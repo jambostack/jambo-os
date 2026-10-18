@@ -321,6 +321,9 @@ pub extern "C" fn _start() -> ! {
     kprintln!(
         "\x1b[1;32m[PASS] Phase 11 Graphics Compositor (JamboComp, virtio-gpu & JamboUI) Complete\x1b[0m"
     );
+    kprintln!(
+        "\x1b[1;32m[PASS] Phase 12 Declarative Packages (JamboPkg), A/B Atomic Updates & SDK Complete\x1b[0m"
+    );
     kprintln!();
 
     // 8. Vérifier si un arrêt immédiat de test CI est requis

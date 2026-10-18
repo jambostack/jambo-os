@@ -13,4 +13,6 @@ jambo-sh = { path = "../jambo-sh" }
 jambo-coreutils = { path = "../jambo-coreutils" }
 jambo-comp = { path = "../jambo-comp" }
 jambo-ui = { path = "../../libs/jambo-ui" }
+jambo-pkgd = { path = "../jambo-pkgd" }
+jambo-sdk = { path = "../../libs/jambo-sdk" }
 

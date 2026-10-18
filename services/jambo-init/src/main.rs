@@ -185,6 +185,56 @@ pub extern "C" fn _start() -> ! {
         jambo_ui::AccessibilityRole::Terminal
     );
 
+    // 8. Gestionnaire de paquets déclaratif, mises à jour A/B et SDK (Phase 12 - JamboPkg & JamboSDK)
+    let mut pkgd = jambo_pkgd::JamboPkgDaemon::new();
+
+    // Installation d'un paquet logiciel .jpkg vérifié
+    let pkg_manifest = jambo_pkgd::JpkgManifest {
+        name: "jambo-terminal-app",
+        version: (1, 0, 0),
+        content_hash: [0x55; 32],
+        ed25519_signature: [0x77; 64],
+        required_capabilities: libjambo::cap_rights::READ,
+        installed: false,
+    };
+    pkgd.install_package(pkg_manifest).expect("Install jpkg");
+    assert_eq!(pkgd.package_count, 1);
+
+    // Préparation de mise à jour système A/B (Staging vers fente B)
+    let next_gen = pkgd.stage_update().expect("Stage update A/B");
+    assert_eq!(next_gen, 2);
+    assert_eq!(
+        pkgd.current_generation.active_slot,
+        jambo_pkgd::AbSlot::SlotB
+    );
+
+    // Test de résilience : Rollback instantané vers fente A
+    pkgd.rollback().expect("Rollback update");
+    assert_eq!(
+        pkgd.current_generation.active_slot,
+        jambo_pkgd::AbSlot::SlotA
+    );
+
+    // Validation de mise à jour définitive
+    let final_gen = pkgd.stage_update().expect("Stage update A/B");
+    pkgd.commit_update().expect("Commit update");
+    assert!(pkgd.current_generation.committed);
+    assert!(pkgd.current_generation.healthy);
+    assert_eq!(final_gen, 2);
+
+    // Test du SDK officiel JamboSDK
+    let mut app = jambo_sdk::HelloWorldApp::new();
+    let app_ctx = jambo_sdk::AppContext::new(
+        "org.jambostack.helloworld",
+        libjambo::Handle::new(1, 1),
+        libjambo::Handle::new(2, 1),
+    );
+    use jambo_sdk::JamboApp;
+    app.init(&app_ctx).expect("SDK App init");
+    assert!(app.initialized);
+    let keep_running = app.run_step().expect("SDK App run step");
+    assert!(keep_running);
+
     // Boucle de supervision de la santé des services Ring 3
     loop {
         unsafe {
