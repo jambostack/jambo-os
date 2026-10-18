@@ -9,4 +9,6 @@ pcie-bus-mgr = { path = "../pcie-bus-mgr" }
 nvme = { path = "../../drivers/nvme" }
 xhci = { path = "../../drivers/xhci" }
 jambo-netd = { path = "../jambo-netd" }
+jambo-sh = { path = "../jambo-sh" }
+jambo-coreutils = { path = "../jambo-coreutils" }
 

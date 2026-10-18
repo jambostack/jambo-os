@@ -121,6 +121,38 @@ pub extern "C" fn _start() -> ! {
     );
     assert!(netd.open_tcp_stream(&restricted_netcap, ip, 443).is_err());
 
+    // 6. Démarrage et validation de l'espace utilisateur et du shell (Phase 10 - jambo-sh & coreutils)
+    let mut shell = jambo_sh::JamboShell::new();
+
+    // Exécution d'une commande avec confinement strict de capacités par argument
+    let status = shell.execute("ls /system/config.json");
+    assert_eq!(status, jambo_sh::ShellStatus::Success);
+
+    // Vérifie que seule la capacité nécessaire à l'argument a été transmise (Zéro autorité ambiante)
+    let caps_granted = shell
+        .verify_capability_isolation("cat /etc/hosts /var/log/syslog")
+        .expect("Vérification isolation");
+    assert_eq!(caps_granted, 2);
+
+    // Blocage strict d'une commande non autorisée
+    let bad_status = shell.execute("evil_backdoor");
+    assert_eq!(bad_status, jambo_sh::ShellStatus::PermissionDenied);
+
+    // Validation des utilitaires système
+    let processes = jambo_coreutils::CmdPs::list_processes();
+    assert_eq!(processes.len(), 6);
+
+    let cspace_entries = jambo_coreutils::CmdCapStat::inspect_cspace(1).expect("Inspect CSpace");
+    assert_eq!(cspace_entries.len(), 4);
+
+    let (cpu_pct, free_pages, _slub_allocs) = jambo_coreutils::CmdTop::system_metrics();
+    assert!(cpu_pct <= 100);
+    assert!(free_pages > 0);
+
+    let pkg_valid =
+        jambo_coreutils::CmdJpkg::verify_package_integrity("jambo-core-system", &[0xAA; 32]);
+    assert!(pkg_valid);
+
     // Boucle de supervision de la santé des services Ring 3
     loop {
         unsafe {
