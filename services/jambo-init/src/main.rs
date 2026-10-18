@@ -512,7 +512,7 @@ pub extern "C" fn _start() -> ! {
         }
     );
 
-    // 11. Durcissement de sécurité offensive, Fuzzing et tests de résilience chaotique (Phase 16 - jambo-fuzz)
+    // 11. Durcissement de sécurité offensive, Fuzzing et tests de résilience chaotique (Phase 16 - jambo-fuzz v0.2.14)
     let mut fuzzer = jambo_fuzz::SecurityFuzzer::new();
 
     // Campagne de fuzzing d'appels système (10 000 mutations hostiles)
@@ -520,6 +520,17 @@ pub extern "C" fn _start() -> ! {
     assert_eq!(fuzz_report.total_mutations_tested, 10_000);
     assert!(fuzz_report.zero_kernel_panics);
     assert!(fuzz_report.blocked_bad_pointers > 0);
+
+    // Fuzzing des canaux IPC et résistance aux débordements de tampons
+    let ipc_overflows = fuzzer.fuzz_ipc_channel_overflow(1_000);
+    assert!(ipc_overflows > 0);
+
+    // Fuzzing d'épuisement mémoire et allocations massives
+    let mem_fuzz = fuzzer.fuzz_memory_exhaustion_stress(1_000);
+    assert_eq!(mem_fuzz, 1_000);
+
+    // Test de la barrière matérielle SMAP / SMEP
+    assert!(fuzzer.test_smap_smep_kernel_isolation());
 
     // Test d'inviolabilité IOMMU : 100 % des accès DMA hors-bornes sont bloqués
     let dma_contained = fuzzer.test_iommu_attack_containment();

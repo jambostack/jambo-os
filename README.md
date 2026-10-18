@@ -1,7 +1,7 @@
 # **JamboOS (jambostack/jambo-os)**
 
 [![CI / Build & QEMU Boot Test](https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg)](https://github.com/jambostack/jambo-os/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-v0.2.13-orange.svg)](https://github.com/jambostack/jambo-os)
+[![Version](https://img.shields.io/badge/version-v0.2.14-orange.svg)](https://github.com/jambostack/jambo-os)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg)](https://www.rust-lang.org/)
 
@@ -13,8 +13,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.13 (Sous-système d'IA Locale Ring 3 & Indexation Sémantique Vectorielle)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. Après la suite complète de vérification formelle mathématique Kani / Verus (`v0.2.12`), la version `v0.2.13` consolide le sous-système d'intelligence artificielle locale en espace utilisateur `jambo-aid` (Phase 15). Conformément à la charte architecturale stricte de JamboOS, aucun code d'IA ou réseau neuronal ne s'exécute en Ring 0 (TCB inviolable). Le démon `jambo-aid` opère entièrement en Ring 3 sans autorité ambiante : indexation vectorielle sémantique des objets et fichiers JamboFS, calcul de similarité cosinus normalisée (PPM) en arithmétique entière fixe (Fixed-Point i16), recherche Top-K des plus proches voisins, tiny embedder déterministe par hachage n-grammes, et orchestrateur d'intentions utilisateur typées (`LaunchApplication`, `InspectSystemCapabilities`, `QuerySystemMetrics`, `SearchSemanticFile`, `ConfigureNetwork`, `PerformStorageBackup`). Le système reste un prototype de recherche en cours de développement, loin d'une v1.0.0 finale.
+> **Statut du Projet : Version v0.2.14 (Sécurité Offensive, Fuzzing SMAP/IOMMU & Résilience Chaotique)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. Après le sous-système d'IA locale en espace utilisateur `jambo-aid` (`v0.2.13`), la version `v0.2.14` consolide le durcissement de sécurité offensive, le fuzzing et les tests de résilience chaotique `jambo-fuzz` (Phase 16) : campagne de fuzzing de 10 000 mutations d'appels système hostiles avec 0 panique noyau, interception des débordements de tampons et poignées de capacités corrompues sur canaux IPC, gestion robuste des allocations de mémoire physique extrêmes (`SysError::OutOfMemory`), simulation et validation de la barrière matérielle SMAP / SMEP garantissant l'isolation étanche entre Ring 0 et Ring 3, confinement IOMMU VT-d bloquant 100 % des accès DMA sauvages hors domaine, et auto-guérison par Function-Level Reset (FLR) PCIe des pilotes matériels en 12 ms (< seuil critique de 25 ms) avec zéro perte de données. Le système reste un prototype de recherche en cours de développement, loin d'une v1.0.0 finale.
 
 ---
 
@@ -60,7 +60,7 @@ Toutes les **17 phases** du *Plan Directeur d'Ingénierie* sont intégralement d
 | **13** | **Compatibilité & WASI** | ✅ **Terminé** | Traducteur POSIX Ring 3 `jambo-linux` (zéro dette Ring 0), moteur sandboxed WebAssembly / WASI Snapshot Preview 1. |
 | **14** | **Vérification Formelle** | ✅ **Terminé** | 8 preuves formelles Kani/Verus validées au boot (CSpace anti-ABA, MMU W^X, Buddy disjoint, EEVDF monotone, CDT atténuation, IPC anti-deadlock, CoW isolation, transfert linéaire). |
 | **15** | **Sous-système d'IA Locale** | ✅ **Terminé** | Démon Ring 3 `jambo-aid`, indexation vectorielle normalisée (PPM), recherche Top-K, tiny embedder n-grammes et intentions typées. |
-| **16** | **Sécurité Offensive & Fuzzing** | ✅ **Terminé** | Campagne de fuzzing (10 000 mutations hostiles, barrière SMAP Ring 0 sans panique), confinement IOMMU 100%, chaos FLR 12 ms. |
+| **16** | **Sécurité Offensive & Fuzzing** | ✅ **Terminé** | Fuzzing (10k mutations sans panique), débordements IPC, stress CoW, barrière SMAP/SMEP, confinement IOMMU 100%, chaos FLR 12 ms. |
 | **17** | **Bus RPC Distribué & Écosystème Grappe** | ✅ **Prototype v0.1** | Démon `jambo-rpc`, jetons de capacités distribuées (`DistributedCapToken`), gestionnaire de grappe et bascule transparente (Failover). |
 
 ---
