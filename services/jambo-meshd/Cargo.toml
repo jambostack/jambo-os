@@ -1,0 +1,7 @@
+[package]
+name = "jambo-meshd"
+version = "0.2.27"
+edition = "2021"
+
+[dependencies]
+libjambo = { path = "../../libs/libjambo" }

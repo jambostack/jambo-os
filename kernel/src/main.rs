@@ -131,7 +131,7 @@ pub extern "C" fn _start() -> ! {
     // 4. Bannière système d'accueil
     kprintln!("\x1b[1;36m");
     kprintln!("================================================================================");
-    kprintln!("    JAMBO-OS (JamboKernel v0.2.26) — Micro-noyau de 3e Génération             ");
+    kprintln!("    JAMBO-OS (JamboKernel v0.2.27) — Micro-noyau de 3e Génération             ");
     kprintln!("    Architecture : Micro-noyau orienté capacités en Rust no_std (x86_64/AArch64)");
     kprintln!("    Auteur & Architecte Principal : ASSOGBA Prudence Dieudonné                 ");
     kprintln!("    Dépôt Officiel : https://github.com/jambostack/jambo-os                    ");
@@ -715,14 +715,17 @@ pub extern "C" fn _start() -> ! {
         "\x1b[1;32m[PASS] Phase 27 Distributed Workload & Container Scheduler Complete\x1b[0m"
     );
     kprintln!("\x1b[1;32m[PASS] Phase 28 Zero-Copy Asynchronous Event Bus Complete\x1b[0m");
+    kprintln!(
+        "\x1b[1;32m[PASS] Phase 29 Distributed Encrypted Mesh Network & Zero-Trust Routing Complete\x1b[0m"
+    );
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.26 (Bus d'Événements Pub/Sub Asynchrone Zéro-Copie)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.27 (Maillage Réseau Chiffré Distribué & Routage Zero-Trust)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.26 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.27 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );

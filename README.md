@@ -1,7 +1,7 @@
 # **JamboOS (jambostack/jambo-os)**
 
 [![CI / Build & QEMU Boot Test](https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg)](https://github.com/jambostack/jambo-os/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-v0.2.26-orange.svg)](https://github.com/jambostack/jambo-os)
+[![Version](https://img.shields.io/badge/version-v0.2.27-orange.svg)](https://github.com/jambostack/jambo-os)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg)](https://www.rust-lang.org/)
 
@@ -13,8 +13,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.26 (Bus d'Événements Pub/Sub Asynchrone Zéro-Copie)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. Après l'ordonnanceur de charges de travail distribuées `jambo-schedd` (`v0.2.25`), la version `v0.2.26` introduit le bus d'événements Pub/Sub asynchrone en espace utilisateur `jambo-eventd` (Phase 28) : découplage temporel et spatial des services de grappe, canaux hiérarchiques avec filtrage par préfixe, files d'attente circulaires bornées déterministes (*drop-oldest*) et contrôle d'accès strict sans autorité ambiante régi par les capacités `EventCap`. Le système reste un prototype de recherche en cours de développement, loin d'une v1.0.0 finale.
+> **Statut du Projet : Version v0.2.27 (Maillage Réseau Chiffré Distribué & Routage Zero-Trust)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. Après le bus d'événements Pub/Sub asynchrone `jambo-eventd` (`v0.2.26`), la version `v0.2.27` introduit le démon de maillage réseau chiffré distribué et de routage zero-trust `jambo-meshd` (Phase 29) : encapsulation de paquets réseau chiffrés par flux symétrique et intégrité MAC 128 bits, protection anti-rejeu stricte par monotonicité de séquence, table de routage virtuelle par sous-réseau avec correspondance de masque binaire, et contrôle d'accès sans autorité ambiante régi par les capacités `MeshCap`. Le système reste un prototype de recherche en cours de développement, loin d'une v1.0.0 finale.
 
 ---
 
@@ -40,7 +40,7 @@
 
 ## **2. Tableau synoptique d'avancement des phases d'ingénierie**
 
-Toutes les **28 phases** du *Plan Directeur d'Ingénierie* sont intégralement développées, testées et validées sous environnement QEMU UEFI multicœur.
+Toutes les **29 phases** du *Plan Directeur d'Ingénierie* sont intégralement développées, testées et validées sous environnement QEMU UEFI multicœur.
 
 | Phase | Intitulé du Composant | Statut | Responsabilité Technique |
 | :---: | :--- | :---: | :--- |
@@ -73,6 +73,7 @@ Toutes les **28 phases** du *Plan Directeur d'Ingénierie* sont intégralement d
 | **26** | **Magasin Clé-Valeur Transactionnel** | ✅ **Terminé** | Démon `jambo-kvd`, capacités `KvCap`, MVCC monotone, baux temporels (*leases*), Compare-And-Swap (CAS). |
 | **27** | **Ordonnanceur de Tâches & Conteneurs** | ✅ **Terminé** | Démon `jambo-schedd`, capacités `SchedCap`, placement multi-critère, migration à chaud, éviction contrôlée (*drain*). |
 | **28** | **Bus d'Événements Pub/Sub Asynchrone** | ✅ **Terminé** | Démon `jambo-eventd`, capacités `EventCap`, files annulaires bornées, filtrage hiérarchique par préfixe, drop-oldest. |
+| **29** | **Maillage Réseau Chiffré & Zero-Trust** | ✅ **Terminé** | Démon `jambo-meshd`, capacités `MeshCap`, encapsulation chiffrée symétrique MAC 128 bits, table de routage virtuelle, anti-rejeu monotone. |
 
 ---
 
@@ -117,6 +118,7 @@ jambo-os/
 │   ├── jambo-init/          # Superviseur système PID 1 en espace utilisateur
 │   ├── jambo-kvd/           # Magasin clé-valeur transactionnel distribué (MVCC & baux)
 │   ├── jambo-linux/         # Traducteur d'appels système Linux (compatibilité POSIX)
+│   ├── jambo-meshd/         # Maillage réseau chiffré P2P et routage zero-trust
 │   ├── jambo-netd/          # Démon réseau TCP/IP, TLS 1.3 et DNS sécurisé
 │   ├── jambo-pkgd/          # Gestionnaire de paquets immuables et mises à jour A/B
 │   ├── jambo-powerd/        # Gestion d'énergie ACPI et régulation thermique/C-states

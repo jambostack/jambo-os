@@ -1302,6 +1302,57 @@ pub extern "C" fn _start() -> ! {
         Err(libjambo::SysError::PermissionDenied)
     );
 
+    // 24. Maillage Réseau Chiffré Distribué & Routage Zero-Trust (Phase 29 - jambo-meshd v0.2.27)
+    let mesh_cap = jambo_meshd::MeshCap::new(
+        libjambo::Handle::new(1501, 1),
+        jambo_meshd::mesh_rights::ALL,
+    );
+    let mut local_mesh = jambo_meshd::MeshNetwork::new(1, [10, 42, 0, 1]);
+    let mut remote_mesh = jambo_meshd::MeshNetwork::new(2, [10, 42, 0, 2]);
+
+    let session_key = [0x5A; 32];
+    local_mesh
+        .add_peer(
+            &mesh_cap,
+            2,
+            &[0x02; 32],
+            [10, 42, 0, 2],
+            ([192, 168, 1, 20], 51820),
+            &session_key,
+        )
+        .expect("Add mesh peer 2");
+    remote_mesh
+        .add_peer(
+            &mesh_cap,
+            1,
+            &[0x01; 32],
+            [10, 42, 0, 1],
+            ([192, 168, 1, 10], 51820),
+            &session_key,
+        )
+        .expect("Add mesh peer 1");
+
+    // Encapsulation et chiffrement de bout en bout
+    let plaintext_payload = b"JAMBO_ZERO_TRUST_ENCRYPTED_PACKET";
+    let encrypted_pkt = local_mesh
+        .encapsulate_and_encrypt(&mesh_cap, [10, 42, 0, 2], plaintext_payload)
+        .expect("Encapsulate and encrypt mesh packet");
+    assert_ne!(encrypted_pkt.data_bytes(), plaintext_payload);
+
+    // Déchiffrement et vérification d'intégrité
+    let mut decrypted_buf = [0u8; 64];
+    let dec_len = remote_mesh
+        .decrypt_and_decapsulate(&mesh_cap, &encrypted_pkt, &mut decrypted_buf)
+        .expect("Decrypt mesh packet");
+    assert_eq!(&decrypted_buf[..dec_len], plaintext_payload);
+
+    // Contrôle d'accès : rejet strict sans MeshCap autorisée
+    let unauth_mesh_cap = jambo_meshd::MeshCap::new(libjambo::Handle::new(1502, 1), 0);
+    assert_eq!(
+        local_mesh.encapsulate_and_encrypt(&unauth_mesh_cap, [10, 42, 0, 2], b"test"),
+        Err(libjambo::SysError::PermissionDenied)
+    );
+
     // Boucle de supervision de la santé des services Ring 3
     loop {
         unsafe {
