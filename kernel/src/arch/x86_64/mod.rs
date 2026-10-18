@@ -3,6 +3,7 @@ pub mod cpu;
 pub mod gdt;
 pub mod idt;
 pub mod io;
+pub mod iommu;
 pub mod qemu;
 pub mod serial;
 
@@ -11,5 +12,7 @@ pub use cpu::{current_cpu, init_per_cpu, PerCpuData, MAX_CPUS};
 pub use gdt::init_gdt;
 pub use idt::init_idt;
 pub use io::*;
+pub use iommu::{init_iommu, IommuDomain, IOMMU_MANAGER, PciBdf};
 pub use qemu::{exit_qemu, QemuExitCode};
 pub use serial::{init_serial, SERIAL1};
+

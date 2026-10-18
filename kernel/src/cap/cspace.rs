@@ -14,6 +14,7 @@ pub enum KernelObject {
     Process(u64),
     Thread(u64),
     Ring(u64),
+    Iommu(Arc<crate::arch::x86_64::iommu::IommuDomain>),
 }
 
 #[derive(Clone)]

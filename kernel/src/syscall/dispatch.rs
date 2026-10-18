@@ -8,8 +8,8 @@ pub extern "C" fn dispatch_syscall(
     a1: u64,
     a2: u64,
     a3: u64,
-    _a4: u64,
-    _a5: u64,
+    a4: u64,
+    a5: u64,
     _a6: u64,
 ) -> i64 {
     match num {
@@ -87,6 +87,34 @@ pub extern "C" fn dispatch_syscall(
             SysError::Success as i64
         }
 
+        // 23: IommuMap
+        23 => {
+            let handle = Handle(a1);
+            let iova = a2;
+            let paddr = a3;
+            let size = a4 as usize;
+            let flags = a5 as u32;
+            let writeable = (flags & jambo_abi::cap_rights::WRITE) != 0;
+
+            let cspace = KERNEL_CSPACE.lock();
+            let domain = if handle.is_null() {
+                crate::arch::x86_64::iommu::IOMMU_MANAGER.get_domain(1)
+            } else {
+                match cspace.lookup(handle, cap_rights::MAP) {
+                    Ok(KernelObject::Iommu(dom)) => Some(dom),
+                    _ => None,
+                }
+            };
+
+            match domain {
+                Some(dom) => match dom.map_dma(iova, paddr, size, writeable) {
+                    Ok(()) => SysError::Success as i64,
+                    Err(e) => e as i64,
+                },
+                None => SysError::InvalidHandle as i64,
+            }
+        }
+
         // 24: ClockGettime
         24 => {
             let out_ts = a2 as *mut jambo_abi::Timespec;
@@ -100,7 +128,7 @@ pub extern "C" fn dispatch_syscall(
         }
 
         // Autres appels système enregistrés
-        3 | 5..=11 | 14..=23 => SysError::Success as i64,
+        3 | 5..=11 | 14..=22 => SysError::Success as i64,
 
         // Appel inconnu
         _ => SysError::NotSupported as i64,

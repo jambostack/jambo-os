@@ -7,7 +7,10 @@ members = [
     "xtask",
     "services/jambo-init",
     "services/jambo-fs",
+    "services/pcie-bus-mgr",
     "drivers/virtio",
+    "drivers/nvme",
+    "drivers/xhci",
 ]
 
 [profile.dev]

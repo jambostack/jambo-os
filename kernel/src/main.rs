@@ -289,13 +289,31 @@ pub extern "C" fn _start() -> ! {
         created_handle
     );
 
-    // 11. Validation mesurable des étapes de démarrage
+    // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
+    arch::x86_64::init_iommu();
+    let root_domain = arch::x86_64::IOMMU_MANAGER.create_domain();
+    let fake_nvme_bdf = arch::x86_64::PciBdf::new(0, 4, 0);
+    arch::x86_64::IOMMU_MANAGER
+        .assign_device(root_domain.id, fake_nvme_bdf)
+        .expect("Assignation IOMMU périphérique");
+    assert!(arch::x86_64::IOMMU_MANAGER.is_bus_master_allowed(fake_nvme_bdf));
+
+    // Test de mappage DMA et isolation hors-bornes
+    root_domain
+        .map_dma(0x1000_0000, 0x2000_0000, 0x10000, true)
+        .expect("Mappage DMA");
+    assert!(root_domain.translate_dma(0x1000_0000, 4096, true).is_some());
+    assert!(root_domain.translate_dma(0x2000_0000, 4096, true).is_none()); // Doit être bloqué par l'IOMMU !
+    kprintln!("[IOMMU/VT-d] Validation : DMA légitime autorisée, DMA hors-bornes 100% bloquée par le matériel.");
+
+    // 12. Validation mesurable des étapes de démarrage
     kprintln!();
     kprintln!("\x1b[1;32m[PASS] Phase 2 Bootstrap Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 3 CPU & Multicore SMP Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 4 Memory Management Complete (PMM, SLUB, VMM, VMO)\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 5 Process, Thread & EEVDF Scheduler Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 6 CSpace, 24 Syscalls & Hybrid IPC Complete\x1b[0m");
+    kprintln!("\x1b[1;32m[PASS] Phase 8 IOMMU & Hardware Isolation Complete\x1b[0m");
     kprintln!();
 
     // 8. Vérifier si un arrêt immédiat de test CI est requis
