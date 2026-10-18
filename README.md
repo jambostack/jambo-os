@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.35-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.36-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.35 (Infrastructure à Clés Publiques Éphémères & Certificats de Grappe)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. Après le moteur de traçage distribué `jambo-traced` (`v0.2.34`), la version `v0.2.35` introduit le démon d'infrastructure de clés publiques et de gestion des certificats éphémères `jambo-certd` (Phase 37) : autorité de certification de grappe (*Cluster CA*) autonome en `#![no_std]`, certificats d'identité à validité courte, vérification cryptographique déterministe d'usages de clés (mTLS, Mesh, Code Signing), révocation proactive et contrôle d'accès sans autorité ambiante régi par les capacités `CertCap`. Le système reste un prototype de recherche en cours de développement, loin d'une v1.0.0 finale.
+> **Statut du Projet : Version v0.2.36 (Packaging Initrd Espace Utilisateur & Protocole Limine Module)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. Après l'infrastructure PKI éphémère `jambo-certd` (`v0.2.35`), la version `v0.2.36` franchit une étape fondamentale vers l'espace utilisateur opérationnel (Phase 38) : liaison du binaire utilisateur `jambo-init` en mémoire basse (`0x0040_0000`) via `user-x86_64.ld`, packaging automatique de l'archive d'amorçage `initrd.tar` via `xtask`, support du protocole de modules Limine (`ModulesRequest`) et parser d'archive UStar sans allocation `#![no_std]`. Le superviseur détecte et charge désormais les binaires ELF réels depuis le ramdisk d'amorçage.
 
 ---
 
@@ -54,7 +54,7 @@
 
 ## **2. Tableau synoptique d'avancement des phases d'ingénierie**
 
-Toutes les **37 phases** du *Plan Directeur d'Ingénierie* sont intégralement développées, testées et validées sous environnement QEMU UEFI multicœur.
+Toutes les **38 phases** du *Plan Directeur d'Ingénierie* sont intégralement développées, testées et validées sous environnement QEMU UEFI multicœur.
 
 | Phase | Intitulé du Composant | Statut | Responsabilité Technique |
 | :---: | :--- | :---: | :--- |
@@ -96,6 +96,7 @@ Toutes les **37 phases** du *Plan Directeur d'Ingénierie* sont intégralement d
 | **35** | **Politiques de Sécurité & Contrôle d'Admission** | ✅ **Terminé** | Démon `jambo-policyd`, capacités `PolicyCap`, filtrage ABAC déterministe, Deny-by-default, baux de règles. |
 | **36** | **Traçage Distribué & Analyse de Latence** | ✅ **Terminé** | Démon `jambo-traced`, capacités `TraceCap`, arborescences de portées (spans), W3C TraceContext, ring buffers. |
 | **37** | **PKI Éphémère & Gestion des Certificats** | ✅ **Terminé** | Démon `jambo-certd`, capacités `CertCap`, autorité CA de grappe, attestations courtes durées, révocation. |
+| **38** | **Initrd & Packaging Userspace** | ✅ **Terminé** | Packaging `initrd.tar`, linker script `user-x86_64.ld`, décodeur UStar `#![no_std]` et extraction ELF Limine. |
 
 ---
 

@@ -75,9 +75,62 @@ fn build_kernel(release: bool, test_features: bool) -> anyhow::Result<PathBuf> {
     Ok(root.join(format!("target/x86_64-unknown-none/{}/kernel", profile)))
 }
 
+fn build_init(release: bool) -> anyhow::Result<PathBuf> {
+    let root = root_dir();
+    let mut cmd = Command::new("cargo");
+    cmd.current_dir(&root);
+    cmd.args([
+        "build",
+        "--package",
+        "jambo-init",
+        "--target",
+        "x86_64-unknown-none",
+    ]);
+    if release {
+        cmd.arg("--release");
+    }
+    cmd.env(
+        "RUSTFLAGS",
+        "-C link-arg=-Tlibs/user-x86_64.ld -C relocation-model=static",
+    );
+
+    let status = cmd.status()?;
+    if !status.success() {
+        anyhow::bail!("Échec de compilation du binaire jambo-init");
+    }
+
+    let profile = if release { "release" } else { "debug" };
+    Ok(root.join(format!("target/x86_64-unknown-none/{}/jambo-init", profile)))
+}
+
+fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
+    let root = root_dir();
+    let init_bin = build_init(release)?;
+
+    let initrd_stage = root.join("target/initrd_stage");
+    let bin_dir = initrd_stage.join("bin");
+    let _ = fs::remove_dir_all(&initrd_stage);
+    fs::create_dir_all(&bin_dir)?;
+
+    fs::copy(&init_bin, bin_dir.join("init"))?;
+
+    let initrd_tar = root.join("target/initrd.tar");
+    let status = Command::new("tar")
+        .current_dir(&initrd_stage)
+        .args(["-cf", initrd_tar.to_str().unwrap(), "bin/init"])
+        .status()?;
+
+    if !status.success() {
+        anyhow::bail!("Échec de génération de l'archive initrd.tar");
+    }
+
+    Ok(initrd_tar)
+}
+
 fn create_iso(release: bool, test_mode: bool) -> anyhow::Result<PathBuf> {
     let root = root_dir();
     let kernel_bin = build_kernel(release, test_mode)?;
+    let initrd_tar = create_initrd(release)?;
 
     let iso_root = root.join("target/iso_root");
     let boot_dir = iso_root.join("boot");
@@ -88,14 +141,15 @@ fn create_iso(release: bool, test_mode: bool) -> anyhow::Result<PathBuf> {
     fs::create_dir_all(&limine_dir)?;
     fs::create_dir_all(&efi_boot_dir)?;
 
-    // Copie du noyau
+    // Copie du noyau et de l'initrd
     fs::copy(&kernel_bin, boot_dir.join("jambo-kernel.elf"))?;
+    fs::copy(&initrd_tar, boot_dir.join("initrd.tar"))?;
 
-    // Configuration Limine
+    // Configuration Limine avec module Initrd
     let limine_conf_content = if test_mode {
-        "timeout: 0\n\n/JamboOS (Test CI)\n    protocol: limine\n    kernel_path: boot():/boot/jambo-kernel.elf\n    cmdline: test\n"
+        "timeout: 0\n\n/JamboOS (Test CI)\n    protocol: limine\n    kernel_path: boot():/boot/jambo-kernel.elf\n    module_path: boot():/boot/initrd.tar\n    cmdline: test\n"
     } else {
-        "timeout: 1\n\n/JamboOS\n    protocol: limine\n    kernel_path: boot():/boot/jambo-kernel.elf\n"
+        "timeout: 1\n\n/JamboOS\n    protocol: limine\n    kernel_path: boot():/boot/jambo-kernel.elf\n    module_path: boot():/boot/initrd.tar\n"
     };
     fs::write(limine_dir.join("limine.conf"), limine_conf_content)?;
 

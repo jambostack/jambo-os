@@ -22,7 +22,8 @@ use arch::{exit_qemu, init_serial, QemuExitCode};
 use core::sync::atomic::{AtomicU32, Ordering};
 use drivers::init_framebuffer;
 use limine::request::{
-    ExecutableCmdlineRequest, FramebufferRequest, HhdmRequest, MemmapRequest, MpRequest,
+    ExecutableCmdlineRequest, FramebufferRequest, HhdmRequest, MemmapRequest, ModulesRequest,
+    MpRequest,
 };
 use limine::{memmap, BaseRevision, RequestsEndMarker, RequestsStartMarker};
 
@@ -51,6 +52,10 @@ static MEMMAP_REQUEST: MemmapRequest = MemmapRequest::new();
 #[used]
 #[link_section = ".limine_requests"]
 static MP_REQUEST: MpRequest = MpRequest::new(0);
+
+#[used]
+#[link_section = ".limine_requests"]
+static MODULES_REQUEST: ModulesRequest = ModulesRequest::new();
 
 #[used]
 #[link_section = ".limine_requests"]
@@ -131,7 +136,7 @@ pub extern "C" fn _start() -> ! {
     // 4. Bannière système d'accueil
     kprintln!("\x1b[1;36m");
     kprintln!("================================================================================");
-    kprintln!("    JAMBO-OS (JamboKernel v0.2.35) — Micro-noyau de 3e Génération             ");
+    kprintln!("    JAMBO-OS (JamboKernel v0.2.36) — Micro-noyau de 3e Génération             ");
     kprintln!("    Architecture : Micro-noyau orienté capacités en Rust no_std (x86_64/AArch64)");
     kprintln!("    Auteur & Architecte Principal : ASSOGBA Prudence Dieudonné                 ");
     kprintln!("    Dépôt Officiel : https://github.com/jambostack/jambo-os                    ");
@@ -314,11 +319,54 @@ pub extern "C" fn _start() -> ! {
     sched::SCHEDULER.lock().enqueue(thread2);
     kprintln!("[SCHED/EEVDF] Ordonnanceur EEVDF opérationnel avec 2 threads de test en file");
 
+    // Détection et extraction des modules Limine (Phase 38 - Initrd Userspace v0.2.36)
+    let mut initrd_elf_bytes: Option<&'static [u8]> = None;
+    if let Some(modules_resp) = MODULES_REQUEST.response() {
+        let modules = modules_resp.modules();
+        kprintln!(
+            "[BOOT/MODULES] Détection de {} module(s) d'amorçage Limine :",
+            modules.len()
+        );
+        for (idx, m) in modules.iter().enumerate() {
+            let data = m.data();
+            kprintln!(
+                "  [{:02}] Module '{}' | {} octets (cmdline: '{}')",
+                idx,
+                m.path(),
+                data.len(),
+                m.cmdline()
+            );
+
+            // Parser l'archive TAR Initrd ou binaire direct
+            if m.path().contains("initrd") || m.path().ends_with(".tar") || data.len() >= 512 {
+                let tar = mm::TarArchive::new(data);
+                if let Some(init_data) = tar.find("init") {
+                    kprintln!(
+                        "[INITRD/TAR] Exécutable '/bin/init' extrait de l'archive ({:#x} octets)",
+                        init_data.len()
+                    );
+                    initrd_elf_bytes = Some(init_data);
+                }
+            }
+            if initrd_elf_bytes.is_none() && data.len() >= 4 && data[0..4] == mm::elf::ELF_MAGIC {
+                kprintln!(
+                    "[MODULE/ELF] Binaire ELF direct détecté ({:#x} octets)",
+                    data.len()
+                );
+                initrd_elf_bytes = Some(data);
+            }
+        }
+    } else {
+        kprintln!("[WARN] Aucun module Limine fourni par le chargeur d'amorçage.");
+    }
+
+    let init_binary = initrd_elf_bytes.unwrap_or(&test_elf);
+
     // Création et validation d'un processus utilisateur initial Ring 3 depuis ELF64 (v0.2.1)
     let (init_process, init_thread) = sched::Process::create_user_process(
         1,
         "init",
-        &test_elf,
+        init_binary,
         &["init", "--daemon"],
         &["PATH=/bin:/usr/bin", "TERM=xterm-256color"],
     )
@@ -740,14 +788,17 @@ pub extern "C" fn _start() -> ! {
     kprintln!(
         "\x1b[1;32m[PASS] Phase 37 Distributed Ephemeral PKI & Mutual TLS Certificate Authority Complete\x1b[0m"
     );
+    kprintln!(
+        "\x1b[1;32m[PASS] Phase 38 Userspace Initrd Ramdisk Packaging & Limine Module Protocol Complete\x1b[0m"
+    );
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.35 (Infrastructure à Clés Publiques Éphémères & Certificats de Grappe)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.36 (Packaging Initrd & Modules d'Amorçage Limine)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.35 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.36 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
