@@ -59,6 +59,7 @@ static CMDLINE_REQUEST: ExecutableCmdlineRequest = ExecutableCmdlineRequest::new
 #[link_section = ".limine_requests_end"]
 static _END_MARKER: RequestsEndMarker = RequestsEndMarker::new();
 
+#[cfg(target_arch = "x86_64")]
 unsafe extern "C" fn ap_start(info: &limine::mp::MpInfo) -> ! {
     arch::init_gdt();
     arch::init_idt();
@@ -71,6 +72,20 @@ unsafe extern "C" fn ap_start(info: &limine::mp::MpInfo) -> ! {
     );
     loop {
         core::arch::asm!("hlt", options(nomem, nostack, preserves_flags));
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+unsafe extern "C" fn ap_start(info: &limine::mp::MpInfo) -> ! {
+    arch::init_per_cpu(info.processor_id, info.mpidr, false);
+    ACTIVE_CPUS.fetch_add(1, Ordering::SeqCst);
+    kprintln!(
+        "[SMP] Cœur AP #{} démarré (MPIDR: {:#x})",
+        info.processor_id,
+        info.mpidr
+    );
+    loop {
+        core::arch::asm!("wfi", options(nomem, nostack, preserves_flags));
     }
 }
 
@@ -208,35 +223,52 @@ pub extern "C" fn _start() -> ! {
         .expect("Projection VMO");
     kprintln!("[VMM/VMO] VMO Copy-on-Write projeté avec succès dans le nouvel espace d'adressage");
 
-    // 7. Initialisation matérielle CPU (Phase 3) : GDT, TSS (IST1), IDT et APIC
-    arch::init_gdt();
-    kprintln!("[CPU/GDT] GDT et TSS initialisés (Pile IST1 dédiée aux Double Faults)");
+    // 7. Initialisation matérielle CPU (Phase 3)
+    #[cfg(target_arch = "x86_64")]
+    {
+        arch::init_gdt();
+        kprintln!("[CPU/GDT] GDT et TSS initialisés (Pile IST1 dédiée aux Double Faults)");
 
-    arch::init_idt();
-    kprintln!("[CPU/IDT] IDT chargée (256 vecteurs, gestionnaires d'exceptions actifs)");
+        arch::init_idt();
+        kprintln!("[CPU/IDT] IDT chargée (256 vecteurs, gestionnaires d'exceptions actifs)");
 
-    arch::disable_pic();
-    kprintln!("[CPU/PIC] Contrôleur hérité PIC 8259 masqué");
+        arch::disable_pic();
+        kprintln!("[CPU/PIC] Contrôleur hérité PIC 8259 masqué");
 
-    if arch::has_x2apic() {
-        arch::X2Apic::init();
-        kprintln!(
-            "[CPU/APIC] Mode moderne x2APIC activé via MSR (ID CPU : {})",
-            arch::X2Apic::id()
-        );
-    } else {
-        kprintln!("[CPU/APIC] Mode x2APIC non supporté par le CPU");
+        if arch::has_x2apic() {
+            arch::X2Apic::init();
+            kprintln!(
+                "[CPU/APIC] Mode moderne x2APIC activé via MSR (ID CPU : {})",
+                arch::X2Apic::id()
+            );
+        } else {
+            kprintln!("[CPU/APIC] Mode x2APIC non supporté par le CPU");
+        }
+
+        arch::init_per_cpu(0, 0, true);
     }
 
-    // 8. Initialisation PerCpuData et réveil des cœurs secondaires SMP
-    arch::init_per_cpu(0, 0, true);
+    #[cfg(target_arch = "aarch64")]
+    {
+        kprintln!("[CPU/GIC] Contrôleur GIC et vecteurs d'exceptions ARM64 initialisés");
+        arch::init_per_cpu(0, 0, true);
+    }
 
+    // 8. Réveil des cœurs secondaires SMP
     if let Some(mp_resp) = MP_REQUEST.response() {
         let cpus = mp_resp.cpus();
         kprintln!("[SMP] Détection de {} cœurs logiques", cpus.len());
 
+        #[cfg(target_arch = "x86_64")]
         for cpu in cpus.iter() {
             if cpu.lapic_id != mp_resp.bsp_lapic_id {
+                cpu.bootstrap(ap_start, cpu.processor_id as u64);
+            }
+        }
+
+        #[cfg(target_arch = "aarch64")]
+        for cpu in cpus.iter() {
+            if cpu.mpidr != mp_resp.bsp_mpidr {
                 cpu.bootstrap(ap_start, cpu.processor_id as u64);
             }
         }
@@ -291,13 +323,13 @@ pub extern "C" fn _start() -> ! {
     );
 
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
-    arch::x86_64::init_iommu();
-    let root_domain = arch::x86_64::IOMMU_MANAGER.create_domain();
-    let fake_nvme_bdf = arch::x86_64::PciBdf::new(0, 4, 0);
-    arch::x86_64::IOMMU_MANAGER
+    arch::init_iommu();
+    let root_domain = arch::IOMMU_MANAGER.create_domain();
+    let fake_nvme_bdf = arch::PciBdf::new(0, 4, 0);
+    arch::IOMMU_MANAGER
         .assign_device(root_domain.id, fake_nvme_bdf)
         .expect("Assignation IOMMU périphérique");
-    assert!(arch::x86_64::IOMMU_MANAGER.is_bus_master_allowed(fake_nvme_bdf));
+    assert!(arch::IOMMU_MANAGER.is_bus_master_allowed(fake_nvme_bdf));
 
     // Test de mappage DMA et isolation hors-bornes
     root_domain
@@ -370,9 +402,13 @@ pub extern "C" fn _start() -> ! {
     // Boucle d'attente système en attente de la Phase 3 (IDT / APIC / SMP)
     kprintln!("[SYSTEM] JamboKernel en attente d'interruptions...");
     loop {
-        // SAFETY: L'instruction hlt met le processeur en pause jusqu'à la prochaine interruption
+        #[cfg(target_arch = "x86_64")]
         unsafe {
             core::arch::asm!("hlt", options(nomem, nostack, preserves_flags));
+        }
+        #[cfg(target_arch = "aarch64")]
+        unsafe {
+            core::arch::asm!("wfi", options(nomem, nostack, preserves_flags));
         }
     }
 }

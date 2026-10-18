@@ -38,3 +38,36 @@ pub unsafe fn syscall6(
     );
     (ret, ret2)
 }
+
+/// Wrapper d'appel système brut pour ARM64 (AArch64)
+///
+/// # Safety
+///
+/// Cette fonction effectue un appel système direct via l'instruction `SVC #0` (EL0 -> EL1).
+#[cfg(target_arch = "aarch64")]
+#[inline(always)]
+pub unsafe fn syscall6(
+    num: SyscallNumber,
+    arg1: u64,
+    arg2: u64,
+    arg3: u64,
+    arg4: u64,
+    arg5: u64,
+    arg6: u64,
+) -> (i64, u64) {
+    let ret: i64;
+    let ret2: u64;
+    // SAFETY: Appel système direct en EL0 via l'instruction SVC #0.
+    core::arch::asm!(
+        "svc #0",
+        in("x8") num as u64,
+        inlateout("x0") arg1 => ret,
+        inlateout("x1") arg2 => ret2,
+        in("x2") arg3,
+        in("x3") arg4,
+        in("x4") arg5,
+        in("x5") arg6,
+        options(nostack, preserves_flags)
+    );
+    (ret, ret2)
+}

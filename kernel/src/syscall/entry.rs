@@ -1,12 +1,20 @@
+#[cfg(target_arch = "x86_64")]
 use crate::arch::x86_64::apic::{rdmsr, wrmsr};
+#[cfg(target_arch = "x86_64")]
 use crate::arch::x86_64::gdt::{KERNEL_CODE_SEL, USER_DATA_SEL};
+#[cfg(target_arch = "x86_64")]
 use core::arch::global_asm;
 
+#[cfg(target_arch = "x86_64")]
 pub const IA32_EFER_MSR: u32 = 0xC0000080;
+#[cfg(target_arch = "x86_64")]
 pub const IA32_STAR_MSR: u32 = 0xC0000081;
+#[cfg(target_arch = "x86_64")]
 pub const IA32_LSTAR_MSR: u32 = 0xC0000082;
+#[cfg(target_arch = "x86_64")]
 pub const IA32_FMASK_MSR: u32 = 0xC0000084;
 
+#[cfg(target_arch = "x86_64")]
 global_asm!(
     r#"
     .globl syscall_entry
@@ -57,11 +65,13 @@ global_asm!(
     "#
 );
 
+#[cfg(target_arch = "x86_64")]
 extern "C" {
     fn syscall_entry();
 }
 
-/// Configure les MSRs matériels pour activer l'instruction SYSCALL/SYSRET en mode Long 64 bits
+/// Configure les registres matériels pour activer les appels système
+#[cfg(target_arch = "x86_64")]
 pub fn init_syscall() {
     unsafe {
         // 1. Activer SCE (System Call Extensions, bit 0) dans IA32_EFER
@@ -78,4 +88,10 @@ pub fn init_syscall() {
         // 4. IA32_FMASK : Masquer les interruptions matérielles (IF) et le trap flag (TF) lors de l'appel
         wrmsr(IA32_FMASK_MSR, 0x257FD5);
     }
+}
+
+/// Configuration des appels système pour ARM64 (routage SVC #0 via EL1)
+#[cfg(target_arch = "aarch64")]
+pub fn init_syscall() {
+    // Sur AArch64, les appels système EL0 sont capturés par les vecteurs VBAR_EL1
 }

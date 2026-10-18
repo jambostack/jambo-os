@@ -32,6 +32,9 @@ jobs:
       - name: Run Clippy linter
         run: cargo clippy --package jambo-abi --package xtask -- -D warnings
 
+      - name: Verify AArch64 Cross-Architecture Build
+        run: cargo check --workspace --target aarch64-unknown-none --exclude xtask
+
       - name: Build JamboKernel ELF
         run: cargo xtask build
 

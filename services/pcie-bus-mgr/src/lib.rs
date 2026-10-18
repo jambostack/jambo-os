@@ -108,6 +108,7 @@ impl PciConfigAccess {
     ///
     /// L'accès direct aux ports d'E/S x86 0xCF8 et 0xCFC suppose que le matériel
     /// PCIe est accessible et que l'offset est aligné.
+    #[cfg(target_arch = "x86_64")]
     #[inline]
     pub unsafe fn read32(addr: PciAddress, offset: u8) -> u32 {
         let conf_addr = addr.config_addr(offset);
@@ -117,16 +118,30 @@ impl PciConfigAccess {
         val
     }
 
+    #[cfg(not(target_arch = "x86_64"))]
+    #[inline]
+    pub unsafe fn read32(_addr: PciAddress, _offset: u8) -> u32 {
+        // En AArch64 / RISC-V, la configuration PCIe s'effectue via MMIO ECAM
+        0xFFFF_FFFF
+    }
+
     /// Écrit un mot de 32 bits dans l'espace de configuration PCI.
     ///
     /// # Safety
     ///
     /// L'appelant doit s'assurer que l'écriture dans ce registre matériel est valide.
+    #[cfg(target_arch = "x86_64")]
     #[inline]
     pub unsafe fn write32(addr: PciAddress, offset: u8, val: u32) {
         let conf_addr = addr.config_addr(offset);
         core::arch::asm!("out dx, eax", in("dx") PCI_CONFIG_ADDRESS, in("eax") conf_addr, options(nomem, nostack));
         core::arch::asm!("out dx, eax", in("dx") PCI_CONFIG_DATA, in("eax") val, options(nomem, nostack));
+    }
+
+    #[cfg(not(target_arch = "x86_64"))]
+    #[inline]
+    pub unsafe fn write32(_addr: PciAddress, _offset: u8, _val: u32) {
+        // En AArch64 / RISC-V, écriture MMIO ECAM
     }
 
     /// Lit un mot de 16 bits dans l'espace de configuration PCI.

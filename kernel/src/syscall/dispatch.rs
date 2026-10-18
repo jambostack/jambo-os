@@ -98,7 +98,7 @@ pub extern "C" fn dispatch_syscall(
 
             let cspace = KERNEL_CSPACE.lock();
             let domain = if handle.is_null() {
-                crate::arch::x86_64::iommu::IOMMU_MANAGER.get_domain(1)
+                crate::arch::IOMMU_MANAGER.get_domain(1)
             } else {
                 match cspace.lookup(handle, cap_rights::MAP) {
                     Ok(KernelObject::Iommu(dom)) => Some(dom),

@@ -8,7 +8,7 @@
 **Système d'Exploitation Micro-noyau de 3e Génération Orienté Capacités**  
 *Auteur et Architecte Principal* : **ASSOGBA Prudence Dieudonné**  
 *Dépôt officiel* : [https://github.com/jambostack/jambo-os](https://github.com/jambostack/jambo-os)  
-*Architecture cible* : x86-64 (Long Mode 64 bits) / Multicœur SMP / UEFI 2.11 (Limine v3 Protocol)
+*Architectures cibles* : x86-64 (Long Mode 64 bits) & AArch64 (ARM64) / Multicœur SMP / UEFI 2.11 (Limine v3 Protocol)
 
 ---
 
