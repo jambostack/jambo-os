@@ -1,7 +1,7 @@
 # **JamboOS (jambostack/jambo-os)**
 
 [![CI / Build & QEMU Boot Test](https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg)](https://github.com/jambostack/jambo-os/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-v0.2.25-orange.svg)](https://github.com/jambostack/jambo-os)
+[![Version](https://img.shields.io/badge/version-v0.2.26-orange.svg)](https://github.com/jambostack/jambo-os)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg)](https://www.rust-lang.org/)
 
@@ -13,8 +13,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.25 (Ordonnanceur de Charges de Travail et Conteneurs Distribués)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. Après le magasin clé-valeur transactionnel `jambo-kvd` (`v0.2.24`), la version `v0.2.25` introduit l'ordonnanceur de charges de travail distribuées en espace utilisateur `jambo-schedd` (Phase 27) : modèle déclaratif multi-runtime (micro-VMs `jambo-vmm`, sandboxes WebAssembly `jambo-wasm`, charges POSIX `jambo-linux`), algorithme de placement multicritère à score de charge, migration à chaud, éviction contrôlée (*drain*) et régulation stricte par capacités `SchedCap`. Le système reste un prototype de recherche en cours de développement, loin d'une v1.0.0 finale.
+> **Statut du Projet : Version v0.2.26 (Bus d'Événements Pub/Sub Asynchrone Zéro-Copie)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. Après l'ordonnanceur de charges de travail distribuées `jambo-schedd` (`v0.2.25`), la version `v0.2.26` introduit le bus d'événements Pub/Sub asynchrone en espace utilisateur `jambo-eventd` (Phase 28) : découplage temporel et spatial des services de grappe, canaux hiérarchiques avec filtrage par préfixe, files d'attente circulaires bornées déterministes (*drop-oldest*) et contrôle d'accès strict sans autorité ambiante régi par les capacités `EventCap`. Le système reste un prototype de recherche en cours de développement, loin d'une v1.0.0 finale.
 
 ---
 
@@ -40,7 +40,7 @@
 
 ## **2. Tableau synoptique d'avancement des phases d'ingénierie**
 
-Toutes les **27 phases** du *Plan Directeur d'Ingénierie* sont intégralement développées, testées et validées sous environnement QEMU UEFI multicœur.
+Toutes les **28 phases** du *Plan Directeur d'Ingénierie* sont intégralement développées, testées et validées sous environnement QEMU UEFI multicœur.
 
 | Phase | Intitulé du Composant | Statut | Responsabilité Technique |
 | :---: | :--- | :---: | :--- |
@@ -72,6 +72,7 @@ Toutes les **27 phases** du *Plan Directeur d'Ingénierie* sont intégralement d
 | **25** | **Consensus Distribué Raft** | ✅ **Terminé** | Démon `jambo-raft`, capacités `RaftCap`, quorum strict, journal répliqué, élection de leader et FSM linéaire. |
 | **26** | **Magasin Clé-Valeur Transactionnel** | ✅ **Terminé** | Démon `jambo-kvd`, capacités `KvCap`, MVCC monotone, baux temporels (*leases*), Compare-And-Swap (CAS). |
 | **27** | **Ordonnanceur de Tâches & Conteneurs** | ✅ **Terminé** | Démon `jambo-schedd`, capacités `SchedCap`, placement multi-critère, migration à chaud, éviction contrôlée (*drain*). |
+| **28** | **Bus d'Événements Pub/Sub Asynchrone** | ✅ **Terminé** | Démon `jambo-eventd`, capacités `EventCap`, files annulaires bornées, filtrage hiérarchique par préfixe, drop-oldest. |
 
 ---
 
@@ -110,6 +111,7 @@ jambo-os/
 │   ├── jambo-comp/          # Compositeur d'affichage fenêtré zéro-copie
 │   ├── jambo-coreutils/     # Utilitaires système (ps, capstat, top, jpkg)
 │   ├── jambo-cryptod/       # Chiffrement de bloc transparent ChaCha20 et scellement TPM 2.0
+│   ├── jambo-eventd/        # Bus d'événements Pub/Sub asynchrone et découplage de grappe
 │   ├── jambo-fs/            # Système de fichiers transactionnel Merkle Copy-on-Write
 │   ├── jambo-fuzz/          # Moteur de fuzzing offensif et tests de résilience
 │   ├── jambo-init/          # Superviseur système PID 1 en espace utilisateur

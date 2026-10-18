@@ -1246,6 +1246,62 @@ pub extern "C" fn _start() -> ! {
         Err(libjambo::SysError::PermissionDenied)
     );
 
+    // 23. Bus d'Événements Pub/Sub Asynchrone Zéro-Copie (Phase 28 - jambo-eventd v0.2.26)
+    let event_cap = jambo_eventd::EventCap::new(
+        libjambo::Handle::new(1401, 1),
+        jambo_eventd::event_rights::ALL,
+    );
+    let mut event_bus = jambo_eventd::EventBus::new();
+
+    // Enregistrement d'abonnements (exact et par préfixe)
+    let sub_sched = event_bus
+        .subscribe(&event_cap, b"scheduler/", true)
+        .expect("Subscribe scheduler events");
+    let sub_audit = event_bus
+        .subscribe(&event_cap, b"security/audit", false)
+        .expect("Subscribe audit events");
+
+    // Publication d'événements asynchrones
+    let seq1 = event_bus
+        .publish(
+            &event_cap,
+            1,
+            b"scheduler/node_drain",
+            b"NODE_2_DRAINED",
+            1000,
+        )
+        .expect("Publish scheduler event");
+    assert_eq!(seq1, 1);
+
+    let seq2 = event_bus
+        .publish(
+            &event_cap,
+            1,
+            b"security/audit",
+            b"UNAUTH_ACCESS_BLOCKED",
+            1001,
+        )
+        .expect("Publish audit event");
+    assert_eq!(seq2, 2);
+
+    // Consommation et vérification d'isolation
+    let sched_ev = event_bus
+        .poll_event(&event_cap, sub_sched)
+        .expect("Poll scheduler event");
+    assert_eq!(sched_ev.unwrap().payload_bytes(), b"NODE_2_DRAINED");
+
+    let audit_ev = event_bus
+        .poll_event(&event_cap, sub_audit)
+        .expect("Poll audit event");
+    assert_eq!(audit_ev.unwrap().payload_bytes(), b"UNAUTH_ACCESS_BLOCKED");
+
+    // Contrôle d'accès : rejet strict sans EventCap autorisée
+    let unauth_event_cap = jambo_eventd::EventCap::new(libjambo::Handle::new(1402, 1), 0);
+    assert_eq!(
+        event_bus.publish(&unauth_event_cap, 1, b"unauthorized", b"data", 1002),
+        Err(libjambo::SysError::PermissionDenied)
+    );
+
     // Boucle de supervision de la santé des services Ring 3
     loop {
         unsafe {

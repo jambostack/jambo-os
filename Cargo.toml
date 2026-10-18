@@ -28,6 +28,7 @@ members = [
     "services/jambo-raft",
     "services/jambo-kvd",
     "services/jambo-schedd",
+    "services/jambo-eventd",
     "libs/jambo-ui",
     "libs/jambo-sdk",
     "drivers/virtio",
