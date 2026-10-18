@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.36-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.37-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.36 (Packaging Initrd Espace Utilisateur & Protocole Limine Module)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. Après l'infrastructure PKI éphémère `jambo-certd` (`v0.2.35`), la version `v0.2.36` franchit une étape fondamentale vers l'espace utilisateur opérationnel (Phase 38) : liaison du binaire utilisateur `jambo-init` en mémoire basse (`0x0040_0000`) via `user-x86_64.ld`, packaging automatique de l'archive d'amorçage `initrd.tar` via `xtask`, support du protocole de modules Limine (`ModulesRequest`) et parser d'archive UStar sans allocation `#![no_std]`. Le superviseur détecte et charge désormais les binaires ELF réels depuis le ramdisk d'amorçage.
+> **Statut du Projet : Version v0.2.37 (Exécution en Espace Utilisateur & Aller-Retour Syscall Ring 3)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. Après le packaging de l'Initrd `initrd.tar` (`v0.2.36`), la version `v0.2.37` franchit le cap historique de l'exécution matérielle en espace utilisateur non privilégié (Phase 39) : transition CPL 0 $\to$ CPL 3 via `enter_user_mode` (`IRETQ` avec sélecteurs de segments GDT `0x23` et `0x1B`), exécution d'instructions en Ring 3, piégeage des appels système matériels `syscall` via `IA32_LSTAR` et retour déterministe en espace utilisateur par `sysretq`. Le superviseur démontre formellement l'isolation et la reprise d'exécution entre Ring 0 et Ring 3 sous QEMU.
 
 ---
 
@@ -54,7 +54,7 @@
 
 ## **2. Tableau synoptique d'avancement des phases d'ingénierie**
 
-Toutes les **38 phases** du *Plan Directeur d'Ingénierie* sont intégralement développées, testées et validées sous environnement QEMU UEFI multicœur.
+Toutes les **39 phases** du *Plan Directeur d'Ingénierie* sont intégralement développées, testées et validées sous environnement QEMU UEFI multicœur.
 
 | Phase | Intitulé du Composant | Statut | Responsabilité Technique |
 | :---: | :--- | :---: | :--- |
@@ -97,6 +97,7 @@ Toutes les **38 phases** du *Plan Directeur d'Ingénierie* sont intégralement d
 | **36** | **Traçage Distribué & Analyse de Latence** | ✅ **Terminé** | Démon `jambo-traced`, capacités `TraceCap`, arborescences de portées (spans), W3C TraceContext, ring buffers. |
 | **37** | **PKI Éphémère & Gestion des Certificats** | ✅ **Terminé** | Démon `jambo-certd`, capacités `CertCap`, autorité CA de grappe, attestations courtes durées, révocation. |
 | **38** | **Initrd & Packaging Userspace** | ✅ **Terminé** | Packaging `initrd.tar`, linker script `user-x86_64.ld`, décodeur UStar `#![no_std]` et extraction ELF Limine. |
+| **39** | **Exécution Ring 3 & Syscall** | ✅ **Terminé** | Saut matériel `enter_user_mode` (CPL 3), piégeage `syscall`, commutation de contexte et retour `sysretq`. |
 
 ---
 

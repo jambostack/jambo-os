@@ -1,6 +1,6 @@
 use crate::cap::{KernelObject, KERNEL_CSPACE};
 use crate::mm::{AddressSpace, Vmo};
-use crate::sched::{allocate_pid, allocate_tid, Process, Thread, ThreadState, SCHEDULER};
+use crate::sched::{allocate_pid, allocate_tid, EevdfScheduler, Process, Thread, ThreadState, SCHEDULER};
 use alloc::sync::Arc;
 use jambo_abi::{cap_rights, Handle, SysError};
 
@@ -202,6 +202,7 @@ pub extern "C" fn dispatch_syscall(
                 t.user_entry = entry_point;
                 t.user_rsp = stack_pointer;
                 t.state = ThreadState::Ready;
+                t.deadline = 1000;
             }
 
             SCHEDULER.lock().enqueue(thread);
@@ -210,17 +211,19 @@ pub extern "C" fn dispatch_syscall(
 
         // 11: ThreadExit (exit_code: a1)
         11 => {
-            let mut sched = SCHEDULER.lock();
-            if let Some(ref curr) = sched.current {
-                curr.lock().state = ThreadState::Exited;
+            {
+                let sched = SCHEDULER.lock();
+                if let Some(ref curr) = sched.current {
+                    curr.lock().state = ThreadState::Exited;
+                }
             }
-            sched.reschedule();
+            EevdfScheduler::reschedule();
             SysError::Success as i64
         }
 
         // 12: ThreadYield
         12 => {
-            SCHEDULER.lock().reschedule();
+            EevdfScheduler::reschedule();
             SysError::Success as i64
         }
 

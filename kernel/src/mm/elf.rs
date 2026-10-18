@@ -27,7 +27,7 @@ pub const PF_W: u32 = 1 << 1;
 pub const PF_R: u32 = 1 << 2;
 
 pub const USER_STACK_TOP: u64 = 0x0000_7FFF_FFFF_0000;
-pub const USER_STACK_SIZE: usize = 64 * 1024; // 64 Kio de pile utilisateur
+pub const USER_STACK_SIZE: usize = 512 * 1024; // 512 Kio de pile utilisateur
 
 #[repr(C, packed)]
 #[derive(Debug, Clone, Copy)]

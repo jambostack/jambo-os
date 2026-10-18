@@ -6,7 +6,7 @@ use alloc::vec::Vec;
 use jambo_abi::{JamboEvent, SysError};
 use spin::Mutex;
 
-use crate::sched::{Thread, ThreadState, SCHEDULER};
+use crate::sched::{EevdfScheduler, Thread, ThreadState, SCHEDULER};
 
 /// Port asynchrone de notification et de multiplexage d'événements
 pub struct Port {
@@ -72,7 +72,7 @@ impl Port {
             }
 
             // Réordonnancement EEVDF
-            SCHEDULER.lock().reschedule();
+            EevdfScheduler::reschedule();
 
             // Au réveil, consommer l'événement disponible
             let mut events = self.events.lock();

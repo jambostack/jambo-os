@@ -48,44 +48,51 @@ impl EevdfScheduler {
     }
 
     /// Effectue un réordonnancement explicite (thread_yield ou fin de quantum)
-    pub fn reschedule(&mut self) {
-        let next_thread = match self.pick_next() {
-            Some(t) => t,
-            None => return, // Aucun autre thread prêt
+    pub fn reschedule() {
+        let (prev_rsp_ptr, next_rsp) = {
+            let mut sched = SCHEDULER.lock();
+            let next_thread = match sched.pick_next() {
+                Some(t) => t,
+                None => return, // Aucun autre thread prêt
+            };
+
+            let prev_current = sched.current.take();
+            if let Some(current) = prev_current {
+                let mut curr = current.lock();
+                if curr.state == ThreadState::Running {
+                    curr.state = ThreadState::Ready;
+                    curr.vruntime += 1;
+                    curr.deadline += 10;
+                    drop(curr);
+                    sched.runqueue.push(current.clone());
+                } else {
+                    drop(curr);
+                }
+
+                let next_rsp = next_thread.lock().rsp;
+                sched.current = Some(next_thread);
+
+                let prev_rsp_ptr = {
+                    let mut prev_guard = current.lock();
+                    &mut prev_guard.rsp as *mut u64
+                };
+
+                (prev_rsp_ptr, next_rsp)
+            } else {
+                let next_guard = next_thread.lock();
+                let next_rsp = next_guard.rsp;
+                drop(next_guard);
+                sched.current = Some(next_thread);
+                (core::ptr::null_mut(), next_rsp)
+            }
         };
 
-        let prev_current = self.current.take();
-        if let Some(current) = prev_current {
-            // Si le thread courant est toujours actif, le remettre dans la runqueue
-            let mut curr = current.lock();
-            if curr.state == ThreadState::Running {
-                curr.state = ThreadState::Ready;
-                curr.vruntime += 1;
-                curr.deadline += 10;
-                drop(curr);
-                self.runqueue.push(current.clone());
-            }
-
-            let mut prev_guard = current.lock();
-            let next_guard = next_thread.lock();
-
-            let prev_rsp_ptr = &mut prev_guard.rsp as *mut u64;
-            let next_rsp = next_guard.rsp;
-
-            drop(prev_guard);
-            drop(next_guard);
-
-            self.current = Some(next_thread);
-
+        if !prev_rsp_ptr.is_null() {
             unsafe {
                 switch_context(prev_rsp_ptr, next_rsp);
             }
         } else {
-            // Premier ordonnancement
             let mut dummy_rsp: u64 = 0;
-            let next_rsp = next_thread.lock().rsp;
-            self.current = Some(next_thread);
-
             unsafe {
                 switch_context(&mut dummy_rsp, next_rsp);
             }

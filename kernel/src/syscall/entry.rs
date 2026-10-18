@@ -1,7 +1,7 @@
 #[cfg(target_arch = "x86_64")]
 use crate::arch::x86_64::apic::{rdmsr, wrmsr};
 #[cfg(target_arch = "x86_64")]
-use crate::arch::x86_64::gdt::{KERNEL_CODE_SEL, USER_DATA_SEL};
+use crate::arch::x86_64::gdt::{KERNEL_CODE_SEL, KERNEL_DATA_SEL};
 #[cfg(target_arch = "x86_64")]
 use core::arch::global_asm;
 
@@ -23,11 +23,13 @@ global_asm!(
         // Échanger GS pour accéder aux structures PerCpuData du superviseur
         swapgs
 
-        // Sauvegarder la pile utilisateur dans PerCpuData (offset 24 par exemple)
+        // Sauvegarder temporairement la pile utilisateur dans PerCpuData (offset 24)
         mov gs:[24], rsp
         // Charger la pile noyau depuis PerCpuData (offset 16)
         mov rsp, gs:[16]
 
+        mov r10, gs:[24] // Sauvegarder RSP utilisateur sur la pile noyau du thread
+        push r10
         push rcx // Sauvegarder RIP utilisateur
         push r11 // Sauvegarder RFLAGS utilisateur
         push rbp
@@ -57,9 +59,8 @@ global_asm!(
         pop rbp
         pop r11 // Restaurer RFLAGS utilisateur
         pop rcx // Restaurer RIP utilisateur
+        pop rsp // Restaurer la pile utilisateur directement depuis la pile noyau
 
-        // Restaurer la pile utilisateur
-        mov rsp, gs:[24]
         swapgs
         sysretq
     "#
@@ -79,7 +80,7 @@ pub fn init_syscall() {
         wrmsr(IA32_EFER_MSR, efer | 1);
 
         // 2. Configurer IA32_STAR avec les sélecteurs GDT noyau et utilisateur
-        let star = ((KERNEL_CODE_SEL as u64) << 32) | (((USER_DATA_SEL - 8) as u64) << 48);
+        let star = ((KERNEL_CODE_SEL as u64) << 32) | ((KERNEL_DATA_SEL as u64) << 48);
         wrmsr(IA32_STAR_MSR, star);
 
         // 3. IA32_LSTAR : Adresse du point d'entrée assembleur syscall_entry

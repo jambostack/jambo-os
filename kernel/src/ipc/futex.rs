@@ -1,5 +1,5 @@
 extern crate alloc;
-use crate::sched::{Thread, ThreadState, SCHEDULER};
+use crate::sched::{EevdfScheduler, Thread, ThreadState, SCHEDULER};
 use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -35,7 +35,7 @@ impl FutexManager {
             map.entry(uaddr).or_insert_with(Vec::new).push(thread);
             drop(map);
 
-            SCHEDULER.lock().reschedule();
+            EevdfScheduler::reschedule();
             Ok(())
         } else {
             Err(SysError::InvalidArgument)

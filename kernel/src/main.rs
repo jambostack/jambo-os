@@ -97,6 +97,13 @@ unsafe extern "C" fn ap_start(info: &limine::mp::MpInfo) -> ! {
 
 extern "C" fn test_worker() {
     kprintln!("[SCHED] Exécution d'un thread travailleur dans son contexte propre.");
+    {
+        let sched = sched::SCHEDULER.lock();
+        if let Some(ref curr) = sched.current {
+            curr.lock().state = sched::ThreadState::Exited;
+        }
+    }
+    sched::EevdfScheduler::reschedule();
     loop {
         core::hint::spin_loop();
     }
@@ -136,7 +143,7 @@ pub extern "C" fn _start() -> ! {
     // 4. Bannière système d'accueil
     kprintln!("\x1b[1;36m");
     kprintln!("================================================================================");
-    kprintln!("    JAMBO-OS (JamboKernel v0.2.36) — Micro-noyau de 3e Génération             ");
+    kprintln!("    JAMBO-OS (JamboKernel v0.2.37) — Micro-noyau de 3e Génération             ");
     kprintln!("    Architecture : Micro-noyau orienté capacités en Rust no_std (x86_64/AArch64)");
     kprintln!("    Auteur & Architecte Principal : ASSOGBA Prudence Dieudonné                 ");
     kprintln!("    Dépôt Officiel : https://github.com/jambostack/jambo-os                    ");
@@ -315,6 +322,8 @@ pub extern "C" fn _start() -> ! {
     // 9. Initialisation et validation de l'ordonnanceur multicœur EEVDF et processus utilisateurs (Phase 5)
     let thread1 = sched::Thread::new_kernel(1, 0, test_worker).expect("Thread 1");
     let thread2 = sched::Thread::new_kernel(2, 0, test_worker).expect("Thread 2");
+    thread1.lock().deadline = 1000;
+    thread2.lock().deadline = 1000;
     sched::SCHEDULER.lock().enqueue(thread1);
     sched::SCHEDULER.lock().enqueue(thread2);
     kprintln!("[SCHED/EEVDF] Ordonnanceur EEVDF opérationnel avec 2 threads de test en file");
@@ -402,6 +411,7 @@ pub extern "C" fn _start() -> ! {
         .expect("Lecture chaîne argv[1]");
     assert_eq!(argv1_str.as_str(), "--daemon");
 
+    init_thread.lock().deadline = 1000;
     sched::SCHEDULER.lock().enqueue(init_thread);
     kprintln!(
         "[PROCESS] Processus utilisateur init (PID 1) initialisé avec pile System V ABI (RSP: {:#018x})",
@@ -475,6 +485,15 @@ pub extern "C" fn _start() -> ! {
         0,
     );
     assert_eq!(ret_s, 0);
+
+    {
+        let cspace = cap::KERNEL_CSPACE.lock();
+        if let Ok(cap::KernelObject::Thread(t)) =
+            cspace.lookup(jambo_abi::Handle(thread_handle), jambo_abi::cap_rights::MANAGE)
+        {
+            t.lock().deadline = 1000;
+        }
+    }
 
     kprintln!(
         "[SYSCALL] Cycle de vie validé : process_create ({:#x}), thread_create ({:#x}), vmo_map & thread_start",
@@ -677,6 +696,13 @@ pub extern "C" fn _start() -> ! {
         "[LINUX/WASM] Couche de compatibilité Linux POSIX et runtime WASI/Wasm sandboxed validés"
     );
 
+    // 10bis. Validation de l'exécution Ring 3 et aller-retour Syscall (Phase 39 - v0.2.37)
+    let ring3_success = sched::execute_ring3_roundtrip_test();
+    assert!(
+        ring3_success,
+        "Échec du test de transition matérielle vers Ring 3"
+    );
+
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
 
     arch::init_iommu();
@@ -791,14 +817,17 @@ pub extern "C" fn _start() -> ! {
     kprintln!(
         "\x1b[1;32m[PASS] Phase 38 Userspace Initrd Ramdisk Packaging & Limine Module Protocol Complete\x1b[0m"
     );
+    kprintln!(
+        "\x1b[1;32m[PASS] Phase 39 Userspace Execution, Ring-3 Transition & Syscall Roundtrip Complete\x1b[0m"
+    );
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.36 (Packaging Initrd & Modules d'Amorçage Limine)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.37 (Exécution Espace Utilisateur & Aller-Retour Syscall Ring 3)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.36 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.37 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
