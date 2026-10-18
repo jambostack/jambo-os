@@ -235,6 +235,57 @@ pub extern "C" fn _start() -> ! {
     let keep_running = app.run_step().expect("SDK App run step");
     assert!(keep_running);
 
+    // 9. Couche de compatibilité applicative Linux et Runtime WebAssembly/WASI (Phase 13)
+    let mut linux_emu = jambo_linux::LinuxProcessEmulator::new(1001);
+
+    // Vérification des appels système Linux interceptés et traduits
+    let pid_res = linux_emu.handle_linux_syscall(jambo_linux::LINUX_SYS_GETPID, 0, 0, 0, 0, 0, 0);
+    assert_eq!(pid_res, 1001);
+
+    let open_fd = linux_emu.handle_linux_syscall(jambo_linux::LINUX_SYS_OPEN, 0, 0, 0, 0, 0, 0);
+    assert!(open_fd >= 3);
+
+    let write_res = linux_emu.handle_linux_syscall(
+        jambo_linux::LINUX_SYS_WRITE,
+        open_fd as u64,
+        0,
+        128,
+        0,
+        0,
+        0,
+    );
+    assert_eq!(write_res, 128);
+
+    let close_res =
+        linux_emu.handle_linux_syscall(jambo_linux::LINUX_SYS_CLOSE, open_fd as u64, 0, 0, 0, 0, 0);
+    assert_eq!(close_res, 0);
+
+    // Runtime WebAssembly et sandboxing WASI
+    let mut wasm_vm = jambo_wasm::WasmEngine::new();
+    let sample_wasm_binary: [u8; 8] = [0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00]; // En-tête officiel Wasm v1
+    let mut wasm_instance = wasm_vm
+        .load_module(&sample_wasm_binary)
+        .expect("Load Wasm module");
+
+    // Test de mémoire linéaire sécurisée
+    wasm_instance
+        .memory
+        .write_memory(0, b"JamboWasm linear memory payload")
+        .expect("Write wasm memory");
+    assert_eq!(
+        &wasm_instance
+            .memory
+            .read_memory(0, 9)
+            .expect("Read wasm memory"),
+        b"JamboWasm"
+    );
+
+    // Exécution du point d'entrée WASI _start
+    let exit_code = wasm_vm
+        .invoke_export(&mut wasm_instance, "_start")
+        .expect("Invoke Wasm export");
+    assert_eq!(exit_code, 0);
+
     // Boucle de supervision de la santé des services Ring 3
     loop {
         unsafe {

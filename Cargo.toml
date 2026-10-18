@@ -13,6 +13,8 @@ members = [
     "services/jambo-coreutils",
     "services/jambo-comp",
     "services/jambo-pkgd",
+    "services/jambo-linux",
+    "services/jambo-wasm",
     "libs/jambo-ui",
     "libs/jambo-sdk",
     "drivers/virtio",
