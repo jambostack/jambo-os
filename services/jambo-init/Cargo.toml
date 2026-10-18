@@ -1,6 +1,6 @@
 [package]
 name = "jambo-init"
-version = "0.2.17"
+version = "0.2.18"
 edition = "2021"
 
 [dependencies]
@@ -22,6 +22,7 @@ jambo-fuzz = { path = "../jambo-fuzz" }
 jambo-rpc = { path = "../jambo-rpc" }
 jambo-auditd = { path = "../jambo-auditd" }
 jambo-powerd = { path = "../jambo-powerd" }
+jambo-cryptod = { path = "../jambo-cryptod" }
 jambo-fs = { path = "../jambo-fs" }
 virtio-drv = { path = "../../drivers/virtio" }
 

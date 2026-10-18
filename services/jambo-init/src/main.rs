@@ -769,6 +769,75 @@ pub extern "C" fn _start() -> ! {
     );
     assert!(power_mgr.power_saver_active);
 
+    // 15. Chiffrement de Bloc Transparent et Scellement Matériel TPM (Phase 20 - jambo-cryptod v0.2.18)
+    let master_volume_key = [0x5Cu8; 32];
+    let mut enc_dev = jambo_cryptod::EncryptedBlockDevice::new(1, master_volume_key);
+
+    let crypto_cap = jambo_cryptod::CryptoVolumeCap::new(
+        libjambo::Handle::new(700, 1),
+        1,
+        jambo_cryptod::crypto_rights::READ_SECTOR
+            | jambo_cryptod::crypto_rights::WRITE_SECTOR
+            | jambo_cryptod::crypto_rights::ROTATE_KEY
+            | jambo_cryptod::crypto_rights::SEAL_TPM,
+    );
+
+    // Chiffrement d'un secteur de données JamboFS
+    let raw_sector = [0x7Eu8; jambo_cryptod::SECTOR_SIZE];
+    let mut enc_sector0 = [0u8; jambo_cryptod::SECTOR_SIZE];
+    let mut enc_sector1 = [0u8; jambo_cryptod::SECTOR_SIZE];
+
+    enc_dev
+        .encrypt_and_write(&crypto_cap, 0, &raw_sector, &mut enc_sector0)
+        .expect("Encrypt sector LBA 0");
+    enc_dev
+        .encrypt_and_write(&crypto_cap, 1, &raw_sector, &mut enc_sector1)
+        .expect("Encrypt sector LBA 1");
+
+    // Propriété anti-motif LBA : les ciphertexts diffèrent malgré un contenu identique
+    assert_ne!(&enc_sector0[..], &raw_sector[..]);
+    assert_ne!(&enc_sector0[..], &enc_sector1[..]);
+
+    // Déchiffrement transparent exact
+    let mut dec_sector = [0u8; jambo_cryptod::SECTOR_SIZE];
+    enc_dev
+        .read_and_decrypt(&crypto_cap, 0, &enc_sector0, &mut dec_sector)
+        .expect("Decrypt sector LBA 0");
+    assert_eq!(&dec_sector[..], &raw_sector[..]);
+
+    // Scellement TPM 2.0 sous les registres PCR de démarrage mesuré
+    let measured_pcrs: [[u8; 32]; 8] = [
+        [0xA0; 32], [0xA1; 32], [0xA2; 32], [0xA3; 32], [0xA4; 32], // Limine
+        [0xA5; 32], [0xA6; 32], [0xA7; 32],
+    ];
+    enc_dev
+        .seal_with_tpm(&crypto_cap, &measured_pcrs)
+        .expect("Seal volume under TPM PCRs");
+    assert!(enc_dev.sealed_blob.is_some());
+
+    // Vérification du descellement TPM sur plateforme intègre
+    let unsealed =
+        jambo_cryptod::TpmSealEngine::unseal(enc_dev.sealed_blob.as_ref().unwrap(), &measured_pcrs)
+            .expect("Unseal TPM key");
+    assert_eq!(unsealed, master_volume_key);
+
+    // Rejet formel du descellement si un PCR est altéré (attaque sur le bootloader)
+    let mut tampered_pcrs = measured_pcrs;
+    tampered_pcrs[4][0] ^= 0xFF;
+    let tamper_fail =
+        jambo_cryptod::TpmSealEngine::unseal(enc_dev.sealed_blob.as_ref().unwrap(), &tampered_pcrs);
+    assert_eq!(tamper_fail, Err(libjambo::SysError::PermissionDenied));
+
+    // Contrôle de capacité : rejet strict en écriture sans droit WRITE_SECTOR
+    let read_only_crypto_cap = jambo_cryptod::CryptoVolumeCap::new(
+        libjambo::Handle::new(701, 1),
+        1,
+        jambo_cryptod::crypto_rights::READ_SECTOR,
+    );
+    let bad_write =
+        enc_dev.encrypt_and_write(&read_only_crypto_cap, 2, &raw_sector, &mut enc_sector0);
+    assert_eq!(bad_write, Err(libjambo::SysError::PermissionDenied));
+
     // Boucle de supervision de la santé des services Ring 3
     loop {
         unsafe {

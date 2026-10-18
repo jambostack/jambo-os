@@ -20,6 +20,7 @@ members = [
     "services/jambo-rpc",
     "services/jambo-auditd",
     "services/jambo-powerd",
+    "services/jambo-cryptod",
     "libs/jambo-ui",
     "libs/jambo-sdk",
     "drivers/virtio",
