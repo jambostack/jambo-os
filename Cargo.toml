@@ -25,6 +25,7 @@ members = [
     "services/jambo-vmm",
     "services/jambo-vhostd",
     "services/jambo-timed",
+    "services/jambo-raft",
     "libs/jambo-ui",
     "libs/jambo-sdk",
     "drivers/virtio",

@@ -1053,6 +1053,57 @@ pub extern "C" fn _start() -> ! {
         Err(libjambo::SysError::PermissionDenied)
     );
 
+    // 20. Moteur de Consensus Distribué Léger Raft (Phase 25 - jambo-raft v0.2.23)
+    let raft_cap = jambo_raft::RaftCap::new(
+        libjambo::Handle::new(1101, 1),
+        42,
+        jambo_raft::raft_rights::ALL,
+    );
+    let mut leader_node = jambo_raft::RaftNode::new(1, 42);
+
+    // Élection de leader
+    let vote_req = leader_node
+        .start_election(&raft_cap)
+        .expect("Start Raft election");
+    assert_eq!(leader_node.role, jambo_raft::RaftRole::Candidate);
+
+    let vote_reply = jambo_raft::RequestVoteReply {
+        term: vote_req.term,
+        vote_granted: true,
+    };
+    leader_node.record_vote(&raft_cap, &vote_reply, 3);
+    assert_eq!(leader_node.role, jambo_raft::RaftRole::Leader);
+
+    // Proposition et réplication de commande de cluster
+    let log_entry = leader_node
+        .propose_command(&raft_cap, 501, b"JAMBO_CLUSTER_COMMIT")
+        .expect("Propose Raft command");
+    assert_eq!(log_entry.index, 1);
+
+    // Réplication sur un nœud suiveur
+    let mut follower_node = jambo_raft::RaftNode::new(2, 42);
+    let append_args = jambo_raft::AppendEntriesArgs {
+        term: leader_node.current_term,
+        leader_id: 1,
+        prev_log_index: 0,
+        prev_log_term: 0,
+        entry: Some(log_entry),
+        leader_commit: 1,
+    };
+    let append_reply = follower_node
+        .handle_append_entries(&raft_cap, &append_args)
+        .expect("Replicate Raft entry");
+    assert!(append_reply.success);
+    assert_eq!(follower_node.commit_index, 1);
+    assert_eq!(follower_node.apply_committed(), 1);
+
+    // Contrôle d'accès : rejet immédiat sans RaftCap autorisée
+    let unauth_raft_cap = jambo_raft::RaftCap::new(libjambo::Handle::new(1102, 1), 42, 0);
+    assert_eq!(
+        leader_node.propose_command(&unauth_raft_cap, 502, b"UNAUTHORIZED"),
+        Err(libjambo::SysError::PermissionDenied)
+    );
+
     // Boucle de supervision de la santé des services Ring 3
     loop {
         unsafe {

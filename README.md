@@ -1,7 +1,7 @@
 # **JamboOS (jambostack/jambo-os)**
 
 [![CI / Build & QEMU Boot Test](https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg)](https://github.com/jambostack/jambo-os/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-v0.2.22-orange.svg)](https://github.com/jambostack/jambo-os)
+[![Version](https://img.shields.io/badge/version-v0.2.23-orange.svg)](https://github.com/jambostack/jambo-os)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg)](https://www.rust-lang.org/)
 
@@ -13,8 +13,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.22 (Synchronisation Horlogère Distribuée PTP/NTP)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. Après la virtualisation de périphériques invités vhost-user `jambo-vhostd` (`v0.2.21`), la version `v0.2.22` introduit le démon de synchronisation horlogère distribuée en espace utilisateur `jambo-timed` (Phase 24) : implémentation haute précision PTP (IEEE 1588) et NTP sans autorité ambiante, asservissement PLL/FLL par correction de dérive de fréquence (*slewing*), garantie mathématique d'absence de régression temporelle (monotonicité inviolable) et protection par capacités dédiées `TimeSyncCap`. Le système reste un prototype de recherche en cours de développement, loin d'une v1.0.0 finale.
+> **Statut du Projet : Version v0.2.23 (Consensus Distribué Léger & Réplication Raft)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. Après la synchronisation horlogère distribuée PTP/NTP `jambo-timed` (`v0.2.22`), la version `v0.2.23` introduit le moteur de consensus distribué léger en espace utilisateur `jambo-raft` (Phase 25) : implémentation `#![no_std]` sans autorité ambiante de l'algorithme Raft, élection de leader par accord de quorum strict, réplication de journal d'actions déterministes, transitions de machines à états linéaires et gouvernance par capacités dédiées `RaftCap`. Le système reste un prototype de recherche en cours de développement, loin d'une v1.0.0 finale.
 
 ---
 
@@ -40,7 +40,7 @@
 
 ## **2. Tableau synoptique d'avancement des phases d'ingénierie**
 
-Toutes les **24 phases** du *Plan Directeur d'Ingénierie* sont intégralement développées, testées et validées sous environnement QEMU UEFI multicœur.
+Toutes les **25 phases** du *Plan Directeur d'Ingénierie* sont intégralement développées, testées et validées sous environnement QEMU UEFI multicœur.
 
 | Phase | Intitulé du Composant | Statut | Responsabilité Technique |
 | :---: | :--- | :---: | :--- |
@@ -69,6 +69,7 @@ Toutes les **24 phases** du *Plan Directeur d'Ingénierie* sont intégralement d
 | **22** | **Micro-VMM & Isolation Type-2** | ✅ **Terminé** | Démon `jambo-vmm`, capacités `VmCap`, pagination imbriquée EPT, piégeage VM-Exits I/O et vCPUs. |
 | **23** | **Périphériques Virtuels vhost-user** | ✅ **Terminé** | Démon `jambo-vhostd`, capacités `VhostCap`, émulation VirtIO-Net/Block découplée, virtqueues zéro-copie. |
 | **24** | **Synchronisation Horlogère PTP/NTP** | ✅ **Terminé** | Démon `jambo-timed`, capacités `TimeSyncCap`, asservissement PLL/FLL, monotonicité garantie, PTP (IEEE 1588). |
+| **25** | **Consensus Distribué Raft** | ✅ **Terminé** | Démon `jambo-raft`, capacités `RaftCap`, quorum strict, journal répliqué, élection de leader et FSM linéaire. |
 
 ---
 
@@ -114,6 +115,7 @@ jambo-os/
 │   ├── jambo-netd/          # Démon réseau TCP/IP, TLS 1.3 et DNS sécurisé
 │   ├── jambo-pkgd/          # Gestionnaire de paquets immuables et mises à jour A/B
 │   ├── jambo-powerd/        # Gestion d'énergie ACPI et régulation thermique/C-states
+│   ├── jambo-raft/          # Moteur de consensus distribué Raft et réplication d'état
 │   ├── jambo-rpc/           # Bus RPC distribué et capacités de cluster
 │   ├── jambo-sh/            # Shell interactif orienté objets
 │   ├── jambo-timed/         # Synchronisation horlogère distribuée PTP/NTP haute précision
