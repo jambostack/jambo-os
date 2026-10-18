@@ -1,7 +1,7 @@
 # **JamboOS (jambostack/jambo-os)**
 
 [![CI / Build & QEMU Boot Test](https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg)](https://github.com/jambostack/jambo-os/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-v1.0.0-blue.svg)](https://github.com/jambostack/jambo-os)
+[![Version](https://img.shields.io/badge/version-v0.1.0--alpha-orange.svg)](https://github.com/jambostack/jambo-os)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg)](https://www.rust-lang.org/)
 
@@ -9,6 +9,12 @@
 *Auteur et Architecte Principal* : **ASSOGBA Prudence Dieudonné**  
 *Dépôt officiel* : [https://github.com/jambostack/jambo-os](https://github.com/jambostack/jambo-os)  
 *Architectures cibles* : x86-64 (Long Mode 64 bits) & AArch64 (ARM64) / Multicœur SMP / UEFI 2.11 (Limine v3 Protocol)
+
+---
+
+> [!IMPORTANT]
+> **Statut du Projet : Version v0.1.0-alpha (Fondations Architecturales & Prototype)**  
+> Le projet JamboOS est actuellement au stade de **prototype de recherche (pre-alpha)**. L'échafaudage architectural de référence et les prototypes fonctionnels des 17 phases ont été validés sous émulateur QEMU multicœur. **Le système est encore très loin d'une Version 1.0.0 de production.** Le cycle de maturation vers la production nécessite un travail approfondi sur le matériel physique réel, l'optimisation des pilotes bare-metal, la robustesse sous forte charge et le portage d'applications tierces.
 
 ---
 
@@ -54,7 +60,7 @@ Toutes les **17 phases** du *Plan Directeur d'Ingénierie* sont intégralement d
 | **14** | **Vérification Formelle** | ✅ **Terminé** | Preuves formelles Kani/Verus validées au boot (invariants CSpace, MMU W^X, non-chevauchement Buddy, monotonicité EEVDF). |
 | **15** | **Sous-système d'IA Locale** | ✅ **Terminé** | Démon Ring 3 `jambo-aid`, indexation sémantique vectorielle (similarité cosinus), orchestrateur d'intentions typées. |
 | **16** | **Sécurité Offensive & Fuzzing** | ✅ **Terminé** | Campagne de fuzzing (10 000 mutations hostiles, barrière SMAP Ring 0 sans panique), confinement IOMMU 100%, chaos FLR 12 ms. |
-| **17** | **Bus RPC Distribué & Release v1.0** | ✅ **Terminé** | Démon `jambo-rpc`, jetons de capacités distribuées (`DistributedCapToken`), gestionnaire de grappe et bascule transparente (Failover). |
+| **17** | **Bus RPC Distribué & Écosystème Grappe** | ✅ **Prototype v0.1** | Démon `jambo-rpc`, jetons de capacités distribuées (`DistributedCapToken`), gestionnaire de grappe et bascule transparente (Failover). |
 
 ---
 

@@ -375,14 +375,16 @@ pub extern "C" fn _start() -> ! {
     kprintln!("\x1b[1;32m[PASS] Phase 17 Distributed RPC Bus & Cluster Resilience Complete\x1b[0m");
     kprintln!();
     kprintln!(
-        "\x1b[1;35m====================================================================\x1b[0m"
+        "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;32m[RELEASE] JamboOS v1.0.0 Production Microkernel Successfully Launched\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.1.0-alpha (Fondations & Architecture de Réf)\x1b[0m"
     );
-    kprintln!("\x1b[1;36m[STATUS] All 17 Engineering Phases Verified & Fully Operational\x1b[0m");
     kprintln!(
-        "\x1b[1;35m====================================================================\x1b[0m"
+        "\x1b[1;33m[STATUS] Prototypes architecturaux des 17 phases initialisés et fonctionnels\x1b[0m"
+    );
+    kprintln!(
+        "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!();
 
