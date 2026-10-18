@@ -1,7 +1,7 @@
 # **JamboOS (jambostack/jambo-os)**
 
 [![CI / Build & QEMU Boot Test](https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg)](https://github.com/jambostack/jambo-os/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-v0.2.19-orange.svg)](https://github.com/jambostack/jambo-os)
+[![Version](https://img.shields.io/badge/version-v0.2.20-orange.svg)](https://github.com/jambostack/jambo-os)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg)](https://www.rust-lang.org/)
 
@@ -13,8 +13,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.19 (Identité Cryptographique & Gestionnaire de Sessions Isolées)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. Après le chiffrement de bloc transparent et scellement TPM `jambo-cryptod` (`v0.2.18`), la version `v0.2.19` consolide le démon d'identité cryptographique et de sessions isolées `jambo-authd` (Phase 21) : élimination du modèle d'UID/GID monolithique et du super-utilisateur `root` au profit d'identités asymétriques Ed25519, authentification zéro-connaissance par défi-réponse sans mot de passe en clair en mémoire, délivrance de jetons de session capabilitaires `SessionTokenCap`, isolation stricte des espaces CSpace multi-utilisateurs et révocation atomique en cascade avec destruction sans résidu de mémoire (*zeroization*). Le système reste un prototype de recherche en cours de développement, loin d'une v1.0.0 finale.
+> **Statut du Projet : Version v0.2.20 (Moniteur de Micro-Machines Virtuelles & Isolation Matérielle Type-2)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. Après le gestionnaire d'identité et de sessions isolées `jambo-authd` (`v0.2.19`), la version `v0.2.20` introduit le moniteur de micro-machines virtuelles en espace utilisateur `jambo-vmm` (Phase 22) : hyperviseur utilisateur de type-2 sans autorité ambiante régissant des micro-VMs isolées par virtualisation matérielle (VT-x / AMD-V / ARM EL2), capacité dédiée `VmCap`, pagination imbriquée EPT (Extended Page Tables) à double traduction GPA-HPA, interception d'E/S et piégeage de VM-Exits. Le système reste un prototype de recherche en cours de développement, loin d'une v1.0.0 finale.
 
 ---
 
@@ -40,7 +40,7 @@
 
 ## **2. Tableau synoptique d'avancement des phases d'ingénierie**
 
-Toutes les **21 phases** du *Plan Directeur d'Ingénierie* sont intégralement développées, testées et validées sous environnement QEMU UEFI multicœur.
+Toutes les **22 phases** du *Plan Directeur d'Ingénierie* sont intégralement développées, testées et validées sous environnement QEMU UEFI multicœur.
 
 | Phase | Intitulé du Composant | Statut | Responsabilité Technique |
 | :---: | :--- | :---: | :--- |
@@ -66,6 +66,7 @@ Toutes les **21 phases** du *Plan Directeur d'Ingénierie* sont intégralement d
 | **19** | **Gestion d'Énergie & ACPI Ring 3** | ✅ **Terminé** | Démon `jambo-powerd`, capacités `PowerCap`, transitions S0/S3/S5, régulation C-states SMP et batterie d'urgence. |
 | **20** | **Chiffrement de Bloc & TPM 2.0** | ✅ **Terminé** | Démon `jambo-cryptod`, capacités `CryptoVolumeCap`, ChaCha20/XTS, scellement PCR démarrage mesuré. |
 | **21** | **Identité Cryptographique & Sessions** | ✅ **Terminé** | Démon `jambo-authd`, identité Ed25519, défi-réponse zéro-connaissance, jetons `SessionTokenCap`, isolation CSpace. |
+| **22** | **Micro-VMM & Isolation Type-2** | ✅ **Terminé** | Démon `jambo-vmm`, capacités `VmCap`, pagination imbriquée EPT, piégeage VM-Exits I/O et vCPUs. |
 
 ---
 
@@ -99,16 +100,21 @@ jambo-os/
 │   └── libjambo/            # Bibliothèque d'encapsulation des syscalls et primitives Ring 3
 ├── services/
 │   ├── jambo-aid/           # Démon d'intelligence artificielle locale et recherche sémantique
+│   ├── jambo-auditd/        # Registre d'audit cryptographique et détection d'anomalies
+│   ├── jambo-authd/         # Identité cryptographique Ed25519 et sessions isolées
 │   ├── jambo-comp/          # Compositeur d'affichage fenêtré zéro-copie
 │   ├── jambo-coreutils/     # Utilitaires système (ps, capstat, top, jpkg)
+│   ├── jambo-cryptod/       # Chiffrement de bloc transparent ChaCha20 et scellement TPM 2.0
 │   ├── jambo-fs/            # Système de fichiers transactionnel Merkle Copy-on-Write
 │   ├── jambo-fuzz/          # Moteur de fuzzing offensif et tests de résilience
 │   ├── jambo-init/          # Superviseur système PID 1 en espace utilisateur
 │   ├── jambo-linux/         # Traducteur d'appels système Linux (compatibilité POSIX)
 │   ├── jambo-netd/          # Démon réseau TCP/IP, TLS 1.3 et DNS sécurisé
 │   ├── jambo-pkgd/          # Gestionnaire de paquets immuables et mises à jour A/B
+│   ├── jambo-powerd/        # Gestion d'énergie ACPI et régulation thermique/C-states
 │   ├── jambo-rpc/           # Bus RPC distribué et capacités de cluster
 │   ├── jambo-sh/            # Shell interactif orienté objets
+│   ├── jambo-vmm/           # Moniteur de micro-VMs et isolation matérielle Type-2
 │   ├── jambo-wasm/          # Runtime WebAssembly / WASI Snapshot Preview 1
 │   └── pcie-bus-mgr/        # Gestionnaire de bus PCIe, MSI-X et isolation IOMMU
 └── xtask/                   # Outil de compilation, création d'ISO et test QEMU

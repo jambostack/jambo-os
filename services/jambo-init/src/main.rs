@@ -880,6 +880,97 @@ pub extern "C" fn _start() -> ! {
         Err(libjambo::SysError::InvalidHandle)
     );
 
+    // 17. Moniteur de Micro-Machines Virtuelles et Isolation Matérielle Type-2 (Phase 22 - jambo-vmm v0.2.20)
+    let vmm_cap = jambo_vmm::VmCap::new(
+        libjambo::Handle::new(801, 1),
+        101,
+        jambo_vmm::vm_rights::ALL,
+    );
+    let mut micro_vmm = jambo_vmm::MicroVmm::new(&vmm_cap, 101).expect("Create MicroVMM");
+
+    // Configuration de la mémoire imbriquée EPT
+    micro_vmm
+        .map_memory(&vmm_cap, 0x0, 0x100000, 0x2000, jambo_vmm::ept_perms::RWX)
+        .expect("Map guest memory");
+
+    // Instanciation d'un processeur virtuel vCPU
+    micro_vmm
+        .add_vcpu(&vmm_cap, 0, 0x0, 0x1000)
+        .expect("Add vCPU 0");
+
+    // Payload invité : écriture série COM1 et extinction
+    let mut guest_code = [0u8; 0x2000];
+    guest_code[0] = 0xB8; // MOV EAX, 0x4F ('O')
+    guest_code[1] = b'O';
+    guest_code[2] = 0x00;
+    guest_code[3] = 0x00;
+    guest_code[4] = 0x00;
+    guest_code[5] = 0xE6; // OUT 0xF8, AL
+    guest_code[6] = 0xF8;
+    guest_code[7] = 0xB8; // MOV EAX, 0x4B ('K')
+    guest_code[8] = b'K';
+    guest_code[9] = 0x00;
+    guest_code[10] = 0x00;
+    guest_code[11] = 0x00;
+    guest_code[12] = 0xE6; // OUT 0xF8, AL
+    guest_code[13] = 0xF8;
+    guest_code[14] = 0xF4; // HLT
+
+    // Exécution pas-à-pas avec piégeage matériel
+    assert_eq!(
+        micro_vmm
+            .step_vcpu(&vmm_cap, 0, &guest_code)
+            .expect("Step MOV 1"),
+        jambo_vmm::VmExitReason::CpuidQuery {
+            leaf: b'O' as u32,
+            subleaf: 0
+        }
+    );
+    assert_eq!(
+        micro_vmm
+            .step_vcpu(&vmm_cap, 0, &guest_code)
+            .expect("Step OUT 1"),
+        jambo_vmm::VmExitReason::IoInstruction {
+            port: 0xF8,
+            is_write: true,
+            size: 1,
+            data: b'O' as u32
+        }
+    );
+    assert_eq!(
+        micro_vmm
+            .step_vcpu(&vmm_cap, 0, &guest_code)
+            .expect("Step MOV 2"),
+        jambo_vmm::VmExitReason::CpuidQuery {
+            leaf: b'K' as u32,
+            subleaf: 0
+        }
+    );
+    assert_eq!(
+        micro_vmm
+            .step_vcpu(&vmm_cap, 0, &guest_code)
+            .expect("Step OUT 2"),
+        jambo_vmm::VmExitReason::IoInstruction {
+            port: 0xF8,
+            is_write: true,
+            size: 1,
+            data: b'K' as u32
+        }
+    );
+    assert_eq!(
+        micro_vmm
+            .step_vcpu(&vmm_cap, 0, &guest_code)
+            .expect("Step HLT"),
+        jambo_vmm::VmExitReason::Halt
+    );
+
+    // Contrôle d'accès sans privilège de virtualisation
+    let unauth_vmm_cap = jambo_vmm::VmCap::new(libjambo::Handle::new(802, 1), 101, 0);
+    assert_eq!(
+        micro_vmm.step_vcpu(&unauth_vmm_cap, 0, &guest_code),
+        Err(libjambo::SysError::PermissionDenied)
+    );
+
     // Boucle de supervision de la santé des services Ring 3
     loop {
         unsafe {

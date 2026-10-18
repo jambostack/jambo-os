@@ -1,0 +1,7 @@
+[package]
+name = "jambo-vmm"
+version = "0.2.20"
+edition = "2021"
+
+[dependencies]
+libjambo = { path = "../../libs/libjambo" }
