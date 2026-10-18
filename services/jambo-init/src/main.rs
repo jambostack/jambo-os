@@ -461,21 +461,36 @@ pub extern "C" fn _start() -> ! {
     assert_eq!(exit_code, 0);
     assert_eq!(wasm_instance.exit_code, Some(0));
 
-    // 10. Sous-système d'IA locale en espace utilisateur (Phase 15 - jambo-aid)
+    // 10. Sous-système d'IA locale en espace utilisateur (Phase 15 - jambo-aid v0.2.13)
     let mut ai_index = jambo_aid::SemanticIndex::new();
     let doc_vec = jambo_aid::VectorEmbedding::new([10, 20, 30, 40, 50, 60, 70, 80]);
     ai_index
         .insert(1, "/docs/architecture.md", doc_vec)
-        .expect("Insert semantic doc");
-    assert_eq!(ai_index.count, 1);
+        .expect("Insert semantic doc 1");
+    let net_vec = jambo_aid::VectorEmbedding::new([0, 0, 0, 0, 50, 60, 70, 80]);
+    ai_index
+        .insert(2, "/docs/network.md", net_vec)
+        .expect("Insert semantic doc 2");
+    assert_eq!(ai_index.count, 2);
 
-    // Test de recherche sémantique par similarité cosinus
+    // Test de recherche sémantique par similarité cosinus et top-k
     let query_vec = jambo_aid::VectorEmbedding::new([9, 21, 29, 42, 48, 62, 69, 81]);
     let (matched_doc, score) = ai_index
         .search_nearest(&query_vec)
         .expect("Semantic search");
     assert_eq!(matched_doc, "/docs/architecture.md");
     assert!(score > 0);
+
+    let top_k = ai_index.search_top_k(&query_vec, 2);
+    assert_eq!(top_k[0].unwrap().0, "/docs/architecture.md");
+
+    // Normalisation de similarité cosinus (parts per thousand)
+    let sim_ppm = doc_vec.cosine_similarity_ppm(&query_vec);
+    assert!(sim_ppm >= 900 && sim_ppm <= 1000);
+
+    // Tiny Embedder déterministe
+    let auto_emb = jambo_aid::VectorEmbedding::from_text("jambo kernel ai");
+    assert!(auto_emb.norm() > 0);
 
     // Test de l'orchestrateur d'intentions typées
     let mut intent_engine = jambo_aid::IntentOrchestrator::new();
@@ -487,6 +502,15 @@ pub extern "C" fn _start() -> ! {
 
     let act2 = intent_engine.parse_intent("affiche les permissions de la table de capacités");
     assert_eq!(act2, jambo_aid::IntentAction::InspectSystemCapabilities);
+
+    let act3 = intent_engine.parse_intent("configure le reseau ip");
+    assert_eq!(
+        act3,
+        jambo_aid::IntentAction::ConfigureNetwork {
+            interface: "eth0",
+            dhcp: true
+        }
+    );
 
     // 11. Durcissement de sécurité offensive, Fuzzing et tests de résilience chaotique (Phase 16 - jambo-fuzz)
     let mut fuzzer = jambo_fuzz::SecurityFuzzer::new();

@@ -10,9 +10,10 @@ use libjambo::SysError;
 
 pub const EMBEDDING_DIM: usize = 8;
 pub const MAX_INDEXED_DOCS: usize = 16;
+pub const MAX_TOP_K: usize = 4;
 
-/// Vecteur d'embedding sémantique
-#[derive(Debug, Clone, Copy)]
+/// Vecteur d'embedding sémantique quantifié (Fixed-Point i16)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VectorEmbedding {
     pub values: [i16; EMBEDDING_DIM],
 }
@@ -22,7 +23,7 @@ impl VectorEmbedding {
         Self { values }
     }
 
-    /// Calcul de similarité cosinus en arithmétique entière fixe (Fixed-Point)
+    /// Calcul du produit scalaire (Dot Product)
     pub fn dot_product(&self, other: &Self) -> i32 {
         let mut sum: i32 = 0;
         let mut i = 0;
@@ -32,6 +33,67 @@ impl VectorEmbedding {
         }
         sum
     }
+
+    /// Norme euclidienne entière (Integer Square Root)
+    pub fn norm(&self) -> u32 {
+        let mut sum_sq: u32 = 0;
+        let mut i = 0;
+        while i < EMBEDDING_DIM {
+            let v = self.values[i] as i32;
+            sum_sq += (v * v) as u32;
+            i += 1;
+        }
+        integer_sqrt(sum_sq)
+    }
+
+    /// Similarité cosinus normalisée à l'échelle [-1000, 1000]
+    pub fn cosine_similarity_ppm(&self, other: &Self) -> i32 {
+        let n1 = self.norm() as i64;
+        let n2 = other.norm() as i64;
+        if n1 == 0 || n2 == 0 {
+            return 0;
+        }
+        let dot = self.dot_product(other) as i64;
+        let raw = ((dot * 1000) / (n1 * n2)) as i32;
+        raw.clamp(-1000, 1000)
+    }
+
+    /// Génère un embedding sémantique déterministe à partir d'une chaîne de texte (Tiny N-gram Hash Embedder)
+    pub fn from_text(text: &str) -> Self {
+        let mut vals = [0i16; EMBEDDING_DIM];
+        let bytes = text.as_bytes();
+        if bytes.is_empty() {
+            return Self { values: vals };
+        }
+
+        let mut idx = 0;
+        while idx < bytes.len() {
+            let b = bytes[idx];
+            let dim = idx % EMBEDDING_DIM;
+            let weight = ((b as i16) & 0x1F) - 16;
+            vals[dim] = vals[dim].saturating_add(weight);
+            idx += 1;
+        }
+
+        Self { values: vals }
+    }
+}
+
+/// Racine carrée entière par méthode de Héron
+fn integer_sqrt(val: u32) -> u32 {
+    if val == 0 {
+        return 0;
+    }
+    let mut x0 = val / 2;
+    if x0 == 0 {
+        return 1;
+    }
+    let mut x1 = (x0 + val / x0) / 2;
+    while x1 < x0 {
+        x0 = x1;
+        x1 = (x0 + val / x0) / 2;
+    }
+    x0
 }
 
 /// Document ou objet JamboFS indexé sémantiquement
@@ -99,6 +161,38 @@ impl SemanticIndex {
 
         best_match
     }
+
+    /// Recherche les Top-K documents les plus pertinents
+    pub fn search_top_k(
+        &self,
+        query_vec: &VectorEmbedding,
+        k: usize,
+    ) -> [Option<(&'static str, i32)>; MAX_TOP_K] {
+        let mut results: [Option<(&'static str, i32)>; MAX_TOP_K] = [None; MAX_TOP_K];
+        let target_k = if k > MAX_TOP_K { MAX_TOP_K } else { k };
+
+        for obj in self.objects.iter().flatten() {
+            let score = obj.embedding.dot_product(query_vec);
+
+            for i in 0..target_k {
+                let replace = match results[i] {
+                    None => true,
+                    Some((_, existing_score)) => score > existing_score,
+                };
+                if replace {
+                    let mut j = target_k - 1;
+                    while j > i {
+                        results[j] = results[j - 1];
+                        j -= 1;
+                    }
+                    results[i] = Some((obj.path_or_title, score));
+                    break;
+                }
+            }
+        }
+
+        results
+    }
 }
 
 /// Type d'action déduite par l'orchestrateur d'intentions
@@ -107,6 +201,9 @@ pub enum IntentAction {
     LaunchApplication(&'static str),
     InspectSystemCapabilities,
     QuerySystemMetrics,
+    SearchSemanticFile(&'static str),
+    ConfigureNetwork { interface: &'static str, dhcp: bool },
+    PerformStorageBackup { destination: &'static str },
     UnknownIntent,
 }
 
@@ -136,8 +233,74 @@ impl IntentOrchestrator {
             IntentAction::InspectSystemCapabilities
         } else if text.contains("top") || text.contains("cpu") || text.contains("metrics") {
             IntentAction::QuerySystemMetrics
+        } else if text.contains("find") || text.contains("search") || text.contains("cherche") {
+            IntentAction::SearchSemanticFile("architecture.md")
+        } else if text.contains("network") || text.contains("reseau") || text.contains("ip") {
+            IntentAction::ConfigureNetwork {
+                interface: "eth0",
+                dhcp: true,
+            }
+        } else if text.contains("backup") || text.contains("sauvegarde") {
+            IntentAction::PerformStorageBackup {
+                destination: "/backup/cas_store.raw",
+            }
         } else {
             IntentAction::UnknownIntent
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_vector_cosine_and_dot() {
+        let v1 = VectorEmbedding::new([10, 20, 30, 40, 50, 60, 70, 80]);
+        let v2 = VectorEmbedding::new([10, 20, 30, 40, 50, 60, 70, 80]);
+        let dot = v1.dot_product(&v2);
+        assert!(dot > 0);
+        let sim = v1.cosine_similarity_ppm(&v2);
+        assert_eq!(sim, 1000);
+    }
+
+    #[test]
+    fn test_semantic_index_top_k() {
+        let mut idx = SemanticIndex::new();
+        idx.insert(
+            1,
+            "/docs/arch.md",
+            VectorEmbedding::new([10, 20, 30, 40, 0, 0, 0, 0]),
+        )
+        .unwrap();
+        idx.insert(
+            2,
+            "/docs/net.md",
+            VectorEmbedding::new([0, 0, 0, 0, 10, 20, 30, 40]),
+        )
+        .unwrap();
+
+        let q = VectorEmbedding::new([10, 20, 30, 40, 0, 0, 0, 0]);
+        let top_matches = idx.search_top_k(&q, 2);
+        assert_eq!(top_matches[0].unwrap().0, "/docs/arch.md");
+    }
+
+    #[test]
+    fn test_tiny_embedder_and_intents() {
+        let emb = VectorEmbedding::from_text("jambo kernel microkernel");
+        assert_ne!(emb.values, [0; EMBEDDING_DIM]);
+
+        let mut orch = IntentOrchestrator::new();
+        assert_eq!(
+            orch.parse_intent("lance le terminal"),
+            IntentAction::LaunchApplication("jambo-term")
+        );
+        assert_eq!(
+            orch.parse_intent("configure le reseau ip"),
+            IntentAction::ConfigureNetwork {
+                interface: "eth0",
+                dhcp: true
+            }
+        );
     }
 }
