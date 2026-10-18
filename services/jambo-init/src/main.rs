@@ -143,6 +143,23 @@ pub extern "C" fn _start() -> ! {
         .expect("Handshake TLS 1.3");
     let _ = netd.close_tcp_stream(sock_id);
 
+    // Émission de trame Ethernet sécurisée via VirtIO-Net (v0.2.7)
+    let frame_payload = b"GET /health HTTP/1.1\r\nHost: api.jambostack.org\r\n\r\n";
+    netd.transmit_frame(&legit_netcap, frame_payload, ip, 443)
+        .expect("Émission de trame Ethernet");
+
+    // Réception et décodage en loopback
+    let mut rx_buf = [0u8; 128];
+    let rx_len = netd
+        .net_driver
+        .receive(&mut rx_buf)
+        .expect("Réception VirtIO-Net");
+    assert!(rx_len > 0);
+    let ethertype = netd
+        .process_incoming_frame(&rx_buf[..rx_len])
+        .expect("Décodage Ethernet");
+    assert_eq!(ethertype, jambo_netd::ETHERTYPE_IPV4);
+
     // Test de sécurité : Rejet formel d'accès réseau sans capacité NetCap valide
     let restricted_netcap = jambo_netd::NetworkCapability::new(
         libjambo::Handle::new(11, 1),

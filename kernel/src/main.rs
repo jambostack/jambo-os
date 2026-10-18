@@ -131,7 +131,7 @@ pub extern "C" fn _start() -> ! {
     // 4. Bannière système d'accueil
     kprintln!("\x1b[1;36m");
     kprintln!("================================================================================");
-    kprintln!("    JAMBO-OS (JamboKernel v0.2.6) — Micro-noyau de 3e Génération              ");
+    kprintln!("    JAMBO-OS (JamboKernel v0.2.7) — Micro-noyau de 3e Génération              ");
     kprintln!("    Architecture : Micro-noyau orienté capacités en Rust no_std (x86_64/AArch64)");
     kprintln!("    Auteur & Architecte Principal : ASSOGBA Prudence Dieudonné                 ");
     kprintln!("    Dépôt Officiel : https://github.com/jambostack/jambo-os                    ");
@@ -668,9 +668,9 @@ pub extern "C" fn _start() -> ! {
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.6 (Système de Fichiers Transactionnel CoW JamboFS & VirtIO-Block)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.7 (Pile Réseau Zéro-Autorité jambo-netd, VirtIO-Net & Capacités NetCap)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.6 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.7 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );

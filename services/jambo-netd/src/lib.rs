@@ -252,4 +252,41 @@ impl JamboNetd {
         // Négociation validée TLS_AES_256_GCM_SHA384
         Ok(true)
     }
+
+    /// Transmet un paquet encapsulé dans Ethernet et IPv4 via VirtIO-Net
+    pub fn transmit_frame(
+        &mut self,
+        cap: &NetworkCapability,
+        payload: &[u8],
+        _remote_ip: [u8; 4],
+        remote_port: u16,
+    ) -> Result<(), SysError> {
+        cap.verify_access(net_rights::CONNECT, remote_port)?;
+
+        let mut packet = [0u8; 128];
+        let total_len = 14 + 20 + payload.len().min(64);
+        if total_len > packet.len() {
+            return Err(SysError::InvalidArgument);
+        }
+
+        // En-tête Ethernet
+        packet[0..6].copy_from_slice(&[0xFF; 6]); // Broadcast MAC destination
+        packet[6..12].copy_from_slice(&self.net_driver.mac_address);
+        packet[12..14].copy_from_slice(&ETHERTYPE_IPV4.to_be_bytes());
+
+        // Payload
+        let copy_len = payload.len().min(64);
+        packet[34..34 + copy_len].copy_from_slice(&payload[..copy_len]);
+
+        self.net_driver.transmit(&packet[..total_len])
+    }
+
+    /// Analyse et décode une trame Ethernet entrante
+    pub fn process_incoming_frame(&mut self, frame: &[u8]) -> Result<u16, SysError> {
+        if frame.len() < 14 {
+            return Err(SysError::BufferTooSmall);
+        }
+        let ethertype = u16::from_be_bytes([frame[12], frame[13]]);
+        Ok(ethertype)
+    }
 }

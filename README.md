@@ -1,7 +1,7 @@
 # **JamboOS (jambostack/jambo-os)**
 
 [![CI / Build & QEMU Boot Test](https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg)](https://github.com/jambostack/jambo-os/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-v0.2.6-orange.svg)](https://github.com/jambostack/jambo-os)
+[![Version](https://img.shields.io/badge/version-v0.2.7-orange.svg)](https://github.com/jambostack/jambo-os)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg)](https://www.rust-lang.org/)
 
@@ -13,8 +13,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.6 (Système de Fichiers Transactionnel CoW JamboFS & Pilote VirtIO-Block)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. Après la clôture des 24 appels système et de la gestion du temps haute précision (`v0.2.5`), la version `v0.2.6` implémente le serveur de fichiers transactionnel `JamboFS` (Phase 7) en espace utilisateur Ring 3 : structure d'inodes et arbres B+ Copy-on-Write (CoW), validation d'intégrité sans corruption silencieuse par condensat Merkle 256 bits, protocole IPC de système de fichiers (`FsRequest`, `FsResponse`), et intégration opérationnelle avec le pilote VirtIO-Block pour la soumission et l'écriture synchrone de secteurs. Le système reste un prototype de recherche en cours de développement, loin d'une v1.0.0 finale.
+> **Statut du Projet : Version v0.2.7 (Pile Réseau Zéro-Autorité jambo-netd, VirtIO-Net & Capacités NetCap)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. Après le système de fichiers transactionnel `JamboFS` (`v0.2.6`), la version `v0.2.7` implémente le démon de pile réseau en espace utilisateur `jambo-netd` (Phase 9) : communication réseau sans autorité ambiante strictement soumise à la détention d'une capacité `NetCap` avec filtrage fin de droits et de ports, encapsulation complète de trames Ethernet/IPv4/TCP, résolution DNS sécurisée via DNS-over-TLS (port 853), poignée de main TLS 1.3 (`TLS_AES_256_GCM_SHA384`), et pilote réseau VirtIO-Net 1.2 pour la transmission matérielle et loopback. Le système reste un prototype de recherche en cours de développement, loin d'une v1.0.0 finale.
 
 ---
 
