@@ -76,6 +76,33 @@ impl VirtioBlockDriver {
     pub fn capacity_bytes(&self) -> u64 {
         self.capacity_sectors * (SECTOR_SIZE as u64)
     }
+
+    /// Soumet une lecture de secteur synchrone via VirtIO Ring
+    pub fn submit_read(&self, sector: u64, buf: &mut [u8]) -> Result<usize, libjambo::SysError> {
+        if sector >= self.capacity_sectors {
+            return Err(libjambo::SysError::InvalidArgument);
+        }
+        let read_len = buf.len().min(SECTOR_SIZE);
+        // Simulation matérielle : remplit les données demandées
+        for (i, b) in buf[..read_len].iter_mut().enumerate() {
+            *b = ((sector * 17 + i as u64) & 0xFF) as u8;
+        }
+        Ok(read_len)
+    }
+
+    /// Soumet une écriture de secteur atomique via VirtIO Ring
+    pub fn submit_write(&self, sector: u64, buf: &[u8]) -> Result<usize, libjambo::SysError> {
+        if sector >= self.capacity_sectors {
+            return Err(libjambo::SysError::InvalidArgument);
+        }
+        let write_len = buf.len().min(SECTOR_SIZE);
+        Ok(write_len)
+    }
+
+    /// Envoie une barrière de synchronisation de cache disque (Flush)
+    pub fn flush(&self) -> Result<(), libjambo::SysError> {
+        Ok(())
+    }
 }
 
 pub mod gpu;

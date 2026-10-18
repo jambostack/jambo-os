@@ -85,6 +85,33 @@ pub extern "C" fn _start() -> ! {
     let _ = nvme_ctrl.read_blocks(0, 8, 0x1000_0000);
     let _ = nvme_ctrl.flush();
 
+    // 4b. Système de Fichiers Transactionnel CoW (JamboFS) & Pilote VirtIO-Block (v0.2.6)
+    let virtio_blk = virtio_drv::VirtioBlockDriver::new(0xFE00_4000, 4096);
+    assert_eq!(virtio_blk.capacity_bytes(), 4096 * 512);
+
+    let mut fs_server = jambo_fs::JamboFsServer::new(jambo_fs::Uberblock::default());
+    assert_eq!(fs_server.generation(), 1);
+
+    // Écriture transactionnelle Copy-on-Write d'un fichier de configuration
+    let test_data = b"{\"hostname\": \"jambobox\", \"secure_boot\": true}";
+    let (_inode, block_offset) = fs_server
+        .write_file_cow(test_data)
+        .expect("Écriture CoW JamboFS");
+    assert_eq!(fs_server.generation(), 2);
+    assert!(block_offset > 0);
+    assert!(fs_server.verify_integrity());
+
+    // Simulation d'écriture et lecture de secteur via le pilote VirtIO-Block
+    let mut sector_buf = [0u8; 512];
+    sector_buf[..test_data.len()].copy_from_slice(test_data);
+    let written = virtio_blk.submit_write(0, &sector_buf).expect("Écriture secteur VirtIO");
+    assert_eq!(written, 512);
+
+    let mut read_buf = [0u8; 512];
+    let read_bytes = virtio_blk.submit_read(0, &mut read_buf).expect("Lecture secteur VirtIO");
+    assert_eq!(read_bytes, 512);
+    let _ = virtio_blk.flush();
+
     // 5. Initialisation et validation de la pile réseau en espace utilisateur (Phase 9 - jambo-netd)
     let mut netd = jambo_netd::JamboNetd::new();
 

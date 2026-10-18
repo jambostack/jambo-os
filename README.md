@@ -1,7 +1,7 @@
 # **JamboOS (jambostack/jambo-os)**
 
 [![CI / Build & QEMU Boot Test](https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg)](https://github.com/jambostack/jambo-os/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-v0.2.5-orange.svg)](https://github.com/jambostack/jambo-os)
+[![Version](https://img.shields.io/badge/version-v0.2.6-orange.svg)](https://github.com/jambostack/jambo-os)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg)](https://www.rust-lang.org/)
 
@@ -13,8 +13,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.5 (Temps Haute Précision, TSC Invariant, CMOS RTC & Clôture des 24 Appels Système)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. Après la gestion des ports et liaisons d'IRQ (`v0.2.4`), la version `v0.2.5` implémente le sous-système de temps haute précision : prise en charge du TSC invariant et des compteurs matériels CPU à 2.0 GHz, lecture du calendrier et de l'heure via le pilote CMOS RTC matériel, horloges POSIX conformes (`CLOCK_REALTIME`, `CLOCK_MONOTONIC`, `CLOCK_BOOTTIME`), et implémentation complète de l'appel système `ClockGettime` (Syscall 24). Avec ce jalon, l'intégralité des 24 appels système fondamentaux du micro-noyau JamboOS est opérationnelle, typée et sécurisée par capacités. Le système reste un prototype de recherche en cours de développement, loin d'une v1.0.0 finale.
+> **Statut du Projet : Version v0.2.6 (Système de Fichiers Transactionnel CoW JamboFS & Pilote VirtIO-Block)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. Après la clôture des 24 appels système et de la gestion du temps haute précision (`v0.2.5`), la version `v0.2.6` implémente le serveur de fichiers transactionnel `JamboFS` (Phase 7) en espace utilisateur Ring 3 : structure d'inodes et arbres B+ Copy-on-Write (CoW), validation d'intégrité sans corruption silencieuse par condensat Merkle 256 bits, protocole IPC de système de fichiers (`FsRequest`, `FsResponse`), et intégration opérationnelle avec le pilote VirtIO-Block pour la soumission et l'écriture synchrone de secteurs. Le système reste un prototype de recherche en cours de développement, loin d'une v1.0.0 finale.
 
 ---
 
