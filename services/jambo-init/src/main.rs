@@ -1015,6 +1015,44 @@ pub extern "C" fn _start() -> ! {
         Err(libjambo::SysError::PermissionDenied)
     );
 
+    // 19. Synchronisation Horlogère Distribuée PTP/NTP (Phase 24 - jambo-timed v0.2.22)
+    let time_cap = jambo_timed::TimeSyncCap::new(
+        libjambo::Handle::new(1001, 1),
+        1,
+        jambo_timed::time_rights::ALL,
+    );
+    let mut time_server =
+        jambo_timed::TimeSyncServer::new(1, jambo_timed::PreciseTime::new(1792340000, 0));
+
+    // Lecture du temps garanti
+    let t_init = time_server.read_time(&time_cap).expect("Read precise time");
+    assert_eq!(t_init.seconds, 1792340000);
+
+    // Synchronisation d'un échantillon PTP (IEEE 1588)
+    let ptp_sample = jambo_timed::PtpSample {
+        t1_master_tx: jambo_timed::PreciseTime::new(1792340000, 0),
+        t2_slave_rx: jambo_timed::PreciseTime::new(1792340000, 15_000_000),
+        t3_slave_tx: jambo_timed::PreciseTime::new(1792340000, 20_000_000),
+        t4_master_rx: jambo_timed::PreciseTime::new(1792340000, 25_000_000),
+    };
+    let (offset, delay) = time_server
+        .apply_ptp_sync(&time_cap, &ptp_sample)
+        .expect("Apply PTP sync");
+    assert_eq!(offset, 5_000_000); // 5 ms offset
+    assert_eq!(delay, 10_000_000); // 10 ms delay
+    assert_eq!(time_server.sync_count, 1);
+
+    // Progression monotone stricte de l'horloge
+    let t_next = time_server.advance_time(1_000_000);
+    assert!(t_next.as_nanos() > t_init.as_nanos());
+
+    // Contrôle d'accès : rejet strict de synchronisation sans TimeSyncCap
+    let unauth_time_cap = jambo_timed::TimeSyncCap::new(libjambo::Handle::new(1002, 1), 1, 0);
+    assert_eq!(
+        time_server.apply_ptp_sync(&unauth_time_cap, &ptp_sample),
+        Err(libjambo::SysError::PermissionDenied)
+    );
+
     // Boucle de supervision de la santé des services Ring 3
     loop {
         unsafe {

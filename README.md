@@ -1,7 +1,7 @@
 # **JamboOS (jambostack/jambo-os)**
 
 [![CI / Build & QEMU Boot Test](https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg)](https://github.com/jambostack/jambo-os/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-v0.2.21-orange.svg)](https://github.com/jambostack/jambo-os)
+[![Version](https://img.shields.io/badge/version-v0.2.22-orange.svg)](https://github.com/jambostack/jambo-os)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg)](https://www.rust-lang.org/)
 
@@ -13,8 +13,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.21 (Virtualisation de Périphériques vhost-user & E/S Découplées)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. Après le moniteur de micro-machines virtuelles `jambo-vmm` (`v0.2.20`), la version `v0.2.21` introduit le démon de virtualisation de périphériques en espace utilisateur `jambo-vhostd` (Phase 23) : protocoles vhost-user normalisés (VirtIO-Net, VirtIO-Block) découplés de l'hyperviseur pour une sécurité maximale en Ring 3, capacités dédiées `VhostCap`, files d'attente virtuelles (*virtqueues*) zéro-copie et interconnexion native avec la pile réseau et le système de fichiers hôtes. Le système reste un prototype de recherche en cours de développement, loin d'une v1.0.0 finale.
+> **Statut du Projet : Version v0.2.22 (Synchronisation Horlogère Distribuée PTP/NTP)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. Après la virtualisation de périphériques invités vhost-user `jambo-vhostd` (`v0.2.21`), la version `v0.2.22` introduit le démon de synchronisation horlogère distribuée en espace utilisateur `jambo-timed` (Phase 24) : implémentation haute précision PTP (IEEE 1588) et NTP sans autorité ambiante, asservissement PLL/FLL par correction de dérive de fréquence (*slewing*), garantie mathématique d'absence de régression temporelle (monotonicité inviolable) et protection par capacités dédiées `TimeSyncCap`. Le système reste un prototype de recherche en cours de développement, loin d'une v1.0.0 finale.
 
 ---
 
@@ -40,7 +40,7 @@
 
 ## **2. Tableau synoptique d'avancement des phases d'ingénierie**
 
-Toutes les **23 phases** du *Plan Directeur d'Ingénierie* sont intégralement développées, testées et validées sous environnement QEMU UEFI multicœur.
+Toutes les **24 phases** du *Plan Directeur d'Ingénierie* sont intégralement développées, testées et validées sous environnement QEMU UEFI multicœur.
 
 | Phase | Intitulé du Composant | Statut | Responsabilité Technique |
 | :---: | :--- | :---: | :--- |
@@ -68,6 +68,7 @@ Toutes les **23 phases** du *Plan Directeur d'Ingénierie* sont intégralement d
 | **21** | **Identité Cryptographique & Sessions** | ✅ **Terminé** | Démon `jambo-authd`, identité Ed25519, défi-réponse zéro-connaissance, jetons `SessionTokenCap`, isolation CSpace. |
 | **22** | **Micro-VMM & Isolation Type-2** | ✅ **Terminé** | Démon `jambo-vmm`, capacités `VmCap`, pagination imbriquée EPT, piégeage VM-Exits I/O et vCPUs. |
 | **23** | **Périphériques Virtuels vhost-user** | ✅ **Terminé** | Démon `jambo-vhostd`, capacités `VhostCap`, émulation VirtIO-Net/Block découplée, virtqueues zéro-copie. |
+| **24** | **Synchronisation Horlogère PTP/NTP** | ✅ **Terminé** | Démon `jambo-timed`, capacités `TimeSyncCap`, asservissement PLL/FLL, monotonicité garantie, PTP (IEEE 1588). |
 
 ---
 
@@ -115,6 +116,7 @@ jambo-os/
 │   ├── jambo-powerd/        # Gestion d'énergie ACPI et régulation thermique/C-states
 │   ├── jambo-rpc/           # Bus RPC distribué et capacités de cluster
 │   ├── jambo-sh/            # Shell interactif orienté objets
+│   ├── jambo-timed/         # Synchronisation horlogère distribuée PTP/NTP haute précision
 │   ├── jambo-vhostd/        # Virtualisation de périphériques vhost-user VirtIO Ring 3
 │   ├── jambo-vmm/           # Moniteur de micro-VMs et isolation matérielle Type-2
 │   ├── jambo-wasm/          # Runtime WebAssembly / WASI Snapshot Preview 1
