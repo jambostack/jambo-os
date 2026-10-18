@@ -1537,6 +1537,62 @@ pub extern "C" fn _start() -> ! {
         Err(libjambo::SysError::PermissionDenied)
     );
 
+    // 29. Découverte de Services Distribuée & Résolution de Noms (Phase 34 - jambo-serviced v0.2.32)
+    let discovery_cap = jambo_serviced::DiscoveryCap::new(
+        libjambo::Handle::new(2001, 1),
+        jambo_serviced::discovery_rights::ALL,
+    );
+    let mut reg = jambo_serviced::ServiceRegistry::new();
+
+    reg.register_instance(
+        &discovery_cap,
+        b"vault.cluster",
+        1,
+        [10, 42, 1, 1],
+        8200,
+        1,
+        60,
+        1000,
+    )
+    .expect("Register vault instance 1");
+
+    reg.register_instance(
+        &discovery_cap,
+        b"vault.cluster",
+        2,
+        [10, 42, 1, 2],
+        8200,
+        2,
+        60,
+        1000,
+    )
+    .expect("Register vault instance 2");
+
+    // Résolution d'endpoints
+    let mut endpoints = [([0u8; 4], 0u16); 4];
+    let resolved_count = reg
+        .resolve(&discovery_cap, b"vault.cluster", 1010, &mut endpoints)
+        .expect("Resolve vault service endpoints");
+    assert_eq!(resolved_count, 2);
+    assert_eq!(endpoints[0], ([10, 42, 1, 1], 8200));
+    assert_eq!(endpoints[1], ([10, 42, 1, 2], 8200));
+
+    // Contrôle d'accès sans autorité ambiante
+    let unauth_disc_cap = jambo_serviced::DiscoveryCap::new(libjambo::Handle::new(2002, 1), 0);
+    assert_eq!(
+        reg.register_instance(
+            &unauth_disc_cap,
+            b"fake.service",
+            9,
+            [0, 0, 0, 0],
+            80,
+            1,
+            60,
+            1000
+        ),
+        Err(libjambo::SysError::PermissionDenied)
+    );
+
     // Boucle de supervision de la santé des services Ring 3
     loop {
         unsafe {
