@@ -88,6 +88,27 @@ static inline uint32_t jambo_handle_generation(jambo_handle_t h) {
 #define JAMBO_SYS_IOMMU_MAP      23
 #define JAMBO_SYS_CLOCK_GETTIME  24
 
+/* === Clés du vecteur auxiliaire ELF (Auxiliary Vector) System V ABI === */
+
+#define JAMBO_AT_NULL    0
+#define JAMBO_AT_IGNORE  1
+#define JAMBO_AT_EXECFD  2
+#define JAMBO_AT_PHDR    3
+#define JAMBO_AT_PHENT   4
+#define JAMBO_AT_PHNUM   5
+#define JAMBO_AT_PAGESZ  6
+#define JAMBO_AT_BASE    7
+#define JAMBO_AT_FLAGS   8
+#define JAMBO_AT_ENTRY   9
+#define JAMBO_AT_NOTELF  10
+#define JAMBO_AT_UID     11
+#define JAMBO_AT_EUID    12
+#define JAMBO_AT_GID     13
+#define JAMBO_AT_EGID    14
+#define JAMBO_AT_CLKTCK  17
+#define JAMBO_AT_SECURE  23
+#define JAMBO_AT_RANDOM  25
+
 /* === Invocations brutes d'appels système === */
 
 #if defined(__x86_64__)

@@ -1,6 +1,8 @@
+#[cfg(target_arch = "x86_64")]
 use core::arch::global_asm;
 
 // Sauvegarde et restauration des registres callee-saved System V AMD64 (rbx, rbp, r12-r15)
+#[cfg(target_arch = "x86_64")]
 global_asm!(
     r#"
     .globl switch_context
@@ -47,6 +49,37 @@ global_asm!(
         push 0x23          // CS utilisateur
         push rdi           // RIP utilisateur
         iretq
+    "#
+);
+
+#[cfg(target_arch = "aarch64")]
+core::arch::global_asm!(
+    r#"
+    .globl switch_context
+    switch_context:
+        stp x19, x20, [sp, #-16]!
+        stp x21, x22, [sp, #-16]!
+        stp x23, x24, [sp, #-16]!
+        stp x25, x26, [sp, #-16]!
+        stp x27, x28, [sp, #-16]!
+        stp x29, x30, [sp, #-16]!
+        mov x2, sp
+        str x2, [x0]
+        mov sp, x1
+        ldp x29, x30, [sp], #16
+        ldp x27, x28, [sp], #16
+        ldp x25, x26, [sp], #16
+        ldp x23, x24, [sp], #16
+        ldp x21, x22, [sp], #16
+        ldp x19, x20, [sp], #16
+        ret
+
+    .globl enter_user_mode
+    enter_user_mode:
+        msr elr_el1, x0
+        msr sp_el0, x1
+        msr spsr_el1, xzr
+        eret
     "#
 );
 

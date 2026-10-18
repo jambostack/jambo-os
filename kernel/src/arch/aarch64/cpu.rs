@@ -30,3 +30,5 @@ pub fn init_per_cpu(cpu_id: u32, mpidr: u64, is_bsp: bool) {
 pub fn current_cpu() -> &'static PerCpuData {
     unsafe { &PER_CPU[0] }
 }
+
+pub fn set_current_kernel_stack(_stack_top: u64) {}

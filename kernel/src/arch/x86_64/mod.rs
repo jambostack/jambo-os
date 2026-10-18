@@ -8,8 +8,8 @@ pub mod qemu;
 pub mod serial;
 
 pub use apic::{disable_pic, has_x2apic, LocalApic, X2Apic, IA32_APIC_BASE_MSR};
-pub use cpu::{current_cpu, init_per_cpu, PerCpuData, MAX_CPUS};
-pub use gdt::init_gdt;
+pub use cpu::{current_cpu, init_per_cpu, set_current_kernel_stack, PerCpuData, MAX_CPUS};
+pub use gdt::{init_gdt, set_kernel_stack};
 pub use idt::init_idt;
 pub use io::*;
 pub use iommu::{init_iommu, IommuDomain, PciBdf, IOMMU_MANAGER};

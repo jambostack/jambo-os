@@ -1,7 +1,7 @@
 # **JamboOS (jambostack/jambo-os)**
 
 [![CI / Build & QEMU Boot Test](https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg)](https://github.com/jambostack/jambo-os/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-v0.2.0-orange.svg)](https://github.com/jambostack/jambo-os)
+[![Version](https://img.shields.io/badge/version-v0.2.1-orange.svg)](https://github.com/jambostack/jambo-os)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg)](https://www.rust-lang.org/)
 
@@ -13,8 +13,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.0 (Chargeur ELF64, Demand Paging, C ABI & Multi-Architecture)**  
-> Le projet JamboOS avance méthodiquement dans son cycle pré-alpha v0.*.*. Après la validation des fondations initiales (`v0.1.0`), la version `v0.2.0` introduit le chargeur de binaires exécutables ELF64, la résolution des défauts de page (Demand Paging), l'en-tête C ABI natif (`jambo.h`) et le support multi-architecture x86-64 / AArch64 vérifié par CI. Le système reste un prototype de recherche en cours de développement, loin d'une v1.0.0 finale.
+> **Statut du Projet : Version v0.2.1 (Gestion des Processus Utilisateurs & Initialisation de la Pile System V ABI)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. Après le chargeur ELF64 et le Demand Paging (`v0.2.0`), la version `v0.2.1` implémente l'initialisation des processus utilisateurs Ring 3 (`sched::Process`), la configuration du cadre de pile utilisateur selon la System V AMD64 ABI (`argc`, `argv`, `envp`, vecteur auxiliaire `auxv` avec `AT_PAGESZ`, `AT_ENTRY`, `AT_PHDR`, `AT_RANDOM`), l'actualisation dynamique du RSP0 superviseur dans le TSS et l'ordonnancement de threads utilisateurs isolés sous EEVDF. Le système reste un prototype de recherche en cours de développement, loin d'une v1.0.0 finale.
 
 ---
 

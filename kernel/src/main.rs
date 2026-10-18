@@ -129,7 +129,7 @@ pub extern "C" fn _start() -> ! {
     // 4. Bannière système d'accueil
     kprintln!("\x1b[1;36m");
     kprintln!("================================================================================");
-    kprintln!("    JAMBO-OS (JamboKernel v0.2.0) — Micro-noyau de 3e Génération              ");
+    kprintln!("    JAMBO-OS (JamboKernel v0.2.1) — Micro-noyau de 3e Génération              ");
     kprintln!("    Architecture : Micro-noyau orienté capacités en Rust no_std (x86_64/AArch64)");
     kprintln!("    Auteur & Architecte Principal : ASSOGBA Prudence Dieudonné                 ");
     kprintln!("    Dépôt Officiel : https://github.com/jambostack/jambo-os                    ");
@@ -305,12 +305,58 @@ pub extern "C" fn _start() -> ! {
         kprintln!("[SMP] Mode mono-cœur (Réponse MP non disponible)");
     }
 
-    // 9. Initialisation et validation de l'ordonnanceur multicœur EEVDF (Phase 5)
+    // 9. Initialisation et validation de l'ordonnanceur multicœur EEVDF et processus utilisateurs (Phase 5)
     let thread1 = sched::Thread::new_kernel(1, 0, test_worker).expect("Thread 1");
     let thread2 = sched::Thread::new_kernel(2, 0, test_worker).expect("Thread 2");
     sched::SCHEDULER.lock().enqueue(thread1);
     sched::SCHEDULER.lock().enqueue(thread2);
     kprintln!("[SCHED/EEVDF] Ordonnanceur EEVDF opérationnel avec 2 threads de test en file");
+
+    // Création et validation d'un processus utilisateur initial Ring 3 depuis ELF64 (v0.2.1)
+    let (init_process, init_thread) = sched::Process::create_user_process(
+        1,
+        "init",
+        &test_elf,
+        &["init", "--daemon"],
+        &["PATH=/bin:/usr/bin", "TERM=xterm-256color"],
+    )
+    .expect("Création du processus utilisateur initial");
+
+    // Validation formelle du cadre de pile utilisateur System V AMD64 ABI
+    let user_sp = init_thread.lock().user_rsp;
+    assert_eq!(user_sp % 16, 0, "Alignement 16 octets du RSP utilisateur");
+
+    let read_argc = init_process
+        .aspace
+        .read_u64(user_sp as usize)
+        .expect("Lecture argc utilisateur");
+    assert_eq!(read_argc, 2, "argc doit être égal à 2");
+
+    let argv0_ptr = init_process
+        .aspace
+        .read_u64((user_sp + 8) as usize)
+        .expect("Lecture pointeur argv[0]");
+    let argv0_str = init_process
+        .aspace
+        .read_string(argv0_ptr as usize, 32)
+        .expect("Lecture chaîne argv[0]");
+    assert_eq!(argv0_str.as_str(), "init");
+
+    let argv1_ptr = init_process
+        .aspace
+        .read_u64((user_sp + 16) as usize)
+        .expect("Lecture pointeur argv[1]");
+    let argv1_str = init_process
+        .aspace
+        .read_string(argv1_ptr as usize, 32)
+        .expect("Lecture chaîne argv[1]");
+    assert_eq!(argv1_str.as_str(), "--daemon");
+
+    sched::SCHEDULER.lock().enqueue(init_thread);
+    kprintln!(
+        "[PROCESS] Processus utilisateur init (PID 1) initialisé avec pile System V ABI (RSP: {:#018x})",
+        user_sp
+    );
 
     // 10. Initialisation CSpace, configuration SYSCALL et IPC hybride (Phase 6)
     cap::init_cspace();
@@ -395,9 +441,9 @@ pub extern "C" fn _start() -> ! {
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.0 (Chargeur ELF64, Demand Paging & Multi-Arch)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.1 (Processus Utilisateur & Initialisation Pile ABI)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.0 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.1 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );

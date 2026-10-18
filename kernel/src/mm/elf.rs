@@ -65,6 +65,9 @@ pub struct Elf64Phdr {
 pub struct ElfLoadResult {
     pub entry_point: u64,
     pub stack_pointer: u64,
+    pub phdr_vaddr: u64,
+    pub phentsize: u16,
+    pub phnum: u16,
     pub total_pages_mapped: usize,
 }
 
@@ -104,6 +107,7 @@ pub fn load_elf64(aspace: &AddressSpace, elf_bytes: &[u8]) -> Result<ElfLoadResu
     }
 
     let mut total_pages_mapped = 0;
+    let mut phdr_vaddr = 0u64;
 
     // 2. Parcourir et mapper tous les segments PT_LOAD
     for i in 0..phnum {
@@ -111,7 +115,19 @@ pub fn load_elf64(aspace: &AddressSpace, elf_bytes: &[u8]) -> Result<ElfLoadResu
         let phdr_ptr = unsafe { elf_bytes.as_ptr().add(phdr_offset) as *const Elf64Phdr };
         let phdr = unsafe { core::ptr::read_unaligned(phdr_ptr) };
 
+        if phdr.p_type == 6 {
+            // PT_PHDR = 6
+            phdr_vaddr = phdr.p_vaddr;
+        }
+
         if phdr.p_type == PT_LOAD {
+            if phdr_vaddr == 0
+                && phdr.p_offset <= phoff as u64
+                && (phdr.p_offset + phdr.p_filesz) >= (phoff + phnum * phentsize) as u64
+            {
+                phdr_vaddr = phdr.p_vaddr + (phoff as u64 - phdr.p_offset);
+            }
+
             // Vérification de sécurité formelle : Confinement strict en espace utilisateur (Lower-Half)
             if phdr.p_vaddr >= 0x0000_8000_0000_0000
                 || phdr.p_vaddr + phdr.p_memsz >= 0x0000_8000_0000_0000
@@ -184,6 +200,10 @@ pub fn load_elf64(aspace: &AddressSpace, elf_bytes: &[u8]) -> Result<ElfLoadResu
         }
     }
 
+    if phdr_vaddr == 0 {
+        phdr_vaddr = header.e_entry;
+    }
+
     // 3. Allouer et mapper la pile utilisateur (64 Kio avec permissions READ | WRITE)
     let stack_vmo = Vmo::create(USER_STACK_SIZE);
     let stack_pages = stack_vmo.page_count();
@@ -200,6 +220,9 @@ pub fn load_elf64(aspace: &AddressSpace, elf_bytes: &[u8]) -> Result<ElfLoadResu
     Ok(ElfLoadResult {
         entry_point: header.e_entry,
         stack_pointer: USER_STACK_TOP,
+        phdr_vaddr,
+        phentsize: header.e_phentsize,
+        phnum: header.e_phnum,
         total_pages_mapped,
     })
 }

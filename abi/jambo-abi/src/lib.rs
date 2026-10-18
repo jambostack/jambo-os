@@ -64,6 +64,28 @@ pub mod vmo_prot {
     pub const USER: u32 = 1 << 3;
 }
 
+/// Identifiants du vecteur auxiliaire (ELF Auxiliary Vector) selon la System V ABI
+pub mod auxv {
+    pub const AT_NULL: u64 = 0;
+    pub const AT_IGNORE: u64 = 1;
+    pub const AT_EXECFD: u64 = 2;
+    pub const AT_PHDR: u64 = 3;
+    pub const AT_PHENT: u64 = 4;
+    pub const AT_PHNUM: u64 = 5;
+    pub const AT_PAGESZ: u64 = 6;
+    pub const AT_BASE: u64 = 7;
+    pub const AT_FLAGS: u64 = 8;
+    pub const AT_ENTRY: u64 = 9;
+    pub const AT_NOTELF: u64 = 10;
+    pub const AT_UID: u64 = 11;
+    pub const AT_EUID: u64 = 12;
+    pub const AT_GID: u64 = 13;
+    pub const AT_EGID: u64 = 14;
+    pub const AT_CLKTCK: u64 = 17;
+    pub const AT_SECURE: u64 = 23;
+    pub const AT_RANDOM: u64 = 25;
+}
+
 /// Numéros d'appels système (24 syscalls)
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

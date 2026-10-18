@@ -128,3 +128,11 @@ pub fn init_gdt() {
         core::arch::asm!("ltr {0:x}", in(reg) TSS_SEL, options(nomem, nostack, preserves_flags));
     }
 }
+
+/// Met à jour le pointeur de pile superviseur (RSP0) dans le TSS pour le thread actif
+pub fn set_kernel_stack(stack_top: u64) {
+    unsafe {
+        let tss = &mut *core::ptr::addr_of_mut!(TSS);
+        tss.rsp[0] = stack_top;
+    }
+}
