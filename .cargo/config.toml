@@ -1,0 +1,11 @@
+[target.x86_64-unknown-none]
+rustflags = [
+    "-C", "link-arg=-Tkernel/linker-x86_64.ld",
+    "-C", "target-feature=-sse",
+    "-C", "code-model=kernel",
+    "-C", "relocation-model=static",
+]
+
+[alias]
+xtask = "run --package xtask --"
+

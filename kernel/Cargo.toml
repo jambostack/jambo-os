@@ -1,0 +1,18 @@
+[package]
+name = "kernel"
+version = "0.1.0"
+edition = "2021"
+[[bin]]
+name = "kernel"
+path = "src/main.rs"
+test = false
+bench = false
+
+[dependencies]
+jambo-abi = { path = "../abi/jambo-abi" }
+limine = "0.6.5"
+spin = "0.9"
+
+[features]
+default = []
+qemu-test = []

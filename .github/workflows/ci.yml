@@ -1,0 +1,46 @@
+name: JamboOS CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  build-and-test:
+    name: Build & QEMU Boot Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies (QEMU, OVMF, xorriso)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq qemu-system-x86 ovmf xorriso mtools
+
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install nightly --profile minimal \
+            -t x86_64-unknown-none -t aarch64-unknown-none \
+            -c rust-src -c llvm-tools-preview -c clippy -c rustfmt
+          rustup default nightly
+
+      - name: Check code formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run Clippy linter
+        run: cargo clippy --package jambo-abi --package xtask -- -D warnings
+
+      - name: Build JamboKernel ELF
+        run: cargo xtask build
+
+      - name: Verify ELF W^X Protection
+        run: |
+          readelf -l target/x86_64-unknown-none/debug/kernel
+
+      - name: Generate bootable ISO
+        run: cargo xtask iso
+
+      - name: Execute automated QEMU boot test (Phase 2)
+        run: cargo xtask test
