@@ -1,0 +1,7 @@
+[package]
+name = "jambo-authd"
+version = "0.2.19"
+edition = "2021"
+
+[dependencies]
+libjambo = { path = "../../libs/libjambo" }

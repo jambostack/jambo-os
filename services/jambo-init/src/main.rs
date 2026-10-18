@@ -838,6 +838,48 @@ pub extern "C" fn _start() -> ! {
         enc_dev.encrypt_and_write(&read_only_crypto_cap, 2, &raw_sector, &mut enc_sector0);
     assert_eq!(bad_write, Err(libjambo::SysError::PermissionDenied));
 
+    // 16. Identité Cryptographique et Gestionnaire de Sessions Isolées (Phase 21 - jambo-authd v0.2.19)
+    let mut session_mgr = jambo_authd::SessionManager::new();
+    let bob_key = [0x99u8; 32];
+    let bob_identity = jambo_authd::UserIdentity::new(
+        1002,
+        "bob",
+        bob_key,
+        jambo_authd::UserRole::SystemOperator,
+        0xFFFF,
+    );
+    session_mgr
+        .register_user(bob_identity)
+        .expect("Register user bob");
+
+    // Défi-réponse cryptographique
+    let auth_challenge = jambo_authd::CryptoAuthEngine::generate_challenge(0x5EED, 1);
+    let valid_signature = jambo_authd::CryptoAuthEngine::sign_challenge(&bob_key, &auth_challenge);
+
+    // Authentification légitime
+    let bob_session = session_mgr
+        .authenticate("bob", &auth_challenge, &valid_signature, 10_000, 30_000)
+        .expect("Authenticate bob");
+    assert_eq!(bob_session.user_id, 1002);
+    assert_eq!(bob_session.role, jambo_authd::UserRole::SystemOperator);
+    assert!(session_mgr.validate_session(&bob_session, 15_000).is_ok());
+
+    // Rejet formel d'une signature falsifiée
+    let mut forged_signature = valid_signature;
+    forged_signature[0] ^= 0xEE;
+    let auth_fail =
+        session_mgr.authenticate("bob", &auth_challenge, &forged_signature, 10_000, 30_000);
+    assert_eq!(auth_fail, Err(libjambo::SysError::PermissionDenied));
+
+    // Déconnexion et révocation atomique (Zero-Remanence)
+    session_mgr
+        .terminate_session(bob_session.session_id)
+        .expect("Terminate session");
+    assert_eq!(
+        session_mgr.validate_session(&bob_session, 15_000),
+        Err(libjambo::SysError::InvalidHandle)
+    );
+
     // Boucle de supervision de la santé des services Ring 3
     loop {
         unsafe {

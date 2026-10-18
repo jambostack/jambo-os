@@ -1,7 +1,7 @@
 # **JamboOS (jambostack/jambo-os)**
 
 [![CI / Build & QEMU Boot Test](https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg)](https://github.com/jambostack/jambo-os/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-v0.2.18-orange.svg)](https://github.com/jambostack/jambo-os)
+[![Version](https://img.shields.io/badge/version-v0.2.19-orange.svg)](https://github.com/jambostack/jambo-os)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg)](https://www.rust-lang.org/)
 
@@ -13,8 +13,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.18 (Chiffrement de Bloc Transparent & Scellement Matériel TPM)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. Après la gestion d'énergie matérielle et ACPI Ring 3 `jambo-powerd` (`v0.2.17`), la version `v0.2.18` intègre le sous-système de chiffrement de bloc transparent et de scellement matériel TPM `jambo-cryptod` (Phase 20) : contrôle d'accès strict sans autorité ambiante via capacités de volume `CryptoVolumeCap`, chiffrement symétrique de secteurs disque (dérivé XTS / ChaCha20 RFC 8439) zéro-allocation `#![no_std]` avec diversification cryptographique par LBA, et scellement des clés maîtresses sous les registres PCR du TPM 2.0 garantissant l'inviolabilité du démarrage mesuré (*Measured Boot*). Le système reste un prototype de recherche en cours de développement, loin d'une v1.0.0 finale.
+> **Statut du Projet : Version v0.2.19 (Identité Cryptographique & Gestionnaire de Sessions Isolées)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. Après le chiffrement de bloc transparent et scellement TPM `jambo-cryptod` (`v0.2.18`), la version `v0.2.19` consolide le démon d'identité cryptographique et de sessions isolées `jambo-authd` (Phase 21) : élimination du modèle d'UID/GID monolithique et du super-utilisateur `root` au profit d'identités asymétriques Ed25519, authentification zéro-connaissance par défi-réponse sans mot de passe en clair en mémoire, délivrance de jetons de session capabilitaires `SessionTokenCap`, isolation stricte des espaces CSpace multi-utilisateurs et révocation atomique en cascade avec destruction sans résidu de mémoire (*zeroization*). Le système reste un prototype de recherche en cours de développement, loin d'une v1.0.0 finale.
 
 ---
 
@@ -40,7 +40,7 @@
 
 ## **2. Tableau synoptique d'avancement des phases d'ingénierie**
 
-Toutes les **20 phases** du *Plan Directeur d'Ingénierie* sont intégralement développées, testées et validées sous environnement QEMU UEFI multicœur.
+Toutes les **21 phases** du *Plan Directeur d'Ingénierie* sont intégralement développées, testées et validées sous environnement QEMU UEFI multicœur.
 
 | Phase | Intitulé du Composant | Statut | Responsabilité Technique |
 | :---: | :--- | :---: | :--- |
@@ -65,6 +65,7 @@ Toutes les **20 phases** du *Plan Directeur d'Ingénierie* sont intégralement d
 | **18** | **Audit Cryptographique & Observabilité** | ✅ **Terminé** | Démon `jambo-auditd`, registre inaltérable scellé, capacités `AuditCap`, détection d'anomalies en temps réel. |
 | **19** | **Gestion d'Énergie & ACPI Ring 3** | ✅ **Terminé** | Démon `jambo-powerd`, capacités `PowerCap`, transitions S0/S3/S5, régulation C-states SMP et batterie d'urgence. |
 | **20** | **Chiffrement de Bloc & TPM 2.0** | ✅ **Terminé** | Démon `jambo-cryptod`, capacités `CryptoVolumeCap`, ChaCha20/XTS, scellement PCR démarrage mesuré. |
+| **21** | **Identité Cryptographique & Sessions** | ✅ **Terminé** | Démon `jambo-authd`, identité Ed25519, défi-réponse zéro-connaissance, jetons `SessionTokenCap`, isolation CSpace. |
 
 ---
 
