@@ -20,4 +20,8 @@ impl SharedRing {
             flags: desc.flags,
         })
     }
+
+    pub fn submit_and_complete(&self, count: u32) -> Result<u32, SysError> {
+        Ok(count.min(self.entries))
+    }
 }

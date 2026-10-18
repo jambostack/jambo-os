@@ -1,7 +1,7 @@
 # **JamboOS (jambostack/jambo-os)**
 
 [![CI / Build & QEMU Boot Test](https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg)](https://github.com/jambostack/jambo-os/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-v0.2.2-orange.svg)](https://github.com/jambostack/jambo-os)
+[![Version](https://img.shields.io/badge/version-v0.2.3-orange.svg)](https://github.com/jambostack/jambo-os)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg)](https://www.rust-lang.org/)
 
@@ -13,8 +13,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.2 (Cycle de Vie des Processus & Threads, Appels Système Délégués par Capacités)**  
-> Le projet JamboOS avance méthodiquement dans son cycle pré-alpha `v0.*.*`. Après la configuration du cadre de pile System V ABI (`v0.2.1`), la version `v0.2.2` implémente les appels système complets de cycle de vie (`process_create`, `thread_create`, `thread_start`, `thread_exit`, `vmo_map`, `vmo_unmap`), la liaison typée des objets `Process` et `Thread` au sein de la table des capacités (`CSpace`), ainsi que les wrappers C ABI correspondants dans `jambo.h`. Le système reste un prototype de recherche en cours de développement, loin d'une v1.0.0 finale.
+> **Statut du Projet : Version v0.2.3 (IPC Hybride, Fastpath Messaging, Anneaux Partagés & Synchronisation Futex)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. Après la validation des appels système de cycle de vie des processus et threads (`v0.2.2`), la version `v0.2.3` implémente le sous-système IPC complet : canaux bidirectionnels isolés avec liaison d'extrémités typées (`ChannelEndpoint`), transmission de messages fastpath en registres CPU (`channel_call`), fermetures d'extrémités avec notification `PeerClosed`, synchronisation par verrous légers `Futex` (`futex_wait`, `futex_wake`) avec mise en veille et réveil ordonnancés sous EEVDF, et anneaux circulaires partagés zéro-copie (`SharedRing`). Le système reste un prototype de recherche en cours de développement, loin d'une v1.0.0 finale.
 
 ---
 

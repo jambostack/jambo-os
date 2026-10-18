@@ -23,8 +23,12 @@ pub struct FormalProofResult {
 pub fn verify_cspace_anti_aba_invariant() -> FormalProofResult {
     let mut cspace = CSpace::new();
 
+    let ch = alloc::sync::Arc::new(spin::Mutex::new(crate::ipc::Channel::new()));
+    let ep1 = crate::ipc::ChannelEndpoint::new(ch.clone(), true);
+    let ep2 = crate::ipc::ChannelEndpoint::new(ch, false);
+
     // Insertion initiale
-    let h1 = cspace.insert(crate::cap::KernelObject::Channel(1), cap_rights::READ);
+    let h1 = cspace.insert(crate::cap::KernelObject::Channel(ep1), cap_rights::READ);
     let gen1 = h1.generation();
     let idx1 = h1.index();
 
@@ -33,7 +37,7 @@ pub fn verify_cspace_anti_aba_invariant() -> FormalProofResult {
     assert!(drop_res.is_ok());
 
     // Réallocation dans le même slot libre
-    let h2 = cspace.insert(crate::cap::KernelObject::Channel(2), cap_rights::READ);
+    let h2 = cspace.insert(crate::cap::KernelObject::Channel(ep2), cap_rights::READ);
     let gen2 = h2.generation();
     let idx2 = h2.index();
 

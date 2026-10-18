@@ -228,9 +228,14 @@ pub extern "C" fn dispatch_syscall(
         13 => {
             let out_h1 = a2 as *mut u64;
             let out_h2 = a3 as *mut u64;
+
+            let channel = Arc::new(spin::Mutex::new(crate::ipc::Channel::new()));
+            let ep_a = crate::ipc::ChannelEndpoint::new(channel.clone(), true);
+            let ep_b = crate::ipc::ChannelEndpoint::new(channel, false);
+
             let mut cspace = KERNEL_CSPACE.lock();
-            let h1 = cspace.insert(KernelObject::Channel(1), cap_rights::ALL);
-            let h2 = cspace.insert(KernelObject::Channel(2), cap_rights::ALL);
+            let h1 = cspace.insert(KernelObject::Channel(ep_a), cap_rights::ALL);
+            let h2 = cspace.insert(KernelObject::Channel(ep_b), cap_rights::ALL);
 
             if !out_h1.is_null() {
                 unsafe {
@@ -244,6 +249,123 @@ pub extern "C" fn dispatch_syscall(
             }
             SysError::Success as i64
         }
+
+        // 14: ChannelCall (endpoint_h: a1, send_ptr: a2, recv_ptr: a3)
+        14 => {
+            let ep_h = Handle(a1);
+            let send_ptr = a2 as *const crate::ipc::ChannelMessage;
+            let recv_ptr = a3 as *mut crate::ipc::ChannelMessage;
+
+            let cspace = KERNEL_CSPACE.lock();
+            let ep = match cspace.lookup(ep_h, cap_rights::SEND | cap_rights::RECEIVE) {
+                Ok(KernelObject::Channel(ep)) => ep,
+                _ => return SysError::InvalidHandle as i64,
+            };
+            drop(cspace);
+
+            if !send_ptr.is_null() {
+                let msg = unsafe { (*send_ptr).clone() };
+                if let Err(e) = ep.send(msg) {
+                    return e as i64;
+                }
+            }
+
+            if !recv_ptr.is_null() {
+                match ep.recv() {
+                    Ok(Some(msg)) => unsafe {
+                        *recv_ptr = msg;
+                    },
+                    Ok(None) => return SysError::TimedOut as i64,
+                    Err(e) => return e as i64,
+                }
+            }
+
+            SysError::Success as i64
+        }
+
+        // 15: PortCreate
+        15 => SysError::Success as i64,
+
+        // 16: PortWait
+        16 => SysError::Success as i64,
+
+        // 17: RingSetup (desc_ptr: a1, out_handle: a2)
+        17 => {
+            let desc_ptr = a1 as *const jambo_abi::RingDesc;
+            let out_h = a2 as *mut u64;
+
+            if desc_ptr.is_null() {
+                return SysError::InvalidArgument as i64;
+            }
+
+            let desc = unsafe { &*desc_ptr };
+            let ring = match crate::ipc::SharedRing::new(desc) {
+                Ok(r) => Arc::new(r),
+                Err(e) => return e as i64,
+            };
+
+            let mut cspace = KERNEL_CSPACE.lock();
+            let handle = cspace.insert(KernelObject::Ring(ring), cap_rights::ALL);
+
+            if !out_h.is_null() {
+                unsafe {
+                    *out_h = handle.0;
+                }
+            }
+            SysError::Success as i64
+        }
+
+        // 18: RingEnter (ring_h: a1, to_submit: a2, min_complete: a3)
+        18 => {
+            let ring_h = Handle(a1);
+            let to_submit = a2 as u32;
+
+            let cspace = KERNEL_CSPACE.lock();
+            let ring = match cspace.lookup(ring_h, cap_rights::MANAGE) {
+                Ok(KernelObject::Ring(r)) => r,
+                _ => return SysError::InvalidHandle as i64,
+            };
+            drop(cspace);
+
+            match ring.submit_and_complete(to_submit) {
+                Ok(completed) => completed as i64,
+                Err(e) => e as i64,
+            }
+        }
+
+        // 19: FutexWait (uaddr: a1, expected: a2, timeout: a3)
+        19 => {
+            let uaddr = a1 as usize;
+            let expected = a2 as u32;
+
+            if (uaddr & 3) != 0 {
+                return SysError::BadAddress as i64;
+            }
+
+            let current_val = unsafe { *(uaddr as *const u32) };
+
+            match crate::ipc::FUTEX_MANAGER.wait(uaddr, expected, current_val) {
+                Ok(()) => SysError::Success as i64,
+                Err(e) => e as i64,
+            }
+        }
+
+        // 20: FutexWake (uaddr: a1, count: a2)
+        20 => {
+            let uaddr = a1 as usize;
+            let count = a2 as u32;
+
+            match crate::ipc::FUTEX_MANAGER.wake(uaddr, count) {
+                Ok(woken) => woken as i64,
+                Err(e) => e as i64,
+            }
+        }
+
+        // 21: IrqBind
+        21 => SysError::Success as i64,
+
+        // 22: IrqAck
+        22 => SysError::Success as i64,
 
         // 23: IommuMap
         23 => {
@@ -284,9 +406,6 @@ pub extern "C" fn dispatch_syscall(
             }
             SysError::Success as i64
         }
-
-        // Autres appels système enregistrés
-        14..=22 => SysError::Success as i64,
 
         // Appel inconnu
         _ => SysError::NotSupported as i64,

@@ -56,3 +56,40 @@ impl Channel {
 }
 
 pub static CHANNEL_REGISTRY: Mutex<alloc::vec::Vec<Channel>> = Mutex::new(alloc::vec::Vec::new());
+
+/// Extrémité de canal IPC typée et isolée pour le modèle de capacités
+pub struct ChannelEndpoint {
+    pub channel: alloc::sync::Arc<Mutex<Channel>>,
+    pub is_endpoint_a: bool,
+}
+
+impl ChannelEndpoint {
+    pub fn new(
+        channel: alloc::sync::Arc<Mutex<Channel>>,
+        is_endpoint_a: bool,
+    ) -> alloc::sync::Arc<Self> {
+        alloc::sync::Arc::new(Self {
+            channel,
+            is_endpoint_a,
+        })
+    }
+
+    pub fn send(&self, msg: ChannelMessage) -> Result<(), SysError> {
+        self.channel.lock().send(self.is_endpoint_a, msg)
+    }
+
+    pub fn recv(&self) -> Result<Option<ChannelMessage>, SysError> {
+        self.channel.lock().recv(self.is_endpoint_a)
+    }
+
+    pub fn is_peer_closed(&self) -> bool {
+        self.channel.lock().is_closed
+    }
+}
+
+impl Drop for ChannelEndpoint {
+    fn drop(&mut self) {
+        // Notifier la fermeture de l'extrémité opposée (PeerClosed)
+        self.channel.lock().is_closed = true;
+    }
+}

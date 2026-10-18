@@ -9,11 +9,11 @@ use spin::Mutex;
 pub enum KernelObject {
     None,
     Vmo(Arc<Vmo>),
-    Channel(u64),
+    Channel(Arc<crate::ipc::ChannelEndpoint>),
     Port(u64),
     Process(Arc<crate::sched::Process>),
     Thread(Arc<Mutex<crate::sched::Thread>>),
-    Ring(u64),
+    Ring(Arc<crate::ipc::SharedRing>),
     Iommu(Arc<crate::arch::IommuDomain>),
 }
 

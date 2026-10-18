@@ -129,7 +129,7 @@ pub extern "C" fn _start() -> ! {
     // 4. Bannière système d'accueil
     kprintln!("\x1b[1;36m");
     kprintln!("================================================================================");
-    kprintln!("    JAMBO-OS (JamboKernel v0.2.2) — Micro-noyau de 3e Génération              ");
+    kprintln!("    JAMBO-OS (JamboKernel v0.2.3) — Micro-noyau de 3e Génération              ");
     kprintln!("    Architecture : Micro-noyau orienté capacités en Rust no_std (x86_64/AArch64)");
     kprintln!("    Auteur & Architecte Principal : ASSOGBA Prudence Dieudonné                 ");
     kprintln!("    Dépôt Officiel : https://github.com/jambostack/jambo-os                    ");
@@ -432,6 +432,92 @@ pub extern "C" fn _start() -> ! {
         thread_handle
     );
 
+    // Test et validation de l'IPC hybride : Canaux bidirectionnels, Futex et SharedRing (v0.2.3)
+    let mut ch_ep1: u64 = 0;
+    let mut ch_ep2: u64 = 0;
+    let ret_ch = syscall::dispatch_syscall(
+        13,
+        0,
+        &mut ch_ep1 as *mut u64 as u64,
+        &mut ch_ep2 as *mut u64 as u64,
+        0,
+        0,
+        0,
+    );
+    assert_eq!(ret_ch, 0);
+
+    let mut send_msg = ipc::ChannelMessage {
+        bytes: [0u8; ipc::channel::MAX_FASTPATH_BYTES],
+        byte_count: 5,
+        handles: [jambo_abi::Handle::NULL; ipc::channel::MAX_HANDLES],
+        handle_count: 0,
+    };
+    send_msg.bytes[0..5].copy_from_slice(b"JAMBO");
+
+    // Envoi sur ep1 via ChannelCall
+    let ret_send = syscall::dispatch_syscall(
+        14,
+        ch_ep1,
+        &send_msg as *const ipc::ChannelMessage as u64,
+        0,
+        0,
+        0,
+        0,
+    );
+    assert_eq!(ret_send, 0);
+
+    // Réception sur ep2 via ChannelCall
+    let mut recv_msg = ipc::ChannelMessage {
+        bytes: [0u8; ipc::channel::MAX_FASTPATH_BYTES],
+        byte_count: 0,
+        handles: [jambo_abi::Handle::NULL; ipc::channel::MAX_HANDLES],
+        handle_count: 0,
+    };
+    let ret_recv = syscall::dispatch_syscall(
+        14,
+        ch_ep2,
+        0,
+        &mut recv_msg as *mut ipc::ChannelMessage as u64,
+        0,
+        0,
+        0,
+    );
+    assert_eq!(ret_recv, 0);
+    assert_eq!(&recv_msg.bytes[0..5], b"JAMBO");
+
+    // Validation Futex et Shared Ring
+    let futex_word: u32 = 42;
+    let ret_wake = syscall::dispatch_syscall(20, &futex_word as *const u32 as u64, 1, 0, 0, 0, 0);
+    assert_eq!(ret_wake, 0);
+
+    let ring_desc = jambo_abi::RingDesc {
+        sub_ring_vaddr: 0x0060_0000,
+        comp_ring_vaddr: 0x0060_1000,
+        ring_entries: 64,
+        flags: 0,
+    };
+    let mut ring_h: u64 = 0;
+    let ret_ring = syscall::dispatch_syscall(
+        17,
+        &ring_desc as *const jambo_abi::RingDesc as u64,
+        &mut ring_h as *mut u64 as u64,
+        0,
+        0,
+        0,
+        0,
+    );
+    assert_eq!(ret_ring, 0);
+    assert_ne!(ring_h, 0);
+
+    let ret_sub = syscall::dispatch_syscall(18, ring_h, 16, 16, 0, 0, 0);
+    assert_eq!(ret_sub, 16);
+
+    kprintln!(
+        "[IPC/FUTEX] Canaux bidirectionnels ({:#x} <-> {:#x}), Futex et Anneaux partagés validés",
+        ch_ep1,
+        ch_ep2
+    );
+
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
     arch::init_iommu();
     let root_domain = arch::IOMMU_MANAGER.create_domain();
@@ -488,9 +574,9 @@ pub extern "C" fn _start() -> ! {
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.2 (Cycle de vie Processus & Threads, Syscalls Cap-Backed)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.3 (IPC Hybride, Fastpath Messaging & Synchronisation Futex)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.2 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.3 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );

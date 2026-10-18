@@ -182,6 +182,26 @@ static inline int64_t jambo_channel_create(uint32_t flags, jambo_handle_t* out1,
     return jambo_syscall6(JAMBO_SYS_CHANNEL_CREATE, (uint64_t)flags, (uint64_t)(uintptr_t)out1, (uint64_t)(uintptr_t)out2, 0, 0, 0, NULL);
 }
 
+static inline int64_t jambo_channel_call(jambo_handle_t endpoint, const void* send_msg, void* recv_msg) {
+    return jambo_syscall6(JAMBO_SYS_CHANNEL_CALL, endpoint, (uint64_t)(uintptr_t)send_msg, (uint64_t)(uintptr_t)recv_msg, 0, 0, 0, NULL);
+}
+
+static inline int64_t jambo_ring_setup(const void* ring_desc, jambo_handle_t* out_ring) {
+    return jambo_syscall6(JAMBO_SYS_RING_SETUP, (uint64_t)(uintptr_t)ring_desc, (uint64_t)(uintptr_t)out_ring, 0, 0, 0, 0, NULL);
+}
+
+static inline int64_t jambo_ring_enter(jambo_handle_t ring, uint32_t to_submit, uint32_t min_complete) {
+    return jambo_syscall6(JAMBO_SYS_RING_ENTER, ring, (uint64_t)to_submit, (uint64_t)min_complete, 0, 0, 0, NULL);
+}
+
+static inline int64_t jambo_futex_wait(const uint32_t* uaddr, uint32_t expected_val, uint64_t timeout_ns) {
+    return jambo_syscall6(JAMBO_SYS_FUTEX_WAIT, (uint64_t)(uintptr_t)uaddr, (uint64_t)expected_val, timeout_ns, 0, 0, 0, NULL);
+}
+
+static inline int64_t jambo_futex_wake(const uint32_t* uaddr, uint32_t count) {
+    return jambo_syscall6(JAMBO_SYS_FUTEX_WAKE, (uint64_t)(uintptr_t)uaddr, (uint64_t)count, 0, 0, 0, 0, NULL);
+}
+
 #ifdef __cplusplus
 }
 #endif
