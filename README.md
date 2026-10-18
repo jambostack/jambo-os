@@ -1,14 +1,28 @@
-# **JamboOS (jambostack/jambo-os)**
+<p align="center">
+  <img src="docs/assets/banner.png" alt="JamboOS Banner" width="800">
+</p>
 
-[![CI / Build & QEMU Boot Test](https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg)](https://github.com/jambostack/jambo-os/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-v0.2.35-orange.svg)](https://github.com/jambostack/jambo-os)
-[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg)](LICENSE)
-[![Rust](https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg)](https://www.rust-lang.org/)
+<p align="center">
+  <img src="docs/assets/logo.svg" alt="JamboOS Logo" width="110" height="110">
+  &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+  <img src="docs/assets/mascot.svg" alt="JamboOS Mascot" width="110" height="110">
+</p>
 
-**Système d'Exploitation Micro-noyau de 3e Génération Orienté Capacités**  
-*Auteur et Architecte Principal* : **ASSOGBA Prudence Dieudonné**  
-*Dépôt officiel* : [https://github.com/jambostack/jambo-os](https://github.com/jambostack/jambo-os)  
-*Architectures cibles* : x86-64 (Long Mode 64 bits) & AArch64 (ARM64) / Multicœur SMP / UEFI 2.11 (Limine v3 Protocol)
+<h1 align="center"><strong>JamboOS (jambostack/jambo-os)</strong></h1>
+<p align="center"><strong>Système d'Exploitation Micro-noyau de 3e Génération Orienté Capacités en Rust <code>#![no_std]</code></strong></p>
+
+<p align="center">
+  <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.35-orange.svg" alt="Version"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
+  <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
+</p>
+
+<p align="center">
+  <em>Auteur & Architecte Principal</em> : <strong>ASSOGBA Prudence Dieudonné</strong> &bull;
+  <em>Dépôt officiel</em> : <a href="https://github.com/jambostack/jambo-os">https://github.com/jambostack/jambo-os</a><br>
+  <em>Architectures cibles</em> : x86-64 (Long Mode 64 bits) & AArch64 (ARM64) / Multicœur SMP / UEFI 2.11 (Limine v3 Protocol)
+</p>
 
 ---
 
@@ -94,7 +108,8 @@ jambo-os/
 ├── boot/
 │   └── limine.cfg           # Configuration du chargeur d'amorçage Limine v3
 ├── docs/
-│   ├── adr/                 # Architecture Decision Records (ADR-0001 à ADR-0006)
+│   ├── adr/                 # Architecture Decision Records (ADR-0001 à ADR-0026)
+│   ├── assets/              # Identité visuelle, logos, bannières et mascottes officielles
 │   └── specs/               # Spécifications de la carte mémoire, ABI et sécurité
 ├── drivers/
 │   ├── nvme/                # Contrôleur de stockage NVMe 1.4 Ring 3
