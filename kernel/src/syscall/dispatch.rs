@@ -1,5 +1,7 @@
 use crate::cap::{KernelObject, KERNEL_CSPACE};
-use crate::mm::Vmo;
+use crate::mm::{AddressSpace, Vmo};
+use crate::sched::{allocate_pid, allocate_tid, Process, Thread, ThreadState, SCHEDULER};
+use alloc::sync::Arc;
 use jambo_abi::{cap_rights, Handle, SysError};
 
 #[no_mangle]
@@ -42,6 +44,26 @@ pub extern "C" fn dispatch_syscall(
             }
         }
 
+        // 3: CapTransfer
+        3 => {
+            let handle = Handle(a1);
+            let out_ptr = a2 as *mut u64;
+            let mut cspace = KERNEL_CSPACE.lock();
+            match cspace.lookup(handle, cap_rights::TRANSFER) {
+                Ok(obj) => {
+                    let _ = cspace.drop_cap(handle);
+                    let new_h = cspace.insert(obj, cap_rights::ALL);
+                    if !out_ptr.is_null() {
+                        unsafe {
+                            *out_ptr = new_h.0;
+                        }
+                    }
+                    SysError::Success as i64
+                }
+                Err(err) => err as i64,
+            }
+        }
+
         // 4: VmoCreate
         4 => {
             let size = a1 as usize;
@@ -60,9 +82,145 @@ pub extern "C" fn dispatch_syscall(
             SysError::Success as i64
         }
 
+        // 5: VmoMap (proc_h: a1, vmo_h: a2, vaddr: a3, prot: a4)
+        5 => {
+            let proc_h = Handle(a1);
+            let vmo_h = Handle(a2);
+            let vaddr = a3 as usize;
+            let prot = a4 as u32;
+
+            let cspace = KERNEL_CSPACE.lock();
+            let vmo = match cspace.lookup(vmo_h, cap_rights::MAP) {
+                Ok(KernelObject::Vmo(v)) => v,
+                _ => return SysError::InvalidHandle as i64,
+            };
+
+            let proc = match cspace.lookup(proc_h, cap_rights::MANAGE) {
+                Ok(KernelObject::Process(p)) => p,
+                _ => return SysError::InvalidHandle as i64,
+            };
+            drop(cspace);
+
+            match proc.aspace.map_vmo(vaddr, vmo, prot) {
+                Ok(()) => SysError::Success as i64,
+                Err(_) => SysError::OutOfMemory as i64,
+            }
+        }
+
+        // 6: VmoUnmap (proc_h: a1, vaddr: a2, size: a3)
+        6 => {
+            let proc_h = Handle(a1);
+            let vaddr = a2 as usize;
+            let size = a3 as usize;
+
+            let cspace = KERNEL_CSPACE.lock();
+            let proc = match cspace.lookup(proc_h, cap_rights::MANAGE) {
+                Ok(KernelObject::Process(p)) => p,
+                _ => return SysError::InvalidHandle as i64,
+            };
+            drop(cspace);
+
+            match proc.aspace.unmap(vaddr, size) {
+                Ok(()) => SysError::Success as i64,
+                Err(_) => SysError::BadAddress as i64,
+            }
+        }
+
+        // 7: VmoProtect
+        7 => SysError::Success as i64,
+
+        // 8: ProcessCreate (flags: a1, out_handle: a2)
+        8 => {
+            let _flags = a1 as u32;
+            let out_handle = a2 as *mut u64;
+
+            let pid = allocate_pid();
+            let aspace = match AddressSpace::new() {
+                Some(a) => Arc::new(a),
+                None => return SysError::OutOfMemory as i64,
+            };
+
+            let proc = Process::new(pid, "user_proc", aspace);
+            let mut cspace = KERNEL_CSPACE.lock();
+            let handle = cspace.insert(KernelObject::Process(proc), cap_rights::ALL);
+
+            if !out_handle.is_null() {
+                unsafe {
+                    *out_handle = handle.0;
+                }
+            }
+            SysError::Success as i64
+        }
+
+        // 9: ThreadCreate (proc_h: a1, flags: a2, out_handle: a3)
+        9 => {
+            let proc_h = Handle(a1);
+            let _flags = a2 as u32;
+            let out_handle = a3 as *mut u64;
+
+            let cspace = KERNEL_CSPACE.lock();
+            let proc = match cspace.lookup(proc_h, cap_rights::MANAGE) {
+                Ok(KernelObject::Process(p)) => p,
+                _ => return SysError::InvalidHandle as i64,
+            };
+            drop(cspace);
+
+            let tid = allocate_tid();
+            let thread = match Thread::new_user(tid, proc.id, proc.aspace.clone(), 0, 0) {
+                Some(t) => t,
+                None => return SysError::OutOfMemory as i64,
+            };
+
+            proc.threads.lock().push(thread.clone());
+
+            let mut cspace = KERNEL_CSPACE.lock();
+            let handle = cspace.insert(KernelObject::Thread(thread), cap_rights::ALL);
+
+            if !out_handle.is_null() {
+                unsafe {
+                    *out_handle = handle.0;
+                }
+            }
+            SysError::Success as i64
+        }
+
+        // 10: ThreadStart (thread_h: a1, entry: a2, rsp: a3)
+        10 => {
+            let thread_h = Handle(a1);
+            let entry_point = a2;
+            let stack_pointer = a3;
+
+            let cspace = KERNEL_CSPACE.lock();
+            let thread = match cspace.lookup(thread_h, cap_rights::MANAGE) {
+                Ok(KernelObject::Thread(t)) => t,
+                _ => return SysError::InvalidHandle as i64,
+            };
+            drop(cspace);
+
+            {
+                let mut t = thread.lock();
+                t.user_entry = entry_point;
+                t.user_rsp = stack_pointer;
+                t.state = ThreadState::Ready;
+            }
+
+            SCHEDULER.lock().enqueue(thread);
+            SysError::Success as i64
+        }
+
+        // 11: ThreadExit (exit_code: a1)
+        11 => {
+            let mut sched = SCHEDULER.lock();
+            if let Some(ref curr) = sched.current {
+                curr.lock().state = ThreadState::Exited;
+            }
+            sched.reschedule();
+            SysError::Success as i64
+        }
+
         // 12: ThreadYield
         12 => {
-            crate::sched::SCHEDULER.lock().reschedule();
+            SCHEDULER.lock().reschedule();
             SysError::Success as i64
         }
 
@@ -128,7 +286,7 @@ pub extern "C" fn dispatch_syscall(
         }
 
         // Autres appels système enregistrés
-        3 | 5..=11 | 14..=22 => SysError::Success as i64,
+        14..=22 => SysError::Success as i64,
 
         // Appel inconnu
         _ => SysError::NotSupported as i64,

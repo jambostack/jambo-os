@@ -154,6 +154,30 @@ static inline int64_t jambo_vmo_create(size_t size, uint32_t flags, jambo_handle
     return jambo_syscall6(JAMBO_SYS_VMO_CREATE, (uint64_t)size, (uint64_t)flags, (uint64_t)(uintptr_t)out_handle, 0, 0, 0, NULL);
 }
 
+static inline int64_t jambo_vmo_map(jambo_handle_t proc, jambo_handle_t vmo, uint64_t vaddr, uint32_t prot) {
+    return jambo_syscall6(JAMBO_SYS_VMO_MAP, proc, vmo, vaddr, (uint64_t)prot, 0, 0, NULL);
+}
+
+static inline int64_t jambo_vmo_unmap(jambo_handle_t proc, uint64_t vaddr, size_t size) {
+    return jambo_syscall6(JAMBO_SYS_VMO_UNMAP, proc, vaddr, (uint64_t)size, 0, 0, 0, NULL);
+}
+
+static inline int64_t jambo_process_create(uint32_t flags, jambo_handle_t* out_proc) {
+    return jambo_syscall6(JAMBO_SYS_PROCESS_CREATE, (uint64_t)flags, (uint64_t)(uintptr_t)out_proc, 0, 0, 0, 0, NULL);
+}
+
+static inline int64_t jambo_thread_create(jambo_handle_t proc, uint32_t flags, jambo_handle_t* out_thread) {
+    return jambo_syscall6(JAMBO_SYS_THREAD_CREATE, proc, (uint64_t)flags, (uint64_t)(uintptr_t)out_thread, 0, 0, 0, NULL);
+}
+
+static inline int64_t jambo_thread_start(jambo_handle_t thread, uint64_t entry_point, uint64_t stack_pointer) {
+    return jambo_syscall6(JAMBO_SYS_THREAD_START, thread, entry_point, stack_pointer, 0, 0, 0, NULL);
+}
+
+static inline int64_t jambo_thread_exit(int32_t exit_code) {
+    return jambo_syscall6(JAMBO_SYS_THREAD_EXIT, (uint64_t)(int64_t)exit_code, 0, 0, 0, 0, 0, NULL);
+}
+
 static inline int64_t jambo_channel_create(uint32_t flags, jambo_handle_t* out1, jambo_handle_t* out2) {
     return jambo_syscall6(JAMBO_SYS_CHANNEL_CREATE, (uint64_t)flags, (uint64_t)(uintptr_t)out1, (uint64_t)(uintptr_t)out2, 0, 0, 0, NULL);
 }

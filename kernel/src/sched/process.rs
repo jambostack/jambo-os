@@ -4,8 +4,16 @@ use crate::mm::{load_elf64, AddressSpace};
 use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicU64, Ordering};
 use jambo_abi::{auxv, SysError};
 use spin::Mutex;
+
+static NEXT_PID: AtomicU64 = AtomicU64::new(10);
+
+/// Alloue un identifiant de processus unique
+pub fn allocate_pid() -> u64 {
+    NEXT_PID.fetch_add(1, Ordering::Relaxed)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProcessState {

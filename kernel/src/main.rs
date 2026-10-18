@@ -129,7 +129,7 @@ pub extern "C" fn _start() -> ! {
     // 4. Bannière système d'accueil
     kprintln!("\x1b[1;36m");
     kprintln!("================================================================================");
-    kprintln!("    JAMBO-OS (JamboKernel v0.2.1) — Micro-noyau de 3e Génération              ");
+    kprintln!("    JAMBO-OS (JamboKernel v0.2.2) — Micro-noyau de 3e Génération              ");
     kprintln!("    Architecture : Micro-noyau orienté capacités en Rust no_std (x86_64/AArch64)");
     kprintln!("    Auteur & Architecte Principal : ASSOGBA Prudence Dieudonné                 ");
     kprintln!("    Dépôt Officiel : https://github.com/jambostack/jambo-os                    ");
@@ -385,6 +385,53 @@ pub extern "C" fn _start() -> ! {
         created_handle
     );
 
+    // Test et validation des appels système de cycle de vie des processus et threads (v0.2.2)
+    let mut proc_handle: u64 = 0;
+    let ret_p = syscall::dispatch_syscall(8, 0, &mut proc_handle as *mut u64 as u64, 0, 0, 0, 0);
+    assert_eq!(ret_p, 0);
+    assert_ne!(proc_handle, 0);
+
+    let mut thread_handle: u64 = 0;
+    let ret_t = syscall::dispatch_syscall(
+        9,
+        proc_handle,
+        0,
+        &mut thread_handle as *mut u64 as u64,
+        0,
+        0,
+        0,
+    );
+    assert_eq!(ret_t, 0);
+    assert_ne!(thread_handle, 0);
+
+    let ret_m = syscall::dispatch_syscall(
+        5,
+        proc_handle,
+        created_handle,
+        0x0050_0000,
+        (jambo_abi::vmo_prot::READ | jambo_abi::vmo_prot::WRITE) as u64,
+        0,
+        0,
+    );
+    assert_eq!(ret_m, 0);
+
+    let ret_s = syscall::dispatch_syscall(
+        10,
+        thread_handle,
+        0x0050_0000,
+        0x0000_7FFF_FFFF_0000,
+        0,
+        0,
+        0,
+    );
+    assert_eq!(ret_s, 0);
+
+    kprintln!(
+        "[SYSCALL] Cycle de vie validé : process_create ({:#x}), thread_create ({:#x}), vmo_map & thread_start",
+        proc_handle,
+        thread_handle
+    );
+
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
     arch::init_iommu();
     let root_domain = arch::IOMMU_MANAGER.create_domain();
@@ -441,9 +488,9 @@ pub extern "C" fn _start() -> ! {
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.1 (Processus Utilisateur & Initialisation Pile ABI)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.2 (Cycle de vie Processus & Threads, Syscalls Cap-Backed)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.1 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.2 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );

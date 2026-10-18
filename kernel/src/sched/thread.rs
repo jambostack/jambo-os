@@ -1,7 +1,15 @@
 extern crate alloc;
 use crate::mm::{phys_to_virt, virt_to_phys, AddressSpace, PAGE_SIZE, PMM};
 use alloc::sync::Arc;
+use core::sync::atomic::{AtomicU64, Ordering};
 use spin::Mutex;
+
+static NEXT_TID: AtomicU64 = AtomicU64::new(100);
+
+/// Alloue un identifiant de thread unique
+pub fn allocate_tid() -> u64 {
+    NEXT_TID.fetch_add(1, Ordering::Relaxed)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ThreadState {

@@ -11,8 +11,8 @@ pub enum KernelObject {
     Vmo(Arc<Vmo>),
     Channel(u64),
     Port(u64),
-    Process(u64),
-    Thread(u64),
+    Process(Arc<crate::sched::Process>),
+    Thread(Arc<Mutex<crate::sched::Thread>>),
     Ring(u64),
     Iommu(Arc<crate::arch::IommuDomain>),
 }
