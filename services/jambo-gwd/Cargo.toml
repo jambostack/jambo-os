@@ -1,0 +1,7 @@
+[package]
+name = "jambo-gwd"
+version = "0.2.29"
+edition = "2021"
+
+[dependencies]
+libjambo = { path = "../../libs/libjambo" }

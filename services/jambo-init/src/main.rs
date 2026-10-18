@@ -1394,6 +1394,56 @@ pub extern "C" fn _start() -> ! {
         Err(libjambo::SysError::PermissionDenied)
     );
 
+    // 26. Passerelle Réseau L4/L7 & Équilibreur de Charge Élastique (Phase 31 - jambo-gwd v0.2.29)
+    let gw_cap =
+        jambo_gwd::GatewayCap::new(libjambo::Handle::new(1701, 1), jambo_gwd::gw_rights::ALL);
+    let mut gw = jambo_gwd::GatewayManager::new();
+    gw.register_service(
+        &gw_cap,
+        201,
+        8080,
+        jambo_gwd::LoadBalanceStrategy::LeastConnections,
+        2, // Seuil coupe-circuit
+    )
+    .expect("Register virtual service 8080");
+
+    gw.add_backend(&gw_cap, 201, [10, 0, 2, 1], 9001, 1)
+        .expect("Add backend 1");
+    gw.add_backend(&gw_cap, 201, [10, 0, 2, 2], 9002, 1)
+        .expect("Add backend 2");
+
+    // Routage Least-Connections
+    let target1 = gw
+        .route_packet(&gw_cap, 8080, [192, 168, 1, 100])
+        .expect("Route connection 1");
+    assert_eq!(target1, ([10, 0, 2, 1], 9001));
+
+    let target2 = gw
+        .route_packet(&gw_cap, 8080, [192, 168, 1, 101])
+        .expect("Route connection 2");
+    assert_eq!(target2, ([10, 0, 2, 2], 9002));
+
+    // Coupe-circuit sur défaillance de backend
+    gw.report_health(&gw_cap, 201, [10, 0, 2, 1], 9001, false)
+        .expect("Report failure 1");
+    let is_healthy = gw
+        .report_health(&gw_cap, 201, [10, 0, 2, 1], 9001, false)
+        .expect("Report failure 2");
+    assert!(!is_healthy); // Circuit breaker activé
+
+    // Requête suivante automatiquement basculée sur le nœud sain survivant
+    let failover_target = gw
+        .route_packet(&gw_cap, 8080, [192, 168, 1, 102])
+        .expect("Failover to surviving node");
+    assert_eq!(failover_target, ([10, 0, 2, 2], 9002));
+
+    // Contrôle d'accès sans autorité ambiante
+    let unauth_gw_cap = jambo_gwd::GatewayCap::new(libjambo::Handle::new(1702, 1), 0);
+    assert_eq!(
+        gw.route_packet(&unauth_gw_cap, 8080, [192, 168, 1, 103]),
+        Err(libjambo::SysError::PermissionDenied)
+    );
+
     // Boucle de supervision de la santé des services Ring 3
     loop {
         unsafe {

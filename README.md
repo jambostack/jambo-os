@@ -1,7 +1,7 @@
 # **JamboOS (jambostack/jambo-os)**
 
 [![CI / Build & QEMU Boot Test](https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg)](https://github.com/jambostack/jambo-os/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-v0.2.28-orange.svg)](https://github.com/jambostack/jambo-os)
+[![Version](https://img.shields.io/badge/version-v0.2.29-orange.svg)](https://github.com/jambostack/jambo-os)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg)](https://www.rust-lang.org/)
 
@@ -13,8 +13,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.28 (Système de Fichiers Distribué Adressable par Contenu & CAS)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. Après le maillage réseau chiffré et le routage zero-trust `jambo-meshd` (`v0.2.27`), la version `v0.2.28` introduit le démon de système de fichiers distribué adressable par contenu et de réplication de blocs dédupliqués `jambo-dfsd` (Phase 30) : magasin d'objets immuables dédupliqués globalement par empreinte cryptographique BLAKE3/256-bit, vérification stricte d'intégrité à la lecture, maintien d'un facteur de réplication multi-nœuds avec épinglage persistant (*pin*), et contrôle d'accès sans autorité ambiante régi par les capacités `DfsCap`. Le système reste un prototype de recherche en cours de développement, loin d'une v1.0.0 finale.
+> **Statut du Projet : Version v0.2.29 (Passerelle Réseau L4/L7 & Équilibreur de Charge Élastique)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. Après le stockage distribué adressable par contenu `jambo-dfsd` (`v0.2.28`), la version `v0.2.29` introduit le démon de passerelle d'entrée et d'équilibrage de charge élastique `jambo-gwd` (Phase 31) : aiguillage réseau multi-stratégies L4/L7 (Round-Robin, Moindre Connexions, IP-Hash), sondes de santé périodiques, coupe-circuit réactif (*circuit breaker*) avec bascule automatique transparente (*failover*), et contrôle d'accès sans autorité ambiante régi par les capacités `GatewayCap`. Le système reste un prototype de recherche en cours de développement, loin d'une v1.0.0 finale.
 
 ---
 
@@ -40,7 +40,7 @@
 
 ## **2. Tableau synoptique d'avancement des phases d'ingénierie**
 
-Toutes les **30 phases** du *Plan Directeur d'Ingénierie* sont intégralement développées, testées et validées sous environnement QEMU UEFI multicœur.
+Toutes les **31 phases** du *Plan Directeur d'Ingénierie* sont intégralement développées, testées et validées sous environnement QEMU UEFI multicœur.
 
 | Phase | Intitulé du Composant | Statut | Responsabilité Technique |
 | :---: | :--- | :---: | :--- |
@@ -75,6 +75,7 @@ Toutes les **30 phases** du *Plan Directeur d'Ingénierie* sont intégralement d
 | **28** | **Bus d'Événements Pub/Sub Asynchrone** | ✅ **Terminé** | Démon `jambo-eventd`, capacités `EventCap`, files annulaires bornées, filtrage hiérarchique par préfixe, drop-oldest. |
 | **29** | **Maillage Réseau Chiffré & Zero-Trust** | ✅ **Terminé** | Démon `jambo-meshd`, capacités `MeshCap`, encapsulation chiffrée symétrique MAC 128 bits, table de routage virtuelle, anti-rejeu monotone. |
 | **30** | **Stockage Distribué Adressable par Contenu** | ✅ **Terminé** | Démon `jambo-dfsd`, capacités `DfsCap`, adressage CAS 256 bits, déduplication globale, réplication multi-nœuds, anti-corruption. |
+| **31** | **Passerelle Réseau L4/L7 & Équilibrage** | ✅ **Terminé** | Démon `jambo-gwd`, capacités `GatewayCap`, aiguillage RoundRobin/LeastConns/IpHash, coupe-circuit réactif, failover. |
 
 ---
 
@@ -117,6 +118,7 @@ jambo-os/
 │   ├── jambo-eventd/        # Bus d'événements Pub/Sub asynchrone et découplage de grappe
 │   ├── jambo-fs/            # Système de fichiers transactionnel Merkle Copy-on-Write
 │   ├── jambo-fuzz/          # Moteur de fuzzing offensif et tests de résilience
+│   ├── jambo-gwd/           # Passerelle réseau L4/L7 & équilibrage de charge élastique
 │   ├── jambo-init/          # Superviseur système PID 1 en espace utilisateur
 │   ├── jambo-kvd/           # Magasin clé-valeur transactionnel distribué (MVCC & baux)
 │   ├── jambo-linux/         # Traducteur d'appels système Linux (compatibilité POSIX)
