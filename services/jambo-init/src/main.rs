@@ -971,6 +971,50 @@ pub extern "C" fn _start() -> ! {
         Err(libjambo::SysError::PermissionDenied)
     );
 
+    // 18. Virtualisation de Périphériques vhost-user Découplés (Phase 23 - jambo-vhostd v0.2.21)
+    let vhost_cap = jambo_vhostd::VhostCap::new(
+        libjambo::Handle::new(901, 1),
+        10,
+        jambo_vhostd::vhost_rights::ALL,
+    );
+    let mut vhost_server = jambo_vhostd::VhostServer::new();
+
+    // Enregistrement d'un backend réseau virtuel VirtIO-Net
+    vhost_server
+        .register_net_device(&vhost_cap, 10, [0x52, 0x54, 0x00, 0x12, 0x34, 0x56])
+        .expect("Register vhost-net device");
+
+    // Négociation vhost-user : configuration de virtqueue
+    vhost_server
+        .dispatch_request(
+            &vhost_cap,
+            10,
+            jambo_vhostd::VhostUserRequest::SetVringNum { index: 0, num: 128 },
+        )
+        .expect("Configure vhost virtqueue");
+
+    // Transmission et réception de paquets réseau isolés
+    let net_dev = vhost_server.net_devices[0].as_mut().expect("Net device");
+    let test_frame = b"JAMBO_VHOST_USER_ETHERNET_PAYLOAD";
+    net_dev
+        .transmit_packet(&vhost_cap, test_frame)
+        .expect("Transmit guest frame");
+    assert_eq!(net_dev.tx_packets_count, 1);
+
+    let mut guest_rx_buf = [0u8; 64];
+    let rx_len = net_dev
+        .receive_packet(&vhost_cap, &mut guest_rx_buf, test_frame)
+        .expect("Receive guest frame");
+    assert_eq!(&guest_rx_buf[..rx_len], test_frame);
+    assert_eq!(net_dev.rx_packets_count, 1);
+
+    // Contrôle d'accès : rejet immédiat en l'absence de VhostCap autorisée
+    let unauth_vhost_cap = jambo_vhostd::VhostCap::new(libjambo::Handle::new(902, 1), 10, 0);
+    assert_eq!(
+        net_dev.transmit_packet(&unauth_vhost_cap, test_frame),
+        Err(libjambo::SysError::PermissionDenied)
+    );
+
     // Boucle de supervision de la santé des services Ring 3
     loop {
         unsafe {

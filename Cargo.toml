@@ -23,6 +23,7 @@ members = [
     "services/jambo-cryptod",
     "services/jambo-authd",
     "services/jambo-vmm",
+    "services/jambo-vhostd",
     "libs/jambo-ui",
     "libs/jambo-sdk",
     "drivers/virtio",
