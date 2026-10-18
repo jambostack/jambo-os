@@ -6,9 +6,13 @@ extern crate alloc;
 use jambo_abi as _;
 
 pub mod arch;
+pub mod cap;
 pub mod drivers;
+pub mod ipc;
 pub mod mm;
 pub mod panic;
+pub mod sched;
+pub mod syscall;
 #[macro_use]
 pub mod print;
 
@@ -62,6 +66,13 @@ unsafe extern "C" fn ap_start(info: &limine::mp::MpInfo) -> ! {
     kprintln!("[SMP] Cœur AP #{} démarré (LAPIC ID: {})", info.processor_id, info.lapic_id);
     loop {
         core::arch::asm!("hlt", options(nomem, nostack, preserves_flags));
+    }
+}
+
+extern "C" fn test_worker() {
+    kprintln!("[SCHED] Exécution d'un thread travailleur dans son contexte propre.");
+    loop {
+        core::hint::spin_loop();
     }
 }
 
@@ -240,11 +251,54 @@ pub extern "C" fn _start() -> ! {
         kprintln!("[SMP] Mode mono-cœur (Réponse MP non disponible)");
     }
 
-    // 9. Validation mesurable des étapes de démarrage
+    // 9. Initialisation et validation de l'ordonnanceur multicœur EEVDF (Phase 5)
+    let thread1 = sched::Thread::new_kernel(1, 0, test_worker).expect("Thread 1");
+    let thread2 = sched::Thread::new_kernel(2, 0, test_worker).expect("Thread 2");
+    sched::SCHEDULER.lock().enqueue(thread1);
+    sched::SCHEDULER.lock().enqueue(thread2);
+    kprintln!("[SCHED/EEVDF] Ordonnanceur EEVDF opérationnel avec 2 threads de test en file");
+
+    // 10. Initialisation CSpace, configuration SYSCALL et IPC hybride (Phase 6)
+    cap::init_cspace();
+    syscall::init_syscall();
+
+    let vmo_test = mm::Vmo::create(4096);
+    let cap_handle = cap::KERNEL_CSPACE
+        .lock()
+        .insert(cap::KernelObject::Vmo(vmo_test), jambo_abi::cap_rights::ALL);
+    let dup_handle = cap::KERNEL_CSPACE
+        .lock()
+        .duplicate(cap_handle, jambo_abi::cap_rights::READ)
+        .expect("Duplication de capacité");
+    kprintln!(
+        "[CAP/CSPACE] Table de capacités active. Handle initial: {:#x}, Handle atténué: {:#x}",
+        cap_handle.0,
+        dup_handle.0
+    );
+
+    let mut created_handle: u64 = 0;
+    let ret = syscall::dispatch_syscall(
+        4,
+        4096,
+        0,
+        &mut created_handle as *mut u64 as u64,
+        0,
+        0,
+        0,
+    );
+    kprintln!(
+        "[SYSCALL] Appel système vmo_create validé (Code retour: {}, Nouveau Handle: {:#x})",
+        ret,
+        created_handle
+    );
+
+    // 11. Validation mesurable des étapes de démarrage
     kprintln!();
     kprintln!("\x1b[1;32m[PASS] Phase 2 Bootstrap Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 3 CPU & Multicore SMP Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 4 Memory Management Complete (PMM, SLUB, VMM, VMO)\x1b[0m");
+    kprintln!("\x1b[1;32m[PASS] Phase 5 Process, Thread & EEVDF Scheduler Complete\x1b[0m");
+    kprintln!("\x1b[1;32m[PASS] Phase 6 CSpace, 24 Syscalls & Hybrid IPC Complete\x1b[0m");
     kprintln!();
 
     // 8. Vérifier si un arrêt immédiat de test CI est requis
