@@ -1172,6 +1172,80 @@ pub extern "C" fn _start() -> ! {
         Err(libjambo::SysError::PermissionDenied)
     );
 
+    // 22. Ordonnanceur de Charges de Travail et de Conteneurs Distribués (Phase 27 - jambo-schedd v0.2.25)
+    let sched_cap = jambo_schedd::SchedCap::new(
+        libjambo::Handle::new(1301, 1),
+        jambo_schedd::sched_rights::ALL,
+    );
+    let mut cluster_sched = jambo_schedd::ClusterScheduler::new();
+
+    // Enregistrement des nœuds de la grappe
+    cluster_sched
+        .register_node(&sched_cap, 1, 16, 2048)
+        .expect("Register cluster node 1");
+    cluster_sched
+        .register_node(&sched_cap, 2, 16, 2048)
+        .expect("Register cluster node 2");
+
+    // Soumission déclarative d'une micro-VM et d'un conteneur WASM
+    let vmm_spec = jambo_schedd::TaskSpec::new(
+        0,
+        b"micro-vmm-gateway",
+        jambo_schedd::RuntimeType::MicroVmm,
+        4,
+        512,
+        Some(1),
+    );
+    let wasm_spec = jambo_schedd::TaskSpec::new(
+        0,
+        b"wasm-edge-filter",
+        jambo_schedd::RuntimeType::Wasm,
+        2,
+        128,
+        None,
+    );
+    let vmm_tid = cluster_sched
+        .submit_task(&sched_cap, vmm_spec)
+        .expect("Submit VMM task");
+    let wasm_tid = cluster_sched
+        .submit_task(&sched_cap, wasm_spec)
+        .expect("Submit WASM task");
+
+    // Ordonnancement et placement déclaratif
+    let placed = cluster_sched.schedule_pending(1000);
+    assert_eq!(placed, 2);
+
+    let vmm_task = cluster_sched
+        .query_task(&sched_cap, vmm_tid)
+        .expect("Query VMM task");
+    assert_eq!(vmm_task.state, jambo_schedd::TaskState::Running);
+    assert_eq!(vmm_task.assigned_node, Some(1));
+
+    let wasm_task = cluster_sched
+        .query_task(&sched_cap, wasm_tid)
+        .expect("Query WASM task");
+    assert_eq!(wasm_task.state, jambo_schedd::TaskState::Running);
+    assert!(wasm_task.assigned_node.is_some());
+
+    // Migration à chaud et drainage contrôlé
+    cluster_sched
+        .migrate_task(&sched_cap, vmm_tid, 2)
+        .expect("Migrate VMM task to node 2");
+    assert_eq!(
+        cluster_sched
+            .query_task(&sched_cap, vmm_tid)
+            .unwrap()
+            .assigned_node,
+        Some(2)
+    );
+
+    // Contrôle d'accès : rejet strict sans SchedCap autorisée
+    let unauth_sched_cap = jambo_schedd::SchedCap::new(libjambo::Handle::new(1302, 1), 0);
+    assert_eq!(
+        cluster_sched.cancel_task(&unauth_sched_cap, vmm_tid),
+        Err(libjambo::SysError::PermissionDenied)
+    );
+
     // Boucle de supervision de la santé des services Ring 3
     loop {
         unsafe {

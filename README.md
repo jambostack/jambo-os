@@ -1,7 +1,7 @@
 # **JamboOS (jambostack/jambo-os)**
 
 [![CI / Build & QEMU Boot Test](https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg)](https://github.com/jambostack/jambo-os/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-v0.2.24-orange.svg)](https://github.com/jambostack/jambo-os)
+[![Version](https://img.shields.io/badge/version-v0.2.25-orange.svg)](https://github.com/jambostack/jambo-os)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg)](https://www.rust-lang.org/)
 
@@ -13,8 +13,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.24 (Magasin Clé-Valeur Distribué Transactionnel)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. Après le moteur de consensus distribué Raft `jambo-raft` (`v0.2.23`), la version `v0.2.24` introduit le magasin clé-valeur transactionnel distribué en espace utilisateur `jambo-kvd` (Phase 26) : modèle de données multiversionné (MVCC) avec révisions monotones, baux temporels (*leases*) basés sur l'horloge sans dérive `jambo-timed` avec expiration automatique, transactions atomiques conditionnelles Compare-And-Swap (CAS) et isolation stricte par capacités `KvCap`. Le système reste un prototype de recherche en cours de développement, loin d'une v1.0.0 finale.
+> **Statut du Projet : Version v0.2.25 (Ordonnanceur de Charges de Travail et Conteneurs Distribués)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. Après le magasin clé-valeur transactionnel `jambo-kvd` (`v0.2.24`), la version `v0.2.25` introduit l'ordonnanceur de charges de travail distribuées en espace utilisateur `jambo-schedd` (Phase 27) : modèle déclaratif multi-runtime (micro-VMs `jambo-vmm`, sandboxes WebAssembly `jambo-wasm`, charges POSIX `jambo-linux`), algorithme de placement multicritère à score de charge, migration à chaud, éviction contrôlée (*drain*) et régulation stricte par capacités `SchedCap`. Le système reste un prototype de recherche en cours de développement, loin d'une v1.0.0 finale.
 
 ---
 
@@ -40,7 +40,7 @@
 
 ## **2. Tableau synoptique d'avancement des phases d'ingénierie**
 
-Toutes les **26 phases** du *Plan Directeur d'Ingénierie* sont intégralement développées, testées et validées sous environnement QEMU UEFI multicœur.
+Toutes les **27 phases** du *Plan Directeur d'Ingénierie* sont intégralement développées, testées et validées sous environnement QEMU UEFI multicœur.
 
 | Phase | Intitulé du Composant | Statut | Responsabilité Technique |
 | :---: | :--- | :---: | :--- |
@@ -71,6 +71,7 @@ Toutes les **26 phases** du *Plan Directeur d'Ingénierie* sont intégralement d
 | **24** | **Synchronisation Horlogère PTP/NTP** | ✅ **Terminé** | Démon `jambo-timed`, capacités `TimeSyncCap`, asservissement PLL/FLL, monotonicité garantie, PTP (IEEE 1588). |
 | **25** | **Consensus Distribué Raft** | ✅ **Terminé** | Démon `jambo-raft`, capacités `RaftCap`, quorum strict, journal répliqué, élection de leader et FSM linéaire. |
 | **26** | **Magasin Clé-Valeur Transactionnel** | ✅ **Terminé** | Démon `jambo-kvd`, capacités `KvCap`, MVCC monotone, baux temporels (*leases*), Compare-And-Swap (CAS). |
+| **27** | **Ordonnanceur de Tâches & Conteneurs** | ✅ **Terminé** | Démon `jambo-schedd`, capacités `SchedCap`, placement multi-critère, migration à chaud, éviction contrôlée (*drain*). |
 
 ---
 
@@ -119,6 +120,7 @@ jambo-os/
 │   ├── jambo-powerd/        # Gestion d'énergie ACPI et régulation thermique/C-states
 │   ├── jambo-raft/          # Moteur de consensus distribué Raft et réplication d'état
 │   ├── jambo-rpc/           # Bus RPC distribué et capacités de cluster
+│   ├── jambo-schedd/        # Ordonnanceur distribué de charges de travail et micro-VMs
 │   ├── jambo-sh/            # Shell interactif orienté objets
 │   ├── jambo-timed/         # Synchronisation horlogère distribuée PTP/NTP haute précision
 │   ├── jambo-vhostd/        # Virtualisation de périphériques vhost-user VirtIO Ring 3
