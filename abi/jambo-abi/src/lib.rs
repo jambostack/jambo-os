@@ -159,10 +159,19 @@ pub struct RingDesc {
     pub flags: u32,
 }
 
+pub mod event_types {
+    pub const NONE: u32 = 0;
+    pub const IRQ: u32 = 1;
+    pub const USER: u32 = 2;
+    pub const CHANNEL: u32 = 3;
+}
+
 #[repr(C)]
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct JamboEvent {
     pub handle: Handle,
     pub event_type: u32,
+    pub _pad: u32,
     pub data: u64,
 }
+

@@ -283,11 +283,50 @@ pub extern "C" fn dispatch_syscall(
             SysError::Success as i64
         }
 
-        // 15: PortCreate
-        15 => SysError::Success as i64,
+        // 15: PortCreate (flags: a1, out_port: a2)
+        15 => {
+            let _flags = a1 as u32;
+            let out_port = a2 as *mut u64;
 
-        // 16: PortWait
-        16 => SysError::Success as i64,
+            let port = Arc::new(crate::ipc::Port::new());
+            let mut cspace = KERNEL_CSPACE.lock();
+            let handle = cspace.insert(KernelObject::Port(port), cap_rights::ALL);
+
+            if !out_port.is_null() {
+                unsafe {
+                    *out_port = handle.0;
+                }
+            }
+            SysError::Success as i64
+        }
+
+        // 16: PortWait (port_h: a1, out_event: a2, timeout: a3)
+        16 => {
+            let port_h = Handle(a1);
+            let out_event = a2 as *mut jambo_abi::JamboEvent;
+            let timeout = a3;
+
+            let cspace = KERNEL_CSPACE.lock();
+            let port = match cspace.lookup(port_h, cap_rights::RECEIVE) {
+                Ok(KernelObject::Port(p)) => p,
+                _ => return SysError::InvalidHandle as i64,
+            };
+            drop(cspace);
+
+            match port.wait(timeout) {
+                Ok(Some(ev)) => {
+                    if !out_event.is_null() {
+                        unsafe {
+                            *out_event = ev;
+                        }
+                    }
+                    SysError::Success as i64
+                }
+                Ok(None) => SysError::TimedOut as i64,
+                Err(e) => e as i64,
+            }
+        }
+
 
         // 17: RingSetup (desc_ptr: a1, out_handle: a2)
         17 => {
@@ -361,11 +400,49 @@ pub extern "C" fn dispatch_syscall(
             }
         }
 
-        // 21: IrqBind
-        21 => SysError::Success as i64,
+        // 21: IrqBind (vector: a1, port_h: a2, cookie: a3, out_irq: a4)
+        21 => {
+            let vector = a1 as u32;
+            let port_h = Handle(a2);
+            let cookie = a3;
+            let out_irq = a4 as *mut u64;
 
-        // 22: IrqAck
-        22 => SysError::Success as i64,
+            let cspace = KERNEL_CSPACE.lock();
+            let port = match cspace.lookup(port_h, cap_rights::MANAGE | cap_rights::RECEIVE) {
+                Ok(KernelObject::Port(p)) => p,
+                _ => return SysError::InvalidHandle as i64,
+            };
+            drop(cspace);
+
+            let irq_obj = Arc::new(crate::ipc::IrqObject::new(vector, cookie, port));
+            crate::ipc::IRQ_DISPATCHER.register(irq_obj.clone());
+
+            let mut cspace = KERNEL_CSPACE.lock();
+            let handle = cspace.insert(KernelObject::Irq(irq_obj), cap_rights::ALL);
+
+            if !out_irq.is_null() {
+                unsafe {
+                    *out_irq = handle.0;
+                }
+            }
+            SysError::Success as i64
+        }
+
+        // 22: IrqAck (irq_h: a1)
+        22 => {
+            let irq_h = Handle(a1);
+
+            let cspace = KERNEL_CSPACE.lock();
+            let irq = match cspace.lookup(irq_h, cap_rights::MANAGE) {
+                Ok(KernelObject::Irq(i)) => i,
+                _ => return SysError::InvalidHandle as i64,
+            };
+            drop(cspace);
+
+            irq.ack();
+            SysError::Success as i64
+        }
+
 
         // 23: IommuMap
         23 => {

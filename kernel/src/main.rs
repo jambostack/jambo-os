@@ -129,7 +129,7 @@ pub extern "C" fn _start() -> ! {
     // 4. Bannière système d'accueil
     kprintln!("\x1b[1;36m");
     kprintln!("================================================================================");
-    kprintln!("    JAMBO-OS (JamboKernel v0.2.3) — Micro-noyau de 3e Génération              ");
+    kprintln!("    JAMBO-OS (JamboKernel v0.2.4) — Micro-noyau de 3e Génération              ");
     kprintln!("    Architecture : Micro-noyau orienté capacités en Rust no_std (x86_64/AArch64)");
     kprintln!("    Auteur & Architecte Principal : ASSOGBA Prudence Dieudonné                 ");
     kprintln!("    Dépôt Officiel : https://github.com/jambostack/jambo-os                    ");
@@ -518,7 +518,68 @@ pub extern "C" fn _start() -> ! {
         ch_ep2
     );
 
+    // Test et validation des Ports asynchrones et liaison d'interruptions matérielles IRQ (v0.2.4)
+    let mut port_h: u64 = 0;
+    let ret_port = syscall::dispatch_syscall(
+        15,
+        0,
+        &mut port_h as *mut u64 as u64,
+        0,
+        0,
+        0,
+        0,
+    );
+    assert_eq!(ret_port, 0);
+    assert_ne!(port_h, 0);
+
+    let mut irq_h: u64 = 0;
+    const TEST_IRQ_VECTOR: u32 = 48; // Vecteur IRQ VirtIO/PCI
+    const TEST_IRQ_COOKIE: u64 = 0xDEAD_CAFE_BEEF;
+    let ret_irq_bind = syscall::dispatch_syscall(
+        21,
+        TEST_IRQ_VECTOR as u64,
+        port_h,
+        TEST_IRQ_COOKIE,
+        &mut irq_h as *mut u64 as u64,
+        0,
+        0,
+    );
+    assert_eq!(ret_irq_bind, 0);
+    assert_ne!(irq_h, 0);
+
+    // Déclenchement d'une interruption matérielle simulée vers le port
+    let dispatched = ipc::IRQ_DISPATCHER.trigger_irq(TEST_IRQ_VECTOR, jambo_abi::Handle(irq_h));
+    assert!(dispatched, "L'interruption matérielle doit être dispatchée vers le Port");
+
+    // Réception de l'événement sur le Port via PortWait (Syscall 16)
+    let mut event = jambo_abi::JamboEvent::default();
+    let ret_pwait = syscall::dispatch_syscall(
+        16,
+        port_h,
+        &mut event as *mut jambo_abi::JamboEvent as u64,
+        0, // Non bloquant pour le test unitaire
+        0,
+        0,
+        0,
+    );
+    assert_eq!(ret_pwait, 0);
+    assert_eq!(event.handle.0, irq_h);
+    assert_eq!(event.event_type, jambo_abi::event_types::IRQ);
+    assert_eq!(event.data, TEST_IRQ_COOKIE);
+
+    // Acquittement de l'interruption matérielle via IrqAck (Syscall 22)
+    let ret_ack = syscall::dispatch_syscall(22, irq_h, 0, 0, 0, 0, 0);
+    assert_eq!(ret_ack, 0);
+
+    kprintln!(
+        "[ASYNC/IRQ] Port asynchrone ({:#x}), IRQ #{} liée ({:#x}) et acquittement EOI validés",
+        port_h,
+        TEST_IRQ_VECTOR,
+        irq_h
+    );
+
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
+
     arch::init_iommu();
     let root_domain = arch::IOMMU_MANAGER.create_domain();
     let fake_nvme_bdf = arch::PciBdf::new(0, 4, 0);
@@ -574,9 +635,9 @@ pub extern "C" fn _start() -> ! {
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.3 (IPC Hybride, Fastpath Messaging & Synchronisation Futex)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.4 (Ports de Notification Asynchrone, Multiplexage d'Événements & IRQ Bind/Ack pour Drivers Ring 3)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.3 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.4 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );

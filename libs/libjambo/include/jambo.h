@@ -30,7 +30,20 @@ static inline uint32_t jambo_handle_generation(jambo_handle_t h) {
     return (uint32_t)(h >> 32);
 }
 
+#define JAMBO_EVENT_NONE    0
+#define JAMBO_EVENT_IRQ     1
+#define JAMBO_EVENT_USER    2
+#define JAMBO_EVENT_CHANNEL 3
+
+typedef struct {
+    jambo_handle_t handle;
+    uint32_t event_type;
+    uint32_t _pad;
+    uint64_t data;
+} jambo_event_t;
+
 /* === Codes d'erreur système === */
+
 
 #define JAMBO_OK                    0
 #define JAMBO_ERR_INVALID_HANDLE   -1
@@ -201,6 +214,23 @@ static inline int64_t jambo_futex_wait(const uint32_t* uaddr, uint32_t expected_
 static inline int64_t jambo_futex_wake(const uint32_t* uaddr, uint32_t count) {
     return jambo_syscall6(JAMBO_SYS_FUTEX_WAKE, (uint64_t)(uintptr_t)uaddr, (uint64_t)count, 0, 0, 0, 0, NULL);
 }
+
+static inline int64_t jambo_port_create(uint32_t flags, jambo_handle_t* out_port) {
+    return jambo_syscall6(JAMBO_SYS_PORT_CREATE, (uint64_t)flags, (uint64_t)(uintptr_t)out_port, 0, 0, 0, 0, NULL);
+}
+
+static inline int64_t jambo_port_wait(jambo_handle_t port, jambo_event_t* out_event, uint64_t timeout_ns) {
+    return jambo_syscall6(JAMBO_SYS_PORT_WAIT, port, (uint64_t)(uintptr_t)out_event, timeout_ns, 0, 0, 0, NULL);
+}
+
+static inline int64_t jambo_irq_bind(uint32_t irq_vector, jambo_handle_t port, uint64_t cookie, jambo_handle_t* out_irq) {
+    return jambo_syscall6(JAMBO_SYS_IRQ_BIND, (uint64_t)irq_vector, port, cookie, (uint64_t)(uintptr_t)out_irq, 0, 0, NULL);
+}
+
+static inline int64_t jambo_irq_ack(jambo_handle_t irq) {
+    return jambo_syscall6(JAMBO_SYS_IRQ_ACK, irq, 0, 0, 0, 0, 0, NULL);
+}
+
 
 #ifdef __cplusplus
 }

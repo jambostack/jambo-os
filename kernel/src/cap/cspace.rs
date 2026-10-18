@@ -10,11 +10,12 @@ pub enum KernelObject {
     None,
     Vmo(Arc<Vmo>),
     Channel(Arc<crate::ipc::ChannelEndpoint>),
-    Port(u64),
+    Port(Arc<crate::ipc::Port>),
     Process(Arc<crate::sched::Process>),
     Thread(Arc<Mutex<crate::sched::Thread>>),
     Ring(Arc<crate::ipc::SharedRing>),
     Iommu(Arc<crate::arch::IommuDomain>),
+    Irq(Arc<crate::ipc::IrqObject>),
 }
 
 #[derive(Clone)]

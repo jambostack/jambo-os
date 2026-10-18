@@ -45,9 +45,19 @@ pub fn verify_cspace_anti_aba_invariant() -> FormalProofResult {
     assert_eq!(idx1, idx2);
     assert_ne!(gen1, gen2);
 
-    // L'ancien Handle est formellement invalide (Use-After-Close impossible)
     assert!(cspace.lookup(h1, cap_rights::READ).is_err());
     assert!(cspace.lookup(h2, cap_rights::READ).is_ok());
+
+    // Vérification de non-interférence pour les objets asynchrones Port et IRQ (v0.2.4)
+    let port = alloc::sync::Arc::new(crate::ipc::Port::new());
+    let h_port = cspace.insert(crate::cap::KernelObject::Port(port.clone()), cap_rights::RECEIVE);
+    let irq_obj = alloc::sync::Arc::new(crate::ipc::IrqObject::new(50, 0x1234, port));
+    let h_irq = cspace.insert(crate::cap::KernelObject::Irq(irq_obj), cap_rights::MANAGE);
+
+    assert_ne!(h_port.index(), h_irq.index());
+    assert!(cspace.lookup(h_port, cap_rights::RECEIVE).is_ok());
+    assert!(cspace.lookup(h_irq, cap_rights::MANAGE).is_ok());
+
 
     FormalProofResult {
         proof_name: "CSpace Anti-ABA & Use-After-Close Safety",
