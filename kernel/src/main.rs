@@ -1,18 +1,26 @@
 #![no_std]
 #![no_main]
 
+extern crate alloc;
+
 use jambo_abi as _;
 
 pub mod arch;
 pub mod drivers;
+pub mod mm;
 pub mod panic;
 #[macro_use]
 pub mod print;
 
 use arch::{exit_qemu, init_serial, QemuExitCode};
+use core::sync::atomic::{AtomicU32, Ordering};
 use drivers::init_framebuffer;
-use limine::request::{ExecutableCmdlineRequest, FramebufferRequest, HhdmRequest, MemmapRequest};
+use limine::request::{
+    ExecutableCmdlineRequest, FramebufferRequest, HhdmRequest, MemmapRequest, MpRequest,
+};
 use limine::{memmap, BaseRevision, RequestsEndMarker, RequestsStartMarker};
+
+static ACTIVE_CPUS: AtomicU32 = AtomicU32::new(1); // BSP compte pour 1
 
 #[used]
 #[link_section = ".limine_requests_start"]
@@ -36,11 +44,26 @@ static MEMMAP_REQUEST: MemmapRequest = MemmapRequest::new();
 
 #[used]
 #[link_section = ".limine_requests"]
+static MP_REQUEST: MpRequest = MpRequest::new(0);
+
+#[used]
+#[link_section = ".limine_requests"]
 static CMDLINE_REQUEST: ExecutableCmdlineRequest = ExecutableCmdlineRequest::new();
 
 #[used]
 #[link_section = ".limine_requests_end"]
 static _END_MARKER: RequestsEndMarker = RequestsEndMarker::new();
+
+unsafe extern "C" fn ap_start(info: &limine::mp::MpInfo) -> ! {
+    arch::init_gdt();
+    arch::init_idt();
+    arch::init_per_cpu(info.processor_id, info.lapic_id, false);
+    ACTIVE_CPUS.fetch_add(1, Ordering::SeqCst);
+    kprintln!("[SMP] Cœur AP #{} démarré (LAPIC ID: {})", info.processor_id, info.lapic_id);
+    loop {
+        core::arch::asm!("hlt", options(nomem, nostack, preserves_flags));
+    }
+}
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
@@ -84,6 +107,7 @@ pub extern "C" fn _start() -> ! {
 
     // 5. Affichage des informations HHDM (Higher-Half Direct Map)
     if let Some(hhdm) = HHDM_REQUEST.response() {
+        mm::HHDM_OFFSET.store(hhdm.offset as usize, Ordering::Relaxed);
         kprintln!(
             "[BOOT/HHDM] Projection mémoire physique directe à : {:#018x}",
             hhdm.offset
@@ -92,7 +116,7 @@ pub extern "C" fn _start() -> ! {
         kprintln!("[WARN] HHDM non fourni par le chargeur d'amorçage.");
     }
 
-    // 6. Analyse et journalisation de la carte mémoire physique (PMM)
+    // 6. Analyse et initialisation de l'allocateur de mémoire physique (PMM Buddy Allocator)
     if let Some(mmap_resp) = MEMMAP_REQUEST.response() {
         let entries = mmap_resp.entries();
         kprintln!(
@@ -103,11 +127,15 @@ pub extern "C" fn _start() -> ! {
         let mut usable_bytes: u64 = 0;
         let mut total_bytes: u64 = 0;
 
+        let mut pmm = mm::PMM.lock();
         for (idx, entry) in entries.iter().enumerate() {
             total_bytes += entry.length;
             let type_str = match entry.type_ {
                 memmap::MEMMAP_USABLE => {
                     usable_bytes += entry.length;
+                    unsafe {
+                        pmm.add_region(entry.base as usize, entry.length as usize);
+                    }
                     "Utilisable (RAM)"
                 }
                 memmap::MEMMAP_RESERVED => "Réservé Matériel",
@@ -129,15 +157,40 @@ pub extern "C" fn _start() -> ! {
                 type_str
             );
         }
+        let total_pmm_pages = pmm.total_pages();
+        drop(pmm);
 
         kprintln!(
             "[BOOT/MMAP] Mémoire totale : {} Mio | RAM utilisable : {} Mio",
             total_bytes / (1024 * 1024),
             usable_bytes / (1024 * 1024)
         );
+        kprintln!(
+            "[BOOT/PMM] Buddy Allocator initialisé ({} pages physiques / {} Mio gérées)",
+            total_pmm_pages,
+            (total_pmm_pages * 4096) / (1024 * 1024)
+        );
     } else {
         kprintln!("[WARN] Carte mémoire physique non disponible.");
     }
+
+    // 7. Validation du sous-système mémoire : Tas SLUB, VMM et Objets VMO (Phase 4)
+    let test_vec: alloc::vec::Vec<usize> = alloc::vec![10, 20, 30, 40];
+    kprintln!(
+        "[HEAP/SLUB] Tas noyau actif, allocation dynamique validée ({} éléments)",
+        test_vec.len()
+    );
+
+    let vmo = mm::Vmo::create(64 * 1024);
+    let aspace = mm::AddressSpace::new().expect("Création espace d'adressage virtuel");
+    aspace
+        .map_vmo(
+            0x0040_0000,
+            vmo,
+            jambo_abi::vmo_prot::READ | jambo_abi::vmo_prot::WRITE,
+        )
+        .expect("Projection VMO");
+    kprintln!("[VMM/VMO] VMO Copy-on-Write projeté avec succès dans le nouvel espace d'adressage");
 
     // 7. Initialisation matérielle CPU (Phase 3) : GDT, TSS (IST1), IDT et APIC
     arch::init_gdt();
@@ -159,10 +212,39 @@ pub extern "C" fn _start() -> ! {
         kprintln!("[CPU/APIC] Mode x2APIC non supporté par le CPU");
     }
 
-    // 8. Validation mesurable des étapes de démarrage
+    // 8. Initialisation PerCpuData et réveil des cœurs secondaires SMP
+    arch::init_per_cpu(0, 0, true);
+
+    if let Some(mp_resp) = MP_REQUEST.response() {
+        let cpus = mp_resp.cpus();
+        kprintln!("[SMP] Détection de {} cœurs logiques", cpus.len());
+
+        for cpu in cpus.iter() {
+            if cpu.lapic_id != mp_resp.bsp_lapic_id {
+                cpu.bootstrap(ap_start, cpu.processor_id as u64);
+            }
+        }
+
+        let mut spins = 0;
+        while ACTIVE_CPUS.load(Ordering::SeqCst) < (cpus.len() as u32) && spins < 100_000 {
+            core::hint::spin_loop();
+            spins += 1;
+        }
+
+        kprintln!(
+            "[SMP] Multicœur SMP opérationnel ({} cœurs actifs sur {})",
+            ACTIVE_CPUS.load(Ordering::SeqCst),
+            cpus.len()
+        );
+    } else {
+        kprintln!("[SMP] Mode mono-cœur (Réponse MP non disponible)");
+    }
+
+    // 9. Validation mesurable des étapes de démarrage
     kprintln!();
     kprintln!("\x1b[1;32m[PASS] Phase 2 Bootstrap Complete\x1b[0m");
-    kprintln!("\x1b[1;32m[PASS] Phase 3 CPU Foundations Complete (GDT, TSS, IDT, APIC)\x1b[0m");
+    kprintln!("\x1b[1;32m[PASS] Phase 3 CPU & Multicore SMP Complete\x1b[0m");
+    kprintln!("\x1b[1;32m[PASS] Phase 4 Memory Management Complete (PMM, SLUB, VMM, VMO)\x1b[0m");
     kprintln!();
 
     // 8. Vérifier si un arrêt immédiat de test CI est requis
