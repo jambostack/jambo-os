@@ -10,8 +10,8 @@ use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU32, Ordering};
-use spin::Mutex;
 use jambo_abi::SysError;
+use spin::Mutex;
 
 /// Descripteur de périphérique PCIe : Bus / Device / Function (16 bits)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -82,7 +82,13 @@ impl IommuDomain {
     }
 
     /// Associe une plage d'adresses virtuelles I/O (IOVA) à des pages physiques
-    pub fn map_dma(&self, iova: u64, paddr: u64, size: usize, writeable: bool) -> Result<(), SysError> {
+    pub fn map_dma(
+        &self,
+        iova: u64,
+        paddr: u64,
+        size: usize,
+        writeable: bool,
+    ) -> Result<(), SysError> {
         if size == 0 || (iova & 0xFFF) != 0 || (paddr & 0xFFF) != 0 {
             return Err(SysError::InvalidArgument);
         }
@@ -97,12 +103,15 @@ impl IommuDomain {
             }
         }
 
-        maps.insert(iova, DmaMapping {
+        maps.insert(
             iova,
-            paddr,
-            size,
-            writeable,
-        });
+            DmaMapping {
+                iova,
+                paddr,
+                size,
+                writeable,
+            },
+        );
 
         Ok(())
     }
@@ -187,7 +196,11 @@ impl IommuManager {
 
     /// Règle formelle : Vérifie si le Bus Master Enable est autorisé
     pub fn is_bus_master_allowed(&self, bdf: PciBdf) -> bool {
-        *self.bus_master_allowed.lock().get(&bdf.to_raw()).unwrap_or(&false)
+        *self
+            .bus_master_allowed
+            .lock()
+            .get(&bdf.to_raw())
+            .unwrap_or(&false)
     }
 
     /// Obtenir le domaine associé à un identifiant
@@ -201,6 +214,8 @@ pub static IOMMU_MANAGER: IommuManager = IommuManager::new();
 /// Initialise le sous-système IOMMU (Intel VT-d)
 pub fn init_iommu() {
     crate::kprintln!("[iommu] Initializing Intel VT-d / DMA Protection Subsystem...");
-    crate::kprintln!("[iommu] Hardware policy active: Bus Master Enable forbidden without valid IOMMU Domain.");
+    crate::kprintln!(
+        "[iommu] Hardware policy active: Bus Master Enable forbidden without valid IOMMU Domain."
+    );
     crate::kprintln!("[iommu] Subsystem ready. 100% Out-of-bounds DMA protection enforced.");
 }

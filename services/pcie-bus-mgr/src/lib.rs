@@ -23,7 +23,11 @@ pub struct PciAddress {
 impl PciAddress {
     #[inline]
     pub const fn new(bus: u8, device: u8, function: u8) -> Self {
-        Self { bus, device, function }
+        Self {
+            bus,
+            device,
+            function,
+        }
     }
 
     #[inline]
@@ -224,8 +228,10 @@ impl PcieBusManager {
 
                             if mem_type == 0x02 && bar_idx + 1 < 6 {
                                 // BAR 64 bits
-                                let bar_high = unsafe { PciConfigAccess::read32(addr, bar_offset + 4) };
-                                let base_addr = ((bar_high as u64) << 32) | ((bar_val & !0x0F) as u64);
+                                let bar_high =
+                                    unsafe { PciConfigAccess::read32(addr, bar_offset + 4) };
+                                let base_addr =
+                                    ((bar_high as u64) << 32) | ((bar_val & !0x0F) as u64);
                                 bars[bar_idx] = Some(PciBar {
                                     index: bar_idx as u8,
                                     bar_type: BarType::Memory64,
@@ -255,11 +261,15 @@ impl PcieBusManager {
 
                     if (status & (1 << 4)) != 0 {
                         // Liste de capacités présente
-                        let mut cap_ptr = unsafe { PciConfigAccess::read16(addr, 0x34) & 0xFF } as u8;
+                        let mut cap_ptr =
+                            unsafe { PciConfigAccess::read16(addr, 0x34) & 0xFF } as u8;
                         let mut loop_guard = 0;
                         while cap_ptr != 0 && loop_guard < 48 {
-                            let cap_id = unsafe { PciConfigAccess::read16(addr, cap_ptr) & 0xFF } as u8;
-                            let next_ptr = unsafe { (PciConfigAccess::read16(addr, cap_ptr) >> 8) & 0xFF } as u8;
+                            let cap_id =
+                                unsafe { PciConfigAccess::read16(addr, cap_ptr) & 0xFF } as u8;
+                            let next_ptr =
+                                unsafe { (PciConfigAccess::read16(addr, cap_ptr) >> 8) & 0xFF }
+                                    as u8;
 
                             if cap_id == 0x10 {
                                 pcie_cap = Some(cap_ptr);

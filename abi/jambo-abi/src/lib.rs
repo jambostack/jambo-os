@@ -56,7 +56,6 @@ pub mod net_rights {
     pub const TLS: u32 = 1 << 6;
 }
 
-
 /// Permissions de projection mémoire (W^X)
 pub mod vmo_prot {
     pub const READ: u32 = 1 << 0;

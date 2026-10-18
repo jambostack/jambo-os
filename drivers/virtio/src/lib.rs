@@ -80,4 +80,3 @@ impl VirtioBlockDriver {
 
 pub mod net;
 pub use net::{VirtioNetDriver, VirtioNetHdr};
-

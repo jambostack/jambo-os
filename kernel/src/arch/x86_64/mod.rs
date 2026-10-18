@@ -12,7 +12,6 @@ pub use cpu::{current_cpu, init_per_cpu, PerCpuData, MAX_CPUS};
 pub use gdt::init_gdt;
 pub use idt::init_idt;
 pub use io::*;
-pub use iommu::{init_iommu, IommuDomain, IOMMU_MANAGER, PciBdf};
+pub use iommu::{init_iommu, IommuDomain, PciBdf, IOMMU_MANAGER};
 pub use qemu::{exit_qemu, QemuExitCode};
 pub use serial::{init_serial, SERIAL1};
-

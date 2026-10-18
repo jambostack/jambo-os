@@ -257,7 +257,11 @@ impl XhciController {
         if !self.ready {
             return Err(SysError::ResourceBusy);
         }
-        self.cmd_ring.push(input_ctx_iova, (slot_id as u32) << 24, TRB_TYPE_ADDRESS_DEVICE)
+        self.cmd_ring.push(
+            input_ctx_iova,
+            (slot_id as u32) << 24,
+            TRB_TYPE_ADDRESS_DEVICE,
+        )
     }
 
     /// Traite un rapport USB HID reçu d'un périphérique (clavier ou souris)
