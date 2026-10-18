@@ -33,6 +33,7 @@ members = [
     "services/jambo-dfsd",
     "services/jambo-gwd",
     "services/jambo-vaultd",
+    "services/jambo-metricsd",
     "libs/jambo-ui",
     "libs/jambo-sdk",
     "drivers/virtio",

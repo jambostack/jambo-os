@@ -1,7 +1,7 @@
 # **JamboOS (jambostack/jambo-os)**
 
 [![CI / Build & QEMU Boot Test](https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg)](https://github.com/jambostack/jambo-os/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-v0.2.30-orange.svg)](https://github.com/jambostack/jambo-os)
+[![Version](https://img.shields.io/badge/version-v0.2.31-orange.svg)](https://github.com/jambostack/jambo-os)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg)](https://www.rust-lang.org/)
 
@@ -13,8 +13,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.30 (Coffre-Fort de Secrets Distribué & Partage à Seuil)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. Après la passerelle réseau L4/L7 `jambo-gwd` (`v0.2.29`), la version `v0.2.30` introduit le démon de coffre-fort de secrets distribué `jambo-vaultd` (Phase 32) : déverrouillage de la clé racine par quorum de parts à seuil ($K$ parmi $N$), chiffrement d'enveloppe individuel des secrets, gestion stricte de baux temporels (*leases*) avec expiration automatique, rotation de versions et contrôle d'accès sans autorité ambiante régi par les capacités `VaultCap`. Le système reste un prototype de recherche en cours de développement, loin d'une v1.0.0 finale.
+> **Statut du Projet : Version v0.2.31 (Moteur de Métriques Distribuées & Surveillance en Séries Temporelles)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. Après le coffre-fort de secrets distribué `jambo-vaultd` (`v0.2.30`), la version `v0.2.31` introduit le démon d'observabilité quantitative et de séries temporelles `jambo-metricsd` (Phase 33) : collecte de métriques système dans des tampons annulaires déterministes (*ring buffers*), agrégats statistiques O(1), évaluation réactive de règles d'alerte à seuil et contrôle d'accès sans autorité ambiante régi par les capacités `MetricsCap`. Le système reste un prototype de recherche en cours de développement, loin d'une v1.0.0 finale.
 
 ---
 
@@ -40,7 +40,7 @@
 
 ## **2. Tableau synoptique d'avancement des phases d'ingénierie**
 
-Toutes les **32 phases** du *Plan Directeur d'Ingénierie* sont intégralement développées, testées et validées sous environnement QEMU UEFI multicœur.
+Toutes les **33 phases** du *Plan Directeur d'Ingénierie* sont intégralement développées, testées et validées sous environnement QEMU UEFI multicœur.
 
 | Phase | Intitulé du Composant | Statut | Responsabilité Technique |
 | :---: | :--- | :---: | :--- |
@@ -77,6 +77,7 @@ Toutes les **32 phases** du *Plan Directeur d'Ingénierie* sont intégralement d
 | **30** | **Stockage Distribué Adressable par Contenu** | ✅ **Terminé** | Démon `jambo-dfsd`, capacités `DfsCap`, adressage CAS 256 bits, déduplication globale, réplication multi-nœuds, anti-corruption. |
 | **31** | **Passerelle Réseau L4/L7 & Équilibrage** | ✅ **Terminé** | Démon `jambo-gwd`, capacités `GatewayCap`, aiguillage RoundRobin/LeastConns/IpHash, coupe-circuit réactif, failover. |
 | **32** | **Coffre-Fort de Secrets & Quorum à Seuil** | ✅ **Terminé** | Démon `jambo-vaultd`, capacités `VaultCap`, déverrouillage K-sur-N, chiffrement d'enveloppe, baux temporels, rotation. |
+| **33** | **Métriques Distribuées & Séries Temporelles** | ✅ **Terminé** | Démon `jambo-metricsd`, capacités `MetricsCap`, anneaux bornés, agrégats O(1), règles d'alerte, détection de seuils. |
 
 ---
 
@@ -124,6 +125,7 @@ jambo-os/
 │   ├── jambo-kvd/           # Magasin clé-valeur transactionnel distribué (MVCC & baux)
 │   ├── jambo-linux/         # Traducteur d'appels système Linux (compatibilité POSIX)
 │   ├── jambo-meshd/         # Maillage réseau chiffré P2P et routage zero-trust
+│   ├── jambo-metricsd/      # Moteur de métriques distribuées & séries temporelles
 │   ├── jambo-netd/          # Démon réseau TCP/IP, TLS 1.3 et DNS sécurisé
 │   ├── jambo-pkgd/          # Gestionnaire de paquets immuables et mises à jour A/B
 │   ├── jambo-powerd/        # Gestion d'énergie ACPI et régulation thermique/C-states

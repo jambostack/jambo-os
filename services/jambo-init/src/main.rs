@@ -1486,6 +1486,57 @@ pub extern "C" fn _start() -> ! {
         Err(libjambo::SysError::PermissionDenied)
     );
 
+    // 28. Moteur de Métriques Distribuées & Surveillance en Séries Temporelles (Phase 33 - jambo-metricsd v0.2.31)
+    let metrics_cap = jambo_metricsd::MetricsCap::new(
+        libjambo::Handle::new(1901, 1),
+        jambo_metricsd::metrics_rights::ALL,
+    );
+    let mut collector = jambo_metricsd::MetricsCollector::new();
+
+    collector
+        .register_series(&metrics_cap, b"cluster_cpu_load", 1)
+        .expect("Register CPU series");
+    collector
+        .register_alert(
+            &metrics_cap,
+            b"cluster_cpu_load",
+            jambo_metricsd::AlertCondition::GreaterThan,
+            85,
+        )
+        .expect("Register CPU alert rule");
+
+    // Ingestion d'échantillons
+    assert!(!collector
+        .ingest(&metrics_cap, b"cluster_cpu_load", 1, 1000, 45)
+        .expect("Ingest sample 1"));
+    assert!(!collector
+        .ingest(&metrics_cap, b"cluster_cpu_load", 1, 1001, 65)
+        .expect("Ingest sample 2"));
+    // Franchissement du seuil (90 > 85) -> alerte déclenchée
+    assert!(collector
+        .ingest(&metrics_cap, b"cluster_cpu_load", 1, 1002, 90)
+        .expect("Ingest sample 3"));
+    assert!(collector
+        .is_alert_triggered(&metrics_cap, b"cluster_cpu_load")
+        .unwrap());
+
+    // Requête de statistiques
+    let (min, max, avg, last, count) = collector
+        .query_stats(&metrics_cap, b"cluster_cpu_load", 1)
+        .expect("Query CPU stats");
+    assert_eq!(min, 45);
+    assert_eq!(max, 90);
+    assert_eq!(avg, 66); // (45 + 65 + 90) / 3 = 66
+    assert_eq!(last, 90);
+    assert_eq!(count, 3);
+
+    // Contrôle d'accès sans autorité ambiante
+    let unauth_metrics_cap = jambo_metricsd::MetricsCap::new(libjambo::Handle::new(1902, 1), 0);
+    assert_eq!(
+        collector.ingest(&unauth_metrics_cap, b"cluster_cpu_load", 1, 1003, 50),
+        Err(libjambo::SysError::PermissionDenied)
+    );
+
     // Boucle de supervision de la santé des services Ring 3
     loop {
         unsafe {
