@@ -1,7 +1,7 @@
 # **JamboOS (jambostack/jambo-os)**
 
 [![CI / Build & QEMU Boot Test](https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg)](https://github.com/jambostack/jambo-os/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-v0.2.32-orange.svg)](https://github.com/jambostack/jambo-os)
+[![Version](https://img.shields.io/badge/version-v0.2.33-orange.svg)](https://github.com/jambostack/jambo-os)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg)](https://www.rust-lang.org/)
 
@@ -13,8 +13,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.32 (Découverte de Services Distribuée & Résolution de Noms de Grappe)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. Après le moteur de métriques distribuées `jambo-metricsd` (`v0.2.31`), la version `v0.2.32` introduit le démon de découverte de services distribuée `jambo-serviced` (Phase 34) : enregistrement dynamique d'instances, résolution de noms de grappe O(1) avec baux de validité (TTL), battements de cœur, éviction automatique des cibles défaillantes et contrôle d'accès sans autorité ambiante régi par les capacités `DiscoveryCap`. Le système reste un prototype de recherche en cours de développement, loin d'une v1.0.0 finale.
+> **Statut du Projet : Version v0.2.33 (Moteur de Politiques de Sécurité Déclaratives & Contrôle d'Admission de Grappe)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. Après la découverte de services distribuée `jambo-serviced` (`v0.2.32`), la version `v0.2.33` introduit le démon de politiques de sécurité déclaratives et de contrôle d'admission `jambo-policyd` (Phase 35) : filtrage d'admission ABAC/RBAC déterministe en `#![no_std]`, principe de déni par défaut (*Deny-by-default*), préséance stricte des refus explicites, expiration temporelle des baux de règles et contrôle d'accès sans autorité ambiante régi par les capacités `PolicyCap`. Le système reste un prototype de recherche en cours de développement, loin d'une v1.0.0 finale.
 
 ---
 
@@ -40,7 +40,7 @@
 
 ## **2. Tableau synoptique d'avancement des phases d'ingénierie**
 
-Toutes les **34 phases** du *Plan Directeur d'Ingénierie* sont intégralement développées, testées et validées sous environnement QEMU UEFI multicœur.
+Toutes les **35 phases** du *Plan Directeur d'Ingénierie* sont intégralement développées, testées et validées sous environnement QEMU UEFI multicœur.
 
 | Phase | Intitulé du Composant | Statut | Responsabilité Technique |
 | :---: | :--- | :---: | :--- |
@@ -79,6 +79,7 @@ Toutes les **34 phases** du *Plan Directeur d'Ingénierie* sont intégralement d
 | **32** | **Coffre-Fort de Secrets & Quorum à Seuil** | ✅ **Terminé** | Démon `jambo-vaultd`, capacités `VaultCap`, déverrouillage K-sur-N, chiffrement d'enveloppe, baux temporels, rotation. |
 | **33** | **Métriques Distribuées & Séries Temporelles** | ✅ **Terminé** | Démon `jambo-metricsd`, capacités `MetricsCap`, anneaux bornés, agrégats O(1), règles d'alerte, détection de seuils. |
 | **34** | **Découverte de Services & Résolution de Noms** | ✅ **Terminé** | Démon `jambo-serviced`, capacités `DiscoveryCap`, enregistrement d'instances, TTL/heartbeat, purge automatique. |
+| **35** | **Politiques de Sécurité & Contrôle d'Admission** | ✅ **Terminé** | Démon `jambo-policyd`, capacités `PolicyCap`, filtrage ABAC déterministe, Deny-by-default, baux de règles. |
 
 ---
 
@@ -129,6 +130,7 @@ jambo-os/
 │   ├── jambo-metricsd/      # Moteur de métriques distribuées & séries temporelles
 │   ├── jambo-netd/          # Démon réseau TCP/IP, TLS 1.3 et DNS sécurisé
 │   ├── jambo-pkgd/          # Gestionnaire de paquets immuables et mises à jour A/B
+│   ├── jambo-policyd/       # Moteur de politiques de sécurité & admission de grappe
 │   ├── jambo-powerd/        # Gestion d'énergie ACPI et régulation thermique/C-states
 │   ├── jambo-raft/          # Moteur de consensus distribué Raft et réplication d'état
 │   ├── jambo-rpc/           # Bus RPC distribué et capacités de cluster

@@ -1593,6 +1593,97 @@ pub extern "C" fn _start() -> ! {
         Err(libjambo::SysError::PermissionDenied)
     );
 
+    // 30. Moteur de Politiques de Sécurité Déclaratives & Contrôle d'Admission (Phase 35 - jambo-policyd v0.2.33)
+    let policy_cap = jambo_policyd::PolicyCap::new(
+        libjambo::Handle::new(2101, 1),
+        jambo_policyd::policy_rights::ALL,
+    );
+    let mut pol_engine = jambo_policyd::PolicyEngine::new();
+
+    // Règle 1 : Autorisation des charges de travail générales pour les opérateurs
+    let allow_rule = jambo_policyd::PolicyRule::new(
+        1,
+        jambo_policyd::roles::ROLE_OPERATOR,
+        jambo_policyd::actions::ACTION_SPAWN_WORKLOAD,
+        b"workloads/",
+        jambo_policyd::PolicyEffect::Allow,
+        10,
+        0,
+    )
+    .expect("Create allow rule");
+    pol_engine
+        .add_rule(&policy_cap, allow_rule)
+        .expect("Add allow rule");
+
+    // Règle 2 : Refus explicite prioritaire sur workloads/restricted
+    let deny_rule = jambo_policyd::PolicyRule::new(
+        2,
+        jambo_policyd::roles::ROLE_OPERATOR,
+        jambo_policyd::actions::ACTION_SPAWN_WORKLOAD,
+        b"workloads/restricted",
+        jambo_policyd::PolicyEffect::Deny,
+        20,
+        0,
+    )
+    .expect("Create deny rule");
+    pol_engine
+        .add_rule(&policy_cap, deny_rule)
+        .expect("Add deny rule");
+
+    // Admission légitime
+    let req_ok = jambo_policyd::AdmissionRequest::new(
+        501,
+        jambo_policyd::roles::ROLE_OPERATOR,
+        jambo_policyd::actions::ACTION_SPAWN_WORKLOAD,
+        b"workloads/microvm-app",
+        1000,
+    )
+    .expect("Create admission req");
+    let dec_ok = pol_engine
+        .evaluate(&policy_cap, &req_ok)
+        .expect("Evaluate ok req");
+    assert_eq!(dec_ok, jambo_policyd::AdmissionDecision::Allowed);
+
+    // Admission rejetée par règle explicite Deny
+    let req_restricted = jambo_policyd::AdmissionRequest::new(
+        502,
+        jambo_policyd::roles::ROLE_OPERATOR,
+        jambo_policyd::actions::ACTION_SPAWN_WORKLOAD,
+        b"workloads/restricted/db",
+        1000,
+    )
+    .expect("Create restricted req");
+    let dec_restricted = pol_engine
+        .evaluate(&policy_cap, &req_restricted)
+        .expect("Evaluate restricted req");
+    assert_eq!(
+        dec_restricted,
+        jambo_policyd::AdmissionDecision::Denied {
+            reason: "Explicit policy Deny matched",
+            matching_rule_id: Some(2)
+        }
+    );
+
+    // Admission rejetée par Deny-by-default
+    let req_uncovered = jambo_policyd::AdmissionRequest::new(
+        503,
+        jambo_policyd::roles::ROLE_GUEST,
+        jambo_policyd::actions::ACTION_ACCESS_SECRET,
+        b"secrets/root-token",
+        1000,
+    )
+    .expect("Create uncovered req");
+    let dec_uncovered = pol_engine
+        .evaluate(&policy_cap, &req_uncovered)
+        .expect("Evaluate uncovered req");
+    assert_eq!(
+        dec_uncovered,
+        jambo_policyd::AdmissionDecision::Denied {
+            reason: "Default Deny: no matching allow rule",
+            matching_rule_id: None
+        }
+    );
+
     // Boucle de supervision de la santé des services Ring 3
     loop {
         unsafe {
