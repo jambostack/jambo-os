@@ -315,6 +315,36 @@ impl ClusterManager {
         Err(SysError::OutOfMemory)
     }
 
+    /// Enregistre un battement de cœur (Heartbeat) pour un nœud avec son horodatage
+    pub fn record_heartbeat(&mut self, node_id: u64, epoch_ts: u64) -> Result<(), SysError> {
+        for slot in self.nodes.iter_mut() {
+            if let Some(ref mut node) = slot {
+                if node.node_id == node_id {
+                    node.last_heartbeat_epoch = epoch_ts;
+                    node.status = NodeStatus::Online;
+                    return Ok(());
+                }
+            }
+        }
+        Err(SysError::InvalidHandle)
+    }
+
+    /// Analyse l'état de santé de la grappe et déclenche la dégradation si un nœud expire
+    pub fn monitor_liveness(&mut self, current_epoch: u64, timeout_epochs: u64) -> usize {
+        let mut degraded_count = 0;
+        for slot in self.nodes.iter_mut() {
+            if let Some(ref mut node) = slot {
+                if node.status == NodeStatus::Online
+                    && current_epoch.saturating_sub(node.last_heartbeat_epoch) > timeout_epochs
+                {
+                    node.status = NodeStatus::Degraded;
+                    degraded_count += 1;
+                }
+            }
+        }
+        degraded_count
+    }
+
     /// Signale une défaillance de nœud et bascule vers une réplique saine
     pub fn trigger_failover(&mut self, failed_node_id: u64) -> Option<u64> {
         for slot in self.nodes.iter_mut() {
@@ -324,9 +354,15 @@ impl ClusterManager {
                 }
             }
         }
-        // Trouver un nœud de secours en ligne
+        // 1. Chercher prioritairement un nœud de secours en ligne
         for entry in self.nodes.iter().flatten() {
             if entry.status == NodeStatus::Online && entry.node_id != failed_node_id {
+                return Some(entry.node_id);
+            }
+        }
+        // 2. À défaut, basculer vers un nœud en mode dégradé
+        for entry in self.nodes.iter().flatten() {
+            if entry.status == NodeStatus::Degraded && entry.node_id != failed_node_id {
                 return Some(entry.node_id);
             }
         }
@@ -387,5 +423,56 @@ impl RpcServerDispatcher {
             0,
             &response_payload[..2],
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_signed_cap_token_and_replay_protection() {
+        let secret = [0x55u8; 32];
+        let token = DistributedCapToken::new_signed(1, 2, 0x1000, 0x03, 10, &secret);
+        assert!(token.verify(&secret, 10).is_ok());
+
+        // Rejeu avec nonce antérieur
+        assert!(token.verify(&secret, 11).is_err());
+
+        // Faux secret
+        let rogue_secret = [0x99u8; 32];
+        assert!(token.verify(&rogue_secret, 10).is_err());
+    }
+
+    #[test]
+    fn test_rpc_dispatcher_lifecycle() {
+        let mut reg = RpcRegistry::new();
+        reg.register_service(0x1000, "compute", 0x01).unwrap();
+
+        let secret = [0x22u8; 32];
+        let mut dispatcher = RpcServerDispatcher::new(reg, secret);
+
+        let token = DistributedCapToken::new_signed(1, 2, 0x1000, 0x01, 100, &secret);
+        let req = RpcPacket::new_request(1, 0x1000, 5, token, &[0xAA, 0xBB]);
+
+        let resp = dispatcher.dispatch(&req).unwrap();
+        assert_eq!(resp.status, 0);
+        assert_eq!(resp.payload[0], 0xAA);
+        assert_eq!(resp.payload[1], 5);
+    }
+
+    #[test]
+    fn test_cluster_failover_and_heartbeat() {
+        let mut mgr = ClusterManager::new(1);
+        mgr.add_node(2, [10, 0, 0, 2]).unwrap();
+        mgr.add_node(3, [10, 0, 0, 3]).unwrap();
+
+        assert_eq!(mgr.active_nodes, 2);
+
+        mgr.record_heartbeat(2, 115).unwrap();
+        assert_eq!(mgr.monitor_liveness(120, 10), 1); // Node 3 n'a pas eu de heartbeat récent (100 vs 115)
+
+        let backup = mgr.trigger_failover(2);
+        assert_eq!(backup, Some(3));
     }
 }

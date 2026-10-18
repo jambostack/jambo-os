@@ -617,6 +617,13 @@ pub extern "C" fn _start() -> ! {
     let backup_node = cluster_mgr.trigger_failover(2);
     assert_eq!(backup_node, Some(3));
 
+    // Test de monitoring des battements de cœur et détection de nœud dégradé
+    cluster_mgr
+        .record_heartbeat(3, 110)
+        .expect("Record heartbeat node 3");
+    let degraded = cluster_mgr.monitor_liveness(125, 10);
+    assert_eq!(degraded, 1);
+
     // Boucle de supervision de la santé des services Ring 3
     loop {
         unsafe {

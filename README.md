@@ -1,7 +1,7 @@
 # **JamboOS (jambostack/jambo-os)**
 
 [![CI / Build & QEMU Boot Test](https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg)](https://github.com/jambostack/jambo-os/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-v0.2.14-orange.svg)](https://github.com/jambostack/jambo-os)
+[![Version](https://img.shields.io/badge/version-v0.2.15-orange.svg)](https://github.com/jambostack/jambo-os)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg)](https://www.rust-lang.org/)
 
@@ -13,8 +13,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.14 (Sécurité Offensive, Fuzzing SMAP/IOMMU & Résilience Chaotique)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. Après le sous-système d'IA locale en espace utilisateur `jambo-aid` (`v0.2.13`), la version `v0.2.14` consolide le durcissement de sécurité offensive, le fuzzing et les tests de résilience chaotique `jambo-fuzz` (Phase 16) : campagne de fuzzing de 10 000 mutations d'appels système hostiles avec 0 panique noyau, interception des débordements de tampons et poignées de capacités corrompues sur canaux IPC, gestion robuste des allocations de mémoire physique extrêmes (`SysError::OutOfMemory`), simulation et validation de la barrière matérielle SMAP / SMEP garantissant l'isolation étanche entre Ring 0 et Ring 3, confinement IOMMU VT-d bloquant 100 % des accès DMA sauvages hors domaine, et auto-guérison par Function-Level Reset (FLR) PCIe des pilotes matériels en 12 ms (< seuil critique de 25 ms) avec zéro perte de données. Le système reste un prototype de recherche en cours de développement, loin d'une v1.0.0 finale.
+> **Statut du Projet : Version v0.2.15 (Bus RPC Distribué, Jetons Cryptographiques & Grappe Haute Disponibilité)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. Après la sécurité offensive et le fuzzing chaotique `jambo-fuzz` (`v0.2.14`), la version `v0.2.15` consolide le bus RPC distribué et l'écosystème de grappe à haute disponibilité `jambo-rpc` (Phase 17) : communication inter-nœuds transparente sans autorité ambiante à travers le réseau, jetons de capacités distribuées signés cryptographiquement (`DistributedCapToken`) avec nonces stricts anti-rejeu, registre de services typés (`RpcRegistry`) et dispatcher serveur vérifiant les droits de manière étanche (`RpcServerDispatcher`), gestionnaire de grappe (`ClusterManager`) avec télémétrie par battements de cœur (`record_heartbeat`, `monitor_liveness`) et bascule automatique transparente à priorité ordonnée (`trigger_failover`: réplique Online en premier lieu, repli en mode Degraded en second) assurant une disponibilité ininterrompue des services Ring 3. Le système reste un prototype de recherche en cours de développement, loin d'une v1.0.0 finale.
 
 ---
 
@@ -61,7 +61,7 @@ Toutes les **17 phases** du *Plan Directeur d'Ingénierie* sont intégralement d
 | **14** | **Vérification Formelle** | ✅ **Terminé** | 8 preuves formelles Kani/Verus validées au boot (CSpace anti-ABA, MMU W^X, Buddy disjoint, EEVDF monotone, CDT atténuation, IPC anti-deadlock, CoW isolation, transfert linéaire). |
 | **15** | **Sous-système d'IA Locale** | ✅ **Terminé** | Démon Ring 3 `jambo-aid`, indexation vectorielle normalisée (PPM), recherche Top-K, tiny embedder n-grammes et intentions typées. |
 | **16** | **Sécurité Offensive & Fuzzing** | ✅ **Terminé** | Fuzzing (10k mutations sans panique), débordements IPC, stress CoW, barrière SMAP/SMEP, confinement IOMMU 100%, chaos FLR 12 ms. |
-| **17** | **Bus RPC Distribué & Écosystème Grappe** | ✅ **Prototype v0.1** | Démon `jambo-rpc`, jetons de capacités distribuées (`DistributedCapToken`), gestionnaire de grappe et bascule transparente (Failover). |
+| **17** | **Bus RPC Distribué & Écosystème Grappe** | ✅ **Terminé** | Démon `jambo-rpc`, jetons `DistributedCapToken`, dispatch typé, heartbeats et bascule transparente O(1). |
 
 ---
 
