@@ -1104,6 +1104,74 @@ pub extern "C" fn _start() -> ! {
         Err(libjambo::SysError::PermissionDenied)
     );
 
+    // 21. Magasin Clé-Valeur Distribué Transactionnel (Phase 26 - jambo-kvd v0.2.24)
+    let kv_cap = jambo_kvd::KvCap::new(libjambo::Handle::new(1201, 1), jambo_kvd::kv_rights::ALL);
+    let mut kv_store = jambo_kvd::KvStore::new();
+
+    // Insertion et validation MVCC
+    let rev1 = kv_store
+        .put(&kv_cap, b"cluster/config/mtu", b"9000", None)
+        .expect("KV Put MTU");
+    assert_eq!(rev1, 1);
+
+    let val = kv_store
+        .get(&kv_cap, b"cluster/config/mtu")
+        .expect("KV Get MTU");
+    assert_eq!(val.unwrap().value_bytes(), b"9000");
+
+    // Baux temporels et expiration automatique
+    let lease_id = kv_store
+        .grant_lease(&kv_cap, 500, 1000)
+        .expect("Grant KV lease");
+    kv_store
+        .put(
+            &kv_cap,
+            b"services/discovery/vmm",
+            b"active",
+            Some(lease_id),
+        )
+        .expect("Put KV with lease");
+
+    // Purge à expiration (t=1600 > 1000 + 500)
+    let purged = kv_store.purge_expired_leases(1600);
+    assert_eq!(purged, 1);
+    assert!(kv_store
+        .get(&kv_cap, b"services/discovery/vmm")
+        .unwrap()
+        .is_none());
+
+    // Transaction atomique Compare-And-Swap (CAS)
+    let cmp = [jambo_kvd::KvCompare::new(
+        b"cluster/config/mtu",
+        jambo_kvd::CompareTarget::from_value_bytes(b"9000"),
+        jambo_kvd::CompareOp::Equal,
+    )];
+    let success_ops = [jambo_kvd::KvOp::new_put(
+        b"cluster/config/mtu",
+        b"1500",
+        None,
+    )];
+    let failure_ops = [];
+    let txn_res = kv_store
+        .txn(&kv_cap, &cmp, &success_ops, &failure_ops)
+        .expect("KV Txn CAS");
+    assert!(txn_res.succeeded);
+    assert_eq!(
+        kv_store
+            .get(&kv_cap, b"cluster/config/mtu")
+            .unwrap()
+            .unwrap()
+            .value_bytes(),
+        b"1500"
+    );
+
+    // Contrôle d'accès : rejet immédiat sans KvCap autorisée
+    let unauth_kv_cap = jambo_kvd::KvCap::new(libjambo::Handle::new(1202, 1), 0);
+    assert_eq!(
+        kv_store.put(&unauth_kv_cap, b"unauthorized", b"data", None),
+        Err(libjambo::SysError::PermissionDenied)
+    );
+
     // Boucle de supervision de la santé des services Ring 3
     loop {
         unsafe {
