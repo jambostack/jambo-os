@@ -15,6 +15,7 @@ members = [
     "services/jambo-pkgd",
     "services/jambo-linux",
     "services/jambo-wasm",
+    "services/jambo-aid",
     "libs/jambo-ui",
     "libs/jambo-sdk",
     "drivers/virtio",

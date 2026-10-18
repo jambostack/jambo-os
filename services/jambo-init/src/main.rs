@@ -286,6 +286,33 @@ pub extern "C" fn _start() -> ! {
         .expect("Invoke Wasm export");
     assert_eq!(exit_code, 0);
 
+    // 10. Sous-système d'IA locale en espace utilisateur (Phase 15 - jambo-aid)
+    let mut ai_index = jambo_aid::SemanticIndex::new();
+    let doc_vec = jambo_aid::VectorEmbedding::new([10, 20, 30, 40, 50, 60, 70, 80]);
+    ai_index
+        .insert(1, "/docs/architecture.md", doc_vec)
+        .expect("Insert semantic doc");
+    assert_eq!(ai_index.count, 1);
+
+    // Test de recherche sémantique par similarité cosinus
+    let query_vec = jambo_aid::VectorEmbedding::new([9, 21, 29, 42, 48, 62, 69, 81]);
+    let (matched_doc, score) = ai_index
+        .search_nearest(&query_vec)
+        .expect("Semantic search");
+    assert_eq!(matched_doc, "/docs/architecture.md");
+    assert!(score > 0);
+
+    // Test de l'orchestrateur d'intentions typées
+    let mut intent_engine = jambo_aid::IntentOrchestrator::new();
+    let act1 = intent_engine.parse_intent("lance le terminal pour compiler le projet");
+    assert_eq!(
+        act1,
+        jambo_aid::IntentAction::LaunchApplication("jambo-term")
+    );
+
+    let act2 = intent_engine.parse_intent("affiche les permissions de la table de capacités");
+    assert_eq!(act2, jambo_aid::IntentAction::InspectSystemCapabilities);
+
     // Boucle de supervision de la santé des services Ring 3
     loop {
         unsafe {

@@ -17,4 +17,5 @@ jambo-pkgd = { path = "../jambo-pkgd" }
 jambo-sdk = { path = "../../libs/jambo-sdk" }
 jambo-linux = { path = "../jambo-linux" }
 jambo-wasm = { path = "../jambo-wasm" }
+jambo-aid = { path = "../jambo-aid" }
 
