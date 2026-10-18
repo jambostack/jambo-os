@@ -8,6 +8,7 @@ use jambo_abi as _;
 pub mod arch;
 pub mod cap;
 pub mod drivers;
+pub mod formal;
 pub mod ipc;
 pub mod mm;
 pub mod panic;
@@ -326,6 +327,12 @@ pub extern "C" fn _start() -> ! {
     );
     kprintln!(
         "\x1b[1;32m[PASS] Phase 13 Application Compatibility (JamboLinux & WASI Runtime) Complete\x1b[0m"
+    );
+
+    // 14. Vérification formelle ciblée Kani / Verus (Phase 14)
+    formal::run_all_formal_proofs();
+    kprintln!(
+        "\x1b[1;32m[PASS] Phase 14 Formal Verification (CSpace, MMU & EEVDF Invariants) Complete\x1b[0m"
     );
     kprintln!();
 
