@@ -30,6 +30,7 @@ members = [
     "services/jambo-schedd",
     "services/jambo-eventd",
     "services/jambo-meshd",
+    "services/jambo-dfsd",
     "libs/jambo-ui",
     "libs/jambo-sdk",
     "drivers/virtio",

@@ -1353,6 +1353,47 @@ pub extern "C" fn _start() -> ! {
         Err(libjambo::SysError::PermissionDenied)
     );
 
+    // 25. Système de Fichiers Distribué Adressable par Contenu & Réplication (Phase 30 - jambo-dfsd v0.2.28)
+    let dfs_cap =
+        jambo_dfsd::DfsCap::new(libjambo::Handle::new(1601, 1), jambo_dfsd::dfs_rights::ALL);
+    let mut dfs_store = jambo_dfsd::DfsBlockStore::new(1);
+    let block_data = b"JAMBO_DISTRIBUTED_CONTENT_ADDRESSED_OBJECT_PAYLOAD";
+    let block_hash = dfs_store
+        .put_block(&dfs_cap, block_data, true)
+        .expect("Put CAS block in jambo-dfsd");
+
+    // Déduplication CAS
+    let dup_hash = dfs_store
+        .put_block(&dfs_cap, block_data, false)
+        .expect("Put duplicate CAS block");
+    assert_eq!(block_hash, dup_hash);
+    assert_eq!(dfs_store.dedup_count, 1);
+    assert_eq!(dfs_store.block_count(), 1);
+
+    // Lecture avec vérification d'intégrité
+    let mut read_buf = [0u8; 128];
+    let read_bytes = dfs_store
+        .get_block(&dfs_cap, &block_hash, &mut read_buf)
+        .expect("Get CAS block with integrity check");
+    assert_eq!(&read_buf[..read_bytes], block_data);
+
+    // Réplication multi-nœuds et protection par épinglage (pin)
+    dfs_store
+        .add_replica(&dfs_cap, &block_hash, 2)
+        .expect("Add node 2 replica");
+    assert_eq!(dfs_store.replica_count(&block_hash).unwrap(), 2);
+    assert_eq!(
+        dfs_store.delete_block(&dfs_cap, &block_hash),
+        Err(libjambo::SysError::ResourceBusy)
+    );
+
+    // Contrôle d'accès sans autorité ambiante
+    let unauth_dfs_cap = jambo_dfsd::DfsCap::new(libjambo::Handle::new(1602, 1), 0);
+    assert_eq!(
+        dfs_store.put_block(&unauth_dfs_cap, b"unauth", false),
+        Err(libjambo::SysError::PermissionDenied)
+    );
+
     // Boucle de supervision de la santé des services Ring 3
     loop {
         unsafe {

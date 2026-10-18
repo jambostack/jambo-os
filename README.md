@@ -1,7 +1,7 @@
 # **JamboOS (jambostack/jambo-os)**
 
 [![CI / Build & QEMU Boot Test](https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg)](https://github.com/jambostack/jambo-os/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-v0.2.27-orange.svg)](https://github.com/jambostack/jambo-os)
+[![Version](https://img.shields.io/badge/version-v0.2.28-orange.svg)](https://github.com/jambostack/jambo-os)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg)](https://www.rust-lang.org/)
 
@@ -13,8 +13,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.27 (Maillage Réseau Chiffré Distribué & Routage Zero-Trust)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. Après le bus d'événements Pub/Sub asynchrone `jambo-eventd` (`v0.2.26`), la version `v0.2.27` introduit le démon de maillage réseau chiffré distribué et de routage zero-trust `jambo-meshd` (Phase 29) : encapsulation de paquets réseau chiffrés par flux symétrique et intégrité MAC 128 bits, protection anti-rejeu stricte par monotonicité de séquence, table de routage virtuelle par sous-réseau avec correspondance de masque binaire, et contrôle d'accès sans autorité ambiante régi par les capacités `MeshCap`. Le système reste un prototype de recherche en cours de développement, loin d'une v1.0.0 finale.
+> **Statut du Projet : Version v0.2.28 (Système de Fichiers Distribué Adressable par Contenu & CAS)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. Après le maillage réseau chiffré et le routage zero-trust `jambo-meshd` (`v0.2.27`), la version `v0.2.28` introduit le démon de système de fichiers distribué adressable par contenu et de réplication de blocs dédupliqués `jambo-dfsd` (Phase 30) : magasin d'objets immuables dédupliqués globalement par empreinte cryptographique BLAKE3/256-bit, vérification stricte d'intégrité à la lecture, maintien d'un facteur de réplication multi-nœuds avec épinglage persistant (*pin*), et contrôle d'accès sans autorité ambiante régi par les capacités `DfsCap`. Le système reste un prototype de recherche en cours de développement, loin d'une v1.0.0 finale.
 
 ---
 
@@ -40,7 +40,7 @@
 
 ## **2. Tableau synoptique d'avancement des phases d'ingénierie**
 
-Toutes les **29 phases** du *Plan Directeur d'Ingénierie* sont intégralement développées, testées et validées sous environnement QEMU UEFI multicœur.
+Toutes les **30 phases** du *Plan Directeur d'Ingénierie* sont intégralement développées, testées et validées sous environnement QEMU UEFI multicœur.
 
 | Phase | Intitulé du Composant | Statut | Responsabilité Technique |
 | :---: | :--- | :---: | :--- |
@@ -74,6 +74,7 @@ Toutes les **29 phases** du *Plan Directeur d'Ingénierie* sont intégralement d
 | **27** | **Ordonnanceur de Tâches & Conteneurs** | ✅ **Terminé** | Démon `jambo-schedd`, capacités `SchedCap`, placement multi-critère, migration à chaud, éviction contrôlée (*drain*). |
 | **28** | **Bus d'Événements Pub/Sub Asynchrone** | ✅ **Terminé** | Démon `jambo-eventd`, capacités `EventCap`, files annulaires bornées, filtrage hiérarchique par préfixe, drop-oldest. |
 | **29** | **Maillage Réseau Chiffré & Zero-Trust** | ✅ **Terminé** | Démon `jambo-meshd`, capacités `MeshCap`, encapsulation chiffrée symétrique MAC 128 bits, table de routage virtuelle, anti-rejeu monotone. |
+| **30** | **Stockage Distribué Adressable par Contenu** | ✅ **Terminé** | Démon `jambo-dfsd`, capacités `DfsCap`, adressage CAS 256 bits, déduplication globale, réplication multi-nœuds, anti-corruption. |
 
 ---
 
@@ -112,6 +113,7 @@ jambo-os/
 │   ├── jambo-comp/          # Compositeur d'affichage fenêtré zéro-copie
 │   ├── jambo-coreutils/     # Utilitaires système (ps, capstat, top, jpkg)
 │   ├── jambo-cryptod/       # Chiffrement de bloc transparent ChaCha20 et scellement TPM 2.0
+│   ├── jambo-dfsd/          # Stockage distribué adressable par contenu (CAS) & réplication
 │   ├── jambo-eventd/        # Bus d'événements Pub/Sub asynchrone et découplage de grappe
 │   ├── jambo-fs/            # Système de fichiers transactionnel Merkle Copy-on-Write
 │   ├── jambo-fuzz/          # Moteur de fuzzing offensif et tests de résilience
