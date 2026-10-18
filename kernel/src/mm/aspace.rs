@@ -84,4 +84,46 @@ impl AddressSpace {
             .retain(|m| !(m.vaddr >= vaddr && m.vaddr < vaddr + size));
         Ok(())
     }
+
+    /// Résout un défaut de page (Page Fault #14) pour Demand Paging ou Copy-on-Write
+    pub fn handle_page_fault(
+        &self,
+        fault_vaddr: usize,
+        is_write: bool,
+    ) -> Result<(), jambo_abi::SysError> {
+        let mappings = self.mappings.lock();
+        for mapping in mappings.iter() {
+            let map_end = mapping.vaddr + mapping.vmo.size();
+            if fault_vaddr >= mapping.vaddr && fault_vaddr < map_end {
+                let page_idx = (fault_vaddr - mapping.vaddr) / PAGE_SIZE;
+
+                if is_write && (mapping.prot & jambo_abi::vmo_prot::WRITE) == 0 {
+                    return Err(jambo_abi::SysError::PermissionDenied);
+                }
+
+                if let Some(paddr) = mapping.vmo.get_or_alloc_page(page_idx) {
+                    let page_vaddr = mapping.vaddr + page_idx * PAGE_SIZE;
+                    let mut flags = PAGE_PRESENT | PAGE_USER;
+                    if (mapping.prot & jambo_abi::vmo_prot::WRITE) != 0 {
+                        flags |= PAGE_WRITABLE;
+                    }
+                    if (mapping.prot & jambo_abi::vmo_prot::EXEC) == 0 {
+                        flags |= PAGE_NO_EXECUTE;
+                    }
+
+                    let pml4 = unsafe { &mut *(phys_to_virt(self.pml4_paddr) as *mut PageTable) };
+                    unsafe {
+                        map_page(pml4, page_vaddr, paddr, flags)
+                            .map_err(|_| jambo_abi::SysError::OutOfMemory)?;
+                    }
+                    #[cfg(target_arch = "x86_64")]
+                    super::paging::invlpg(page_vaddr);
+
+                    return Ok(());
+                }
+                return Err(jambo_abi::SysError::OutOfMemory);
+            }
+        }
+        Err(jambo_abi::SysError::BadAddress)
+    }
 }

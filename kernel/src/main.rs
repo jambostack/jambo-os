@@ -129,8 +129,8 @@ pub extern "C" fn _start() -> ! {
     // 4. Bannière système d'accueil
     kprintln!("\x1b[1;36m");
     kprintln!("================================================================================");
-    kprintln!("    JAMBO-OS (JamboKernel v0.1.0-alpha) — Micro-noyau de 3e Génération        ");
-    kprintln!("    Architecture : Micro-noyau orienté capacités en Rust no_std (x86-64)       ");
+    kprintln!("    JAMBO-OS (JamboKernel v0.2.0) — Micro-noyau de 3e Génération              ");
+    kprintln!("    Architecture : Micro-noyau orienté capacités en Rust no_std (x86_64/AArch64)");
     kprintln!("    Auteur & Architecte Principal : ASSOGBA Prudence Dieudonné                 ");
     kprintln!("    Dépôt Officiel : https://github.com/jambostack/jambo-os                    ");
     kprintln!("================================================================================");
@@ -222,6 +222,23 @@ pub extern "C" fn _start() -> ! {
         )
         .expect("Projection VMO");
     kprintln!("[VMM/VMO] VMO Copy-on-Write projeté avec succès dans le nouvel espace d'adressage");
+
+    // Test de résolution à la demande (Demand Paging)
+    aspace
+        .handle_page_fault(0x0040_1000, true)
+        .expect("Résolution défaut de page");
+    kprintln!("[MMU/PAGING] Défaut de page (Demand Paging) intercepté et résolu avec succès");
+
+    // Test du chargeur d'exécutables binaires ELF64
+    let test_elf = mm::elf::build_test_elf64();
+    let elf_result = mm::load_elf64(&aspace, &test_elf).expect("Chargement binaire ELF64");
+    assert_eq!(elf_result.entry_point, 0x0040_0000);
+    assert!(elf_result.total_pages_mapped > 0);
+    kprintln!(
+        "[ELF64] Chargeur binaire opérationnel (Point d'entrée: {:#010x}, Pile: {:#018x})",
+        elf_result.entry_point,
+        elf_result.stack_pointer
+    );
 
     // 7. Initialisation matérielle CPU (Phase 3)
     #[cfg(target_arch = "x86_64")]
@@ -378,11 +395,9 @@ pub extern "C" fn _start() -> ! {
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.1.0-alpha (Fondations & Architecture de Réf)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.0 (Chargeur ELF64, Demand Paging & Multi-Arch)\x1b[0m"
     );
-    kprintln!(
-        "\x1b[1;33m[STATUS] Prototypes architecturaux des 17 phases initialisés et fonctionnels\x1b[0m"
-    );
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.0 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );

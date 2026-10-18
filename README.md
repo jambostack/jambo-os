@@ -1,7 +1,7 @@
 # **JamboOS (jambostack/jambo-os)**
 
 [![CI / Build & QEMU Boot Test](https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg)](https://github.com/jambostack/jambo-os/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-v0.1.0--alpha-orange.svg)](https://github.com/jambostack/jambo-os)
+[![Version](https://img.shields.io/badge/version-v0.2.0-orange.svg)](https://github.com/jambostack/jambo-os)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg)](https://www.rust-lang.org/)
 
@@ -13,8 +13,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.1.0-alpha (Fondations Architecturales & Prototype)**  
-> Le projet JamboOS est actuellement au stade de **prototype de recherche (pre-alpha)**. L'échafaudage architectural de référence et les prototypes fonctionnels des 17 phases ont été validés sous émulateur QEMU multicœur. **Le système est encore très loin d'une Version 1.0.0 de production.** Le cycle de maturation vers la production nécessite un travail approfondi sur le matériel physique réel, l'optimisation des pilotes bare-metal, la robustesse sous forte charge et le portage d'applications tierces.
+> **Statut du Projet : Version v0.2.0 (Chargeur ELF64, Demand Paging, C ABI & Multi-Architecture)**  
+> Le projet JamboOS avance méthodiquement dans son cycle pré-alpha v0.*.*. Après la validation des fondations initiales (`v0.1.0`), la version `v0.2.0` introduit le chargeur de binaires exécutables ELF64, la résolution des défauts de page (Demand Paging), l'en-tête C ABI natif (`jambo.h`) et le support multi-architecture x86-64 / AArch64 vérifié par CI. Le système reste un prototype de recherche en cours de développement, loin d'une v1.0.0 finale.
 
 ---
 
