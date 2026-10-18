@@ -313,6 +313,24 @@ pub extern "C" fn _start() -> ! {
     let act2 = intent_engine.parse_intent("affiche les permissions de la table de capacités");
     assert_eq!(act2, jambo_aid::IntentAction::InspectSystemCapabilities);
 
+    // 11. Durcissement de sécurité offensive, Fuzzing et tests de résilience chaotique (Phase 16 - jambo-fuzz)
+    let mut fuzzer = jambo_fuzz::SecurityFuzzer::new();
+
+    // Campagne de fuzzing d'appels système (10 000 mutations hostiles)
+    let fuzz_report = fuzzer.fuzz_syscall_robustness(10_000);
+    assert_eq!(fuzz_report.total_mutations_tested, 10_000);
+    assert!(fuzz_report.zero_kernel_panics);
+    assert!(fuzz_report.blocked_bad_pointers > 0);
+
+    // Test d'inviolabilité IOMMU : 100 % des accès DMA hors-bornes sont bloqués
+    let dma_contained = fuzzer.test_iommu_attack_containment();
+    assert!(dma_contained);
+
+    // Test de chaos et auto-guérison matérielle sous 25 ms
+    let (driver_survived, latency_ms) = fuzzer.test_chaos_driver_resilience();
+    assert!(driver_survived);
+    assert!(latency_ms < 25);
+
     // Boucle de supervision de la santé des services Ring 3
     loop {
         unsafe {
