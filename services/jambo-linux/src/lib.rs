@@ -5,7 +5,7 @@
 
 #![no_std]
 
-use libjambo::{cap_rights, Handle, SysError};
+use libjambo::{cap_rights, Handle};
 
 pub const LINUX_SYS_READ: u64 = 0;
 pub const LINUX_SYS_WRITE: u64 = 1;
@@ -80,7 +80,7 @@ impl LinuxProcessEmulator {
         &mut self,
         num: u64,
         a1: u64,
-        a2: u64,
+        _a2: u64,
         a3: u64,
         _a4: u64,
         _a5: u64,

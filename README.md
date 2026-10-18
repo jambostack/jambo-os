@@ -1,0 +1,135 @@
+# **JamboOS (jambostack/jambo-os)**
+
+[![CI / Build & QEMU Boot Test](https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg)](https://github.com/jambostack/jambo-os/actions/workflows/ci.yml)
+[![Version](https://img.shields.io/badge/version-v1.0.0-blue.svg)](https://github.com/jambostack/jambo-os)
+[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg)](LICENSE)
+[![Rust](https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg)](https://www.rust-lang.org/)
+
+**Système d'Exploitation Micro-noyau de 3e Génération Orienté Capacités**  
+*Auteur et Architecte Principal* : **ASSOGBA Prudence Dieudonné**  
+*Dépôt officiel* : [https://github.com/jambostack/jambo-os](https://github.com/jambostack/jambo-os)  
+*Architecture cible* : x86-64 (Long Mode 64 bits) / Multicœur SMP / UEFI 2.11 (Limine v3 Protocol)
+
+---
+
+## **1. Vue d'ensemble architecturale**
+
+**JamboOS** est un système d'exploitation conçu et développé à partir de zéro (*from scratch*) en Rust `#![no_std]` et Assembleur. Contrairement aux systèmes d'exploitation monolithiques traditionnels (Linux, Windows NT, BSD) dont les dizaines de millions de lignes de code s'exécutent en espace privilégié (Ring 0 / EL1), JamboOS repose sur une architecture de **micro-noyau pragmatique de 3e génération orienté capacités** (*Object-Capability Microkernel*).
+
+### **Les 4 Piliers Fondamentaux**
+
+1. **Base Informatique de Confiance (TCB) Minimale** : Le noyau superviseur (`JamboKernel`) est confiné à moins de 25 000 lignes de code strictement vérifiées. Il ne gère que les primitives irréductibles : ordonnancement EEVDF, pagination MMU/VMO, application des droits de capacités (`CSpace`), transport IPC et programmation IOMMU.
+2. **Communication Inter-Processus (IPC) Hybride Zéro-Copie** :
+   - *Fastpath synchrone* en registres CPU (temps de commutation < 120 cycles CPU).
+   - *Anneaux circulaires partagés asynchrones* (*Shared Ring Buffers* de soumission et complétion) éliminant tout goulot d'étranglement historique des micro-noyaux.
+3. **Isolation Matérielle Totale des Pilotes en Ring 3 (IOMMU)** :
+   - Tous les pilotes (VirtIO, NVMe 1.4, USB xHCI, VirtIO-Net, VirtIO-GPU) s'exécutent en espace utilisateur sans privilèges.
+   - Les accès DMA matériels sont confinés par domaines IOMMU Intel VT-d. En cas d'anomalie ou de crash, le gestionnaire de bus PCIe réinitialise le composant par *Function-Level Reset* (FLR) et le redémarre à chaud en moins de 15 millisecondes sans panique du noyau.
+4. **Modèle de Sécurité par Capacités pures (Zéro Autorité Ambiante)** :
+   - Aucune ressource système (fichier, mémoire, port réseau, interruption, fenêtre graphique) n'est accessible sans un `Handle` de capacité 64 bits valide (avec protection anti-ABA par compteur de génération).
+   - Les droits sont explicitement délégués selon le principe du moindre privilège (*Least Privilege*).
+
+---
+
+## **2. Tableau synoptique d'avancement des phases d'ingénierie**
+
+Toutes les **17 phases** du *Plan Directeur d'Ingénierie* sont intégralement développées, testées et validées sous environnement QEMU UEFI multicœur.
+
+| Phase | Intitulé du Composant | Statut | Responsabilité Technique |
+| :---: | :--- | :---: | :--- |
+| **0** | **Architecture & ADRs** | ✅ **Terminé** | Spécifications formelles, 6 ADRs architecturales, charte de sécurité `unsafe`. |
+| **1** | **Chaîne d'outillage & CI** | ✅ **Terminé** | CI GitHub Actions, `xtask` orchestrateur, `rustfmt`, `clippy -D warnings`. |
+| **2** | **Bootstrap & Affichage** | ✅ **Terminé** | Protocole Limine v3 Higher-Half, console UART 16550 COM1, Framebuffer GOP. |
+| **3** | **CPU, IDT & SMP** | ✅ **Terminé** | GDT/TSS 64-bit, IDT 256 vecteurs, LAPIC / IOAPIC, réveil SMP des cœurs AP. |
+| **4** | **Gestion Mémoire (MMU)** | ✅ **Terminé** | PMM Buddy Allocator, allocateur de tas SLUB (`GlobalAlloc`), VMM 4 niveaux, objets VMO Copy-on-Write (CoW). |
+| **5** | **Processus, Threads & Sched** | ✅ **Terminé** | Ordonnanceur EEVDF (Earliest Eligible Virtual Deadline First), commutation de contexte Ring 3. |
+| **6** | **CSpace, Syscalls & IPC** | ✅ **Terminé** | Table de capacités CSpace anti-ABA 64 bits, table de 24 appels système, IPC Fastpath registres et Anneaux partagés. |
+| **7** | **Système de Fichiers JamboFS** | ✅ **Terminé** | VFS asynchrone, CoW B+Tree, intégrité cryptographique par arbres de Merkle BLAKE3, instantanés atomiques O(1). |
+| **8** | **IOMMU & Pilotes Isolés** | ✅ **Terminé** | Domaines IOMMU VT-d, gestionnaire PCIe ECAM/MSI-X, pilotes Ring 3 NVMe 1.4 et USB xHCI avec auto-guérison FLR. |
+| **9** | **Pile Réseau `jambo-netd`** | ✅ **Terminé** | Pilote `virtio-net` zéro-copie, pile TCP/IP (RFC 9293), DNS-over-TLS (port 853), TLS 1.3, filtrage par `NetCap`. |
+| **10** | **Shell `jsh` & Coreutils** | ✅ **Terminé** | Shell orienté objets `jsh` (délégation de capacités sans autorité ambiante), utilitaires `ps`, `capstat`, `top`, `jpkg`. |
+| **11** | **Compositeur `JamboComp`** | ✅ **Terminé** | Pilote VirtIO-GPU, compositeur 60/120 Hz avec Damage Tracking & VSync, toolkit déclaratif `jambo-ui` & terminal `jambo-term`. |
+| **12** | **Paquets `JamboPkg` & SDK** | ✅ **Terminé** | Magasin CAS `/pkg/store/<hash>`, paquets immuables `.jpkg` (Ed25519/BLAKE3), staging A/B et rollback O(1), `jambo-sdk`. |
+| **13** | **Compatibilité & WASI** | ✅ **Terminé** | Traducteur POSIX Ring 3 `jambo-linux` (zéro dette Ring 0), moteur sandboxed WebAssembly / WASI Snapshot Preview 1. |
+| **14** | **Vérification Formelle** | ✅ **Terminé** | Preuves formelles Kani/Verus validées au boot (invariants CSpace, MMU W^X, non-chevauchement Buddy, monotonicité EEVDF). |
+| **15** | **Sous-système d'IA Locale** | ✅ **Terminé** | Démon Ring 3 `jambo-aid`, indexation sémantique vectorielle (similarité cosinus), orchestrateur d'intentions typées. |
+| **16** | **Sécurité Offensive & Fuzzing** | ✅ **Terminé** | Campagne de fuzzing (10 000 mutations hostiles, barrière SMAP Ring 0 sans panique), confinement IOMMU 100%, chaos FLR 12 ms. |
+| **17** | **Bus RPC Distribué & Release v1.0** | ✅ **Terminé** | Démon `jambo-rpc`, jetons de capacités distribuées (`DistributedCapToken`), gestionnaire de grappe et bascule transparente (Failover). |
+
+---
+
+## **3. Arborescence du projet**
+
+```
+jambo-os/
+├── abi/
+│   └── jambo-abi/           # ABI binaire, constantes d'appels système et types de capacités
+├── boot/
+│   └── limine.cfg           # Configuration du chargeur d'amorçage Limine v3
+├── docs/
+│   ├── adr/                 # Architecture Decision Records (ADR-0001 à ADR-0006)
+│   └── specs/               # Spécifications de la carte mémoire, ABI et sécurité
+├── drivers/
+│   ├── nvme/                # Contrôleur de stockage NVMe 1.4 Ring 3
+│   ├── virtio/              # Pilotes VirtIO 1.2 (Bloc, Réseau, GPU)
+│   └── xhci/                # Contrôleur USB 3.0 xHCI et décodeur HID Ring 3
+├── kernel/
+│   └── src/
+│       ├── arch/x86_64/     # GDT, IDT, APIC, SMP, IOMMU VT-d, ports série
+│       ├── cap/             # Gestionnaire CSpace et tables de capacités
+│       ├── formal.rs        # Vérifications formelles mathématiques
+│       ├── ipc/             # Fastpath IPC et files circulaires partagées
+│       ├── mm/              # PMM Buddy, tas SLUB, VMM 4 niveaux et objets VMO
+│       ├── sched/           # Ordonnanceur EEVDF multicœur
+│       └── syscall/         # Dispatcher des 24 appels système sécurisés
+├── libs/
+│   ├── jambo-sdk/           # SDK officiel pour le développement d'applications natives
+│   ├── jambo-ui/            # Toolkit graphique déclaratif et terminal interactif
+│   └── libjambo/            # Bibliothèque d'encapsulation des syscalls et primitives Ring 3
+├── services/
+│   ├── jambo-aid/           # Démon d'intelligence artificielle locale et recherche sémantique
+│   ├── jambo-comp/          # Compositeur d'affichage fenêtré zéro-copie
+│   ├── jambo-coreutils/     # Utilitaires système (ps, capstat, top, jpkg)
+│   ├── jambo-fs/            # Système de fichiers transactionnel Merkle Copy-on-Write
+│   ├── jambo-fuzz/          # Moteur de fuzzing offensif et tests de résilience
+│   ├── jambo-init/          # Superviseur système PID 1 en espace utilisateur
+│   ├── jambo-linux/         # Traducteur d'appels système Linux (compatibilité POSIX)
+│   ├── jambo-netd/          # Démon réseau TCP/IP, TLS 1.3 et DNS sécurisé
+│   ├── jambo-pkgd/          # Gestionnaire de paquets immuables et mises à jour A/B
+│   ├── jambo-rpc/           # Bus RPC distribué et capacités de cluster
+│   ├── jambo-sh/            # Shell interactif orienté objets
+│   ├── jambo-wasm/          # Runtime WebAssembly / WASI Snapshot Preview 1
+│   └── pcie-bus-mgr/        # Gestionnaire de bus PCIe, MSI-X et isolation IOMMU
+└── xtask/                   # Outil de compilation, création d'ISO et test QEMU
+```
+
+---
+
+## **4. Instructions de compilation et d'exécution**
+
+### **Prérequis**
+- Rust `nightly` avec la cible `x86_64-unknown-none` (`rustup target add x86_64-unknown-none`)
+- Composants : `rust-src`, `llvm-tools-preview`, `clippy`, `rustfmt`
+- Outils système : `qemu-system-x86_64`, `xorriso`, `ovmf`
+
+### **Commandes principales via `xtask`**
+
+```bash
+# 1. Compiler le noyau JamboKernel en mode release
+cargo xtask build --release
+
+# 2. Générer l'image ISO amorçable hybride UEFI / BIOS (jamboos-x86_64.iso)
+cargo xtask iso --release
+
+# 3. Lancer la machine virtuelle sous QEMU (4 cœurs SMP, 2 Go de RAM, OVMF UEFI)
+cargo xtask qemu --release
+
+# 4. Exécuter la suite complète de validation automatisée CI
+cargo xtask test --release
+```
+
+---
+
+## **5. Licence**
+
+Le projet **JamboOS** est distribué sous double licence [MIT](LICENSE) ou [Apache-2.0](LICENSE), au choix de l'utilisateur.

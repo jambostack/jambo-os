@@ -331,6 +331,82 @@ pub extern "C" fn _start() -> ! {
     assert!(driver_survived);
     assert!(latency_ms < 25);
 
+    // 12. Bus RPC Distribué et Écosystème Cluster Haute Disponibilité (Phase 17 - jambo-rpc)
+    let mut rpc_registry = jambo_rpc::RpcRegistry::new();
+    let compute_service_id = 0xCAFE_BABE_0000_0001;
+    rpc_registry
+        .register_service(
+            compute_service_id,
+            "org.jambo.cluster.compute",
+            libjambo::cap_rights::READ | libjambo::cap_rights::WRITE,
+        )
+        .expect("Register RPC service");
+
+    let cluster_secret = [0x77u8; 32];
+    let mut rpc_dispatcher = jambo_rpc::RpcServerDispatcher::new(rpc_registry, cluster_secret);
+
+    // Test d'appel RPC légitime avec jeton de capacité signé
+    let valid_token = jambo_rpc::DistributedCapToken::new_signed(
+        1, // Node source (client)
+        2, // Node cible (serveur)
+        compute_service_id,
+        libjambo::cap_rights::READ | libjambo::cap_rights::WRITE,
+        100, // Nonce initial
+        &cluster_secret,
+    );
+    let rpc_req = jambo_rpc::RpcPacket::new_request(
+        1,
+        compute_service_id,
+        7, // Method ID
+        valid_token,
+        &[0x01, 0x02, 0x03, 0x04],
+    );
+    let rpc_res = rpc_dispatcher
+        .dispatch(&rpc_req)
+        .expect("Valid RPC call must succeed");
+    assert_eq!(rpc_res.status, 0);
+    assert_eq!(rpc_res.payload[0], 0xAA);
+    assert_eq!(rpc_res.payload[1], 7);
+
+    // Test de détection formelle d'attaque par rejeu (nonce inférieur au minimum requis)
+    let replayed_token = jambo_rpc::DistributedCapToken::new_signed(
+        1,
+        2,
+        compute_service_id,
+        libjambo::cap_rights::READ | libjambo::cap_rights::WRITE,
+        50, // Nonce déjà expiré
+        &cluster_secret,
+    );
+    let replay_req =
+        jambo_rpc::RpcPacket::new_request(2, compute_service_id, 7, replayed_token, &[]);
+    assert!(rpc_dispatcher.dispatch(&replay_req).is_err());
+
+    // Test de rejet d'une capacité falsifiée (mauvaise clé secrète)
+    let rogue_secret = [0x11u8; 32];
+    let forged_token = jambo_rpc::DistributedCapToken::new_signed(
+        1,
+        2,
+        compute_service_id,
+        libjambo::cap_rights::READ | libjambo::cap_rights::WRITE,
+        200,
+        &rogue_secret,
+    );
+    let forged_req = jambo_rpc::RpcPacket::new_request(3, compute_service_id, 7, forged_token, &[]);
+    assert!(rpc_dispatcher.dispatch(&forged_req).is_err());
+
+    // Test du gestionnaire de cluster et bascule automatique (Failover transparent)
+    let mut cluster_mgr = jambo_rpc::ClusterManager::new(1);
+    cluster_mgr
+        .add_node(2, [192, 168, 1, 10])
+        .expect("Add node 2");
+    cluster_mgr
+        .add_node(3, [192, 168, 1, 11])
+        .expect("Add node 3");
+    assert_eq!(cluster_mgr.active_nodes, 2);
+
+    let backup_node = cluster_mgr.trigger_failover(2);
+    assert_eq!(backup_node, Some(3));
+
     // Boucle de supervision de la santé des services Ring 3
     loop {
         unsafe {

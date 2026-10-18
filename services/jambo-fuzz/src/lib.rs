@@ -8,7 +8,7 @@
 
 #![no_std]
 
-use libjambo::{Handle, SysError, SyscallNumber};
+use libjambo::Handle;
 
 /// Rapport de fuzzing de robustesse
 #[derive(Debug, Clone, Copy, Default)]
@@ -74,7 +74,7 @@ impl SecurityFuzzer {
         for _ in 0..iterations {
             let rnd_num = (self.rng.next_u64() % 24) + 1;
             let fake_handle = Handle(self.rng.next_u64());
-            let hostile_ptr = if (self.rng.next_u64() & 1) == 0 {
+            let hostile_ptr: u64 = if (self.rng.next_u64() & 1) == 0 {
                 0xFFFF_FFFF_8000_0000 // Tentative d'écrasement de la mémoire Ring 0
             } else {
                 0x0000_0000_0000_0000 // Pointeur NULL

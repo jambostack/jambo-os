@@ -19,4 +19,5 @@ jambo-linux = { path = "../jambo-linux" }
 jambo-wasm = { path = "../jambo-wasm" }
 jambo-aid = { path = "../jambo-aid" }
 jambo-fuzz = { path = "../jambo-fuzz" }
+jambo-rpc = { path = "../jambo-rpc" }
 
