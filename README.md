@@ -1,7 +1,7 @@
 # **JamboOS (jambostack/jambo-os)**
 
 [![CI / Build & QEMU Boot Test](https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg)](https://github.com/jambostack/jambo-os/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-v0.2.33-orange.svg)](https://github.com/jambostack/jambo-os)
+[![Version](https://img.shields.io/badge/version-v0.2.34-orange.svg)](https://github.com/jambostack/jambo-os)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg)](https://www.rust-lang.org/)
 
@@ -13,8 +13,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.33 (Moteur de Politiques de Sécurité Déclaratives & Contrôle d'Admission de Grappe)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. Après la découverte de services distribuée `jambo-serviced` (`v0.2.32`), la version `v0.2.33` introduit le démon de politiques de sécurité déclaratives et de contrôle d'admission `jambo-policyd` (Phase 35) : filtrage d'admission ABAC/RBAC déterministe en `#![no_std]`, principe de déni par défaut (*Deny-by-default*), préséance stricte des refus explicites, expiration temporelle des baux de règles et contrôle d'accès sans autorité ambiante régi par les capacités `PolicyCap`. Le système reste un prototype de recherche en cours de développement, loin d'une v1.0.0 finale.
+> **Statut du Projet : Version v0.2.34 (Traçage Distribué, Propagation de Contexte & Analyse de Latence)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. Après le moteur de politiques déclaratives et de contrôle d'admission `jambo-policyd` (`v0.2.33`), la version `v0.2.34` introduit le démon de traçage distribué `jambo-traced` (Phase 36) : arborescences de portées (*spans*), propagation causale de contexte (compatible W3C Trace Context), mesure déterministe des temps de trajet et d'exécution, détection des goulets d'étranglement de latence et contrôle d'accès sans autorité ambiante régi par les capacités `TraceCap`. Le système reste un prototype de recherche en cours de développement, loin d'une v1.0.0 finale.
 
 ---
 
@@ -40,7 +40,7 @@
 
 ## **2. Tableau synoptique d'avancement des phases d'ingénierie**
 
-Toutes les **35 phases** du *Plan Directeur d'Ingénierie* sont intégralement développées, testées et validées sous environnement QEMU UEFI multicœur.
+Toutes les **36 phases** du *Plan Directeur d'Ingénierie* sont intégralement développées, testées et validées sous environnement QEMU UEFI multicœur.
 
 | Phase | Intitulé du Composant | Statut | Responsabilité Technique |
 | :---: | :--- | :---: | :--- |
@@ -80,6 +80,7 @@ Toutes les **35 phases** du *Plan Directeur d'Ingénierie* sont intégralement d
 | **33** | **Métriques Distribuées & Séries Temporelles** | ✅ **Terminé** | Démon `jambo-metricsd`, capacités `MetricsCap`, anneaux bornés, agrégats O(1), règles d'alerte, détection de seuils. |
 | **34** | **Découverte de Services & Résolution de Noms** | ✅ **Terminé** | Démon `jambo-serviced`, capacités `DiscoveryCap`, enregistrement d'instances, TTL/heartbeat, purge automatique. |
 | **35** | **Politiques de Sécurité & Contrôle d'Admission** | ✅ **Terminé** | Démon `jambo-policyd`, capacités `PolicyCap`, filtrage ABAC déterministe, Deny-by-default, baux de règles. |
+| **36** | **Traçage Distribué & Analyse de Latence** | ✅ **Terminé** | Démon `jambo-traced`, capacités `TraceCap`, arborescences de portées (spans), W3C TraceContext, ring buffers. |
 
 ---
 
@@ -138,6 +139,7 @@ jambo-os/
 │   ├── jambo-serviced/      # Registre de découverte de services & résolution de noms
 │   ├── jambo-sh/            # Shell interactif orienté objets
 │   ├── jambo-timed/         # Synchronisation horlogère distribuée PTP/NTP haute précision
+│   ├── jambo-traced/        # Moteur de traçage distribué & propagation de contexte
 │   ├── jambo-vaultd/        # Coffre-fort de secrets distribué & quorum de déverrouillage
 │   ├── jambo-vhostd/        # Virtualisation de périphériques vhost-user VirtIO Ring 3
 │   ├── jambo-vmm/           # Moniteur de micro-VMs et isolation matérielle Type-2

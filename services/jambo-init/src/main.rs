@@ -1684,6 +1684,73 @@ pub extern "C" fn _start() -> ! {
         }
     );
 
+    // 31. Traçage Distribué, Propagation de Contexte & Analyse de Latence (Phase 36 - jambo-traced v0.2.34)
+    let trace_cap = jambo_traced::TraceCap::new(
+        libjambo::Handle::new(2201, 1),
+        jambo_traced::trace_rights::ALL,
+    );
+    let mut collector = jambo_traced::TraceCollector::new();
+
+    let trace_id = [0x55; 16];
+    let root_span_id = 100;
+    let root_ctx = jambo_traced::TraceContext::new(
+        trace_id,
+        root_span_id,
+        None,
+        jambo_traced::trace_flags::FLAG_SAMPLED,
+    );
+
+    // Démarrage de la portée racine
+    collector
+        .start_span(&trace_cap, b"gateway.ingress", &root_ctx, 1000)
+        .expect("Start root trace span");
+
+    // Propagation du contexte vers une sous-opération enfant
+    let child_span_id = 101;
+    let child_ctx = root_ctx.create_child(child_span_id);
+    collector
+        .start_span(&trace_cap, b"service.resolve", &child_ctx, 1050)
+        .expect("Start child trace span");
+
+    // Clôture des portées
+    collector
+        .finish_span(
+            &trace_cap,
+            child_span_id,
+            jambo_traced::SpanStatus::Ok,
+            1150,
+        )
+        .expect("Finish child trace span");
+    collector
+        .finish_span(&trace_cap, root_span_id, jambo_traced::SpanStatus::Ok, 1300)
+        .expect("Finish root trace span");
+
+    // Vérification de la collecte arborescente
+    let mut trace_spans = [jambo_traced::TraceSpan {
+        span_id: 0,
+        trace_id: [0; 16],
+        parent_span_id: None,
+        name: [0; jambo_traced::MAX_SPAN_NAME_LEN],
+        name_len: 0,
+        start_time: 0,
+        end_time: 0,
+        status: jambo_traced::SpanStatus::Active,
+    }; 4];
+
+    let found_spans = collector
+        .query_by_trace(&trace_cap, &trace_id, &mut trace_spans)
+        .expect("Query trace tree");
+    assert_eq!(found_spans, 2);
+
+    // Contrôle d'accès sans autorité ambiante
+    let unauth_trace_cap = trace_cap
+        .attenuate(jambo_traced::trace_rights::TRACE_QUERY)
+        .expect("Attenuate trace cap");
+    assert_eq!(
+        collector.start_span(&unauth_trace_cap, b"unauth", &root_ctx, 1400),
+        Err(libjambo::SysError::PermissionDenied)
+    );
+
     // Boucle de supervision de la santé des services Ring 3
     loop {
         unsafe {

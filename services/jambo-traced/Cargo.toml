@@ -1,0 +1,10 @@
+[package]
+name = "jambo-traced"
+version = "0.2.34"
+edition = "2021"
+authors = ["ASSOGBA Prudence Dieudonné <jprud67@gmail.com>"]
+description = "Moteur de Traçage Distribué, Propagation de Contexte & Analyse de Latence pour JamboOS"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+libjambo = { path = "../../libs/libjambo" }
