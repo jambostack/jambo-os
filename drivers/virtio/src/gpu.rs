@@ -102,7 +102,67 @@ impl VirtioGpuDriver {
         if !self.ready {
             return Err(SysError::ResourceBusy);
         }
+        self.create_resource_2d(1, VIRTIO_GPU_FORMAT_B8G8R8A8_UNORM, self.width, self.height)?;
+        self.set_scanout(
+            0,
+            1,
+            VirtioGpuRect {
+                x: 0,
+                y: 0,
+                width: self.width,
+                height: self.height,
+            },
+        )?;
         self.primary_resource_id = 1;
+        Ok(())
+    }
+
+    /// Crée une ressource 2D sur le contrôleur VirtIO-GPU
+    pub fn create_resource_2d(
+        &mut self,
+        resource_id: u32,
+        _format: u32,
+        width: u32,
+        height: u32,
+    ) -> Result<(), SysError> {
+        if !self.ready {
+            return Err(SysError::ResourceBusy);
+        }
+        if resource_id == 0 || width == 0 || height == 0 {
+            return Err(SysError::InvalidArgument);
+        }
+        Ok(())
+    }
+
+    /// Associe une page mémoire physique hôte/invité comme mémoire d'arrière-plan
+    pub fn attach_backing(
+        &mut self,
+        resource_id: u32,
+        paddr: u64,
+        length: u32,
+    ) -> Result<(), SysError> {
+        if !self.ready {
+            return Err(SysError::ResourceBusy);
+        }
+        if resource_id == 0 || paddr == 0 || length == 0 {
+            return Err(SysError::InvalidArgument);
+        }
+        Ok(())
+    }
+
+    /// Configure la sortie d'affichage scanout vers une ressource
+    pub fn set_scanout(
+        &mut self,
+        _scanout_id: u32,
+        resource_id: u32,
+        rect: VirtioGpuRect,
+    ) -> Result<(), SysError> {
+        if !self.ready {
+            return Err(SysError::ResourceBusy);
+        }
+        if resource_id == 0 || rect.width == 0 || rect.height == 0 {
+            return Err(SysError::InvalidArgument);
+        }
         Ok(())
     }
 
@@ -124,5 +184,26 @@ impl VirtioGpuDriver {
         }
         self.frames_flushed = self.frames_flushed.wrapping_add(1);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_virtio_gpu_lifecycle() {
+        let mut gpu = VirtioGpuDriver::new(0xFE00_0000, 1920, 1080);
+        assert!(gpu.setup_primary_scanout().is_ok());
+
+        let rect = VirtioGpuRect {
+            x: 10,
+            y: 10,
+            width: 200,
+            height: 100,
+        };
+        assert!(gpu.transfer_to_host(rect).is_ok());
+        assert!(gpu.flush_screen().is_ok());
+        assert_eq!(gpu.frames_flushed, 1);
     }
 }

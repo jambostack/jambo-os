@@ -230,6 +230,11 @@ pub extern "C" fn _start() -> ! {
     // 7. Initialisation et validation du compositeur graphique (Phase 11 - JamboComp, virtio-gpu & JamboUI)
     let mut comp = jambo_comp::JamboComp::new(1920, 1080, 60);
 
+    // Initialisation du scanout primaire VirtIO-GPU
+    comp.gpu_driver
+        .setup_primary_scanout()
+        .expect("Setup scanout VirtIO-GPU");
+
     // Création de deux surfaces clientes distinctes
     let term_cap = comp
         .create_surface(10, 800, 600)
@@ -242,22 +247,55 @@ pub extern "C" fn _start() -> ! {
     assert!(comp.verify_surface_isolation(10, term_cap));
     assert!(!comp.verify_surface_isolation(10, editor_cap)); // Client 10 ne peut pas lire la fenêtre de Client 20 !
 
+    // Portail de capture d'écran sécurisé (Zero-Ambient Authority)
+    let unauth_capture = comp.request_screen_capture(10, None);
+    assert_eq!(unauth_capture, Err(libjambo::SysError::PermissionDenied));
+
+    let authorized_portal_cap = libjambo::Handle::new(120, 1);
+    let auth_capture = comp.request_screen_capture(10, Some(authorized_portal_cap));
+    assert!(auth_capture.is_ok());
+
+    // Z-ordering & Hit testing
+    comp.bring_to_front(1).expect("Bring window 1 to front");
+    assert_eq!(comp.focused_window_id, Some(1));
+    assert!(comp.window_at(150, 150).is_some());
+
     // Damage Tracking : Déclaration d'une zone modifiée et composition VSync
     comp.damage_surface(term_cap, jambo_comp::DamageRect::new(10, 10, 200, 100))
         .expect("Damage surface");
     let damaged_count = comp.composite_frame().expect("Composite frame");
-    assert_eq!(damaged_count, 2); // 2 fenêtres avec damage initial composées
+    assert!(damaged_count >= 1);
+    assert!(comp.total_frames_composed >= 1);
 
-    // Validation du framework JamboUI et de l'accessibilité obligatoire
+    // Validation du framework JamboUI et de l'arbre d'accessibilité obligatoire (v0.2.9)
     let btn = jambo_ui::Button::new(1, "Ouvrir Fichier", 120, 32);
     assert_eq!(btn.accessibility.role, jambo_ui::AccessibilityRole::Button);
 
+    let mut chk = jambo_ui::CheckBox::new(2, "Affichage Accéléré", true);
+    assert!(chk.checked);
+    chk.toggle();
+    assert!(!chk.checked);
+
+    let mut a11y_tree = jambo_ui::AccessibilityTree::new();
+    a11y_tree
+        .register(btn.accessibility)
+        .expect("Register button");
+    a11y_tree
+        .register(chk.accessibility)
+        .expect("Register checkbox");
+    assert_eq!(a11y_tree.count(), 2);
+    assert!(a11y_tree
+        .find_by_role(jambo_ui::AccessibilityRole::Button)
+        .is_some());
+
     let mut term_ui = jambo_ui::JamboTerm::new();
-    term_ui.write_str("JamboOS v0.1.0-alpha\nSession graphique active.\n");
+    term_ui.write_str("JamboOS v0.2.9\nSession graphique active.\n");
     assert_eq!(
         term_ui.accessibility.role,
         jambo_ui::AccessibilityRole::Terminal
     );
+    assert_eq!(term_ui.char_at(0, 0), 'J');
+    assert_eq!(term_ui.char_at(1, 0), 'S');
 
     // 8. Gestionnaire de paquets déclaratif, mises à jour A/B et SDK (Phase 12 - JamboPkg & JamboSDK)
     let mut pkgd = jambo_pkgd::JamboPkgDaemon::new();

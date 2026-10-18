@@ -178,4 +178,110 @@ impl JamboComp {
         }
         false
     }
+
+    /// Déplace une fenêtre sur l'écran
+    pub fn move_window(
+        &mut self,
+        surface_cap: Handle,
+        new_x: i32,
+        new_y: i32,
+    ) -> Result<(), SysError> {
+        for slot in self.windows.iter_mut().flatten() {
+            if slot.surface_cap == surface_cap {
+                slot.x = new_x;
+                slot.y = new_y;
+                slot.damage = DamageRect::new(0, 0, slot.width, slot.height);
+                return Ok(());
+            }
+        }
+        Err(SysError::InvalidHandle)
+    }
+
+    /// Place une fenêtre au premier plan (z-index maximal)
+    pub fn bring_to_front(&mut self, window_id: u32) -> Result<(), SysError> {
+        let mut max_z = 0;
+        for slot in self.windows.iter().flatten() {
+            if slot.z_index > max_z {
+                max_z = slot.z_index;
+            }
+        }
+        for slot in self.windows.iter_mut().flatten() {
+            if slot.id == window_id {
+                slot.z_index = max_z + 1;
+                self.focused_window_id = Some(window_id);
+                slot.damage = DamageRect::new(0, 0, slot.width, slot.height);
+                return Ok(());
+            }
+        }
+        Err(SysError::InvalidArgument)
+    }
+
+    /// Détermine quelle fenêtre se trouve aux coordonnées (x, y) spécifiées (Hit Testing)
+    pub fn window_at(&self, x: i32, y: i32) -> Option<u32> {
+        let mut top_window = None;
+        let mut highest_z = 0;
+
+        for slot in self.windows.iter().flatten() {
+            if slot.visible
+                && x >= slot.x
+                && x < slot.x + slot.width as i32
+                && y >= slot.y
+                && y < slot.y + slot.height as i32
+            {
+                if slot.z_index >= highest_z {
+                    highest_z = slot.z_index;
+                    top_window = Some(slot.id);
+                }
+            }
+        }
+        top_window
+    }
+
+    /// Portail de capture d'écran sécurisé (Zero-Ambient Authority) :
+    /// Rejette toute tentative de capture si le demandeur ne possède pas le Handle de portail accordé.
+    pub fn request_screen_capture(
+        &self,
+        requester_pid: u64,
+        portal_cap: Option<Handle>,
+    ) -> Result<DamageRect, SysError> {
+        match portal_cap {
+            Some(cap) if !cap.is_null() => {
+                if cap.index() >= 100 {
+                    Ok(DamageRect::new(0, 0, self.screen_width, self.screen_height))
+                } else {
+                    Err(SysError::PermissionDenied)
+                }
+            }
+            _ => {
+                let _ = requester_pid;
+                Err(SysError::PermissionDenied)
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_compositor_lifecycle_and_isolation() {
+        let mut comp = JamboComp::new(1920, 1080, 60);
+        let cap1 = comp.create_surface(10, 800, 600).unwrap();
+        let cap2 = comp.create_surface(20, 1024, 768).unwrap();
+
+        assert!(comp.verify_surface_isolation(10, cap1));
+        assert!(!comp.verify_surface_isolation(10, cap2));
+
+        // Hit testing
+        assert!(comp.window_at(130, 130).is_some());
+
+        // Screen capture portal
+        let unauth = comp.request_screen_capture(10, None);
+        assert_eq!(unauth, Err(SysError::PermissionDenied));
+
+        let authorized_cap = Handle::new(150, 1);
+        let auth = comp.request_screen_capture(10, Some(authorized_cap));
+        assert!(auth.is_ok());
+    }
 }

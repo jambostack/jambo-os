@@ -36,6 +36,7 @@ pub enum AccessibilityRole {
     Label,
     Terminal,
     Container,
+    CheckBox,
 }
 
 /// Nœud d'accessibilité obligatoire pour les lecteurs d'écran et l'assistance
@@ -73,6 +74,104 @@ impl Button {
                 focused: false,
             },
         }
+    }
+}
+
+/// Libellé texte déclaratif
+#[derive(Debug, Clone, Copy)]
+pub struct Label {
+    pub text: &'static str,
+    pub color: Color,
+    pub accessibility: AccessibilityNode,
+}
+
+impl Label {
+    pub const fn new(id: u32, text: &'static str) -> Self {
+        Self {
+            text,
+            color: Color::WHITE,
+            accessibility: AccessibilityNode {
+                id,
+                role: AccessibilityRole::Label,
+                label: text,
+                focusable: false,
+                focused: false,
+            },
+        }
+    }
+}
+
+/// Case à cocher accessible
+#[derive(Debug, Clone, Copy)]
+pub struct CheckBox {
+    pub label: &'static str,
+    pub checked: bool,
+    pub accessibility: AccessibilityNode,
+}
+
+impl CheckBox {
+    pub const fn new(id: u32, label: &'static str, checked: bool) -> Self {
+        Self {
+            label,
+            checked,
+            accessibility: AccessibilityNode {
+                id,
+                role: AccessibilityRole::CheckBox,
+                label,
+                focusable: true,
+                focused: false,
+            },
+        }
+    }
+
+    pub fn toggle(&mut self) {
+        self.checked = !self.checked;
+    }
+}
+
+pub const MAX_A11Y_NODES: usize = 32;
+
+/// Arbre d'accessibilité obligatoire structurant l'interface pour les technologies d'assistance
+#[derive(Debug, Clone, Copy)]
+pub struct AccessibilityTree {
+    pub nodes: [Option<AccessibilityNode>; MAX_A11Y_NODES],
+    pub count: usize,
+}
+
+impl Default for AccessibilityTree {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AccessibilityTree {
+    pub const fn new() -> Self {
+        Self {
+            nodes: [None; MAX_A11Y_NODES],
+            count: 0,
+        }
+    }
+
+    pub fn register(&mut self, node: AccessibilityNode) -> Result<(), ()> {
+        if self.count >= MAX_A11Y_NODES {
+            return Err(());
+        }
+        self.nodes[self.count] = Some(node);
+        self.count += 1;
+        Ok(())
+    }
+
+    pub fn count(&self) -> usize {
+        self.count
+    }
+
+    pub fn find_by_role(&self, role: AccessibilityRole) -> Option<&AccessibilityNode> {
+        for slot in self.nodes[..self.count].iter().flatten() {
+            if slot.role == role {
+                return Some(slot);
+            }
+        }
+        None
     }
 }
 
@@ -127,8 +226,52 @@ impl JamboTerm {
         }
     }
 
+    pub fn char_at(&self, row: usize, col: usize) -> char {
+        if row < self.rows && col < self.cols {
+            self.grid[row][col]
+        } else {
+            ' '
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.cursor_col = 0;
+        self.cursor_row = 0;
+        self.grid = [[' '; 80]; 25];
+    }
+
     /// Vérifie la présence obligatoire de l'arbre d'accessibilité
     pub fn accessibility_node(&self) -> &AccessibilityNode {
         &self.accessibility
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_ui_components_and_accessibility() {
+        let btn = Button::new(1, "Valider", 100, 30);
+        assert_eq!(btn.accessibility.role, AccessibilityRole::Button);
+
+        let mut chk = CheckBox::new(2, "Mode Sombre", false);
+        assert!(!chk.checked);
+        chk.toggle();
+        assert!(chk.checked);
+
+        let mut a11y_tree = AccessibilityTree::new();
+        a11y_tree.register(btn.accessibility).unwrap();
+        a11y_tree.register(chk.accessibility).unwrap();
+        assert_eq!(a11y_tree.count(), 2);
+        assert!(a11y_tree.find_by_role(AccessibilityRole::Button).is_some());
+    }
+
+    #[test]
+    fn test_jambo_term() {
+        let mut term = JamboTerm::new();
+        term.write_str("Hello\nWorld");
+        assert_eq!(term.char_at(0, 0), 'H');
+        assert_eq!(term.char_at(1, 0), 'W');
     }
 }
