@@ -1,7 +1,7 @@
 # **JamboOS (jambostack/jambo-os)**
 
 [![CI / Build & QEMU Boot Test](https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg)](https://github.com/jambostack/jambo-os/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-v0.2.15-orange.svg)](https://github.com/jambostack/jambo-os)
+[![Version](https://img.shields.io/badge/version-v0.2.16-orange.svg)](https://github.com/jambostack/jambo-os)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg)](https://www.rust-lang.org/)
 
@@ -13,8 +13,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.15 (Bus RPC Distribué, Jetons Cryptographiques & Grappe Haute Disponibilité)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. Après la sécurité offensive et le fuzzing chaotique `jambo-fuzz` (`v0.2.14`), la version `v0.2.15` consolide le bus RPC distribué et l'écosystème de grappe à haute disponibilité `jambo-rpc` (Phase 17) : communication inter-nœuds transparente sans autorité ambiante à travers le réseau, jetons de capacités distribuées signés cryptographiquement (`DistributedCapToken`) avec nonces stricts anti-rejeu, registre de services typés (`RpcRegistry`) et dispatcher serveur vérifiant les droits de manière étanche (`RpcServerDispatcher`), gestionnaire de grappe (`ClusterManager`) avec télémétrie par battements de cœur (`record_heartbeat`, `monitor_liveness`) et bascule automatique transparente à priorité ordonnée (`trigger_failover`: réplique Online en premier lieu, repli en mode Degraded en second) assurant une disponibilité ininterrompue des services Ring 3. Le système reste un prototype de recherche en cours de développement, loin d'une v1.0.0 finale.
+> **Statut du Projet : Version v0.2.16 (Journal d'Audit Cryptographique Inaltérable & Observabilité Zéro-Autorité)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. Après le bus RPC distribué `jambo-rpc` (`v0.2.15`), la version `v0.2.16` introduit le démon d'audit de sécurité et d'observabilité zéro-autorité ambiante `jambo-auditd` (Phase 18) : grand livre d'audit inaltérable (*tamper-evident ledger*) scellé par chaînage de condensats cryptographiques déterministes, capacités d'audit granulaires (`AuditCap`) soumises au moindre privilège pour l'émission et la lecture filtrée d'événements, vérification mathématique d'intégrité de la chaîne au boot (`verify_chain_integrity`), et moteur heuristique d'analyse d'anomalies en temps réel (`AnomalyDetector`) détectant proactivement attaques par rejeu RPC et violations de mémoire sans jamais impacter le micro-noyau Ring 0. Le système reste un prototype de recherche en cours de développement, loin d'une v1.0.0 finale.
 
 ---
 
@@ -40,7 +40,7 @@
 
 ## **2. Tableau synoptique d'avancement des phases d'ingénierie**
 
-Toutes les **17 phases** du *Plan Directeur d'Ingénierie* sont intégralement développées, testées et validées sous environnement QEMU UEFI multicœur.
+Toutes les **18 phases** du *Plan Directeur d'Ingénierie* sont intégralement développées, testées et validées sous environnement QEMU UEFI multicœur.
 
 | Phase | Intitulé du Composant | Statut | Responsabilité Technique |
 | :---: | :--- | :---: | :--- |
@@ -62,6 +62,7 @@ Toutes les **17 phases** du *Plan Directeur d'Ingénierie* sont intégralement d
 | **15** | **Sous-système d'IA Locale** | ✅ **Terminé** | Démon Ring 3 `jambo-aid`, indexation vectorielle normalisée (PPM), recherche Top-K, tiny embedder n-grammes et intentions typées. |
 | **16** | **Sécurité Offensive & Fuzzing** | ✅ **Terminé** | Fuzzing (10k mutations sans panique), débordements IPC, stress CoW, barrière SMAP/SMEP, confinement IOMMU 100%, chaos FLR 12 ms. |
 | **17** | **Bus RPC Distribué & Écosystème Grappe** | ✅ **Terminé** | Démon `jambo-rpc`, jetons `DistributedCapToken`, dispatch typé, heartbeats et bascule transparente O(1). |
+| **18** | **Audit Cryptographique & Observabilité** | ✅ **Terminé** | Démon `jambo-auditd`, registre inaltérable scellé, capacités `AuditCap`, détection d'anomalies en temps réel. |
 
 ---
 

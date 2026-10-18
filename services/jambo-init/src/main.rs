@@ -624,6 +624,92 @@ pub extern "C" fn _start() -> ! {
     let degraded = cluster_mgr.monitor_liveness(125, 10);
     assert_eq!(degraded, 1);
 
+    // 13. Démon d'Audit Cryptographique Inaltérable & Observabilité Zéro-Autorité (Phase 18 - jambo-auditd v0.2.16)
+    let mut audit_ledger = jambo_auditd::AuditLedger::new();
+    let audit_cap = jambo_auditd::AuditCap::new(
+        libjambo::Handle::new(500, 1),
+        0xFFFFFFFF, // Toutes catégories autorisées
+        jambo_auditd::AuditSeverity::Debug,
+        true,
+        true,
+    );
+
+    // Enregistrement d'événements de sécurité dans le grand livre scellé
+    let ev1 = audit_ledger
+        .record_event(
+            &audit_cap,
+            1, // PID init
+            jambo_auditd::AuditCategory::CSpace,
+            jambo_auditd::AuditSeverity::Info,
+            0x10,
+            b"Capability root table instantiated",
+            1000,
+        )
+        .expect("Record CSpace audit event");
+    assert_eq!(ev1, 1);
+
+    let ev2 = audit_ledger
+        .record_event(
+            &audit_cap,
+            2, // PID pcie-bus-mgr
+            jambo_auditd::AuditCategory::IommuDma,
+            jambo_auditd::AuditSeverity::Warning,
+            0x20,
+            b"PCIe FLR recovery completed",
+            1500,
+        )
+        .expect("Record IOMMU audit event");
+    assert_eq!(ev2, 2);
+
+    let ev3 = audit_ledger
+        .record_event(
+            &audit_cap,
+            3, // PID jambo-rpc
+            jambo_auditd::AuditCategory::DistributedRpc,
+            jambo_auditd::AuditSeverity::SecurityViolation,
+            0x30,
+            b"Rpc replay attempt blocked",
+            2000,
+        )
+        .expect("Record RPC violation");
+    assert_eq!(ev3, 3);
+
+    // Vérification mathématique d'intégrité de la chaîne cryptographique
+    assert!(audit_ledger.verify_chain_integrity());
+
+    // Contrôle d'accès strict : rejet d'enregistrement avec capacité non autorisée
+    let read_only_cap = jambo_auditd::AuditCap::new(
+        libjambo::Handle::new(501, 1),
+        jambo_auditd::AuditCategory::CSpace.to_mask(),
+        jambo_auditd::AuditSeverity::Info,
+        false, // can_write = false
+        true,
+    );
+    let unauthorized_write = audit_ledger.record_event(
+        &read_only_cap,
+        1,
+        jambo_auditd::AuditCategory::CSpace,
+        jambo_auditd::AuditSeverity::Info,
+        0x11,
+        b"Illegal write attempt",
+        2500,
+    );
+    assert_eq!(
+        unauthorized_write,
+        Err(libjambo::SysError::PermissionDenied)
+    );
+
+    // Détection d'anomalies de sécurité en temps réel
+    let anomaly_detector = jambo_auditd::AnomalyDetector::new(1);
+    let alert = anomaly_detector.scan_for_anomalies(&audit_ledger);
+    assert!(alert.is_some());
+    let alert_data = alert.unwrap();
+    assert_eq!(alert_data.suspect_pid, 3);
+    assert_eq!(
+        alert_data.anomaly,
+        jambo_auditd::AnomalyType::PotentialRpcReplayAttack
+    );
+
     // Boucle de supervision de la santé des services Ring 3
     loop {
         unsafe {
