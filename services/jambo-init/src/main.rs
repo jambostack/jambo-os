@@ -1444,6 +1444,48 @@ pub extern "C" fn _start() -> ! {
         Err(libjambo::SysError::PermissionDenied)
     );
 
+    // 27. Coffre-Fort de Secrets Distribué & Déverrouillage par Quorum (Phase 32 - jambo-vaultd v0.2.30)
+    let vault_cap = jambo_vaultd::VaultCap::new(
+        libjambo::Handle::new(1801, 1),
+        jambo_vaultd::vault_rights::ALL,
+    );
+    let master_seed = [0x55; 32];
+    let mut vault = jambo_vaultd::VaultManager::new(2, 3, master_seed);
+
+    // Déverrouillage progressif par parts de quorum (2 sur 3 nécessaires)
+    let state1 = vault
+        .submit_unseal_share(&vault_cap, 0, &[0xAA; 32])
+        .expect("Submit share 0");
+    assert_eq!(state1, jambo_vaultd::VaultState::Unsealing);
+
+    let state2 = vault
+        .submit_unseal_share(&vault_cap, 1, &[0xBB; 32])
+        .expect("Submit share 1");
+    assert_eq!(state2, jambo_vaultd::VaultState::Unsealed);
+
+    // Enregistrement d'un secret sous chiffrement d'enveloppe
+    let secret_path = b"cluster/root_ca_private_key";
+    let secret_data = b"TOP_SECRET_CLUSTER_ED25519_KEY_MATERIAL";
+    let v1 = vault
+        .put_secret(&vault_cap, secret_path, secret_data, 7200, 1000)
+        .expect("Store secret in vault");
+    assert_eq!(v1, 1);
+
+    // Lecture et déchiffrement vérifié
+    let mut secret_buf = [0u8; 64];
+    let (s_len, ver) = vault
+        .get_secret(&vault_cap, secret_path, 1500, &mut secret_buf)
+        .expect("Retrieve secret from vault");
+    assert_eq!(ver, 1);
+    assert_eq!(&secret_buf[..s_len], secret_data);
+
+    // Contrôle d'accès sans autorité ambiante
+    let unauth_vault_cap = jambo_vaultd::VaultCap::new(libjambo::Handle::new(1802, 1), 0);
+    assert_eq!(
+        vault.get_secret(&unauth_vault_cap, secret_path, 1500, &mut secret_buf),
+        Err(libjambo::SysError::PermissionDenied)
+    );
+
     // Boucle de supervision de la santé des services Ring 3
     loop {
         unsafe {
