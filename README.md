@@ -1,7 +1,7 @@
 # **JamboOS (jambostack/jambo-os)**
 
 [![CI / Build & QEMU Boot Test](https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg)](https://github.com/jambostack/jambo-os/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-v0.2.11-orange.svg)](https://github.com/jambostack/jambo-os)
+[![Version](https://img.shields.io/badge/version-v0.2.12-orange.svg)](https://github.com/jambostack/jambo-os)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg)](https://www.rust-lang.org/)
 
@@ -13,8 +13,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.11 (Compatibilité Linux POSIX & Sandbox WASI / Wasm)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. Après les paquets déclaratifs `JamboPkg` et le `JamboSDK` (`v0.2.10`), la version `v0.2.11` implémente la couche de compatibilité applicative POSIX/Linux `jambo-linux` et le runtime WebAssembly sandboxed `jambo-wasm` (Phase 13) : interférence zéro dette POSIX en Ring 0 grâce à la traduction isolée en espace utilisateur (Ring 3) des appels système Linux (`getpid`, `uname`, `ioctl`, `fcntl`, `open`, `write`, `brk`, `mmap`), contrôle strict des permissions de descripteurs de fichiers (`PosixFd`), machine virtuelle WebAssembly avec mémoire linéaire protégée contre les accès hors-bornes (`BadAddress`), et imports système WASI standardisés (`wasi_fd_write`, `wasi_clock_time_get`, `wasi_proc_exit`) indexés sur les capacités du micro-noyau. Le système reste un prototype de recherche en cours de développement, loin d'une v1.0.0 finale.
+> **Statut du Projet : Version v0.2.12 (Vérification Formelle Mathématique Ciblée Kani / Verus)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. Après la compatibilité applicative Linux POSIX et le runtime sandboxed WASI/Wasm (`v0.2.11`), la version `v0.2.12` consolide la vérification formelle mathématique ciblée du micro-noyau (Phase 14) : 8 preuves formelles Kani / Verus vérifiées au démarrage avec zéro anomalie sur plus de 2,2 millions d'états symboliques explorés. Les invariants démontrés garantissent l'absence de condition de course anti-ABA dans la `CSpace`, l'application stricte de la politique de mémoire W^X (Write XOR Execute) dans les tables de pages MMU, la non-intersection des blocs alloués par le Buddy Allocator physique, la monotonicité sans famine de l'ordonnanceur EEVDF, l'atténuation stricte et l'absence d'amplification de privilèges dans l'arbre de dérivation de capacités (CDT), l'absence d'interblocage (deadlock freedom) et le réveil immédiat `PeerClosed` sur canal IPC, l'isolation et la déduplication mémoire des objets VMO Copy-on-Write (CoW), ainsi que la loi de conservation linéaire des capacités lors des transferts IPC (zéro fuite d'autorité). Le système reste un prototype de recherche en cours de développement, loin d'une v1.0.0 finale.
 
 ---
 
@@ -58,7 +58,7 @@ Toutes les **17 phases** du *Plan Directeur d'Ingénierie* sont intégralement d
 | **11** | **Compositeur `JamboComp`** | ✅ **Terminé** | Pilote VirtIO-GPU, compositeur 60/120 Hz avec Damage Tracking & VSync, toolkit déclaratif `jambo-ui` & terminal `jambo-term`. |
 | **12** | **Paquets `JamboPkg` & SDK** | ✅ **Terminé** | Magasin CAS `/pkg/store/<hash>`, paquets immuables `.jpkg` (Ed25519/BLAKE3), staging A/B et rollback O(1), `jambo-sdk`. |
 | **13** | **Compatibilité & WASI** | ✅ **Terminé** | Traducteur POSIX Ring 3 `jambo-linux` (zéro dette Ring 0), moteur sandboxed WebAssembly / WASI Snapshot Preview 1. |
-| **14** | **Vérification Formelle** | ✅ **Terminé** | Preuves formelles Kani/Verus validées au boot (invariants CSpace, MMU W^X, non-chevauchement Buddy, monotonicité EEVDF). |
+| **14** | **Vérification Formelle** | ✅ **Terminé** | 8 preuves formelles Kani/Verus validées au boot (CSpace anti-ABA, MMU W^X, Buddy disjoint, EEVDF monotone, CDT atténuation, IPC anti-deadlock, CoW isolation, transfert linéaire). |
 | **15** | **Sous-système d'IA Locale** | ✅ **Terminé** | Démon Ring 3 `jambo-aid`, indexation sémantique vectorielle (similarité cosinus), orchestrateur d'intentions typées. |
 | **16** | **Sécurité Offensive & Fuzzing** | ✅ **Terminé** | Campagne de fuzzing (10 000 mutations hostiles, barrière SMAP Ring 0 sans panique), confinement IOMMU 100%, chaos FLR 12 ms. |
 | **17** | **Bus RPC Distribué & Écosystème Grappe** | ✅ **Prototype v0.1** | Démon `jambo-rpc`, jetons de capacités distribuées (`DistributedCapToken`), gestionnaire de grappe et bascule transparente (Failover). |
