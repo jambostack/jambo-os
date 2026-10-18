@@ -327,7 +327,6 @@ pub extern "C" fn dispatch_syscall(
             }
         }
 
-
         // 17: RingSetup (desc_ptr: a1, out_handle: a2)
         17 => {
             let desc_ptr = a1 as *const jambo_abi::RingDesc;
@@ -443,7 +442,6 @@ pub extern "C" fn dispatch_syscall(
             SysError::Success as i64
         }
 
-
         // 23: IommuMap
         23 => {
             let handle = Handle(a1);
@@ -491,7 +489,6 @@ pub extern "C" fn dispatch_syscall(
                 Err(e) => e as i64,
             }
         }
-
 
         // Appel inconnu
         _ => SysError::NotSupported as i64,

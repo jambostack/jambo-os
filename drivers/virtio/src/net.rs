@@ -32,6 +32,8 @@ pub struct VirtioNetDriver {
     pub tx_ready: bool,
     pub packets_tx_count: u64,
     pub packets_rx_count: u64,
+    pub loopback_packet: [u8; 1514],
+    pub loopback_len: usize,
 }
 
 impl Default for VirtioNetDriver {
@@ -49,10 +51,12 @@ impl VirtioNetDriver {
             tx_ready: true,
             packets_tx_count: 0,
             packets_rx_count: 0,
+            loopback_packet: [0u8; 1514],
+            loopback_len: 0,
         }
     }
 
-    /// Émet une trame Ethernet brute sur le réseau
+    /// Émet une trame Ethernet brute sur le réseau VirtIO
     pub fn transmit(&mut self, packet: &[u8]) -> Result<(), SysError> {
         if packet.is_empty() || packet.len() > 1514 {
             return Err(SysError::InvalidArgument);
@@ -61,6 +65,9 @@ impl VirtioNetDriver {
             return Err(SysError::ResourceBusy);
         }
 
+        // Sauvegarder dans le tampon loopback pour test local sans matériel physique
+        self.loopback_packet[..packet.len()].copy_from_slice(packet);
+        self.loopback_len = packet.len();
         self.packets_tx_count = self.packets_tx_count.wrapping_add(1);
         Ok(())
     }
@@ -74,8 +81,14 @@ impl VirtioNetDriver {
             return Err(SysError::ResourceBusy);
         }
 
-        // Trame simulée ou loopback si aucun paquet en attente
-        self.packets_rx_count = self.packets_rx_count.wrapping_add(1);
+        if self.loopback_len > 0 {
+            let copy_len = self.loopback_len.min(buf.len());
+            buf[..copy_len].copy_from_slice(&self.loopback_packet[..copy_len]);
+            self.loopback_len = 0;
+            self.packets_rx_count = self.packets_rx_count.wrapping_add(1);
+            return Ok(copy_len);
+        }
+
         Ok(0)
     }
 }

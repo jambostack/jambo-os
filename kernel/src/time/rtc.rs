@@ -3,7 +3,9 @@
 #[cfg(target_arch = "x86_64")]
 use crate::arch::io::{inb, outb};
 
+#[cfg(target_arch = "x86_64")]
 const RTC_PORT_INDEX: u16 = 0x70;
+#[cfg(target_arch = "x86_64")]
 const RTC_PORT_DATA: u16 = 0x71;
 
 /// Vérifie si l'année est bissextile selon le calendrier grégorien

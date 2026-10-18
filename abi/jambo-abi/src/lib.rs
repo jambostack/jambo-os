@@ -181,4 +181,3 @@ pub struct JamboEvent {
     pub _pad: u32,
     pub data: u64,
 }
-

@@ -104,11 +104,15 @@ pub extern "C" fn _start() -> ! {
     // Simulation d'écriture et lecture de secteur via le pilote VirtIO-Block
     let mut sector_buf = [0u8; 512];
     sector_buf[..test_data.len()].copy_from_slice(test_data);
-    let written = virtio_blk.submit_write(0, &sector_buf).expect("Écriture secteur VirtIO");
+    let written = virtio_blk
+        .submit_write(0, &sector_buf)
+        .expect("Écriture secteur VirtIO");
     assert_eq!(written, 512);
 
     let mut read_buf = [0u8; 512];
-    let read_bytes = virtio_blk.submit_read(0, &mut read_buf).expect("Lecture secteur VirtIO");
+    let read_bytes = virtio_blk
+        .submit_read(0, &mut read_buf)
+        .expect("Lecture secteur VirtIO");
     assert_eq!(read_bytes, 512);
     let _ = virtio_blk.flush();
 

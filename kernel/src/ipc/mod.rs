@@ -9,4 +9,3 @@ pub use futex::{FutexManager, FUTEX_MANAGER};
 pub use irq::{IrqDispatcher, IrqObject, IRQ_DISPATCHER};
 pub use port::Port;
 pub use ring::SharedRing;
-

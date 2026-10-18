@@ -157,10 +157,7 @@ impl JamboFsServer {
     }
 
     /// Effectue une écriture Copy-on-Write (CoW) atomique sans écraser les blocs existants
-    pub fn write_file_cow(
-        &mut self,
-        data: &[u8],
-    ) -> Result<(FsInode, u64), libjambo::SysError> {
+    pub fn write_file_cow(&mut self, data: &[u8]) -> Result<(FsInode, u64), libjambo::SysError> {
         self.active_uberblock.generation += 1;
         let gen = self.active_uberblock.generation;
 
@@ -172,7 +169,8 @@ impl JamboFsServer {
         inode.checksum = block_chk;
 
         // Allouer un nouvel offset pour le bloc CoW
-        let new_block_offset = self.active_uberblock.root_tree_offset + (inode.block_count as u64 * BLOCK_SIZE as u64);
+        let new_block_offset =
+            self.active_uberblock.root_tree_offset + (inode.block_count as u64 * BLOCK_SIZE as u64);
         inode.direct_blocks[0] = new_block_offset;
 
         // Mettre à jour l'Uberblock atomiquement
@@ -194,4 +192,3 @@ impl JamboFsServer {
         self.active_uberblock.is_valid() && self.active_uberblock.root_checksum != [0u8; 32]
     }
 }
-

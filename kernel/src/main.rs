@@ -522,15 +522,7 @@ pub extern "C" fn _start() -> ! {
 
     // Test et validation des Ports asynchrones et liaison d'interruptions matérielles IRQ (v0.2.4)
     let mut port_h: u64 = 0;
-    let ret_port = syscall::dispatch_syscall(
-        15,
-        0,
-        &mut port_h as *mut u64 as u64,
-        0,
-        0,
-        0,
-        0,
-    );
+    let ret_port = syscall::dispatch_syscall(15, 0, &mut port_h as *mut u64 as u64, 0, 0, 0, 0);
     assert_eq!(ret_port, 0);
     assert_ne!(port_h, 0);
 
@@ -551,7 +543,10 @@ pub extern "C" fn _start() -> ! {
 
     // Déclenchement d'une interruption matérielle simulée vers le port
     let dispatched = ipc::IRQ_DISPATCHER.trigger_irq(TEST_IRQ_VECTOR, jambo_abi::Handle(irq_h));
-    assert!(dispatched, "L'interruption matérielle doit être dispatchée vers le Port");
+    assert!(
+        dispatched,
+        "L'interruption matérielle doit être dispatchée vers le Port"
+    );
 
     // Réception de l'événement sur le Port via PortWait (Syscall 16)
     let mut event = jambo_abi::JamboEvent::default();
