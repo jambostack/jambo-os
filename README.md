@@ -1,7 +1,7 @@
 # **JamboOS (jambostack/jambo-os)**
 
 [![CI / Build & QEMU Boot Test](https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg)](https://github.com/jambostack/jambo-os/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-v0.2.4-orange.svg)](https://github.com/jambostack/jambo-os)
+[![Version](https://img.shields.io/badge/version-v0.2.5-orange.svg)](https://github.com/jambostack/jambo-os)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg)](https://www.rust-lang.org/)
 
@@ -13,8 +13,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.4 (Ports de Notification Asynchrone, Multiplexage d'Événements & IRQ Bind/Ack pour Drivers Ring 3)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. Après les canaux IPC et les futex (`v0.2.3`), la version `v0.2.4` implémente le sous-système de notification asynchrone et de gestion des interruptions matérielles pour les pilotes de périphériques en espace utilisateur Ring 3 : création de files d'événements multiplexés (`PortCreate`, `PortWait`), association dynamique d'interruptions matérielles ou MSI (`IrqBind`), propagation d'événements matériels typés (`JamboEvent`), et acquittement sécurisé au niveau des contrôleurs d'interruptions (`IrqAck` / EOI APIC). Le système reste un prototype de recherche en cours de développement, loin d'une v1.0.0 finale.
+> **Statut du Projet : Version v0.2.5 (Temps Haute Précision, TSC Invariant, CMOS RTC & Clôture des 24 Appels Système)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. Après la gestion des ports et liaisons d'IRQ (`v0.2.4`), la version `v0.2.5` implémente le sous-système de temps haute précision : prise en charge du TSC invariant et des compteurs matériels CPU à 2.0 GHz, lecture du calendrier et de l'heure via le pilote CMOS RTC matériel, horloges POSIX conformes (`CLOCK_REALTIME`, `CLOCK_MONOTONIC`, `CLOCK_BOOTTIME`), et implémentation complète de l'appel système `ClockGettime` (Syscall 24). Avec ce jalon, l'intégralité des 24 appels système fondamentaux du micro-noyau JamboOS est opérationnelle, typée et sécurisée par capacités. Le système reste un prototype de recherche en cours de développement, loin d'une v1.0.0 finale.
 
 ---
 

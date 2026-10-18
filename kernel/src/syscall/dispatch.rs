@@ -472,17 +472,26 @@ pub extern "C" fn dispatch_syscall(
             }
         }
 
-        // 24: ClockGettime
+        // 24: ClockGettime (clock_id: a1, out_ts: a2)
         24 => {
+            let clock_id = a1 as u32;
             let out_ts = a2 as *mut jambo_abi::Timespec;
-            if !out_ts.is_null() {
-                unsafe {
-                    (*out_ts).tv_sec = 0;
-                    (*out_ts).tv_nsec = 0;
-                }
+
+            if out_ts.is_null() {
+                return SysError::InvalidArgument as i64;
             }
-            SysError::Success as i64
+
+            match crate::time::clock_gettime(clock_id) {
+                Ok(ts) => {
+                    unsafe {
+                        *out_ts = ts;
+                    }
+                    SysError::Success as i64
+                }
+                Err(e) => e as i64,
+            }
         }
+
 
         // Appel inconnu
         _ => SysError::NotSupported as i64,

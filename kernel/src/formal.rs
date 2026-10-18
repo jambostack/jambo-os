@@ -128,6 +128,11 @@ pub fn verify_eevdf_virtual_time_monotonicity() -> FormalProofResult {
         assert!(virtual_time >= prev, "Perte de monotonicité EEVDF");
     }
 
+    // Monotonicité de l'horloge physique sous-jacente (TSC)
+    let t1 = crate::time::monotonic_nanos();
+    let t2 = crate::time::monotonic_nanos();
+    assert!(t2 >= t1, "L'horloge monotone ne doit jamais reculer");
+
     FormalProofResult {
         proof_name: "EEVDF Virtual Time Monotonicity & Starvation-Free",
         verified_states: 131072,

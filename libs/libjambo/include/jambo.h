@@ -42,7 +42,18 @@ typedef struct {
     uint64_t data;
 } jambo_event_t;
 
+#define JAMBO_CLOCK_REALTIME  0
+#define JAMBO_CLOCK_MONOTONIC 1
+#define JAMBO_CLOCK_BOOTTIME  2
+
+typedef struct {
+    uint64_t tv_sec;
+    uint32_t tv_nsec;
+    uint32_t _pad;
+} jambo_timespec_t;
+
 /* === Codes d'erreur système === */
+
 
 
 #define JAMBO_OK                    0
@@ -230,6 +241,11 @@ static inline int64_t jambo_irq_bind(uint32_t irq_vector, jambo_handle_t port, u
 static inline int64_t jambo_irq_ack(jambo_handle_t irq) {
     return jambo_syscall6(JAMBO_SYS_IRQ_ACK, irq, 0, 0, 0, 0, 0, NULL);
 }
+
+static inline int64_t jambo_clock_gettime(uint32_t clock_id, jambo_timespec_t* out_ts) {
+    return jambo_syscall6(JAMBO_SYS_CLOCK_GETTIME, (uint64_t)clock_id, (uint64_t)(uintptr_t)out_ts, 0, 0, 0, 0, NULL);
+}
+
 
 
 #ifdef __cplusplus

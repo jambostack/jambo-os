@@ -86,6 +86,13 @@ pub mod auxv {
     pub const AT_RANDOM: u64 = 25;
 }
 
+/// Identifiants d'horloges pour l'appel système ClockGettime
+pub mod clocks {
+    pub const CLOCK_REALTIME: u32 = 0;
+    pub const CLOCK_MONOTONIC: u32 = 1;
+    pub const CLOCK_BOOTTIME: u32 = 2;
+}
+
 /// Numéros d'appels système (24 syscalls)
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
