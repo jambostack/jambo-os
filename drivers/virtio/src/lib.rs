@@ -77,3 +77,7 @@ impl VirtioBlockDriver {
         self.capacity_sectors * (SECTOR_SIZE as u64)
     }
 }
+
+pub mod net;
+pub use net::{VirtioNetDriver, VirtioNetHdr};
+

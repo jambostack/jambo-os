@@ -8,4 +8,5 @@ libjambo = { path = "../../libs/libjambo" }
 pcie-bus-mgr = { path = "../pcie-bus-mgr" }
 nvme = { path = "../../drivers/nvme" }
 xhci = { path = "../../drivers/xhci" }
+jambo-netd = { path = "../jambo-netd" }
 

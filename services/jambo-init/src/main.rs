@@ -85,6 +85,42 @@ pub extern "C" fn _start() -> ! {
     let _ = nvme_ctrl.read_blocks(0, 8, 0x1000_0000);
     let _ = nvme_ctrl.flush();
 
+    // 5. Initialisation et validation de la pile réseau en espace utilisateur (Phase 9 - jambo-netd)
+    let mut netd = jambo_netd::JamboNetd::new();
+
+    // Capacité réseau légitime avec droits CONNECT, DNS et TLS sur ports 80-853
+    let legit_netcap = jambo_netd::NetworkCapability::new(
+        libjambo::Handle::new(10, 1),
+        libjambo::net_rights::CONNECT | libjambo::net_rights::DNS | libjambo::net_rights::TLS,
+        80,
+        853,
+    );
+
+    // Résolution DNS-over-TLS (DoT sur port 853)
+    let ip = netd
+        .resolve_dns_over_tls(&legit_netcap, "api.jambostack.org")
+        .expect("Résolution DoT");
+
+    // Établissement de flux TCP sécurisé vers port HTTPS 443
+    let sock_id = netd
+        .open_tcp_stream(&legit_netcap, ip, 443)
+        .expect("Connexion TCP");
+
+    // Négociation TLS 1.3
+    let _tls_ok = netd
+        .establish_tls13_handshake(&legit_netcap, sock_id)
+        .expect("Handshake TLS 1.3");
+    let _ = netd.close_tcp_stream(sock_id);
+
+    // Test de sécurité : Rejet formel d'accès réseau sans capacité NetCap valide
+    let restricted_netcap = jambo_netd::NetworkCapability::new(
+        libjambo::Handle::new(11, 1),
+        0, // Zéro droit réseau accordé
+        1024,
+        65535,
+    );
+    assert!(netd.open_tcp_stream(&restricted_netcap, ip, 443).is_err());
+
     // Boucle de supervision de la santé des services Ring 3
     loop {
         unsafe {

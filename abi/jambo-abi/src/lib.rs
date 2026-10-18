@@ -45,6 +45,18 @@ pub mod cap_rights {
         READ | WRITE | EXECUTE | MAP | SEND | RECEIVE | DUPLICATE | TRANSFER | MANAGE;
 }
 
+/// Droits réseau spécifiques pour la capacité NetCap (Phase 9)
+pub mod net_rights {
+    pub const BIND: u32 = 1 << 0;
+    pub const CONNECT: u32 = 1 << 1;
+    pub const LISTEN: u32 = 1 << 2;
+    pub const ACCEPT: u32 = 1 << 3;
+    pub const RAW: u32 = 1 << 4;
+    pub const DNS: u32 = 1 << 5;
+    pub const TLS: u32 = 1 << 6;
+}
+
+
 /// Permissions de projection mémoire (W^X)
 pub mod vmo_prot {
     pub const READ: u32 = 1 << 0;

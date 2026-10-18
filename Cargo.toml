@@ -8,6 +8,7 @@ members = [
     "services/jambo-init",
     "services/jambo-fs",
     "services/pcie-bus-mgr",
+    "services/jambo-netd",
     "drivers/virtio",
     "drivers/nvme",
     "drivers/xhci",
