@@ -1,7 +1,7 @@
 # **JamboOS (jambostack/jambo-os)**
 
 [![CI / Build & QEMU Boot Test](https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg)](https://github.com/jambostack/jambo-os/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-v0.2.9-orange.svg)](https://github.com/jambostack/jambo-os)
+[![Version](https://img.shields.io/badge/version-v0.2.10-orange.svg)](https://github.com/jambostack/jambo-os)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg)](https://www.rust-lang.org/)
 
@@ -13,8 +13,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.9 (Compositeur JamboComp, VirtIO-GPU & Framework UI Accessible JamboUI)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. Après le shell objet `jsh` et les pipelines structurés (`v0.2.8`), la version `v0.2.9` implémente le sous-système graphique et d'interface utilisateur en espace utilisateur (Phase 11) : compositeur zéro-copie `JamboComp` avec Damage Tracking fluide (60/120 Hz) et synchronisation matérielle VSync, pilote d'accélération d'affichage VirtIO-GPU (commandes 2D, backing pages et scanout), isolation stricte des surfaces clientes interdisant tout espionnage inter-fenêtres, portails de capture d'écran à consentement explicite par capacité, et framework d'interface déclaratif `JamboUI` intégrant un arbre d'accessibilité obligatoire (`AccessibilityTree`, `AccessibilityNode`) pour les technologies d'assistance ainsi que le terminal accéléré `JamboTerm`. Le système reste un prototype de recherche en cours de développement, loin d'une v1.0.0 finale.
+> **Statut du Projet : Version v0.2.10 (Paquets Déclaratifs JPkg, Mises à Jour A/B & JamboSDK)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. Après le compositeur graphique `JamboComp` et le framework `JamboUI` (`v0.2.9`), la version `v0.2.10` implémente le gestionnaire de paquets déclaratif `JamboPkg` et le SDK applicatif officiel `JamboSDK` (Phase 12) : format de paquet hermétique immuable (`.jpkg`), magasin adressé par le contenu (CAS) avec vérification de signatures cryptographiques Ed25519, bascule atomique $O(1)$ entre générations de partitions A/B, mécanisme de résilience avec quota de démarrage et rollback automatique instantané (< 2 s), et SDK orienté capacités `JamboSDK` (`JamboApp`, `AppContext`, `run_app`) pour le développement d'applications natives sans autorité ambiante. Le système reste un prototype de recherche en cours de développement, loin d'une v1.0.0 finale.
 
 ---
 

@@ -40,6 +40,14 @@ impl AppContext {
         let _ = (msg_id, data);
         Ok(())
     }
+
+    /// Reçoit un message structuré JamboIDL simulé via le canal principal
+    pub fn receive_ipc_message(&self) -> Result<(u32, u64), SysError> {
+        if self.main_channel.is_null() {
+            return Err(SysError::InvalidHandle);
+        }
+        Ok((1, 0x42))
+    }
 }
 
 /// Trait définissant le cycle de vie d'une application JamboOS
@@ -47,12 +55,30 @@ pub trait JamboApp {
     fn manifest(&self) -> AppManifest;
     fn init(&mut self, ctx: &AppContext) -> Result<(), SysError>;
     fn run_step(&mut self) -> Result<bool, SysError>; // Renvoie true pour continuer, false pour quitter
+    fn shutdown(&mut self) -> Result<(), SysError> {
+        Ok(())
+    }
+}
+
+/// Exécute le cycle de vie complet d'une application JamboSDK
+pub fn run_app<T: JamboApp>(app: &mut T, ctx: &AppContext) -> Result<u32, SysError> {
+    app.init(ctx)?;
+    let mut step_count = 0;
+    while app.run_step()? {
+        step_count += 1;
+        if step_count > 100 {
+            break;
+        }
+    }
+    app.shutdown()?;
+    Ok(step_count)
 }
 
 /// Application de test exemple fournie dans le SDK
 pub struct HelloWorldApp {
     pub initialized: bool,
     pub steps_run: u32,
+    pub stopped: bool,
 }
 
 impl Default for HelloWorldApp {
@@ -66,6 +92,7 @@ impl HelloWorldApp {
         Self {
             initialized: false,
             steps_run: 0,
+            stopped: false,
         }
     }
 }
@@ -88,5 +115,25 @@ impl JamboApp for HelloWorldApp {
     fn run_step(&mut self) -> Result<bool, SysError> {
         self.steps_run += 1;
         Ok(self.steps_run < 3)
+    }
+
+    fn shutdown(&mut self) -> Result<(), SysError> {
+        self.stopped = true;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sdk_app_lifecycle() {
+        let mut app = HelloWorldApp::new();
+        let ctx = AppContext::new("org.jambostack.test", Handle::new(1, 1), Handle::new(2, 1));
+        let steps = run_app(&mut app, &ctx).expect("run app");
+        assert_eq!(steps, 2);
+        assert!(app.initialized);
+        assert!(app.stopped);
     }
 }

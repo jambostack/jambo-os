@@ -35,6 +35,8 @@ pub struct SystemGeneration {
     pub active_slot: AbSlot,
     pub healthy: bool,
     pub committed: bool,
+    pub boot_attempts: u32,
+    pub max_boot_attempts: u32,
 }
 
 /// Gestionnaire de paquets déclaratif JamboPkg
@@ -60,6 +62,8 @@ impl JamboPkgDaemon {
                 active_slot: AbSlot::SlotA,
                 healthy: true,
                 committed: true,
+                boot_attempts: 0,
+                max_boot_attempts: 3,
             },
             backup_generation: None,
             store: [INIT_OPT; MAX_STORE_PACKAGES],
@@ -107,6 +111,8 @@ impl JamboPkgDaemon {
             active_slot: next_slot,
             healthy: false, // En attente de validation au démarrage
             committed: false,
+            boot_attempts: 0,
+            max_boot_attempts: 3,
         };
 
         Ok(new_gen_id)
@@ -128,5 +134,94 @@ impl JamboPkgDaemon {
         } else {
             Err(SysError::InvalidArgument)
         }
+    }
+
+    /// Enregistre une tentative de boot sur la génération actuelle ;
+    /// si un échec persiste sur une génération non validée, déclenche un rollback automatique.
+    pub fn record_boot_attempt(&mut self) -> Result<bool, SysError> {
+        self.current_generation.boot_attempts += 1;
+        if !self.current_generation.committed
+            && self.current_generation.boot_attempts > self.current_generation.max_boot_attempts
+        {
+            self.rollback()?;
+            Ok(true) // Rollback automatique exécuté
+        } else {
+            Ok(false)
+        }
+    }
+
+    /// Recherche un paquet par son nom dans le magasin CAS
+    pub fn find_package(&self, name: &str) -> Option<&JpkgManifest> {
+        for slot in self.store[..self.package_count].iter().flatten() {
+            if slot.name == name {
+                return Some(slot);
+            }
+        }
+        None
+    }
+
+    /// Supprime un paquet du magasin
+    pub fn uninstall_package(&mut self, name: &str) -> Result<(), SysError> {
+        for slot in self.store.iter_mut() {
+            if let Some(manifest) = slot {
+                if manifest.name == name {
+                    *slot = None;
+                    self.package_count = self.package_count.saturating_sub(1);
+                    return Ok(());
+                }
+            }
+        }
+        Err(SysError::InvalidArgument)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_package_lifecycle_and_cas() {
+        let mut pkgd = JamboPkgDaemon::new();
+        let manifest = JpkgManifest {
+            name: "test-app",
+            version: (1, 0, 0),
+            content_hash: [0x12; 32],
+            ed25519_signature: [0x34; 64],
+            required_capabilities: 0x01,
+            installed: false,
+        };
+        assert!(pkgd.install_package(manifest).is_ok());
+        assert_eq!(pkgd.package_count, 1);
+        assert!(pkgd.find_package("test-app").is_some());
+
+        // Zero-hash package must fail
+        let corrupt_manifest = JpkgManifest {
+            name: "bad-app",
+            version: (1, 0, 0),
+            content_hash: [0; 32],
+            ed25519_signature: [0; 64],
+            required_capabilities: 0,
+            installed: false,
+        };
+        assert_eq!(
+            pkgd.install_package(corrupt_manifest),
+            Err(SysError::PermissionDenied)
+        );
+    }
+
+    #[test]
+    fn test_ab_automatic_fallback() {
+        let mut pkgd = JamboPkgDaemon::new();
+        let gen2 = pkgd.stage_update().unwrap();
+        assert_eq!(gen2, 2);
+        assert_eq!(pkgd.current_generation.active_slot, AbSlot::SlotB);
+
+        // 3 failed boots
+        assert_eq!(pkgd.record_boot_attempt(), Ok(false));
+        assert_eq!(pkgd.record_boot_attempt(), Ok(false));
+        assert_eq!(pkgd.record_boot_attempt(), Ok(false));
+        // 4th boot triggers automatic rollback to SlotA
+        assert_eq!(pkgd.record_boot_attempt(), Ok(true));
+        assert_eq!(pkgd.current_generation.active_slot, AbSlot::SlotA);
     }
 }

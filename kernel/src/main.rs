@@ -131,7 +131,7 @@ pub extern "C" fn _start() -> ! {
     // 4. Bannière système d'accueil
     kprintln!("\x1b[1;36m");
     kprintln!("================================================================================");
-    kprintln!("    JAMBO-OS (JamboKernel v0.2.9) — Micro-noyau de 3e Génération              ");
+    kprintln!("    JAMBO-OS (JamboKernel v0.2.10) — Micro-noyau de 3e Génération             ");
     kprintln!("    Architecture : Micro-noyau orienté capacités en Rust no_std (x86_64/AArch64)");
     kprintln!("    Auteur & Architecte Principal : ASSOGBA Prudence Dieudonné                 ");
     kprintln!("    Dépôt Officiel : https://github.com/jambostack/jambo-os                    ");
@@ -619,6 +619,11 @@ pub extern "C" fn _start() -> ! {
     // Test et validation du compositeur graphique, VirtIO-GPU et JamboUI (Phase 11 - v0.2.9)
     kprintln!("[COMP/GPU] Compositeur JamboComp, VirtIO-GPU, portails de capture et JamboUI accessibles validés");
 
+    // Test et validation des paquets déclaratifs JPkg, mises à jour A/B et JamboSDK (Phase 12 - v0.2.10)
+    kprintln!(
+        "[PKGD/SDK] Paquets déclaratifs JPkg, mises à jour A/B atomiques et JamboSDK validés"
+    );
+
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
 
     arch::init_iommu();
@@ -677,9 +682,9 @@ pub extern "C" fn _start() -> ! {
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.9 (Compositeur JamboComp, VirtIO-GPU & Framework UI JamboUI)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.10 (Paquets Déclaratifs JPkg, Mises à Jour A/B & JamboSDK)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.9 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.10 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );

@@ -312,6 +312,26 @@ pub extern "C" fn _start() -> ! {
     pkgd.install_package(pkg_manifest).expect("Install jpkg");
     assert_eq!(pkgd.package_count, 1);
 
+    // Recherche CAS et inspection d'un paquet installé
+    let found_pkg = pkgd
+        .find_package("jambo-terminal-app")
+        .expect("Trouver paquet dans CAS");
+    assert_eq!(found_pkg.required_capabilities, libjambo::cap_rights::READ);
+
+    // Rejet formel d'un paquet falsifié (empreinte nulle)
+    let corrupted_manifest = jambo_pkgd::JpkgManifest {
+        name: "malicious-payload",
+        version: (0, 0, 1),
+        content_hash: [0u8; 32],
+        ed25519_signature: [0u8; 64],
+        required_capabilities: 0,
+        installed: false,
+    };
+    assert_eq!(
+        pkgd.install_package(corrupted_manifest),
+        Err(libjambo::SysError::PermissionDenied)
+    );
+
     // Préparation de mise à jour système A/B (Staging vers fente B)
     let next_gen = pkgd.stage_update().expect("Stage update A/B");
     assert_eq!(next_gen, 2);
@@ -327,25 +347,39 @@ pub extern "C" fn _start() -> ! {
         jambo_pkgd::AbSlot::SlotA
     );
 
+    // Test du mécanisme de secours automatique (Fallback après dépassement de quota boot)
+    let _ = pkgd.stage_update().expect("Stage update A/B");
+    assert_eq!(
+        pkgd.current_generation.active_slot,
+        jambo_pkgd::AbSlot::SlotB
+    );
+    assert_eq!(pkgd.record_boot_attempt(), Ok(false));
+    assert_eq!(pkgd.record_boot_attempt(), Ok(false));
+    assert_eq!(pkgd.record_boot_attempt(), Ok(false));
+    assert_eq!(pkgd.record_boot_attempt(), Ok(true)); // 4e tentative => Rollback automatique vers Slot A
+    assert_eq!(
+        pkgd.current_generation.active_slot,
+        jambo_pkgd::AbSlot::SlotA
+    );
+
     // Validation de mise à jour définitive
     let final_gen = pkgd.stage_update().expect("Stage update A/B");
     pkgd.commit_update().expect("Commit update");
     assert!(pkgd.current_generation.committed);
     assert!(pkgd.current_generation.healthy);
-    assert_eq!(final_gen, 2);
+    assert_eq!(final_gen, 4);
 
-    // Test du SDK officiel JamboSDK
+    // Test du SDK officiel JamboSDK et exécution du cycle de vie complet
     let mut app = jambo_sdk::HelloWorldApp::new();
     let app_ctx = jambo_sdk::AppContext::new(
         "org.jambostack.helloworld",
         libjambo::Handle::new(1, 1),
         libjambo::Handle::new(2, 1),
     );
-    use jambo_sdk::JamboApp;
-    app.init(&app_ctx).expect("SDK App init");
+    let steps_executed = jambo_sdk::run_app(&mut app, &app_ctx).expect("SDK App run lifecycle");
+    assert_eq!(steps_executed, 2);
     assert!(app.initialized);
-    let keep_running = app.run_step().expect("SDK App run step");
-    assert!(keep_running);
+    assert!(app.stopped);
 
     // 9. Couche de compatibilité applicative Linux et Runtime WebAssembly/WASI (Phase 13)
     let mut linux_emu = jambo_linux::LinuxProcessEmulator::new(1001);
