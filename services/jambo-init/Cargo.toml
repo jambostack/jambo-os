@@ -11,4 +11,6 @@ xhci = { path = "../../drivers/xhci" }
 jambo-netd = { path = "../jambo-netd" }
 jambo-sh = { path = "../jambo-sh" }
 jambo-coreutils = { path = "../jambo-coreutils" }
+jambo-comp = { path = "../jambo-comp" }
+jambo-ui = { path = "../../libs/jambo-ui" }
 

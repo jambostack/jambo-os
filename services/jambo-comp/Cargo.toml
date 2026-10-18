@@ -1,0 +1,8 @@
+[package]
+name = "jambo-comp"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+libjambo = { path = "../../libs/libjambo" }
+virtio-drv = { path = "../../drivers/virtio" }

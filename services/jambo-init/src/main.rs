@@ -153,6 +153,38 @@ pub extern "C" fn _start() -> ! {
         jambo_coreutils::CmdJpkg::verify_package_integrity("jambo-core-system", &[0xAA; 32]);
     assert!(pkg_valid);
 
+    // 7. Initialisation et validation du compositeur graphique (Phase 11 - JamboComp, virtio-gpu & JamboUI)
+    let mut comp = jambo_comp::JamboComp::new(1920, 1080, 60);
+
+    // Création de deux surfaces clientes distinctes
+    let term_cap = comp
+        .create_surface(10, 800, 600)
+        .expect("Création surface terminal");
+    let editor_cap = comp
+        .create_surface(20, 1024, 768)
+        .expect("Création surface éditeur");
+
+    // Règle formelle : Vérification de l'isolation stricte des surfaces
+    assert!(comp.verify_surface_isolation(10, term_cap));
+    assert!(!comp.verify_surface_isolation(10, editor_cap)); // Client 10 ne peut pas lire la fenêtre de Client 20 !
+
+    // Damage Tracking : Déclaration d'une zone modifiée et composition VSync
+    comp.damage_surface(term_cap, jambo_comp::DamageRect::new(10, 10, 200, 100))
+        .expect("Damage surface");
+    let damaged_count = comp.composite_frame().expect("Composite frame");
+    assert_eq!(damaged_count, 2); // 2 fenêtres avec damage initial composées
+
+    // Validation du framework JamboUI et de l'accessibilité obligatoire
+    let btn = jambo_ui::Button::new(1, "Ouvrir Fichier", 120, 32);
+    assert_eq!(btn.accessibility.role, jambo_ui::AccessibilityRole::Button);
+
+    let mut term_ui = jambo_ui::JamboTerm::new();
+    term_ui.write_str("JamboOS v0.1.0-alpha\nSession graphique active.\n");
+    assert_eq!(
+        term_ui.accessibility.role,
+        jambo_ui::AccessibilityRole::Terminal
+    );
+
     // Boucle de supervision de la santé des services Ring 3
     loop {
         unsafe {

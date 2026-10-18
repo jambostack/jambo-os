@@ -11,6 +11,8 @@ members = [
     "services/jambo-netd",
     "services/jambo-sh",
     "services/jambo-coreutils",
+    "services/jambo-comp",
+    "libs/jambo-ui",
     "drivers/virtio",
     "drivers/nvme",
     "drivers/xhci",

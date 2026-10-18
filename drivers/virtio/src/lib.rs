@@ -78,5 +78,7 @@ impl VirtioBlockDriver {
     }
 }
 
+pub mod gpu;
 pub mod net;
+pub use gpu::{VirtioGpuDriver, VirtioGpuRect};
 pub use net::{VirtioNetDriver, VirtioNetHdr};
