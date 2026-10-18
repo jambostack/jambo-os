@@ -1,0 +1,10 @@
+[package]
+name = "jambo-certd"
+version = "0.2.35"
+edition = "2021"
+authors = ["ASSOGBA Prudence Dieudonné <jprud67@gmail.com>"]
+description = "Infrastructure à Clés Publiques Éphémères & Gestion des Certificats de Grappe pour JamboOS"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+libjambo = { path = "../../libs/libjambo" }

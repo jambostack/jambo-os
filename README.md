@@ -1,7 +1,7 @@
 # **JamboOS (jambostack/jambo-os)**
 
 [![CI / Build & QEMU Boot Test](https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg)](https://github.com/jambostack/jambo-os/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-v0.2.34-orange.svg)](https://github.com/jambostack/jambo-os)
+[![Version](https://img.shields.io/badge/version-v0.2.35-orange.svg)](https://github.com/jambostack/jambo-os)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg)](https://www.rust-lang.org/)
 
@@ -13,8 +13,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.34 (Traçage Distribué, Propagation de Contexte & Analyse de Latence)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. Après le moteur de politiques déclaratives et de contrôle d'admission `jambo-policyd` (`v0.2.33`), la version `v0.2.34` introduit le démon de traçage distribué `jambo-traced` (Phase 36) : arborescences de portées (*spans*), propagation causale de contexte (compatible W3C Trace Context), mesure déterministe des temps de trajet et d'exécution, détection des goulets d'étranglement de latence et contrôle d'accès sans autorité ambiante régi par les capacités `TraceCap`. Le système reste un prototype de recherche en cours de développement, loin d'une v1.0.0 finale.
+> **Statut du Projet : Version v0.2.35 (Infrastructure à Clés Publiques Éphémères & Certificats de Grappe)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. Après le moteur de traçage distribué `jambo-traced` (`v0.2.34`), la version `v0.2.35` introduit le démon d'infrastructure de clés publiques et de gestion des certificats éphémères `jambo-certd` (Phase 37) : autorité de certification de grappe (*Cluster CA*) autonome en `#![no_std]`, certificats d'identité à validité courte, vérification cryptographique déterministe d'usages de clés (mTLS, Mesh, Code Signing), révocation proactive et contrôle d'accès sans autorité ambiante régi par les capacités `CertCap`. Le système reste un prototype de recherche en cours de développement, loin d'une v1.0.0 finale.
 
 ---
 
@@ -40,7 +40,7 @@
 
 ## **2. Tableau synoptique d'avancement des phases d'ingénierie**
 
-Toutes les **36 phases** du *Plan Directeur d'Ingénierie* sont intégralement développées, testées et validées sous environnement QEMU UEFI multicœur.
+Toutes les **37 phases** du *Plan Directeur d'Ingénierie* sont intégralement développées, testées et validées sous environnement QEMU UEFI multicœur.
 
 | Phase | Intitulé du Composant | Statut | Responsabilité Technique |
 | :---: | :--- | :---: | :--- |
@@ -81,6 +81,7 @@ Toutes les **36 phases** du *Plan Directeur d'Ingénierie* sont intégralement d
 | **34** | **Découverte de Services & Résolution de Noms** | ✅ **Terminé** | Démon `jambo-serviced`, capacités `DiscoveryCap`, enregistrement d'instances, TTL/heartbeat, purge automatique. |
 | **35** | **Politiques de Sécurité & Contrôle d'Admission** | ✅ **Terminé** | Démon `jambo-policyd`, capacités `PolicyCap`, filtrage ABAC déterministe, Deny-by-default, baux de règles. |
 | **36** | **Traçage Distribué & Analyse de Latence** | ✅ **Terminé** | Démon `jambo-traced`, capacités `TraceCap`, arborescences de portées (spans), W3C TraceContext, ring buffers. |
+| **37** | **PKI Éphémère & Gestion des Certificats** | ✅ **Terminé** | Démon `jambo-certd`, capacités `CertCap`, autorité CA de grappe, attestations courtes durées, révocation. |
 
 ---
 
@@ -116,6 +117,7 @@ jambo-os/
 │   ├── jambo-aid/           # Démon d'intelligence artificielle locale et recherche sémantique
 │   ├── jambo-auditd/        # Registre d'audit cryptographique et détection d'anomalies
 │   ├── jambo-authd/         # Identité cryptographique Ed25519 et sessions isolées
+│   ├── jambo-certd/         # Infrastructure de certificats éphémères & autorité CA
 │   ├── jambo-comp/          # Compositeur d'affichage fenêtré zéro-copie
 │   ├── jambo-coreutils/     # Utilitaires système (ps, capstat, top, jpkg)
 │   ├── jambo-cryptod/       # Chiffrement de bloc transparent ChaCha20 et scellement TPM 2.0

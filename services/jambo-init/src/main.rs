@@ -1751,6 +1751,89 @@ pub extern "C" fn _start() -> ! {
         Err(libjambo::SysError::PermissionDenied)
     );
 
+    // 32. Infrastructure à Clés Publiques Éphémères & Certificats de Grappe (Phase 37 - jambo-certd v0.2.35)
+    let cert_cap = jambo_certd::CertCap::new(
+        libjambo::Handle::new(2301, 1),
+        jambo_certd::cert_rights::ALL,
+    );
+    let mut ca = jambo_certd::ClusterCa::new(1, [0xCC; 32], [0x77; 32]);
+
+    let node_pubkey = [0xDD; 32];
+    let cert1 = ca
+        .issue_cert(
+            &cert_cap,
+            b"mesh.node-1.cluster",
+            node_pubkey,
+            1000,
+            2000,
+            jambo_certd::key_usages::USAGE_SERVER_AUTH
+                | jambo_certd::key_usages::USAGE_MESH_ROUTING,
+        )
+        .expect("Issue ephemeral cert 1");
+
+    assert_eq!(ca.active_count(), 1);
+
+    // Validation du certificat
+    let valid_status = ca
+        .verify_cert(
+            &cert_cap,
+            &cert1,
+            jambo_certd::key_usages::USAGE_MESH_ROUTING,
+            1500,
+        )
+        .expect("Verify valid cert");
+    assert_eq!(valid_status, jambo_certd::CertStatus::Valid);
+
+    // Rejet pour inadéquation d'usage
+    let mismatch_status = ca
+        .verify_cert(
+            &cert_cap,
+            &cert1,
+            jambo_certd::key_usages::USAGE_CODE_SIGN,
+            1500,
+        )
+        .expect("Verify usage mismatch");
+    assert_eq!(mismatch_status, jambo_certd::CertStatus::UsageMismatch);
+
+    // Révocation d'un second certificat
+    let cert2 = ca
+        .issue_cert(
+            &cert_cap,
+            b"guest.worker.cluster",
+            [0xEE; 32],
+            1000,
+            2000,
+            jambo_certd::key_usages::USAGE_CLIENT_AUTH,
+        )
+        .expect("Issue ephemeral cert 2");
+    ca.revoke_cert(&cert_cap, cert2.serial)
+        .expect("Revoke cert 2");
+    let revoked_status = ca
+        .verify_cert(
+            &cert_cap,
+            &cert2,
+            jambo_certd::key_usages::USAGE_CLIENT_AUTH,
+            1500,
+        )
+        .expect("Verify revoked cert");
+    assert_eq!(revoked_status, jambo_certd::CertStatus::Revoked);
+
+    // Contrôle d'accès sans autorité ambiante
+    let unauth_cert_cap = cert_cap
+        .attenuate(jambo_certd::cert_rights::CERT_VERIFY)
+        .expect("Attenuate cert cap");
+    assert_eq!(
+        ca.issue_cert(
+            &unauth_cert_cap,
+            b"unauth",
+            [0; 32],
+            1000,
+            2000,
+            jambo_certd::key_usages::USAGE_CLIENT_AUTH
+        ),
+        Err(libjambo::SysError::PermissionDenied)
+    );
+
     // Boucle de supervision de la santé des services Ring 3
     loop {
         unsafe {

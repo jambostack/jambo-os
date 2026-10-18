@@ -37,6 +37,7 @@ members = [
     "services/jambo-serviced",
     "services/jambo-policyd",
     "services/jambo-traced",
+    "services/jambo-certd",
     "libs/jambo-ui",
     "libs/jambo-sdk",
     "drivers/virtio",
