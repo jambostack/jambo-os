@@ -14,9 +14,13 @@ pub const LINUX_SYS_CLOSE: u64 = 3;
 pub const LINUX_SYS_FSTAT: u64 = 5;
 pub const LINUX_SYS_MMAP: u64 = 9;
 pub const LINUX_SYS_BRK: u64 = 12;
+pub const LINUX_SYS_IOCTL: u64 = 16;
 pub const LINUX_SYS_GETPID: u64 = 39;
 pub const LINUX_SYS_CLONE: u64 = 56;
 pub const LINUX_SYS_EXIT: u64 = 60;
+pub const LINUX_SYS_UNAME: u64 = 63;
+pub const LINUX_SYS_FCNTL: u64 = 72;
+pub const LINUX_SYS_GETTIMEOFDAY: u64 = 96;
 pub const LINUX_SYS_CLOCK_GETTIME: u64 = 228;
 
 pub const MAX_FDS: usize = 32;
@@ -90,28 +94,44 @@ impl LinuxProcessEmulator {
             LINUX_SYS_READ => {
                 let fd = a1 as i32;
                 let count = a3;
-                if fd < 0 || fd as usize >= MAX_FDS || self.fds[fd as usize].is_none() {
+                if fd < 0 || fd as usize >= MAX_FDS {
                     return -9; // EBADF
                 }
-                count as i64 // Simulation de lecture réussie
+                match &self.fds[fd as usize] {
+                    Some(desc) => {
+                        if (desc.flags & cap_rights::READ) == 0 {
+                            return -9; // EBADF (Not open for reading)
+                        }
+                        count as i64
+                    }
+                    None => -9,
+                }
             }
             LINUX_SYS_WRITE => {
                 let fd = a1 as i32;
                 let count = a3;
-                if fd < 0 || fd as usize >= MAX_FDS || self.fds[fd as usize].is_none() {
+                if fd < 0 || fd as usize >= MAX_FDS {
                     return -9; // EBADF
                 }
-                count as i64 // Simulation d'écriture réussie
+                match &self.fds[fd as usize] {
+                    Some(desc) => {
+                        if (desc.flags & cap_rights::WRITE) == 0 {
+                            return -9; // EBADF (Not open for writing)
+                        }
+                        count as i64
+                    }
+                    None => -9,
+                }
             }
             LINUX_SYS_OPEN => {
                 // Allouer un nouveau FD mappé vers un Handle de capacité
-                for slot in self.fds.iter_mut().skip(3) {
+                for (idx, slot) in self.fds.iter_mut().enumerate().skip(3) {
                     if slot.is_none() {
-                        let new_fd = 3;
+                        let new_fd = idx as i32;
                         *slot = Some(PosixFd {
                             fd: new_fd,
-                            cap_handle: Handle::new(50, 1),
-                            flags: cap_rights::READ,
+                            cap_handle: Handle::new(50 + idx as u32, 1),
+                            flags: cap_rights::READ | cap_rights::WRITE,
                             offset: 0,
                         });
                         return new_fd as i64;
@@ -121,7 +141,7 @@ impl LinuxProcessEmulator {
             }
             LINUX_SYS_CLOSE => {
                 let fd = a1 as i32;
-                if fd >= 0 && (fd as usize) < MAX_FDS {
+                if fd >= 0 && (fd as usize) < MAX_FDS && self.fds[fd as usize].is_some() {
                     self.fds[fd as usize] = None;
                     0 // Success
                 } else {
@@ -129,6 +149,10 @@ impl LinuxProcessEmulator {
                 }
             }
             LINUX_SYS_GETPID => self.pid as i64,
+            LINUX_SYS_UNAME => 0,        // Success (utsname simulé)
+            LINUX_SYS_IOCTL => 0,        // Success (TCGETS terminal info)
+            LINUX_SYS_FCNTL => 0,        // Success
+            LINUX_SYS_GETTIMEOFDAY => 0, // Success
             LINUX_SYS_BRK => {
                 let requested = a1;
                 if requested != 0 && requested >= self.brk_current {
@@ -144,5 +168,46 @@ impl LinuxProcessEmulator {
             LINUX_SYS_EXIT => 0,
             _ => -38, // ENOSYS
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_linux_emulator_syscalls() {
+        let mut emu = LinuxProcessEmulator::new(1001);
+        assert_eq!(
+            emu.handle_linux_syscall(LINUX_SYS_GETPID, 0, 0, 0, 0, 0, 0),
+            1001
+        );
+        assert_eq!(
+            emu.handle_linux_syscall(LINUX_SYS_UNAME, 0, 0, 0, 0, 0, 0),
+            0
+        );
+
+        // stdout is writable
+        assert_eq!(
+            emu.handle_linux_syscall(LINUX_SYS_WRITE, 1, 0, 16, 0, 0, 0),
+            16
+        );
+        // stdin is read-only -> write fails with EBADF (-9)
+        assert_eq!(
+            emu.handle_linux_syscall(LINUX_SYS_WRITE, 0, 0, 16, 0, 0, 0),
+            -9
+        );
+
+        // Open and close
+        let new_fd = emu.handle_linux_syscall(LINUX_SYS_OPEN, 0, 0, 0, 0, 0, 0);
+        assert!(new_fd >= 3);
+        assert_eq!(
+            emu.handle_linux_syscall(LINUX_SYS_CLOSE, new_fd as u64, 0, 0, 0, 0, 0),
+            0
+        );
+        assert_eq!(
+            emu.handle_linux_syscall(LINUX_SYS_CLOSE, new_fd as u64, 0, 0, 0, 0, 0),
+            -9
+        );
     }
 }

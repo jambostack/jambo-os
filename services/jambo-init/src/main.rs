@@ -381,12 +381,23 @@ pub extern "C" fn _start() -> ! {
     assert!(app.initialized);
     assert!(app.stopped);
 
-    // 9. Couche de compatibilité applicative Linux et Runtime WebAssembly/WASI (Phase 13)
+    // 9. Couche de compatibilité applicative Linux et Runtime WebAssembly/WASI (Phase 13 - v0.2.11)
     let mut linux_emu = jambo_linux::LinuxProcessEmulator::new(1001);
 
     // Vérification des appels système Linux interceptés et traduits
     let pid_res = linux_emu.handle_linux_syscall(jambo_linux::LINUX_SYS_GETPID, 0, 0, 0, 0, 0, 0);
     assert_eq!(pid_res, 1001);
+
+    let uname_res = linux_emu.handle_linux_syscall(jambo_linux::LINUX_SYS_UNAME, 0, 0, 0, 0, 0, 0);
+    assert_eq!(uname_res, 0);
+
+    let ioctl_res =
+        linux_emu.handle_linux_syscall(jambo_linux::LINUX_SYS_IOCTL, 1, 0x5401, 0, 0, 0, 0);
+    assert_eq!(ioctl_res, 0);
+
+    // Sécurité POSIX : Rejet d'écriture sur stdin (lecture seule)
+    let bad_write = linux_emu.handle_linux_syscall(jambo_linux::LINUX_SYS_WRITE, 0, 0, 32, 0, 0, 0);
+    assert_eq!(bad_write, -9); // EBADF
 
     let open_fd = linux_emu.handle_linux_syscall(jambo_linux::LINUX_SYS_OPEN, 0, 0, 0, 0, 0, 0);
     assert!(open_fd >= 3);
@@ -406,7 +417,7 @@ pub extern "C" fn _start() -> ! {
         linux_emu.handle_linux_syscall(jambo_linux::LINUX_SYS_CLOSE, open_fd as u64, 0, 0, 0, 0, 0);
     assert_eq!(close_res, 0);
 
-    // Runtime WebAssembly et sandboxing WASI
+    // Runtime WebAssembly et sandboxing WASI (v0.2.11)
     let mut wasm_vm = jambo_wasm::WasmEngine::new();
     let sample_wasm_binary: [u8; 8] = [0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00]; // En-tête officiel Wasm v1
     let mut wasm_instance = wasm_vm
@@ -426,11 +437,29 @@ pub extern "C" fn _start() -> ! {
         b"JamboWasm"
     );
 
+    // Sécurité Sandbox Wasm : Tentative d'écriture hors-bornes strictement interceptée
+    let out_of_bounds = wasm_instance
+        .memory
+        .write_memory(4090, b"payload exceeding sandboxed memory buffer");
+    assert_eq!(out_of_bounds, Err(libjambo::SysError::BadAddress));
+
+    // Appels d'imports WASI (fd_write & clock_time_get)
+    let wasi_written = wasm_instance
+        .wasi_fd_write(1, b"WASI host output")
+        .expect("WASI fd_write");
+    assert_eq!(wasi_written, 16);
+
+    let wasi_time = wasm_instance
+        .wasi_clock_time_get(0)
+        .expect("WASI clock_time_get");
+    assert!(wasi_time > 0);
+
     // Exécution du point d'entrée WASI _start
     let exit_code = wasm_vm
         .invoke_export(&mut wasm_instance, "_start")
         .expect("Invoke Wasm export");
     assert_eq!(exit_code, 0);
+    assert_eq!(wasm_instance.exit_code, Some(0));
 
     // 10. Sous-système d'IA locale en espace utilisateur (Phase 15 - jambo-aid)
     let mut ai_index = jambo_aid::SemanticIndex::new();

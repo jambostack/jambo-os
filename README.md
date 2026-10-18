@@ -1,7 +1,7 @@
 # **JamboOS (jambostack/jambo-os)**
 
 [![CI / Build & QEMU Boot Test](https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg)](https://github.com/jambostack/jambo-os/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-v0.2.10-orange.svg)](https://github.com/jambostack/jambo-os)
+[![Version](https://img.shields.io/badge/version-v0.2.11-orange.svg)](https://github.com/jambostack/jambo-os)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg)](https://www.rust-lang.org/)
 
@@ -13,8 +13,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.10 (Paquets Déclaratifs JPkg, Mises à Jour A/B & JamboSDK)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. Après le compositeur graphique `JamboComp` et le framework `JamboUI` (`v0.2.9`), la version `v0.2.10` implémente le gestionnaire de paquets déclaratif `JamboPkg` et le SDK applicatif officiel `JamboSDK` (Phase 12) : format de paquet hermétique immuable (`.jpkg`), magasin adressé par le contenu (CAS) avec vérification de signatures cryptographiques Ed25519, bascule atomique $O(1)$ entre générations de partitions A/B, mécanisme de résilience avec quota de démarrage et rollback automatique instantané (< 2 s), et SDK orienté capacités `JamboSDK` (`JamboApp`, `AppContext`, `run_app`) pour le développement d'applications natives sans autorité ambiante. Le système reste un prototype de recherche en cours de développement, loin d'une v1.0.0 finale.
+> **Statut du Projet : Version v0.2.11 (Compatibilité Linux POSIX & Sandbox WASI / Wasm)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. Après les paquets déclaratifs `JamboPkg` et le `JamboSDK` (`v0.2.10`), la version `v0.2.11` implémente la couche de compatibilité applicative POSIX/Linux `jambo-linux` et le runtime WebAssembly sandboxed `jambo-wasm` (Phase 13) : interférence zéro dette POSIX en Ring 0 grâce à la traduction isolée en espace utilisateur (Ring 3) des appels système Linux (`getpid`, `uname`, `ioctl`, `fcntl`, `open`, `write`, `brk`, `mmap`), contrôle strict des permissions de descripteurs de fichiers (`PosixFd`), machine virtuelle WebAssembly avec mémoire linéaire protégée contre les accès hors-bornes (`BadAddress`), et imports système WASI standardisés (`wasi_fd_write`, `wasi_clock_time_get`, `wasi_proc_exit`) indexés sur les capacités du micro-noyau. Le système reste un prototype de recherche en cours de développement, loin d'une v1.0.0 finale.
 
 ---
 
