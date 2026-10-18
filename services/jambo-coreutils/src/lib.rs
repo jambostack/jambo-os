@@ -5,7 +5,8 @@
 
 #![no_std]
 
-use libjambo::{Handle, SysError};
+use jambo_sh::{ArgumentCapability, ObjectRecord, StructuredPipeline};
+use libjambo::{cap_rights, Handle, SysError};
 
 /// Entrée de processus pour la commande `ps`
 #[derive(Debug, Clone, Copy)]
@@ -67,6 +68,20 @@ impl CmdPs {
             },
         ]
     }
+
+    /// Génère un flux d'objets structurés pour le pipeline du shell
+    pub fn pipeline() -> StructuredPipeline {
+        let mut pipe = StructuredPipeline::empty();
+        for p in Self::list_processes() {
+            let _ = pipe.push(ObjectRecord::Process {
+                pid: p.pid,
+                name: p.name,
+                memory_pages: p.memory_pages,
+                cap_count: p.cap_count,
+            });
+        }
+        pipe
+    }
 }
 
 /// Entrée de capacité pour la commande `capstat`
@@ -108,6 +123,75 @@ impl CmdCapStat {
             },
         ])
     }
+
+    /// Génère un pipeline structuré inspectant les capacités du processus
+    pub fn pipeline(pid: u64) -> Result<StructuredPipeline, SysError> {
+        let entries = Self::inspect_cspace(pid)?;
+        let mut pipe = StructuredPipeline::empty();
+        for c in entries {
+            let _ = pipe.push(ObjectRecord::Capability {
+                handle: c.handle,
+                object_type: c.object_type,
+                rights_mask: c.rights_mask,
+            });
+        }
+        Ok(pipe)
+    }
+}
+
+/// Commande `cat` : Lecture confinée par capacité (Zéro autorité ambiante)
+pub struct CmdCat;
+
+impl CmdCat {
+    /// Lit le contenu d'un fichier UNIQUEMENT si la capacité fournie possède le droit cap_rights::READ
+    pub fn read_confined<'a>(
+        cap: &ArgumentCapability,
+        data: &'a [u8],
+    ) -> Result<&'a [u8], SysError> {
+        if (cap.rights & cap_rights::READ) == 0 {
+            return Err(SysError::PermissionDenied);
+        }
+        if cap.granted_handle.is_null() {
+            return Err(SysError::InvalidHandle);
+        }
+        Ok(data)
+    }
+}
+
+/// Commande `filter` : Filtrage d'objets structurés dans un pipeline
+pub struct CmdFilter;
+
+impl CmdFilter {
+    /// Filtre les processus ayant au moins un certain nombre de capacités
+    pub fn filter_by_min_caps(
+        pipeline: &StructuredPipeline,
+        min_caps: usize,
+    ) -> StructuredPipeline {
+        pipeline.filter(|rec| match rec {
+            ObjectRecord::Process { cap_count, .. } => *cap_count >= min_caps,
+            _ => false,
+        })
+    }
+
+    /// Filtre les processus occupant au moins une quantité de mémoire (pages)
+    pub fn filter_by_min_memory(
+        pipeline: &StructuredPipeline,
+        min_pages: usize,
+    ) -> StructuredPipeline {
+        pipeline.filter(|rec| match rec {
+            ObjectRecord::Process { memory_pages, .. } => *memory_pages >= min_pages,
+            _ => false,
+        })
+    }
+
+    /// Filtre les entités d'un pipeline par préfixe de nom
+    pub fn filter_by_prefix(pipeline: &StructuredPipeline, prefix: &str) -> StructuredPipeline {
+        pipeline.filter(|rec| match rec {
+            ObjectRecord::Process { name, .. } => name.starts_with(prefix),
+            ObjectRecord::FileEntry { name, .. } => name.starts_with(prefix),
+            _ => false,
+        })
+    }
 }
 
 /// Commande `top` : Métriques temps-réel
@@ -130,5 +214,41 @@ impl CmdJpkg {
         }
         // Vérifie que l'empreinte BLAKE3 est valide et non nulle
         expected_blake3_hash.iter().any(|&b| b != 0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_cmd_cat_confined() {
+        let read_cap = ArgumentCapability {
+            target_resource_id: 1,
+            granted_handle: Handle::new(10, 1),
+            rights: cap_rights::READ,
+        };
+        let content = b"hello capability world";
+        let res = CmdCat::read_confined(&read_cap, content);
+        assert_eq!(res, Ok(&content[..]));
+
+        let no_rights_cap = ArgumentCapability {
+            target_resource_id: 1,
+            granted_handle: Handle::new(10, 1),
+            rights: 0,
+        };
+        assert_eq!(
+            CmdCat::read_confined(&no_rights_cap, content),
+            Err(SysError::PermissionDenied)
+        );
+    }
+
+    #[test]
+    fn test_coreutils_pipeline() {
+        let pipe = CmdPs::pipeline();
+        assert_eq!(pipe.count(), 6);
+
+        let filtered = CmdFilter::filter_by_min_caps(&pipe, 8);
+        assert_eq!(filtered.count(), 3);
     }
 }

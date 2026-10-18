@@ -177,21 +177,47 @@ pub extern "C" fn _start() -> ! {
     assert_eq!(status, jambo_sh::ShellStatus::Success);
 
     // Vérifie que seule la capacité nécessaire à l'argument a été transmise (Zéro autorité ambiante)
-    let caps_granted = shell
-        .verify_capability_isolation("cat /etc/hosts /var/log/syslog")
-        .expect("Vérification isolation");
-    assert_eq!(caps_granted, 2);
+    let parsed_cmd = shell.parse_and_confine("cat /etc/hosts /var/log/syslog");
+    assert_eq!(parsed_cmd.cap_count, 2);
+    let cat_cap = parsed_cmd.capabilities[0].unwrap();
+
+    // Validation du confinement strict de CmdCat (Zero Ambient Authority)
+    let hosts_data = b"127.0.0.1 localhost\n::1 localhost";
+    let cat_read =
+        jambo_coreutils::CmdCat::read_confined(&cat_cap, hosts_data).expect("CmdCat read confined");
+    assert_eq!(cat_read, hosts_data);
+
+    // Tentative d'accès avec une capacité sans droit de lecture : rejet immédiat
+    let unauth_cap = jambo_sh::ArgumentCapability {
+        target_resource_id: 999,
+        granted_handle: libjambo::Handle::new(99, 1),
+        rights: 0, // Aucun droit READ
+    };
+    assert_eq!(
+        jambo_coreutils::CmdCat::read_confined(&unauth_cap, hosts_data),
+        Err(libjambo::SysError::PermissionDenied)
+    );
 
     // Blocage strict d'une commande non autorisée
     let bad_status = shell.execute("evil_backdoor");
     assert_eq!(bad_status, jambo_sh::ShellStatus::PermissionDenied);
 
-    // Validation des utilitaires système
-    let processes = jambo_coreutils::CmdPs::list_processes();
-    assert_eq!(processes.len(), 6);
+    // Validation des pipelines d'objets structurés (v0.2.8 - ps | filter)
+    assert!(shell.is_pipeline("ps | filter caps >= 8"));
+    let proc_pipeline = jambo_coreutils::CmdPs::pipeline();
+    assert_eq!(proc_pipeline.count(), 6);
 
-    let cspace_entries = jambo_coreutils::CmdCapStat::inspect_cspace(1).expect("Inspect CSpace");
-    assert_eq!(cspace_entries.len(), 4);
+    // Pipeline structuré : ps | filter caps >= 8
+    let high_priv_procs = jambo_coreutils::CmdFilter::filter_by_min_caps(&proc_pipeline, 8);
+    assert_eq!(high_priv_procs.count(), 3); // jambo-init (14), pcie-bus-mgr (8), jambo-netd (12)
+
+    // Pipeline structuré : ps | filter memory >= 64 pages
+    let heavy_procs = jambo_coreutils::CmdFilter::filter_by_min_memory(&proc_pipeline, 64);
+    assert_eq!(heavy_procs.count(), 2); // nvme-drv (64), jambo-netd (128)
+
+    // Pipeline de CSpace
+    let cspace_pipe = jambo_coreutils::CmdCapStat::pipeline(1).expect("Inspect CSpace pipeline");
+    assert_eq!(cspace_pipe.count(), 4);
 
     let (cpu_pct, free_pages, _slub_allocs) = jambo_coreutils::CmdTop::system_metrics();
     assert!(cpu_pct <= 100);

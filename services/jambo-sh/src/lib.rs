@@ -35,6 +35,119 @@ pub struct ParsedCommand<'a> {
     pub cap_count: usize,
 }
 
+/// Enregistrement structuré échangé au sein des pipelines du shell (zéro flux textuel brut)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ObjectRecord {
+    Process {
+        pid: u64,
+        name: &'static str,
+        memory_pages: usize,
+        cap_count: usize,
+    },
+    Capability {
+        handle: Handle,
+        object_type: &'static str,
+        rights_mask: u32,
+    },
+    FileEntry {
+        name: &'static str,
+        size_bytes: usize,
+        is_directory: bool,
+    },
+    Metric {
+        name: &'static str,
+        value: u64,
+        unit: &'static str,
+    },
+}
+
+impl ObjectRecord {
+    pub const fn record_type(&self) -> &'static str {
+        match self {
+            Self::Process { .. } => "Process",
+            Self::Capability { .. } => "Capability",
+            Self::FileEntry { .. } => "FileEntry",
+            Self::Metric { .. } => "Metric",
+        }
+    }
+}
+
+/// Capacité maximale d'éléments en transit dans un pipeline d'objets (environnement no_std)
+pub const MAX_PIPELINE_RECORDS: usize = 16;
+
+/// Pipeline d'objets typés garantissant l'intégrité sans désérialisation textuelle non sécurisée
+#[derive(Debug, Clone, Copy)]
+pub struct StructuredPipeline {
+    pub records: [Option<ObjectRecord>; MAX_PIPELINE_RECORDS],
+    pub count: usize,
+}
+
+impl Default for StructuredPipeline {
+    fn default() -> Self {
+        Self::empty()
+    }
+}
+
+impl StructuredPipeline {
+    pub const fn empty() -> Self {
+        Self {
+            records: [None; MAX_PIPELINE_RECORDS],
+            count: 0,
+        }
+    }
+
+    pub fn from_slice(slice: &[ObjectRecord]) -> Self {
+        let mut pipe = Self::empty();
+        for &item in slice {
+            if pipe.push(item).is_err() {
+                break;
+            }
+        }
+        pipe
+    }
+
+    pub fn push(&mut self, record: ObjectRecord) -> Result<(), SysError> {
+        if self.count >= MAX_PIPELINE_RECORDS {
+            return Err(SysError::OutOfMemory);
+        }
+        self.records[self.count] = Some(record);
+        self.count += 1;
+        Ok(())
+    }
+
+    pub const fn count(&self) -> usize {
+        self.count
+    }
+
+    pub const fn is_empty(&self) -> bool {
+        self.count == 0
+    }
+
+    pub fn get(&self, index: usize) -> Option<&ObjectRecord> {
+        if index < self.count {
+            self.records[index].as_ref()
+        } else {
+            None
+        }
+    }
+
+    /// Filtre les enregistrements du pipeline via un prédicat
+    pub fn filter<F>(&self, mut predicate: F) -> Self
+    where
+        F: FnMut(&ObjectRecord) -> bool,
+    {
+        let mut result = Self::empty();
+        for i in 0..self.count {
+            if let Some(rec) = &self.records[i] {
+                if predicate(rec) {
+                    let _ = result.push(*rec);
+                }
+            }
+        }
+        result
+    }
+}
+
 /// Interpréteur de commandes JamboShell
 pub struct JamboShell {
     pub prompt_user: &'static str,
@@ -128,7 +241,7 @@ impl JamboShell {
             "help" => ShellStatus::Success,
             "version" => ShellStatus::Success,
             "capstat" => ShellStatus::Success,
-            "ps" | "ls" | "top" | "jpkg" => {
+            "ps" | "ls" | "top" | "jpkg" | "cat" | "filter" => {
                 // Commandes valides exécutées avec confinement par capacités
                 ShellStatus::Success
             }
@@ -140,10 +253,70 @@ impl JamboShell {
         }
     }
 
+    /// Détecte si une commande utilise un pipeline d'objets structurés ('|')
+    pub fn is_pipeline(&self, line: &str) -> bool {
+        line.contains('|')
+    }
+
+    /// Filtre les processus d'un pipeline par seuil minimal de capacités
+    pub fn pipe_filter_by_min_caps(
+        &self,
+        pipeline: &StructuredPipeline,
+        min_caps: usize,
+    ) -> StructuredPipeline {
+        pipeline.filter(|rec| match rec {
+            ObjectRecord::Process { cap_count, .. } => *cap_count >= min_caps,
+            _ => false,
+        })
+    }
+
     /// Vérifie la conformité de l'isolation : aucun accès ambiant transmis
     pub fn verify_capability_isolation(&self, line: &str) -> Result<usize, SysError> {
         let parsed = self.parse_and_confine(line);
         // Doit accorder exactement le nombre de capacités nécessaires aux arguments passés
         Ok(parsed.cap_count)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_pipeline_creation_and_filtering() {
+        let mut pipe = StructuredPipeline::empty();
+        assert!(pipe.is_empty());
+        assert_eq!(pipe.count(), 0);
+
+        pipe.push(ObjectRecord::Process {
+            pid: 1,
+            name: "init",
+            memory_pages: 32,
+            cap_count: 14,
+        })
+        .unwrap();
+
+        pipe.push(ObjectRecord::Process {
+            pid: 2,
+            name: "sh",
+            memory_pages: 16,
+            cap_count: 4,
+        })
+        .unwrap();
+
+        assert_eq!(pipe.count(), 2);
+        let filtered = pipe.filter(|rec| match rec {
+            ObjectRecord::Process { cap_count, .. } => *cap_count >= 10,
+            _ => false,
+        });
+        assert_eq!(filtered.count(), 1);
+    }
+
+    #[test]
+    fn test_shell_confinement() {
+        let shell = JamboShell::new();
+        let parsed = shell.parse_and_confine("cat /file1 /file2");
+        assert_eq!(parsed.cap_count, 2);
+        assert_eq!(parsed.name, "cat");
     }
 }
