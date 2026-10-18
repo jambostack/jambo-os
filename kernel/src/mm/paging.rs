@@ -46,11 +46,16 @@ pub fn invlpg(vaddr: usize) {
 }
 
 /// Mappe une page virtuelle 4 Kio vers une page physique 4 Kio dans l'arborescence PML4
-pub unsafe fn map_page(pml4: &mut PageTable, vaddr: usize, paddr: usize, flags: u64) -> Result<(), &'static str> {
+pub unsafe fn map_page(
+    pml4: &mut PageTable,
+    vaddr: usize,
+    paddr: usize,
+    flags: u64,
+) -> Result<(), &'static str> {
     let pml4_idx = (vaddr >> 39) & 0x1ff;
     let pdpt_idx = (vaddr >> 30) & 0x1ff;
-    let pd_idx   = (vaddr >> 21) & 0x1ff;
-    let pt_idx   = (vaddr >> 12) & 0x1ff;
+    let pd_idx = (vaddr >> 21) & 0x1ff;
+    let pt_idx = (vaddr >> 12) & 0x1ff;
 
     // Niveau 4 (PML4) -> Niveau 3 (PDPT)
     let pdpt = get_or_create_table(&mut pml4.entries[pml4_idx], flags)?;
@@ -72,8 +77,8 @@ pub unsafe fn map_page(pml4: &mut PageTable, vaddr: usize, paddr: usize, flags: 
 pub unsafe fn unmap_page(pml4: &mut PageTable, vaddr: usize) -> Result<(), &'static str> {
     let pml4_idx = (vaddr >> 39) & 0x1ff;
     let pdpt_idx = (vaddr >> 30) & 0x1ff;
-    let pd_idx   = (vaddr >> 21) & 0x1ff;
-    let pt_idx   = (vaddr >> 12) & 0x1ff;
+    let pd_idx = (vaddr >> 21) & 0x1ff;
+    let pt_idx = (vaddr >> 12) & 0x1ff;
 
     let pml4e = pml4.entries[pml4_idx];
     if (pml4e & PAGE_PRESENT) == 0 {
@@ -99,7 +104,10 @@ pub unsafe fn unmap_page(pml4: &mut PageTable, vaddr: usize) -> Result<(), &'sta
     Ok(())
 }
 
-unsafe fn get_or_create_table(entry: &mut u64, inherit_flags: u64) -> Result<&'static mut PageTable, &'static str> {
+unsafe fn get_or_create_table(
+    entry: &mut u64,
+    inherit_flags: u64,
+) -> Result<&'static mut PageTable, &'static str> {
     if (*entry & PAGE_PRESENT) != 0 {
         let paddr = (*entry & PHYS_ADDR_MASK) as usize;
         let vaddr = phys_to_virt(paddr);

@@ -1,8 +1,8 @@
 extern crate alloc;
+use super::pmm::{alloc_page, free_page, phys_to_virt, PAGE_SIZE};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use spin::Mutex;
-use super::pmm::{alloc_page, free_page, phys_to_virt, PAGE_SIZE};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VmoType {

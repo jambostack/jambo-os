@@ -1,6 +1,6 @@
-use core::arch::global_asm;
 use crate::arch::x86_64::apic::{rdmsr, wrmsr};
 use crate::arch::x86_64::gdt::{KERNEL_CODE_SEL, USER_DATA_SEL};
+use core::arch::global_asm;
 
 pub const IA32_EFER_MSR: u32 = 0xC0000080;
 pub const IA32_STAR_MSR: u32 = 0xC0000081;

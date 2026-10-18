@@ -1,10 +1,12 @@
 extern crate alloc;
+use super::paging::{
+    map_page, unmap_page, PageTable, PAGE_NO_EXECUTE, PAGE_PRESENT, PAGE_USER, PAGE_WRITABLE,
+};
+use super::pmm::{alloc_page, phys_to_virt, PAGE_SIZE};
+use super::vmo::Vmo;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use spin::Mutex;
-use super::paging::{map_page, unmap_page, PageTable, PAGE_PRESENT, PAGE_USER, PAGE_WRITABLE, PAGE_NO_EXECUTE};
-use super::pmm::{alloc_page, phys_to_virt, PAGE_SIZE};
-use super::vmo::Vmo;
 
 pub struct VmoMapping {
     pub vaddr: usize,
@@ -77,7 +79,9 @@ impl AddressSpace {
             }
         }
 
-        self.mappings.lock().retain(|m| !(m.vaddr >= vaddr && m.vaddr < vaddr + size));
+        self.mappings
+            .lock()
+            .retain(|m| !(m.vaddr >= vaddr && m.vaddr < vaddr + size));
         Ok(())
     }
 }

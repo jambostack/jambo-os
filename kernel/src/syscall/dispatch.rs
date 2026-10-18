@@ -1,6 +1,6 @@
-use jambo_abi::{cap_rights, Handle, SysError};
 use crate::cap::{KernelObject, KERNEL_CSPACE};
 use crate::mm::Vmo;
+use jambo_abi::{cap_rights, Handle, SysError};
 
 #[no_mangle]
 pub extern "C" fn dispatch_syscall(
@@ -22,7 +22,9 @@ pub extern "C" fn dispatch_syscall(
             match cspace.duplicate(handle, rights) {
                 Ok(new_handle) => {
                     if !out_ptr.is_null() {
-                        unsafe { *out_ptr = new_handle.0; }
+                        unsafe {
+                            *out_ptr = new_handle.0;
+                        }
                     }
                     SysError::Success as i64
                 }
@@ -51,7 +53,9 @@ pub extern "C" fn dispatch_syscall(
             let handle = cspace.insert(KernelObject::Vmo(vmo), cap_rights::ALL);
 
             if !out_handle.is_null() {
-                unsafe { *out_handle = handle.0; }
+                unsafe {
+                    *out_handle = handle.0;
+                }
             }
             SysError::Success as i64
         }
@@ -71,10 +75,14 @@ pub extern "C" fn dispatch_syscall(
             let h2 = cspace.insert(KernelObject::Channel(2), cap_rights::ALL);
 
             if !out_h1.is_null() {
-                unsafe { *out_h1 = h1.0; }
+                unsafe {
+                    *out_h1 = h1.0;
+                }
             }
             if !out_h2.is_null() {
-                unsafe { *out_h2 = h2.0; }
+                unsafe {
+                    *out_h2 = h2.0;
+                }
             }
             SysError::Success as i64
         }

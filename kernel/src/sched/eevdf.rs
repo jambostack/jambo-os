@@ -1,9 +1,9 @@
 extern crate alloc;
+use super::context::switch_context;
+use super::thread::{Thread, ThreadState};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use spin::Mutex;
-use super::context::switch_context;
-use super::thread::{Thread, ThreadState};
 
 pub struct EevdfScheduler {
     runqueue: Vec<Arc<Mutex<Thread>>>,

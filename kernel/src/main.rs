@@ -63,7 +63,11 @@ unsafe extern "C" fn ap_start(info: &limine::mp::MpInfo) -> ! {
     arch::init_idt();
     arch::init_per_cpu(info.processor_id, info.lapic_id, false);
     ACTIVE_CPUS.fetch_add(1, Ordering::SeqCst);
-    kprintln!("[SMP] Cœur AP #{} démarré (LAPIC ID: {})", info.processor_id, info.lapic_id);
+    kprintln!(
+        "[SMP] Cœur AP #{} démarré (LAPIC ID: {})",
+        info.processor_id,
+        info.lapic_id
+    );
     loop {
         core::arch::asm!("hlt", options(nomem, nostack, preserves_flags));
     }
@@ -277,15 +281,8 @@ pub extern "C" fn _start() -> ! {
     );
 
     let mut created_handle: u64 = 0;
-    let ret = syscall::dispatch_syscall(
-        4,
-        4096,
-        0,
-        &mut created_handle as *mut u64 as u64,
-        0,
-        0,
-        0,
-    );
+    let ret =
+        syscall::dispatch_syscall(4, 4096, 0, &mut created_handle as *mut u64 as u64, 0, 0, 0);
     kprintln!(
         "[SYSCALL] Appel système vmo_create validé (Code retour: {}, Nouveau Handle: {:#x})",
         ret,

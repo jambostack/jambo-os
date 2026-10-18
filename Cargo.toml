@@ -5,6 +5,9 @@ members = [
     "kernel",
     "libs/libjambo",
     "xtask",
+    "services/jambo-init",
+    "services/jambo-fs",
+    "drivers/virtio",
 ]
 
 [profile.dev]

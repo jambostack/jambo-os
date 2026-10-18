@@ -3,6 +3,12 @@
 pub use jambo_abi::*;
 
 /// Wrapper d'appel système brut pour x86-64
+///
+/// # Safety
+///
+/// Cette fonction effectue un appel système direct via l'instruction assembleur `SYSCALL`.
+/// L'appelant doit s'assurer que les arguments passés sont valides et correspondent aux
+/// préconditions définies dans l'ABI JamboOS.
 #[cfg(target_arch = "x86_64")]
 #[inline(always)]
 pub unsafe fn syscall6(

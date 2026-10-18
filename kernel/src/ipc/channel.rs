@@ -1,7 +1,7 @@
 extern crate alloc;
 use alloc::collections::VecDeque;
-use spin::Mutex;
 use jambo_abi::{Handle, SysError};
+use spin::Mutex;
 
 pub const MAX_FASTPATH_BYTES: usize = 64;
 pub const MAX_HANDLES: usize = 4;

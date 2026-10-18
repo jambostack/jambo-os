@@ -75,9 +75,12 @@ pub fn init_gdt() {
     // SAFETY: Initialisation matérielle exclusive au démarrage du processeur (BSP).
     unsafe {
         // 1. Configurer les piles d'exception dans le TSS
-        let double_fault_stack_top = (core::ptr::addr_of!(DOUBLE_FAULT_STACK.0) as *const u8 as u64) + STACK_SIZE as u64;
-        let nmi_stack_top = (core::ptr::addr_of!(NMI_STACK.0) as *const u8 as u64) + STACK_SIZE as u64;
-        let priv_stack_top = (core::ptr::addr_of!(PRIVILEGE_STACK.0) as *const u8 as u64) + STACK_SIZE as u64;
+        let double_fault_stack_top =
+            (core::ptr::addr_of!(DOUBLE_FAULT_STACK.0) as *const u8 as u64) + STACK_SIZE as u64;
+        let nmi_stack_top =
+            (core::ptr::addr_of!(NMI_STACK.0) as *const u8 as u64) + STACK_SIZE as u64;
+        let priv_stack_top =
+            (core::ptr::addr_of!(PRIVILEGE_STACK.0) as *const u8 as u64) + STACK_SIZE as u64;
 
         let tss = &mut *core::ptr::addr_of_mut!(TSS);
         tss.ist[DOUBLE_FAULT_IST_INDEX] = double_fault_stack_top;

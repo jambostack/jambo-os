@@ -1,9 +1,9 @@
 extern crate alloc;
+use super::thread::Thread;
+use crate::mm::AddressSpace;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use spin::Mutex;
-use crate::mm::AddressSpace;
-use super::thread::Thread;
 
 pub struct Process {
     pub id: u64,

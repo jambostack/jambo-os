@@ -1,9 +1,9 @@
 extern crate alloc;
+use crate::mm::Vmo;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use jambo_abi::{cap_rights, Handle, SysError};
 use spin::Mutex;
-use crate::mm::Vmo;
 
 #[derive(Clone)]
 pub enum KernelObject {

@@ -1,7 +1,7 @@
 extern crate alloc;
+use crate::mm::{phys_to_virt, PAGE_SIZE};
 use alloc::sync::Arc;
 use spin::Mutex;
-use crate::mm::{phys_to_virt, PAGE_SIZE};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ThreadState {
@@ -24,7 +24,11 @@ pub struct Thread {
 
 impl Thread {
     /// Crée un thread noyau avec sa propre pile de 16 Kio
-    pub fn new_kernel(id: u64, process_id: u64, entry: extern "C" fn()) -> Option<Arc<Mutex<Self>>> {
+    pub fn new_kernel(
+        id: u64,
+        process_id: u64,
+        entry: extern "C" fn(),
+    ) -> Option<Arc<Mutex<Self>>> {
         // Allouer 4 pages contiguës (16 Kio) pour la pile noyau
         let stack_paddr = super::super::mm::PMM.lock().allocate(2)?; // 2^2 = 4 pages = 16 Kio
         let stack_base = phys_to_virt(stack_paddr);
