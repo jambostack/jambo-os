@@ -47,9 +47,30 @@ impl EevdfScheduler {
         Some(next)
     }
 
+    /// Déclenché par le timer matériel (ex: APIC Timer à 100 Hz)
+    pub fn on_timer_tick() {
+        let should_reschedule = {
+            if let Some(sched) = SCHEDULER.try_lock() {
+                if let Some(ref curr) = sched.current {
+                    let mut thread = curr.lock();
+                    thread.vruntime += 1;
+                    thread.vruntime >= thread.deadline && !sched.runqueue.is_empty()
+                } else {
+                    !sched.runqueue.is_empty()
+                }
+            } else {
+                false
+            }
+        };
+
+        if should_reschedule {
+            Self::reschedule();
+        }
+    }
+
     /// Effectue un réordonnancement explicite (thread_yield ou fin de quantum)
     pub fn reschedule() {
-        let (prev_rsp_ptr, next_rsp) = {
+        let (prev_rsp_ptr, next_rsp, next_aspace, next_stack_top) = {
             let mut sched = SCHEDULER.lock();
             let next_thread = match sched.pick_next() {
                 Some(t) => t,
@@ -69,7 +90,10 @@ impl EevdfScheduler {
                     drop(curr);
                 }
 
-                let next_rsp = next_thread.lock().rsp;
+                let (next_rsp, next_aspace, next_stack_top) = {
+                    let guard = next_thread.lock();
+                    (guard.rsp, guard.aspace.clone(), guard.stack_top as u64)
+                };
                 sched.current = Some(next_thread);
 
                 let prev_rsp_ptr = {
@@ -77,15 +101,31 @@ impl EevdfScheduler {
                     &mut prev_guard.rsp as *mut u64
                 };
 
-                (prev_rsp_ptr, next_rsp)
+                (prev_rsp_ptr, next_rsp, next_aspace, next_stack_top)
             } else {
-                let next_guard = next_thread.lock();
-                let next_rsp = next_guard.rsp;
-                drop(next_guard);
+                let (next_rsp, next_aspace, next_stack_top) = {
+                    let guard = next_thread.lock();
+                    (guard.rsp, guard.aspace.clone(), guard.stack_top as u64)
+                };
                 sched.current = Some(next_thread);
-                (core::ptr::null_mut(), next_rsp)
+                (core::ptr::null_mut(), next_rsp, next_aspace, next_stack_top)
             }
         };
+
+        if let Some(ref aspace) = next_aspace {
+            #[cfg(target_arch = "x86_64")]
+            {
+                crate::mm::paging::write_cr3(aspace.pml4_paddr);
+                crate::arch::set_kernel_stack(next_stack_top);
+                crate::arch::set_current_kernel_stack(next_stack_top);
+            }
+        } else if next_stack_top != 0 {
+            #[cfg(target_arch = "x86_64")]
+            {
+                crate::arch::set_kernel_stack(next_stack_top);
+                crate::arch::set_current_kernel_stack(next_stack_top);
+            }
+        }
 
         if !prev_rsp_ptr.is_null() {
             unsafe {

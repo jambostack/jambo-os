@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.37-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.38-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.37 (Exécution en Espace Utilisateur & Aller-Retour Syscall Ring 3)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. Après le packaging de l'Initrd `initrd.tar` (`v0.2.36`), la version `v0.2.37` franchit le cap historique de l'exécution matérielle en espace utilisateur non privilégié (Phase 39) : transition CPL 0 $\to$ CPL 3 via `enter_user_mode` (`IRETQ` avec sélecteurs de segments GDT `0x23` et `0x1B`), exécution d'instructions en Ring 3, piégeage des appels système matériels `syscall` via `IA32_LSTAR` et retour déterministe en espace utilisateur par `sysretq`. Le superviseur démontre formellement l'isolation et la reprise d'exécution entre Ring 0 et Ring 3 sous QEMU.
+> **Statut du Projet : Version v0.2.38 (Timer APIC Local & Ordonnancement Préemptif EEVDF)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. Après la validation de l'exécution Ring 3 et de l'aller-retour Syscall (`v0.2.37`), la version `v0.2.38` implémente le multitâche préemptif par interruption matérielle (Phase 40) : configuration du Timer APIC Local en mode périodique (vecteur IDT 32 à 100 Hz), gestionnaire d'interruption temps réel avec acquittement EOI, incrémentation du temps virtuel EEVDF et commutation de contexte forcée sous interruption sans coopération préalable du thread actif.
 
 ---
 

@@ -7,7 +7,10 @@ pub mod iommu;
 pub mod qemu;
 pub mod serial;
 
-pub use apic::{disable_pic, has_x2apic, LocalApic, X2Apic, IA32_APIC_BASE_MSR};
+pub use apic::{
+    apic_eoi, apic_start_timer, apic_stop_timer, disable_pic, has_x2apic, init_apic, LocalApic,
+    X2Apic, IA32_APIC_BASE_MSR, LOCAL_APIC,
+};
 pub use cpu::{current_cpu, init_per_cpu, set_current_kernel_stack, PerCpuData, MAX_CPUS};
 pub use gdt::{init_gdt, set_kernel_stack};
 pub use idt::init_idt;

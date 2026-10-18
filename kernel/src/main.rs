@@ -143,7 +143,7 @@ pub extern "C" fn _start() -> ! {
     // 4. Bannière système d'accueil
     kprintln!("\x1b[1;36m");
     kprintln!("================================================================================");
-    kprintln!("    JAMBO-OS (JamboKernel v0.2.37) — Micro-noyau de 3e Génération             ");
+    kprintln!("    JAMBO-OS (JamboKernel v0.2.38) — Micro-noyau de 3e Génération             ");
     kprintln!("    Architecture : Micro-noyau orienté capacités en Rust no_std (x86_64/AArch64)");
     kprintln!("    Auteur & Architecte Principal : ASSOGBA Prudence Dieudonné                 ");
     kprintln!("    Dépôt Officiel : https://github.com/jambostack/jambo-os                    ");
@@ -266,14 +266,14 @@ pub extern "C" fn _start() -> ! {
         arch::disable_pic();
         kprintln!("[CPU/PIC] Contrôleur hérité PIC 8259 masqué");
 
+        arch::init_apic();
         if arch::has_x2apic() {
-            arch::X2Apic::init();
             kprintln!(
                 "[CPU/APIC] Mode moderne x2APIC activé via MSR (ID CPU : {})",
                 arch::X2Apic::id()
             );
         } else {
-            kprintln!("[CPU/APIC] Mode x2APIC non supporté par le CPU");
+            kprintln!("[CPU/APIC] Contrôleur Local APIC (xAPIC MMIO) initialisé");
         }
 
         arch::init_per_cpu(0, 0, true);
@@ -703,6 +703,13 @@ pub extern "C" fn _start() -> ! {
         "Échec du test de transition matérielle vers Ring 3"
     );
 
+    // 10ter. Validation du multitâche préemptif par Timer APIC (Phase 40 - v0.2.38)
+    let preempt_success = sched::execute_preemption_test();
+    assert!(
+        preempt_success,
+        "Échec du test de préemption matérielle par Timer APIC"
+    );
+
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
 
     arch::init_iommu();
@@ -820,14 +827,17 @@ pub extern "C" fn _start() -> ! {
     kprintln!(
         "\x1b[1;32m[PASS] Phase 39 Userspace Execution, Ring-3 Transition & Syscall Roundtrip Complete\x1b[0m"
     );
+    kprintln!(
+        "\x1b[1;32m[PASS] Phase 40 Local APIC Timer & Preemptive EEVDF Multitasking Complete\x1b[0m"
+    );
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.37 (Exécution Espace Utilisateur & Aller-Retour Syscall Ring 3)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.38 (Timer APIC Local & Ordonnancement Préemptif EEVDF)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.37 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.38 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );

@@ -1,5 +1,6 @@
 use super::io::outb;
 use core::arch::asm;
+use spin::Mutex;
 
 pub const IA32_APIC_BASE_MSR: u32 = 0x1B;
 pub const APIC_BASE_MSR_ENABLE: u64 = 1 << 11;
@@ -153,4 +154,84 @@ impl LocalApic {
     pub fn id(&self) -> u32 {
         unsafe { self.read_reg(APIC_REG_ID) >> 24 }
     }
+
+    /// Démarre le Timer APIC en mode périodique sur le vecteur spécifié
+    pub fn start_timer(&mut self, vector: u8, initial_count: u32, divide_by_16: bool) {
+        unsafe {
+            let div_val = if divide_by_16 { 0x3 } else { 0xB };
+            self.write_reg(APIC_REG_TIMER_DIV, div_val);
+            let lvt_val = (1 << 17) | (vector as u32);
+            self.write_reg(APIC_REG_LVT_TIMER, lvt_val);
+            self.write_reg(APIC_REG_TIMER_INIT_CNT, initial_count);
+        }
+    }
+
+    /// Arrête le Timer APIC
+    pub fn stop_timer(&mut self) {
+        unsafe {
+            self.write_reg(APIC_REG_LVT_TIMER, 1 << 16);
+            self.write_reg(APIC_REG_TIMER_INIT_CNT, 0);
+        }
+    }
 }
+
+pub static LOCAL_APIC: Mutex<Option<LocalApic>> = Mutex::new(None);
+
+/// Initialise l'APIC local (x2APIC MSR ou xAPIC MMIO selon support matériel)
+pub fn init_apic() {
+    if has_x2apic() {
+        X2Apic::init();
+    } else {
+        unsafe {
+            let base = rdmsr(IA32_APIC_BASE_MSR);
+            let paddr = (base & 0xFFFF_F000) as usize;
+            let vaddr = crate::mm::phys_to_virt(paddr) as u64;
+
+            // Mapper la page physique MMIO APIC dans le PML4 superviseur actif
+            let current_cr3 = crate::mm::read_cr3();
+            let pml4 = &mut *(crate::mm::phys_to_virt(current_cr3) as *mut crate::mm::PageTable);
+            let flags = 0x01 | 0x02 | (1 << 63); // PRESENT | WRITABLE | NO_EXECUTE
+            let _ = crate::mm::map_page(pml4, vaddr as usize, paddr, flags);
+
+            let mut lapic = LocalApic::new(vaddr);
+            lapic.init();
+            *LOCAL_APIC.lock() = Some(lapic);
+        }
+    }
+}
+
+/// Démarre le Timer APIC périodique sur le vecteur spécifié
+pub fn apic_start_timer(vector: u8, initial_count: u32) {
+    if has_x2apic() {
+        unsafe {
+            wrmsr(0x83E, 0x3); // Divide by 16
+            wrmsr(0x832, (1 << 17) | (vector as u64));
+            wrmsr(0x838, initial_count as u64);
+        }
+    } else if let Some(ref mut lapic) = *LOCAL_APIC.lock() {
+        lapic.start_timer(vector, initial_count, true);
+    }
+}
+
+/// Arrête le Timer APIC
+pub fn apic_stop_timer() {
+    if has_x2apic() {
+        unsafe {
+            wrmsr(0x832, 1 << 16);
+            wrmsr(0x838, 0);
+        }
+    } else if let Some(ref mut lapic) = *LOCAL_APIC.lock() {
+        lapic.stop_timer();
+    }
+}
+
+/// Envoie le signal EOI au contrôleur APIC
+#[inline]
+pub fn apic_eoi() {
+    if has_x2apic() {
+        X2Apic::eoi();
+    } else if let Some(ref lapic) = *LOCAL_APIC.lock() {
+        lapic.eoi();
+    }
+}
+
