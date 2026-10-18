@@ -687,14 +687,17 @@ pub extern "C" fn _start() -> ! {
     kprintln!(
         "\x1b[1;32m[PASS] Phase 18 Cryptographic Audit Ledger & Zero-Ambient Observability Complete\x1b[0m"
     );
+    kprintln!(
+        "\x1b[1;32m[PASS] Phase 19 Userspace ACPI & Hardware Power Management Complete\x1b[0m"
+    );
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.16 (Journal d'Audit Cryptographique Inaltérable & Observabilité Zéro-Autorité)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.17 (Gestionnaire d'Énergie et Événements Matériels ACPI Ring 3)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.16 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.17 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );

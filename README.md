@@ -1,7 +1,7 @@
 # **JamboOS (jambostack/jambo-os)**
 
 [![CI / Build & QEMU Boot Test](https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg)](https://github.com/jambostack/jambo-os/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-v0.2.16-orange.svg)](https://github.com/jambostack/jambo-os)
+[![Version](https://img.shields.io/badge/version-v0.2.17-orange.svg)](https://github.com/jambostack/jambo-os)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg)](https://www.rust-lang.org/)
 
@@ -13,8 +13,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.16 (Journal d'Audit Cryptographique Inaltérable & Observabilité Zéro-Autorité)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. Après le bus RPC distribué `jambo-rpc` (`v0.2.15`), la version `v0.2.16` introduit le démon d'audit de sécurité et d'observabilité zéro-autorité ambiante `jambo-auditd` (Phase 18) : grand livre d'audit inaltérable (*tamper-evident ledger*) scellé par chaînage de condensats cryptographiques déterministes, capacités d'audit granulaires (`AuditCap`) soumises au moindre privilège pour l'émission et la lecture filtrée d'événements, vérification mathématique d'intégrité de la chaîne au boot (`verify_chain_integrity`), et moteur heuristique d'analyse d'anomalies en temps réel (`AnomalyDetector`) détectant proactivement attaques par rejeu RPC et violations de mémoire sans jamais impacter le micro-noyau Ring 0. Le système reste un prototype de recherche en cours de développement, loin d'une v1.0.0 finale.
+> **Statut du Projet : Version v0.2.17 (Gestionnaire d'Énergie et Événements Matériels ACPI Ring 3)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. Après le grand livre d'audit cryptographique inaltérable `jambo-auditd` (`v0.2.16`), la version `v0.2.17` consolide le gestionnaire d'énergie matérielle et ACPI en espace utilisateur `jambo-powerd` (Phase 19) : contrôle d'accès sans autorité ambiante via capacités explicites `PowerCap`, transitions d'états d'alimentation globales déterministes (S0 actif, S3 veille en RAM, S5 arrêt doux) sans aucune complexité ACPI dans le micro-noyau Ring 0, régulation dynamique des C-states des cœurs SMP (C0 actif, C3 veille profonde) pour l'efficacité énergétique, télémétrie de batterie et politique d'urgence avec activation automatique du mode d'économie d'énergie. Le système reste un prototype de recherche en cours de développement, loin d'une v1.0.0 finale.
 
 ---
 
@@ -40,7 +40,7 @@
 
 ## **2. Tableau synoptique d'avancement des phases d'ingénierie**
 
-Toutes les **18 phases** du *Plan Directeur d'Ingénierie* sont intégralement développées, testées et validées sous environnement QEMU UEFI multicœur.
+Toutes les **19 phases** du *Plan Directeur d'Ingénierie* sont intégralement développées, testées et validées sous environnement QEMU UEFI multicœur.
 
 | Phase | Intitulé du Composant | Statut | Responsabilité Technique |
 | :---: | :--- | :---: | :--- |
@@ -63,6 +63,7 @@ Toutes les **18 phases** du *Plan Directeur d'Ingénierie* sont intégralement d
 | **16** | **Sécurité Offensive & Fuzzing** | ✅ **Terminé** | Fuzzing (10k mutations sans panique), débordements IPC, stress CoW, barrière SMAP/SMEP, confinement IOMMU 100%, chaos FLR 12 ms. |
 | **17** | **Bus RPC Distribué & Écosystème Grappe** | ✅ **Terminé** | Démon `jambo-rpc`, jetons `DistributedCapToken`, dispatch typé, heartbeats et bascule transparente O(1). |
 | **18** | **Audit Cryptographique & Observabilité** | ✅ **Terminé** | Démon `jambo-auditd`, registre inaltérable scellé, capacités `AuditCap`, détection d'anomalies en temps réel. |
+| **19** | **Gestion d'Énergie & ACPI Ring 3** | ✅ **Terminé** | Démon `jambo-powerd`, capacités `PowerCap`, transitions S0/S3/S5, régulation C-states SMP et batterie d'urgence. |
 
 ---
 

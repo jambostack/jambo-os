@@ -19,6 +19,7 @@ members = [
     "services/jambo-fuzz",
     "services/jambo-rpc",
     "services/jambo-auditd",
+    "services/jambo-powerd",
     "libs/jambo-ui",
     "libs/jambo-sdk",
     "drivers/virtio",

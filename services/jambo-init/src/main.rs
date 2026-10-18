@@ -710,6 +710,65 @@ pub extern "C" fn _start() -> ! {
         jambo_auditd::AnomalyType::PotentialRpcReplayAttack
     );
 
+    // 14. Gestionnaire d'Énergie et Événements Matériels ACPI Ring 3 (Phase 19 - jambo-powerd v0.2.17)
+    let fadt_info = jambo_powerd::AcpiFadtInfo::default();
+    let mut power_mgr = jambo_powerd::PowerManager::new(fadt_info);
+
+    // Contrôle d'accès sans autorité ambiante : rejet d'une tentative de mise en veille non autorisée
+    let query_only_cap = jambo_powerd::PowerCap::new(
+        libjambo::Handle::new(600, 1),
+        jambo_powerd::power_rights::BATTERY_QUERY,
+    );
+    let unauthorized_sleep =
+        power_mgr.transition_state(&query_only_cap, jambo_powerd::PowerState::S3SuspendToRam);
+    assert_eq!(
+        unauthorized_sleep,
+        Err(libjambo::SysError::PermissionDenied)
+    );
+
+    // Capacité d'administration de l'énergie légitime
+    let power_admin_cap = jambo_powerd::PowerCap::new(
+        libjambo::Handle::new(601, 1),
+        jambo_powerd::power_rights::SHUTDOWN
+            | jambo_powerd::power_rights::SUSPEND
+            | jambo_powerd::power_rights::THROTTLE
+            | jambo_powerd::power_rights::BATTERY_QUERY,
+    );
+
+    // Validation des transitions d'états ACPI (S0 -> S3 -> S0)
+    let s3_res =
+        power_mgr.transition_state(&power_admin_cap, jambo_powerd::PowerState::S3SuspendToRam);
+    assert_eq!(s3_res, Ok(jambo_powerd::PowerState::S3SuspendToRam));
+
+    let s0_res = power_mgr.transition_state(&power_admin_cap, jambo_powerd::PowerState::S0Working);
+    assert_eq!(s0_res, Ok(jambo_powerd::PowerState::S0Working));
+
+    // Régulation dynamique des C-states sur les cœurs de calcul SMP
+    let cstate_res = power_mgr.set_core_cstate(
+        &power_admin_cap,
+        2, // Cœur AP #2 inactif
+        jambo_powerd::CpuPowerState::C3DeepSleep,
+    );
+    assert!(cstate_res.is_ok());
+    assert_eq!(
+        power_mgr.cpu_cstates[2],
+        jambo_powerd::CpuPowerState::C3DeepSleep
+    );
+    assert_eq!(
+        power_mgr.cpu_cstates[0],
+        jambo_powerd::CpuPowerState::C0Active
+    );
+
+    // Évaluation de la télémétrie de batterie et politique de sauvegarde
+    power_mgr
+        .update_battery(&power_admin_cap, 12, false, 36)
+        .expect("Update battery telemetry");
+    assert_eq!(
+        power_mgr.evaluate_policy(),
+        jambo_powerd::PowerPolicyAction::EngageBatterySaver
+    );
+    assert!(power_mgr.power_saver_active);
+
     // Boucle de supervision de la santé des services Ring 3
     loop {
         unsafe {
