@@ -1,7 +1,7 @@
 # ROADMAP DU DÉVELOPPEMENT AUTONOME — JamboOS
 
-> **Dernière mise à jour** : 2026-10-19 17:25 UTC  
-> **Version actuelle** : `v0.2.82`  
+> **Dernière mise à jour** : 2026-10-19 17:40 UTC  
+> **Version actuelle** : `v0.2.83`  
 > **Statut global** : Pré-Alpha active — Micro-noyau de 3e génération orienté capacités (`#![no_std]`)  
 > **Cycle de développement autonome** : 10 minutes via le Planificateur de Tâches & Crons d'Antigravity WebUI  
 
@@ -71,26 +71,27 @@
 | **v0.2.80** | 82 | Watchdog `jambo-watchdogd` | Chien de garde matériel/logiciel, détection dérive event loop, isolation NMI, vivacité grappe, WatchdogCap | ✅ Validé |
 | **v0.2.81** | 83 | Core Dumps `jambo-cored` | Capture d'état post-mortem, crash dumps ELF64 scellés SHA-256, isolation mémoire & quarantaine, télémétrie post-crash, CoreCap | ✅ Validé |
 | **v0.2.82** | 84 | Livepatching `jambo-patchd` | Rechargement à chaud de binaires Ring 3, injection atomique de trampolines, quiescence de threads, conformité ABI, PatchCap | ✅ Validé |
+| **v0.2.83** | 85 | Profilage `jambo-profilerd` | Échantillonnage de compteurs de performance matérielle (PMC/PEBS), profils de flammes (Flamegraphs) et analyse de latence Ring 3 | ✅ Validé |
 
 ---
 
 ## 3. Prochaines Étapes Prioritaires
 
-### 🎯 Prochaine Tâche Immédiate : Phase 85 — v0.2.83
-* **Composant** : `services/jambo-profilerd`
-* **Objectif** : Échantillonnage de compteurs de performance matérielle (PMC/PEBS), profils de flammes (Flamegraphs) et analyse de latence Ring 3
-* **Tâches précises** :
-  1. Capture des événements matériels PMC (instructions, cycles, fautes de cache L1/L3, prédictions de branchement).
-  2. Échantillonnage non-intrusif de l'arbre d'appels et export de profils structurés scellés.
-  3. Validation `cargo xtask test` et commit `v0.2.83`.
-
-### 🎯 Tâche Suivante : Phase 86 — v0.2.84
+### 🎯 Prochaine Tâche Immédiate : Phase 86 — v0.2.84
 * **Composant** : `services/jambo-dbg`
 * **Objectif** : Débogage dynamique d'espace utilisateur, registres de points d'arrêt matériels DR0..DR7, pas à pas et introspection mémoire
 * **Tâches précises** :
   1. Gestion des exceptions de débogage INT1/INT3 et interception de points d'arrêt matériels.
   2. Inspection de la mémoire et des registres de threads sans interruption non sollicitée.
   3. Validation `cargo xtask test` et commit `v0.2.84`.
+
+### 🎯 Tâche Suivante : Phase 87 — v0.2.85
+* **Composant** : `services/jambo-dynlinkd`
+* **Objectif** : Édition de liens dynamiques Ring 3, bibliothèques partagées ELF64 `.jso`, tables GOT/PLT et résolution différée sous modèle capabilaire
+* **Tâches précises** :
+  1. Chargement et relocation dynamique de symboles ELF64 partagés dans l'espace d'adressage virtuel.
+  2. Tables de liaison GOT/PLT en mémoire protégée W^X et liaison paresseuse sécurisée.
+  3. Validation `cargo xtask test` et commit `v0.2.85`.
 
 ---
 
@@ -113,6 +114,8 @@
 * **2026-10-19 16:42 UTC** : Validation complète Phase 82 (`jambo-watchdogd`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test --workspace --lib`). Tag `v0.2.80`.
 * **2026-10-19 17:05 UTC** : Validation complète Phase 83 (`jambo-cored`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-cored`). Tag `v0.2.81`.
 * **2026-10-19 17:25 UTC** : Validation complète Phase 84 (`jambo-patchd`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-patchd`). Tag `v0.2.82`.
+* **2026-10-19 17:40 UTC** : Validation complète Phase 85 (`jambo-profilerd`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-profilerd`). Tag `v0.2.83`.
+
 
 
 

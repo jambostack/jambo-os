@@ -1,6 +1,6 @@
 [package]
 name = "jambo-init"
-version = "0.2.82"
+version = "0.2.83"
 edition = "2021"
 [lib]
 name = "jambo_init"

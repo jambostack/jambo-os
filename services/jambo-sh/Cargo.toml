@@ -1,6 +1,6 @@
 [package]
 name = "jambo-sh"
-version = "0.2.82"
+version = "0.2.83"
 edition = "2021"
 
 [lib]
@@ -38,6 +38,7 @@ jambo-metricsd = { path = "../jambo-metricsd" }
 jambo-netd = { path = "../jambo-netd" }
 jambo-pkgd = { path = "../jambo-pkgd" }
 jambo-patchd = { path = "../jambo-patchd" }
+jambo-profilerd = { path = "../jambo-profilerd" }
 jambo-policyd = { path = "../jambo-policyd" }
 jambo-powerd = { path = "../jambo-powerd" }
 jambo-raft = { path = "../jambo-raft" }

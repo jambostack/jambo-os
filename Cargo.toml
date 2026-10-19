@@ -49,6 +49,7 @@ members = [
     "services/jambo-watchdogd",
     "services/jambo-cored",
     "services/jambo-patchd",
+    "services/jambo-profilerd",
     "libs/jambo-ui",
     "libs/jambo-sdk",
     "drivers/virtio",

@@ -135,6 +135,7 @@ pub struct JamboShell {
     pub watchdog: jambo_watchdogd::JamboWatchdogDaemon,
     pub core: jambo_cored::JamboCoreDaemon,
     pub patch: jambo_patchd::JamboPatchDaemon,
+    pub profiler: jambo_profilerd::JamboProfilerDaemon,
 }
 
 impl Default for JamboShell {
@@ -299,6 +300,12 @@ impl JamboShell {
         );
         let mut patch = jambo_patchd::JamboPatchDaemon::new(1, patch_cap);
         patch.init_defaults();
+        let profiler_cap = jambo_profilerd::ProfileCap::new(
+            libjambo::Handle::new(8501, 1),
+            jambo_profilerd::profile_rights::ALL,
+        );
+        let mut profiler = jambo_profilerd::JamboProfilerDaemon::new(1, profiler_cap);
+        profiler.init_defaults();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -342,6 +349,7 @@ impl JamboShell {
             watchdog,
             core,
             patch,
+            profiler,
         }
     }
 
@@ -491,6 +499,7 @@ impl JamboShell {
                 emit("  secpolicy [cmd] - Attestation matérielle TPM 2.0 et confinement de grappe\n");
                 emit("  wall [cmd]   - Pare-feu distribué dynamique et synchronisation conntrack\n");
                 emit("  diag [cmd]   - Diagnostic matériel autonome, auto-réparation & télémétrie\n");
+                emit("  profiler [cmd]- Échantillonnage PMC/PEBS, Flamegraphs et analyse de latence Ring 3\n");
                 emit("  echo <args>  - Affiche les arguments sur la sortie console\n");
                 emit("  clear        - Efface l'écran du terminal (ANSI escape)\n");
                 emit("  reboot       - Redémarre la machine\n");
@@ -498,7 +507,7 @@ impl JamboShell {
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.2.78 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.2.83 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -2867,6 +2876,236 @@ impl JamboShell {
                     }
                     _ => {
                         emit("Usage: patch [status | list | view <id> | quiesce <id> | apply <id> | revert <id> | verify <id> | digest]\n");
+                        (ShellStatus::ExecutionFailed, write_pos)
+                    }
+                }
+            }
+            "profiler" | "perfctl" => {
+                let subcmd = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    "status"
+                };
+
+                match subcmd {
+                    "status" => {
+                        let mut b = [0u8; 20];
+                        emit("=== OBSERVABILITÉ & PROFILAGE MATÉRIEL (jambo-profilerd) ===\n");
+                        emit("Démon Profiler ID      : #");
+                        emit(format_u64(self.profiler.daemon_id as u64, &mut b));
+                        emit("\nÉchantillons Capturés  : ");
+                        emit(format_u64(self.profiler.stats.total_samples_collected, &mut b));
+                        emit("\nEnregistrements PEBS   : ");
+                        emit(format_u64(self.profiler.stats.total_pebs_records, &mut b));
+                        emit("\nÉvénements de Latence  : ");
+                        emit(format_u64(self.profiler.stats.total_latency_events, &mut b));
+                        emit("\nRapports Générés       : ");
+                        emit(format_u64(self.profiler.stats.total_reports_generated, &mut b));
+                        emit("\nSceaux SHA-256 Validés : ");
+                        emit(format_u64(self.profiler.stats.total_seals_verified, &mut b));
+                        emit("\nEntrées d'Audit        : ");
+                        emit(format_u64(self.profiler.stats.total_audit_entries, &mut b));
+                        emit("\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "pmc" => {
+                        let mut b = [0u8; 20];
+                        emit("=== COMPTEURS DE PERFORMANCE MATÉRIELLE (PMC) ===\n");
+                        emit("Instructions Retirées  : ");
+                        emit(format_u64(self.profiler.aggregated.instructions, &mut b));
+                        emit("\nCycles Processeur      : ");
+                        emit(format_u64(self.profiler.aggregated.cycles, &mut b));
+                        emit("\nIPC (Instructions/Cyc) : ");
+                        let (ipc_whole, ipc_frac) = self.profiler.aggregated.ipc_ratio();
+                        emit(format_u64(ipc_whole, &mut b));
+                        emit(".");
+                        if ipc_frac < 10 {
+                            emit("0");
+                        }
+                        emit(format_u64(ipc_frac, &mut b));
+                        emit("\nInstructions de Saut   : ");
+                        emit(format_u64(self.profiler.aggregated.branch_instructions, &mut b));
+                        emit("\nFautes de Branchement  : ");
+                        emit(format_u64(self.profiler.aggregated.branch_misses, &mut b));
+                        emit(" (");
+                        emit(format_u64(self.profiler.aggregated.branch_miss_rate_percent() as u64, &mut b));
+                        emit("%)\nFautes de Cache LLC    : ");
+                        emit(format_u64(self.profiler.aggregated.llc_misses, &mut b));
+                        emit("\nFautes L1D / L1I Cache : ");
+                        emit(format_u64(self.profiler.aggregated.l1d_misses, &mut b));
+                        emit(" / ");
+                        emit(format_u64(self.profiler.aggregated.l1i_misses, &mut b));
+                        emit("\nFautes TLB (dTLB/iTLB) : ");
+                        emit(format_u64(self.profiler.aggregated.dtlb_misses, &mut b));
+                        emit(" / ");
+                        emit(format_u64(self.profiler.aggregated.itlb_misses, &mut b));
+                        emit("\nCycles de Gel (Stalls) : ");
+                        emit(format_u64(self.profiler.aggregated.stall_cycles, &mut b));
+                        emit("\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "sample" => {
+                        let cap = self.profiler.cap;
+                        let sample = jambo_profilerd::PmcSample {
+                            sample_id: 0,
+                            pid: 1,
+                            tid: 1,
+                            timestamp: 9999,
+                            ip: 0x0040_3050,
+                            sp: 0x7FFF_0000,
+                            event: jambo_profilerd::PmcEventType::Instructions,
+                            counter_val: 50_000,
+                            call_stack: [0x0040_0010, 0x0040_3050, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                            call_stack_len: 2,
+                            pebs: Some(jambo_profilerd::PebsRecord {
+                                precise_ip: 0x0040_3050,
+                                linear_data_addr: 0x7FFF_0010,
+                                flags: 0x01,
+                                event_index: 0,
+                            }),
+                        };
+                        match self.profiler.record_sample(&cap, sample) {
+                            Ok(sid) => {
+                                let mut b = [0u8; 20];
+                                emit("profiler: échantillon matériel capturé avec succès [ID: #");
+                                emit(format_u64(sid, &mut b));
+                                emit("]\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("profiler: échec d'échantillonnage (droits insuffisants)\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "flame" | "flamegraph" => {
+                        let mut b = [0u8; 20];
+                        emit("=== PROFILS DE FLAMMES & ARBRE D'APPELS (FLAMEGRAPH) ===\n");
+                        emit("Niveaux d'empilement analysés : ");
+                        emit(format_u64(self.profiler.flame_count as u64, &mut b));
+                        emit("\n\nProfondeur | Symbole                   | Échantillons | Self Samples\n");
+                        emit("-----------+---------------------------+--------------+-------------\n");
+                        for slot in self.profiler.flame_nodes.iter() {
+                            if let Some(node) = slot {
+                                emit("  ");
+                                emit(format_u64(node.depth as u64, &mut b));
+                                emit("        | ");
+                                let sym = node.symbol_str();
+                                emit(sym);
+                                for _ in sym.len()..25 {
+                                    emit(" ");
+                                }
+                                emit(" | ");
+                                emit(format_u64(node.samples as u64, &mut b));
+                                for _ in format_u64(node.samples as u64, &mut b).len()..12 {
+                                    emit(" ");
+                                }
+                                emit(" | ");
+                                emit(format_u64(node.self_samples as u64, &mut b));
+                                emit("\n");
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "latency" => {
+                        let mut b = [0u8; 20];
+                        emit("=== ANALYSE DE LATENCE SYSTÈME & COMMUTATIONS RING 3/0 ===\n");
+                        for cat in [
+                            jambo_profilerd::LatencyCategory::SyscallDispatch,
+                            jambo_profilerd::LatencyCategory::ContextSwitch,
+                            jambo_profilerd::LatencyCategory::IpcTransfer,
+                            jambo_profilerd::LatencyCategory::InterruptHandler,
+                        ] {
+                            let st = self.profiler.calculate_latency_stats(Some(cat));
+                            emit("\nCatégorie : ");
+                            emit(cat.name());
+                            emit(" (Événements: ");
+                            emit(format_u64(st.count, &mut b));
+                            emit(")\n  Min: ");
+                            emit(format_u64(st.min_ns, &mut b));
+                            emit(" ns | Avg: ");
+                            emit(format_u64(st.avg_ns, &mut b));
+                            emit(" ns | Max: ");
+                            emit(format_u64(st.max_ns, &mut b));
+                            emit(" ns\n  p50: ");
+                            emit(format_u64(st.p50_ns, &mut b));
+                            emit(" ns | p90: ");
+                            emit(format_u64(st.p90_ns, &mut b));
+                            emit(" ns | p99: ");
+                            emit(format_u64(st.p99_ns, &mut b));
+                            emit(" ns\n");
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "report" => {
+                        let mut b = [0u8; 20];
+                        emit("=== RAPPORT DE PROFILAGE DE PERFORMANCE RING 3 ===\n");
+                        if let Some(rep) = self.profiler.get_report(1) {
+                            emit("Rapport ID           : #");
+                            emit(format_u64(rep.report_id as u64, &mut b));
+                            emit("\nProcessus Cible      : PID ");
+                            emit(format_u64(rep.target_pid, &mut b));
+                            emit("\nÉchantillons         : ");
+                            emit(format_u64(rep.sample_count as u64, &mut b));
+                            emit("\nDurée Fenêtre        : ");
+                            emit(format_u64(rep.duration_ns, &mut b));
+                            emit(" ns\nGoulot Principal     : ");
+                            emit(rep.bottleneck_str());
+                            emit(" (");
+                            emit(format_u64(rep.bottleneck_samples as u64, &mut b));
+                            emit(" self-samples)\nLatence Médiane (p50): ");
+                            emit(format_u64(rep.latency.p50_ns, &mut b));
+                            emit(" ns\nLatence Max (p99)    : ");
+                            emit(format_u64(rep.latency.p99_ns, &mut b));
+                            emit(" ns\nSceau SHA-256        : ");
+                            for byte in rep.seal_hash.iter() {
+                                emit(format_hex_u64(*byte as u64, &mut b));
+                            }
+                            emit("\n");
+                            (ShellStatus::Success, write_pos)
+                        } else {
+                            emit("profiler: aucun rapport disponible\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        }
+                    }
+                    "verify" => {
+                        let report_id = if parsed.arg_count > 2 {
+                            parse_u64(parsed.args[2]).unwrap_or(1) as u32
+                        } else {
+                            1
+                        };
+                        let cap = self.profiler.cap;
+                        let mut b = [0u8; 20];
+                        match self.profiler.verify_report_seal(&cap, report_id) {
+                            Ok(true) => {
+                                emit("profiler: sceau cryptographique SHA-256 du rapport #");
+                                emit(format_u64(report_id as u64, &mut b));
+                                emit(" [VALIDE / INTÈGRE]\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Ok(false) => {
+                                emit("profiler: ALERTE FALSIFICATION ! Sceau du rapport #");
+                                emit(format_u64(report_id as u64, &mut b));
+                                emit(" [CORROMPU / INVALIDE]\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                            Err(_) => {
+                                emit("profiler: rapport introuvable ou erreur de vérification\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "digest" | "audit" => {
+                        emit("Condensat SHA-256 d'Audit Profilage : ");
+                        let mut b = [0u8; 20];
+                        for byte in self.profiler.last_audit_digest.iter() {
+                            emit(format_hex_u64(*byte as u64, &mut b));
+                        }
+                        emit("\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    _ => {
+                        emit("Usage: profiler [status | pmc | sample | flame | latency | report | verify <id> | digest]\n");
                         (ShellStatus::ExecutionFailed, write_pos)
                     }
                 }

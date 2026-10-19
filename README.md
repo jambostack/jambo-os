@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.82-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.83-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.82 (Rechargement à Chaud en Espace Utilisateur, Injection Atomique de Trampolines & Conformité ABI jambo-patchd)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.82` introduit le démon de rechargement à chaud et de livepatching en espace utilisateur (`services/jambo-patchd`), intégrant le remplacement atomique de symboles et fonctions exécutables Ring 3 sans interruption de service, la génération dynamique de trampolines multi-architectures (x86-64 Rel32 5B, Indirect64 14B, ARM64 Direct Branch 4B, ARM64 Indirect Branch 16B), la synchronisation par barrière de quiescence des threads avec détection étanche des threads en zone critique du trampoline, la vérification formelle de conformité ABI (System V AMD64 et ARM64 AAPCS, alignement de pile et d'instructions, préservation des registres callee-saved), la préservation de l'état des VMO avec mécanisme de restauration atomique garantie (*Rollback*), le scellement cryptographique par chaîne SHA-256 avec détection formelle de falsification, le contrôle d'accès capabilaire `PatchCap` sans autorité ambiante, et les commandes shell interactives `patch [status | list | view | quiesce | apply | revert | verify | digest]` dans `jsh`.
+> **Statut du Projet : Version v0.2.83 (Échantillonnage PMC/PEBS, Profils de Flammes & Analyse de Latence Ring 3 jambo-profilerd)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.83` introduit le démon d'observabilité matérielle et de profilage continu en espace utilisateur (`services/jambo-profilerd`), intégrant la capture précise des compteurs matériels de performance PMC (instructions, cycles CPU, cycles de référence, ratios IPC, prédictions et fautes de branchement, fautes de cache L1D/L1I/LLC, fautes dTLB/iTLB, cycles de gel de pipeline), l'échantillonnage matériel PEBS (Processor Event-Based Sampling) sans dérive d'interruption, le déroulement d'arbre d'appels et l'agrégation hiérarchique en profils de flammes (*Flamegraphs*) au format compact *folded stacks*, l'analyse fine de la distribution de latence (p50, p90, p99, p99.9) pour les commutations de contexte, interruptions et appels système, le scellement cryptographique inviolable des rapports par condensat SHA-256 avec registre d'audit chaîné, le contrôle d'accès capabilaire `ProfileCap` sans autorité ambiante, et les commandes shell interactives `profiler [status | pmc | sample | flame | latency | report | verify | digest]` dans `jsh`.
 
 ---
 
