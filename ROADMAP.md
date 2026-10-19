@@ -1,7 +1,7 @@
 # ROADMAP DU DÉVELOPPEMENT AUTONOME — JamboOS
 
-> **Dernière mise à jour** : 2026-10-19 20:20 UTC  
-> **Version actuelle** : `v0.2.87`  
+> **Dernière mise à jour** : 2026-10-19 20:35 UTC  
+> **Version actuelle** : `v0.2.88`  
 > **Statut global** : Pré-Alpha active — Micro-noyau de 3e génération orienté capacités (`#![no_std]`)  
 > **Cycle de développement autonome** : 10 minutes via le Planificateur de Tâches & Crons d'Antigravity WebUI  
 
@@ -20,7 +20,7 @@
 
 ## 2. État d'Avancement des Phases d'Ingénierie
 
-### Phases Validées (v0.1.0 à v0.2.87)
+### Phases Validées (v0.1.0 à v0.2.88)
 
 | Jalon / Version | Phase | Composant | Description Technique | Statut |
 | :--- | :---: | :--- | :--- | :--- |
@@ -76,25 +76,25 @@
 | **v0.2.85** | 87 | Éditeur de Liens `jambo-dynlinkd` | Édition de liens dynamiques Ring 3, bibliothèques partagées ELF64 `.jso`, tables GOT/PLT, résolution différée et durcissement RELRO | ✅ Validé |
 | **v0.2.86** | 88 | Seccomp BPF `jambo-seccomp` | Filtres d'appels système granulaires BPF, validation DAG O(N), actions (Allow, Kill, Trap, Errno), TSYNC, no_new_privs & conformité POSIX | ✅ Validé |
 | **v0.2.87** | 89 | Mandat d'Accès MAC `jambo-mac` | MLS Bell-LaPadula (confidentialité NRU/NWD), Biba (intégrité NRD/NWU), treillis de compartiments, déclassification contrôlée, MacCap & scellement SHA-256 | ✅ Validé |
+| **v0.2.88** | 90 | Confinement VFS `jambo-landlock` | Sandboxing VFS sans autorité ambiante, règles d'arborescence path_beneath, empilement monotone irréversible, héritage fork, LandlockCap & audit SHA-256 | ✅ Validé |
 
 ---
 
 ## 3. Prochaines Étapes Prioritaires
 
-### 🎯 Prochaine Tâche Immédiate : Phase 90 — v0.2.88
-* **Composant** : `services/jambo-landlock`
-* **Objectif** : Confinement de sécurité au niveau du système de fichiers sans autorité ambiante (FS sandboxing)
-* **Tâches précises** :
-  1. Règles d'arborescence VFS strictes par descripteur de fichier et limitation des accès fichiers/dossiers.
-  2. Empilement de couches de restriction monotones sans déconfinement.
-  3. Validation `cargo xtask test` et commit `v0.2.88`.
-
-### 🎯 Tâche Suivante : Phase 91 — v0.2.89
+### 🎯 Prochaine Tâche Immédiate : Phase 91 — v0.2.89
 * **Composant** : `services/jambo-capspec`
 * **Objectif** : Spécification formelle, vérification de conformité dynamique d'atténuation de capacités et validation d'invariants de sécurité pour micro-noyau
 * **Tâches précises** :
   1. Vérification dynamique de conformité des invariants CSpace et rejet d'amplification d'autorité ambiante.
   2. Profils formels de confinement et validation `cargo xtask test`.
+
+### 🎯 Tâche Suivante : Phase 92 — v0.2.90
+* **Composant** : `services/jambo-tee`
+* **Objectif** : Environnements d'Exécution de Confiance (TEE), enclaves matérielles isolées (Intel SGX/TDX & ARM TrustZone/CCA) et mémoire chiffrée Ring 3
+* **Tâches précises** :
+  1. Abstraction matérielle de mémoire scellée et enclaves Ring 3 isolées.
+  2. Profils formels de sécurité et validation `cargo xtask test`.
 
 ---
 
@@ -122,6 +122,7 @@
 * **2026-10-19 18:20 UTC** : Validation complète Phase 87 (`jambo-dynlinkd`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-dynlinkd`). Tag `v0.2.85`.
 * **2026-10-19 20:00 UTC** : Validation complète Phase 88 (`jambo-seccomp`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-seccomp`). Tag `v0.2.86`.
 * **2026-10-19 20:20 UTC** : Validation complète Phase 89 (`jambo-mac`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-mac`). Tag `v0.2.87`.
+* **2026-10-19 20:35 UTC** : Validation complète Phase 90 (`jambo-landlock`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-landlock`). Tag `v0.2.88`.
 
 
 

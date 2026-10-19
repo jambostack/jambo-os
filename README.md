@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.87-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.88-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.87 (Mandat d'Accès Contrôlé Multi-Niveaux MLS, Modèles Bell-LaPadula & Biba jambo-mac)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.87` introduit le démon de contrôle d'accès obligatoire (MAC) multi-niveaux (MLS) en espace utilisateur (`services/jambo-mac`), implémentant rigoureusement les modèles formels de Bell-LaPadula (confidentialité absolue via la propriété de sécurité simple *No Read Up* et la propriété $\star$ *No Write Down*) et de Biba (intégrité absolue via la propriété d'intégrité simple *No Read Down* et la propriété $\star$ *No Write Up*), le treillis de compartiments et catégories non-hiérarchiques, la déclassification contrôlée sous mandat `MAC_DOWNGRADE`, le contrôle d'accès capabilaire `MacCap` sans autorité ambiante avec interdiction formelle d'amplification, la chaîne d'audit inviolable scellée par hachage SHA-256, et les commandes shell d'administration interactives `mac [status | subjects | objects | check | audit]` dans `jsh`.
+> **Statut du Projet : Version v0.2.88 (Confinement de Système de Fichiers sans Autorité Ambiante & Sandboxing Monotone jambo-landlock)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.88` introduit le sous-système de confinement d'accès aux fichiers et répertoires en espace utilisateur (`services/jambo-landlock`), instaurant un sandboxing VFS strict sans autorité ambiante ancré sur des descripteurs de répertoires (`PathBeneathRule`), un modèle d'accès granulaire (`LandlockAccessFs` : lecture, écriture, exécution, référencement), l'empilement de couches de restriction monotones irréversibles par processus (`restrict_self`) garantissant par intersection stricte qu'aucune couche ne peut déconfiner ou amplifier des privilèges, l'héritage automatique de confinement lors du clonage de tâches (`inherit_domain`), le contrôle d'accès capabilaire `LandlockCap` avec atténuation stricte, un registre d'audit inviolable chaîné par hachage cryptographique SHA-256 pur `#[no_std]`, et les commandes shell d'administration interactives `landlock [status | domains | rulesets | check | audit]` dans `jsh`.
 
 ---
 

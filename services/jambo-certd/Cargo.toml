@@ -1,6 +1,6 @@
 [package]
 name = "jambo-certd"
-version = "0.2.87"
+version = "0.2.88"
 edition = "2021"
 authors = ["ASSOGBA Prudence Dieudonné <jprud67@gmail.com>"]
 description = "Infrastructure à Clés Publiques Éphémères & Gestion des Certificats de Grappe pour JamboOS"

@@ -1051,6 +1051,13 @@ pub extern "C" fn _start() -> ! {
         "Échec du test du démon de contrôle d'accès obligatoire jambo-mac"
     );
 
+    // 10undevicies. Validation du Confinement VFS sans Autorité Ambiante & Sandboxing Landlock (Phase 90 - v0.2.88)
+    let landlock_success = sched::execute_landlock_daemon_test();
+    assert!(
+        landlock_success,
+        "Échec du test du démon de confinement du système de fichiers jambo-landlock"
+    );
+
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
 
     arch::init_iommu();
@@ -1276,14 +1283,15 @@ pub extern "C" fn _start() -> ! {
     kprintln!("\x1b[1;32m[PASS] Phase 87 Userspace Dynamic Linking, ELF64 Shared Libraries (.jso), GOT/PLT & Lazy Binding (jambo-dynlinkd) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 88 Userspace Granular Syscall Filtering, BPF DAG Validation & POSIX Conformance (jambo-seccomp) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 89 Userspace Mandatory Access Control (MAC), MLS Bell-LaPadula & Biba (jambo-mac) Complete\x1b[0m");
+    kprintln!("\x1b[1;32m[PASS] Phase 90 Userspace Filesystem Sandboxing & Monotonic Landlock Confinement (jambo-landlock) Complete\x1b[0m");
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.87 (Mandat d'Accès Contrôlé MLS, Bell-LaPadula & Biba jambo-mac)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.88 (Confinement VFS sans Autorité Ambiante, Sandboxing Monotone jambo-landlock)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.87 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.88 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );

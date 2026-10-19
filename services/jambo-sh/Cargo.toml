@@ -1,6 +1,6 @@
 [package]
 name = "jambo-sh"
-version = "0.2.87"
+version = "0.2.88"
 edition = "2021"
 
 [lib]
@@ -24,6 +24,7 @@ jambo-dbg = { path = "../jambo-dbg" }
 jambo-dynlinkd = { path = "../jambo-dynlinkd" }
 jambo-seccomp = { path = "../jambo-seccomp" }
 jambo-mac = { path = "../jambo-mac" }
+jambo-landlock = { path = "../jambo-landlock" }
 jambo-cryptod = { path = "../jambo-cryptod" }
 jambo-dfsd = { path = "../jambo-dfsd" }
 jambo-diagd = { path = "../jambo-diagd" }

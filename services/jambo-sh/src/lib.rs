@@ -158,6 +158,7 @@ pub struct JamboShell {
     pub dynlink: jambo_dynlinkd::JamboDynLinkDaemon,
     pub seccomp: jambo_seccomp::JamboSeccompDaemon,
     pub mac: jambo_mac::JamboMacDaemon,
+    pub landlock: jambo_landlock::JamboLandlockDaemon,
 }
 
 impl Default for JamboShell {
@@ -352,6 +353,12 @@ impl JamboShell {
         );
         let mut mac = jambo_mac::JamboMacDaemon::new(mac_cap);
         mac.init_defaults();
+        let landlock_cap = jambo_landlock::LandlockCap::new(
+            libjambo::Handle::new(9001, 1),
+            jambo_landlock::landlock_rights::ALL,
+        );
+        let mut landlock = jambo_landlock::JamboLandlockDaemon::new(landlock_cap);
+        landlock.init_defaults();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -400,6 +407,7 @@ impl JamboShell {
             dynlink,
             seccomp,
             mac,
+            landlock,
         }
     }
 
@@ -4055,6 +4063,156 @@ impl JamboShell {
                     }
                     _ => {
                         emit("Usage: mac [status | subjects | objects | check <subj_id> <obj_id> [read|write|rw|exec] | audit]\n");
+                        (ShellStatus::ExecutionFailed, write_pos)
+                    }
+                }
+            }
+            "landlock" => {
+                let subcmd = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    "status"
+                };
+                match subcmd {
+                    "status" => {
+                        let mut b = [0u8; 20];
+                        emit("=== CONFINEMENT SYSTÈME DE FICHIERS SANS AUTORITÉ AMBIANTE (jambo-landlock) ===\n");
+                        emit("Sandboxing VFS Monotone & Empilement de Couches Strictes\n");
+                        emit("Domaines actifs     : ");
+                        let mut count_dom = 0;
+                        for d in &self.landlock.domains {
+                            if d.is_some() {
+                                count_dom += 1;
+                            }
+                        }
+                        emit(format_u64(count_dom, &mut b));
+                        emit(" / ");
+                        emit(format_u64(jambo_landlock::MAX_DOMAINS as u64, &mut b));
+                        emit("\nEnsembles de règles : ");
+                        let mut count_rule = 0;
+                        for r in &self.landlock.rulesets {
+                            if r.is_some() {
+                                count_rule += 1;
+                            }
+                        }
+                        emit(format_u64(count_rule, &mut b));
+                        emit(" / ");
+                        emit(format_u64(jambo_landlock::MAX_RULESETS as u64, &mut b));
+                        emit("\nÉvaluations totales : ");
+                        emit(format_u64(self.landlock.evaluations_count, &mut b));
+                        emit("\nAccès accordés      : ");
+                        emit(format_u64(self.landlock.granted_count, &mut b));
+                        emit("\nViolations bloquées : ");
+                        emit(format_u64(self.landlock.denied_count, &mut b));
+                        emit("\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "domains" | "dom" => {
+                        let mut b = [0u8; 20];
+                        emit("PID | NOM              | COUCHES | DROITS INTERCEPTÉS\n");
+                        emit("----+------------------+---------+-------------------\n");
+                        for slot in &self.landlock.domains {
+                            if let Some(dom) = slot {
+                                emit(format_u64(dom.pid as u64, &mut b));
+                                emit("   | ");
+                                let name = dom.name_str();
+                                emit(name);
+                                for _ in 0..(16usize.saturating_sub(name.len())) {
+                                    emit(" ");
+                                }
+                                emit(" | ");
+                                emit(format_u64(dom.layer_count as u64, &mut b));
+                                emit("       | 0x");
+                                emit(format_hex_u64(dom.total_handled_access as u64, &mut b));
+                                emit("\n");
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "rulesets" | "rules" => {
+                        let mut b = [0u8; 20];
+                        emit("ID  | DROITS GÉRÉS | NB RÈGLES | STATUT\n");
+                        emit("----+--------------+-----------+----------\n");
+                        for slot in &self.landlock.rulesets {
+                            if let Some(r) = slot {
+                                emit(format_u64(r.id as u64, &mut b));
+                                emit("   | 0x");
+                                emit(format_hex_u64(r.handled_access_fs as u64, &mut b));
+                                emit("       | ");
+                                emit(format_u64(r.rule_count as u64, &mut b));
+                                emit("         | ");
+                                if r.is_committed {
+                                    emit("Scellé\n");
+                                } else {
+                                    emit("Ouvert\n");
+                                }
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "check" => {
+                        if parsed.arg_count >= 3 {
+                            let pid = match parse_u64(parsed.args[2]) {
+                                Some(val) => val as u32,
+                                None => {
+                                    emit("PID invalide\n");
+                                    return (ShellStatus::ExecutionFailed, write_pos);
+                                }
+                            };
+                            let target_path = if parsed.arg_count > 3 {
+                                parsed.args[3]
+                            } else {
+                                "/"
+                            };
+                            let access_op = if parsed.arg_count > 4 {
+                                match parsed.args[4] {
+                                    "write" | "w" => jambo_landlock::fs_access::WRITE_FILE,
+                                    "exec" | "x" => jambo_landlock::fs_access::EXECUTE,
+                                    _ => jambo_landlock::fs_access::READ_FILE,
+                                }
+                            } else {
+                                jambo_landlock::fs_access::READ_FILE
+                            };
+
+                            let decision = self.landlock.check_access(pid, target_path, access_op, 5000);
+                            emit("[Évaluation Landlock PID ");
+                            let mut b = [0u8; 20];
+                            emit(format_u64(pid as u64, &mut b));
+                            emit(" -> ");
+                            emit(target_path);
+                            emit("] : ");
+                            match decision {
+                                jambo_landlock::LandlockDecision::Granted => {
+                                    emit("ACCORDÉ (Confinement Landlock respecté)\n");
+                                }
+                                jambo_landlock::LandlockDecision::ProcessUnconfined => {
+                                    emit("ACCORDÉ (Processus non confiné)\n");
+                                }
+                                jambo_landlock::LandlockDecision::Denied { layer_index, missing_access, .. } => {
+                                    emit("REFUSÉ (Bloqué par la couche ");
+                                    emit(format_u64(layer_index as u64, &mut b));
+                                    emit(", droits manquants: 0x");
+                                    emit(format_hex_u64(missing_access as u64, &mut b));
+                                    emit(")\n");
+                                }
+                            }
+                            (ShellStatus::Success, write_pos)
+                        } else {
+                            emit("Usage: landlock check <pid> <path> [read|write|exec]\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        }
+                    }
+                    "audit" => {
+                        emit("Condensat SHA-256 d'Audit Landlock (FS Sandboxing) : ");
+                        let mut b = [0u8; 20];
+                        for byte in self.landlock.last_audit_digest.iter() {
+                            emit(format_hex_u64(*byte as u64, &mut b));
+                        }
+                        emit("\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    _ => {
+                        emit("Usage: landlock [status | domains | rulesets | check <pid> <path> [read|write|exec] | audit]\n");
                         (ShellStatus::ExecutionFailed, write_pos)
                     }
                 }

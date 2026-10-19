@@ -54,6 +54,7 @@ members = [
     "services/jambo-dynlinkd",
     "services/jambo-seccomp",
     "services/jambo-mac",
+    "services/jambo-landlock",
     "libs/jambo-ui",
     "libs/jambo-sdk",
     "drivers/virtio",
