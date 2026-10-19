@@ -41,6 +41,7 @@ members = [
     "services/jambo-dnsd",
     "services/jambo-logd",
     "services/jambo-bpfd",
+    "services/jambo-ipcd",
     "libs/jambo-ui",
     "libs/jambo-sdk",
     "drivers/virtio",

@@ -1,0 +1,7 @@
+[package]
+name = "jambo-ipcd"
+version = "0.2.75"
+edition = "2021"
+
+[dependencies]
+libjambo = { path = "../../libs/libjambo" }

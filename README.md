@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.74-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.75-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.74 (Moteur eBPF Souverain & Filtrage Réseau XDP jambo-bpfd)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.74` introduit le démon et moteur de bytecode eBPF souverain (`services/jambo-bpfd`), doté d'un vérificateur formel de terminaison par graphe orienté acyclique (DAG strict interdisant toute boucle infinie), d'une machine virtuelle sandboxed de 11 registres 64 bits avec isolation mémoire de pile bornée `[-512, 0)`, du confinement capabilaire strict `BpfCap` (Zéro Autorité Ambiante), de structures de stockage partagées haute performance (eBPF Maps Array, HashMap, RingBuf), de crochets réseau XDP (*eXpress Data Path*) avec verdicts déterministes (`XDP_PASS`, `XDP_DROP`), et des commandes shell interactives `bpf [status | list | maps | verify | run <id> | attach <id> <hook>]` dans `jsh`.
+> **Statut du Projet : Version v0.2.75 (Multiplexeur et Passerelle de Messagerie IPC Distribuée jambo-ipcd)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.75` introduit le multiplexeur et passerelle de messagerie IPC distribuée (`services/jambo-ipcd`), doté du chiffrement symétrique in-situ avec authentification par étiquette MAC (16 octets), d'un ordonnancement déterministe strict par classes de priorité (`Critical` > `High` > `Normal` > `Background`), d'une immunité totale contre le rejeu de trames (`sequence > rx_sequence`), du confinement capabilaire sans autorité ambiante `IpcCap`, d'une table de routage inter-nœuds avec bornage temporel (`max_latency_bound_us`), et des commandes shell interactives `ipc [status | channels | routes | send <chan_id> <msg> | dispatch]` dans `jsh`.
 
 ---
 
@@ -146,6 +146,7 @@ jambo-os/
 │   ├── jambo-fuzz/          # Moteur de fuzzing offensif et tests de résilience
 │   ├── jambo-gwd/           # Passerelle réseau L4/L7 & équilibrage de charge élastique
 │   ├── jambo-init/          # Superviseur système PID 1 en espace utilisateur
+│   ├── jambo-ipcd/          # Multiplexeur et passerelle de messagerie IPC distribuée
 │   ├── jambo-kvd/           # Magasin clé-valeur transactionnel distribué (MVCC & baux)
 │   ├── jambo-linux/         # Traducteur d'appels système Linux (compatibilité POSIX)
 │   ├── jambo-logd/          # Démon de journalisation structurée et agrégation distribuée

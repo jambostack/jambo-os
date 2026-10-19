@@ -960,6 +960,13 @@ pub extern "C" fn _start() -> ! {
         "Échec du test du démon eBPF et filtrage réseau jambo-bpfd"
     );
 
+    // 10vicesies. Validation du Multiplexeur & Passerelle IPC Distribuée (Phase 77 - v0.2.75)
+    let ipc_success = sched::execute_ipc_daemon_test();
+    assert!(
+        ipc_success,
+        "Échec du test du démon multiplexeur IPC jambo-ipcd"
+    );
+
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
 
     arch::init_iommu();
@@ -1172,14 +1179,15 @@ pub extern "C" fn _start() -> ! {
     kprintln!("\x1b[1;32m[PASS] Phase 74 Cluster Authoritative DNS Resolver & DnsCap Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 75 Structured Logging & Distributed Log Aggregation Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 76 Sovereign eBPF Engine & Packet Filtering (jambo-bpfd) Complete\x1b[0m");
+    kprintln!("\x1b[1;32m[PASS] Phase 77 Distributed IPC Multiplexer & Deterministic Gateway (jambo-ipcd) Complete\x1b[0m");
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.74 (Moteur eBPF Souverain & Filtrage Réseau jambo-bpfd)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.75 (Multiplexeur & Passerelle IPC Distribuée jambo-ipcd)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.74 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.75 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );

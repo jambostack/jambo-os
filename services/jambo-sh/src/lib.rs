@@ -127,6 +127,7 @@ pub struct JamboShell {
     pub dns: jambo_dnsd::JamboDnsDaemon,
     pub logd: jambo_logd::JamboLogDaemon,
     pub bpf: jambo_bpfd::JamboBpfDaemon,
+    pub ipc: jambo_ipcd::JamboIpcDaemon,
 }
 
 impl Default for JamboShell {
@@ -221,6 +222,32 @@ impl JamboShell {
             let _ = bpf.attach(&bpf_cap, prog_id, "eth0_xdp");
         }
         let _ = bpf.create_map(&bpf_cap, "packet_stats", jambo_bpfd::BpfMapType::Array, 4, 8, 8);
+        let ipc_cap = jambo_ipcd::IpcCap::new(
+            libjambo::Handle::new(7701, 1),
+            jambo_ipcd::ipc_rights::ALL,
+        );
+        let mut ipc = jambo_ipcd::JamboIpcDaemon::new(1, ipc_cap);
+        let _ = ipc.create_channel(
+            &ipc_cap,
+            "sys-control",
+            1,
+            10,
+            10,
+            jambo_ipcd::IpcPriority::Critical,
+            false,
+            None,
+        );
+        let _ = ipc.create_channel(
+            &ipc_cap,
+            "cluster-sync",
+            2,
+            50,
+            50,
+            jambo_ipcd::IpcPriority::High,
+            true,
+            Some([0x3au8; 32]),
+        );
+        let _ = ipc.add_route(&ipc_cap, 2, 1, 10, 500, true);
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -256,6 +283,7 @@ impl JamboShell {
             dns,
             logd,
             bpf,
+            ipc,
         }
     }
 
@@ -400,6 +428,8 @@ impl JamboShell {
                 emit("  trace [cmd]  - Traçage distribué, spans et analyse de latence\n");
                 emit("  cert [cmd]   - Autorité de certification distribuée et mTLS\n");
                 emit("  init [cmd]   - Superviseur PID 1, cycle de vie et DAG de services\n");
+                emit("  bpf [cmd]    - Moteur eBPF souverain et filtrage réseau XDP\n");
+                emit("  ipc [cmd]    - Multiplexeur IPC distribué et passerelle déterministe\n");
                 emit("  echo <args>  - Affiche les arguments sur la sortie console\n");
                 emit("  clear        - Efface l'écran du terminal (ANSI escape)\n");
                 emit("  reboot       - Redémarre la machine\n");
@@ -407,7 +437,7 @@ impl JamboShell {
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.2.71 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.2.75 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -1126,6 +1156,129 @@ impl JamboShell {
                     }
                     _ => {
                         emit("Usage: bpf [status | list | maps | verify | run <id> | attach <id> <hook>]\n");
+                        (ShellStatus::ExecutionFailed, write_pos)
+                    }
+                }
+            }
+            "ipc" => {
+                let ipc_cap = self.ipc.cap;
+                let sub = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    "status"
+                };
+                match sub {
+                    "status" => {
+                        let mut b = [0u8; 20];
+                        emit("=== MULTIPLEXEUR ET PASSERELLE IPC DISTRIBUÉE (jambo-ipcd) ===\n");
+                        if let Ok(st) = self.ipc.stats(&ipc_cap) {
+                            emit("Nœud local : ");
+                            emit(format_u64(self.ipc.local_node_id as u64, &mut b));
+                            emit("\nCanaux multiplexés actifs : ");
+                            emit(format_u64(st.channels_count as u64, &mut b));
+                            emit("\nRoutes déterministes enregistrées : ");
+                            emit(format_u64(st.routes_count as u64, &mut b));
+                            emit("\nMessages émis (TX) : ");
+                            emit(format_u64(st.total_sent, &mut b));
+                            emit("\nMessages reçus (RX) : ");
+                            emit(format_u64(st.total_received, &mut b));
+                            emit("\nMessages réacheminés (Transit/Gateway) : ");
+                            emit(format_u64(st.total_forwarded, &mut b));
+                            emit("\nMessages rejetés (Rejeu/Falsification) : ");
+                            emit(format_u64(st.total_replay_rejected, &mut b));
+                            emit("\nOrdonnancements déterministes exécutés : ");
+                            emit(format_u64(st.deterministic_dispatches, &mut b));
+                            emit("\nPriorités déterministes : Critical (0) > High (1) > Normal (2) > Background (3)\n");
+                        } else {
+                            emit("Erreur lors de la lecture des statistiques IPC\n");
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "channels" | "list" => {
+                        let mut b = [0u8; 20];
+                        emit("ID  NOM              SRC:PORT    DST:PORT    PRIORITÉ     CHIFFRÉ  TX_SEQ  RX_SEQ\n");
+                        emit("--  ---------------  ----------  ----------  -----------  -------  ------  ------\n");
+                        for ch in self.ipc.channels.iter() {
+                            if let Some(c) = ch {
+                                emit(format_u64(c.channel_id as u64, &mut b));
+                                emit("   ");
+                                emit(c.name_as_str());
+                                let pad = 17usize.saturating_sub(c.name_len);
+                                for _ in 0..pad { emit(" "); }
+                                emit(format_u64(c.src_node as u64, &mut b));
+                                emit(":");
+                                emit(format_u64(c.src_port as u64, &mut b));
+                                emit("        ");
+                                emit(format_u64(c.dst_node as u64, &mut b));
+                                emit(":");
+                                emit(format_u64(c.dst_port as u64, &mut b));
+                                emit("        ");
+                                emit(c.priority.as_str());
+                                let prio_pad = 13usize.saturating_sub(c.priority.as_str().len());
+                                for _ in 0..prio_pad { emit(" "); }
+                                if c.encrypted { emit("Oui      "); } else { emit("Non      "); }
+                                emit(format_u64(c.tx_sequence, &mut b));
+                                emit("       ");
+                                emit(format_u64(c.rx_sequence, &mut b));
+                                emit("\n");
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "routes" => {
+                        let mut b = [0u8; 20];
+                        emit("DEST_NODE   PASSERELLE  MÉTRIQUE  MAX_LATENCE_US  CHIFFRÉ  ACTIF\n");
+                        emit("----------  ----------  --------  --------------  -------  -----\n");
+                        for r in self.ipc.routes.iter() {
+                            if let Some(route) = r {
+                                emit(format_u64(route.target_node as u64, &mut b));
+                                emit("           ");
+                                emit(format_u64(route.gateway_node as u64, &mut b));
+                                emit("           ");
+                                emit(format_u64(route.metric as u64, &mut b));
+                                emit("         ");
+                                emit(format_u64(route.max_latency_bound_us as u64, &mut b));
+                                emit("             ");
+                                if route.encrypted { emit("Oui      "); } else { emit("Non      "); }
+                                if route.active { emit("Oui\n"); } else { emit("Non\n"); }
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "send" => {
+                        if parsed.arg_count < 4 {
+                            emit("Usage: ipc send <chan_id> <message>\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        } else {
+                            let chan_id = parse_u64(parsed.args[2]).unwrap_or(1) as u32;
+                            let msg_content = parsed.args[3];
+                            match self.ipc.send_message(&ipc_cap, chan_id, msg_content.as_bytes(), 100) {
+                                Ok(msg_id) => {
+                                    let mut b = [0u8; 20];
+                                    emit("[IPC] Message #");
+                                    emit(format_u64(msg_id, &mut b));
+                                    emit(" mis en file d'attente d'émission déterministe (canal ");
+                                    emit(format_u64(chan_id as u64, &mut b));
+                                    emit(")\n");
+                                    (ShellStatus::Success, write_pos)
+                                }
+                                Err(_) => {
+                                    emit("ipc: échec de l'envoi du message ou canal inexistant\n");
+                                    (ShellStatus::ExecutionFailed, write_pos)
+                                }
+                            }
+                        }
+                    }
+                    "dispatch" => {
+                        let dispatched = self.ipc.dispatch_deterministic(110);
+                        let mut b = [0u8; 20];
+                        emit("[IPC] Ordonnancement déterministe achevé : ");
+                        emit(format_u64(dispatched as u64, &mut b));
+                        emit(" messages acheminés avec succès selon leur niveau de priorité.\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    _ => {
+                        emit("Usage: ipc [status | channels | routes | send <chan_id> <msg> | dispatch]\n");
                         (ShellStatus::ExecutionFailed, write_pos)
                     }
                 }
