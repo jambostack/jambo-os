@@ -165,6 +165,7 @@ pub struct JamboShell {
     pub hsm: jambo_hsm::JamboHsmDaemon,
     pub mpc: jambo_mpc::JamboMpcDaemon,
     pub pqc: jambo_pqc::JamboPqcDaemon,
+    pub zksnark: jambo_zksnark::JamboZkSnarkDaemon,
 }
 
 impl Default for JamboShell {
@@ -401,6 +402,12 @@ impl JamboShell {
         );
         let mut pqc = jambo_pqc::JamboPqcDaemon::new(pqc_cap);
         pqc.init_defaults();
+        let zksnark_cap = jambo_zksnark::ZkSnarkCap::new(
+            libjambo::Handle::new(9701, 1),
+            jambo_zksnark::zksnark_rights::ALL,
+        );
+        let mut zksnark = jambo_zksnark::JamboZkSnarkDaemon::new(zksnark_cap);
+        zksnark.init_defaults();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -456,6 +463,7 @@ impl JamboShell {
             hsm,
             mpc,
             pqc,
+            zksnark,
         }
     }
 
@@ -616,10 +624,11 @@ impl JamboShell {
                 emit("  hsm [cmd]     - Module de sécurité matériel HSM Ring 3, dérivation PKCS#11 & scellement KEK\n");
                 emit("  mpc [cmd]     - Calcul Multipartite Sécurisé (MPC), partage de secret & consensus distribué\n");
                 emit("  pqc [cmd]     - Cryptographie Post-Quantique (ML-KEM/ML-DSA) & transition souveraine\n");
+                emit("  zksnark [cmd] - Preuves à Divulgation Nulle de Connaissance (zk-SNARKs R1CS)\n");
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.2.94 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.2.95 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -5348,6 +5357,124 @@ impl JamboShell {
                     }
                     _ => {
                         emit("Usage: pqc [status | keys | kem | dsa | hybrid | transition <pure|hybrid|classical> | audit]\n");
+                        (ShellStatus::ExecutionFailed, write_pos)
+                    }
+                }
+            }
+            "zksnark" => {
+                let sub = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    "status"
+                };
+                match sub {
+                    "status" => {
+                        let mut b = [0u8; 20];
+                        emit("=== PREUVES À DIVULGATION NULLE DE CONNAISSANCE (jambo-zksnark) ===\n");
+                        emit("Corps de base       : Goldilocks prime P = 2^64 - 2^32 + 1\n");
+                        emit("Système formel      : R1CS (Rank-1 Constraint Systems) & Groth16 zk-SNARK\n");
+                        let active_circuits = self.zksnark.circuits.iter().filter(|c| c.is_some()).count();
+                        emit("Circuits enregistrés: ");
+                        emit(format_u64(active_circuits as u64, &mut b));
+                        emit(" / ");
+                        emit(format_u64(jambo_zksnark::MAX_CIRCUITS as u64, &mut b));
+                        emit("\nPreuves générées    : ");
+                        emit(format_u64(self.zksnark.prove_count, &mut b));
+                        emit("\nPreuves vérifiées OK: ");
+                        emit(format_u64(self.zksnark.verify_success_count, &mut b));
+                        emit("\nRejets de fraudes   : ");
+                        emit(format_u64(self.zksnark.verify_fail_count, &mut b));
+                        emit("\nSetups exécutés     : ");
+                        emit(format_u64(self.zksnark.setup_count, &mut b));
+                        emit("\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "circuits" => {
+                        emit("ID  NOM                   VARS  PUB  CONTRAINTES\n");
+                        for (i, c_opt) in self.zksnark.circuits.iter().enumerate() {
+                            if let Some(c) = c_opt {
+                                let mut b = [0u8; 20];
+                                emit(format_u64(i as u64, &mut b));
+                                emit("   ");
+                                let name_str = core::str::from_utf8(&c.name[..c.name_len]).unwrap_or("Circuit");
+                                emit(name_str);
+                                for _ in name_str.len()..22 {
+                                    emit(" ");
+                                }
+                                emit(format_u64(c.num_vars as u64, &mut b));
+                                emit("     ");
+                                emit(format_u64(c.num_public_inputs as u64, &mut b));
+                                emit("    ");
+                                emit(format_u64(c.constraint_count as u64, &mut b));
+                                emit("\n");
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "prove" => {
+                        let admin_cap = self.zksnark.admin_cap;
+                        let s = jambo_zksnark::Fr::from_u64(3);
+                        let s2 = jambo_zksnark::Fr::from_u64(9);
+                        let s3 = jambo_zksnark::Fr::from_u64(27);
+                        let y = jambo_zksnark::Fr::from_u64(49);
+                        let witness = [jambo_zksnark::Fr::ONE, s, s2, s3, y];
+                        match self.zksnark.create_proof(&admin_cap, 0, &witness, 0x1234_5678) {
+                            Ok(proof) => {
+                                let mut b = [0u8; 20];
+                                emit("[ZKSNARK/PROVE] Preuve générée avec succès (ID: ");
+                                emit(format_u64(proof.proof_id, &mut b));
+                                emit(")\n");
+                                emit("  Point A = 0x");
+                                emit(format_hex_u64(proof.point_a.0, &mut b));
+                                emit("\n  Point B = 0x");
+                                emit(format_hex_u64(proof.point_b.0, &mut b));
+                                emit("\n  Point C = 0x");
+                                emit(format_hex_u64(proof.point_c.0, &mut b));
+                                emit("\n  Entrée publique Y = ");
+                                emit(format_u64(proof.public_inputs[0].0, &mut b));
+                                emit("\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("[ZKSNARK/PROVE] Erreur lors de la génération de preuve\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "verify" => {
+                        let admin_cap = self.zksnark.admin_cap;
+                        let s = jambo_zksnark::Fr::from_u64(3);
+                        let s2 = jambo_zksnark::Fr::from_u64(9);
+                        let s3 = jambo_zksnark::Fr::from_u64(27);
+                        let y = jambo_zksnark::Fr::from_u64(49);
+                        let witness = [jambo_zksnark::Fr::ONE, s, s2, s3, y];
+                        let proof = self.zksnark.create_proof(&admin_cap, 0, &witness, 0x9999).unwrap();
+                        match self.zksnark.verify_proof(&admin_cap, &proof) {
+                            Ok(true) => {
+                                emit("[ZKSNARK/VERIFY] Preuve Groth16 formellement vérifiée et acceptée (O(1))\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Ok(false) => {
+                                emit("[ZKSNARK/VERIFY] Preuve rejetée : non satisfiable\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                            Err(_) => {
+                                emit("[ZKSNARK/VERIFY] Erreur lors de la vérification de preuve\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "audit" => {
+                        emit("Condensat SHA-256 d'Audit zk-SNARK (Registre Scellé) : ");
+                        let mut b = [0u8; 20];
+                        for byte in self.zksnark.audit_chain.iter() {
+                            emit(format_hex_u64(*byte as u64, &mut b));
+                        }
+                        emit("\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    _ => {
+                        emit("Usage: zksnark [status | circuits | prove | verify | audit]\n");
                         (ShellStatus::ExecutionFailed, write_pos)
                     }
                 }

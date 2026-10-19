@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.94-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.95-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.94 (Cryptographie Post-Quantique ML-KEM/ML-DSA & Transition Quantique Souveraine jambo-pqc)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.94` introduit le sous-système de cryptographie post-quantique (PQC) et de transition quantique souveraine (`services/jambo-pqc`) : encapsulation de clés ML-KEM (Kyber-768 / FIPS 203) et signatures sur réseaux euclidiens ML-DSA (Dilithium-65 / FIPS 204) avec arithmétique polynomiale négacyclique sans allocation (`#![no_std]`), échange de clés hybride Dual-Defense (ML-KEM + ECDH / X25519) via HKDF-SHA256, machine d'états de transition quantique (`ClassicalOnly`, `HybridPqcClassical`, `PurePqcEnforced`), registre d'audit inviolable scellé par chaîne SHA-256 (`pqc_audit_chain`), gouvernance capabilaire stricte par jeton `PqcCap` et commandes shell interactives `pqc [status | keys | kem | dsa | hybrid | transition | audit]` dans `jsh`.
+> **Statut du Projet : Version v0.2.95 (Preuves à Divulgation Nulle de Connaissance zk-SNARKs R1CS jambo-zksnark)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.95` introduit le sous-système de preuves à divulgation nulle de connaissance (zk-SNARKs) et de circuits arithmétiques R1CS (`services/jambo-zksnark`) : arithmétique modulaire en corps de Goldilocks ($P = 2^{64} - 2^{32} + 1$) sans allocations (`#![no_std]`), compilateur de contraintes R1CS ($A \cdot B = C$) et évaluation QAP Groth16 succincte $O(1)$, bibliothèque de circuits souverains (`PreimageKnowledge`, `RangeProof4Bit`, `CapTokenProof`, `ConfidentialTransfer`), transcription de Fiat-Shamir scellée SHA-256, registre d'audit inviolable `zk_audit_chain`, gouvernance capabilaire stricte par jeton `ZkSnarkCap` et commandes shell interactives `zksnark [status | circuits | prove | verify | audit]` dans `jsh`.
 
 ---
 
@@ -183,6 +183,7 @@ jambo-os/
 │   ├── jambo-walld/         # Pare-feu distribué dynamique & synchronisation conntrack
 │   ├── jambo-wasm/          # Runtime WebAssembly / WASI Snapshot Preview 1
 │   ├── jambo-watchdogd/     # Surveillance de vivacité matérielle/logicielle & chien de garde
+│   ├── jambo-zksnark/       # Preuves à divulgation nulle de connaissance (zk-SNARKs) & contraintes R1CS
 │   └── pcie-bus-mgr/        # Gestionnaire de bus PCIe, MSI-X et isolation IOMMU
 └── xtask/                   # Outil de compilation, création d'ISO et test QEMU
 ```

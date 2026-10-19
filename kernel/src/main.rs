@@ -1100,6 +1100,13 @@ pub extern "C" fn _start() -> ! {
         "Échec du test de la cryptographie post-quantique PQC jambo-pqc"
     );
 
+    // 10sexiesvicies. Validation des Preuves à Divulgation Nulle de Connaissance zk-SNARK & R1CS (Phase 97 - v0.2.95)
+    let zksnark_success = sched::execute_zksnark_daemon_test();
+    assert!(
+        zksnark_success,
+        "Échec du test des preuves à divulgation nulle de connaissance zk-SNARK jambo-zksnark"
+    );
+
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
 
     arch::init_iommu();
@@ -1332,14 +1339,15 @@ pub extern "C" fn _start() -> ! {
     kprintln!("\x1b[1;32m[PASS] Phase 94 Hardware Security Module (HSM), PKCS#11 Key Derivation & Sealed Storage (jambo-hsm) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 95 Secure Multi-Party Computation (MPC), Threshold Secret Sharing & Beaver Triplets (jambo-mpc) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 96 Post-Quantum Cryptography (ML-KEM, ML-DSA) & Sovereign Quantum Transition (jambo-pqc) Complete\x1b[0m");
+    kprintln!("\x1b[1;32m[PASS] Phase 97 Zero-Knowledge Succinct Proofs (zk-SNARKs) & R1CS Constraints (jambo-zksnark) Complete\x1b[0m");
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.94 (Cryptographie Post-Quantique ML-KEM/ML-DSA & Transition Quantique Souveraine jambo-pqc)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.95 (Preuves zk-SNARKs R1CS & Divulgation Nulle de Connaissance jambo-zksnark)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.94 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.95 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
