@@ -133,6 +133,7 @@ pub struct JamboShell {
     pub diag: jambo_diagd::JamboDiagDaemon,
     pub sand: jambo_sandd::JamboSandDaemon,
     pub watchdog: jambo_watchdogd::JamboWatchdogDaemon,
+    pub core: jambo_cored::JamboCoreDaemon,
 }
 
 impl Default for JamboShell {
@@ -285,6 +286,12 @@ impl JamboShell {
         );
         let mut watchdog = jambo_watchdogd::JamboWatchdogDaemon::new(1, watchdog_cap);
         watchdog.init_defaults();
+        let core_cap = jambo_cored::CoreCap::new(
+            libjambo::Handle::new(8301, 1),
+            jambo_cored::core_rights::ALL,
+        );
+        let mut core = jambo_cored::JamboCoreDaemon::new(1, core_cap);
+        core.init_defaults();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -326,6 +333,7 @@ impl JamboShell {
             diag,
             sand,
             watchdog,
+            core,
         }
     }
 
@@ -2404,6 +2412,224 @@ impl JamboShell {
                     }
                     _ => {
                         emit("Usage: watchdog [status | targets | hw | nodes | pet <id> | nmi <id> | alerts | digest]\n");
+                        (ShellStatus::ExecutionFailed, write_pos)
+                    }
+                }
+            }
+            "core" | "corectl" => {
+                let subcmd = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    "status"
+                };
+
+                match subcmd {
+                    "status" => {
+                        let mut b = [0u8; 20];
+                        emit("=== GESTIONNAIRE DE CRASH DUMPS & FORENSIQUE POST-MORTEM (jambo-cored) ===\n");
+                        emit("Démon Core ID          : #");
+                        emit(format_u64(self.core.daemon_id as u64, &mut b));
+                        emit("\nRapports Archivés      : ");
+                        emit(format_u64(self.core.report_count as u64, &mut b));
+                        emit(" / ");
+                        emit(format_u64(jambo_cored::MAX_CRASH_REPORTS as u64, &mut b));
+                        emit("\nJournaux de Télémétrie : ");
+                        emit(format_u64(self.core.telemetry_count as u64, &mut b));
+                        emit(" / ");
+                        emit(format_u64(jambo_cored::MAX_TELEMETRY_LOGS as u64, &mut b));
+                        emit("\n\n--- Statistiques de Forensique & Auto-Guérison ---\n");
+                        emit("Crashs Capturés        : ");
+                        emit(format_u64(self.core.stats.total_crashes_captured, &mut b));
+                        emit("\nDumps ELF Générés      : ");
+                        emit(format_u64(self.core.stats.total_elf_generated, &mut b));
+                        emit("\nRapports Scellés       : ");
+                        emit(format_u64(self.core.stats.total_reports_sealed, &mut b));
+                        emit("\nPages en Quarantaine   : ");
+                        emit(format_u64(self.core.stats.total_pages_quarantined, &mut b));
+                        emit("\nTélémétries Émises     : ");
+                        emit(format_u64(self.core.stats.total_telemetry_emitted, &mut b));
+                        emit("\nSceaux Intègres        : ");
+                        emit(format_u64(self.core.stats.total_verifications_succeeded, &mut b));
+                        emit("\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "list" | "reports" => {
+                        let mut b = [0u8; 20];
+                        emit("=== RAPPORTS DE CRASH ARCHIVÉS & SCELLÉS ===\n");
+                        for slot in self.core.reports.iter() {
+                            if let Some(report) = slot {
+                                emit("Rapport #");
+                                emit(format_u64(report.report_id, &mut b));
+                                emit(" | ");
+                                emit(report.process_name_str());
+                                emit(" (PID: ");
+                                emit(format_u64(report.pid as u64, &mut b));
+                                emit(") | ");
+                                emit(report.reason.as_str());
+                                emit(" | ELF: ");
+                                emit(format_u64(report.elf_size as u64, &mut b));
+                                emit(" octets | ");
+                                emit(if report.quarantined { "[QUARANTAINE]" } else { "[ACTIF]" });
+                                emit(if report.telemetry_emitted { " [TÉLÉMÉTRIE]" } else { "" });
+                                emit("\n");
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "view" | "inspect" => {
+                        if parsed.arg_count < 3 {
+                            emit("Usage: core view <report_id>\n");
+                            return (ShellStatus::ExecutionFailed, write_pos);
+                        }
+                        let report_id = parse_u64(parsed.args[2]).unwrap_or(0);
+                        let mut b = [0u8; 20];
+                        if let Some(rep) = self.core.get_report(report_id) {
+                            emit("=== DÉTAILS DU CRASH DUMP #");
+                            emit(format_u64(rep.report_id, &mut b));
+                            emit(" ===\nProcessus     : ");
+                            emit(rep.process_name_str());
+                            emit("\nPID / TID     : ");
+                            emit(format_u64(rep.pid as u64, &mut b));
+                            emit(" / ");
+                            emit(format_u64(rep.tid as u64, &mut b));
+                            emit("\nRaison        : ");
+                            emit(rep.reason.as_str());
+                            emit(" (Signal: ");
+                            emit(format_u64(rep.reason.signal_num() as u64, &mut b));
+                            emit(")\nPC / RIP      : 0x");
+                            emit(format_hex_u64(rep.regs.instruction_pointer(), &mut b));
+                            emit("\nSP / RSP      : 0x");
+                            emit(format_hex_u64(rep.regs.stack_pointer(), &mut b));
+                            emit("\nAdresse Faute : 0x");
+                            emit(format_hex_u64(rep.regs.fault_address(), &mut b));
+                            emit("\nTaille ELF    : ");
+                            emit(format_u64(rep.elf_size as u64, &mut b));
+                            emit(" octets\nQuarantaine   : ");
+                            emit(if rep.quarantined { "OUI (Mémoire isolée)" } else { "NON" });
+                            emit("\nRecommandation: ");
+                            emit(rep.recommendation.as_str());
+                            emit("\n");
+                            (ShellStatus::Success, write_pos)
+                        } else {
+                            emit("core: rapport introuvable\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        }
+                    }
+                    "quarantine" => {
+                        if parsed.arg_count < 3 {
+                            emit("Usage: core quarantine <report_id>\n");
+                            return (ShellStatus::ExecutionFailed, write_pos);
+                        }
+                        let report_id = parse_u64(parsed.args[2]).unwrap_or(0);
+                        let mut b = [0u8; 20];
+                        let cap = self.core.admin_cap;
+                        match self.core.quarantine_memory(&cap, report_id) {
+                            Ok(pages) => {
+                                emit("core: rapport #");
+                                emit(format_u64(report_id, &mut b));
+                                emit(" mis en quarantaine (");
+                                emit(format_u64(pages, &mut b));
+                                emit(" pages isolées)\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("core: échec de mise en quarantaine du rapport\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "telemetry" => {
+                        if parsed.arg_count < 3 {
+                            emit("Usage: core telemetry <report_id>\n");
+                            return (ShellStatus::ExecutionFailed, write_pos);
+                        }
+                        let report_id = parse_u64(parsed.args[2]).unwrap_or(0);
+                        let mut b = [0u8; 20];
+                        let cap = self.core.admin_cap;
+                        match self.core.emit_telemetry(&cap, report_id, 1) {
+                            Ok(tel) => {
+                                emit("core: télémétrie post-crash émise pour rapport #");
+                                emit(format_u64(report_id, &mut b));
+                                emit(", action recommandée: ");
+                                emit(tel.recommendation.as_str());
+                                emit("\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("core: échec d'émission de télémétrie\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "verify" => {
+                        if parsed.arg_count < 3 {
+                            emit("Usage: core verify <report_id>\n");
+                            return (ShellStatus::ExecutionFailed, write_pos);
+                        }
+                        let report_id = parse_u64(parsed.args[2]).unwrap_or(0);
+                        let mut b = [0u8; 20];
+                        let cap = self.core.admin_cap;
+                        match self.core.verify_seal(&cap, report_id) {
+                            Ok(true) => {
+                                emit("core: sceau cryptographique SHA-256 du rapport #");
+                                emit(format_u64(report_id, &mut b));
+                                emit(" [VALIDE / INTÈGRE]\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Ok(false) => {
+                                emit("core: ALERTE FALSIFICATION ! Sceau du rapport #");
+                                emit(format_u64(report_id, &mut b));
+                                emit(" [INVALIDE / CORROMPU]\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                            Err(_) => {
+                                emit("core: rapport introuvable ou erreur de vérification\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "elf" => {
+                        if parsed.arg_count < 3 {
+                            emit("Usage: core elf <report_id>\n");
+                            return (ShellStatus::ExecutionFailed, write_pos);
+                        }
+                        let report_id = parse_u64(parsed.args[2]).unwrap_or(0);
+                        let mut b = [0u8; 20];
+                        let mut elf_buf = [0u8; 2048];
+                        let cap = self.core.admin_cap;
+                        match self.core.generate_elf(&cap, report_id, &mut elf_buf) {
+                            Ok(sz) => {
+                                emit("core: binaire ELF64 Core Dump généré (");
+                                emit(format_u64(sz as u64, &mut b));
+                                emit(" octets, Format: ELF64/ET_CORE)\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("core: échec de génération du dump ELF\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "digest" => {
+                        let cap = self.core.admin_cap;
+                        match self.core.get_audit_digest(&cap) {
+                            Ok(digest) => {
+                                emit("Condensat SHA-256 d'Audit Crash & Forensique : ");
+                                let mut b = [0u8; 20];
+                                for byte in digest.iter() {
+                                    emit(format_hex_u64(*byte as u64, &mut b));
+                                }
+                                emit("\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("core: échec de lecture du condensat d'audit\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    _ => {
+                        emit("Usage: core [status | list | view <id> | quarantine <id> | telemetry <id> | verify <id> | elf <id> | digest]\n");
                         (ShellStatus::ExecutionFailed, write_pos)
                     }
                 }

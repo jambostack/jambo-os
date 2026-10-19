@@ -1,7 +1,7 @@
 # ROADMAP DU DÉVELOPPEMENT AUTONOME — JamboOS
 
-> **Dernière mise à jour** : 2026-10-19 16:20 UTC  
-> **Version actuelle** : `v0.2.79`  
+> **Dernière mise à jour** : 2026-10-19 17:05 UTC  
+> **Version actuelle** : `v0.2.81`  
 > **Statut global** : Pré-Alpha active — Micro-noyau de 3e génération orienté capacités (`#![no_std]`)  
 > **Cycle de développement autonome** : 10 minutes via le Planificateur de Tâches & Crons d'Antigravity WebUI  
 
@@ -69,26 +69,27 @@
 | **v0.2.78** | 80 | Diagnostics `jambo-diagd` | Surveillance active PCIe/NVMe/VirtIO/ECC/MCA, auto-remédiation (Link Retraining, FLR, Hot-Failover), scellement SHA-256, DiagCap | ✅ Validé |
 | **v0.2.79** | 81 | Confinement `jambo-sandd` | Confinement Seccomp/Landlock Zero-Ambient, resserrement monotone, SandCap, audit SHA-256 | ✅ Validé |
 | **v0.2.80** | 82 | Watchdog `jambo-watchdogd` | Chien de garde matériel/logiciel, détection dérive event loop, isolation NMI, vivacité grappe, WatchdogCap | ✅ Validé |
+| **v0.2.81** | 83 | Core Dumps `jambo-cored` | Capture d'état post-mortem, crash dumps ELF64 scellés SHA-256, isolation mémoire & quarantaine, télémétrie post-crash, CoreCap | ✅ Validé |
 
 ---
 
 ## 3. Prochaines Étapes Prioritaires
 
-### 🎯 Prochaine Tâche Immédiate : Phase 83 — v0.2.81
-* **Composant** : `services/jambo-cored`
-* **Objectif** : Capture d'état post-mortem, génération de crash dumps scellés ELF, isolation mémoire et télémétrie post-crash
-* **Tâches précises** :
-  1. Capture d'état des registres et de la pile mémoire lors de paniques ou fautes non récupérables.
-  2. Génération de rapports ELF Core Dump scellés par signature cryptographique.
-  3. Validation `cargo xtask test` et commit `v0.2.81`.
-
-### 🎯 Tâche Suivante : Phase 84 — v0.2.82
+### 🎯 Prochaine Tâche Immédiate : Phase 84 — v0.2.82
 * **Composant** : `services/jambo-patchd`
 * **Objectif** : Rechargement à chaud de binaires en espace utilisateur, patchs dynamiques sans redémarrage et vérification de conformité ABI
 * **Tâches précises** :
   1. Remplacement atomique de symboles et fonctions exécutables Ring 3 à chaud (*Livepatching*).
   2. Quiescence des threads, redirection de trampolines et préservation de l'état des VMO.
   3. Validation `cargo xtask test` et commit `v0.2.82`.
+
+### 🎯 Tâche Suivante : Phase 85 — v0.2.83
+* **Composant** : `services/jambo-profilerd`
+* **Objectif** : Échantillonnage de compteurs de performance matérielle (PMC/PEBS), profils de flammes (Flamegraphs) et analyse de latence Ring 3
+* **Tâches précises** :
+  1. Capture des événements matériels PMC (instructions, cycles, fautes de cache L1/L3, prédictions de branchement).
+  2. Échantillonnage non-intrusif de l'arbre d'appels et export de profils structurés scellés.
+  3. Validation `cargo xtask test` et commit `v0.2.83`.
 
 ---
 
@@ -109,6 +110,8 @@
 * **2026-10-19 16:05 UTC** : Validation complète Phase 80 (`jambo-diagd`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test --workspace --lib`). Tag `v0.2.78`.
 * **2026-10-19 16:20 UTC** : Validation complète Phase 81 (`jambo-sandd`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test --workspace --lib`). Tag `v0.2.79`.
 * **2026-10-19 16:42 UTC** : Validation complète Phase 82 (`jambo-watchdogd`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test --workspace --lib`). Tag `v0.2.80`.
+* **2026-10-19 17:05 UTC** : Validation complète Phase 83 (`jambo-cored`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-cored`). Tag `v0.2.81`.
+
 
 
 
