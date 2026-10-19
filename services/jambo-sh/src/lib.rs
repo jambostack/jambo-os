@@ -124,6 +124,7 @@ pub struct JamboShell {
     pub trace: jambo_traced::JamboTraceDaemon,
     pub cert: jambo_certd::JamboCertDaemon,
     pub init: jambo_init::JamboInitDaemon,
+    pub dns: jambo_dnsd::JamboDnsDaemon,
 }
 
 impl Default for JamboShell {
@@ -187,6 +188,12 @@ impl JamboShell {
         let trace = jambo_traced::JamboTraceDaemon::new();
         let cert = jambo_certd::JamboCertDaemon::new();
         let init = jambo_init::JamboInitDaemon::new();
+        let dns_cap = jambo_dnsd::DnsCap::new(
+            libjambo::Handle::new(7401, 1),
+            jambo_dnsd::dns_rights::ALL,
+        );
+        let mut dns = jambo_dnsd::JamboDnsDaemon::new(dns_cap);
+        let _ = dns.sync_from_service_registry(&dns_cap, &service.registry, 100);
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -219,6 +226,7 @@ impl JamboShell {
             trace,
             cert,
             init,
+            dns,
         }
     }
 
@@ -322,7 +330,7 @@ impl JamboShell {
                 emit("  ip           - Affiche la configuration réseau IPv4/MAC de eth0\n");
                 emit("  ping <ip>    - Teste la connectivité réseau ICMP Echo\n");
                 emit("  netstat      - Affiche la table des sockets TCP actives\n");
-                emit("  dns <host>   - Résolution DNS sécurisée via DNS-over-TLS (DoT 853)\n");
+                emit("  dns [cmd]    - Serveur & résolveur DNS d'autorité (.jambo) et DoT externe\n");
                 emit("  gui [cmd]    - Interface graphique JamboComp, VirtIO-GPU et JamboUI\n");
                 emit("  compat [cmd] - Couche de compatibilité binaire Linux ELF POSIX\n");
                 emit("  wasm [cmd]   - Runtime d'exécution WebAssembly & sandbox WASI\n");
@@ -568,30 +576,211 @@ impl JamboShell {
                 (ShellStatus::Success, write_pos)
             }
             "dns" => {
-                let domain = if parsed.arg_count > 1 {
+                let dns_cap = self.dns.cap;
+                let sub = if parsed.arg_count > 1 {
                     parsed.args[1]
                 } else {
-                    "github.com"
+                    "status"
                 };
-                match self.netd.resolve_dns_over_tls(&self.net_cap, domain) {
-                    Ok(ip) => {
-                        emit("[DNS/DoT] Résolution sécurisée via 1.1.1.1:853 : ");
-                        emit(domain);
-                        emit(" -> ");
+                match sub {
+                    "status" | "info" => {
                         let mut b = [0u8; 20];
-                        emit(format_u64(ip[0] as u64, &mut b));
-                        emit(".");
-                        emit(format_u64(ip[1] as u64, &mut b));
-                        emit(".");
-                        emit(format_u64(ip[2] as u64, &mut b));
-                        emit(".");
-                        emit(format_u64(ip[3] as u64, &mut b));
-                        emit(" (TLS 1.3 Validé)\n");
+                        emit("=== SERVEUR ET RÉSOLVEUR DNS D'AUTORITÉ (jambo-dnsd) ===\n");
+                        emit("Zone faisant autorité : .");
+                        emit(self.dns.zone.origin_str());
+                        emit("\nEnregistrements actifs : ");
+                        emit(format_u64(self.dns.zone.active_records_count() as u64, &mut b));
+                        emit("\nRequêtes reçues        : ");
+                        emit(format_u64(self.dns.queries_total, &mut b));
+                        emit("\nRequêtes résolues      : ");
+                        emit(format_u64(self.dns.queries_resolved, &mut b));
+                        emit("\nDomaines introuvables  : ");
+                        emit(format_u64(self.dns.nxdomain_total, &mut b));
+                        emit("\nConfinement de grappe  : DnsCap (Zero-Ambient Authority)\n");
                         (ShellStatus::Success, write_pos)
                     }
-                    Err(_) => {
-                        emit("dns: échec de résolution sécurisée DoT\n");
-                        (ShellStatus::PermissionDenied, write_pos)
+                    "zone" | "list" => {
+                        let mut b = [0u8; 20];
+                        emit("=== ZONE D'AUTORITÉ .");
+                        emit(self.dns.zone.origin_str());
+                        emit(" ===\n");
+                        emit("NOM                             TYPE   TTL    DONNÉE\n");
+                        for rec in self.dns.zone.records.iter() {
+                            if rec.allocated {
+                                let name = rec.name_str();
+                                emit(name);
+                                for _ in name.len()..32 {
+                                    emit(" ");
+                                }
+                                let t_str = rec.rtype.as_str();
+                                emit(t_str);
+                                for _ in t_str.len()..7 {
+                                    emit(" ");
+                                }
+                                emit(format_u64(rec.ttl as u64, &mut b));
+                                emit("    ");
+                                match rec.data {
+                                    jambo_dnsd::DnsRecordData::A(ip) => {
+                                        emit(format_u64(ip[0] as u64, &mut b));
+                                        emit(".");
+                                        emit(format_u64(ip[1] as u64, &mut b));
+                                        emit(".");
+                                        emit(format_u64(ip[2] as u64, &mut b));
+                                        emit(".");
+                                        emit(format_u64(ip[3] as u64, &mut b));
+                                    }
+                                    jambo_dnsd::DnsRecordData::AAAA(_) => {
+                                        emit("[IPv6]");
+                                    }
+                                    jambo_dnsd::DnsRecordData::SRV { port, ref target, target_len, .. } => {
+                                        emit("port ");
+                                        emit(format_u64(port as u64, &mut b));
+                                        emit(" -> ");
+                                        emit(core::str::from_utf8(&target[..target_len]).unwrap_or(""));
+                                    }
+                                    jambo_dnsd::DnsRecordData::TXT { ref text, text_len } => {
+                                        emit("\"");
+                                        emit(core::str::from_utf8(&text[..text_len]).unwrap_or(""));
+                                        emit("\"");
+                                    }
+                                    _ => {
+                                        emit("-");
+                                    }
+                                }
+                                emit("\n");
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "resolve" => {
+                        let domain = if parsed.arg_count > 2 {
+                            parsed.args[2]
+                        } else {
+                            "cluster.jambo"
+                        };
+                        let rtype_str = if parsed.arg_count > 3 {
+                            parsed.args[3]
+                        } else {
+                            "A"
+                        };
+                        let rtype = match rtype_str {
+                            "AAAA" => jambo_dnsd::DnsType::AAAA,
+                            "SRV" => jambo_dnsd::DnsType::SRV,
+                            "TXT" => jambo_dnsd::DnsType::TXT,
+                            _ => jambo_dnsd::DnsType::A,
+                        };
+                        match self.dns.resolve(&dns_cap, domain, rtype, 1000) {
+                            Ok(Some(data)) => {
+                                let mut b = [0u8; 20];
+                                emit("[DNS/RESOLVE] '");
+                                emit(domain);
+                                emit("' (");
+                                emit(rtype.as_str());
+                                emit(") -> ");
+                                match data {
+                                    jambo_dnsd::DnsRecordData::A(ip) => {
+                                        emit(format_u64(ip[0] as u64, &mut b));
+                                        emit(".");
+                                        emit(format_u64(ip[1] as u64, &mut b));
+                                        emit(".");
+                                        emit(format_u64(ip[2] as u64, &mut b));
+                                        emit(".");
+                                        emit(format_u64(ip[3] as u64, &mut b));
+                                        emit(" (Zone Autoritaire .jambo)\n");
+                                    }
+                                    jambo_dnsd::DnsRecordData::SRV { port, target, target_len, .. } => {
+                                        emit("Port ");
+                                        emit(format_u64(port as u64, &mut b));
+                                        emit(" Cible: ");
+                                        emit(core::str::from_utf8(&target[..target_len]).unwrap_or(""));
+                                        emit("\n");
+                                    }
+                                    _ => {
+                                        emit("Succès\n");
+                                    }
+                                }
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Ok(None) => {
+                                emit("[DNS/RESOLVE] '");
+                                emit(domain);
+                                emit("' introuvable (NXDOMAIN)\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                            Err(_) => {
+                                emit("[DNS/RESOLVE] Échec d'autorisation DnsCap\n");
+                                (ShellStatus::PermissionDenied, write_pos)
+                            }
+                        }
+                    }
+                    "sync" => {
+                        let mut b = [0u8; 20];
+                        match self.dns.sync_from_service_registry(&dns_cap, &self.service.registry, 1000) {
+                            Ok(synced) => {
+                                emit("[DNS/SYNC] ");
+                                emit(format_u64(synced as u64, &mut b));
+                                emit(" enregistrement(s) synchronisé(s) depuis jambo-serviced\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("[DNS/SYNC] Erreur de synchronisation capabilaire\n");
+                                (ShellStatus::PermissionDenied, write_pos)
+                            }
+                        }
+                    }
+                    _ => {
+                        let domain = sub;
+                        if domain.ends_with(".jambo") || domain == "jambo" {
+                            match self.dns.resolve_a(&dns_cap, domain, 1000) {
+                                Ok(Some(ip)) => {
+                                    let mut b = [0u8; 20];
+                                    emit("[DNS] Résolution locale d'autorité : ");
+                                    emit(domain);
+                                    emit(" -> ");
+                                    emit(format_u64(ip[0] as u64, &mut b));
+                                    emit(".");
+                                    emit(format_u64(ip[1] as u64, &mut b));
+                                    emit(".");
+                                    emit(format_u64(ip[2] as u64, &mut b));
+                                    emit(".");
+                                    emit(format_u64(ip[3] as u64, &mut b));
+                                    emit(" (Zone .jambo)\n");
+                                    (ShellStatus::Success, write_pos)
+                                }
+                                Ok(None) => {
+                                    emit("[DNS] '");
+                                    emit(domain);
+                                    emit("' non trouvé dans la zone .jambo (NXDOMAIN)\n");
+                                    (ShellStatus::ExecutionFailed, write_pos)
+                                }
+                                Err(_) => {
+                                    emit("[DNS] Erreur de permission DnsCap\n");
+                                    (ShellStatus::PermissionDenied, write_pos)
+                                }
+                            }
+                        } else {
+                            match self.netd.resolve_dns_over_tls(&self.net_cap, domain) {
+                                Ok(ip) => {
+                                    emit("[DNS/DoT] Résolution sécurisée via 1.1.1.1:853 : ");
+                                    emit(domain);
+                                    emit(" -> ");
+                                    let mut b = [0u8; 20];
+                                    emit(format_u64(ip[0] as u64, &mut b));
+                                    emit(".");
+                                    emit(format_u64(ip[1] as u64, &mut b));
+                                    emit(".");
+                                    emit(format_u64(ip[2] as u64, &mut b));
+                                    emit(".");
+                                    emit(format_u64(ip[3] as u64, &mut b));
+                                    emit(" (TLS 1.3 Validé)\n");
+                                    (ShellStatus::Success, write_pos)
+                                }
+                                Err(_) => {
+                                    emit("dns: échec de résolution sécurisée DoT\n");
+                                    (ShellStatus::PermissionDenied, write_pos)
+                                }
+                            }
+                        }
                     }
                 }
             }

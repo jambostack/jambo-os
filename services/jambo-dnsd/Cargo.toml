@@ -1,0 +1,8 @@
+[package]
+name = "jambo-dnsd"
+version = "0.2.72"
+edition = "2021"
+
+[dependencies]
+libjambo = { path = "../../libs/libjambo" }
+jambo-serviced = { path = "../jambo-serviced" }

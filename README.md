@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.71-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.72-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.71 (Moteur WebAssembly Sandboxed jambo-wasm)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.71` introduit le moteur d'exécution WebAssembly V1 souverain en espace utilisateur (`services/jambo-wasm`), implémentant une machine à pile d'opérandes complète `#![no_std]`, une mémoire linéaire sandboxed isolée avec vérification stricte des accès hors-bornes (traps déterministes `SysError::BadAddress`), le comptage déterministe de consommation d'instructions (*gas metering*) anti-DoS, le confinement capabilaire granulaire `WasmCap` (droits `WASM_EXEC`, `WASM_MEM_GROW`, `WASM_WASI_IO`, `WASM_WASI_TIME`), les liaisons WASI Preview 1 sans autorité ambiante et les commandes interactives `wasm [status | run <module> | test]` dans `jsh`.
+> **Statut du Projet : Version v0.2.72 (Résolveur et Serveur DNS d'Autorité de Grappe jambo-dnsd)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.72` introduit le résolveur et serveur DNS d'autorité souverain en espace utilisateur (`services/jambo-dnsd`), fournissant la résolution de zone locale `.jambo` pour la grappe, les enregistrements A (IPv4), AAAA (IPv6), SRV (services réseau), CNAME, TXT et PTR, le décodage et l'encodage binaire des trames RFC 1035 wire-format, le confinement capabilaire strict `DnsCap` (droits `DNS_RESOLVE`, `DNS_REGISTER`, `DNS_ZONE_UPDATE`, `DNS_RECURSE`, `DNS_ADMIN`), la synchronisation bidirectionnelle directe avec `jambo-serviced` et les commandes interactives `dns [status | zone | resolve <domaine> | sync]` dans `jsh`.
 
 ---
 
@@ -139,6 +139,7 @@ jambo-os/
 │   ├── jambo-coreutils/     # Utilitaires système (ps, capstat, top, jpkg)
 │   ├── jambo-cryptod/       # Chiffrement de bloc transparent ChaCha20 et scellement TPM 2.0
 │   ├── jambo-dfsd/          # Stockage distribué adressable par contenu (CAS) & réplication
+│   ├── jambo-dnsd/          # Serveur & résolveur DNS d'autorité de grappe (.jambo)
 │   ├── jambo-eventd/        # Bus d'événements Pub/Sub asynchrone et découplage de grappe
 │   ├── jambo-fs/            # Système de fichiers transactionnel Merkle Copy-on-Write
 │   ├── jambo-fuzz/          # Moteur de fuzzing offensif et tests de résilience
