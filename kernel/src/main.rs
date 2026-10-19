@@ -1093,6 +1093,13 @@ pub extern "C" fn _start() -> ! {
         "Échec du test du calcul multipartite sécurisé MPC jambo-mpc"
     );
 
+    // 10quinquiesvicies. Validation de la Cryptographie Post-Quantique PQC & Transition Quantique Souveraine (Phase 96 - v0.2.94)
+    let pqc_success = sched::execute_pqc_daemon_test();
+    assert!(
+        pqc_success,
+        "Échec du test de la cryptographie post-quantique PQC jambo-pqc"
+    );
+
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
 
     arch::init_iommu();
@@ -1324,14 +1331,15 @@ pub extern "C" fn _start() -> ! {
     kprintln!("\x1b[1;32m[PASS] Phase 93 Remote Cryptographic Attestation, Zero-Knowledge Proofs (ZKP) & Hardware Cluster Confinement (jambo-attest) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 94 Hardware Security Module (HSM), PKCS#11 Key Derivation & Sealed Storage (jambo-hsm) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 95 Secure Multi-Party Computation (MPC), Threshold Secret Sharing & Beaver Triplets (jambo-mpc) Complete\x1b[0m");
+    kprintln!("\x1b[1;32m[PASS] Phase 96 Post-Quantum Cryptography (ML-KEM, ML-DSA) & Sovereign Quantum Transition (jambo-pqc) Complete\x1b[0m");
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.93 (Calcul Multipartite Sécurisé MPC, Partage Secret de Seuil & Triplés de Beaver jambo-mpc)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.94 (Cryptographie Post-Quantique ML-KEM/ML-DSA & Transition Quantique Souveraine jambo-pqc)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.93 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.94 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );

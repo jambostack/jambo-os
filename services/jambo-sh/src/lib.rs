@@ -164,6 +164,7 @@ pub struct JamboShell {
     pub attest: jambo_attest::JamboAttestDaemon,
     pub hsm: jambo_hsm::JamboHsmDaemon,
     pub mpc: jambo_mpc::JamboMpcDaemon,
+    pub pqc: jambo_pqc::JamboPqcDaemon,
 }
 
 impl Default for JamboShell {
@@ -394,6 +395,12 @@ impl JamboShell {
         );
         let mut mpc = jambo_mpc::JamboMpcDaemon::new(mpc_cap);
         mpc.init_defaults();
+        let pqc_cap = jambo_pqc::PqcCap::new(
+            libjambo::Handle::new(9601, 1),
+            jambo_pqc::pqc_rights::ALL,
+        );
+        let mut pqc = jambo_pqc::JamboPqcDaemon::new(pqc_cap);
+        pqc.init_defaults();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -448,6 +455,7 @@ impl JamboShell {
             attest,
             hsm,
             mpc,
+            pqc,
         }
     }
 
@@ -607,10 +615,11 @@ impl JamboShell {
                 emit("  attest [cmd]  - Attestation distante, preuves Zero-Knowledge (ZKP) & confinement grappe\n");
                 emit("  hsm [cmd]     - Module de sécurité matériel HSM Ring 3, dérivation PKCS#11 & scellement KEK\n");
                 emit("  mpc [cmd]     - Calcul Multipartite Sécurisé (MPC), partage de secret & consensus distribué\n");
+                emit("  pqc [cmd]     - Cryptographie Post-Quantique (ML-KEM/ML-DSA) & transition souveraine\n");
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.2.93 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.2.94 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -5134,6 +5143,211 @@ impl JamboShell {
                     }
                     _ => {
                         emit("Usage: mpc [status | nodes | share | beaver | slash | audit]\n");
+                        (ShellStatus::ExecutionFailed, write_pos)
+                    }
+                }
+            }
+            "pqc" => {
+                let sub = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    "status"
+                };
+                match sub {
+                    "status" => {
+                        let mut b = [0u8; 20];
+                        emit("=== CRYPTOGRAPHIE POST-QUANTIQUE SOUVERAINE (jambo-pqc) ===\n");
+                        emit("Algorithmes Standards       : ML-KEM (Kyber-768) & ML-DSA (Dilithium-65)\n");
+                        emit("État Transition Quantique   : ");
+                        match self.pqc.transition_state {
+                            jambo_pqc::PqcTransitionState::ClassicalOnly => emit("ClassicalOnly (Déprécié)\n"),
+                            jambo_pqc::PqcTransitionState::HybridPqcClassical => emit("HybridPqcClassical (Dual-Defense Active)\n"),
+                            jambo_pqc::PqcTransitionState::PurePqcEnforced => emit("PurePqcEnforced (Post-Quantique Strict)\n"),
+                        }
+                        emit("Clés PQC Actives            : ");
+                        emit(format_u64(self.pqc.count_active_keys() as u64, &mut b));
+                        emit(" / ");
+                        emit(format_u64(jambo_pqc::MAX_PQC_KEYS as u64, &mut b));
+                        emit("\nEncapsulations ML-KEM       : ");
+                        emit(format_u64(self.pqc.kem_encaps_count, &mut b));
+                        emit("\nDécapsulations ML-KEM       : ");
+                        emit(format_u64(self.pqc.kem_decaps_count, &mut b));
+                        emit("\nSignatures ML-DSA           : ");
+                        emit(format_u64(self.pqc.dsa_signs_count, &mut b));
+                        emit("\nVérifications ML-DSA        : ");
+                        emit(format_u64(self.pqc.dsa_verifies_count, &mut b));
+                        emit("\nÉchanges Hybrides KEX       : ");
+                        emit(format_u64(self.pqc.hybrid_kex_count, &mut b));
+                        emit("\nZéroïsations d'Urgence      : ");
+                        emit(format_u64(self.pqc.zeroizations, &mut b));
+                        emit("\nÉpoque Sous-Système PQC     : ");
+                        emit(format_u64(self.pqc.epoch, &mut b));
+                        emit("\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "keys" => {
+                        let mut b = [0u8; 20];
+                        emit("ID | ALGORITHME      | LIBELLÉ                         | USAGE | STATUT\n");
+                        emit("---+-----------------+---------------------------------+-------+--------\n");
+                        for k_opt in &self.pqc.keys {
+                            if let Some(k) = k_opt {
+                                emit(format_u64(k.key_id as u64, &mut b));
+                                emit("  | ");
+                                let algo_str = match k.algorithm {
+                                    jambo_pqc::PqcAlgorithm::MlKem768 => "ML-KEM-768     ",
+                                    jambo_pqc::PqcAlgorithm::MlDsa65 => "ML-DSA-65      ",
+                                    jambo_pqc::PqcAlgorithm::HybridMlKemX25519 => "Hybrid-KEM-X255",
+                                };
+                                emit(algo_str);
+                                emit(" | ");
+                                if let Ok(lbl) = core::str::from_utf8(&k.label[..k.label_len]) {
+                                    emit(lbl);
+                                    for _ in k.label_len..31 {
+                                        emit(" ");
+                                    }
+                                } else {
+                                    emit("Inconnu                        ");
+                                }
+                                emit(" | ");
+                                emit(format_u64(k.usage_count as u64, &mut b));
+                                for _ in format_u64(k.usage_count as u64, &mut b).len()..5 {
+                                    emit(" ");
+                                }
+                                emit(" | ");
+                                if k.is_active {
+                                    emit("Actif\n");
+                                } else {
+                                    emit("Révoqué\n");
+                                }
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "kem" => {
+                        let admin_cap = self.pqc.admin_cap;
+                        emit("Exécution de l'échange de clé post-quantique ML-KEM-768...\n");
+                        let kem_key_id = self.pqc.keys.iter().filter_map(|k| k.as_ref()).find(|k| k.is_active && k.algorithm == jambo_pqc::PqcAlgorithm::MlKem768).map(|k| k.key_id);
+                        if let Some(kid) = kem_key_id {
+                            let mut ct = [0u8; jambo_pqc::KEM_CIPHERTEXT_LEN];
+                            let mut ss_sender = [0u8; jambo_pqc::KEM_SHARED_SECRET_LEN];
+                            let mut ss_receiver = [0u8; jambo_pqc::KEM_SHARED_SECRET_LEN];
+
+                            match self.pqc.kem_encapsulate(&admin_cap, kid, b"shell_entropy_kem_seed", &mut ct, &mut ss_sender) {
+                                Ok(()) => {
+                                    match self.pqc.kem_decapsulate(&admin_cap, kid, &ct, &mut ss_receiver) {
+                                        Ok(()) => {
+                                            if ss_sender == ss_receiver {
+                                                emit("\x1b[1;32m[SUCCÈS] Encapsulation & Décapsulation ML-KEM validées (Secrets partagés identiques).\x1b[0m\n");
+                                                (ShellStatus::Success, write_pos)
+                                            } else {
+                                                emit("Erreur: Non-concordance des secrets partagés ML-KEM.\n");
+                                                (ShellStatus::ExecutionFailed, write_pos)
+                                            }
+                                        }
+                                        Err(_) => {
+                                            emit("Échec de la décapsulation ML-KEM.\n");
+                                            (ShellStatus::ExecutionFailed, write_pos)
+                                        }
+                                    }
+                                }
+                                Err(_) => {
+                                    emit("Échec de l'encapsulation ML-KEM.\n");
+                                    (ShellStatus::ExecutionFailed, write_pos)
+                                }
+                            }
+                        } else {
+                            emit("Aucune clé ML-KEM active disponible.\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        }
+                    }
+                    "dsa" => {
+                        let admin_cap = self.pqc.admin_cap;
+                        emit("Signature et vérification numérique post-quantique ML-DSA-65...\n");
+                        let dsa_key_id = self.pqc.keys.iter().filter_map(|k| k.as_ref()).find(|k| k.is_active && k.algorithm == jambo_pqc::PqcAlgorithm::MlDsa65).map(|k| k.key_id);
+                        if let Some(kid) = dsa_key_id {
+                            let msg = b"JAMBO_PQC_SHELL_TEST_MESSAGE_2026";
+                            let mut sig = [0u8; jambo_pqc::DSA_SIGNATURE_LEN];
+                            match self.pqc.dsa_sign(&admin_cap, kid, msg, b"nonce_shell_dsa", &mut sig) {
+                                Ok(_) => {
+                                    match self.pqc.dsa_verify(&admin_cap, kid, msg, &sig) {
+                                        Ok(valid) if valid => {
+                                            emit("\x1b[1;32m[SUCCÈS] Signature ML-DSA apposée et vérifiée avec succès (Authenticité post-quantique garantie).\x1b[0m\n");
+                                            (ShellStatus::Success, write_pos)
+                                        }
+                                        _ => {
+                                            emit("Échec de la vérification ML-DSA.\n");
+                                            (ShellStatus::ExecutionFailed, write_pos)
+                                        }
+                                    }
+                                }
+                                Err(_) => {
+                                    emit("Échec de la signature ML-DSA.\n");
+                                    (ShellStatus::ExecutionFailed, write_pos)
+                                }
+                            }
+                        } else {
+                            emit("Aucune clé ML-DSA active disponible.\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        }
+                    }
+                    "hybrid" => {
+                        let admin_cap = self.pqc.admin_cap;
+                        emit("Échange de clés hybride Dual-Defense (ML-KEM + ECDH)...\n");
+                        let kem_key_id = self.pqc.keys.iter().filter_map(|k| k.as_ref()).find(|k| k.is_active && k.algorithm == jambo_pqc::PqcAlgorithm::MlKem768).map(|k| k.key_id);
+                        if let Some(kid) = kem_key_id {
+                            let classical_ss = [0x5cu8; 32];
+                            let mut ct = [0u8; jambo_pqc::KEM_CIPHERTEXT_LEN];
+                            let mut hybrid_ss = [0u8; 32];
+                            match self.pqc.execute_hybrid_kex(&admin_cap, kid, &classical_ss, b"SHELL_HYBRID_KEX", &mut ct, &mut hybrid_ss) {
+                                Ok(()) => {
+                                    emit("\x1b[1;32m[SUCCÈS] Secret dérivé hybride généré via HKDF-SHA256 (Dual-Defense certifiée).\x1b[0m\n");
+                                    (ShellStatus::Success, write_pos)
+                                }
+                                Err(_) => {
+                                    emit("Échec de l'échange de clés hybride.\n");
+                                    (ShellStatus::ExecutionFailed, write_pos)
+                                }
+                            }
+                        } else {
+                            emit("Aucune clé ML-KEM active disponible pour l'échange hybride.\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        }
+                    }
+                    "transition" => {
+                        let admin_cap = self.pqc.admin_cap;
+                        let target = if parsed.arg_count > 2 {
+                            parsed.args[2]
+                        } else {
+                            "pure"
+                        };
+                        let new_state = match target {
+                            "pure" => jambo_pqc::PqcTransitionState::PurePqcEnforced,
+                            "hybrid" => jambo_pqc::PqcTransitionState::HybridPqcClassical,
+                            "classical" => jambo_pqc::PqcTransitionState::ClassicalOnly,
+                            _ => jambo_pqc::PqcTransitionState::PurePqcEnforced,
+                        };
+                        match self.pqc.set_transition_state(&admin_cap, new_state) {
+                            Ok(()) => {
+                                emit("\x1b[1;32m[SUCCÈS] Politique de transition quantique mise à jour.\x1b[0m\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("Échec de mise à jour de la transition quantique.\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "audit" => {
+                        emit("Condensat SHA-256 d'Audit PQC (Registre Cryptographique Scellé) : ");
+                        let mut b = [0u8; 20];
+                        for byte in self.pqc.audit_chain.iter() {
+                            emit(format_hex_u64(*byte as u64, &mut b));
+                        }
+                        emit("\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    _ => {
+                        emit("Usage: pqc [status | keys | kem | dsa | hybrid | transition <pure|hybrid|classical> | audit]\n");
                         (ShellStatus::ExecutionFailed, write_pos)
                     }
                 }

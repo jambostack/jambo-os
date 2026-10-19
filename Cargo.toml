@@ -60,6 +60,7 @@ members = [
     "services/jambo-attest",
     "services/jambo-hsm",
     "services/jambo-mpc",
+    "services/jambo-pqc",
     "libs/jambo-ui",
     "libs/jambo-sdk",
     "drivers/virtio",

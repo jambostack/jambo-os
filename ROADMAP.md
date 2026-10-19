@@ -82,24 +82,25 @@
 | **v0.2.91** | 93 | Attestation Grappe `jambo-attest` | Attestation cryptographique à distance, preuves Zero-Knowledge (ZKP) Schnorr/Fiat-Shamir, revendications d'intégrité, confinement de grappe & scellement SHA-256 | ✅ Validé |
 | **v0.2.92** | 94 | Sécurité Matérielle `jambo-hsm` | Module de sécurité matériel HSM Ring 3, dérivation PKCS#11, scellement KEK, zéroïsation d'urgence & audit SHA-256 | ✅ Validé |
 | **v0.2.93** | 95 | Calcul MPC `jambo-mpc` | Calcul Multipartite Sécurisé (MPC), corps GF(256), partage secret de seuil de Shamir (SSS/VSS), triplés de Beaver, détection byzantine & audit SHA-256 | ✅ Validé |
+| **v0.2.94** | 96 | Cryptographie Post-Quantique `jambo-pqc` | Cryptographie Post-Quantique (ML-KEM / Kyber-768 & ML-DSA / Dilithium-65), arithmétique d'anneaux négacycliques, Dual-Defense HKDF, transition quantique & audit SHA-256 | ✅ Validé |
 
 ---
 
 ## 3. Prochaines Étapes Prioritaires
 
-### 🎯 Prochaine Tâche Immédiate : Phase 96 — v0.2.94
-* **Composant** : `services/jambo-pqc`
-* **Objectif** : Cryptographie Post-Quantique (ML-KEM / Kyber, ML-DSA / Dilithium) et transition quantique souveraine
-* **Tâches précises** :
-  1. Implémentation des primitives post-quantiques `#![no_std]`.
-  2. Intégration aux échanges de clés et validation `cargo xtask test`.
-
-### 🎯 Tâche Suivante : Phase 97 — v0.2.95
+### 🎯 Prochaine Tâche Immédiate : Phase 97 — v0.2.95
 * **Composant** : `services/jambo-zksnark`
 * **Objectif** : Preuves à Divulgation Nulle de Connaissance (zk-SNARKs), circuits arithmétiques R1CS et vérification succincte Ring 3
 * **Tâches précises** :
   1. Moteur de vérification de contraintes R1CS `#![no_std]`.
   2. Preuves succinctes non-interactives et validation `cargo xtask test`.
+
+### 🎯 Tâche Suivante : Phase 98 — v0.2.96
+* **Composant** : `services/jambo-fhe`
+* **Objectif** : Chiffrement Complètement Homomorphe (FHE), schémas BFV/CKKS sur anneaux et calculs aveugles en Ring 3
+* **Tâches précises** :
+  1. Arithmétique d'anneaux homomorphes et bootstrapp `#![no_std]`.
+  2. Opérations arithmétiques chiffrées et validation `cargo xtask test`.
 
 ---
 
@@ -133,6 +134,7 @@
 * **2026-10-19 21:35 UTC** : Validation complète Phase 93 (`jambo-attest`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-attest`). Tag `v0.2.91`.
 * **2026-10-19 21:55 UTC** : Validation complète Phase 94 (`jambo-hsm`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-hsm`). Tag `v0.2.92`.
 * **2026-10-19 22:15 UTC** : Validation complète Phase 95 (`jambo-mpc`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-mpc`). Tag `v0.2.93`.
+* **2026-10-19 22:55 UTC** : Validation complète Phase 96 (`jambo-pqc`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-pqc`). Tag `v0.2.94`.
 
 
 

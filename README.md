@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.93-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.94-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.93 (Calcul Multipartite Sécurisé MPC, Partage Secret de Seuil & Triplés de Beaver jambo-mpc)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.93` introduit le sous-système de calcul multipartite sécurisé et de consensus cryptographique distribué (`services/jambo-mpc`) : corps de Galois GF(256) souverain (`#![no_std]`), partage secret de seuil de Shamir (SSS, seuil (t, n)) avec interpolation de Lagrange, engagements de partage vérifiable (VSS) par condensats SHA-256/HMAC, évaluation de circuits arithmétiques aveugles par Triplés de Beaver (Beaver Triplets) garantissant la confidentialité des opérandes, détection d'altération cryptographique et bannissement (*Slashing*) de nœuds byzantins, registre d'audit inviolable scellé par chaîne SHA-256 (`mpc_audit_chain`), gouvernance capabilaire stricte par jeton `MpcCap` et commandes shell interactives `mpc [status | nodes | share | beaver | slash | audit]` dans `jsh`.
+> **Statut du Projet : Version v0.2.94 (Cryptographie Post-Quantique ML-KEM/ML-DSA & Transition Quantique Souveraine jambo-pqc)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.94` introduit le sous-système de cryptographie post-quantique (PQC) et de transition quantique souveraine (`services/jambo-pqc`) : encapsulation de clés ML-KEM (Kyber-768 / FIPS 203) et signatures sur réseaux euclidiens ML-DSA (Dilithium-65 / FIPS 204) avec arithmétique polynomiale négacyclique sans allocation (`#![no_std]`), échange de clés hybride Dual-Defense (ML-KEM + ECDH / X25519) via HKDF-SHA256, machine d'états de transition quantique (`ClassicalOnly`, `HybridPqcClassical`, `PurePqcEnforced`), registre d'audit inviolable scellé par chaîne SHA-256 (`pqc_audit_chain`), gouvernance capabilaire stricte par jeton `PqcCap` et commandes shell interactives `pqc [status | keys | kem | dsa | hybrid | transition | audit]` dans `jsh`.
 
 ---
 
@@ -165,6 +165,7 @@ jambo-os/
 │   ├── jambo-patchd/        # Rechargement à chaud de binaires Ring 3 & conformité ABI
 │   ├── jambo-policyd/       # Moteur de politiques de sécurité & admission de grappe
 │   ├── jambo-powerd/        # Gestion d'énergie ACPI et régulation thermique/C-states
+│   ├── jambo-pqc/           # Cryptographie post-quantique (ML-KEM, ML-DSA) & transition souveraine
 │   ├── jambo-profilerd/     # Échantillonnage PMC/PEBS, profils de flammes & analyse de latence
 │   ├── jambo-raft/          # Moteur de consensus distribué Raft et réplication d'état
 │   ├── jambo-rpc/           # Bus RPC distribué et capacités de cluster
