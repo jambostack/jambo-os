@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.89-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.90-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.89 (Spécification Formelle, Invariants CSpace et Atténuation Monotone jambo-capspec)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.89` introduit le moteur formel de gouvernance capabilaire (`services/jambo-capspec`), instaurant la vérification dynamique d'invariants CSpace en temps réel : éradication absolue de l'autorité ambiante (`NoAmbientAuthority`), atténuation monotone irréversible ($Rights(child) \subseteq Rights(parent)$) avec rejet formel de toute tentative d'amplification de privilèges (`RightsAmplification`), acyclicité et bornage strict de profondeur de dérivation dans l'arbre généalogique (`AcyclicLineage`), révocation en cascade déterministe récursive (`CascadingRevocation`), profils formels de confinement (`StrictIsolation`, `ServiceWorker`, `SystemSupervisor`), intégrité cryptographique des jetons et traçabilité par journal d'audit scellé par blocs de hachage SHA-256 pur `#[no_std]`, et commandes shell interactives `capspec [status | profiles | nodes | verify | audit]` dans `jsh`.
+> **Statut du Projet : Version v0.2.90 (Environnements d'Exécution de Confiance TEE, Enclaves Isolées & Mémoire Chiffrée jambo-tee)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.90` introduit le sous-système de confiance matérielle (`services/jambo-tee`), instaurant l'isolation cryptographique en espace utilisateur Ring 3 : abstraction matérielle multi-architecture (`Intel SGX` avec EPC/SECS/TCS, `Intel TDX`, `ARM TrustZone` Secure World et `ARM CCA` Realm Management Extension), cycle de vie d'enclaves strict (Uninitialized -> Created -> Loading -> Finalized -> Running -> Destroyed), calcul de mesure cryptographique inaltérable `MRENCLAVE` et identité de signataire `MRSIGNER` scellées par SHA-256, stockage scellé (`Sealed Storage`) lié à la mesure ou au signataire avec chiffrement de flux et authentification HMAC-SHA256, rapports d'attestation locale/distante (`TeeReport` / EREPORT), effacement sécurisé de mémoire (`Memory Scrubbing`) prévenant toute rémanence, gouvernance capabilaire par jeton `TeeCap` (CREATE, LOAD, ENTER, SEAL, REPORT, ADMIN) et commandes shell interactives `tee [status | list | report | audit]` dans `jsh`.
 
 ---
 
@@ -170,6 +170,7 @@ jambo-os/
 │   ├── jambo-secpolicyd/    # Démon d'attestation matérielle TPM 2.0 et confinement de grappe
 │   ├── jambo-serviced/      # Registre de découverte de services & résolution de noms
 │   ├── jambo-sh/            # Shell interactif orienté objets
+│   ├── jambo-tee/           # Environnements d'Exécution de Confiance (TEE), enclaves et mémoire chiffrée
 │   ├── jambo-timed/         # Synchronisation horlogère distribuée PTP/NTP haute précision
 │   ├── jambo-traced/        # Moteur de traçage distribué & propagation de contexte
 │   ├── jambo-vaultd/        # Coffre-fort de secrets distribué & quorum de déverrouillage

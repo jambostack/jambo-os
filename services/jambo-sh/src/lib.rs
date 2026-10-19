@@ -160,6 +160,7 @@ pub struct JamboShell {
     pub mac: jambo_mac::JamboMacDaemon,
     pub landlock: jambo_landlock::JamboLandlockDaemon,
     pub capspec: jambo_capspec::JamboCapSpecDaemon,
+    pub tee: jambo_tee::JamboTeeDaemon,
 }
 
 impl Default for JamboShell {
@@ -366,6 +367,12 @@ impl JamboShell {
         );
         let mut capspec = jambo_capspec::JamboCapSpecDaemon::new(capspec_cap);
         capspec.init_defaults();
+        let tee_cap = jambo_tee::TeeCap::new(
+            libjambo::Handle::new(9201, 1),
+            jambo_tee::tee_rights::ALL,
+        );
+        let mut tee = jambo_tee::JamboTeeDaemon::new(tee_cap);
+        tee.init_defaults();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -416,6 +423,7 @@ impl JamboShell {
             mac,
             landlock,
             capspec,
+            tee,
         }
     }
 
@@ -567,6 +575,7 @@ impl JamboShell {
                 emit("  diag [cmd]   - Diagnostic matériel autonome, auto-réparation & télémétrie\n");
                 emit("  profiler [cmd]- Échantillonnage PMC/PEBS, Flamegraphs et analyse de latence Ring 3\n");
                 emit("  capspec [cmd] - Spécification formelle, invariants CSpace et atténuation de capacités\n");
+                emit("  tee [cmd]     - Environnements d'Exécution de Confiance (TEE), enclaves et mémoire chiffrée\n");
                 emit("  echo <args>  - Affiche les arguments sur la sortie console\n");
                 emit("  clear        - Efface l'écran du terminal (ANSI escape)\n");
                 emit("  reboot       - Redémarre la machine\n");
@@ -574,7 +583,7 @@ impl JamboShell {
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.2.89 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.2.90 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -4377,6 +4386,111 @@ impl JamboShell {
                     }
                     _ => {
                         emit("Usage: capspec [status | profiles | nodes | verify | audit]\n");
+                        (ShellStatus::ExecutionFailed, write_pos)
+                    }
+                }
+            }
+            "tee" => {
+                let sub = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    "status"
+                };
+                match sub {
+                    "status" => {
+                        let mut b = [0u8; 20];
+                        emit("=== ENVIRONNEMENTS D'EXÉCUTION DE CONFIANCE (TEE) & ENCLAVES (jambo-tee) ===\n");
+                        emit("Abstraction matérielle : Intel SGX / TDX & ARM TrustZone / CCA\n");
+                        emit("Enclaves actives       : ");
+                        let mut active = 0;
+                        for slot in &self.tee.enclaves {
+                            if slot.is_some() {
+                                active += 1;
+                            }
+                        }
+                        emit(format_u64(active, &mut b));
+                        emit(" / ");
+                        emit(format_u64(jambo_tee::MAX_ENCLAVES as u64, &mut b));
+                        emit("\nCréations totales      : ");
+                        emit(format_u64(self.tee.total_created, &mut b));
+                        emit("\nEntrées dans enclave   : ");
+                        emit(format_u64(self.tee.total_entries, &mut b));
+                        emit("\nBlobs scellés (Storage): ");
+                        emit(format_u64(self.tee.total_seals, &mut b));
+                        emit("\nViolations bloquées    : ");
+                        emit(format_u64(self.tee.total_violations, &mut b));
+                        emit("\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "list" | "enclaves" => {
+                        let mut b = [0u8; 20];
+                        emit("ID  | NOM              | BACKEND                          | PAGES | ADDR BASE          \n");
+                        emit("----+------------------+----------------------------------+-------+--------------------\n");
+                        for slot in &self.tee.enclaves {
+                            if let Some(enc) = slot {
+                                emit(format_u64(enc.id as u64, &mut b));
+                                emit("   | ");
+                                let name = enc.name_as_str();
+                                emit(name);
+                                for _ in 0..(16usize.saturating_sub(name.len())) {
+                                    emit(" ");
+                                }
+                                emit(" | ");
+                                let b_str = enc.backend.as_str();
+                                emit(b_str);
+                                for _ in 0..(32usize.saturating_sub(b_str.len())) {
+                                    emit(" ");
+                                }
+                                emit(" | ");
+                                emit(format_u64(enc.page_count as u64, &mut b));
+                                emit("     | 0x");
+                                emit(format_hex_u64(enc.base_vaddr, &mut b));
+                                emit("\n");
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "report" => {
+                        emit("[Attestation TEE] Génération du rapport cryptographique pour l'enclave 1...\n");
+                        let admin_cap = self.tee.admin_cap;
+                        match self.tee.generate_report(&admin_cap, 1, b"JAMBO_SHELL_CHALLENGE") {
+                            Ok(rep) => {
+                                emit("Enclave ID     : 1\n");
+                                emit("Backend        : ");
+                                emit(rep.backend.as_str());
+                                emit("\nMRENCLAVE      : ");
+                                let mut b = [0u8; 20];
+                                for byte in rep.measurement.iter().take(8) {
+                                    emit(format_hex_u64(*byte as u64, &mut b));
+                                }
+                                emit("...\nMRSIGNER       : ");
+                                for byte in rep.signer_id.iter().take(8) {
+                                    emit(format_hex_u64(*byte as u64, &mut b));
+                                }
+                                emit("...\nMAC Rapport    : ");
+                                for byte in rep.report_mac.iter().take(8) {
+                                    emit(format_hex_u64(*byte as u64, &mut b));
+                                }
+                                emit("...\n[SUCCÈS] Rapport d'attestation vérifié et scellé\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("[ERREUR] Impossible de générer le rapport pour l'enclave 1\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "audit" => {
+                        emit("Condensat SHA-256 d'Audit TEE (Registre Cryptographique Scellé) : ");
+                        let mut b = [0u8; 20];
+                        for byte in self.tee.audit_chain.iter() {
+                            emit(format_hex_u64(*byte as u64, &mut b));
+                        }
+                        emit("\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    _ => {
+                        emit("Usage: tee [status | list | report | audit]\n");
                         (ShellStatus::ExecutionFailed, write_pos)
                     }
                 }
