@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.88-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.89-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.88 (Confinement de Système de Fichiers sans Autorité Ambiante & Sandboxing Monotone jambo-landlock)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.88` introduit le sous-système de confinement d'accès aux fichiers et répertoires en espace utilisateur (`services/jambo-landlock`), instaurant un sandboxing VFS strict sans autorité ambiante ancré sur des descripteurs de répertoires (`PathBeneathRule`), un modèle d'accès granulaire (`LandlockAccessFs` : lecture, écriture, exécution, référencement), l'empilement de couches de restriction monotones irréversibles par processus (`restrict_self`) garantissant par intersection stricte qu'aucune couche ne peut déconfiner ou amplifier des privilèges, l'héritage automatique de confinement lors du clonage de tâches (`inherit_domain`), le contrôle d'accès capabilaire `LandlockCap` avec atténuation stricte, un registre d'audit inviolable chaîné par hachage cryptographique SHA-256 pur `#[no_std]`, et les commandes shell d'administration interactives `landlock [status | domains | rulesets | check | audit]` dans `jsh`.
+> **Statut du Projet : Version v0.2.89 (Spécification Formelle, Invariants CSpace et Atténuation Monotone jambo-capspec)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.89` introduit le moteur formel de gouvernance capabilaire (`services/jambo-capspec`), instaurant la vérification dynamique d'invariants CSpace en temps réel : éradication absolue de l'autorité ambiante (`NoAmbientAuthority`), atténuation monotone irréversible ($Rights(child) \subseteq Rights(parent)$) avec rejet formel de toute tentative d'amplification de privilèges (`RightsAmplification`), acyclicité et bornage strict de profondeur de dérivation dans l'arbre généalogique (`AcyclicLineage`), révocation en cascade déterministe récursive (`CascadingRevocation`), profils formels de confinement (`StrictIsolation`, `ServiceWorker`, `SystemSupervisor`), intégrité cryptographique des jetons et traçabilité par journal d'audit scellé par blocs de hachage SHA-256 pur `#[no_std]`, et commandes shell interactives `capspec [status | profiles | nodes | verify | audit]` dans `jsh`.
 
 ---
 
@@ -135,6 +135,7 @@ jambo-os/
 │   ├── jambo-auditd/        # Registre d'audit cryptographique et détection d'anomalies
 │   ├── jambo-authd/         # Identité cryptographique Ed25519 et sessions isolées
 │   ├── jambo-bpfd/          # Moteur eBPF souverain, vérificateur DAG & filtrage XDP
+│   ├── jambo-capspec/       # Spécification formelle, invariants CSpace et atténuation monotone
 │   ├── jambo-certd/         # Infrastructure de certificats éphémères & autorité CA
 │   ├── jambo-comp/          # Compositeur d'affichage fenêtré zéro-copie
 │   ├── jambo-coreutils/     # Utilitaires système (ps, capstat, top, jpkg)

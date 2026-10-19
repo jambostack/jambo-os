@@ -159,6 +159,7 @@ pub struct JamboShell {
     pub seccomp: jambo_seccomp::JamboSeccompDaemon,
     pub mac: jambo_mac::JamboMacDaemon,
     pub landlock: jambo_landlock::JamboLandlockDaemon,
+    pub capspec: jambo_capspec::JamboCapSpecDaemon,
 }
 
 impl Default for JamboShell {
@@ -359,6 +360,12 @@ impl JamboShell {
         );
         let mut landlock = jambo_landlock::JamboLandlockDaemon::new(landlock_cap);
         landlock.init_defaults();
+        let capspec_cap = jambo_capspec::CapSpecCap::new(
+            libjambo::Handle::new(9101, 1),
+            jambo_capspec::capspec_rights::ALL,
+        );
+        let mut capspec = jambo_capspec::JamboCapSpecDaemon::new(capspec_cap);
+        capspec.init_defaults();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -408,6 +415,7 @@ impl JamboShell {
             seccomp,
             mac,
             landlock,
+            capspec,
         }
     }
 
@@ -558,6 +566,7 @@ impl JamboShell {
                 emit("  wall [cmd]   - Pare-feu distribué dynamique et synchronisation conntrack\n");
                 emit("  diag [cmd]   - Diagnostic matériel autonome, auto-réparation & télémétrie\n");
                 emit("  profiler [cmd]- Échantillonnage PMC/PEBS, Flamegraphs et analyse de latence Ring 3\n");
+                emit("  capspec [cmd] - Spécification formelle, invariants CSpace et atténuation de capacités\n");
                 emit("  echo <args>  - Affiche les arguments sur la sortie console\n");
                 emit("  clear        - Efface l'écran du terminal (ANSI escape)\n");
                 emit("  reboot       - Redémarre la machine\n");
@@ -565,7 +574,7 @@ impl JamboShell {
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.2.83 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.2.89 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -4213,6 +4222,161 @@ impl JamboShell {
                     }
                     _ => {
                         emit("Usage: landlock [status | domains | rulesets | check <pid> <path> [read|write|exec] | audit]\n");
+                        (ShellStatus::ExecutionFailed, write_pos)
+                    }
+                }
+            }
+            "capspec" => {
+                let sub = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    "status"
+                };
+                match sub {
+                    "status" => {
+                        let mut b = [0u8; 20];
+                        emit("=== SPÉCIFICATION FORMELLE & VÉRIFICATION D'INVARIANTS CSPACE (jambo-capspec) ===\n");
+                        emit("Modèle formel       : Absence d'Autorité Ambiante & Atténuation Monotone CSpace\n");
+                        emit("Nœuds CSpace actifs : ");
+                        let mut count_nodes = 0;
+                        for n in &self.capspec.nodes {
+                            if n.is_some() {
+                                count_nodes += 1;
+                            }
+                        }
+                        emit(format_u64(count_nodes, &mut b));
+                        emit(" / ");
+                        emit(format_u64(jambo_capspec::MAX_CAP_NODES as u64, &mut b));
+                        emit("\nProfils enregistrés : ");
+                        let mut count_prof = 0;
+                        for p in &self.capspec.profiles {
+                            if p.is_some() {
+                                count_prof += 1;
+                            }
+                        }
+                        emit(format_u64(count_prof, &mut b));
+                        emit(" / ");
+                        emit(format_u64(jambo_capspec::MAX_PROFILES as u64, &mut b));
+                        emit("\nÉvaluations totales : ");
+                        emit(format_u64(self.capspec.evaluations_count, &mut b));
+                        emit("\nRévocations cascade : ");
+                        emit(format_u64(self.capspec.revocations_count, &mut b));
+                        emit("\nViolations bloquées : ");
+                        emit(format_u64(self.capspec.violations_count, &mut b));
+                        emit("\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "profiles" | "prof" => {
+                        let mut b = [0u8; 20];
+                        emit("ID  | NOM              | TYPES AUTORISÉS | DROITS MAX | DÉLÉGATION\n");
+                        emit("----+------------------+-----------------+------------+-----------\n");
+                        for slot in &self.capspec.profiles {
+                            if let Some(prof) = slot {
+                                emit(format_u64(prof.id as u64, &mut b));
+                                emit("   | ");
+                                let name = prof.name_str();
+                                emit(name);
+                                for _ in 0..(16usize.saturating_sub(name.len())) {
+                                    emit(" ");
+                                }
+                                emit(" | 0x");
+                                emit(format_hex_u64(prof.allowed_types_mask as u64, &mut b));
+                                emit("      | 0x");
+                                emit(format_hex_u64(prof.max_rights_mask as u64, &mut b));
+                                emit("   | ");
+                                if prof.allow_delegation {
+                                    emit("Oui\n");
+                                } else {
+                                    emit("Non (Strict)\n");
+                                }
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "nodes" => {
+                        let mut b = [0u8; 20];
+                        emit("ID  | HANDLE   | TYPE    | PID | PROFONDEUR | STATUT   | DROITS\n");
+                        emit("----+----------+---------+-----+------------+----------+-------\n");
+                        for slot in &self.capspec.nodes {
+                            if let Some(node) = slot {
+                                emit(format_u64(node.id as u64, &mut b));
+                                emit("   | 0x");
+                                emit(format_hex_u64(node.handle.0, &mut b));
+                                emit(" | ");
+                                let t_str = node.cap_type.as_str();
+                                emit(t_str);
+                                for _ in 0..(7usize.saturating_sub(t_str.len())) {
+                                    emit(" ");
+                                }
+                                emit(" | ");
+                                emit(format_u64(node.owner_pid as u64, &mut b));
+                                emit("   | ");
+                                emit(format_u64(node.depth as u64, &mut b));
+                                emit("          | ");
+                                if node.is_revoked {
+                                    emit("Révoqué  | 0x");
+                                } else {
+                                    emit("Valide   | 0x");
+                                }
+                                emit(format_hex_u64(node.rights as u64, &mut b));
+                                emit("\n");
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "verify" => {
+                        emit("[Vérification Formelle CSpace] Contrôle exhaustif des invariants...\n");
+                        let res = self.capspec.check_all_invariants();
+                        let mut b = [0u8; 20];
+                        match res {
+                            Ok(count) => {
+                                emit("[SUCCÈS] Tous les invariants formels vérifiés avec succès (");
+                                emit(format_u64(count as u64, &mut b));
+                                emit(" nœuds CSpace conformes, 0 cycle, atténuation monotone stricte)\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(e) => {
+                                emit("[ERREUR] Violation d'invariant formel détectée : ");
+                                match e {
+                                    jambo_capspec::InvariantViolation::AmbientAuthorityAttempt { pid } => {
+                                        emit("Tentative d'Autorité Ambiante PID ");
+                                        emit(format_u64(pid as u64, &mut b));
+                                    }
+                                    jambo_capspec::InvariantViolation::RightsAmplification { parent_rights, requested_rights } => {
+                                        emit("Amplification de Droits (Parent: 0x");
+                                        emit(format_hex_u64(parent_rights as u64, &mut b));
+                                        emit(", Requis: 0x");
+                                        emit(format_hex_u64(requested_rights as u64, &mut b));
+                                        emit(")");
+                                    }
+                                    jambo_capspec::InvariantViolation::CycleDetected { node_id } => {
+                                        emit("Cycle dans l'arbre CSpace au nœud ");
+                                        emit(format_u64(node_id as u64, &mut b));
+                                    }
+                                    jambo_capspec::InvariantViolation::IntegrityTampered { node_id } => {
+                                        emit("Altération d'intégrité cryptographique nœud ");
+                                        emit(format_u64(node_id as u64, &mut b));
+                                    }
+                                    _ => {
+                                        emit("Autre violation formelle");
+                                    }
+                                }
+                                emit("\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "audit" => {
+                        emit("Condensat SHA-256 d'Audit CapSpec (Invariants CSpace) : ");
+                        let mut b = [0u8; 20];
+                        for byte in self.capspec.last_audit_digest.iter() {
+                            emit(format_hex_u64(*byte as u64, &mut b));
+                        }
+                        emit("\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    _ => {
+                        emit("Usage: capspec [status | profiles | nodes | verify | audit]\n");
                         (ShellStatus::ExecutionFailed, write_pos)
                     }
                 }

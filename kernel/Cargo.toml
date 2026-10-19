@@ -1,6 +1,6 @@
 [package]
 name = "kernel"
-version = "0.2.88"
+version = "0.2.89"
 edition = "2021"
 [[bin]]
 name = "kernel"
@@ -22,6 +22,7 @@ jambo-dynlinkd = { path = "../services/jambo-dynlinkd" }
 jambo-seccomp = { path = "../services/jambo-seccomp" }
 jambo-mac = { path = "../services/jambo-mac" }
 jambo-landlock = { path = "../services/jambo-landlock" }
+jambo-capspec = { path = "../services/jambo-capspec" }
 jambo-cryptod = { path = "../services/jambo-cryptod" }
 jambo-dfsd = { path = "../services/jambo-dfsd" }
 jambo-diagd = { path = "../services/jambo-diagd" }
