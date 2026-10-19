@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.77-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.78-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.77 (Pare-Feu Distribué Dynamique & Synchronisation Conntrack jambo-walld)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.77` introduit le démon de pare-feu distribué dynamique et de synchronisation de sessions conntrack (`services/jambo-walld`), doté d'une machine à états TCP/UDP conntrack déterministe avec Fast-Path instantané pour les flux `Established`, d'une synchronisation inter-nœuds cryptographiquement scellée par HMAC-SHA256 pour la haute disponibilité et la bascule à chaud (Hot Failover), du filtrage dynamique adaptatif Zero-Trust (déni par défaut, verrouillage d'urgence lockdown), de l'auto-blocage dynamique en cas d'anomalies réseau (scans XMAS, NULL, drapeaux TCP invalides), du contrôle d'accès capabilaire `WallCap`, et des commandes shell interactives `wall [status | rules | conntrack | add | lockdown]` dans `jsh`.
+> **Statut du Projet : Version v0.2.78 (Diagnostic Matériel Autonome, Auto-Réparation & Télémétrie de Pannes jambo-diagd)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.78` introduit le démon de diagnostic matériel autonome et de télémétrie de pannes (`services/jambo-diagd`), doté de la surveillance active des bus (PCIe, NVMe, VirtIO, mémoire DDR ECC, CPU MCA), de détection fine des erreurs (AER corrigible/fatal, ECC corrigible/non-corrigible, erreurs médias), de stratégies d'auto-remédiation autonome à chaud (Link Retraining PCIe, Function-Level Reset FLR, repli dégradé, et Hot-Failover automatique vers contrôleur de secours), d'un journal d'incidents scellé cryptographiquement par une chaîne de condensats SHA-256, du contrôle d'accès capabilaire `DiagCap`, et des commandes shell interactives `diag [status | devices | inspect | scan | remediate | incidents | digest]` dans `jsh`.
 
 ---
 
@@ -140,6 +140,7 @@ jambo-os/
 │   ├── jambo-coreutils/     # Utilitaires système (ps, capstat, top, jpkg)
 │   ├── jambo-cryptod/       # Chiffrement de bloc transparent ChaCha20 et scellement TPM 2.0
 │   ├── jambo-dfsd/          # Stockage distribué adressable par contenu (CAS) & réplication
+│   ├── jambo-diagd/         # Diagnostic matériel autonome, auto-réparation & télémétrie
 │   ├── jambo-dnsd/          # Serveur & résolveur DNS d'autorité de grappe (.jambo)
 │   ├── jambo-eventd/        # Bus d'événements Pub/Sub asynchrone et découplage de grappe
 │   ├── jambo-fs/            # Système de fichiers transactionnel Merkle Copy-on-Write

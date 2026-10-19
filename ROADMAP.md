@@ -1,7 +1,7 @@
 # ROADMAP DU DÉVELOPPEMENT AUTONOME — JamboOS
 
-> **Dernière mise à jour** : 2026-10-19 15:45 UTC  
-> **Version actuelle** : `v0.2.77`  
+> **Dernière mise à jour** : 2026-10-19 16:05 UTC  
+> **Version actuelle** : `v0.2.78`  
 > **Statut global** : Pré-Alpha active — Micro-noyau de 3e génération orienté capacités (`#![no_std]`)  
 > **Cycle de développement autonome** : 10 minutes via le Planificateur de Tâches & Crons d'Antigravity WebUI  
 
@@ -20,10 +20,10 @@
 
 ## 2. État d'Avancement des Phases d'Ingénierie
 
-### Phases Validées (v0.1.0 à v0.2.77)
+### Phases Validées (v0.1.0 à v0.2.78)
 
 | Jalon / Version | Phase | Composant | Description Technique | Statut |
-| :--- | :---: | :--- | :--- | :--- | :---: |
+| :--- | :---: | :--- | :--- | :--- | :--- :
 | **v0.1.0 - v0.2.38** | 1 - 38 | Kernel & Drivers | Micro-noyau, CSpace, MMU Buddy/SLUB, IPC zéro-copie, VFS CoW, VirtIO Ring 3, APIC SMP | ✅ Validé |
 | **v0.2.39** | 39 | Exécution Ring 3 | Commutation CPL 3, syscall roundtrip, `sysretq` | ✅ Validé |
 | **v0.2.40** | 40 | APIC & EEVDF | Ordonnancement préemptif EEVDF monotone | ✅ Validé |
@@ -66,26 +66,27 @@
 | **v0.2.75** | 77 | Multiplexeur IPC `jambo-ipcd` | Multiplexage de canaux IPC inter-nœuds chiffrés, routage déterministe par priorité (Critical/High/Normal/Background), anti-rejeu, IpcCap | ✅ Validé |
 | **v0.2.76** | 78 | Attestation TPM 2.0 `jambo-secpolicyd` | Attestation matérielle distante TPM 2.0, citations signées TpmQuote, défi-réponse anti-rejeu, confinement de grappe, SecPolicyCap | ✅ Validé |
 | **v0.2.77** | 79 | Pare-feu `jambo-walld` | Pare-feu d'état distribué, machine FSM conntrack, synchronisation d'état scellée HMAC, Zero-Trust adaptatif, auto-blocage scans, WallCap | ✅ Validé |
+| **v0.2.78** | 80 | Diagnostics `jambo-diagd` | Surveillance active PCIe/NVMe/VirtIO/ECC/MCA, auto-remédiation (Link Retraining, FLR, Hot-Failover), scellement SHA-256, DiagCap | ✅ Validé |
 
 ---
 
 ## 3. Prochaines Étapes Prioritaires
 
-### 🎯 Prochaine Tâche Immédiate : Phase 80 — v0.2.78
-* **Composant** : `services/jambo-diagd`
-* **Objectif** : Diagnostic matériel autonome, auto-réparation et télémétrie de pannes
-* **Tâches précises** :
-  1. Surveillance active des bus PCIe/NVMe/VirtIO et détection d'erreurs ECC.
-  2. Stratégies d'auto-remédiation et bascule à chaud.
-  3. Validation `cargo xtask test` et commit `v0.2.78`.
-
-### 🎯 Tâche Suivante : Phase 81 — v0.2.79
+### 🎯 Prochaine Tâche Immédiate : Phase 81 — v0.2.79
 * **Composant** : `services/jambo-sandd`
 * **Objectif** : Confinement de processus et micro-bacs à sable Zero-Ambient Seccomp/Landlock-like
 * **Tâches précises** :
   1. Filtrage d'appels système par masque de capacités et arguments.
   2. Arbre de profils de restriction dynamique pour charges non fiables.
   3. Validation `cargo xtask test` et commit `v0.2.79`.
+
+### 🎯 Tâche Suivante : Phase 82 — v0.2.80
+* **Composant** : `services/jambo-watchdogd`
+* **Objectif** : Surveillance de vivacité système matérielle & logicielle, battements de cœur inter-nœuds, isolation NMI et bascule de secours
+* **Tâches précises** :
+  1. Chien de garde matériel (Hardware Watchdog WDT / iTCO) et logiciel Ring 3.
+  2. Détection de blocages de threads, dérive de boucle d'événements et alertes NMI.
+  3. Validation `cargo xtask test` et commit `v0.2.80`.
 
 ---
 
@@ -103,5 +104,7 @@
 * **2026-10-19 15:05 UTC** : Validation complète Phase 77 (`jambo-ipcd`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test --workspace --lib`). Tag `v0.2.75`.
 * **2026-10-19 15:23 UTC** : Validation complète Phase 78 (`jambo-secpolicyd`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test --workspace --lib`). Tag `v0.2.76`.
 * **2026-10-19 15:45 UTC** : Validation complète Phase 79 (`jambo-walld`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test --workspace --lib`). Tag `v0.2.77`.
+* **2026-10-19 16:05 UTC** : Validation complète Phase 80 (`jambo-diagd`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test --workspace --lib`). Tag `v0.2.78`.
+
 
 

@@ -130,6 +130,7 @@ pub struct JamboShell {
     pub ipc: jambo_ipcd::JamboIpcDaemon,
     pub secpolicy: jambo_secpolicyd::JamboSecPolicyDaemon,
     pub wall: jambo_walld::JamboWallDaemon,
+    pub diag: jambo_diagd::JamboDiagDaemon,
 }
 
 impl Default for JamboShell {
@@ -264,6 +265,12 @@ impl JamboShell {
         );
         let mut wall = jambo_walld::JamboWallDaemon::new(1, wall_cap, [0x79u8; 32]);
         wall.init_defaults();
+        let diag_cap = jambo_diagd::DiagCap::new(
+            libjambo::Handle::new(8001, 1),
+            jambo_diagd::diag_rights::ALL,
+        );
+        let mut diag = jambo_diagd::JamboDiagDaemon::new(1, diag_cap);
+        diag.init_defaults();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -302,6 +309,7 @@ impl JamboShell {
             ipc,
             secpolicy,
             wall,
+            diag,
         }
     }
 
@@ -450,6 +458,7 @@ impl JamboShell {
                 emit("  ipc [cmd]    - Multiplexeur IPC distribué et passerelle déterministe\n");
                 emit("  secpolicy [cmd] - Attestation matérielle TPM 2.0 et confinement de grappe\n");
                 emit("  wall [cmd]   - Pare-feu distribué dynamique et synchronisation conntrack\n");
+                emit("  diag [cmd]   - Diagnostic matériel autonome, auto-réparation & télémétrie\n");
                 emit("  echo <args>  - Affiche les arguments sur la sortie console\n");
                 emit("  clear        - Efface l'écran du terminal (ANSI escape)\n");
                 emit("  reboot       - Redémarre la machine\n");
@@ -457,7 +466,7 @@ impl JamboShell {
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.2.77 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.2.78 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -1662,6 +1671,252 @@ impl JamboShell {
                     }
                     _ => {
                         emit("Usage: wall [status | rules | conntrack | add <src_z> <dst_z> <proto> <dport> <act> | lockdown [on|off]]\n");
+                        (ShellStatus::ExecutionFailed, write_pos)
+                    }
+                }
+            }
+            "diag" => {
+                let diag_cap = self.diag.admin_cap;
+                let subcmd = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    "status"
+                };
+
+                match subcmd {
+                    "status" => {
+                        let mut b = [0u8; 20];
+                        emit("=== DIAGNOSTIC MATÉRIEL AUTONOME & TÉLÉMÉTRIE (jambo-diagd) ===\n");
+                        emit("Nœud Local ID        : #");
+                        emit(format_u64(self.diag.node_id, &mut b));
+                        emit("\nScore Global Santé   : ");
+                        emit(format_u64(self.diag.global_health_score() as u64, &mut b));
+                        emit(" / 100\nAuto-Réparation      : ");
+                        if self.diag.auto_remediation_enabled {
+                            emit("ACTIVE (Autonome)\n");
+                        } else {
+                            emit("DÉSACTIVÉE (Manuel)\n");
+                        }
+                        emit("Périphériques        : ");
+                        emit(format_u64(self.diag.device_count as u64, &mut b));
+                        emit(" / ");
+                        emit(format_u64(jambo_diagd::MAX_DEVICES as u64, &mut b));
+                        emit("\nIncidents Enregistrés: ");
+                        emit(format_u64(self.diag.incident_total, &mut b));
+                        emit("\n\n--- Statistiques d'Auto-Remédiation ---\n");
+                        emit("Erreurs Totales      : ");
+                        emit(format_u64(self.diag.stats.total_errors, &mut b));
+                        emit(" | Remédiations : ");
+                        emit(format_u64(self.diag.stats.total_remediations, &mut b));
+                        emit("\nLink Retraining PCIe : ");
+                        emit(format_u64(self.diag.stats.link_retrains, &mut b));
+                        emit(" | Resets FLR : ");
+                        emit(format_u64(self.diag.stats.flr_resets, &mut b));
+                        emit("\nHot-Failover Secours : ");
+                        emit(format_u64(self.diag.stats.hot_failovers, &mut b));
+                        emit(" | Quarantines : ");
+                        emit(format_u64(self.diag.stats.quarantines, &mut b));
+                        emit("\nReplis Dégradés      : ");
+                        emit(format_u64(self.diag.stats.degraded_fallbacks, &mut b));
+                        emit("\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "devices" | "list" => {
+                        let mut b = [0u8; 20];
+                        emit("ID  BUS      BDF       SANTÉ  ÉTAT         NOM                  REMED  SPARE\n");
+                        emit("----------------------------------------------------------------------------\n");
+                        for dev in self.diag.devices.iter().flatten() {
+                            emit("#");
+                            emit(format_u64(dev.id as u64, &mut b));
+                            emit("  ");
+                            emit(dev.bus_type.as_str());
+                            emit("     ");
+                            emit(format_u64(dev.bdf.0 as u64, &mut b));
+                            emit(":");
+                            emit(format_u64(dev.bdf.1 as u64, &mut b));
+                            emit(".");
+                            emit(format_u64(dev.bdf.2 as u64, &mut b));
+                            emit("   ");
+                            emit(format_u64(dev.health_score as u64, &mut b));
+                            emit("%    ");
+                            emit(dev.status.as_str());
+                            emit("    ");
+                            emit(dev.name_as_str());
+                            emit("   ");
+                            emit(format_u64(dev.remediation_count as u64, &mut b));
+                            if dev.is_spare {
+                                emit("  [SECOURS]");
+                            }
+                            emit("\n");
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "inspect" => {
+                        if parsed.arg_count < 3 {
+                            emit("Usage: diag inspect <dev_id | name>\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        } else {
+                            let mut found = None;
+                            if let Some(id) = parse_u64(parsed.args[2]) {
+                                found = self.diag.get_device(id as u32);
+                            }
+                            if found.is_none() {
+                                found = self.diag.find_device_by_name(parsed.args[2]);
+                            }
+
+                            if let Some(dev) = found {
+                                let mut b = [0u8; 20];
+                                emit("--- Diagnostic Détaillé : ");
+                                emit(dev.name_as_str());
+                                emit(" (#");
+                                emit(format_u64(dev.id as u64, &mut b));
+                                emit(") ---\n");
+                                emit("Type de Bus       : ");
+                                emit(dev.bus_type.as_str());
+                                emit(" | BDF : ");
+                                emit(format_u64(dev.bdf.0 as u64, &mut b));
+                                emit(":");
+                                emit(format_u64(dev.bdf.1 as u64, &mut b));
+                                emit(".");
+                                emit(format_u64(dev.bdf.2 as u64, &mut b));
+                                emit("\nScore de Santé    : ");
+                                emit(format_u64(dev.health_score as u64, &mut b));
+                                emit(" / 100 | État: ");
+                                emit(dev.status.as_str());
+                                emit("\nErreurs ECC Corr  : ");
+                                emit(format_u64(dev.ecc_correctable_count as u64, &mut b));
+                                emit(" | Non-corr: ");
+                                emit(format_u64(dev.ecc_uncorrectable_count as u64, &mut b));
+                                emit("\nErreurs PCIe AER  : Corr: ");
+                                emit(format_u64(dev.pcie_aer_correctable_count as u64, &mut b));
+                                emit(" | Fatales: ");
+                                emit(format_u64(dev.pcie_aer_fatal_count as u64, &mut b));
+                                emit("\nErreurs NVMe      : ");
+                                emit(format_u64(dev.nvme_errors_count as u64, &mut b));
+                                emit(" | VirtIO: ");
+                                emit(format_u64(dev.virtio_errors_count as u64, &mut b));
+                                emit("\nDernière Action   : ");
+                                emit(dev.last_action.as_str());
+                                emit(" | Total Remédiations: ");
+                                emit(format_u64(dev.remediation_count as u64, &mut b));
+                                emit("\n");
+                                (ShellStatus::Success, write_pos)
+                            } else {
+                                emit("diag: périphérique introuvable\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "scan" => {
+                        let mut b = [0u8; 20];
+                        match self.diag.trigger_scan(&diag_cap, 1) {
+                            Ok(sum) => {
+                                emit("[DIAG] Scan actif des bus matériels terminé avec succès.\n");
+                                emit("Périphériques Scannés: ");
+                                emit(format_u64(sum.devices_scanned as u64, &mut b));
+                                emit(" | Score Moyen : ");
+                                emit(format_u64(sum.mean_health_score as u64, &mut b));
+                                emit("%\nSains : ");
+                                emit(format_u64(sum.healthy_count as u64, &mut b));
+                                emit(" | Avertissements : ");
+                                emit(format_u64(sum.warning_count as u64, &mut b));
+                                emit(" | Dégradés : ");
+                                emit(format_u64(sum.degraded_count as u64, &mut b));
+                                emit(" | Défaillants/Isolés : ");
+                                emit(format_u64(sum.failed_count as u64, &mut b));
+                                emit("\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("diag: échec du scan matériel\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "remediate" => {
+                        if parsed.arg_count < 4 {
+                            emit("Usage: diag remediate <dev_id> <retrain | flr | degraded | failover | quarantine>\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        } else {
+                            let dev_id = match parse_u64(parsed.args[2]) {
+                                Some(id) => id as u32,
+                                None => {
+                                    if let Some(d) = self.diag.find_device_by_name(parsed.args[2]) {
+                                        d.id
+                                    } else {
+                                        0
+                                    }
+                                }
+                            };
+                            let action = jambo_diagd::RemediationAction::from_str(parsed.args[3])
+                                .unwrap_or(jambo_diagd::RemediationAction::None);
+
+                            if dev_id == 0 || action == jambo_diagd::RemediationAction::None {
+                                emit("diag: périphérique ou action de remédiation invalide\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            } else {
+                                match self.diag.execute_remediation(&diag_cap, dev_id, action, 100) {
+                                    Ok(_) => {
+                                        emit("[DIAG] Remédiation appliquée avec succès sur le composant\n");
+                                        (ShellStatus::Success, write_pos)
+                                    }
+                                    Err(_) => {
+                                        emit("diag: échec de l'application de la remédiation\n");
+                                        (ShellStatus::ExecutionFailed, write_pos)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    "incidents" => {
+                        let mut b = [0u8; 20];
+                        emit("ID    HORODATAGE  DEV                  ERREUR              GRAVITÉ  ACTION\n");
+                        emit("----------------------------------------------------------------------------\n");
+                        for slot in self.diag.incidents.iter().flatten() {
+                            emit("#");
+                            emit(format_u64(slot.incident_id, &mut b));
+                            emit("   T+");
+                            emit(format_u64(slot.timestamp, &mut b));
+                            emit("s    ");
+                            emit(slot.name_as_str());
+                            emit("    ");
+                            emit(slot.error_type.as_str());
+                            emit("    ");
+                            emit(slot.severity.as_str());
+                            emit("    ");
+                            emit(slot.remediation.as_str());
+                            emit("\n");
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "digest" => {
+                        let mut b = [0u8; 20];
+                        match self.diag.get_telemetry_digest(&diag_cap) {
+                            Ok(digest) => {
+                                emit("Condensat SHA-256 de Télémétrie : ");
+                                for byte in digest.iter() {
+                                    let hi = (byte >> 4) & 0x0F;
+                                    let lo = byte & 0x0F;
+                                    let c_hi = if hi < 10 { b'0' + hi } else { b'a' + (hi - 10) };
+                                    let c_lo = if lo < 10 { b'0' + lo } else { b'a' + (lo - 10) };
+                                    let s = [c_hi, c_lo];
+                                    if let Ok(st) = core::str::from_utf8(&s) {
+                                        emit(st);
+                                    }
+                                }
+                                emit("\nTotal Incidents Scellés : ");
+                                emit(format_u64(self.diag.incident_total, &mut b));
+                                emit("\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("diag: échec de lecture du condensat de télémétrie\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    _ => {
+                        emit("Usage: diag [status | devices | inspect <dev> | scan | remediate <dev> <act> | incidents | digest]\n");
                         (ShellStatus::ExecutionFailed, write_pos)
                     }
                 }
