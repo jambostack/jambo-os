@@ -1023,6 +1023,13 @@ pub extern "C" fn _start() -> ! {
         "Échec du test du démon de profilage matériel jambo-profilerd"
     );
 
+    // 10quindecies. Validation du Débogage Dynamique Ring 3, DR0..DR7 & Introspection (Phase 86 - v0.2.84)
+    let dbg_success = sched::execute_dbg_daemon_test();
+    assert!(
+        dbg_success,
+        "Échec du test du démon de débogage dynamique jambo-dbg"
+    );
+
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
 
     arch::init_iommu();
@@ -1244,14 +1251,15 @@ pub extern "C" fn _start() -> ! {
     kprintln!("\x1b[1;32m[PASS] Phase 83 Post-Mortem State Capture, Sealed ELF Core Dumps & Telemetry (jambo-cored) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 84 Userspace Binary Livepatching & ABI Compliance (jambo-patchd) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 85 Userspace Hardware Performance Profiling, Flamegraphs & Latency Analysis (jambo-profilerd) Complete\x1b[0m");
+    kprintln!("\x1b[1;32m[PASS] Phase 86 Userspace Dynamic Debugging, Hardware Breakpoints DR0..DR7 & Memory Introspection (jambo-dbg) Complete\x1b[0m");
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.83 (Échantillonnage PMC/PEBS, Flamegraphs & Latence jambo-profilerd)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.84 (Débogage Dynamique Ring 3, DR0..DR7 & Introspection jambo-dbg)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.83 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.84 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );

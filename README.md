@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.83-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.84-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.83 (Échantillonnage PMC/PEBS, Profils de Flammes & Analyse de Latence Ring 3 jambo-profilerd)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.83` introduit le démon d'observabilité matérielle et de profilage continu en espace utilisateur (`services/jambo-profilerd`), intégrant la capture précise des compteurs matériels de performance PMC (instructions, cycles CPU, cycles de référence, ratios IPC, prédictions et fautes de branchement, fautes de cache L1D/L1I/LLC, fautes dTLB/iTLB, cycles de gel de pipeline), l'échantillonnage matériel PEBS (Processor Event-Based Sampling) sans dérive d'interruption, le déroulement d'arbre d'appels et l'agrégation hiérarchique en profils de flammes (*Flamegraphs*) au format compact *folded stacks*, l'analyse fine de la distribution de latence (p50, p90, p99, p99.9) pour les commutations de contexte, interruptions et appels système, le scellement cryptographique inviolable des rapports par condensat SHA-256 avec registre d'audit chaîné, le contrôle d'accès capabilaire `ProfileCap` sans autorité ambiante, et les commandes shell interactives `profiler [status | pmc | sample | flame | latency | report | verify | digest]` dans `jsh`.
+> **Statut du Projet : Version v0.2.84 (Débogage Dynamique Ring 3, DR0..DR7 & Introspection Mémoire jambo-dbg)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.84` introduit le démon de débogage dynamique en espace utilisateur (`services/jambo-dbg`), intégrant la capture et la gestion des exceptions matérielles de débogage INT1 (`#DB`) et logicielles INT3 (`#BP` - 0xCC) avec rembobinage automatique de RIP et restauration mémoire, la programmation et l'émulation des registres matériels x86-64 DR0..DR7 (points d'arrêt et watchpoints en exécution, écriture et lecture/écriture avec décodage d'état DR6), l'exécution pas à pas (*Single-Stepping*) matérielle via le drapeau Trap Flag (TF dans RFLAGS), l'introspection et la modification sécurisées des registres de threads utilisateur et de la mémoire virtuelle cible avec désassemblage compact, le scellement cryptographique inviolable de chaque opération par registre d'audit chaîné SHA-256, le contrôle d'accès capabilaire strict `DbgCap` sans autorité ambiante, et les commandes shell interactives `dbg [status | attach | detach | bp | regs | mem | step | cont | digest]` dans `jsh`.
 
 ---
 
@@ -139,6 +139,7 @@ jambo-os/
 │   ├── jambo-comp/          # Compositeur d'affichage fenêtré zéro-copie
 │   ├── jambo-coreutils/     # Utilitaires système (ps, capstat, top, jpkg)
 │   ├── jambo-cored/         # Capture d'état post-mortem, crash dumps ELF scellés & télémétrie
+│   ├── jambo-dbg/           # Débogage dynamique d'espace utilisateur, DR0..DR7 & introspection
 │   ├── jambo-cryptod/       # Chiffrement de bloc transparent ChaCha20 et scellement TPM 2.0
 │   ├── jambo-dfsd/          # Stockage distribué adressable par contenu (CAS) & réplication
 │   ├── jambo-diagd/         # Diagnostic matériel autonome, auto-réparation & télémétrie
@@ -159,6 +160,7 @@ jambo-os/
 │   ├── jambo-patchd/        # Rechargement à chaud de binaires Ring 3 & conformité ABI
 │   ├── jambo-policyd/       # Moteur de politiques de sécurité & admission de grappe
 │   ├── jambo-powerd/        # Gestion d'énergie ACPI et régulation thermique/C-states
+│   ├── jambo-profilerd/     # Échantillonnage PMC/PEBS, profils de flammes & analyse de latence
 │   ├── jambo-raft/          # Moteur de consensus distribué Raft et réplication d'état
 │   ├── jambo-rpc/           # Bus RPC distribué et capacités de cluster
 │   ├── jambo-sandd/         # Confinement de processus et micro-bacs à sable Zero-Ambient

@@ -91,6 +91,24 @@ fn parse_u64(s: &str) -> Option<u64> {
     Some(val)
 }
 
+fn parse_hex_or_dec(s: &str) -> Option<u64> {
+    if s.starts_with("0x") || s.starts_with("0X") {
+        let mut val = 0u64;
+        for &b in s[2..].as_bytes() {
+            let digit = match b {
+                b'0'..=b'9' => (b - b'0') as u64,
+                b'a'..=b'f' => (b - b'a' + 10) as u64,
+                b'A'..=b'F' => (b - b'A' + 10) as u64,
+                _ => return None,
+            };
+            val = val.checked_mul(16)?.checked_add(digit)?;
+        }
+        Some(val)
+    } else {
+        parse_u64(s)
+    }
+}
+
 /// Interpréteur de commandes JamboShell
 pub struct JamboShell {
     pub prompt_user: &'static str,
@@ -136,6 +154,7 @@ pub struct JamboShell {
     pub core: jambo_cored::JamboCoreDaemon,
     pub patch: jambo_patchd::JamboPatchDaemon,
     pub profiler: jambo_profilerd::JamboProfilerDaemon,
+    pub dbg: jambo_dbg::JamboDebuggerDaemon,
 }
 
 impl Default for JamboShell {
@@ -306,6 +325,12 @@ impl JamboShell {
         );
         let mut profiler = jambo_profilerd::JamboProfilerDaemon::new(1, profiler_cap);
         profiler.init_defaults();
+        let dbg_cap = jambo_dbg::DbgCap::new(
+            libjambo::Handle::new(8601, 1),
+            jambo_dbg::dbg_rights::ALL,
+        );
+        let mut dbg = jambo_dbg::JamboDebuggerDaemon::new(1, dbg_cap);
+        dbg.init_defaults();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -350,6 +375,7 @@ impl JamboShell {
             core,
             patch,
             profiler,
+            dbg,
         }
     }
 
@@ -3106,6 +3132,307 @@ impl JamboShell {
                     }
                     _ => {
                         emit("Usage: profiler [status | pmc | sample | flame | latency | report | verify <id> | digest]\n");
+                        (ShellStatus::ExecutionFailed, write_pos)
+                    }
+                }
+            }
+            "dbg" | "debugger" => {
+                let subcmd = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    "status"
+                };
+
+                let cap = self.dbg.cap;
+                match subcmd {
+                    "status" => {
+                        let mut b = [0u8; 20];
+                        emit("=== DÉBOGUEUR D'ESPACE UTILISATEUR (JAMBO-DBG) ===\n");
+                        emit("Sessions Actives     : ");
+                        emit(format_u64(self.dbg.session_count as u64, &mut b));
+                        emit("\nEntrées d'Audit Log  : ");
+                        emit(format_u64(self.dbg.audit_count as u64, &mut b));
+                        emit("\nIntégrité SHA-256    : ");
+                        if self.dbg.verify_audit_integrity() {
+                            emit("VALIDE & SCELLÉE");
+                        } else {
+                            emit("CORROMPUE");
+                        }
+                        if let Some(session) = self.dbg.get_session(1) {
+                            emit("\nSession Cible        : PID ");
+                            emit(format_u64(session.pid, &mut b));
+                            emit(" [État: ");
+                            emit(session.state.name());
+                            emit("]\nPoints d'Arrêt Actifs: ");
+                            emit(format_u64(session.bp_count as u64, &mut b));
+                            emit("\nThreads Supervisés   : ");
+                            emit(format_u64(session.thread_count as u64, &mut b));
+                        }
+                        emit("\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "attach" => {
+                        let pid = if parsed.arg_count > 2 {
+                            parse_u64(parsed.args[2]).unwrap_or(2)
+                        } else {
+                            2
+                        };
+                        match self.dbg.attach_process(&cap, pid, 2000) {
+                            Ok(()) => {
+                                let mut b = [0u8; 20];
+                                emit("dbg: processus PID ");
+                                emit(format_u64(pid, &mut b));
+                                emit(" attaché avec succès au débogueur\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("dbg: échec d'attachement au processus\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "detach" => {
+                        let pid = if parsed.arg_count > 2 {
+                            parse_u64(parsed.args[2]).unwrap_or(2)
+                        } else {
+                            2
+                        };
+                        match self.dbg.detach_process(&cap, pid, 2001) {
+                            Ok(()) => {
+                                let mut b = [0u8; 20];
+                                emit("dbg: processus PID ");
+                                emit(format_u64(pid, &mut b));
+                                emit(" détaché du débogueur\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("dbg: échec de détachement du processus\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "bp" => {
+                        let bp_sub = if parsed.arg_count > 2 {
+                            parsed.args[2]
+                        } else {
+                            "list"
+                        };
+                        match bp_sub {
+                            "add" => {
+                                let addr = if parsed.arg_count > 3 {
+                                    parse_hex_or_dec(parsed.args[3]).unwrap_or(0x0040_0001)
+                                } else {
+                                    0x0040_0001
+                                };
+                                let is_hw = parsed.arg_count > 4 && parsed.args[4] == "hw";
+                                if is_hw {
+                                    match self.dbg.add_hardware_breakpoint(
+                                        &cap,
+                                        1,
+                                        addr,
+                                        jambo_dbg::DrCondition::Execute,
+                                        jambo_dbg::DrLength::Len1,
+                                        2002,
+                                    ) {
+                                        Ok((bpid, slot)) => {
+                                            let mut b = [0u8; 20];
+                                            emit("dbg: point d'arrêt matériel #");
+                                            emit(format_u64(bpid as u64, &mut b));
+                                            emit(" assigné sur slot DR");
+                                            emit(format_u64(slot.index() as u64, &mut b));
+                                            emit(" à l'adresse ");
+                                            emit(format_hex_u64(addr, &mut b));
+                                            emit("\n");
+                                            (ShellStatus::Success, write_pos)
+                                        }
+                                        Err(_) => {
+                                            emit("dbg: échec d'ajout du point d'arrêt matériel\n");
+                                            (ShellStatus::ExecutionFailed, write_pos)
+                                        }
+                                    }
+                                } else {
+                                    match self.dbg.add_software_breakpoint(&cap, 1, addr, 2003) {
+                                        Ok(bpid) => {
+                                            let mut b = [0u8; 20];
+                                            emit("dbg: point d'arrêt logiciel INT3 #");
+                                            emit(format_u64(bpid as u64, &mut b));
+                                            emit(" inséré à l'adresse ");
+                                            emit(format_hex_u64(addr, &mut b));
+                                            emit("\n");
+                                            (ShellStatus::Success, write_pos)
+                                        }
+                                        Err(_) => {
+                                            emit("dbg: échec d'insertion du point d'arrêt INT3\n");
+                                            (ShellStatus::ExecutionFailed, write_pos)
+                                        }
+                                    }
+                                }
+                            }
+                            "del" => {
+                                let bpid = if parsed.arg_count > 3 {
+                                    parse_u64(parsed.args[3]).unwrap_or(1) as u32
+                                } else {
+                                    1
+                                };
+                                match self.dbg.remove_breakpoint(&cap, 1, bpid, 2004) {
+                                    Ok(()) => {
+                                        let mut b = [0u8; 20];
+                                        emit("dbg: point d'arrêt #");
+                                        emit(format_u64(bpid as u64, &mut b));
+                                        emit(" supprimé avec succès (mémoire restaurée)\n");
+                                        (ShellStatus::Success, write_pos)
+                                    }
+                                    Err(_) => {
+                                        emit("dbg: point d'arrêt introuvable ou erreur de suppression\n");
+                                        (ShellStatus::ExecutionFailed, write_pos)
+                                    }
+                                }
+                            }
+                            _ => {
+                                let mut b = [0u8; 20];
+                                emit("=== POINTS D'ARRÊT ACTIFS (PID 1) ===\n");
+                                emit("ID | Type       | Condition | Adresse            | Déclenchements\n");
+                                emit("---+------------+-----------+--------------------+---------------\n");
+                                if let Some(session) = self.dbg.get_session(1) {
+                                    for slot in session.breakpoints.iter() {
+                                        if let Some(bp) = slot {
+                                            emit(" ");
+                                            emit(format_u64(bp.id as u64, &mut b));
+                                            emit(" | ");
+                                            match bp.bp_type {
+                                                jambo_dbg::BreakpointType::Hardware => emit("Hardware   | "),
+                                                jambo_dbg::BreakpointType::SoftwareInt3 => emit("Software   | "),
+                                            }
+                                            emit(bp.cond.name());
+                                            emit("      | ");
+                                            emit(format_hex_u64(bp.addr, &mut b));
+                                            emit(" | ");
+                                            emit(format_u64(bp.hit_count, &mut b));
+                                            emit("\n");
+                                        }
+                                    }
+                                }
+                                (ShellStatus::Success, write_pos)
+                            }
+                        }
+                    }
+                    "regs" => {
+                        let tid = if parsed.arg_count > 2 {
+                            parse_u64(parsed.args[2]).unwrap_or(1)
+                        } else {
+                            1
+                        };
+                        match self.dbg.read_registers(&cap, 1, tid, 2005) {
+                            Ok(regs) => {
+                                let mut b = [0u8; 20];
+                                emit("=== REGISTRES DU THREAD TID ");
+                                emit(format_u64(tid, &mut b));
+                                emit(" ===\n");
+                                emit("RIP: "); emit(format_hex_u64(regs.rip, &mut b));
+                                emit("  RSP: "); emit(format_hex_u64(regs.rsp, &mut b));
+                                emit("  RBP: "); emit(format_hex_u64(regs.rbp, &mut b));
+                                emit("\nRAX: "); emit(format_hex_u64(regs.rax, &mut b));
+                                emit("  RBX: "); emit(format_hex_u64(regs.rbx, &mut b));
+                                emit("  RCX: "); emit(format_hex_u64(regs.rcx, &mut b));
+                                emit("  RDX: "); emit(format_hex_u64(regs.rdx, &mut b));
+                                emit("\nRSI: "); emit(format_hex_u64(regs.rsi, &mut b));
+                                emit("  RDI: "); emit(format_hex_u64(regs.rdi, &mut b));
+                                emit("  RFLAGS: "); emit(format_hex_u64(regs.rflags, &mut b));
+                                emit(" [TF=");
+                                if regs.is_single_step_enabled() { emit("1"); } else { emit("0"); }
+                                emit("]\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("dbg: impossible de lire les registres du thread\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "mem" => {
+                        let addr = if parsed.arg_count > 2 {
+                            parse_hex_or_dec(parsed.args[2]).unwrap_or(0x0040_0000)
+                        } else {
+                            0x0040_0000
+                        };
+                        let mut buf = [0u8; 16];
+                        match self.dbg.read_memory(&cap, 1, addr, &mut buf, 2006) {
+                            Ok(len) => {
+                                let mut b = [0u8; 20];
+                                emit("=== INTROSPECTION MÉMOIRE À ");
+                                emit(format_hex_u64(addr, &mut b));
+                                emit(" ===\nDump hex : ");
+                                for byte in &buf[..len] {
+                                    emit(format_hex_u64(*byte as u64, &mut b));
+                                    emit(" ");
+                                }
+                                let inst = jambo_dbg::inspect_instruction(&buf[..len], addr);
+                                emit("\nInstruction désassemblée : ");
+                                emit(inst.mnemonic);
+                                emit(" (longueur: ");
+                                emit(format_u64(inst.len as u64, &mut b));
+                                emit(" octets)\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("dbg: adresse mémoire invalide ou inaccessible\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "step" => {
+                        let tid = if parsed.arg_count > 2 {
+                            parse_u64(parsed.args[2]).unwrap_or(1)
+                        } else {
+                            1
+                        };
+                        match self.dbg.step_instruction(&cap, 1, tid, 2007) {
+                            Ok(inst) => {
+                                let mut b = [0u8; 20];
+                                emit("dbg: pas à pas exécuté [Instruction: ");
+                                emit(inst.mnemonic);
+                                emit(" à ");
+                                emit(format_hex_u64(inst.addr, &mut b));
+                                emit("]\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("dbg: échec du pas à pas (droits insuffisants ou thread actif)\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "cont" | "resume" => {
+                        let tid = if parsed.arg_count > 2 {
+                            parse_u64(parsed.args[2]).unwrap_or(1)
+                        } else {
+                            1
+                        };
+                        match self.dbg.resume_thread(&cap, 1, tid, 2008) {
+                            Ok(()) => {
+                                let mut b = [0u8; 20];
+                                emit("dbg: reprise de l'exécution du thread TID ");
+                                emit(format_u64(tid, &mut b));
+                                emit("\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("dbg: échec de reprise du thread\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "digest" | "audit" => {
+                        emit("Condensat SHA-256 d'Audit Débogueur : ");
+                        let mut b = [0u8; 20];
+                        for byte in self.dbg.last_audit_hash.iter() {
+                            emit(format_hex_u64(*byte as u64, &mut b));
+                        }
+                        emit("\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    _ => {
+                        emit("Usage: dbg [status | attach <pid> | detach <pid> | bp [add|del|list] | regs [tid] | mem <addr> | step [tid] | cont [tid] | digest]\n");
                         (ShellStatus::ExecutionFailed, write_pos)
                     }
                 }

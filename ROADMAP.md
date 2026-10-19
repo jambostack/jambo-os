@@ -1,7 +1,7 @@
 # ROADMAP DU DÉVELOPPEMENT AUTONOME — JamboOS
 
-> **Dernière mise à jour** : 2026-10-19 17:40 UTC  
-> **Version actuelle** : `v0.2.83`  
+> **Dernière mise à jour** : 2026-10-19 18:00 UTC  
+> **Version actuelle** : `v0.2.84`  
 > **Statut global** : Pré-Alpha active — Micro-noyau de 3e génération orienté capacités (`#![no_std]`)  
 > **Cycle de développement autonome** : 10 minutes via le Planificateur de Tâches & Crons d'Antigravity WebUI  
 
@@ -20,7 +20,7 @@
 
 ## 2. État d'Avancement des Phases d'Ingénierie
 
-### Phases Validées (v0.1.0 à v0.2.79)
+### Phases Validées (v0.1.0 à v0.2.84)
 
 | Jalon / Version | Phase | Composant | Description Technique | Statut |
 | :--- | :---: | :--- | :--- | :--- | :--- :
@@ -72,26 +72,27 @@
 | **v0.2.81** | 83 | Core Dumps `jambo-cored` | Capture d'état post-mortem, crash dumps ELF64 scellés SHA-256, isolation mémoire & quarantaine, télémétrie post-crash, CoreCap | ✅ Validé |
 | **v0.2.82** | 84 | Livepatching `jambo-patchd` | Rechargement à chaud de binaires Ring 3, injection atomique de trampolines, quiescence de threads, conformité ABI, PatchCap | ✅ Validé |
 | **v0.2.83** | 85 | Profilage `jambo-profilerd` | Échantillonnage de compteurs de performance matérielle (PMC/PEBS), profils de flammes (Flamegraphs) et analyse de latence Ring 3 | ✅ Validé |
+| **v0.2.84** | 86 | Débogueur `jambo-dbg` | Débogage dynamique d'espace utilisateur, registres de points d'arrêt matériels DR0..DR7, pas à pas et introspection mémoire | ✅ Validé |
 
 ---
 
 ## 3. Prochaines Étapes Prioritaires
 
-### 🎯 Prochaine Tâche Immédiate : Phase 86 — v0.2.84
-* **Composant** : `services/jambo-dbg`
-* **Objectif** : Débogage dynamique d'espace utilisateur, registres de points d'arrêt matériels DR0..DR7, pas à pas et introspection mémoire
-* **Tâches précises** :
-  1. Gestion des exceptions de débogage INT1/INT3 et interception de points d'arrêt matériels.
-  2. Inspection de la mémoire et des registres de threads sans interruption non sollicitée.
-  3. Validation `cargo xtask test` et commit `v0.2.84`.
-
-### 🎯 Tâche Suivante : Phase 87 — v0.2.85
+### 🎯 Prochaine Tâche Immédiate : Phase 87 — v0.2.85
 * **Composant** : `services/jambo-dynlinkd`
 * **Objectif** : Édition de liens dynamiques Ring 3, bibliothèques partagées ELF64 `.jso`, tables GOT/PLT et résolution différée sous modèle capabilaire
 * **Tâches précises** :
   1. Chargement et relocation dynamique de symboles ELF64 partagés dans l'espace d'adressage virtuel.
   2. Tables de liaison GOT/PLT en mémoire protégée W^X et liaison paresseuse sécurisée.
   3. Validation `cargo xtask test` et commit `v0.2.85`.
+
+### 🎯 Tâche Suivante : Phase 88 — v0.2.86
+* **Composant** : `services/jambo-seccomp`
+* **Objectif** : Filtres d'appels système granulaires à base de BPF étendu pour isolation sans privilèges, profils de confinement par application et conformité POSIX stricte
+* **Tâches précises** :
+  1. Compilateur et validateur de filtres BPF pour l'interception de syscalls par thread.
+  2. Politiques déclaratives d'autorisations et d'actions (Allow, Kill, Trap, Errno).
+  3. Validation `cargo xtask test` et commit `v0.2.86`.
 
 ---
 
@@ -115,6 +116,7 @@
 * **2026-10-19 17:05 UTC** : Validation complète Phase 83 (`jambo-cored`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-cored`). Tag `v0.2.81`.
 * **2026-10-19 17:25 UTC** : Validation complète Phase 84 (`jambo-patchd`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-patchd`). Tag `v0.2.82`.
 * **2026-10-19 17:40 UTC** : Validation complète Phase 85 (`jambo-profilerd`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-profilerd`). Tag `v0.2.83`.
+* **2026-10-19 18:00 UTC** : Validation complète Phase 86 (`jambo-dbg`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-dbg`). Tag `v0.2.84`.
 
 
 

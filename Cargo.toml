@@ -50,6 +50,7 @@ members = [
     "services/jambo-cored",
     "services/jambo-patchd",
     "services/jambo-profilerd",
+    "services/jambo-dbg",
     "libs/jambo-ui",
     "libs/jambo-sdk",
     "drivers/virtio",
