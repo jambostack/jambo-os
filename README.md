@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.67-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.68-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.67 (Moteur Déclaratif de Politiques de Sécurité jambo-policyd)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.67` introduit le moteur déclaratif de politiques de sécurité et contrôle d'admission en espace utilisateur (`services/jambo-policyd`), garantissant le principe de déni par défaut (*Deny-by-default*), la préséance absolue du refus explicite (*Deny precedence*), la gestion de baux temporels avec expiration automatique et purge déterministe, le confinement capabilaire granulaire `PolicyCap` et les commandes interactives `policy [status | eval <role> <resource> | add <id> <resource>]` dans `jsh`.
+> **Statut du Projet : Version v0.2.68 (Traçage Distribué & Analyse de Latence jambo-traced)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.68` introduit le moteur de traçage distribué, propagation causale de contexte W3C et analyse de latence en espace utilisateur (`services/jambo-traced`), implémentant des portées d'exécution hiérarchiques (*spans*), un tampon circulaire borné (*drop-oldest*), la sérialisation binaire compacte (33 octets), le confinement capabilaire granulaire `TraceCap` et les commandes interactives `trace [status | span <name> | query <span_id>]` dans `jsh`.
 
 ---
 

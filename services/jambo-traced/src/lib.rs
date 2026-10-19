@@ -332,6 +332,89 @@ impl TraceCollector {
     }
 }
 
+/// Démon orchestrateur de traçage distribué et analyse de latence (`jambo-traced`).
+pub struct JamboTraceDaemon {
+    pub collector: TraceCollector,
+    pub cap: TraceCap,
+    pub operations_count: u64,
+}
+
+impl Default for JamboTraceDaemon {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl JamboTraceDaemon {
+    pub fn new() -> Self {
+        let cap = TraceCap::new(Handle::new(7001, 1), trace_rights::ALL);
+        let mut collector = TraceCollector::new();
+
+        // Trace initiale d'amorçage
+        let trace_id = [0x70; 16];
+        let span_id = collector.allocate_span_id();
+        let ctx = TraceContext::new(trace_id, span_id, None, trace_flags::FLAG_SAMPLED);
+        let _ = collector.start_span(&cap, b"boot.bootstrap", &ctx, 100);
+        let _ = collector.finish_span(&cap, span_id, SpanStatus::Ok, 150);
+
+        Self {
+            collector,
+            cap,
+            operations_count: 1,
+        }
+    }
+
+    pub fn start_span(
+        &mut self,
+        name: &[u8],
+        context: &TraceContext,
+        start_time: u64,
+    ) -> Result<u64, SysError> {
+        let span_id = self
+            .collector
+            .start_span(&self.cap, name, context, start_time)?;
+        self.operations_count = self.operations_count.saturating_add(1);
+        Ok(span_id)
+    }
+
+    pub fn finish_span(
+        &mut self,
+        span_id: u64,
+        status: SpanStatus,
+        end_time: u64,
+    ) -> Result<(), SysError> {
+        self.collector
+            .finish_span(&self.cap, span_id, status, end_time)?;
+        self.operations_count = self.operations_count.saturating_add(1);
+        Ok(())
+    }
+
+    pub fn allocate_span_id(&mut self) -> u64 {
+        self.collector.allocate_span_id()
+    }
+
+    pub fn find_recorded(&self, span_id: u64) -> Result<Option<TraceSpan>, SysError> {
+        self.collector.find_recorded(&self.cap, span_id)
+    }
+
+    pub fn query_by_trace(
+        &self,
+        trace_id: &[u8; 16],
+        out_spans: &mut [TraceSpan],
+    ) -> Result<usize, SysError> {
+        self.collector
+            .query_by_trace(&self.cap, trace_id, out_spans)
+    }
+
+    pub fn active_count(&self) -> usize {
+        self.collector.active_count()
+    }
+
+    pub fn total_recorded(&self) -> u64 {
+        self.collector.total_recorded()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -461,5 +544,40 @@ mod tests {
             collector.start_span(&cap_query_only, b"test", &ctx, 100),
             Err(SysError::PermissionDenied)
         );
+    }
+
+    #[test]
+    fn test_trace_daemon() {
+        let mut daemon = JamboTraceDaemon::new();
+        assert_eq!(daemon.total_recorded(), 1);
+        assert_eq!(daemon.active_count(), 0);
+
+        let trace_id = [0x42; 16];
+        let span_id = daemon.allocate_span_id();
+        let ctx = TraceContext::new(trace_id, span_id, None, trace_flags::FLAG_SAMPLED);
+
+        daemon.start_span(b"fs.read_block", &ctx, 200).unwrap();
+        assert_eq!(daemon.active_count(), 1);
+
+        daemon.finish_span(span_id, SpanStatus::Ok, 280).unwrap();
+        assert_eq!(daemon.active_count(), 0);
+        assert_eq!(daemon.total_recorded(), 2);
+
+        let span = daemon.find_recorded(span_id).unwrap().unwrap();
+        assert_eq!(span.span_id, span_id);
+        assert_eq!(span.duration(), Some(80));
+
+        let mut spans = [TraceSpan {
+            span_id: 0,
+            trace_id: [0; 16],
+            parent_span_id: None,
+            name: [0; MAX_SPAN_NAME_LEN],
+            name_len: 0,
+            start_time: 0,
+            end_time: 0,
+            status: SpanStatus::Active,
+        }; 2];
+        let n = daemon.query_by_trace(&trace_id, &mut spans).unwrap();
+        assert_eq!(n, 1);
     }
 }

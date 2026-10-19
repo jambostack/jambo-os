@@ -121,6 +121,7 @@ pub struct JamboShell {
     pub metrics: jambo_metricsd::JamboMetricsDaemon,
     pub service: jambo_serviced::JamboServiceDaemon,
     pub policy: jambo_policyd::JamboPolicyDaemon,
+    pub trace: jambo_traced::JamboTraceDaemon,
 }
 
 impl Default for JamboShell {
@@ -181,6 +182,7 @@ impl JamboShell {
         let metrics = jambo_metricsd::JamboMetricsDaemon::new();
         let service = jambo_serviced::JamboServiceDaemon::new();
         let policy = jambo_policyd::JamboPolicyDaemon::new();
+        let trace = jambo_traced::JamboTraceDaemon::new();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -210,6 +212,7 @@ impl JamboShell {
             metrics,
             service,
             policy,
+            trace,
         }
     }
 
@@ -350,6 +353,7 @@ impl JamboShell {
                 emit("  metrics [cmd]- Métriques chronologiques et télémétrie de grappe\n");
                 emit("  service [cmd]- Découverte de services et résolution de noms\n");
                 emit("  policy [cmd] - Moteur déclaratif de politiques et admission control\n");
+                emit("  trace [cmd]  - Traçage distribué, spans et analyse de latence\n");
                 emit("  echo <args>  - Affiche les arguments sur la sortie console\n");
                 emit("  clear        - Efface l'écran du terminal (ANSI escape)\n");
                 emit("  reboot       - Redémarre la machine\n");
@@ -357,7 +361,7 @@ impl JamboShell {
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.2.67 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.2.68 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -3235,6 +3239,97 @@ impl JamboShell {
                     }
                     _ => {
                         emit("Usage: policy [status | eval <role> <resource> | add <id> <resource>]\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                }
+            }
+            "trace" => {
+                let sub = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    ""
+                };
+                match sub {
+                    "status" => {
+                        let mut b = [0u8; 20];
+                        emit("=== TRAÇAGE DISTRIBUÉ & ANALYSE DE LATENCE (jambo-traced) ===\n");
+                        emit("Portées actives        : ");
+                        emit(format_u64(self.trace.active_count() as u64, &mut b));
+                        emit("\nPortées archivées      : ");
+                        emit(format_u64(self.trace.total_recorded(), &mut b));
+                        emit(" (Ring Buffer borné 64)\nContexte de trace      : W3C Trace Context (128-bit TraceId, 64-bit SpanId)\n");
+                        emit("Confinement            : TraceCap (Zero-Ambient Authority)\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "span" => {
+                        let name = if parsed.arg_count > 2 {
+                            parsed.args[2]
+                        } else {
+                            "net.request"
+                        };
+                        let span_id = self.trace.allocate_span_id();
+                        let trace_id = [0x55; 16];
+                        let ctx = jambo_traced::TraceContext::new(
+                            trace_id,
+                            span_id,
+                            None,
+                            jambo_traced::trace_flags::FLAG_SAMPLED,
+                        );
+                        match self.trace.start_span(name.as_bytes(), &ctx, 100) {
+                            Ok(_) => {
+                                let _ = self.trace.finish_span(
+                                    span_id,
+                                    jambo_traced::SpanStatus::Ok,
+                                    145,
+                                );
+                                let mut b = [0u8; 20];
+                                emit("[TRACE/SPAN] Portée '");
+                                emit(name);
+                                emit("' enregistrée (Span ID: ");
+                                emit(format_u64(span_id, &mut b));
+                                emit(", Durée: 45 ticks, Statut: Ok)\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("[TRACE] Échec du démarrage de la portée\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "query" => {
+                        let id = if parsed.arg_count > 2 {
+                            parse_u64(parsed.args[2]).unwrap_or(1)
+                        } else {
+                            1
+                        };
+                        match self.trace.find_recorded(id) {
+                            Ok(Some(span)) => {
+                                let mut b = [0u8; 20];
+                                emit("[TRACE/QUERY] Portée #");
+                                emit(format_u64(span.span_id, &mut b));
+                                emit(" '");
+                                if let Ok(name_str) =
+                                    core::str::from_utf8(&span.name[..span.name_len])
+                                {
+                                    emit(name_str);
+                                }
+                                emit("' -> Durée: ");
+                                emit(format_u64(span.duration().unwrap_or(0), &mut b));
+                                emit(" ticks (Statut: Ok)\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Ok(None) => {
+                                emit("[TRACE] Portée introuvable dans le tampon circulaire\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                            Err(_) => {
+                                emit("[TRACE] Droits insuffisants pour interroger les traces\n");
+                                (ShellStatus::PermissionDenied, write_pos)
+                            }
+                        }
+                    }
+                    _ => {
+                        emit("Usage: trace [status | span <name> | query <span_id>]\n");
                         (ShellStatus::Success, write_pos)
                     }
                 }

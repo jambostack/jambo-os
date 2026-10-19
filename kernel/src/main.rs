@@ -911,6 +911,13 @@ pub extern "C" fn _start() -> ! {
         "Échec du test du moteur déclaratif de politiques et admission control"
     );
 
+    // 10terdeciescies. Validation du Traçage Distribué & Analyse de Latence (Phase 70 - v0.2.68)
+    let trace_success = sched::execute_distributed_tracing_test();
+    assert!(
+        trace_success,
+        "Échec du test de traçage distribué et analyse de latence"
+    );
+
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
 
     arch::init_iommu();
@@ -1114,14 +1121,15 @@ pub extern "C" fn _start() -> ! {
     kprintln!(
         "\x1b[1;32m[PASS] Phase 69 Declarative Security Policy Engine & Cluster Admission Control Complete\x1b[0m"
     );
+    kprintln!(
+        "\x1b[1;32m[PASS] Phase 70 Distributed Tracing, Context Propagation & Latency Profiling Complete\x1b[0m"
+    );
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
-    kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.67 (Moteur de Politiques de Sécurité jambo-policyd)\x1b[0m"
-    );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.67 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;36m[JAMBOKERNEL] Version v0.2.68 (Traçage Distribué jambo-traced)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.68 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
