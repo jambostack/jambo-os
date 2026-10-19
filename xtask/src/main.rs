@@ -103,9 +103,40 @@ fn build_init(release: bool) -> anyhow::Result<PathBuf> {
     Ok(root.join(format!("target/x86_64-unknown-none/{}/jambo-init", profile)))
 }
 
+fn build_jsh(release: bool) -> anyhow::Result<PathBuf> {
+    let root = root_dir();
+    let mut cmd = Command::new("cargo");
+    cmd.current_dir(&root);
+    cmd.args([
+        "build",
+        "--package",
+        "jambo-sh",
+        "--bin",
+        "jsh",
+        "--target",
+        "x86_64-unknown-none",
+    ]);
+    if release {
+        cmd.arg("--release");
+    }
+    cmd.env(
+        "RUSTFLAGS",
+        "-C link-arg=-Tlibs/user-x86_64.ld -C relocation-model=static",
+    );
+
+    let status = cmd.status()?;
+    if !status.success() {
+        anyhow::bail!("Échec de compilation du binaire jsh");
+    }
+
+    let profile = if release { "release" } else { "debug" };
+    Ok(root.join(format!("target/x86_64-unknown-none/{}/jsh", profile)))
+}
+
 fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
     let root = root_dir();
     let init_bin = build_init(release)?;
+    let jsh_bin = build_jsh(release)?;
 
     let initrd_stage = root.join("target/initrd_stage");
     let bin_dir = initrd_stage.join("bin");
@@ -113,11 +144,12 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
     fs::create_dir_all(&bin_dir)?;
 
     fs::copy(&init_bin, bin_dir.join("init"))?;
+    fs::copy(&jsh_bin, bin_dir.join("jsh"))?;
 
     let initrd_tar = root.join("target/initrd.tar");
     let status = Command::new("tar")
         .current_dir(&initrd_stage)
-        .args(["-cf", initrd_tar.to_str().unwrap(), "bin/init"])
+        .args(["-cf", initrd_tar.to_str().unwrap(), "bin/init", "bin/jsh"])
         .status()?;
 
     if !status.success() {

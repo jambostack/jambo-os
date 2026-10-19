@@ -146,6 +146,11 @@ extern "C" fn user_thread_trampoline() -> ! {
         crate::arch::set_kernel_stack(kernel_stack_top);
         crate::arch::set_current_kernel_stack(kernel_stack_top);
         unsafe {
+            let cpu = crate::arch::current_cpu();
+            crate::arch::x86_64::apic::wrmsr(
+                crate::arch::x86_64::cpu::IA32_KERNEL_GS_BASE_MSR,
+                cpu as *const _ as u64,
+            );
             crate::mm::paging::write_cr3(aspace.pml4_paddr);
             super::context::enter_user_mode(user_entry, user_rsp);
         }

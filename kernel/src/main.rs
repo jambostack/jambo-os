@@ -717,6 +717,13 @@ pub extern "C" fn _start() -> ! {
         "Échec du test d'E/S console interactive UART"
     );
 
+    // 10quinquies. Validation du Shell interactif jsh en Ring 3 et commandes natives (Phase 42 - v0.2.40)
+    let shell_success = sched::execute_shell_repl_test();
+    assert!(
+        shell_success,
+        "Échec du test de shell interactif jsh Ring 3"
+    );
+
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
 
     arch::init_iommu();
@@ -840,14 +847,17 @@ pub extern "C" fn _start() -> ! {
     kprintln!(
         "\x1b[1;32m[PASS] Phase 41 Interactive Console I/O, UART RX Interrupt & Ring Buffer Complete\x1b[0m"
     );
+    kprintln!(
+        "\x1b[1;32m[PASS] Phase 42 Interactive Ring 3 Object Shell (jsh) & Native Commands Complete\x1b[0m"
+    );
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.39 (I/O Interactif & Console Série UART RX)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.40 (Shell Interactif jsh & Commandes Natives)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.39 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.40 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );

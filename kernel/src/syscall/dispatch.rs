@@ -493,6 +493,71 @@ pub extern "C" fn dispatch_syscall(
             }
         }
 
+        // 25: ConsoleRead (user_buf: a1, max_len: a2)
+        25 => {
+            let buf = a1 as *mut u8;
+            let max_len = a2 as usize;
+            if buf.is_null() {
+                return SysError::InvalidArgument as i64;
+            }
+            let mut read_bytes = 0;
+            while read_bytes < max_len {
+                if let Some(b) = crate::arch::try_get_char() {
+                    unsafe {
+                        *buf.add(read_bytes) = b;
+                    }
+                    read_bytes += 1;
+                } else {
+                    break;
+                }
+            }
+            read_bytes as i64
+        }
+
+        // 26: ConsoleWrite (user_buf: a1, len: a2)
+        26 => {
+            let buf = a1 as *const u8;
+            let len = a2 as usize;
+            if buf.is_null() {
+                return SysError::InvalidArgument as i64;
+            }
+            for i in 0..len {
+                let b = unsafe { *buf.add(i) };
+                crate::arch::SERIAL1.lock().write_byte(b);
+            }
+            len as i64
+        }
+
+        // 27: SysInfo (out_info: a1)
+        27 => {
+            let out_info = a1 as *mut jambo_abi::SystemInfo;
+            if out_info.is_null() {
+                return SysError::InvalidArgument as i64;
+            }
+            let total_pages = crate::mm::pmm::PMM.lock().total_pages() as u64;
+            let allocated_pages = crate::mm::pmm::PMM.lock().allocated_pages() as u64;
+            let free_pages = total_pages.saturating_sub(allocated_pages);
+            let uptime = crate::time::clock_gettime(jambo_abi::clocks::CLOCK_MONOTONIC)
+                .map(|ts| ts.tv_sec)
+                .unwrap_or(0);
+            unsafe {
+                *out_info = jambo_abi::SystemInfo {
+                    total_pages,
+                    free_pages,
+                    allocated_pages,
+                    active_processes: 2,
+                    active_threads: 2,
+                    uptime_seconds: uptime,
+                };
+            }
+            SysError::Success as i64
+        }
+
+        // 28: SystemPoweroff
+        28 => {
+            crate::arch::exit_qemu(crate::arch::QemuExitCode::Success);
+        }
+
         // Appel inconnu
         _ => SysError::NotSupported as i64,
     }

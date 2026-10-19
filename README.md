@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.39-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.40-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.39 (Interruption UART RX & Ring Buffer Console Interactif)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. Après la mise en place du multitâche préemptif par Timer APIC (`v0.2.38`), la version `v0.2.39` active l'interruption de réception (RX) de l'UART 16550 COM1 et son routage via le contrôleur I/O APIC vers le vecteur IDT 36 (Phase 41). Les caractères saisis au clavier sont stockés dans un ring buffer sans allocation dynamique et consommés de façon asynchrone par les primitives de console, préparant le lancement interactif du shell utilisateur.
+> **Statut du Projet : Version v0.2.40 (Shell Interactif jsh en Ring 3 & Commandes Natives)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. Après l'activation de l'interruption UART RX (`v0.2.39`), la version `v0.2.40` implémente le shell objet interactif `jsh` en espace utilisateur Ring 3 avec zéro autorité ambiante (Phase 42). Il fournit une boucle REPL (*Read-Eval-Print Loop*) avec prompt `jambo:/#`, les appels système de console (`ConsoleRead`, `ConsoleWrite`) et de métriques (`SysInfo`), ainsi que les commandes natives réelles (`help`, `version`, `ps`, `mem`, `echo`, `clear`, `reboot`, `poweroff`).
 
 ---
 

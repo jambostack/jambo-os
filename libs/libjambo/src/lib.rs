@@ -71,3 +71,76 @@ pub unsafe fn syscall6(
     );
     (ret, ret2)
 }
+
+/// Lit des octets depuis la console interactive (Syscall 25)
+pub fn console_read(buf: &mut [u8]) -> Result<usize, SysError> {
+    let (ret, _) = unsafe {
+        syscall6(
+            SyscallNumber::ConsoleRead,
+            buf.as_mut_ptr() as u64,
+            buf.len() as u64,
+            0,
+            0,
+            0,
+            0,
+        )
+    };
+    if ret < 0 {
+        Err(SysError::BadAddress)
+    } else {
+        Ok(ret as usize)
+    }
+}
+
+/// Écrit des octets vers la console interactive (Syscall 26)
+pub fn console_write(buf: &[u8]) -> Result<usize, SysError> {
+    let (ret, _) = unsafe {
+        syscall6(
+            SyscallNumber::ConsoleWrite,
+            buf.as_ptr() as u64,
+            buf.len() as u64,
+            0,
+            0,
+            0,
+            0,
+        )
+    };
+    if ret < 0 {
+        Err(SysError::BadAddress)
+    } else {
+        Ok(ret as usize)
+    }
+}
+
+/// Interroge les métriques du système d'exploitation (Syscall 27)
+pub fn sys_info() -> Result<SystemInfo, SysError> {
+    let mut info = SystemInfo::default();
+    let (ret, _) = unsafe {
+        syscall6(
+            SyscallNumber::SysInfo,
+            &mut info as *mut SystemInfo as u64,
+            0,
+            0,
+            0,
+            0,
+            0,
+        )
+    };
+    if ret != 0 {
+        Err(SysError::InvalidArgument)
+    } else {
+        Ok(info)
+    }
+}
+
+/// Affiche une chaîne de caractères sur la console standard
+pub fn print(s: &str) {
+    let _ = console_write(s.as_bytes());
+}
+
+/// Affiche une chaîne de caractères suivie d'un retour à la ligne
+pub fn println(s: &str) {
+    print(s);
+    print("\n");
+}
+

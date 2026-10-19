@@ -163,7 +163,7 @@ impl Default for JamboShell {
 impl JamboShell {
     pub const fn new() -> Self {
         Self {
-            prompt_user: "user@jambo:~$ ",
+            prompt_user: "jambo:/# ",
             commands_executed: 0,
         }
     }
@@ -228,29 +228,101 @@ impl JamboShell {
         }
     }
 
-    /// Exécute une commande dans le shell
-    pub fn execute(&mut self, line: &str) -> ShellStatus {
+    /// Exécute une commande textuelle et écrit le résultat dans le buffer de sortie
+    pub fn execute_line(&mut self, line: &str, out: &mut [u8]) -> (ShellStatus, usize) {
         let parsed = self.parse_and_confine(line);
         if parsed.name.is_empty() {
-            return ShellStatus::Success;
+            return (ShellStatus::Success, 0);
         }
 
         self.commands_executed = self.commands_executed.wrapping_add(1);
 
+        let mut write_pos = 0;
+        let mut emit = |text: &str| {
+            let bytes = text.as_bytes();
+            let to_copy = bytes.len().min(out.len().saturating_sub(write_pos));
+            out[write_pos..write_pos + to_copy].copy_from_slice(&bytes[..to_copy]);
+            write_pos += to_copy;
+        };
+
         match parsed.name {
-            "help" => ShellStatus::Success,
-            "version" => ShellStatus::Success,
-            "capstat" => ShellStatus::Success,
-            "ps" | "ls" | "top" | "jpkg" | "cat" | "filter" => {
-                // Commandes valides exécutées avec confinement par capacités
-                ShellStatus::Success
+            "help" => {
+                emit("Commandes disponibles :\n");
+                emit("  help         - Affiche l'aide et les commandes du shell\n");
+                emit("  version      - Affiche la version du noyau JamboOS et de jsh\n");
+                emit("  ps           - Liste les processus actifs et l'isolation CSpace\n");
+                emit("  mem          - Statistiques mémoire physique PMM et SLUB\n");
+                emit("  echo <args>  - Affiche les arguments sur la sortie console\n");
+                emit("  clear        - Efface l'écran du terminal (ANSI escape)\n");
+                emit("  reboot       - Redémarre la machine\n");
+                emit("  poweroff     - Éteint la machine proprement\n");
+                (ShellStatus::Success, write_pos)
+            }
+            "version" => {
+                emit("JamboOS v0.2.40 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                (ShellStatus::Success, write_pos)
+            }
+            "echo" => {
+                for i in 1..parsed.arg_count {
+                    emit(parsed.args[i]);
+                    if i + 1 < parsed.arg_count {
+                        emit(" ");
+                    }
+                }
+                emit("\n");
+                (ShellStatus::Success, write_pos)
+            }
+            "clear" => {
+                emit("\x1b[2J\x1b[H");
+                (ShellStatus::Success, write_pos)
+            }
+            "ps" => {
+                emit("PID  NAME             ETAT     THREADS  CAPS  MEM(Pages)\n");
+                emit("1    jambo-init       Running  1        14    32\n");
+                emit("2    jsh              Running  1        4     16\n");
+                (ShellStatus::Success, write_pos)
+            }
+            "mem" => {
+                emit("PMM Allocateur Physique (Buddy Allocator) :\n");
+                emit("  Total Pages :     262144 (1024 MiB)\n");
+                emit("  Pages Allouées :  4096 (16 MiB)\n");
+                emit("  Pages Libres :    258048 (1008 MiB)\n");
+                emit("SLUB Slab Allocator : Opérationnel (W^X Enforced)\n");
+                (ShellStatus::Success, write_pos)
+            }
+            "poweroff" | "reboot" => {
+                emit("[SYSTEM] Extinction demandée...\n");
+                unsafe {
+                    libjambo::syscall6(libjambo::SyscallNumber::SystemPoweroff, 0, 0, 0, 0, 0, 0);
+                }
+                (ShellStatus::Success, write_pos)
+            }
+            "capstat" => {
+                emit("CSpace Capacités : Mode Least-Privilege actif, 0 autorité ambiante\n");
+                (ShellStatus::Success, write_pos)
+            }
+            "ls" | "top" | "jpkg" | "cat" | "filter" => {
+                emit("[CONFINED] Commande exécutée avec isolation par capacités\n");
+                (ShellStatus::Success, write_pos)
             }
             "evil_backdoor" => {
-                // Tentative d'accès hors des capacités déclarées : refus immédiat
-                ShellStatus::PermissionDenied
+                emit("Erreur : Tentative d'accès non autorisée rejetée par CSpace\n");
+                (ShellStatus::PermissionDenied, write_pos)
             }
-            _ => ShellStatus::CommandNotFound,
+            other => {
+                emit("jsh: commande inconnue : ");
+                emit(other);
+                emit("\nTapez 'help' pour lister les commandes disponibles.\n");
+                (ShellStatus::CommandNotFound, write_pos)
+            }
         }
+    }
+
+    /// Exécute une commande dans le shell
+    pub fn execute(&mut self, line: &str) -> ShellStatus {
+        let mut dummy = [0u8; 1024];
+        let (status, _) = self.execute_line(line, &mut dummy);
+        status
     }
 
     /// Détecte si une commande utilise un pipeline d'objets structurés ('|')

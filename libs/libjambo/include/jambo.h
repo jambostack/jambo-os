@@ -111,6 +111,19 @@ typedef struct {
 #define JAMBO_SYS_IRQ_ACK        22
 #define JAMBO_SYS_IOMMU_MAP      23
 #define JAMBO_SYS_CLOCK_GETTIME  24
+#define JAMBO_SYS_CONSOLE_READ   25
+#define JAMBO_SYS_CONSOLE_WRITE  26
+#define JAMBO_SYS_SYS_INFO       27
+#define JAMBO_SYS_SYS_POWEROFF   28
+
+typedef struct {
+    uint64_t total_pages;
+    uint64_t free_pages;
+    uint64_t allocated_pages;
+    uint64_t active_processes;
+    uint64_t active_threads;
+    uint64_t uptime_seconds;
+} jambo_sysinfo_t;
 
 /* === Clés du vecteur auxiliaire ELF (Auxiliary Vector) System V ABI === */
 

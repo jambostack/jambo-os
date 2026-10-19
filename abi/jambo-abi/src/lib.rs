@@ -130,6 +130,24 @@ pub enum SyscallNumber {
     IrqAck = 22,
     IommuMap = 23,
     ClockGettime = 24,
+
+    // Famille 6 : Console E/S & Système (Phase 42 - v0.2.40)
+    ConsoleRead = 25,
+    ConsoleWrite = 26,
+    SysInfo = 27,
+    SystemPoweroff = 28,
+}
+
+/// Métriques système rapportées par l'appel système SysInfo (Syscall 27)
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SystemInfo {
+    pub total_pages: u64,
+    pub free_pages: u64,
+    pub allocated_pages: u64,
+    pub active_processes: u64,
+    pub active_threads: u64,
+    pub uptime_seconds: u64,
 }
 
 /// Codes d'erreur système
