@@ -1,7 +1,7 @@
 # ROADMAP DU DÉVELOPPEMENT AUTONOME — JamboOS
 
-> **Dernière mise à jour** : 2026-10-19 13:22 UTC  
-> **Version actuelle** : `v0.2.70`  
+> **Dernière mise à jour** : 2026-10-19 13:42 UTC  
+> **Version actuelle** : `v0.2.71`  
 > **Statut global** : Pré-Alpha active — Micro-noyau de 3e génération orienté capacités (`#![no_std]`)  
 > **Cycle de développement autonome** : 10 minutes via le Planificateur de Tâches & Crons d'Antigravity WebUI  
 
@@ -20,7 +20,7 @@
 
 ## 2. État d'Avancement des Phases d'Ingénierie
 
-### Phases Validées (v0.1.0 à v0.2.70)
+### Phases Validées (v0.1.0 à v0.2.71)
 
 | Jalon / Version | Phase | Composant | Description Technique | Statut |
 | :--- | :---: | :--- | :--- | :---: |
@@ -59,20 +59,13 @@
 | **v0.2.68** | 70 | Traçage `jambo-traced` | Spans bornés, propagation W3C TraceContext | ✅ Validé |
 | **v0.2.69** | 71 | Certificats `jambo-certd`| PKI éphémère de grappe, mTLS, CertCap, CRL | ✅ Validé |
 | **v0.2.70** | 72 | Superviseur `jambo-init` | Superviseur PID 1, ordonnancement DAG, auto-guérison, shutdown | ✅ Validé |
+| **v0.2.71** | 73 | Wasm Sandbox `jambo-wasm` | Exécuteur WebAssembly `#![no_std]`, stack machine, WasmCap, WASI | ✅ Validé |
 
 ---
 
 ## 3. Prochaines Étapes Prioritaires
 
-### 🎯 Prochaine Tâche Immédiate : Phase 73 — v0.2.71
-* **Composant** : `services/jambo-wasm`
-* **Objectif** : Exécuteur Sandboxed WebAssembly `#![no_std]`
-* **Tâches précises** :
-  1. Interpréteur de bytecode WASM compact avec validation stricte de mémoire linéaire.
-  2. Intégration aux capacités `WasmCap` et test d'exécution d'un module compilé.
-  3. Validation `cargo xtask test` et commit `v0.2.71`.
-
-### 🎯 Tâche Suivante : Phase 74 — v0.2.72
+### 🎯 Prochaine Tâche Immédiate : Phase 74 — v0.2.72
 * **Composant** : `services/jambo-dnsd`
 * **Objectif** : Résolveur et Serveur DNS d'Autorité de Grappe
 * **Tâches précises** :
@@ -88,6 +81,14 @@
   2. Filtrage capabilaire `LogCap` et archivage chiffré vers `jambo-dfsd`.
   3. Validation `cargo xtask test` et commit `v0.2.73`.
 
+### 🎯 Tâche Suivante : Phase 76 — v0.2.74
+* **Composant** : `services/jambo-bpfd`
+* **Objectif** : Filtres de paquets et instrumentation eBPF souveraine
+* **Tâches précises** :
+  1. Interpréteur de bytecode eBPF sécurisé avec vérificateur formel de terminaison.
+  2. Crochets réseau socket/XDP et métriques de grappe.
+  3. Validation `cargo xtask test` et commit `v0.2.74`.
+
 ---
 
 ## 4. Journal d'Exécution des Cycles
@@ -96,4 +97,5 @@
 * **2026-10-19 12:51 UTC** : Enregistrement du cycle autonome de 10 minutes dans le Planificateur de Tâches & Crons d'Antigravity WebUI (`jambo-os-cycle`, `*/10 * * * *`, ticker actif).
 * **2026-10-19 12:52 UTC** : Validation complète Phase 70 (`jambo-traced`), passage avec succès de la suite de tests QEMU (`cargo xtask test`). Commit `65903bd` étiqueté `v0.2.68`.
 * **2026-10-19 13:02 UTC** : Validation complète Phase 71 (`jambo-certd`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test --workspace --lib`). Tag `v0.2.69`.
-* **2026-10-19 13:22 UTC** : Validation complète Phase 72 (`jambo-init`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test --workspace --lib`). Prêt pour tag `v0.2.70`.
+* **2026-10-19 13:22 UTC** : Validation complète Phase 72 (`jambo-init`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test --workspace --lib`). Tag `v0.2.70`.
+* **2026-10-19 13:42 UTC** : Validation complète Phase 73 (`jambo-wasm`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test --workspace --lib`). Tag `v0.2.71`.

@@ -1,6 +1,6 @@
 [package]
 name = "jambo-metricsd"
-version = "0.2.70"
+version = "0.2.71"
 edition = "2021"
 
 [dependencies]

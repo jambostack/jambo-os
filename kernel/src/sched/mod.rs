@@ -36,6 +36,7 @@ pub mod vault_test;
 pub mod vfs_test;
 pub mod vhost_test;
 pub mod vmm_test;
+pub mod wasm_test;
 
 pub use ai_test::execute_local_ai_test;
 pub use audit_test::execute_cryptographic_audit_test;
@@ -75,6 +76,7 @@ pub use vault_test::execute_distributed_vault_test;
 pub use vfs_test::execute_vfs_test;
 pub use vhost_test::execute_vhost_user_test;
 pub use vmm_test::execute_userspace_vmm_test;
+pub use wasm_test::execute_wasm_runtime_test;
 
 #[inline]
 pub fn on_timer_tick() {

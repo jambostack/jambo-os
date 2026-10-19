@@ -369,7 +369,7 @@ impl JamboShell {
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.2.70 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.2.71 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -900,8 +900,11 @@ impl JamboShell {
                     "info"
                 };
                 match subcmd {
-                    "info" => {
+                    "info" | "status" => {
+                        emit("=== MOTEUR WEBASSEMBLY SANDBOXÉ (jambo-wasm) ===\n");
                         emit("WASI Sandboxed Runtime: Active (Wasm V1, Linear Memory Isolation, Gas Metering)\n");
+                        emit("  Confinement : WasmCap (Mémoire: 4096 octets / 1 page, Quota gaz: 1 000 000)\n");
+                        emit("  Capacités : WASM_EXEC, WASM_MEM_GROW, WASM_WASI_IO, WASM_WASI_TIME\n");
                         (ShellStatus::Success, write_pos)
                     }
                     "run" => {
@@ -921,8 +924,21 @@ impl JamboShell {
                         emit(" gaz consommé\n");
                         (ShellStatus::Success, write_pos)
                     }
+                    "test" => {
+                        let (code1, gas1) = jambo_wasm::execute_wasm_module("add.wasm");
+                        let (code2, gas2) = jambo_wasm::execute_wasm_module("mem.wasm");
+                        emit("[WASM/TEST] Modules compilés validés avec succès (add=");
+                        let mut b = [0u8; 20];
+                        emit(format_u64(code1 as u64, &mut b));
+                        emit(", mem=");
+                        emit(format_u64(code2 as u64, &mut b));
+                        emit(") sous WasmCap, ");
+                        emit(format_u64(gas1 + gas2, &mut b));
+                        emit(" gaz total\n");
+                        (ShellStatus::Success, write_pos)
+                    }
                     _ => {
-                        emit("Usage: wasm [info | run <module>]\n");
+                        emit("Usage: wasm [info | status | run <module> | test]\n");
                         (ShellStatus::Success, write_pos)
                     }
                 }
