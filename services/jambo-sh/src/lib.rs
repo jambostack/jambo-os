@@ -161,6 +161,7 @@ pub struct JamboShell {
     pub landlock: jambo_landlock::JamboLandlockDaemon,
     pub capspec: jambo_capspec::JamboCapSpecDaemon,
     pub tee: jambo_tee::JamboTeeDaemon,
+    pub attest: jambo_attest::JamboAttestDaemon,
 }
 
 impl Default for JamboShell {
@@ -373,6 +374,12 @@ impl JamboShell {
         );
         let mut tee = jambo_tee::JamboTeeDaemon::new(tee_cap);
         tee.init_defaults();
+        let attest_cap = jambo_attest::AttestCap::new(
+            libjambo::Handle::new(9301, 1),
+            jambo_attest::attest_rights::ALL,
+        );
+        let mut attest = jambo_attest::JamboAttestDaemon::new(attest_cap);
+        attest.init_defaults();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -424,6 +431,7 @@ impl JamboShell {
             landlock,
             capspec,
             tee,
+            attest,
         }
     }
 
@@ -513,6 +521,10 @@ impl JamboShell {
                 emit("Commandes disponibles :\n");
                 emit("  help         - Affiche l'aide et les commandes du shell\n");
                 emit("  version      - Affiche la version du noyau JamboOS et de jsh\n");
+                emit("  reboot       - Redémarre la machine\n");
+                emit("  poweroff     - Éteint la machine proprement\n");
+                emit("  clear        - Efface l'écran du terminal (ANSI escape)\n");
+                emit("  echo <args>  - Affiche les arguments sur la sortie console\n");
                 emit("  ps           - Liste les processus actifs et l'isolation CSpace\n");
                 emit("  capstat [pid]- Inspecte la CSpace d'un processus spécifique\n");
                 emit("  top          - Affiche les métriques d'ordonnancement et mémoire en temps réel\n");
@@ -576,14 +588,11 @@ impl JamboShell {
                 emit("  profiler [cmd]- Échantillonnage PMC/PEBS, Flamegraphs et analyse de latence Ring 3\n");
                 emit("  capspec [cmd] - Spécification formelle, invariants CSpace et atténuation de capacités\n");
                 emit("  tee [cmd]     - Environnements d'Exécution de Confiance (TEE), enclaves et mémoire chiffrée\n");
-                emit("  echo <args>  - Affiche les arguments sur la sortie console\n");
-                emit("  clear        - Efface l'écran du terminal (ANSI escape)\n");
-                emit("  reboot       - Redémarre la machine\n");
-                emit("  poweroff     - Éteint la machine proprement\n");
+                emit("  attest [cmd]  - Attestation distante, preuves Zero-Knowledge (ZKP) & confinement grappe\n");
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.2.90 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.2.91 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -4491,6 +4500,162 @@ impl JamboShell {
                     }
                     _ => {
                         emit("Usage: tee [status | list | report | audit]\n");
+                        (ShellStatus::ExecutionFailed, write_pos)
+                    }
+                }
+            }
+            "attest" => {
+                let sub = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    "status"
+                };
+                match sub {
+                    "status" => {
+                        let mut b = [0u8; 20];
+                        emit("=== ATTESTATION CRYPTOGRAPHIQUE & CONFINEMENT DE GRAPPE (jambo-attest) ===\n");
+                        emit("Algorithme ZKP         : Schnorr / Fiat-Shamir NIZKPoK (Prime 2^64 - 59)\n");
+                        emit("Nœuds enregistrés      : ");
+                        let mut total = 0;
+                        for slot in &self.attest.nodes {
+                            if slot.is_some() {
+                                total += 1;
+                            }
+                        }
+                        emit(format_u64(total as u64, &mut b));
+                        emit(" / ");
+                        emit(format_u64(jambo_attest::MAX_NODES as u64, &mut b));
+                        emit("\nNœuds certifiés (OK)   : ");
+                        emit(format_u64(self.attest.count_active_trusted() as u64, &mut b));
+                        emit("\nNœuds en quarantaine   : ");
+                        emit(format_u64(self.attest.count_quarantined() as u64, &mut b));
+                        emit("\nRevendications générées: ");
+                        emit(format_u64(self.attest.total_claims_generated, &mut b));
+                        emit("\nRevendications validées: ");
+                        emit(format_u64(self.attest.total_claims_verified, &mut b));
+                        emit("\nPreuves ZKP générées   : ");
+                        emit(format_u64(self.attest.total_zkp_generated, &mut b));
+                        emit("\nPreuves ZKP vérifiées  : ");
+                        emit(format_u64(self.attest.total_zkp_verified, &mut b));
+                        emit("\nViolations / Anomalies : ");
+                        emit(format_u64(self.attest.total_violations, &mut b));
+                        emit("\nÉpoque actuelle grappe : ");
+                        emit(format_u64(self.attest.cluster_epoch, &mut b));
+                        emit("\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "nodes" | "list" => {
+                        let mut b = [0u8; 20];
+                        emit("ID  | NOM              | RACINE MATÉRIELLE                | STATUT              | CONFINEMENT\n");
+                        emit("----+------------------+----------------------------------+---------------------+-----------------------------------\n");
+                        for slot in &self.attest.nodes {
+                            if let Some(n) = slot {
+                                emit(format_u64(n.node_id as u64, &mut b));
+                                emit("   | ");
+                                emit(n.name_as_str());
+                                for _ in 0..(17usize.saturating_sub(n.name_len)) {
+                                    emit(" ");
+                                }
+                                emit("| ");
+                                let tr = n.trust_root.as_str();
+                                emit(tr);
+                                for _ in 0..(33usize.saturating_sub(tr.len())) {
+                                    emit(" ");
+                                }
+                                emit("| ");
+                                let st = n.status.as_str();
+                                emit(st);
+                                for _ in 0..(20usize.saturating_sub(st.len())) {
+                                    emit(" ");
+                                }
+                                emit("| ");
+                                emit(n.confinement.as_str());
+                                emit("\n");
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "verify" => {
+                        emit("[Attestation Grappe] Exécution du protocole complet d'attestation distante pour le nœud 1...\n");
+                        let admin_cap = self.attest.admin_cap;
+                        match self.attest.generate_claim(&admin_cap, 1) {
+                            Ok(claim) => {
+                                emit("[1/3] Revendication d'intégrité signée émise avec succès.\n");
+                                match self.attest.verify_claim(&admin_cap, &claim) {
+                                    Ok(true) => {
+                                        emit("[2/3] Signature HMAC & Mesure matérielle conformes.\n");
+                                        let claim_digest = claim.compute_digest();
+                                        match self.attest.generate_zkp_proof(&admin_cap, 1, 0x1337_4242, 0x5544_3322, claim_digest) {
+                                            Ok(proof) => {
+                                                emit("[3/3] Preuve Schnorr ZKP générée. Vérification formelle...\n");
+                                                match self.attest.verify_zkp_proof(&admin_cap, &proof) {
+                                                    Ok(true) => {
+                                                        emit("\x1b[1;32m[SUCCÈS] Preuve Zero-Knowledge validée avec succès ! Nœud 1 certifié conforme et restrictions levées.\x1b[0m\n");
+                                                        (ShellStatus::Success, write_pos)
+                                                    }
+                                                    _ => {
+                                                        emit("\x1b[1;31m[ÉCHEC] Échec de la vérification mathématique ZKP.\x1b[0m\n");
+                                                        (ShellStatus::ExecutionFailed, write_pos)
+                                                    }
+                                                }
+                                            }
+                                            Err(_) => {
+                                                emit("Échec de génération de la preuve ZKP.\n");
+                                                (ShellStatus::ExecutionFailed, write_pos)
+                                            }
+                                        }
+                                    }
+                                    _ => {
+                                        emit("Échec de vérification de la revendication.\n");
+                                        (ShellStatus::ExecutionFailed, write_pos)
+                                    }
+                                }
+                            }
+                            Err(_) => {
+                                emit("Nœud 1 introuvable ou erreur de capacité.\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "confine" => {
+                        let admin_cap = self.attest.admin_cap;
+                        emit("[Sécurité Grappe] Confinement d'urgence et mise en quarantaine du nœud 2...\n");
+                        match self.attest.confine_node(&admin_cap, 2, jambo_attest::ConfinementLevel::Isolated, "Confinement manuel opérateur") {
+                            Ok(()) => {
+                                emit("\x1b[1;33m[ISOLATION] Nœud 2 isolé du réseau et du bus IPC de grappe.\x1b[0m\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("Échec de modification du niveau de confinement.\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "rotate" => {
+                        let admin_cap = self.attest.admin_cap;
+                        emit("[Anti-Rejeu] Renouvellement du nonce de défi cryptographique de grappe...\n");
+                        match self.attest.rotate_cluster_challenge(&admin_cap, b"JAMBO_MANUAL_ROTATE_SALT") {
+                            Ok(_) => {
+                                emit("\x1b[1;32m[OK] Défi renouvelé, incrémentation de l'époque et invalidation des anciens nonces.\x1b[0m\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("Erreur de rotation du défi de grappe.\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "audit" => {
+                        emit("Condensat SHA-256 d'Audit Attestation (Registre Cryptographique Scellé) : ");
+                        let mut b = [0u8; 20];
+                        for byte in self.attest.audit_chain.iter() {
+                            emit(format_hex_u64(*byte as u64, &mut b));
+                        }
+                        emit("\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    _ => {
+                        emit("Usage: attest [status | nodes | verify | confine | rotate | audit]\n");
                         (ShellStatus::ExecutionFailed, write_pos)
                     }
                 }

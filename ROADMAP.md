@@ -1,7 +1,7 @@
 # ROADMAP DU DÉVELOPPEMENT AUTONOME — JamboOS
 
-> **Dernière mise à jour** : 2026-10-19 21:20 UTC  
-> **Version actuelle** : `v0.2.90`  
+> **Dernière mise à jour** : 2026-10-19 21:35 UTC  
+> **Version actuelle** : `v0.2.91`  
 > **Statut global** : Pré-Alpha active — Micro-noyau de 3e génération orienté capacités (`#![no_std]`)  
 > **Cycle de développement autonome** : 10 minutes via le Planificateur de Tâches & Crons d'Antigravity WebUI  
 
@@ -79,24 +79,25 @@
 | **v0.2.88** | 90 | Confinement VFS `jambo-landlock` | Sandboxing VFS sans autorité ambiante, règles d'arborescence path_beneath, empilement monotone irréversible, héritage fork, LandlockCap & audit SHA-256 | ✅ Validé |
 | **v0.2.89** | 91 | Spécification CSpace `jambo-capspec` | Spécification formelle, vérification dynamique d'invariants CSpace, atténuation monotone, absence d'autorité ambiante, CapSpecCap & scellement SHA-256 | ✅ Validé |
 | **v0.2.90** | 92 | Environnements TEE `jambo-tee` | Enclaves matérielles isolées (SGX/TDX & TrustZone/CCA), mémoire chiffrée, scellement SHA-256, TeeCap | ✅ Validé |
+| **v0.2.91** | 93 | Attestation Grappe `jambo-attest` | Attestation cryptographique à distance, preuves Zero-Knowledge (ZKP) Schnorr/Fiat-Shamir, revendications d'intégrité, confinement de grappe & scellement SHA-256 | ✅ Validé |
 
 ---
 
 ## 3. Prochaines Étapes Prioritaires
 
-### 🎯 Prochaine Tâche Immédiate : Phase 93 — v0.2.91
-* **Composant** : `services/jambo-attest`
-* **Objectif** : Attestation cryptographique à distance, preuves Zero-Knowledge (ZKP) et confinement matériel de grappe
-* **Tâches précises** :
-  1. Génération et vérification de preuves d'intégrité de nœud.
-  2. Intégration de grappe et validation `cargo xtask test`.
-
-### 🎯 Tâche Suivante : Phase 94 — v0.2.92
+### 🎯 Prochaine Tâche Immédiate : Phase 94 — v0.2.92
 * **Composant** : `services/jambo-hsm`
 * **Objectif** : Module de sécurité matériel HSM Ring 3, dérivation PKCS#11 et stockage de clés cryptographiques scellées
 * **Tâches précises** :
   1. Emulation et abstraction de module de sécurité matériel souverain.
   2. Dérivation de clés cryptographiques et validation `cargo xtask test`.
+
+### 🎯 Tâche Suivante : Phase 95 — v0.2.93
+* **Composant** : `services/jambo-mpc`
+* **Objectif** : Calcul Multipartite Sécurisé (MPC), partage secret de seuil et consensus cryptographique distribué
+* **Tâches précises** :
+  1. Partage secret vérifiable et calcul sécurisé multi-participants.
+  2. Intégration de grappe et validation `cargo xtask test`.
 
 ---
 
@@ -127,6 +128,7 @@
 * **2026-10-19 20:35 UTC** : Validation complète Phase 90 (`jambo-landlock`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-landlock`). Tag `v0.2.88`.
 * **2026-10-19 21:05 UTC** : Validation complète Phase 91 (`jambo-capspec`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-capspec`). Tag `v0.2.89`.
 * **2026-10-19 21:20 UTC** : Validation complète Phase 92 (`jambo-tee`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-tee`). Tag `v0.2.90`.
+* **2026-10-19 21:35 UTC** : Validation complète Phase 93 (`jambo-attest`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-attest`). Tag `v0.2.91`.
 
 
 

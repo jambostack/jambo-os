@@ -1072,6 +1072,13 @@ pub extern "C" fn _start() -> ! {
         "Échec du test du sous-système TEE et enclaves isolées jambo-tee"
     );
 
+    // 10duovicies. Validation de l'Attestation Distante, Preuves ZKP & Confinement Matériel de Grappe (Phase 93 - v0.2.91)
+    let attest_success = sched::execute_attest_daemon_test();
+    assert!(
+        attest_success,
+        "Échec du test du sous-système d'attestation distante et de preuves ZKP jambo-attest"
+    );
+
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
 
     arch::init_iommu();
@@ -1300,14 +1307,15 @@ pub extern "C" fn _start() -> ! {
     kprintln!("\x1b[1;32m[PASS] Phase 90 Userspace Filesystem Sandboxing & Monotonic Landlock Confinement (jambo-landlock) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 91 Formal Capability Specification, CSpace Invariant Verification & Monotonic Attenuation (jambo-capspec) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 92 Trusted Execution Environments (TEE), Isolated Enclaves & Encrypted Memory (jambo-tee) Complete\x1b[0m");
+    kprintln!("\x1b[1;32m[PASS] Phase 93 Remote Cryptographic Attestation, Zero-Knowledge Proofs (ZKP) & Hardware Cluster Confinement (jambo-attest) Complete\x1b[0m");
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.90 (Environnements d'Exécution de Confiance TEE, Enclaves Isolées & Mémoire Chiffrée jambo-tee)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.91 (Attestation Cryptographique Distante, Preuves ZKP & Confinement Matériel de Grappe jambo-attest)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.90 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.91 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );

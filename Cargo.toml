@@ -57,6 +57,7 @@ members = [
     "services/jambo-landlock",
     "services/jambo-capspec",
     "services/jambo-tee",
+    "services/jambo-attest",
     "libs/jambo-ui",
     "libs/jambo-sdk",
     "drivers/virtio",

@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.90-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.91-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.90 (Environnements d'Exécution de Confiance TEE, Enclaves Isolées & Mémoire Chiffrée jambo-tee)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.90` introduit le sous-système de confiance matérielle (`services/jambo-tee`), instaurant l'isolation cryptographique en espace utilisateur Ring 3 : abstraction matérielle multi-architecture (`Intel SGX` avec EPC/SECS/TCS, `Intel TDX`, `ARM TrustZone` Secure World et `ARM CCA` Realm Management Extension), cycle de vie d'enclaves strict (Uninitialized -> Created -> Loading -> Finalized -> Running -> Destroyed), calcul de mesure cryptographique inaltérable `MRENCLAVE` et identité de signataire `MRSIGNER` scellées par SHA-256, stockage scellé (`Sealed Storage`) lié à la mesure ou au signataire avec chiffrement de flux et authentification HMAC-SHA256, rapports d'attestation locale/distante (`TeeReport` / EREPORT), effacement sécurisé de mémoire (`Memory Scrubbing`) prévenant toute rémanence, gouvernance capabilaire par jeton `TeeCap` (CREATE, LOAD, ENTER, SEAL, REPORT, ADMIN) et commandes shell interactives `tee [status | list | report | audit]` dans `jsh`.
+> **Statut du Projet : Version v0.2.91 (Attestation Cryptographique Distante, Preuves ZKP & Confinement Matériel de Grappe jambo-attest)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.91` introduit le sous-système d'attestation cryptographique et de confinement de grappe (`services/jambo-attest`), instaurant l'admission zero-trust et la vérification sans divulgation de secrets : attestation cryptographique distante multi-architecture (`TPM 2.0 PCR`, `Intel TDX`, `AMD SEV-SNP`, `ARM CCA Realm` et enclaves `jambo-tee`), preuves d'intégrité Zero-Knowledge (ZKP) basées sur le protocole de Schnorr / Fiat-Shamir (NIZKPoK) sur un grand corps premier sans exposition des clés matérielles, revendications d'intégrité signées (`NodeIntegrityClaim`) avec défi anti-rejeu inter-nœuds, confinement matériel adaptatif de grappe (`ConfinementLevel` : Unrestricted, Sandboxed, Isolated, Ejected) avec mise en quarantaine immédiate sur détection d'anomalie, registre d'audit inaltérable scellé par chaîne SHA-256 (`audit_chain`), gouvernance capabilaire par jeton `AttestCap` et commandes shell interactives `attest [status | nodes | verify | confine | rotate | audit]` dans `jsh`.
 
 ---
 
@@ -132,6 +132,7 @@ jambo-os/
 │   └── libjambo/            # Bibliothèque d'encapsulation des syscalls et primitives Ring 3
 ├── services/
 │   ├── jambo-aid/           # Démon d'intelligence artificielle locale et recherche sémantique
+│   ├── jambo-attest/        # Attestation cryptographique distante, preuves Zero-Knowledge & confinement grappe
 │   ├── jambo-auditd/        # Registre d'audit cryptographique et détection d'anomalies
 │   ├── jambo-authd/         # Identité cryptographique Ed25519 et sessions isolées
 │   ├── jambo-bpfd/          # Moteur eBPF souverain, vérificateur DAG & filtrage XDP
