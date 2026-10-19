@@ -1,6 +1,6 @@
 [package]
 name = "jambo-sh"
-version = "0.2.51"
+version = "0.2.52"
 edition = "2021"
 
 [lib]
@@ -16,6 +16,7 @@ jambo-aid = { path = "../jambo-aid" }
 jambo-auditd = { path = "../jambo-auditd" }
 jambo-comp = { path = "../jambo-comp" }
 jambo-coreutils = { path = "../jambo-coreutils" }
+jambo-cryptod = { path = "../jambo-cryptod" }
 jambo-fs = { path = "../jambo-fs" }
 jambo-fuzz = { path = "../jambo-fuzz" }
 jambo-linux = { path = "../jambo-linux" }

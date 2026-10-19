@@ -1,6 +1,6 @@
 [package]
 name = "kernel"
-version = "0.2.51"
+version = "0.2.52"
 edition = "2021"
 [[bin]]
 name = "kernel"
@@ -13,6 +13,7 @@ jambo-abi = { path = "../abi/jambo-abi" }
 jambo-aid = { path = "../services/jambo-aid" }
 jambo-auditd = { path = "../services/jambo-auditd" }
 jambo-comp = { path = "../services/jambo-comp" }
+jambo-cryptod = { path = "../services/jambo-cryptod" }
 jambo-fs = { path = "../services/jambo-fs" }
 jambo-fuzz = { path = "../services/jambo-fuzz" }
 jambo-linux = { path = "../services/jambo-linux" }

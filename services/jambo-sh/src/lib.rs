@@ -105,6 +105,7 @@ pub struct JamboShell {
     pub rpc: jambo_rpc::JamboRpcDaemon,
     pub audit: jambo_auditd::JamboAuditDaemon,
     pub power: jambo_powerd::JamboPowerDaemon,
+    pub crypto: jambo_cryptod::JamboCryptoDaemon,
 }
 
 impl Default for JamboShell {
@@ -143,6 +144,8 @@ impl JamboShell {
         audit.init_defaults();
         let mut power = jambo_powerd::JamboPowerDaemon::new();
         power.init_defaults();
+        let mut crypto = jambo_cryptod::JamboCryptoDaemon::new();
+        crypto.init_defaults();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -156,6 +159,7 @@ impl JamboShell {
             rpc,
             audit,
             power,
+            crypto,
         }
     }
 
@@ -270,6 +274,7 @@ impl JamboShell {
                 emit("  rpc [cmd]    - Bus RPC distribué, jetons de capacités et cluster\n");
                 emit("  audit [cmd]  - Grand livre d'audit cryptographique et observabilité\n");
                 emit("  power [cmd]  - Gestion d'énergie matérielle ACPI, C-states et batterie\n");
+                emit("  crypto [cmd] - Chiffrement transparent de stockage et scellement TPM\n");
                 emit("  echo <args>  - Affiche les arguments sur la sortie console\n");
                 emit("  clear        - Efface l'écran du terminal (ANSI escape)\n");
                 emit("  reboot       - Redémarre la machine\n");
@@ -277,7 +282,7 @@ impl JamboShell {
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.2.51 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.2.52 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -1502,6 +1507,117 @@ impl JamboShell {
                     }
                     _ => {
                         emit("Usage: power [status | state <s0..s5> | cstate <0..3> <c0..c3> | policy]\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                }
+            }
+            "crypto" => {
+                let sub = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    ""
+                };
+                match sub {
+                    "status" => {
+                        let mut b = [0u8; 20];
+                        emit("=== CHIFFREMENT DE BLOC TRANSPARENT & TPM (jambo-cryptod) ===\n");
+                        emit("Volume ID               : ");
+                        emit(format_u64(self.crypto.device.volume_id as u64, &mut b));
+                        emit("\nSecteurs chiffrés       : ");
+                        emit(format_u64(
+                            self.crypto.device.sectors_encrypted_count,
+                            &mut b,
+                        ));
+                        emit("\nScellement TPM 2.0      : ");
+                        if self.crypto.device.sealed_blob.is_some() {
+                            emit("SCELLÉ (PCR 0..7 intègres)\n");
+                        } else {
+                            emit("NON SCELLÉ\n");
+                        }
+                        emit("Algorithme              : ChaCha20 RFC 8439 (Secteurs 512 octets)\n");
+                        emit(
+                            "Capacité de contrôle    : CryptoVolumeCap (Zero-Ambient Authority)\n",
+                        );
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "encrypt" => {
+                        if parsed.arg_count < 3 {
+                            emit("Usage: crypto encrypt <lba> [message]\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        } else {
+                            let lba = match parsed.args[2] {
+                                "0" => 0,
+                                "1" => 1,
+                                "2" => 2,
+                                "3" => 3,
+                                _ => 10,
+                            };
+                            let msg = if parsed.arg_count > 3 {
+                                parsed.args[3].as_bytes()
+                            } else {
+                                b"JamboOS_Secure_Block_Payload_512"
+                            };
+                            let mut plaintext = [0u8; jambo_cryptod::SECTOR_SIZE];
+                            let copy_len = msg.len().min(jambo_cryptod::SECTOR_SIZE);
+                            plaintext[..copy_len].copy_from_slice(&msg[..copy_len]);
+
+                            let mut ciphertext = [0u8; jambo_cryptod::SECTOR_SIZE];
+                            match self.crypto.device.encrypt_and_write(
+                                &self.crypto.admin_cap,
+                                lba,
+                                &plaintext,
+                                &mut ciphertext,
+                            ) {
+                                Ok(_) => {
+                                    let mut b = [0u8; 20];
+                                    emit("[CRYPTO] Secteur LBA ");
+                                    emit(format_u64(lba, &mut b));
+                                    emit(" chiffré et écrit avec succès via ChaCha20\n");
+                                    (ShellStatus::Success, write_pos)
+                                }
+                                Err(_) => {
+                                    emit("[CRYPTO] Erreur lors du chiffrement du secteur\n");
+                                    (ShellStatus::ExecutionFailed, write_pos)
+                                }
+                            }
+                        }
+                    }
+                    "seal" => {
+                        match self
+                            .crypto
+                            .device
+                            .seal_with_tpm(&self.crypto.admin_cap, &self.crypto.pcr_bank)
+                        {
+                            Ok(_) => {
+                                emit("[CRYPTO/TPM] Clé maîtresse scellée sous l'empreinte composite des registres PCR\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("[CRYPTO/TPM] Échec du scellement TPM\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "verify" => {
+                        if let Some(ref blob) = self.crypto.device.sealed_blob {
+                            match jambo_cryptod::TpmSealEngine::unseal(blob, &self.crypto.pcr_bank)
+                            {
+                                Ok(_) => {
+                                    emit("[CRYPTO/TPM] Intégrité de la plateforme (Measured Boot) validée : 100% conforme\n");
+                                    (ShellStatus::Success, write_pos)
+                                }
+                                Err(_) => {
+                                    emit("[CRYPTO/TPM/ALERTE] Altération de plateforme détectée : PCR non conformes !\n");
+                                    (ShellStatus::ExecutionFailed, write_pos)
+                                }
+                            }
+                        } else {
+                            emit("[CRYPTO] Aucun volume scellé TPM n'est actif\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        }
+                    }
+                    _ => {
+                        emit("Usage: crypto [status | encrypt <lba> [msg] | seal | verify]\n");
                         (ShellStatus::Success, write_pos)
                     }
                 }

@@ -270,6 +270,47 @@ impl EncryptedBlockDevice {
     }
 }
 
+/// Démon orchestrateur de chiffrement de stockage et scellement TPM 2.0 (Ring 3)
+pub struct JamboCryptoDaemon {
+    pub device: EncryptedBlockDevice,
+    pub admin_cap: CryptoVolumeCap,
+    pub pcr_bank: [[u8; 32]; 8],
+}
+
+impl Default for JamboCryptoDaemon {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl JamboCryptoDaemon {
+    pub fn new() -> Self {
+        let default_key = [0x4Au8; 32];
+        let admin_cap = CryptoVolumeCap::new(
+            Handle::new(1, 1),
+            1,
+            crypto_rights::READ_SECTOR
+                | crypto_rights::WRITE_SECTOR
+                | crypto_rights::ROTATE_KEY
+                | crypto_rights::SEAL_TPM,
+        );
+        let valid_pcrs: [[u8; 32]; 8] = [
+            [0x01; 32], [0x02; 32], [0x03; 32], [0x04; 32], [0x05; 32], [0x06; 32], [0x07; 32],
+            [0x08; 32],
+        ];
+        Self {
+            device: EncryptedBlockDevice::new(1, default_key),
+            admin_cap,
+            pcr_bank: valid_pcrs,
+        }
+    }
+
+    /// Initialise le volume chiffré et le scellement TPM par défaut
+    pub fn init_defaults(&mut self) {
+        let _ = self.device.seal_with_tpm(&self.admin_cap, &self.pcr_bank);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -802,6 +802,13 @@ pub extern "C" fn _start() -> ! {
         "Échec du test de gestion d'énergie matérielle ACPI et régulation C-States"
     );
 
+    // 10septendecies. Validation du Chiffrement de Bloc Transparent & Scellement Matériel TPM 2.0 (Phase 54 - v0.2.52)
+    let crypto_success = sched::execute_transparent_crypto_test();
+    assert!(
+        crypto_success,
+        "Échec du test de chiffrement de bloc transparent et scellement TPM"
+    );
+
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
 
     arch::init_iommu();
@@ -961,14 +968,17 @@ pub extern "C" fn _start() -> ! {
     kprintln!(
         "\x1b[1;32m[PASS] Phase 53 Hardware ACPI Power Management & Dynamic C-States Complete\x1b[0m"
     );
+    kprintln!(
+        "\x1b[1;32m[PASS] Phase 54 Transparent Block Encryption & TPM 2.0 Measured Boot Complete\x1b[0m"
+    );
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.51 (Gestion d'Énergie Matérielle ACPI jambo-powerd)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.52 (Chiffrement Transparent & TPM 2.0 jambo-cryptod)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.51 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.52 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );

@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.51-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.52-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.51 (Gestion d'Énergie Matérielle ACPI, C-States & Thermique jambo-powerd)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.51` introduit le démon de gestion énergétique et ACPI en espace utilisateur (`services/jambo-powerd`), le contrôle sécurisé par capacités `PowerCap` (zéro-autorité ambiante), les transitions d'état ACPI globales (S0, S1, S3, S4, S5), la régulation fine des cœurs CPU SMP (C-States C0/C1/C2/C3), la télémétrie de batterie avec alertes thermiques réactives et les commandes interactives `power [status | state | cstate | policy]` dans `jsh`.
+> **Statut du Projet : Version v0.2.52 (Chiffrement Transparent & Scellement Matériel TPM 2.0 jambo-cryptod)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.52` introduit le démon de chiffrement de stockage et scellement TPM en espace utilisateur (`services/jambo-cryptod`), le chiffrement de secteur à la volée déterministe (ChaCha20 RFC 8439) avec diversité LBA, le scellement cryptographique sous les registres PCR d'un TPM 2.0 mesuré (Measured Boot), le confinement strict par capacités `CryptoVolumeCap` (zéro-autorité ambiante) et les commandes interactives `crypto [status | encrypt | seal | verify]` dans `jsh`.
 
 ---
 
