@@ -163,6 +163,7 @@ pub struct JamboShell {
     pub tee: jambo_tee::JamboTeeDaemon,
     pub attest: jambo_attest::JamboAttestDaemon,
     pub hsm: jambo_hsm::JamboHsmDaemon,
+    pub mpc: jambo_mpc::JamboMpcDaemon,
 }
 
 impl Default for JamboShell {
@@ -387,6 +388,12 @@ impl JamboShell {
         );
         let mut hsm = jambo_hsm::JamboHsmDaemon::new(hsm_cap);
         hsm.init_defaults();
+        let mpc_cap = jambo_mpc::MpcCap::new(
+            libjambo::Handle::new(9501, 1),
+            jambo_mpc::mpc_rights::ALL,
+        );
+        let mut mpc = jambo_mpc::JamboMpcDaemon::new(mpc_cap);
+        mpc.init_defaults();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -440,6 +447,7 @@ impl JamboShell {
             tee,
             attest,
             hsm,
+            mpc,
         }
     }
 
@@ -598,10 +606,11 @@ impl JamboShell {
                 emit("  tee [cmd]     - Environnements d'Exécution de Confiance (TEE), enclaves et mémoire chiffrée\n");
                 emit("  attest [cmd]  - Attestation distante, preuves Zero-Knowledge (ZKP) & confinement grappe\n");
                 emit("  hsm [cmd]     - Module de sécurité matériel HSM Ring 3, dérivation PKCS#11 & scellement KEK\n");
+                emit("  mpc [cmd]     - Calcul Multipartite Sécurisé (MPC), partage de secret & consensus distribué\n");
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.2.92 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.2.93 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -4938,6 +4947,193 @@ impl JamboShell {
                     }
                     _ => {
                         emit("Usage: hsm [status | slots | objects | derive | wrap | zeroize | audit]\n");
+                        (ShellStatus::ExecutionFailed, write_pos)
+                    }
+                }
+            }
+            "mpc" => {
+                let sub = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    "status"
+                };
+                match sub {
+                    "status" => {
+                        let mut b = [0u8; 20];
+                        emit("=== CALCUL MULTIPARTITE SÉCURISÉ SOUVERAIN (jambo-mpc) ===\n");
+                        emit("Arithmétique & Primitives : Corps de Galois GF(256) / Shamir SSS & VSS / Beaver Triples\n");
+                        emit("Nœuds Actifs Grappe MPC   : ");
+                        emit(format_u64(self.mpc.count_active_nodes() as u64, &mut b));
+                        emit(" / ");
+                        emit(format_u64(jambo_mpc::MAX_MPC_NODES as u64, &mut b));
+                        emit("\nSessions Créées           : ");
+                        emit(format_u64(self.mpc.sessions_created, &mut b));
+                        emit("\nSecrets Divisés (SSS)    : ");
+                        emit(format_u64(self.mpc.secrets_split, &mut b));
+                        emit("\nSecrets Reconstruits     : ");
+                        emit(format_u64(self.mpc.secrets_reconstructed, &mut b));
+                        emit("\nMultiplications Beaver   : ");
+                        emit(format_u64(self.mpc.beaver_mults_computed, &mut b));
+                        emit("\nBannissements Byzantins  : ");
+                        emit(format_u64(self.mpc.byzantine_slashes, &mut b));
+                        emit("\nÉpoque MPC               : ");
+                        emit(format_u64(self.mpc.epoch, &mut b));
+                        emit("\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "nodes" => {
+                        let mut b = [0u8; 20];
+                        emit("ID | NOM DU NŒUD                   | STATUT            | PARTS TRAITÉES | STRIKES\n");
+                        emit("---+-------------------------------+-------------------+----------------+--------\n");
+                        for n_opt in &self.mpc.nodes {
+                            if let Some(n) = n_opt {
+                                emit(format_u64(n.node_id as u64, &mut b));
+                                emit("  | ");
+                                emit(n.name_as_str());
+                                for _ in n.name_len..30 {
+                                    emit(" ");
+                                }
+                                emit("| ");
+                                emit(n.status.as_str());
+                                for _ in n.status.as_str().len()..18 {
+                                    emit(" ");
+                                }
+                                emit("| ");
+                                emit(format_u64(n.shares_handled, &mut b));
+                                for _ in format_u64(n.shares_handled, &mut b).len()..15 {
+                                    emit(" ");
+                                }
+                                emit("| ");
+                                emit(format_u64(n.byzantine_strikes as u64, &mut b));
+                                emit("\n");
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "share" => {
+                        let admin_cap = self.mpc.admin_cap;
+                        emit("Création d'une session de partage secret de Shamir (Seuil t=3, n=5)...\n");
+                        match self.mpc.create_session(&admin_cap, jambo_mpc::MpcSessionType::ThresholdSharing, 3, 5) {
+                            Ok(sess_id) => {
+                                let mut shares = [jambo_mpc::SecretShare {
+                                    node_id: 0,
+                                    values: [0u8; jambo_mpc::MAX_SECRET_LEN],
+                                    len: 0,
+                                }; 5];
+                                let mut commitments = [jambo_mpc::VssCommitment {
+                                    coeff_index: 0,
+                                    commitment_hash: [0u8; 32],
+                                }; 3];
+
+                                let secret = b"JAMBO_CLUSTER_KEY_2026";
+                                match self.mpc.split_secret_in_session(
+                                    &admin_cap,
+                                    sess_id,
+                                    secret,
+                                    b"cluster_share_seed_entropy",
+                                    &mut shares,
+                                    &mut commitments,
+                                ) {
+                                    Ok(n) => {
+                                        emit("\x1b[1;32m[SUCCÈS] Secret divisé en ");
+                                        let mut b = [0u8; 20];
+                                        emit(format_u64(n as u64, &mut b));
+                                        emit(" parts vérifiables (VSS commitments validés).\x1b[0m\n");
+
+                                        // Reconstitution avec les parts {1, 3, 5} (t=3)
+                                        let subset = [shares[0], shares[2], shares[4]];
+                                        let mut recovered = [0u8; jambo_mpc::MAX_SECRET_LEN];
+                                        match self.mpc.reconstruct_secret_in_session(&admin_cap, sess_id, &subset, &mut recovered) {
+                                            Ok(rec_len) => {
+                                                emit("\x1b[1;32m[SUCCÈS] Secret reconstruit par interpolation de Lagrange (3/5 parts) : ");
+                                                if let Ok(rec_str) = core::str::from_utf8(&recovered[..rec_len]) {
+                                                    emit(rec_str);
+                                                }
+                                                emit("\x1b[0m\n");
+                                                (ShellStatus::Success, write_pos)
+                                            }
+                                            Err(_) => {
+                                                emit("Échec de la reconstruction du secret MPC.\n");
+                                                (ShellStatus::ExecutionFailed, write_pos)
+                                            }
+                                        }
+                                    }
+                                    Err(_) => {
+                                        emit("Échec de la distribution des parts MPC.\n");
+                                        (ShellStatus::ExecutionFailed, write_pos)
+                                    }
+                                }
+                            }
+                            Err(_) => {
+                                emit("Échec de création de la session MPC.\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "beaver" => {
+                        let admin_cap = self.mpc.admin_cap;
+                        emit("Calcul de multiplication sécurisée multipartite aveugle (Triplé de Beaver)...\n");
+                        let x = jambo_mpc::Gf256(0x0b);
+                        let y = jambo_mpc::Gf256(0x05);
+                        let exp = x.mul(y);
+
+                        match self.mpc.execute_beaver_mult(&admin_cap, x, y, 4, b"seed_beaver_exec") {
+                            Ok(res) => {
+                                let mut b = [0u8; 20];
+                                emit("\x1b[1;32m[SUCCÈS] Multiplication MPC réussie : x=0x0B * y=0x05 = 0x");
+                                emit(format_hex_u64(res.0 as u64, &mut b));
+                                emit(" (Attendu : 0x");
+                                emit(format_hex_u64(exp.0 as u64, &mut b));
+                                emit(")\x1b[0m\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("Échec du calcul Beaver MPC.\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "slash" => {
+                        let admin_cap = self.mpc.admin_cap;
+                        let target_node = if parsed.arg_count > 2 {
+                            let mut id: u8 = 0;
+                            for byte in parsed.args[2].as_bytes() {
+                                if *byte >= b'0' && *byte <= b'9' {
+                                    id = id.wrapping_mul(10).wrapping_add(*byte - b'0');
+                                }
+                            }
+                            if id == 0 { 5 } else { id }
+                        } else {
+                            5 // Par défaut nœud 5
+                        };
+
+                        emit("Bannissement du nœud byzantin ");
+                        let mut b = [0u8; 20];
+                        emit(format_u64(target_node as u64, &mut b));
+                        emit(" pour altération de part cryptographique...\n");
+
+                        match self.mpc.slash_byzantine_node(&admin_cap, target_node, "Preuve d'altération VSS") {
+                            Ok(()) => {
+                                emit("\x1b[1;32m[SUCCÈS] Nœud byzantin banni avec succès (Slashing cryptographique appliqué).\x1b[0m\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("Échec du bannissement du nœud.\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "audit" => {
+                        emit("Condensat SHA-256 d'Audit MPC (Registre Cryptographique Scellé) : ");
+                        let mut b = [0u8; 20];
+                        for byte in self.mpc.audit_chain.iter() {
+                            emit(format_hex_u64(*byte as u64, &mut b));
+                        }
+                        emit("\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    _ => {
+                        emit("Usage: mpc [status | nodes | share | beaver | slash | audit]\n");
                         (ShellStatus::ExecutionFailed, write_pos)
                     }
                 }

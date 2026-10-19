@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.92-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.93-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.92 (Module de Sécurité Matériel HSM Ring 3, Dérivation PKCS#11 & Scellement KEK jambo-hsm)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.92` introduit le sous-système de module de sécurité matériel et de conformité PKCS#11 (`services/jambo-hsm`), instaurant une enclave cryptographique souveraine isolée du reste du système : émulation matérielle multicouche (`HsmSlot`, `HsmToken`), conformité PKCS#11 v2.40 (sessions RO/RW, authentification PIN pour Security Officer `CKU_SO` et Utilisateur `CKU_USER` avec verrouillage anti-bruteforce), hiérarchie et dérivation déterministe de clés via HKDF-SHA256 (RFC 5869 Extract & Expand) depuis une Clé Maîtresse d'Enveloppement (KEK) scellée à perpétuité, politiques et attributs stricts d'objets (`CKA_SENSITIVE`, `CKA_EXTRACTABLE = false`, `CKA_WRAP`, `CKA_DERIVE`), enveloppement sécurisé de clés (Key Wrapping/Unwrapping sous KEK avec HMAC-SHA256), procédure de zéroïsation matérielle d'urgence (Emergency Zeroization) détruisant l'intégralité des secrets en temps $O(1)$, registre d'audit inaltérable scellé par chaîne SHA-256 (`hsm_audit_chain`), gouvernance capabilaire stricte par jeton `HsmCap` et commandes shell interactives `hsm [status | slots | objects | derive | wrap | zeroize | audit]` dans `jsh`.
+> **Statut du Projet : Version v0.2.93 (Calcul Multipartite Sécurisé MPC, Partage Secret de Seuil & Triplés de Beaver jambo-mpc)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.93` introduit le sous-système de calcul multipartite sécurisé et de consensus cryptographique distribué (`services/jambo-mpc`) : corps de Galois GF(256) souverain (`#![no_std]`), partage secret de seuil de Shamir (SSS, seuil (t, n)) avec interpolation de Lagrange, engagements de partage vérifiable (VSS) par condensats SHA-256/HMAC, évaluation de circuits arithmétiques aveugles par Triplés de Beaver (Beaver Triplets) garantissant la confidentialité des opérandes, détection d'altération cryptographique et bannissement (*Slashing*) de nœuds byzantins, registre d'audit inviolable scellé par chaîne SHA-256 (`mpc_audit_chain`), gouvernance capabilaire stricte par jeton `MpcCap` et commandes shell interactives `mpc [status | nodes | share | beaver | slash | audit]` dans `jsh`.
 
 ---
 
@@ -152,6 +152,7 @@ jambo-os/
 │   ├── jambo-fuzz/          # Moteur de fuzzing offensif et tests de résilience
 │   ├── jambo-gwd/           # Passerelle réseau L4/L7 & équilibrage de charge élastique
 │   ├── jambo-hsm/           # Module de sécurité matériel HSM Ring 3, dérivation PKCS#11 & scellement KEK
+│   ├── jambo-mpc/           # Calcul multipartite sécurisé (MPC), partage secret de Shamir & triplés de Beaver
 │   ├── jambo-init/          # Superviseur système PID 1 en espace utilisateur
 │   ├── jambo-ipcd/          # Multiplexeur et passerelle de messagerie IPC distribuée
 │   ├── jambo-kvd/           # Magasin clé-valeur transactionnel distribué (MVCC & baux)

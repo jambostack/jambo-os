@@ -1,7 +1,7 @@
 # ROADMAP DU DÉVELOPPEMENT AUTONOME — JamboOS
 
-> **Dernière mise à jour** : 2026-10-19 21:55 UTC  
-> **Version actuelle** : `v0.2.92`  
+> **Dernière mise à jour** : 2026-10-19 22:15 UTC  
+> **Version actuelle** : `v0.2.93`  
 > **Statut global** : Pré-Alpha active — Micro-noyau de 3e génération orienté capacités (`#![no_std]`)  
 > **Cycle de développement autonome** : 10 minutes via le Planificateur de Tâches & Crons d'Antigravity WebUI  
 
@@ -81,24 +81,25 @@
 | **v0.2.90** | 92 | Environnements TEE `jambo-tee` | Enclaves matérielles isolées (SGX/TDX & TrustZone/CCA), mémoire chiffrée, scellement SHA-256, TeeCap | ✅ Validé |
 | **v0.2.91** | 93 | Attestation Grappe `jambo-attest` | Attestation cryptographique à distance, preuves Zero-Knowledge (ZKP) Schnorr/Fiat-Shamir, revendications d'intégrité, confinement de grappe & scellement SHA-256 | ✅ Validé |
 | **v0.2.92** | 94 | Sécurité Matérielle `jambo-hsm` | Module de sécurité matériel HSM Ring 3, dérivation PKCS#11, scellement KEK, zéroïsation d'urgence & audit SHA-256 | ✅ Validé |
+| **v0.2.93** | 95 | Calcul MPC `jambo-mpc` | Calcul Multipartite Sécurisé (MPC), corps GF(256), partage secret de seuil de Shamir (SSS/VSS), triplés de Beaver, détection byzantine & audit SHA-256 | ✅ Validé |
 
 ---
 
 ## 3. Prochaines Étapes Prioritaires
 
-### 🎯 Prochaine Tâche Immédiate : Phase 95 — v0.2.93
-* **Composant** : `services/jambo-mpc`
-* **Objectif** : Calcul Multipartite Sécurisé (MPC), partage secret de seuil et consensus cryptographique distribué
-* **Tâches précises** :
-  1. Partage secret vérifiable et calcul sécurisé multi-participants.
-  2. Intégration de grappe et validation `cargo xtask test`.
-
-### 🎯 Tâche Suivante : Phase 96 — v0.2.94
+### 🎯 Prochaine Tâche Immédiate : Phase 96 — v0.2.94
 * **Composant** : `services/jambo-pqc`
 * **Objectif** : Cryptographie Post-Quantique (ML-KEM / Kyber, ML-DSA / Dilithium) et transition quantique souveraine
 * **Tâches précises** :
   1. Implémentation des primitives post-quantiques `#![no_std]`.
   2. Intégration aux échanges de clés et validation `cargo xtask test`.
+
+### 🎯 Tâche Suivante : Phase 97 — v0.2.95
+* **Composant** : `services/jambo-zksnark`
+* **Objectif** : Preuves à Divulgation Nulle de Connaissance (zk-SNARKs), circuits arithmétiques R1CS et vérification succincte Ring 3
+* **Tâches précises** :
+  1. Moteur de vérification de contraintes R1CS `#![no_std]`.
+  2. Preuves succinctes non-interactives et validation `cargo xtask test`.
 
 ---
 
@@ -131,6 +132,7 @@
 * **2026-10-19 21:20 UTC** : Validation complète Phase 92 (`jambo-tee`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-tee`). Tag `v0.2.90`.
 * **2026-10-19 21:35 UTC** : Validation complète Phase 93 (`jambo-attest`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-attest`). Tag `v0.2.91`.
 * **2026-10-19 21:55 UTC** : Validation complète Phase 94 (`jambo-hsm`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-hsm`). Tag `v0.2.92`.
+* **2026-10-19 22:15 UTC** : Validation complète Phase 95 (`jambo-mpc`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-mpc`). Tag `v0.2.93`.
 
 
 
