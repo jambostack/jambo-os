@@ -134,6 +134,7 @@ pub struct JamboShell {
     pub sand: jambo_sandd::JamboSandDaemon,
     pub watchdog: jambo_watchdogd::JamboWatchdogDaemon,
     pub core: jambo_cored::JamboCoreDaemon,
+    pub patch: jambo_patchd::JamboPatchDaemon,
 }
 
 impl Default for JamboShell {
@@ -292,6 +293,12 @@ impl JamboShell {
         );
         let mut core = jambo_cored::JamboCoreDaemon::new(1, core_cap);
         core.init_defaults();
+        let patch_cap = jambo_patchd::PatchCap::new(
+            libjambo::Handle::new(8401, 1),
+            jambo_patchd::patch_rights::ALL,
+        );
+        let mut patch = jambo_patchd::JamboPatchDaemon::new(1, patch_cap);
+        patch.init_defaults();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -334,6 +341,7 @@ impl JamboShell {
             sand,
             watchdog,
             core,
+            patch,
         }
     }
 
@@ -2630,6 +2638,235 @@ impl JamboShell {
                     }
                     _ => {
                         emit("Usage: core [status | list | view <id> | quarantine <id> | telemetry <id> | verify <id> | elf <id> | digest]\n");
+                        (ShellStatus::ExecutionFailed, write_pos)
+                    }
+                }
+            }
+            "patch" | "patchctl" => {
+                let subcmd = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    "status"
+                };
+
+                match subcmd {
+                    "status" => {
+                        let mut b = [0u8; 20];
+                        emit("=== GESTIONNAIRE DE RECHARGEMENT À CHAUD (jambo-patchd) ===\n");
+                        emit("Démon Patch ID         : #");
+                        emit(format_u64(self.patch.daemon_id as u64, &mut b));
+                        emit("\nPatchs Enregistrés     : ");
+                        emit(format_u64(self.patch.patch_count as u64, &mut b));
+                        emit(" / ");
+                        emit(format_u64(jambo_patchd::MAX_PATCHES as u64, &mut b));
+                        emit("\nEntrées d'Audit        : ");
+                        emit(format_u64(self.patch.audit_count as u64, &mut b));
+                        emit(" / ");
+                        emit(format_u64(jambo_patchd::MAX_AUDIT_LOGS as u64, &mut b));
+                        emit("\n\n--- Statistiques de Livepatching & Conformité ABI ---\n");
+                        emit("Patchs Préparés        : ");
+                        emit(format_u64(self.patch.stats.total_patches_prepared, &mut b));
+                        emit("\nPatchs Appliqués       : ");
+                        emit(format_u64(self.patch.stats.total_patches_applied, &mut b));
+                        emit("\nPatchs Restaurés       : ");
+                        emit(format_u64(self.patch.stats.total_patches_reverted, &mut b));
+                        emit("\nCycles de Quiescence   : ");
+                        emit(format_u64(self.patch.stats.total_quiescence_cycles, &mut b));
+                        emit("\nVérifications ABI OK   : ");
+                        emit(format_u64(self.patch.stats.total_abi_checks_passed, &mut b));
+                        emit("\nVérifications ABI KO   : ");
+                        emit(format_u64(self.patch.stats.total_abi_checks_failed, &mut b));
+                        emit("\nSceaux Validés         : ");
+                        emit(format_u64(self.patch.stats.total_seals_verified, &mut b));
+                        emit("\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "list" | "patches" => {
+                        let mut b = [0u8; 20];
+                        emit("=== CATALOGUE DES PATCHS DYNAMIQUES RING 3 ===\n");
+                        for slot in self.patch.patches.iter() {
+                            if let Some(p) = slot {
+                                emit("Patch #");
+                                emit(format_u64(p.patch_id as u64, &mut b));
+                                emit(" [PID: ");
+                                emit(format_u64(p.target_pid, &mut b));
+                                emit("] ");
+                                emit(p.name_str());
+                                emit("\n  Symbole    : ");
+                                emit(p.symbol_str());
+                                emit("\n  État       : ");
+                                emit(p.state_str());
+                                emit("\n  Arch / Tram: ");
+                                emit(p.arch_str());
+                                emit(" / ");
+                                emit(p.trampoline_str());
+                                emit("\n  Cible -> Repl: 0x");
+                                emit(format_hex_u64(p.target_vaddr, &mut b));
+                                emit(" -> 0x");
+                                emit(format_hex_u64(p.replacement_vaddr, &mut b));
+                                emit("\n");
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "view" => {
+                        if parsed.arg_count < 3 {
+                            emit("Usage: patch view <patch_id>\n");
+                            return (ShellStatus::ExecutionFailed, write_pos);
+                        }
+                        let patch_id = parse_u64(parsed.args[2]).unwrap_or(0) as u32;
+                        let mut b = [0u8; 20];
+                        if let Some(p) = self.patch.get_patch(patch_id) {
+                            emit("=== DÉTAILS DU PATCH #");
+                            emit(format_u64(p.patch_id as u64, &mut b));
+                            emit(" ===\nNom        : ");
+                            emit(p.name_str());
+                            emit("\nPID Cible  : ");
+                            emit(format_u64(p.target_pid, &mut b));
+                            emit("\nSymbole    : ");
+                            emit(p.symbol_str());
+                            emit("\nÉtat       : ");
+                            emit(p.state_str());
+                            emit("\nArch       : ");
+                            emit(p.arch_str());
+                            emit("\nTrampoline : ");
+                            emit(p.trampoline_str());
+                            emit("\nAdresse Cible : 0x");
+                            emit(format_hex_u64(p.target_vaddr, &mut b));
+                            emit("\nAdresse Repl  : 0x");
+                            emit(format_hex_u64(p.replacement_vaddr, &mut b));
+                            emit("\nTaille Tramp  : ");
+                            emit(format_u64(p.trampoline_len as u64, &mut b));
+                            emit(" octets\nTaille Prolog : ");
+                            emit(format_u64(p.original_prologue_len as u64, &mut b));
+                            emit(" octets\nTimestamp     : ");
+                            emit(format_u64(p.applied_timestamp, &mut b));
+                            emit("\n");
+                            (ShellStatus::Success, write_pos)
+                        } else {
+                            emit("patch: patch introuvable\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        }
+                    }
+                    "quiesce" => {
+                        if parsed.arg_count < 3 {
+                            emit("Usage: patch quiesce <patch_id>\n");
+                            return (ShellStatus::ExecutionFailed, write_pos);
+                        }
+                        let patch_id = parse_u64(parsed.args[2]).unwrap_or(0) as u32;
+                        let mut b = [0u8; 20];
+                        let cap = self.patch.cap;
+                        let mut threads = [
+                            jambo_patchd::TargetThread {
+                                thread_id: 1,
+                                ip: 0x0050_0000,
+                                sp: 0x7FFF_0000,
+                                state: jambo_patchd::ThreadState::Running,
+                            },
+                            jambo_patchd::TargetThread {
+                                thread_id: 2,
+                                ip: 0x0050_1000,
+                                sp: 0x7FFF_1000,
+                                state: jambo_patchd::ThreadState::Running,
+                            },
+                        ];
+                        match self.patch.quiesce_threads(&cap, patch_id, &mut threads, 2000) {
+                            Ok(q_count) => {
+                                emit("patch: barrière de quiescence atteinte pour patch #");
+                                emit(format_u64(patch_id as u64, &mut b));
+                                emit(" (");
+                                emit(format_u64(q_count as u64, &mut b));
+                                emit(" threads synchronisés hors de la zone critique)\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("patch: échec de quiescence (threads en zone critique ou droits insuffisants)\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "apply" => {
+                        if parsed.arg_count < 3 {
+                            emit("Usage: patch apply <patch_id>\n");
+                            return (ShellStatus::ExecutionFailed, write_pos);
+                        }
+                        let patch_id = parse_u64(parsed.args[2]).unwrap_or(0) as u32;
+                        let mut b = [0u8; 20];
+                        let cap = self.patch.cap;
+                        let mut dummy_code = [0x55, 0x48, 0x89, 0xE5, 0x48, 0x83, 0xEC, 0x20, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90];
+                        match self.patch.apply_patch(&cap, patch_id, &mut dummy_code, 0, 2010) {
+                            Ok(()) => {
+                                emit("patch: patch #");
+                                emit(format_u64(patch_id as u64, &mut b));
+                                emit(" appliqué avec succès à chaud (trampoline actif)\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("patch: échec d'application du patch\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "revert" | "rollback" => {
+                        if parsed.arg_count < 3 {
+                            emit("Usage: patch revert <patch_id>\n");
+                            return (ShellStatus::ExecutionFailed, write_pos);
+                        }
+                        let patch_id = parse_u64(parsed.args[2]).unwrap_or(0) as u32;
+                        let mut b = [0u8; 20];
+                        let cap = self.patch.cap;
+                        let mut dummy_code = [0xE9, 0x00, 0x00, 0x00, 0x00, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90];
+                        match self.patch.revert_patch(&cap, patch_id, &mut dummy_code, 0, 2020) {
+                            Ok(()) => {
+                                emit("patch: patch #");
+                                emit(format_u64(patch_id as u64, &mut b));
+                                emit(" restauré avec succès (rollback du prologue original effectué)\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("patch: échec de restauration du patch\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "verify" => {
+                        if parsed.arg_count < 3 {
+                            emit("Usage: patch verify <patch_id>\n");
+                            return (ShellStatus::ExecutionFailed, write_pos);
+                        }
+                        let patch_id = parse_u64(parsed.args[2]).unwrap_or(0) as u32;
+                        let mut b = [0u8; 20];
+                        let cap = self.patch.cap;
+                        match self.patch.verify_patch_seal(&cap, patch_id) {
+                            Ok(true) => {
+                                emit("patch: sceau cryptographique SHA-256 du patch #");
+                                emit(format_u64(patch_id as u64, &mut b));
+                                emit(" [VALIDE / INTÈGRE]\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Ok(false) => {
+                                emit("patch: ALERTE FALSIFICATION ! Sceau du patch #");
+                                emit(format_u64(patch_id as u64, &mut b));
+                                emit(" [INVALIDE / CORROMPU]\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                            Err(_) => {
+                                emit("patch: patch introuvable ou erreur de vérification\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "digest" => {
+                        emit("Condensat SHA-256 d'Audit Livepatching : ");
+                        let mut b = [0u8; 20];
+                        for byte in self.patch.last_audit_digest.iter() {
+                            emit(format_hex_u64(*byte as u64, &mut b));
+                        }
+                        emit("\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    _ => {
+                        emit("Usage: patch [status | list | view <id> | quiesce <id> | apply <id> | revert <id> | verify <id> | digest]\n");
                         (ShellStatus::ExecutionFailed, write_pos)
                     }
                 }

@@ -1009,6 +1009,13 @@ pub extern "C" fn _start() -> ! {
         "Échec du test du démon de capture d'état post-mortem jambo-cored"
     );
 
+    // 10terdecies. Validation du Rechargement à Chaud & Conformité ABI (Phase 84 - v0.2.82)
+    let patch_success = sched::execute_patch_daemon_test();
+    assert!(
+        patch_success,
+        "Échec du test du démon de rechargement à chaud jambo-patchd"
+    );
+
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
 
     arch::init_iommu();
@@ -1228,14 +1235,15 @@ pub extern "C" fn _start() -> ! {
     kprintln!("\x1b[1;32m[PASS] Phase 81 Process Confinement & Zero-Ambient Micro-Sandboxing (jambo-sandd) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 82 Hardware & Software Watchdog, Cluster Liveness & NMI Isolation (jambo-watchdogd) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 83 Post-Mortem State Capture, Sealed ELF Core Dumps & Telemetry (jambo-cored) Complete\x1b[0m");
+    kprintln!("\x1b[1;32m[PASS] Phase 84 Userspace Binary Livepatching & ABI Compliance (jambo-patchd) Complete\x1b[0m");
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.81 (Capture Post-Mortem, Crash Dumps ELF & Télémétrie jambo-cored)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.82 (Livepatching Ring 3, Quiescence & Conformité ABI jambo-patchd)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.81 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.82 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );

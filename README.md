@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.81-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.82-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.81 (Capture d'État Post-Mortem, Crash Dumps ELF Scellés & Télémétrie jambo-cored)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.81` introduit le démon de capture d'état post-mortem et d'analyse forensique (`services/jambo-cored`), intégrant la capture déterministe des registres CPU (x86-64 et AArch64) et de la pile mémoire lors de paniques ou fautes non récupérables (SIGSEGV, GPF, fautes de page, Watchdog Timeout), la génération de fichiers Core Dump conformes à la spécification binaire ELF64 (`ET_CORE`, `PT_NOTE`, `PT_LOAD`, notes `NT_PRSTATUS`, `NT_PRPSINFO`, `NT_SIGINFO`), le scellement cryptographique inviolable par chaîne SHA-256 avec détection formelle de falsification, la mise en quarantaine immédiate des segments mémoires VMO pour prévenir la corruption inter-domaines, la télémétrie post-crash avec recommandations automatisées d'auto-guérison de grappe, le contrôle d'accès capabilaire `CoreCap` sans autorité ambiante, un registre d'audit chaîné SHA-256, et les commandes shell interactives `core [status | list | view | quarantine | telemetry | verify | elf | digest]` dans `jsh`.
+> **Statut du Projet : Version v0.2.82 (Rechargement à Chaud en Espace Utilisateur, Injection Atomique de Trampolines & Conformité ABI jambo-patchd)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.82` introduit le démon de rechargement à chaud et de livepatching en espace utilisateur (`services/jambo-patchd`), intégrant le remplacement atomique de symboles et fonctions exécutables Ring 3 sans interruption de service, la génération dynamique de trampolines multi-architectures (x86-64 Rel32 5B, Indirect64 14B, ARM64 Direct Branch 4B, ARM64 Indirect Branch 16B), la synchronisation par barrière de quiescence des threads avec détection étanche des threads en zone critique du trampoline, la vérification formelle de conformité ABI (System V AMD64 et ARM64 AAPCS, alignement de pile et d'instructions, préservation des registres callee-saved), la préservation de l'état des VMO avec mécanisme de restauration atomique garantie (*Rollback*), le scellement cryptographique par chaîne SHA-256 avec détection formelle de falsification, le contrôle d'accès capabilaire `PatchCap` sans autorité ambiante, et les commandes shell interactives `patch [status | list | view | quiesce | apply | revert | verify | digest]` dans `jsh`.
 
 ---
 
@@ -156,6 +156,7 @@ jambo-os/
 │   ├── jambo-metricsd/      # Moteur de métriques distribuées & séries temporelles
 │   ├── jambo-netd/          # Démon réseau TCP/IP, TLS 1.3 et DNS sécurisé
 │   ├── jambo-pkgd/          # Gestionnaire de paquets immuables et mises à jour A/B
+│   ├── jambo-patchd/        # Rechargement à chaud de binaires Ring 3 & conformité ABI
 │   ├── jambo-policyd/       # Moteur de politiques de sécurité & admission de grappe
 │   ├── jambo-powerd/        # Gestion d'énergie ACPI et régulation thermique/C-states
 │   ├── jambo-raft/          # Moteur de consensus distribué Raft et réplication d'état
@@ -172,6 +173,7 @@ jambo-os/
 │   ├── jambo-vmm/           # Moniteur de micro-VMs et isolation matérielle Type-2
 │   ├── jambo-walld/         # Pare-feu distribué dynamique & synchronisation conntrack
 │   ├── jambo-wasm/          # Runtime WebAssembly / WASI Snapshot Preview 1
+│   ├── jambo-watchdogd/     # Surveillance de vivacité matérielle/logicielle & chien de garde
 │   └── pcie-bus-mgr/        # Gestionnaire de bus PCIe, MSI-X et isolation IOMMU
 └── xtask/                   # Outil de compilation, création d'ISO et test QEMU
 ```

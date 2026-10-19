@@ -1,6 +1,6 @@
 [package]
 name = "jambo-meshd"
-version = "0.2.81"
+version = "0.2.82"
 edition = "2021"
 
 [dependencies]
