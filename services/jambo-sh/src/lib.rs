@@ -131,6 +131,7 @@ pub struct JamboShell {
     pub secpolicy: jambo_secpolicyd::JamboSecPolicyDaemon,
     pub wall: jambo_walld::JamboWallDaemon,
     pub diag: jambo_diagd::JamboDiagDaemon,
+    pub sand: jambo_sandd::JamboSandDaemon,
 }
 
 impl Default for JamboShell {
@@ -271,6 +272,12 @@ impl JamboShell {
         );
         let mut diag = jambo_diagd::JamboDiagDaemon::new(1, diag_cap);
         diag.init_defaults();
+        let sand_cap = jambo_sandd::SandCap::new(
+            libjambo::Handle::new(8101, 1),
+            jambo_sandd::sand_rights::ALL,
+        );
+        let mut sand = jambo_sandd::JamboSandDaemon::new(1, sand_cap);
+        sand.init_defaults();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -310,6 +317,7 @@ impl JamboShell {
             secpolicy,
             wall,
             diag,
+            sand,
         }
     }
 
@@ -1917,6 +1925,266 @@ impl JamboShell {
                     }
                     _ => {
                         emit("Usage: diag [status | devices | inspect <dev> | scan | remediate <dev> <act> | incidents | digest]\n");
+                        (ShellStatus::ExecutionFailed, write_pos)
+                    }
+                }
+            }
+            "sand" | "sandbox" => {
+                let subcmd = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    "status"
+                };
+
+                match subcmd {
+                    "status" => {
+                        let mut b = [0u8; 20];
+                        emit("=== CONFINEMENT & MICRO-BACS À SABLE ZERO-AMBIENT (jambo-sandd) ===\n");
+                        emit("Démon Sand ID        : #");
+                        emit(format_u64(self.sand.daemon_id as u64, &mut b));
+                        emit("\nProfils Actifs       : ");
+                        emit(format_u64(self.sand.profile_count as u64, &mut b));
+                        emit(" / ");
+                        emit(format_u64(jambo_sandd::MAX_PROFILES as u64, &mut b));
+                        emit("\nBacs à Sable Actifs  : ");
+                        emit(format_u64(self.sand.sandbox_count as u64, &mut b));
+                        emit(" / ");
+                        emit(format_u64(jambo_sandd::MAX_SANDBOXES as u64, &mut b));
+                        emit("\nViolations Consignées: ");
+                        emit(format_u64(self.sand.violation_total, &mut b));
+                        emit("\n\n--- Statistiques d'Exécution & Filtrage ---\n");
+                        emit("Évaluations Totales  : ");
+                        emit(format_u64(self.sand.stats.total_evaluations, &mut b));
+                        emit("\nAutorisés            : ");
+                        emit(format_u64(self.sand.stats.total_allowed, &mut b));
+                        emit(" | Bloqués (Deny) : ");
+                        emit(format_u64(self.sand.stats.total_denied, &mut b));
+                        emit("\nTués (Kill)          : ");
+                        emit(format_u64(self.sand.stats.total_killed, &mut b));
+                        emit(" | Piégés (Trap) : ");
+                        emit(format_u64(self.sand.stats.total_trapped, &mut b));
+                        emit("\nContrôles Landlock   : ");
+                        emit(format_u64(self.sand.stats.total_landlock_checks, &mut b));
+                        emit(" | Landlock Bloqués : ");
+                        emit(format_u64(self.sand.stats.total_landlock_blocked, &mut b));
+                        emit("\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "profiles" => {
+                        let mut b = [0u8; 20];
+                        emit("ID  NOM               PARENT  RIGUEUR  DEFAUT  SYSCALLS_MASK       NO_NEW_PRIVS\n");
+                        emit("----------------------------------------------------------------------------\n");
+                        for p in self.sand.profiles.iter().flatten() {
+                            emit("#");
+                            emit(format_u64(p.id as u64, &mut b));
+                            emit("  ");
+                            emit(p.name_str());
+                            let pad = 18usize.saturating_sub(p.name_str().len());
+                            for _ in 0..pad {
+                                emit(" ");
+                            }
+                            if let Some(pid) = p.parent_id {
+                                emit("#");
+                                emit(format_u64(pid as u64, &mut b));
+                                emit("     ");
+                            } else {
+                                emit("NONE   ");
+                            }
+                            emit(format_u64(p.strictness_level as u64, &mut b));
+                            emit("%     ");
+                            emit(p.default_action.as_str());
+                            let dpad = 8usize.saturating_sub(p.default_action.as_str().len());
+                            for _ in 0..dpad {
+                                emit(" ");
+                            }
+                            emit(format_hex_u64(p.allowed_syscall_mask, &mut b));
+                            emit("  ");
+                            if p.no_new_privs {
+                                emit("OUI\n");
+                            } else {
+                                emit("NON\n");
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "sandboxes" | "list" => {
+                        let mut b = [0u8; 20];
+                        emit("ID  PID      TID      PROFIL            ACTIF  TUÉ  EVALS  VIOLATIONS\n");
+                        emit("----------------------------------------------------------------------\n");
+                        for s in self.sand.sandboxes.iter().flatten() {
+                            emit("#");
+                            emit(format_u64(s.id as u64, &mut b));
+                            emit("  ");
+                            let pid_s = format_u64(s.process_id, &mut b);
+                            emit(pid_s);
+                            let pad1 = 9usize.saturating_sub(pid_s.len());
+                            for _ in 0..pad1 {
+                                emit(" ");
+                            }
+                            let tid_s = format_u64(s.thread_id, &mut b);
+                            emit(tid_s);
+                            let pad2 = 9usize.saturating_sub(tid_s.len());
+                            for _ in 0..pad2 {
+                                emit(" ");
+                            }
+                            let prof_name = self.sand.get_profile(s.profile_id).map(|p| p.name_str()).unwrap_or("?");
+                            emit(prof_name);
+                            let pad3 = 18usize.saturating_sub(prof_name.len());
+                            for _ in 0..pad3 {
+                                emit(" ");
+                            }
+                            if s.is_active {
+                                emit("OUI    ");
+                            } else {
+                                emit("NON    ");
+                            }
+                            if s.is_killed {
+                                emit("OUI  ");
+                            } else {
+                                emit("NON  ");
+                            }
+                            let ev_s = format_u64(s.evaluation_count, &mut b);
+                            emit(ev_s);
+                            let pad4 = 7usize.saturating_sub(ev_s.len());
+                            for _ in 0..pad4 {
+                                emit(" ");
+                            }
+                            emit(format_u64(s.violation_count as u64, &mut b));
+                            emit("\n");
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "inspect" => {
+                        if parsed.arg_count < 3 {
+                            emit("Usage: sand inspect <sandbox_id | profile_id>\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        } else {
+                            let mut b = [0u8; 20];
+                            let id = parse_u64(parsed.args[2]).unwrap_or(1) as u32;
+                            if let Some(prof) = self.sand.get_profile(id) {
+                                emit("=== PROFIL DE CONFINEMENT #");
+                                emit(format_u64(prof.id as u64, &mut b));
+                                emit(" (");
+                                emit(prof.name_str());
+                                emit(") ===\n");
+                                emit("Rigueur               : ");
+                                emit(format_u64(prof.strictness_level as u64, &mut b));
+                                emit("%\nAction par Défaut     : ");
+                                emit(prof.default_action.as_str());
+                                emit("\nMasque Appels Système : ");
+                                emit(format_hex_u64(prof.allowed_syscall_mask, &mut b));
+                                emit("\nRègles d'Arguments    : ");
+                                emit(format_u64(prof.rule_count as u64, &mut b));
+                                emit("\nRègles Landlock       : ");
+                                emit(format_u64(prof.landlock_count as u64, &mut b));
+                                emit("\n");
+                                for r in prof.landlock_rules.iter().flatten() {
+                                    emit("  - Chemin: ");
+                                    emit(r.path_str());
+                                    emit(" | Droits: ");
+                                    emit(format_hex_u64(r.allowed_access as u64, &mut b));
+                                    emit("\n");
+                                }
+                                (ShellStatus::Success, write_pos)
+                            } else if let Some(sb) = self.sand.get_sandbox(id) {
+                                emit("=== BAC À SABLE #");
+                                emit(format_u64(sb.id as u64, &mut b));
+                                emit(" (PID ");
+                                emit(format_u64(sb.process_id, &mut b));
+                                emit(") ===\nProfil Assigné   : #");
+                                emit(format_u64(sb.profile_id as u64, &mut b));
+                                emit("\nActif            : ");
+                                if sb.is_active {
+                                    emit("OUI\n");
+                                } else {
+                                    emit("NON\n");
+                                }
+                                emit("Tué / Neutralisé : ");
+                                if sb.is_killed {
+                                    emit("OUI\n");
+                                } else {
+                                    emit("NON\n");
+                                }
+                                emit("Évaluations      : ");
+                                emit(format_u64(sb.evaluation_count, &mut b));
+                                emit("\nViolations       : ");
+                                emit(format_u64(sb.violation_count as u64, &mut b));
+                                emit("\n");
+                                (ShellStatus::Success, write_pos)
+                            } else {
+                                emit("sand: profil ou bac à sable introuvable\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "test" => {
+                        if parsed.arg_count < 4 {
+                            emit("Usage: sand test <sandbox_id> <syscall_nr>\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        } else {
+                            let mut b = [0u8; 20];
+                            let s_id = parse_u64(parsed.args[2]).unwrap_or(1) as u32;
+                            let sys_nr = parse_u64(parsed.args[3]).unwrap_or(0) as u32;
+                            let decision = self.sand.evaluate_syscall(s_id, sys_nr, [0, 0, 0, 0], 100);
+                            emit("[SANDBOX] Test Syscall #");
+                            emit(format_u64(sys_nr as u64, &mut b));
+                            emit(" sur Bac à Sable #");
+                            emit(format_u64(s_id as u64, &mut b));
+                            emit(" -> DÉCISION: ");
+                            emit(decision.as_str());
+                            emit("\n");
+                            (ShellStatus::Success, write_pos)
+                        }
+                    }
+                    "violations" => {
+                        let mut b = [0u8; 20];
+                        emit("ID    HORODATAGE  SANDBOX  PID      SYSCALL  ACTION\n");
+                        emit("---------------------------------------------------\n");
+                        for v in self.sand.violations.iter().flatten() {
+                            emit("#");
+                            emit(format_u64(v.violation_id, &mut b));
+                            emit("   T+");
+                            emit(format_u64(v.timestamp, &mut b));
+                            emit("s       #");
+                            emit(format_u64(v.sandbox_id as u64, &mut b));
+                            emit("       ");
+                            emit(format_u64(v.process_id, &mut b));
+                            emit("      #");
+                            emit(format_u64(v.syscall_nr as u64, &mut b));
+                            emit("       ");
+                            emit(v.action_taken.as_str());
+                            emit("\n");
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "digest" => {
+                        let mut b = [0u8; 20];
+                        match self.sand.get_audit_digest(&self.sand.admin_cap) {
+                            Ok(digest) => {
+                                emit("Condensat SHA-256 de Confinement : ");
+                                for byte in digest.iter() {
+                                    let hi = (byte >> 4) & 0x0F;
+                                    let lo = byte & 0x0F;
+                                    let c_hi = if hi < 10 { b'0' + hi } else { b'a' + (hi - 10) };
+                                    let c_lo = if lo < 10 { b'0' + lo } else { b'a' + (lo - 10) };
+                                    let s = [c_hi, c_lo];
+                                    if let Ok(st) = core::str::from_utf8(&s) {
+                                        emit(st);
+                                    }
+                                }
+                                emit("\nTotal Violations Scellées : ");
+                                emit(format_u64(self.sand.violation_total, &mut b));
+                                emit("\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("sand: échec de lecture du condensat de confinement\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    _ => {
+                        emit("Usage: sand [status | profiles | list | inspect <id> | test <sb> <sys> | violations | digest]\n");
                         (ShellStatus::ExecutionFailed, write_pos)
                     }
                 }

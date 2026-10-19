@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.78-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.79-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.78 (Diagnostic Matériel Autonome, Auto-Réparation & Télémétrie de Pannes jambo-diagd)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.78` introduit le démon de diagnostic matériel autonome et de télémétrie de pannes (`services/jambo-diagd`), doté de la surveillance active des bus (PCIe, NVMe, VirtIO, mémoire DDR ECC, CPU MCA), de détection fine des erreurs (AER corrigible/fatal, ECC corrigible/non-corrigible, erreurs médias), de stratégies d'auto-remédiation autonome à chaud (Link Retraining PCIe, Function-Level Reset FLR, repli dégradé, et Hot-Failover automatique vers contrôleur de secours), d'un journal d'incidents scellé cryptographiquement par une chaîne de condensats SHA-256, du contrôle d'accès capabilaire `DiagCap`, et des commandes shell interactives `diag [status | devices | inspect | scan | remediate | incidents | digest]` dans `jsh`.
+> **Statut du Projet : Version v0.2.79 (Confinement de Processus & Micro-Bacs à Sable Zero-Ambient jambo-sandd)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.79` introduit le démon de confinement granulaire et de micro-bacs à sable Zero-Ambient (`services/jambo-sandd`), doté du filtrage d'appels système Seccomp-like par masque binaire O(1) et prédicats d'arguments fins, d'un arbre hiérarchique de profils dynamiques avec garantie mathématique de resserrement monotone (`Strict`, `ComputeOnly`, `NetworkWorker`, `UntrustedPlugin`), de restrictions de chemins et ressources VFS Landlock-like, d'un journal de violations scellé cryptographiquement par SHA-256, du contrôle d'accès capabilaire `SandCap`, et des commandes shell interactives `sand [status | profiles | list | inspect | test | violations | digest]` dans `jsh`.
 
 ---
 
@@ -159,6 +159,7 @@ jambo-os/
 │   ├── jambo-powerd/        # Gestion d'énergie ACPI et régulation thermique/C-states
 │   ├── jambo-raft/          # Moteur de consensus distribué Raft et réplication d'état
 │   ├── jambo-rpc/           # Bus RPC distribué et capacités de cluster
+│   ├── jambo-sandd/         # Confinement de processus et micro-bacs à sable Zero-Ambient
 │   ├── jambo-schedd/        # Ordonnanceur distribué de charges de travail et micro-VMs
 │   ├── jambo-secpolicyd/    # Démon d'attestation matérielle TPM 2.0 et confinement de grappe
 │   ├── jambo-serviced/      # Registre de découverte de services & résolution de noms

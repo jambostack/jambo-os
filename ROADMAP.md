@@ -1,7 +1,7 @@
 # ROADMAP DU DÉVELOPPEMENT AUTONOME — JamboOS
 
-> **Dernière mise à jour** : 2026-10-19 16:05 UTC  
-> **Version actuelle** : `v0.2.78`  
+> **Dernière mise à jour** : 2026-10-19 16:20 UTC  
+> **Version actuelle** : `v0.2.79`  
 > **Statut global** : Pré-Alpha active — Micro-noyau de 3e génération orienté capacités (`#![no_std]`)  
 > **Cycle de développement autonome** : 10 minutes via le Planificateur de Tâches & Crons d'Antigravity WebUI  
 
@@ -20,7 +20,7 @@
 
 ## 2. État d'Avancement des Phases d'Ingénierie
 
-### Phases Validées (v0.1.0 à v0.2.78)
+### Phases Validées (v0.1.0 à v0.2.79)
 
 | Jalon / Version | Phase | Composant | Description Technique | Statut |
 | :--- | :---: | :--- | :--- | :--- | :--- :
@@ -67,26 +67,27 @@
 | **v0.2.76** | 78 | Attestation TPM 2.0 `jambo-secpolicyd` | Attestation matérielle distante TPM 2.0, citations signées TpmQuote, défi-réponse anti-rejeu, confinement de grappe, SecPolicyCap | ✅ Validé |
 | **v0.2.77** | 79 | Pare-feu `jambo-walld` | Pare-feu d'état distribué, machine FSM conntrack, synchronisation d'état scellée HMAC, Zero-Trust adaptatif, auto-blocage scans, WallCap | ✅ Validé |
 | **v0.2.78** | 80 | Diagnostics `jambo-diagd` | Surveillance active PCIe/NVMe/VirtIO/ECC/MCA, auto-remédiation (Link Retraining, FLR, Hot-Failover), scellement SHA-256, DiagCap | ✅ Validé |
+| **v0.2.79** | 81 | Confinement `jambo-sandd` | Confinement Seccomp/Landlock Zero-Ambient, resserrement monotone, SandCap, audit SHA-256 | ✅ Validé |
 
 ---
 
 ## 3. Prochaines Étapes Prioritaires
 
-### 🎯 Prochaine Tâche Immédiate : Phase 81 — v0.2.79
-* **Composant** : `services/jambo-sandd`
-* **Objectif** : Confinement de processus et micro-bacs à sable Zero-Ambient Seccomp/Landlock-like
-* **Tâches précises** :
-  1. Filtrage d'appels système par masque de capacités et arguments.
-  2. Arbre de profils de restriction dynamique pour charges non fiables.
-  3. Validation `cargo xtask test` et commit `v0.2.79`.
-
-### 🎯 Tâche Suivante : Phase 82 — v0.2.80
+### 🎯 Prochaine Tâche Immédiate : Phase 82 — v0.2.80
 * **Composant** : `services/jambo-watchdogd`
 * **Objectif** : Surveillance de vivacité système matérielle & logicielle, battements de cœur inter-nœuds, isolation NMI et bascule de secours
 * **Tâches précises** :
   1. Chien de garde matériel (Hardware Watchdog WDT / iTCO) et logiciel Ring 3.
   2. Détection de blocages de threads, dérive de boucle d'événements et alertes NMI.
   3. Validation `cargo xtask test` et commit `v0.2.80`.
+
+### 🎯 Tâche Suivante : Phase 83 — v0.2.81
+* **Composant** : `services/jambo-cored`
+* **Objectif** : Capture d'état post-mortem, génération de crash dumps scellés ELF, isolation mémoire et télémétrie post-crash
+* **Tâches précises** :
+  1. Capture d'état des registres et de la pile mémoire lors de paniques ou fautes non récupérables.
+  2. Génération de rapports ELF Core Dump scellés par signature cryptographique.
+  3. Validation `cargo xtask test` et commit `v0.2.81`.
 
 ---
 
@@ -105,6 +106,7 @@
 * **2026-10-19 15:23 UTC** : Validation complète Phase 78 (`jambo-secpolicyd`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test --workspace --lib`). Tag `v0.2.76`.
 * **2026-10-19 15:45 UTC** : Validation complète Phase 79 (`jambo-walld`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test --workspace --lib`). Tag `v0.2.77`.
 * **2026-10-19 16:05 UTC** : Validation complète Phase 80 (`jambo-diagd`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test --workspace --lib`). Tag `v0.2.78`.
+* **2026-10-19 16:20 UTC** : Validation complète Phase 81 (`jambo-sandd`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test --workspace --lib`). Tag `v0.2.79`.
 
 
 

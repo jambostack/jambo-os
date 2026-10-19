@@ -45,6 +45,7 @@ members = [
     "services/jambo-secpolicyd",
     "services/jambo-walld",
     "services/jambo-diagd",
+    "services/jambo-sandd",
     "libs/jambo-ui",
     "libs/jambo-sdk",
     "drivers/virtio",
