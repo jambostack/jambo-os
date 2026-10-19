@@ -1,4 +1,5 @@
 pub mod ai_test;
+pub mod audit_test;
 pub mod comp_test;
 pub mod compat_test;
 pub mod context;
@@ -17,6 +18,7 @@ pub mod thread;
 pub mod vfs_test;
 
 pub use ai_test::execute_local_ai_test;
+pub use audit_test::execute_cryptographic_audit_test;
 pub use comp_test::execute_graphics_compositor_test;
 pub use compat_test::execute_compat_test;
 pub use context::{enter_user_mode, switch_context};

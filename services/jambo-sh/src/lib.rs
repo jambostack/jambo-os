@@ -103,6 +103,7 @@ pub struct JamboShell {
     pub aid: jambo_aid::JamboAiDaemon,
     pub fuzz: jambo_fuzz::JamboFuzzDaemon,
     pub rpc: jambo_rpc::JamboRpcDaemon,
+    pub audit: jambo_auditd::JamboAuditDaemon,
 }
 
 impl Default for JamboShell {
@@ -137,6 +138,8 @@ impl JamboShell {
         );
         let mut rpc = jambo_rpc::JamboRpcDaemon::new();
         rpc.init_defaults();
+        let mut audit = jambo_auditd::JamboAuditDaemon::new();
+        audit.init_defaults();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -148,6 +151,7 @@ impl JamboShell {
             aid,
             fuzz: jambo_fuzz::JamboFuzzDaemon::new(),
             rpc,
+            audit,
         }
     }
 
@@ -260,6 +264,7 @@ impl JamboShell {
                     "  fuzz [cmd]   - Moteur de fuzzing offensif, isolation SMAP/IOMMU et chaos\n",
                 );
                 emit("  rpc [cmd]    - Bus RPC distribué, jetons de capacités et cluster\n");
+                emit("  audit [cmd]  - Grand livre d'audit cryptographique et observabilité\n");
                 emit("  echo <args>  - Affiche les arguments sur la sortie console\n");
                 emit("  clear        - Efface l'écran du terminal (ANSI escape)\n");
                 emit("  reboot       - Redémarre la machine\n");
@@ -267,7 +272,7 @@ impl JamboShell {
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.2.49 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.2.50 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -1200,6 +1205,128 @@ impl JamboShell {
                     }
                     _ => {
                         emit("Usage: rpc [status | call <svc> <mth> | ping <node> | cluster | failover <node>]\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                }
+            }
+            "audit" => {
+                let sub = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    ""
+                };
+                match sub {
+                    "status" => {
+                        let mut b = [0u8; 20];
+                        emit("=== GRAND LIVRE D'AUDIT CRYPTOGRAPHIQUE (jambo-auditd) ===\n");
+                        emit("Événements enregistrés : ");
+                        emit(format_u64(self.audit.ledger.total_recorded(), &mut b));
+                        emit("\nIntégrité cryptographique : ");
+                        if self.audit.verify_integrity() {
+                            emit("CONFORME (Inviolable)\n");
+                        } else {
+                            emit("FALSIFICATION DÉTECTÉE !\n");
+                        }
+                        emit("Détection heuristique d'anomalies : ACTIVE (Seuil: 3)\n");
+                        emit("Capacité d'audit : ADMIN (Zero-Ambient Authority)\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "log" => {
+                        if parsed.arg_count < 3 {
+                            emit("Usage: audit log <message>\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        } else {
+                            let msg = parsed.args[2];
+                            match self.audit.log_event(
+                                1,
+                                jambo_auditd::AuditCategory::Authentication,
+                                jambo_auditd::AuditSeverity::Info,
+                                100,
+                                msg.as_bytes(),
+                                10000,
+                            ) {
+                                Ok(seq) => {
+                                    let mut b = [0u8; 20];
+                                    emit("[AUDIT] Événement scellé avec succès (Seq: ");
+                                    emit(format_u64(seq, &mut b));
+                                    emit(")\n");
+                                    (ShellStatus::Success, write_pos)
+                                }
+                                Err(_) => {
+                                    emit(
+                                        "[AUDIT] Erreur lors de l'enregistrement de l'événement\n",
+                                    );
+                                    (ShellStatus::ExecutionFailed, write_pos)
+                                }
+                            }
+                        }
+                    }
+                    "verify" => {
+                        if self.audit.verify_integrity() {
+                            emit("[AUDIT] Vérification d'intégrité : SUCCÈS (Chaîne cryptographique 100% valide)\n");
+                            (ShellStatus::Success, write_pos)
+                        } else {
+                            emit("[AUDIT/ALERTE] ÉCHEC : Violation d'intégrité détectée dans le grand livre !\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        }
+                    }
+                    "alert" => match self.audit.detector.scan_for_anomalies(&self.audit.ledger) {
+                        Some(alert) => {
+                            let mut b = [0u8; 20];
+                            emit("[AUDIT/ALERTE] Anomalie de sécurité détectée !\n");
+                            emit("  PID suspect      : ");
+                            emit(format_u64(alert.suspect_pid, &mut b));
+                            emit("\n  Nombre d'incidents : ");
+                            emit(format_u64(alert.incident_count as u64, &mut b));
+                            emit("\n");
+                            (ShellStatus::Success, write_pos)
+                        }
+                        None => {
+                            emit("[AUDIT] Aucune anomalie détectée dans les journaux récents.\n");
+                            (ShellStatus::Success, write_pos)
+                        }
+                    },
+                    "dump" => {
+                        emit("--- Derniers événements d'audit scellés ---\n");
+                        let mut entries = [jambo_auditd::AuditEntry {
+                            sequence_id: 0,
+                            timestamp_ns: 0,
+                            source_pid: 0,
+                            category: jambo_auditd::AuditCategory::CSpace,
+                            severity: jambo_auditd::AuditSeverity::Debug,
+                            event_code: 0,
+                            details_len: 0,
+                            details: [0; 32],
+                            prev_hash: [0; 16],
+                            entry_hash: [0; 16],
+                        }; 8];
+                        if let Ok(count) = self.audit.ledger.query_events(
+                            &self.audit.admin_cap,
+                            None,
+                            jambo_auditd::AuditSeverity::Debug,
+                            &mut entries,
+                        ) {
+                            let mut b = [0u8; 20];
+                            for entry in entries.iter().take(count) {
+                                emit("Seq ");
+                                emit(format_u64(entry.sequence_id, &mut b));
+                                emit(" [PID ");
+                                emit(format_u64(entry.source_pid, &mut b));
+                                emit("] : ");
+                                if let Ok(s) =
+                                    core::str::from_utf8(&entry.details[..entry.details_len])
+                                {
+                                    emit(s);
+                                } else {
+                                    emit("<binaire>");
+                                }
+                                emit("\n");
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    _ => {
+                        emit("Usage: audit [status | log <msg> | verify | alert | dump]\n");
                         (ShellStatus::Success, write_pos)
                     }
                 }

@@ -309,8 +309,17 @@ impl AuditLedger {
         Ok(matched)
     }
 
+    /// Retourne le nombre total d'événements enregistrés
+    pub const fn total_recorded(&self) -> u64 {
+        self.total_recorded
+    }
+
+    /// Retourne le dernier hachage de la chaîne
+    pub const fn last_hash(&self) -> [u8; 16] {
+        self.last_hash
+    }
+
     /// Altère intentionnellement une entrée en mémoire pour tester la détection de falsification
-    #[cfg(test)]
     pub fn corrupt_entry_for_test(&mut self, slot: usize) {
         if let Some(entry) = &mut self.entries[slot % MAX_AUDIT_ENTRIES] {
             entry.details[0] ^= 0xFF; // Corruption d'un octet de payload
@@ -388,6 +397,94 @@ impl AnomalyDetector {
         }
 
         None
+    }
+}
+
+/// Démon principal d'audit et observabilité de sécurité JamboAudit
+pub struct JamboAuditDaemon {
+    pub ledger: AuditLedger,
+    pub detector: AnomalyDetector,
+    pub admin_cap: AuditCap,
+}
+
+impl Default for JamboAuditDaemon {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl JamboAuditDaemon {
+    pub const fn new() -> Self {
+        let admin_cap = AuditCap::new(
+            Handle::new(1, 1),
+            0xFFFFFFFF,
+            AuditSeverity::Debug,
+            true,
+            true,
+        );
+        let ledger = AuditLedger::new();
+        Self {
+            ledger,
+            detector: AnomalyDetector::new(3),
+            admin_cap,
+        }
+    }
+
+    /// Initialise les événements fondamentaux de boot
+    pub fn init_defaults(&mut self) {
+        let _ = self.ledger.record_event(
+            &self.admin_cap,
+            1,
+            AuditCategory::CSpace,
+            AuditSeverity::Info,
+            1,
+            b"Audit subsystem initialized",
+            1000,
+        );
+        let _ = self.ledger.record_event(
+            &self.admin_cap,
+            1,
+            AuditCategory::MemoryMMU,
+            AuditSeverity::Info,
+            2,
+            b"W^X page isolation active",
+            2000,
+        );
+        let _ = self.ledger.record_event(
+            &self.admin_cap,
+            1,
+            AuditCategory::IommuDma,
+            AuditSeverity::Info,
+            3,
+            b"IOMMU DMA protection active",
+            3000,
+        );
+    }
+
+    /// Enregistre un événement avec la capacité admin
+    pub fn log_event(
+        &mut self,
+        source_pid: u64,
+        category: AuditCategory,
+        severity: AuditSeverity,
+        event_code: u32,
+        details: &[u8],
+        timestamp_ns: u64,
+    ) -> Result<u64, SysError> {
+        self.ledger.record_event(
+            &self.admin_cap,
+            source_pid,
+            category,
+            severity,
+            event_code,
+            details,
+            timestamp_ns,
+        )
+    }
+
+    /// Vérifie l'intégrité de la chaîne cryptographique
+    pub fn verify_integrity(&self) -> bool {
+        self.ledger.verify_chain_integrity()
     }
 }
 

@@ -788,6 +788,13 @@ pub extern "C" fn _start() -> ! {
         "Échec du test du bus RPC distribué, jetons de capacités et résilience cluster"
     );
 
+    // 10quindecies. Validation du Grand Livre d'Audit Cryptographique Immuable & Observabilité Zéro-Autorité (Phase 52 - v0.2.50)
+    let audit_success = sched::execute_cryptographic_audit_test();
+    assert!(
+        audit_success,
+        "Échec du test du grand livre d'audit cryptographique et de l'observabilité zéro-autorité"
+    );
+
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
 
     arch::init_iommu();
@@ -941,14 +948,17 @@ pub extern "C" fn _start() -> ! {
     kprintln!(
         "\x1b[1;32m[PASS] Phase 51 Distributed RPC Bus, Cryptographic Cap Tokens & Cluster Resilience Complete\x1b[0m"
     );
+    kprintln!(
+        "\x1b[1;32m[PASS] Phase 52 Cryptographic Audit Ledger & Zero-Ambient Observability Complete\x1b[0m"
+    );
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.49 (Bus RPC Distribué & Cluster jambo-rpc)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.50 (Audit Cryptographique Immuable jambo-auditd)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.49 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.50 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );

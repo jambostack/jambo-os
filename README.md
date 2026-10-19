@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.49-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.50-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.49 (Bus RPC Distribué & Cluster jambo-rpc)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. Après l'intégration du gestionnaire de paquets déclaratifs et des mises à jour A/B (`v0.2.46`), la version `v0.2.47` introduit le sous-système d'IA locale en espace utilisateur (`services/jambo-aid`) avec calcul d'embeddings vectoriels fixed-point (`VectorEmbedding`), similarité cosinus normalisée, index sémantique Top-K (`SemanticIndex`), et orchestrateur d'intentions typées en langage naturel sans autorité ambiante (`ai [ask | search | embed | status]` dans `jsh`).
+> **Statut du Projet : Version v0.2.50 (Grand Livre d'Audit Cryptographique Immuable & Observabilité jambo-auditd)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.50` introduit le grand livre d'audit cryptographique inaltérable en espace utilisateur (`services/jambo-auditd`), le scellement séquentiel par chaînage de hachage inviolable (tamper-evident ledger), le confinement strict par capacités `AuditCap` (zéro-autorité ambiante), le moteur de détection heuristique d'anomalies en temps réel et les commandes interactives `audit [status | log | verify | alert | dump]` dans `jsh`.
 
 ---
 
