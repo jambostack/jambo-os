@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.84-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.85-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.84 (Débogage Dynamique Ring 3, DR0..DR7 & Introspection Mémoire jambo-dbg)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.84` introduit le démon de débogage dynamique en espace utilisateur (`services/jambo-dbg`), intégrant la capture et la gestion des exceptions matérielles de débogage INT1 (`#DB`) et logicielles INT3 (`#BP` - 0xCC) avec rembobinage automatique de RIP et restauration mémoire, la programmation et l'émulation des registres matériels x86-64 DR0..DR7 (points d'arrêt et watchpoints en exécution, écriture et lecture/écriture avec décodage d'état DR6), l'exécution pas à pas (*Single-Stepping*) matérielle via le drapeau Trap Flag (TF dans RFLAGS), l'introspection et la modification sécurisées des registres de threads utilisateur et de la mémoire virtuelle cible avec désassemblage compact, le scellement cryptographique inviolable de chaque opération par registre d'audit chaîné SHA-256, le contrôle d'accès capabilaire strict `DbgCap` sans autorité ambiante, et les commandes shell interactives `dbg [status | attach | detach | bp | regs | mem | step | cont | digest]` dans `jsh`.
+> **Statut du Projet : Version v0.2.85 (Édition de Liens Dynamiques Ring 3, Bibliothèques Partagées ELF64 .jso, Tables GOT/PLT & Résolution Différée jambo-dynlinkd)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.85` introduit le démon d'édition de liens dynamiques en espace utilisateur (`services/jambo-dynlinkd`), intégrant le chargement et la relocation dynamique de bibliothèques partagées ELF64 (`.jso` / *Jambo Shared Objects*), la gestion et le scellement en mémoire protégée W^X des tables globales de décalage (GOT) et tables de liaison de procédures (PLT), la résolution différée sécurisée (*Lazy Binding*) via trampolines et la liaison immédiate (*BIND_NOW*), le durcissement RELRO (*Read-Only Relocations*), le graphe de dépendances dynamiques (`DT_NEEDED`), le comptage de références (`dlopen`/`dlclose`), le scellement cryptographique inviolable par registre d'audit chaîné SHA-256, le contrôle d'accès capabilaire strict `DynLinkCap` sans autorité ambiante, et les commandes shell interactives `dynlink [status | list | load | resolve | lazy | relro | unload | digest]` ainsi que `ldd` dans `jsh`.
 
 ---
 
@@ -140,6 +140,7 @@ jambo-os/
 │   ├── jambo-coreutils/     # Utilitaires système (ps, capstat, top, jpkg)
 │   ├── jambo-cored/         # Capture d'état post-mortem, crash dumps ELF scellés & télémétrie
 │   ├── jambo-dbg/           # Débogage dynamique d'espace utilisateur, DR0..DR7 & introspection
+│   ├── jambo-dynlinkd/      # Édition de liens dynamiques Ring 3, ELF64 .jso, GOT/PLT & lazy binding
 │   ├── jambo-cryptod/       # Chiffrement de bloc transparent ChaCha20 et scellement TPM 2.0
 │   ├── jambo-dfsd/          # Stockage distribué adressable par contenu (CAS) & réplication
 │   ├── jambo-diagd/         # Diagnostic matériel autonome, auto-réparation & télémétrie

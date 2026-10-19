@@ -1,7 +1,7 @@
 # ROADMAP DU DÉVELOPPEMENT AUTONOME — JamboOS
 
-> **Dernière mise à jour** : 2026-10-19 18:00 UTC  
-> **Version actuelle** : `v0.2.84`  
+> **Dernière mise à jour** : 2026-10-19 18:20 UTC  
+> **Version actuelle** : `v0.2.85`  
 > **Statut global** : Pré-Alpha active — Micro-noyau de 3e génération orienté capacités (`#![no_std]`)  
 > **Cycle de développement autonome** : 10 minutes via le Planificateur de Tâches & Crons d'Antigravity WebUI  
 
@@ -20,10 +20,10 @@
 
 ## 2. État d'Avancement des Phases d'Ingénierie
 
-### Phases Validées (v0.1.0 à v0.2.84)
+### Phases Validées (v0.1.0 à v0.2.85)
 
 | Jalon / Version | Phase | Composant | Description Technique | Statut |
-| :--- | :---: | :--- | :--- | :--- | :--- :
+| :--- | :---: | :--- | :--- | :--- |
 | **v0.1.0 - v0.2.38** | 1 - 38 | Kernel & Drivers | Micro-noyau, CSpace, MMU Buddy/SLUB, IPC zéro-copie, VFS CoW, VirtIO Ring 3, APIC SMP | ✅ Validé |
 | **v0.2.39** | 39 | Exécution Ring 3 | Commutation CPL 3, syscall roundtrip, `sysretq` | ✅ Validé |
 | **v0.2.40** | 40 | APIC & EEVDF | Ordonnancement préemptif EEVDF monotone | ✅ Validé |
@@ -73,26 +73,27 @@
 | **v0.2.82** | 84 | Livepatching `jambo-patchd` | Rechargement à chaud de binaires Ring 3, injection atomique de trampolines, quiescence de threads, conformité ABI, PatchCap | ✅ Validé |
 | **v0.2.83** | 85 | Profilage `jambo-profilerd` | Échantillonnage de compteurs de performance matérielle (PMC/PEBS), profils de flammes (Flamegraphs) et analyse de latence Ring 3 | ✅ Validé |
 | **v0.2.84** | 86 | Débogueur `jambo-dbg` | Débogage dynamique d'espace utilisateur, registres de points d'arrêt matériels DR0..DR7, pas à pas et introspection mémoire | ✅ Validé |
+| **v0.2.85** | 87 | Éditeur de Liens `jambo-dynlinkd` | Édition de liens dynamiques Ring 3, bibliothèques partagées ELF64 `.jso`, tables GOT/PLT, résolution différée et durcissement RELRO | ✅ Validé |
 
 ---
 
 ## 3. Prochaines Étapes Prioritaires
 
-### 🎯 Prochaine Tâche Immédiate : Phase 87 — v0.2.85
-* **Composant** : `services/jambo-dynlinkd`
-* **Objectif** : Édition de liens dynamiques Ring 3, bibliothèques partagées ELF64 `.jso`, tables GOT/PLT et résolution différée sous modèle capabilaire
-* **Tâches précises** :
-  1. Chargement et relocation dynamique de symboles ELF64 partagés dans l'espace d'adressage virtuel.
-  2. Tables de liaison GOT/PLT en mémoire protégée W^X et liaison paresseuse sécurisée.
-  3. Validation `cargo xtask test` et commit `v0.2.85`.
-
-### 🎯 Tâche Suivante : Phase 88 — v0.2.86
+### 🎯 Prochaine Tâche Immédiate : Phase 88 — v0.2.86
 * **Composant** : `services/jambo-seccomp`
 * **Objectif** : Filtres d'appels système granulaires à base de BPF étendu pour isolation sans privilèges, profils de confinement par application et conformité POSIX stricte
 * **Tâches précises** :
   1. Compilateur et validateur de filtres BPF pour l'interception de syscalls par thread.
   2. Politiques déclaratives d'autorisations et d'actions (Allow, Kill, Trap, Errno).
-  3. Validation `cargo xtask test` et commit `v0.2.86`.
+  3. Validation `cargo xtask test` et commit `v0.2.85` -> `v0.2.86`.
+
+### 🎯 Tâche Suivante : Phase 89 — v0.2.87
+* **Composant** : `services/jambo-mac`
+* **Objectif** : Mandat d'accès contrôlé (MAC) multi-niveaux (MLS), modèles Bell-LaPadula (confidentialité) et Biba (intégrité) pour micro-noyau capabilaire
+* **Tâches précises** :
+  1. Niveaux de classification hiérarchiques (Unclassified, Confidential, Secret, TopSecret) et compartiments non-hiérarchiques.
+  2. Règles d'invariance d'écriture et de lecture stricte sous modèle capabilaire.
+  3. Validation `cargo xtask test` et commit `v0.2.87`.
 
 ---
 
@@ -117,6 +118,8 @@
 * **2026-10-19 17:25 UTC** : Validation complète Phase 84 (`jambo-patchd`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-patchd`). Tag `v0.2.82`.
 * **2026-10-19 17:40 UTC** : Validation complète Phase 85 (`jambo-profilerd`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-profilerd`). Tag `v0.2.83`.
 * **2026-10-19 18:00 UTC** : Validation complète Phase 86 (`jambo-dbg`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-dbg`). Tag `v0.2.84`.
+* **2026-10-19 18:20 UTC** : Validation complète Phase 87 (`jambo-dynlinkd`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-dynlinkd`). Tag `v0.2.85`.
+
 
 
 

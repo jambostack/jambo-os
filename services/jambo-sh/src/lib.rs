@@ -155,6 +155,7 @@ pub struct JamboShell {
     pub patch: jambo_patchd::JamboPatchDaemon,
     pub profiler: jambo_profilerd::JamboProfilerDaemon,
     pub dbg: jambo_dbg::JamboDebuggerDaemon,
+    pub dynlink: jambo_dynlinkd::JamboDynLinkDaemon,
 }
 
 impl Default for JamboShell {
@@ -331,6 +332,12 @@ impl JamboShell {
         );
         let mut dbg = jambo_dbg::JamboDebuggerDaemon::new(1, dbg_cap);
         dbg.init_defaults();
+        let dynlink_cap = jambo_dynlinkd::DynLinkCap::new(
+            libjambo::Handle::new(8701, 1),
+            jambo_dynlinkd::dynlink_rights::ALL,
+        );
+        let mut dynlink = jambo_dynlinkd::JamboDynLinkDaemon::new(1, dynlink_cap);
+        dynlink.init_defaults();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -376,6 +383,7 @@ impl JamboShell {
             patch,
             profiler,
             dbg,
+            dynlink,
         }
     }
 
@@ -3433,6 +3441,221 @@ impl JamboShell {
                     }
                     _ => {
                         emit("Usage: dbg [status | attach <pid> | detach <pid> | bp [add|del|list] | regs [tid] | mem <addr> | step [tid] | cont [tid] | digest]\n");
+                        (ShellStatus::ExecutionFailed, write_pos)
+                    }
+                }
+            }
+            "dynlink" | "ldd" => {
+                let subcmd = if parsed.name == "ldd" {
+                    "ldd"
+                } else if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    "status"
+                };
+                let cap = self.dynlink.cap;
+                match subcmd {
+                    "status" => {
+                        emit("=== ÉDITION DE LIENS DYNAMIQUES & GOT/PLT (jambo-dynlinkd) ===\n");
+                        let mut b = [0u8; 20];
+                        emit("Bibliothèques partagées chargées (.jso) : ");
+                        emit(format_u64(self.dynlink.lib_count as u64, &mut b));
+                        emit("\nRelocations dynamiques appliquées      : ");
+                        emit(format_u64(self.dynlink.total_relocations_applied, &mut b));
+                        emit("\nRésolutions différées (Lazy PLT)       : ");
+                        emit(format_u64(self.dynlink.total_lazy_resolutions, &mut b));
+                        emit("\nIntégrité du registre d'audit SHA-256  : ");
+                        if self.dynlink.verify_audit_integrity() {
+                            emit("INVIOLABLE / VALIDÉ\n");
+                        } else {
+                            emit("COMPROMIS / ERREUR\n");
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "list" => {
+                        emit("ID | Nom                     | Base virtuelle     | Taille   | Réf | État\n");
+                        emit("---+-------------------------+--------------------+----------+-----+----------\n");
+                        let mut b = [0u8; 20];
+                        for slot in &self.dynlink.libraries {
+                            if let Some(ref lib) = slot {
+                                emit(format_u64(lib.id as u64, &mut b));
+                                emit("  | ");
+                                emit(lib.name_str());
+                                for _ in lib.name_len..24 {
+                                    emit(" ");
+                                }
+                                emit("| 0x");
+                                emit(format_hex_u64(lib.base_address, &mut b));
+                                emit(" | ");
+                                emit(format_u64(lib.total_size, &mut b));
+                                emit(" o | ");
+                                emit(format_u64(lib.ref_count as u64, &mut b));
+                                emit("   | ");
+                                match lib.state {
+                                    jambo_dynlinkd::LibraryState::Loaded => emit("Loaded\n"),
+                                    jambo_dynlinkd::LibraryState::Relocated => emit("Relocated\n"),
+                                    jambo_dynlinkd::LibraryState::Bound => emit("Bound\n"),
+                                    jambo_dynlinkd::LibraryState::Ready => emit("Ready\n"),
+                                    _ => emit("Unloaded\n"),
+                                }
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "load" => {
+                        if parsed.arg_count > 2 {
+                            let name = parsed.args[2];
+                            let now = parsed.arg_count > 3 && parsed.args[3] == "now";
+                            let flags = if now { jambo_dynlinkd::RTLD_NOW } else { jambo_dynlinkd::RTLD_LAZY };
+                            let base = 0x0000_7000_0000_0000 + ((self.dynlink.lib_count as u64 + 1) * 0x0004_0000);
+                            match self.dynlink.load_library(&cap, name, base, 0x10000, flags, 3000) {
+                                Ok(id) => {
+                                    emit("dynlink: bibliothèque chargée avec succès (ID ");
+                                    let mut b = [0u8; 20];
+                                    emit(format_u64(id as u64, &mut b));
+                                    emit(")\n");
+                                    (ShellStatus::Success, write_pos)
+                                }
+                                Err(_) => {
+                                    emit("dynlink: échec du chargement de la bibliothèque partagée\n");
+                                    (ShellStatus::ExecutionFailed, write_pos)
+                                }
+                            }
+                        } else {
+                            emit("Usage: dynlink load <nom.jso> [lazy|now]\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        }
+                    }
+                    "resolve" => {
+                        if parsed.arg_count > 2 {
+                            let sym = parsed.args[2];
+                            match self.dynlink.resolve_symbol_global(&cap, sym) {
+                                Ok((lib_id, addr)) => {
+                                    emit("Symbole '");
+                                    emit(sym);
+                                    emit("' résolu dans lib ID ");
+                                    let mut b = [0u8; 20];
+                                    emit(format_u64(lib_id as u64, &mut b));
+                                    emit(" -> 0x");
+                                    emit(format_hex_u64(addr, &mut b));
+                                    emit("\n");
+                                    (ShellStatus::Success, write_pos)
+                                }
+                                Err(_) => {
+                                    emit("dynlink: symbole introuvable dans les bibliothèques chargées\n");
+                                    (ShellStatus::ExecutionFailed, write_pos)
+                                }
+                            }
+                        } else {
+                            emit("Usage: dynlink resolve <symbole>\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        }
+                    }
+                    "lazy" => {
+                        if parsed.arg_count > 3 {
+                            let lib_id = parse_u64(parsed.args[2]).unwrap_or(1) as u32;
+                            let plt_idx = parse_u64(parsed.args[3]).unwrap_or(0) as usize;
+                            match self.dynlink.resolve_lazy(&cap, lib_id, plt_idx, 3001) {
+                                Ok(target) => {
+                                    emit("dynlink: résolution différée PLT réussie -> 0x");
+                                    let mut b = [0u8; 20];
+                                    emit(format_hex_u64(target, &mut b));
+                                    emit("\n");
+                                    (ShellStatus::Success, write_pos)
+                                }
+                                Err(_) => {
+                                    emit("dynlink: échec de résolution différée (index invalide ou symbole absent)\n");
+                                    (ShellStatus::ExecutionFailed, write_pos)
+                                }
+                            }
+                        } else {
+                            emit("Usage: dynlink lazy <lib_id> <plt_index>\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        }
+                    }
+                    "relro" => {
+                        if parsed.arg_count > 2 {
+                            let lib_id = parse_u64(parsed.args[2]).unwrap_or(1) as u32;
+                            match self.dynlink.enforce_relro(&cap, lib_id, 3002) {
+                                Ok(()) => {
+                                    emit("dynlink: durcissement RELRO appliqué, GOT scellée en lecture seule W^X\n");
+                                    (ShellStatus::Success, write_pos)
+                                }
+                                Err(_) => {
+                                    emit("dynlink: échec de l'application RELRO\n");
+                                    (ShellStatus::ExecutionFailed, write_pos)
+                                }
+                            }
+                        } else {
+                            emit("Usage: dynlink relro <lib_id>\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        }
+                    }
+                    "unload" => {
+                        if parsed.arg_count > 2 {
+                            let lib_id = parse_u64(parsed.args[2]).unwrap_or(1) as u32;
+                            match self.dynlink.unload_library(&cap, lib_id, 3003) {
+                                Ok(()) => {
+                                    emit("dynlink: bibliothèque déchargée avec succès\n");
+                                    (ShellStatus::Success, write_pos)
+                                }
+                                Err(_) => {
+                                    emit("dynlink: échec du déchargement (ID introuvable ou RTLD_NODELETE)\n");
+                                    (ShellStatus::ExecutionFailed, write_pos)
+                                }
+                            }
+                        } else {
+                            emit("Usage: dynlink unload <lib_id>\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        }
+                    }
+                    "ldd" => {
+                        let target = if parsed.name == "ldd" && parsed.arg_count > 1 {
+                            parsed.args[1]
+                        } else if parsed.arg_count > 2 {
+                            parsed.args[2]
+                        } else {
+                            "libcrypto.jso"
+                        };
+                        emit("ldd: dépendances dynamiques pour ");
+                        emit(target);
+                        emit(" :\n");
+                        if let Some(lib) = self.dynlink.find_library_by_name(target) {
+                            let mut b = [0u8; 20];
+                            emit("  0x");
+                            emit(format_hex_u64(lib.base_address, &mut b));
+                            emit(" => ");
+                            emit(lib.name_str());
+                            emit(" (taille: ");
+                            emit(format_u64(lib.total_size, &mut b));
+                            emit(" octets)\n");
+                            for d in 0..lib.dep_count {
+                                let dep_id = lib.dependencies[d];
+                                if let Some(dep) = self.dynlink.get_library(dep_id) {
+                                    emit("    -> dépend de : ");
+                                    emit(dep.name_str());
+                                    emit(" (0x");
+                                    emit(format_hex_u64(dep.base_address, &mut b));
+                                    emit(")\n");
+                                }
+                            }
+                            (ShellStatus::Success, write_pos)
+                        } else {
+                            emit("ldd: bibliothèque introuvable\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        }
+                    }
+                    "digest" | "audit" => {
+                        emit("Condensat SHA-256 d'Audit Éditeur de Liens : ");
+                        let mut b = [0u8; 20];
+                        for byte in self.dynlink.last_audit_digest.iter() {
+                            emit(format_hex_u64(*byte as u64, &mut b));
+                        }
+                        emit("\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    _ => {
+                        emit("Usage: dynlink [status | list | load <name> [flags] | resolve <sym> | lazy <lib_id> <idx> | relro <lib_id> | unload <lib_id> | ldd <name> | audit]\n");
                         (ShellStatus::ExecutionFailed, write_pos)
                     }
                 }
@@ -6604,9 +6827,16 @@ mod tests {
 
     #[test]
     fn test_shell_confinement() {
-        let shell = JamboShell::new();
-        let parsed = shell.parse_and_confine("cat /file1 /file2");
-        assert_eq!(parsed.cap_count, 2);
-        assert_eq!(parsed.name, "cat");
+        extern crate std;
+        let handle = std::thread::Builder::new()
+            .stack_size(8 * 1024 * 1024)
+            .spawn(|| {
+                let shell = JamboShell::new();
+                let parsed = shell.parse_and_confine("cat /file1 /file2");
+                assert_eq!(parsed.cap_count, 2);
+                assert_eq!(parsed.name, "cat");
+            })
+            .unwrap();
+        handle.join().unwrap();
     }
 }
