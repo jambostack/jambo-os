@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.59-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.60-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.59 (Ordonnanceur de Tâches & Conteneurs Distribués jambo-schedd)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.59` introduit l'ordonnanceur de charges de travail et de conteneurs distribués en espace utilisateur (`services/jambo-schedd`), implémentant l'orchestration déclarative multimode (`MicroVmm`, `Wasm`, `Posix`), l'algorithme de placement déterministe à score de charge minimale (*Least-Allocated Node Scoring*), les mécanismes de migration à chaud et de drainage de nœud avec éviction contrôlée, le confinement capabilaire strict `SchedCap` et les commandes interactives `sched [status | submit | run | cancel | drain]` dans `jsh`.
+> **Statut du Projet : Version v0.2.60 (Bus d'Événements Asynchrone Zéro-Copie jambo-eventd)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.60` introduit le bus d'événements pub/sub asynchrone zéro-copie en espace utilisateur (`services/jambo-eventd`), implémentant le découplage des communications inter-services sans autorité ambiante, le routage exact et hiérarchique par préfixe, des files circulaires bornées par souscripteur avec politique d'éviction déterministe (*drop-oldest*), le confinement capabilaire granulaire `EventCap` et les commandes interactives `event [status | pub | sub | poll | unsub]` dans `jsh`.
 
 ---
 

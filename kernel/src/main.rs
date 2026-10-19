@@ -855,6 +855,13 @@ pub extern "C" fn _start() -> ! {
         "Échec du test de l'ordonnanceur de charges et conteneurs distribués"
     );
 
+    // 10quinquiescies. Validation du Bus d'Événements Asynchrone Zéro-Copie (Phase 62 - v0.2.60)
+    let event_success = sched::execute_event_bus_test();
+    assert!(
+        event_success,
+        "Échec du test du bus d'événements pub/sub asynchrone zéro-copie"
+    );
+
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
 
     arch::init_iommu();
@@ -1038,14 +1045,15 @@ pub extern "C" fn _start() -> ! {
     kprintln!(
         "\x1b[1;32m[PASS] Phase 61 Distributed Workload & Container Scheduler Complete\x1b[0m"
     );
+    kprintln!("\x1b[1;32m[PASS] Phase 62 Zero-Copy Asynchronous Event Bus Complete\x1b[0m");
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.59 (Ordonnanceur de Tâches & Conteneurs Distribués jambo-schedd)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.60 (Bus d'Événements Asynchrone Zéro-Copie jambo-eventd)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.59 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.60 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );

@@ -10,7 +10,7 @@ use libjambo::{Handle, SysError};
 
 pub const MAX_TOPIC_NAME: usize = 32;
 pub const MAX_PAYLOAD: usize = 64;
-pub const MAX_SUBSCRIPTIONS: usize = 16;
+pub const MAX_SUBSCRIPTIONS: usize = 8;
 pub const MAX_QUEUE_LEN: usize = 8;
 
 /// Droits de capacité pour le bus d'événements.
@@ -271,6 +271,67 @@ impl EventBus {
     }
 }
 
+/// Démon orchestrateur du bus d'événements pub/sub zéro-copie (`jambo-eventd`).
+pub struct JamboEventDaemon {
+    pub bus: EventBus,
+    pub cap: EventCap,
+    pub default_sub_id: Option<u32>,
+}
+
+impl Default for JamboEventDaemon {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl JamboEventDaemon {
+    pub fn new() -> Self {
+        let cap = EventCap::new(Handle::new(6201, 1), event_rights::ALL);
+        let mut bus = EventBus::new();
+        let default_sub_id = bus.subscribe(&cap, b"system/", true).ok();
+        Self {
+            bus,
+            cap,
+            default_sub_id,
+        }
+    }
+
+    pub fn publish(
+        &mut self,
+        sender_pid: u32,
+        topic: &[u8],
+        payload: &[u8],
+        now_ms: u64,
+    ) -> Result<u64, SysError> {
+        self.bus
+            .publish(&self.cap, sender_pid, topic, payload, now_ms)
+    }
+
+    pub fn subscribe(&mut self, topic_filter: &[u8], is_prefix: bool) -> Result<u32, SysError> {
+        self.bus.subscribe(&self.cap, topic_filter, is_prefix)
+    }
+
+    pub fn unsubscribe(&mut self, sub_id: u32) -> Result<(), SysError> {
+        self.bus.unsubscribe(&self.cap, sub_id)
+    }
+
+    pub fn poll(&mut self, sub_id: u32) -> Result<Option<EventMessage>, SysError> {
+        self.bus.poll_event(&self.cap, sub_id)
+    }
+
+    pub fn total_published(&self) -> u64 {
+        self.bus.published_count
+    }
+
+    pub fn active_subscriptions_count(&self) -> usize {
+        self.bus
+            .subscriptions
+            .iter()
+            .filter(|s| s.is_some())
+            .count()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -360,5 +421,28 @@ mod tests {
         // Vérification : les 2 premiers ont été écrasés (0 et 1), le premier disponible est 2
         let first = bus.poll_event(&cap, sub_id).unwrap().unwrap();
         assert_eq!(first.payload_bytes()[0], 2);
+    }
+
+    #[test]
+    fn test_daemon_pubsub() {
+        let mut daemon = JamboEventDaemon::new();
+        assert_eq!(daemon.active_subscriptions_count(), 1);
+
+        let sub_custom = daemon.subscribe(b"custom/topic", false).unwrap();
+        assert_eq!(daemon.active_subscriptions_count(), 2);
+
+        let seq1 = daemon
+            .publish(10, b"custom/topic", b"EVENT_DATA_PAYLOAD", 1000)
+            .unwrap();
+        assert_eq!(seq1, 1);
+        assert_eq!(daemon.total_published(), 1);
+
+        let msg = daemon.poll(sub_custom).unwrap().unwrap();
+        assert_eq!(msg.payload_bytes(), b"EVENT_DATA_PAYLOAD");
+        assert_eq!(msg.sender_pid, 10);
+        assert_eq!(msg.seq_id, 1);
+
+        daemon.unsubscribe(sub_custom).unwrap();
+        assert_eq!(daemon.active_subscriptions_count(), 1);
     }
 }

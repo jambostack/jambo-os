@@ -113,6 +113,7 @@ pub struct JamboShell {
     pub raft: jambo_raft::JamboRaftDaemon,
     pub kv: jambo_kvd::JamboKvDaemon,
     pub sched: jambo_schedd::JamboSchedDaemon,
+    pub event: jambo_eventd::JamboEventDaemon,
 }
 
 impl Default for JamboShell {
@@ -165,6 +166,7 @@ impl JamboShell {
         raft.init_defaults();
         let kv = jambo_kvd::JamboKvDaemon::new();
         let sched = jambo_schedd::JamboSchedDaemon::new();
+        let event = jambo_eventd::JamboEventDaemon::new();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -186,6 +188,7 @@ impl JamboShell {
             raft,
             kv,
             sched,
+            event,
         }
     }
 
@@ -314,6 +317,7 @@ impl JamboShell {
                 emit("  raft [cmd]   - Moteur de consensus distribué léger Raft et réplication\n");
                 emit("  kv [cmd]     - Base de données clé-valeur transactionnelle distribuée\n");
                 emit("  sched [cmd]  - Ordonnanceur de charges et conteneurs distribués\n");
+                emit("  event [cmd]  - Bus d'événements pub/sub asynchrone zéro-copie\n");
                 emit("  echo <args>  - Affiche les arguments sur la sortie console\n");
                 emit("  clear        - Efface l'écran du terminal (ANSI escape)\n");
                 emit("  reboot       - Redémarre la machine\n");
@@ -321,7 +325,7 @@ impl JamboShell {
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.2.59 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.2.60 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -2406,6 +2410,125 @@ impl JamboShell {
                     }
                     _ => {
                         emit("Usage: sched [status | submit <name> <vcpus> <pages> | run | cancel <id> | drain <node>]\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                }
+            }
+            "event" => {
+                let sub = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    ""
+                };
+                match sub {
+                    "status" => {
+                        let mut b = [0u8; 20];
+                        emit("=== BUS D'ÉVÉNEMENTS PUB/SUB ASYNCHRONE (jambo-eventd) ===\n");
+                        emit("Abonnements actifs     : ");
+                        emit(format_u64(
+                            self.event.active_subscriptions_count() as u64,
+                            &mut b,
+                        ));
+                        emit("\nÉvénements publiés     : ");
+                        emit(format_u64(self.event.total_published(), &mut b));
+                        emit("\nConfinement            : EventCap (ALL) - Zéro-Copie & Zero-Ambient\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "pub" => {
+                        if parsed.arg_count < 4 {
+                            emit("Usage: event pub <topic> <payload>\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        } else {
+                            let topic = parsed.args[2];
+                            let payload = parsed.args[3];
+                            match self
+                                .event
+                                .publish(1, topic.as_bytes(), payload.as_bytes(), 1000)
+                            {
+                                Ok(seq) => {
+                                    let mut b = [0u8; 20];
+                                    emit("[EVENT/PUB] Événement diffusé avec succès (Seq #");
+                                    emit(format_u64(seq, &mut b));
+                                    emit(")\n");
+                                    (ShellStatus::Success, write_pos)
+                                }
+                                Err(_) => {
+                                    emit("[EVENT] Échec de la publication (Droits EventCap insuffisants)\n");
+                                    (ShellStatus::PermissionDenied, write_pos)
+                                }
+                            }
+                        }
+                    }
+                    "sub" => {
+                        if parsed.arg_count < 3 {
+                            emit("Usage: event sub <topic_filter>\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        } else {
+                            let filter = parsed.args[2];
+                            let is_prefix = filter.ends_with('/');
+                            match self.event.subscribe(filter.as_bytes(), is_prefix) {
+                                Ok(sub_id) => {
+                                    let mut b = [0u8; 20];
+                                    emit("[EVENT/SUB] Abonnement actif créé (Sub ID #");
+                                    emit(format_u64(sub_id as u64, &mut b));
+                                    emit(")\n");
+                                    (ShellStatus::Success, write_pos)
+                                }
+                                Err(_) => {
+                                    emit("[EVENT] Échec de l'abonnement (Nombre maximum atteint ou droits refusés)\n");
+                                    (ShellStatus::ExecutionFailed, write_pos)
+                                }
+                            }
+                        }
+                    }
+                    "poll" => {
+                        let sub_id = if parsed.arg_count > 2 {
+                            parse_u64(parsed.args[2]).unwrap_or(1) as u32
+                        } else {
+                            self.event.default_sub_id.unwrap_or(1)
+                        };
+                        match self.event.poll(sub_id) {
+                            Ok(Some(msg)) => {
+                                let mut b = [0u8; 20];
+                                emit("[EVENT/MSG] Topic: ");
+                                emit(core::str::from_utf8(msg.topic_bytes()).unwrap_or("<bin>"));
+                                emit(" | Payload: ");
+                                emit(core::str::from_utf8(msg.payload_bytes()).unwrap_or("<bin>"));
+                                emit(" (Seq #");
+                                emit(format_u64(msg.seq_id, &mut b));
+                                emit(")\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Ok(None) => {
+                                emit("[EVENT] Aucun événement en attente dans la file\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("[EVENT] Erreur lors de la lecture de la file\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "unsub" => {
+                        if parsed.arg_count < 3 {
+                            emit("Usage: event unsub <sub_id>\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        } else {
+                            let sub_id = parse_u64(parsed.args[2]).unwrap_or(0) as u32;
+                            match self.event.unsubscribe(sub_id) {
+                                Ok(()) => {
+                                    emit("[EVENT/OK] Abonnement résilié\n");
+                                    (ShellStatus::Success, write_pos)
+                                }
+                                Err(_) => {
+                                    emit("[EVENT] Souscription introuvable\n");
+                                    (ShellStatus::ExecutionFailed, write_pos)
+                                }
+                            }
+                        }
+                    }
+                    _ => {
+                        emit("Usage: event [status | pub <topic> <payload> | sub <topic> | poll [sub_id] | unsub <id>]\n");
                         (ShellStatus::Success, write_pos)
                     }
                 }
