@@ -270,6 +270,75 @@ impl SessionManager {
 
         Err(SysError::InvalidHandle)
     }
+
+    /// Retourne le nombre de sessions actives
+    pub const fn active_sessions_count(&self) -> usize {
+        self.active_sessions_count
+    }
+
+    /// Retourne le nombre d'utilisateurs enregistrés dans l'annuaire
+    pub fn registered_users_count(&self) -> usize {
+        let mut count = 0;
+        for u in self.users.iter() {
+            if u.is_some() {
+                count += 1;
+            }
+        }
+        count
+    }
+}
+
+/// Démon orchestrateur de gestion des identités cryptographiques et sessions (Ring 3)
+pub struct JamboAuthDaemon {
+    pub manager: SessionManager,
+    pub active_token: Option<SessionTokenCap>,
+}
+
+impl Default for JamboAuthDaemon {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl JamboAuthDaemon {
+    pub fn new() -> Self {
+        Self {
+            manager: SessionManager::new(),
+            active_token: None,
+        }
+    }
+
+    /// Initialise les identités fondamentales et ouvre une session par défaut
+    pub fn init_defaults(&mut self) {
+        let op_key = [0x5Au8; 32];
+        let auditor_key = [0x7Eu8; 32];
+        let guest_key = [0x11u8; 32];
+
+        let op_user =
+            UserIdentity::new(1, "operator", op_key, UserRole::SystemOperator, 0xFFFFFFFF);
+        let auditor_user = UserIdentity::new(
+            2,
+            "auditor",
+            auditor_key,
+            UserRole::SecurityAuditor,
+            0x0000FFFF,
+        );
+        let guest_user = UserIdentity::new(3, "guest", guest_key, UserRole::Guest, 0x0000000F);
+
+        let _ = self.manager.register_user(op_user);
+        let _ = self.manager.register_user(auditor_user);
+        let _ = self.manager.register_user(guest_user);
+
+        // Connexion initiale de l'opérateur système
+        let challenge = CryptoAuthEngine::generate_challenge(0x1337, 1);
+        let signature = CryptoAuthEngine::sign_challenge(&op_key, &challenge);
+        if let Ok(token) =
+            self.manager
+                .authenticate("operator", &challenge, &signature, 1000, 3600_000_000_000)
+        {
+            self.active_token = Some(token);
+        }
+    }
 }
 
 #[cfg(test)]

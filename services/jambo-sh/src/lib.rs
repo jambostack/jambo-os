@@ -106,6 +106,7 @@ pub struct JamboShell {
     pub audit: jambo_auditd::JamboAuditDaemon,
     pub power: jambo_powerd::JamboPowerDaemon,
     pub crypto: jambo_cryptod::JamboCryptoDaemon,
+    pub auth: jambo_authd::JamboAuthDaemon,
 }
 
 impl Default for JamboShell {
@@ -146,6 +147,8 @@ impl JamboShell {
         power.init_defaults();
         let mut crypto = jambo_cryptod::JamboCryptoDaemon::new();
         crypto.init_defaults();
+        let mut auth = jambo_authd::JamboAuthDaemon::new();
+        auth.init_defaults();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -160,6 +163,7 @@ impl JamboShell {
             audit,
             power,
             crypto,
+            auth,
         }
     }
 
@@ -275,6 +279,7 @@ impl JamboShell {
                 emit("  audit [cmd]  - Grand livre d'audit cryptographique et observabilité\n");
                 emit("  power [cmd]  - Gestion d'énergie matérielle ACPI, C-states et batterie\n");
                 emit("  crypto [cmd] - Chiffrement transparent de stockage et scellement TPM\n");
+                emit("  auth [cmd]   - Identité cryptographique et gestion des sessions isolées\n");
                 emit("  echo <args>  - Affiche les arguments sur la sortie console\n");
                 emit("  clear        - Efface l'écran du terminal (ANSI escape)\n");
                 emit("  reboot       - Redémarre la machine\n");
@@ -282,7 +287,7 @@ impl JamboShell {
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.2.52 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.2.53 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -1622,6 +1627,130 @@ impl JamboShell {
                     }
                 }
             }
+            "auth" => {
+                let sub = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    ""
+                };
+                match sub {
+                    "status" => {
+                        let mut b = [0u8; 20];
+                        emit("=== GESTIONNAIRE D'IDENTITÉS CRYPTOGRAPHIQUES (jambo-authd) ===\n");
+                        if let Some(ref token) = self.auth.active_token {
+                            emit("Session active          : Session #");
+                            emit(format_u64(token.session_id, &mut b));
+                            emit("\nUtilisateur             : UID #");
+                            emit(format_u64(token.user_id as u64, &mut b));
+                            emit(" (Rôle : ");
+                            match token.role {
+                                jambo_authd::UserRole::SystemOperator => {
+                                    emit("Opérateur Système)\n")
+                                }
+                                jambo_authd::UserRole::SecurityAuditor => {
+                                    emit("Auditeur de Sécurité)\n")
+                                }
+                                jambo_authd::UserRole::StandardUser => {
+                                    emit("Utilisateur Standard)\n")
+                                }
+                                jambo_authd::UserRole::Guest => emit("Invité)\n"),
+                            }
+                        } else {
+                            emit("Session active          : AUCUNE (Non authentifié)\n");
+                        }
+                        emit("Sessions actives        : ");
+                        emit(format_u64(
+                            self.auth.manager.active_sessions_count() as u64,
+                            &mut b,
+                        ));
+                        emit("\nIdentités enregistrées  : ");
+                        emit(format_u64(
+                            self.auth.manager.registered_users_count() as u64,
+                            &mut b,
+                        ));
+                        emit("\nModèle d'autorité       : Zéro-Autorité Ambiante (Ed25519 / Défi-Réponse)\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "login" => {
+                        if parsed.arg_count < 3 {
+                            emit("Usage: auth login <operator|auditor|guest>\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        } else {
+                            let user_str = parsed.args[2];
+                            let key = match user_str {
+                                "operator" => Some([0x5Au8; 32]),
+                                "auditor" => Some([0x7Eu8; 32]),
+                                "guest" => Some([0x11u8; 32]),
+                                _ => None,
+                            };
+                            if let Some(k) = key {
+                                let challenge = jambo_authd::CryptoAuthEngine::generate_challenge(
+                                    0x2026,
+                                    self.commands_executed,
+                                );
+                                let sig =
+                                    jambo_authd::CryptoAuthEngine::sign_challenge(&k, &challenge);
+                                match self.auth.manager.authenticate(
+                                    user_str,
+                                    &challenge,
+                                    &sig,
+                                    1000,
+                                    3600_000_000_000,
+                                ) {
+                                    Ok(token) => {
+                                        let mut b = [0u8; 20];
+                                        self.auth.active_token = Some(token);
+                                        emit("[AUTH] Authentification réussie pour '");
+                                        emit(user_str);
+                                        emit("' (Session ID: #");
+                                        emit(format_u64(token.session_id, &mut b));
+                                        emit(")\n");
+                                        (ShellStatus::Success, write_pos)
+                                    }
+                                    Err(_) => {
+                                        emit("[AUTH] Échec de l'authentification défi-réponse\n");
+                                        (ShellStatus::ExecutionFailed, write_pos)
+                                    }
+                                }
+                            } else {
+                                emit("Utilisateur inconnu (utilisateurs valides : operator, auditor, guest)\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "logout" => {
+                        if let Some(token) = self.auth.active_token.take() {
+                            let _ = self.auth.manager.terminate_session(token.session_id);
+                            emit("[AUTH] Session révoquée avec succès et mémoire purgée (Zero-Remanence)\n");
+                            (ShellStatus::Success, write_pos)
+                        } else {
+                            emit("[AUTH] Aucune session active à déconnecter\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        }
+                    }
+                    "verify" => {
+                        if let Some(ref token) = self.auth.active_token {
+                            match self.auth.manager.validate_session(token, 2000) {
+                                Ok(_) => {
+                                    emit("[AUTH] Jeton de session capabiliaire SessionTokenCap valide et actif\n");
+                                    (ShellStatus::Success, write_pos)
+                                }
+                                Err(_) => {
+                                    emit("[AUTH/ALERTE] Jeton de session révoqué ou expiré\n");
+                                    (ShellStatus::ExecutionFailed, write_pos)
+                                }
+                            }
+                        } else {
+                            emit("[AUTH] Aucune session active\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        }
+                    }
+                    _ => {
+                        emit("Usage: auth [status | login <user> | logout | verify]\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                }
+            }
             "evil_backdoor" => {
                 emit("Erreur : Tentative d'accès non autorisée rejetée par CSpace\n");
                 (ShellStatus::PermissionDenied, write_pos)
@@ -1637,7 +1766,7 @@ impl JamboShell {
 
     /// Exécute une commande dans le shell
     pub fn execute(&mut self, line: &str) -> ShellStatus {
-        let mut dummy = [0u8; 2048];
+        let mut dummy = [0u8; 4096];
         let (status, _) = self.execute_line(line, &mut dummy);
         status
     }

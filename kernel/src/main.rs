@@ -809,6 +809,13 @@ pub extern "C" fn _start() -> ! {
         "Échec du test de chiffrement de bloc transparent et scellement TPM"
     );
 
+    // 10octodecies. Validation de l'Identité Cryptographique & Sessions Isolées (Phase 55 - v0.2.53)
+    let auth_success = sched::execute_cryptographic_auth_test();
+    assert!(
+        auth_success,
+        "Échec du test des identités cryptographiques et sessions isolées"
+    );
+
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
 
     arch::init_iommu();
@@ -971,14 +978,17 @@ pub extern "C" fn _start() -> ! {
     kprintln!(
         "\x1b[1;32m[PASS] Phase 54 Transparent Block Encryption & TPM 2.0 Measured Boot Complete\x1b[0m"
     );
+    kprintln!(
+        "\x1b[1;32m[PASS] Phase 55 Asymmetric Cryptographic Identity & Isolated Sessions Complete\x1b[0m"
+    );
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.52 (Chiffrement Transparent & TPM 2.0 jambo-cryptod)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.53 (Identités Cryptographiques & Sessions jambo-authd)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.52 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.53 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
