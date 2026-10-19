@@ -995,6 +995,13 @@ pub extern "C" fn _start() -> ! {
         "Échec du test du démon de confinement de processus jambo-sandd"
     );
 
+    // 10undecies. Validation de la Surveillance de Vivacité & Chien de Garde (Phase 82 - v0.2.80)
+    let watchdog_success = sched::execute_watchdog_daemon_test();
+    assert!(
+        watchdog_success,
+        "Échec du test du démon de surveillance de vivacité jambo-watchdogd"
+    );
+
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
 
     arch::init_iommu();
@@ -1212,14 +1219,15 @@ pub extern "C" fn _start() -> ! {
     kprintln!("\x1b[1;32m[PASS] Phase 79 Distributed Stateful Firewall & Conntrack Sync (jambo-walld) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 80 Autonomous Hardware Diagnostics, Remediation & Fault Telemetry (jambo-diagd) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 81 Process Confinement & Zero-Ambient Micro-Sandboxing (jambo-sandd) Complete\x1b[0m");
+    kprintln!("\x1b[1;32m[PASS] Phase 82 Hardware & Software Watchdog, Cluster Liveness & NMI Isolation (jambo-watchdogd) Complete\x1b[0m");
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.79 (Confinement de Processus & Micro-Bacs à Sable jambo-sandd)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.80 (Surveillance de Vivacité, Chien de Garde & NMI jambo-watchdogd)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.79 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.80 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );

@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.79-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.80-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.79 (Confinement de Processus & Micro-Bacs à Sable Zero-Ambient jambo-sandd)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.79` introduit le démon de confinement granulaire et de micro-bacs à sable Zero-Ambient (`services/jambo-sandd`), doté du filtrage d'appels système Seccomp-like par masque binaire O(1) et prédicats d'arguments fins, d'un arbre hiérarchique de profils dynamiques avec garantie mathématique de resserrement monotone (`Strict`, `ComputeOnly`, `NetworkWorker`, `UntrustedPlugin`), de restrictions de chemins et ressources VFS Landlock-like, d'un journal de violations scellé cryptographiquement par SHA-256, du contrôle d'accès capabilaire `SandCap`, et des commandes shell interactives `sand [status | profiles | list | inspect | test | violations | digest]` dans `jsh`.
+> **Statut du Projet : Version v0.2.80 (Surveillance de Vivacité Matérielle & Logicielle, Chien de Garde & Isolation NMI jambo-watchdogd)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.80` introduit le démon de surveillance de vivacité système matérielle et logicielle (`services/jambo-watchdogd`), intégrant un chien de garde matériel WDT / iTCO v2 avec pré-interruption NMI avant réinitialisation physique, la surveillance logicielle Ring 3 / Ring 0 de threads et démons avec détection fine de dérive d'ordonnancement (*Event Loop Drift*), des battements de cœur inter-nœuds (*Cluster Liveness*) avec bascule automatique de secours (*Failover*), l'isolation sécurisée des threads bloqués sur interruption non-masquable (NMI), le contrôle d'accès capabilaire `WatchdogCap` sans autorité ambiante, un condensat d'audit scellé par SHA-256, et les commandes shell interactives `watchdog [status | targets | hw | nodes | pet | nmi | alerts | digest]` dans `jsh`.
 
 ---
 

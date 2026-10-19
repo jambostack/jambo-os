@@ -68,26 +68,27 @@
 | **v0.2.77** | 79 | Pare-feu `jambo-walld` | Pare-feu d'état distribué, machine FSM conntrack, synchronisation d'état scellée HMAC, Zero-Trust adaptatif, auto-blocage scans, WallCap | ✅ Validé |
 | **v0.2.78** | 80 | Diagnostics `jambo-diagd` | Surveillance active PCIe/NVMe/VirtIO/ECC/MCA, auto-remédiation (Link Retraining, FLR, Hot-Failover), scellement SHA-256, DiagCap | ✅ Validé |
 | **v0.2.79** | 81 | Confinement `jambo-sandd` | Confinement Seccomp/Landlock Zero-Ambient, resserrement monotone, SandCap, audit SHA-256 | ✅ Validé |
+| **v0.2.80** | 82 | Watchdog `jambo-watchdogd` | Chien de garde matériel/logiciel, détection dérive event loop, isolation NMI, vivacité grappe, WatchdogCap | ✅ Validé |
 
 ---
 
 ## 3. Prochaines Étapes Prioritaires
 
-### 🎯 Prochaine Tâche Immédiate : Phase 82 — v0.2.80
-* **Composant** : `services/jambo-watchdogd`
-* **Objectif** : Surveillance de vivacité système matérielle & logicielle, battements de cœur inter-nœuds, isolation NMI et bascule de secours
-* **Tâches précises** :
-  1. Chien de garde matériel (Hardware Watchdog WDT / iTCO) et logiciel Ring 3.
-  2. Détection de blocages de threads, dérive de boucle d'événements et alertes NMI.
-  3. Validation `cargo xtask test` et commit `v0.2.80`.
-
-### 🎯 Tâche Suivante : Phase 83 — v0.2.81
+### 🎯 Prochaine Tâche Immédiate : Phase 83 — v0.2.81
 * **Composant** : `services/jambo-cored`
 * **Objectif** : Capture d'état post-mortem, génération de crash dumps scellés ELF, isolation mémoire et télémétrie post-crash
 * **Tâches précises** :
   1. Capture d'état des registres et de la pile mémoire lors de paniques ou fautes non récupérables.
   2. Génération de rapports ELF Core Dump scellés par signature cryptographique.
   3. Validation `cargo xtask test` et commit `v0.2.81`.
+
+### 🎯 Tâche Suivante : Phase 84 — v0.2.82
+* **Composant** : `services/jambo-patchd`
+* **Objectif** : Rechargement à chaud de binaires en espace utilisateur, patchs dynamiques sans redémarrage et vérification de conformité ABI
+* **Tâches précises** :
+  1. Remplacement atomique de symboles et fonctions exécutables Ring 3 à chaud (*Livepatching*).
+  2. Quiescence des threads, redirection de trampolines et préservation de l'état des VMO.
+  3. Validation `cargo xtask test` et commit `v0.2.82`.
 
 ---
 
@@ -107,6 +108,7 @@
 * **2026-10-19 15:45 UTC** : Validation complète Phase 79 (`jambo-walld`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test --workspace --lib`). Tag `v0.2.77`.
 * **2026-10-19 16:05 UTC** : Validation complète Phase 80 (`jambo-diagd`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test --workspace --lib`). Tag `v0.2.78`.
 * **2026-10-19 16:20 UTC** : Validation complète Phase 81 (`jambo-sandd`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test --workspace --lib`). Tag `v0.2.79`.
+* **2026-10-19 16:42 UTC** : Validation complète Phase 82 (`jambo-watchdogd`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test --workspace --lib`). Tag `v0.2.80`.
 
 
 

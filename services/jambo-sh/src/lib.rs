@@ -132,6 +132,7 @@ pub struct JamboShell {
     pub wall: jambo_walld::JamboWallDaemon,
     pub diag: jambo_diagd::JamboDiagDaemon,
     pub sand: jambo_sandd::JamboSandDaemon,
+    pub watchdog: jambo_watchdogd::JamboWatchdogDaemon,
 }
 
 impl Default for JamboShell {
@@ -278,6 +279,12 @@ impl JamboShell {
         );
         let mut sand = jambo_sandd::JamboSandDaemon::new(1, sand_cap);
         sand.init_defaults();
+        let watchdog_cap = jambo_watchdogd::WatchdogCap::new(
+            libjambo::Handle::new(8201, 1),
+            jambo_watchdogd::watchdog_rights::ALL,
+        );
+        let mut watchdog = jambo_watchdogd::JamboWatchdogDaemon::new(1, watchdog_cap);
+        watchdog.init_defaults();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -318,6 +325,7 @@ impl JamboShell {
             wall,
             diag,
             sand,
+            watchdog,
         }
     }
 
@@ -2185,6 +2193,217 @@ impl JamboShell {
                     }
                     _ => {
                         emit("Usage: sand [status | profiles | list | inspect <id> | test <sb> <sys> | violations | digest]\n");
+                        (ShellStatus::ExecutionFailed, write_pos)
+                    }
+                }
+            }
+            "watchdog" | "watchdogctl" => {
+                let subcmd = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    "status"
+                };
+
+                match subcmd {
+                    "status" => {
+                        let mut b = [0u8; 20];
+                        emit("=== SURVEILLANCE DE VIVACITÉ & CHIEN DE GARDE (jambo-watchdogd) ===\n");
+                        emit("Démon Watchdog ID      : #");
+                        emit(format_u64(self.watchdog.daemon_id as u64, &mut b));
+                        emit("\nCibles Surveillées     : ");
+                        emit(format_u64(self.watchdog.target_count as u64, &mut b));
+                        emit(" / ");
+                        emit(format_u64(jambo_watchdogd::MAX_WATCHDOG_TARGETS as u64, &mut b));
+                        emit("\nNœuds de Grappe        : ");
+                        emit(format_u64(self.watchdog.cluster_count as u64, &mut b));
+                        emit(" / ");
+                        emit(format_u64(jambo_watchdogd::MAX_CLUSTER_NODES as u64, &mut b));
+                        emit("\nChien de Garde Matériel: ");
+                        emit(self.watchdog.hw_watchdog.hw_type.as_str());
+                        emit(if self.watchdog.hw_watchdog.status == jambo_watchdogd::HwWatchdogStatus::Armed { " [ARMÉ]" } else { " [DÉSARMÉ]" });
+                        emit("\n\n--- Statistiques de Vivacité & Tolérance aux Pannes ---\n");
+                        emit("Nourritures (Pets)     : ");
+                        emit(format_u64(self.watchdog.stats.total_pets, &mut b));
+                        emit("\nBlocages Détectés      : ");
+                        emit(format_u64(self.watchdog.stats.total_stalls_detected, &mut b));
+                        emit(" | Dérives d'Event Loop: ");
+                        emit(format_u64(self.watchdog.stats.total_drifts_warned, &mut b));
+                        emit("\nAlertes NMI Reçues     : ");
+                        emit(format_u64(self.watchdog.stats.total_nmi_alerts, &mut b));
+                        emit(" | Threads Isolés : ");
+                        emit(format_u64(self.watchdog.stats.total_threads_isolated, &mut b));
+                        emit("\nBascules de Grappe     : ");
+                        emit(format_u64(self.watchdog.stats.total_cluster_failovers, &mut b));
+                        emit(" | Recharges Matérielles: ");
+                        emit(format_u64(self.watchdog.stats.total_hw_reloads, &mut b));
+                        emit("\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "targets" | "list" => {
+                        let mut b = [0u8; 20];
+                        emit("=== CIBLES LOGICIELLES SURVEILLÉES ===\n");
+                        for slot in self.watchdog.targets.iter() {
+                            if let Some(target) = slot {
+                                emit("ID: #");
+                                emit(format_u64(target.id as u64, &mut b));
+                                emit(" | ");
+                                emit(target.name_str());
+                                emit(" [");
+                                emit(target.target_type.as_str());
+                                emit("] (PID: ");
+                                emit(format_u64(target.pid, &mut b));
+                                emit(", TID: ");
+                                emit(format_u64(target.tid, &mut b));
+                                emit(") - Timeout: ");
+                                emit(format_u64(target.timeout_ms, &mut b));
+                                emit("ms - État: ");
+                                emit(target.state.as_str());
+                                emit(" - Action: ");
+                                emit(target.failover_action.as_str());
+                                emit("\n");
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "hw" => {
+                        let mut b = [0u8; 20];
+                        emit("=== CHIEN DE GARDE MATÉRIEL (Hardware Watchdog) ===\n");
+                        emit("Type Matériel : ");
+                        emit(self.watchdog.hw_watchdog.hw_type.as_str());
+                        emit("\nPort Base I/O : 0x");
+                        emit(format_hex_u64(self.watchdog.hw_watchdog.io_port_base as u64, &mut b));
+                        emit("\nTimeout Total : ");
+                        emit(format_u64(self.watchdog.hw_watchdog.timeout_ms, &mut b));
+                        emit(" ms (Pré-timeout NMI: ");
+                        emit(format_u64(self.watchdog.hw_watchdog.pre_timeout_ms, &mut b));
+                        emit(" ms)\nRecharges     : ");
+                        emit(format_u64(self.watchdog.hw_watchdog.reload_count, &mut b));
+                        emit(" | Alertes NMI: ");
+                        emit(format_u64(self.watchdog.hw_watchdog.nmi_count, &mut b));
+                        emit(" | Hard Resets: ");
+                        emit(format_u64(self.watchdog.hw_watchdog.reset_count, &mut b));
+                        emit("\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "nodes" => {
+                        let mut b = [0u8; 20];
+                        emit("=== BATTEMENTS DE CŒUR DE GRAPPE (Inter-Node Liveness) ===\n");
+                        for slot in self.watchdog.cluster_nodes.iter() {
+                            if let Some(node) = slot {
+                                emit("Nœud #");
+                                emit(format_u64(node.node_id as u64, &mut b));
+                                emit(" : ");
+                                emit(node.name_str());
+                                emit(if node.is_primary { " [PRIMARY]" } else { " [STANDBY]" });
+                                emit(" - Intervalle: ");
+                                emit(format_u64(node.heartbeat_interval_ms, &mut b));
+                                emit("ms - Manqués: ");
+                                emit(format_u64(node.missed_count as u64, &mut b));
+                                emit(" - État: ");
+                                emit(node.state.as_str());
+                                emit("\n");
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "pet" => {
+                        if parsed.arg_count < 3 {
+                            emit("Usage: watchdog pet <target_id>\n");
+                            return (ShellStatus::ExecutionFailed, write_pos);
+                        }
+                        let target_id = parse_u64(parsed.args[2]).unwrap_or(1) as u32;
+                        let cap = self.watchdog.admin_cap;
+                        match self.watchdog.pet_target(&cap, target_id, 200) {
+                            Ok(()) => {
+                                emit("watchdog: cible #");
+                                let mut b = [0u8; 20];
+                                emit(format_u64(target_id as u64, &mut b));
+                                emit(" nourrie avec succès (liveness affirmée)\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("watchdog: erreur lors de la nourriture de la cible\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "nmi" => {
+                        if parsed.arg_count < 3 {
+                            emit("Usage: watchdog nmi <target_id>\n");
+                            return (ShellStatus::ExecutionFailed, write_pos);
+                        }
+                        let target_id = parse_u64(parsed.args[2]).unwrap_or(1) as u32;
+                        let rip = 0xFFFFFFFF80105000u64;
+                        let rsp = 0xFFFF800000028000u64;
+                        let cap = self.watchdog.admin_cap;
+                        match self.watchdog.trigger_nmi(
+                            &cap,
+                            0,
+                            Some(target_id),
+                            jambo_watchdogd::LockupType::HardLockup,
+                            rip,
+                            rsp,
+                            300,
+                        ) {
+                            Ok(alert_id) => {
+                                emit("watchdog: alerte NMI #");
+                                let mut b = [0u8; 20];
+                                emit(format_u64(alert_id, &mut b));
+                                emit(" déclenchée et cible #");
+                                emit(format_u64(target_id as u64, &mut b));
+                                emit(" isolée avec succès\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("watchdog: échec du déclenchement NMI\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "alerts" => {
+                        let mut b = [0u8; 20];
+                        emit("=== JOURNAL DES ALERTES NMI & BLOCAGES DÉTECTÉS ===\n");
+                        let mut count = 0;
+                        for slot in self.watchdog.nmi_alerts.iter() {
+                            if let Some(al) = slot {
+                                emit("Alerte #");
+                                emit(format_u64(al.alert_id, &mut b));
+                                emit(" [CPU ");
+                                emit(format_u64(al.cpu_id as u64, &mut b));
+                                emit("] : Type: ");
+                                emit(al.lockup_type.as_str());
+                                emit(" - Action: ");
+                                emit(al.action_taken.as_str());
+                                emit(" - RIP: 0x");
+                                emit(format_hex_u64(al.rip, &mut b));
+                                emit("\n");
+                                count += 1;
+                            }
+                        }
+                        if count == 0 {
+                            emit("(Aucune alerte NMI enregistrée)\n");
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "digest" => {
+                        match self.watchdog.get_audit_digest(&self.watchdog.admin_cap) {
+                            Ok(digest) => {
+                                emit("Condensat SHA-256 de Vivacité & Watchdog : ");
+                                let mut b = [0u8; 20];
+                                for byte in digest.iter() {
+                                    emit(format_hex_u64(*byte as u64, &mut b));
+                                }
+                                emit("\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("watchdog: échec de lecture du condensat d'audit\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    _ => {
+                        emit("Usage: watchdog [status | targets | hw | nodes | pet <id> | nmi <id> | alerts | digest]\n");
                         (ShellStatus::ExecutionFailed, write_pos)
                     }
                 }
