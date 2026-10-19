@@ -18,6 +18,7 @@ pub mod cert_rights {
     pub const CERT_VERIFY: u32 = 0x02;
     pub const CERT_REVOKE: u32 = 0x04;
     pub const CERT_AUDIT: u32 = 0x08;
+    pub const CERT_INSPECT: u32 = 0x08;
     pub const CERT_ADMIN: u32 = 0x80;
     pub const ALL: u32 = CERT_ISSUE | CERT_VERIFY | CERT_REVOKE | CERT_AUDIT | CERT_ADMIN;
 }
@@ -89,6 +90,16 @@ impl EphemeralCert {
     /// Indique si le certificat est dans sa fenêtre temporelle de validité.
     pub const fn is_time_valid(&self, current_time: u64) -> bool {
         current_time >= self.not_before && current_time <= self.not_after
+    }
+
+    /// Renvoie le nom / sujet du certificat sous forme de &str.
+    pub fn subject_str(&self) -> &str {
+        core::str::from_utf8(&self.subject[..self.subject_len]).unwrap_or("")
+    }
+
+    /// Alias pour le common name.
+    pub fn common_name(&self) -> &str {
+        self.subject_str()
     }
 }
 
@@ -298,6 +309,122 @@ impl ClusterCa {
     pub fn ca_public_key(&self) -> &[u8; 32] {
         &self.ca_public_key
     }
+
+    /// Recherche un certificat actif par son numéro de série.
+    pub fn get_active(&self, serial: u64) -> Option<EphemeralCert> {
+        for slot in self.active_certs.iter().flatten() {
+            if slot.serial == serial {
+                return Some(*slot);
+            }
+        }
+        None
+    }
+
+    /// Indique si un numéro de série est marqué comme révoqué.
+    pub fn is_revoked(&self, serial: u64) -> bool {
+        for &s in &self.revoked_serials[..self.revoked_count] {
+            if s == serial {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Nombre de révocations enregistrées.
+    pub fn revoked_count(&self) -> usize {
+        self.revoked_count
+    }
+}
+
+/// Démon orchestrateur d'autorité de certification distribuée et mTLS (`jambo-certd`).
+pub struct JamboCertDaemon {
+    pub ca: ClusterCa,
+    pub cap: CertCap,
+    pub operations_count: u64,
+}
+
+impl Default for JamboCertDaemon {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl JamboCertDaemon {
+    pub fn new() -> Self {
+        let cap = CertCap::new(Handle::new(7101, 1), cert_rights::ALL);
+        let mut ca = ClusterCa::new(1, [0x71; 32], [0xAC; 32]);
+
+        // Certificat système émis par défaut pour le nœud local
+        let _ = ca.issue_cert(
+            &cap,
+            b"node-0.cluster.local",
+            [0x10; 32],
+            100,
+            10000,
+            key_usages::USAGE_SERVER_AUTH
+                | key_usages::USAGE_CLIENT_AUTH
+                | key_usages::USAGE_MESH_ROUTING,
+        );
+
+        Self {
+            ca,
+            cap,
+            operations_count: 1,
+        }
+    }
+
+    pub fn issue_cert(
+        &mut self,
+        subject: &[u8],
+        public_key: [u8; 32],
+        not_before: u64,
+        not_after: u64,
+        key_usage: u32,
+    ) -> Result<EphemeralCert, SysError> {
+        let cert = self.ca.issue_cert(
+            &self.cap, subject, public_key, not_before, not_after, key_usage,
+        )?;
+        self.operations_count = self.operations_count.saturating_add(1);
+        Ok(cert)
+    }
+
+    pub fn verify_cert(
+        &self,
+        cert: &EphemeralCert,
+        required_usage: u32,
+        current_time: u64,
+    ) -> Result<CertStatus, SysError> {
+        self.ca
+            .verify_cert(&self.cap, cert, required_usage, current_time)
+    }
+
+    pub fn revoke_cert(&mut self, serial: u64) -> Result<(), SysError> {
+        self.ca.revoke_cert(&self.cap, serial)?;
+        self.operations_count = self.operations_count.saturating_add(1);
+        Ok(())
+    }
+
+    pub fn purge_expired(&mut self, now: u64) -> usize {
+        let purged = self.ca.purge_expired(now);
+        self.operations_count = self.operations_count.saturating_add(purged as u64);
+        purged
+    }
+
+    pub fn active_count(&self) -> usize {
+        self.ca.active_count()
+    }
+
+    pub fn get_active(&self, serial: u64) -> Option<EphemeralCert> {
+        self.ca.get_active(serial)
+    }
+
+    pub fn is_revoked(&self, serial: u64) -> bool {
+        self.ca.is_revoked(serial)
+    }
+
+    pub fn revoked_count(&self) -> usize {
+        self.ca.revoked_count()
+    }
 }
 
 #[cfg(test)]
@@ -424,5 +551,36 @@ mod tests {
             key_usages::USAGE_SERVER_AUTH,
         );
         assert_eq!(res, Err(SysError::PermissionDenied));
+    }
+
+    #[test]
+    fn test_cert_daemon() {
+        let mut daemon = JamboCertDaemon::new();
+        assert_eq!(daemon.active_count(), 1);
+
+        let cert = daemon.get_active(1000).unwrap();
+        assert_eq!(&cert.subject[..cert.subject_len], b"node-0.cluster.local");
+
+        let status = daemon
+            .verify_cert(&cert, key_usages::USAGE_SERVER_AUTH, 1000)
+            .unwrap();
+        assert_eq!(status, CertStatus::Valid);
+
+        let new_cert = daemon
+            .issue_cert(
+                b"workload-1.service",
+                [0x99; 32],
+                500,
+                1500,
+                key_usages::USAGE_CLIENT_AUTH,
+            )
+            .unwrap();
+        assert_eq!(daemon.active_count(), 2);
+
+        daemon.revoke_cert(new_cert.serial).unwrap();
+        let status_rev = daemon
+            .verify_cert(&new_cert, key_usages::USAGE_CLIENT_AUTH, 600)
+            .unwrap();
+        assert_eq!(status_rev, CertStatus::Revoked);
     }
 }

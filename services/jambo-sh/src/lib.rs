@@ -122,6 +122,7 @@ pub struct JamboShell {
     pub service: jambo_serviced::JamboServiceDaemon,
     pub policy: jambo_policyd::JamboPolicyDaemon,
     pub trace: jambo_traced::JamboTraceDaemon,
+    pub cert: jambo_certd::JamboCertDaemon,
 }
 
 impl Default for JamboShell {
@@ -183,6 +184,7 @@ impl JamboShell {
         let service = jambo_serviced::JamboServiceDaemon::new();
         let policy = jambo_policyd::JamboPolicyDaemon::new();
         let trace = jambo_traced::JamboTraceDaemon::new();
+        let cert = jambo_certd::JamboCertDaemon::new();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -213,6 +215,7 @@ impl JamboShell {
             service,
             policy,
             trace,
+            cert,
         }
     }
 
@@ -354,6 +357,7 @@ impl JamboShell {
                 emit("  service [cmd]- Découverte de services et résolution de noms\n");
                 emit("  policy [cmd] - Moteur déclaratif de politiques et admission control\n");
                 emit("  trace [cmd]  - Traçage distribué, spans et analyse de latence\n");
+                emit("  cert [cmd]   - Autorité de certification distribuée et mTLS\n");
                 emit("  echo <args>  - Affiche les arguments sur la sortie console\n");
                 emit("  clear        - Efface l'écran du terminal (ANSI escape)\n");
                 emit("  reboot       - Redémarre la machine\n");
@@ -361,7 +365,7 @@ impl JamboShell {
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.2.68 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.2.69 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -3330,6 +3334,145 @@ impl JamboShell {
                     }
                     _ => {
                         emit("Usage: trace [status | span <name> | query <span_id>]\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                }
+            }
+            "cert" => {
+                let sub = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    ""
+                };
+                match sub {
+                    "status" => {
+                        let mut b = [0u8; 20];
+                        emit("=== AUTORITÉ DE CERTIFICATION & mTLS (jambo-certd) ===\n");
+                        emit("Certificats actifs     : ");
+                        emit(format_u64(self.cert.active_count() as u64, &mut b));
+                        emit("\nOpérations traitées    : ");
+                        emit(format_u64(self.cert.operations_count, &mut b));
+                        emit("\nDurée de validité      : Certificats éphémères (Fenêtre temporelle stricte)\n");
+                        emit("Confinement            : CertCap (Zero-Ambient Authority)\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "issue" => {
+                        let (cn, not_before, not_after) = if parsed.arg_count > 3 && parse_u64(parsed.args[2]).is_some() {
+                            let cn = parsed.args[3];
+                            let nb = if parsed.arg_count > 4 { parse_u64(parsed.args[4]).unwrap_or(100) } else { 100 };
+                            let na = if parsed.arg_count > 5 { parse_u64(parsed.args[5]).unwrap_or(5000) } else { 5000 };
+                            (cn, nb, na)
+                        } else if parsed.arg_count > 2 {
+                            (parsed.args[2], 100, 5000)
+                        } else {
+                            ("mesh.service", 100, 5000)
+                        };
+                        match self.cert.issue_cert(
+                            cn.as_bytes(),
+                            [0xEE; 32],
+                            not_before,
+                            not_after,
+                            jambo_certd::key_usages::USAGE_SERVER_AUTH
+                                | jambo_certd::key_usages::USAGE_CLIENT_AUTH,
+                        ) {
+                            Ok(cert) => {
+                                let mut b = [0u8; 20];
+                                emit("[CERT/ISSUE] Certificat émis avec succès (Série: ");
+                                emit(format_u64(cert.serial, &mut b));
+                                emit(", Sujet: '");
+                                emit(cn);
+                                emit("', Usages: ServerAuth|ClientAuth)\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("[CERT] Échec de l'émission du certificat\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "verify" => {
+                        let serial = if parsed.arg_count > 2 {
+                            parse_u64(parsed.args[2]).unwrap_or(1000)
+                        } else {
+                            1000
+                        };
+                        let check_time = if parsed.arg_count > 3 {
+                            parse_u64(parsed.args[3]).unwrap_or(500)
+                        } else {
+                            500
+                        };
+                        if self.cert.is_revoked(serial) {
+                            let mut b = [0u8; 20];
+                            emit("[CERT/VERIFY] Certificat #");
+                            emit(format_u64(serial, &mut b));
+                            emit(" REJETÉ: Révoqué (Revoked)\n");
+                            (ShellStatus::Success, write_pos)
+                        } else if let Some(cert) = self.cert.get_active(serial) {
+                            match self.cert.verify_cert(
+                                &cert,
+                                jambo_certd::key_usages::USAGE_SERVER_AUTH,
+                                check_time,
+                            ) {
+                                Ok(jambo_certd::CertStatus::Valid) => {
+                                    let mut b = [0u8; 20];
+                                    emit("[CERT/VERIFY] Certificat #");
+                                    emit(format_u64(serial, &mut b));
+                                    emit(" VALIDE (Valid)\n");
+                                    (ShellStatus::Success, write_pos)
+                                }
+                                Ok(other) => {
+                                    let mut b = [0u8; 20];
+                                    emit("[CERT/VERIFY] Certificat #");
+                                    emit(format_u64(serial, &mut b));
+                                    match other {
+                                        jambo_certd::CertStatus::Revoked => {
+                                            emit(" REJETÉ: Révoqué (Revoked)\n")
+                                        }
+                                        jambo_certd::CertStatus::Expired => {
+                                            emit(" REJETÉ: Expiré (Expired)\n")
+                                        }
+                                        jambo_certd::CertStatus::InvalidSignature => {
+                                            emit(" REJETÉ: Signature Invalide\n")
+                                        }
+                                        jambo_certd::CertStatus::UsageMismatch => {
+                                            emit(" REJETÉ: Usage Non Autorisé\n")
+                                        }
+                                        _ => emit(" REJETÉ\n"),
+                                    }
+                                    (ShellStatus::Success, write_pos)
+                                }
+                                Err(_) => {
+                                    emit("[CERT] Erreur de vérification\n");
+                                    (ShellStatus::ExecutionFailed, write_pos)
+                                }
+                            }
+                        } else {
+                            emit("[CERT] Certificat introuvable dans la table active\n");
+                            (ShellStatus::Success, write_pos)
+                        }
+                    }
+                    "revoke" => {
+                        let serial = if parsed.arg_count > 2 {
+                            parse_u64(parsed.args[2]).unwrap_or(1000)
+                        } else {
+                            1000
+                        };
+                        match self.cert.revoke_cert(serial) {
+                            Ok(_) => {
+                                let mut b = [0u8; 20];
+                                emit("[CERT/REVOKE] Certificat #");
+                                emit(format_u64(serial, &mut b));
+                                emit(" révoqué avec succès\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("[CERT] Échec de la révocation du certificat\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    _ => {
+                        emit("Usage: cert [status | issue <cn> | verify <serial> | revoke <serial>]\n");
                         (ShellStatus::Success, write_pos)
                     }
                 }

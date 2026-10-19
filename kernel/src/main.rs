@@ -918,6 +918,13 @@ pub extern "C" fn _start() -> ! {
         "Échec du test de traçage distribué et analyse de latence"
     );
 
+    // 10quaterdeciescies. Validation de l'Autorité de Certification Éphémère & mTLS (Phase 71 - v0.2.69)
+    let cert_success = sched::execute_cluster_ca_test();
+    assert!(
+        cert_success,
+        "Échec du test de l'autorité de certification éphémère et mTLS"
+    );
+
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
 
     arch::init_iommu();
@@ -1124,12 +1131,15 @@ pub extern "C" fn _start() -> ! {
     kprintln!(
         "\x1b[1;32m[PASS] Phase 70 Distributed Tracing, Context Propagation & Latency Profiling Complete\x1b[0m"
     );
+    kprintln!("\x1b[1;32m[PASS] Phase 71 Ephemeral Cluster PKI & Mutual TLS Complete\x1b[0m");
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
-    kprintln!("\x1b[1;36m[JAMBOKERNEL] Version v0.2.68 (Traçage Distribué jambo-traced)\x1b[0m");
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.68 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!(
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.69 (Autorité de Certification jambo-certd)\x1b[0m"
+    );
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.69 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );

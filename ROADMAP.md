@@ -1,7 +1,7 @@
 # ROADMAP DU DÉVELOPPEMENT AUTONOME — JamboOS
 
-> **Dernière mise à jour** : 2026-10-19 12:53 UTC  
-> **Version actuelle** : `v0.2.68`  
+> **Dernière mise à jour** : 2026-10-19 13:03 UTC  
+> **Version actuelle** : `v0.2.69`  
 > **Statut global** : Pré-Alpha active — Micro-noyau de 3e génération orienté capacités (`#![no_std]`)  
 > **Cycle de développement autonome** : 10 minutes via le Planificateur de Tâches & Crons d'Antigravity WebUI  
 
@@ -57,23 +57,13 @@
 | **v0.2.68** | 68 | Découverte `jambo-serviced`| Registre dynamique, TTL/heartbeat, résolution IP:port | ✅ Validé |
 | **v0.2.69** | 69 | Politiques `jambo-policyd` | ABAC déclaratif, Deny-by-default, préséance refus | ✅ Validé |
 | **v0.2.70** | 70 | Traçage `jambo-traced` | Spans bornés, propagation W3C TraceContext | ✅ Validé |
+| **v0.2.71** | 71 | Certificats `jambo-certd`| PKI éphémère de grappe, mTLS, CertCap, CRL | ✅ Validé |
 
 ---
 
 ## 3. Prochaines Étapes Prioritaires
 
-### 🎯 Prochaine Tâche Immédiate : Phase 71 — v0.2.69
-* **Composant** : `services/jambo-certd`
-* **Objectif** : PKI Éphémère & Gestion des Certificats de Grappe
-* **Tâches précises** :
-  1. Finaliser `JamboCertDaemon` avec autorité CA de grappe dans `services/jambo-certd/src/lib.rs`.
-  2. Valider le confinement capabilaire `CertCap`.
-  3. Ajouter `jambo-certd = { path = "../services/jambo-certd" }` à `kernel/Cargo.toml`.
-  4. Créer le module noyau `kernel/src/sched/certd_test.rs` et l'enregistrer dans `kernel/src/sched/mod.rs` & `kernel/src/main.rs`.
-  5. Intégrer les commandes `cert [status | issue <name> | verify <id> | revoke <id>]` dans `services/jambo-sh`.
-  6. Valider avec `cargo xtask test` et commiter `v0.2.69`.
-
-### 🎯 Tâche Suivante : Phase 72 — v0.2.70
+### 🎯 Prochaine Tâche Immédiate : Phase 72 — v0.2.70
 * **Composant** : `services/jambo-init`
 * **Objectif** : Superviseur Système PID 1 en Ring 3
 * **Tâches précises** :
@@ -90,10 +80,20 @@
   2. Intégration aux capacités `WasmCap` et test d'exécution d'un module compilé.
   3. Validation `cargo xtask test` et commit `v0.2.71`.
 
+### 🎯 Tâche Suivante : Phase 74 — v0.2.72
+* **Composant** : `services/jambo-dnsd`
+* **Objectif** : Résolveur et Serveur DNS d'Autorité de Grappe
+* **Tâches précises** :
+  1. Résolution de domaines locaux `.jambo` et enregistrements A/AAAA/SRV.
+  2. Confinement capabilaire `DnsCap` et intégration avec `jambo-serviced`.
+  3. Validation `cargo xtask test` et commit `v0.2.72`.
+
 ---
 
 ## 4. Journal d'Exécution des Cycles
 
 * **2026-10-19 12:47 UTC** : Validation complète Phase 69 (`jambo-policyd`), passage avec succès de la suite de tests QEMU (`cargo xtask test`). Commit `6a5738d` étiqueté `v0.2.67`.
 * **2026-10-19 12:51 UTC** : Enregistrement du cycle autonome de 10 minutes dans le Planificateur de Tâches & Crons d'Antigravity WebUI (`jambo-os-cycle`, `*/10 * * * *`, ticker actif).
-* **2026-10-19 12:52 UTC** : Validation complète Phase 70 (`jambo-traced`), passage avec succès de la suite de tests QEMU (`cargo xtask test`). Prêt pour tag `v0.2.68`.
+* **2026-10-19 12:52 UTC** : Validation complète Phase 70 (`jambo-traced`), passage avec succès de la suite de tests QEMU (`cargo xtask test`). Commit `65903bd` étiqueté `v0.2.68`.
+* **2026-10-19 13:02 UTC** : Validation complète Phase 71 (`jambo-certd`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test --workspace --lib`). Prêt pour tag `v0.2.69`.
+
