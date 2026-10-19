@@ -143,7 +143,7 @@ pub extern "C" fn _start() -> ! {
     // 4. Bannière système d'accueil
     kprintln!("\x1b[1;36m");
     kprintln!("================================================================================");
-    kprintln!("    JAMBO-OS (JamboKernel v0.2.38) — Micro-noyau de 3e Génération             ");
+    kprintln!("    JAMBO-OS (JamboKernel v0.2.39) — Micro-noyau de 3e Génération             ");
     kprintln!("    Architecture : Micro-noyau orienté capacités en Rust no_std (x86_64/AArch64)");
     kprintln!("    Auteur & Architecte Principal : ASSOGBA Prudence Dieudonné                 ");
     kprintln!("    Dépôt Officiel : https://github.com/jambostack/jambo-os                    ");
@@ -710,6 +710,13 @@ pub extern "C" fn _start() -> ! {
         "Échec du test de préemption matérielle par Timer APIC"
     );
 
+    // 10quater. Validation de l'E/S console interactive et de l'interruption UART RX (Phase 41 - v0.2.39)
+    let interactive_success = sched::execute_interactive_io_test();
+    assert!(
+        interactive_success,
+        "Échec du test d'E/S console interactive UART"
+    );
+
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
 
     arch::init_iommu();
@@ -830,14 +837,17 @@ pub extern "C" fn _start() -> ! {
     kprintln!(
         "\x1b[1;32m[PASS] Phase 40 Local APIC Timer & Preemptive EEVDF Multitasking Complete\x1b[0m"
     );
+    kprintln!(
+        "\x1b[1;32m[PASS] Phase 41 Interactive Console I/O, UART RX Interrupt & Ring Buffer Complete\x1b[0m"
+    );
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.38 (Timer APIC Local & Ordonnancement Préemptif EEVDF)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.39 (I/O Interactif & Console Série UART RX)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.38 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.39 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );

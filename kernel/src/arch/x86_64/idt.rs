@@ -82,6 +82,7 @@ extern "C" {
     fn isr13();
     fn isr14();
     fn isr32();
+    fn isr36();
     fn isr_default();
 }
 
@@ -89,6 +90,12 @@ extern "C" {
 pub extern "C" fn timer_interrupt_handler(_frame: &TrapFrame) {
     super::apic::apic_eoi();
     crate::sched::on_timer_tick();
+}
+
+#[no_mangle]
+pub extern "C" fn serial_interrupt_handler(_frame: &TrapFrame) {
+    super::apic::apic_eoi();
+    super::serial::on_serial_irq();
 }
 
 #[no_mangle]
@@ -220,6 +227,20 @@ core::arch::global_asm!(
         add rsp, 16
         iretq
 
+    .globl isr36
+    isr36:
+        push 0
+        push 36
+        jmp serial_interrupt_entry
+
+    serial_interrupt_entry:
+        PUSH_ALL
+        mov rdi, rsp
+        call serial_interrupt_handler
+        POP_ALL
+        add rsp, 16
+        iretq
+
     .globl isr_default
     isr_default:
         push 0
@@ -249,6 +270,7 @@ pub fn init_idt() {
         (*idt_ptr.add(13)).set_handler(isr13 as *const () as usize, 0);
         (*idt_ptr.add(14)).set_handler(isr14 as *const () as usize, 0);
         (*idt_ptr.add(32)).set_handler(isr32 as *const () as usize, 0);
+        (*idt_ptr.add(36)).set_handler(isr36 as *const () as usize, 0);
 
         let descriptor = IdtDescriptor {
             limit: (size_of::<[IdtEntry; 256]>() - 1) as u16,
