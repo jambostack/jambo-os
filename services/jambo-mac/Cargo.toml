@@ -1,0 +1,7 @@
+[package]
+name = "jambo-mac"
+version = "0.2.87"
+edition = "2021"
+
+[dependencies]
+libjambo = { path = "../../libs/libjambo" }

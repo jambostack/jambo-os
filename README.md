@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.86-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.87-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.86 (Filtrage d'Appels Système BPF Granulaire, Confinement par Application & Conformité POSIX jambo-seccomp)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.86` introduit le démon de filtrage d'appels système BPF en espace utilisateur (`services/jambo-seccomp`), intégrant la compilation et la validation formelle DAG de filtres BPF classiques étendus garantissant l'absence de boucles et une terminaison en $O(N)$, le modèle d'actions granulaires normalisées (ALLOW, KILL_PROCESS, KILL_THREAD, TRAP, ERRNO, LOG, USER_NOTIF), l'empilement ordonné de filtres par thread avec sémantique de composition stricte (préséance de l'action la plus restrictive), le scellement irréversible du bit `no_new_privs`, la synchronisation atomique multi-threads de processus (`SECCOMP_FILTER_FLAG_TSYNC`), les profils prédéfinis (`Strict`, `Compute`, `Network`), la chaîne d'audit inviolable scellée par hachage cryptographique SHA-256, le contrôle d'accès capabilaire strict `SeccompCap` sans autorité ambiante, et les commandes shell interactives `seccomp [status | list | load | attach | tsync | eval | audit]` dans `jsh`.
+> **Statut du Projet : Version v0.2.87 (Mandat d'Accès Contrôlé Multi-Niveaux MLS, Modèles Bell-LaPadula & Biba jambo-mac)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.87` introduit le démon de contrôle d'accès obligatoire (MAC) multi-niveaux (MLS) en espace utilisateur (`services/jambo-mac`), implémentant rigoureusement les modèles formels de Bell-LaPadula (confidentialité absolue via la propriété de sécurité simple *No Read Up* et la propriété $\star$ *No Write Down*) et de Biba (intégrité absolue via la propriété d'intégrité simple *No Read Down* et la propriété $\star$ *No Write Up*), le treillis de compartiments et catégories non-hiérarchiques, la déclassification contrôlée sous mandat `MAC_DOWNGRADE`, le contrôle d'accès capabilaire `MacCap` sans autorité ambiante avec interdiction formelle d'amplification, la chaîne d'audit inviolable scellée par hachage SHA-256, et les commandes shell d'administration interactives `mac [status | subjects | objects | check | audit]` dans `jsh`.
 
 ---
 

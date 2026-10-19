@@ -157,6 +157,7 @@ pub struct JamboShell {
     pub dbg: jambo_dbg::JamboDebuggerDaemon,
     pub dynlink: jambo_dynlinkd::JamboDynLinkDaemon,
     pub seccomp: jambo_seccomp::JamboSeccompDaemon,
+    pub mac: jambo_mac::JamboMacDaemon,
 }
 
 impl Default for JamboShell {
@@ -345,6 +346,12 @@ impl JamboShell {
         );
         let mut seccomp = jambo_seccomp::JamboSeccompDaemon::new(1, seccomp_cap);
         seccomp.init_defaults();
+        let mac_cap = jambo_mac::MacCap::new(
+            libjambo::Handle::new(8901, 1),
+            jambo_mac::mac_rights::ALL,
+        );
+        let mut mac = jambo_mac::JamboMacDaemon::new(mac_cap);
+        mac.init_defaults();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -392,6 +399,7 @@ impl JamboShell {
             dbg,
             dynlink,
             seccomp,
+            mac,
         }
     }
 
@@ -3860,6 +3868,193 @@ impl JamboShell {
                     }
                     _ => {
                         emit("Usage: seccomp [status | list | load <strict|compute|net> | attach <tid> <fid> | tsync <pid> <fid> | eval <tid> <nr> | audit]\n");
+                        (ShellStatus::ExecutionFailed, write_pos)
+                    }
+                }
+            }
+            "mac" => {
+                let subcmd = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    "status"
+                };
+                match subcmd {
+                    "status" => {
+                        let mut b = [0u8; 20];
+                        emit("=== CONTRÔLE D'ACCÈS MANDATAIRE MULTI-NIVEAUX MLS (jambo-mac) ===\n");
+                        emit("Modèles Bell-LaPadula (Confidentialité) & Biba (Intégrité)\n");
+                        emit("Sujets actifs      : ");
+                        let mut count_sub = 0;
+                        for s in &self.mac.subjects {
+                            if s.is_some() {
+                                count_sub += 1;
+                            }
+                        }
+                        emit(format_u64(count_sub, &mut b));
+                        emit(" / ");
+                        emit(format_u64(jambo_mac::MAX_SUBJECTS as u64, &mut b));
+                        emit("\nObjets surveillés  : ");
+                        let mut count_obj = 0;
+                        for o in &self.mac.objects {
+                            if o.is_some() {
+                                count_obj += 1;
+                            }
+                        }
+                        emit(format_u64(count_obj, &mut b));
+                        emit(" / ");
+                        emit(format_u64(jambo_mac::MAX_OBJECTS as u64, &mut b));
+                        emit("\nÉvaluations totales: ");
+                        emit(format_u64(self.mac.evaluations_count, &mut b));
+                        emit("\nAccès accordés     : ");
+                        emit(format_u64(self.mac.granted_count, &mut b));
+                        emit("\nViolations bloquées: ");
+                        emit(format_u64(self.mac.violations_count, &mut b));
+                        emit("\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "subjects" | "sub" => {
+                        let mut b = [0u8; 20];
+                        emit("ID  | NOM              | HABILITATION | INTÉGRITÉ | COMPARTIMENTS\n");
+                        emit("----+------------------+--------------+-----------+--------------\n");
+                        for slot in &self.mac.subjects {
+                            if let Some(sub) = slot {
+                                emit(format_u64(sub.id as u64, &mut b));
+                                emit(" | ");
+                                let name_str =
+                                    core::str::from_utf8(&sub.name[..sub.name_len]).unwrap_or("<utf8-err>");
+                                emit(name_str);
+                                for _ in 0..(16usize.saturating_sub(sub.name_len)) {
+                                    emit(" ");
+                                }
+                                emit(" | ");
+                                emit(sub.label.level.as_str());
+                                for _ in 0..(12usize.saturating_sub(sub.label.level.as_str().len())) {
+                                    emit(" ");
+                                }
+                                emit(" | ");
+                                emit(sub.label.integrity.as_str());
+                                for _ in 0..(9usize.saturating_sub(sub.label.integrity.as_str().len())) {
+                                    emit(" ");
+                                }
+                                emit(" | 0x");
+                                emit(format_hex_u64(sub.label.categories as u64, &mut b));
+                                emit("\n");
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "objects" | "obj" => {
+                        let mut b = [0u8; 20];
+                        emit("ID  | OBJET            | CLASSIF      | INTÉGRITÉ | COMPARTIMENTS\n");
+                        emit("----+------------------+--------------+-----------+--------------\n");
+                        for slot in &self.mac.objects {
+                            if let Some(obj) = slot {
+                                emit(format_u64(obj.id as u64, &mut b));
+                                emit(" | ");
+                                let name_str =
+                                    core::str::from_utf8(&obj.name[..obj.name_len]).unwrap_or("<utf8-err>");
+                                emit(name_str);
+                                for _ in 0..(16usize.saturating_sub(obj.name_len)) {
+                                    emit(" ");
+                                }
+                                emit(" | ");
+                                emit(obj.label.level.as_str());
+                                for _ in 0..(12usize.saturating_sub(obj.label.level.as_str().len())) {
+                                    emit(" ");
+                                }
+                                emit(" | ");
+                                emit(obj.label.integrity.as_str());
+                                for _ in 0..(9usize.saturating_sub(obj.label.integrity.as_str().len())) {
+                                    emit(" ");
+                                }
+                                emit(" | 0x");
+                                emit(format_hex_u64(obj.label.categories as u64, &mut b));
+                                emit("\n");
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "check" => {
+                        if parsed.arg_count >= 4 {
+                            let sub_id = parse_u64(parsed.args[2]).unwrap_or(0) as u32;
+                            let obj_id = parse_u64(parsed.args[3]).unwrap_or(0) as u32;
+                            let access_mode = if parsed.arg_count >= 5 {
+                                match parsed.args[4] {
+                                    "write" | "w" => jambo_mac::AccessType::Write,
+                                    "rw" => jambo_mac::AccessType::ReadWrite,
+                                    "exec" | "x" => jambo_mac::AccessType::Execute,
+                                    _ => jambo_mac::AccessType::Read,
+                                }
+                            } else {
+                                jambo_mac::AccessType::Read
+                            };
+                            let decision = self.mac.evaluate_access(sub_id, obj_id, access_mode, 3200);
+                            emit("Évaluation MAC Sujet ");
+                            let mut b = [0u8; 20];
+                            emit(format_u64(sub_id as u64, &mut b));
+                            emit(" -> Objet ");
+                            emit(format_u64(obj_id as u64, &mut b));
+                            emit(" [");
+                            match access_mode {
+                                jambo_mac::AccessType::Read => emit("READ"),
+                                jambo_mac::AccessType::Write => emit("WRITE"),
+                                jambo_mac::AccessType::ReadWrite => emit("READWRITE"),
+                                jambo_mac::AccessType::Execute => emit("EXECUTE"),
+                            }
+                            emit("] : ");
+                            match decision {
+                                jambo_mac::MacDecision::Granted => {
+                                    emit("ACCORDÉ (Politiques BLP & Biba respectées)\n")
+                                }
+                                jambo_mac::MacDecision::Denied(reason) => {
+                                    emit("REFUSÉ (Violation ");
+                                    match reason {
+                                        jambo_mac::MacViolationReason::BlpNoReadUp => {
+                                            emit("Bell-LaPadula No Read Up - NRU")
+                                        }
+                                        jambo_mac::MacViolationReason::BlpNoWriteDown => {
+                                            emit("Bell-LaPadula No Write Down - NWD")
+                                        }
+                                        jambo_mac::MacViolationReason::BibaNoReadDown => {
+                                            emit("Biba No Read Down - NRD")
+                                        }
+                                        jambo_mac::MacViolationReason::BibaNoWriteUp => {
+                                            emit("Biba No Write Up - NWU")
+                                        }
+                                        jambo_mac::MacViolationReason::CompartmentMismatch => {
+                                            emit("Compartiments Incompatibles")
+                                        }
+                                        jambo_mac::MacViolationReason::InvalidEntity => {
+                                            emit("Entité Invalide")
+                                        }
+                                        jambo_mac::MacViolationReason::MissingCapability => {
+                                            emit("Capacité Absente")
+                                        }
+                                        jambo_mac::MacViolationReason::DowngradeProhibited => {
+                                            emit("Déclassification Interdite")
+                                        }
+                                        jambo_mac::MacViolationReason::None => emit("Raison Inconnue"),
+                                    }
+                                    emit(")\n");
+                                }
+                            }
+                            (ShellStatus::Success, write_pos)
+                        } else {
+                            emit("Usage: mac check <subj_id> <obj_id> [read|write|rw|exec]\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        }
+                    }
+                    "audit" => {
+                        emit("Condensat SHA-256 d'Audit MAC (Bell-LaPadula & Biba) : ");
+                        let mut b = [0u8; 20];
+                        for byte in self.mac.last_audit_digest.iter() {
+                            emit(format_hex_u64(*byte as u64, &mut b));
+                        }
+                        emit("\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    _ => {
+                        emit("Usage: mac [status | subjects | objects | check <subj_id> <obj_id> [read|write|rw|exec] | audit]\n");
                         (ShellStatus::ExecutionFailed, write_pos)
                     }
                 }
