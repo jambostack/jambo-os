@@ -28,6 +28,24 @@ pub struct JpkgManifest {
     pub installed: bool,
 }
 
+impl JpkgManifest {
+    pub const fn new(
+        name: &'static str,
+        version: (u16, u16, u16),
+        content_hash: [u8; 32],
+        required_capabilities: u32,
+    ) -> Self {
+        Self {
+            name,
+            version,
+            content_hash,
+            ed25519_signature: [0x5au8; 64],
+            required_capabilities,
+            installed: false,
+        }
+    }
+}
+
 /// État d'une génération système A/B
 #[derive(Debug, Clone, Copy)]
 pub struct SystemGeneration {

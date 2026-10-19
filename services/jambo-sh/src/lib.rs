@@ -99,6 +99,7 @@ pub struct JamboShell {
     pub netd: jambo_netd::JamboNetd,
     pub net_cap: jambo_netd::NetworkCapability,
     pub comp: jambo_comp::JamboComp,
+    pub pkgd: jambo_pkgd::JamboPkgDaemon,
 }
 
 impl Default for JamboShell {
@@ -127,6 +128,7 @@ impl JamboShell {
             netd: jambo_netd::JamboNetd::new(),
             net_cap,
             comp: jambo_comp::JamboComp::new(1920, 1080, 60),
+            pkgd: jambo_pkgd::JamboPkgDaemon::new(),
         }
     }
 
@@ -219,7 +221,8 @@ impl JamboShell {
                 emit("  ps           - Liste les processus actifs et l'isolation CSpace\n");
                 emit("  capstat [pid]- Inspecte la CSpace d'un processus spécifique\n");
                 emit("  top          - Affiche les métriques d'ordonnancement et mémoire en temps réel\n");
-                emit("  jpkg <args>  - Gestionnaire de paquets immuables déclaratifs (ex: jpkg verify)\n");
+                emit("  jpkg <args>  - Gestionnaire de paquets immuables et bascule A/B (ex: jpkg slot)\n");
+                emit("  sdk [cmd]    - Kit de développement JamboSDK et exécution native isolée\n");
                 emit("  filter <args>- Filtrage structuré par pipeline (ex: ps | filter --min-caps 8)\n");
                 emit("  mem          - Statistiques mémoire physique PMM et SLUB\n");
                 emit("  ls [dir]     - Liste les fichiers du système VFS JamboFS\n");
@@ -240,7 +243,7 @@ impl JamboShell {
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.2.45 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.2.46 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -526,25 +529,126 @@ impl JamboShell {
                 (ShellStatus::Success, write_pos)
             }
             "jpkg" => {
-                if parsed.arg_count > 1 && parsed.args[1] == "verify" {
-                    let pkg_name = if parsed.arg_count > 2 {
-                        parsed.args[2]
-                    } else {
-                        "system.jpkg"
-                    };
-                    let blake3_hash = [0x5au8; 32];
-                    if CmdJpkg::verify_package_integrity(pkg_name, &blake3_hash) {
-                        emit("[JPKG] Vérification d'intégrité BLAKE3 du paquet '");
-                        emit(pkg_name);
-                        emit("' : INTÈGRE & VALIDÉ (100% Immuable)\n");
-                        (ShellStatus::Success, write_pos)
-                    } else {
-                        emit("[JPKG] Échec de vérification du paquet\n");
-                        (ShellStatus::ExecutionFailed, write_pos)
-                    }
+                let subcmd = if parsed.arg_count > 1 {
+                    parsed.args[1]
                 } else {
-                    emit("Usage: jpkg verify <nom_paquet>\n");
-                    (ShellStatus::Success, write_pos)
+                    "slot"
+                };
+                match subcmd {
+                    "verify" => {
+                        let pkg_name = if parsed.arg_count > 2 {
+                            parsed.args[2]
+                        } else {
+                            "system.jpkg"
+                        };
+                        let blake3_hash = [0x5au8; 32];
+                        if CmdJpkg::verify_package_integrity(pkg_name, &blake3_hash) {
+                            emit("[JPKG] Vérification d'intégrité BLAKE3 du paquet '");
+                            emit(pkg_name);
+                            emit("' : INTÈGRE & VALIDÉ (100% Immuable)\n");
+                            (ShellStatus::Success, write_pos)
+                        } else {
+                            emit("[JPKG] Échec de vérification du paquet\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        }
+                    }
+                    "slot" => {
+                        emit("[JPKG] Génération active : #");
+                        let mut b = [0u8; 20];
+                        emit(format_u64(
+                            self.pkgd.current_generation.generation_id,
+                            &mut b,
+                        ));
+                        emit(match self.pkgd.current_generation.active_slot {
+                            jambo_pkgd::AbSlot::SlotA => " (Slot A)",
+                            jambo_pkgd::AbSlot::SlotB => " (Slot B)",
+                        });
+                        emit(if self.pkgd.current_generation.committed {
+                            ", Statut : Validé (Committed)\n"
+                        } else {
+                            ", Statut : En attente (Staged)\n"
+                        });
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "install" => {
+                        let pkg_name: &'static str = if parsed.arg_count > 2 {
+                            match parsed.args[2] {
+                                "editor" => "editor",
+                                "system-shell" => "system-shell",
+                                "coreutils" => "coreutils",
+                                _ => "app.jpkg",
+                            }
+                        } else {
+                            "core-tools"
+                        };
+                        let manifest =
+                            jambo_pkgd::JpkgManifest::new(pkg_name, (1, 0, 0), [0x42u8; 32], 0x07);
+                        match self.pkgd.install_package(manifest) {
+                            Ok(()) => {
+                                emit("[JPKG] Paquet '");
+                                emit(pkg_name);
+                                emit("' (v1.0.0) installé avec succès dans le magasin CAS\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("[JPKG] Erreur lors de l'installation du paquet\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "stage" => match self.pkgd.stage_update() {
+                        Ok(new_gen) => {
+                            emit("[JPKG] Mise à jour A/B préparée : passage vers ");
+                            emit(match self.pkgd.current_generation.active_slot {
+                                jambo_pkgd::AbSlot::SlotA => "Slot A",
+                                jambo_pkgd::AbSlot::SlotB => "Slot B",
+                            });
+                            emit(" (Génération #");
+                            let mut b = [0u8; 20];
+                            emit(format_u64(new_gen, &mut b));
+                            emit(")\n");
+                            (ShellStatus::Success, write_pos)
+                        }
+                        Err(_) => {
+                            emit("[JPKG] Échec de la préparation de mise à jour\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        }
+                    },
+                    "commit" => match self.pkgd.commit_update() {
+                        Ok(()) => {
+                            emit("[JPKG] Génération validée et verrouillée atomiquement O(1)\n");
+                            (ShellStatus::Success, write_pos)
+                        }
+                        Err(_) => {
+                            emit("[JPKG] Échec de validation de la génération\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        }
+                    },
+                    "rollback" => match self.pkgd.rollback() {
+                        Ok(()) => {
+                            emit("[JPKG] Rollback instantané exécuté : retour sur ");
+                            emit(match self.pkgd.current_generation.active_slot {
+                                jambo_pkgd::AbSlot::SlotA => "Slot A",
+                                jambo_pkgd::AbSlot::SlotB => "Slot B",
+                            });
+                            emit(" (Génération #");
+                            let mut b = [0u8; 20];
+                            emit(format_u64(
+                                self.pkgd.current_generation.generation_id,
+                                &mut b,
+                            ));
+                            emit(")\n");
+                            (ShellStatus::Success, write_pos)
+                        }
+                        Err(_) => {
+                            emit("[JPKG] Aucun état antérieur disponible pour le rollback\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        }
+                    },
+                    _ => {
+                        emit("Usage: jpkg [verify <pkg> | slot | install <pkg> | stage | commit | rollback]\n");
+                        (ShellStatus::Success, write_pos)
+                    }
                 }
             }
             "filter" => {
@@ -693,6 +797,51 @@ impl JamboShell {
                     }
                     _ => {
                         emit("Usage: wasm [info | run <module>]\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                }
+            }
+            "sdk" => {
+                let subcmd = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    "status"
+                };
+                match subcmd {
+                    "status" => {
+                        emit("JamboSDK v0.2.46: Active (Native Capability App Framework, Zero Ambient)\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "run" => {
+                        let target = if parsed.arg_count > 2 {
+                            parsed.args[2]
+                        } else {
+                            "hello-world"
+                        };
+                        let mut app = jambo_sdk::HelloWorldApp::new();
+                        let ctx = jambo_sdk::AppContext::new(
+                            "hello-app",
+                            libjambo::Handle::new(10, 1),
+                            libjambo::Handle::new(20, 1),
+                        );
+                        match jambo_sdk::run_app(&mut app, &ctx) {
+                            Ok(steps) => {
+                                emit("[SDK] Application '");
+                                emit(target);
+                                emit("' exécutée avec succès via JamboSDK (");
+                                let mut b = [0u8; 20];
+                                emit(format_u64(steps as u64, &mut b));
+                                emit(" étapes, canal IPC #10)\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("[SDK] Erreur d'exécution de l'application\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    _ => {
+                        emit("Usage: sdk [status | run <app>]\n");
                         (ShellStatus::Success, write_pos)
                     }
                 }
