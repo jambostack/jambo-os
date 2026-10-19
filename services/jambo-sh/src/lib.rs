@@ -117,6 +117,7 @@ pub struct JamboShell {
     pub mesh: jambo_meshd::JamboMeshDaemon,
     pub dfs: jambo_dfsd::JamboDfsDaemon,
     pub gw: jambo_gwd::JamboGatewayDaemon,
+    pub vault: jambo_vaultd::JamboVaultDaemon,
 }
 
 impl Default for JamboShell {
@@ -173,6 +174,7 @@ impl JamboShell {
         let mesh = jambo_meshd::JamboMeshDaemon::new();
         let dfs = jambo_dfsd::JamboDfsDaemon::new();
         let gw = jambo_gwd::JamboGatewayDaemon::new();
+        let vault = jambo_vaultd::JamboVaultDaemon::new();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -198,6 +200,7 @@ impl JamboShell {
             mesh,
             dfs,
             gw,
+            vault,
         }
     }
 
@@ -332,6 +335,9 @@ impl JamboShell {
                     "  dfs [cmd]    - Système de fichiers distribué CAS et réplication de blocs\n",
                 );
                 emit("  gw [cmd]     - Passerelle ingress et répartiteur de charge élastique\n");
+                emit(
+                    "  vault [cmd]  - Coffre-fort de secrets distribué et déverrouillage à seuil\n",
+                );
                 emit("  echo <args>  - Affiche les arguments sur la sortie console\n");
                 emit("  clear        - Efface l'écran du terminal (ANSI escape)\n");
                 emit("  reboot       - Redémarre la machine\n");
@@ -339,7 +345,7 @@ impl JamboShell {
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.2.63 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.2.64 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -2746,6 +2752,107 @@ impl JamboShell {
                     }
                     _ => {
                         emit("Usage: gw [status | route | cb]\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                }
+            }
+            "vault" => {
+                let sub = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    ""
+                };
+                match sub {
+                    "status" => {
+                        let mut b = [0u8; 20];
+                        emit("=== COFFRE-FORT DE SECRETS DISTRIBUÉ (jambo-vaultd) ===\n");
+                        emit("Statut du coffre       : ");
+                        if self.vault.is_unsealed() {
+                            emit("Déverrouillé (Unsealed)\n");
+                        } else {
+                            emit("Scellé (Sealed)\n");
+                        }
+                        emit("Secrets stockés        : ");
+                        emit(format_u64(self.vault.secret_count() as u64, &mut b));
+                        emit("\nQuorum de déverrouillage: 2 sur 3 parts (Shamir Threshold)\n");
+                        emit("Chiffrement            : Chiffrement d'enveloppe symétrique 256 bits\n");
+                        emit("Confinement            : VaultCap (Zero-Ambient Authority)\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "put" => {
+                        let path = if parsed.arg_count > 2 {
+                            parsed.args[2]
+                        } else {
+                            "app/secret"
+                        };
+                        let val = if parsed.arg_count > 3 {
+                            parsed.args[3]
+                        } else {
+                            "SECRET_TOKEN_42"
+                        };
+                        match self
+                            .vault
+                            .put_secret(path.as_bytes(), val.as_bytes(), 3600, 100)
+                        {
+                            Ok(ver) => {
+                                let mut b = [0u8; 20];
+                                emit("[VAULT/SECRET] Secret enregistré avec succès (Version ");
+                                emit(format_u64(ver as u64, &mut b));
+                                emit(")\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("[VAULT] Échec de l'écriture (Coffre scellé ou droits insuffisants)\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "get" => {
+                        let path = if parsed.arg_count > 2 {
+                            parsed.args[2]
+                        } else {
+                            "app/secret"
+                        };
+                        let mut secret_buf = [0u8; 64];
+                        match self.vault.get_secret(path.as_bytes(), 150, &mut secret_buf) {
+                            Ok((len, ver)) => {
+                                let mut b = [0u8; 20];
+                                emit("[VAULT/SECRET] Valeur (v");
+                                emit(format_u64(ver as u64, &mut b));
+                                emit("): ");
+                                if let Ok(s) = core::str::from_utf8(&secret_buf[..len]) {
+                                    emit(s);
+                                } else {
+                                    emit("<binaire>");
+                                }
+                                emit("\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("[VAULT] Secret introuvable, bail expiré ou coffre scellé\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "reseal" => {
+                        let _ = self.vault.reseal();
+                        emit("[VAULT/SEAL] Coffre-fort scellé avec succès\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "unseal" => {
+                        let share = [0x11u8; jambo_vaultd::KEY_SIZE];
+                        let _ = self.vault.submit_unseal_share(0, &share);
+                        let _ = self.vault.submit_unseal_share(1, &share);
+                        if self.vault.is_unsealed() {
+                            emit("[VAULT/UNSEAL] Quorum atteint : Coffre-fort déverrouillé avec succès\n");
+                            (ShellStatus::Success, write_pos)
+                        } else {
+                            emit("[VAULT/UNSEAL] Quorum insuffisant\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        }
+                    }
+                    _ => {
+                        emit("Usage: vault [status | put <key> <val> | get <key> | reseal | unseal]\n");
                         (ShellStatus::Success, write_pos)
                     }
                 }

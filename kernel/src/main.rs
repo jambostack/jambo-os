@@ -883,6 +883,13 @@ pub extern "C" fn _start() -> ! {
         "Échec du test de la passerelle ingress et répartiteur de charge élastique"
     );
 
+    // 10noniescies. Validation du Coffre-Fort de Secrets Distribué & Déverrouillage à Seuil (Phase 66 - v0.2.64)
+    let vault_success = sched::execute_distributed_vault_test();
+    assert!(
+        vault_success,
+        "Échec du test du coffre-fort de secrets distribué et déverrouillage à seuil"
+    );
+
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
 
     arch::init_iommu();
@@ -1074,14 +1081,17 @@ pub extern "C" fn _start() -> ! {
         "\x1b[1;32m[PASS] Phase 64 Distributed Content-Addressed Storage & Block Replication Complete\x1b[0m"
     );
     kprintln!("\x1b[1;32m[PASS] Phase 65 Ingress Gateway & Elastic Load Balancer Complete\x1b[0m");
+    kprintln!(
+        "\x1b[1;32m[PASS] Phase 66 Distributed Secret Vault & Threshold Unsealing Complete\x1b[0m"
+    );
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.63 (Passerelle Ingress & Répartiteur de Charge jambo-gwd)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.64 (Coffre-Fort de Secrets Distribué & Seuil Shamir jambo-vaultd)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.63 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.64 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );

@@ -290,6 +290,86 @@ impl VaultManager {
     }
 }
 
+/// Démon orchestrateur de coffre-fort de secrets distribué (`jambo-vaultd`).
+pub struct JamboVaultDaemon {
+    pub vault: VaultManager,
+    pub cap: VaultCap,
+}
+
+impl Default for JamboVaultDaemon {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl JamboVaultDaemon {
+    pub fn new() -> Self {
+        let cap = VaultCap::new(Handle::new(6601, 1), vault_rights::ALL);
+        let master_key = [0x5Cu8; KEY_SIZE];
+        let mut vault = VaultManager::new(2, 3, master_key);
+        // Pré-déverrouille avec 2 parts pour usage immédiat en shell
+        let share = [0x11u8; KEY_SIZE];
+        let _ = vault.submit_unseal_share(&cap, 0, &share);
+        let _ = vault.submit_unseal_share(&cap, 1, &share);
+        Self { vault, cap }
+    }
+
+    pub fn submit_unseal_share(
+        &mut self,
+        share_id: u8,
+        share_data: &[u8; KEY_SIZE],
+    ) -> Result<VaultState, SysError> {
+        self.vault
+            .submit_unseal_share(&self.cap, share_id, share_data)
+    }
+
+    pub fn reseal(&mut self) -> Result<(), SysError> {
+        self.vault.reseal(&self.cap)
+    }
+
+    pub fn put_secret(
+        &mut self,
+        path: &[u8],
+        payload: &[u8],
+        lease: u64,
+        now: u64,
+    ) -> Result<u32, SysError> {
+        self.vault.put_secret(&self.cap, path, payload, lease, now)
+    }
+
+    pub fn get_secret(
+        &self,
+        path: &[u8],
+        now: u64,
+        out: &mut [u8],
+    ) -> Result<(usize, u32), SysError> {
+        self.vault.get_secret(&self.cap, path, now, out)
+    }
+
+    pub fn rotate_secret(
+        &mut self,
+        path: &[u8],
+        new_payload: &[u8],
+        lease: u64,
+        now: u64,
+    ) -> Result<u32, SysError> {
+        self.vault
+            .rotate_secret(&self.cap, path, new_payload, lease, now)
+    }
+
+    pub fn revoke_secret(&mut self, path: &[u8]) -> Result<(), SysError> {
+        self.vault.revoke_secret(&self.cap, path)
+    }
+
+    pub fn secret_count(&self) -> usize {
+        self.vault.secret_count()
+    }
+
+    pub fn is_unsealed(&self) -> bool {
+        self.vault.state == VaultState::Unsealed
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -407,5 +487,33 @@ mod tests {
         // Tentative d'écriture avec droit lecture seule -> PermissionDenied
         let res = vault.put_secret(&cap_read_only, b"test", b"val", 100, 0);
         assert_eq!(res, Err(SysError::PermissionDenied));
+    }
+
+    #[test]
+    fn test_vault_daemon() {
+        let mut daemon = JamboVaultDaemon::new();
+        assert!(daemon.is_unsealed());
+        let v1 = daemon
+            .put_secret(b"db/password", b"super_secret_pwd", 1000, 50)
+            .unwrap();
+        assert_eq!(v1, 1);
+        assert_eq!(daemon.secret_count(), 1);
+
+        let mut out = [0u8; 32];
+        let (len, v) = daemon.get_secret(b"db/password", 60, &mut out).unwrap();
+        assert_eq!(v, 1);
+        assert_eq!(&out[..len], b"super_secret_pwd");
+
+        daemon.reseal().unwrap();
+        assert!(!daemon.is_unsealed());
+        assert_eq!(
+            daemon.get_secret(b"db/password", 70, &mut out),
+            Err(SysError::ResourceBusy)
+        );
+
+        let share = [0x11u8; KEY_SIZE];
+        daemon.submit_unseal_share(0, &share).unwrap();
+        daemon.submit_unseal_share(1, &share).unwrap();
+        assert!(daemon.is_unsealed());
     }
 }

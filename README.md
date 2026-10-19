@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.63-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.64-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.63 (Passerelle Ingress & Répartiteur de Charge Élastique jambo-gwd)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.63` introduit la passerelle ingress et l'équilibreur de charge élastique en espace utilisateur (`services/jambo-gwd`), implémentant les stratégies multi-algorithmes (Round-Robin, Least-Connections, IP-Hash), les sondes de santé continues, le déclenchement automatique du coupe-circuit (*circuit breaker*) avec bascule transparente (*failover*), le confinement capabilaire granulaire `GatewayCap` et les commandes interactives `gw [status | route | cb]` dans `jsh`.
+> **Statut du Projet : Version v0.2.64 (Coffre-Fort de Secrets Distribué & Seuil Shamir jambo-vaultd)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.64` introduit le coffre-fort de secrets distribué et le déverrouillage par quorum à seuil Shamir en espace utilisateur (`services/jambo-vaultd`), implémentant le quorum K sur N parts, le chiffrement d'enveloppe symétrique 256 bits, le versionnement et la rotation dynamique de secrets, le contrôle strict des baux temporels, le rescellement atomique, le confinement capabilaire granulaire `VaultCap` et les commandes interactives `vault [status | put | get | reseal | unseal]` dans `jsh`.
 
 ---
 
