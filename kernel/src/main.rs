@@ -739,6 +739,13 @@ pub extern "C" fn _start() -> ! {
         "Échec du test de la pile réseau jambo-netd et sockets"
     );
 
+    // 10octies. Validation des Pipelines d'Objets Structurés & Utilitaires Confinés (Phase 45 - v0.2.43)
+    let coreutils_success = sched::execute_coreutils_pipeline_test();
+    assert!(
+        coreutils_success,
+        "Échec du test des pipelines d'objets structurés et utilitaires jambo-coreutils"
+    );
+
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
 
     arch::init_iommu();
@@ -871,14 +878,17 @@ pub extern "C" fn _start() -> ! {
     kprintln!(
         "\x1b[1;32m[PASS] Phase 44 Userspace Zero-Authority Network Stack (jambo-netd) & Sockets Complete\x1b[0m"
     );
+    kprintln!(
+        "\x1b[1;32m[PASS] Phase 45 Structured Object Pipelines & Confined Coreutils Complete\x1b[0m"
+    );
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.42 (Pile Réseau Userspace jambo-netd & Sockets)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.43 (Pipelines d'Objets Structurés & Utilitaires jambo-coreutils)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.42 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.43 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );

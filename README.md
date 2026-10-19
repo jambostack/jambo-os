@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.42-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.43-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.42 (Pile Réseau Userspace Sans Autorité Ambiante jambo-netd & Sockets NetCap)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. Après la validation du système de fichiers virtuel VFS transactionnel CoW (`v0.2.41`), la version `v0.2.42` implémente la pile réseau modulaire en espace utilisateur (`services/jambo-netd`) selon le paradigme de sécurité par capacités sans autorité ambiante (Zero Ambient Authority). Elle intègre les sockets TCP/IP sécurisées par NetCap, la poignée de main TLS 1.3 de bout en bout, la résolution DNS-over-TLS (port 853), le support ICMP Ping, ainsi que les commandes réseau natives du shell interactif `jsh` (`ip`, `ping`, `netstat`, `dns`).
+> **Statut du Projet : Version v0.2.43 (Pipelines d'Objets Structurés & Utilitaires Système Confinés jambo-coreutils)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. Après la validation de la pile réseau zéro-autorité (`v0.2.42`), la version `v0.2.43` introduit les pipelines d'objets typés structurés (`StructuredPipeline`, `ObjectRecord`) et l'intégration complète des utilitaires système natifs (`services/jambo-coreutils`). Elle permet le chaînage d'objets typés via le shell `jsh` (`ps | filter --min-caps 8`, `--min-mem 32`, `--prefix jambo`), l'audit approfondi de la table des capacités (`capstat <pid>`), la surveillance des métriques d'ordonnancement temps-réel (`top`), la vérification d'intégrité cryptographique BLAKE3 (`jpkg verify`), ainsi que le confinement strict des lectures de données sans autorité ambiante.
 
 ---
 

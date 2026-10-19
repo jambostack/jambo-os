@@ -1,4 +1,5 @@
 pub mod context;
+pub mod coreutils_test;
 pub mod eevdf;
 pub mod interactive_test;
 pub mod net_test;
@@ -10,6 +11,7 @@ pub mod thread;
 pub mod vfs_test;
 
 pub use context::{enter_user_mode, switch_context};
+pub use coreutils_test::execute_coreutils_pipeline_test;
 pub use eevdf::{EevdfScheduler, SCHEDULER};
 pub use interactive_test::execute_interactive_io_test;
 pub use net_test::execute_network_test;

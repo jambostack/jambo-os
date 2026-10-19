@@ -5,8 +5,128 @@
 
 #![no_std]
 
-use jambo_sh::{ArgumentCapability, ObjectRecord, StructuredPipeline};
 use libjambo::{cap_rights, Handle, SysError};
+
+/// Capacité accordée à une commande pour un argument spécifique
+#[derive(Debug, Clone, Copy)]
+pub struct ArgumentCapability {
+    pub target_resource_id: u32,
+    pub granted_handle: Handle,
+    pub rights: u32,
+}
+
+/// Enregistrement structuré échangé au sein des pipelines du shell (zéro flux textuel brut)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ObjectRecord {
+    Process {
+        pid: u64,
+        name: &'static str,
+        memory_pages: usize,
+        cap_count: usize,
+    },
+    Capability {
+        handle: Handle,
+        object_type: &'static str,
+        rights_mask: u32,
+    },
+    FileEntry {
+        name: &'static str,
+        size_bytes: usize,
+        is_directory: bool,
+    },
+    Metric {
+        name: &'static str,
+        value: u64,
+        unit: &'static str,
+    },
+}
+
+impl ObjectRecord {
+    pub const fn record_type(&self) -> &'static str {
+        match self {
+            Self::Process { .. } => "Process",
+            Self::Capability { .. } => "Capability",
+            Self::FileEntry { .. } => "FileEntry",
+            Self::Metric { .. } => "Metric",
+        }
+    }
+}
+
+/// Capacité maximale d'éléments en transit dans un pipeline d'objets (environnement no_std)
+pub const MAX_PIPELINE_RECORDS: usize = 16;
+
+/// Pipeline d'objets typés garantissant l'intégrité sans désérialisation textuelle non sécurisée
+#[derive(Debug, Clone, Copy)]
+pub struct StructuredPipeline {
+    pub records: [Option<ObjectRecord>; MAX_PIPELINE_RECORDS],
+    pub count: usize,
+}
+
+impl Default for StructuredPipeline {
+    fn default() -> Self {
+        Self::empty()
+    }
+}
+
+impl StructuredPipeline {
+    pub const fn empty() -> Self {
+        Self {
+            records: [None; MAX_PIPELINE_RECORDS],
+            count: 0,
+        }
+    }
+
+    pub fn from_slice(slice: &[ObjectRecord]) -> Self {
+        let mut pipe = Self::empty();
+        for &item in slice {
+            if pipe.push(item).is_err() {
+                break;
+            }
+        }
+        pipe
+    }
+
+    pub fn push(&mut self, record: ObjectRecord) -> Result<(), SysError> {
+        if self.count >= MAX_PIPELINE_RECORDS {
+            return Err(SysError::OutOfMemory);
+        }
+        self.records[self.count] = Some(record);
+        self.count += 1;
+        Ok(())
+    }
+
+    pub const fn count(&self) -> usize {
+        self.count
+    }
+
+    pub const fn is_empty(&self) -> bool {
+        self.count == 0
+    }
+
+    pub fn get(&self, index: usize) -> Option<&ObjectRecord> {
+        if index < self.count {
+            self.records[index].as_ref()
+        } else {
+            None
+        }
+    }
+
+    /// Filtre les enregistrements du pipeline via un prédicat
+    pub fn filter<F>(&self, mut predicate: F) -> Self
+    where
+        F: FnMut(&ObjectRecord) -> bool,
+    {
+        let mut result = Self::empty();
+        for i in 0..self.count {
+            if let Some(rec) = &self.records[i] {
+                if predicate(rec) {
+                    let _ = result.push(*rec);
+                }
+            }
+        }
+        result
+    }
+}
 
 /// Entrée de processus pour la commande `ps`
 #[derive(Debug, Clone, Copy)]

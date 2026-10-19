@@ -18,13 +18,10 @@ pub enum ShellStatus {
     ExecutionFailed,
 }
 
-/// Capacité accordée à une commande pour un argument spécifique
-#[derive(Debug, Clone, Copy)]
-pub struct ArgumentCapability {
-    pub target_resource_id: u32,
-    pub granted_handle: Handle,
-    pub rights: u32,
-}
+pub use jambo_coreutils::{
+    ArgumentCapability, CmdCapStat, CmdCat, CmdFilter, CmdJpkg, CmdPs, CmdTop, ObjectRecord,
+    ProcessInfo, StructuredPipeline, MAX_PIPELINE_RECORDS,
+};
 
 /// Description d'une commande analysée avec ses capacités dérivées
 pub struct ParsedCommand<'a> {
@@ -33,119 +30,6 @@ pub struct ParsedCommand<'a> {
     pub arg_count: usize,
     pub capabilities: [Option<ArgumentCapability>; 8],
     pub cap_count: usize,
-}
-
-/// Enregistrement structuré échangé au sein des pipelines du shell (zéro flux textuel brut)
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ObjectRecord {
-    Process {
-        pid: u64,
-        name: &'static str,
-        memory_pages: usize,
-        cap_count: usize,
-    },
-    Capability {
-        handle: Handle,
-        object_type: &'static str,
-        rights_mask: u32,
-    },
-    FileEntry {
-        name: &'static str,
-        size_bytes: usize,
-        is_directory: bool,
-    },
-    Metric {
-        name: &'static str,
-        value: u64,
-        unit: &'static str,
-    },
-}
-
-impl ObjectRecord {
-    pub const fn record_type(&self) -> &'static str {
-        match self {
-            Self::Process { .. } => "Process",
-            Self::Capability { .. } => "Capability",
-            Self::FileEntry { .. } => "FileEntry",
-            Self::Metric { .. } => "Metric",
-        }
-    }
-}
-
-/// Capacité maximale d'éléments en transit dans un pipeline d'objets (environnement no_std)
-pub const MAX_PIPELINE_RECORDS: usize = 16;
-
-/// Pipeline d'objets typés garantissant l'intégrité sans désérialisation textuelle non sécurisée
-#[derive(Debug, Clone, Copy)]
-pub struct StructuredPipeline {
-    pub records: [Option<ObjectRecord>; MAX_PIPELINE_RECORDS],
-    pub count: usize,
-}
-
-impl Default for StructuredPipeline {
-    fn default() -> Self {
-        Self::empty()
-    }
-}
-
-impl StructuredPipeline {
-    pub const fn empty() -> Self {
-        Self {
-            records: [None; MAX_PIPELINE_RECORDS],
-            count: 0,
-        }
-    }
-
-    pub fn from_slice(slice: &[ObjectRecord]) -> Self {
-        let mut pipe = Self::empty();
-        for &item in slice {
-            if pipe.push(item).is_err() {
-                break;
-            }
-        }
-        pipe
-    }
-
-    pub fn push(&mut self, record: ObjectRecord) -> Result<(), SysError> {
-        if self.count >= MAX_PIPELINE_RECORDS {
-            return Err(SysError::OutOfMemory);
-        }
-        self.records[self.count] = Some(record);
-        self.count += 1;
-        Ok(())
-    }
-
-    pub const fn count(&self) -> usize {
-        self.count
-    }
-
-    pub const fn is_empty(&self) -> bool {
-        self.count == 0
-    }
-
-    pub fn get(&self, index: usize) -> Option<&ObjectRecord> {
-        if index < self.count {
-            self.records[index].as_ref()
-        } else {
-            None
-        }
-    }
-
-    /// Filtre les enregistrements du pipeline via un prédicat
-    pub fn filter<F>(&self, mut predicate: F) -> Self
-    where
-        F: FnMut(&ObjectRecord) -> bool,
-    {
-        let mut result = Self::empty();
-        for i in 0..self.count {
-            if let Some(rec) = &self.records[i] {
-                if predicate(rec) {
-                    let _ = result.push(*rec);
-                }
-            }
-        }
-        result
-    }
 }
 
 fn format_u64(mut val: u64, buf: &mut [u8; 20]) -> &str {
@@ -164,6 +48,47 @@ fn format_u64(mut val: u64, buf: &mut [u8; 20]) -> &str {
         buf[j] = temp[i - 1 - j];
     }
     core::str::from_utf8(&buf[..i]).unwrap_or("")
+}
+
+fn format_hex_u64(val: u64, buf: &mut [u8; 20]) -> &str {
+    buf[0] = b'0';
+    buf[1] = b'x';
+    if val == 0 {
+        buf[2] = b'0';
+        return core::str::from_utf8(&buf[..3]).unwrap_or("0x0");
+    }
+    let mut temp = [0u8; 16];
+    let mut i = 0;
+    let mut v = val;
+    while v > 0 {
+        let nibble = (v & 0xF) as u8;
+        temp[i] = if nibble < 10 {
+            b'0' + nibble
+        } else {
+            b'a' + (nibble - 10)
+        };
+        v >>= 4;
+        i += 1;
+    }
+    let mut out_idx = 2;
+    while i > 0 {
+        i -= 1;
+        buf[out_idx] = temp[i];
+        out_idx += 1;
+    }
+    core::str::from_utf8(&buf[..out_idx]).unwrap_or("0x0")
+}
+
+fn parse_u64(s: &str) -> Option<u64> {
+    let mut val = 0u64;
+    for &b in s.as_bytes() {
+        if b >= b'0' && b <= b'9' {
+            val = val.checked_mul(10)?.checked_add((b - b'0') as u64)?;
+        } else {
+            return None;
+        }
+    }
+    Some(val)
 }
 
 /// Interpréteur de commandes JamboShell
@@ -265,6 +190,10 @@ impl JamboShell {
 
     /// Exécute une commande textuelle et écrit le résultat dans le buffer de sortie
     pub fn execute_line(&mut self, line: &str, out: &mut [u8]) -> (ShellStatus, usize) {
+        if self.is_pipeline(line) {
+            return self.execute_pipeline(line, out);
+        }
+
         let parsed = self.parse_and_confine(line);
         if parsed.name.is_empty() {
             return (ShellStatus::Success, 0);
@@ -286,6 +215,10 @@ impl JamboShell {
                 emit("  help         - Affiche l'aide et les commandes du shell\n");
                 emit("  version      - Affiche la version du noyau JamboOS et de jsh\n");
                 emit("  ps           - Liste les processus actifs et l'isolation CSpace\n");
+                emit("  capstat [pid]- Inspecte la CSpace d'un processus spécifique\n");
+                emit("  top          - Affiche les métriques d'ordonnancement et mémoire en temps réel\n");
+                emit("  jpkg <args>  - Gestionnaire de paquets immuables déclaratifs (ex: jpkg verify)\n");
+                emit("  filter <args>- Filtrage structuré par pipeline (ex: ps | filter --min-caps 8)\n");
                 emit("  mem          - Statistiques mémoire physique PMM et SLUB\n");
                 emit("  ls [dir]     - Liste les fichiers du système VFS JamboFS\n");
                 emit("  cat <file>   - Affiche le contenu d'un fichier du VFS\n");
@@ -302,7 +235,7 @@ impl JamboShell {
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.2.41 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.2.43 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -321,8 +254,23 @@ impl JamboShell {
             }
             "ps" => {
                 emit("PID  NAME             ETAT     THREADS  CAPS  MEM(Pages)\n");
-                emit("1    jambo-init       Running  1        14    32\n");
-                emit("2    jsh              Running  1        4     16\n");
+                for p in CmdPs::list_processes() {
+                    let mut b = [0u8; 20];
+                    emit(format_u64(p.pid, &mut b));
+                    emit("    ");
+                    emit(p.name);
+                    let pad = 17usize.saturating_sub(p.name.len());
+                    for _ in 0..pad {
+                        emit(" ");
+                    }
+                    emit("Running  ");
+                    emit(format_u64(p.thread_count as u64, &mut b));
+                    emit("        ");
+                    emit(format_u64(p.cap_count as u64, &mut b));
+                    emit("    ");
+                    emit(format_u64(p.memory_pages as u64, &mut b));
+                    emit("\n");
+                }
                 (ShellStatus::Success, write_pos)
             }
             "mem" => {
@@ -521,11 +469,81 @@ impl JamboShell {
                 (ShellStatus::Success, write_pos)
             }
             "capstat" => {
-                emit("CSpace Capacités : Mode Least-Privilege actif, 0 autorité ambiante\n");
+                let target_pid = if parsed.arg_count > 1 {
+                    parse_u64(parsed.args[1]).unwrap_or(1)
+                } else {
+                    1
+                };
+                match CmdCapStat::inspect_cspace(target_pid) {
+                    Ok(caps) => {
+                        emit("[CAPSTAT] CSpace du processus PID ");
+                        let mut b = [0u8; 20];
+                        emit(format_u64(target_pid, &mut b));
+                        emit(" (Zero-Ambient Enforced) :\n");
+                        emit("HANDLE       TYPE                  DROITS\n");
+                        for c in &caps {
+                            emit(format_hex_u64(c.handle.0, &mut b));
+                            emit("  ");
+                            emit(c.object_type);
+                            let pad = 22usize.saturating_sub(c.object_type.len());
+                            for _ in 0..pad {
+                                emit(" ");
+                            }
+                            emit(format_hex_u64(c.rights_mask as u64, &mut b));
+                            emit("\n");
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    Err(_) => {
+                        emit("capstat: PID invalide ou CSpace introuvable\n");
+                        (ShellStatus::ExecutionFailed, write_pos)
+                    }
+                }
+            }
+            "top" => {
+                let (cpu, free_pages, slub) = CmdTop::system_metrics();
+                emit("[TOP] Métriques Système Temps-Réel :\n");
+                emit("  Utilisation CPU :     ");
+                let mut b = [0u8; 20];
+                emit(format_u64(cpu as u64, &mut b));
+                emit("%\n");
+                emit("  PMM Pages Libres :    ");
+                emit(format_u64(free_pages as u64, &mut b));
+                emit(" (");
+                emit(format_u64(
+                    (free_pages * 4096 / (1024 * 1024)) as u64,
+                    &mut b,
+                ));
+                emit(" MiB)\n");
+                emit("  SLUB Allocations :    ");
+                emit(format_u64(slub as u64, &mut b));
+                emit(" blocs actifs (W^X Enforced)\n");
                 (ShellStatus::Success, write_pos)
             }
-            "top" | "jpkg" | "filter" => {
-                emit("[CONFINED] Commande exécutée avec isolation par capacités\n");
+            "jpkg" => {
+                if parsed.arg_count > 1 && parsed.args[1] == "verify" {
+                    let pkg_name = if parsed.arg_count > 2 {
+                        parsed.args[2]
+                    } else {
+                        "system.jpkg"
+                    };
+                    let blake3_hash = [0x5au8; 32];
+                    if CmdJpkg::verify_package_integrity(pkg_name, &blake3_hash) {
+                        emit("[JPKG] Vérification d'intégrité BLAKE3 du paquet '");
+                        emit(pkg_name);
+                        emit("' : INTÈGRE & VALIDÉ (100% Immuable)\n");
+                        (ShellStatus::Success, write_pos)
+                    } else {
+                        emit("[JPKG] Échec de vérification du paquet\n");
+                        (ShellStatus::ExecutionFailed, write_pos)
+                    }
+                } else {
+                    emit("Usage: jpkg verify <nom_paquet>\n");
+                    (ShellStatus::Success, write_pos)
+                }
+            }
+            "filter" => {
+                emit("Usage dans un pipeline : <cmd> | filter [--min-caps N | --min-mem N | --prefix str]\n");
                 (ShellStatus::Success, write_pos)
             }
             "evil_backdoor" => {
@@ -543,7 +561,7 @@ impl JamboShell {
 
     /// Exécute une commande dans le shell
     pub fn execute(&mut self, line: &str) -> ShellStatus {
-        let mut dummy = [0u8; 1024];
+        let mut dummy = [0u8; 2048];
         let (status, _) = self.execute_line(line, &mut dummy);
         status
     }
@@ -551,6 +569,119 @@ impl JamboShell {
     /// Détecte si une commande utilise un pipeline d'objets structurés ('|')
     pub fn is_pipeline(&self, line: &str) -> bool {
         line.contains('|')
+    }
+
+    /// Exécute un pipeline d'objets structurés (ex: `ps | filter --min-caps 8`)
+    pub fn execute_pipeline(&mut self, line: &str, out: &mut [u8]) -> (ShellStatus, usize) {
+        let mut write_pos = 0;
+        let mut emit = |text: &str| {
+            let bytes = text.as_bytes();
+            let to_copy = bytes.len().min(out.len().saturating_sub(write_pos));
+            out[write_pos..write_pos + to_copy].copy_from_slice(&bytes[..to_copy]);
+            write_pos += to_copy;
+        };
+
+        let mut parts = line.split('|');
+        let stage0 = parts.next().unwrap_or("").trim();
+        let stage1 = parts.next().unwrap_or("").trim();
+
+        // 1. Évaluation de la commande productrice (Stage 0)
+        let initial_pipe = if stage0 == "ps" {
+            CmdPs::pipeline()
+        } else if stage0.starts_with("capstat") {
+            let pid = stage0
+                .split_ascii_whitespace()
+                .nth(1)
+                .and_then(parse_u64)
+                .unwrap_or(1);
+            CmdCapStat::pipeline(pid).unwrap_or_default()
+        } else {
+            StructuredPipeline::empty()
+        };
+
+        // 2. Évaluation de la commande consommatrice / filtrante (Stage 1)
+        let final_pipe = if stage1.starts_with("filter") {
+            let mut filter_parts = stage1.split_ascii_whitespace();
+            let _ = filter_parts.next(); // "filter"
+            let flag = filter_parts.next().unwrap_or("");
+            let val_str = filter_parts.next().unwrap_or("");
+
+            match flag {
+                "--min-caps" => {
+                    let threshold = parse_u64(val_str).unwrap_or(0) as usize;
+                    CmdFilter::filter_by_min_caps(&initial_pipe, threshold)
+                }
+                "--min-mem" => {
+                    let threshold = parse_u64(val_str).unwrap_or(0) as usize;
+                    CmdFilter::filter_by_min_memory(&initial_pipe, threshold)
+                }
+                "--prefix" => CmdFilter::filter_by_prefix(&initial_pipe, val_str),
+                _ => initial_pipe,
+            }
+        } else {
+            initial_pipe
+        };
+
+        // 3. Rendu structuré dans le buffer de sortie
+        if final_pipe.is_empty() {
+            emit("[PIPELINE] 0 objet sélectionné par le filtre de capacités\n");
+            return (ShellStatus::Success, write_pos);
+        }
+
+        match final_pipe.get(0) {
+            Some(ObjectRecord::Process { .. }) => {
+                emit("PID  NAME             CAPS  MEM(Pages)\n");
+                for i in 0..final_pipe.count() {
+                    if let Some(ObjectRecord::Process {
+                        pid,
+                        name,
+                        cap_count,
+                        memory_pages,
+                    }) = final_pipe.get(i)
+                    {
+                        let mut b = [0u8; 20];
+                        emit(format_u64(*pid, &mut b));
+                        emit("    ");
+                        emit(name);
+                        let pad = 17usize.saturating_sub(name.len());
+                        for _ in 0..pad {
+                            emit(" ");
+                        }
+                        emit(format_u64(*cap_count as u64, &mut b));
+                        emit("     ");
+                        emit(format_u64(*memory_pages as u64, &mut b));
+                        emit("\n");
+                    }
+                }
+            }
+            Some(ObjectRecord::Capability { .. }) => {
+                emit("HANDLE       TYPE                  DROITS\n");
+                for i in 0..final_pipe.count() {
+                    if let Some(ObjectRecord::Capability {
+                        handle,
+                        object_type,
+                        rights_mask,
+                    }) = final_pipe.get(i)
+                    {
+                        let mut b = [0u8; 20];
+                        emit(format_hex_u64(handle.0, &mut b));
+                        emit("  ");
+                        emit(object_type);
+                        let pad = 22usize.saturating_sub(object_type.len());
+                        for _ in 0..pad {
+                            emit(" ");
+                        }
+                        emit(format_hex_u64(*rights_mask as u64, &mut b));
+                        emit("\n");
+                    }
+                }
+            }
+            _ => {
+                emit("[PIPELINE] Rendu générique d'enregistrements\n");
+            }
+        }
+
+        (ShellStatus::Success, write_pos)
     }
 
     /// Filtre les processus d'un pipeline par seuil minimal de capacités

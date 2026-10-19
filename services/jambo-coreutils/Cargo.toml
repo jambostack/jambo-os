@@ -1,8 +1,7 @@
 [package]
 name = "jambo-coreutils"
-version = "0.2.42"
+version = "0.2.43"
 edition = "2021"
 
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }
-jambo-sh = { path = "../jambo-sh" }

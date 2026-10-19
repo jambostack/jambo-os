@@ -180,7 +180,7 @@ pub fn execute_shell_repl_test() -> bool {
 
     // Validation des commandes natives réelles via JamboShell
     let mut shell = jambo_sh::JamboShell::new();
-    let mut out_buf = [0u8; 1024];
+    let mut out_buf = [0u8; 2048];
 
     // Test commande 'echo'
     let (_, len_echo) = shell.execute_line("echo Hello JamboOS!", &mut out_buf);
@@ -200,7 +200,9 @@ pub fn execute_shell_repl_test() -> bool {
     // Test commande 'ps'
     let (_, len_ps) = shell.execute_line("ps", &mut out_buf);
     let str_ps = core::str::from_utf8(&out_buf[..len_ps]).unwrap_or("");
-    assert!(str_ps.contains("jambo-init") && str_ps.contains("jsh"));
+    assert!(
+        str_ps.contains("jambo-init") && (str_ps.contains("jsh") || str_ps.contains("jambo-sh"))
+    );
     kprintln!("[SHELL/EXEC] Commande 'ps' validée avec table des processus Ring 3");
 
     // Test commande 'help'
