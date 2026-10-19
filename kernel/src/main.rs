@@ -904,6 +904,13 @@ pub extern "C" fn _start() -> ! {
         "Échec du test de découverte de services et résolution de noms"
     );
 
+    // 10duodeciescies. Validation du Moteur Déclaratif de Politiques & Admission Control (Phase 69 - v0.2.67)
+    let policy_success = sched::execute_policy_engine_test();
+    assert!(
+        policy_success,
+        "Échec du test du moteur déclaratif de politiques et admission control"
+    );
+
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
 
     arch::init_iommu();
@@ -1104,14 +1111,17 @@ pub extern "C" fn _start() -> ! {
     kprintln!(
         "\x1b[1;32m[PASS] Phase 68 Distributed Service Discovery & Name Resolution Complete\x1b[0m"
     );
+    kprintln!(
+        "\x1b[1;32m[PASS] Phase 69 Declarative Security Policy Engine & Cluster Admission Control Complete\x1b[0m"
+    );
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.66 (Découverte de Services jambo-serviced)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.67 (Moteur de Politiques de Sécurité jambo-policyd)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.66 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.67 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );

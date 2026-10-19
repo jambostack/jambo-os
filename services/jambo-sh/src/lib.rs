@@ -120,6 +120,7 @@ pub struct JamboShell {
     pub vault: jambo_vaultd::JamboVaultDaemon,
     pub metrics: jambo_metricsd::JamboMetricsDaemon,
     pub service: jambo_serviced::JamboServiceDaemon,
+    pub policy: jambo_policyd::JamboPolicyDaemon,
 }
 
 impl Default for JamboShell {
@@ -179,6 +180,7 @@ impl JamboShell {
         let vault = jambo_vaultd::JamboVaultDaemon::new();
         let metrics = jambo_metricsd::JamboMetricsDaemon::new();
         let service = jambo_serviced::JamboServiceDaemon::new();
+        let policy = jambo_policyd::JamboPolicyDaemon::new();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -207,6 +209,7 @@ impl JamboShell {
             vault,
             metrics,
             service,
+            policy,
         }
     }
 
@@ -346,6 +349,7 @@ impl JamboShell {
                 );
                 emit("  metrics [cmd]- Métriques chronologiques et télémétrie de grappe\n");
                 emit("  service [cmd]- Découverte de services et résolution de noms\n");
+                emit("  policy [cmd] - Moteur déclaratif de politiques et admission control\n");
                 emit("  echo <args>  - Affiche les arguments sur la sortie console\n");
                 emit("  clear        - Efface l'écran du terminal (ANSI escape)\n");
                 emit("  reboot       - Redémarre la machine\n");
@@ -353,7 +357,7 @@ impl JamboShell {
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.2.66 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.2.67 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -3104,6 +3108,133 @@ impl JamboShell {
                     }
                     _ => {
                         emit("Usage: service [status | resolve <name> | register <name> <id> | heartbeat <name> <id> | deregister <name> <id>]\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                }
+            }
+            "policy" => {
+                let sub = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    ""
+                };
+                match sub {
+                    "status" => {
+                        let mut b = [0u8; 20];
+                        let (evals, allows, denies) = self.policy.stats().unwrap_or((0, 0, 0));
+                        emit(
+                            "=== POLITIQUES DE SÉCURITÉ & ADMISSION CONTROL (jambo-policyd) ===\n",
+                        );
+                        emit("Règles déclaratives    : ");
+                        emit(format_u64(self.policy.rule_count() as u64, &mut b));
+                        emit("\nÉvaluations traitées   : ");
+                        emit(format_u64(evals, &mut b));
+                        emit(" (Autorisés: ");
+                        emit(format_u64(allows, &mut b));
+                        emit(", Rejetés: ");
+                        emit(format_u64(denies, &mut b));
+                        emit(")\nPrincipe de décision   : Deny-by-default & Préséance du Refus explicite\n");
+                        emit("Confinement            : PolicyCap (Zero-Ambient Authority)\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "eval" => {
+                        let role_str = if parsed.arg_count > 2 {
+                            parsed.args[2]
+                        } else {
+                            "system"
+                        };
+                        let res_str = if parsed.arg_count > 3 {
+                            parsed.args[3]
+                        } else {
+                            "admin/subsystem"
+                        };
+                        let role = match role_str {
+                            "system" => jambo_policyd::roles::ROLE_SYSTEM,
+                            "operator" => jambo_policyd::roles::ROLE_OPERATOR,
+                            "workload" => jambo_policyd::roles::ROLE_WORKLOAD,
+                            _ => jambo_policyd::roles::ROLE_GUEST,
+                        };
+                        let action = if res_str.starts_with("admin") {
+                            jambo_policyd::actions::ACTION_ADMIN
+                        } else if res_str.starts_with("secrets") {
+                            jambo_policyd::actions::ACTION_ACCESS_SECRET
+                        } else {
+                            jambo_policyd::actions::ACTION_SPAWN_WORKLOAD
+                        };
+                        if let Ok(req) = jambo_policyd::AdmissionRequest::new(
+                            100,
+                            role,
+                            action,
+                            res_str.as_bytes(),
+                            100,
+                        ) {
+                            match self.policy.evaluate(&req) {
+                                Ok(jambo_policyd::AdmissionDecision::Allowed) => {
+                                    emit("[POLICY/EVAL] Décision: AUTORISÉ (Allowed) pour le sujet sur '");
+                                    emit(res_str);
+                                    emit("'\n");
+                                    (ShellStatus::Success, write_pos)
+                                }
+                                Ok(jambo_policyd::AdmissionDecision::Denied { reason, .. }) => {
+                                    emit("[POLICY/EVAL] Décision: REJETÉ (Denied): ");
+                                    emit(reason);
+                                    emit(" sur '");
+                                    emit(res_str);
+                                    emit("'\n");
+                                    (ShellStatus::Success, write_pos)
+                                }
+                                Err(_) => {
+                                    emit("[POLICY] Erreur lors de l'évaluation de la politique\n");
+                                    (ShellStatus::ExecutionFailed, write_pos)
+                                }
+                            }
+                        } else {
+                            emit("[POLICY] Paramètres de requête d'admission invalides\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        }
+                    }
+                    "add" => {
+                        let id: u32 = if parsed.arg_count > 2 {
+                            parse_u64(parsed.args[2]).unwrap_or(20) as u32
+                        } else {
+                            20
+                        };
+                        let res_str = if parsed.arg_count > 3 {
+                            parsed.args[3]
+                        } else {
+                            "public/"
+                        };
+                        if let Ok(rule) = jambo_policyd::PolicyRule::new(
+                            id,
+                            jambo_policyd::roles::ROLE_ANY,
+                            jambo_policyd::actions::ACTION_SPAWN_WORKLOAD,
+                            res_str.as_bytes(),
+                            jambo_policyd::PolicyEffect::Allow,
+                            5,
+                            0,
+                        ) {
+                            match self.policy.add_rule(rule) {
+                                Ok(_) => {
+                                    let mut b = [0u8; 20];
+                                    emit("[POLICY/ADD] Règle #");
+                                    emit(format_u64(id as u64, &mut b));
+                                    emit(" déclarée avec succès pour '");
+                                    emit(res_str);
+                                    emit("'\n");
+                                    (ShellStatus::Success, write_pos)
+                                }
+                                Err(_) => {
+                                    emit("[POLICY] Échec de l'ajout de la règle (table pleine ou droits insuffisants)\n");
+                                    (ShellStatus::ExecutionFailed, write_pos)
+                                }
+                            }
+                        } else {
+                            emit("[POLICY] Erreur de création de la règle déclarative\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        }
+                    }
+                    _ => {
+                        emit("Usage: policy [status | eval <role> <resource> | add <id> <resource>]\n");
                         (ShellStatus::Success, write_pos)
                     }
                 }

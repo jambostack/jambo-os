@@ -337,6 +337,89 @@ impl PolicyEngine {
     }
 }
 
+/// Démon orchestrateur de politiques de sécurité et contrôle d'admission (`jambo-policyd`).
+pub struct JamboPolicyDaemon {
+    pub engine: PolicyEngine,
+    pub cap: PolicyCap,
+    pub operations_count: u64,
+}
+
+impl Default for JamboPolicyDaemon {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl JamboPolicyDaemon {
+    pub fn new() -> Self {
+        let cap = PolicyCap::new(Handle::new(6901, 1), policy_rights::ALL);
+        let mut engine = PolicyEngine::new();
+        // Règles par défaut : Le rôle SYSTEM a accès à admin/ et secrets/
+        let rule_sys = PolicyRule::new(
+            1,
+            roles::ROLE_SYSTEM,
+            actions::ACTION_ADMIN | actions::ACTION_ACCESS_SECRET,
+            b"admin/",
+            PolicyEffect::Allow,
+            100,
+            0,
+        )
+        .unwrap();
+        let _ = engine.add_rule(&cap, rule_sys);
+
+        // Les opérateurs ont accès à workloads/
+        let rule_op = PolicyRule::new(
+            2,
+            roles::ROLE_OPERATOR,
+            actions::ACTION_SPAWN_WORKLOAD | actions::ACTION_ROUTE_TRAFFIC,
+            b"workloads/",
+            PolicyEffect::Allow,
+            10,
+            0,
+        )
+        .unwrap();
+        let _ = engine.add_rule(&cap, rule_op);
+
+        Self {
+            engine,
+            cap,
+            operations_count: 2,
+        }
+    }
+
+    pub fn add_rule(&mut self, rule: PolicyRule) -> Result<(), SysError> {
+        self.engine.add_rule(&self.cap, rule)?;
+        self.operations_count = self.operations_count.saturating_add(1);
+        Ok(())
+    }
+
+    pub fn remove_rule(&mut self, rule_id: u32) -> Result<(), SysError> {
+        self.engine.remove_rule(&self.cap, rule_id)?;
+        self.operations_count = self.operations_count.saturating_add(1);
+        Ok(())
+    }
+
+    pub fn evaluate(&mut self, req: &AdmissionRequest) -> Result<AdmissionDecision, SysError> {
+        let res = self.engine.evaluate(&self.cap, req)?;
+        self.operations_count = self.operations_count.saturating_add(1);
+        Ok(res)
+    }
+
+    pub fn stats(&self) -> Result<(u64, u64, u64), SysError> {
+        self.engine.stats(&self.cap)
+    }
+
+    pub fn rule_count(&self) -> usize {
+        self.engine.rule_count()
+    }
+
+    pub fn purge_expired(&mut self, now: u64) -> usize {
+        let purged = self.engine.purge_expired(now);
+        self.operations_count = self.operations_count.saturating_add(purged as u64);
+        purged
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -558,5 +641,47 @@ mod tests {
             engine.add_rule(&cap_eval_only, rule),
             Err(SysError::PermissionDenied)
         );
+    }
+
+    #[test]
+    fn test_policy_daemon() {
+        let mut daemon = JamboPolicyDaemon::new();
+        assert_eq!(daemon.rule_count(), 2);
+
+        let (evals, allows, denies) = daemon.stats().unwrap();
+        assert_eq!(evals, 0);
+        assert_eq!(allows, 0);
+        assert_eq!(denies, 0);
+
+        let req_sys = AdmissionRequest::new(
+            1,
+            roles::ROLE_SYSTEM,
+            actions::ACTION_ADMIN,
+            b"admin/subsystem",
+            100,
+        )
+        .unwrap();
+        assert_eq!(
+            daemon.evaluate(&req_sys).unwrap(),
+            AdmissionDecision::Allowed
+        );
+
+        let req_denied = AdmissionRequest::new(
+            2,
+            roles::ROLE_GUEST,
+            actions::ACTION_ACCESS_SECRET,
+            b"secrets/keys",
+            100,
+        )
+        .unwrap();
+        match daemon.evaluate(&req_denied).unwrap() {
+            AdmissionDecision::Denied { .. } => {}
+            _ => panic!("Guest access must be denied by default"),
+        }
+
+        let (evals2, allows2, denies2) = daemon.stats().unwrap();
+        assert_eq!(evals2, 2);
+        assert_eq!(allows2, 1);
+        assert_eq!(denies2, 1);
     }
 }
