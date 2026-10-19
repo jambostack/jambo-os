@@ -767,6 +767,13 @@ pub extern "C" fn _start() -> ! {
         "Échec du test des paquets déclaratifs jambo-pkgd, mises à jour A/B et JamboSDK"
     );
 
+    // 10duodecies. Validation du Sous-Système IA Local & Similarité Vectorielle (Phase 49 - v0.2.47)
+    let ai_success = sched::execute_local_ai_test();
+    assert!(
+        ai_success,
+        "Échec du test du sous-système d'IA locale jambo-aid et similarité vectorielle"
+    );
+
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
 
     arch::init_iommu();
@@ -911,14 +918,17 @@ pub extern "C" fn _start() -> ! {
     kprintln!(
         "\x1b[1;32m[PASS] Phase 48 Declarative Packages (JamboPkg), A/B Atomic Updates & SDK Complete\x1b[0m"
     );
+    kprintln!(
+        "\x1b[1;32m[PASS] Phase 49 Local AI Subsystem (jambo-aid) & Intent Orchestrator Complete\x1b[0m"
+    );
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.46 (Paquets Déclaratifs JPkg, Mises à jour A/B & SDK)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.47 (IA Locale jambo-aid & Orchestrateur d'Intents)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.46 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.47 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );

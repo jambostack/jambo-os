@@ -227,7 +227,7 @@ impl IntentOrchestrator {
     pub fn parse_intent(&mut self, text: &str) -> IntentAction {
         self.intents_parsed = self.intents_parsed.wrapping_add(1);
 
-        if text.contains("terminal") || text.contains("console") {
+        if text.contains("terminal") || text.contains("console") || text.contains("term") {
             IntentAction::LaunchApplication("jambo-term")
         } else if text.contains("capstat") || text.contains("permissions") {
             IntentAction::InspectSystemCapabilities
@@ -247,6 +247,47 @@ impl IntentOrchestrator {
         } else {
             IntentAction::UnknownIntent
         }
+    }
+}
+
+/// Démon principal du sous-système d'IA locale JamboAI
+pub struct JamboAiDaemon {
+    pub index: SemanticIndex,
+    pub orchestrator: IntentOrchestrator,
+    pub queries_handled: u64,
+}
+
+impl Default for JamboAiDaemon {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl JamboAiDaemon {
+    pub const fn new() -> Self {
+        Self {
+            index: SemanticIndex::new(),
+            orchestrator: IntentOrchestrator::new(),
+            queries_handled: 0,
+        }
+    }
+
+    /// Analyse une requête utilisateur et la convertit en intention structurée
+    pub fn handle_query(&mut self, query: &str) -> IntentAction {
+        self.queries_handled = self.queries_handled.wrapping_add(1);
+        self.orchestrator.parse_intent(query)
+    }
+
+    /// Indexe un texte en calculant automatiquement son embedding
+    pub fn index_text(&mut self, id: u64, path: &'static str, text: &str) -> Result<(), SysError> {
+        let embedding = VectorEmbedding::from_text(text);
+        self.index.insert(id, path, embedding)
+    }
+
+    /// Recherche sémantique par similarité cosinus
+    pub fn search(&self, text: &str) -> Option<(&'static str, i32)> {
+        let query_vec = VectorEmbedding::from_text(text);
+        self.index.search_nearest(&query_vec)
     }
 }
 

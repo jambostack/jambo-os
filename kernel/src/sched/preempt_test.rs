@@ -93,22 +93,21 @@ pub fn execute_preemption_test() -> bool {
     );
     EevdfScheduler::reschedule();
 
-    // 5. La reprise d'exécution ICI démontre que le Timer APIC a interrompu le travailleur
+    // 5. La reprise d'exécution ICI démontre que le Timer APIC a interrompu le travailleur.
+    // Désactiver immédiatement les interruptions et stopper le timer pour figer l'environnement de test.
+    unsafe {
+        core::arch::asm!("cli", options(nomem, nostack));
+    }
+    crate::arch::apic_stop_timer();
+    TEST_COMPLETE.store(true, Ordering::Release);
+    worker_thread.lock().state = ThreadState::Exited;
+    SCHEDULER.lock().remove_thread(888);
+
     let ticks = COMPUTE_TICKS.load(Ordering::Acquire);
     kprintln!(
         "[PREEMPT/SUCCESS] Préemption matérielle réussie ! Le superviseur a repris la main après {} cycles de calcul du travailleur.",
         ticks
     );
-
-    // Arrêter immédiatement le timer matériel pour éviter toute interruption intempestive
-    crate::arch::apic_stop_timer();
-    TEST_COMPLETE.store(true, Ordering::Release);
-    worker_thread.lock().state = ThreadState::Exited;
-
-    // Désactiver les interruptions pour les phases séquentielles suivantes
-    unsafe {
-        core::arch::asm!("cli", options(nomem, nostack));
-    }
 
     kprintln!("[PREEMPT/DONE] Ordonnancement préemptif EEVDF validé avec succès.");
     true

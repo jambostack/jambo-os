@@ -24,6 +24,11 @@ impl EevdfScheduler {
         self.runqueue.push(thread);
     }
 
+    /// Retire un thread de la file d'attente par son TID
+    pub fn remove_thread(&mut self, tid: u64) {
+        self.runqueue.retain(|t| t.lock().id != tid);
+    }
+
     /// Sélectionne le thread ayant la plus petite échéance virtuelle (Earliest Eligible Virtual Deadline)
     pub fn pick_next(&mut self) -> Option<Arc<Mutex<Thread>>> {
         if self.runqueue.is_empty() {

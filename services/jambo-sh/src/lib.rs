@@ -100,6 +100,7 @@ pub struct JamboShell {
     pub net_cap: jambo_netd::NetworkCapability,
     pub comp: jambo_comp::JamboComp,
     pub pkgd: jambo_pkgd::JamboPkgDaemon,
+    pub aid: jambo_aid::JamboAiDaemon,
 }
 
 impl Default for JamboShell {
@@ -121,6 +122,17 @@ impl JamboShell {
             1,
             65535,
         );
+        let mut aid = jambo_aid::JamboAiDaemon::new();
+        let _ = aid.index_text(
+            1,
+            "/docs/architecture.md",
+            "microkernel capability security cspace vfs",
+        );
+        let _ = aid.index_text(
+            2,
+            "/docs/networking.md",
+            "ethernet virtio socket tcp ip packet",
+        );
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -129,6 +141,7 @@ impl JamboShell {
             net_cap,
             comp: jambo_comp::JamboComp::new(1920, 1080, 60),
             pkgd: jambo_pkgd::JamboPkgDaemon::new(),
+            aid,
         }
     }
 
@@ -236,6 +249,7 @@ impl JamboShell {
                 emit("  gui [cmd]    - Interface graphique JamboComp, VirtIO-GPU et JamboUI\n");
                 emit("  compat [cmd] - Couche de compatibilité binaire Linux ELF POSIX\n");
                 emit("  wasm [cmd]   - Runtime d'exécution WebAssembly & sandbox WASI\n");
+                emit("  ai [cmd]     - Sous-système d'IA locale, similarité vectorielle et intents\n");
                 emit("  echo <args>  - Affiche les arguments sur la sortie console\n");
                 emit("  clear        - Efface l'écran du terminal (ANSI escape)\n");
                 emit("  reboot       - Redémarre la machine\n");
@@ -243,7 +257,7 @@ impl JamboShell {
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.2.46 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.2.47 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -842,6 +856,120 @@ impl JamboShell {
                     }
                     _ => {
                         emit("Usage: sdk [status | run <app>]\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                }
+            }
+            "ai" => {
+                let subcmd = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    "status"
+                };
+                match subcmd {
+                    "status" => {
+                        emit("JamboAI Subsystem: Active (Ring 3 isolated, Dim: 8, Zero-Ambient)\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "ask" => {
+                        let prompt = if let Some(p) = line.trim().strip_prefix("ai ask") {
+                            let p = p.trim();
+                            if p.is_empty() {
+                                "lance le terminal"
+                            } else {
+                                p
+                            }
+                        } else {
+                            "lance le terminal"
+                        };
+                        let intent = self.aid.handle_query(prompt);
+                        emit("[AI] Intention détectée : ");
+                        match intent {
+                            jambo_aid::IntentAction::LaunchApplication(app) => {
+                                emit("Lancer l'application '");
+                                emit(app);
+                                emit("'\n");
+                            }
+                            jambo_aid::IntentAction::InspectSystemCapabilities => {
+                                emit("Inspecter les capacités CSpace du système\n");
+                            }
+                            jambo_aid::IntentAction::QuerySystemMetrics => {
+                                emit("Consulter les métriques CPU/mémoire en temps réel\n");
+                            }
+                            jambo_aid::IntentAction::SearchSemanticFile(f) => {
+                                emit("Recherche sémantique du fichier '");
+                                emit(f);
+                                emit("'\n");
+                            }
+                            jambo_aid::IntentAction::ConfigureNetwork { interface, dhcp } => {
+                                emit("Configurer l'interface '");
+                                emit(interface);
+                                emit(if dhcp {
+                                    "' via DHCP\n"
+                                } else {
+                                    "' en IP statique\n"
+                                });
+                            }
+                            jambo_aid::IntentAction::PerformStorageBackup { destination } => {
+                                emit("Sauvegarde vers '");
+                                emit(destination);
+                                emit("'\n");
+                            }
+                            jambo_aid::IntentAction::UnknownIntent => {
+                                emit("Intention non reconnue\n");
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "search" => {
+                        let query = if let Some(q) = line.trim().strip_prefix("ai search") {
+                            let q = q.trim();
+                            if q.is_empty() {
+                                "security"
+                            } else {
+                                q
+                            }
+                        } else {
+                            "security"
+                        };
+                        match self.aid.search(query) {
+                            Some((path, score)) => {
+                                emit("[AI] Document le plus pertinent : '");
+                                emit(path);
+                                emit("' (score : ");
+                                let mut b = [0u8; 20];
+                                emit(format_u64(score.max(0) as u64, &mut b));
+                                emit(")\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            None => {
+                                emit("[AI] Aucun document pertinent trouvé\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                        }
+                    }
+                    "embed" => {
+                        let text = if let Some(t) = line.trim().strip_prefix("ai embed") {
+                            let t = t.trim();
+                            if t.is_empty() {
+                                "kernel"
+                            } else {
+                                t
+                            }
+                        } else {
+                            "kernel"
+                        };
+                        let vec = jambo_aid::VectorEmbedding::from_text(text);
+                        emit("[AI] Embedding calculé (Norme : ");
+                        let mut b = [0u8; 20];
+                        emit(format_u64(vec.norm() as u64, &mut b));
+                        emit(")\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    _ => {
+                        emit(
+                            "Usage: ai [status | ask <prompt> | search <query> | embed <texte>]\n",
+                        );
                         (ShellStatus::Success, write_pos)
                     }
                 }

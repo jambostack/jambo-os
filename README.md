@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.46-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.47-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.46 (Gestionnaire de Paquets Déclaratifs jambo-pkgd, Mises à Jour A/B & JamboSDK)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. Après l'intégration de la couche de compatibilité Linux POSIX et du runtime WASI (`v0.2.45`), la version `v0.2.46` apporte le gestionnaire de paquets immuables déclaratifs avec intégrité BLAKE3 et signatures Ed25519 (`services/jambo-pkgd`), le partitionnement transactionnel dual-slot A/B avec bascule atomique O(1) et rollback automatique sur échec de boot, ainsi que le kit de développement applicatif natif (`libs/jambo-sdk`) et les commandes `jpkg` et `sdk` dans le shell `jsh`.
+> **Statut du Projet : Version v0.2.47 (Sous-Système IA Local jambo-aid & Orchestrateur d'Intents)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. Après l'intégration du gestionnaire de paquets déclaratifs et des mises à jour A/B (`v0.2.46`), la version `v0.2.47` introduit le sous-système d'IA locale en espace utilisateur (`services/jambo-aid`) avec calcul d'embeddings vectoriels fixed-point (`VectorEmbedding`), similarité cosinus normalisée, index sémantique Top-K (`SemanticIndex`), et orchestrateur d'intentions typées en langage naturel sans autorité ambiante (`ai [ask | search | embed | status]` dans `jsh`).
 
 ---
 
