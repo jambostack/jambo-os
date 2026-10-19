@@ -128,6 +128,7 @@ pub struct JamboShell {
     pub logd: jambo_logd::JamboLogDaemon,
     pub bpf: jambo_bpfd::JamboBpfDaemon,
     pub ipc: jambo_ipcd::JamboIpcDaemon,
+    pub secpolicy: jambo_secpolicyd::JamboSecPolicyDaemon,
 }
 
 impl Default for JamboShell {
@@ -248,6 +249,14 @@ impl JamboShell {
             Some([0x3au8; 32]),
         );
         let _ = ipc.add_route(&ipc_cap, 2, 1, 10, 500, true);
+        let secpolicy_cap = jambo_secpolicyd::SecPolicyCap::new(
+            libjambo::Handle::new(7801, 1),
+            jambo_secpolicyd::secpolicy_rights::ALL,
+        );
+        let secpolicy_priv = [0x78u8; 32];
+        let secpolicy_pub = [0x78u8; 32];
+        let mut secpolicy = jambo_secpolicyd::JamboSecPolicyDaemon::new(1, secpolicy_cap, secpolicy_priv, secpolicy_pub);
+        let _ = secpolicy.register_remote_node(&secpolicy_cap, 2, [0x55u8; 32]);
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -284,6 +293,7 @@ impl JamboShell {
             logd,
             bpf,
             ipc,
+            secpolicy,
         }
     }
 
@@ -430,6 +440,7 @@ impl JamboShell {
                 emit("  init [cmd]   - Superviseur PID 1, cycle de vie et DAG de services\n");
                 emit("  bpf [cmd]    - Moteur eBPF souverain et filtrage réseau XDP\n");
                 emit("  ipc [cmd]    - Multiplexeur IPC distribué et passerelle déterministe\n");
+                emit("  secpolicy [cmd] - Attestation matérielle TPM 2.0 et confinement de grappe\n");
                 emit("  echo <args>  - Affiche les arguments sur la sortie console\n");
                 emit("  clear        - Efface l'écran du terminal (ANSI escape)\n");
                 emit("  reboot       - Redémarre la machine\n");
@@ -437,7 +448,7 @@ impl JamboShell {
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.2.75 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.2.76 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -1279,6 +1290,165 @@ impl JamboShell {
                     }
                     _ => {
                         emit("Usage: ipc [status | channels | routes | send <chan_id> <msg> | dispatch]\n");
+                        (ShellStatus::ExecutionFailed, write_pos)
+                    }
+                }
+            }
+            "secpolicy" => {
+                let sec_cap = self.secpolicy.cap;
+                let subcmd = if parsed.arg_count > 1 { parsed.args[1] } else { "status" };
+                match subcmd {
+                    "status" => {
+                        let mut b = [0u8; 20];
+                        emit("=== ATTESTATION MATÉRIELLE TPM 2.0 ET CONFINEMENT DE GRAPPE (jambo-secpolicyd) ===\n");
+                        emit("Nœud local : #");
+                        emit(format_u64(self.secpolicy.local_node_id, &mut b));
+                        emit("\nSpécification TPM : TPM 2.0 (TCG PC Client Compatible)\n");
+                        emit("Registres PCR actifs : 24 (PCR 0..23 SHA-256)\n");
+                        if let Ok(st) = self.secpolicy.stats(&sec_cap) {
+                            emit("Citations générées : ");
+                            emit(format_u64(st.quotes_generated, &mut b));
+                            emit(" | Citations vérifiées : ");
+                            emit(format_u64(st.quotes_verified, &mut b));
+                            emit("\nAttestations réussies : ");
+                            emit(format_u64(st.attestations_passed, &mut b));
+                            emit(" | Altérations détectées : ");
+                            emit(format_u64(st.attestations_failed, &mut b));
+                            emit("\nNœuds en quarantaine : ");
+                            emit(format_u64(st.nodes_quarantined, &mut b));
+                            emit(" | Extensions PCR : ");
+                            emit(format_u64(st.pcrs_extended, &mut b));
+                            emit("\n");
+                        }
+                        emit("\n--- Nœuds Actifs de la Grappe ---\n");
+                        emit("NODE ID    CONFINEMENT    STATUS         DERNIÈRE ATTESTATION\n");
+                        for n in self.secpolicy.nodes.iter() {
+                            if n.is_active {
+                                emit("#");
+                                emit(format_u64(n.node_id, &mut b));
+                                emit("         ");
+                                emit(n.confinement.as_str());
+                                emit("      ");
+                                if n.confinement == jambo_secpolicyd::ConfinementState::Trusted {
+                                    emit("SAIN           ");
+                                } else {
+                                    emit("CONFINÉ        ");
+                                }
+                                emit("Tick ");
+                                emit(format_u64(n.last_attested_ticks, &mut b));
+                                emit("\n");
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "pcrs" => {
+                        let mut b = [0u8; 20];
+                        emit("=== REGISTRES PCR TPM 2.0 (BANQUE SHA-256) ===\n");
+                        let pcr_names = [
+                            "Firmware/CRTM", "HW Platform Config", "Option ROM Code", "Option ROM Config",
+                            "Limine Bootloader", "GPT / Boot Config", "ACPI State / S0", "Secure Boot Policy",
+                            "JamboKernel ELF", "Initrd Ramdisk", "IMA Integrity", "Security Policy",
+                            "Cluster Credentials", "Userspace Services", "TPM EK Cert Stamp", "Consensus Epoch",
+                        ];
+                        for i in 0..16 {
+                            if let Some(pcr_val) = self.secpolicy.pcr_bank.get_pcr(i) {
+                                emit("PCR #");
+                                emit(format_u64(i as u64, &mut b));
+                                emit(" (");
+                                emit(pcr_names[i]);
+                                emit(") : ");
+                                for byte in pcr_val.iter().take(8) {
+                                    emit(format_hex_u64(*byte as u64, &mut b));
+                                    emit(" ");
+                                }
+                                emit("...\n");
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "verify" => {
+                        if parsed.arg_count < 3 {
+                            emit("Usage: secpolicy verify <node_id>\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        } else {
+                            let node_id = parse_u64(parsed.args[2]).unwrap_or(2);
+                            let mut b = [0u8; 20];
+                            let challenge_nonce = self.secpolicy.generate_challenge_nonce(&sec_cap, 500).unwrap_or([0u8; 32]);
+                            let mut remote_sim = jambo_secpolicyd::JamboSecPolicyDaemon::new(
+                                node_id,
+                                sec_cap,
+                                [0x55u8; 32],
+                                [0x55u8; 32],
+                            );
+                            let quote = remote_sim.generate_quote(
+                                &sec_cap,
+                                jambo_secpolicyd::DEFAULT_CRITICAL_PCR_MASK,
+                                &challenge_nonce,
+                                505,
+                            );
+                            match quote {
+                                Ok(q) => {
+                                    match self.secpolicy.verify_remote_attestation(
+                                        &sec_cap,
+                                        &q,
+                                        &challenge_nonce,
+                                        jambo_secpolicyd::DEFAULT_CRITICAL_PCR_MASK,
+                                        510,
+                                    ) {
+                                        Ok(res) => {
+                                            emit("[SECPOLICY] Nœud #");
+                                            emit(format_u64(node_id, &mut b));
+                                            emit(" : Attestation matérielle TPM 2.0 validée (");
+                                            emit(res.as_str());
+                                            emit(") - Statut: TRUSTED\n");
+                                            (ShellStatus::Success, write_pos)
+                                        }
+                                        Err(_) => {
+                                            emit("secpolicy: échec de la vérification de l'attestation\n");
+                                            (ShellStatus::ExecutionFailed, write_pos)
+                                        }
+                                    }
+                                }
+                                Err(_) => {
+                                    emit("secpolicy: génération de citation impossible\n");
+                                    (ShellStatus::ExecutionFailed, write_pos)
+                                }
+                            }
+                        }
+                    }
+                    "confine" => {
+                        if parsed.arg_count < 4 {
+                            emit("Usage: secpolicy confine <node_id> <trusted|strict|quarantine|revoked>\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        } else {
+                            let node_id = parse_u64(parsed.args[2]).unwrap_or(2);
+                            let mode_str = parsed.args[3];
+                            let state = match mode_str {
+                                "trusted" => jambo_secpolicyd::ConfinementState::Trusted,
+                                "strict" => jambo_secpolicyd::ConfinementState::Strict,
+                                "quarantine" => jambo_secpolicyd::ConfinementState::Quarantine,
+                                "revoked" => jambo_secpolicyd::ConfinementState::Revoked,
+                                _ => jambo_secpolicyd::ConfinementState::Quarantine,
+                            };
+                            let mut b = [0u8; 20];
+                            match self.secpolicy.set_node_confinement(&sec_cap, node_id, state, "MANUAL_CLI_ENFORCE") {
+                                Ok(_) => {
+                                    emit("[SECPOLICY] Confinement du nœud #");
+                                    emit(format_u64(node_id, &mut b));
+                                    emit(" mis à jour: ");
+                                    emit(state.as_str());
+                                    emit("\n");
+                                    (ShellStatus::Success, write_pos)
+                                }
+                                Err(_) => {
+                                    emit("secpolicy: échec de la modification du confinement\n");
+                                    (ShellStatus::ExecutionFailed, write_pos)
+                                }
+                            }
+                        }
+                    }
+                    _ => {
+                        emit("Usage: secpolicy [status | pcrs | verify <node_id> | confine <node_id> <mode>]\n");
                         (ShellStatus::ExecutionFailed, write_pos)
                     }
                 }

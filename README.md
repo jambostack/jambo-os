@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.75-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.76-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.75 (Multiplexeur et Passerelle de Messagerie IPC Distribuée jambo-ipcd)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.75` introduit le multiplexeur et passerelle de messagerie IPC distribuée (`services/jambo-ipcd`), doté du chiffrement symétrique in-situ avec authentification par étiquette MAC (16 octets), d'un ordonnancement déterministe strict par classes de priorité (`Critical` > `High` > `Normal` > `Background`), d'une immunité totale contre le rejeu de trames (`sequence > rx_sequence`), du confinement capabilaire sans autorité ambiante `IpcCap`, d'une table de routage inter-nœuds avec bornage temporel (`max_latency_bound_us`), et des commandes shell interactives `ipc [status | channels | routes | send <chan_id> <msg> | dispatch]` dans `jsh`.
+> **Statut du Projet : Version v0.2.76 (Attestation Matérielle Distante TPM 2.0 & Confinement de Grappe jambo-secpolicyd)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.76` introduit le démon d'attestation matérielle TPM 2.0 et de confinement de grappe (`services/jambo-secpolicyd`), doté de la gestion des registres PCR (PCR 0..23) avec extensions cryptographiques SHA-256 conformes TCG, d'un journal d'événements de démarrage mesuré borné (`EventLog`), de la génération de citations cryptographiques signées asymétriquement (`TpmQuote`), d'un protocole défi-réponse par nonce frais interdisant le rejeu de trames, de la vérification d'intégrité de démarrage mesuré contre une baseline saine (Golden Baseline), du confinement automatique Zero-Trust en quarantaine ou révocation des nœuds compromis, du contrôle d'accès capabilaire `SecPolicyCap`, et des commandes shell interactives `secpolicy [status | pcrs | verify <node_id> | confine <node_id> <mode>]` dans `jsh`.
 
 ---
 
@@ -159,6 +159,7 @@ jambo-os/
 │   ├── jambo-raft/          # Moteur de consensus distribué Raft et réplication d'état
 │   ├── jambo-rpc/           # Bus RPC distribué et capacités de cluster
 │   ├── jambo-schedd/        # Ordonnanceur distribué de charges de travail et micro-VMs
+│   ├── jambo-secpolicyd/    # Démon d'attestation matérielle TPM 2.0 et confinement de grappe
 │   ├── jambo-serviced/      # Registre de découverte de services & résolution de noms
 │   ├── jambo-sh/            # Shell interactif orienté objets
 │   ├── jambo-timed/         # Synchronisation horlogère distribuée PTP/NTP haute précision
