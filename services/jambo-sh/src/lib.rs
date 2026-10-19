@@ -119,6 +119,7 @@ pub struct JamboShell {
     pub gw: jambo_gwd::JamboGatewayDaemon,
     pub vault: jambo_vaultd::JamboVaultDaemon,
     pub metrics: jambo_metricsd::JamboMetricsDaemon,
+    pub service: jambo_serviced::JamboServiceDaemon,
 }
 
 impl Default for JamboShell {
@@ -177,6 +178,7 @@ impl JamboShell {
         let gw = jambo_gwd::JamboGatewayDaemon::new();
         let vault = jambo_vaultd::JamboVaultDaemon::new();
         let metrics = jambo_metricsd::JamboMetricsDaemon::new();
+        let service = jambo_serviced::JamboServiceDaemon::new();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -204,6 +206,7 @@ impl JamboShell {
             gw,
             vault,
             metrics,
+            service,
         }
     }
 
@@ -342,6 +345,7 @@ impl JamboShell {
                     "  vault [cmd]  - Coffre-fort de secrets distribué et déverrouillage à seuil\n",
                 );
                 emit("  metrics [cmd]- Métriques chronologiques et télémétrie de grappe\n");
+                emit("  service [cmd]- Découverte de services et résolution de noms\n");
                 emit("  echo <args>  - Affiche les arguments sur la sortie console\n");
                 emit("  clear        - Efface l'écran du terminal (ANSI escape)\n");
                 emit("  reboot       - Redémarre la machine\n");
@@ -349,7 +353,7 @@ impl JamboShell {
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.2.65 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.2.66 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -2947,6 +2951,159 @@ impl JamboShell {
                     }
                     _ => {
                         emit("Usage: metrics [status | query <name> | ingest <name> <val>]\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                }
+            }
+            "service" => {
+                let sub = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    ""
+                };
+                match sub {
+                    "status" => {
+                        let mut b = [0u8; 20];
+                        emit("=== DÉCOUVERTE DE SERVICES DISTRIBUÉE (jambo-serviced) ===\n");
+                        emit("Services déclarés      : ");
+                        emit(format_u64(self.service.service_count() as u64, &mut b));
+                        emit("\nOpérations traitées    : ");
+                        emit(format_u64(self.service.operations_count, &mut b));
+                        emit("\nRésolution dynamique   : Multi-Endpoints & Failover\n");
+                        emit("Gestion des baux       : Heartbeat & TTL automatique\n");
+                        emit("Confinement            : DiscoveryCap (Zero-Ambient Authority)\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "resolve" => {
+                        let name = if parsed.arg_count > 2 {
+                            parsed.args[2]
+                        } else {
+                            "kvd.service"
+                        };
+                        let mut eps = [([0u8; 4], 0u16); 4];
+                        match self.service.resolve(name.as_bytes(), 100, &mut eps) {
+                            Ok(count) => {
+                                let mut b = [0u8; 20];
+                                emit("[SERVICE/RESOLVE] Résolution de '");
+                                emit(name);
+                                emit("' -> ");
+                                emit(format_u64(count as u64, &mut b));
+                                emit(" instance(s) saine(s)\n");
+                                for i in 0..count {
+                                    let (ip, port) = eps[i];
+                                    emit("  Instance ");
+                                    emit(format_u64((i + 1) as u64, &mut b));
+                                    emit(": ");
+                                    emit(format_u64(ip[0] as u64, &mut b));
+                                    emit(".");
+                                    emit(format_u64(ip[1] as u64, &mut b));
+                                    emit(".");
+                                    emit(format_u64(ip[2] as u64, &mut b));
+                                    emit(".");
+                                    emit(format_u64(ip[3] as u64, &mut b));
+                                    emit(":");
+                                    emit(format_u64(port as u64, &mut b));
+                                    emit("\n");
+                                }
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("[SERVICE] Échec de la résolution (service introuvable ou droits insuffisants)\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "register" => {
+                        let name = if parsed.arg_count > 2 {
+                            parsed.args[2]
+                        } else {
+                            "api.service"
+                        };
+                        let inst_id: u32 = if parsed.arg_count > 3 {
+                            parse_u64(parsed.args[3]).unwrap_or(10) as u32
+                        } else {
+                            10
+                        };
+                        match self.service.register(
+                            name.as_bytes(),
+                            inst_id,
+                            [10, 0, 1, 5],
+                            8080,
+                            1,
+                            60,
+                            100,
+                        ) {
+                            Ok(_) => {
+                                let mut b = [0u8; 20];
+                                emit("[SERVICE/REGISTER] Service '");
+                                emit(name);
+                                emit("' enregistré avec succès (Instance ID: ");
+                                emit(format_u64(inst_id as u64, &mut b));
+                                emit(", Endpoint: 10.0.1.5:8080, TTL: 60s)\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("[SERVICE] Échec de l'enregistrement (limite atteinte ou droits insuffisants)\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "heartbeat" => {
+                        let name = if parsed.arg_count > 2 {
+                            parsed.args[2]
+                        } else {
+                            "kvd.service"
+                        };
+                        let inst_id: u32 = if parsed.arg_count > 3 {
+                            parse_u64(parsed.args[3]).unwrap_or(1) as u32
+                        } else {
+                            1
+                        };
+                        match self.service.heartbeat(name.as_bytes(), inst_id, 120) {
+                            Ok(_) => {
+                                let mut b = [0u8; 20];
+                                emit("[SERVICE/HEARTBEAT] Bail renouvelé pour '");
+                                emit(name);
+                                emit("' (Instance ID: ");
+                                emit(format_u64(inst_id as u64, &mut b));
+                                emit(")\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("[SERVICE] Instance introuvable pour le battement de cœur\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "deregister" => {
+                        let name = if parsed.arg_count > 2 {
+                            parsed.args[2]
+                        } else {
+                            "kvd.service"
+                        };
+                        let inst_id: u32 = if parsed.arg_count > 3 {
+                            parse_u64(parsed.args[3]).unwrap_or(1) as u32
+                        } else {
+                            1
+                        };
+                        match self.service.deregister(name.as_bytes(), inst_id) {
+                            Ok(_) => {
+                                let mut b = [0u8; 20];
+                                emit("[SERVICE/DEREGISTER] Instance ");
+                                emit(format_u64(inst_id as u64, &mut b));
+                                emit(" retirée avec succès de '");
+                                emit(name);
+                                emit("'\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("[SERVICE] Instance introuvable pour le dé-enregistrement\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    _ => {
+                        emit("Usage: service [status | resolve <name> | register <name> <id> | heartbeat <name> <id> | deregister <name> <id>]\n");
                         (ShellStatus::Success, write_pos)
                     }
                 }

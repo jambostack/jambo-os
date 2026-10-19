@@ -326,6 +326,111 @@ impl ServiceRegistry {
     }
 }
 
+/// Démon orchestrateur de découverte de services et résolution de noms (`jambo-serviced`).
+pub struct JamboServiceDaemon {
+    pub registry: ServiceRegistry,
+    pub cap: DiscoveryCap,
+    pub operations_count: u64,
+}
+
+impl Default for JamboServiceDaemon {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl JamboServiceDaemon {
+    pub fn new() -> Self {
+        let cap = DiscoveryCap::new(Handle::new(6801, 1), discovery_rights::ALL);
+        let mut registry = ServiceRegistry::new();
+        // Services systèmes pré-enregistrés par défaut
+        let _ =
+            registry.register_instance(&cap, b"kvd.service", 1, [127, 0, 0, 1], 7001, 1, 300, 100);
+        let _ = registry.register_instance(
+            &cap,
+            b"meshd.service",
+            1,
+            [127, 0, 0, 1],
+            8001,
+            1,
+            300,
+            100,
+        );
+        Self {
+            registry,
+            cap,
+            operations_count: 2,
+        }
+    }
+
+    pub fn register(
+        &mut self,
+        service_name: &[u8],
+        instance_id: u32,
+        ip: [u8; 4],
+        port: u16,
+        node_id: u16,
+        ttl_seconds: u32,
+        now: u64,
+    ) -> Result<(), SysError> {
+        self.registry.register_instance(
+            &self.cap,
+            service_name,
+            instance_id,
+            ip,
+            port,
+            node_id,
+            ttl_seconds,
+            now,
+        )?;
+        self.operations_count = self.operations_count.saturating_add(1);
+        Ok(())
+    }
+
+    pub fn heartbeat(
+        &mut self,
+        service_name: &[u8],
+        instance_id: u32,
+        now: u64,
+    ) -> Result<(), SysError> {
+        self.registry
+            .heartbeat(&self.cap, service_name, instance_id, now)?;
+        self.operations_count = self.operations_count.saturating_add(1);
+        Ok(())
+    }
+
+    pub fn deregister(&mut self, service_name: &[u8], instance_id: u32) -> Result<(), SysError> {
+        self.registry
+            .deregister_instance(&self.cap, service_name, instance_id)?;
+        self.operations_count = self.operations_count.saturating_add(1);
+        Ok(())
+    }
+
+    pub fn resolve(
+        &self,
+        service_name: &[u8],
+        now: u64,
+        out_endpoints: &mut [([u8; 4], u16)],
+    ) -> Result<usize, SysError> {
+        self.registry
+            .resolve(&self.cap, service_name, now, out_endpoints)
+    }
+
+    pub fn purge_expired(&mut self, now: u64) -> usize {
+        let purged = self.registry.purge_expired(now);
+        self.operations_count = self.operations_count.saturating_add(purged as u64);
+        purged
+    }
+
+    pub fn service_count(&self) -> usize {
+        self.registry.service_count()
+    }
+
+    pub fn instance_count(&self, service_name: &[u8]) -> Result<usize, SysError> {
+        self.registry.instance_count(service_name)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -432,5 +537,27 @@ mod tests {
         let res =
             reg.register_instance(&cap_resolve_only, b"test", 1, [127, 0, 0, 1], 80, 1, 60, 0);
         assert_eq!(res, Err(SysError::PermissionDenied));
+    }
+
+    #[test]
+    fn test_service_daemon() {
+        let mut daemon = JamboServiceDaemon::new();
+        assert_eq!(daemon.service_count(), 2);
+        assert_eq!(daemon.instance_count(b"kvd.service").unwrap(), 1);
+
+        let mut eps = [([0u8; 4], 0u16); 4];
+        let n = daemon.resolve(b"kvd.service", 150, &mut eps).unwrap();
+        assert_eq!(n, 1);
+        assert_eq!(eps[0], ([127, 0, 0, 1], 7001));
+
+        daemon
+            .register(b"api.service", 10, [192, 168, 1, 50], 443, 2, 60, 200)
+            .unwrap();
+        assert_eq!(daemon.service_count(), 3);
+        assert_eq!(daemon.instance_count(b"api.service").unwrap(), 1);
+
+        daemon.heartbeat(b"api.service", 10, 210).unwrap();
+        daemon.deregister(b"api.service", 10).unwrap();
+        assert_eq!(daemon.instance_count(b"api.service").unwrap(), 0);
     }
 }

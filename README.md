@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.65-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.66-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.65 (Métriques Chronologiques & Télémétrie de Grappe jambo-metricsd)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.65` introduit le moteur de métriques en séries temporelles et télémétrie de grappe en espace utilisateur (`services/jambo-metricsd`), implémentant des tampons annulaires circulaires bornés (politique *drop-oldest*), l'évaluation temps-réel de règles d'alerte dynamiques, le calcul de statistiques agrégées (min, max, avg, last), le confinement capabilaire granulaire `MetricsCap` et les commandes interactives `metrics [status | query <name> | ingest <name> <val>]` dans `jsh`.
+> **Statut du Projet : Version v0.2.66 (Découverte de Services & Résolution de Noms jambo-serviced)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.66` introduit le moteur de découverte de services distribuée et résolution de noms en espace utilisateur (`services/jambo-serviced`), implémentant un registre sémantique multi-instances, la résolution dynamique d'adresses (IP:Port), la gestion de baux temporels avec battement de cœur (*heartbeat*) et éviction automatique par TTL, le confinement capabilaire granulaire `DiscoveryCap` et les commandes interactives `service [status | resolve <name> | register <name> <id> | heartbeat <name> <id> | deregister <name> <id>]` dans `jsh`.
 
 ---
 
