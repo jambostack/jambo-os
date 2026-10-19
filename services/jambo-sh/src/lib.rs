@@ -108,6 +108,7 @@ pub struct JamboShell {
     pub crypto: jambo_cryptod::JamboCryptoDaemon,
     pub auth: jambo_authd::JamboAuthDaemon,
     pub vmm: jambo_vmm::JamboVmmDaemon,
+    pub vhost: jambo_vhostd::JamboVhostDaemon,
 }
 
 impl Default for JamboShell {
@@ -152,6 +153,8 @@ impl JamboShell {
         auth.init_defaults();
         let mut vmm = jambo_vmm::JamboVmmDaemon::new();
         vmm.init_defaults();
+        let mut vhost = jambo_vhostd::JamboVhostDaemon::new();
+        vhost.init_defaults();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -168,6 +171,7 @@ impl JamboShell {
             crypto,
             auth,
             vmm,
+            vhost,
         }
     }
 
@@ -287,6 +291,9 @@ impl JamboShell {
                 emit(
                     "  vmm [cmd]    - Micro-hyperviseur utilisateur Type-2 et micro-VMs isolées\n",
                 );
+                emit(
+                    "  vhost [cmd]  - Virtualisation de périphériques vhost-user et E/S découplées\n",
+                );
                 emit("  echo <args>  - Affiche les arguments sur la sortie console\n");
                 emit("  clear        - Efface l'écran du terminal (ANSI escape)\n");
                 emit("  reboot       - Redémarre la machine\n");
@@ -294,7 +301,7 @@ impl JamboShell {
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.2.54 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.2.55 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -1859,6 +1866,125 @@ impl JamboShell {
                     }
                     _ => {
                         emit("Usage: vmm [status | step | run | reset]\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                }
+            }
+            "vhost" => {
+                let sub = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    ""
+                };
+                match sub {
+                    "status" => {
+                        let mut b = [0u8; 20];
+                        let (net_count, blk_count) = self.vhost.active_devices_count();
+                        let (net_tx, net_rx) = self.vhost.net_stats();
+                        let (blk_reads, blk_writes) = self.vhost.blk_stats();
+                        emit("=== VIRTUALISATION DE PÉRIPHÉRIQUES VHOST-USER (jambo-vhostd) ===\n");
+                        emit("Périphériques Net actifs: ");
+                        emit(format_u64(net_count as u64, &mut b));
+                        emit(" (VirtIO-Net #1, MAC: 52:54:00:12:34:56)\n");
+                        emit("Périphériques Blk actifs: ");
+                        emit(format_u64(blk_count as u64, &mut b));
+                        emit(" (VirtIO-Blk #2, Capacité: 2 secteurs / 1024 octets)\n");
+                        emit("Trames réseau TX / RX   : ");
+                        emit(format_u64(net_tx, &mut b));
+                        emit(" / ");
+                        emit(format_u64(net_rx, &mut b));
+                        emit("\nOpérations Blk R / W    : ");
+                        emit(format_u64(blk_reads, &mut b));
+                        emit(" / ");
+                        emit(format_u64(blk_writes, &mut b));
+                        emit("\nModèle d'isolation      : Zero-Copy Shared Ring Buffer (Ring 3 vhost-user)\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "net" => {
+                        if parsed.arg_count < 3 {
+                            emit("Usage: vhost net <payload>\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        } else {
+                            let payload = parsed.args[2];
+                            match self.vhost.transmit_net(payload.as_bytes()) {
+                                Ok(_) => {
+                                    emit("[VHOST-NET] Trame réseau VirtIO-Net transmise avec succès (");
+                                    let mut b = [0u8; 20];
+                                    emit(format_u64(payload.len() as u64, &mut b));
+                                    emit(" octets)\n");
+                                    (ShellStatus::Success, write_pos)
+                                }
+                                Err(_) => {
+                                    emit("[VHOST-NET] Échec de transmission réseau\n");
+                                    (ShellStatus::ExecutionFailed, write_pos)
+                                }
+                            }
+                        }
+                    }
+                    "write" => {
+                        if parsed.arg_count < 4 {
+                            emit("Usage: vhost write <lba> <data>\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        } else {
+                            if let Some(lba) = parse_u64(parsed.args[2]) {
+                                let data = parsed.args[3];
+                                match self.vhost.write_block(lba, data.as_bytes()) {
+                                    Ok(_) => {
+                                        emit("[VHOST-BLK] Écriture bloc LBA #");
+                                        let mut b = [0u8; 20];
+                                        emit(format_u64(lba, &mut b));
+                                        emit(" exécutée avec succès\n");
+                                        (ShellStatus::Success, write_pos)
+                                    }
+                                    Err(_) => {
+                                        emit(
+                                            "[VHOST-BLK] Erreur d'accès bloc ou LBA hors-bornes\n",
+                                        );
+                                        (ShellStatus::ExecutionFailed, write_pos)
+                                    }
+                                }
+                            } else {
+                                emit("[VHOST-BLK] LBA invalide\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "read" => {
+                        if parsed.arg_count < 3 {
+                            emit("Usage: vhost read <lba>\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        } else {
+                            if let Some(lba) = parse_u64(parsed.args[2]) {
+                                let mut read_buf = [0u8; 512];
+                                match self.vhost.read_block(lba, &mut read_buf) {
+                                    Ok(n) => {
+                                        emit("[VHOST-BLK] Données LBA #");
+                                        let mut b = [0u8; 20];
+                                        emit(format_u64(lba, &mut b));
+                                        emit(" (512 octets) : ");
+                                        let print_len = n.min(32);
+                                        if let Ok(s) = core::str::from_utf8(&read_buf[..print_len])
+                                        {
+                                            emit(s.trim_end_matches('\0'));
+                                        } else {
+                                            emit("[données binaires]");
+                                        }
+                                        emit("\n");
+                                        (ShellStatus::Success, write_pos)
+                                    }
+                                    Err(_) => {
+                                        emit("[VHOST-BLK] Erreur de lecture bloc ou LBA hors-bornes\n");
+                                        (ShellStatus::ExecutionFailed, write_pos)
+                                    }
+                                }
+                            } else {
+                                emit("[VHOST-BLK] LBA invalide\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    _ => {
+                        emit("Usage: vhost [status | net <payload> | write <lba> <data> | read <lba>]\n");
                         (ShellStatus::Success, write_pos)
                     }
                 }

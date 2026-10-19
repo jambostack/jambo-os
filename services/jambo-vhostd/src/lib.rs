@@ -408,6 +408,185 @@ impl VhostServer {
     }
 }
 
+/// Démon orchestrateur de virtualisation de périphériques vhost-user (Ring 3)
+pub struct JamboVhostDaemon {
+    pub server: VhostServer,
+    pub admin_cap: VhostCap,
+    pub net_cap: VhostCap,
+    pub blk_cap: VhostCap,
+    pub storage_backend: [u8; 1024],
+}
+
+impl Default for JamboVhostDaemon {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl JamboVhostDaemon {
+    pub fn new() -> Self {
+        let admin_cap = VhostCap::new(Handle::new(57, 1), 0, vhost_rights::ALL);
+        let net_cap = VhostCap::new(
+            Handle::new(57, 2),
+            1,
+            vhost_rights::VHOST_NET_BACKEND
+                | vhost_rights::MEMORY_MAP_SHARED
+                | vhost_rights::KICK_SIGNAL,
+        );
+        let blk_cap = VhostCap::new(
+            Handle::new(57, 3),
+            2,
+            vhost_rights::VHOST_BLK_BACKEND
+                | vhost_rights::MEMORY_MAP_SHARED
+                | vhost_rights::KICK_SIGNAL,
+        );
+        Self {
+            server: VhostServer::new(),
+            admin_cap,
+            net_cap,
+            blk_cap,
+            storage_backend: [0u8; 1024],
+        }
+    }
+
+    /// Initialise les périphériques VirtIO virtuels par défaut (VirtIO-Net #1 et VirtIO-Blk #2)
+    pub fn init_defaults(&mut self) {
+        let net_cap = self.net_cap;
+        let blk_cap = self.blk_cap;
+
+        // 1. VirtIO-Net (id 1, MAC 52:54:00:12:34:56)
+        let _ = self
+            .server
+            .register_net_device(&net_cap, 1, [0x52, 0x54, 0x00, 0x12, 0x34, 0x56]);
+        let _ =
+            self.server
+                .dispatch_request(&net_cap, 1, VhostUserRequest::SetFeatures(0x1_0000_0000));
+        let _ = self.server.dispatch_request(
+            &net_cap,
+            1,
+            VhostUserRequest::SetVringNum { index: 0, num: 64 },
+        );
+        let _ = self.server.dispatch_request(
+            &net_cap,
+            1,
+            VhostUserRequest::SetVringNum { index: 1, num: 64 },
+        );
+
+        // 2. VirtIO-Blk (id 2, 2 secteurs de 512 octets = 1024 octets)
+        let _ = self.server.register_blk_device(&blk_cap, 2, 2);
+        let _ =
+            self.server
+                .dispatch_request(&blk_cap, 2, VhostUserRequest::SetFeatures(0x1_0000_0000));
+        let _ = self.server.dispatch_request(
+            &blk_cap,
+            2,
+            VhostUserRequest::SetVringNum { index: 0, num: 128 },
+        );
+
+        // Initialiser le secteur 0 avec un en-tête JamboOS
+        self.storage_backend[..8].copy_from_slice(b"JAMBOBLK");
+    }
+
+    /// Émet une trame réseau via le périphérique VirtIO-Net
+    pub fn transmit_net(&mut self, packet: &[u8]) -> Result<(), SysError> {
+        let cap = self.net_cap;
+        if let Some(ref mut net_dev) = self.server.net_devices[0] {
+            net_dev.transmit_packet(&cap, packet)
+        } else {
+            Err(SysError::InvalidHandle)
+        }
+    }
+
+    /// Reçoit une trame réseau via le périphérique VirtIO-Net
+    pub fn receive_net(&mut self, buf: &mut [u8], incoming: &[u8]) -> Result<usize, SysError> {
+        let cap = self.net_cap;
+        if let Some(ref mut net_dev) = self.server.net_devices[0] {
+            net_dev.receive_packet(&cap, buf, incoming)
+        } else {
+            Err(SysError::InvalidHandle)
+        }
+    }
+
+    /// Écrit un bloc de 512 octets dans le stockage VirtIO-Blk
+    pub fn write_block(&mut self, sector: u64, data: &[u8]) -> Result<(), SysError> {
+        let cap = self.blk_cap;
+        let offset = (sector as usize) * SECTOR_SIZE;
+        if offset + SECTOR_SIZE > self.storage_backend.len() {
+            return Err(SysError::InvalidArgument);
+        }
+        let storage_slice = &mut self.storage_backend[offset..offset + SECTOR_SIZE];
+        let mut buffer = [0u8; SECTOR_SIZE];
+        let to_copy = data.len().min(SECTOR_SIZE);
+        buffer[..to_copy].copy_from_slice(&data[..to_copy]);
+
+        if let Some(ref mut blk_dev) = self.server.blk_devices[0] {
+            blk_dev.handle_io(
+                &cap,
+                VhostBlkType::Write,
+                sector,
+                &mut buffer,
+                storage_slice,
+            )
+        } else {
+            Err(SysError::InvalidHandle)
+        }
+    }
+
+    /// Lit un bloc de 512 octets depuis le stockage VirtIO-Blk
+    pub fn read_block(&mut self, sector: u64, out_buf: &mut [u8]) -> Result<usize, SysError> {
+        let cap = self.blk_cap;
+        let offset = (sector as usize) * SECTOR_SIZE;
+        if offset + SECTOR_SIZE > self.storage_backend.len() || out_buf.len() < SECTOR_SIZE {
+            return Err(SysError::InvalidArgument);
+        }
+        let storage_slice = &mut self.storage_backend[offset..offset + SECTOR_SIZE];
+        let mut buffer = [0u8; SECTOR_SIZE];
+
+        if let Some(ref mut blk_dev) = self.server.blk_devices[0] {
+            blk_dev.handle_io(&cap, VhostBlkType::Read, sector, &mut buffer, storage_slice)?;
+            out_buf[..SECTOR_SIZE].copy_from_slice(&buffer);
+            Ok(SECTOR_SIZE)
+        } else {
+            Err(SysError::InvalidHandle)
+        }
+    }
+
+    /// Nombre de périphériques actifs (net, blk)
+    pub fn active_devices_count(&self) -> (usize, usize) {
+        let net = self
+            .server
+            .net_devices
+            .iter()
+            .filter(|d| d.is_some())
+            .count();
+        let blk = self
+            .server
+            .blk_devices
+            .iter()
+            .filter(|d| d.is_some())
+            .count();
+        (net, blk)
+    }
+
+    /// Statistiques réseau VirtIO-Net (tx_count, rx_count)
+    pub fn net_stats(&self) -> (u64, u64) {
+        if let Some(ref dev) = self.server.net_devices[0] {
+            (dev.tx_packets_count, dev.rx_packets_count)
+        } else {
+            (0, 0)
+        }
+    }
+
+    /// Statistiques bloc VirtIO-Blk (reads_count, writes_count)
+    pub fn blk_stats(&self) -> (u64, u64) {
+        if let Some(ref dev) = self.server.blk_devices[0] {
+            (dev.reads_count, dev.writes_count)
+        } else {
+            (0, 0)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -506,5 +685,45 @@ mod tests {
             VhostUserRequest::SetVringNum { index: 0, num: 32 },
         );
         assert_eq!(rej, Err(SysError::PermissionDenied));
+    }
+
+    #[test]
+    fn test_vhost_daemon_lifecycle() {
+        let mut daemon = JamboVhostDaemon::new();
+        assert_eq!(daemon.active_devices_count(), (0, 0));
+        daemon.init_defaults();
+        assert_eq!(daemon.active_devices_count(), (1, 1));
+
+        // Test VirtIO-Net transmit & receive
+        let payload = b"VHOST_TEST_ETHERNET_PACKET";
+        assert!(daemon.transmit_net(payload).is_ok());
+        let (tx, rx) = daemon.net_stats();
+        assert_eq!(tx, 1);
+        assert_eq!(rx, 0);
+
+        let mut rx_buf = [0u8; 128];
+        let rx_len = daemon
+            .receive_net(&mut rx_buf, payload)
+            .expect("receive_net");
+        assert_eq!(&rx_buf[..rx_len], payload);
+        let (tx2, rx2) = daemon.net_stats();
+        assert_eq!(tx2, 1);
+        assert_eq!(rx2, 1);
+
+        // Test VirtIO-Blk read & write
+        let mut block_read = [0u8; 512];
+        assert_eq!(daemon.read_block(0, &mut block_read).unwrap(), 512);
+        assert_eq!(&block_read[..8], b"JAMBOBLK");
+
+        let write_data = b"SECTOR_1_DATA_TEST_PAYLOAD";
+        assert!(daemon.write_block(1, write_data).is_ok());
+
+        let mut read_sector1 = [0u8; 512];
+        assert_eq!(daemon.read_block(1, &mut read_sector1).unwrap(), 512);
+        assert_eq!(&read_sector1[..write_data.len()], write_data);
+
+        let (reads, writes) = daemon.blk_stats();
+        assert_eq!(reads, 2);
+        assert_eq!(writes, 1);
     }
 }

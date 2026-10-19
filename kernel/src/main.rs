@@ -823,6 +823,13 @@ pub extern "C" fn _start() -> ! {
         "Échec du test du micro-hyperviseur utilisateur et isolation Type-2"
     );
 
+    // 10vicies. Validation de la Virtualisation de Périphériques vhost-user (Phase 57 - v0.2.55)
+    let vhost_success = sched::execute_vhost_user_test();
+    assert!(
+        vhost_success,
+        "Échec du test de virtualisation de périphériques vhost-user"
+    );
+
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
 
     arch::init_iommu();
@@ -991,14 +998,17 @@ pub extern "C" fn _start() -> ! {
     kprintln!(
         "\x1b[1;32m[PASS] Phase 56 Userspace Micro-VMM & Hardware Type-2 Isolation Complete\x1b[0m"
     );
+    kprintln!(
+        "\x1b[1;32m[PASS] Phase 57 Userspace vhost-user Device Virtualization Complete\x1b[0m"
+    );
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.54 (Micro-Hyperviseur Utilisateur Type-2 jambo-vmm)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.55 (Virtualisation de Périphériques vhost-user jambo-vhostd)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.54 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.55 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
