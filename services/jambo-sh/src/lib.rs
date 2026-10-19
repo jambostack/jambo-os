@@ -125,6 +125,7 @@ pub struct JamboShell {
     pub cert: jambo_certd::JamboCertDaemon,
     pub init: jambo_init::JamboInitDaemon,
     pub dns: jambo_dnsd::JamboDnsDaemon,
+    pub logd: jambo_logd::JamboLogDaemon,
 }
 
 impl Default for JamboShell {
@@ -194,6 +195,13 @@ impl JamboShell {
         );
         let mut dns = jambo_dnsd::JamboDnsDaemon::new(dns_cap);
         let _ = dns.sync_from_service_registry(&dns_cap, &service.registry, 100);
+        let log_cap = jambo_logd::LogCap::new(
+            libjambo::Handle::new(7501, 1),
+            jambo_logd::log_rights::ALL,
+        );
+        let mut logd = jambo_logd::JamboLogDaemon::new(log_cap, 1);
+        let _ = logd.log(&log_cap, jambo_logd::LogLevel::Info, "INIT", "Superviseur PID 1 initialisé", None, None, &[], 100);
+        let _ = logd.log(&log_cap, jambo_logd::LogLevel::Info, "KERNEL", "Micro-noyau JamboOS opérationnel", None, None, &[], 150);
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -227,6 +235,7 @@ impl JamboShell {
             cert,
             init,
             dns,
+            logd,
         }
     }
 
@@ -331,6 +340,7 @@ impl JamboShell {
                 emit("  ping <ip>    - Teste la connectivité réseau ICMP Echo\n");
                 emit("  netstat      - Affiche la table des sockets TCP actives\n");
                 emit("  dns [cmd]    - Serveur & résolveur DNS d'autorité (.jambo) et DoT externe\n");
+                emit("  log [cmd]    - Journalisation structurée (jambo-logd) et agrégation distribuée\n");
                 emit("  gui [cmd]    - Interface graphique JamboComp, VirtIO-GPU et JamboUI\n");
                 emit("  compat [cmd] - Couche de compatibilité binaire Linux ELF POSIX\n");
                 emit("  wasm [cmd]   - Runtime d'exécution WebAssembly & sandbox WASI\n");
@@ -781,6 +791,154 @@ impl JamboShell {
                                 }
                             }
                         }
+                    }
+                }
+            }
+            "log" => {
+                let log_cap = self.logd.cap;
+                let sub = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    "status"
+                };
+                match sub {
+                    "status" => {
+                        let mut b = [0u8; 20];
+                        emit("=== JOURNALISATION STRUCTURÉE ET AGRÉGATION (jambo-logd) ===\n");
+                        if let Ok(stats) = self.logd.stats(&log_cap) {
+                            emit("Entrées enregistrées : ");
+                            emit(format_u64(stats.total_logged, &mut b));
+                            emit("\nEntrées dans le tampon anneau : ");
+                            emit(format_u64(stats.buffer_count as u64, &mut b));
+                            emit(" / ");
+                            emit(format_u64(jambo_logd::RING_BUFFER_CAPACITY as u64, &mut b));
+                            emit("\nEntrées rejetées (overflow) : ");
+                            emit(format_u64(stats.total_dropped, &mut b));
+                            emit("\nRequêtes servies : ");
+                            emit(format_u64(stats.queries_served, &mut b));
+                            emit("\nArchives créées dans jambo-dfsd : ");
+                            emit(format_u64(stats.archives_created as u64, &mut b));
+                            emit("\nEntrées archivées total : ");
+                            emit(format_u64(stats.total_archived_entries, &mut b));
+                            emit("\nIntégrité de la chaîne cryptographique : ");
+                            if self.logd.verify_integrity(&log_cap).unwrap_or(false) {
+                                emit("CONFORME (Inaltérable / Tamper-evident)\n");
+                            } else {
+                                emit("ALTÉRATION DÉTECTÉE !\n");
+                            }
+                        } else {
+                            emit("Erreur lors de la lecture des statistiques jambo-logd\n");
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "tail" => {
+                        let count = if parsed.arg_count > 2 {
+                            parse_u64(parsed.args[2]).unwrap_or(5) as usize
+                        } else {
+                            5
+                        };
+                        let mut records = [jambo_logd::LogRecord::empty(); 16];
+                        match self.logd.tail(&log_cap, count, &mut records) {
+                            Ok(n) => {
+                                let mut text_buf = [0u8; 128];
+                                for i in 0..n {
+                                    let rec = &records[i];
+                                    let len = rec.format_text(&mut text_buf);
+                                    if len > 0 {
+                                        if let Ok(s) = core::str::from_utf8(&text_buf[..len]) {
+                                            emit(s);
+                                            emit("\n");
+                                        }
+                                    }
+                                }
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("log: permission refusée ou erreur de lecture\n");
+                                (ShellStatus::PermissionDenied, write_pos)
+                            }
+                        }
+                    }
+                    "write" => {
+                        if parsed.arg_count < 4 {
+                            emit("Usage: log write <level> <subsystem> <message>\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        } else {
+                            let lvl_str = parsed.args[2];
+                            let lvl = jambo_logd::LogLevel::from_str(lvl_str).unwrap_or(jambo_logd::LogLevel::Info);
+                            let sub_name = parsed.args[3];
+                            let msg = if parsed.arg_count > 4 { parsed.args[4] } else { "Notification système" };
+                            match self.logd.log(&log_cap, lvl, sub_name, msg, None, None, &[], 2000) {
+                                Ok(id) => {
+                                    let mut b = [0u8; 20];
+                                    emit("[LOG] Entrée #");
+                                    emit(format_u64(id, &mut b));
+                                    emit(" consignée et scellée dans l'anneau circulaire\n");
+                                    (ShellStatus::Success, write_pos)
+                                }
+                                Err(_) => {
+                                    emit("log: erreur d'écriture\n");
+                                    (ShellStatus::ExecutionFailed, write_pos)
+                                }
+                            }
+                        }
+                    }
+                    "query" => {
+                        let filter_sub = if parsed.arg_count > 2 { Some(parsed.args[2]) } else { None };
+                        let mut filter = jambo_logd::LogQueryFilter::empty();
+                        filter.subsystem = filter_sub;
+                        let mut records = [jambo_logd::LogRecord::empty(); 16];
+                        match self.logd.query(&log_cap, &filter, &mut records) {
+                            Ok(n) => {
+                                let mut text_buf = [0u8; 128];
+                                for i in 0..n {
+                                    let len = records[i].format_text(&mut text_buf);
+                                    if len > 0 {
+                                        if let Ok(s) = core::str::from_utf8(&text_buf[..len]) {
+                                            emit(s);
+                                            emit("\n");
+                                        }
+                                    }
+                                }
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("log: erreur de recherche\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "archive" => {
+                        let dfs_cap = self.dfs.cap;
+                        let key = [0x5cu8; 32];
+                        match self.logd.archive_to_dfs(&log_cap, &mut self.dfs.store, &dfs_cap, &key, 5000) {
+                            Ok(desc) => {
+                                let mut b = [0u8; 20];
+                                emit("[LOG] Archive #");
+                                emit(format_u64(desc.archive_id as u64, &mut b));
+                                emit(" créée et chiffrée dans jambo-dfsd (Entrées : ");
+                                emit(format_u64(desc.count as u64, &mut b));
+                                emit(")\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("log: échec de l'archivage ou aucune entrée à archiver\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "verify" => {
+                        if self.logd.verify_integrity(&log_cap).unwrap_or(false) {
+                            emit("[LOG/AUDIT] Chaîne cryptographique vérifiée : 100% Intègre et Inviolable\n");
+                            (ShellStatus::Success, write_pos)
+                        } else {
+                            emit("[LOG/AUDIT] ERREUR : Chaîne cryptographique corrompue !\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        }
+                    }
+                    _ => {
+                        emit("Usage: log [status | tail <n> | write <lvl> <sub> <msg> | query [sub] | archive | verify]\n");
+                        (ShellStatus::ExecutionFailed, write_pos)
                     }
                 }
             }

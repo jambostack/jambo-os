@@ -1,0 +1,8 @@
+[package]
+name = "jambo-logd"
+version = "0.2.73"
+edition = "2021"
+
+[dependencies]
+libjambo = { path = "../../libs/libjambo" }
+jambo-dfsd = { path = "../jambo-dfsd" }

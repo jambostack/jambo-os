@@ -946,6 +946,13 @@ pub extern "C" fn _start() -> ! {
         "Échec du test du résolveur et serveur DNS d'autorité de grappe"
     );
 
+    // 10duodevicies. Validation de la Journalisation Structurée & Agrégation Distribuée (Phase 75 - v0.2.73)
+    let log_success = sched::execute_log_daemon_test();
+    assert!(
+        log_success,
+        "Échec du test du démon de journalisation structurée jambo-logd"
+    );
+
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
 
     arch::init_iommu();
@@ -1156,14 +1163,15 @@ pub extern "C" fn _start() -> ! {
     kprintln!("\x1b[1;32m[PASS] Phase 72 Ring-3 PID 1 Supervisor & Service DAG Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 73 Sandboxed WebAssembly Engine & WasmCap Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 74 Cluster Authoritative DNS Resolver & DnsCap Complete\x1b[0m");
+    kprintln!("\x1b[1;32m[PASS] Phase 75 Structured Logging & Distributed Log Aggregation Complete\x1b[0m");
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.72 (Résolveur DNS d'Autorité de Grappe jambo-dnsd)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.73 (Journalisation Structurée & Agrégation Distribuée jambo-logd)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.72 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.73 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );

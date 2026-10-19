@@ -1,7 +1,7 @@
 # ROADMAP DU DÉVELOPPEMENT AUTONOME — JamboOS
 
-> **Dernière mise à jour** : 2026-10-19 14:08 UTC  
-> **Version actuelle** : `v0.2.72`  
+> **Dernière mise à jour** : 2026-10-19 14:22 UTC  
+> **Version actuelle** : `v0.2.73`  
 > **Statut global** : Pré-Alpha active — Micro-noyau de 3e génération orienté capacités (`#![no_std]`)  
 > **Cycle de développement autonome** : 10 minutes via le Planificateur de Tâches & Crons d'Antigravity WebUI  
 
@@ -20,7 +20,7 @@
 
 ## 2. État d'Avancement des Phases d'Ingénierie
 
-### Phases Validées (v0.1.0 à v0.2.72)
+### Phases Validées (v0.1.0 à v0.2.73)
 
 | Jalon / Version | Phase | Composant | Description Technique | Statut |
 | :--- | :---: | :--- | :--- | :--- | :---: |
@@ -61,20 +61,13 @@
 | **v0.2.70** | 72 | Superviseur `jambo-init` | Superviseur PID 1, ordonnancement DAG, auto-guérison, shutdown | ✅ Validé |
 | **v0.2.71** | 73 | Wasm Sandbox `jambo-wasm` | Exécuteur WebAssembly `#![no_std]`, stack machine, WasmCap, WASI | ✅ Validé |
 | **v0.2.72** | 74 | DNS de Grappe `jambo-dnsd` | Résolveur d'autorité `.jambo`, A/AAAA/SRV/TXT/PTR, RFC 1035 wire-format, DnsCap, synchro `jambo-serviced` | ✅ Validé |
+| **v0.2.73** | 75 | Journalisation `jambo-logd` | Journalisation structurée `#![no_std]`, anneau borné haute performance, scellement cryptographique inviolable, LogCap, archivage chiffré `jambo-dfsd` | ✅ Validé |
 
 ---
 
 ## 3. Prochaines Étapes Prioritaires
 
-### 🎯 Prochaine Tâche Immédiate : Phase 75 — v0.2.73
-* **Composant** : `services/jambo-logd`
-* **Objectif** : Journalisation Structurée & Agrégation Distribuée
-* **Tâches précises** :
-  1. Anneau circulaire de logs structurés haute performance avec niveaux de criticité.
-  2. Filtrage capabilaire `LogCap` et archivage chiffré vers `jambo-dfsd`.
-  3. Validation `cargo xtask test` et commit `v0.2.73`.
-
-### 🎯 Tâche Suivante : Phase 76 — v0.2.74
+### 🎯 Prochaine Tâche Immédiate : Phase 76 — v0.2.74
 * **Composant** : `services/jambo-bpfd`
 * **Objectif** : Filtres de paquets et instrumentation eBPF souveraine
 * **Tâches précises** :
@@ -90,6 +83,14 @@
   2. Routage à latence déterministe avec `IpcCap`.
   3. Validation `cargo xtask test` et commit `v0.2.75`.
 
+### 🎯 Tâche Suivante : Phase 78 — v0.2.76
+* **Composant** : `services/jambo-secpolicyd`
+* **Objectif** : Attestation matérielle distante TPM 2.0 et confinement de grappe
+* **Tâches précises** :
+  1. Registres PCR TPM 2.0 et citations cryptographiques signées.
+  2. Vérification d'intégrité de démarrage mesuré inter-nœuds.
+  3. Validation `cargo xtask test` et commit `v0.2.76`.
+
 ---
 
 ## 4. Journal d'Exécution des Cycles
@@ -101,3 +102,5 @@
 * **2026-10-19 13:22 UTC** : Validation complète Phase 72 (`jambo-init`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test --workspace --lib`). Tag `v0.2.70`.
 * **2026-10-19 13:42 UTC** : Validation complète Phase 73 (`jambo-wasm`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test --workspace --lib`). Tag `v0.2.71`.
 * **2026-10-19 14:08 UTC** : Validation complète Phase 74 (`jambo-dnsd`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test --workspace --lib`). Tag `v0.2.72`.
+* **2026-10-19 14:22 UTC** : Validation complète Phase 75 (`jambo-logd`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test --workspace --lib`). Tag `v0.2.73`.
+
