@@ -283,6 +283,71 @@ impl TimeSyncServer {
     }
 }
 
+/// Démon orchestrateur de synchronisation horlogère PTP/NTP (Ring 3)
+pub struct JamboTimeDaemon {
+    pub server: TimeSyncServer,
+    pub admin_cap: TimeSyncCap,
+    pub read_cap: TimeSyncCap,
+}
+
+impl Default for JamboTimeDaemon {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl JamboTimeDaemon {
+    pub fn new() -> Self {
+        let admin_cap = TimeSyncCap::new(Handle::new(58, 1), 1, time_rights::ALL);
+        let read_cap = TimeSyncCap::new(Handle::new(58, 2), 1, time_rights::TIME_READ);
+        let initial_time = PreciseTime::new(1792340000, 0); // Timestamp étalon (2026)
+        Self {
+            server: TimeSyncServer::new(1, initial_time),
+            admin_cap,
+            read_cap,
+        }
+    }
+
+    /// Initialise le démon avec calibration PTP par défaut
+    pub fn init_defaults(&mut self) {
+        let sample = PtpSample {
+            t1_master_tx: PreciseTime::new(1792340000, 0),
+            t2_slave_rx: PreciseTime::new(1792340000, 10_000_000), // delay 8ms + offset 2ms
+            t3_slave_tx: PreciseTime::new(1792340000, 20_000_000),
+            t4_master_rx: PreciseTime::new(1792340000, 26_000_000), // delay 8ms - offset 2ms
+        };
+        let cap = self.admin_cap;
+        let _ = self.server.apply_ptp_sync(&cap, &sample);
+    }
+
+    /// Lit l'heure précise actuelle
+    pub fn get_time(&self) -> Result<PreciseTime, SysError> {
+        self.server.read_time(&self.read_cap)
+    }
+
+    /// Avance le temps de 'nanos' nanosecondes
+    pub fn advance_nanos(&mut self, nanos: u64) -> PreciseTime {
+        self.server.advance_time(nanos)
+    }
+
+    /// Effectue une synchronisation PTP avec les 4 points d'échantillonnage
+    pub fn sync_ptp(&mut self, sample: &PtpSample) -> Result<(i64, i64), SysError> {
+        let cap = self.admin_cap;
+        self.server.apply_ptp_sync(&cap, sample)
+    }
+
+    /// État du servo (Mode, Freq PPM, Offset, Delay, Sync Count)
+    pub fn status(&self) -> (ServoMode, i32, i64, i64, u64) {
+        (
+            self.server.servo.mode,
+            self.server.servo.freq_ppm,
+            self.server.last_measured_offset,
+            self.server.last_measured_delay,
+            self.server.sync_count,
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -359,5 +424,23 @@ mod tests {
             server.apply_ptp_sync(&unauth_cap, &sample).err(),
             Some(SysError::PermissionDenied)
         );
+    }
+
+    #[test]
+    fn test_time_daemon_lifecycle() {
+        let mut daemon = JamboTimeDaemon::new();
+        let t0 = daemon.get_time().expect("read time");
+        assert_eq!(t0.seconds, 1792340000);
+
+        daemon.init_defaults();
+        let (mode, _ppm, offset, delay, syncs) = daemon.status();
+        assert_eq!(syncs, 1);
+        assert_eq!(offset, 2_000_000); // 2 ms offset
+        assert_eq!(delay, 8_000_000); // 8 ms delay
+        assert_eq!(mode, ServoMode::Slewing);
+
+        // Advance time
+        let t1 = daemon.advance_nanos(1_000_000_000);
+        assert!(t1.as_nanos() > t0.as_nanos());
     }
 }

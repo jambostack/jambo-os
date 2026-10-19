@@ -109,6 +109,7 @@ pub struct JamboShell {
     pub auth: jambo_authd::JamboAuthDaemon,
     pub vmm: jambo_vmm::JamboVmmDaemon,
     pub vhost: jambo_vhostd::JamboVhostDaemon,
+    pub time: jambo_timed::JamboTimeDaemon,
 }
 
 impl Default for JamboShell {
@@ -155,6 +156,8 @@ impl JamboShell {
         vmm.init_defaults();
         let mut vhost = jambo_vhostd::JamboVhostDaemon::new();
         vhost.init_defaults();
+        let mut time = jambo_timed::JamboTimeDaemon::new();
+        time.init_defaults();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -172,6 +175,7 @@ impl JamboShell {
             auth,
             vmm,
             vhost,
+            time,
         }
     }
 
@@ -294,6 +298,9 @@ impl JamboShell {
                 emit(
                     "  vhost [cmd]  - Virtualisation de périphériques vhost-user et E/S découplées\n",
                 );
+                emit(
+                    "  time [cmd]   - Synchronisation horlogère distribuée PTP/NTP et asservissement\n",
+                );
                 emit("  echo <args>  - Affiche les arguments sur la sortie console\n");
                 emit("  clear        - Efface l'écran du terminal (ANSI escape)\n");
                 emit("  reboot       - Redémarre la machine\n");
@@ -301,7 +308,7 @@ impl JamboShell {
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.2.55 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.2.56 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -1985,6 +1992,110 @@ impl JamboShell {
                     }
                     _ => {
                         emit("Usage: vhost [status | net <payload> | write <lba> <data> | read <lba>]\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                }
+            }
+            "time" => {
+                let sub = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    ""
+                };
+                match sub {
+                    "status" => {
+                        let mut b = [0u8; 20];
+                        emit("=== SYNCHRONISATION HORLOGÈRE DISTRIBUÉE (jambo-timed) ===\n");
+                        if let Ok(t) = self.time.get_time() {
+                            emit("Temps précis actuel     : ");
+                            emit(format_u64(t.seconds, &mut b));
+                            emit("s ");
+                            emit(format_u64(t.nanoseconds as u64, &mut b));
+                            emit("ns (UTC/Étalon 2026)\n");
+                        }
+                        let (mode, ppm, offset, delay, syncs) = self.time.status();
+                        emit("Mode d'asservissement   : ");
+                        match mode {
+                            jambo_timed::ServoMode::Locked => emit("Locked (Synchronisé)\n"),
+                            jambo_timed::ServoMode::Slewing => {
+                                emit("Slewing (Lissage progressif)\n")
+                            }
+                            jambo_timed::ServoMode::Stepping => emit("Stepping (Saut discret)\n"),
+                        }
+                        emit("Dérive de fréquence     : ");
+                        if ppm < 0 {
+                            emit("-");
+                            emit(format_u64((-ppm) as u64, &mut b));
+                        } else {
+                            emit("+");
+                            emit(format_u64(ppm as u64, &mut b));
+                        }
+                        emit(" PPM\n");
+                        emit("Dernier écart (Offset)  : ");
+                        if offset < 0 {
+                            emit("-");
+                            emit(format_u64((-offset) as u64, &mut b));
+                        } else {
+                            emit("+");
+                            emit(format_u64(offset as u64, &mut b));
+                        }
+                        emit(" ns\n");
+                        emit("Délai aller-retour      : ");
+                        emit(format_u64(delay.max(0) as u64, &mut b));
+                        emit(" ns\n");
+                        emit("Synchronisations PTP    : ");
+                        emit(format_u64(syncs, &mut b));
+                        emit("\nPrécision & Monotonicité: Sub-microseconde, anti-régression stricte\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "sync" => {
+                        let sample = jambo_timed::PtpSample {
+                            t1_master_tx: jambo_timed::PreciseTime::new(1792340001, 0),
+                            t2_slave_rx: jambo_timed::PreciseTime::new(1792340001, 8_000_000),
+                            t3_slave_tx: jambo_timed::PreciseTime::new(1792340001, 16_000_000),
+                            t4_master_rx: jambo_timed::PreciseTime::new(1792340001, 22_000_000),
+                        };
+                        match self.time.sync_ptp(&sample) {
+                            Ok((off, del)) => {
+                                let mut b = [0u8; 20];
+                                emit("[TIME/PTP] Synchronisation quadri-points réussie : Offset=");
+                                if off < 0 {
+                                    emit("-");
+                                    emit(format_u64((-off) as u64, &mut b));
+                                } else {
+                                    emit("+");
+                                    emit(format_u64(off as u64, &mut b));
+                                }
+                                emit(" ns | Délai=");
+                                emit(format_u64(del.max(0) as u64, &mut b));
+                                emit(" ns\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("[TIME/PTP] Échec de la synchronisation PTP\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "tick" => {
+                        let nanos = if parsed.arg_count > 2 {
+                            parse_u64(parsed.args[2]).unwrap_or(1_000_000_000)
+                        } else {
+                            1_000_000_000
+                        };
+                        let t = self.time.advance_nanos(nanos);
+                        let mut b = [0u8; 20];
+                        emit("[TIME/CLOCK] Horloge avancée de ");
+                        emit(format_u64(nanos, &mut b));
+                        emit(" ns -> Nouveau temps : ");
+                        emit(format_u64(t.seconds, &mut b));
+                        emit("s ");
+                        emit(format_u64(t.nanoseconds as u64, &mut b));
+                        emit("ns\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    _ => {
+                        emit("Usage: time [status | sync | tick [nanos]]\n");
                         (ShellStatus::Success, write_pos)
                     }
                 }

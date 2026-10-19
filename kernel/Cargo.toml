@@ -1,6 +1,6 @@
 [package]
 name = "kernel"
-version = "0.2.55"
+version = "0.2.56"
 edition = "2021"
 [[bin]]
 name = "kernel"
@@ -24,6 +24,7 @@ jambo-powerd = { path = "../services/jambo-powerd" }
 jambo-rpc = { path = "../services/jambo-rpc" }
 jambo-sdk = { path = "../libs/jambo-sdk" }
 jambo-sh = { path = "../services/jambo-sh" }
+jambo-timed = { path = "../services/jambo-timed" }
 jambo-ui = { path = "../libs/jambo-ui" }
 jambo-vhostd = { path = "../services/jambo-vhostd" }
 jambo-vmm = { path = "../services/jambo-vmm" }

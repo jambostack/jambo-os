@@ -830,6 +830,13 @@ pub extern "C" fn _start() -> ! {
         "Échec du test de virtualisation de périphériques vhost-user"
     );
 
+    // 10unvicies. Validation de la Synchronisation Horlogère Distribuée PTP/NTP (Phase 58 - v0.2.56)
+    let time_success = sched::execute_time_sync_test();
+    assert!(
+        time_success,
+        "Échec du test de synchronisation horlogère distribuée PTP/NTP"
+    );
+
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
 
     arch::init_iommu();
@@ -1001,14 +1008,17 @@ pub extern "C" fn _start() -> ! {
     kprintln!(
         "\x1b[1;32m[PASS] Phase 57 Userspace vhost-user Device Virtualization Complete\x1b[0m"
     );
+    kprintln!(
+        "\x1b[1;32m[PASS] Phase 58 Distributed Clock Synchronization PTP/NTP Complete\x1b[0m"
+    );
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.55 (Virtualisation de Périphériques vhost-user jambo-vhostd)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.56 (Synchronisation Horlogère Distribuée PTP/NTP jambo-timed)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.55 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.56 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );

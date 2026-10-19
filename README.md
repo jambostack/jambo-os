@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.55-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.56-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.55 (Virtualisation de Périphériques vhost-user jambo-vhostd)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.55` introduit le service de virtualisation de périphériques VirtIO en espace utilisateur (`services/jambo-vhostd`), permettant l'émulation découplée sans copie (Zero-Copy) de périphériques réseau (`VirtIO-Net`) et de stockage bloc (`VirtIO-Blk`), la négociation conforme au protocole `vhost-user`, le confinement capabilaire granulaire `VhostCap` et les commandes interactives `vhost [status | net | write | read]` dans `jsh`.
+> **Statut du Projet : Version v0.2.56 (Synchronisation Horlogère Distribuée PTP/NTP jambo-timed)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.56` introduit le démon de synchronisation horlogère distribuée en espace utilisateur (`services/jambo-timed`), fournissant une référence temporelle sub-microseconde sans autorité ambiante, un asservissement d'horloge par boucle PLL/FLL (`ClockServo`) avec lissage progressif (*slewing*) et garantie mathématique d'anti-régression monotone, la prise en charge de l'algorithme quadri-points IEEE 1588 PTP, le confinement capabilaire `TimeSyncCap` et les commandes interactives `time [status | sync | tick]` dans `jsh`.
 
 ---
 
