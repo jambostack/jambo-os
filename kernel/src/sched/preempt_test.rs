@@ -100,12 +100,15 @@ pub fn execute_preemption_test() -> bool {
         ticks
     );
 
-    // Arrêter le timer et terminer proprement
-    TEST_COMPLETE.store(true, Ordering::Release);
-    worker_thread.lock().deadline = 0;
-    EevdfScheduler::reschedule();
-
+    // Arrêter immédiatement le timer matériel pour éviter toute interruption intempestive
     crate::arch::apic_stop_timer();
+    TEST_COMPLETE.store(true, Ordering::Release);
+    worker_thread.lock().state = ThreadState::Exited;
+
+    // Désactiver les interruptions pour les phases séquentielles suivantes
+    unsafe {
+        core::arch::asm!("cli", options(nomem, nostack));
+    }
 
     kprintln!("[PREEMPT/DONE] Ordonnancement préemptif EEVDF validé avec succès.");
     true

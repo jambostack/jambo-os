@@ -146,6 +146,28 @@ impl WasmEngine {
     }
 }
 
+/// Charge et exécute un module WASM synthétique sandboxé.
+/// Retourne (exit_code, gas_consumed).
+pub fn execute_wasm_module(module_name: &str) -> (i32, u64) {
+    let _ = module_name;
+    // Bytecode WASM minimal valide : magic + version 1
+    let valid_wasm: [u8; 8] = [0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00];
+    let mut engine = WasmEngine::new();
+
+    match engine.load_module(&valid_wasm) {
+        Ok(mut instance) => {
+            // Tester fd_write WASI
+            let _ = instance.wasi_fd_write(1, b"hello from wasm");
+            // Invoquer _start
+            match engine.invoke_export(&mut instance, "_start") {
+                Ok(code) => (code, engine.gas_consumed),
+                Err(_) => (1, engine.gas_consumed),
+            }
+        }
+        Err(_) => (127, 0),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

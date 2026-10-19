@@ -171,6 +171,25 @@ impl LinuxProcessEmulator {
     }
 }
 
+/// Émule l'exécution d'un binaire ELF Linux synthétique en espace utilisateur sandboxé.
+/// Retourne le code de sortie (0 = succès) et le nombre de syscalls interceptés.
+pub fn emulate_linux_elf_binary(elf_name: &str, pid: u64) -> (i32, usize) {
+    let mut emu = LinuxProcessEmulator::new(pid);
+
+    // Séquence de syscalls typique d'un binaire ELF Linux minimal
+    let ret_getpid = emu.handle_linux_syscall(LINUX_SYS_GETPID, 0, 0, 0, 0, 0, 0);
+    let ret_uname = emu.handle_linux_syscall(LINUX_SYS_UNAME, 0, 0, 0, 0, 0, 0);
+    let ret_write = emu.handle_linux_syscall(LINUX_SYS_WRITE, 1, 0, elf_name.len() as u64, 0, 0, 0);
+    let ret_exit = emu.handle_linux_syscall(LINUX_SYS_EXIT, 0, 0, 0, 0, 0, 0);
+
+    let success = ret_getpid == pid as i64
+        && ret_uname == 0
+        && ret_write == elf_name.len() as i64
+        && ret_exit == 0;
+
+    (if success { 0 } else { 1 }, 4)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

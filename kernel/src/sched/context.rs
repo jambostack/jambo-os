@@ -10,6 +10,7 @@ global_asm!(
         // RDI = *mut u64 (prev_rsp)
         // RSI = u64 (next_rsp)
         pushfq
+        cli
         push rbx
         push rbp
         push r12

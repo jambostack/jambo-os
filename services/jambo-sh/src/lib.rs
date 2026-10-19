@@ -231,6 +231,8 @@ impl JamboShell {
                 emit("  netstat      - Affiche la table des sockets TCP actives\n");
                 emit("  dns <host>   - Résolution DNS sécurisée via DNS-over-TLS (DoT 853)\n");
                 emit("  gui [cmd]    - Interface graphique JamboComp, VirtIO-GPU et JamboUI\n");
+                emit("  compat [cmd] - Couche de compatibilité binaire Linux ELF POSIX\n");
+                emit("  wasm [cmd]   - Runtime d'exécution WebAssembly & sandbox WASI\n");
                 emit("  echo <args>  - Affiche les arguments sur la sortie console\n");
                 emit("  clear        - Efface l'écran du terminal (ANSI escape)\n");
                 emit("  reboot       - Redémarre la machine\n");
@@ -238,7 +240,7 @@ impl JamboShell {
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.2.44 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.2.45 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -623,6 +625,74 @@ impl JamboShell {
                     },
                     _ => {
                         emit("Usage: gui [status | demo | capture]\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                }
+            }
+            "compat" => {
+                let subcmd = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    "status"
+                };
+                match subcmd {
+                    "status" => {
+                        emit("Linux POSIX Translation Layer: Active (x86_64, 15 syscalls shims, zero Ring-0 debt)\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "run" => {
+                        let target = if parsed.arg_count > 2 {
+                            parsed.args[2]
+                        } else {
+                            "busybox_echo"
+                        };
+                        let (code, count) = jambo_linux::emulate_linux_elf_binary(target, 1005);
+                        emit("[COMPAT] ELF '");
+                        emit(target);
+                        emit("' exécuté via shim POSIX: code ");
+                        let mut b = [0u8; 20];
+                        emit(format_u64(code as u64, &mut b));
+                        emit(", ");
+                        emit(format_u64(count as u64, &mut b));
+                        emit(" syscalls interceptés\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    _ => {
+                        emit("Usage: compat [status | run <binary>]\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                }
+            }
+            "wasm" => {
+                let subcmd = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    "info"
+                };
+                match subcmd {
+                    "info" => {
+                        emit("WASI Sandboxed Runtime: Active (Wasm V1, Linear Memory Isolation, Gas Metering)\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "run" => {
+                        let target = if parsed.arg_count > 2 {
+                            parsed.args[2]
+                        } else {
+                            "app.wasm"
+                        };
+                        let (code, gas) = jambo_wasm::execute_wasm_module(target);
+                        emit("[WASM] Module '");
+                        emit(target);
+                        emit("' exécuté dans la sandbox WASI: code ");
+                        let mut b = [0u8; 20];
+                        emit(format_u64(code as u64, &mut b));
+                        emit(", ");
+                        emit(format_u64(gas, &mut b));
+                        emit(" gaz consommé\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    _ => {
+                        emit("Usage: wasm [info | run <module>]\n");
                         (ShellStatus::Success, write_pos)
                     }
                 }

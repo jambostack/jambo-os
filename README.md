@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.44-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.45-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.44 (Compositeur Graphique Userspace jambo-comp & JamboUI Déclaratif)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. Après l'intégration des pipelines d'objets structurés et des utilitaires confinés (`v0.2.43`), la version `v0.2.44` introduit le compositeur d'affichage matériel en espace utilisateur (`services/jambo-comp`) et le framework graphique déclaratif accessible (`libs/jambo-ui`). Elle fournit la composition par Damage Tracking 60/120 Hz vers VirtIO-GPU, l'isolation étanche des surfaces de fenêtres applicatives, le portail de capture d'écran sans autorité ambiante (Zero Ambient Authority), l'arbre d'accessibilité obligatoire (`AccessibilityTree`), le terminal graphique `JamboTerm`, et la commande shell interactive `gui` (`status`, `demo`, `capture`).
+> **Statut du Projet : Version v0.2.45 (Couche de Compatibilité Linux POSIX jambo-linux & Runtime WASI/Wasm)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. Après l'intégration du compositeur graphique Ring 3 et de JamboUI (`v0.2.44`), la version `v0.2.45` apporte la compatibilité applicative universelle sans dette POSIX en Ring 0 : traduction des appels système Linux x86-64 (`services/jambo-linux`), runtime WebAssembly / sandbox WASI avec gas metering et isolation stricte de la mémoire linéaire (`services/jambo-wasm`), et commandes interactives `compat` et `wasm` dans le shell `jsh`.
 
 ---
 

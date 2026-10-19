@@ -753,6 +753,13 @@ pub extern "C" fn _start() -> ! {
         "Échec du test du compositeur graphique jambo-comp et JamboUI"
     );
 
+    // 10decies. Validation de la Couche de Compatibilité Linux POSIX & WASI Runtime (Phase 47 - v0.2.45)
+    let compat_success = sched::execute_compat_test();
+    assert!(
+        compat_success,
+        "Échec du test de compatibilité Linux POSIX et runtime WASI/Wasm"
+    );
+
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
 
     arch::init_iommu();
@@ -891,14 +898,17 @@ pub extern "C" fn _start() -> ! {
     kprintln!(
         "\x1b[1;32m[PASS] Phase 46 Userspace Graphics Compositor (jambo-comp) & JamboUI Complete\x1b[0m"
     );
+    kprintln!(
+        "\x1b[1;32m[PASS] Phase 47 Linux POSIX Compat Layer & Sandboxed WASI Runtime Complete\x1b[0m"
+    );
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.44 (Compositeur Graphique jambo-comp & JamboUI)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.45 (Compatibilité Linux POSIX & WASI Runtime)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.44 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.45 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
