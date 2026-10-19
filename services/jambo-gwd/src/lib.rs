@@ -321,6 +321,99 @@ impl GatewayManager {
     }
 }
 
+/// Démon orchestrateur de passerelle ingress et répartiteur de charge (`jambo-gwd`).
+pub struct JamboGatewayDaemon {
+    pub gw: GatewayManager,
+    pub cap: GatewayCap,
+    pub routes_processed: u64,
+}
+
+impl Default for JamboGatewayDaemon {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl JamboGatewayDaemon {
+    pub fn new() -> Self {
+        let cap = GatewayCap::new(Handle::new(6501, 1), gw_rights::ALL);
+        let mut gw = GatewayManager::new();
+        let _ = gw.register_service(&cap, 1, 80, LoadBalanceStrategy::RoundRobin, 3);
+        let _ = gw.add_backend(&cap, 1, [10, 0, 0, 1], 8080, 1);
+        let _ = gw.add_backend(&cap, 1, [10, 0, 0, 2], 8080, 1);
+        Self {
+            gw,
+            cap,
+            routes_processed: 0,
+        }
+    }
+
+    pub fn register_service(
+        &mut self,
+        service_id: u32,
+        frontend_port: u16,
+        strategy: LoadBalanceStrategy,
+        cb_threshold: u8,
+    ) -> Result<(), SysError> {
+        self.gw
+            .register_service(&self.cap, service_id, frontend_port, strategy, cb_threshold)
+    }
+
+    pub fn add_backend(
+        &mut self,
+        service_id: u32,
+        ip: [u8; 4],
+        port: u16,
+        weight: u16,
+    ) -> Result<(), SysError> {
+        self.gw.add_backend(&self.cap, service_id, ip, port, weight)
+    }
+
+    pub fn route_packet(
+        &mut self,
+        frontend_port: u16,
+        client_ip: [u8; 4],
+    ) -> Result<([u8; 4], u16), SysError> {
+        let ep = self.gw.route_packet(&self.cap, frontend_port, client_ip)?;
+        self.routes_processed = self.routes_processed.saturating_add(1);
+        Ok(ep)
+    }
+
+    pub fn release_connection(
+        &mut self,
+        frontend_port: u16,
+        backend_ip: [u8; 4],
+        backend_port: u16,
+    ) -> Result<(), SysError> {
+        self.gw
+            .release_connection(frontend_port, backend_ip, backend_port)
+    }
+
+    pub fn report_health(
+        &mut self,
+        service_id: u32,
+        backend_ip: [u8; 4],
+        backend_port: u16,
+        success: bool,
+    ) -> Result<bool, SysError> {
+        self.gw
+            .report_health(&self.cap, service_id, backend_ip, backend_port, success)
+    }
+
+    pub fn service_count(&self) -> usize {
+        self.gw.service_count()
+    }
+
+    pub fn total_backends(&self) -> usize {
+        self.gw
+            .services
+            .iter()
+            .filter(|s| s.allocated)
+            .map(|s| s.backends.iter().filter(|b| b.allocated).count())
+            .sum()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -409,5 +502,15 @@ mod tests {
         // Tentative d'enregistrement de service sans droit GW_ADMIN -> PermissionDenied
         let res = gw.register_service(&cap_route_only, 104, 80, LoadBalanceStrategy::RoundRobin, 3);
         assert_eq!(res, Err(SysError::PermissionDenied));
+    }
+
+    #[test]
+    fn test_gateway_daemon() {
+        let mut daemon = JamboGatewayDaemon::new();
+        assert_eq!(daemon.service_count(), 1);
+        assert_eq!(daemon.total_backends(), 2);
+        let ep = daemon.route_packet(80, [192, 168, 1, 10]).unwrap();
+        assert_eq!(ep, ([10, 0, 0, 1], 8080));
+        assert_eq!(daemon.routes_processed, 1);
     }
 }

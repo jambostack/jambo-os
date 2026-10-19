@@ -116,6 +116,7 @@ pub struct JamboShell {
     pub event: jambo_eventd::JamboEventDaemon,
     pub mesh: jambo_meshd::JamboMeshDaemon,
     pub dfs: jambo_dfsd::JamboDfsDaemon,
+    pub gw: jambo_gwd::JamboGatewayDaemon,
 }
 
 impl Default for JamboShell {
@@ -171,6 +172,7 @@ impl JamboShell {
         let event = jambo_eventd::JamboEventDaemon::new();
         let mesh = jambo_meshd::JamboMeshDaemon::new();
         let dfs = jambo_dfsd::JamboDfsDaemon::new();
+        let gw = jambo_gwd::JamboGatewayDaemon::new();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -195,6 +197,7 @@ impl JamboShell {
             event,
             mesh,
             dfs,
+            gw,
         }
     }
 
@@ -328,6 +331,7 @@ impl JamboShell {
                 emit(
                     "  dfs [cmd]    - Système de fichiers distribué CAS et réplication de blocs\n",
                 );
+                emit("  gw [cmd]     - Passerelle ingress et répartiteur de charge élastique\n");
                 emit("  echo <args>  - Affiche les arguments sur la sortie console\n");
                 emit("  clear        - Efface l'écran du terminal (ANSI escape)\n");
                 emit("  reboot       - Redémarre la machine\n");
@@ -335,7 +339,7 @@ impl JamboShell {
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.2.62 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.2.63 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -2678,6 +2682,70 @@ impl JamboShell {
                     }
                     _ => {
                         emit("Usage: dfs [status | put <data> | pin | del]\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                }
+            }
+            "gw" => {
+                let sub = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    ""
+                };
+                match sub {
+                    "status" => {
+                        let mut b = [0u8; 20];
+                        emit("=== PASSERELLE INGRESS & ÉQUILIBREUR DE CHARGE (jambo-gwd) ===\n");
+                        emit("Services virtuels      : ");
+                        emit(format_u64(self.gw.service_count() as u64, &mut b));
+                        emit("\nBackends actifs        : ");
+                        emit(format_u64(self.gw.total_backends() as u64, &mut b));
+                        emit("\nRequêtes acheminées    : ");
+                        emit(format_u64(self.gw.routes_processed, &mut b));
+                        emit("\nAlgorithmes supportés  : RoundRobin | LeastConnections | IpHash\n");
+                        emit("Résilience             : Health Checks & Coupe-Circuit (Circuit Breaker)\n");
+                        emit("Confinement            : GatewayCap (Zero-Ambient Authority)\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "route" => {
+                        let port: u16 = 80;
+                        let client_ip = [192, 168, 1, 100];
+                        match self.gw.route_packet(port, client_ip) {
+                            Ok((b_ip, b_port)) => {
+                                let mut b = [0u8; 20];
+                                emit(
+                                    "[GW/ROUTE] Requête acheminée avec succès vers backend 10.0.0.",
+                                );
+                                emit(format_u64(b_ip[3] as u64, &mut b));
+                                emit(":");
+                                emit(format_u64(b_port as u64, &mut b));
+                                emit("\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("[GW] Échec d'aiguillage (aucun backend sain ou service inconnu)\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "cb" => {
+                        // Déclenche le coupe-circuit sur le backend 10.0.0.1:8080 du service 1
+                        let _ = self.gw.report_health(1, [10, 0, 0, 1], 8080, false);
+                        let _ = self.gw.report_health(1, [10, 0, 0, 1], 8080, false);
+                        let healthy = self
+                            .gw
+                            .report_health(1, [10, 0, 0, 1], 8080, false)
+                            .unwrap_or(true);
+                        if !healthy {
+                            emit("[GW/CIRCUIT-BREAKER] Coupe-circuit déclenché sur backend 10.0.0.1:8080 (Hors-service)\n");
+                            (ShellStatus::Success, write_pos)
+                        } else {
+                            emit("[GW] Échec du déclenchement du coupe-circuit\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        }
+                    }
+                    _ => {
+                        emit("Usage: gw [status | route | cb]\n");
                         (ShellStatus::Success, write_pos)
                     }
                 }

@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.62-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.63-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.62 (Stockage Distribué Adressé par le Contenu & Réplication jambo-dfsd)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.62` introduit le magasin de stockage distribué adressé par le contenu (CAS) et la réplication par blocs en espace utilisateur (`services/jambo-dfsd`), implémentant l'adressage cryptographique déterministe 256 bits, la vérification d'intégrité anti-corruption, la déduplication transparente avec comptage de références, la réplication multi-nœuds, l'épinglage persistant, le confinement capabilaire granulaire `DfsCap` et les commandes interactives `dfs [status | put | pin | del]` dans `jsh`.
+> **Statut du Projet : Version v0.2.63 (Passerelle Ingress & Répartiteur de Charge Élastique jambo-gwd)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.63` introduit la passerelle ingress et l'équilibreur de charge élastique en espace utilisateur (`services/jambo-gwd`), implémentant les stratégies multi-algorithmes (Round-Robin, Least-Connections, IP-Hash), les sondes de santé continues, le déclenchement automatique du coupe-circuit (*circuit breaker*) avec bascule transparente (*failover*), le confinement capabilaire granulaire `GatewayCap` et les commandes interactives `gw [status | route | cb]` dans `jsh`.
 
 ---
 
