@@ -168,6 +168,7 @@ pub struct JamboShell {
     pub zksnark: jambo_zksnark::JamboZkSnarkDaemon,
     pub fhe: jambo_fhe::JamboFheDaemon,
     pub mixnet: jambo_mixnet::JamboMixnetDaemon,
+    pub secboot: jambo_secboot::JamboSecBootDaemon,
 }
 
 impl Default for JamboShell {
@@ -422,6 +423,12 @@ impl JamboShell {
         );
         let mut mixnet = jambo_mixnet::JamboMixnetDaemon::new(mixnet_cap);
         mixnet.init_defaults();
+        let secboot_cap = jambo_secboot::SecBootCap::new(
+            libjambo::Handle::new(10001, 1),
+            jambo_secboot::secboot_rights::ALL,
+        );
+        let mut secboot = jambo_secboot::JamboSecBootDaemon::new(secboot_cap);
+        secboot.init_defaults();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -480,6 +487,7 @@ impl JamboShell {
             zksnark,
             fhe,
             mixnet,
+            secboot,
         }
     }
 
@@ -643,10 +651,11 @@ impl JamboShell {
                 emit("  zksnark [cmd] - Preuves à Divulgation Nulle de Connaissance (zk-SNARKs R1CS)\n");
                 emit("  fhe [cmd]     - Chiffrement Homomorphe (BFV/CKKS), calculs aveugles & bootstrapping\n");
                 emit("  mixnet [cmd]  - Réseau de mixage anonyme (Sphinx), dissimulation temporelle & routage en oignon\n");
+                emit("  secboot [cmd] - Démarrage sécurisé souverain (Secure Boot), mesure TPM 2.0 PCR & scellement\n");
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.2.97 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.2.98 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -5723,6 +5732,132 @@ impl JamboShell {
                     }
                     _ => {
                         emit("Usage: mixnet [status | route | mix | dummy | audit]\n");
+                        (ShellStatus::ExecutionFailed, write_pos)
+                    }
+                }
+            }
+            "secboot" => {
+                let sub = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    "status"
+                };
+                match sub {
+                    "status" => {
+                        let mut b = [0u8; 20];
+                        emit("=== DÉMARRAGE SÉCURISÉ & MESURE D'INTÉGRITÉ TPM 2.0 (jambo-secboot) ===\n");
+                        emit("Registres PCR actifs : ");
+                        emit(format_u64(jambo_secboot::PCR_COUNT as u64, &mut b));
+                        emit(" banques SHA-256 (PCR 0..23)\n");
+                        emit("Chaîne de confiance  : CRTM (PCR 0) -> UEFI (PCR 1) -> Limine (PCR 4) -> Kernel (PCR 8) -> Initrd (PCR 9)\n");
+                        emit("Mesures enregistrées : ");
+                        emit(format_u64(self.secboot.measurements_recorded as u64, &mut b));
+                        emit(" événements TCG 2.0\n");
+                        emit("Clés Secure Boot     : ");
+                        emit(format_u64(self.secboot.key_count as u64, &mut b));
+                        emit(" clés enregistrées (PK, KEK, DB, DBX)\n");
+                        emit("Secrets scellés      : ");
+                        emit(format_u64(self.secboot.secrets_sealed as u64, &mut b));
+                        emit(" actifs (Sous politique PCR)\n");
+                        emit("Vérifications DB     : [Validées: ");
+                        emit(format_u64(self.secboot.verifications_passed as u64, &mut b));
+                        emit(", Rejetées: ");
+                        emit(format_u64(self.secboot.verifications_failed as u64, &mut b));
+                        emit("]\nViolations Intégrité : ");
+                        emit(format_u64(self.secboot.tamper_violations as u64, &mut b));
+                        emit(" tentatives de tampering bloquées\n");
+                        let composite = self.secboot.compute_pcr_composite(jambo_secboot::CRITICAL_PCR_MASK);
+                        emit("Composite PCRs       : ");
+                        for byte in composite[..8].iter() {
+                            emit(format_hex_u64(*byte as u64, &mut b));
+                        }
+                        emit("... (Chaîne scellée)\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "measure" => {
+                        let comp_name = b"Hotplug_Device_Driver";
+                        let comp_code = b"DRV_NVME_EXPRESS_CONTROLLER_SOVEREIGN_V2";
+                        match self.secboot.measure_stage(
+                            jambo_secboot::BootStage::CustomComponent,
+                            16,
+                            comp_name,
+                            comp_code,
+                        ) {
+                            Ok(digest) => {
+                                let mut b = [0u8; 20];
+                                emit("[SECBOOT/MEASURE] Nouveau composant mesuré et étendu dans PCR 16!\n");
+                                emit("[SECBOOT/MEASURE] Nouvelle valeur PCR 16 : ");
+                                for byte in digest[..8].iter() {
+                                    emit(format_hex_u64(*byte as u64, &mut b));
+                                }
+                                emit("...\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("[SECBOOT/MEASURE] Erreur lors de la mesure du composant!\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "seal" => {
+                        let confidential = b"JAMBO_VAULT_MASTER_KEY_PROTECTED_BY_TPM_PCR";
+                        emit("[SECBOOT/SEAL] Scellement cryptographique sous politique PCR critiques (0, 4, 8, 9, 11, 12)...\n");
+                        match self.secboot.seal_secret(jambo_secboot::CRITICAL_PCR_MASK, confidential) {
+                            Ok(secret_id) => {
+                                let mut b = [0u8; 20];
+                                emit("[SECBOOT/SEAL] Secret scellé avec succès, identifiant : ");
+                                emit(format_u64(secret_id as u64, &mut b));
+                                emit("\n[SECBOOT/UNSEAL] Test de déscellement immédiat sous intégrité validée...\n");
+                                let mut out = [0u8; 64];
+                                match self.secboot.unseal_secret(secret_id, &mut out) {
+                                    Ok(len) => {
+                                        emit("[SECBOOT/UNSEAL] Déscellement réussi! Secret intact : ");
+                                        if let Ok(s) = core::str::from_utf8(&out[..len]) {
+                                            emit(s);
+                                        }
+                                        emit("\n");
+                                        (ShellStatus::Success, write_pos)
+                                    }
+                                    Err(_) => {
+                                        emit("[SECBOOT/UNSEAL] Erreur : Déscellement refusé!\n");
+                                        (ShellStatus::ExecutionFailed, write_pos)
+                                    }
+                                }
+                            }
+                            Err(_) => {
+                                emit("[SECBOOT/SEAL] Erreur lors du scellement du secret!\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "verify" => {
+                        let authorized_digest = jambo_secboot::Sha256::digest(b"JAMBO_KERNEL_OFFICIAL_RELEASE_KEY");
+                        let rogue_digest = jambo_secboot::Sha256::digest(b"UNTRUSTED_ROOTKIT_PAYLOAD_2026");
+                        emit("[SECBOOT/VERIFY] Vérification signature officielle noyau JamboOS : ");
+                        if self.secboot.verify_binary(&authorized_digest) == Ok(true) {
+                            emit("AUTORISÉ (DB)\n");
+                        } else {
+                            emit("REJETÉ\n");
+                        }
+                        emit("[SECBOOT/VERIFY] Vérification binaire non autorisé/corrompu : ");
+                        if self.secboot.verify_binary(&rogue_digest) == Ok(true) {
+                            emit("AUTORISÉ\n");
+                        } else {
+                            emit("REJETÉ (Sécurité conforme)\n");
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "audit" => {
+                        emit("Condensat SHA-256 d'Audit Secure Boot (Registre Scellé) : ");
+                        let mut b = [0u8; 20];
+                        for byte in self.secboot.audit_chain.iter() {
+                            emit(format_hex_u64(*byte as u64, &mut b));
+                        }
+                        emit("\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    _ => {
+                        emit("Usage: secboot [status | measure | seal | verify | audit]\n");
                         (ShellStatus::ExecutionFailed, write_pos)
                     }
                 }

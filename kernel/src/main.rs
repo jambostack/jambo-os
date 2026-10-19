@@ -1121,6 +1121,13 @@ pub extern "C" fn _start() -> ! {
         "Échec du test du réseau de mixage anonyme Sphinx jambo-mixnet"
     );
 
+    // 10undetricies. Validation du Démarrage Sécurisé Souverain & Mesure d'Intégrité Matérielle TPM 2.0 (Phase 100 - v0.2.98)
+    let secboot_success = sched::execute_secboot_daemon_test();
+    assert!(
+        secboot_success,
+        "Échec du test du démarrage sécurisé souverain jambo-secboot"
+    );
+
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
 
     arch::init_iommu();
@@ -1356,14 +1363,15 @@ pub extern "C" fn _start() -> ! {
     kprintln!("\x1b[1;32m[PASS] Phase 97 Zero-Knowledge Succinct Proofs (zk-SNARKs) & R1CS Constraints (jambo-zksnark) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 98 Fully Homomorphic Encryption (FHE), Ring BFV/CKKS & Blind Computing (jambo-fhe) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 99 Anonymous Mixnet (Sphinx), Onion Routing & Traffic Analysis Resistance (jambo-mixnet) Complete\x1b[0m");
+    kprintln!("\x1b[1;32m[PASS] Phase 100 Secure Boot, TPM 2.0 PCR Integrity & Hardware Root of Trust (jambo-secboot) Complete\x1b[0m");
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.97 (Réseau de Mixage Sphinx & Dissimulation jambo-mixnet)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.98 (Démarrage Sécurisé Souverain TPM 2.0 jambo-secboot)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.97 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.98 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );

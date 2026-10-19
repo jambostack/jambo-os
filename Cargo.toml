@@ -64,6 +64,7 @@ members = [
     "services/jambo-zksnark",
     "services/jambo-fhe",
     "services/jambo-mixnet",
+    "services/jambo-secboot",
     "libs/jambo-ui",
     "libs/jambo-sdk",
     "drivers/virtio",

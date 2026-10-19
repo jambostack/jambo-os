@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.97-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.98-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.97 (Réseau de Mixage Anonyme Sphinx & Dissimulation de Trafic jambo-mixnet)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.97` introduit le sous-système de réseau de mixage anonyme et de routage en oignon Sphinx souverain (`services/jambo-mixnet`) : paquets cryptographiques Sphinx `#![no_std]` de taille rigoureusement fixe et constante (256 octets, 0 fuite de métadonnées), routage en couches étanches (clé publique/masquage éphémère $\alpha$ 32B, tag d'intégrité MAC $\gamma$ 8B, en-tête d'oignon $\beta$ 80B, charge utile chiffrée 136B), démasquage et épluchage par pelures successives (*Layered Onion Peeling*) avec remplissage déterministe (*Deterministic Padding*), résistance à l'analyse de trafic (bassin de mixage `MixPool` avec brassage pseudo-aléatoire Fisher-Yates, gigue de délais programmés, injection de trafic de couverture / leurres *Cover Traffic*), protection stricte anti-rejeu (`ReplayCache`), registre d'audit scellé par chaîne SHA-256 (`mixnet_audit_chain`), gouvernance capabilaire stricte par jeton `MixCap` et commandes shell interactives `mixnet [status | route | mix | dummy | audit]` dans `jsh`.
+> **Statut du Projet : Version v0.2.98 (Démarrage Sécurisé Souverain, Mesure PCR TPM 2.0 & Chaîne de Confiance Matérielle jambo-secboot)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.98` introduit le sous-système de démarrage sécurisé souverain et de mesure d'intégrité matérielle TPM 2.0 (`services/jambo-secboot`) : chaîne de mesure cryptographique TCG 2.0 `#![no_std]` (CRTM PCR 0, Firmware PCR 1, Limine PCR 4, JamboKernel PCR 8, Initrd PCR 9, SecPolicy PCR 11, JamboInit PCR 12) avec extensions SHA-256 déterministes, hiérarchie de clés souveraines Secure Boot (Platform Key PK, Key Exchange Key KEK, base de clés autorisées DB et base de révocations DBX), scellement cryptographique sous contraintes PCR (*TPM Data Sealing & Unsealing*) bloquant immédiatement le déscellement en cas de tentative d'altération (anti-bootkit / anti-rootkit), gouvernance capabilaire stricte par jeton `SecBootCap` sans autorité ambiante, registre d'audit scellé par chaîne SHA-256 (`secboot_audit_chain`) et commandes shell interactives `secboot [status | measure | seal | verify | audit]` dans `jsh`.
 
 ---
 
@@ -161,6 +161,7 @@ jambo-os/
 │   ├── jambo-logd/          # Démon de journalisation structurée et agrégation distribuée
 │   ├── jambo-meshd/         # Maillage réseau chiffré P2P et routage zero-trust
 │   ├── jambo-metricsd/      # Moteur de métriques distribuées & séries temporelles
+│   ├── jambo-mixnet/        # Réseau de mixage anonyme Sphinx & dissimulation de métadonnées
 │   ├── jambo-netd/          # Démon réseau TCP/IP, TLS 1.3 et DNS sécurisé
 │   ├── jambo-pkgd/          # Gestionnaire de paquets immuables et mises à jour A/B
 │   ├── jambo-patchd/        # Rechargement à chaud de binaires Ring 3 & conformité ABI
@@ -172,6 +173,7 @@ jambo-os/
 │   ├── jambo-rpc/           # Bus RPC distribué et capacités de cluster
 │   ├── jambo-sandd/         # Confinement de processus et micro-bacs à sable Zero-Ambient
 │   ├── jambo-schedd/        # Ordonnanceur distribué de charges de travail et micro-VMs
+│   ├── jambo-secboot/       # Démarrage sécurisé (Secure Boot), mesure TPM 2.0 PCR & scellement
 │   ├── jambo-secpolicyd/    # Démon d'attestation matérielle TPM 2.0 et confinement de grappe
 │   ├── jambo-serviced/      # Registre de découverte de services & résolution de noms
 │   ├── jambo-sh/            # Shell interactif orienté objets

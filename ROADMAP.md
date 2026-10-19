@@ -1,7 +1,7 @@
 # ROADMAP DU DÉVELOPPEMENT AUTONOME — JamboOS
 
-> **Dernière mise à jour** : 2026-10-19 23:35 UTC  
-> **Version actuelle** : `v0.2.97`  
+> **Dernière mise à jour** : 2026-10-19 23:55 UTC  
+> **Version actuelle** : `v0.2.98`  
 > **Statut global** : Pré-Alpha active — Micro-noyau de 3e génération orienté capacités (`#![no_std]`)  
 > **Cycle de développement autonome** : 10 minutes via le Planificateur de Tâches & Crons d'Antigravity WebUI  
 
@@ -86,24 +86,25 @@
 | **v0.2.95** | 97 | Preuves zk-SNARKs R1CS `jambo-zksnark` | Preuves à Divulgation Nulle de Connaissance (zk-SNARKs Groth16), systèmes de contraintes R1CS, corps de Goldilocks, circuits pré-intégrés (pré-image, range, cap, transfer) & audit SHA-256 | ✅ Validé |
 | **v0.2.96** | 98 | Chiffrement Homomorphe `jambo-fhe` | Chiffrement Complètement Homomorphe (FHE BFV/CKKS), anneaux cyclotomiques, rélinéarisation base-W, bootstrapping & calcul aveugle Ring 3 | ✅ Validé |
 | **v0.2.97** | 99 | Réseau de Mixage Sphinx `jambo-mixnet` | Réseau de mixage anonyme à routage en oignon Sphinx (256 octets fixes), dissimulation temporelle, bassin de mixage Fisher-Yates, trafic de couverture & audit SHA-256 | ✅ Validé |
+| **v0.2.98** | 100 | Démarrage Sécurisé `jambo-secboot` | Démarrage sécurisé souverain (Secure Boot), mesure d'intégrité PCR TPM 2.0, chaîne de confiance matérielle, hiérarchie PK/KEK/DB/DBX & scellement | ✅ Validé |
 
 ---
 
 ## 3. Prochaines Étapes Prioritaires
 
-### 🎯 Prochaine Tâche Immédiate : Phase 100 — v0.2.98
-* **Composant** : `services/jambo-secboot`
-* **Objectif** : Démarrage sécurisé souverain (Secure Boot), mesure d'intégrité PCR TPM 2.0 et chaîne de confiance matérielle
-* **Tâches précises** :
-  1. Chaîne de mesure cryptographique de boot et attestations PCR `#![no_std]`.
-  2. Politiques de scellement et validation `cargo xtask test`.
-
-### 🎯 Tâche Suivante : Phase 101 — v0.2.99
+### 🎯 Prochaine Tâche Immédiate : Phase 101 — v0.2.99
 * **Composant** : `services/jambo-idps`
 * **Objectif** : Système de détection et prévention d'intrusions Ring 3 (IDPS), analyse heuristique de flux IPC et contre-mesures autonomes
 * **Tâches précises** :
   1. Moteur de détection d'anomalies de flux IPC `#![no_std]`.
   2. Révocation dynamique de capacités et validation `cargo xtask test`.
+
+### 🎯 Tâche Suivante : Phase 102 — v0.2.100
+* **Composant** : `services/jambo-hsm2`
+* **Objectif** : Architecture HSM distribuée et fédération de clés à seuil multi-puces
+* **Tâches précises** :
+  1. Fédération cryptographique de modules HSM Ring 3.
+  2. Protocoles d'accord de clés de groupe et validation `cargo xtask test`.
 
 ---
 
@@ -141,6 +142,7 @@
 * **2026-10-19 23:05 UTC** : Validation complète Phase 97 (`jambo-zksnark`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-zksnark`). Tag `v0.2.95`.
 * **2026-10-19 23:20 UTC** : Validation complète Phase 98 (`jambo-fhe`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-fhe`). Tag `v0.2.96`.
 * **2026-10-19 23:35 UTC** : Validation complète Phase 99 (`jambo-mixnet`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-mixnet`). Tag `v0.2.97`.
+* **2026-10-19 23:55 UTC** : Validation complète Phase 100 (`jambo-secboot`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-secboot`). Tag `v0.2.98`.
 
 
 
