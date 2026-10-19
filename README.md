@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.95-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.96-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.95 (Preuves à Divulgation Nulle de Connaissance zk-SNARKs R1CS jambo-zksnark)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.95` introduit le sous-système de preuves à divulgation nulle de connaissance (zk-SNARKs) et de circuits arithmétiques R1CS (`services/jambo-zksnark`) : arithmétique modulaire en corps de Goldilocks ($P = 2^{64} - 2^{32} + 1$) sans allocations (`#![no_std]`), compilateur de contraintes R1CS ($A \cdot B = C$) et évaluation QAP Groth16 succincte $O(1)$, bibliothèque de circuits souverains (`PreimageKnowledge`, `RangeProof4Bit`, `CapTokenProof`, `ConfidentialTransfer`), transcription de Fiat-Shamir scellée SHA-256, registre d'audit inviolable `zk_audit_chain`, gouvernance capabilaire stricte par jeton `ZkSnarkCap` et commandes shell interactives `zksnark [status | circuits | prove | verify | audit]` dans `jsh`.
+> **Statut du Projet : Version v0.2.96 (Chiffrement Complètement Homomorphe FHE & Calculs Aveugles jambo-fhe)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.96` introduit le sous-système de chiffrement complètement homomorphe (FHE) et de calcul aveugle souverain (`services/jambo-fhe`) : arithmétique d'anneaux cyclotomiques ($R_q = \mathbb{Z}_q[X]/(X^{16} + 1)$, $q = 1073758209$, $t = 65537$, $\Delta = 16384$) sans allocations (`#![no_std]`), schéma BFV pour arithmétique entière exacte et schéma CKKS à rééchelonnage modulaire, rélinéarisation base-$W$ ($W = 32768$), rafraîchissement homomorphe de bruit (bootstrapping restaurant le budget de bruit à 48 bits), moteur souverain de calcul aveugle (polynôme aveugle $P(x)$, produit scalaire aveugle $\sum w_i x_i$, portes de décision confidentielles), registre d'audit scellé par chaîne SHA-256 (`fhe_audit_chain`), gouvernance capabilaire stricte par jeton `FheCap` et commandes shell interactives `fhe [status | demo | blind | bootstrap | audit]` dans `jsh`.
 
 ---
 
@@ -148,6 +148,7 @@ jambo-os/
 │   ├── jambo-diagd/         # Diagnostic matériel autonome, auto-réparation & télémétrie
 │   ├── jambo-dnsd/          # Serveur & résolveur DNS d'autorité de grappe (.jambo)
 │   ├── jambo-eventd/        # Bus d'événements Pub/Sub asynchrone et découplage de grappe
+│   ├── jambo-fhe/           # Chiffrement complètement homomorphe (FHE BFV/CKKS) & calcul aveugle
 │   ├── jambo-fs/            # Système de fichiers transactionnel Merkle Copy-on-Write
 │   ├── jambo-fuzz/          # Moteur de fuzzing offensif et tests de résilience
 │   ├── jambo-gwd/           # Passerelle réseau L4/L7 & équilibrage de charge élastique

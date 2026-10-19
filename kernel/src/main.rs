@@ -1107,6 +1107,13 @@ pub extern "C" fn _start() -> ! {
         "Échec du test des preuves à divulgation nulle de connaissance zk-SNARK jambo-zksnark"
     );
 
+    // 10septiesvicies. Validation du Chiffrement Complètement Homomorphe FHE & Calcul Aveugle Ring 3 (Phase 98 - v0.2.96)
+    let fhe_success = sched::execute_fhe_daemon_test();
+    assert!(
+        fhe_success,
+        "Échec du test du chiffrement homomorphe FHE jambo-fhe"
+    );
+
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
 
     arch::init_iommu();
@@ -1340,14 +1347,15 @@ pub extern "C" fn _start() -> ! {
     kprintln!("\x1b[1;32m[PASS] Phase 95 Secure Multi-Party Computation (MPC), Threshold Secret Sharing & Beaver Triplets (jambo-mpc) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 96 Post-Quantum Cryptography (ML-KEM, ML-DSA) & Sovereign Quantum Transition (jambo-pqc) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 97 Zero-Knowledge Succinct Proofs (zk-SNARKs) & R1CS Constraints (jambo-zksnark) Complete\x1b[0m");
+    kprintln!("\x1b[1;32m[PASS] Phase 98 Fully Homomorphic Encryption (FHE), Ring BFV/CKKS & Blind Computing (jambo-fhe) Complete\x1b[0m");
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.95 (Preuves zk-SNARKs R1CS & Divulgation Nulle de Connaissance jambo-zksnark)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.96 (Chiffrement Homomorphe FHE & Calculs Aveugles jambo-fhe)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.95 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.96 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );

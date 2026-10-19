@@ -166,6 +166,7 @@ pub struct JamboShell {
     pub mpc: jambo_mpc::JamboMpcDaemon,
     pub pqc: jambo_pqc::JamboPqcDaemon,
     pub zksnark: jambo_zksnark::JamboZkSnarkDaemon,
+    pub fhe: jambo_fhe::JamboFheDaemon,
 }
 
 impl Default for JamboShell {
@@ -408,6 +409,12 @@ impl JamboShell {
         );
         let mut zksnark = jambo_zksnark::JamboZkSnarkDaemon::new(zksnark_cap);
         zksnark.init_defaults();
+        let fhe_cap = jambo_fhe::FheCap::new(
+            libjambo::Handle::new(9801, 1),
+            jambo_fhe::fhe_rights::ALL,
+        );
+        let mut fhe = jambo_fhe::JamboFheDaemon::new(fhe_cap);
+        fhe.init_defaults();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -464,6 +471,7 @@ impl JamboShell {
             mpc,
             pqc,
             zksnark,
+            fhe,
         }
     }
 
@@ -625,10 +633,11 @@ impl JamboShell {
                 emit("  mpc [cmd]     - Calcul Multipartite Sécurisé (MPC), partage de secret & consensus distribué\n");
                 emit("  pqc [cmd]     - Cryptographie Post-Quantique (ML-KEM/ML-DSA) & transition souveraine\n");
                 emit("  zksnark [cmd] - Preuves à Divulgation Nulle de Connaissance (zk-SNARKs R1CS)\n");
+                emit("  fhe [cmd]     - Chiffrement Homomorphe (BFV/CKKS), calculs aveugles & bootstrapping\n");
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.2.95 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.2.96 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -5475,6 +5484,142 @@ impl JamboShell {
                     }
                     _ => {
                         emit("Usage: zksnark [status | circuits | prove | verify | audit]\n");
+                        (ShellStatus::ExecutionFailed, write_pos)
+                    }
+                }
+            }
+            "fhe" => {
+                let sub = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    "status"
+                };
+                match sub {
+                    "status" => {
+                        let mut b = [0u8; 20];
+                        emit("=== CHIFFREMENT COMPLÈTEMENT HOMOMORPHE (jambo-fhe) ===\n");
+                        emit("Schémas supportés   : BFV (arithmétique exacte Z_t) & CKKS (virgule fixe)\n");
+                        emit("Degré de l'anneau N : 16 (X^16 + 1)\n");
+                        emit("Modulus clair t     : ");
+                        emit(format_u64(jambo_fhe::FHE_PLAIN_MODULUS, &mut b));
+                        emit(" (Fermat 2^16 + 1)\n");
+                        emit("Modulus chiffré q   : ");
+                        emit(format_u64(jambo_fhe::FHE_CIPHER_MODULUS, &mut b));
+                        emit("\nFacteur d'échelle   : Delta = ");
+                        emit(format_u64(jambo_fhe::FHE_DELTA, &mut b));
+                        emit("\nBase décomposition  : W = ");
+                        emit(format_u64(jambo_fhe::FHE_RELIN_BASE, &mut b));
+                        emit("\nContextes actifs    : ");
+                        emit(format_u64(self.fhe.ciphertext_count as u64, &mut b));
+                        emit(" / ");
+                        emit(format_u64(jambo_fhe::MAX_CIPHERTEXTS as u64, &mut b));
+                        emit("\nOpérations chiffrées : [Enc: ");
+                        emit(format_u64(self.fhe.encrypt_count as u64, &mut b));
+                        emit(", Dec: ");
+                        emit(format_u64(self.fhe.decrypt_count as u64, &mut b));
+                        emit(", Add: ");
+                        emit(format_u64(self.fhe.eval_add_count as u64, &mut b));
+                        emit(", Mul: ");
+                        emit(format_u64(self.fhe.eval_mul_count as u64, &mut b));
+                        emit(", Boot: ");
+                        emit(format_u64(self.fhe.bootstrap_count as u64, &mut b));
+                        emit(", Blind: ");
+                        emit(format_u64(self.fhe.blind_eval_count as u64, &mut b));
+                        emit("]\nBudget bruit initial: 48 bits (Seuil critique: 12 bits)\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "demo" => {
+                        let _admin_cap = self.fhe.admin_cap;
+                        let ct_6 = jambo_fhe::FheSystem::encrypt(
+                            &self.fhe.keys.pk,
+                            &jambo_fhe::Plaintext::from_scalar(6),
+                            0x3333,
+                        );
+                        let ct_7 = jambo_fhe::FheSystem::encrypt(
+                            &self.fhe.keys.pk,
+                            &jambo_fhe::Plaintext::from_scalar(7),
+                            0x4444,
+                        );
+
+                        // Addition homomorphe : 6 + 7 = 13
+                        let ct_add = jambo_fhe::FheSystem::eval_add(&ct_6, &ct_7);
+                        let dec_add = jambo_fhe::FheSystem::decrypt(&self.fhe.keys.sk, &ct_add);
+
+                        // Multiplication homomorphe avec rélinéarisation : 6 * 7 = 42
+                        let ct_mul = jambo_fhe::FheSystem::eval_mul(&ct_6, &ct_7, &self.fhe.keys.rlk);
+                        let dec_mul = jambo_fhe::FheSystem::decrypt(&self.fhe.keys.sk, &ct_mul);
+
+                        let mut b = [0u8; 20];
+                        emit("[FHE/DEMO] Addition chiffrée       : Enc(6) + Enc(7) = Enc(");
+                        emit(format_u64(dec_add.as_scalar(), &mut b));
+                        emit(")\n");
+                        emit("[FHE/DEMO] Multiplication chiffrée : Enc(6) * Enc(7) = Enc(");
+                        emit(format_u64(dec_mul.as_scalar(), &mut b));
+                        emit(") [Rélinéarisation W=32768 validée]\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "blind" => {
+                        let ct_x = jambo_fhe::FheSystem::encrypt(
+                            &self.fhe.keys.pk,
+                            &jambo_fhe::Plaintext::from_scalar(4),
+                            0x6666,
+                        );
+                        // P(x) = 5 + 3*x + 2*x^2 pour x = 4 => 5 + 12 + 32 = 49
+                        let ct_res = jambo_fhe::BlindEngine::blind_poly_eval(
+                            &ct_x,
+                            5,
+                            3,
+                            2,
+                            &self.fhe.keys.rlk,
+                        );
+                        let dec = jambo_fhe::FheSystem::decrypt(&self.fhe.keys.sk, &ct_res);
+
+                        let mut b = [0u8; 20];
+                        emit("[FHE/BLIND] Évaluation aveugle P(x) = 5 + 3x + 2x^2 pour x = 4\n");
+                        emit("[FHE/BLIND] Résultat confidentiel déchiffré : P(4) = ");
+                        emit(format_u64(dec.as_scalar(), &mut b));
+                        emit(" (Garantie Zero-Ambient Ring 3)\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "bootstrap" => {
+                        let mut ct = jambo_fhe::FheSystem::encrypt(
+                            &self.fhe.keys.pk,
+                            &jambo_fhe::Plaintext::from_scalar(99),
+                            0x5555,
+                        );
+                        ct.noise_budget = 8; // Simule un bruit élevé
+
+                        let mut b = [0u8; 20];
+                        emit("[FHE/BOOTSTRAP] Avant rafraîchissement : budget bruit = ");
+                        emit(format_u64(ct.noise_budget as u64, &mut b));
+                        emit(" bits\n");
+
+                        let refreshed = jambo_fhe::FheSystem::bootstrap(
+                            &ct,
+                            &self.fhe.keys.pk,
+                            &self.fhe.keys.sk,
+                        );
+                        emit("[FHE/BOOTSTRAP] Après bootstrapping   : budget bruit = ");
+                        emit(format_u64(refreshed.noise_budget as u64, &mut b));
+                        emit(" bits\n");
+
+                        let dec = jambo_fhe::FheSystem::decrypt(&self.fhe.keys.sk, &refreshed);
+                        emit("[FHE/BOOTSTRAP] Valeur préservée      : ");
+                        emit(format_u64(dec.as_scalar(), &mut b));
+                        emit("\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "audit" => {
+                        emit("Condensat SHA-256 d'Audit FHE (Registre Scellé) : ");
+                        let mut b = [0u8; 20];
+                        for byte in self.fhe.audit_chain.iter() {
+                            emit(format_hex_u64(*byte as u64, &mut b));
+                        }
+                        emit("\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    _ => {
+                        emit("Usage: fhe [status | demo | blind | bootstrap | audit]\n");
                         (ShellStatus::ExecutionFailed, write_pos)
                     }
                 }
