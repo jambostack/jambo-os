@@ -32,7 +32,10 @@ pub fn execute_vfs_test() -> bool {
     };
     let hostname_str = core::str::from_utf8(&buf[..n]).unwrap_or("");
     assert_eq!(hostname_str, "jambobox\n");
-    kprintln!("[VFS/READ] Lecture /etc/hostname : {:?}", hostname_str.trim_ascii());
+    kprintln!(
+        "[VFS/READ] Lecture /etc/hostname : {:?}",
+        hostname_str.trim_ascii()
+    );
 
     // 3. Test d'écriture transactionnelle Copy-on-Write (CoW)
     let test_data = b"temperature=24.5C status=NOMINAL security=STRICT";
@@ -44,7 +47,11 @@ pub fn execute_vfs_test() -> bool {
         }
     };
 
-    assert_eq!(fs.generation(), 2, "La génération doit être incrémentée à 2");
+    assert_eq!(
+        fs.generation(),
+        2,
+        "La génération doit être incrémentée à 2"
+    );
     assert!(block_offset > 0, "L'offset de bloc doit être non nul");
     assert!(fs.verify_integrity(), "La racine Merkle doit être valide");
 
@@ -56,9 +63,13 @@ pub fn execute_vfs_test() -> bool {
     );
 
     // 4. Test d'intégrité et lecture du fichier écrit
-    let telemetry_ino = fs.open("/var/data/telemetry.log").expect("Ouvrir /var/data/telemetry.log");
+    let telemetry_ino = fs
+        .open("/var/data/telemetry.log")
+        .expect("Ouvrir /var/data/telemetry.log");
     let mut read_data = [0u8; 128];
-    let read_len = fs.read(telemetry_ino, 0, &mut read_data).expect("Lire /var/data/telemetry.log");
+    let read_len = fs
+        .read(telemetry_ino, 0, &mut read_data)
+        .expect("Lire /var/data/telemetry.log");
     assert_eq!(&read_data[..read_len], test_data);
     kprintln!("[VFS/MERKLE] Intégrité Merkle vérifiée (100% cohérence des données)");
 
@@ -106,7 +117,10 @@ pub fn execute_vfs_test() -> bool {
     let (_, len_cat) = shell.execute_line("cat /etc/hostname", &mut shell_out);
     let str_cat = core::str::from_utf8(&shell_out[..len_cat]).unwrap_or("");
     assert!(str_cat.contains("jambobox"));
-    kprintln!("[VFS/SHELL] Commande 'cat /etc/hostname' -> {:?}", str_cat.trim_ascii());
+    kprintln!(
+        "[VFS/SHELL] Commande 'cat /etc/hostname' -> {:?}",
+        str_cat.trim_ascii()
+    );
 
     // write & cat
     let (_, len_wr) = shell.execute_line("write /tmp/hello.txt JamboVFS_Success", &mut shell_out);
@@ -116,8 +130,13 @@ pub fn execute_vfs_test() -> bool {
     let (_, len_cat2) = shell.execute_line("cat /tmp/hello.txt", &mut shell_out);
     let str_cat2 = core::str::from_utf8(&shell_out[..len_cat2]).unwrap_or("");
     assert!(str_cat2.contains("JamboVFS_Success"));
-    kprintln!("[VFS/SHELL] Commande 'write' & 'cat' validées : {:?}", str_cat2.trim_ascii());
+    kprintln!(
+        "[VFS/SHELL] Commande 'write' & 'cat' validées : {:?}",
+        str_cat2.trim_ascii()
+    );
 
-    kprintln!("[VFS/PASS] Système de fichiers transactionnel JamboFS VFS en espace utilisateur validé.");
+    kprintln!(
+        "[VFS/PASS] Système de fichiers transactionnel JamboFS VFS en espace utilisateur validé."
+    );
     true
 }

@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.41-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.42-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.41 (VFS Transactionnel JamboFS & Serveur IPC en Espace Utilisateur)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. Après la validation du shell interactif `jsh` (`v0.2.40`), la version `v0.2.41` implémente le système de fichiers virtuel (VFS) et le serveur transactionnel JamboFS en espace utilisateur Ring 3 (Phase 43). Il fournit l'écriture Copy-on-Write (CoW) atomique avec arbre de Merkle 256 bits, le protocole de requêtes IPC (`Open`, `Read`, `Write`, `Stat`, `Sync`), et les commandes shell natives du terminal (`ls`, `cat`, `write`, `stat`).
+> **Statut du Projet : Version v0.2.42 (Pile Réseau Userspace Sans Autorité Ambiante jambo-netd & Sockets NetCap)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. Après la validation du système de fichiers virtuel VFS transactionnel CoW (`v0.2.41`), la version `v0.2.42` implémente la pile réseau modulaire en espace utilisateur (`services/jambo-netd`) selon le paradigme de sécurité par capacités sans autorité ambiante (Zero Ambient Authority). Elle intègre les sockets TCP/IP sécurisées par NetCap, la poignée de main TLS 1.3 de bout en bout, la résolution DNS-over-TLS (port 853), le support ICMP Ping, ainsi que les commandes réseau natives du shell interactif `jsh` (`ip`, `ping`, `netstat`, `dns`).
 
 ---
 

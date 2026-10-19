@@ -488,9 +488,10 @@ pub extern "C" fn _start() -> ! {
 
     {
         let cspace = cap::KERNEL_CSPACE.lock();
-        if let Ok(cap::KernelObject::Thread(t)) =
-            cspace.lookup(jambo_abi::Handle(thread_handle), jambo_abi::cap_rights::MANAGE)
-        {
+        if let Ok(cap::KernelObject::Thread(t)) = cspace.lookup(
+            jambo_abi::Handle(thread_handle),
+            jambo_abi::cap_rights::MANAGE,
+        ) {
             t.lock().deadline = 1000;
         }
     }
@@ -731,6 +732,13 @@ pub extern "C" fn _start() -> ! {
         "Échec du test de système de fichiers transactionnel JamboFS VFS"
     );
 
+    // 10septies. Validation de la Pile Réseau Zero-Authority jambo-netd & Sockets (Phase 44 - v0.2.42)
+    let net_success = sched::execute_network_test();
+    assert!(
+        net_success,
+        "Échec du test de la pile réseau jambo-netd et sockets"
+    );
+
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
 
     arch::init_iommu();
@@ -860,14 +868,17 @@ pub extern "C" fn _start() -> ! {
     kprintln!(
         "\x1b[1;32m[PASS] Phase 43 Userspace VFS, Transactional JamboFS CoW & File Operations Complete\x1b[0m"
     );
+    kprintln!(
+        "\x1b[1;32m[PASS] Phase 44 Userspace Zero-Authority Network Stack (jambo-netd) & Sockets Complete\x1b[0m"
+    );
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.41 (VFS Transactionnel JamboFS & IPC FsServer)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.42 (Pile Réseau Userspace jambo-netd & Sockets)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.41 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.42 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );

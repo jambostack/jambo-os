@@ -1,4 +1,5 @@
 //! Module de test et validation de transition matérielle Ring 3 et aller-retour Syscall (Phase 39 - v0.2.37)
+#![allow(unused_imports, dead_code)]
 
 extern crate alloc;
 use alloc::sync::Arc;
@@ -14,7 +15,9 @@ pub static RING3_SYSCALL_STAGE: AtomicU32 = AtomicU32::new(0);
 
 #[cfg(target_arch = "x86_64")]
 pub fn execute_ring3_roundtrip_test() -> bool {
-    kprintln!("[RING3/TEST] Initialisation du test de transition matérielle vers Ring 3 (Phase 39)...");
+    kprintln!(
+        "[RING3/TEST] Initialisation du test de transition matérielle vers Ring 3 (Phase 39)..."
+    );
 
     let aspace = match AddressSpace::new() {
         Some(a) => Arc::new(a),
@@ -48,10 +51,10 @@ pub fn execute_ring3_roundtrip_test() -> bool {
     let user_bytecode: [u8; 28] = [
         0x48, 0xc7, 0xc7, 0x2a, 0x00, 0x00, 0x00, // mov rdi, 42
         0x48, 0xc7, 0xc0, 0x0c, 0x00, 0x00, 0x00, // mov rax, 12 (ThreadYield)
-        0x0f, 0x05,                               // syscall (Aller-retour Ring 3 -> Ring 0 -> Ring 3)
-        0x48, 0x31, 0xff,                         // xor rdi, rdi
+        0x0f, 0x05, // syscall (Aller-retour Ring 3 -> Ring 0 -> Ring 3)
+        0x48, 0x31, 0xff, // xor rdi, rdi
         0x48, 0xc7, 0xc0, 0x0b, 0x00, 0x00, 0x00, // mov rax, 11 (ThreadExit)
-        0x0f, 0x05,                               // syscall (Sortie propre Ring 3)
+        0x0f, 0x05, // syscall (Sortie propre Ring 3)
     ];
 
     if aspace.write_bytes(0x0040_0000, &user_bytecode).is_err() {
@@ -114,7 +117,9 @@ pub fn execute_ring3_roundtrip_test() -> bool {
         sched.enqueue(user_thread.clone());
     }
 
-    kprintln!("[RING3/TRANSITION] Saut vers Ring 3 via enter_user_mode (IRETQ avec CS=0x23, SS=0x1B)...");
+    kprintln!(
+        "[RING3/TRANSITION] Saut vers Ring 3 via enter_user_mode (IRETQ avec CS=0x23, SS=0x1B)..."
+    );
 
     // Déclencher l'ordonnancement pour basculer vers le thread Ring 3
     RING3_SYSCALL_STAGE.store(1, Ordering::SeqCst);

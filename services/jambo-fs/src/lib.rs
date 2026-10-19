@@ -231,7 +231,12 @@ impl JamboFsServer {
     }
 
     /// Lit le contenu d'un fichier par son numéro d'inode
-    pub fn read(&self, ino: u64, offset: usize, out: &mut [u8]) -> Result<usize, libjambo::SysError> {
+    pub fn read(
+        &self,
+        ino: u64,
+        offset: usize,
+        out: &mut [u8],
+    ) -> Result<usize, libjambo::SysError> {
         for entry in &self.files {
             if entry.in_use && entry.inode.ino == ino {
                 if offset >= entry.data_len {
@@ -402,8 +407,8 @@ impl JamboFsServer {
         inode.checksum = block_chk;
 
         // Allouer un nouvel offset pour le bloc CoW
-        let new_block_offset = self.active_uberblock.root_tree_offset
-            + (inode.block_count as u64 * BLOCK_SIZE as u64);
+        let new_block_offset =
+            self.active_uberblock.root_tree_offset + (inode.block_count as u64 * BLOCK_SIZE as u64);
         inode.direct_blocks[0] = new_block_offset;
 
         // Mettre à jour l'Uberblock atomiquement

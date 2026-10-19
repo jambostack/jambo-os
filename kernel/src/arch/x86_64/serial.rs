@@ -150,4 +150,3 @@ pub fn inject_input_str(s: &str) {
         queue.push(b);
     }
 }
-

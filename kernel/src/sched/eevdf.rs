@@ -112,10 +112,10 @@ impl EevdfScheduler {
             }
         };
 
-        if let Some(ref aspace) = next_aspace {
+        if let Some(ref _aspace) = next_aspace {
             #[cfg(target_arch = "x86_64")]
             {
-                crate::mm::paging::write_cr3(aspace.pml4_paddr);
+                crate::mm::paging::write_cr3(_aspace.pml4_paddr);
                 crate::arch::set_kernel_stack(next_stack_top);
                 crate::arch::set_current_kernel_stack(next_stack_top);
             }

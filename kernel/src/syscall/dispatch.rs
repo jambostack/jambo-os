@@ -1,6 +1,8 @@
 use crate::cap::{KernelObject, KERNEL_CSPACE};
 use crate::mm::{AddressSpace, Vmo};
-use crate::sched::{allocate_pid, allocate_tid, EevdfScheduler, Process, Thread, ThreadState, SCHEDULER};
+use crate::sched::{
+    allocate_pid, allocate_tid, EevdfScheduler, Process, Thread, ThreadState, SCHEDULER,
+};
 use alloc::sync::Arc;
 use jambo_abi::{cap_rights, Handle, SysError};
 

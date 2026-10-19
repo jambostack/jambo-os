@@ -17,7 +17,11 @@ pub fn apic_eoi() {}
 
 pub fn init_ioapic() {}
 pub fn ioapic_route_irq(_irq: u8, _vector: u8, _dest_lapic_id: u8) {}
-pub fn try_get_char() -> Option<u8> { None }
-pub fn get_char() -> u8 { 0 }
+pub fn try_get_char() -> Option<u8> {
+    None
+}
+pub fn get_char() -> u8 {
+    0
+}
 pub fn inject_input_byte(_b: u8) {}
 pub fn inject_input_str(_s: &str) {}

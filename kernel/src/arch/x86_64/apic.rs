@@ -234,4 +234,3 @@ pub fn apic_eoi() {
         lapic.eoi();
     }
 }
-

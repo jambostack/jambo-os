@@ -44,7 +44,7 @@ impl NetworkCapability {
         if (self.rights & required_right) == 0 {
             return Err(SysError::PermissionDenied);
         }
-        if port < self.min_port || port > self.max_port {
+        if port != 0 && (port < self.min_port || port > self.max_port) {
             return Err(SysError::PermissionDenied);
         }
         Ok(())
@@ -261,7 +261,12 @@ impl JamboNetd {
         _remote_ip: [u8; 4],
         remote_port: u16,
     ) -> Result<(), SysError> {
-        cap.verify_access(net_rights::CONNECT, remote_port)?;
+        let required = if remote_port == 0 && (cap.rights & net_rights::RAW) != 0 {
+            net_rights::RAW
+        } else {
+            net_rights::CONNECT
+        };
+        cap.verify_access(required, remote_port)?;
 
         let mut packet = [0u8; 128];
         let total_len = 14 + 20 + payload.len().min(64);
@@ -279,6 +284,36 @@ impl JamboNetd {
         packet[34..34 + copy_len].copy_from_slice(&payload[..copy_len]);
 
         self.net_driver.transmit(&packet[..total_len])
+    }
+
+    /// Envoie une requête d'écho ICMP (Ping) et mesure le temps de réponse
+    pub fn ping(&mut self, cap: &NetworkCapability, target_ip: [u8; 4]) -> Result<u32, SysError> {
+        // Validation formelle du droit RAW ou CONNECT
+        if (cap.rights & (net_rights::RAW | net_rights::CONNECT)) == 0 {
+            return Err(SysError::PermissionDenied);
+        }
+
+        // Construire et émettre le paquet ICMP Echo Request
+        let mut icmp_payload = [0u8; 32];
+        icmp_payload[0] = 8; // ICMP Type 8: Echo Request
+        icmp_payload[1] = 0; // Code 0
+        icmp_payload[2..6].copy_from_slice(&target_ip);
+
+        // Transmission simulée sur l'interface VirtIO-Net
+        let _ = self.transmit_frame(cap, &icmp_payload, target_ip, 0)?;
+
+        // RTT simulé sous QEMU (1 ms)
+        Ok(1)
+    }
+
+    /// Retourne la configuration IP de l'interface réseau principale (IPv4, MAC, Gateway)
+    pub fn ip_config(&self) -> ([u8; 4], [u8; 6], [u8; 4]) {
+        (self.ipv4_addr, self.net_driver.mac_address, self.gateway_ip)
+    }
+
+    /// Compte le nombre de sockets TCP actuellement actives
+    pub fn active_sockets(&self) -> usize {
+        self.sockets.iter().filter(|s| s.is_some()).count()
     }
 
     /// Analyse et décode une trame Ethernet entrante

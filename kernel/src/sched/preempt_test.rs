@@ -1,4 +1,5 @@
 //! Module de validation formelle du multitâche préemptif par Timer APIC (Phase 40 - v0.2.38)
+#![allow(unused_imports, dead_code)]
 
 extern crate alloc;
 use alloc::sync::Arc;
@@ -34,7 +35,9 @@ extern "C" fn uncooperative_compute_worker() {
 /// Exécute le test de validation du multitâche préemptif (Phase 40)
 #[cfg(target_arch = "x86_64")]
 pub fn execute_preemption_test() -> bool {
-    kprintln!("[PREEMPT/TEST] Démarrage du test de préemption matérielle par Timer APIC (Phase 40)...");
+    kprintln!(
+        "[PREEMPT/TEST] Démarrage du test de préemption matérielle par Timer APIC (Phase 40)..."
+    );
 
     COMPUTE_TICKS.store(0, Ordering::SeqCst);
     TEST_COMPLETE.store(false, Ordering::SeqCst);
@@ -75,7 +78,9 @@ pub fn execute_preemption_test() -> bool {
     // 3. Initialiser l'APIC et démarrer le Timer à 100 Hz (vecteur 32)
     crate::arch::apic_start_timer(32, 0x10000);
 
-    kprintln!("[PREEMPT/TIMER] Timer APIC armé (vecteur 32). Activation des interruptions CPU (STI)...");
+    kprintln!(
+        "[PREEMPT/TIMER] Timer APIC armé (vecteur 32). Activation des interruptions CPU (STI)..."
+    );
 
     // Activer les interruptions matérielles (STI)
     unsafe {
@@ -83,7 +88,9 @@ pub fn execute_preemption_test() -> bool {
     }
 
     // 4. Céder le contrôle au thread de calcul non coopératif
-    kprintln!("[PREEMPT/SWITCH] Bascule vers le thread de calcul non coopératif (boucle sans yield)...");
+    kprintln!(
+        "[PREEMPT/SWITCH] Bascule vers le thread de calcul non coopératif (boucle sans yield)..."
+    );
     EevdfScheduler::reschedule();
 
     // 5. La reprise d'exécution ICI démontre que le Timer APIC a interrompu le travailleur

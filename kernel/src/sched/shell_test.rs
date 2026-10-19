@@ -1,4 +1,5 @@
 //! Module de test et validation du Shell interactif jsh en Ring 3 & Commandes Natives (Phase 42 - v0.2.40)
+#![allow(unused_imports, dead_code)]
 
 extern crate alloc;
 use alloc::sync::Arc;
@@ -27,10 +28,22 @@ pub fn execute_shell_repl_test() -> bool {
     let in_vmo = Vmo::create(PAGE_SIZE);
     let info_vmo = Vmo::create(PAGE_SIZE);
 
-    if aspace.map_vmo(0x0040_0000, code_vmo, vmo_prot::READ | vmo_prot::WRITE | vmo_prot::EXEC).is_err()
-        || aspace.map_vmo(0x0040_1000, data_vmo, vmo_prot::READ | vmo_prot::WRITE).is_err()
-        || aspace.map_vmo(0x0040_2000, in_vmo, vmo_prot::READ | vmo_prot::WRITE).is_err()
-        || aspace.map_vmo(0x0040_3000, info_vmo, vmo_prot::READ | vmo_prot::WRITE).is_err()
+    if aspace
+        .map_vmo(
+            0x0040_0000,
+            code_vmo,
+            vmo_prot::READ | vmo_prot::WRITE | vmo_prot::EXEC,
+        )
+        .is_err()
+        || aspace
+            .map_vmo(0x0040_1000, data_vmo, vmo_prot::READ | vmo_prot::WRITE)
+            .is_err()
+        || aspace
+            .map_vmo(0x0040_2000, in_vmo, vmo_prot::READ | vmo_prot::WRITE)
+            .is_err()
+        || aspace
+            .map_vmo(0x0040_3000, info_vmo, vmo_prot::READ | vmo_prot::WRITE)
+            .is_err()
     {
         kprintln!("[SHELL/ERR] Échec du mapping des pages mémoire virtuelles");
         return false;
@@ -56,29 +69,25 @@ pub fn execute_shell_repl_test() -> bool {
     let shell_bytecode: [u8; 92] = [
         // 1. ConsoleWrite(0x00401000, 9)
         0x48, 0xbf, 0x00, 0x10, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, // mov rdi, 0x00401000
-        0x48, 0xc7, 0xc6, 0x09, 0x00, 0x00, 0x00,                   // mov rsi, 9
-        0x48, 0xc7, 0xc0, 0x1a, 0x00, 0x00, 0x00,                   // mov rax, 26 (ConsoleWrite)
-        0x0f, 0x05,                                                 // syscall
-
+        0x48, 0xc7, 0xc6, 0x09, 0x00, 0x00, 0x00, // mov rsi, 9
+        0x48, 0xc7, 0xc0, 0x1a, 0x00, 0x00, 0x00, // mov rax, 26 (ConsoleWrite)
+        0x0f, 0x05, // syscall
         // 2. ConsoleRead(0x00402000, 64)
         0x48, 0xbf, 0x00, 0x20, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, // mov rdi, 0x00402000
-        0x48, 0xc7, 0xc6, 0x40, 0x00, 0x00, 0x00,                   // mov rsi, 64
-        0x48, 0xc7, 0xc0, 0x19, 0x00, 0x00, 0x00,                   // mov rax, 25 (ConsoleRead)
-        0x0f, 0x05,                                                 // syscall
-
+        0x48, 0xc7, 0xc6, 0x40, 0x00, 0x00, 0x00, // mov rsi, 64
+        0x48, 0xc7, 0xc0, 0x19, 0x00, 0x00, 0x00, // mov rax, 25 (ConsoleRead)
+        0x0f, 0x05, // syscall
         // 3. SysInfo(0x00403000)
         0x48, 0xbf, 0x00, 0x30, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, // mov rdi, 0x00403000
-        0x48, 0xc7, 0xc0, 0x1b, 0x00, 0x00, 0x00,                   // mov rax, 27 (SysInfo)
-        0x0f, 0x05,                                                 // syscall
-
+        0x48, 0xc7, 0xc0, 0x1b, 0x00, 0x00, 0x00, // mov rax, 27 (SysInfo)
+        0x0f, 0x05, // syscall
         // 4. ThreadYield (12)
-        0x48, 0xc7, 0xc0, 0x0c, 0x00, 0x00, 0x00,                   // mov rax, 12
-        0x0f, 0x05,                                                 // syscall
-
+        0x48, 0xc7, 0xc0, 0x0c, 0x00, 0x00, 0x00, // mov rax, 12
+        0x0f, 0x05, // syscall
         // 5. ThreadExit(0)
-        0x48, 0x31, 0xff,                                           // xor rdi, rdi
-        0x48, 0xc7, 0xc0, 0x0b, 0x00, 0x00, 0x00,                   // mov rax, 11
-        0x0f, 0x05,                                                 // syscall
+        0x48, 0x31, 0xff, // xor rdi, rdi
+        0x48, 0xc7, 0xc0, 0x0b, 0x00, 0x00, 0x00, // mov rax, 11
+        0x0f, 0x05, // syscall
     ];
 
     if aspace.write_bytes(0x0040_0000, &shell_bytecode).is_err() {
@@ -89,7 +98,10 @@ pub fn execute_shell_repl_test() -> bool {
     // 5. Mappage de la pile utilisateur (64 Kio)
     let stack_vmo = Vmo::create(64 * 1024);
     let stack_base = 0x0000_7FFF_FFFF_0000usize - 64 * 1024;
-    if aspace.map_vmo(stack_base, stack_vmo, vmo_prot::READ | vmo_prot::WRITE).is_err() {
+    if aspace
+        .map_vmo(stack_base, stack_vmo, vmo_prot::READ | vmo_prot::WRITE)
+        .is_err()
+    {
         kprintln!("[SHELL/ERR] Échec du mapping de la pile utilisateur");
         return false;
     }
@@ -173,7 +185,10 @@ pub fn execute_shell_repl_test() -> bool {
     // Test commande 'echo'
     let (_, len_echo) = shell.execute_line("echo Hello JamboOS!", &mut out_buf);
     let str_echo = core::str::from_utf8(&out_buf[..len_echo]).unwrap_or("");
-    kprintln!("[SHELL/EXEC] Commande 'echo Hello JamboOS!' -> {:?}", str_echo.trim_ascii());
+    kprintln!(
+        "[SHELL/EXEC] Commande 'echo Hello JamboOS!' -> {:?}",
+        str_echo.trim_ascii()
+    );
     assert_eq!(str_echo.trim_ascii(), "Hello JamboOS!");
 
     // Test commande 'mem'
