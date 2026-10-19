@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.76-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.77-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.76 (Attestation Matérielle Distante TPM 2.0 & Confinement de Grappe jambo-secpolicyd)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.76` introduit le démon d'attestation matérielle TPM 2.0 et de confinement de grappe (`services/jambo-secpolicyd`), doté de la gestion des registres PCR (PCR 0..23) avec extensions cryptographiques SHA-256 conformes TCG, d'un journal d'événements de démarrage mesuré borné (`EventLog`), de la génération de citations cryptographiques signées asymétriquement (`TpmQuote`), d'un protocole défi-réponse par nonce frais interdisant le rejeu de trames, de la vérification d'intégrité de démarrage mesuré contre une baseline saine (Golden Baseline), du confinement automatique Zero-Trust en quarantaine ou révocation des nœuds compromis, du contrôle d'accès capabilaire `SecPolicyCap`, et des commandes shell interactives `secpolicy [status | pcrs | verify <node_id> | confine <node_id> <mode>]` dans `jsh`.
+> **Statut du Projet : Version v0.2.77 (Pare-Feu Distribué Dynamique & Synchronisation Conntrack jambo-walld)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.77` introduit le démon de pare-feu distribué dynamique et de synchronisation de sessions conntrack (`services/jambo-walld`), doté d'une machine à états TCP/UDP conntrack déterministe avec Fast-Path instantané pour les flux `Established`, d'une synchronisation inter-nœuds cryptographiquement scellée par HMAC-SHA256 pour la haute disponibilité et la bascule à chaud (Hot Failover), du filtrage dynamique adaptatif Zero-Trust (déni par défaut, verrouillage d'urgence lockdown), de l'auto-blocage dynamique en cas d'anomalies réseau (scans XMAS, NULL, drapeaux TCP invalides), du contrôle d'accès capabilaire `WallCap`, et des commandes shell interactives `wall [status | rules | conntrack | add | lockdown]` dans `jsh`.
 
 ---
 
@@ -167,6 +167,7 @@ jambo-os/
 │   ├── jambo-vaultd/        # Coffre-fort de secrets distribué & quorum de déverrouillage
 │   ├── jambo-vhostd/        # Virtualisation de périphériques vhost-user VirtIO Ring 3
 │   ├── jambo-vmm/           # Moniteur de micro-VMs et isolation matérielle Type-2
+│   ├── jambo-walld/         # Pare-feu distribué dynamique & synchronisation conntrack
 │   ├── jambo-wasm/          # Runtime WebAssembly / WASI Snapshot Preview 1
 │   └── pcie-bus-mgr/        # Gestionnaire de bus PCIe, MSI-X et isolation IOMMU
 └── xtask/                   # Outil de compilation, création d'ISO et test QEMU

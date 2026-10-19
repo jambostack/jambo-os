@@ -974,6 +974,13 @@ pub extern "C" fn _start() -> ! {
         "Échec du test du démon d'attestation TPM 2.0 jambo-secpolicyd"
     );
 
+    // 10octies. Validation du Pare-Feu Distribué & Synchronisation Conntrack (Phase 79 - v0.2.77)
+    let wall_success = sched::execute_wall_daemon_test();
+    assert!(
+        wall_success,
+        "Échec du test du démon de pare-feu distribué jambo-walld"
+    );
+
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
 
     arch::init_iommu();
@@ -1188,14 +1195,15 @@ pub extern "C" fn _start() -> ! {
     kprintln!("\x1b[1;32m[PASS] Phase 76 Sovereign eBPF Engine & Packet Filtering (jambo-bpfd) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 77 Distributed IPC Multiplexer & Deterministic Gateway (jambo-ipcd) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 78 Remote TPM 2.0 Hardware Attestation & Cluster Confinement (jambo-secpolicyd) Complete\x1b[0m");
+    kprintln!("\x1b[1;32m[PASS] Phase 79 Distributed Stateful Firewall & Conntrack Sync (jambo-walld) Complete\x1b[0m");
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.76 (Attestation TPM 2.0 & Confinement de Grappe jambo-secpolicyd)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.77 (Pare-Feu Distribué & Synchronisation Conntrack jambo-walld)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.76 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.77 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );

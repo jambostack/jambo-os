@@ -129,6 +129,7 @@ pub struct JamboShell {
     pub bpf: jambo_bpfd::JamboBpfDaemon,
     pub ipc: jambo_ipcd::JamboIpcDaemon,
     pub secpolicy: jambo_secpolicyd::JamboSecPolicyDaemon,
+    pub wall: jambo_walld::JamboWallDaemon,
 }
 
 impl Default for JamboShell {
@@ -257,6 +258,12 @@ impl JamboShell {
         let secpolicy_pub = [0x78u8; 32];
         let mut secpolicy = jambo_secpolicyd::JamboSecPolicyDaemon::new(1, secpolicy_cap, secpolicy_priv, secpolicy_pub);
         let _ = secpolicy.register_remote_node(&secpolicy_cap, 2, [0x55u8; 32]);
+        let wall_cap = jambo_walld::WallCap::new(
+            libjambo::Handle::new(7901, 1),
+            jambo_walld::wall_rights::ALL,
+        );
+        let mut wall = jambo_walld::JamboWallDaemon::new(1, wall_cap, [0x79u8; 32]);
+        wall.init_defaults();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -294,6 +301,7 @@ impl JamboShell {
             bpf,
             ipc,
             secpolicy,
+            wall,
         }
     }
 
@@ -441,6 +449,7 @@ impl JamboShell {
                 emit("  bpf [cmd]    - Moteur eBPF souverain et filtrage réseau XDP\n");
                 emit("  ipc [cmd]    - Multiplexeur IPC distribué et passerelle déterministe\n");
                 emit("  secpolicy [cmd] - Attestation matérielle TPM 2.0 et confinement de grappe\n");
+                emit("  wall [cmd]   - Pare-feu distribué dynamique et synchronisation conntrack\n");
                 emit("  echo <args>  - Affiche les arguments sur la sortie console\n");
                 emit("  clear        - Efface l'écran du terminal (ANSI escape)\n");
                 emit("  reboot       - Redémarre la machine\n");
@@ -448,7 +457,7 @@ impl JamboShell {
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.2.76 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.2.77 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -1449,6 +1458,210 @@ impl JamboShell {
                     }
                     _ => {
                         emit("Usage: secpolicy [status | pcrs | verify <node_id> | confine <node_id> <mode>]\n");
+                        (ShellStatus::ExecutionFailed, write_pos)
+                    }
+                }
+            }
+            "wall" => {
+                let wall_cap = self.wall.cap;
+                let subcmd = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    "status"
+                };
+
+                match subcmd {
+                    "status" => {
+                        let mut b = [0u8; 20];
+                        emit("=== PARE-FEU DISTRIBUÉ & ÉTATS DE SESSIONS CONNTRACK (jambo-walld) ===\n");
+                        emit("Nœud Local ID        : #");
+                        emit(format_u64(self.wall.node_id, &mut b));
+                        emit("\nPolitique Zero-Trust : ");
+                        if self.wall.zero_trust_strict {
+                            emit("STRICTE (Déni par défaut)\n");
+                        } else {
+                            emit("PERMISSIVE\n");
+                        }
+                        emit("Verrouillage Urgence : ");
+                        if self.wall.emergency_lockdown {
+                            emit("ACTIF (LOCKDOWN)\n");
+                        } else {
+                            emit("INACTIF (NORMAL)\n");
+                        }
+                        emit("Sessions Actives     : ");
+                        emit(format_u64(self.wall.conntrack.active_count() as u64, &mut b));
+                        emit(" / ");
+                        emit(format_u64(jambo_walld::MAX_CONNTRACK_ENTRIES as u64, &mut b));
+                        emit("\nRègles Actives       : ");
+                        emit(format_u64(self.wall.rule_count as u64, &mut b));
+                        emit(" / ");
+                        emit(format_u64(jambo_walld::MAX_RULES as u64, &mut b));
+                        emit("\n");
+
+                        if let Ok(st) = self.wall.stats(&wall_cap) {
+                            emit("\n--- Statistiques de Filtrage ---\n");
+                            emit("Paquets Évalués      : ");
+                            emit(format_u64(st.packets_evaluated, &mut b));
+                            emit(" | Autorisés : ");
+                            emit(format_u64(st.packets_allowed, &mut b));
+                            emit(" | Rejetés/Bloqués : ");
+                            emit(format_u64(st.packets_dropped + st.packets_rejected, &mut b));
+                            emit("\nConntrack Fast-Path  : ");
+                            emit(format_u64(st.conntrack_fastpath_hits, &mut b));
+                            emit(" hits\nMenaces Détectées    : ");
+                            emit(format_u64(st.threats_detected, &mut b));
+                            emit(" | Blocs Dynamiques : ");
+                            emit(format_u64(st.dynamic_blocks_created, &mut b));
+                            emit("\nSynchro Grappe       : Envoyés: ");
+                            emit(format_u64(st.sync_events_sent, &mut b));
+                            emit(" | Reçus: ");
+                            emit(format_u64(st.sync_events_received, &mut b));
+                            emit("\n");
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "rules" => {
+                        let mut b = [0u8; 20];
+                        emit("ID  PRIO  ACTION    NOM                      ZONES               HITS\n");
+                        emit("--------------------------------------------------------------------\n");
+                        for r in self.wall.rules[..self.wall.rule_count].iter() {
+                            if r.is_active {
+                                emit("#");
+                                emit(format_u64(r.id as u64, &mut b));
+                                emit("  ");
+                                emit(format_u64(r.priority as u64, &mut b));
+                                emit("    ");
+                                emit(r.action.as_str());
+                                emit("     ");
+                                emit(r.name_as_str());
+                                emit("  ");
+                                if let Some(sz) = r.src_zone {
+                                    emit(sz.as_str());
+                                } else {
+                                    emit("*");
+                                }
+                                emit("->");
+                                if let Some(dz) = r.dst_zone {
+                                    emit(dz.as_str());
+                                } else {
+                                    emit("*");
+                                }
+                                emit("  Hits: ");
+                                emit(format_u64(r.hit_count, &mut b));
+                                if r.is_dynamic_block {
+                                    emit(" [AUTO-BLOC]");
+                                }
+                                emit("\n");
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "conntrack" => {
+                        let mut b = [0u8; 20];
+                        emit("PROTO  SRC IP:PORT         DST IP:PORT         ÉTAT         PAQUETS   OCTETS\n");
+                        emit("----------------------------------------------------------------------------\n");
+                        for entry in self.wall.conntrack.entries.iter() {
+                            if entry.is_active {
+                                if entry.tuple.proto == jambo_walld::ip_proto::TCP {
+                                    emit("TCP    ");
+                                } else if entry.tuple.proto == jambo_walld::ip_proto::UDP {
+                                    emit("UDP    ");
+                                } else {
+                                    emit("IP     ");
+                                }
+                                emit(format_u64(entry.tuple.src_ip[0] as u64, &mut b));
+                                emit(".");
+                                emit(format_u64(entry.tuple.src_ip[1] as u64, &mut b));
+                                emit(".");
+                                emit(format_u64(entry.tuple.src_ip[2] as u64, &mut b));
+                                emit(".");
+                                emit(format_u64(entry.tuple.src_ip[3] as u64, &mut b));
+                                emit(":");
+                                emit(format_u64(entry.tuple.src_port as u64, &mut b));
+                                emit(" -> ");
+                                emit(format_u64(entry.tuple.dst_ip[0] as u64, &mut b));
+                                emit(".");
+                                emit(format_u64(entry.tuple.dst_ip[1] as u64, &mut b));
+                                emit(".");
+                                emit(format_u64(entry.tuple.dst_ip[2] as u64, &mut b));
+                                emit(".");
+                                emit(format_u64(entry.tuple.dst_ip[3] as u64, &mut b));
+                                emit(":");
+                                emit(format_u64(entry.tuple.dst_port as u64, &mut b));
+                                emit("  ");
+                                emit(entry.state.as_str());
+                                emit("  ");
+                                emit(format_u64(entry.orig_packets + entry.reply_packets, &mut b));
+                                emit(" pkts  ");
+                                emit(format_u64(entry.orig_bytes + entry.reply_bytes, &mut b));
+                                emit(" B\n");
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "add" => {
+                        if parsed.arg_count < 6 {
+                            emit("Usage: wall add <src_zone> <dst_zone> <proto> <dport> <allow|drop>\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        } else {
+                            let src_zone = jambo_walld::SecurityZone::from_str(parsed.args[2]);
+                            let dst_zone = jambo_walld::SecurityZone::from_str(parsed.args[3]);
+                            let proto = match parsed.args[4] {
+                                "tcp" | "TCP" => Some(jambo_walld::ip_proto::TCP),
+                                "udp" | "UDP" => Some(jambo_walld::ip_proto::UDP),
+                                "icmp" | "ICMP" => Some(jambo_walld::ip_proto::ICMP),
+                                _ => None,
+                            };
+                            let dport = parse_u64(parsed.args[5]).unwrap_or(80) as u16;
+                            let action = jambo_walld::WallAction::from_str(if parsed.arg_count > 6 { parsed.args[6] } else { "allow" }).unwrap_or(jambo_walld::WallAction::Allow);
+
+                            let mut r = jambo_walld::WallRule::empty();
+                            r.priority = 60;
+                            r.set_name("cli_rule");
+                            r.src_zone = src_zone;
+                            r.dst_zone = dst_zone;
+                            r.proto = proto;
+                            r.dst_port_range = Some((dport, dport));
+                            r.action = action;
+
+                            let mut b = [0u8; 20];
+                            match self.wall.add_rule(&wall_cap, r) {
+                                Ok(id) => {
+                                    emit("[WALL] Règle #");
+                                    emit(format_u64(id as u64, &mut b));
+                                    emit(" ajoutée avec succès\n");
+                                    (ShellStatus::Success, write_pos)
+                                }
+                                Err(_) => {
+                                    emit("wall: échec de l'ajout de la règle\n");
+                                    (ShellStatus::ExecutionFailed, write_pos)
+                                }
+                            }
+                        }
+                    }
+                    "lockdown" => {
+                        let enable = if parsed.arg_count > 2 {
+                            parsed.args[2] == "on" || parsed.args[2] == "1"
+                        } else {
+                            !self.wall.emergency_lockdown
+                        };
+                        match self.wall.set_lockdown(&wall_cap, enable) {
+                            Ok(_) => {
+                                if enable {
+                                    emit("[WALL] VERROUILLAGE D'URGENCE ACTIVÉ: tout le trafic non-noyau est bloqué!\n");
+                                } else {
+                                    emit("[WALL] Verrouillage levé: reprise du trafic nominal.\n");
+                                }
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("wall: échec de modification du mode lockdown\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    _ => {
+                        emit("Usage: wall [status | rules | conntrack | add <src_z> <dst_z> <proto> <dport> <act> | lockdown [on|off]]\n");
                         (ShellStatus::ExecutionFailed, write_pos)
                     }
                 }

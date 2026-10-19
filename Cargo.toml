@@ -43,6 +43,7 @@ members = [
     "services/jambo-bpfd",
     "services/jambo-ipcd",
     "services/jambo-secpolicyd",
+    "services/jambo-walld",
     "libs/jambo-ui",
     "libs/jambo-sdk",
     "drivers/virtio",
