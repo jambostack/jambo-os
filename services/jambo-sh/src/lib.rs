@@ -148,10 +148,29 @@ impl StructuredPipeline {
     }
 }
 
+fn format_u64(mut val: u64, buf: &mut [u8; 20]) -> &str {
+    if val == 0 {
+        buf[0] = b'0';
+        return core::str::from_utf8(&buf[..1]).unwrap_or("0");
+    }
+    let mut i = 0;
+    let mut temp = [0u8; 20];
+    while val > 0 {
+        temp[i] = b'0' + (val % 10) as u8;
+        val /= 10;
+        i += 1;
+    }
+    for j in 0..i {
+        buf[j] = temp[i - 1 - j];
+    }
+    core::str::from_utf8(&buf[..i]).unwrap_or("")
+}
+
 /// Interpréteur de commandes JamboShell
 pub struct JamboShell {
     pub prompt_user: &'static str,
     pub commands_executed: u64,
+    pub fs: jambo_fs::JamboFsServer,
 }
 
 impl Default for JamboShell {
@@ -161,10 +180,11 @@ impl Default for JamboShell {
 }
 
 impl JamboShell {
-    pub const fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
+            fs: jambo_fs::JamboFsServer::new(jambo_fs::Uberblock::default()),
         }
     }
 
@@ -252,6 +272,10 @@ impl JamboShell {
                 emit("  version      - Affiche la version du noyau JamboOS et de jsh\n");
                 emit("  ps           - Liste les processus actifs et l'isolation CSpace\n");
                 emit("  mem          - Statistiques mémoire physique PMM et SLUB\n");
+                emit("  ls [dir]     - Liste les fichiers du système VFS JamboFS\n");
+                emit("  cat <file>   - Affiche le contenu d'un fichier du VFS\n");
+                emit("  write <f> <t>- Écrit dans un fichier de manière transactionnelle CoW\n");
+                emit("  stat <file>  - Affiche les métadonnées et checksum Merkle d'un fichier\n");
                 emit("  echo <args>  - Affiche les arguments sur la sortie console\n");
                 emit("  clear        - Efface l'écran du terminal (ANSI escape)\n");
                 emit("  reboot       - Redémarre la machine\n");
@@ -259,7 +283,7 @@ impl JamboShell {
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.2.40 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.2.41 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -290,6 +314,110 @@ impl JamboShell {
                 emit("SLUB Slab Allocator : Opérationnel (W^X Enforced)\n");
                 (ShellStatus::Success, write_pos)
             }
+            "ls" => {
+                emit("INODE  TAILLE  GEN  FICHIER\n");
+                for entry in &self.fs.files {
+                    if entry.in_use {
+                        if let Ok(path_str) = core::str::from_utf8(&entry.path[..entry.path_len]) {
+                            emit("  ");
+                            emit(path_str);
+                            emit(" (");
+                            let mut buf = [0u8; 20];
+                            emit(format_u64(entry.inode.size, &mut buf));
+                            emit(" octets)\n");
+                        }
+                    }
+                }
+                (ShellStatus::Success, write_pos)
+            }
+            "cat" => {
+                if parsed.arg_count > 1 {
+                    let target_path = parsed.args[1];
+                    match self.fs.open(target_path) {
+                        Ok(ino) => {
+                            let mut read_buf = [0u8; 512];
+                            match self.fs.read(ino, 0, &mut read_buf) {
+                                Ok(n) => {
+                                    if let Ok(text) = core::str::from_utf8(&read_buf[..n]) {
+                                        emit(text);
+                                        if !text.ends_with('\n') {
+                                            emit("\n");
+                                        }
+                                    }
+                                    (ShellStatus::Success, write_pos)
+                                }
+                                Err(_) => {
+                                    emit("cat: erreur de lecture fichier\n");
+                                    (ShellStatus::ExecutionFailed, write_pos)
+                                }
+                            }
+                        }
+                        Err(_) => {
+                            emit("cat: fichier non trouvé : ");
+                            emit(target_path);
+                            emit("\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        }
+                    }
+                } else {
+                    emit("Usage: cat <chemin_fichier>\n");
+                    (ShellStatus::Success, write_pos)
+                }
+            }
+            "write" => {
+                if parsed.arg_count >= 3 {
+                    let target_path = parsed.args[1];
+                    let text = parsed.args[2];
+                    match self.fs.write_file_vfs(target_path, text.as_bytes()) {
+                        Ok(inode) => {
+                            emit("[JAMBOFS/COW] Fichier écrit avec succès via transaction CoW (Inode: ");
+                            let mut buf = [0u8; 20];
+                            emit(format_u64(inode.ino, &mut buf));
+                            emit(", Gen: ");
+                            emit(format_u64(inode.generation, &mut buf));
+                            emit(")\n");
+                            (ShellStatus::Success, write_pos)
+                        }
+                        Err(_) => {
+                            emit("write: échec d'écriture transactionnelle CoW\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        }
+                    }
+                } else {
+                    emit("Usage: write <chemin_fichier> <texte>\n");
+                    (ShellStatus::Success, write_pos)
+                }
+            }
+            "stat" => {
+                if parsed.arg_count > 1 {
+                    let target_path = parsed.args[1];
+                    match self.fs.open(target_path) {
+                        Ok(ino) => {
+                            if let Ok(st) = self.fs.stat(ino) {
+                                emit("Inode: ");
+                                let mut buf = [0u8; 20];
+                                emit(format_u64(st.ino, &mut buf));
+                                emit(" | Taille: ");
+                                emit(format_u64(st.size, &mut buf));
+                                emit(" octets | Génération CoW: ");
+                                emit(format_u64(st.generation, &mut buf));
+                                emit("\n");
+                                (ShellStatus::Success, write_pos)
+                            } else {
+                                emit("stat: métadonnées introuvables\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                        Err(_) => {
+                            emit("stat: fichier non trouvé\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        }
+                    }
+                } else {
+                    emit("Usage: stat <chemin_fichier>\n");
+                    (ShellStatus::Success, write_pos)
+                }
+            }
             "poweroff" | "reboot" => {
                 emit("[SYSTEM] Extinction demandée...\n");
                 unsafe {
@@ -301,7 +429,7 @@ impl JamboShell {
                 emit("CSpace Capacités : Mode Least-Privilege actif, 0 autorité ambiante\n");
                 (ShellStatus::Success, write_pos)
             }
-            "ls" | "top" | "jpkg" | "cat" | "filter" => {
+            "top" | "jpkg" | "filter" => {
                 emit("[CONFINED] Commande exécutée avec isolation par capacités\n");
                 (ShellStatus::Success, write_pos)
             }

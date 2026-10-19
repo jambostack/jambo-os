@@ -724,6 +724,13 @@ pub extern "C" fn _start() -> ! {
         "Échec du test de shell interactif jsh Ring 3"
     );
 
+    // 10sexies. Validation du Système de Fichiers Transactionnel JamboFS VFS (Phase 43 - v0.2.41)
+    let vfs_success = sched::execute_vfs_test();
+    assert!(
+        vfs_success,
+        "Échec du test de système de fichiers transactionnel JamboFS VFS"
+    );
+
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
 
     arch::init_iommu();
@@ -850,14 +857,17 @@ pub extern "C" fn _start() -> ! {
     kprintln!(
         "\x1b[1;32m[PASS] Phase 42 Interactive Ring 3 Object Shell (jsh) & Native Commands Complete\x1b[0m"
     );
+    kprintln!(
+        "\x1b[1;32m[PASS] Phase 43 Userspace VFS, Transactional JamboFS CoW & File Operations Complete\x1b[0m"
+    );
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.40 (Shell Interactif jsh & Commandes Natives)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.41 (VFS Transactionnel JamboFS & IPC FsServer)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.40 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.41 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );

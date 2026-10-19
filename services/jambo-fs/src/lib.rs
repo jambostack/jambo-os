@@ -138,17 +138,250 @@ pub fn compute_block_checksum(data: &[u8], seed: u64) -> [u8; 32] {
     out
 }
 
+pub const MAX_VFS_FILES: usize = 16;
+pub const MAX_PATH_LEN: usize = 64;
+pub const MAX_FILE_DATA: usize = 512;
+
+#[derive(Debug, Clone, Copy)]
+pub struct VfsFileEntry {
+    pub path: [u8; MAX_PATH_LEN],
+    pub path_len: usize,
+    pub inode: FsInode,
+    pub data_len: usize,
+    pub data: [u8; MAX_FILE_DATA],
+    pub in_use: bool,
+}
+
+impl Default for VfsFileEntry {
+    fn default() -> Self {
+        Self {
+            path: [0; MAX_PATH_LEN],
+            path_len: 0,
+            inode: FsInode::new(0, 0, 0),
+            data_len: 0,
+            data: [0; MAX_FILE_DATA],
+            in_use: false,
+        }
+    }
+}
+
 /// Serveur de fichiers transactionnel JamboFS en espace utilisateur
 pub struct JamboFsServer {
     pub active_uberblock: Uberblock,
     pub next_ino: u64,
+    pub files: [VfsFileEntry; MAX_VFS_FILES],
 }
 
 impl JamboFsServer {
     pub fn new(uberblock: Uberblock) -> Self {
-        Self {
+        let mut server = Self {
             active_uberblock: uberblock,
             next_ino: 100,
+            files: [VfsFileEntry::default(); MAX_VFS_FILES],
+        };
+
+        // Fichiers initiaux du système VFS
+        server.add_system_file("/etc/hostname", b"jambobox\n");
+        server.add_system_file(
+            "/system/config.json",
+            b"{\"hostname\": \"jambobox\", \"secure_boot\": true}",
+        );
+        server.add_system_file(
+            "/var/log/syslog",
+            b"[SYSTEM] JamboOS v0.2.41 booted successfully\n",
+        );
+
+        server
+    }
+
+    pub fn add_system_file(&mut self, path: &str, content: &[u8]) {
+        for entry in &mut self.files {
+            if !entry.in_use {
+                entry.in_use = true;
+                let path_bytes = path.as_bytes();
+                entry.path_len = path_bytes.len().min(MAX_PATH_LEN);
+                entry.path[..entry.path_len].copy_from_slice(&path_bytes[..entry.path_len]);
+
+                let ino = self.next_ino;
+                self.next_ino += 1;
+                let mut inode =
+                    FsInode::new(ino, content.len() as u64, self.active_uberblock.generation);
+                inode.checksum = compute_block_checksum(content, self.active_uberblock.generation);
+                entry.inode = inode;
+
+                entry.data_len = content.len().min(MAX_FILE_DATA);
+                entry.data[..entry.data_len].copy_from_slice(&content[..entry.data_len]);
+                break;
+            }
+        }
+    }
+
+    /// Ouvre un fichier par son chemin virtuel
+    pub fn open(&self, path: &str) -> Result<u64, libjambo::SysError> {
+        let path_bytes = path.as_bytes();
+        for entry in &self.files {
+            if entry.in_use
+                && entry.path_len == path_bytes.len()
+                && &entry.path[..entry.path_len] == path_bytes
+            {
+                return Ok(entry.inode.ino);
+            }
+        }
+        Err(libjambo::SysError::InvalidArgument)
+    }
+
+    /// Lit le contenu d'un fichier par son numéro d'inode
+    pub fn read(&self, ino: u64, offset: usize, out: &mut [u8]) -> Result<usize, libjambo::SysError> {
+        for entry in &self.files {
+            if entry.in_use && entry.inode.ino == ino {
+                if offset >= entry.data_len {
+                    return Ok(0);
+                }
+                let available = entry.data_len - offset;
+                let to_read = available.min(out.len());
+                out[..to_read].copy_from_slice(&entry.data[offset..offset + to_read]);
+                return Ok(to_read);
+            }
+        }
+        Err(libjambo::SysError::InvalidArgument)
+    }
+
+    /// Écrit dans un fichier de manière Copy-on-Write (atomique)
+    pub fn write_file_vfs(
+        &mut self,
+        path: &str,
+        content: &[u8],
+    ) -> Result<FsInode, libjambo::SysError> {
+        let (inode, _) = self.write_file_cow(content)?;
+        let path_bytes = path.as_bytes();
+
+        // Mettre à jour si le fichier existe déjà
+        for entry in &mut self.files {
+            if entry.in_use
+                && entry.path_len == path_bytes.len()
+                && &entry.path[..entry.path_len] == path_bytes
+            {
+                entry.inode = inode;
+                entry.data_len = content.len().min(MAX_FILE_DATA);
+                entry.data[..entry.data_len].copy_from_slice(&content[..entry.data_len]);
+                return Ok(inode);
+            }
+        }
+
+        // Sinon créer une nouvelle entrée VFS
+        for entry in &mut self.files {
+            if !entry.in_use {
+                entry.in_use = true;
+                entry.path_len = path_bytes.len().min(MAX_PATH_LEN);
+                entry.path[..entry.path_len].copy_from_slice(&path_bytes[..entry.path_len]);
+                entry.inode = inode;
+                entry.data_len = content.len().min(MAX_FILE_DATA);
+                entry.data[..entry.data_len].copy_from_slice(&content[..entry.data_len]);
+                return Ok(inode);
+            }
+        }
+        Err(libjambo::SysError::OutOfMemory)
+    }
+
+    /// Retourne les métadonnées (stat) d'un fichier par inode
+    pub fn stat(&self, ino: u64) -> Result<FsInode, libjambo::SysError> {
+        for entry in &self.files {
+            if entry.in_use && entry.inode.ino == ino {
+                return Ok(entry.inode);
+            }
+        }
+        Err(libjambo::SysError::InvalidArgument)
+    }
+
+    /// Traite une requête IPC issue d'un canal VFS
+    pub fn handle_ipc(
+        &mut self,
+        req: &FsRequest,
+        req_data: &[u8],
+        resp_data: &mut [u8],
+    ) -> FsResponse {
+        match req.opcode {
+            FsOpcode::Open => {
+                let path_len = (req.path_len as usize).min(req.path.len());
+                if let Ok(path_str) = core::str::from_utf8(&req.path[..path_len]) {
+                    match self.open(path_str) {
+                        Ok(ino) => FsResponse {
+                            status: libjambo::SysError::Success as i64,
+                            bytes_transferred: ino,
+                            vmo_handle: libjambo::Handle::new(ino as u32, 1),
+                        },
+                        Err(e) => FsResponse {
+                            status: e as i64,
+                            bytes_transferred: 0,
+                            vmo_handle: libjambo::Handle::NULL,
+                        },
+                    }
+                } else {
+                    FsResponse {
+                        status: libjambo::SysError::InvalidArgument as i64,
+                        bytes_transferred: 0,
+                        vmo_handle: libjambo::Handle::NULL,
+                    }
+                }
+            }
+            FsOpcode::Read => {
+                let ino = req.handle.index() as u64;
+                match self.read(ino, req.offset as usize, resp_data) {
+                    Ok(read_len) => FsResponse {
+                        status: libjambo::SysError::Success as i64,
+                        bytes_transferred: read_len as u64,
+                        vmo_handle: req.handle,
+                    },
+                    Err(e) => FsResponse {
+                        status: e as i64,
+                        bytes_transferred: 0,
+                        vmo_handle: libjambo::Handle::NULL,
+                    },
+                }
+            }
+            FsOpcode::Write => {
+                let path_len = (req.path_len as usize).min(req.path.len());
+                if let Ok(path_str) = core::str::from_utf8(&req.path[..path_len]) {
+                    match self.write_file_vfs(path_str, req_data) {
+                        Ok(inode) => FsResponse {
+                            status: libjambo::SysError::Success as i64,
+                            bytes_transferred: inode.size,
+                            vmo_handle: libjambo::Handle::new(inode.ino as u32, 1),
+                        },
+                        Err(e) => FsResponse {
+                            status: e as i64,
+                            bytes_transferred: 0,
+                            vmo_handle: libjambo::Handle::NULL,
+                        },
+                    }
+                } else {
+                    FsResponse {
+                        status: libjambo::SysError::InvalidArgument as i64,
+                        bytes_transferred: 0,
+                        vmo_handle: libjambo::Handle::NULL,
+                    }
+                }
+            }
+            FsOpcode::Stat => {
+                let ino = req.handle.index() as u64;
+                match self.stat(ino) {
+                    Ok(inode) => FsResponse {
+                        status: libjambo::SysError::Success as i64,
+                        bytes_transferred: inode.size,
+                        vmo_handle: req.handle,
+                    },
+                    Err(e) => FsResponse {
+                        status: e as i64,
+                        bytes_transferred: 0,
+                        vmo_handle: libjambo::Handle::NULL,
+                    },
+                }
+            }
+            FsOpcode::Sync => FsResponse {
+                status: libjambo::SysError::Success as i64,
+                bytes_transferred: self.active_uberblock.generation,
+                vmo_handle: libjambo::Handle::NULL,
+            },
         }
     }
 
@@ -169,8 +402,8 @@ impl JamboFsServer {
         inode.checksum = block_chk;
 
         // Allouer un nouvel offset pour le bloc CoW
-        let new_block_offset =
-            self.active_uberblock.root_tree_offset + (inode.block_count as u64 * BLOCK_SIZE as u64);
+        let new_block_offset = self.active_uberblock.root_tree_offset
+            + (inode.block_count as u64 * BLOCK_SIZE as u64);
         inode.direct_blocks[0] = new_block_offset;
 
         // Mettre à jour l'Uberblock atomiquement

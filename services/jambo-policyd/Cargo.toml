@@ -1,6 +1,6 @@
 [package]
 name = "jambo-policyd"
-version = "0.2.40"
+version = "0.2.41"
 edition = "2021"
 authors = ["ASSOGBA Prudence Dieudonné <jprud67@gmail.com>"]
 description = "Moteur de Politiques de Sécurité Déclaratives & Contrôle d'Admission de Grappe pour JamboOS"
