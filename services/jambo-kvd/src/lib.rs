@@ -532,6 +532,90 @@ impl KvStore {
     }
 }
 
+/// Démon orchestrateur de magasin Clé-Valeur distribué (`jambo-kvd`).
+pub struct JamboKvDaemon {
+    pub store: KvStore,
+    pub cap: KvCap,
+}
+
+impl Default for JamboKvDaemon {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl JamboKvDaemon {
+    pub fn new() -> Self {
+        let cap = KvCap::new(Handle::new(1201, 1), kv_rights::ALL);
+        let mut store = KvStore::new();
+        let _ = store.put(&cap, b"cluster/name", b"jambo-cluster-0", None);
+        let _ = store.put(&cap, b"cluster/version", b"0.2.58", None);
+        let _ = store.put(&cap, b"cluster/nodes", b"1", None);
+        Self { store, cap }
+    }
+
+    pub fn get(&self, key: &[u8]) -> Result<Option<KeyValue>, SysError> {
+        self.store.get(&self.cap, key)
+    }
+
+    pub fn put(
+        &mut self,
+        key: &[u8],
+        value: &[u8],
+        lease_id: Option<u64>,
+    ) -> Result<u64, SysError> {
+        self.store.put(&self.cap, key, value, lease_id)
+    }
+
+    pub fn delete(&mut self, key: &[u8]) -> Result<bool, SysError> {
+        self.store.delete(&self.cap, key)
+    }
+
+    pub fn grant_lease(&mut self, ttl_ms: u64, now_ms: u64) -> Result<u64, SysError> {
+        self.store.grant_lease(&self.cap, ttl_ms, now_ms)
+    }
+
+    pub fn purge_leases(&mut self, now_ms: u64) -> usize {
+        self.store.purge_expired_leases(now_ms)
+    }
+
+    pub fn cas(
+        &mut self,
+        key: &[u8],
+        expected_val: &[u8],
+        new_val: &[u8],
+    ) -> Result<bool, SysError> {
+        let cmp = [KvCompare::new(
+            key,
+            CompareTarget::from_value_bytes(expected_val),
+            CompareOp::Equal,
+        )];
+        let success = [KvOp::new_put(key, new_val, None)];
+        let failure = [];
+        let res = self.store.txn(&self.cap, &cmp, &success, &failure)?;
+        Ok(res.succeeded)
+    }
+
+    pub fn revision(&self) -> u64 {
+        self.store.revision()
+    }
+
+    pub fn active_keys_count(&self) -> usize {
+        self.store
+            .entries
+            .iter()
+            .filter(|e| match e {
+                Some(kv) => !kv.tombstone,
+                None => false,
+            })
+            .count()
+    }
+
+    pub fn active_leases_count(&self) -> usize {
+        self.store.leases.iter().filter(|l| l.is_some()).count()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -630,5 +714,58 @@ mod tests {
 
         let kv = store.get(&cap, b"counter").unwrap().unwrap();
         assert_eq!(kv.value_bytes(), b"11");
+    }
+
+    #[test]
+    fn test_daemon_operations() {
+        let mut daemon = JamboKvDaemon::new();
+        assert_eq!(daemon.revision(), 3);
+        assert_eq!(daemon.active_keys_count(), 3);
+
+        let cluster_name = daemon.get(b"cluster/name").unwrap().unwrap();
+        assert_eq!(cluster_name.value_bytes(), b"jambo-cluster-0");
+
+        let rev = daemon.put(b"node/role", b"primary", None).unwrap();
+        assert_eq!(rev, 4);
+        assert_eq!(daemon.active_keys_count(), 4);
+
+        let role = daemon.get(b"node/role").unwrap().unwrap();
+        assert_eq!(role.value_bytes(), b"primary");
+
+        let deleted = daemon.delete(b"node/role").unwrap();
+        assert!(deleted);
+        assert_eq!(daemon.active_keys_count(), 3);
+        assert!(daemon.get(b"node/role").unwrap().is_none());
+    }
+
+    #[test]
+    fn test_daemon_cas_and_leases() {
+        let mut daemon = JamboKvDaemon::new();
+        daemon.put(b"lock/master", b"node-1", None).unwrap();
+
+        // CAS qui réussit
+        let cas_ok = daemon.cas(b"lock/master", b"node-1", b"node-2").unwrap();
+        assert!(cas_ok);
+        let val = daemon.get(b"lock/master").unwrap().unwrap();
+        assert_eq!(val.value_bytes(), b"node-2");
+
+        // CAS qui échoue car la valeur actuelle n'est pas "node-1"
+        let cas_fail = daemon.cas(b"lock/master", b"node-1", b"node-3").unwrap();
+        assert!(!cas_fail);
+        let val2 = daemon.get(b"lock/master").unwrap().unwrap();
+        assert_eq!(val2.value_bytes(), b"node-2");
+
+        // Baux
+        let lease_id = daemon.grant_lease(500, 1000).unwrap();
+        daemon
+            .put(b"ephemeral/agent", b"alive", Some(lease_id))
+            .unwrap();
+        assert_eq!(daemon.active_leases_count(), 1);
+
+        assert_eq!(daemon.purge_leases(1200), 0);
+        assert!(daemon.get(b"ephemeral/agent").unwrap().is_some());
+
+        assert_eq!(daemon.purge_leases(1600), 1);
+        assert!(daemon.get(b"ephemeral/agent").unwrap().is_none());
     }
 }

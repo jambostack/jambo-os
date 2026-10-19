@@ -111,6 +111,7 @@ pub struct JamboShell {
     pub vhost: jambo_vhostd::JamboVhostDaemon,
     pub time: jambo_timed::JamboTimeDaemon,
     pub raft: jambo_raft::JamboRaftDaemon,
+    pub kv: jambo_kvd::JamboKvDaemon,
 }
 
 impl Default for JamboShell {
@@ -161,6 +162,7 @@ impl JamboShell {
         time.init_defaults();
         let mut raft = jambo_raft::JamboRaftDaemon::new();
         raft.init_defaults();
+        let kv = jambo_kvd::JamboKvDaemon::new();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -180,6 +182,7 @@ impl JamboShell {
             vhost,
             time,
             raft,
+            kv,
         }
     }
 
@@ -306,6 +309,7 @@ impl JamboShell {
                     "  time [cmd]   - Synchronisation horlogère distribuée PTP/NTP et asservissement\n",
                 );
                 emit("  raft [cmd]   - Moteur de consensus distribué léger Raft et réplication\n");
+                emit("  kv [cmd]     - Base de données clé-valeur transactionnelle distribuée\n");
                 emit("  echo <args>  - Affiche les arguments sur la sortie console\n");
                 emit("  clear        - Efface l'écran du terminal (ANSI escape)\n");
                 emit("  reboot       - Redémarre la machine\n");
@@ -313,7 +317,7 @@ impl JamboShell {
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.2.57 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.2.58 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -2169,6 +2173,133 @@ impl JamboShell {
                     },
                     _ => {
                         emit("Usage: raft [status | propose <payload> | elect]\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                }
+            }
+            "kv" => {
+                let sub = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    ""
+                };
+                match sub {
+                    "status" => {
+                        let mut b = [0u8; 20];
+                        emit("=== BASE CLÉ-VALEUR TRANSACTIONNELLE DISTRIBUÉE (jambo-kvd) ===\n");
+                        emit("Révision courante (MVCC) : Rev #");
+                        emit(format_u64(self.kv.revision(), &mut b));
+                        emit("\nClés actives             : ");
+                        emit(format_u64(self.kv.active_keys_count() as u64, &mut b));
+                        emit("\nBaux actifs              : ");
+                        emit(format_u64(self.kv.active_leases_count() as u64, &mut b));
+                        emit("\nConfinement              : KvCap (ALL) - Zéro-Autorité Ambiante\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "get" => {
+                        if parsed.arg_count < 3 {
+                            emit("Usage: kv get <key>\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        } else {
+                            let key = parsed.args[2];
+                            match self.kv.get(key.as_bytes()) {
+                                Ok(Some(kv)) => {
+                                    let mut b = [0u8; 20];
+                                    emit(
+                                        core::str::from_utf8(kv.value_bytes())
+                                            .unwrap_or("<binary>"),
+                                    );
+                                    emit(" (ver: ");
+                                    emit(format_u64(kv.version, &mut b));
+                                    emit(", mod_rev: ");
+                                    emit(format_u64(kv.mod_revision, &mut b));
+                                    emit(")\n");
+                                    (ShellStatus::Success, write_pos)
+                                }
+                                Ok(None) => {
+                                    emit("[KV] Clé introuvable ou supprimée\n");
+                                    (ShellStatus::ExecutionFailed, write_pos)
+                                }
+                                Err(_) => {
+                                    emit("[KV] Erreur de permission (KvCap refusée)\n");
+                                    (ShellStatus::PermissionDenied, write_pos)
+                                }
+                            }
+                        }
+                    }
+                    "put" => {
+                        if parsed.arg_count < 4 {
+                            emit("Usage: kv put <key> <val>\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        } else {
+                            let key = parsed.args[2];
+                            let val = parsed.args[3];
+                            match self.kv.put(key.as_bytes(), val.as_bytes(), None) {
+                                Ok(rev) => {
+                                    let mut b = [0u8; 20];
+                                    emit("[KV/OK] Écriture validée (Révision #");
+                                    emit(format_u64(rev, &mut b));
+                                    emit(")\n");
+                                    (ShellStatus::Success, write_pos)
+                                }
+                                Err(_) => {
+                                    emit("[KV] Échec de l'écriture (Mémoire pleine ou droits insuffisants)\n");
+                                    (ShellStatus::ExecutionFailed, write_pos)
+                                }
+                            }
+                        }
+                    }
+                    "del" => {
+                        if parsed.arg_count < 3 {
+                            emit("Usage: kv del <key>\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        } else {
+                            let key = parsed.args[2];
+                            match self.kv.delete(key.as_bytes()) {
+                                Ok(true) => {
+                                    emit("[KV/OK] Clé supprimée (tombstone posé)\n");
+                                    (ShellStatus::Success, write_pos)
+                                }
+                                Ok(false) => {
+                                    emit("[KV] Clé non trouvée\n");
+                                    (ShellStatus::ExecutionFailed, write_pos)
+                                }
+                                Err(_) => {
+                                    emit("[KV] Droits insuffisants pour suppression\n");
+                                    (ShellStatus::PermissionDenied, write_pos)
+                                }
+                            }
+                        }
+                    }
+                    "cas" => {
+                        if parsed.arg_count < 5 {
+                            emit("Usage: kv cas <key> <expected_val> <new_val>\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        } else {
+                            let key = parsed.args[2];
+                            let exp = parsed.args[3];
+                            let new_v = parsed.args[4];
+                            match self
+                                .kv
+                                .cas(key.as_bytes(), exp.as_bytes(), new_v.as_bytes())
+                            {
+                                Ok(true) => {
+                                    emit("[KV/TXN] Transaction CAS réussie avec succès\n");
+                                    (ShellStatus::Success, write_pos)
+                                }
+                                Ok(false) => {
+                                    emit("[KV/TXN] Échec de la transaction CAS (prédicat non satisfait)\n");
+                                    (ShellStatus::ExecutionFailed, write_pos)
+                                }
+                                Err(_) => {
+                                    emit("[KV/TXN] Erreur lors de la transaction atomique\n");
+                                    (ShellStatus::ExecutionFailed, write_pos)
+                                }
+                            }
+                        }
+                    }
+                    _ => {
+                        emit("Usage: kv [status | get <key> | put <key> <val> | del <key> | cas <key> <expected> <new>]\n");
                         (ShellStatus::Success, write_pos)
                     }
                 }

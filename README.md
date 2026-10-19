@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.57-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.58-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.57 (Moteur de Consensus Distribué Léger Raft jambo-raft)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.57` introduit le moteur de consensus distribué léger Raft en espace utilisateur (`services/jambo-raft`), implémentant l'automate d'états Raft complet (`Follower`, `Candidate`, `Leader`), les élections de meneur déterministes à quorum majoritaire, la réplication d'entrées de journal indexé avec validation et gestion des termes monotones, le confinement capabilaire d'administration et de proposition `RaftCap` et les commandes interactives `raft [status | propose | elect]` dans `jsh`.
+> **Statut du Projet : Version v0.2.58 (Base de Données Clé-Valeur Transactionnelle Distribuée jambo-kvd)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.58` introduit la base de données clé-valeur transactionnelle distribuée en espace utilisateur (`services/jambo-kvd`), implémentant le moteur multiversionné MVCC sans autorité ambiante, la traçabilité des révisions logiques et tombstones, les baux temporels avec expiration et purge automatique (`Lease`), les transactions atomiques conditionnelles Compare-And-Swap (`KvCompare`, `KvOp`, `TxnResult`), le confinement capabilaire strict `KvCap` et les commandes interactives `kv [status | get | put | del | cas]` dans `jsh`.
 
 ---
 

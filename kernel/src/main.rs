@@ -841,6 +841,13 @@ pub extern "C" fn _start() -> ! {
     let raft_success = sched::execute_raft_consensus_test();
     assert!(raft_success, "Échec du test de consensus distribué Raft");
 
+    // 10téricies. Validation de la Base de Données Clé-Valeur Transactionnelle Distribuée (Phase 60 - v0.2.58)
+    let kvd_success = sched::execute_kvd_store_test();
+    assert!(
+        kvd_success,
+        "Échec du test de la base de données clé-valeur transactionnelle distribuée"
+    );
+
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
 
     arch::init_iommu();
@@ -1018,14 +1025,17 @@ pub extern "C" fn _start() -> ! {
     kprintln!(
         "\x1b[1;32m[PASS] Phase 59 Lightweight Distributed Raft Consensus Engine Complete\x1b[0m"
     );
+    kprintln!(
+        "\x1b[1;32m[PASS] Phase 60 Distributed Transactional Key-Value Store Complete\x1b[0m"
+    );
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.57 (Moteur de Consensus Distribué Raft jambo-raft)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.58 (Base de Données Clé-Valeur Transactionnelle Distribuée jambo-kvd)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.57 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.58 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
