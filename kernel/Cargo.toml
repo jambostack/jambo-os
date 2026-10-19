@@ -1,6 +1,6 @@
 [package]
 name = "kernel"
-version = "0.2.43"
+version = "0.2.44"
 edition = "2021"
 [[bin]]
 name = "kernel"
@@ -10,9 +10,11 @@ bench = false
 
 [dependencies]
 jambo-abi = { path = "../abi/jambo-abi" }
+jambo-comp = { path = "../services/jambo-comp" }
 jambo-fs = { path = "../services/jambo-fs" }
 jambo-netd = { path = "../services/jambo-netd" }
 jambo-sh = { path = "../services/jambo-sh" }
+jambo-ui = { path = "../libs/jambo-ui" }
 limine = "0.6.5"
 spin = "0.9"
 

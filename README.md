@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.43-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.44-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.43 (Pipelines d'Objets Structurés & Utilitaires Système Confinés jambo-coreutils)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. Après la validation de la pile réseau zéro-autorité (`v0.2.42`), la version `v0.2.43` introduit les pipelines d'objets typés structurés (`StructuredPipeline`, `ObjectRecord`) et l'intégration complète des utilitaires système natifs (`services/jambo-coreutils`). Elle permet le chaînage d'objets typés via le shell `jsh` (`ps | filter --min-caps 8`, `--min-mem 32`, `--prefix jambo`), l'audit approfondi de la table des capacités (`capstat <pid>`), la surveillance des métriques d'ordonnancement temps-réel (`top`), la vérification d'intégrité cryptographique BLAKE3 (`jpkg verify`), ainsi que le confinement strict des lectures de données sans autorité ambiante.
+> **Statut du Projet : Version v0.2.44 (Compositeur Graphique Userspace jambo-comp & JamboUI Déclaratif)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. Après l'intégration des pipelines d'objets structurés et des utilitaires confinés (`v0.2.43`), la version `v0.2.44` introduit le compositeur d'affichage matériel en espace utilisateur (`services/jambo-comp`) et le framework graphique déclaratif accessible (`libs/jambo-ui`). Elle fournit la composition par Damage Tracking 60/120 Hz vers VirtIO-GPU, l'isolation étanche des surfaces de fenêtres applicatives, le portail de capture d'écran sans autorité ambiante (Zero Ambient Authority), l'arbre d'accessibilité obligatoire (`AccessibilityTree`), le terminal graphique `JamboTerm`, et la commande shell interactive `gui` (`status`, `demo`, `capture`).
 
 ---
 

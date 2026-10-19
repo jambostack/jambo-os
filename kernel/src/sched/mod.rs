@@ -1,3 +1,4 @@
+pub mod comp_test;
 pub mod context;
 pub mod coreutils_test;
 pub mod eevdf;
@@ -10,6 +11,7 @@ pub mod shell_test;
 pub mod thread;
 pub mod vfs_test;
 
+pub use comp_test::execute_graphics_compositor_test;
 pub use context::{enter_user_mode, switch_context};
 pub use coreutils_test::execute_coreutils_pipeline_test;
 pub use eevdf::{EevdfScheduler, SCHEDULER};

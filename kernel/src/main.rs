@@ -746,6 +746,13 @@ pub extern "C" fn _start() -> ! {
         "Échec du test des pipelines d'objets structurés et utilitaires jambo-coreutils"
     );
 
+    // 10nonies. Validation du Compositeur Graphique Ring 3 & JamboUI (Phase 46 - v0.2.44)
+    let comp_success = sched::execute_graphics_compositor_test();
+    assert!(
+        comp_success,
+        "Échec du test du compositeur graphique jambo-comp et JamboUI"
+    );
+
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
 
     arch::init_iommu();
@@ -881,14 +888,17 @@ pub extern "C" fn _start() -> ! {
     kprintln!(
         "\x1b[1;32m[PASS] Phase 45 Structured Object Pipelines & Confined Coreutils Complete\x1b[0m"
     );
+    kprintln!(
+        "\x1b[1;32m[PASS] Phase 46 Userspace Graphics Compositor (jambo-comp) & JamboUI Complete\x1b[0m"
+    );
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.43 (Pipelines d'Objets Structurés & Utilitaires jambo-coreutils)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.44 (Compositeur Graphique jambo-comp & JamboUI)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.43 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.44 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
