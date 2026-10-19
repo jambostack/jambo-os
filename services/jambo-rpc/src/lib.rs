@@ -119,7 +119,7 @@ impl DistributedCapToken {
 }
 
 /// Paquet binaire compact de transport RPC
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RpcPacket {
     pub magic: u32,
     pub version: u16,
@@ -423,6 +423,76 @@ impl RpcServerDispatcher {
             0,
             &response_payload[..2],
         ))
+    }
+}
+
+/// Démon principal du sous-système RPC distribué JamboRPC
+pub struct JamboRpcDaemon {
+    pub dispatcher: RpcServerDispatcher,
+    pub cluster: ClusterManager,
+    pub requests_sent: u64,
+    pub shared_secret: [u8; 32],
+}
+
+impl Default for JamboRpcDaemon {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl JamboRpcDaemon {
+    pub const fn new() -> Self {
+        let registry = RpcRegistry::new();
+        let shared_secret = [0x42u8; 32];
+        let dispatcher = RpcServerDispatcher::new(registry, shared_secret);
+        let cluster = ClusterManager::new(1);
+
+        Self {
+            dispatcher,
+            cluster,
+            requests_sent: 0,
+            shared_secret,
+        }
+    }
+
+    /// Initialise les services et nœuds par défaut
+    pub fn init_defaults(&mut self) {
+        let _ = self
+            .dispatcher
+            .registry
+            .register_service(0x1000, "compute", 0x01);
+        let _ = self
+            .dispatcher
+            .registry
+            .register_service(0x2000, "storage", 0x03);
+        let _ = self
+            .dispatcher
+            .registry
+            .register_service(0x3000, "auth", 0x07);
+
+        let _ = self.cluster.add_node(1, [127, 0, 0, 1]);
+        let _ = self.cluster.add_node(2, [192, 168, 1, 20]);
+        let _ = self.cluster.add_node(3, [192, 168, 1, 30]);
+    }
+
+    /// Envoie un appel RPC simulé vérifié par jeton de capacité
+    pub fn call_service(
+        &mut self,
+        service_id: u64,
+        method_id: u32,
+        payload: &[u8],
+    ) -> Result<RpcPacket, SysError> {
+        self.requests_sent += 1;
+        let nonce = 1000 + self.requests_sent;
+        let token =
+            DistributedCapToken::new_signed(1, 2, service_id, 0x07, nonce, &self.shared_secret);
+        let req = RpcPacket::new_request(self.requests_sent, service_id, method_id, token, payload);
+        self.dispatcher.dispatch(&req)
+    }
+
+    /// Envoie un ping de battement de cœur au cluster
+    pub fn ping_node(&mut self, node_id: u64, epoch: u64) -> Result<(), SysError> {
+        self.cluster.record_heartbeat(node_id, epoch)
     }
 }
 

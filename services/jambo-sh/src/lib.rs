@@ -102,6 +102,7 @@ pub struct JamboShell {
     pub pkgd: jambo_pkgd::JamboPkgDaemon,
     pub aid: jambo_aid::JamboAiDaemon,
     pub fuzz: jambo_fuzz::JamboFuzzDaemon,
+    pub rpc: jambo_rpc::JamboRpcDaemon,
 }
 
 impl Default for JamboShell {
@@ -134,6 +135,8 @@ impl JamboShell {
             "/docs/networking.md",
             "ethernet virtio socket tcp ip packet",
         );
+        let mut rpc = jambo_rpc::JamboRpcDaemon::new();
+        rpc.init_defaults();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -144,6 +147,7 @@ impl JamboShell {
             pkgd: jambo_pkgd::JamboPkgDaemon::new(),
             aid,
             fuzz: jambo_fuzz::JamboFuzzDaemon::new(),
+            rpc,
         }
     }
 
@@ -255,6 +259,7 @@ impl JamboShell {
                 emit(
                     "  fuzz [cmd]   - Moteur de fuzzing offensif, isolation SMAP/IOMMU et chaos\n",
                 );
+                emit("  rpc [cmd]    - Bus RPC distribué, jetons de capacités et cluster\n");
                 emit("  echo <args>  - Affiche les arguments sur la sortie console\n");
                 emit("  clear        - Efface l'écran du terminal (ANSI escape)\n");
                 emit("  reboot       - Redémarre la machine\n");
@@ -262,7 +267,7 @@ impl JamboShell {
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.2.48 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.2.49 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -1068,6 +1073,133 @@ impl JamboShell {
                     }
                     _ => {
                         emit("Usage: fuzz [status | run <n> | smap | iommu | chaos]\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                }
+            }
+            "rpc" => {
+                let subcmd = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    "status"
+                };
+                match subcmd {
+                    "status" => {
+                        let mut b = [0u8; 20];
+                        emit("JamboRPC Bus: Actif (Port: JRPC/v1, Magic: 0x4A525043)\n");
+                        emit("  Nœud local              : #");
+                        emit(format_u64(self.rpc.cluster.local_node_id, &mut b));
+                        emit("\n  Nœuds cluster actifs    : ");
+                        emit(format_u64(self.rpc.cluster.active_nodes as u64, &mut b));
+                        emit("\n  Services RPC enregistrés: ");
+                        emit(format_u64(
+                            self.rpc.dispatcher.registry.count as u64,
+                            &mut b,
+                        ));
+                        emit("\n  Appels RPC traités      : ");
+                        emit(format_u64(self.rpc.dispatcher.calls_processed, &mut b));
+                        emit("\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "call" => {
+                        let svc_id = if parsed.arg_count > 2 {
+                            if parsed.args[2].starts_with("0x") || parsed.args[2].starts_with("0X")
+                            {
+                                u64::from_str_radix(&parsed.args[2][2..], 16).unwrap_or(0x1000)
+                            } else {
+                                parse_u64(parsed.args[2]).unwrap_or(0x1000)
+                            }
+                        } else {
+                            0x1000
+                        };
+                        let method_id = if parsed.arg_count > 3 {
+                            parse_u64(parsed.args[3]).unwrap_or(1) as u32
+                        } else {
+                            1
+                        };
+                        match self.rpc.call_service(svc_id, method_id, b"jambo_rpc_ping") {
+                            Ok(resp) => {
+                                let mut b = [0u8; 20];
+                                emit("[RPC/CALL] Appel vers service 0x");
+                                emit(format_hex_u64(svc_id, &mut b));
+                                emit(" méthode ");
+                                emit(format_u64(method_id as u64, &mut b));
+                                emit(" : succès (Status: ");
+                                emit(format_u64(resp.status as u64, &mut b));
+                                emit(", Réponse: 0xAA)\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("[RPC/CALL] Erreur: Accès refusé par le jeton de capacité\n");
+                                (ShellStatus::PermissionDenied, write_pos)
+                            }
+                        }
+                    }
+                    "ping" => {
+                        let node_id = if parsed.arg_count > 2 {
+                            parse_u64(parsed.args[2]).unwrap_or(2)
+                        } else {
+                            2
+                        };
+                        match self.rpc.ping_node(node_id, 150) {
+                            Ok(()) => {
+                                let mut b = [0u8; 20];
+                                emit("[RPC/PING] Battement de cœur envoyé au nœud #");
+                                emit(format_u64(node_id, &mut b));
+                                emit(" : acquitté (Epoch 150)\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("[RPC/PING] Erreur : Nœud inconnu dans le cluster\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "cluster" => {
+                        emit("ID  IP_ADDR          STATUT\n");
+                        for opt_node in self.rpc.cluster.nodes.iter().flatten() {
+                            let mut b = [0u8; 20];
+                            emit(format_u64(opt_node.node_id, &mut b));
+                            emit("   ");
+                            for (i, octet) in opt_node.ip_addr.iter().enumerate() {
+                                emit(format_u64(*octet as u64, &mut b));
+                                if i < 3 {
+                                    emit(".");
+                                }
+                            }
+                            emit("       ");
+                            match opt_node.status {
+                                jambo_rpc::NodeStatus::Online => emit("Online\n"),
+                                jambo_rpc::NodeStatus::Degraded => emit("Degraded\n"),
+                                jambo_rpc::NodeStatus::Offline => emit("Offline\n"),
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "failover" => {
+                        let node_id = if parsed.arg_count > 2 {
+                            parse_u64(parsed.args[2]).unwrap_or(2)
+                        } else {
+                            2
+                        };
+                        match self.rpc.cluster.trigger_failover(node_id) {
+                            Some(backup) => {
+                                let mut b = [0u8; 20];
+                                emit("[RPC/FAILOVER] Nœud #");
+                                emit(format_u64(node_id, &mut b));
+                                emit(" déclaré Offline, bascule réussie vers nœud de secours #");
+                                emit(format_u64(backup, &mut b));
+                                emit("\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            None => {
+                                emit("[RPC/FAILOVER] Erreur : Aucun nœud de secours disponible\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    _ => {
+                        emit("Usage: rpc [status | call <svc> <mth> | ping <node> | cluster | failover <node>]\n");
                         (ShellStatus::Success, write_pos)
                     }
                 }

@@ -781,6 +781,13 @@ pub extern "C" fn _start() -> ! {
         "Échec du test de durcissement de sécurité offensive, fuzzing SMAP/IOMMU et résilience chaos"
     );
 
+    // 10quaterdecies. Validation du Bus RPC Distribué, Jetons Macaroon & Résilience Cluster (Phase 51 - v0.2.49)
+    let rpc_success = sched::execute_distributed_rpc_test();
+    assert!(
+        rpc_success,
+        "Échec du test du bus RPC distribué, jetons de capacités et résilience cluster"
+    );
+
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
 
     arch::init_iommu();
@@ -931,14 +938,17 @@ pub extern "C" fn _start() -> ! {
     kprintln!(
         "\x1b[1;32m[PASS] Phase 50 Offensive Security Hardening, Fuzzing (SMAP/IOMMU) & Chaos Resilience Complete\x1b[0m"
     );
+    kprintln!(
+        "\x1b[1;32m[PASS] Phase 51 Distributed RPC Bus, Cryptographic Cap Tokens & Cluster Resilience Complete\x1b[0m"
+    );
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.48 (Fuzzing Sécurité Offensive & Chaos jambo-fuzz)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.49 (Bus RPC Distribué & Cluster jambo-rpc)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.48 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.49 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
