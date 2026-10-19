@@ -114,6 +114,7 @@ pub struct JamboShell {
     pub kv: jambo_kvd::JamboKvDaemon,
     pub sched: jambo_schedd::JamboSchedDaemon,
     pub event: jambo_eventd::JamboEventDaemon,
+    pub mesh: jambo_meshd::JamboMeshDaemon,
 }
 
 impl Default for JamboShell {
@@ -167,6 +168,7 @@ impl JamboShell {
         let kv = jambo_kvd::JamboKvDaemon::new();
         let sched = jambo_schedd::JamboSchedDaemon::new();
         let event = jambo_eventd::JamboEventDaemon::new();
+        let mesh = jambo_meshd::JamboMeshDaemon::new();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -189,6 +191,7 @@ impl JamboShell {
             kv,
             sched,
             event,
+            mesh,
         }
     }
 
@@ -318,6 +321,7 @@ impl JamboShell {
                 emit("  kv [cmd]     - Base de données clé-valeur transactionnelle distribuée\n");
                 emit("  sched [cmd]  - Ordonnanceur de charges et conteneurs distribués\n");
                 emit("  event [cmd]  - Bus d'événements pub/sub asynchrone zéro-copie\n");
+                emit("  mesh [cmd]   - Réseau maillé chiffré distribué et routage Zero-Trust\n");
                 emit("  echo <args>  - Affiche les arguments sur la sortie console\n");
                 emit("  clear        - Efface l'écran du terminal (ANSI escape)\n");
                 emit("  reboot       - Redémarre la machine\n");
@@ -325,7 +329,7 @@ impl JamboShell {
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.2.60 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.2.61 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -2529,6 +2533,63 @@ impl JamboShell {
                     }
                     _ => {
                         emit("Usage: event [status | pub <topic> <payload> | sub <topic> | poll [sub_id] | unsub <id>]\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                }
+            }
+            "mesh" => {
+                let sub = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    ""
+                };
+                match sub {
+                    "status" => {
+                        let mut b = [0u8; 20];
+                        emit("=== MAILLAGE RÉSEAU CHIFFRÉ ZERO-TRUST (jambo-meshd) ===\n");
+                        emit("ID pair local          : Peer #");
+                        emit(format_u64(self.mesh.net.local_peer_id as u64, &mut b));
+                        emit("\nIP virtuelle locale    : 10.42.0.1\n");
+                        emit("Pairs maillés actifs   : ");
+                        emit(format_u64(self.mesh.active_peers_count() as u64, &mut b));
+                        emit("\nRoutes de superposition: ");
+                        emit(format_u64(self.mesh.routes_count() as u64, &mut b));
+                        emit("\nPaquets tunnelés       : ");
+                        emit(format_u64(self.mesh.packets_tunneled(), &mut b));
+                        emit("\nChiffrement            : Stream Cipher ChaCha20-Poly1305 (Simulé) + Anti-Rejeu\n");
+                        emit("Confinement            : MeshCap (Zero-Ambient Authority)\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "ping" => {
+                        let dest = [10, 42, 0, 2];
+                        match self.mesh.send_packet(dest, b"ECHO_REQUEST_ZERO_TRUST") {
+                            Ok(packet) => {
+                                let mut b = [0u8; 20];
+                                emit("[MESH/TUNNEL] Paquet chiffré transmis vers VIP 10.42.0.2 (Seq #");
+                                emit(format_u64(packet.seq_id, &mut b));
+                                emit(", Taille: ");
+                                emit(format_u64(packet.data_len as u64, &mut b));
+                                emit(" octets)\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("[MESH] Échec de l'encapsulation (Route introuvable ou droits insuffisants)\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "peers" => {
+                        emit("Pairs configurés :\n");
+                        for p in self.mesh.net.peers.iter().flatten() {
+                            let mut b = [0u8; 20];
+                            emit("  - Peer #");
+                            emit(format_u64(p.peer_id as u64, &mut b));
+                            emit(" (VIP: 10.42.0.2, Endpoint: 192.168.1.102:51820) - Actif\n");
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    _ => {
+                        emit("Usage: mesh [status | ping <vip> | peers]\n");
                         (ShellStatus::Success, write_pos)
                     }
                 }

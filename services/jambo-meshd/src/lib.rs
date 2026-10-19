@@ -321,6 +321,84 @@ impl MeshNetwork {
     }
 }
 
+/// Démon orchestrateur de maillage réseau chiffré et routage Zero-Trust (`jambo-meshd`).
+pub struct JamboMeshDaemon {
+    pub net: MeshNetwork,
+    pub cap: MeshCap,
+}
+
+impl Default for JamboMeshDaemon {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl JamboMeshDaemon {
+    pub fn new() -> Self {
+        let cap = MeshCap::new(Handle::new(6301, 1), mesh_rights::ALL);
+        let mut net = MeshNetwork::new(1, [10, 42, 0, 1]);
+        let default_key = [0x5Au8; KEY_SIZE];
+        let _ = net.add_peer(
+            &cap,
+            2,
+            &[0x02u8; KEY_SIZE],
+            [10, 42, 0, 2],
+            ([192, 168, 1, 102], 51820),
+            &default_key,
+        );
+        let _ = net.add_route(&cap, [10, 42, 0, 0], [255, 255, 0, 0], 2);
+        Self { net, cap }
+    }
+
+    pub fn add_peer(
+        &mut self,
+        peer_id: u32,
+        pub_key: &[u8; KEY_SIZE],
+        vip: [u8; 4],
+        endpoint: ([u8; 4], u16),
+        session_key: &[u8; KEY_SIZE],
+    ) -> Result<(), SysError> {
+        self.net
+            .add_peer(&self.cap, peer_id, pub_key, vip, endpoint, session_key)
+    }
+
+    pub fn send_packet(
+        &mut self,
+        dest_vip: [u8; 4],
+        payload: &[u8],
+    ) -> Result<MeshPacket, SysError> {
+        self.net
+            .encapsulate_and_encrypt(&self.cap, dest_vip, payload)
+    }
+
+    pub fn receive_packet(
+        &mut self,
+        packet: &MeshPacket,
+        out_buf: &mut [u8],
+    ) -> Result<usize, SysError> {
+        self.net.decrypt_and_decapsulate(&self.cap, packet, out_buf)
+    }
+
+    pub fn active_peers_count(&self) -> usize {
+        self.net
+            .peers
+            .iter()
+            .filter(|p| match p {
+                Some(peer) => peer.active,
+                None => false,
+            })
+            .count()
+    }
+
+    pub fn routes_count(&self) -> usize {
+        self.net.routes.iter().filter(|r| r.is_some()).count()
+    }
+
+    pub fn packets_tunneled(&self) -> u64 {
+        self.net.packets_tunneled
+    }
+}
+
 #[inline(never)]
 fn mac_tag_compare(a: u8, b: u8) -> u8 {
     a ^ b
@@ -438,5 +516,20 @@ mod tests {
         assert_eq!(peer.session_key, key2);
         assert_eq!(peer.tx_sequence, 1);
         assert_eq!(peer.rx_sequence, 0);
+    }
+
+    #[test]
+    fn test_daemon_tunnel() {
+        let mut daemon = JamboMeshDaemon::new();
+        assert_eq!(daemon.active_peers_count(), 1);
+        assert_eq!(daemon.routes_count(), 1);
+
+        let packet = daemon
+            .send_packet([10, 42, 0, 2], b"DAEMON_TUNNELED_PING")
+            .unwrap();
+        assert_eq!(daemon.packets_tunneled(), 1);
+        assert_eq!(packet.dest_peer_id, 2);
+        assert_eq!(packet.sender_peer_id, 1);
+        assert_eq!(packet.data_len, 20);
     }
 }
