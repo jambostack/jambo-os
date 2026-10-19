@@ -167,6 +167,7 @@ pub struct JamboShell {
     pub pqc: jambo_pqc::JamboPqcDaemon,
     pub zksnark: jambo_zksnark::JamboZkSnarkDaemon,
     pub fhe: jambo_fhe::JamboFheDaemon,
+    pub mixnet: jambo_mixnet::JamboMixnetDaemon,
 }
 
 impl Default for JamboShell {
@@ -415,6 +416,12 @@ impl JamboShell {
         );
         let mut fhe = jambo_fhe::JamboFheDaemon::new(fhe_cap);
         fhe.init_defaults();
+        let mixnet_cap = jambo_mixnet::MixCap::new(
+            libjambo::Handle::new(9901, 1),
+            jambo_mixnet::mix_rights::ALL,
+        );
+        let mut mixnet = jambo_mixnet::JamboMixnetDaemon::new(mixnet_cap);
+        mixnet.init_defaults();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -472,6 +479,7 @@ impl JamboShell {
             pqc,
             zksnark,
             fhe,
+            mixnet,
         }
     }
 
@@ -634,10 +642,11 @@ impl JamboShell {
                 emit("  pqc [cmd]     - Cryptographie Post-Quantique (ML-KEM/ML-DSA) & transition souveraine\n");
                 emit("  zksnark [cmd] - Preuves à Divulgation Nulle de Connaissance (zk-SNARKs R1CS)\n");
                 emit("  fhe [cmd]     - Chiffrement Homomorphe (BFV/CKKS), calculs aveugles & bootstrapping\n");
+                emit("  mixnet [cmd]  - Réseau de mixage anonyme (Sphinx), dissimulation temporelle & routage en oignon\n");
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.2.96 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.2.97 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -5620,6 +5629,100 @@ impl JamboShell {
                     }
                     _ => {
                         emit("Usage: fhe [status | demo | blind | bootstrap | audit]\n");
+                        (ShellStatus::ExecutionFailed, write_pos)
+                    }
+                }
+            }
+            "mixnet" => {
+                let sub = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    "status"
+                };
+                match sub {
+                    "status" => {
+                        let mut b = [0u8; 20];
+                        emit("=== RÉSEAU DE MIXAGE ANONYME SPHINX (jambo-mixnet) ===\n");
+                        emit("Format de paquet    : Sphinx v1.0 fixe (256 octets, 0 fuite métadonnées)\n");
+                        emit("Composants en-tête  : Alpha (32B) | Gamma MAC (8B) | Beta Onion (80B)\n");
+                        emit("Charge utile        : 136 octets chiffrée par couches symétriques\n");
+                        emit("Sauts max supportés : ");
+                        emit(format_u64(jambo_mixnet::MAX_HOPS as u64, &mut b));
+                        emit(" sauts de mixage\n");
+                        emit("Nœuds de mixage     : ");
+                        emit(format_u64(self.mixnet.node_count as u64, &mut b));
+                        emit(" actifs [101, 102, 103, 104]\n");
+                        emit("Bassin de mixage    : [Capacité: ");
+                        emit(format_u64(jambo_mixnet::MIX_POOL_CAPACITY as u64, &mut b));
+                        emit(", En attente: ");
+                        emit(format_u64(self.mixnet.mix_pool.count as u64, &mut b));
+                        emit(", Total mixés: ");
+                        emit(format_u64(self.mixnet.mix_pool.total_mixed as u64, &mut b));
+                        emit(", Leurre injecté: ");
+                        emit(format_u64(self.mixnet.mix_pool.cover_injected as u64, &mut b));
+                        emit("]\nTrafic & Sécurité   : [Routés: ");
+                        emit(format_u64(self.mixnet.packets_routed as u64, &mut b));
+                        emit(", Dépaquetés: ");
+                        emit(format_u64(self.mixnet.packets_unwrapped as u64, &mut b));
+                        emit(", Rejeux bloqués: ");
+                        emit(format_u64(self.mixnet.replays_detected as u64, &mut b));
+                        emit(", Altérations bloquées: ");
+                        emit(format_u64(self.mixnet.tampers_detected as u64, &mut b));
+                        emit("]\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "route" => {
+                        let route_nodes = [101, 102, 103, 104];
+                        let secret_payload = b"JAMBO_ONION_ROUTING_PACKET_CONFIDENTIAL";
+                        emit("[MIXNET/ROUTE] Encapsulation paquet Sphinx 4 sauts (101 -> 102 -> 103 -> 104)...\n");
+                        match self.mixnet.route_onion_message(&route_nodes, secret_payload, 0xCAFE1234) {
+                            Ok(payload) => {
+                                emit("[MIXNET/ROUTE] Routage achevé avec succès sans fuite de métadonnées!\n");
+                                emit("[MIXNET/ROUTE] Message extrait au nœud de sortie : ");
+                                if let Ok(s) = core::str::from_utf8(&payload[..secret_payload.len()]) {
+                                    emit(s);
+                                }
+                                emit("\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("[MIXNET/ROUTE] Erreur lors du routage du paquet en oignon!\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "mix" => {
+                        let _ = self.mixnet.mix_pool.inject_cover_packet(101, 15, 0x1111);
+                        let _ = self.mixnet.mix_pool.inject_cover_packet(102, 25, 0x2222);
+                        let _ = self.mixnet.mix_pool.inject_cover_packet(103, 35, 0x3333);
+                        let flushed = self.mixnet.batch_mix_and_flush(0x9876543210);
+
+                        let mut b = [0u8; 20];
+                        emit("[MIXNET/MIX] Brassage pseudo-aléatoire Fisher-Yates dans le bassin de mixage...\n");
+                        emit("[MIXNET/MIX] ");
+                        emit(format_u64(flushed as u64, &mut b));
+                        emit(" paquets réordonnancés et décorrélés temporellement (Anti-Traffic Analysis)\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "dummy" => {
+                        let injected = self.mixnet.inject_cover_traffic(101, 2, 0x1337);
+                        let mut b = [0u8; 20];
+                        emit("[MIXNET/DUMMY] ");
+                        emit(format_u64(injected as u64, &mut b));
+                        emit(" paquets de leurre (Cover Traffic) injectés avec succès\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "audit" => {
+                        emit("Condensat SHA-256 d'Audit Mixnet (Registre Scellé) : ");
+                        let mut b = [0u8; 20];
+                        for byte in self.mixnet.audit_chain.iter() {
+                            emit(format_hex_u64(*byte as u64, &mut b));
+                        }
+                        emit("\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    _ => {
+                        emit("Usage: mixnet [status | route | mix | dummy | audit]\n");
                         (ShellStatus::ExecutionFailed, write_pos)
                     }
                 }

@@ -1114,6 +1114,13 @@ pub extern "C" fn _start() -> ! {
         "Échec du test du chiffrement homomorphe FHE jambo-fhe"
     );
 
+    // 10duodetricies. Validation du Réseau de Mixage Anonyme Sphinx & Dissimulation de Métadonnées (Phase 99 - v0.2.97)
+    let mixnet_success = sched::execute_mixnet_daemon_test();
+    assert!(
+        mixnet_success,
+        "Échec du test du réseau de mixage anonyme Sphinx jambo-mixnet"
+    );
+
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
 
     arch::init_iommu();
@@ -1348,14 +1355,15 @@ pub extern "C" fn _start() -> ! {
     kprintln!("\x1b[1;32m[PASS] Phase 96 Post-Quantum Cryptography (ML-KEM, ML-DSA) & Sovereign Quantum Transition (jambo-pqc) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 97 Zero-Knowledge Succinct Proofs (zk-SNARKs) & R1CS Constraints (jambo-zksnark) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 98 Fully Homomorphic Encryption (FHE), Ring BFV/CKKS & Blind Computing (jambo-fhe) Complete\x1b[0m");
+    kprintln!("\x1b[1;32m[PASS] Phase 99 Anonymous Mixnet (Sphinx), Onion Routing & Traffic Analysis Resistance (jambo-mixnet) Complete\x1b[0m");
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.96 (Chiffrement Homomorphe FHE & Calculs Aveugles jambo-fhe)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.97 (Réseau de Mixage Sphinx & Dissimulation jambo-mixnet)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.96 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.97 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );

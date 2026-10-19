@@ -1,7 +1,7 @@
 # ROADMAP DU DÉVELOPPEMENT AUTONOME — JamboOS
 
-> **Dernière mise à jour** : 2026-10-19 23:20 UTC  
-> **Version actuelle** : `v0.2.96`  
+> **Dernière mise à jour** : 2026-10-19 23:35 UTC  
+> **Version actuelle** : `v0.2.97`  
 > **Statut global** : Pré-Alpha active — Micro-noyau de 3e génération orienté capacités (`#![no_std]`)  
 > **Cycle de développement autonome** : 10 minutes via le Planificateur de Tâches & Crons d'Antigravity WebUI  
 
@@ -85,24 +85,25 @@
 | **v0.2.94** | 96 | Cryptographie Post-Quantique `jambo-pqc` | Cryptographie Post-Quantique (ML-KEM / Kyber-768 & ML-DSA / Dilithium-65), arithmétique d'anneaux négacycliques, Dual-Defense HKDF, transition quantique & audit SHA-256 | ✅ Validé |
 | **v0.2.95** | 97 | Preuves zk-SNARKs R1CS `jambo-zksnark` | Preuves à Divulgation Nulle de Connaissance (zk-SNARKs Groth16), systèmes de contraintes R1CS, corps de Goldilocks, circuits pré-intégrés (pré-image, range, cap, transfer) & audit SHA-256 | ✅ Validé |
 | **v0.2.96** | 98 | Chiffrement Homomorphe `jambo-fhe` | Chiffrement Complètement Homomorphe (FHE BFV/CKKS), anneaux cyclotomiques, rélinéarisation base-W, bootstrapping & calcul aveugle Ring 3 | ✅ Validé |
+| **v0.2.97** | 99 | Réseau de Mixage Sphinx `jambo-mixnet` | Réseau de mixage anonyme à routage en oignon Sphinx (256 octets fixes), dissimulation temporelle, bassin de mixage Fisher-Yates, trafic de couverture & audit SHA-256 | ✅ Validé |
 
 ---
 
 ## 3. Prochaines Étapes Prioritaires
 
-### 🎯 Prochaine Tâche Immédiate : Phase 99 — v0.2.97
-* **Composant** : `services/jambo-mixnet`
-* **Objectif** : Réseau de mixage anonyme à routage en oignon Sphinx, dissimulation de métadonnées et résistance à l'analyse de trafic
-* **Tâches précises** :
-  1. Routage en oignon à paquets cryptographiques Sphinx `#![no_std]`.
-  2. Mélange de flux à délais aléatoires et validation `cargo xtask test`.
-
-### 🎯 Tâche Suivante : Phase 100 — v0.2.98
+### 🎯 Prochaine Tâche Immédiate : Phase 100 — v0.2.98
 * **Composant** : `services/jambo-secboot`
 * **Objectif** : Démarrage sécurisé souverain (Secure Boot), mesure d'intégrité PCR TPM 2.0 et chaîne de confiance matérielle
 * **Tâches précises** :
   1. Chaîne de mesure cryptographique de boot et attestations PCR `#![no_std]`.
   2. Politiques de scellement et validation `cargo xtask test`.
+
+### 🎯 Tâche Suivante : Phase 101 — v0.2.99
+* **Composant** : `services/jambo-idps`
+* **Objectif** : Système de détection et prévention d'intrusions Ring 3 (IDPS), analyse heuristique de flux IPC et contre-mesures autonomes
+* **Tâches précises** :
+  1. Moteur de détection d'anomalies de flux IPC `#![no_std]`.
+  2. Révocation dynamique de capacités et validation `cargo xtask test`.
 
 ---
 
@@ -139,6 +140,7 @@
 * **2026-10-19 22:55 UTC** : Validation complète Phase 96 (`jambo-pqc`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-pqc`). Tag `v0.2.94`.
 * **2026-10-19 23:05 UTC** : Validation complète Phase 97 (`jambo-zksnark`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-zksnark`). Tag `v0.2.95`.
 * **2026-10-19 23:20 UTC** : Validation complète Phase 98 (`jambo-fhe`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-fhe`). Tag `v0.2.96`.
+* **2026-10-19 23:35 UTC** : Validation complète Phase 99 (`jambo-mixnet`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-mixnet`). Tag `v0.2.97`.
 
 
 

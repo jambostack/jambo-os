@@ -63,6 +63,7 @@ members = [
     "services/jambo-pqc",
     "services/jambo-zksnark",
     "services/jambo-fhe",
+    "services/jambo-mixnet",
     "libs/jambo-ui",
     "libs/jambo-sdk",
     "drivers/virtio",

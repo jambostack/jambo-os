@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.96-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.97-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.96 (Chiffrement Complètement Homomorphe FHE & Calculs Aveugles jambo-fhe)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.96` introduit le sous-système de chiffrement complètement homomorphe (FHE) et de calcul aveugle souverain (`services/jambo-fhe`) : arithmétique d'anneaux cyclotomiques ($R_q = \mathbb{Z}_q[X]/(X^{16} + 1)$, $q = 1073758209$, $t = 65537$, $\Delta = 16384$) sans allocations (`#![no_std]`), schéma BFV pour arithmétique entière exacte et schéma CKKS à rééchelonnage modulaire, rélinéarisation base-$W$ ($W = 32768$), rafraîchissement homomorphe de bruit (bootstrapping restaurant le budget de bruit à 48 bits), moteur souverain de calcul aveugle (polynôme aveugle $P(x)$, produit scalaire aveugle $\sum w_i x_i$, portes de décision confidentielles), registre d'audit scellé par chaîne SHA-256 (`fhe_audit_chain`), gouvernance capabilaire stricte par jeton `FheCap` et commandes shell interactives `fhe [status | demo | blind | bootstrap | audit]` dans `jsh`.
+> **Statut du Projet : Version v0.2.97 (Réseau de Mixage Anonyme Sphinx & Dissimulation de Trafic jambo-mixnet)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.97` introduit le sous-système de réseau de mixage anonyme et de routage en oignon Sphinx souverain (`services/jambo-mixnet`) : paquets cryptographiques Sphinx `#![no_std]` de taille rigoureusement fixe et constante (256 octets, 0 fuite de métadonnées), routage en couches étanches (clé publique/masquage éphémère $\alpha$ 32B, tag d'intégrité MAC $\gamma$ 8B, en-tête d'oignon $\beta$ 80B, charge utile chiffrée 136B), démasquage et épluchage par pelures successives (*Layered Onion Peeling*) avec remplissage déterministe (*Deterministic Padding*), résistance à l'analyse de trafic (bassin de mixage `MixPool` avec brassage pseudo-aléatoire Fisher-Yates, gigue de délais programmés, injection de trafic de couverture / leurres *Cover Traffic*), protection stricte anti-rejeu (`ReplayCache`), registre d'audit scellé par chaîne SHA-256 (`mixnet_audit_chain`), gouvernance capabilaire stricte par jeton `MixCap` et commandes shell interactives `mixnet [status | route | mix | dummy | audit]` dans `jsh`.
 
 ---
 
