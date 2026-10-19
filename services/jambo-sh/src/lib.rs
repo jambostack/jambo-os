@@ -162,6 +162,7 @@ pub struct JamboShell {
     pub capspec: jambo_capspec::JamboCapSpecDaemon,
     pub tee: jambo_tee::JamboTeeDaemon,
     pub attest: jambo_attest::JamboAttestDaemon,
+    pub hsm: jambo_hsm::JamboHsmDaemon,
 }
 
 impl Default for JamboShell {
@@ -380,6 +381,12 @@ impl JamboShell {
         );
         let mut attest = jambo_attest::JamboAttestDaemon::new(attest_cap);
         attest.init_defaults();
+        let hsm_cap = jambo_hsm::HsmCap::new(
+            libjambo::Handle::new(9401, 1),
+            jambo_hsm::hsm_rights::ALL,
+        );
+        let mut hsm = jambo_hsm::JamboHsmDaemon::new(hsm_cap);
+        hsm.init_defaults();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -432,6 +439,7 @@ impl JamboShell {
             capspec,
             tee,
             attest,
+            hsm,
         }
     }
 
@@ -589,10 +597,11 @@ impl JamboShell {
                 emit("  capspec [cmd] - Spécification formelle, invariants CSpace et atténuation de capacités\n");
                 emit("  tee [cmd]     - Environnements d'Exécution de Confiance (TEE), enclaves et mémoire chiffrée\n");
                 emit("  attest [cmd]  - Attestation distante, preuves Zero-Knowledge (ZKP) & confinement grappe\n");
+                emit("  hsm [cmd]     - Module de sécurité matériel HSM Ring 3, dérivation PKCS#11 & scellement KEK\n");
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.2.91 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.2.92 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -4656,6 +4665,279 @@ impl JamboShell {
                     }
                     _ => {
                         emit("Usage: attest [status | nodes | verify | confine | rotate | audit]\n");
+                        (ShellStatus::ExecutionFailed, write_pos)
+                    }
+                }
+            }
+            "hsm" => {
+                let sub = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    "status"
+                };
+                match sub {
+                    "status" => {
+                        let mut b = [0u8; 20];
+                        emit("=== MODULE DE SÉCURITÉ MATÉRIEL SOUVERAIN (jambo-hsm PKCS#11) ===\n");
+                        emit("Standard Cryptographique : PKCS#11 v2.40 / RFC 5869 HKDF-SHA256\n");
+                        emit("Slots Matériels Présents : ");
+                        let mut slots_count = 0;
+                        for s in &self.hsm.slots {
+                            if s.is_some() {
+                                slots_count += 1;
+                            }
+                        }
+                        emit(format_u64(slots_count as u64, &mut b));
+                        emit(" / ");
+                        emit(format_u64(jambo_hsm::MAX_SLOTS as u64, &mut b));
+                        emit("\nObjets / Clés Scellées   : ");
+                        emit(format_u64(self.hsm.count_active_keys() as u64, &mut b));
+                        emit(" / ");
+                        emit(format_u64(jambo_hsm::MAX_OBJECTS as u64, &mut b));
+                        emit("\nSessions Actives         : ");
+                        emit(format_u64(self.hsm.count_active_sessions() as u64, &mut b));
+                        emit("\nOpérations Cryptographiques: ");
+                        emit(format_u64(self.hsm.crypto_ops_count, &mut b));
+                        emit("\nClés Générées            : ");
+                        emit(format_u64(self.hsm.keys_generated, &mut b));
+                        emit("\nClés Dérivées (HKDF)     : ");
+                        emit(format_u64(self.hsm.keys_derived, &mut b));
+                        emit("\nClés Enveloppées (Wrap)  : ");
+                        emit(format_u64(self.hsm.keys_wrapped, &mut b));
+                        emit("\nZéroïsations d'Urgence   : ");
+                        emit(format_u64(self.hsm.zeroizations, &mut b));
+                        emit("\nÉpoque HSM               : ");
+                        emit(format_u64(self.hsm.epoch, &mut b));
+                        emit("\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "slots" => {
+                        let mut b = [0u8; 20];
+                        emit("SLOT | DESCRIPTION                  | FABRICANT                | HW/FW   | TOKEN\n");
+                        emit("-----+------------------------------+--------------------------+---------+---------------------\n");
+                        for s_opt in &self.hsm.slots {
+                            if let Some(s) = s_opt {
+                                emit(format_u64(s.slot_id as u64, &mut b));
+                                emit("    | ");
+                                emit(s.description_as_str());
+                                for _ in 0..(29usize.saturating_sub(s.description_len)) {
+                                    emit(" ");
+                                }
+                                emit("| ");
+                                emit(s.manufacturer_as_str());
+                                for _ in 0..(25usize.saturating_sub(s.manufacturer_len)) {
+                                    emit(" ");
+                                }
+                                emit("| v");
+                                emit(format_u64(s.hw_version.0 as u64, &mut b));
+                                emit(".");
+                                emit(format_u64(s.hw_version.1 as u64, &mut b));
+                                emit("/v");
+                                emit(format_u64(s.fw_version.0 as u64, &mut b));
+                                emit(".");
+                                emit(format_u64(s.fw_version.1 as u64, &mut b));
+                                emit(" | ");
+                                if let Some(tok) = self.hsm.get_token(s.slot_id) {
+                                    emit(tok.label_as_str());
+                                    if tok.is_zeroized {
+                                        emit(" [ZEROIZED]");
+                                    }
+                                } else {
+                                    emit("<aucun token>");
+                                }
+                                emit("\n");
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "objects" | "keys" => {
+                        let mut b = [0u8; 20];
+                        emit("ID  | SLOT | LABEL                | CLASSE        | TYPE          | SENSITIVE | EXTRACTABLE | USAGES\n");
+                        emit("----+------+----------------------+---------------+---------------+-----------+-------------+--------\n");
+                        for obj_opt in &self.hsm.objects {
+                            if let Some(o) = obj_opt {
+                                emit(format_u64(o.object_id as u64, &mut b));
+                                emit(" | ");
+                                emit(format_u64(o.slot_id as u64, &mut b));
+                                emit("    | ");
+                                emit(o.label_as_str());
+                                for _ in 0..(21usize.saturating_sub(o.label_len)) {
+                                    emit(" ");
+                                }
+                                emit("| ");
+                                let cl = o.class.as_str();
+                                emit(cl);
+                                for _ in 0..(14usize.saturating_sub(cl.len())) {
+                                    emit(" ");
+                                }
+                                emit("| ");
+                                let kt = o.key_type.as_str();
+                                emit(kt);
+                                for _ in 0..(14usize.saturating_sub(kt.len())) {
+                                    emit(" ");
+                                }
+                                emit("| ");
+                                emit(if o.attrs.sensitive { "OUI       " } else { "NON       " });
+                                emit("| ");
+                                emit(if o.attrs.extractable { "OUI         " } else { "NON (SCELLÉ)" });
+                                emit("| ");
+                                emit(format_u64(o.usage_count, &mut b));
+                                emit("\n");
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "derive" => {
+                        emit("[PKCS#11 Derive] Ouverture d'une session RW et authentification utilisateur...\n");
+                        let admin_cap = self.hsm.admin_cap;
+                        match self.hsm.open_session(&admin_cap, 0, true) {
+                            Ok(sess) => {
+                                match self.hsm.login(&admin_cap, sess, jambo_hsm::HsmUserType::User, b"user_sec_pin_2026") {
+                                    Ok(()) => {
+                                        emit("[OK] Session authentifiée. Dérivation HKDF-SHA256 d'une clé de stockage (DEK)...\n");
+                                        let attrs = jambo_hsm::HsmKeyAttributes {
+                                            sensitive: true,
+                                            extractable: false,
+                                            encrypt: true,
+                                            decrypt: true,
+                                            sign: true,
+                                            verify: true,
+                                            wrap: false,
+                                            unwrap: false,
+                                            derive: false,
+                                        };
+                                        match self.hsm.derive_key_hkdf(
+                                            &admin_cap,
+                                            sess,
+                                            1, // Root KEK
+                                            b"SALT_STORAGE_VOLUME_01",
+                                            b"STORAGE_DATA_ENCRYPTION_KEY",
+                                            32,
+                                            "STORAGE_DEK_V1",
+                                            attrs,
+                                        ) {
+                                            Ok(key_id) => {
+                                                let mut b = [0u8; 20];
+                                                emit("\x1b[1;32m[SUCCÈS] Nouvelle clé dérivée scellée ID: ");
+                                                emit(format_u64(key_id as u64, &mut b));
+                                                emit(" générée avec succès in-HSM !\x1b[0m\n");
+                                                let _ = self.hsm.close_session(&admin_cap, sess);
+                                                (ShellStatus::Success, write_pos)
+                                            }
+                                            Err(_) => {
+                                                emit("Échec de la dérivation HKDF.\n");
+                                                let _ = self.hsm.close_session(&admin_cap, sess);
+                                                (ShellStatus::ExecutionFailed, write_pos)
+                                            }
+                                        }
+                                    }
+                                    Err(_) => {
+                                        emit("Échec authentification PIN utilisateur.\n");
+                                        let _ = self.hsm.close_session(&admin_cap, sess);
+                                        (ShellStatus::ExecutionFailed, write_pos)
+                                    }
+                                }
+                            }
+                            Err(_) => {
+                                emit("Échec ouverture de session HSM.\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "wrap" => {
+                        emit("[PKCS#11 Wrapping] Enveloppement & Désenveloppement de clé sous KEK...\n");
+                        let admin_cap = self.hsm.admin_cap;
+                        match self.hsm.open_session(&admin_cap, 0, true) {
+                            Ok(sess) => {
+                                let _ = self.hsm.login(&admin_cap, sess, jambo_hsm::HsmUserType::User, b"user_sec_pin_2026");
+                                let mut attrs = jambo_hsm::HsmKeyAttributes::default();
+                                attrs.extractable = true;
+                                match self.hsm.generate_key(
+                                    &admin_cap,
+                                    sess,
+                                    jambo_hsm::HsmObjectClass::SecretKey,
+                                    jambo_hsm::HsmKeyType::ChaCha20,
+                                    "EPHEMERAL_KEY_WRAP",
+                                    attrs,
+                                    b"entropy_wrap_test",
+                                ) {
+                                    Ok(key_id) => {
+                                        let mut wrapped = [0u8; 128];
+                                        match self.hsm.wrap_key(&admin_cap, sess, 1, key_id, &mut wrapped) {
+                                            Ok(len) => {
+                                                let mut b = [0u8; 20];
+                                                emit("[OK] Clé enveloppée sous KEK avec intégrité HMAC (taille: ");
+                                                emit(format_u64(len as u64, &mut b));
+                                                emit(" octets).\n");
+                                                match self.hsm.unwrap_key(
+                                                    &admin_cap,
+                                                    sess,
+                                                    1,
+                                                    &wrapped[..len],
+                                                    jambo_hsm::HsmObjectClass::SecretKey,
+                                                    jambo_hsm::HsmKeyType::ChaCha20,
+                                                    "RESTORED_WRAPPED_KEY",
+                                                    attrs,
+                                                ) {
+                                                    Ok(new_id) => {
+                                                        emit("\x1b[1;32m[SUCCÈS] Clé désenveloppée et réintégrée dans l'enclave sécurisée ID: ");
+                                                        emit(format_u64(new_id as u64, &mut b));
+                                                        emit("\x1b[0m\n");
+                                                        let _ = self.hsm.close_session(&admin_cap, sess);
+                                                        (ShellStatus::Success, write_pos)
+                                                    }
+                                                    Err(_) => {
+                                                        emit("Échec désenveloppement de clé.\n");
+                                                        let _ = self.hsm.close_session(&admin_cap, sess);
+                                                        (ShellStatus::ExecutionFailed, write_pos)
+                                                    }
+                                                }
+                                            }
+                                            Err(_) => {
+                                                emit("Échec enveloppement de clé.\n");
+                                                let _ = self.hsm.close_session(&admin_cap, sess);
+                                                (ShellStatus::ExecutionFailed, write_pos)
+                                            }
+                                        }
+                                    }
+                                    Err(_) => {
+                                        emit("Échec génération de la clé test.\n");
+                                        let _ = self.hsm.close_session(&admin_cap, sess);
+                                        (ShellStatus::ExecutionFailed, write_pos)
+                                    }
+                                }
+                            }
+                            Err(_) => {
+                                emit("Échec session HSM.\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "zeroize" => {
+                        let admin_cap = self.hsm.admin_cap;
+                        emit("\x1b[1;31m[ALERTE EFFRACTION] Déclenchement de la zéroïsation matérielle d'urgence...\x1b[0m\n");
+                        match self.hsm.emergency_zeroize(&admin_cap, 0) {
+                            Ok(()) => {
+                                emit("\x1b[1;32m[SUCCÈS] Zéroïsation effectuée : toutes les clés matérielles du Slot 0 ont été détruites en O(1).\x1b[0m\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("Échec de la zéroïsation d'urgence.\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "audit" => {
+                        emit("Condensat SHA-256 d'Audit HSM (Registre Cryptographique Scellé) : ");
+                        let mut b = [0u8; 20];
+                        for byte in self.hsm.audit_chain.iter() {
+                            emit(format_hex_u64(*byte as u64, &mut b));
+                        }
+                        emit("\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    _ => {
+                        emit("Usage: hsm [status | slots | objects | derive | wrap | zeroize | audit]\n");
                         (ShellStatus::ExecutionFailed, write_pos)
                     }
                 }

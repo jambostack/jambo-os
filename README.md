@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.91-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.92-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.91 (Attestation Cryptographique Distante, Preuves ZKP & Confinement Matériel de Grappe jambo-attest)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.91` introduit le sous-système d'attestation cryptographique et de confinement de grappe (`services/jambo-attest`), instaurant l'admission zero-trust et la vérification sans divulgation de secrets : attestation cryptographique distante multi-architecture (`TPM 2.0 PCR`, `Intel TDX`, `AMD SEV-SNP`, `ARM CCA Realm` et enclaves `jambo-tee`), preuves d'intégrité Zero-Knowledge (ZKP) basées sur le protocole de Schnorr / Fiat-Shamir (NIZKPoK) sur un grand corps premier sans exposition des clés matérielles, revendications d'intégrité signées (`NodeIntegrityClaim`) avec défi anti-rejeu inter-nœuds, confinement matériel adaptatif de grappe (`ConfinementLevel` : Unrestricted, Sandboxed, Isolated, Ejected) avec mise en quarantaine immédiate sur détection d'anomalie, registre d'audit inaltérable scellé par chaîne SHA-256 (`audit_chain`), gouvernance capabilaire par jeton `AttestCap` et commandes shell interactives `attest [status | nodes | verify | confine | rotate | audit]` dans `jsh`.
+> **Statut du Projet : Version v0.2.92 (Module de Sécurité Matériel HSM Ring 3, Dérivation PKCS#11 & Scellement KEK jambo-hsm)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.92` introduit le sous-système de module de sécurité matériel et de conformité PKCS#11 (`services/jambo-hsm`), instaurant une enclave cryptographique souveraine isolée du reste du système : émulation matérielle multicouche (`HsmSlot`, `HsmToken`), conformité PKCS#11 v2.40 (sessions RO/RW, authentification PIN pour Security Officer `CKU_SO` et Utilisateur `CKU_USER` avec verrouillage anti-bruteforce), hiérarchie et dérivation déterministe de clés via HKDF-SHA256 (RFC 5869 Extract & Expand) depuis une Clé Maîtresse d'Enveloppement (KEK) scellée à perpétuité, politiques et attributs stricts d'objets (`CKA_SENSITIVE`, `CKA_EXTRACTABLE = false`, `CKA_WRAP`, `CKA_DERIVE`), enveloppement sécurisé de clés (Key Wrapping/Unwrapping sous KEK avec HMAC-SHA256), procédure de zéroïsation matérielle d'urgence (Emergency Zeroization) détruisant l'intégralité des secrets en temps $O(1)$, registre d'audit inaltérable scellé par chaîne SHA-256 (`hsm_audit_chain`), gouvernance capabilaire stricte par jeton `HsmCap` et commandes shell interactives `hsm [status | slots | objects | derive | wrap | zeroize | audit]` dans `jsh`.
 
 ---
 
@@ -151,6 +151,7 @@ jambo-os/
 │   ├── jambo-fs/            # Système de fichiers transactionnel Merkle Copy-on-Write
 │   ├── jambo-fuzz/          # Moteur de fuzzing offensif et tests de résilience
 │   ├── jambo-gwd/           # Passerelle réseau L4/L7 & équilibrage de charge élastique
+│   ├── jambo-hsm/           # Module de sécurité matériel HSM Ring 3, dérivation PKCS#11 & scellement KEK
 │   ├── jambo-init/          # Superviseur système PID 1 en espace utilisateur
 │   ├── jambo-ipcd/          # Multiplexeur et passerelle de messagerie IPC distribuée
 │   ├── jambo-kvd/           # Magasin clé-valeur transactionnel distribué (MVCC & baux)

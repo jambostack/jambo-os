@@ -58,6 +58,7 @@ members = [
     "services/jambo-capspec",
     "services/jambo-tee",
     "services/jambo-attest",
+    "services/jambo-hsm",
     "libs/jambo-ui",
     "libs/jambo-sdk",
     "drivers/virtio",

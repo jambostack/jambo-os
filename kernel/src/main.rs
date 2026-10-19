@@ -1079,6 +1079,13 @@ pub extern "C" fn _start() -> ! {
         "Échec du test du sous-système d'attestation distante et de preuves ZKP jambo-attest"
     );
 
+    // 10tervicies. Validation du Module de Sécurité Matériel HSM Ring 3, Dérivation PKCS#11 & Scellement KEK (Phase 94 - v0.2.92)
+    let hsm_success = sched::execute_hsm_daemon_test();
+    assert!(
+        hsm_success,
+        "Échec du test du module de sécurité matériel HSM Ring 3 jambo-hsm"
+    );
+
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
 
     arch::init_iommu();
@@ -1308,14 +1315,15 @@ pub extern "C" fn _start() -> ! {
     kprintln!("\x1b[1;32m[PASS] Phase 91 Formal Capability Specification, CSpace Invariant Verification & Monotonic Attenuation (jambo-capspec) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 92 Trusted Execution Environments (TEE), Isolated Enclaves & Encrypted Memory (jambo-tee) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 93 Remote Cryptographic Attestation, Zero-Knowledge Proofs (ZKP) & Hardware Cluster Confinement (jambo-attest) Complete\x1b[0m");
+    kprintln!("\x1b[1;32m[PASS] Phase 94 Hardware Security Module (HSM), PKCS#11 Key Derivation & Sealed Storage (jambo-hsm) Complete\x1b[0m");
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.91 (Attestation Cryptographique Distante, Preuves ZKP & Confinement Matériel de Grappe jambo-attest)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.92 (Module de Sécurité Matériel HSM Ring 3, Dérivation PKCS#11 & Scellement KEK jambo-hsm)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.91 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.92 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
