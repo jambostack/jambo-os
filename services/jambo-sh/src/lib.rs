@@ -110,6 +110,7 @@ pub struct JamboShell {
     pub vmm: jambo_vmm::JamboVmmDaemon,
     pub vhost: jambo_vhostd::JamboVhostDaemon,
     pub time: jambo_timed::JamboTimeDaemon,
+    pub raft: jambo_raft::JamboRaftDaemon,
 }
 
 impl Default for JamboShell {
@@ -158,6 +159,8 @@ impl JamboShell {
         vhost.init_defaults();
         let mut time = jambo_timed::JamboTimeDaemon::new();
         time.init_defaults();
+        let mut raft = jambo_raft::JamboRaftDaemon::new();
+        raft.init_defaults();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -176,6 +179,7 @@ impl JamboShell {
             vmm,
             vhost,
             time,
+            raft,
         }
     }
 
@@ -301,6 +305,7 @@ impl JamboShell {
                 emit(
                     "  time [cmd]   - Synchronisation horlogère distribuée PTP/NTP et asservissement\n",
                 );
+                emit("  raft [cmd]   - Moteur de consensus distribué léger Raft et réplication\n");
                 emit("  echo <args>  - Affiche les arguments sur la sortie console\n");
                 emit("  clear        - Efface l'écran du terminal (ANSI escape)\n");
                 emit("  reboot       - Redémarre la machine\n");
@@ -308,7 +313,7 @@ impl JamboShell {
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.2.56 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.2.57 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -2096,6 +2101,74 @@ impl JamboShell {
                     }
                     _ => {
                         emit("Usage: time [status | sync | tick [nanos]]\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                }
+            }
+            "raft" => {
+                let sub = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    ""
+                };
+                match sub {
+                    "status" => {
+                        let mut b = [0u8; 20];
+                        let (role, term, commit, log_len) = self.raft.status();
+                        emit("=== MOTEUR DE CONSENSUS DISTRIBUÉ RAFT (jambo-raft) ===\n");
+                        emit("Rôle du nœud            : ");
+                        match role {
+                            jambo_raft::RaftRole::Leader => emit("Leader (Coordinateur actif)\n"),
+                            jambo_raft::RaftRole::Follower => emit("Follower (Suiveur passif)\n"),
+                            jambo_raft::RaftRole::Candidate => emit("Candidate (En élection)\n"),
+                        }
+                        emit("Terme électoral courant : Term #");
+                        emit(format_u64(term, &mut b));
+                        emit("\nIndex de validation     : Commit #");
+                        emit(format_u64(commit, &mut b));
+                        emit("\nLongueur du journal     : ");
+                        emit(format_u64(log_len as u64, &mut b));
+                        emit(" entrées\n");
+                        emit("Taille du cluster       : 3 nœuds (Quorum majoritaire: 2)\n");
+                        emit("Modèle de réplication   : State Machine Replication sans autorité ambiante\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "propose" => {
+                        if parsed.arg_count < 3 {
+                            emit("Usage: raft propose <payload>\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        } else {
+                            let payload = parsed.args[2];
+                            match self.raft.propose(10, payload.as_bytes()) {
+                                Ok(idx) => {
+                                    let mut b = [0u8; 20];
+                                    emit("[RAFT/COMMIT] Commande répliquée avec succès (Index #");
+                                    emit(format_u64(idx, &mut b));
+                                    emit(")\n");
+                                    (ShellStatus::Success, write_pos)
+                                }
+                                Err(_) => {
+                                    emit("[RAFT] Échec de la proposition (Nœud non-leader ou journal plein)\n");
+                                    (ShellStatus::ExecutionFailed, write_pos)
+                                }
+                            }
+                        }
+                    }
+                    "elect" => match self.raft.trigger_election() {
+                        Ok(term) => {
+                            let mut b = [0u8; 20];
+                            emit("[RAFT/ELECTION] Élection déclenchée avec succès -> Leader au Term #");
+                            emit(format_u64(term, &mut b));
+                            emit("\n");
+                            (ShellStatus::Success, write_pos)
+                        }
+                        Err(_) => {
+                            emit("[RAFT] Échec du déclenchement de l'élection\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        }
+                    },
+                    _ => {
+                        emit("Usage: raft [status | propose <payload> | elect]\n");
                         (ShellStatus::Success, write_pos)
                     }
                 }

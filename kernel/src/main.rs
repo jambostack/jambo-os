@@ -837,6 +837,10 @@ pub extern "C" fn _start() -> ! {
         "Échec du test de synchronisation horlogère distribuée PTP/NTP"
     );
 
+    // 10duovicies. Validation du Moteur de Consensus Distribué Raft (Phase 59 - v0.2.57)
+    let raft_success = sched::execute_raft_consensus_test();
+    assert!(raft_success, "Échec du test de consensus distribué Raft");
+
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
 
     arch::init_iommu();
@@ -1011,14 +1015,17 @@ pub extern "C" fn _start() -> ! {
     kprintln!(
         "\x1b[1;32m[PASS] Phase 58 Distributed Clock Synchronization PTP/NTP Complete\x1b[0m"
     );
+    kprintln!(
+        "\x1b[1;32m[PASS] Phase 59 Lightweight Distributed Raft Consensus Engine Complete\x1b[0m"
+    );
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.56 (Synchronisation Horlogère Distribuée PTP/NTP jambo-timed)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.57 (Moteur de Consensus Distribué Raft jambo-raft)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.56 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.57 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );

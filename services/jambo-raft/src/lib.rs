@@ -355,6 +355,78 @@ impl RaftNode {
     }
 }
 
+/// Démon orchestrateur de consensus distribué Raft (Ring 3)
+pub struct JamboRaftDaemon {
+    pub node: RaftNode,
+    pub admin_cap: RaftCap,
+    pub cluster_size: usize,
+}
+
+impl Default for JamboRaftDaemon {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl JamboRaftDaemon {
+    pub fn new() -> Self {
+        let admin_cap = RaftCap::new(Handle::new(59, 1), 1, raft_rights::ALL);
+        Self {
+            node: RaftNode::new(1, 1),
+            admin_cap,
+            cluster_size: 3,
+        }
+    }
+
+    /// Initialise le nœud en tant que Leader avec une entrée initiale validée
+    pub fn init_defaults(&mut self) {
+        let cap = self.admin_cap;
+        if let Ok(_) = self.node.start_election(&cap) {
+            let reply = RequestVoteReply {
+                term: self.node.current_term,
+                vote_granted: true,
+            };
+            self.node.record_vote(&cap, &reply, self.cluster_size);
+        }
+
+        if let Ok(entry) = self.node.propose_command(&cap, 1, b"CLUSTER_INIT") {
+            self.node.commit_index = entry.index;
+            let _ = self.node.apply_committed();
+        }
+    }
+
+    /// Propose une nouvelle commande dans le journal répliqué Raft
+    pub fn propose(&mut self, cmd_id: u32, payload: &[u8]) -> Result<u64, SysError> {
+        let cap = self.admin_cap;
+        let entry = self.node.propose_command(&cap, cmd_id, payload)?;
+        self.node.commit_index = entry.index;
+        let _ = self.node.apply_committed();
+        Ok(entry.index)
+    }
+
+    /// Déclenche une nouvelle élection
+    pub fn trigger_election(&mut self) -> Result<u64, SysError> {
+        let cap = self.admin_cap;
+        let vote_req = self.node.start_election(&cap)?;
+        let reply = RequestVoteReply {
+            term: vote_req.term,
+            vote_granted: true,
+        };
+        self.node.record_vote(&cap, &reply, self.cluster_size);
+        Ok(vote_req.term)
+    }
+
+    /// Récupère l'état courant (Rôle, Terme, Commit Index, Log Len)
+    pub fn status(&self) -> (RaftRole, u64, u64, usize) {
+        (
+            self.node.role,
+            self.node.current_term,
+            self.node.commit_index,
+            self.node.log_len,
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -449,5 +521,28 @@ mod tests {
             node.handle_request_vote(&unauth_cap, &vote_args).err(),
             Some(SysError::PermissionDenied)
         );
+    }
+
+    #[test]
+    fn test_raft_daemon_lifecycle() {
+        let mut daemon = JamboRaftDaemon::new();
+        assert_eq!(daemon.node.role, RaftRole::Follower);
+
+        daemon.init_defaults();
+        assert_eq!(daemon.node.role, RaftRole::Leader);
+        assert_eq!(daemon.node.current_term, 1);
+        assert_eq!(daemon.node.commit_index, 1);
+        assert_eq!(daemon.node.last_applied, 1);
+
+        // Proposer une commande
+        let idx = daemon.propose(10, b"CONFIG_KEY_SET").expect("propose");
+        assert_eq!(idx, 2);
+        assert_eq!(daemon.node.commit_index, 2);
+        assert_eq!(daemon.node.last_applied, 2);
+
+        // Élection forcée
+        let new_term = daemon.trigger_election().expect("election");
+        assert_eq!(new_term, 2);
+        assert_eq!(daemon.node.role, RaftRole::Leader);
     }
 }
