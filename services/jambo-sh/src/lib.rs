@@ -107,6 +107,7 @@ pub struct JamboShell {
     pub power: jambo_powerd::JamboPowerDaemon,
     pub crypto: jambo_cryptod::JamboCryptoDaemon,
     pub auth: jambo_authd::JamboAuthDaemon,
+    pub vmm: jambo_vmm::JamboVmmDaemon,
 }
 
 impl Default for JamboShell {
@@ -149,6 +150,8 @@ impl JamboShell {
         crypto.init_defaults();
         let mut auth = jambo_authd::JamboAuthDaemon::new();
         auth.init_defaults();
+        let mut vmm = jambo_vmm::JamboVmmDaemon::new();
+        vmm.init_defaults();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -164,6 +167,7 @@ impl JamboShell {
             power,
             crypto,
             auth,
+            vmm,
         }
     }
 
@@ -280,6 +284,9 @@ impl JamboShell {
                 emit("  power [cmd]  - Gestion d'énergie matérielle ACPI, C-states et batterie\n");
                 emit("  crypto [cmd] - Chiffrement transparent de stockage et scellement TPM\n");
                 emit("  auth [cmd]   - Identité cryptographique et gestion des sessions isolées\n");
+                emit(
+                    "  vmm [cmd]    - Micro-hyperviseur utilisateur Type-2 et micro-VMs isolées\n",
+                );
                 emit("  echo <args>  - Affiche les arguments sur la sortie console\n");
                 emit("  clear        - Efface l'écran du terminal (ANSI escape)\n");
                 emit("  reboot       - Redémarre la machine\n");
@@ -287,7 +294,7 @@ impl JamboShell {
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.2.53 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.2.54 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -1747,6 +1754,111 @@ impl JamboShell {
                     }
                     _ => {
                         emit("Usage: auth [status | login <user> | logout | verify]\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                }
+            }
+            "vmm" => {
+                let sub = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    ""
+                };
+                match sub {
+                    "status" => {
+                        let mut b = [0u8; 20];
+                        emit("=== MICRO-HYPERVISEUR UTILISATEUR TYPE-2 (jambo-vmm) ===\n");
+                        emit("Micro-VM active         : ");
+                        if self.vmm.is_vm_active() {
+                            emit("OUI (VM #1)\n");
+                        } else {
+                            emit("NON\n");
+                        }
+                        emit("Droits capabilitaires   : VM_CREATE | GUEST_RUN | MEMORY_MAP | IO_INTERCEPT\n");
+                        emit(
+                            "Isolation matérielle    : EPT / Stage-2 Pagetables (Ring 3 Type-2)\n",
+                        );
+                        emit("VM-Exits interceptés    : ");
+                        emit(format_u64(self.vmm.total_exits(), &mut b));
+                        emit("\nSortie console série    : ");
+                        let serial = self.vmm.get_serial_output();
+                        if serial.is_empty() {
+                            emit("[aucune sortie]\n");
+                        } else {
+                            if let Ok(s) = core::str::from_utf8(serial) {
+                                emit(s);
+                            } else {
+                                emit("[données binaires]");
+                            }
+                            emit("\n");
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "step" => match self.vmm.step_vcpu(0) {
+                        Ok(reason) => {
+                            let mut b = [0u8; 20];
+                            emit("[VMM] VM-Exit intercepté avec succès : ");
+                            match reason {
+                                jambo_vmm::VmExitReason::CpuidQuery { leaf, .. } => {
+                                    emit("CpuidQuery leaf=");
+                                    emit(format_hex_u64(leaf as u64, &mut b));
+                                    emit("\n");
+                                }
+                                jambo_vmm::VmExitReason::IoInstruction {
+                                    port,
+                                    is_write,
+                                    data,
+                                    ..
+                                } => {
+                                    emit("IoInstruction port=");
+                                    emit(format_hex_u64(port as u64, &mut b));
+                                    emit(if is_write {
+                                        " WRITE data="
+                                    } else {
+                                        " READ data="
+                                    });
+                                    emit(format_hex_u64(data as u64, &mut b));
+                                    emit("\n");
+                                }
+                                jambo_vmm::VmExitReason::Halt => {
+                                    emit("Halt (vCPU suspendu)\n");
+                                }
+                                jambo_vmm::VmExitReason::EptViolation { gpa, .. } => {
+                                    emit("EptViolation GPA=");
+                                    emit(format_hex_u64(gpa, &mut b));
+                                    emit("\n");
+                                }
+                                _ => {
+                                    emit("Autre interception matérielle\n");
+                                }
+                            }
+                            (ShellStatus::Success, write_pos)
+                        }
+                        Err(_) => {
+                            emit("[VMM] Erreur lors de l'exécution du pas vCPU\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        }
+                    },
+                    "run" => match self.vmm.run_until_halt(0, 10) {
+                        Ok(steps) => {
+                            let mut b = [0u8; 20];
+                            emit("[VMM] Micro-VM exécutée jusqu'à HLT (");
+                            emit(format_u64(steps as u64, &mut b));
+                            emit(" pas exécutés)\n");
+                            (ShellStatus::Success, write_pos)
+                        }
+                        Err(_) => {
+                            emit("[VMM] Erreur lors de l'exécution de la micro-VM\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        }
+                    },
+                    "reset" => {
+                        self.vmm.init_defaults();
+                        emit("[VMM] Micro-VM réinitialisée avec succès\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    _ => {
+                        emit("Usage: vmm [status | step | run | reset]\n");
                         (ShellStatus::Success, write_pos)
                     }
                 }

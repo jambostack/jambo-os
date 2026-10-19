@@ -386,7 +386,7 @@ impl MicroVmm {
     ) -> Result<u32, SysError> {
         self.total_exits += 1;
 
-        if port == COM1_PORT && is_write {
+        if (port == COM1_PORT || port == (COM1_PORT & 0xFF)) && is_write {
             let byte = (data & 0xFF) as u8;
             if self.serial_len < SERIAL_BUFFER_CAPACITY {
                 self.serial_buffer[self.serial_len] = byte;
@@ -520,6 +520,34 @@ impl MicroVmm {
                     }
                 }
             }
+            // 0xEE: OUT DX, AL (écrit AL sur port 16-bit dans DX)
+            0xEE => {
+                let port = (vcpu.regs.rdx & 0xFFFF) as u16;
+                let data = (vcpu.regs.rax & 0xFF) as u32;
+                vcpu.regs.rip += 1;
+                let _ = self.handle_io_exit(port, true, 1, data);
+                vcpu.state = VcpuState::Ready;
+                VmExitReason::IoInstruction {
+                    port,
+                    is_write: true,
+                    size: 1,
+                    data,
+                }
+            }
+            // 0xEC: IN AL, DX (lit port 16-bit dans DX vers AL)
+            0xEC => {
+                let port = (vcpu.regs.rdx & 0xFFFF) as u16;
+                let val = self.handle_io_exit(port, false, 1, 0).unwrap_or(0xFF);
+                vcpu.regs.rax = (vcpu.regs.rax & !0xFF) | (val as u64 & 0xFF);
+                vcpu.regs.rip += 1;
+                vcpu.state = VcpuState::Ready;
+                VmExitReason::IoInstruction {
+                    port,
+                    is_write: false,
+                    size: 1,
+                    data: val,
+                }
+            }
             // 0xB8: MOV EAX, imm32
             0xB8 => {
                 if hpa + 4 >= guest_ram.len() {
@@ -556,6 +584,112 @@ impl MicroVmm {
     /// Récupère les données envoyées par l'invité sur la console série
     pub fn get_serial_output(&self) -> &[u8] {
         &self.serial_buffer[..self.serial_len]
+    }
+}
+
+/// Démon orchestrateur de micro-hyperviseur utilisateur (Ring 3)
+pub struct JamboVmmDaemon {
+    pub vmm: Option<MicroVmm>,
+    pub admin_cap: VmCap,
+    pub guest_ram: [u8; 512],
+}
+
+impl Default for JamboVmmDaemon {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl JamboVmmDaemon {
+    pub fn new() -> Self {
+        let admin_cap = VmCap::new(Handle::new(56, 1), 1, vm_rights::ALL);
+        Self {
+            vmm: None,
+            admin_cap,
+            guest_ram: [0u8; 512],
+        }
+    }
+
+    /// Initialise la micro-VM par défaut avec vCPU 0, mémoire mappée et payload de test
+    pub fn init_defaults(&mut self) {
+        let cap = self.admin_cap;
+        if let Ok(mut vmm) = MicroVmm::new(&cap, 1) {
+            let _ = vmm.map_memory(&cap, 0x0, 0x0, 512, ept_perms::RWX);
+            let _ = vmm.add_vcpu(&cap, 0, 0x0, 0x100);
+
+            // Payload:
+            // 0x00: MOV EAX, 0x4A ('J')  (B8 4A 00 00 00)
+            // 0x05: OUT 0xF8, AL         (E6 F8)
+            // 0x07: MOV EAX, 0x4F ('O')  (B8 4F 00 00 00)
+            // 0x0C: OUT 0xF8, AL         (E6 F8)
+            // 0x0E: HLT                  (F4)
+            self.guest_ram[0] = 0xB8;
+            self.guest_ram[1] = b'J';
+            self.guest_ram[2] = 0x00;
+            self.guest_ram[3] = 0x00;
+            self.guest_ram[4] = 0x00;
+            self.guest_ram[5] = 0xE6;
+            self.guest_ram[6] = 0xF8;
+
+            self.guest_ram[7] = 0xB8;
+            self.guest_ram[8] = b'O';
+            self.guest_ram[9] = 0x00;
+            self.guest_ram[10] = 0x00;
+            self.guest_ram[11] = 0x00;
+            self.guest_ram[12] = 0xE6;
+            self.guest_ram[13] = 0xF8;
+
+            self.guest_ram[14] = 0xF4;
+
+            self.vmm = Some(vmm);
+        }
+    }
+
+    /// Exécute un pas d'instruction sur le vCPU indiqué
+    pub fn step_vcpu(&mut self, vcpu_id: usize) -> Result<VmExitReason, SysError> {
+        let cap = self.admin_cap;
+        let ram = &self.guest_ram;
+        if let Some(ref mut vmm) = self.vmm {
+            vmm.step_vcpu(&cap, vcpu_id, ram)
+        } else {
+            Err(SysError::InvalidHandle)
+        }
+    }
+
+    /// Exécute le vCPU jusqu'à l'arrêt (HLT) ou un nombre maximal d'étapes
+    pub fn run_until_halt(&mut self, vcpu_id: usize, max_steps: usize) -> Result<usize, SysError> {
+        let mut steps = 0;
+        while steps < max_steps {
+            match self.step_vcpu(vcpu_id)? {
+                VmExitReason::Halt => {
+                    steps += 1;
+                    break;
+                }
+                _ => {
+                    steps += 1;
+                }
+            }
+        }
+        Ok(steps)
+    }
+
+    /// Récupère la sortie console série de la micro-VM
+    pub fn get_serial_output(&self) -> &[u8] {
+        if let Some(ref vmm) = self.vmm {
+            vmm.get_serial_output()
+        } else {
+            &[]
+        }
+    }
+
+    /// Indique si une micro-VM est active
+    pub fn is_vm_active(&self) -> bool {
+        self.vmm.is_some()
+    }
+
+    /// Nombre total de VM-exits
+    pub fn total_exits(&self) -> u64 {
+        self.vmm.as_ref().map(|v| v.total_exits).unwrap_or(0)
     }
 }
 
@@ -685,5 +819,64 @@ mod tests {
         let cap_unauth = VmCap::new(Handle::new(1, 0), 99, 0); // 0 droits
         let vmm_res = MicroVmm::new(&cap_unauth, 99);
         assert_eq!(vmm_res.err(), Some(SysError::PermissionDenied));
+    }
+
+    #[test]
+    fn test_vmm_daemon_lifecycle() {
+        let mut daemon = JamboVmmDaemon::new();
+        assert!(!daemon.is_vm_active());
+        daemon.init_defaults();
+        assert!(daemon.is_vm_active());
+
+        // Step 1: MOV EAX, 'J'
+        let s1 = daemon.step_vcpu(0).expect("step 1");
+        assert_eq!(
+            s1,
+            VmExitReason::CpuidQuery {
+                leaf: b'J' as u32,
+                subleaf: 0
+            }
+        );
+
+        // Step 2: OUT 0xF8, AL ('J')
+        let s2 = daemon.step_vcpu(0).expect("step 2");
+        assert_eq!(
+            s2,
+            VmExitReason::IoInstruction {
+                port: 0xF8,
+                is_write: true,
+                size: 1,
+                data: b'J' as u32
+            }
+        );
+        assert_eq!(daemon.get_serial_output(), b"J");
+
+        // Step 3: MOV EAX, 'O'
+        let s3 = daemon.step_vcpu(0).expect("step 3");
+        assert_eq!(
+            s3,
+            VmExitReason::CpuidQuery {
+                leaf: b'O' as u32,
+                subleaf: 0
+            }
+        );
+
+        // Step 4: OUT 0xF8, AL ('O')
+        let s4 = daemon.step_vcpu(0).expect("step 4");
+        assert_eq!(
+            s4,
+            VmExitReason::IoInstruction {
+                port: 0xF8,
+                is_write: true,
+                size: 1,
+                data: b'O' as u32
+            }
+        );
+        assert_eq!(daemon.get_serial_output(), b"JO");
+
+        // Step 5: HLT
+        let s5 = daemon.step_vcpu(0).expect("step 5");
+        assert_eq!(s5, VmExitReason::Halt);
+        assert_eq!(daemon.total_exits(), 3); // 2 I/O exits + 1 HLT
     }
 }

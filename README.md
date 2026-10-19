@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.53-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.54-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.53 (Identités Cryptographiques & Sessions Isolées jambo-authd)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.53` introduit le gestionnaire d'identités cryptographiques et de sessions en espace utilisateur (`services/jambo-authd`), éradiquant définitivement le super-utilisateur `root` au profit d'identités asymétriques Ed25519, de l'authentification défi-réponse sans mot de passe en clair, des jetons de sessions capabilitaires `SessionTokenCap` avec révocation atomique en cascade (Zero-Remanence) et des commandes interactives `auth [status | login | logout | verify]` dans `jsh`.
+> **Statut du Projet : Version v0.2.54 (Micro-Hyperviseur Utilisateur Type-2 jambo-vmm)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.54` introduit le micro-hyperviseur utilisateur (`services/jambo-vmm`), permettant l'exécution de micro-machines virtuelles légères isolées par virtualisation matérielle (VT-x / AMD-V / Stage-2), la gestion de tables de pages étendues (`EptAddressSpace`), l'émulation et l'interception des VM-Exits pour les vCPUs (CPUID, I/O COM1, HLT) et les commandes interactives `vmm [status | step | run | reset]` dans `jsh`.
 
 ---
 

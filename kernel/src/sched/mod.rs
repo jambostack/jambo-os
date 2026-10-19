@@ -19,6 +19,7 @@ pub mod rpc_test;
 pub mod shell_test;
 pub mod thread;
 pub mod vfs_test;
+pub mod vmm_test;
 
 pub use ai_test::execute_local_ai_test;
 pub use audit_test::execute_cryptographic_audit_test;
@@ -41,6 +42,7 @@ pub use rpc_test::execute_distributed_rpc_test;
 pub use shell_test::execute_shell_repl_test;
 pub use thread::{allocate_tid, Thread, ThreadState};
 pub use vfs_test::execute_vfs_test;
+pub use vmm_test::execute_userspace_vmm_test;
 
 #[inline]
 pub fn on_timer_tick() {
