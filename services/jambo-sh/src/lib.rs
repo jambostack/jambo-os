@@ -123,6 +123,7 @@ pub struct JamboShell {
     pub policy: jambo_policyd::JamboPolicyDaemon,
     pub trace: jambo_traced::JamboTraceDaemon,
     pub cert: jambo_certd::JamboCertDaemon,
+    pub init: jambo_init::JamboInitDaemon,
 }
 
 impl Default for JamboShell {
@@ -185,6 +186,7 @@ impl JamboShell {
         let policy = jambo_policyd::JamboPolicyDaemon::new();
         let trace = jambo_traced::JamboTraceDaemon::new();
         let cert = jambo_certd::JamboCertDaemon::new();
+        let init = jambo_init::JamboInitDaemon::new();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -216,6 +218,7 @@ impl JamboShell {
             policy,
             trace,
             cert,
+            init,
         }
     }
 
@@ -358,6 +361,7 @@ impl JamboShell {
                 emit("  policy [cmd] - Moteur déclaratif de politiques et admission control\n");
                 emit("  trace [cmd]  - Traçage distribué, spans et analyse de latence\n");
                 emit("  cert [cmd]   - Autorité de certification distribuée et mTLS\n");
+                emit("  init [cmd]   - Superviseur PID 1, cycle de vie et DAG de services\n");
                 emit("  echo <args>  - Affiche les arguments sur la sortie console\n");
                 emit("  clear        - Efface l'écran du terminal (ANSI escape)\n");
                 emit("  reboot       - Redémarre la machine\n");
@@ -365,7 +369,7 @@ impl JamboShell {
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.2.69 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.2.70 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -3473,6 +3477,77 @@ impl JamboShell {
                     }
                     _ => {
                         emit("Usage: cert [status | issue <cn> | verify <serial> | revoke <serial>]\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                }
+            }
+            "init" => {
+                let sub = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    ""
+                };
+                match sub {
+                    "status" => {
+                        let mut b = [0u8; 20];
+                        emit("=== SUPERVISEUR SYSTÈME PID 1 (jambo-init) ===\n");
+                        emit("Statut Superviseur    : ");
+                        if self.init.is_shutdown() {
+                            emit("Arrêté (Shutdown)\n");
+                        } else {
+                            emit("Opérationnel (Active)\n");
+                        }
+                        emit("Services Actifs       : ");
+                        emit(format_u64(self.init.active_count() as u64, &mut b));
+                        emit(" / ");
+                        emit(format_u64(self.init.total_services() as u64, &mut b));
+                        emit("\nServices en Échec     : ");
+                        emit(format_u64(self.init.failed_count() as u64, &mut b));
+                        emit("\nOpérations Traitées   : ");
+                        emit(format_u64(self.init.operations_count(), &mut b));
+                        emit("\nConfinement           : InitCap (Zero-Ambient Authority)\n");
+                        emit("Ordonnancement        : DAG Topologique strict\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "restart" => {
+                        if parsed.arg_count > 2 {
+                            let daemon = parsed.args[2];
+                            match self.init.restart_service_by_name(daemon.as_bytes()) {
+                                Ok(_) => {
+                                    emit("[INIT/RESTART] Service '");
+                                    emit(daemon);
+                                    emit("' relancé avec succès par PID 1\n");
+                                    (ShellStatus::Success, write_pos)
+                                }
+                                Err(_) => {
+                                    emit("[INIT] Échec de relance : service '");
+                                    emit(daemon);
+                                    emit("' introuvable\n");
+                                    (ShellStatus::ExecutionFailed, write_pos)
+                                }
+                            }
+                        } else {
+                            emit("Usage: init restart <daemon>\n");
+                            (ShellStatus::Success, write_pos)
+                        }
+                    }
+                    "shutdown" => {
+                        match self.init.shutdown_system() {
+                            Ok(stopped) => {
+                                let mut b = [0u8; 20];
+                                emit("[INIT/SHUTDOWN] Arrêt ordonné du système accompli (");
+                                emit(format_u64(stopped as u64, &mut b));
+                                emit(" services arrêtés selon le DAG inverse)\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("[INIT] Échec lors de l'arrêt du système\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    _ => {
+                        emit("Usage: init [status | restart <daemon> | shutdown]\n");
                         (ShellStatus::Success, write_pos)
                     }
                 }

@@ -925,6 +925,13 @@ pub extern "C" fn _start() -> ! {
         "Échec du test de l'autorité de certification éphémère et mTLS"
     );
 
+    // 10quindecies. Validation du Superviseur Système PID 1 & DAG de Dépendances (Phase 72 - v0.2.70)
+    let init_success = sched::execute_init_supervisor_test();
+    assert!(
+        init_success,
+        "Échec du test du superviseur système PID 1 et gestionnaire de DAG"
+    );
+
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
 
     arch::init_iommu();
@@ -1132,14 +1139,15 @@ pub extern "C" fn _start() -> ! {
         "\x1b[1;32m[PASS] Phase 70 Distributed Tracing, Context Propagation & Latency Profiling Complete\x1b[0m"
     );
     kprintln!("\x1b[1;32m[PASS] Phase 71 Ephemeral Cluster PKI & Mutual TLS Complete\x1b[0m");
+    kprintln!("\x1b[1;32m[PASS] Phase 72 Ring-3 PID 1 Supervisor & Service DAG Complete\x1b[0m");
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.69 (Autorité de Certification jambo-certd)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.70 (Superviseur PID 1 jambo-init)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.69 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.70 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );

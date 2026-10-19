@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.69-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.70-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.69 (Autorité de Certification Éphémère & mTLS jambo-certd)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.69` introduit l'autorité de certification éphémère de grappe et mTLS en espace utilisateur (`services/jambo-certd`), implémentant des certificats éphémères signés cryptographiquement par SHA-256, une validation temporelle stricte, une table CRL de révocation immédiate, le confinement capabilaire granulaire `CertCap` et les commandes interactives `cert [status | issue | verify | revoke]` dans `jsh`.
+> **Statut du Projet : Version v0.2.70 (Superviseur Système PID 1 & Gestionnaire de DAG jambo-init)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.70` introduit le superviseur système racine PID 1 en espace utilisateur (`services/jambo-init`), implémentant l'orchestration déterministe des dépendances selon un DAG topologique strict, la détection formelle de cycles, la tolérance aux pannes matérielles et logicielles avec relance automatique (*auto-healing*), l'extinction ordonnée (*shutdown*), le confinement capabilaire granulaire `InitCap` et les commandes d'administration système `init [status | restart <daemon> | shutdown]` dans `jsh`.
 
 ---
 

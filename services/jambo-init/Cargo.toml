@@ -1,15 +1,20 @@
 [package]
 name = "jambo-init"
-version = "0.2.69"
+version = "0.2.70"
 edition = "2021"
+[lib]
+name = "jambo_init"
+path = "src/lib.rs"
 
+[[bin]]
+name = "jambo-init"
+path = "src/main.rs"
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }
 pcie-bus-mgr = { path = "../pcie-bus-mgr" }
 nvme = { path = "../../drivers/nvme" }
 xhci = { path = "../../drivers/xhci" }
 jambo-netd = { path = "../jambo-netd" }
-jambo-sh = { path = "../jambo-sh" }
 jambo-coreutils = { path = "../jambo-coreutils" }
 jambo-comp = { path = "../jambo-comp" }
 jambo-ui = { path = "../../libs/jambo-ui" }

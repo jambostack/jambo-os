@@ -170,17 +170,12 @@ pub extern "C" fn _start() -> ! {
     );
     assert!(netd.open_tcp_stream(&restricted_netcap, ip, 443).is_err());
 
-    // 6. Démarrage et validation de l'espace utilisateur et du shell (Phase 10 - jambo-sh & coreutils)
-    let mut shell = jambo_sh::JamboShell::new();
-
-    // Exécution d'une commande avec confinement strict de capacités par argument
-    let status = shell.execute("ls /system/config.json");
-    assert_eq!(status, jambo_sh::ShellStatus::Success);
-
-    // Vérifie que seule la capacité nécessaire à l'argument a été transmise (Zéro autorité ambiante)
-    let parsed_cmd = shell.parse_and_confine("cat /etc/hosts /var/log/syslog");
-    assert_eq!(parsed_cmd.cap_count, 2);
-    let cat_cap = parsed_cmd.capabilities[0].unwrap();
+    // 6. Démarrage et validation de l'espace utilisateur et des utilitaires (Phase 10 - coreutils)
+    let cat_cap = jambo_coreutils::ArgumentCapability {
+        target_resource_id: 1,
+        granted_handle: libjambo::Handle::new(10, 1),
+        rights: libjambo::cap_rights::READ,
+    };
 
     // Validation du confinement strict de CmdCat (Zero Ambient Authority)
     let hosts_data = b"127.0.0.1 localhost\n::1 localhost";
@@ -189,7 +184,7 @@ pub extern "C" fn _start() -> ! {
     assert_eq!(cat_read, hosts_data);
 
     // Tentative d'accès avec une capacité sans droit de lecture : rejet immédiat
-    let unauth_cap = jambo_sh::ArgumentCapability {
+    let unauth_cap = jambo_coreutils::ArgumentCapability {
         target_resource_id: 999,
         granted_handle: libjambo::Handle::new(99, 1),
         rights: 0, // Aucun droit READ
@@ -198,13 +193,6 @@ pub extern "C" fn _start() -> ! {
         jambo_coreutils::CmdCat::read_confined(&unauth_cap, hosts_data),
         Err(libjambo::SysError::PermissionDenied)
     );
-
-    // Blocage strict d'une commande non autorisée
-    let bad_status = shell.execute("evil_backdoor");
-    assert_eq!(bad_status, jambo_sh::ShellStatus::PermissionDenied);
-
-    // Validation des pipelines d'objets structurés (v0.2.8 - ps | filter)
-    assert!(shell.is_pipeline("ps | filter caps >= 8"));
     let proc_pipeline = jambo_coreutils::CmdPs::pipeline();
     assert_eq!(proc_pipeline.count(), 6);
 
@@ -1833,6 +1821,25 @@ pub extern "C" fn _start() -> ! {
             jambo_certd::key_usages::USAGE_CLIENT_AUTH
         ),
         Err(libjambo::SysError::PermissionDenied)
+    );
+
+    // 33. Superviseur Système PID 1, DAG de Dépendances & Tolérance aux Pannes (Phase 72 - v0.2.70)
+    let _init_cap = jambo_init::InitCap::new(
+        libjambo::Handle::new(72, 1),
+        jambo_init::init_rights::ALL,
+    );
+    let mut supervisor_daemon = jambo_init::JamboInitDaemon::new();
+    assert!(supervisor_daemon.active_count() >= 10);
+    assert_eq!(supervisor_daemon.failed_count(), 0);
+
+    // Test de simulation de panne et d'auto-guérison sur jambo-serviced
+    let restart_st = supervisor_daemon
+        .report_crash_by_name(b"jambo-serviced")
+        .expect("Self-healing crash recovery");
+    assert_eq!(restart_st, jambo_init::DaemonState::Running);
+    assert_eq!(
+        supervisor_daemon.get_service_restarts(b"jambo-serviced"),
+        Some(1)
     );
 
     // Boucle de supervision de la santé des services Ring 3
