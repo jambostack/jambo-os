@@ -774,6 +774,13 @@ pub extern "C" fn _start() -> ! {
         "Échec du test du sous-système d'IA locale jambo-aid et similarité vectorielle"
     );
 
+    // 10tredecies. Validation du Durcissement de Sécurité Offensive, Fuzzing SMAP/IOMMU & Chaos (Phase 50 - v0.2.48)
+    let fuzz_success = sched::execute_security_fuzz_test();
+    assert!(
+        fuzz_success,
+        "Échec du test de durcissement de sécurité offensive, fuzzing SMAP/IOMMU et résilience chaos"
+    );
+
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
 
     arch::init_iommu();
@@ -921,14 +928,17 @@ pub extern "C" fn _start() -> ! {
     kprintln!(
         "\x1b[1;32m[PASS] Phase 49 Local AI Subsystem (jambo-aid) & Intent Orchestrator Complete\x1b[0m"
     );
+    kprintln!(
+        "\x1b[1;32m[PASS] Phase 50 Offensive Security Hardening, Fuzzing (SMAP/IOMMU) & Chaos Resilience Complete\x1b[0m"
+    );
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.47 (IA Locale jambo-aid & Orchestrateur d'Intents)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.48 (Fuzzing Sécurité Offensive & Chaos jambo-fuzz)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.47 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.48 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );

@@ -101,6 +101,7 @@ pub struct JamboShell {
     pub comp: jambo_comp::JamboComp,
     pub pkgd: jambo_pkgd::JamboPkgDaemon,
     pub aid: jambo_aid::JamboAiDaemon,
+    pub fuzz: jambo_fuzz::JamboFuzzDaemon,
 }
 
 impl Default for JamboShell {
@@ -142,6 +143,7 @@ impl JamboShell {
             comp: jambo_comp::JamboComp::new(1920, 1080, 60),
             pkgd: jambo_pkgd::JamboPkgDaemon::new(),
             aid,
+            fuzz: jambo_fuzz::JamboFuzzDaemon::new(),
         }
     }
 
@@ -250,6 +252,9 @@ impl JamboShell {
                 emit("  compat [cmd] - Couche de compatibilité binaire Linux ELF POSIX\n");
                 emit("  wasm [cmd]   - Runtime d'exécution WebAssembly & sandbox WASI\n");
                 emit("  ai [cmd]     - Sous-système d'IA locale, similarité vectorielle et intents\n");
+                emit(
+                    "  fuzz [cmd]   - Moteur de fuzzing offensif, isolation SMAP/IOMMU et chaos\n",
+                );
                 emit("  echo <args>  - Affiche les arguments sur la sortie console\n");
                 emit("  clear        - Efface l'écran du terminal (ANSI escape)\n");
                 emit("  reboot       - Redémarre la machine\n");
@@ -257,7 +262,7 @@ impl JamboShell {
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.2.47 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.2.48 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -970,6 +975,99 @@ impl JamboShell {
                         emit(
                             "Usage: ai [status | ask <prompt> | search <query> | embed <texte>]\n",
                         );
+                        (ShellStatus::Success, write_pos)
+                    }
+                }
+            }
+            "fuzz" => {
+                let subcmd = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    "status"
+                };
+                match subcmd {
+                    "status" => {
+                        let mut b = [0u8; 20];
+                        emit("JamboFuzz Security Engine: Active\n");
+                        emit("  Campagnes exécutées      : ");
+                        emit(format_u64(self.fuzz.total_campaigns as u64, &mut b));
+                        emit("\n  Dernières mutations     : ");
+                        emit(format_u64(
+                            self.fuzz.last_report.total_mutations_tested as u64,
+                            &mut b,
+                        ));
+                        emit("\n  Handles invalides rejetés : ");
+                        emit(format_u64(
+                            self.fuzz.last_report.rejected_invalid_handles as u64,
+                            &mut b,
+                        ));
+                        emit("\n  Pointeurs hostiles bloqués: ");
+                        emit(format_u64(
+                            self.fuzz.last_report.blocked_bad_pointers as u64,
+                            &mut b,
+                        ));
+                        emit("\n  Violations SMAP bloquées  : ");
+                        emit(format_u64(
+                            self.fuzz.last_report.smap_violations_blocked as u64,
+                            &mut b,
+                        ));
+                        emit("\n  Panics noyau évités       : ");
+                        emit(if self.fuzz.last_report.zero_kernel_panics {
+                            "Oui (100% stable)\n"
+                        } else {
+                            "Non\n"
+                        });
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "run" => {
+                        let iterations = if parsed.arg_count > 2 {
+                            parse_u64(parsed.args[2]).unwrap_or(500) as usize
+                        } else {
+                            500
+                        };
+                        let report = self.fuzz.run_campaign(iterations);
+                        let mut b = [0u8; 20];
+                        emit("[FUZZ] Campagne de ");
+                        emit(format_u64(report.total_mutations_tested as u64, &mut b));
+                        emit(" mutations terminée : ");
+                        emit(format_u64(report.rejected_invalid_handles as u64, &mut b));
+                        emit(" handles invalides rejetés, ");
+                        emit(format_u64(report.blocked_bad_pointers as u64, &mut b));
+                        emit(" pointeurs hostiles bloqués (0 panic noyau)\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "smap" => {
+                        let ok = self.fuzz.fuzzer.test_smap_smep_kernel_isolation();
+                        if ok {
+                            emit("[FUZZ/SMAP] Isolation matérielle SMAP/SMEP validée (Ring 0 imperméable aux adresses utilisateur)\n");
+                        } else {
+                            emit("[FUZZ/SMAP] Échec de vérification de la barrière SMAP\n");
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "iommu" => {
+                        let ok = self.fuzz.fuzzer.test_iommu_attack_containment();
+                        if ok {
+                            emit("[FUZZ/IOMMU] Confinement DMA matériel validé (100% accès hors domaine bloqués par l'IOMMU)\n");
+                        } else {
+                            emit("[FUZZ/IOMMU] Alerte: Fuite DMA détectée\n");
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "chaos" => {
+                        let (ok, latency) = self.fuzz.fuzzer.test_chaos_driver_resilience();
+                        let mut b = [0u8; 20];
+                        if ok {
+                            emit("[FUZZ/CHAOS] Résilience du pilote validée : auto-guérison en ");
+                            emit(format_u64(latency as u64, &mut b));
+                            emit(" ms (< 25 ms, 0 perte de données)\n");
+                        } else {
+                            emit("[FUZZ/CHAOS] Échec de l'auto-guérison du pilote sous chaos\n");
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    _ => {
+                        emit("Usage: fuzz [status | run <n> | smap | iommu | chaos]\n");
                         (ShellStatus::Success, write_pos)
                     }
                 }

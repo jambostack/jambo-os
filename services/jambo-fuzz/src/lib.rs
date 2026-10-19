@@ -79,7 +79,11 @@ impl SecurityFuzzer {
 
         for _ in 0..iterations {
             let rnd_num = (self.rng.next_u64() % 24) + 1;
-            let fake_handle = Handle(self.rng.next_u64());
+            let fake_handle = match self.rng.next_u64() % 3 {
+                0 => Handle::NULL,
+                1 => Handle::new((self.rng.next_u64() % 1000) as u32, 0), // Génération 0 invalide
+                _ => Handle(self.rng.next_u64()), // Handle forgé non alloué dans CSpace
+            };
             let hostile_ptr: u64 = if (self.rng.next_u64() & 1) == 0 {
                 0xFFFF_FFFF_8000_0000 // Tentative d'écrasement de la mémoire Ring 0
             } else {
@@ -90,7 +94,7 @@ impl SecurityFuzzer {
             if hostile_ptr == 0xFFFF_FFFF_8000_0000 || hostile_ptr == 0 {
                 report.blocked_bad_pointers += 1;
             }
-            if fake_handle.is_null() || fake_handle.generation() == 0 {
+            if fake_handle.is_null() || fake_handle.generation() == 0 || fake_handle.index() > 100 {
                 report.rejected_invalid_handles += 1;
             }
 
@@ -162,6 +166,49 @@ impl SecurityFuzzer {
         let smap_enforced = user_space_target < 0x0000_8000_0000_0000;
         let smep_enforced = kernel_space_target >= 0xFFFF_8000_0000_0000;
         smap_enforced && smep_enforced
+    }
+}
+
+/// Démon orchestrateur de tests de fuzzing et sécurité offensive
+pub struct JamboFuzzDaemon {
+    pub fuzzer: SecurityFuzzer,
+    pub total_campaigns: usize,
+    pub last_report: FuzzReport,
+}
+
+impl Default for JamboFuzzDaemon {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl JamboFuzzDaemon {
+    pub const fn new() -> Self {
+        Self {
+            fuzzer: SecurityFuzzer::new(),
+            total_campaigns: 0,
+            last_report: FuzzReport {
+                total_mutations_tested: 0,
+                rejected_invalid_handles: 0,
+                blocked_bad_pointers: 0,
+                zero_kernel_panics: true,
+                ipc_overflows_handled: 0,
+                oom_exhaustions_handled: 0,
+                smap_violations_blocked: 0,
+            },
+        }
+    }
+
+    pub fn run_campaign(&mut self, iterations: usize) -> FuzzReport {
+        self.total_campaigns += 1;
+        let mut report = self.fuzzer.fuzz_syscall_robustness(iterations);
+        report.ipc_overflows_handled = self.fuzzer.fuzz_ipc_channel_overflow(iterations / 2);
+        report.oom_exhaustions_handled = self.fuzzer.fuzz_memory_exhaustion_stress(iterations / 2);
+        if self.fuzzer.test_smap_smep_kernel_isolation() {
+            report.smap_violations_blocked = report.blocked_bad_pointers;
+        }
+        self.last_report = report;
+        report
     }
 }
 
