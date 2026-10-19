@@ -1037,6 +1037,13 @@ pub extern "C" fn _start() -> ! {
         "Échec du test du démon d'édition de liens dynamiques jambo-dynlinkd"
     );
 
+    // 10septiesdecies. Validation du Filtrage d'Appels Système BPF & Confinement Granulaire (Phase 88 - v0.2.86)
+    let seccomp_success = sched::execute_seccomp_daemon_test();
+    assert!(
+        seccomp_success,
+        "Échec du test du démon de filtrage d'appels système BPF jambo-seccomp"
+    );
+
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
 
     arch::init_iommu();
@@ -1260,14 +1267,15 @@ pub extern "C" fn _start() -> ! {
     kprintln!("\x1b[1;32m[PASS] Phase 85 Userspace Hardware Performance Profiling, Flamegraphs & Latency Analysis (jambo-profilerd) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 86 Userspace Dynamic Debugging, Hardware Breakpoints DR0..DR7 & Memory Introspection (jambo-dbg) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 87 Userspace Dynamic Linking, ELF64 Shared Libraries (.jso), GOT/PLT & Lazy Binding (jambo-dynlinkd) Complete\x1b[0m");
+    kprintln!("\x1b[1;32m[PASS] Phase 88 Userspace Granular Syscall Filtering, BPF DAG Validation & POSIX Conformance (jambo-seccomp) Complete\x1b[0m");
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.85 (Édition de Liens Dynamiques Ring 3, GOT/PLT & jambo-dynlinkd)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.86 (Filtrage d'Appels Système BPF, Confinement Granulaire & jambo-seccomp)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.85 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.86 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );

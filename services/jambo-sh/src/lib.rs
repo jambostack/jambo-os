@@ -156,6 +156,7 @@ pub struct JamboShell {
     pub profiler: jambo_profilerd::JamboProfilerDaemon,
     pub dbg: jambo_dbg::JamboDebuggerDaemon,
     pub dynlink: jambo_dynlinkd::JamboDynLinkDaemon,
+    pub seccomp: jambo_seccomp::JamboSeccompDaemon,
 }
 
 impl Default for JamboShell {
@@ -338,6 +339,12 @@ impl JamboShell {
         );
         let mut dynlink = jambo_dynlinkd::JamboDynLinkDaemon::new(1, dynlink_cap);
         dynlink.init_defaults();
+        let seccomp_cap = jambo_seccomp::SeccompCap::new(
+            libjambo::Handle::new(8801, 1),
+            jambo_seccomp::seccomp_rights::ALL,
+        );
+        let mut seccomp = jambo_seccomp::JamboSeccompDaemon::new(1, seccomp_cap);
+        seccomp.init_defaults();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -384,6 +391,7 @@ impl JamboShell {
             profiler,
             dbg,
             dynlink,
+            seccomp,
         }
     }
 
@@ -3656,6 +3664,202 @@ impl JamboShell {
                     }
                     _ => {
                         emit("Usage: dynlink [status | list | load <name> [flags] | resolve <sym> | lazy <lib_id> <idx> | relro <lib_id> | unload <lib_id> | ldd <name> | audit]\n");
+                        (ShellStatus::ExecutionFailed, write_pos)
+                    }
+                }
+            }
+            "seccomp" => {
+                let subcmd = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    "status"
+                };
+                let cap = self.seccomp.cap;
+                match subcmd {
+                    "status" => {
+                        emit("=== FILTRAGE BPF & CONFINEMENT D'APPELS SYSTÈME (jambo-seccomp) ===\n");
+                        let mut b = [0u8; 20];
+                        emit("Filtres enregistrés en mémoire : ");
+                        emit(format_u64(self.seccomp.filter_count as u64, &mut b));
+                        emit(" / ");
+                        emit(format_u64(jambo_seccomp::MAX_FILTERS as u64, &mut b));
+                        emit("\nThreads sous confinement      : ");
+                        emit(format_u64(self.seccomp.thread_count as u64, &mut b));
+                        emit(" / ");
+                        emit(format_u64(jambo_seccomp::MAX_THREADS as u64, &mut b));
+                        emit("\nÉvaluations d'appels système   : ");
+                        emit(format_u64(self.seccomp.evaluations_count, &mut b));
+                        emit("\nAppels autorisés (ALLOW)       : ");
+                        emit(format_u64(self.seccomp.allowed_count, &mut b));
+                        emit("\nViolations / Blocages          : ");
+                        emit(format_u64(self.seccomp.violations_count, &mut b));
+                        emit("\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "list" => {
+                        emit("ID | Profil / Nom               | Insns | Propriétaire PID | Utilisations\n");
+                        emit("---+----------------------------+-------+------------------+-------------\n");
+                        let mut b = [0u8; 20];
+                        for slot in &self.seccomp.filters {
+                            if let Some(ref f) = slot {
+                                emit(format_u64(f.id as u64, &mut b));
+                                emit("  | ");
+                                emit(f.name_str());
+                                for _ in f.name_len..27 {
+                                    emit(" ");
+                                }
+                                emit("| ");
+                                emit(format_u64(f.program.len as u64, &mut b));
+                                emit("     | PID ");
+                                emit(format_u64(f.owner_pid, &mut b));
+                                emit("            | ");
+                                emit(format_u64(f.use_count as u64, &mut b));
+                                emit("\n");
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "load" => {
+                        if parsed.arg_count > 2 {
+                            let profile = parsed.args[2];
+                            let res = match profile {
+                                "strict" => jambo_seccomp::FilterBuilder::build_strict_filter().map(|p| ("Strict", p)),
+                                "compute" => jambo_seccomp::FilterBuilder::build_compute_filter().map(|p| ("Compute", p)),
+                                "net" => jambo_seccomp::FilterBuilder::build_network_filter().map(|p| ("Network", p)),
+                                _ => {
+                                    let mut b_n = jambo_seccomp::FilterBuilder::new();
+                                    b_n.check_arch(jambo_seccomp::AUDIT_ARCH_X86_64);
+                                    b_n.allow_syscall(0); // read
+                                    b_n.allow_syscall(1); // write
+                                    b_n.allow_syscall(60); // exit
+                                    b_n.default_action(jambo_seccomp::SECCOMP_RET_KILL_PROCESS);
+                                    b_n.build().map(|p| ("NetCustom", p))
+                                }
+                            };
+                            match res {
+                                Ok((name, prog)) => {
+                                    match self.seccomp.load_named_filter(&cap, name, prog, 0, 100, 3100) {
+                                        Ok(id) => {
+                                            emit("seccomp: filtre '");
+                                            emit(name);
+                                            emit("' chargé avec succès (ID ");
+                                            let mut b = [0u8; 20];
+                                            emit(format_u64(id as u64, &mut b));
+                                            emit(")\n");
+                                            (ShellStatus::Success, write_pos)
+                                        }
+                                        Err(_) => {
+                                            emit("seccomp: erreur lors du chargement du filtre\n");
+                                            (ShellStatus::ExecutionFailed, write_pos)
+                                        }
+                                    }
+                                }
+                                Err(_) => {
+                                    emit("seccomp: échec de validation formelle du filtre BPF\n");
+                                    (ShellStatus::ExecutionFailed, write_pos)
+                                }
+                            }
+                        } else {
+                            emit("Usage: seccomp load <strict|compute|net>\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        }
+                    }
+                    "attach" => {
+                        if parsed.arg_count > 3 {
+                            let tid = parse_u64(parsed.args[2]).unwrap_or(1);
+                            let fid = parse_u64(parsed.args[3]).unwrap_or(1) as u32;
+                            let _ = self.seccomp.register_thread(tid, 1);
+                            let _ = self.seccomp.set_no_new_privs(tid);
+                            match self.seccomp.attach_filter_to_thread(&cap, tid, fid, 3101) {
+                                Ok(()) => {
+                                    emit("seccomp: filtre attaché avec succès au thread TID ");
+                                    let mut b = [0u8; 20];
+                                    emit(format_u64(tid, &mut b));
+                                    emit(" (no_new_privs scellé)\n");
+                                    (ShellStatus::Success, write_pos)
+                                }
+                                Err(_) => {
+                                    emit("seccomp: échec d'attachement du filtre (ID ou TID invalide)\n");
+                                    (ShellStatus::ExecutionFailed, write_pos)
+                                }
+                            }
+                        } else {
+                            emit("Usage: seccomp attach <tid> <filter_id>\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        }
+                    }
+                    "tsync" => {
+                        if parsed.arg_count > 3 {
+                            let pid = parse_u64(parsed.args[2]).unwrap_or(1);
+                            let fid = parse_u64(parsed.args[3]).unwrap_or(1) as u32;
+                            match self.seccomp.sync_process_threads(&cap, pid, fid, 3102) {
+                                Ok(count) => {
+                                    emit("seccomp: synchronisation TSYNC réussie sur ");
+                                    let mut b = [0u8; 20];
+                                    emit(format_u64(count as u64, &mut b));
+                                    emit(" thread(s) du PID ");
+                                    emit(format_u64(pid, &mut b));
+                                    emit("\n");
+                                    (ShellStatus::Success, write_pos)
+                                }
+                                Err(_) => {
+                                    emit("seccomp: échec de la synchronisation TSYNC multi-thread\n");
+                                    (ShellStatus::ExecutionFailed, write_pos)
+                                }
+                            }
+                        } else {
+                            emit("Usage: seccomp tsync <pid> <filter_id>\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        }
+                    }
+                    "eval" => {
+                        if parsed.arg_count > 3 {
+                            let tid = parse_u64(parsed.args[2]).unwrap_or(1);
+                            let nr = parse_u64(parsed.args[3]).unwrap_or(0) as i32;
+                            let data = jambo_seccomp::SeccompData::new(
+                                nr,
+                                jambo_seccomp::AUDIT_ARCH_X86_64,
+                                0x400000,
+                                [0; 6],
+                            );
+                            let action = self.seccomp.evaluate_syscall(tid, &data, 3103);
+                            emit("seccomp: évaluation pour TID ");
+                            let mut b = [0u8; 20];
+                            emit(format_u64(tid, &mut b));
+                            emit(" sur appel système ");
+                            emit(format_u64(nr as u64, &mut b));
+                            emit(" -> Action : ");
+                            let act_type = action & jambo_seccomp::SECCOMP_RET_ACTION_FULL;
+                            match act_type {
+                                jambo_seccomp::SECCOMP_RET_ALLOW => emit("ALLOW (Autorisé)\n"),
+                                jambo_seccomp::SECCOMP_RET_KILL_PROCESS => emit("KILL_PROCESS (Processus Terminé)\n"),
+                                jambo_seccomp::SECCOMP_RET_KILL_THREAD => emit("KILL_THREAD (Thread Terminé)\n"),
+                                jambo_seccomp::SECCOMP_RET_TRAP => emit("TRAP (Signal SIGSYS Envoyé)\n"),
+                                jambo_seccomp::SECCOMP_RET_ERRNO => {
+                                    emit("ERRNO (Erreur ");
+                                    emit(format_u64((action & jambo_seccomp::SECCOMP_RET_DATA) as u64, &mut b));
+                                    emit(")\n");
+                                }
+                                jambo_seccomp::SECCOMP_RET_LOG => emit("LOG (Enregistré)\n"),
+                                _ => emit("INCONNU\n"),
+                            }
+                            (ShellStatus::Success, write_pos)
+                        } else {
+                            emit("Usage: seccomp eval <tid> <syscall_nr>\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        }
+                    }
+                    "audit" => {
+                        emit("Condensat SHA-256 d'Audit Seccomp BPF : ");
+                        let mut b = [0u8; 20];
+                        for byte in self.seccomp.last_audit_digest.iter() {
+                            emit(format_hex_u64(*byte as u64, &mut b));
+                        }
+                        emit("\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    _ => {
+                        emit("Usage: seccomp [status | list | load <strict|compute|net> | attach <tid> <fid> | tsync <pid> <fid> | eval <tid> <nr> | audit]\n");
                         (ShellStatus::ExecutionFailed, write_pos)
                     }
                 }

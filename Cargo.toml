@@ -52,6 +52,7 @@ members = [
     "services/jambo-profilerd",
     "services/jambo-dbg",
     "services/jambo-dynlinkd",
+    "services/jambo-seccomp",
     "libs/jambo-ui",
     "libs/jambo-sdk",
     "drivers/virtio",
