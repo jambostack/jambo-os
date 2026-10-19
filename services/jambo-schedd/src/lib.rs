@@ -430,6 +430,86 @@ impl ClusterScheduler {
     }
 }
 
+/// Démon orchestrateur de charges distribuées et conteneurs (`jambo-schedd`).
+pub struct JamboSchedDaemon {
+    pub sched: ClusterScheduler,
+    pub cap: SchedCap,
+}
+
+impl Default for JamboSchedDaemon {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl JamboSchedDaemon {
+    pub fn new() -> Self {
+        let cap = SchedCap::new(Handle::new(6101, 1), sched_rights::ALL);
+        let mut sched = ClusterScheduler::new();
+        let _ = sched.register_node(&cap, 1, 8, 2048);
+        let _ = sched.register_node(&cap, 2, 4, 1024);
+        Self { sched, cap }
+    }
+
+    pub fn submit(
+        &mut self,
+        name: &[u8],
+        runtime: RuntimeType,
+        vcpus: u32,
+        memory_pages: u32,
+        preferred_node: Option<u32>,
+    ) -> Result<u32, SysError> {
+        let spec = TaskSpec::new(0, name, runtime, vcpus, memory_pages, preferred_node);
+        self.sched.submit_task(&self.cap, spec)
+    }
+
+    pub fn schedule_pending(&mut self, now_ms: u64) -> usize {
+        self.sched.schedule_pending(now_ms)
+    }
+
+    pub fn cancel(&mut self, task_id: u32) -> Result<(), SysError> {
+        self.sched.cancel_task(&self.cap, task_id)
+    }
+
+    pub fn migrate(&mut self, task_id: u32, target_node: u32) -> Result<(), SysError> {
+        self.sched.migrate_task(&self.cap, task_id, target_node)
+    }
+
+    pub fn drain(&mut self, node_id: u32) -> Result<usize, SysError> {
+        self.sched.drain_node(&self.cap, node_id)
+    }
+
+    pub fn query(&self, task_id: u32) -> Result<Task, SysError> {
+        self.sched.query_task(&self.cap, task_id)
+    }
+
+    pub fn running_tasks_count(&self) -> usize {
+        self.sched
+            .tasks
+            .iter()
+            .filter(|t| match t {
+                Some(task) => task.state == TaskState::Running,
+                None => false,
+            })
+            .count()
+    }
+
+    pub fn total_tasks_count(&self) -> usize {
+        self.sched.tasks.iter().filter(|t| t.is_some()).count()
+    }
+
+    pub fn active_nodes_count(&self) -> usize {
+        self.sched
+            .nodes
+            .iter()
+            .filter(|n| match n {
+                Some(node) => node.healthy && !node.draining,
+                None => false,
+            })
+            .count()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -511,5 +591,30 @@ mod tests {
         sched.schedule_pending(600);
         let task_rescheduled = sched.query_task(&admin_cap, tid).unwrap();
         assert_eq!(task_rescheduled.assigned_node, Some(201));
+    }
+
+    #[test]
+    fn test_daemon_orchestration() {
+        let mut daemon = JamboSchedDaemon::new();
+        assert_eq!(daemon.active_nodes_count(), 2);
+        assert_eq!(daemon.running_tasks_count(), 0);
+
+        let t1 = daemon
+            .submit(b"web-worker", RuntimeType::Wasm, 2, 64, None)
+            .unwrap();
+        assert_eq!(t1, 1);
+
+        let placed = daemon.schedule_pending(100);
+        assert_eq!(placed, 1);
+        assert_eq!(daemon.running_tasks_count(), 1);
+
+        let task = daemon.query(t1).unwrap();
+        assert_eq!(task.state, TaskState::Running);
+        assert!(task.assigned_node.is_some());
+
+        daemon.cancel(t1).unwrap();
+        assert_eq!(daemon.running_tasks_count(), 0);
+        let task_canceled = daemon.query(t1).unwrap();
+        assert_eq!(task_canceled.state, TaskState::Completed);
     }
 }

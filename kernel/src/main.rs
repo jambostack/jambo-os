@@ -848,6 +848,13 @@ pub extern "C" fn _start() -> ! {
         "Échec du test de la base de données clé-valeur transactionnelle distribuée"
     );
 
+    // 10quatericies. Validation de l'Ordonnanceur de Tâches & Conteneurs Distribués (Phase 61 - v0.2.59)
+    let schedd_success = sched::execute_cluster_scheduler_test();
+    assert!(
+        schedd_success,
+        "Échec du test de l'ordonnanceur de charges et conteneurs distribués"
+    );
+
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
 
     arch::init_iommu();
@@ -1028,14 +1035,17 @@ pub extern "C" fn _start() -> ! {
     kprintln!(
         "\x1b[1;32m[PASS] Phase 60 Distributed Transactional Key-Value Store Complete\x1b[0m"
     );
+    kprintln!(
+        "\x1b[1;32m[PASS] Phase 61 Distributed Workload & Container Scheduler Complete\x1b[0m"
+    );
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.58 (Base de Données Clé-Valeur Transactionnelle Distribuée jambo-kvd)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.59 (Ordonnanceur de Tâches & Conteneurs Distribués jambo-schedd)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.58 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.59 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );

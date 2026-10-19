@@ -112,6 +112,7 @@ pub struct JamboShell {
     pub time: jambo_timed::JamboTimeDaemon,
     pub raft: jambo_raft::JamboRaftDaemon,
     pub kv: jambo_kvd::JamboKvDaemon,
+    pub sched: jambo_schedd::JamboSchedDaemon,
 }
 
 impl Default for JamboShell {
@@ -163,6 +164,7 @@ impl JamboShell {
         let mut raft = jambo_raft::JamboRaftDaemon::new();
         raft.init_defaults();
         let kv = jambo_kvd::JamboKvDaemon::new();
+        let sched = jambo_schedd::JamboSchedDaemon::new();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -183,6 +185,7 @@ impl JamboShell {
             time,
             raft,
             kv,
+            sched,
         }
     }
 
@@ -310,6 +313,7 @@ impl JamboShell {
                 );
                 emit("  raft [cmd]   - Moteur de consensus distribué léger Raft et réplication\n");
                 emit("  kv [cmd]     - Base de données clé-valeur transactionnelle distribuée\n");
+                emit("  sched [cmd]  - Ordonnanceur de charges et conteneurs distribués\n");
                 emit("  echo <args>  - Affiche les arguments sur la sortie console\n");
                 emit("  clear        - Efface l'écran du terminal (ANSI escape)\n");
                 emit("  reboot       - Redémarre la machine\n");
@@ -317,7 +321,7 @@ impl JamboShell {
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.2.58 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.2.59 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -2300,6 +2304,108 @@ impl JamboShell {
                     }
                     _ => {
                         emit("Usage: kv [status | get <key> | put <key> <val> | del <key> | cas <key> <expected> <new>]\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                }
+            }
+            "sched" => {
+                let sub = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    ""
+                };
+                match sub {
+                    "status" => {
+                        let mut b = [0u8; 20];
+                        emit("=== ORDONNANCEUR DE CHARGES & CONTENEURS (jambo-schedd) ===\n");
+                        emit("Nœuds de calcul actifs : ");
+                        emit(format_u64(self.sched.active_nodes_count() as u64, &mut b));
+                        emit("\nTâches en cours        : ");
+                        emit(format_u64(self.sched.running_tasks_count() as u64, &mut b));
+                        emit("\nTotal tâches gérées    : ");
+                        emit(format_u64(self.sched.total_tasks_count() as u64, &mut b));
+                        emit("\nAlgorithme             : Least-Allocated Node Score & Anti-Affinity\n");
+                        emit("Confinement            : SchedCap (Zero-Ambient Authority)\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "submit" => {
+                        if parsed.arg_count < 5 {
+                            emit("Usage: sched submit <name> <vcpus> <pages>\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        } else {
+                            let name = parsed.args[2];
+                            let vcpus = parse_u64(parsed.args[3]).unwrap_or(1) as u32;
+                            let pages = parse_u64(parsed.args[4]).unwrap_or(64) as u32;
+                            match self.sched.submit(
+                                name.as_bytes(),
+                                jambo_schedd::RuntimeType::MicroVmm,
+                                vcpus,
+                                pages,
+                                None,
+                            ) {
+                                Ok(tid) => {
+                                    let mut b = [0u8; 20];
+                                    emit("[SCHED/OK] Tâche enregistrée avec succès (ID #");
+                                    emit(format_u64(tid as u64, &mut b));
+                                    emit(")\n");
+                                    (ShellStatus::Success, write_pos)
+                                }
+                                Err(_) => {
+                                    emit("[SCHED] Échec de la soumission de la tâche\n");
+                                    (ShellStatus::ExecutionFailed, write_pos)
+                                }
+                            }
+                        }
+                    }
+                    "run" => {
+                        let placed = self.sched.schedule_pending(1000);
+                        let mut b = [0u8; 20];
+                        emit("[SCHED/RECONCILE] Cycle d'ordonnancement exécuté (");
+                        emit(format_u64(placed as u64, &mut b));
+                        emit(" tâche(s) placée(s))\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "cancel" => {
+                        if parsed.arg_count < 3 {
+                            emit("Usage: sched cancel <task_id>\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        } else {
+                            let tid = parse_u64(parsed.args[2]).unwrap_or(0) as u32;
+                            match self.sched.cancel(tid) {
+                                Ok(()) => {
+                                    emit("[SCHED/OK] Tâche annulée et ressources libérées\n");
+                                    (ShellStatus::Success, write_pos)
+                                }
+                                Err(_) => {
+                                    emit("[SCHED] Échec de l'annulation (ID introuvable ou non autorisé)\n");
+                                    (ShellStatus::ExecutionFailed, write_pos)
+                                }
+                            }
+                        }
+                    }
+                    "drain" => {
+                        if parsed.arg_count < 3 {
+                            emit("Usage: sched drain <node_id>\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        } else {
+                            let nid = parse_u64(parsed.args[2]).unwrap_or(0) as u32;
+                            match self.sched.drain(nid) {
+                                Ok(evicted) => {
+                                    let mut b = [0u8; 20];
+                                    emit("[SCHED/DRAIN] Nœud drainé avec succès (");
+                                    emit(format_u64(evicted as u64, &mut b));
+                                    emit(" tâche(s) évincée(s))\n");
+                                    (ShellStatus::Success, write_pos)
+                                }
+                                Err(_) => {
+                                    emit("[SCHED] Nœud introuvable ou erreur de droits\n");
+                                    (ShellStatus::ExecutionFailed, write_pos)
+                                }
+                            }
+                        }
+                    }
+                    _ => {
+                        emit("Usage: sched [status | submit <name> <vcpus> <pages> | run | cancel <id> | drain <node>]\n");
                         (ShellStatus::Success, write_pos)
                     }
                 }
