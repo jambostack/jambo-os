@@ -289,6 +289,66 @@ impl DfsBlockStore {
     }
 }
 
+/// Démon orchestrateur de stockage distribué adressé par le contenu (`jambo-dfsd`).
+pub struct JamboDfsDaemon {
+    pub store: DfsBlockStore,
+    pub cap: DfsCap,
+}
+
+impl Default for JamboDfsDaemon {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl JamboDfsDaemon {
+    pub fn new() -> Self {
+        let cap = DfsCap::new(Handle::new(6401, 1), dfs_rights::ALL);
+        let store = DfsBlockStore::new(1);
+        Self { store, cap }
+    }
+
+    pub fn put_block(&mut self, data: &[u8], pin: bool) -> Result<[u8; HASH_SIZE], SysError> {
+        self.store.put_block(&self.cap, data, pin)
+    }
+
+    pub fn get_block(&self, hash: &[u8; HASH_SIZE], out_buf: &mut [u8]) -> Result<usize, SysError> {
+        self.store.get_block(&self.cap, hash, out_buf)
+    }
+
+    pub fn add_replica(
+        &mut self,
+        hash: &[u8; HASH_SIZE],
+        remote_node_id: u16,
+    ) -> Result<(), SysError> {
+        self.store.add_replica(&self.cap, hash, remote_node_id)
+    }
+
+    pub fn pin_block(&mut self, hash: &[u8; HASH_SIZE], pinned: bool) -> Result<(), SysError> {
+        self.store.pin_block(&self.cap, hash, pinned)
+    }
+
+    pub fn delete_block(&mut self, hash: &[u8; HASH_SIZE]) -> Result<bool, SysError> {
+        self.store.delete_block(&self.cap, hash)
+    }
+
+    pub fn block_count(&self) -> usize {
+        self.store.block_count()
+    }
+
+    pub fn replica_count(&self, hash: &[u8; HASH_SIZE]) -> Result<u32, SysError> {
+        self.store.replica_count(hash)
+    }
+
+    pub fn total_bytes(&self) -> usize {
+        self.store.total_stored_bytes
+    }
+
+    pub fn dedup_count(&self) -> usize {
+        self.store.dedup_count
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -372,5 +432,20 @@ mod tests {
         // Écriture avec capacité lecture seule -> PermissionDenied
         let res = store.put_block(&cap_read_only, data, false);
         assert_eq!(res, Err(SysError::PermissionDenied));
+    }
+
+    #[test]
+    fn test_dfs_daemon() {
+        let mut daemon = JamboDfsDaemon::new();
+        let hash = daemon.put_block(b"Test daemon payload", true).unwrap();
+        assert_eq!(daemon.block_count(), 1);
+        daemon.add_replica(&hash, 2).unwrap();
+        assert_eq!(daemon.replica_count(&hash).unwrap(), 2);
+        let mut out = [0u8; 64];
+        let n = daemon.get_block(&hash, &mut out).unwrap();
+        assert_eq!(&out[..n], b"Test daemon payload");
+        daemon.pin_block(&hash, false).unwrap();
+        assert!(daemon.delete_block(&hash).unwrap());
+        assert_eq!(daemon.block_count(), 0);
     }
 }

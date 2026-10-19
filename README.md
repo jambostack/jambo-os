@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.61-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.62-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.61 (Réseau Maillé Chiffré Distribué & Routage Zero-Trust jambo-meshd)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.61` introduit le réseau maillé chiffré distribué et routage Zero-Trust en espace utilisateur (`services/jambo-meshd`), implémentant le chiffrement symétrique et l'authentification de paquets, la protection anti-rejeu par séquence monotone, une table de routage dynamique multi-sauts, le confinement capabilaire granulaire `MeshCap` et les commandes interactives `mesh [status | ping | peers]` dans `jsh`.
+> **Statut du Projet : Version v0.2.62 (Stockage Distribué Adressé par le Contenu & Réplication jambo-dfsd)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.62` introduit le magasin de stockage distribué adressé par le contenu (CAS) et la réplication par blocs en espace utilisateur (`services/jambo-dfsd`), implémentant l'adressage cryptographique déterministe 256 bits, la vérification d'intégrité anti-corruption, la déduplication transparente avec comptage de références, la réplication multi-nœuds, l'épinglage persistant, le confinement capabilaire granulaire `DfsCap` et les commandes interactives `dfs [status | put | pin | del]` dans `jsh`.
 
 ---
 

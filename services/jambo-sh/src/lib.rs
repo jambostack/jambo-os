@@ -115,6 +115,7 @@ pub struct JamboShell {
     pub sched: jambo_schedd::JamboSchedDaemon,
     pub event: jambo_eventd::JamboEventDaemon,
     pub mesh: jambo_meshd::JamboMeshDaemon,
+    pub dfs: jambo_dfsd::JamboDfsDaemon,
 }
 
 impl Default for JamboShell {
@@ -169,6 +170,7 @@ impl JamboShell {
         let sched = jambo_schedd::JamboSchedDaemon::new();
         let event = jambo_eventd::JamboEventDaemon::new();
         let mesh = jambo_meshd::JamboMeshDaemon::new();
+        let dfs = jambo_dfsd::JamboDfsDaemon::new();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -192,6 +194,7 @@ impl JamboShell {
             sched,
             event,
             mesh,
+            dfs,
         }
     }
 
@@ -322,6 +325,9 @@ impl JamboShell {
                 emit("  sched [cmd]  - Ordonnanceur de charges et conteneurs distribués\n");
                 emit("  event [cmd]  - Bus d'événements pub/sub asynchrone zéro-copie\n");
                 emit("  mesh [cmd]   - Réseau maillé chiffré distribué et routage Zero-Trust\n");
+                emit(
+                    "  dfs [cmd]    - Système de fichiers distribué CAS et réplication de blocs\n",
+                );
                 emit("  echo <args>  - Affiche les arguments sur la sortie console\n");
                 emit("  clear        - Efface l'écran du terminal (ANSI escape)\n");
                 emit("  reboot       - Redémarre la machine\n");
@@ -329,7 +335,7 @@ impl JamboShell {
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.2.61 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.2.62 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -2590,6 +2596,88 @@ impl JamboShell {
                     }
                     _ => {
                         emit("Usage: mesh [status | ping <vip> | peers]\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                }
+            }
+            "dfs" => {
+                let sub = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    ""
+                };
+                match sub {
+                    "status" => {
+                        let mut b = [0u8; 20];
+                        emit("=== STOCKAGE DISTRIBUÉ ADRESSÉ PAR LE CONTENU (jambo-dfsd) ===\n");
+                        emit("ID nœud local          : Node #");
+                        emit(format_u64(self.dfs.store.node_id as u64, &mut b));
+                        emit("\nBlocs CAS uniques      : ");
+                        emit(format_u64(self.dfs.block_count() as u64, &mut b));
+                        emit("\nOctets stockés         : ");
+                        emit(format_u64(self.dfs.total_bytes() as u64, &mut b));
+                        emit(" octets\nÉconomie déduplication : ");
+                        emit(format_u64(self.dfs.dedup_count() as u64, &mut b));
+                        emit(" blocs\nConfinement            : DfsCap (Zero-Ambient Authority)\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "put" => {
+                        let data = if parsed.arg_count > 2 {
+                            parsed.args[2]
+                        } else {
+                            "DEFAULT_CAS_DATA"
+                        };
+                        match self.dfs.put_block(data.as_bytes(), false) {
+                            Ok(_) => {
+                                emit("[DFS/CAS] Bloc stocké avec succès (CAS 256 bits)\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("[DFS] Erreur lors de l'écriture du bloc CAS\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "pin" => {
+                        let mut pinned = false;
+                        for blk in self.dfs.store.blocks.iter_mut() {
+                            if blk.allocated {
+                                blk.pinned = true;
+                                pinned = true;
+                                break;
+                            }
+                        }
+                        if pinned {
+                            emit("[DFS/PIN] Bloc CAS épinglé de manière persistante\n");
+                            (ShellStatus::Success, write_pos)
+                        } else {
+                            emit("[DFS/PIN] Aucun bloc à épingler\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        }
+                    }
+                    "del" => {
+                        let mut target_hash = None;
+                        for blk in self.dfs.store.blocks.iter() {
+                            if blk.allocated && !blk.pinned {
+                                target_hash = Some(blk.hash);
+                                break;
+                            }
+                        }
+                        let deleted = if let Some(h) = target_hash {
+                            self.dfs.delete_block(&h).unwrap_or(false)
+                        } else {
+                            false
+                        };
+                        if deleted {
+                            emit("[DFS/CAS] Bloc CAS libéré avec succès\n");
+                            (ShellStatus::Success, write_pos)
+                        } else {
+                            emit("[DFS/CAS] Aucun bloc libérable ou bloc épinglé\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        }
+                    }
+                    _ => {
+                        emit("Usage: dfs [status | put <data> | pin | del]\n");
                         (ShellStatus::Success, write_pos)
                     }
                 }

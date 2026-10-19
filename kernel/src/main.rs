@@ -869,6 +869,13 @@ pub extern "C" fn _start() -> ! {
         "Échec du test du réseau maillé chiffré distribué et routage Zero-Trust"
     );
 
+    // 10septiescies. Validation du Stockage Distribué Adressé par le Contenu & Réplication par Blocs (Phase 64 - v0.2.62)
+    let dfs_success = sched::execute_dfs_storage_test();
+    assert!(
+        dfs_success,
+        "Échec du test du stockage distribué adressé par le contenu et réplication"
+    );
+
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
 
     arch::init_iommu();
@@ -1056,14 +1063,17 @@ pub extern "C" fn _start() -> ! {
     kprintln!(
         "\x1b[1;32m[PASS] Phase 63 Distributed Encrypted Mesh Network & Zero-Trust Routing Complete\x1b[0m"
     );
+    kprintln!(
+        "\x1b[1;32m[PASS] Phase 64 Distributed Content-Addressed Storage & Block Replication Complete\x1b[0m"
+    );
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.61 (Réseau Maillé Chiffré Distribué & Routage Zero-Trust jambo-meshd)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.62 (Stockage Distribué CAS & Réplication jambo-dfsd)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.61 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.62 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
