@@ -126,6 +126,7 @@ pub struct JamboShell {
     pub init: jambo_init::JamboInitDaemon,
     pub dns: jambo_dnsd::JamboDnsDaemon,
     pub logd: jambo_logd::JamboLogDaemon,
+    pub bpf: jambo_bpfd::JamboBpfDaemon,
 }
 
 impl Default for JamboShell {
@@ -202,6 +203,24 @@ impl JamboShell {
         let mut logd = jambo_logd::JamboLogDaemon::new(log_cap, 1);
         let _ = logd.log(&log_cap, jambo_logd::LogLevel::Info, "INIT", "Superviseur PID 1 initialisé", None, None, &[], 100);
         let _ = logd.log(&log_cap, jambo_logd::LogLevel::Info, "KERNEL", "Micro-noyau JamboOS opérationnel", None, None, &[], 150);
+        let bpf_cap = jambo_bpfd::BpfCap::new(
+            libjambo::Handle::new(7601, 1),
+            jambo_bpfd::bpf_rights::ALL,
+        );
+        let mut bpf = jambo_bpfd::JamboBpfDaemon::new(bpf_cap);
+        let default_xdp = [
+            jambo_bpfd::BpfInstruction::mov64_imm(1, 0),
+            jambo_bpfd::BpfInstruction::call(jambo_bpfd::bpf_helpers::PACKET_READ_BYTE),
+            jambo_bpfd::BpfInstruction::jmp_imm(jambo_bpfd::bpf_jmp::BPF_JEQ, 0, 0xff, 2),
+            jambo_bpfd::BpfInstruction::mov64_imm(0, jambo_bpfd::xdp_action::XDP_PASS as i32),
+            jambo_bpfd::BpfInstruction::exit(),
+            jambo_bpfd::BpfInstruction::mov64_imm(0, jambo_bpfd::xdp_action::XDP_DROP as i32),
+            jambo_bpfd::BpfInstruction::exit(),
+        ];
+        if let Ok(prog_id) = bpf.load_and_verify(&bpf_cap, jambo_bpfd::BpfProgramType::Xdp, "xdp_guard", &default_xdp) {
+            let _ = bpf.attach(&bpf_cap, prog_id, "eth0_xdp");
+        }
+        let _ = bpf.create_map(&bpf_cap, "packet_stats", jambo_bpfd::BpfMapType::Array, 4, 8, 8);
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -236,6 +255,7 @@ impl JamboShell {
             init,
             dns,
             logd,
+            bpf,
         }
     }
 
@@ -938,6 +958,174 @@ impl JamboShell {
                     }
                     _ => {
                         emit("Usage: log [status | tail <n> | write <lvl> <sub> <msg> | query [sub] | archive | verify]\n");
+                        (ShellStatus::ExecutionFailed, write_pos)
+                    }
+                }
+            }
+            "bpf" => {
+                let bpf_cap = self.bpf.cap;
+                let sub = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    "status"
+                };
+                match sub {
+                    "status" => {
+                        let mut b = [0u8; 20];
+                        emit("=== MOTEUR eBPF SOUVERAIN & FILTRAGE RÉSEAU (jambo-bpfd) ===\n");
+                        if let Ok(st) = self.bpf.stats(&bpf_cap) {
+                            emit("Programmes chargés & vérifiés : ");
+                            emit(format_u64(st.programs_verified as u64, &mut b));
+                            emit("\nCartes mémoire eBPF actives : ");
+                            emit(format_u64(st.maps_created as u64, &mut b));
+                            emit("\nPaquets inspectés : ");
+                            emit(format_u64(st.packets_inspected, &mut b));
+                            emit("\nPaquets autorisés (XDP_PASS) : ");
+                            emit(format_u64(st.packets_passed, &mut b));
+                            emit("\nPaquets rejetés (XDP_DROP) : ");
+                            emit(format_u64(st.packets_dropped, &mut b));
+                            emit("\nCycles VM exécutés : ");
+                            emit(format_u64(st.total_cycles, &mut b));
+                            emit("\nGarantie de terminaison : DAG Acyclique formellement vérifié (0 boucle infinie)\n");
+                        } else {
+                            emit("Erreur lors de la lecture des statistiques eBPF\n");
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "list" | "prog" => {
+                        let mut b = [0u8; 20];
+                        emit("ID  TYPE                      NOM              INSTRS  COMPLEXITÉ  RUNS\n");
+                        emit("--  ------------------------  ---------------  ------  ----------  ----\n");
+                        for p in self.bpf.programs.iter() {
+                            if let Some(prog) = p {
+                                emit(format_u64(prog.id as u64, &mut b));
+                                emit("   ");
+                                emit(prog.prog_type.as_str());
+                                emit("  ");
+                                if let Ok(s) = core::str::from_utf8(&prog.name[..prog.name_len]) {
+                                    emit(s);
+                                }
+                                emit("  ");
+                                emit(format_u64(prog.instruction_count as u64, &mut b));
+                                emit("       ");
+                                emit(format_u64(prog.report.complexity_score as u64, &mut b));
+                                emit("           ");
+                                emit(format_u64(prog.runs, &mut b));
+                                emit("\n");
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "maps" => {
+                        let mut b = [0u8; 20];
+                        emit("ID  NOM              TYPE          CLÉ (O)  VAL (O)  MAX ENTRÉES\n");
+                        emit("--  ---------------  ------------  -------  -------  -----------\n");
+                        for m in self.bpf.maps.iter() {
+                            if let Some(map) = m {
+                                emit(format_u64(map.id as u64, &mut b));
+                                emit("   ");
+                                if let Ok(s) = core::str::from_utf8(&map.name[..map.name_len]) {
+                                    emit(s);
+                                }
+                                emit("  ");
+                                emit(map.map_type.as_str());
+                                emit("  ");
+                                emit(format_u64(map.key_size as u64, &mut b));
+                                emit("        ");
+                                emit(format_u64(map.val_size as u64, &mut b));
+                                emit("        ");
+                                emit(format_u64(map.max_entries as u64, &mut b));
+                                emit("\n");
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "verify" => {
+                        let sample_filter = [
+                            jambo_bpfd::BpfInstruction::mov64_imm(1, 0),
+                            jambo_bpfd::BpfInstruction::call(jambo_bpfd::bpf_helpers::PACKET_READ_BYTE),
+                            jambo_bpfd::BpfInstruction::jmp_imm(jambo_bpfd::bpf_jmp::BPF_JEQ, 0, 0x53, 2),
+                            jambo_bpfd::BpfInstruction::mov64_imm(0, jambo_bpfd::xdp_action::XDP_PASS as i32),
+                            jambo_bpfd::BpfInstruction::exit(),
+                            jambo_bpfd::BpfInstruction::mov64_imm(0, jambo_bpfd::xdp_action::XDP_DROP as i32),
+                            jambo_bpfd::BpfInstruction::exit(),
+                        ];
+                        match jambo_bpfd::BpfVerifier::verify(&sample_filter) {
+                            Ok(rep) => {
+                                let mut b = [0u8; 20];
+                                emit("[BPF/VERIFIER] Vérification formelle réussie !\n");
+                                emit("  Instructions : ");
+                                emit(format_u64(rep.instruction_count as u64, &mut b));
+                                emit("\n  Branches & Sauts : ");
+                                emit(format_u64(rep.branch_count as u64, &mut b));
+                                emit("\n  DAG Acyclique : OUI (Terminaison prouvée, 0 boucle)\n");
+                                emit("  Score de complexité : ");
+                                emit(format_u64(rep.complexity_score as u64, &mut b));
+                                emit("\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("[BPF/VERIFIER] Échec de la vérification formelle !\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "run" => {
+                        let prog_id = if parsed.arg_count > 2 {
+                            parse_u64(parsed.args[2]).unwrap_or(1) as u32
+                        } else {
+                            1
+                        };
+                        let dummy_pkt = [0xAA, 0xBB, 0xCC, 0xDD];
+                        let mut ctx = jambo_bpfd::BpfContext::new_packet(&dummy_pkt, 1, 0x0800, 2000);
+                        match self.bpf.run_program(&bpf_cap, prog_id, &mut ctx) {
+                            Ok(verdict) => {
+                                let mut b = [0u8; 20];
+                                emit("[BPF] Programme #");
+                                emit(format_u64(prog_id as u64, &mut b));
+                                emit(" exécuté. Verdict R0 : ");
+                                emit(format_u64(verdict, &mut b));
+                                if verdict == jambo_bpfd::xdp_action::XDP_PASS {
+                                    emit(" (XDP_PASS)\n");
+                                } else if verdict == jambo_bpfd::xdp_action::XDP_DROP {
+                                    emit(" (XDP_DROP)\n");
+                                } else {
+                                    emit("\n");
+                                }
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("bpf: échec d'exécution du programme ou ID introuvable\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "attach" => {
+                        if parsed.arg_count < 4 {
+                            emit("Usage: bpf attach <prog_id> <hook>\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        } else {
+                            let prog_id = parse_u64(parsed.args[2]).unwrap_or(1) as u32;
+                            let hook = parsed.args[3];
+                            match self.bpf.attach(&bpf_cap, prog_id, hook) {
+                                Ok(()) => {
+                                    let mut b = [0u8; 20];
+                                    emit("[BPF] Programme #");
+                                    emit(format_u64(prog_id as u64, &mut b));
+                                    emit(" attaché avec succès au crochet '");
+                                    emit(hook);
+                                    emit("'\n");
+                                    (ShellStatus::Success, write_pos)
+                                }
+                                Err(_) => {
+                                    emit("bpf: échec de l'attachement au crochet\n");
+                                    (ShellStatus::ExecutionFailed, write_pos)
+                                }
+                            }
+                        }
+                    }
+                    _ => {
+                        emit("Usage: bpf [status | list | maps | verify | run <id> | attach <id> <hook>]\n");
                         (ShellStatus::ExecutionFailed, write_pos)
                     }
                 }

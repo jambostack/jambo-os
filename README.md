@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.73-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.74-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.73 (Journalisation Structurée & Agrégation Distribuée jambo-logd)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.73` introduit le démon de journalisation structurée et d'agrégation distribuée (`services/jambo-logd`), fournissant un anneau circulaire borné haute performance en `#![no_std]` (`RING_BUFFER_CAPACITY = 64`), des enregistrements typés multi-sévérités (Trace, Debug, Info, Warn, Error, Fatal), le confinement capabilaire strict `LogCap` sans autorité ambiante, la compatibilité W3C TraceContext (`trace_id`, `span_id`), un chaînage cryptographique inviolable (tamper-evident hash chain), l'archivage chiffré dédupliqué vers `jambo-dfsd`, et les commandes shell interactives `log [status | tail <n> | write <lvl> <sub> <msg> | query [sub] | archive | verify]` dans `jsh`.
+> **Statut du Projet : Version v0.2.74 (Moteur eBPF Souverain & Filtrage Réseau XDP jambo-bpfd)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.74` introduit le démon et moteur de bytecode eBPF souverain (`services/jambo-bpfd`), doté d'un vérificateur formel de terminaison par graphe orienté acyclique (DAG strict interdisant toute boucle infinie), d'une machine virtuelle sandboxed de 11 registres 64 bits avec isolation mémoire de pile bornée `[-512, 0)`, du confinement capabilaire strict `BpfCap` (Zéro Autorité Ambiante), de structures de stockage partagées haute performance (eBPF Maps Array, HashMap, RingBuf), de crochets réseau XDP (*eXpress Data Path*) avec verdicts déterministes (`XDP_PASS`, `XDP_DROP`), et des commandes shell interactives `bpf [status | list | maps | verify | run <id> | attach <id> <hook>]` dans `jsh`.
 
 ---
 
@@ -134,6 +134,7 @@ jambo-os/
 │   ├── jambo-aid/           # Démon d'intelligence artificielle locale et recherche sémantique
 │   ├── jambo-auditd/        # Registre d'audit cryptographique et détection d'anomalies
 │   ├── jambo-authd/         # Identité cryptographique Ed25519 et sessions isolées
+│   ├── jambo-bpfd/          # Moteur eBPF souverain, vérificateur DAG & filtrage XDP
 │   ├── jambo-certd/         # Infrastructure de certificats éphémères & autorité CA
 │   ├── jambo-comp/          # Compositeur d'affichage fenêtré zéro-copie
 │   ├── jambo-coreutils/     # Utilitaires système (ps, capstat, top, jpkg)

@@ -1,7 +1,7 @@
 # ROADMAP DU DÉVELOPPEMENT AUTONOME — JamboOS
 
-> **Dernière mise à jour** : 2026-10-19 14:22 UTC  
-> **Version actuelle** : `v0.2.73`  
+> **Dernière mise à jour** : 2026-10-19 14:42 UTC  
+> **Version actuelle** : `v0.2.74`  
 > **Statut global** : Pré-Alpha active — Micro-noyau de 3e génération orienté capacités (`#![no_std]`)  
 > **Cycle de développement autonome** : 10 minutes via le Planificateur de Tâches & Crons d'Antigravity WebUI  
 
@@ -62,20 +62,13 @@
 | **v0.2.71** | 73 | Wasm Sandbox `jambo-wasm` | Exécuteur WebAssembly `#![no_std]`, stack machine, WasmCap, WASI | ✅ Validé |
 | **v0.2.72** | 74 | DNS de Grappe `jambo-dnsd` | Résolveur d'autorité `.jambo`, A/AAAA/SRV/TXT/PTR, RFC 1035 wire-format, DnsCap, synchro `jambo-serviced` | ✅ Validé |
 | **v0.2.73** | 75 | Journalisation `jambo-logd` | Journalisation structurée `#![no_std]`, anneau borné haute performance, scellement cryptographique inviolable, LogCap, archivage chiffré `jambo-dfsd` | ✅ Validé |
+| **v0.2.74** | 76 | Filtrage eBPF `jambo-bpfd` | Interpréteur eBPF souverain, vérificateur formel DAG (0 boucle), maps partagées, crochets XDP, BpfCap | ✅ Validé |
 
 ---
 
 ## 3. Prochaines Étapes Prioritaires
 
-### 🎯 Prochaine Tâche Immédiate : Phase 76 — v0.2.74
-* **Composant** : `services/jambo-bpfd`
-* **Objectif** : Filtres de paquets et instrumentation eBPF souveraine
-* **Tâches précises** :
-  1. Interpréteur de bytecode eBPF sécurisé avec vérificateur formel de terminaison.
-  2. Crochets réseau socket/XDP et métriques de grappe.
-  3. Validation `cargo xtask test` et commit `v0.2.74`.
-
-### 🎯 Tâche Suivante : Phase 77 — v0.2.75
+### 🎯 Prochaine Tâche Immédiate : Phase 77 — v0.2.75
 * **Composant** : `services/jambo-ipcd`
 * **Objectif** : Multiplexeur et passerelle de messagerie IPC distribuée
 * **Tâches précises** :
@@ -91,6 +84,14 @@
   2. Vérification d'intégrité de démarrage mesuré inter-nœuds.
   3. Validation `cargo xtask test` et commit `v0.2.76`.
 
+### 🎯 Tâche Suivante : Phase 79 — v0.2.77
+* **Composant** : `services/jambo-walld`
+* **Objectif** : Pare-feu distribué dynamique et synchronisation d'état de sessions conntrack
+* **Tâches précises** :
+  1. Table d'états conntrack synchronisée par bus d'événements.
+  2. Filtrage dynamique à politique adaptative Zero-Trust.
+  3. Validation `cargo xtask test` et commit `v0.2.77`.
+
 ---
 
 ## 4. Journal d'Exécution des Cycles
@@ -103,4 +104,6 @@
 * **2026-10-19 13:42 UTC** : Validation complète Phase 73 (`jambo-wasm`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test --workspace --lib`). Tag `v0.2.71`.
 * **2026-10-19 14:08 UTC** : Validation complète Phase 74 (`jambo-dnsd`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test --workspace --lib`). Tag `v0.2.72`.
 * **2026-10-19 14:22 UTC** : Validation complète Phase 75 (`jambo-logd`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test --workspace --lib`). Tag `v0.2.73`.
+* **2026-10-19 14:42 UTC** : Validation complète Phase 76 (`jambo-bpfd`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test --workspace --lib`). Tag `v0.2.74`.
+
 
