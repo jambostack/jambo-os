@@ -890,6 +890,13 @@ pub extern "C" fn _start() -> ! {
         "Échec du test du coffre-fort de secrets distribué et déverrouillage à seuil"
     );
 
+    // 10deciescies. Validation des Métriques Chronologiques & Télémétrie de Grappe (Phase 67 - v0.2.65)
+    let metrics_success = sched::execute_metrics_telemetry_test();
+    assert!(
+        metrics_success,
+        "Échec du test des métriques chronologiques et télémétrie de grappe"
+    );
+
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
 
     arch::init_iommu();
@@ -1084,14 +1091,17 @@ pub extern "C" fn _start() -> ! {
     kprintln!(
         "\x1b[1;32m[PASS] Phase 66 Distributed Secret Vault & Threshold Unsealing Complete\x1b[0m"
     );
+    kprintln!(
+        "\x1b[1;32m[PASS] Phase 67 Distributed Time-Series Metrics & Cluster Monitoring Complete\x1b[0m"
+    );
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.64 (Coffre-Fort de Secrets Distribué & Seuil Shamir jambo-vaultd)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.65 (Métriques Chronologiques & Télémétrie jambo-metricsd)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.64 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.65 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );

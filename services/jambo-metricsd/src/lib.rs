@@ -8,7 +8,7 @@
 
 use libjambo::{Handle, SysError};
 
-pub const MAX_SERIES: usize = 32;
+pub const MAX_SERIES: usize = 16;
 pub const RING_CAPACITY: usize = 32;
 pub const MAX_ALERT_RULES: usize = 16;
 
@@ -338,6 +338,80 @@ impl MetricsCollector {
     }
 }
 
+/// Démon orchestrateur de métriques et télémétrie distribuée (`jambo-metricsd`).
+pub struct JamboMetricsDaemon {
+    pub collector: MetricsCollector,
+    pub cap: MetricsCap,
+    pub samples_ingested: u64,
+}
+
+impl Default for JamboMetricsDaemon {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl JamboMetricsDaemon {
+    pub fn new() -> Self {
+        let cap = MetricsCap::new(Handle::new(6701, 1), metrics_rights::ALL);
+        let mut collector = MetricsCollector::new();
+        let _ = collector.register_series(&cap, b"node_cpu", 1);
+        let _ = collector.register_series(&cap, b"node_ram", 1);
+        let _ = collector.register_alert(&cap, b"node_cpu", AlertCondition::GreaterThan, 90);
+        let _ = collector.ingest(&cap, b"node_cpu", 1, 100, 25);
+        let _ = collector.ingest(&cap, b"node_ram", 1, 100, 1024);
+        Self {
+            collector,
+            cap,
+            samples_ingested: 2,
+        }
+    }
+
+    pub fn register_series(&mut self, name: &[u8], node_id: u16) -> Result<(), SysError> {
+        self.collector.register_series(&self.cap, name, node_id)
+    }
+
+    pub fn register_alert(
+        &mut self,
+        name: &[u8],
+        cond: AlertCondition,
+        threshold: u64,
+    ) -> Result<(), SysError> {
+        self.collector
+            .register_alert(&self.cap, name, cond, threshold)
+    }
+
+    pub fn ingest(
+        &mut self,
+        name: &[u8],
+        node_id: u16,
+        timestamp: u64,
+        value: u64,
+    ) -> Result<bool, SysError> {
+        let alerted = self
+            .collector
+            .ingest(&self.cap, name, node_id, timestamp, value)?;
+        self.samples_ingested = self.samples_ingested.saturating_add(1);
+        Ok(alerted)
+    }
+
+    pub fn query_stats(
+        &self,
+        name: &[u8],
+        node_id: u16,
+    ) -> Result<(u64, u64, u64, u64, usize), SysError> {
+        self.collector.query_stats(&self.cap, name, node_id)
+    }
+
+    pub fn is_alert_triggered(&self, name: &[u8]) -> Result<bool, SysError> {
+        self.collector.is_alert_triggered(&self.cap, name)
+    }
+
+    pub fn series_count(&self) -> usize {
+        self.collector.series_count()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -447,5 +521,25 @@ mod tests {
         // Tentative d'ingestion avec capacité de lecture seule -> PermissionDenied
         let res = collector.ingest(&cap_query_only, b"test", 1, 1000, 50);
         assert_eq!(res, Err(SysError::PermissionDenied));
+    }
+
+    #[test]
+    fn test_metrics_daemon() {
+        let mut daemon = JamboMetricsDaemon::new();
+        assert_eq!(daemon.series_count(), 2);
+        assert_eq!(daemon.samples_ingested, 2);
+
+        let (min, max, avg, last, count) = daemon.query_stats(b"node_cpu", 1).unwrap();
+        assert_eq!(min, 25);
+        assert_eq!(max, 25);
+        assert_eq!(avg, 25);
+        assert_eq!(last, 25);
+        assert_eq!(count, 1);
+
+        assert!(!daemon.is_alert_triggered(b"node_cpu").unwrap());
+        // Déclenche l'alerte (> 90)
+        let alert = daemon.ingest(b"node_cpu", 1, 101, 95).unwrap();
+        assert!(alert);
+        assert!(daemon.is_alert_triggered(b"node_cpu").unwrap());
     }
 }

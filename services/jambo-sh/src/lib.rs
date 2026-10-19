@@ -118,6 +118,7 @@ pub struct JamboShell {
     pub dfs: jambo_dfsd::JamboDfsDaemon,
     pub gw: jambo_gwd::JamboGatewayDaemon,
     pub vault: jambo_vaultd::JamboVaultDaemon,
+    pub metrics: jambo_metricsd::JamboMetricsDaemon,
 }
 
 impl Default for JamboShell {
@@ -175,6 +176,7 @@ impl JamboShell {
         let dfs = jambo_dfsd::JamboDfsDaemon::new();
         let gw = jambo_gwd::JamboGatewayDaemon::new();
         let vault = jambo_vaultd::JamboVaultDaemon::new();
+        let metrics = jambo_metricsd::JamboMetricsDaemon::new();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -201,6 +203,7 @@ impl JamboShell {
             dfs,
             gw,
             vault,
+            metrics,
         }
     }
 
@@ -338,6 +341,7 @@ impl JamboShell {
                 emit(
                     "  vault [cmd]  - Coffre-fort de secrets distribué et déverrouillage à seuil\n",
                 );
+                emit("  metrics [cmd]- Métriques chronologiques et télémétrie de grappe\n");
                 emit("  echo <args>  - Affiche les arguments sur la sortie console\n");
                 emit("  clear        - Efface l'écran du terminal (ANSI escape)\n");
                 emit("  reboot       - Redémarre la machine\n");
@@ -345,7 +349,7 @@ impl JamboShell {
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.2.64 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.2.65 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -2853,6 +2857,96 @@ impl JamboShell {
                     }
                     _ => {
                         emit("Usage: vault [status | put <key> <val> | get <key> | reseal | unseal]\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                }
+            }
+            "metrics" => {
+                let sub = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    ""
+                };
+                match sub {
+                    "status" => {
+                        let mut b = [0u8; 20];
+                        emit("=== MÉTRIQUES DISTRIBUÉES & TÉLÉMÉTRIE (jambo-metricsd) ===\n");
+                        emit("Séries enregistrées    : ");
+                        emit(format_u64(self.metrics.series_count() as u64, &mut b));
+                        emit("\nÉchantillons ingérés   : ");
+                        emit(format_u64(self.metrics.samples_ingested, &mut b));
+                        emit("\nCapacité annulaire     : 32 échantillons / série (Drop-Oldest)\n");
+                        emit("Surveillance           : Alertes à seuil dynamiques\n");
+                        emit("Confinement            : MetricsCap (Zero-Ambient Authority)\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "query" => {
+                        let name = if parsed.arg_count > 2 {
+                            parsed.args[2]
+                        } else {
+                            "node_cpu"
+                        };
+                        match self.metrics.query_stats(name.as_bytes(), 1) {
+                            Ok((min, max, avg, last, count)) => {
+                                let mut b = [0u8; 20];
+                                emit("[METRICS/QUERY] Série '");
+                                emit(name);
+                                emit("' (Nœud 1) -> Min: ");
+                                emit(format_u64(min, &mut b));
+                                emit(", Max: ");
+                                emit(format_u64(max, &mut b));
+                                emit(", Moyenne: ");
+                                emit(format_u64(avg, &mut b));
+                                emit(", Dernier: ");
+                                emit(format_u64(last, &mut b));
+                                emit(" (Total: ");
+                                emit(format_u64(count as u64, &mut b));
+                                emit(" échantillons)\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("[METRICS] Série temporelle introuvable ou droits insuffisants\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "ingest" => {
+                        let name = if parsed.arg_count > 2 {
+                            parsed.args[2]
+                        } else {
+                            "node_cpu"
+                        };
+                        let val: u64 = if parsed.arg_count > 3 {
+                            if parsed.args[3] == "95" {
+                                95
+                            } else {
+                                50
+                            }
+                        } else {
+                            50
+                        };
+                        match self.metrics.ingest(name.as_bytes(), 1, 1000, val) {
+                            Ok(alerted) => {
+                                let mut b = [0u8; 20];
+                                emit("[METRICS/INGEST] Échantillon ingéré sur '");
+                                emit(name);
+                                emit("' -> Valeur: ");
+                                emit(format_u64(val, &mut b));
+                                if alerted {
+                                    emit(" [ALERTE SEUIL DÉCLENCHÉE !]\n");
+                                } else {
+                                    emit(" [Normal]\n");
+                                }
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("[METRICS] Échec de l'ingestion (série inconnue ou droits insuffisants)\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    _ => {
+                        emit("Usage: metrics [status | query <name> | ingest <name> <val>]\n");
                         (ShellStatus::Success, write_pos)
                     }
                 }
