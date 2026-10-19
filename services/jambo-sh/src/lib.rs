@@ -104,6 +104,7 @@ pub struct JamboShell {
     pub fuzz: jambo_fuzz::JamboFuzzDaemon,
     pub rpc: jambo_rpc::JamboRpcDaemon,
     pub audit: jambo_auditd::JamboAuditDaemon,
+    pub power: jambo_powerd::JamboPowerDaemon,
 }
 
 impl Default for JamboShell {
@@ -140,6 +141,8 @@ impl JamboShell {
         rpc.init_defaults();
         let mut audit = jambo_auditd::JamboAuditDaemon::new();
         audit.init_defaults();
+        let mut power = jambo_powerd::JamboPowerDaemon::new();
+        power.init_defaults();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -152,6 +155,7 @@ impl JamboShell {
             fuzz: jambo_fuzz::JamboFuzzDaemon::new(),
             rpc,
             audit,
+            power,
         }
     }
 
@@ -265,6 +269,7 @@ impl JamboShell {
                 );
                 emit("  rpc [cmd]    - Bus RPC distribué, jetons de capacités et cluster\n");
                 emit("  audit [cmd]  - Grand livre d'audit cryptographique et observabilité\n");
+                emit("  power [cmd]  - Gestion d'énergie matérielle ACPI, C-states et batterie\n");
                 emit("  echo <args>  - Affiche les arguments sur la sortie console\n");
                 emit("  clear        - Efface l'écran du terminal (ANSI escape)\n");
                 emit("  reboot       - Redémarre la machine\n");
@@ -272,7 +277,7 @@ impl JamboShell {
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.2.50 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.2.51 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -1327,6 +1332,176 @@ impl JamboShell {
                     }
                     _ => {
                         emit("Usage: audit [status | log <msg> | verify | alert | dump]\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                }
+            }
+            "power" => {
+                let sub = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    ""
+                };
+                match sub {
+                    "status" => {
+                        let mut b = [0u8; 20];
+                        emit("=== GESTION DE L'ÉNERGIE MATÉRIELLE ACPI (jambo-powerd) ===\n");
+                        emit("État ACPI global        : ");
+                        match self.power.manager.current_state {
+                            jambo_powerd::PowerState::S0Working => {
+                                emit("S0 (Working - Pleine puissance)\n")
+                            }
+                            jambo_powerd::PowerState::S1CpuStandby => emit("S1 (CPU Standby)\n"),
+                            jambo_powerd::PowerState::S3SuspendToRam => {
+                                emit("S3 (Suspend to RAM)\n")
+                            }
+                            jambo_powerd::PowerState::S4Hibernate => emit("S4 (Hibernate)\n"),
+                            jambo_powerd::PowerState::S5SoftOff => emit("S5 (Soft Off / Éteint)\n"),
+                        }
+                        emit("Batterie                : ");
+                        emit(format_u64(
+                            self.power.manager.battery.percentage as u64,
+                            &mut b,
+                        ));
+                        emit("% (");
+                        if self.power.manager.battery.is_charging {
+                            emit("En charge, ");
+                        } else {
+                            emit("Décharge, ");
+                        }
+                        emit(format_u64(
+                            self.power.manager.battery.temperature_celsius as u64,
+                            &mut b,
+                        ));
+                        emit("°C)\n");
+                        emit("Mode économie d'énergie : ");
+                        if self.power.manager.power_saver_active {
+                            emit("ACTIF\n");
+                        } else {
+                            emit("INACTIF\n");
+                        }
+                        emit("C-States processeurs    : ");
+                        for i in 0..jambo_powerd::MAX_SUPPORTED_CORES {
+                            emit("C");
+                            emit(format_u64(i as u64, &mut b));
+                            emit(":");
+                            match self.power.manager.cpu_cstates[i] {
+                                jambo_powerd::CpuPowerState::C0Active => emit("C0 "),
+                                jambo_powerd::CpuPowerState::C1Halt => emit("C1 "),
+                                jambo_powerd::CpuPowerState::C2StopClock => emit("C2 "),
+                                jambo_powerd::CpuPowerState::C3DeepSleep => emit("C3 "),
+                            }
+                        }
+                        emit("\nTransitions d'état      : ");
+                        emit(format_u64(
+                            self.power.manager.total_state_transitions,
+                            &mut b,
+                        ));
+                        emit("\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "state" => {
+                        if parsed.arg_count < 3 {
+                            emit("Usage: power state <s0|s1|s3|s4|s5>\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        } else {
+                            let target = match parsed.args[2] {
+                                "s0" | "S0" => Some(jambo_powerd::PowerState::S0Working),
+                                "s1" | "S1" => Some(jambo_powerd::PowerState::S1CpuStandby),
+                                "s3" | "S3" => Some(jambo_powerd::PowerState::S3SuspendToRam),
+                                "s4" | "S4" => Some(jambo_powerd::PowerState::S4Hibernate),
+                                "s5" | "S5" => Some(jambo_powerd::PowerState::S5SoftOff),
+                                _ => None,
+                            };
+                            if let Some(st) = target {
+                                match self
+                                    .power
+                                    .manager
+                                    .transition_state(&self.power.admin_cap, st)
+                                {
+                                    Ok(_) => {
+                                        emit(
+                                            "[POWER] Transition ACPI réussie vers l'état demandé\n",
+                                        );
+                                        (ShellStatus::Success, write_pos)
+                                    }
+                                    Err(_) => {
+                                        emit("[POWER] Erreur : Permission refusée pour cette transition\n");
+                                        (ShellStatus::PermissionDenied, write_pos)
+                                    }
+                                }
+                            } else {
+                                emit(
+                                    "État ACPI invalide (valeurs attendues : s0, s1, s3, s4, s5)\n",
+                                );
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "cstate" => {
+                        if parsed.arg_count < 4 {
+                            emit("Usage: power cstate <core 0..3> <c0|c1|c2|c3>\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        } else {
+                            let core_opt = match parsed.args[2] {
+                                "0" => Some(0),
+                                "1" => Some(1),
+                                "2" => Some(2),
+                                "3" => Some(3),
+                                _ => None,
+                            };
+                            let cs_opt = match parsed.args[3] {
+                                "c0" | "C0" => Some(jambo_powerd::CpuPowerState::C0Active),
+                                "c1" | "C1" => Some(jambo_powerd::CpuPowerState::C1Halt),
+                                "c2" | "C2" => Some(jambo_powerd::CpuPowerState::C2StopClock),
+                                "c3" | "C3" => Some(jambo_powerd::CpuPowerState::C3DeepSleep),
+                                _ => None,
+                            };
+                            match (core_opt, cs_opt) {
+                                (Some(core), Some(cs)) => {
+                                    match self.power.manager.set_core_cstate(
+                                        &self.power.admin_cap,
+                                        core,
+                                        cs,
+                                    ) {
+                                        Ok(_) => {
+                                            emit("[POWER] C-State configuré avec succès pour le cœur CPU\n");
+                                            (ShellStatus::Success, write_pos)
+                                        }
+                                        Err(_) => {
+                                            emit("[POWER] Erreur lors de la configuration du C-State\n");
+                                            (ShellStatus::ExecutionFailed, write_pos)
+                                        }
+                                    }
+                                }
+                                _ => {
+                                    emit("Arguments cstate invalides\n");
+                                    (ShellStatus::ExecutionFailed, write_pos)
+                                }
+                            }
+                        }
+                    }
+                    "policy" => {
+                        let action = self.power.manager.evaluate_policy();
+                        emit("Politique d'alimentation : ");
+                        match action {
+                            jambo_powerd::PowerPolicyAction::None => {
+                                emit("Nominale (Aucune action requise)\n")
+                            }
+                            jambo_powerd::PowerPolicyAction::EngageBatterySaver => {
+                                emit("Économie d'énergie activée (Batterie faible)\n")
+                            }
+                            jambo_powerd::PowerPolicyAction::ThermalThrottle => {
+                                emit("Régulation thermique requise (Surchauffe)\n")
+                            }
+                            jambo_powerd::PowerPolicyAction::EmergencyShutdown => {
+                                emit("Extinction d'urgence immédiate (Batterie critique)\n")
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    _ => {
+                        emit("Usage: power [status | state <s0..s5> | cstate <0..3> <c0..c3> | policy]\n");
                         (ShellStatus::Success, write_pos)
                     }
                 }

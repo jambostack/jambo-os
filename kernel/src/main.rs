@@ -795,6 +795,13 @@ pub extern "C" fn _start() -> ! {
         "Échec du test du grand livre d'audit cryptographique et de l'observabilité zéro-autorité"
     );
 
+    // 10sexdecies. Validation de la Gestion de l'Énergie Matérielle ACPI & C-States (Phase 53 - v0.2.51)
+    let power_success = sched::execute_hardware_power_test();
+    assert!(
+        power_success,
+        "Échec du test de gestion d'énergie matérielle ACPI et régulation C-States"
+    );
+
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
 
     arch::init_iommu();
@@ -951,14 +958,17 @@ pub extern "C" fn _start() -> ! {
     kprintln!(
         "\x1b[1;32m[PASS] Phase 52 Cryptographic Audit Ledger & Zero-Ambient Observability Complete\x1b[0m"
     );
+    kprintln!(
+        "\x1b[1;32m[PASS] Phase 53 Hardware ACPI Power Management & Dynamic C-States Complete\x1b[0m"
+    );
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.50 (Audit Cryptographique Immuable jambo-auditd)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.51 (Gestion d'Énergie Matérielle ACPI jambo-powerd)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.50 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.51 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );

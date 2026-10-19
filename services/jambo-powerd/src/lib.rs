@@ -234,6 +234,45 @@ impl PowerManager {
     }
 }
 
+/// Démon orchestrateur de gestion énergétique et ACPI en espace utilisateur (Ring 3)
+pub struct JamboPowerDaemon {
+    pub manager: PowerManager,
+    pub admin_cap: PowerCap,
+}
+
+impl Default for JamboPowerDaemon {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl JamboPowerDaemon {
+    pub fn new() -> Self {
+        let admin_cap = PowerCap::new(
+            Handle::new(1, 1),
+            power_rights::SHUTDOWN
+                | power_rights::REBOOT
+                | power_rights::SUSPEND
+                | power_rights::THROTTLE
+                | power_rights::BATTERY_QUERY,
+        );
+        Self {
+            manager: PowerManager::new(AcpiFadtInfo::default()),
+            admin_cap,
+        }
+    }
+
+    /// Initialise la configuration énergétique par défaut
+    pub fn init_defaults(&mut self) {
+        let _ = self.manager.update_battery(&self.admin_cap, 100, true, 32);
+        for core in 0..MAX_SUPPORTED_CORES {
+            let _ = self
+                .manager
+                .set_core_cstate(&self.admin_cap, core, CpuPowerState::C0Active);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
