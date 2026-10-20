@@ -173,6 +173,7 @@ pub struct JamboShell {
     pub hsm2: jambo_hsm2::JamboHsm2Daemon,
     pub ai_sec: jambo_ai_sec::JamboAiSecDaemon,
     pub wasm2: jambo_wasm2::JamboWasm2Daemon,
+    pub attest2: jambo_attest2::JamboAttest2Daemon,
 }
 
 impl Default for JamboShell {
@@ -459,6 +460,14 @@ impl JamboShell {
         );
         let mut wasm2 = jambo_wasm2::JamboWasm2Daemon::new(wasm2_cap);
         wasm2.init_defaults();
+        let attest2_cap = jambo_attest2::Attest2Cap::new(
+            libjambo::Handle::new(10501, 1),
+            jambo_attest2::attest2_rights::ALL,
+            16,
+            8,
+        );
+        let mut attest2 = jambo_attest2::JamboAttest2Daemon::new(attest2_cap);
+        attest2.init_defaults();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -522,6 +531,7 @@ impl JamboShell {
             hsm2,
             ai_sec,
             wasm2,
+            attest2,
         }
     }
 
@@ -690,10 +700,11 @@ impl JamboShell {
                 emit("  hsm2 [cmd]    - HSM Distribué, fédération de clés à seuil multi-puces & GKA\n");
                 emit("  ai-sec [cmd]  - Garde-fous de sécurité IA, détection d'injections & empoisonnement\n");
                 emit("  wasm2 [cmd]   - Moteur Wasm Component Model, interfaces WIT, liaison & bac à sable\n");
+                emit("  attest2 [cmd] - Attestation distante d'enclaves, chaînes multi-puces & devis d'intégrité\n");
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.2.102 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.2.103 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -6608,6 +6619,229 @@ impl JamboShell {
                     }
                     _ => {
                         emit("Usage: wasm2 [status | list | run <id> <fn> | link | inspect <id> | fuel-check | audit]\n");
+                        (ShellStatus::ExecutionFailed, write_pos)
+                    }
+                }
+            }
+            "attest2" => {
+                let sub = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    "status"
+                };
+                match sub {
+                    "status" => {
+                        let mut b = [0u8; 20];
+                        emit("=== ATTESTATION DISTANTE D'ENCLAVES & CHAÎNES MULTI-PUCES (jambo-attest2) ===\n");
+                        emit("Puces enregistrées      : ");
+                        emit(format_u64(self.attest2.chip_count as u64, &mut b));
+                        emit(" / ");
+                        emit(format_u64(jambo_attest2::MAX_CHIPS as u64, &mut b));
+                        emit("\nPuces de confiance (OK) : ");
+                        emit(format_u64(self.attest2.count_active_trusted_chips() as u64, &mut b));
+                        emit("\nMicro-enclaves actives  : ");
+                        emit(format_u64(self.attest2.enclave_count as u64, &mut b));
+                        emit(" / ");
+                        emit(format_u64(jambo_attest2::MAX_ENCLAVES as u64, &mut b));
+                        emit("\nComposants en quarantaine: ");
+                        emit(format_u64(self.attest2.count_quarantined() as u64, &mut b));
+                        emit("\nDevis générés           : ");
+                        emit(format_u64(self.attest2.total_quotes_generated, &mut b));
+                        emit("\nDevis vérifiés avec succès: ");
+                        emit(format_u64(self.attest2.total_quotes_verified, &mut b));
+                        emit("\nContrôles croisés puces : ");
+                        emit(format_u64(self.attest2.total_cross_checks, &mut b));
+                        emit("\nViolations d'intégrité  : ");
+                        emit(format_u64(self.attest2.total_violations, &mut b));
+                        emit("\nIdentité composée (RoT) : ");
+                        for byte in self.attest2.compound_platform_id.iter().take(8) {
+                            emit(format_hex_u64(*byte as u64, &mut b));
+                        }
+                        emit("...\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "chips" | "list-chips" => {
+                        let mut b = [0u8; 20];
+                        emit("ID  | NOM              | NIVEAU DE CONFIANCE              | STATUT\n");
+                        emit("----+------------------+----------------------------------+--------------------\n");
+                        for slot in &self.attest2.chips[..self.attest2.chip_count] {
+                            if let Some(c) = slot {
+                                emit(format_u64(c.chip_id as u64, &mut b));
+                                emit("   | ");
+                                emit(c.name_as_str());
+                                for _ in 0..(17usize.saturating_sub(c.name_len)) {
+                                    emit(" ");
+                                }
+                                emit("| ");
+                                let level_str = match c.trust_level {
+                                    jambo_attest2::ChipTrustLevel::SiliconRootOfTrust => "Silicon Root of Trust (CPU)",
+                                    jambo_attest2::ChipTrustLevel::BoardRootOfTrust => "Board Root of Trust (TPM 2.0)",
+                                    jambo_attest2::ChipTrustLevel::PlatformRootOfTrust => "Platform RoT (Dedicated HSM)",
+                                    jambo_attest2::ChipTrustLevel::PeripheralRootOfTrust => "Peripheral RoT (SmartNIC)",
+                                };
+                                emit(level_str);
+                                for _ in 0..(33usize.saturating_sub(level_str.len())) {
+                                    emit(" ");
+                                }
+                                emit("| ");
+                                let status_str = match c.status {
+                                    jambo_attest2::ChipStatus::Enrolled => "Enrolled",
+                                    jambo_attest2::ChipStatus::AttestedActive => "Attested Active",
+                                    jambo_attest2::ChipStatus::Degraded => "Degraded",
+                                    jambo_attest2::ChipStatus::Quarantined => "QUARANTINED",
+                                    jambo_attest2::ChipStatus::Revoked => "REVOKED",
+                                    _ => "Unknown",
+                                };
+                                emit(status_str);
+                                emit("\n");
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "enclaves" | "list-enclaves" => {
+                        let mut b = [0u8; 20];
+                        emit("ID  | NOM              | PUCE HÔTE | MRENCLAVE (SHA256) | STATUT\n");
+                        emit("----+------------------+-----------+--------------------+--------------------\n");
+                        for slot in &self.attest2.enclaves[..self.attest2.enclave_count] {
+                            if let Some(e) = slot {
+                                emit(format_u64(e.enclave_id as u64, &mut b));
+                                emit("   | ");
+                                emit(e.name_as_str());
+                                for _ in 0..(17usize.saturating_sub(e.name_len)) {
+                                    emit(" ");
+                                }
+                                emit("| Chip #");
+                                emit(format_u64(e.chip_id as u64, &mut b));
+                                emit("    | ");
+                                for byte in e.mr_enclave.iter().take(8) {
+                                    emit(format_hex_u64(*byte as u64, &mut b));
+                                }
+                                emit(".. | ");
+                                let status_str = match e.status {
+                                    jambo_attest2::EnclaveStatus::Active => "Active",
+                                    jambo_attest2::EnclaveStatus::Attested => "Attested (Verified)",
+                                    jambo_attest2::EnclaveStatus::Quarantined => "QUARANTINED",
+                                    jambo_attest2::EnclaveStatus::Registered => "Registered",
+                                    jambo_attest2::EnclaveStatus::Terminated => "Terminated",
+                                };
+                                emit(status_str);
+                                emit("\n");
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "quote" => {
+                        let enclave_id = if parsed.arg_count > 2 {
+                            parse_u64(parsed.args[2]).unwrap_or(1) as u32
+                        } else {
+                            1
+                        };
+                        let mut b = [0u8; 20];
+                        let nonce = jambo_attest2::Sha256::digest(b"MANUAL_SHELL_CHALLENGE_NONCE_2026");
+                        let cap = self.attest2.admin_cap;
+                        match self.attest2.generate_quote(&cap, enclave_id, &nonce) {
+                            Ok(quote) => {
+                                emit("[SUCCÈS] Devis d'attestation distante généré avec succès pour l'enclave #");
+                                emit(format_u64(enclave_id as u64, &mut b));
+                                emit("\nSignature HMAC puce hôte : ");
+                                for byte in quote.signature.iter().take(16) {
+                                    emit(format_hex_u64(*byte as u64, &mut b));
+                                }
+                                emit("...\nAttributs matériels : 0x");
+                                emit(format_hex_u64(quote.attributes as u64, &mut b));
+                                emit(", SVN : ");
+                                emit(format_u64(quote.svn as u64, &mut b));
+                                emit("\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("[ERREUR] Échec de la génération du devis d'attestation\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "verify" => {
+                        let enclave_id = if parsed.arg_count > 2 {
+                            parse_u64(parsed.args[2]).unwrap_or(1) as u32
+                        } else {
+                            1
+                        };
+                        let mut b = [0u8; 20];
+                        let nonce = jambo_attest2::Sha256::digest(b"VERIFICATION_CHALLENGE_STRICT");
+                        let cap = self.attest2.admin_cap;
+                        match self.attest2.generate_quote(&cap, enclave_id, &nonce) {
+                            Ok(quote) => {
+                                match self.attest2.verify_quote(&cap, &quote, &nonce) {
+                                    Ok(()) => {
+                                        emit("[SUCCÈS] Devis d'attestation validé avec succès contre la politique de référence pour l'enclave #");
+                                        emit(format_u64(enclave_id as u64, &mut b));
+                                        emit("\nIntégrité MRENCLAVE, MRSIGNER et anti-rejeu garantis.\n");
+                                        (ShellStatus::Success, write_pos)
+                                    }
+                                    Err(_) => {
+                                        emit("[ALERTE] Échec de la vérification du devis d'attestation distante !\n");
+                                        (ShellStatus::ExecutionFailed, write_pos)
+                                    }
+                                }
+                            }
+                            Err(_) => {
+                                emit("[ERREUR] Impossible de produire le devis pour vérification\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "cross-check" => {
+                        let cap = self.attest2.admin_cap;
+                        match self.attest2.cross_endorse_chip(&cap, 1, 3) {
+                            Ok(endorsement) => {
+                                let mut b = [0u8; 20];
+                                emit("[SUCCÈS] Endossement croisé inter-puces validé (Puce #1 -> Puce #3)\nSignature d'endossement : ");
+                                for byte in endorsement.signature.iter().take(12) {
+                                    emit(format_hex_u64(*byte as u64, &mut b));
+                                }
+                                emit("...\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("[ERREUR] Échec de l'endossement croisé inter-puces\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "quarantine" => {
+                        let enclave_id = if parsed.arg_count > 2 {
+                            parse_u64(parsed.args[2]).unwrap_or(1) as u32
+                        } else {
+                            1
+                        };
+                        let cap = self.attest2.admin_cap;
+                        match self.attest2.confine_enclave(&cap, enclave_id, "Ordre opérateur shell") {
+                            Ok(()) => {
+                                let mut b = [0u8; 20];
+                                emit("[CONFIRMÉ] Micro-enclave #");
+                                emit(format_u64(enclave_id as u64, &mut b));
+                                emit(" placée en QUARANTAINE immédiate en temps O(1).\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("[ERREUR] Échec de mise en quarantaine\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "audit" => {
+                        let mut b = [0u8; 20];
+                        emit("Condensat SHA-256 du Registre d'Audit Multi-Puces : ");
+                        for byte in self.attest2.audit_chain.iter() {
+                            emit(format_hex_u64(*byte as u64, &mut b));
+                        }
+                        emit("\nÉvénements d'audit consignés : ");
+                        emit(format_u64(self.attest2.audit_count as u64, &mut b));
+                        emit("\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    _ => {
+                        emit("Usage: attest2 [status | chips | enclaves | quote <id> | verify <id> | cross-check | quarantine <id> | audit]\n");
                         (ShellStatus::ExecutionFailed, write_pos)
                     }
                 }

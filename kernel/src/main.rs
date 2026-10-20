@@ -1156,6 +1156,13 @@ pub extern "C" fn _start() -> ! {
         "Échec du test du Wasm Component Model et interfaces de capacités jambo-wasm2"
     );
 
+    // 10sedequadragies. Validation de l'Attestation Distante d'Enclaves & Multi-Puces (Phase 105 - v0.2.103)
+    let attest2_success = sched::execute_attest2_daemon_test();
+    assert!(
+        attest2_success,
+        "Échec du test de l'attestation d'enclaves et chaînes de confiance multi-puces jambo-attest2"
+    );
+
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
 
     arch::init_iommu();
@@ -1395,14 +1402,15 @@ pub extern "C" fn _start() -> ! {
     kprintln!("\x1b[1;32m[PASS] Phase 101 Intrusion Detection & Prevention System (IDPS) & Heuristic IPC Analysis (jambo-idps) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 102 Distributed HSM Architecture & Multi-Chip Threshold Key Federation (jambo-hsm2) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 104 Wasm Component Model & Ring 3 Capabilities (jambo-wasm2) Complete\x1b[0m");
+    kprintln!("\x1b[1;32m[PASS] Phase 105 Remote Hardware Enclave Attestation & Multi-Chip Trust Chains (jambo-attest2) Complete\x1b[0m");
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.102 (Wasm Component Model jambo-wasm2)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.103 (Remote Enclave Attestation & Multi-Chip RoT jambo-attest2)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.102 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.103 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );

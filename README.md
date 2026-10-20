@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.102-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.103-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.102 (Wasm Component Model Ring 3, Interfaces WIT, Canonical ABI & Composition Sandboxed jambo-wasm2)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.102` introduit le moteur de composants WebAssembly souverain en espace utilisateur (`services/jambo-wasm2`) : spécification binaire Component Model `\0asm\x0d\x00\x01\x00`, isolation stricte des mémoires linéaires de chaque composant, sérialisation et marshalling typé par Canonical ABI (`canon lift` et `canon lower`), typage fort des interfaces WIT (scalaires, records, variants, chaînes UTF-8, types ressources), composition et liaison inter-composants sandboxed sans fuite de mémoire linéaire partagée, gestion sécurisée du cycle de vie des ressources (`ResourceTable`, handles empruntés/possédés, prévention formelle du double-free), comptabilisation monotone du carburant (Fuel/Gas Metering) avec interception sécurisée du trap `FuelExhausted`, contrôle d'accès capabilaire Ring 3 fondé sur `Wasm2Cap` sans autorité ambiante, scellement d'un registre d'audit inviolable SHA-256 (`wasm2_audit_chain`) et commandes shell interactives `wasm2 [status | list | run | link | inspect | fuel-check | audit]` dans `jsh`.
+> **Statut du Projet : Version v0.2.103 (Attestation d'Enclaves Matérielles Distantes & Chaînes de Confiance Multi-Puces jambo-attest2)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.103` introduit le sous-système d'attestation d'enclaves matérielles distantes et de chaînes de confiance multi-puces (`services/jambo-attest2`) : hiérarchie de confiance multi-puces (Silicon RoT CPU, Board RoT TPM 2.0, Platform RoT HSM dédié, Peripheral RoT SmartNIC), identité de plateforme composée (`CompoundPlatformId`) calculée par agrégation Merkle SHA-256 en arbre, gestion et mesure de micro-enclaves Ring 3 souveraines (MRENCLAVE, MRSIGNER, SVN anti-rollback, attributs d'isolation matérielle), génération et vérification de devis d'attestation distante scellés par HMAC-SHA256 avec nonces de défi anti-rejeu, validation formelle contre les politiques de référence dorées (Golden Reference Policies), endossement croisé inter-puces (Cross-Chip Mutual Attestation), mise en quarantaine autonome en temps O(1) de toute enclave ou puce corrompue avec propagation en cascade, registre d'audit inaltérable scellé par chaîne de blocs SHA-256 (`attest2_audit_chain`), gouvernance capabilaire par jeton `Attest2Cap` sans autorité ambiante et commandes interactives `attest2 [status | chips | enclaves | quote | verify | cross-check | quarantine | audit]` dans le shell `jsh`.
 
 ---
 

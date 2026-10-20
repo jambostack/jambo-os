@@ -1,0 +1,7 @@
+[package]
+name = "jambo-attest2"
+version = "0.2.103"
+edition = "2021"
+
+[dependencies]
+libjambo = { path = "../../libs/libjambo" }
