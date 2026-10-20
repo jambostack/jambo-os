@@ -178,6 +178,7 @@ pub struct JamboShell {
     pub tee2: jambo_tee2::JamboTee2Daemon,
     pub kms: jambo_kms::JamboKmsDaemon,
     pub pki2: jambo_pki2::JamboPkiDaemon,
+    pub auth2: jambo_auth2::JamboAuth2Daemon,
 }
 
 impl Default for JamboShell {
@@ -504,6 +505,14 @@ impl JamboShell {
         );
         let mut pki2 = jambo_pki2::JamboPkiDaemon::new(pki2_cap);
         pki2.init_defaults();
+        let auth2_cap = jambo_auth2::Auth2Cap::new(
+            libjambo::Handle::new(11001, 1),
+            jambo_auth2::auth2_rights::ALL,
+            1,
+            64,
+        );
+        let mut auth2 = jambo_auth2::JamboAuth2Daemon::new(auth2_cap);
+        auth2.init_defaults();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -572,6 +581,7 @@ impl JamboShell {
             tee2,
             kms,
             pki2,
+            auth2,
         }
     }
 
@@ -745,10 +755,11 @@ impl JamboShell {
                 emit("  tee2 [cmd]    - Micro-hyperviseurs d'enclaves imbriquées & mémoire chiffrée multi-locataires\n");
                 emit("  kms [cmd]     - Gestion et séquestre de clés de grappe distribuée & baux temporels\n");
                 emit("  pki [cmd]     - PKI hybride post-quantique (ML-DSA + Ed25519) & fédération CA\n");
+                emit("  auth2 [cmd]   - Passkeys FIDO2/WebAuthn, signatures Schnorr & jetons éphémères\n");
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.2.107 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.2.108 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -7750,6 +7761,216 @@ impl JamboShell {
                     }
                     _ => {
                         emit("Usage: pki [status | cas | list | crl | verify | benchmark | audit]\n");
+                        (ShellStatus::ExecutionFailed, write_pos)
+                    }
+                }
+            }
+            "auth2" => {
+                let sub = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    "status"
+                };
+                match sub {
+                    "status" => {
+                        let mut b = [0u8; 20];
+                        emit("=== DÉMON D'AUTHENTIFICATION PASSKEYS & JETONS ÉPHÉMÈRES (jambo-auth2) ===\n");
+                        emit("Clés Passkeys WebAuthn Actives : ");
+                        emit(format_u64(self.auth2.passkey_count as u64, &mut b));
+                        emit(" / ");
+                        emit(format_u64(jambo_auth2::MAX_PASSKEYS as u64, &mut b));
+                        emit("\nJetons d'Accès Éphémères Détenus : ");
+                        emit(format_u64(self.auth2.token_count as u64, &mut b));
+                        emit(" / ");
+                        emit(format_u64(jambo_auth2::MAX_TOKENS as u64, &mut b));
+                        emit("\nJetons Révoqués Consignés : ");
+                        emit(format_u64(self.auth2.revoked_count as u64, &mut b));
+                        emit(" / ");
+                        emit(format_u64(jambo_auth2::MAX_REVOKED_TOKENS as u64, &mut b));
+                        emit("\nAuthentifications Réussies : ");
+                        emit(format_u64(self.auth2.successful_auths, &mut b));
+                        emit(" | Échecs / Rejeux Bloqués : ");
+                        emit(format_u64(self.auth2.failed_auths, &mut b));
+                        emit("\nÉpoque Globale de Sécurité : ");
+                        emit(format_u64(self.auth2.cluster_security_epoch as u64, &mut b));
+                        emit("\nHorodatage Système (Ticks) : ");
+                        emit(format_u64(self.auth2.current_time_ticks, &mut b));
+                        emit("\nCondensat d'Audit Scellé (SHA-256) : ");
+                        for byte in self.auth2.audit_chain.iter().take(8) {
+                            emit(format_hex_u64(*byte as u64, &mut b));
+                        }
+                        emit("...\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "passkeys" => {
+                        let mut b = [0u8; 20];
+                        emit("=== CLÉS PASSKEYS WEBAUTHN / FIDO2 ENREGISTRÉES ===\n");
+                        for i in 0..self.auth2.passkey_count {
+                            let pk = &self.auth2.passkeys[i];
+                            emit("Passkey #");
+                            emit(format_u64(i as u64 + 1, &mut b));
+                            emit(" [User #");
+                            emit(format_u64(pk.user_id as u64, &mut b));
+                            emit(" - ");
+                            emit(pk.user_name_str());
+                            emit("] RP: ");
+                            emit(pk.rp_id_str());
+                            emit(" | Facteur: ");
+                            emit(pk.factor.as_str());
+                            emit(" | Transport: ");
+                            emit(pk.transport.as_str());
+                            emit(" | SignCount: ");
+                            emit(format_u64(pk.sign_count as u64, &mut b));
+                            emit("\n");
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "tokens" => {
+                        let mut b = [0u8; 20];
+                        emit("=== JETONS D'ACCÈS ÉPHÉMÈRES (EPHEMERAL TOKENS) ===\n");
+                        for i in 0..self.auth2.token_count {
+                            let tok = &self.auth2.tokens[i];
+                            emit("Token #");
+                            emit(format_u64(tok.token_id, &mut b));
+                            emit(" (User #");
+                            emit(format_u64(tok.user_id as u64, &mut b));
+                            emit(") Scopes: 0x");
+                            emit(format_hex_u64(tok.scopes as u64, &mut b));
+                            emit(" | TTL Expire: ");
+                            emit(format_u64(tok.expires_at_ticks, &mut b));
+                            if tok.revoked {
+                                emit(" [RÉVOQUÉ]\n");
+                            } else {
+                                emit(" [ACTIF]\n");
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "verify" => {
+                        let cap = self.auth2.admin_cap;
+                        let user_secret = 0xABCD_EF01_2345_6789;
+                        let challenge = match self.auth2.create_challenge(1, "auth.jambo.internal") {
+                            Ok(c) => c,
+                            Err(_) => {
+                                emit("Échec lors de la création du défi WebAuthn\n");
+                                return (ShellStatus::ExecutionFailed, write_pos);
+                            }
+                        };
+                        let client_data_hash = jambo_auth2::Sha256::digest(b"cli_assertion_jsh");
+                        let auth_data = jambo_auth2::AuthenticatorData {
+                            rp_id_hash: challenge.rp_id_hash,
+                            flags: jambo_auth2::webauthn_flags::FLAG_UP | jambo_auth2::webauthn_flags::FLAG_UV,
+                            sign_count: self.auth2.passkeys[0].sign_count + 1,
+                        };
+                        let mut msg_buf = [0u8; 37 + 32];
+                        let abytes = auth_data.to_bytes();
+                        msg_buf[..37].copy_from_slice(&abytes);
+                        msg_buf[37..].copy_from_slice(&client_data_hash);
+                        let digest = jambo_auth2::Sha256::digest(&msg_buf);
+                        let (t, s) = jambo_auth2::schnorr::sign_deterministic(user_secret, &digest);
+
+                        let cred_id = self.auth2.passkeys[0].cred_id;
+                        match self.auth2.authenticate_webauthn(
+                            &cap,
+                            &cred_id,
+                            challenge.challenge_id,
+                            &client_data_hash,
+                            auth_data,
+                            t,
+                            s,
+                            jambo_auth2::token_scopes::READ | jambo_auth2::token_scopes::WRITE,
+                            120,
+                        ) {
+                            Ok(tok) => {
+                                let mut b = [0u8; 20];
+                                emit("Authentification WebAuthn Schnorr réussie ! Jeton émis #");
+                                emit(format_u64(tok.token_id, &mut b));
+                                emit(" (Scopes: READ|WRITE)\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("Échec de l'authentification WebAuthn Passkey\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "benchmark" => {
+                        let cap = self.auth2.admin_cap;
+                        let bench_secret = 0x5555_6666_7777_8888;
+                        let bench_pub = jambo_auth2::schnorr::compute_public_key(bench_secret);
+                        let reg_res = self.auth2.register_passkey(
+                            &cap,
+                            42,
+                            "bench.jambo.internal",
+                            "bench-user",
+                            bench_pub,
+                            jambo_auth2::BiometricFactor::IrisScan,
+                            jambo_auth2::PasskeyTransport::InternalPlatform,
+                            jambo_auth2::webauthn_flags::FLAG_UP | jambo_auth2::webauthn_flags::FLAG_UV,
+                        );
+                        if let Ok(cid) = reg_res {
+                            let ch = match self.auth2.create_challenge(42, "bench.jambo.internal") {
+                                Ok(c) => c,
+                                Err(_) => return (ShellStatus::ExecutionFailed, write_pos),
+                            };
+                            let cdata = jambo_auth2::Sha256::digest(b"bench_client_data");
+                            let adata = jambo_auth2::AuthenticatorData {
+                                rp_id_hash: ch.rp_id_hash,
+                                flags: jambo_auth2::webauthn_flags::FLAG_UP | jambo_auth2::webauthn_flags::FLAG_UV,
+                                sign_count: 1,
+                            };
+                            let mut mbuf = [0u8; 37 + 32];
+                            let abytes = adata.to_bytes();
+                            mbuf[..37].copy_from_slice(&abytes);
+                            mbuf[37..].copy_from_slice(&cdata);
+                            let mdigest = jambo_auth2::Sha256::digest(&mbuf);
+                            let (t, s) = jambo_auth2::schnorr::sign_deterministic(bench_secret, &mdigest);
+                            let tok = match self.auth2.authenticate_webauthn(
+                                &cap,
+                                &cid,
+                                ch.challenge_id,
+                                &cdata,
+                                adata,
+                                t,
+                                s,
+                                jambo_auth2::token_scopes::ALL,
+                                300,
+                            ) {
+                                Ok(tk) => tk,
+                                Err(_) => return (ShellStatus::ExecutionFailed, write_pos),
+                            };
+                            let child = match self.auth2.attenuate_token(tok.token_id, jambo_auth2::token_scopes::READ, 60) {
+                                Ok(ch_tk) => ch_tk,
+                                Err(_) => return (ShellStatus::ExecutionFailed, write_pos),
+                            };
+                            let _ = self.auth2.revoke_token(&cap, tok.token_id, jambo_auth2::RevocationReason::ExplicitLogout);
+                            let _ = self.auth2.revoke_user_sessions(&cap, 42, jambo_auth2::RevocationReason::PolicyViolation);
+                            let is_child_revoked = self.auth2.verify_token(child.token_id, jambo_auth2::token_scopes::READ).is_err();
+                            if is_child_revoked {
+                                emit("Benchmark Auth2 : Enregistrement Passkey, Assertion Schnorr ZKP, Émission de Jeton, Atténuation Monotone et Révocations instantanées réussies avec succès\n");
+                                (ShellStatus::Success, write_pos)
+                            } else {
+                                emit("Benchmark Auth2 : Erreur de conformité de révocation\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        } else {
+                            emit("Benchmark Auth2 : Échec de l'enregistrement de la clé Passkey\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        }
+                    }
+                    "audit" => {
+                        let mut b = [0u8; 20];
+                        emit("Condensat SHA-256 du Registre d'Audit Auth2 : ");
+                        for byte in self.auth2.audit_chain.iter() {
+                            emit(format_hex_u64(*byte as u64, &mut b));
+                        }
+                        emit("\nÉvénements d'audit consignés : ");
+                        emit(format_u64(self.auth2.audit_count, &mut b));
+                        emit("\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    _ => {
+                        emit("Usage: auth2 [status | passkeys | tokens | verify | benchmark | audit]\n");
                         (ShellStatus::ExecutionFailed, write_pos)
                     }
                 }

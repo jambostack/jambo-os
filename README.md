@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.107-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.108-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.107 (Infrastructure PKI Hybride Post-Quantique & Fédération de CA Distribuées jambo-pki2)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.107` introduit le sous-système souverain d'infrastructure à clés publiques hybride et fédération d'autorités de certification (`services/jambo-pki2`) : signatures hybrides Dual-Defense combinant ML-DSA (FIPS 204 / Dilithium-65) et Ed25519 pour une protection mathématique absolue contre les ordinateurs quantiques, hiérarchies et fédération multi-CA (RootAnchor, Intermediate, CrossCertified, ExternalFederated) avec limitation stricte de profondeur (`path_length_constraint`), validation formelle de chaînes de confiance selon RFC 5280, listes de révocation de certificats (CRL) signées et vérifiables en temps réel O(1), gestion granulaire des usages autorisés (`KeyUsage` : Server, Client, CodeSign, CaSign, CrlSign), registre d'audit inaltérable scellé par chaîne SHA-256, gouvernance capabilaire stricte par jeton `PkiCap` sans autorité ambiante et commandes interactives `pki [status | cas | list | crl | verify | benchmark | audit]` dans le shell `jsh`.
+> **Statut du Projet : Version v0.2.108 (Authentification Biométrique, Passkeys WebAuthn & Jetons d'Accès Éphémères jambo-auth2)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.108` introduit le sous-système souverain d'authentification sans mot de passe et gestion de jetons d'accès cryptographiques éphémères (`services/jambo-auth2`) : standard Passkeys / FIDO2 / WebAuthn Level 3 (`PasskeyCredential`), validation biométrique matérielle (empreinte digitale, scan oculaire iris, enclaves sécurisées TPM/TEE, PIN matériel), drapeaux d'authentificateur (Présence Utilisateur `UP`, Vérification Biométrique `UV`), signatures Schnorr déterministes et preuves non-interactives Fiat-Shamir NIZKPoK (`g^s == t * y^e mod p`), défis cryptographiques anti-rejeu à usage unique, protection anti-clonage via compteurs d'assertion strictement monotones (`sign_count`), émission de jetons d'accès éphémères (`EphemeralToken`) bornés et signés par HMAC-SHA256, atténuation capabilaire monotone des portées et des durées de vie, révocation instantanée O(1) de sessions ciblées ou par utilisateur, bascule globale d'époque de sécurité de grappe, gouvernance capabilaire stricte `Auth2Cap` sans autorité ambiante, chaîne d'audit inviolable scellée par SHA-256 et commandes interactives `auth2 [status | passkeys | tokens | verify | benchmark | audit]` dans le shell `jsh`.
 
 ---
 

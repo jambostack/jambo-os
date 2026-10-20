@@ -1,6 +1,6 @@
 [package]
 name = "jambo-sh"
-version = "0.2.107"
+version = "0.2.108"
 edition = "2021"
 
 [lib]
@@ -44,6 +44,7 @@ jambo-crypto2 = { path = "../jambo-crypto2" }
 jambo-tee2 = { path = "../jambo-tee2" }
 jambo-kms = { path = "../jambo-kms" }
 jambo-pki2 = { path = "../jambo-pki2" }
+jambo-auth2 = { path = "../jambo-auth2" }
 jambo-cryptod = { path = "../jambo-cryptod" }
 jambo-dfsd = { path = "../jambo-dfsd" }
 jambo-diagd = { path = "../jambo-diagd" }

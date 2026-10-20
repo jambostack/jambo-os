@@ -1191,6 +1191,13 @@ pub extern "C" fn _start() -> ! {
         "Échec du test de l'infrastructure PKI post-quantique et fédération CA jambo-pki2"
     );
 
+    // 12duodeciesquadragies. Validation de l'Authentification Passkeys WebAuthn & Jetons Éphémères (Phase 110 - v0.2.108)
+    let auth2_success = sched::execute_auth2_daemon_test();
+    assert!(
+        auth2_success,
+        "Échec du test de l'authentification Passkeys WebAuthn et jetons éphémères jambo-auth2"
+    );
+
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
 
     arch::init_iommu();
@@ -1435,14 +1442,15 @@ pub extern "C" fn _start() -> ! {
     kprintln!("\x1b[1;32m[PASS] Phase 107 Nested Trusted Execution Environments & Multi-Tenant Encrypted Isolation (jambo-tee2) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 108 Distributed Key Management, Escrow & Hierarchical Custody (jambo-kms) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 109 Post-Quantum PKI & Distributed CA Federation (jambo-pki2) Complete\x1b[0m");
+    kprintln!("\x1b[1;32m[PASS] Phase 110 Passkeys WebAuthn & Ephemeral Access Tokens (jambo-auth2) Complete\x1b[0m");
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.107 (Post-Quantum PKI & Distributed CA Federation jambo-pki2)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.108 (Passkeys WebAuthn & Ephemeral Access Tokens jambo-auth2)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.107 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.108 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
