@@ -1,0 +1,7 @@
+[package]
+name = "jambo-vpn"
+version = "0.2.111"
+edition = "2021"
+
+[dependencies]
+libjambo = { path = "../../libs/libjambo" }

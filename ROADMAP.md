@@ -1,7 +1,7 @@
 # ROADMAP DU DÉVELOPPEMENT AUTONOME — JamboOS
 
-> **Dernière mise à jour** : 2026-10-20 03:40 UTC  
-> **Version actuelle** : `v0.2.110`  
+> **Dernière mise à jour** : 2026-10-20 04:05 UTC  
+> **Version actuelle** : `v0.2.111`  
 > **Statut global** : Pré-Alpha active — Micro-noyau de 3e génération orienté capacités (`#![no_std]`)  
 > **Cycle de développement autonome** : 10 minutes via le Planificateur de Tâches & Crons d'Antigravity WebUI  
 
@@ -99,23 +99,24 @@
 | **v0.2.108** | 110 | Authentification Passkeys & Jetons Éphémères `jambo-auth2` | Authentification biométrique/WebAuthn sans mot de passe, signatures Schnorr déterministes, jetons éphémères HMAC, atténuation monotone, révocation instantanée O(1) & audit SHA-256 | ✅ Validé |
 | **v0.2.109** | 111 | Routage Sécurisé & Micro-Segmentation `jambo-secroute` | Routage Zero-Trust, micro-segmentation en zones étanches, tunnels souverains chiffrés ChaCha20, étiquettes MAC HMAC-SHA256, anti-rejeu strict monotone, quarantaine O(1), SecRouteCap & audit SHA-256 | ✅ Validé |
 | **v0.2.110** | 112 | Prévention & Corrélation d'Intrusions `jambo-ids` | Détection d'anomalies de flux IPC, profilage comportemental, corrélation multi-points hétérogène, calcul de score de menace APT, révocation automatisée de capacités, quarantaine O(1), IdsCap & registre d'audit SHA-256 | ✅ Validé |
+| **v0.2.111** | 113 | Passerelle VPN Post-Quantique WireGuard `jambo-vpn` | Passerelle VPN souveraine inspirée de WireGuard, échange de clés hybride Dual-Defense (ML-KEM + Curve25519), transport chiffré ChaCha20/HMAC-SHA256, anti-rejeu par fenêtre glissante (128 paquets), cryptokey routing par sous-réseaux CIDR AllowedIPs, VpnCap & audit SHA-256 | ✅ Validé |
 
 ---
 
 ## 3. Prochaines Étapes Prioritaires
 
-### 🎯 Prochaine Tâche Immédiate : Phase 113 — v0.2.111
-* **Composant** : `services/jambo-vpn`
-* **Objectif** : Passerelle VPN Post-Quantique WireGuard Souveraine Ring 3 & Transport Chiffré Inter-Grappe
-* **Tâches précises** :
-  1. Échange de clés hybride post-quantique ML-KEM + Curve25519, encapsulation de tunnels inter-noeuds, VpnCap.
-  2. Validation formelle et suite de tests `cargo xtask test`.
-
-### 🎯 Tâche Suivante : Phase 114 — v0.2.112
+### 🎯 Prochaine Tâche Immédiate : Phase 114 — v0.2.112
 * **Composant** : `services/jambo-waf`
 * **Objectif** : Pare-Feu Applicatif L7 (WAF) Sandboxed & Filtrage d'Injections Protocolaire
 * **Tâches précises** :
   1. Détection d'injections HTTP/JSON/Wasm, filtrage d'en-têtes stricts, WafCap.
+  2. Validation formelle et suite de tests `cargo xtask test`.
+
+### 🎯 Tâche Suivante : Phase 115 — v0.2.113
+* **Composant** : `services/jambo-ddos`
+* **Objectif** : Mitigation Anti-DDoS Distribuée L3/L4/L7, Limiteurs de Débit à Jetons & SYN Cookies
+* **Tâches précises** :
+  1. Filtrage anti-amplification, syn-cookies Ring 3, limitation de débit adaptative par IP/zone, DdosCap.
   2. Validation formelle et suite de tests `cargo xtask test`.
 
 ---
@@ -167,6 +168,7 @@
 * **2026-10-20 02:55 UTC** : Validation complète Phase 110 (`jambo-auth2`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-auth2`). Tag `v0.2.108`.
 * **2026-10-20 03:18 UTC** : Validation complète Phase 111 (`jambo-secroute`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-secroute`). Tag `v0.2.109`.
 * **2026-10-20 03:40 UTC** : Validation complète Phase 112 (`jambo-ids`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-ids`). Tag `v0.2.110`.
+* **2026-10-20 04:05 UTC** : Validation complète Phase 113 (`jambo-vpn`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-vpn`). Tag `v0.2.111`.
 
 
 
