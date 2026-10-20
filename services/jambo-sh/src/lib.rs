@@ -172,6 +172,7 @@ pub struct JamboShell {
     pub idps: jambo_idps::JamboIdpsDaemon,
     pub hsm2: jambo_hsm2::JamboHsm2Daemon,
     pub ai_sec: jambo_ai_sec::JamboAiSecDaemon,
+    pub wasm2: jambo_wasm2::JamboWasm2Daemon,
 }
 
 impl Default for JamboShell {
@@ -450,6 +451,14 @@ impl JamboShell {
         );
         let mut ai_sec = jambo_ai_sec::JamboAiSecDaemon::new(ai_sec_cap);
         ai_sec.init_defaults();
+        let wasm2_cap = jambo_wasm2::Wasm2Cap::new(
+            libjambo::Handle::new(10401, 1),
+            jambo_wasm2::wasm2_rights::ALL,
+            8,
+            500_000,
+        );
+        let mut wasm2 = jambo_wasm2::JamboWasm2Daemon::new(wasm2_cap);
+        wasm2.init_defaults();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -512,6 +521,7 @@ impl JamboShell {
             idps,
             hsm2,
             ai_sec,
+            wasm2,
         }
     }
 
@@ -679,10 +689,11 @@ impl JamboShell {
                 emit("  idps [cmd]    - Détection/prévention d'intrusions (IDPS), heuristique flux & quarantaine\n");
                 emit("  hsm2 [cmd]    - HSM Distribué, fédération de clés à seuil multi-puces & GKA\n");
                 emit("  ai-sec [cmd]  - Garde-fous de sécurité IA, détection d'injections & empoisonnement\n");
+                emit("  wasm2 [cmd]   - Moteur Wasm Component Model, interfaces WIT, liaison & bac à sable\n");
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.2.101 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.2.102 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -6338,6 +6349,265 @@ impl JamboShell {
                     }
                     _ => {
                         emit("Usage: ai-sec [status | scan <prompt> | filter <text> | verify <id> | poison-sim <id> | quarantine <id> | audit]\n");
+                        (ShellStatus::ExecutionFailed, write_pos)
+                    }
+                }
+            }
+            "wasm2" => {
+                let subcmd = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    "status"
+                };
+                match subcmd {
+                    "status" => {
+                        let mut b = [0u8; 20];
+                        emit("=== MOTEUR DE COMPOSANTS WASM & INTERFACES RING 3 (jambo-wasm2) ===\n");
+                        emit("  Composants catalogues : ");
+                        emit(format_u64(self.wasm2.component_count as u64, &mut b));
+                        emit("\n  Instances actives     : ");
+                        emit(format_u64(self.wasm2.instance_count as u64, &mut b));
+                        emit("\n  Liens inter-composants: ");
+                        emit(format_u64(self.wasm2.link_count as u64, &mut b));
+                        emit("\n  Ressources allouees   : ");
+                        emit(format_u64(self.wasm2.resource_table.count as u64, &mut b));
+                        emit("\n  Invocations totales   : ");
+                        emit(format_u64(self.wasm2.total_invocations, &mut b));
+                        emit("\n  Carburant consomme    : ");
+                        emit(format_u64(self.wasm2.total_fuel_consumed, &mut b));
+                        emit(" gas\n  Traps de securite     : ");
+                        emit(format_u64(self.wasm2.total_traps, &mut b));
+                        emit("\n  Chaine d'audit SHA-256: ");
+                        for byte in self.wasm2.audit_chain.iter().take(8) {
+                            emit(format_hex_u64(*byte as u64, &mut b));
+                        }
+                        emit("...\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "list" => {
+                        let mut b = [0u8; 20];
+                        emit("--- Composants Enregistres (Catalogue) ---\n");
+                        for i in 0..self.wasm2.component_count {
+                            let c = &self.wasm2.components[i];
+                            emit("  [ID ");
+                            emit(format_u64(c.component_id as u64, &mut b));
+                            emit("] ");
+                            emit(c.name_str());
+                            emit(" | Exports: ");
+                            emit(format_u64(c.export_count as u64, &mut b));
+                            emit(" | Imports: ");
+                            emit(format_u64(c.import_count as u64, &mut b));
+                            emit(" | Fuel defaut: ");
+                            emit(format_u64(c.default_fuel, &mut b));
+                            emit("\n");
+                        }
+                        emit("--- Instances Sandboxed Actives ---\n");
+                        if self.wasm2.instance_count == 0 {
+                            emit("  (Aucune instance active pour le moment)\n");
+                        } else {
+                            for i in 0..self.wasm2.instance_count {
+                                let inst = &self.wasm2.instances[i];
+                                emit("  [Inst #");
+                                emit(format_u64(inst.instance_id as u64, &mut b));
+                                emit("] ");
+                                emit(inst.name_str());
+                                emit(" | Fuel restant: ");
+                                emit(format_u64(inst.fuel_remaining, &mut b));
+                                emit(" | Consomme: ");
+                                emit(format_u64(inst.fuel_consumed, &mut b));
+                                emit("\n");
+                            }
+                        }
+                        emit("--- Liens Inter-Composants (Contracts) ---\n");
+                        if self.wasm2.link_count == 0 {
+                            emit("  (Aucun lien inter-composants actif)\n");
+                        } else {
+                            for i in 0..self.wasm2.link_count {
+                                let l = &self.wasm2.links[i];
+                                emit("  [Link #");
+                                emit(format_u64(l.link_id as u64, &mut b));
+                                emit("] Conso Inst #");
+                                emit(format_u64(l.consumer_instance as u64, &mut b));
+                                emit(" -> Fourn Inst #");
+                                emit(format_u64(l.provider_instance as u64, &mut b));
+                                emit(" (Canonical ABI)\n");
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "run" => {
+                        let mut b = [0u8; 20];
+                        let comp_id = if parsed.arg_count > 2 {
+                            parse_u64(parsed.args[2]).unwrap_or(1) as u32
+                        } else {
+                            1
+                        };
+                        let fn_name = if parsed.arg_count > 3 {
+                            parsed.args[3]
+                        } else {
+                            "hash_block"
+                        };
+                        let cap = self.wasm2.admin_cap;
+                        let inst_id = match self.wasm2.instantiate(&cap, comp_id, 100_000) {
+                            Ok(id) => id,
+                            Err(_) => {
+                                emit("[WASM2] Erreur d'instanciation du composant ID ");
+                                emit(format_u64(comp_id as u64, &mut b));
+                                emit("\n");
+                                return (ShellStatus::ExecutionFailed, write_pos);
+                            }
+                        };
+                        emit("[WASM2] Instance sandboxed creee avec succes : Inst #");
+                        emit(format_u64(inst_id as u64, &mut b));
+                        emit("\n[WASM2] Invocation de '");
+                        emit(fn_name);
+                        emit("' via Canonical ABI...\n");
+
+                        let arg = if fn_name == "create_hasher_res" {
+                            jambo_wasm2::WitValue::U32(10)
+                        } else if fn_name == "read_metrics" {
+                            jambo_wasm2::WitValue::U32(0)
+                        } else {
+                            jambo_wasm2::WitValue::from_str("JAMBO-TOKEN-AUTH-SECURE-999")
+                        };
+
+                        match self.wasm2.invoke_export(&cap, inst_id, fn_name, arg) {
+                            Ok(res) => {
+                                emit("[WASM2] Succes de l'appel ! Resultat WIT : ");
+                                match res {
+                                    jambo_wasm2::WitValue::U32(v) => {
+                                        emit(format_hex_u64(v as u64, &mut b));
+                                    }
+                                    jambo_wasm2::WitValue::U64(v) => {
+                                        emit(format_hex_u64(v, &mut b));
+                                    }
+                                    jambo_wasm2::WitValue::Bool(v) => {
+                                        emit(if v { "true (Valide)" } else { "false (Invalide)" });
+                                    }
+                                    jambo_wasm2::WitValue::Resource(h) => {
+                                        emit("ResourceHandle #");
+                                        emit(format_u64(h as u64, &mut b));
+                                    }
+                                    jambo_wasm2::WitValue::Record(fields, n) => {
+                                        emit("Record[");
+                                        for i in 0..n {
+                                            emit(format_u64(fields[i] as u64, &mut b));
+                                            if i + 1 < n { emit(", "); }
+                                        }
+                                        emit("]");
+                                    }
+                                    _ => emit("(Ok)"),
+                                }
+                                emit("\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(e) => {
+                                emit("[WASM2] Erreur d'invocation : ");
+                                emit(match e {
+                                    jambo_wasm2::ComponentError::FuelExhausted => "Carburant epuise (FuelExhausted trap)",
+                                    jambo_wasm2::ComponentError::TypeMismatch => "Incompatibilite de type WIT",
+                                    jambo_wasm2::ComponentError::ExportNotFound => "Fonction exportee introuvable",
+                                    _ => "Erreur d'execution",
+                                });
+                                emit("\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "link" => {
+                        let mut b = [0u8; 20];
+                        let cap = self.wasm2.admin_cap;
+                        let inst1 = match self.wasm2.instantiate(&cap, 1, 100_000) {
+                            Ok(id) => id,
+                            Err(_) => 1,
+                        };
+                        let inst2 = match self.wasm2.instantiate(&cap, 2, 100_000) {
+                            Ok(id) => id,
+                            Err(_) => 2,
+                        };
+                        match self.wasm2.link_components(&cap, inst2, "hasher_dep", inst1, "hash_block") {
+                            Ok(link_id) => {
+                                emit("[WASM2] Liaison de composants reussie : Link #");
+                                emit(format_u64(link_id as u64, &mut b));
+                                emit(" (Inst #");
+                                emit(format_u64(inst2 as u64, &mut b));
+                                emit(" -> Inst #");
+                                emit(format_u64(inst1 as u64, &mut b));
+                                emit(")\n[WASM2] Isolation memoire stricte & passage par Canonical ABI confirme.\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("[WASM2] Erreur lors de la liaison inter-composants\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "inspect" => {
+                        let mut b = [0u8; 20];
+                        let comp_id = if parsed.arg_count > 2 {
+                            parse_u64(parsed.args[2]).unwrap_or(1) as u32
+                        } else {
+                            1
+                        };
+                        if let Some(c) = self.wasm2.components.iter().take(self.wasm2.component_count).find(|c| c.component_id == comp_id) {
+                            emit("=== INSPECTION WIT DU COMPOSANT ");
+                            emit(c.name_str());
+                            emit(" ===\n  Hash de bytecode : ");
+                            for byte in c.code_hash.iter().take(8) {
+                                emit(format_hex_u64(*byte as u64, &mut b));
+                            }
+                            emit("...\n  Interfaces exportees :\n");
+                            for i in 0..c.export_count {
+                                emit("    - export ");
+                                emit(c.exports[i].name_str());
+                                emit(" (fn #");
+                                emit(format_u64(c.exports[i].fn_index as u64, &mut b));
+                                emit(")\n");
+                            }
+                            emit("  Interfaces importees :\n");
+                            if c.import_count == 0 {
+                                emit("    (Aucun import - composant autonome)\n");
+                            } else {
+                                for i in 0..c.import_count {
+                                    emit("    - import ");
+                                    emit(c.imports[i].name_str());
+                                    emit("\n");
+                                }
+                            }
+                            (ShellStatus::Success, write_pos)
+                        } else {
+                            emit("[WASM2] Composant introuvable\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        }
+                    }
+                    "fuel-check" => {
+                        let mut b = [0u8; 20];
+                        let cap = self.wasm2.admin_cap;
+                        let inst_id = self.wasm2.instantiate(&cap, 1, 1000).unwrap_or(0);
+                        emit("[WASM2] Test d'epuisement de carburant (Quota de 1000 gas alloue, cout=1500)...\n");
+                        let res = self.wasm2.invoke_export(&cap, inst_id, "hash_block", jambo_wasm2::WitValue::from_str("TestBlock"));
+                        if let Err(jambo_wasm2::ComponentError::FuelExhausted) = res {
+                            emit("[WASM2] INTERCEPTION REUSSIE : Trap FuelExhausted declenche. Execution interrompue de maniere sure.\n");
+                            emit("  Total traps interceptes : ");
+                            emit(format_u64(self.wasm2.total_traps, &mut b));
+                            emit("\n");
+                            (ShellStatus::Success, write_pos)
+                        } else {
+                            emit("[WASM2] Echec inattendu du test de carburant\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        }
+                    }
+                    "audit" => {
+                        let mut b = [0u8; 20];
+                        emit("Condensat SHA-256 du Registre d'Audit Wasm Component Model : ");
+                        for byte in self.wasm2.audit_chain.iter() {
+                            emit(format_hex_u64(*byte as u64, &mut b));
+                        }
+                        emit("\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    _ => {
+                        emit("Usage: wasm2 [status | list | run <id> <fn> | link | inspect <id> | fuel-check | audit]\n");
                         (ShellStatus::ExecutionFailed, write_pos)
                     }
                 }

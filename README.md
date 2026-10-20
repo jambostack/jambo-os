@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.101-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.102-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.101 (Garde-fous de Sécurité IA Ring 3, Détection d'Injections de Prompt & Empoisonnement de Modèles jambo-ai-sec)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.101` introduit le démon de sécurité IA souverain en espace utilisateur (`services/jambo-ai-sec`) : filtres d'inférence sécurisés `#![no_std]` pour modèles embarqués, détection en temps réel des injections de prompt (Prompt Injection) et tentatives d'évasion (Jailbreaks), détection des perturbations stéganographiques adverses, assainissement in-place des sorties d'inférence contre les fuites de secrets (clés privées, jetons de capacités CSpace, pointeurs micro-noyau), vérification cryptographique d'intégrité des tenseurs de poids par arbres de Merkle SHA-256, détection d'anomalies de distribution et de déclencheurs cachés (Backdoor Trojans), mise en quarantaine immédiate O(1) de tout modèle corrompu, contrôle capabilaire strict par jeton `AiSecCap` sans autorité ambiante, scellement d'un registre d'audit inviolable SHA-256 (`ai_sec_audit_chain`) et commandes shell interactives `ai-sec [status | scan | filter | verify | poison-sim | quarantine | audit]` dans `jsh`.
+> **Statut du Projet : Version v0.2.102 (Wasm Component Model Ring 3, Interfaces WIT, Canonical ABI & Composition Sandboxed jambo-wasm2)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.102` introduit le moteur de composants WebAssembly souverain en espace utilisateur (`services/jambo-wasm2`) : spécification binaire Component Model `\0asm\x0d\x00\x01\x00`, isolation stricte des mémoires linéaires de chaque composant, sérialisation et marshalling typé par Canonical ABI (`canon lift` et `canon lower`), typage fort des interfaces WIT (scalaires, records, variants, chaînes UTF-8, types ressources), composition et liaison inter-composants sandboxed sans fuite de mémoire linéaire partagée, gestion sécurisée du cycle de vie des ressources (`ResourceTable`, handles empruntés/possédés, prévention formelle du double-free), comptabilisation monotone du carburant (Fuel/Gas Metering) avec interception sécurisée du trap `FuelExhausted`, contrôle d'accès capabilaire Ring 3 fondé sur `Wasm2Cap` sans autorité ambiante, scellement d'un registre d'audit inviolable SHA-256 (`wasm2_audit_chain`) et commandes shell interactives `wasm2 [status | list | run | link | inspect | fuel-check | audit]` dans `jsh`.
 
 ---
 
@@ -188,6 +188,7 @@ jambo-os/
 │   ├── jambo-vmm/           # Moniteur de micro-VMs et isolation matérielle Type-2
 │   ├── jambo-walld/         # Pare-feu distribué dynamique & synchronisation conntrack
 │   ├── jambo-wasm/          # Runtime WebAssembly / WASI Snapshot Preview 1
+│   ├── jambo-wasm2/         # Wasm Component Model, interfaces WIT, Canonical ABI & bac à sable
 │   ├── jambo-watchdogd/     # Surveillance de vivacité matérielle/logicielle & chien de garde
 │   ├── jambo-zksnark/       # Preuves à divulgation nulle de connaissance (zk-SNARKs) & contraintes R1CS
 │   └── pcie-bus-mgr/        # Gestionnaire de bus PCIe, MSI-X et isolation IOMMU
