@@ -30,6 +30,7 @@ pub mod dfs_test;
 pub mod diagd_test;
 pub mod dnsd_test;
 pub mod dspm_test;
+pub mod sspm_test;
 pub mod dynlink_test;
 pub mod easm_test;
 pub mod edr_test;

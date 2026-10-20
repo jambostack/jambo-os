@@ -1,7 +1,7 @@
 # ROADMAP DU DÉVELOPPEMENT AUTONOME — JamboOS
 
-> **Dernière mise à jour** : 2026-10-20 08:52 UTC  
-> **Version actuelle** : `v0.3.1`  
+> **Dernière mise à jour** : 2026-10-20 09:21 UTC  
+> **Version actuelle** : `v0.3.3`  
 > **Statut global** : Pré-Alpha active — Micro-noyau de 3e génération orienté capacités (`#![no_std]`)  
 > **Cycle de développement autonome** : 10 minutes via le Planificateur de Tâches & Crons d'Antigravity WebUI  
 
@@ -122,17 +122,18 @@
 | **v0.3.0** | 133 | Détection et Réponse aux Menaces sur l'Identité ITDR `jambo-itdr` | Détection et réponse aux menaces sur l'identité (ITDR), surveillance d'identités souveraines, détection de compromission de jetons, attaques par rejeu, usurpation de capabilités, élévation de privilèges, dérive géotopologique, évaluation continue du trust score, remédiation proactive (quarantaine, révocation), ItdrCap & registre d'audit SHA-256 inaltérable | ✅ Validé |
 | **v0.3.1** | 134 | Gestion des Accès Privilégiés PAM `jambo-pam` | Moteur souverain PAM de courtage de sessions à privilèges élevés, rotation dynamique de secrets éphémères, attribution just-in-time (JIT) de capabilités administratives, double contrôle (Dual-Auth / Four-Eyes Tier 0), enregistrement cryptographique inviolable de sessions Ring 3/IPC et coupure d'urgence (Kill-Switch O(1)), PamCap & registre d'audit SHA-256 inaltérable | ✅ Validé |
 | **v0.3.2** | 135 | Posture de Sécurité des Données DSPM `jambo-dspm` | Moteur souverain DSPM de découverte, cartographie et classification continue des données au repos et en transit (VFS, IPC, TEE, NVMe, RAM), détection des flux sensibles transfrontaliers / inter-compartiments, isolation & quarantaine O(1), évaluation des risques d'exposition, DspmCap & registre d'audit SHA-256 inaltérable | ✅ Validé |
+| **v0.3.3** | 136 | Gestion Posture Sécurité Services & SaaS SSPM `jambo-sspm` | Moteur souverain SSPM d'évaluation continue de la conformité et des dérives de configuration des services applicatifs, micro-services décentralisés et connecteurs souverains, détection des permissions permissives et des partages tiers non autorisés, remédiation automatisée, quarantaine O(1), SspmCap & registre d'audit SHA-256 inaltérable | ✅ Validé |
 
 ---
 
 ## 3. Prochaines Étapes Prioritaires
 
-### 🎯 Prochaine Tâche Immédiate : Phase 136 — v0.3.3
-* **Composant** : `services/jambo-sspm`
-* **Versionnement** : Poursuite de la série `v0.3.*` (Jalon `v0.3.3`)
-* **Objectif** : Gestion de la Posture de Sécurité des Services & SaaS (SSPM - SaaS Security Posture Management)
+### 🎯 Prochaine Tâche Immédiate : Phase 137 — v0.3.4
+* **Composant** : `services/jambo-aiops`
+* **Versionnement** : Poursuite de la série `v0.3.*` (Jalon `v0.3.4`)
+* **Objectif** : Opérations IT pilotées par l'IA (AIOps) — Corrélation d'événements par apprentissage automatique `#![no_std]`, détection d'anomalies prédictives, corrélation multi-sources, réponse autonome, AiopsCap & audit SHA-256.
 * **Tâches précises** :
-  1. Moteur souverain SSPM d'évaluation continue de la conformité et des dérives de configuration des services applicatifs, micro-services décentralisés et connecteurs souverains, détection des permissions permissives et des partages tiers non autorisés (SspmCap & registre d'audit SHA-256).
+  1. Moteur AIOps souverain : fenêtres d'événements bornées, scoring d'anomalie par z-score glissant, corrélation topologique de services, déclenchement automatique de playbooks de remédiation.
   2. Validation formelle et suite de tests `cargo xtask test`.
 
 ---
@@ -207,6 +208,7 @@
 * **2026-10-20 08:38 UTC** : Validation complète Phase 133 (`jambo-itdr`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-itdr`, 8/8). Tag `v0.3.0`.
 * **2026-10-20 08:52 UTC** : Validation complète Phase 134 (`jambo-pam`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-pam`, 7/7). Tag `v0.3.1`.
 * **2026-10-20 09:07 UTC** : Validation complète Phase 135 (`jambo-dspm`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-dspm`, 8/8). Tag `v0.3.2`.
+* **2026-10-20 09:21 UTC** : Validation complète Phase 136 (`jambo-sspm`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0). SSPM — 6 services évalués, 2 connecteurs surveillés, dérive MFA remédiée, quarantaine O(1) validée, audit SHA-256 vérifié. Tag `v0.3.3`.
 
 
 

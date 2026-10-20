@@ -1,0 +1,7 @@
+[package]
+name = "jambo-sspm"
+version = "0.3.3"
+edition = "2021"
+
+[dependencies]
+libjambo = { path = "../../libs/libjambo" }

@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.3.2-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.3.3-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.3.2 (Gestion de la Posture de Sécurité des Données (DSPM), Cartographie des Flux & Quarantaine O(1) jambo-dspm)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.3.2` introduit le moteur souverain de Data Security Posture Management (DSPM) en espace utilisateur (`services/jambo-dspm`) : découverte continue et inventaire exhaustif des actifs de données au repos et en transit (VFS, IPC, TEE, NVMe, RAM), classification et catégorisation sémantique stricte des données (Public, Interne, Confidentiel, Secret, Très Secret Souverain / PII, Clés Crypto, Santé, Télémesure), cartographie et surveillance proactive des flux inter-compartiments et transfrontaliers, détection immédiate des violations de posture (données sensibles non chiffrées, transferts illégitimes), mécanisme de mise en quarantaine O(1) et remédiation proactive, évaluation continue du score de risque d'exposition (0..100), contrôle d'accès capabilaire strict `DspmCap` sans autorité ambiante et registre d'audit cryptographique inviolable scellé par chaînage SHA-256 avec commandes interactives `dspm [status | assets | flows | rules | violations | scan | quarantine | unquarantine | flow-test | verify]` dans le shell `jsh`.
+> **Statut du Projet : Version v0.3.3 (Gestion de la Posture de Sécurité des Services & SaaS (SSPM), Détection de Dérive & Connecteurs Souverains jambo-sspm)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.3.3` introduit le moteur souverain de SaaS Security Posture Management (SSPM) en espace utilisateur (`services/jambo-sspm`) : évaluation continue de la conformité et des dérives de configuration des services applicatifs, micro-services décentralisés et connecteurs souverains SaaS, détection des permissions permissives et des partages tiers non autorisés (Shadow SaaS), remédiation automatisée, quarantaine O(1), calcul déterministe de l'indice global de posture SSPM (0..100), contrôle d'accès capabilaire strict `SspmCap` sans autorité ambiante et registre d'audit cryptographique inviolable scellé par chaînage SHA-256.
 
 ---
 
