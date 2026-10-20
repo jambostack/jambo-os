@@ -179,6 +179,7 @@ pub struct JamboShell {
     pub kms: jambo_kms::JamboKmsDaemon,
     pub pki2: jambo_pki2::JamboPkiDaemon,
     pub auth2: jambo_auth2::JamboAuth2Daemon,
+    pub secroute: jambo_secroute::JamboSecRouteDaemon,
 }
 
 impl Default for JamboShell {
@@ -513,6 +514,14 @@ impl JamboShell {
         );
         let mut auth2 = jambo_auth2::JamboAuth2Daemon::new(auth2_cap);
         auth2.init_defaults();
+        let secroute_cap = jambo_secroute::SecRouteCap::new(
+            libjambo::Handle::new(11101, 1),
+            jambo_secroute::secroute_rights::ALL,
+            16,
+            1,
+        );
+        let mut secroute = jambo_secroute::JamboSecRouteDaemon::new(secroute_cap);
+        secroute.init_defaults();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -582,6 +591,7 @@ impl JamboShell {
             kms,
             pki2,
             auth2,
+            secroute,
         }
     }
 
@@ -756,10 +766,11 @@ impl JamboShell {
                 emit("  kms [cmd]     - Gestion et séquestre de clés de grappe distribuée & baux temporels\n");
                 emit("  pki [cmd]     - PKI hybride post-quantique (ML-DSA + Ed25519) & fédération CA\n");
                 emit("  auth2 [cmd]   - Passkeys FIDO2/WebAuthn, signatures Schnorr & jetons éphémères\n");
+                emit("  secroute [cmd]- Routage Zero-Trust, micro-segmentation & maillage chiffré\n");
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.2.108 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.2.109 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -7971,6 +7982,245 @@ impl JamboShell {
                     }
                     _ => {
                         emit("Usage: auth2 [status | passkeys | tokens | verify | benchmark | audit]\n");
+                        (ShellStatus::ExecutionFailed, write_pos)
+                    }
+                }
+            }
+            "secroute" => {
+                let subcmd = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    "status"
+                };
+
+                let mut b = [0u8; 20];
+
+                match subcmd {
+                    "status" => {
+                        emit("=== DÉMON DE ROUTAGE SÉCURISÉ & MICRO-SEGMENTATION (jambo-secroute) ===\n");
+                        emit("Zones de sécurité actives : ");
+                        emit(format_u64(self.secroute.zone_count as u64, &mut b));
+                        emit(" / ");
+                        emit(format_u64(jambo_secroute::MAX_ZONES as u64, &mut b));
+                        emit("\nEnclaves enregistrées     : ");
+                        emit(format_u64(self.secroute.enclave_count as u64, &mut b));
+                        emit(" / ");
+                        emit(format_u64(jambo_secroute::MAX_ENCLAVES as u64, &mut b));
+                        emit("\nTunnels souverains actifs : ");
+                        emit(format_u64(self.secroute.tunnel_count as u64, &mut b));
+                        emit(" / ");
+                        emit(format_u64(jambo_secroute::MAX_TUNNELS as u64, &mut b));
+                        emit("\nRègles Zero-Trust actives : ");
+                        emit(format_u64(self.secroute.rule_count as u64, &mut b));
+                        emit(" / ");
+                        emit(format_u64(jambo_secroute::MAX_RULES as u64, &mut b));
+                        emit("\nPaquets routés / chiffrés : ");
+                        emit(format_u64(self.secroute.packets_routed, &mut b));
+                        emit(" / ");
+                        emit(format_u64(self.secroute.packets_encrypted, &mut b));
+                        emit("\nPaquets déchiffrés        : ");
+                        emit(format_u64(self.secroute.packets_decrypted, &mut b));
+                        emit("\nPaquets rejetés (Drop)    : ");
+                        emit(format_u64(self.secroute.packets_dropped, &mut b));
+                        emit("\nViolations anti-rejeu     : ");
+                        emit(format_u64(self.secroute.anti_replay_violations, &mut b));
+                        emit("\nEnclaves en quarantaine   : ");
+                        emit(format_u64(self.secroute.quarantined_events, &mut b));
+                        emit("\nAudit chain scellée       : ");
+                        for byte in self.secroute.audit_chain.iter().take(8) {
+                            emit(format_hex_u64(*byte as u64, &mut b));
+                        }
+                        emit("...\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "zones" => {
+                        emit("=== ZONES DE SÉCURITÉ CONFINÉES ===\n");
+                        emit("ZONE_ID  TRUST_LEVEL     QUARANTINE  NOM\n");
+                        for i in 0..self.secroute.zone_count {
+                            let z = &self.secroute.zones[i];
+                            emit(format_u64(z.zone_id as u64, &mut b));
+                            emit("        ");
+                            emit(z.trust_level.as_str());
+                            emit("       ");
+                            emit(if z.is_quarantined { "OUI" } else { "NON" });
+                            emit("         ");
+                            if let Ok(name_s) = core::str::from_utf8(&z.name[..z.name_len]) {
+                                emit(name_s);
+                            }
+                            emit("\n");
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "enclaves" => {
+                        emit("=== ENCLAVES SOUVERAINES SÉCURISÉES ===\n");
+                        emit("ENCLAVE_ID  ZONE_ID  IP_PORT           ÉTAT        QUARANTINE\n");
+                        for i in 0..self.secroute.enclave_count {
+                            let ep = &self.secroute.enclaves[i];
+                            emit(format_u64(ep.enclave_id as u64, &mut b));
+                            emit("         ");
+                            emit(format_u64(ep.zone_id as u64, &mut b));
+                            emit("        ");
+                            emit(format_u64(ep.ipv4[0] as u64, &mut b));
+                            emit(".");
+                            emit(format_u64(ep.ipv4[1] as u64, &mut b));
+                            emit(".");
+                            emit(format_u64(ep.ipv4[2] as u64, &mut b));
+                            emit(".");
+                            emit(format_u64(ep.ipv4[3] as u64, &mut b));
+                            emit(":");
+                            emit(format_u64(ep.port as u64, &mut b));
+                            emit("     ");
+                            emit(if ep.is_active { "ACTIF" } else { "INACTIF" });
+                            emit("       ");
+                            emit(if ep.is_quarantined { "OUI" } else { "NON" });
+                            emit("\n");
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "tunnels" => {
+                        emit("=== TUNNELS SOUVERAINS CHIFFRÉS CHACHA20 ===\n");
+                        emit("ID  SRC -> DST    TX_SEQ   RX_SEQ   TX_OCTETS  STATUT\n");
+                        for i in 0..self.secroute.tunnel_count {
+                            let t = &self.secroute.tunnels[i];
+                            emit(format_u64(t.tunnel_id as u64, &mut b));
+                            emit("   ");
+                            emit(format_u64(t.src_enclave as u64, &mut b));
+                            emit(" -> ");
+                            emit(format_u64(t.dst_enclave as u64, &mut b));
+                            emit("    ");
+                            emit(format_u64(t.tx_seq, &mut b));
+                            emit("        ");
+                            emit(format_u64(t.rx_seq, &mut b));
+                            emit("        ");
+                            emit(format_u64(t.bytes_transmitted, &mut b));
+                            emit("          ");
+                            match t.status {
+                                jambo_secroute::TunnelStatus::Established => emit("ESTABLISHED\n"),
+                                jambo_secroute::TunnelStatus::Quarantined => emit("QUARANTINED\n"),
+                                jambo_secroute::TunnelStatus::Inactive => emit("INACTIVE\n"),
+                                jambo_secroute::TunnelStatus::Rekeying => emit("REKEYING\n"),
+                                jambo_secroute::TunnelStatus::Terminated => emit("TERMINATED\n"),
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "routes" => {
+                        emit("=== RÈGLES DE ROUTAGE ZERO-TRUST ===\n");
+                        emit("ID  SRC_Z -> DST_Z  SRC_E -> DST_E  ACTION       PRIO  MATCHS\n");
+                        for i in 0..self.secroute.rule_count {
+                            let r = &self.secroute.rules[i];
+                            emit(format_u64(r.rule_id as u64, &mut b));
+                            emit("   ");
+                            emit(format_u64(r.src_zone as u64, &mut b));
+                            emit(" -> ");
+                            emit(format_u64(r.dst_zone as u64, &mut b));
+                            emit("      ");
+                            emit(format_u64(r.src_enclave as u64, &mut b));
+                            emit(" -> ");
+                            emit(format_u64(r.dst_enclave as u64, &mut b));
+                            emit("      ");
+                            match r.action {
+                                jambo_secroute::RouteAction::AllowDirect => emit("AllowDirect   "),
+                                jambo_secroute::RouteAction::RequireTunnel => emit("RequireTunnel "),
+                                jambo_secroute::RouteAction::Deny => emit("Deny          "),
+                                jambo_secroute::RouteAction::QuarantineOnAttempt => emit("Quarantine    "),
+                            }
+                            emit(" ");
+                            emit(format_u64(r.priority as u64, &mut b));
+                            emit("     ");
+                            emit(format_u64(r.match_count, &mut b));
+                            emit("\n");
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "send" => {
+                        emit("[SECROUTE] Test de transmission sécurisée App (301) -> TEE (201) via Tunnel 1...\n");
+                        let cap = self.secroute.admin_cap;
+                        let msg = b"SECURE_IPC_RPC_PAYLOAD_TEST_PHASE111";
+                        let mut packet_buf = [0u8; 512];
+                        match self.secroute.encapsulate_and_route(&cap, 1, 254, msg, &mut packet_buf) {
+                            Ok(packet_len) => {
+                                emit("[SECROUTE] Paquet encapsulé & chiffré ChaCha20 (");
+                                emit(format_u64(packet_len as u64, &mut b));
+                                emit(" octets)\n");
+                                let mut dec_buf = [0u8; 256];
+                                match self.secroute.decapsulate_and_verify(&packet_buf[..packet_len], &mut dec_buf) {
+                                    Ok((hdr, dec_len)) => {
+                                        emit("[SECROUTE] Décapsulation réussie ! En-tête validé (Seq: ");
+                                        emit(format_u64(hdr.seq, &mut b));
+                                        emit(", MAC intègre). Données : ");
+                                        if let Ok(s) = core::str::from_utf8(&dec_buf[..dec_len]) {
+                                            emit(s);
+                                        }
+                                        emit("\n");
+                                        (ShellStatus::Success, write_pos)
+                                    }
+                                    Err(_) => {
+                                        emit("[ERREUR] Échec de la décapsulation/vérification\n");
+                                        (ShellStatus::ExecutionFailed, write_pos)
+                                    }
+                                }
+                            }
+                            Err(_) => {
+                                emit("[ERREUR] Échec de l'encapsulation\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "isolate" => {
+                        let target_enc = if parsed.arg_count > 2 {
+                            parse_u64(parsed.args[2]).unwrap_or(401) as u32
+                        } else {
+                            401
+                        };
+                        let cap = self.secroute.admin_cap;
+                        match self.secroute.quarantine_enclave(&cap, target_enc) {
+                            Ok(()) => {
+                                emit("[SECROUTE] Enclave ");
+                                emit(format_u64(target_enc as u64, &mut b));
+                                emit(" placée en quarantaine immédiate O(1) ! Tunnels associés révoqués.\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("[ERREUR] Échec de mise en quarantaine de l'enclave\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "benchmark" => {
+                        emit("[SECROUTE] Démarrage du benchmark de routage maillé chiffré Ring 3...\n");
+                        let cap = self.secroute.admin_cap;
+                        let msg = b"BENCHMARK_ENCRYPTED_FLOW_CHACHA20_HMAC_SHA256";
+                        let mut pkt = [0u8; 512];
+                        let mut dec = [0u8; 256];
+                        let mut success = 0u64;
+
+                        for _ in 0..10 {
+                            if let Ok(len) = self.secroute.encapsulate_and_route(&cap, 1, 254, msg, &mut pkt) {
+                                if let Ok((_, dlen)) = self.secroute.decapsulate_and_verify(&pkt[..len], &mut dec) {
+                                    if dlen == msg.len() {
+                                        success += 1;
+                                    }
+                                }
+                            }
+                        }
+                        emit("[SECROUTE] Benchmark terminé : ");
+                        emit(format_u64(success, &mut b));
+                        emit(" / 10 paquets routés, chiffrés et vérifiés avec intégrité cryptographique absolue.\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "audit" => {
+                        emit("Condensat SHA-256 du Registre d'Audit SecRoute : ");
+                        for byte in self.secroute.audit_chain.iter() {
+                            emit(format_hex_u64(*byte as u64, &mut b));
+                        }
+                        emit("\nÉvénements d'audit consignés : ");
+                        emit(format_u64(self.secroute.audit_count, &mut b));
+                        emit("\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    _ => {
+                        emit("Usage: secroute [status | zones | enclaves | tunnels | routes | send | isolate | benchmark | audit]\n");
                         (ShellStatus::ExecutionFailed, write_pos)
                     }
                 }

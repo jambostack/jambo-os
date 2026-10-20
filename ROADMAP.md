@@ -1,7 +1,7 @@
 # ROADMAP DU DÉVELOPPEMENT AUTONOME — JamboOS
 
-> **Dernière mise à jour** : 2026-10-20 02:55 UTC  
-> **Version actuelle** : `v0.2.108`  
+> **Dernière mise à jour** : 2026-10-20 03:18 UTC  
+> **Version actuelle** : `v0.2.109`  
 > **Statut global** : Pré-Alpha active — Micro-noyau de 3e génération orienté capacités (`#![no_std]`)  
 > **Cycle de développement autonome** : 10 minutes via le Planificateur de Tâches & Crons d'Antigravity WebUI  
 
@@ -97,23 +97,24 @@
 | **v0.2.106** | 108 | Gestion de Clés & Séquestre `jambo-kms` | Hiérarchies cryptographiques (Master/Domain/Data/Session/Escrow), baux temporels & quotas, séquestre M-sur-N Shamir GF(256), réplication chiffrée multi-nœuds, rotation, zéroïsation, KmsCap & audit SHA-256 | ✅ Validé |
 | **v0.2.107** | 109 | PKI Post-Quantique & Fédération CA `jambo-pki2` | Infrastructure à clés publiques hybride (ML-DSA / Dilithium + Ed25519), fédération d'autorités de certification, validation stricte de chemins RFC 5280, révocation CRL en temps réel, PkiCap & audit SHA-256 | ✅ Validé |
 | **v0.2.108** | 110 | Authentification Passkeys & Jetons Éphémères `jambo-auth2` | Authentification biométrique/WebAuthn sans mot de passe, signatures Schnorr déterministes, jetons éphémères HMAC, atténuation monotone, révocation instantanée O(1) & audit SHA-256 | ✅ Validé |
+| **v0.2.109** | 111 | Routage Sécurisé & Micro-Segmentation `jambo-secroute` | Routage Zero-Trust, micro-segmentation en zones étanches, tunnels souverains chiffrés ChaCha20, étiquettes MAC HMAC-SHA256, anti-rejeu strict monotone, quarantaine O(1), SecRouteCap & audit SHA-256 | ✅ Validé |
 
 ---
 
 ## 3. Prochaines Étapes Prioritaires
 
-### 🎯 Prochaine Tâche Immédiate : Phase 111 — v0.2.109
-* **Composant** : `services/jambo-secroute`
-* **Objectif** : Routage sécurisé Zero-Trust, micro-segmentation de grappe & maillage chiffré dynamique Ring 3
-* **Tâches précises** :
-  1. Tunnels souverains chiffrés, politique de routage par capacités, isolation de flux inter-enclaves.
-  2. Validation formelle et suite de tests `cargo xtask test`.
-
-### 🎯 Tâche Suivante : Phase 112 — v0.2.110
+### 🎯 Prochaine Tâche Immédiate : Phase 112 — v0.2.110
 * **Composant** : `services/jambo-ids`
 * **Objectif** : Prévention et Corrélation d'Intrusions Multi-Points & Révocation Automatisée de Capacités
 * **Tâches précises** :
   1. Moteur d'analyse comportementale Ring 3, détection d'anomalies de flux IPC, isolation immédiate.
+  2. Validation formelle et suite de tests `cargo xtask test`.
+
+### 🎯 Tâche Suivante : Phase 113 — v0.2.111
+* **Composant** : `services/jambo-vpn`
+* **Objectif** : Passerelle VPN Post-Quantique WireGuard Souveraine Ring 3 & Transport Chiffré Inter-Grappe
+* **Tâches précises** :
+  1. Échange de clés hybride post-quantique ML-KEM + Curve25519, encapsulation de tunnels inter-noeuds, VpnCap.
   2. Validation formelle et suite de tests `cargo xtask test`.
 
 ---
@@ -163,6 +164,7 @@
 * **2026-10-20 02:20 UTC** : Validation complète Phase 108 (`jambo-kms`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-kms`). Tag `v0.2.106`.
 * **2026-10-20 02:40 UTC** : Validation complète Phase 109 (`jambo-pki2`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-pki2`). Tag `v0.2.107`.
 * **2026-10-20 02:55 UTC** : Validation complète Phase 110 (`jambo-auth2`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-auth2`). Tag `v0.2.108`.
+* **2026-10-20 03:18 UTC** : Validation complète Phase 111 (`jambo-secroute`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-secroute`). Tag `v0.2.109`.
 
 
 

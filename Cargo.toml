@@ -75,6 +75,7 @@ members = [
     "services/jambo-kms",
     "services/jambo-pki2",
     "services/jambo-auth2",
+    "services/jambo-secroute",
     "libs/jambo-ui",
     "libs/jambo-sdk",
     "drivers/virtio",

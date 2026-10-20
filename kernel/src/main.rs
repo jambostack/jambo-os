@@ -1198,6 +1198,13 @@ pub extern "C" fn _start() -> ! {
         "Échec du test de l'authentification Passkeys WebAuthn et jetons éphémères jambo-auth2"
     );
 
+    // 13tredeciesquadragies. Validation du Routage Sécurisé Zero-Trust, Micro-Segmentation & Maillage Chiffré (Phase 111 - v0.2.109)
+    let secroute_success = sched::execute_secroute_daemon_test();
+    assert!(
+        secroute_success,
+        "Échec du test du routage sécurisé Zero-Trust et maillage chiffré jambo-secroute"
+    );
+
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
 
     arch::init_iommu();
@@ -1443,14 +1450,15 @@ pub extern "C" fn _start() -> ! {
     kprintln!("\x1b[1;32m[PASS] Phase 108 Distributed Key Management, Escrow & Hierarchical Custody (jambo-kms) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 109 Post-Quantum PKI & Distributed CA Federation (jambo-pki2) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 110 Passkeys WebAuthn & Ephemeral Access Tokens (jambo-auth2) Complete\x1b[0m");
+    kprintln!("\x1b[1;32m[PASS] Phase 111 Zero-Trust Secure Routing, Micro-Segmentation & Encrypted Mesh (jambo-secroute) Complete\x1b[0m");
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.108 (Passkeys WebAuthn & Ephemeral Access Tokens jambo-auth2)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.109 (Zero-Trust Secure Routing & Encrypted Mesh jambo-secroute)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.108 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.109 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
