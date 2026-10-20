@@ -191,6 +191,7 @@ pub struct JamboShell {
     pub intel: jambo_intel::JamboIntelDaemon,
     pub deception: jambo_deception::JamboDeceptionDaemon,
     pub ztna: jambo_ztna::JamboZtnaDaemon,
+    pub casb: jambo_casb::JamboCasbDaemon,
 }
 
 impl Default for JamboShell {
@@ -627,6 +628,15 @@ impl JamboShell {
         );
         let mut ztna = jambo_ztna::JamboZtnaDaemon::new(ztna_cap);
         ztna.init_defaults();
+
+        let casb_cap = jambo_casb::CasbCap::new(
+            libjambo::Handle::new(12401, 1),
+            jambo_casb::casb_rights::ALL,
+            5000,
+            100,
+        );
+        let mut casb = jambo_casb::JamboCasbDaemon::new(casb_cap);
+        casb.init_defaults();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -708,6 +718,7 @@ impl JamboShell {
             intel,
             deception,
             ztna,
+            casb,
         }
     }
 
@@ -894,10 +905,11 @@ impl JamboShell {
                 emit("  intel [cmd]   - Renseignement menaces CTI, IoC Bloom/Table, scoring & IntelCap\n");
                 emit("  deception [cmd] - Cyber-déception, HoneyCaps, VMO decoys, canaris & DeceptionCap\n");
                 emit("  ztna [cmd]      - Architecture Zero Trust, micro-périmètres continus & ZtnaCap\n");
+                emit("  casb [cmd]      - Courtier d'accès cloud/grappe (CASB), multi-tenant & DLP avancé\n");
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.2.121 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.2.122 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -9905,6 +9917,135 @@ impl JamboShell {
                     }
                 }
             }
+            "casb" => {
+                let subcmd = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    "status"
+                };
+                match subcmd {
+                    "status" => {
+                        let mut b = [0u8; 20];
+                        emit("[CASB/STATUS] Courtier Sécurité Accès Cloud/Grappe (CASB) & DLP\n");
+                        emit("  Locataires enregistrés  : ");
+                        emit(format_u64(self.casb.tenant_count as u64, &mut b));
+                        emit("\n  Règles DLP actives      : ");
+                        emit(format_u64(self.casb.dlp_rule_count as u64, &mut b));
+                        emit("\n  Inspections totales     : ");
+                        emit(format_u64(self.casb.total_inspections, &mut b));
+                        emit("\n  Admissions approuvées   : ");
+                        emit(format_u64(self.casb.total_approvals, &mut b));
+                        emit("\n  Rédactions (masquage)   : ");
+                        emit(format_u64(self.casb.total_redactions, &mut b));
+                        emit("\n  Blocages / Violations   : ");
+                        emit(format_u64(self.casb.total_blocks, &mut b));
+                        emit("\n  Mises en quarantaine    : ");
+                        emit(format_u64(self.casb.total_quarantines, &mut b));
+                        emit("\n  Chaîne d'audit SHA-256  : ");
+                        let valid = self.casb.verify_ledger_integrity();
+                        emit(if valid { "VÉRIFIÉE (OK)\n" } else { "CORROMPUE (ERR)\n" });
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "tenants" => {
+                        emit("[CASB/TENANTS] Profils de Conformité Multi-Locataires :\n");
+                        for i in 0..self.casb.tenant_count {
+                            if let Some(ref t) = self.casb.tenants[i] {
+                                let mut b = [0u8; 20];
+                                emit("  * [#");
+                                emit(format_u64(t.tenant_id as u64, &mut b));
+                                emit("] ");
+                                emit(t.name_as_str());
+                                emit(" | Tier: ");
+                                emit(t.tier.as_str());
+                                emit(" | Chiffré: ");
+                                emit(if t.require_encryption { "OUI" } else { "NON" });
+                                emit(" | Quarantaine: ");
+                                emit(if t.is_quarantined { "ACTIF\n" } else { "NON\n" });
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "rules" => {
+                        emit("[CASB/RULES] Règles Formelles DLP Enregistrées :\n");
+                        for i in 0..self.casb.dlp_rule_count {
+                            if let Some(ref r) = self.casb.dlp_rules[i] {
+                                let mut b = [0u8; 20];
+                                emit("  * [#");
+                                emit(format_u64(r.rule_id as u64, &mut b));
+                                emit("] ");
+                                emit(r.name_as_str());
+                                emit(" | Motif: ");
+                                emit(r.pattern_type.as_str());
+                                emit(" | Action: ");
+                                emit(r.default_action.as_str());
+                                emit("\n");
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "inspect" => {
+                        let cap = self.casb.admin_cap;
+                        let mut sanitized = [0u8; 256];
+                        let req = jambo_casb::CasbRequest::new(
+                            999,
+                            102, // community.guest
+                            "client_app",
+                            "payment_api",
+                            "PAY",
+                            false,
+                            b"card=4242424242424242&val=100",
+                        );
+                        match self.casb.scan_and_broker_admission(&cap, &req, &mut sanitized, 4000) {
+                            Ok(decision) => {
+                                match decision {
+                                    jambo_casb::AdmissionDecision::Approved { transaction_id, .. } => {
+                                        let mut b = [0u8; 20];
+                                        emit("[CASB/INSPECT] Requête Approuvée - Trans #");
+                                        emit(format_u64(transaction_id, &mut b));
+                                        emit("\n");
+                                    }
+                                    jambo_casb::AdmissionDecision::RedactedAndApproved { transaction_id, redacted_count, .. } => {
+                                        let mut b = [0u8; 20];
+                                        emit("[CASB/INSPECT] Requête Masquée & Approuvée - Trans #");
+                                        emit(format_u64(transaction_id, &mut b));
+                                        emit(" (Champs masqués: ");
+                                        emit(format_u64(redacted_count as u64, &mut b));
+                                        emit(")\n");
+                                    }
+                                    jambo_casb::AdmissionDecision::Blocked { violation_code, reason } => {
+                                        let mut b = [0u8; 20];
+                                        emit("[CASB/INSPECT] Requête Bloquée - Code: ");
+                                        emit(format_u64(violation_code as u64, &mut b));
+                                        emit(" (");
+                                        emit(reason);
+                                        emit(")\n");
+                                    }
+                                    jambo_casb::AdmissionDecision::Quarantined { reason } => {
+                                        emit("[CASB/INSPECT] Locataire Mis en Quarantaine (");
+                                        emit(reason);
+                                        emit(")\n");
+                                    }
+                                }
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("[CASB/INSPECT] Erreur interne d'inspection\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "verify" => {
+                        let valid = self.casb.verify_ledger_integrity();
+                        emit("  Vérification intégrité registre SHA-256 : ");
+                        emit(if valid { "INTÈGRE (OK)\n" } else { "ALTÉRÉ (FAIL)\n" });
+                        (ShellStatus::Success, write_pos)
+                    }
+                    _ => {
+                        emit("Usage: casb [status | tenants | rules | inspect | verify]\n");
+                        (ShellStatus::ExecutionFailed, write_pos)
+                    }
+                }
+            }
             "poweroff" | "reboot" => {
                 emit("[SYSTEM] Extinction demandée...\n");
                 unsafe {
@@ -13426,6 +13567,39 @@ mod tests {
                 let (st6, len6) = shell.execute_line("ztna verify", &mut out);
                 assert_eq!(st6, ShellStatus::Success);
                 assert!(len6 > 0);
+            })
+            .unwrap();
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn test_shell_casb_commands() {
+        extern crate std;
+        let handle = std::thread::Builder::new()
+            .stack_size(8 * 1024 * 1024)
+            .spawn(|| {
+                let mut shell = JamboShell::new();
+                let mut out = [0u8; 1024];
+
+                let (st1, len1) = shell.execute_line("casb status", &mut out);
+                assert_eq!(st1, ShellStatus::Success);
+                assert!(len1 > 0);
+
+                let (st2, len2) = shell.execute_line("casb tenants", &mut out);
+                assert_eq!(st2, ShellStatus::Success);
+                assert!(len2 > 0);
+
+                let (st3, len3) = shell.execute_line("casb rules", &mut out);
+                assert_eq!(st3, ShellStatus::Success);
+                assert!(len3 > 0);
+
+                let (st4, len4) = shell.execute_line("casb inspect", &mut out);
+                assert_eq!(st4, ShellStatus::Success);
+                assert!(len4 > 0);
+
+                let (st5, len5) = shell.execute_line("casb verify", &mut out);
+                assert_eq!(st5, ShellStatus::Success);
+                assert!(len5 > 0);
             })
             .unwrap();
         handle.join().unwrap();

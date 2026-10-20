@@ -88,6 +88,7 @@ members = [
     "services/jambo-intel",
     "services/jambo-deception",
     "services/jambo-ztna",
+    "services/jambo-casb",
     "libs/jambo-ui",
     "libs/jambo-sdk",
     "drivers/virtio",

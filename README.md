@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.120-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.122-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.121 (Architecture Zero Trust, Micro-Périmètres Continus & Ré-évaluation Dynamique de Posture jambo-ztna)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.121` introduit le système souverain d'Architecture Zero Trust (ZTNA) en espace utilisateur (`services/jambo-ztna`) : courtage de confiance continu sans périmètre implicite ("Never Trust, Always Verify"), évaluation dynamique et continue de posture de terminal (santé noyau, intégrité mémoire, attestation matérielle TPM 2.0 / TEE), micro-périmètres applicatifs stricts avec validation unitaire par transaction (IPC, VFS, TEE, réseau), baux éphémères ré-évalués dynamiquement, révocation instantanée O(1) de confiance, contrôle d'accès capabilaire strict `ZtnaCap` et scellement d'audit cryptographique inviolable par chaînage SHA-256 avec commandes interactives `ztna [status | policies | devices | sessions | eval | verify]` dans le shell `jsh`.
+> **Statut du Projet : Version v0.2.122 (Courtier de Sécurité d'Accès Cloud/Grappe (CASB), Contrôle de Conformité Multi-Tenant & DLP Avancé jambo-casb)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.122` introduit le système souverain de Courtier de Sécurité d'Accès Cloud/Grappe (CASB) en espace utilisateur (`services/jambo-casb`) : courtage d'admission et passerelle mandataire inverse d'admission inter-services, gestion de conformité multi-locataires (tenants) par compartimentage étanche et niveaux de conformité (Community, Enterprise, FedRAMP High, Sovereign Defense), moteur autonome de prévention des fuites de données (DLP) avec validation de numéros de cartes par algorithme de Luhn, détection de clés API/secrets et marqueurs souverains, masquage à la volée (`*`), mise en quarantaine automatique des locataires fuyards, contrôle d'accès capabilaire strict `CasbCap` et scellement d'audit cryptographique inviolable par chaînage SHA-256 avec commandes interactives `casb [status | tenants | rules | inspect | verify]` dans le shell `jsh`.
 
 ---
 
@@ -199,6 +199,7 @@ jambo-os/
 │   ├── jambo-watchdogd/     # Surveillance de vivacité matérielle/logicielle & chien de garde
 │   ├── jambo-zksnark/       # Preuves à divulgation nulle de connaissance (zk-SNARKs) & contraintes R1CS
 │   ├── jambo-ztna/          # Architecture Zero Trust (ZTNA), micro-périmètres & ré-évaluation de posture
+│   ├── jambo-casb/          # Courtier d'accès cloud/grappe (CASB), conformité multi-tenant & DLP
 │   └── pcie-bus-mgr/        # Gestionnaire de bus PCIe, MSI-X et isolation IOMMU
 └── xtask/                   # Outil de compilation, création d'ISO et test QEMU
 ```

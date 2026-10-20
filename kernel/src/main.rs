@@ -1282,6 +1282,13 @@ pub extern "C" fn _start() -> ! {
         "Échec du test de l'architecture zero trust jambo-ztna"
     );
 
+    // 17semelviciesquadragies. Validation du Courtier CASB & DLP Avancé (Phase 124 - v0.2.122)
+    let casb_success = sched::casb_test::execute_casb_daemon_test();
+    assert!(
+        casb_success,
+        "Échec du test du courtier CASB et DLP jambo-casb"
+    );
+
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
 
     arch::init_iommu();
@@ -1539,14 +1546,15 @@ pub extern "C" fn _start() -> ! {
     kprintln!("\x1b[1;32m[PASS] Phase 121 Cyber Threat Intelligence, IoC Bloom/Table Search & Dynamic TTL Purge (jambo-intel) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 122 Cyber Deception, High-Fidelity Honeypots, System Canaries & Enclave Escape Traps (jambo-deception) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 123 Zero Trust Architecture, Continuous Micro-Perimeters & Dynamic Posture Re-evaluation (jambo-ztna) Complete\x1b[0m");
+    kprintln!("\x1b[1;32m[PASS] Phase 124 Cloud Access Security Broker, Multi-Tenant Compliance & Advanced DLP (jambo-casb) Complete\x1b[0m");
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.121 (Zero Trust Architecture & Micro-Perimeters jambo-ztna)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.122 (Cloud Access Security Broker & Advanced DLP jambo-casb)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.121 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.122 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );

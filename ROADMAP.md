@@ -1,7 +1,7 @@
 # ROADMAP DU DÉVELOPPEMENT AUTONOME — JamboOS
 
-> **Dernière mise à jour** : 2026-10-20 06:17 UTC  
-> **Version actuelle** : `v0.2.121`  
+> **Dernière mise à jour** : 2026-10-20 06:30 UTC  
+> **Version actuelle** : `v0.2.122`  
 > **Statut global** : Pré-Alpha active — Micro-noyau de 3e génération orienté capacités (`#![no_std]`)  
 > **Cycle de développement autonome** : 10 minutes via le Planificateur de Tâches & Crons d'Antigravity WebUI  
 
@@ -110,16 +110,17 @@
 | **v0.2.119** | 121 | Renseignement Cyber (CTI/IoC) `jambo-intel` | Ingestion de flux IoC normalisés (SHA-256/BLAKE3, IPv4 bogons, domaines/URL), recherche O(1) par filtre de Bloom cryptographique & table compacte, scoring de confiance, expiration dynamique TTL, IntelCap & scellement SHA-256 | ✅ Validé |
 | **v0.2.120** | 122 | Cyber-Déception & Honeypots `jambo-deception` | Faux jetons HoneyCaps, leurres mémoire VMO, faux endpoints IPC/RPC, pièges d'évasion d'enclave TEE, profilage attaquant, auto-quarantaine, DeceptionCap & scellement SHA-256 | ✅ Validé |
 | **v0.2.121** | 123 | Architecture Zero Trust (ZTNA) `jambo-ztna` | Courtage de confiance continu sans périmètre implicite, calcul de score de posture de terminal (santé noyau, intégrité mémoire, attestation TPM/TEE), micro-périmètres applicatifs à validation unitaire par transaction (IPC, VFS, TEE, réseau), baux éphémères ré-évalués, ZtnaCap & registre d'audit SHA-256 inaltérable | ✅ Validé |
+| **v0.2.122** | 124 | Courtier CASB & DLP `jambo-casb` | Courtier d'accès cloud/grappe (CASB), inspection de conformité multi-locataires (Community, Enterprise, FedRAMP High, Sovereign Defense), moteur DLP (cartes bancaires Luhn, secrets/tokens API, marqueurs souverains, PII), masquage à la volée, quarantaine automatique, passerelle mandataire inverse d'admission inter-services, CasbCap & scellement SHA-256 | ✅ Validé |
 
 ---
 
 ## 3. Prochaines Étapes Prioritaires
 
-### 🎯 Prochaine Tâche Immédiate : Phase 124 — v0.2.122
-* **Composant** : `services/jambo-casb`
-* **Objectif** : Courtier de Sécurité d'Accès Cloud/Grappe (CASB), Contrôle de Conformité Multi-Tenant & DLP Avancé
+### 🎯 Prochaine Tâche Immédiate : Phase 125 — v0.2.123
+* **Composant** : `services/jambo-cspm`
+* **Objectif** : Gestion de la Posture de Sécurité Cloud/Grappe (CSPM), Détection de Dérive de Configuration (Drift) & Remédiation Autonome
 * **Tâches précises** :
-  1. Courtier d'accès sécurisé pour grappe distribuée, inspection de conformité des politiques de locataires (tenants), détection de fuites de données sensibles (DLP), passerelle mandataire inverse d'admission inter-services, CasbCap & scellement d'audit cryptographique SHA-256.
+  1. Moteur d'audit continu de conformité des configurations de services, détection de dérive (drift detection) par rapport aux baselines souveraines durcies (CIS benchmarks / DISA STIG pour micro-noyaux), calcul d'indice de risque de grappe, auto-remédiation de règles et paramètres défaillants, CspmCap & registre d'audit SHA-256 inaltérable.
   2. Validation formelle et suite de tests `cargo xtask test`.
 
 ---
@@ -182,6 +183,7 @@
 * **2026-10-20 05:56 UTC** : Validation complète Phase 121 (`jambo-intel`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-intel`, 5/5). Tag `v0.2.119`.
 * **2026-10-20 06:07 UTC** : Validation complète Phase 122 (`jambo-deception`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-deception`, 4/4). Tag `v0.2.120`.
 * **2026-10-20 06:17 UTC** : Validation complète Phase 123 (`jambo-ztna`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-ztna`, 4/4). Tag `v0.2.121`.
+* **2026-10-20 06:30 UTC** : Validation complète Phase 124 (`jambo-casb`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-casb`, 4/4). Tag `v0.2.122`.
 
 
 
