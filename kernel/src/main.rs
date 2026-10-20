@@ -1359,6 +1359,13 @@ pub extern "C" fn _start() -> ! {
         "Échec du test de gestion des accès privilégiés jambo-pam"
     );
 
+    // 20viciesquadragies. Validation de la Gestion de la Posture de Sécurité des Données DSPM (Phase 135 - v0.3.2)
+    let dspm_success = sched::dspm_test::execute_dspm_daemon_test();
+    assert!(
+        dspm_success,
+        "Échec du test de gestion de la posture des données jambo-dspm"
+    );
+
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
 
     arch::init_iommu();
@@ -1627,14 +1634,15 @@ pub extern "C" fn _start() -> ! {
     kprintln!("\x1b[1;32m[PASS] Phase 132 Continuous Threat Exposure Management & Federated Risk Orchestration (jambo-ctem) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 133 Identity Threat Detection and Response (ITDR) (jambo-itdr) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 134 Privileged Access Management (PAM), JIT Elevation & Session Broker (jambo-pam) Complete\x1b[0m");
+    kprintln!("\x1b[1;32m[PASS] Phase 135 Data Security Posture Management (DSPM), Flow Mapping & Quarantine (jambo-dspm) Complete\x1b[0m");
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.3.1 (Privileged Access Management & JIT Elevation jambo-pam)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.3.2 (Data Security Posture Management jambo-dspm)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.3.1 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.3.2 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );

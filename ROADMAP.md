@@ -121,17 +121,18 @@
 | **v0.2.130** | 132 | Gestion Continue d'Exposition aux Menaces CTEM `jambo-ctem` | Programme Continu de Gestion de l'Exposition aux Menaces (CTEM), orchestration fédérée en 5 phases (Scoping, Discovery, Prioritization, Validation, Mobilization), fédération CSPM/CIEM/CWPP/ASPM/BAS/EASM, score d'exploitabilité prédictif, CtemCap & registre d'audit SHA-256 inaltérable | ✅ Validé |
 | **v0.3.0** | 133 | Détection et Réponse aux Menaces sur l'Identité ITDR `jambo-itdr` | Détection et réponse aux menaces sur l'identité (ITDR), surveillance d'identités souveraines, détection de compromission de jetons, attaques par rejeu, usurpation de capabilités, élévation de privilèges, dérive géotopologique, évaluation continue du trust score, remédiation proactive (quarantaine, révocation), ItdrCap & registre d'audit SHA-256 inaltérable | ✅ Validé |
 | **v0.3.1** | 134 | Gestion des Accès Privilégiés PAM `jambo-pam` | Moteur souverain PAM de courtage de sessions à privilèges élevés, rotation dynamique de secrets éphémères, attribution just-in-time (JIT) de capabilités administratives, double contrôle (Dual-Auth / Four-Eyes Tier 0), enregistrement cryptographique inviolable de sessions Ring 3/IPC et coupure d'urgence (Kill-Switch O(1)), PamCap & registre d'audit SHA-256 inaltérable | ✅ Validé |
+| **v0.3.2** | 135 | Posture de Sécurité des Données DSPM `jambo-dspm` | Moteur souverain DSPM de découverte, cartographie et classification continue des données au repos et en transit (VFS, IPC, TEE, NVMe, RAM), détection des flux sensibles transfrontaliers / inter-compartiments, isolation & quarantaine O(1), évaluation des risques d'exposition, DspmCap & registre d'audit SHA-256 inaltérable | ✅ Validé |
 
 ---
 
 ## 3. Prochaines Étapes Prioritaires
 
-### 🎯 Prochaine Tâche Immédiate : Phase 135 — v0.3.2
-* **Composant** : `services/jambo-dspm`
-* **Versionnement** : Poursuite de la série `v0.3.*` (Jalon `v0.3.2`)
-* **Objectif** : Gestion de la Posture de Sécurité des Données (DSPM - Data Security Posture Management)
+### 🎯 Prochaine Tâche Immédiate : Phase 136 — v0.3.3
+* **Composant** : `services/jambo-sspm`
+* **Versionnement** : Poursuite de la série `v0.3.*` (Jalon `v0.3.3`)
+* **Objectif** : Gestion de la Posture de Sécurité des Services & SaaS (SSPM - SaaS Security Posture Management)
 * **Tâches précises** :
-  1. Moteur souverain DSPM de découverte, cartographie et classification continue des données au repos et en transit (VFS, IPC, TEE), détection des flux sensibles transfrontaliers / inter-compartiments, évaluation des risques de fuite et conformité aux souverainetés réglementaires (DspmCap & registre d'audit SHA-256).
+  1. Moteur souverain SSPM d'évaluation continue de la conformité et des dérives de configuration des services applicatifs, micro-services décentralisés et connecteurs souverains, détection des permissions permissives et des partages tiers non autorisés (SspmCap & registre d'audit SHA-256).
   2. Validation formelle et suite de tests `cargo xtask test`.
 
 ---
@@ -205,6 +206,7 @@
 * **2026-10-20 08:18 UTC** : Validation complète Phase 132 (`jambo-ctem`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-ctem`, 5/5). Tag `v0.2.130`.
 * **2026-10-20 08:38 UTC** : Validation complète Phase 133 (`jambo-itdr`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-itdr`, 8/8). Tag `v0.3.0`.
 * **2026-10-20 08:52 UTC** : Validation complète Phase 134 (`jambo-pam`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-pam`, 7/7). Tag `v0.3.1`.
+* **2026-10-20 09:07 UTC** : Validation complète Phase 135 (`jambo-dspm`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-dspm`, 8/8). Tag `v0.3.2`.
 
 
 

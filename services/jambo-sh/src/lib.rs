@@ -202,6 +202,7 @@ pub struct JamboShell {
     pub ctem: jambo_ctem::JamboCtemDaemon,
     pub itdr: jambo_itdr::JamboItdrDaemon,
     pub pam: jambo_pam::JamboPamDaemon,
+    pub dspm: jambo_dspm::JamboDspmDaemon,
 }
 
 impl Default for JamboShell {
@@ -737,6 +738,15 @@ impl JamboShell {
         );
         let mut pam = jambo_pam::JamboPamDaemon::new(pam_cap);
         pam.init_defaults();
+
+        let dspm_cap = jambo_dspm::DspmCap::new(
+            libjambo::Handle::new(13501, 1),
+            jambo_dspm::dspm_rights::ALL,
+            5000,
+            100,
+        );
+        let mut dspm = jambo_dspm::JamboDspmDaemon::new(dspm_cap);
+        dspm.init_defaults();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -829,6 +839,7 @@ impl JamboShell {
             ctem,
             itdr,
             pam,
+            dspm,
         }
     }
 
@@ -1026,10 +1037,11 @@ impl JamboShell {
                 emit("  ctem [cmd]      - Gestion continue d'exposition aux menaces (CTEM), cadrage, validation & remédiation\n");
                 emit("  itdr [cmd]      - Détection et réponse aux menaces sur l'identité (ITDR), analyse de posture & remédiation\n");
                 emit("  pam [cmd]       - Gestion des accès privilégiés (PAM), élévation JIT, sessions & rotation secrets\n");
+                emit("  dspm [cmd]      - Posture des données (DSPM), cartographie, flux transfrontaliers & quarantaine\n");
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.3.1 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.3.2 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -11982,6 +11994,231 @@ impl JamboShell {
                     }
                 }
             }
+            "dspm" => {
+                let subcmd = if parsed.arg_count > 1 { parsed.args[1] } else { "status" };
+                match subcmd {
+                    "status" => {
+                        emit("=== GESTION DE LA POSTURE DE SÉCURITÉ DES DONNÉES (DSPM) ===\n");
+                        let mut b = [0u8; 20];
+                        let cap = self.dspm.admin_cap;
+                        if let Ok(summary) = self.dspm.get_summary(&cap) {
+                            emit("  Actifs de données cartographiés : ");
+                            emit(format_u64(summary.total_assets as u64, &mut b));
+                            emit("\n  Actifs classifiés             : ");
+                            emit(format_u64(summary.classified_assets as u64, &mut b));
+                            emit("\n  Actifs hautement sensibles    : ");
+                            emit(format_u64(summary.sensitive_assets as u64, &mut b));
+                            emit("\n  Actifs placés en quarantaine  : ");
+                            emit(format_u64(summary.quarantined_assets as u64, &mut b));
+                            emit("\n  Violations de posture actives : ");
+                            emit(format_u64(summary.detected_violations as u64, &mut b));
+                            emit("\n  Flux de données tracés        : ");
+                            emit(format_u64(summary.active_flows as u64, &mut b));
+                            emit("\n  Score de risque global (0..100) : ");
+                            emit(format_u64(summary.global_risk_score as u64, &mut b));
+                            emit("/100\n  Conformité souveraine Zero-Ambient : ");
+                            emit(if summary.sovereign_posture_ok { "\x1b[1;32mCONFORME\x1b[0m\n" } else { "\x1b[1;31mRISQUE ÉLEVÉ\x1b[0m\n" });
+                        } else {
+                            emit("  [ERREUR] Accès refusé à la synthèse DSPM\n");
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "assets" => {
+                        emit("=== INVENTAIRE DES ACTIFS DE DONNÉES (DSPM) ===\n");
+                        let mut b = [0u8; 20];
+                        for i in 0..self.dspm.asset_count {
+                            if let Some(ref a) = self.dspm.assets[i] {
+                                emit("  [ID ");
+                                emit(format_u64(a.id as u64, &mut b));
+                                emit("] ");
+                                emit(a.name_as_str());
+                                emit(" (");
+                                emit(a.uri_as_str());
+                                emit(")\n    Emplacement: ");
+                                emit(a.location_type.as_str());
+                                emit(" | Zone: ");
+                                emit(a.compartment.as_str());
+                                emit("\n    Sensibilité: ");
+                                emit(a.sensitivity.as_str());
+                                emit(" | Type: ");
+                                emit(a.category.as_str());
+                                emit("\n    Taille: ");
+                                emit(format_u64(a.size_bytes, &mut b));
+                                emit(" octets | Chiffré: ");
+                                emit(if a.encrypted { "OUI" } else { "NON" });
+                                emit(" | Quarantaine: ");
+                                emit(if a.quarantined { "OUI" } else { "NON" });
+                                emit("\n");
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "flows" => {
+                        emit("=== FLUX DE DONNÉES SURVEILLÉS (DSPM) ===\n");
+                        let mut b = [0u8; 20];
+                        if self.dspm.flow_count == 0 {
+                            emit("  Aucun flux de données tracé pour l'instant.\n");
+                        } else {
+                            for i in 0..self.dspm.flow_count {
+                                if let Some(ref f) = self.dspm.flows[i] {
+                                    emit("  [Flux ");
+                                    emit(format_u64(f.id as u64, &mut b));
+                                    emit("] Actif #");
+                                    emit(format_u64(f.source_asset_id as u64, &mut b));
+                                    emit(" : ");
+                                    emit(f.source_compartment.as_str());
+                                    emit(" -> ");
+                                    emit(f.target_compartment.as_str());
+                                    emit("\n    Sensibilité: ");
+                                    emit(f.flow_sensitivity.as_str());
+                                    emit(" | Volume: ");
+                                    emit(format_u64(f.bytes_transferred, &mut b));
+                                    emit(" B\n    Décision: ");
+                                    emit(if f.allowed { "\x1b[1;32mAUTORISÉ\x1b[0m" } else { "\x1b[1;31mBLOQUÉ\x1b[0m" });
+                                    emit(" | Raison: ");
+                                    emit(f.reason_as_str());
+                                    emit("\n");
+                                }
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "rules" => {
+                        emit("=== RÈGLES DE CONTRÔLE DE FLUX DSPM ===\n");
+                        let mut b = [0u8; 20];
+                        for i in 0..self.dspm.flow_rule_count {
+                            if let Some(ref r) = self.dspm.flow_rules[i] {
+                                emit("  [Règle ");
+                                emit(format_u64(r.id as u64, &mut b));
+                                emit("] ");
+                                emit(r.source_compartment.as_str());
+                                emit(" -> ");
+                                emit(r.target_compartment.as_str());
+                                emit(" | Max: ");
+                                emit(r.max_allowed_sensitivity.as_str());
+                                emit(" | Chiffrement requis: ");
+                                emit(if r.require_encryption { "OUI" } else { "NON" });
+                                emit(" | Action: ");
+                                emit(r.action.as_str());
+                                emit("\n");
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "violations" => {
+                        emit("=== VIOLATIONS DE POSTURE DÉTECTÉES (DSPM) ===\n");
+                        let mut b = [0u8; 20];
+                        if self.dspm.violation_count == 0 {
+                            emit("  Aucune violation active détectée. Posture optimale.\n");
+                        } else {
+                            for i in 0..self.dspm.violation_count {
+                                if let Some(ref v) = self.dspm.violations[i] {
+                                    emit("  [Violation ");
+                                    emit(format_u64(v.id as u64, &mut b));
+                                    emit("] Actif #");
+                                    emit(format_u64(v.asset_id as u64, &mut b));
+                                    emit(" | Type: ");
+                                    emit(v.violation_type.as_str());
+                                    emit(" | Sévérité: ");
+                                    emit(format_u64(v.severity as u64, &mut b));
+                                    emit("/5 | Résolu: ");
+                                    emit(if v.resolved { "OUI" } else { "NON" });
+                                    emit("\n");
+                                }
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "scan" => {
+                        let mut cap = self.dspm.admin_cap;
+                        match self.dspm.run_discovery_scan(&mut cap, 8000) {
+                            Ok(count) => {
+                                let mut b = [0u8; 20];
+                                emit("  [OK] Balayage de découverte terminé : ");
+                                emit(format_u64(count as u64, &mut b));
+                                emit(" actifs scannés\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("  [FAIL] Échec de l'exécution du balayage DSPM\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "quarantine" => {
+                        let asset_id = if parsed.arg_count > 2 {
+                            parse_u64(parsed.args[2]).unwrap_or(1) as u32
+                        } else {
+                            1
+                        };
+                        let mut cap = self.dspm.admin_cap;
+                        match self.dspm.quarantine_asset(&mut cap, asset_id, 8010) {
+                            Ok(()) => {
+                                emit("  [OK] Actif mis en quarantaine et flux coupés avec succès\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("  [FAIL] Échec de la mise en quarantaine de l'actif\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "unquarantine" => {
+                        let asset_id = if parsed.arg_count > 2 {
+                            parse_u64(parsed.args[2]).unwrap_or(1) as u32
+                        } else {
+                            1
+                        };
+                        let mut cap = self.dspm.admin_cap;
+                        match self.dspm.unquarantine_asset(&mut cap, asset_id, 8020) {
+                            Ok(()) => {
+                                emit("  [OK] Quarantaine levée après validation souveraine\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("  [FAIL] Échec de la levée de quarantaine\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "flow-test" => {
+                        let asset_id = if parsed.arg_count > 2 {
+                            parse_u64(parsed.args[2]).unwrap_or(1) as u32
+                        } else {
+                            1
+                        };
+                        let target = if parsed.arg_count > 3 { parsed.args[3] } else { "untrusted" };
+                        let target_comp = match target {
+                            "core" => jambo_dspm::DataCompartment::SovereignCore,
+                            "fabric" => jambo_dspm::DataCompartment::SecFabric,
+                            "workload" => jambo_dspm::DataCompartment::UserWorkload,
+                            _ => jambo_dspm::DataCompartment::CrossBorderUntrusted,
+                        };
+                        let mut cap = self.dspm.admin_cap;
+                        match self.dspm.evaluate_flow(&mut cap, asset_id, target_comp, 1024, 8030) {
+                            Ok(allowed) => {
+                                emit("  Évaluation de flux DSPM : ");
+                                emit(if allowed { "\x1b[1;32mAUTORISÉ\x1b[0m\n" } else { "\x1b[1;31mBLOQUÉ PAR POLITIQUE SOUVERAINE\x1b[0m\n" });
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("  [FAIL] Erreur lors de l'évaluation du flux\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "verify" => {
+                        let valid = self.dspm.verify_ledger_integrity();
+                        emit("  Vérification intégrité registre DSPM SHA-256 : ");
+                        emit(if valid { "INTÈGRE (OK)\n" } else { "ALTÉRÉ (FAIL)\n" });
+                        (ShellStatus::Success, write_pos)
+                    }
+                    _ => {
+                        emit("Usage: dspm [status | assets | flows | rules | violations | scan | quarantine [id] | unquarantine [id] | flow-test [id] [target] | verify]\n");
+                        (ShellStatus::ExecutionFailed, write_pos)
+                    }
+                }
+            }
             "poweroff" | "reboot" => {
                 emit("[SYSTEM] Extinction demandée...\n");
                 unsafe {
@@ -15962,6 +16199,59 @@ mod tests {
                 let (st11, len11) = shell.execute_line("pam verify", &mut out);
                 assert_eq!(st11, ShellStatus::Success);
                 assert!(len11 > 0);
+            })
+            .unwrap();
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn test_shell_dspm_commands() {
+        extern crate std;
+        let handle = std::thread::Builder::new()
+            .stack_size(8 * 1024 * 1024)
+            .spawn(|| {
+                let mut shell = JamboShell::new();
+                let mut out = [0u8; 1024];
+
+                let (st1, len1) = shell.execute_line("dspm status", &mut out);
+                assert_eq!(st1, ShellStatus::Success);
+                assert!(len1 > 0);
+
+                let (st2, len2) = shell.execute_line("dspm assets", &mut out);
+                assert_eq!(st2, ShellStatus::Success);
+                assert!(len2 > 0);
+
+                let (st3, len3) = shell.execute_line("dspm flows", &mut out);
+                assert_eq!(st3, ShellStatus::Success);
+                assert!(len3 > 0);
+
+                let (st4, len4) = shell.execute_line("dspm rules", &mut out);
+                assert_eq!(st4, ShellStatus::Success);
+                assert!(len4 > 0);
+
+                let (st5, len5) = shell.execute_line("dspm violations", &mut out);
+                assert_eq!(st5, ShellStatus::Success);
+                assert!(len5 > 0);
+
+                let (st6, len6) = shell.execute_line("dspm scan", &mut out);
+                assert_eq!(st6, ShellStatus::Success);
+                assert!(len6 > 0);
+
+                let (st7, len7) = shell.execute_line("dspm quarantine 2", &mut out);
+                assert_eq!(st7, ShellStatus::Success);
+                assert!(len7 > 0);
+
+                let (st8, len8) = shell.execute_line("dspm unquarantine 2", &mut out);
+                assert_eq!(st8, ShellStatus::Success);
+                assert!(len8 > 0);
+
+                let (st9, len9) = shell.execute_line("dspm flow-test 1 untrusted", &mut out);
+                assert_eq!(st9, ShellStatus::Success);
+                assert!(len9 > 0);
+
+                let (st10, len10) = shell.execute_line("dspm verify", &mut out);
+                assert_eq!(st10, ShellStatus::Success);
+                assert!(len10 > 0);
             })
             .unwrap();
         handle.join().unwrap();

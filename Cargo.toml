@@ -99,6 +99,7 @@ members = [
     "services/jambo-ctem",
     "services/jambo-itdr",
     "services/jambo-pam",
+    "services/jambo-dspm",
     "libs/jambo-ui",
     "libs/jambo-sdk",
     "drivers/virtio",

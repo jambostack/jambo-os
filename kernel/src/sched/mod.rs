@@ -68,6 +68,7 @@ pub mod easm_test;
 pub mod ctem_test;
 pub mod itdr_test;
 pub mod pam_test;
+pub mod dspm_test;
 pub mod eevdf;
 pub mod event_test;
 pub mod fuzz_test;
