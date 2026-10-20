@@ -119,17 +119,18 @@
 | **v0.2.128** | 130 | Simulation Brèches/Attaques BAS `jambo-bas` | Moteur souverain d'émulation d'adversaires et techniques MITRE ATT&CK (Ring 3, IPC, VFS, TEE, réseau), validation continue des contrôles de sécurité (WAF, EDR, IDPS, CSPM, CIEM, CNAPP, ASPM), calcul déterministe de résilience et détection des lacunes de couverture, BasCap & registre d'audit SHA-256 inaltérable | ✅ Validé |
 | **v0.2.129** | 131 | Surface Externe EASM `jambo-easm` | Gestion de la surface d'attaque externe (EASM), recensement dynamique des actifs, découverte continue de Shadow IT, sous-domaines orphelins, score d'exposition (0..100), remédiation proactive, EasmCap & registre d'audit SHA-256 inaltérable | ✅ Validé |
 | **v0.2.130** | 132 | Gestion Continue d'Exposition aux Menaces CTEM `jambo-ctem` | Programme Continu de Gestion de l'Exposition aux Menaces (CTEM), orchestration fédérée en 5 phases (Scoping, Discovery, Prioritization, Validation, Mobilization), fédération CSPM/CIEM/CWPP/ASPM/BAS/EASM, score d'exploitabilité prédictif, CtemCap & registre d'audit SHA-256 inaltérable | ✅ Validé |
+| **v0.3.0** | 133 | Détection et Réponse aux Menaces sur l'Identité ITDR `jambo-itdr` | Détection et réponse aux menaces sur l'identité (ITDR), surveillance d'identités souveraines, détection de compromission de jetons, attaques par rejeu, usurpation de capabilités, élévation de privilèges, dérive géotopologique, évaluation continue du trust score, remédiation proactive (quarantaine, révocation), ItdrCap & registre d'audit SHA-256 inaltérable | ✅ Validé |
 
 ---
 
 ## 3. Prochaines Étapes Prioritaires
 
-### 🎯 Prochaine Tâche Immédiate : Phase 133 — v0.3.0
-* **Composant** : `services/jambo-itdr`
-* **Versionnement** : Transition obligatoire vers la série `v0.3.*` (démarrant à `v0.3.0`, puis `v0.3.1`, etc.)
-* **Objectif** : Détection et Réponse aux Menaces sur l'Identité (ITDR - Identity Threat Detection and Response)
+### 🎯 Prochaine Tâche Immédiate : Phase 134 — v0.3.1
+* **Composant** : `services/jambo-pam`
+* **Versionnement** : Poursuite de la série `v0.3.*` (Jalon `v0.3.1`)
+* **Objectif** : Gestion des Accès Privilégiés (PAM - Privileged Access Management)
 * **Tâches précises** :
-  1. Moteur souverain ITDR de détection et réponse aux menaces sur l'identité (compromission de jetons, attaques par rejeu de sessions, usurpation de capabilités, élévation de privilèges d'identités distribuées, détection d'anomalies d'authentification en temps réel, ItdrCap & registre d'audit SHA-256 inaltérable).
+  1. Moteur souverain PAM de courtage de sessions à privilèges élevés, rotation dynamique de secrets éphémères, attribution just-in-time (JIT) de capabilités administratives, enregistrement cryptographique inviolable de sessions Ring 3/IPC et barrière d'authentification zero-trust renforcée (PamCap & registre d'audit SHA-256).
   2. Validation formelle et suite de tests `cargo xtask test`.
 
 ---
@@ -201,6 +202,8 @@
 * **2026-10-20 07:50 UTC** : Validation complète Phase 130 (`jambo-bas`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-bas`, 4/4). Tag `v0.2.128`.
 * **2026-10-20 08:08 UTC** : Validation complète Phase 131 (`jambo-easm`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-easm`, 5/5). Tag `v0.2.129`.
 * **2026-10-20 08:18 UTC** : Validation complète Phase 132 (`jambo-ctem`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-ctem`, 5/5). Tag `v0.2.130`.
+* **2026-10-20 08:38 UTC** : Validation complète Phase 133 (`jambo-itdr`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-itdr`, 8/8). Tag `v0.3.0`.
+
 
 
 

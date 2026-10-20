@@ -1345,6 +1345,13 @@ pub extern "C" fn _start() -> ! {
         "Échec du test de gestion continue de l'exposition aux menaces jambo-ctem"
     );
 
+    // 18noniesviciesquadragies. Validation de la Détection et Réponse aux Menaces sur l'Identité ITDR (Phase 133 - v0.3.0)
+    let itdr_success = sched::itdr_test::execute_itdr_daemon_test();
+    assert!(
+        itdr_success,
+        "Échec du test de détection et réponse aux menaces sur l'identité jambo-itdr"
+    );
+
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
 
     arch::init_iommu();
@@ -1611,14 +1618,15 @@ pub extern "C" fn _start() -> ! {
     kprintln!("\x1b[1;32m[PASS] Phase 130 Breach and Attack Simulation & Defense-in-Depth Validation (jambo-bas) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 131 External Attack Surface Management & Shadow IT Discovery (jambo-easm) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 132 Continuous Threat Exposure Management & Federated Risk Orchestration (jambo-ctem) Complete\x1b[0m");
+    kprintln!("\x1b[1;32m[PASS] Phase 133 Identity Threat Detection and Response (ITDR) (jambo-itdr) Complete\x1b[0m");
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.130 (Continuous Threat Exposure Management & Federated Risk Orchestration jambo-ctem)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.3.0 (Identity Threat Detection & Proactive Response jambo-itdr)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.130 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.3.0 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );

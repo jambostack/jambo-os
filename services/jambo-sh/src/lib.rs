@@ -200,6 +200,7 @@ pub struct JamboShell {
     pub bas: jambo_bas::JamboBasDaemon,
     pub easm: jambo_easm::JamboEasmDaemon,
     pub ctem: jambo_ctem::JamboCtemDaemon,
+    pub itdr: jambo_itdr::JamboItdrDaemon,
 }
 
 impl Default for JamboShell {
@@ -717,6 +718,15 @@ impl JamboShell {
         );
         let mut ctem = jambo_ctem::JamboCtemDaemon::new(ctem_cap);
         ctem.init_defaults();
+
+        let itdr_cap = jambo_itdr::ItdrCap::new(
+            libjambo::Handle::new(13301, 1),
+            jambo_itdr::itdr_rights::ALL,
+            5000,
+            100,
+        );
+        let mut itdr = jambo_itdr::JamboItdrDaemon::new(itdr_cap);
+        itdr.init_defaults();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -807,6 +817,7 @@ impl JamboShell {
             bas,
             easm,
             ctem,
+            itdr,
         }
     }
 
@@ -1002,10 +1013,11 @@ impl JamboShell {
                 emit("  bas [cmd]       - Simulation brèches/attaques (BAS), validation continue & gaps\n");
                 emit("  easm [cmd]      - Surface d'attaque externe (EASM), recensement d'actifs, Shadow IT & failles\n");
                 emit("  ctem [cmd]      - Gestion continue d'exposition aux menaces (CTEM), cadrage, validation & remédiation\n");
+                emit("  itdr [cmd]      - Détection et réponse aux menaces sur l'identité (ITDR), analyse de posture & remédiation\n");
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.2.130 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.3.0 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -11444,6 +11456,229 @@ impl JamboShell {
                     }
                 }
             }
+            "itdr" => {
+                let subcmd = if parsed.arg_count > 1 { parsed.args[1] } else { "status" };
+                match subcmd {
+                    "status" => {
+                        emit("=== DÉTECTION ET RÉPONSE AUX MENACES SUR L'IDENTITÉ (ITDR) ===\n");
+                        let mut b = [0u8; 20];
+                        emit("  Identités surveillées       : ");
+                        emit(format_u64(self.itdr.identity_count as u64, &mut b));
+                        emit("\n  Menaces d'identité détectées : ");
+                        emit(format_u64(self.itdr.threat_count as u64, &mut b));
+                        emit("\n  Actions de réponse exécutées : ");
+                        emit(format_u64(self.itdr.action_count as u64, &mut b));
+                        emit("\n  Indice Global de Risque      : ");
+                        emit(format_u64(self.itdr.global_identity_risk as u64, &mut b));
+                        emit("/100\n");
+                        let cap = self.itdr.admin_cap;
+                        if let Ok(summary) = self.itdr.get_summary(&cap) {
+                            emit("  Identités actives            : ");
+                            emit(format_u64(summary.active_identities as u64, &mut b));
+                            emit("\n  Identités en quarantaine     : ");
+                            emit(format_u64(summary.quarantined_identities as u64, &mut b));
+                            emit("\n  Menaces actives              : ");
+                            emit(format_u64(summary.active_threats as u64, &mut b));
+                            emit("\n  Menaces atténuées / remédiées: ");
+                            emit(format_u64(summary.mitigated_threats as u64, &mut b));
+                            emit("\n");
+                        }
+                        let valid = self.itdr.verify_ledger_integrity();
+                        emit("  Registre d'audit SHA-256     : ");
+                        emit(if valid { "SCELLÉ & INTÈGRE (OK)\n" } else { "ALTÉRÉ (FAIL)\n" });
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "identities" => {
+                        emit("=== CARTOGRAPHIE DES IDENTITÉS SOUVERAINES (ITDR) ===\n");
+                        let mut b = [0u8; 20];
+                        for i in 0..self.itdr.identity_count {
+                            if let Some(ref id_rec) = self.itdr.identities[i] {
+                                emit("  [#");
+                                emit(format_u64(id_rec.id as u64, &mut b));
+                                emit("] ");
+                                emit(id_rec.name_as_str());
+                                emit(" (");
+                                match id_rec.id_type {
+                                    jambo_itdr::IdentityType::KernelService => emit("Noyau"),
+                                    jambo_itdr::IdentityType::SystemDaemon => emit("Daemon"),
+                                    jambo_itdr::IdentityType::DistributedPrincipal => emit("Principal Grappe"),
+                                    jambo_itdr::IdentityType::AdminRole => emit("Rôle Admin"),
+                                    jambo_itdr::IdentityType::EphemeralSession => emit("Session Éphémère"),
+                                }
+                                emit(") - Confiance: ");
+                                emit(format_u64(id_rec.trust_score as u64, &mut b));
+                                emit("/100 - Statut: ");
+                                match id_rec.state {
+                                    jambo_itdr::IdentityState::Active => emit("ACTIF\n"),
+                                    jambo_itdr::IdentityState::Suspicious => emit("SUSPECT\n"),
+                                    jambo_itdr::IdentityState::Quarantined => emit("QUARANTAINE\n"),
+                                    jambo_itdr::IdentityState::Revoked => emit("RÉVOQUÉ\n"),
+                                }
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "threats" => {
+                        emit("=== INCIDENTS & MENACES SUR L'IDENTITÉ DÉTECTÉES ===\n");
+                        let mut b = [0u8; 20];
+                        for i in 0..self.itdr.threat_count {
+                            if let Some(ref th) = self.itdr.threats[i] {
+                                emit("  [#");
+                                emit(format_u64(th.id as u64, &mut b));
+                                emit("] Identité #");
+                                emit(format_u64(th.identity_id as u64, &mut b));
+                                emit(" - Type: ");
+                                match th.threat_type {
+                                    jambo_itdr::IdentityThreatType::TokenCompromise => emit("Vol de Jeton"),
+                                    jambo_itdr::IdentityThreatType::SessionReplay => emit("Rejeu de Session"),
+                                    jambo_itdr::IdentityThreatType::CapabilityUsurpation => emit("Usurpation Capabilité"),
+                                    jambo_itdr::IdentityThreatType::PrivilegeEscalation => emit("Élévation Privilège"),
+                                    jambo_itdr::IdentityThreatType::AnomalousAuthRate => emit("Brute-Force Auth"),
+                                    jambo_itdr::IdentityThreatType::DivergentGeoMesh => emit("Saut Topologique"),
+                                }
+                                emit(" - Sévérité: ");
+                                match th.severity {
+                                    jambo_itdr::ThreatSeverity::Critical => emit("CRITIQUE"),
+                                    jambo_itdr::ThreatSeverity::High => emit("ÉLEVÉE"),
+                                    jambo_itdr::ThreatSeverity::Medium => emit("MOYENNE"),
+                                    jambo_itdr::ThreatSeverity::Low => emit("FAIBLE"),
+                                    jambo_itdr::ThreatSeverity::Info => emit("INFO"),
+                                }
+                                emit(" - Statut: ");
+                                match th.status {
+                                    jambo_itdr::ThreatStatus::Detected => emit("DÉTECTÉE\n"),
+                                    jambo_itdr::ThreatStatus::Investigating => emit("EN COURS D'ANALYSE\n"),
+                                    jambo_itdr::ThreatStatus::Contained => emit("CONTENUE\n"),
+                                    jambo_itdr::ThreatStatus::Remediated => emit("REMÉDIÉE\n"),
+                                    jambo_itdr::ThreatStatus::Dismissed => emit("IGNORÉE\n"),
+                                }
+                                emit("      Détails: ");
+                                emit(th.details_as_str());
+                                emit("\n");
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "actions" => {
+                        emit("=== ACTIONS DE RÉPONSE ORCHESTRÉES (ITDR) ===\n");
+                        let mut b = [0u8; 20];
+                        for i in 0..self.itdr.action_count {
+                            if let Some(ref act) = self.itdr.actions[i] {
+                                emit("  [#");
+                                emit(format_u64(act.id as u64, &mut b));
+                                emit("] Menace #");
+                                emit(format_u64(act.threat_id as u64, &mut b));
+                                emit(" -> Cible: ");
+                                emit(act.target_as_str());
+                                emit(" (");
+                                match act.action_type {
+                                    jambo_itdr::ResponseActionType::RevokeToken => emit("Révocation Jeton"),
+                                    jambo_itdr::ResponseActionType::QuarantineIdentity => emit("Quarantaine"),
+                                    jambo_itdr::ResponseActionType::DowngradeCapabilities => emit("Dégradation Capabilités"),
+                                    jambo_itdr::ResponseActionType::StepUpMfaChallenge => emit("Défi MFA Step-Up"),
+                                    jambo_itdr::ResponseActionType::AlertSecurityOfficer => emit("Alerte SecOps"),
+                                }
+                                emit(") - Exécutée: ");
+                                emit(if act.executed { "OUI\n" } else { "NON\n" });
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "analyze" => {
+                        let mut b = [0u8; 20];
+                        let cap = self.itdr.admin_cap;
+                        match self.itdr.analyze_threats(&cap, 7000) {
+                            Ok(cnt) => {
+                                emit("  [OK] Analyse des menaces effectuée : ");
+                                emit(format_u64(cnt as u64, &mut b));
+                                emit(" menaces évaluées\n  Nouvel Indice de Risque : ");
+                                emit(format_u64(self.itdr.global_identity_risk as u64, &mut b));
+                                emit("/100\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("  [FAIL] Échec de l'analyse des menaces ITDR\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "respond" => {
+                        let tid = if parsed.arg_count > 2 {
+                            parse_u64(parsed.args[2]).unwrap_or(1) as u32
+                        } else {
+                            1
+                        };
+                        let mut b = [0u8; 20];
+                        let cap = self.itdr.admin_cap;
+                        match self.itdr.respond_to_threat(&cap, tid, jambo_itdr::ResponseActionType::RevokeToken, 7010) {
+                            Ok(aid) => {
+                                emit("  [OK] Réponse proactive orchestrée avec succès sur menace #");
+                                emit(format_u64(tid as u64, &mut b));
+                                emit(" (Action #");
+                                emit(format_u64(aid as u64, &mut b));
+                                emit(")\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("  [FAIL] Échec du déclenchement de réponse sur menace\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "quarantine" => {
+                        let iid = if parsed.arg_count > 2 {
+                            parse_u64(parsed.args[2]).unwrap_or(1) as u32
+                        } else {
+                            1
+                        };
+                        let mut b = [0u8; 20];
+                        let cap = self.itdr.admin_cap;
+                        match self.itdr.quarantine_identity(&cap, iid, 7020) {
+                            Ok(_) => {
+                                emit("  [OK] Identité souveraine #");
+                                emit(format_u64(iid as u64, &mut b));
+                                emit(" placée en quarantaine stricte et isolée\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("  [FAIL] Échec de la mise en quarantaine de l'identité\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "cycle" => {
+                        let cap = self.itdr.admin_cap;
+                        match self.itdr.run_full_cycle(&cap, 7030) {
+                            Ok(summary) => {
+                                let mut b = [0u8; 20];
+                                emit("  [OK] Cycle ITDR complet exécuté avec succès\n");
+                                emit("  Menaces actives restantes : ");
+                                emit(format_u64(summary.active_threats as u64, &mut b));
+                                emit("\n  Actions exécutées         : ");
+                                emit(format_u64(summary.actions_count as u64, &mut b));
+                                emit("\n  Indice de Risque Final    : ");
+                                emit(format_u64(summary.global_identity_risk as u64, &mut b));
+                                emit("/100\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("  [FAIL] Échec de l'exécution du cycle ITDR\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "verify" => {
+                        let valid = self.itdr.verify_ledger_integrity();
+                        emit("  Vérification intégrité registre ITDR SHA-256 : ");
+                        emit(if valid { "INTÈGRE (OK)\n" } else { "ALTÉRÉ (FAIL)\n" });
+                        (ShellStatus::Success, write_pos)
+                    }
+                    _ => {
+                        emit("Usage: itdr [status | identities | threats | actions | analyze | respond [tid] | quarantine [iid] | cycle | verify]\n");
+                        (ShellStatus::ExecutionFailed, write_pos)
+                    }
+                }
+            }
             "poweroff" | "reboot" => {
                 emit("[SYSTEM] Extinction demandée...\n");
                 unsafe {
@@ -15316,6 +15551,55 @@ mod tests {
                 assert!(len8 > 0);
 
                 let (st9, len9) = shell.execute_line("ctem verify", &mut out);
+                assert_eq!(st9, ShellStatus::Success);
+                assert!(len9 > 0);
+            })
+            .unwrap();
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn test_shell_itdr_commands() {
+        extern crate std;
+        let handle = std::thread::Builder::new()
+            .stack_size(8 * 1024 * 1024)
+            .spawn(|| {
+                let mut shell = JamboShell::new();
+                let mut out = [0u8; 1024];
+
+                let (st1, len1) = shell.execute_line("itdr status", &mut out);
+                assert_eq!(st1, ShellStatus::Success);
+                assert!(len1 > 0);
+
+                let (st2, len2) = shell.execute_line("itdr identities", &mut out);
+                assert_eq!(st2, ShellStatus::Success);
+                assert!(len2 > 0);
+
+                let (st3, len3) = shell.execute_line("itdr threats", &mut out);
+                assert_eq!(st3, ShellStatus::Success);
+                assert!(len3 > 0);
+
+                let (st4, len4) = shell.execute_line("itdr actions", &mut out);
+                assert_eq!(st4, ShellStatus::Success);
+                assert!(len4 > 0);
+
+                let (st5, len5) = shell.execute_line("itdr analyze", &mut out);
+                assert_eq!(st5, ShellStatus::Success);
+                assert!(len5 > 0);
+
+                let (st6, len6) = shell.execute_line("itdr respond 1", &mut out);
+                assert_eq!(st6, ShellStatus::Success);
+                assert!(len6 > 0);
+
+                let (st7, len7) = shell.execute_line("itdr quarantine 1", &mut out);
+                assert_eq!(st7, ShellStatus::Success);
+                assert!(len7 > 0);
+
+                let (st8, len8) = shell.execute_line("itdr cycle", &mut out);
+                assert_eq!(st8, ShellStatus::Success);
+                assert!(len8 > 0);
+
+                let (st9, len9) = shell.execute_line("itdr verify", &mut out);
                 assert_eq!(st9, ShellStatus::Success);
                 assert!(len9 > 0);
             })
