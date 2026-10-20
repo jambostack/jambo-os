@@ -78,6 +78,7 @@ members = [
     "services/jambo-secroute",
     "services/jambo-ids",
     "services/jambo-vpn",
+    "services/jambo-waf",
     "libs/jambo-ui",
     "libs/jambo-sdk",
     "drivers/virtio",

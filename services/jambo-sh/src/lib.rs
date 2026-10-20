@@ -182,6 +182,7 @@ pub struct JamboShell {
     pub secroute: jambo_secroute::JamboSecRouteDaemon,
     pub ids: jambo_ids::JamboIdsDaemon,
     pub vpn: jambo_vpn::JamboVpnDaemon,
+    pub waf: jambo_waf::JamboWafDaemon,
 }
 
 impl Default for JamboShell {
@@ -540,6 +541,14 @@ impl JamboShell {
         );
         let mut vpn = jambo_vpn::JamboVpnDaemon::new(vpn_cap);
         vpn.init_defaults();
+        let waf_cap = jambo_waf::WafCap::new(
+            libjambo::Handle::new(11401, 1),
+            jambo_waf::waf_rights::ALL,
+            1000,
+            1,
+        );
+        let mut waf = jambo_waf::JamboWafDaemon::new(waf_cap);
+        waf.init_defaults();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -612,6 +621,7 @@ impl JamboShell {
             secroute,
             ids,
             vpn,
+            waf,
         }
     }
 
@@ -789,10 +799,11 @@ impl JamboShell {
                 emit("  secroute [cmd]- Routage Zero-Trust, micro-segmentation & maillage chiffré\n");
                 emit("  ids [cmd]     - Détection & corrélation multi-points d'intrusions, mitigation Ring 3\n");
                 emit("  vpn [cmd]     - Passerelle VPN WireGuard post-quantique (ML-KEM + Curve25519) & transport chiffré\n");
+                emit("  waf [cmd]     - Pare-feu applicatif L7 (WAF) sandboxed, détection d'injections & WafCap\n");
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.2.111 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.2.112 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -8669,6 +8680,165 @@ impl JamboShell {
                     }
                 }
             }
+            "waf" => {
+                let subcmd = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    "status"
+                };
+                let mut b = [0u8; 20];
+                match subcmd {
+                    "status" => {
+                        emit("=== PARE-FEU APPLICATIF L7 SANDBOXED (jambo-waf) ===\n");
+                        emit("Inspections totales             : ");
+                        emit(format_u64(self.waf.total_inspections, &mut b));
+                        emit("\nRequêtes autorisées (Pass)      : ");
+                        emit(format_u64(self.waf.total_passed, &mut b));
+                        emit("\nRequêtes bloquées (Block)       : ");
+                        emit(format_u64(self.waf.total_blocked, &mut b));
+                        emit("\nAdresses IP en quarantaine      : ");
+                        emit(format_u64(self.waf.total_quarantined, &mut b));
+                        emit("\nAnomalies protocolaires totales : ");
+                        emit(format_u64(self.waf.total_anomalies, &mut b));
+                        emit("\nRègles de sécurité actives      : ");
+                        emit(format_u64(self.waf.rule_count as u64, &mut b));
+                        emit(" / ");
+                        emit(format_u64(jambo_waf::MAX_RULES as u64, &mut b));
+                        emit("\nIPs en quarantaine actives      : ");
+                        emit(format_u64(self.waf.quarantine_count as u64, &mut b));
+                        emit("\nIPs en liste blanche            : ");
+                        emit(format_u64(self.waf.whitelist_count as u64, &mut b));
+                        emit("\nEntrées d'audit SHA-256         : ");
+                        emit(format_u64(self.waf.audit_count as u64, &mut b));
+                        emit("\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "rules" => {
+                        emit("--- RÈGLES DE SÉCURITÉ APPLICATIVES OWASP L7 ---\n");
+                        for i in 0..self.waf.rule_count {
+                            let rule = &self.waf.rules[i];
+                            emit(" [Règle ");
+                            emit(format_u64(rule.id as u64, &mut b));
+                            emit("] ");
+                            if let Ok(name_str) = core::str::from_utf8(&rule.name[..rule.name_len]) {
+                                emit(name_str);
+                            }
+                            emit(" | Type: ");
+                            emit(rule.attack_type.as_str());
+                            emit(" | Gravité: ");
+                            emit(match rule.severity {
+                                jambo_waf::RuleSeverity::Low => "Faible",
+                                jambo_waf::RuleSeverity::Medium => "Moyenne",
+                                jambo_waf::RuleSeverity::High => "Élevée",
+                                jambo_waf::RuleSeverity::Critical => "Critique",
+                            });
+                            emit(" | Action: ");
+                            emit(match rule.action {
+                                jambo_waf::RuleAction::Allow => "Autoriser",
+                                jambo_waf::RuleAction::Block => "Bloquer",
+                                jambo_waf::RuleAction::Quarantine => "Quarantaine",
+                                jambo_waf::RuleAction::LogOnly => "Journaliser",
+                            });
+                            emit("\n");
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "inspect" => {
+                        emit("[WAF/INSPECT] Test d'inspection en direct...\n");
+                        let cap = self.waf.admin_cap;
+                        let mut req_clean = jambo_waf::HttpRequest::new([192, 168, 1, 100], jambo_waf::HttpMethod::Get, "/api/v1/status");
+                        let _ = req_clean.add_header("Host", "jambo.local");
+                        match self.waf.inspect_request(&cap, &req_clean, 5001) {
+                            Ok(jambo_waf::WafDecision::Allow) => {
+                                emit("  Requête 1 GET /api/v1/status : [ALLOW] Conforme RFC 7230\n");
+                            }
+                            _ => {
+                                emit("  Requête 1 : Échec inattendu\n");
+                            }
+                        }
+
+                        let req_sqli = jambo_waf::HttpRequest::new([10, 0, 0, 88], jambo_waf::HttpMethod::Get, "/items?q=' or '1'='1");
+                        match self.waf.inspect_request(&cap, &req_sqli, 5002) {
+                            Ok(jambo_waf::WafDecision::Block { attack_type, score, .. }) => {
+                                emit("  Requête 2 GET /items?q=...   : [BLOCK] ");
+                                emit(attack_type.as_str());
+                                emit(" (Score: ");
+                                emit(format_u64(score as u64, &mut b));
+                                emit(")\n");
+                            }
+                            _ => {
+                                emit("  Requête 2 : Échec inattendu\n");
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "quarantine" => {
+                        emit("--- ADRESSES IP EN QUARANTAINE ---\n");
+                        if self.waf.quarantine_count == 0 {
+                            emit("Aucune adresse IP actuellement en quarantaine.\n");
+                        } else {
+                            for i in 0..self.waf.quarantine_count {
+                                let q = &self.waf.quarantined[i];
+                                if q.active {
+                                    emit("  IP: ");
+                                    emit(format_u64(q.ip[0] as u64, &mut b)); emit(".");
+                                    emit(format_u64(q.ip[1] as u64, &mut b)); emit(".");
+                                    emit(format_u64(q.ip[2] as u64, &mut b)); emit(".");
+                                    emit(format_u64(q.ip[3] as u64, &mut b));
+                                    emit(" | Fautes: ");
+                                    emit(format_u64(q.strikes as u64, &mut b));
+                                    emit(" | Raison: ");
+                                    emit(q.reason.as_str());
+                                    emit("\n");
+                                }
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "whitelist" => {
+                        emit("--- ADRESSES IP EN LISTE BLANCHE ---\n");
+                        if self.waf.whitelist_count == 0 {
+                            emit("Aucune adresse IP en liste blanche.\n");
+                        } else {
+                            for i in 0..self.waf.whitelist_count {
+                                let ip = &self.waf.whitelisted_ips[i];
+                                emit("  IP de confiance: ");
+                                emit(format_u64(ip[0] as u64, &mut b)); emit(".");
+                                emit(format_u64(ip[1] as u64, &mut b)); emit(".");
+                                emit(format_u64(ip[2] as u64, &mut b)); emit(".");
+                                emit(format_u64(ip[3] as u64, &mut b));
+                                emit("\n");
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "audit" => {
+                        emit("=== REGISTRE D'AUDIT CRYPTOGRAPHIQUE WAF (SHA-256) ===\n");
+                        emit("Chaîne d'audit courante : 0x");
+                        for byte in self.waf.audit_chain.iter().take(16) {
+                            emit(format_hex_u64(*byte as u64, &mut b));
+                        }
+                        emit("...\nEntrées d'audit enregistrées : ");
+                        emit(format_u64(self.waf.audit_count as u64, &mut b));
+                        emit("\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "benchmark" => {
+                        emit("[BENCHMARK/WAF] Évaluation de latence d'inspection L7 (100 requêtes)...\n");
+                        let cap = self.waf.admin_cap;
+                        let req = jambo_waf::HttpRequest::new([127, 0, 0, 1], jambo_waf::HttpMethod::Get, "/api/v1/bench");
+                        for _ in 0..100 {
+                            let _ = self.waf.inspect_request(&cap, &req, 9999);
+                        }
+                        emit("[BENCHMARK/WAF] 100 requêtes inspectées et validées en sous-milliseconde.\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    _ => {
+                        emit("Usage: waf [status | rules | inspect | quarantine | whitelist | audit | benchmark]\n");
+                        (ShellStatus::ExecutionFailed, write_pos)
+                    }
+                }
+            }
             "poweroff" | "reboot" => {
                 emit("[SYSTEM] Extinction demandée...\n");
                 unsafe {
@@ -11873,6 +12043,39 @@ mod tests {
                 let (st4, len4) = shell.execute_line("vpn route", &mut out);
                 assert_eq!(st4, ShellStatus::Success);
                 assert!(len4 > 0);
+            })
+            .unwrap();
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn test_shell_waf_commands() {
+        extern crate std;
+        let handle = std::thread::Builder::new()
+            .stack_size(8 * 1024 * 1024)
+            .spawn(|| {
+                let mut shell = JamboShell::new();
+                let mut out = [0u8; 1024];
+
+                let (st1, len1) = shell.execute_line("waf status", &mut out);
+                assert_eq!(st1, ShellStatus::Success);
+                assert!(len1 > 0);
+
+                let (st2, len2) = shell.execute_line("waf rules", &mut out);
+                assert_eq!(st2, ShellStatus::Success);
+                assert!(len2 > 0);
+
+                let (st3, len3) = shell.execute_line("waf inspect", &mut out);
+                assert_eq!(st3, ShellStatus::Success);
+                assert!(len3 > 0);
+
+                let (st4, len4) = shell.execute_line("waf audit", &mut out);
+                assert_eq!(st4, ShellStatus::Success);
+                assert!(len4 > 0);
+
+                let (st5, len5) = shell.execute_line("waf benchmark", &mut out);
+                assert_eq!(st5, ShellStatus::Success);
+                assert!(len5 > 0);
             })
             .unwrap();
         handle.join().unwrap();

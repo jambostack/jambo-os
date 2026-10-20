@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.111-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.112-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.111 (Passerelle VPN Post-Quantique WireGuard Souveraine Ring 3 & Transport Chiffré Inter-Grappe jambo-vpn)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.111` introduit la passerelle VPN WireGuard souveraine post-quantique en espace utilisateur (`services/jambo-vpn`) : négociation de clés hybride Dual-Defense combinant Curve25519 (ECDH Montgomery RFC 7748) et ML-KEM (Module-LWE dans l'anneau quotient R_q = Z_q[X]/(X^N + 1)), dérivation des clés de session via HKDF-SHA256, transport chiffré haute performance ChaCha20 avec étiquettes MAC HMAC-SHA256, protection anti-rejeu stricte par fenêtre glissante (128 paquets), routage cryptographique (Cryptokey Routing) et filtrage d'ingress par sous-réseaux CIDR (`AllowedIPs`), contrôle d'accès capabilaire strict `VpnCap` (Zero-Ambient Authority), zéroïsation sécurisée en mémoire, registre d'audit inaltérable scellé par chaîne SHA-256 et commandes interactives `vpn [status | peers | handshake | route | audit | benchmark]` dans le shell `jsh`.
+> **Statut du Projet : Version v0.2.112 (Pare-Feu Applicatif L7 Sandboxed & Filtrage d'Injections Protocolaire jambo-waf)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.112` introduit le pare-feu applicatif de couche 7 (WAF) sandboxed en espace utilisateur (`services/jambo-waf`) : contrôle d'accès capabilaire strict `WafCap` (Zero-Ambient Authority), filtrage protocolaire HTTP et en-têtes stricts RFC 7230 (CRLF, null-bytes, HTTP Request Smuggling), moteurs d'injections et heuristiques (SQLi, XSS, RCE, Path Traversal), analyseur JSON récursif borné avec détection de pollution de prototype (`__proto__`), inspecteur sandboxed de bytecode WebAssembly (Wasm) avec détection de bombes mémoire et filtrage d'appels d'hôtes interdits, prévention de fuites de données sensibles sortantes (Data Leakage Prevention), table de quarantaine dynamique O(1), liste blanche et registre d'audit inaltérable scellé par chaîne SHA-256 avec commandes interactives `waf [status | rules | inspect | quarantine | whitelist | audit | benchmark]` dans le shell `jsh`.
 
 ---
 
@@ -189,6 +189,7 @@ jambo-os/
 │   ├── jambo-vhostd/        # Virtualisation de périphériques vhost-user VirtIO Ring 3
 │   ├── jambo-vmm/           # Moniteur de micro-VMs et isolation matérielle Type-2
 │   ├── jambo-vpn/           # Passerelle VPN WireGuard post-quantique (ML-KEM + Curve25519) & transport chiffré
+│   ├── jambo-waf/           # Pare-feu applicatif L7 (WAF) sandboxed, filtrage d'injections & WafCap
 │   ├── jambo-walld/         # Pare-feu distribué dynamique & synchronisation conntrack
 │   ├── jambo-wasm/          # Runtime WebAssembly / WASI Snapshot Preview 1
 │   ├── jambo-wasm2/         # Wasm Component Model, interfaces WIT, Canonical ABI & bac à sable
