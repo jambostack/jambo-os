@@ -196,6 +196,7 @@ pub struct JamboShell {
     pub cwpp: jambo_cwpp::JamboCwppDaemon,
     pub ciem: jambo_ciem::JamboCiemDaemon,
     pub cnapp: jambo_cnapp::JamboCnappDaemon,
+    pub aspm: jambo_aspm::JamboAspmDaemon,
 }
 
 impl Default for JamboShell {
@@ -677,6 +678,15 @@ impl JamboShell {
         );
         let mut cnapp = jambo_cnapp::JamboCnappDaemon::new(cnapp_cap);
         cnapp.init_defaults();
+
+        let aspm_cap = jambo_aspm::AspmCap::new(
+            libjambo::Handle::new(12901, 1),
+            jambo_aspm::aspm_rights::ALL,
+            5000,
+            100,
+        );
+        let mut aspm = jambo_aspm::JamboAspmDaemon::new(aspm_cap);
+        aspm.init_defaults();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -763,6 +773,7 @@ impl JamboShell {
             cwpp,
             ciem,
             cnapp,
+            aspm,
         }
     }
 
@@ -954,10 +965,11 @@ impl JamboShell {
                 emit("  cwpp [cmd]      - Protection charges de travail (CWPP), intégrité d'exécution & confinement\n");
                 emit("  ciem [cmd]      - Droits cloud/grappe (CIEM), détection droits excessifs & moindre privilège\n");
                 emit("  cnapp [cmd]     - Protection unifiée (CNAPP), corrélation CSPM+CWPP+CIEM & risques\n");
+                emit("  aspm [cmd]      - Posture applicative (ASPM), supply chain, SBOM CycloneDX & admission\n");
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.2.126 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.2.127 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -10669,6 +10681,170 @@ impl JamboShell {
                     }
                 }
             }
+            "aspm" => {
+                let mut b = [0u8; 20];
+                let sub = if parsed.arg_count > 1 { parsed.args[1] } else { "status" };
+                match sub {
+                    "status" => {
+                        emit("--- [JAMBO-ASPM] POSTURE DE SÉCURITÉ APPLICATIVE & SUPPLY CHAIN ---\n");
+                        emit("  Composants dans le SBOM      : ");
+                        emit(format_u64(self.aspm.component_count as u64, &mut b));
+                        emit("\n  Vulnérabilités signalées     : ");
+                        emit(format_u64(self.aspm.vulnerability_count as u64, &mut b));
+                        emit("\n  Score global de posture ASPM : ");
+                        emit(format_u64(self.aspm.global_posture_score as u64, &mut b));
+                        emit(" / 100\n  Composants bloqués (quarant) : ");
+                        emit(format_u64(self.aspm.total_blocked, &mut b));
+                        emit("\n  Scans de dépendances exécutés: ");
+                        emit(format_u64(self.aspm.total_scans, &mut b));
+                        emit("\n  Remédiations autonomes       : ");
+                        emit(format_u64(self.aspm.total_remediations, &mut b));
+                        emit("\n  Registre d'audit SHA-256     : ");
+                        let valid = self.aspm.verify_ledger_integrity();
+                        emit(if valid { "SCELLEMENT VALIDE (OK)\n" } else { "ALTÉRATION DÉTECTÉE\n" });
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "components" | "sbom" => {
+                        emit("--- [JAMBO-ASPM] INVENTAIRE DES COMPOSANTS LOGICIELS (SBOM) ---\n");
+                        emit("ID | NOM                  | VERSION   | MENACE AMONT     | BLOCAGE\n");
+                        emit("---+----------------------+-----------+------------------+--------\n");
+                        for i in 0..self.aspm.component_count {
+                            if let Some(ref comp) = self.aspm.components[i] {
+                                emit(format_u64(comp.id as u64, &mut b));
+                                emit("  | ");
+                                emit(comp.name_as_str());
+                                let pad = if comp.name_len < 20 { 20 - comp.name_len } else { 1 };
+                                for _ in 0..pad { emit(" "); }
+                                emit(" | ");
+                                emit(comp.version_as_str());
+                                let vpad = if comp.version_len < 9 { 9 - comp.version_len } else { 1 };
+                                for _ in 0..vpad { emit(" "); }
+                                emit(" | ");
+                                match comp.threat {
+                                    jambo_aspm::SupplyChainThreat::None => emit("Aucune           | "),
+                                    jambo_aspm::SupplyChainThreat::MaliciousBuildScript => emit("build.rs suspect | "),
+                                    jambo_aspm::SupplyChainThreat::DigestMismatch => emit("Digest altéré    | "),
+                                    jambo_aspm::SupplyChainThreat::Typosquatting => emit("Typosquatting    | "),
+                                    jambo_aspm::SupplyChainThreat::KnownVulnerability => emit("CVE connue       | "),
+                                    jambo_aspm::SupplyChainThreat::YankedPackage => emit("Paquet yanked    | "),
+                                    jambo_aspm::SupplyChainThreat::UntrustedSource => emit("Source inconnue  | "),
+                                }
+                                emit(if comp.is_blocked { "OUI (BLOQUÉ)\n" } else { "NON (OK)\n" });
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "vulns" => {
+                        emit("--- [JAMBO-ASPM] VULNÉRABILITÉS SIGNALÉES (CVE / ADVISORIES) ---\n");
+                        emit("ID  | COMP | CVE            | CVSS | SÉVÉRITÉ | STATUT\n");
+                        emit("----+------+----------------+------+----------+-----------\n");
+                        for i in 0..self.aspm.vulnerability_count {
+                            if let Some(ref v) = self.aspm.vulnerabilities[i] {
+                                emit(format_u64(v.id as u64, &mut b));
+                                emit(" | ");
+                                emit(format_u64(v.component_id as u64, &mut b));
+                                emit("    | ");
+                                emit(v.cve_as_str());
+                                let cpad = if v.cve_len < 14 { 14 - v.cve_len } else { 1 };
+                                for _ in 0..cpad { emit(" "); }
+                                emit(" | ");
+                                emit(format_u64(v.cvss_score as u64, &mut b));
+                                emit("   | ");
+                                match v.severity {
+                                    jambo_aspm::VulnerabilitySeverity::Critical => emit("CRITIQUE | "),
+                                    jambo_aspm::VulnerabilitySeverity::High => emit("ÉLEVÉ    | "),
+                                    jambo_aspm::VulnerabilitySeverity::Medium => emit("MOYEN    | "),
+                                    jambo_aspm::VulnerabilitySeverity::Low => emit("FAIBLE   | "),
+                                    jambo_aspm::VulnerabilitySeverity::Info => emit("INFO     | "),
+                                }
+                                emit(if v.is_remediated { "CORRIGÉ\n" } else { "ACTIF\n" });
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "scan" => {
+                        let cap = self.aspm.admin_cap;
+                        match self.aspm.scan_dependencies(&cap, 2500) {
+                            Ok((total, threats)) => {
+                                emit("  [OK] Scan de la chaîne d'approvisionnement terminé avec succès.\n");
+                                emit("  Composants analysés : ");
+                                emit(format_u64(total as u64, &mut b));
+                                emit(" | Menaces amont identifiées : ");
+                                emit(format_u64(threats as u64, &mut b));
+                                emit("\n  Nouveau score de posture globale : ");
+                                emit(format_u64(self.aspm.global_posture_score as u64, &mut b));
+                                emit(" / 100\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("  [FAIL] Échec du scan des dépendances\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "remediate" => {
+                        let cap = self.aspm.admin_cap;
+                        if parsed.arg_count > 2 {
+                            let vid = parse_u64(parsed.args[2]).unwrap_or(0) as u32;
+                            match self.aspm.remediate_vulnerability(&cap, vid, 2600) {
+                                Ok(()) => {
+                                    emit("  [OK] Vulnérabilité ");
+                                    emit(format_u64(vid as u64, &mut b));
+                                    emit(" remédiée et composant sécurisé.\n");
+                                    (ShellStatus::Success, write_pos)
+                                }
+                                Err(_) => {
+                                    emit("  [FAIL] Échec de la remédiation de la vulnérabilité\n");
+                                    (ShellStatus::ExecutionFailed, write_pos)
+                                }
+                            }
+                        } else {
+                            match self.aspm.remediate_all_critical(&cap, 2600) {
+                                Ok(count) => {
+                                    emit("  [OK] Remédiation globale critique effectuée : ");
+                                    emit(format_u64(count as u64, &mut b));
+                                    emit(" vulnérabilité(s) neutralisée(s).\n");
+                                    (ShellStatus::Success, write_pos)
+                                }
+                                Err(_) => {
+                                    emit("  [FAIL] Échec de la remédiation globale\n");
+                                    (ShellStatus::ExecutionFailed, write_pos)
+                                }
+                            }
+                        }
+                    }
+                    "export-cyclonedx" => {
+                        let cap = self.aspm.admin_cap;
+                        let mut sbom_buf = [0u8; 1024];
+                        match self.aspm.generate_cyclonedx_sbom(&cap, &mut sbom_buf) {
+                            Ok(len) => {
+                                emit("  [OK] SBOM CycloneDX 1.5 généré (");
+                                emit(format_u64(len as u64, &mut b));
+                                emit(" octets) :\n  ");
+                                if let Ok(s) = core::str::from_utf8(&sbom_buf[..len]) {
+                                    emit(s);
+                                }
+                                emit("\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("  [FAIL] Erreur lors de la génération du SBOM CycloneDX\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "verify" => {
+                        let valid = self.aspm.verify_ledger_integrity();
+                        emit("  Vérification intégrité registre ASPM SHA-256 : ");
+                        emit(if valid { "INTÈGRE (OK)\n" } else { "ALTÉRÉ (FAIL)\n" });
+                        (ShellStatus::Success, write_pos)
+                    }
+                    _ => {
+                        emit("Usage: aspm [status | components | vulns | scan | remediate [vid] | export-cyclonedx | verify]\n");
+                        (ShellStatus::ExecutionFailed, write_pos)
+                    }
+                }
+            }
             "poweroff" | "reboot" => {
                 emit("[SYSTEM] Extinction demandée...\n");
                 unsafe {
@@ -14371,6 +14547,47 @@ mod tests {
                 let (st6, len6) = shell.execute_line("cnapp verify", &mut out);
                 assert_eq!(st6, ShellStatus::Success);
                 assert!(len6 > 0);
+            })
+            .unwrap();
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn test_shell_aspm_commands() {
+        extern crate std;
+        let handle = std::thread::Builder::new()
+            .stack_size(8 * 1024 * 1024)
+            .spawn(|| {
+                let mut shell = JamboShell::new();
+                let mut out = [0u8; 1024];
+
+                let (st1, len1) = shell.execute_line("aspm status", &mut out);
+                assert_eq!(st1, ShellStatus::Success);
+                assert!(len1 > 0);
+
+                let (st2, len2) = shell.execute_line("aspm components", &mut out);
+                assert_eq!(st2, ShellStatus::Success);
+                assert!(len2 > 0);
+
+                let (st3, len3) = shell.execute_line("aspm vulns", &mut out);
+                assert_eq!(st3, ShellStatus::Success);
+                assert!(len3 > 0);
+
+                let (st4, len4) = shell.execute_line("aspm scan", &mut out);
+                assert_eq!(st4, ShellStatus::Success);
+                assert!(len4 > 0);
+
+                let (st5, len5) = shell.execute_line("aspm export-cyclonedx", &mut out);
+                assert_eq!(st5, ShellStatus::Success);
+                assert!(len5 > 0);
+
+                let (st6, len6) = shell.execute_line("aspm remediate", &mut out);
+                assert_eq!(st6, ShellStatus::Success);
+                assert!(len6 > 0);
+
+                let (st7, len7) = shell.execute_line("aspm verify", &mut out);
+                assert_eq!(st7, ShellStatus::Success);
+                assert!(len7 > 0);
             })
             .unwrap();
         handle.join().unwrap();

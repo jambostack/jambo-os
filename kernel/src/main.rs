@@ -1317,6 +1317,13 @@ pub extern "C" fn _start() -> ! {
         "Échec du test de protection applicative cloud-native jambo-cnapp"
     );
 
+    // 18quinquiesviciesquadragies. Validation de la Posture ASPM & SBOM CycloneDX (Phase 129 - v0.2.127)
+    let aspm_success = sched::aspm_test::execute_aspm_daemon_test();
+    assert!(
+        aspm_success,
+        "Échec du test de posture de sécurité applicative et supply chain jambo-aspm"
+    );
+
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
 
     arch::init_iommu();
@@ -1579,14 +1586,15 @@ pub extern "C" fn _start() -> ! {
     kprintln!("\x1b[1;32m[PASS] Phase 126 Cloud Workload Protection Platform, Runtime Integrity & Containment (jambo-cwpp) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 127 Cloud Infrastructure Entitlement Management & Monotonic Least Privilege (jambo-ciem) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 128 Cloud-Native Application Protection Platform, Unified Risk & Correlation (jambo-cnapp) Complete\x1b[0m");
+    kprintln!("\x1b[1;32m[PASS] Phase 129 Application Security Posture Management, Supply Chain & SBOM CycloneDX (jambo-aspm) Complete\x1b[0m");
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.126 (Cloud-Native Application Protection Platform & Unified Risk jambo-cnapp)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.127 (Application Security Posture Management & SBOM CycloneDX jambo-aspm)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.126 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.127 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );

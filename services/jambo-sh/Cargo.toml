@@ -1,6 +1,6 @@
 [package]
 name = "jambo-sh"
-version = "0.2.126"
+version = "0.2.127"
 edition = "2021"
 
 [lib]
@@ -13,6 +13,7 @@ path = "src/main.rs"
 
 [dependencies]
 jambo-aid = { path = "../jambo-aid" }
+jambo-aspm = { path = "../jambo-aspm" }
 jambo-auditd = { path = "../jambo-auditd" }
 jambo-authd = { path = "../jambo-authd" }
 jambo-bpfd = { path = "../jambo-bpfd" }
