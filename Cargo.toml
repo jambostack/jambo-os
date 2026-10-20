@@ -80,6 +80,7 @@ members = [
     "services/jambo-vpn",
     "services/jambo-waf",
     "services/jambo-ddos",
+    "services/jambo-siem",
     "libs/jambo-ui",
     "libs/jambo-sdk",
     "drivers/virtio",
