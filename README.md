@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.130-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.3.1-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.3.0 (Détection et Réponse aux Menaces sur l'Identité (ITDR), Analyse de Posture & Remédiation Proactive jambo-itdr)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.3.0` inaugure la série majeure `v0.3.*` et introduit le moteur souverain d'Identity Threat Detection and Response (ITDR) en espace utilisateur (`services/jambo-itdr`) : modélisation et surveillance des identités souveraines (noyau, daemons système, identités réparties, rôles d'administration), détection en temps réel des vecteurs de menaces (compromission de jetons, attaques par rejeu de sessions, usurpation de capabilités, élévation de privilèges, dérive géotopologique), évaluation continue du trust score et indice de risque global (0..100), orchestration proactive de la remédiation (révocation de sessions, mise en quarantaine, dégradation monotone de droits, défis MFA step-up), contrôle d'accès capabilaire strict `ItdrCap` sans autorité ambiante et registre d'audit cryptographique inviolable scellé par chaînage SHA-256 avec commandes interactives `itdr [status | identities | threats | actions | analyze | respond | quarantine | cycle | verify]` dans le shell `jsh`.
+> **Statut du Projet : Version v0.3.1 (Gestion des Accès Privilégiés (PAM), Élévation JIT & Enregistrement de Sessions jambo-pam)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.3.1` introduit le moteur souverain de Privileged Access Management (PAM) en espace utilisateur (`services/jambo-pam`) : modélisation et surveillance des comptes privilégiés à privilèges nuls permanents (Zero-Standing-Privileges / ZSP), gestion de l'élévation Just-in-Time (JIT) avec contrôle strict des durées de vie, justifications et principe du double contrôle (Dual-Auth / Four-Eyes) pour les comptes de rang critique (Tier 0), courtage et enregistrement infalsifiable des sessions privilégiées Ring 3/IPC avec condensats cumulatifs SHA-256, mécanisme de coupure d'urgence (Kill-Switch O(1)) de sessions suspectes ou déviantes, rotation dynamique des secrets éphémères, contrôle d'accès capabilaire strict `PamCap` sans autorité ambiante et registre d'audit cryptographique inviolable scellé par chaînage SHA-256 avec commandes interactives `pam [status | accounts | sessions | jit-requests | request | approve | session-start | record | terminate | kill | rotate | verify]` dans le shell `jsh`.
 
 ---
 
@@ -207,6 +207,9 @@ jambo-os/
 │   ├── jambo-aspm/          # Posture de sécurité applicative (ASPM), supply chain & SBOM CycloneDX
 │   ├── jambo-bas/           # Simulation de brèches et d'attaques (BAS), validation continue & gaps
 │   ├── jambo-easm/          # Gestion de la surface d'attaque externe (EASM), découverte d'actifs & Shadow IT
+│   ├── jambo-ctem/          # Gestion continue d'exposition aux menaces (CTEM), cadrage, validation & remédiation
+│   ├── jambo-itdr/          # Détection et réponse aux menaces sur l'identité (ITDR), trust score & remédiation
+│   ├── jambo-pam/           # Gestion des accès privilégiés (PAM), ZSP, élévation JIT & session broker
 │   └── pcie-bus-mgr/        # Gestionnaire de bus PCIe, MSI-X et isolation IOMMU
 └── xtask/                   # Outil de compilation, création d'ISO et test QEMU
 ```

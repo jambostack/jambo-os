@@ -201,6 +201,7 @@ pub struct JamboShell {
     pub easm: jambo_easm::JamboEasmDaemon,
     pub ctem: jambo_ctem::JamboCtemDaemon,
     pub itdr: jambo_itdr::JamboItdrDaemon,
+    pub pam: jambo_pam::JamboPamDaemon,
 }
 
 impl Default for JamboShell {
@@ -727,6 +728,15 @@ impl JamboShell {
         );
         let mut itdr = jambo_itdr::JamboItdrDaemon::new(itdr_cap);
         itdr.init_defaults();
+
+        let pam_cap = jambo_pam::PamCap::new(
+            libjambo::Handle::new(13401, 1),
+            jambo_pam::pam_rights::ALL,
+            5000,
+            100,
+        );
+        let mut pam = jambo_pam::JamboPamDaemon::new(pam_cap);
+        pam.init_defaults();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -818,6 +828,7 @@ impl JamboShell {
             easm,
             ctem,
             itdr,
+            pam,
         }
     }
 
@@ -1014,10 +1025,11 @@ impl JamboShell {
                 emit("  easm [cmd]      - Surface d'attaque externe (EASM), recensement d'actifs, Shadow IT & failles\n");
                 emit("  ctem [cmd]      - Gestion continue d'exposition aux menaces (CTEM), cadrage, validation & remédiation\n");
                 emit("  itdr [cmd]      - Détection et réponse aux menaces sur l'identité (ITDR), analyse de posture & remédiation\n");
+                emit("  pam [cmd]       - Gestion des accès privilégiés (PAM), élévation JIT, sessions & rotation secrets\n");
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.3.0 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.3.1 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -11679,6 +11691,297 @@ impl JamboShell {
                     }
                 }
             }
+            "pam" => {
+                let subcmd = if parsed.arg_count > 1 { parsed.args[1] } else { "status" };
+                match subcmd {
+                    "status" => {
+                        emit("=== GESTION DES ACCÈS PRIVILÉGIÉS (PAM) ===\n");
+                        let mut b = [0u8; 20];
+                        let cap = self.pam.admin_cap;
+                        if let Ok(summary) = self.pam.get_summary(&cap) {
+                            emit("  Comptes supervisés (ZSP)     : ");
+                            emit(format_u64(summary.account_count as u64, &mut b));
+                            emit("\n  Comptes actifs / en service : ");
+                            emit(format_u64(summary.active_accounts as u64, &mut b));
+                            emit("\n  Demandes d'élévation JIT    : ");
+                            emit(format_u64(summary.jit_requests_count as u64, &mut b));
+                            emit("\n  Sessions actives (Ring 3/IPC): ");
+                            emit(format_u64(summary.active_sessions_count as u64, &mut b));
+                            emit("\n  Commandes enregistrées      : ");
+                            emit(format_u64(summary.total_commands_recorded as u64, &mut b));
+                            emit("\n  Grand livre d'audit SHA-256 : ");
+                            emit(if summary.ledger_valid { "INTÈGRE (OK)\n" } else { "ALTÉRÉ (FAIL)\n" });
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "accounts" => {
+                        emit("=== COMPTES PRIVILÉGIÉS SUPERVISÉS ===\n");
+                        let mut b = [0u8; 20];
+                        for i in 0..self.pam.account_count {
+                            if let Some(ref acc) = self.pam.accounts[i] {
+                                emit("  [ID ");
+                                emit(format_u64(acc.id as u64, &mut b));
+                                emit("] ");
+                                emit(acc.name_as_str());
+                                emit(" | Rang: ");
+                                match acc.tier {
+                                    jambo_pam::PrivilegeTier::Tier0KernelCore => emit("Tier 0 (Noyau/Crypto)"),
+                                    jambo_pam::PrivilegeTier::Tier1SystemFabric => emit("Tier 1 (Fabric/Système)"),
+                                    jambo_pam::PrivilegeTier::Tier2AppWorkload => emit("Tier 2 (Workloads/Apps)"),
+                                }
+                                emit(" | Dual-Auth: ");
+                                emit(if acc.requires_dual_auth { "OUI" } else { "NON" });
+                                emit(" | État: ");
+                                match acc.status {
+                                    jambo_pam::AccountStatus::Active => emit("ACTIF"),
+                                    jambo_pam::AccountStatus::InUse => emit("EN SERVICE"),
+                                    jambo_pam::AccountStatus::Suspended => emit("SUSPENDU"),
+                                    jambo_pam::AccountStatus::Locked => emit("VERROUILLÉ"),
+                                }
+                                emit(" | Sessions: ");
+                                emit(format_u64(acc.active_sessions_count as u64, &mut b));
+                                emit("\n");
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "sessions" => {
+                        emit("=== SESSIONS PRIVILÉGIÉES ENREGISTRÉES ===\n");
+                        let mut b = [0u8; 20];
+                        if self.pam.session_count == 0 {
+                            emit("  (Aucune session enregistrée)\n");
+                        } else {
+                            for i in 0..self.pam.session_count {
+                                if let Some(ref s) = self.pam.sessions[i] {
+                                    emit("  [SID ");
+                                    emit(format_u64(s.session_id as u64, &mut b));
+                                    emit("] Compte: ");
+                                    emit(format_u64(s.account_id as u64, &mut b));
+                                    emit(" | Opérateur: ");
+                                    emit(s.operator_as_str());
+                                    emit(" | État: ");
+                                    match s.state {
+                                        jambo_pam::SessionState::Active => emit("ACTIF"),
+                                        jambo_pam::SessionState::Terminated => emit("FERMÉ"),
+                                        jambo_pam::SessionState::KilledAnomalous => emit("STOPPÉ-ANOMALIE"),
+                                        jambo_pam::SessionState::Expired => emit("EXPIRÉ"),
+                                    }
+                                    emit(" | Commandes: ");
+                                    emit(format_u64(s.command_count as u64, &mut b));
+                                    emit("\n");
+                                }
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "jit-requests" => {
+                        emit("=== DEMANDES D'ÉLÉVATION JUST-IN-TIME (JIT) ===\n");
+                        let mut b = [0u8; 20];
+                        if self.pam.jit_count == 0 {
+                            emit("  (Aucune demande JIT soumise)\n");
+                        } else {
+                            for i in 0..self.pam.jit_count {
+                                if let Some(ref r) = self.pam.jit_requests[i] {
+                                    emit("  [REQ ");
+                                    emit(format_u64(r.request_id as u64, &mut b));
+                                    emit("] Demandeur: ");
+                                    emit(r.requester_as_str());
+                                    emit(" | Compte Cible: ");
+                                    emit(format_u64(r.target_account_id as u64, &mut b));
+                                    emit(" | Justif: ");
+                                    emit(r.justification_as_str());
+                                    emit(" | Statut: ");
+                                    match r.status {
+                                        jambo_pam::JitStatus::Pending => emit("EN ATTENTE"),
+                                        jambo_pam::JitStatus::Approved => emit("APPROUVÉ"),
+                                        jambo_pam::JitStatus::Denied => emit("REFUSÉ"),
+                                        jambo_pam::JitStatus::Active => emit("ACTIF"),
+                                        jambo_pam::JitStatus::Expired => emit("EXPIRÉ"),
+                                        jambo_pam::JitStatus::Revoked => emit("RÉVOQUÉ"),
+                                    }
+                                    emit(" | Approbateurs: ");
+                                    emit(r.approver1_as_str());
+                                    emit(" / ");
+                                    emit(r.approver2_as_str());
+                                    emit("\n");
+                                }
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "request" => {
+                        let target_id = if parsed.arg_count > 2 {
+                            parse_u64(parsed.args[2]).unwrap_or(3) as u32
+                        } else {
+                            3
+                        };
+                        let justification = if parsed.arg_count > 3 {
+                            parsed.args[3]
+                        } else {
+                            "Maintenance réseau"
+                        };
+                        let cap = self.pam.admin_cap;
+                        match self.pam.request_jit(&cap, "admin_operator", target_id, justification, 1800, 5000) {
+                            Ok(req_id) => {
+                                let mut b = [0u8; 20];
+                                emit("  [OK] Demande JIT créée avec succès (ID: ");
+                                emit(format_u64(req_id as u64, &mut b));
+                                emit(")\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("  [FAIL] Échec de la soumission de demande JIT\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "approve" => {
+                        let req_id = if parsed.arg_count > 2 {
+                            parse_u64(parsed.args[2]).unwrap_or(1) as u32
+                        } else {
+                            1
+                        };
+                        let approver = if parsed.arg_count > 3 {
+                            parsed.args[3]
+                        } else {
+                            "secops_supervisor"
+                        };
+                        let cap = self.pam.admin_cap;
+                        match self.pam.approve_jit(&cap, req_id, approver, 5010) {
+                            Ok(_) => {
+                                emit("  [OK] Demande JIT pleinement approuvée\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(jambo_pam::PamError::DualAuthRequired) => {
+                                emit("  [INFO] Première approbation enregistrée. Dual-Authorization requise (deuxième approbateur distinct nécessaire)\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("  [FAIL] Échec de l'approbation JIT\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "session-start" => {
+                        let req_id = if parsed.arg_count > 2 {
+                            parse_u64(parsed.args[2]).unwrap_or(1) as u32
+                        } else {
+                            1
+                        };
+                        let operator = if parsed.arg_count > 3 {
+                            parsed.args[3]
+                        } else {
+                            "admin_operator"
+                        };
+                        let cap = self.pam.admin_cap;
+                        match self.pam.start_session(&cap, req_id, operator, 5020) {
+                            Ok(sid) => {
+                                let mut b = [0u8; 20];
+                                emit("  [OK] Session privilégiée établie (SID: ");
+                                emit(format_u64(sid as u64, &mut b));
+                                emit(")\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("  [FAIL] Impossible d'ouvrir la session privilégiée\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "record" => {
+                        let sid = if parsed.arg_count > 2 {
+                            parse_u64(parsed.args[2]).unwrap_or(1) as u32
+                        } else {
+                            1
+                        };
+                        let cmd_str = if parsed.arg_count > 3 {
+                            parsed.args[3]
+                        } else {
+                            "modprobe virtio_net"
+                        };
+                        let cap = self.pam.admin_cap;
+                        match self.pam.record_session_command(&cap, sid, cmd_str, 0, false, 5030) {
+                            Ok(_) => {
+                                emit("  [OK] Commande enregistrée et scellée dans la session\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("  [FAIL] Échec de l'enregistrement de la commande\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "terminate" => {
+                        let sid = if parsed.arg_count > 2 {
+                            parse_u64(parsed.args[2]).unwrap_or(1) as u32
+                        } else {
+                            1
+                        };
+                        let cap = self.pam.admin_cap;
+                        match self.pam.terminate_session(&cap, sid, 5040) {
+                            Ok(()) => {
+                                emit("  [OK] Session fermée normalement et secret éphémère renouvelé\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("  [FAIL] Échec de la fermeture de session\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "kill" => {
+                        let sid = if parsed.arg_count > 2 {
+                            parse_u64(parsed.args[2]).unwrap_or(1) as u32
+                        } else {
+                            1
+                        };
+                        let reason = if parsed.arg_count > 3 {
+                            parsed.args[3]
+                        } else {
+                            "Anomalie de privilège détectée"
+                        };
+                        let cap = self.pam.admin_cap;
+                        match self.pam.kill_session(&cap, sid, reason, 5050) {
+                            Ok(()) => {
+                                emit("  [KILL-SWITCH] Session interrompue d'urgence, compte verrouillé et secret révoqué\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("  [FAIL] Échec de l'interruption d'urgence\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "rotate" => {
+                        let acc_id = if parsed.arg_count > 2 {
+                            parse_u64(parsed.args[2]).unwrap_or(1) as u32
+                        } else {
+                            1
+                        };
+                        let cap = self.pam.admin_cap;
+                        match self.pam.rotate_secret(&cap, acc_id, 5060) {
+                            Ok(_) => {
+                                emit("  [OK] Rotation du secret éphémère exécutée avec succès\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("  [FAIL] Échec de la rotation de secret\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "verify" => {
+                        let valid = self.pam.verify_ledger_integrity();
+                        emit("  Vérification intégrité registre PAM SHA-256 : ");
+                        emit(if valid { "INTÈGRE (OK)\n" } else { "ALTÉRÉ (FAIL)\n" });
+                        (ShellStatus::Success, write_pos)
+                    }
+                    _ => {
+                        emit("Usage: pam [status | accounts | sessions | jit-requests | request | approve | session-start | record | terminate | kill | rotate | verify]\n");
+                        (ShellStatus::ExecutionFailed, write_pos)
+                    }
+                }
+            }
             "poweroff" | "reboot" => {
                 emit("[SYSTEM] Extinction demandée...\n");
                 unsafe {
@@ -15602,6 +15905,63 @@ mod tests {
                 let (st9, len9) = shell.execute_line("itdr verify", &mut out);
                 assert_eq!(st9, ShellStatus::Success);
                 assert!(len9 > 0);
+            })
+            .unwrap();
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn test_shell_pam_commands() {
+        extern crate std;
+        let handle = std::thread::Builder::new()
+            .stack_size(8 * 1024 * 1024)
+            .spawn(|| {
+                let mut shell = JamboShell::new();
+                let mut out = [0u8; 1024];
+
+                let (st1, len1) = shell.execute_line("pam status", &mut out);
+                assert_eq!(st1, ShellStatus::Success);
+                assert!(len1 > 0);
+
+                let (st2, len2) = shell.execute_line("pam accounts", &mut out);
+                assert_eq!(st2, ShellStatus::Success);
+                assert!(len2 > 0);
+
+                let (st3, len3) = shell.execute_line("pam sessions", &mut out);
+                assert_eq!(st3, ShellStatus::Success);
+                assert!(len3 > 0);
+
+                let (st4, len4) = shell.execute_line("pam jit-requests", &mut out);
+                assert_eq!(st4, ShellStatus::Success);
+                assert!(len4 > 0);
+
+                let (st5, len5) = shell.execute_line("pam request 3 Maintenance", &mut out);
+                assert_eq!(st5, ShellStatus::Success);
+                assert!(len5 > 0);
+
+                let (st6, len6) = shell.execute_line("pam approve 1 supervisor", &mut out);
+                assert_eq!(st6, ShellStatus::Success);
+                assert!(len6 > 0);
+
+                let (st7, len7) = shell.execute_line("pam session-start 1 operator_pam", &mut out);
+                assert_eq!(st7, ShellStatus::Success);
+                assert!(len7 > 0);
+
+                let (st8, len8) = shell.execute_line("pam record 1 modprobe", &mut out);
+                assert_eq!(st8, ShellStatus::Success);
+                assert!(len8 > 0);
+
+                let (st9, len9) = shell.execute_line("pam terminate 1", &mut out);
+                assert_eq!(st9, ShellStatus::Success);
+                assert!(len9 > 0);
+
+                let (st10, len10) = shell.execute_line("pam rotate 1", &mut out);
+                assert_eq!(st10, ShellStatus::Success);
+                assert!(len10 > 0);
+
+                let (st11, len11) = shell.execute_line("pam verify", &mut out);
+                assert_eq!(st11, ShellStatus::Success);
+                assert!(len11 > 0);
             })
             .unwrap();
         handle.join().unwrap();
