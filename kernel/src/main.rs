@@ -1233,6 +1233,13 @@ pub extern "C" fn _start() -> ! {
         "Échec du test de la mitigation anti-DDoS L3/L4/L7 jambo-ddos"
     );
 
+    // 14septiesdeciesquadragies. Validation de l'Orchestration SOAR & Réponse aux Incidents (Phase 117 - v0.2.115)
+    let soar_success = sched::execute_soar_daemon_test();
+    assert!(
+        soar_success,
+        "Échec du test de l'orchestration SOAR & réponse aux incidents jambo-soar"
+    );
+
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
 
     arch::init_iommu();
@@ -1483,14 +1490,15 @@ pub extern "C" fn _start() -> ! {
     kprintln!("\x1b[1;32m[PASS] Phase 113 Sovereign Post-Quantum WireGuard Gateway & Encrypted Transport (jambo-vpn) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 114 Sandboxed L7 Web Application Firewall (jambo-waf) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 115 Multi-Layer L3/L4/L7 Anti-DDoS Mitigation & SYN Cookies (jambo-ddos) Complete\x1b[0m");
+    kprintln!("\x1b[1;32m[PASS] Phase 117 Security Orchestration, Automation & Incident Response (jambo-soar) Complete\x1b[0m");
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.113 (Distributed Multi-Layer Anti-DDoS & SYN Cookies jambo-ddos)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.115 (Security Orchestration, Automation & Incident Response jambo-soar)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.113 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.115 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );

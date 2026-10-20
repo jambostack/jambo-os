@@ -81,6 +81,7 @@ members = [
     "services/jambo-waf",
     "services/jambo-ddos",
     "services/jambo-siem",
+    "services/jambo-soar",
     "libs/jambo-ui",
     "libs/jambo-sdk",
     "drivers/virtio",

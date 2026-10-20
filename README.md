@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.114-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.115-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.114 (Corrélation Événements SIEM Temps Réel L3/L4/L7, Limiteurs de Débit à Jetons & SYN Cookies jambo-ddos)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.113` introduit le système souverain de défense et mitigation anti-DDoS haute sécurité en espace utilisateur (`services/jambo-ddos`) : contrôle d'accès capabilaire strict `DdosCap` (Zero-Ambient Authority), mitigation multicouches (L3 anti-spoofing martiens/bogons RFC 6890, L4 SYN Cookies stateless déterministes à fenêtres glissantes de 64s sans allocation d'état mémoire, détection de scans de ports et anomalies de drapeaux TCP, L7 détection de requêtes volumétriques HTTP Floods et d'attaques lentes Slowloris), détection d'amplification (DNS/NTP/SNMP reflection), algorithmes de limitation de débit par seaux à jetons (Token Bucket), gestion des trous noirs O(1) avec TTL et de liste blanche de contournement prioritaire, registre d'audit cryptographique inaltérable scellé par chaîne SHA-256 avec commandes interactives `ddos [status | syn-cookie | rate-limit | blackhole | whitelist | audit | benchmark]` dans le shell `jsh`.
+> **Statut du Projet : Version v0.2.115 (Orchestration SOAR, Automatisation des Incidents, Workflows DAG & SoarCap jambo-soar)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.115` introduit le moteur souverain d'orchestration de sécurité, automatisation et réponse aux incidents en espace utilisateur (`services/jambo-soar`) : contrôle d'accès capabilaire strict `SoarCap` (Zero-Ambient Authority), modélisation des incidents de sécurité avec empreinte SHA-256 unique, moteur d'exécution de playbooks conditionnels en graphe acyclique dirigé (DAG) avec détection formelle de cycles et ordonnancement topologique, intégrations croisées distribuées (`jambo-walld`, `jambo-ddos`, `jambo-waf`, `jambo-ids`, `jambo-siem`), playbooks intégrés (mitigation DDoS, neutralisation d'injections applicatives WAF, révocation immédiate de capacités compromises et confinement), registre d'audit inaltérable scellé par chaîne de hachage SHA-256 avec commandes interactives `soar [status | playbooks | trigger | mitigate | audit]` dans le shell `jsh`.
 
 ---
 

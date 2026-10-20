@@ -184,6 +184,7 @@ pub struct JamboShell {
     pub vpn: jambo_vpn::JamboVpnDaemon,
     pub waf: jambo_waf::JamboWafDaemon,
     pub ddos: jambo_ddos::JamboDdosDaemon,
+    pub soar: jambo_soar::JamboSoarDaemon,
 }
 
 impl Default for JamboShell {
@@ -558,6 +559,14 @@ impl JamboShell {
         );
         let mut ddos = jambo_ddos::JamboDdosDaemon::new(ddos_cap);
         ddos.init_defaults();
+        let soar_cap = jambo_soar::SoarCap::new(
+            libjambo::Handle::new(11701, 1),
+            jambo_soar::soar_rights::ALL,
+            5000,
+            100,
+        );
+        let mut soar = jambo_soar::JamboSoarDaemon::new(soar_cap);
+        soar.init_defaults();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -632,6 +641,7 @@ impl JamboShell {
             vpn,
             waf,
             ddos,
+            soar,
         }
     }
 
@@ -811,10 +821,11 @@ impl JamboShell {
                 emit("  vpn [cmd]     - Passerelle VPN WireGuard post-quantique (ML-KEM + Curve25519) & transport chiffré\n");
                 emit("  waf [cmd]     - Pare-feu applicatif L7 (WAF) sandboxed, détection d'injections & WafCap\n");
                 emit("  ddos [cmd]    - Mitigation Anti-DDoS L3/L4/L7, SYN Cookies, seaux à jetons & DdosCap\n");
+                emit("  soar [cmd]    - Orchestration SOAR, Playbooks DAG automatisés & SoarCap\n");
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.2.113 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.2.115 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -9005,6 +9016,121 @@ impl JamboShell {
                     }
                 }
             }
+            "soar" => {
+                let subcmd = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    "status"
+                };
+                match subcmd {
+                    "status" => {
+                        let mut b = [0u8; 20];
+                        emit("[SOAR/STATUS] Moteur SOAR & Orchestration d'Incidents\n");
+                        emit("  Playbooks actifs      : ");
+                        emit(format_u64(self.soar.playbook_count as u64, &mut b));
+                        emit("\n  Incidents enregistrés : ");
+                        emit(format_u64(self.soar.incident_count as u64, &mut b));
+                        emit("\n  Actions dispatchées   : ");
+                        emit(format_u64(self.soar.dispatched_count as u64, &mut b));
+                        emit("\n  Chaîne audit SHA-256  : ");
+                        emit(format_u64(self.soar.audit_count as u64, &mut b));
+                        emit(" entrées\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "playbooks" => {
+                        emit("[SOAR/PLAYBOOKS] Workflows DAG enregistrés :\n");
+                        for i in 0..self.soar.playbook_count {
+                            if let Some(ref pb) = self.soar.playbooks[i] {
+                                let mut b = [0u8; 20];
+                                emit("  [ID ");
+                                emit(format_u64(pb.id as u64, &mut b));
+                                emit("] ");
+                                if let Ok(s) = core::str::from_utf8(&pb.name[..pb.name_len]) {
+                                    emit(s);
+                                }
+                                emit(" (Etapes: ");
+                                emit(format_u64(pb.steps_count as u64, &mut b));
+                                emit(", Succès: ");
+                                emit(format_u64(pb.success_count as u64, &mut b));
+                                emit(")\n");
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "trigger" => {
+                        let cap = self.soar.admin_cap;
+                        let inc = jambo_soar::Incident::new(
+                            self.soar.incident_count as u64 + 1,
+                            "Test incident injection L7",
+                            jambo_soar::IncidentCategory::SqlInjection,
+                            jambo_soar::IncidentSeverity::High,
+                            "jambo-waf",
+                            [192, 168, 1, 99],
+                            443,
+                            Some(1),
+                            None,
+                            1000,
+                        );
+                        match self.soar.create_incident(&cap, inc) {
+                            Ok(id) => {
+                                let mut b = [0u8; 20];
+                                emit("[SOAR/INCIDENT] Nouvel incident créé avec succès [ID: ");
+                                emit(format_u64(id, &mut b));
+                                emit("]\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("[SOAR/INCIDENT] Erreur création incident\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "mitigate" => {
+                        let cap = self.soar.admin_cap;
+                        let inc_id = self.soar.incident_count as u64;
+                        if inc_id == 0 {
+                            emit("[SOAR/MITIGATE] Aucun incident à mitiger. Exécutez 'soar trigger' d'abord.\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        } else {
+                            match self.soar.execute_playbook(&cap, 2, inc_id, 2000) {
+                                Ok(res) => {
+                                    let mut b = [0u8; 20];
+                                    emit("[SOAR/MITIGATE] Playbook exécuté. Etapes réussies: ");
+                                    emit(format_u64(res.steps_succeeded as u64, &mut b));
+                                    emit(", Entièrement mitigé: ");
+                                    emit(if res.fully_mitigated { "OUI\n" } else { "NON\n" });
+                                    (ShellStatus::Success, write_pos)
+                                }
+                                Err(_) => {
+                                    emit("[SOAR/MITIGATE] Échec exécution playbook\n");
+                                    (ShellStatus::ExecutionFailed, write_pos)
+                                }
+                            }
+                        }
+                    }
+                    "audit" => {
+                        emit("[SOAR/AUDIT] Chaîne SHA-256 inaltérable : 0x");
+                        for byte in self.soar.audit_chain.iter().take(16) {
+                            let hi = (byte >> 4) & 0x0f;
+                            let lo = byte & 0x0f;
+                            let hex_chars = b"0123456789abcdef";
+                            emit(core::str::from_utf8(&[hex_chars[hi as usize], hex_chars[lo as usize]]).unwrap());
+                        }
+                        emit("... [Total : ");
+                        let mut b = [0u8; 20];
+                        emit(format_u64(self.soar.audit_count, &mut b));
+                        emit("]\n");
+                        let valid = self.soar.verify_audit_integrity();
+                        emit("  Intégrité formelle : ");
+                        emit(if valid { "VÉRIFIÉE (OK)\n" } else { "CORROMPUE (ERR)\n" });
+                        (ShellStatus::Success, write_pos)
+                    }
+                    _ => {
+                        emit("Usage: soar [status | playbooks | trigger | mitigate | audit]\n");
+                        (ShellStatus::ExecutionFailed, write_pos)
+                    }
+                }
+            }
             "poweroff" | "reboot" => {
                 emit("[SYSTEM] Extinction demandée...\n");
                 unsafe {
@@ -12283,6 +12409,39 @@ mod tests {
                 let (st7, len7) = shell.execute_line("ddos benchmark", &mut out);
                 assert_eq!(st7, ShellStatus::Success);
                 assert!(len7 > 0);
+            })
+            .unwrap();
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn test_shell_soar_commands() {
+        extern crate std;
+        let handle = std::thread::Builder::new()
+            .stack_size(8 * 1024 * 1024)
+            .spawn(|| {
+                let mut shell = JamboShell::new();
+                let mut out = [0u8; 1024];
+
+                let (st1, len1) = shell.execute_line("soar status", &mut out);
+                assert_eq!(st1, ShellStatus::Success);
+                assert!(len1 > 0);
+
+                let (st2, len2) = shell.execute_line("soar playbooks", &mut out);
+                assert_eq!(st2, ShellStatus::Success);
+                assert!(len2 > 0);
+
+                let (st3, len3) = shell.execute_line("soar trigger", &mut out);
+                assert_eq!(st3, ShellStatus::Success);
+                assert!(len3 > 0);
+
+                let (st4, len4) = shell.execute_line("soar mitigate", &mut out);
+                assert_eq!(st4, ShellStatus::Success);
+                assert!(len4 > 0);
+
+                let (st5, len5) = shell.execute_line("soar audit", &mut out);
+                assert_eq!(st5, ShellStatus::Success);
+                assert!(len5 > 0);
             })
             .unwrap();
         handle.join().unwrap();
