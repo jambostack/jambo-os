@@ -177,6 +177,7 @@ pub struct JamboShell {
     pub crypto2: jambo_crypto2::JamboCrypto2Daemon,
     pub tee2: jambo_tee2::JamboTee2Daemon,
     pub kms: jambo_kms::JamboKmsDaemon,
+    pub pki2: jambo_pki2::JamboPkiDaemon,
 }
 
 impl Default for JamboShell {
@@ -495,6 +496,14 @@ impl JamboShell {
         );
         let mut kms = jambo_kms::JamboKmsDaemon::new(kms_cap);
         kms.init_defaults();
+        let pki2_cap = jambo_pki2::PkiCap::new(
+            libjambo::Handle::new(10901, 1),
+            jambo_pki2::pki_rights::ALL,
+            1,
+            32,
+        );
+        let mut pki2 = jambo_pki2::JamboPkiDaemon::new(pki2_cap);
+        pki2.init_defaults();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -562,6 +571,7 @@ impl JamboShell {
             crypto2,
             tee2,
             kms,
+            pki2,
         }
     }
 
@@ -734,10 +744,11 @@ impl JamboShell {
                 emit("  crypto2 [cmd] - Accélération cryptographique matérielle Ring 3 & gestion de clés souveraines\n");
                 emit("  tee2 [cmd]    - Micro-hyperviseurs d'enclaves imbriquées & mémoire chiffrée multi-locataires\n");
                 emit("  kms [cmd]     - Gestion et séquestre de clés de grappe distribuée & baux temporels\n");
+                emit("  pki [cmd]     - PKI hybride post-quantique (ML-DSA + Ed25519) & fédération CA\n");
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.2.106 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.2.107 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -7547,6 +7558,198 @@ impl JamboShell {
                     }
                     _ => {
                         emit("Usage: kms [status | keys | leases | escrow | replicate | benchmark | audit]\n");
+                        (ShellStatus::ExecutionFailed, write_pos)
+                    }
+                }
+            }
+            "pki" => {
+                let sub = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    "status"
+                };
+                match sub {
+                    "status" => {
+                        let mut b = [0u8; 20];
+                        emit("=== INFRASTRUCTURE PKI HYBRIDE POST-QUANTIQUE (jambo-pki2) ===\n");
+                        emit("Autorités de Certification (CAs) : ");
+                        emit(format_u64(self.pki2.ca_count as u64, &mut b));
+                        emit(" / ");
+                        emit(format_u64(jambo_pki2::MAX_CAS as u64, &mut b));
+                        emit("\nCertificats Numériques Émis : ");
+                        emit(format_u64(self.pki2.cert_count as u64, &mut b));
+                        emit(" / ");
+                        emit(format_u64(jambo_pki2::MAX_CERTS as u64, &mut b));
+                        emit("\nEntrées dans la Liste de Révocation (CRL) : ");
+                        emit(format_u64(self.pki2.crl.entries_count as u64, &mut b));
+                        emit(" / ");
+                        emit(format_u64(jambo_pki2::MAX_CRL_ENTRIES as u64, &mut b));
+                        emit("\nValidations Cryptographiques Exécutées : ");
+                        emit(format_u64(self.pki2.total_validations, &mut b));
+                        emit("\nHorodatage Système (Ticks) : ");
+                        emit(format_u64(self.pki2.current_time_ticks, &mut b));
+                        emit("\nCondensat d'Audit Scellé (SHA-256) : ");
+                        for byte in self.pki2.audit_chain.iter().take(8) {
+                            emit(format_hex_u64(*byte as u64, &mut b));
+                        }
+                        emit("...\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "cas" => {
+                        let mut b = [0u8; 20];
+                        emit("=== AUTORITÉS DE CERTIFICATION FÉDÉRÉES (jambo-pki2) ===\n");
+                        for i in 0..self.pki2.ca_count {
+                            let ca = &self.pki2.cas[i];
+                            emit("CA #");
+                            emit(format_u64(ca.ca_id as u64, &mut b));
+                            emit(" (Parent #");
+                            emit(format_u64(ca.parent_ca_id as u64, &mut b));
+                            emit(") : ");
+                            emit(ca.name_str());
+                            emit(" | Niveau: ");
+                            match ca.trust_level {
+                                jambo_pki2::CaTrustLevel::RootAnchor => emit("RootAnchor"),
+                                jambo_pki2::CaTrustLevel::Intermediate => emit("Intermediate"),
+                                jambo_pki2::CaTrustLevel::CrossCertified => emit("CrossCertified"),
+                                jambo_pki2::CaTrustLevel::ExternalFederated => emit("ExternalFederated"),
+                            }
+                            emit(" | Profondeur Max: ");
+                            emit(format_u64(ca.max_sub_depth as u64, &mut b));
+                            emit(" | Actif: ");
+                            emit(if ca.is_active { "Oui\n" } else { "Non\n" });
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "list" => {
+                        let mut b = [0u8; 20];
+                        emit("=== CATALOGUE DES CERTIFICATS ÉMIS (jambo-pki2) ===\n");
+                        for i in 0..self.pki2.cert_count {
+                            let cert = &self.pki2.certs[i];
+                            emit("Serial #");
+                            emit(format_u64(cert.serial_number, &mut b));
+                            emit(" | Sujet: ");
+                            emit(cert.subject_str());
+                            emit(" | CA Émettrice: #");
+                            emit(format_u64(cert.issuer_ca_id as u64, &mut b));
+                            emit(" | Statut: ");
+                            match cert.status {
+                                jambo_pki2::CertStatus::Active => emit("Actif"),
+                                jambo_pki2::CertStatus::Suspended => emit("Suspendu"),
+                                jambo_pki2::CertStatus::Revoked => emit("Révoqué"),
+                                jambo_pki2::CertStatus::Expired => emit("Expiré"),
+                            }
+                            emit(" | Validité: [");
+                            emit(format_u64(cert.not_before_ticks, &mut b));
+                            emit("..");
+                            emit(format_u64(cert.not_after_ticks, &mut b));
+                            emit("]\n");
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "crl" => {
+                        let mut b = [0u8; 20];
+                        emit("=== LISTE DE RÉVOCATION DE CERTIFICATS (CRL) (jambo-pki2) ===\n");
+                        emit("CRL #");
+                        emit(format_u64(self.pki2.crl.crl_number, &mut b));
+                        emit(" | Émetteur CA #");
+                        emit(format_u64(self.pki2.crl.issuer_ca_id as u64, &mut b));
+                        emit(" | Total Entrées: ");
+                        emit(format_u64(self.pki2.crl.entries_count as u64, &mut b));
+                        emit("\n");
+                        for i in 0..self.pki2.crl.entries_count {
+                            let e = &self.pki2.crl.entries[i];
+                            emit("  - Serial Révoqué #");
+                            emit(format_u64(e.serial_number, &mut b));
+                            emit(" à t=");
+                            emit(format_u64(e.revocation_ticks, &mut b));
+                            emit(" | Motif: ");
+                            match e.reason {
+                                jambo_pki2::RevocationReason::Unspecified => emit("Unspecified\n"),
+                                jambo_pki2::RevocationReason::KeyCompromise => emit("KeyCompromise\n"),
+                                jambo_pki2::RevocationReason::CaCompromise => emit("CaCompromise\n"),
+                                jambo_pki2::RevocationReason::AffiliationChanged => emit("AffiliationChanged\n"),
+                                jambo_pki2::RevocationReason::Superseded => emit("Superseded\n"),
+                                jambo_pki2::RevocationReason::CessationOfOperation => emit("CessationOfOperation\n"),
+                                jambo_pki2::RevocationReason::QuantumVulnerabilityDetected => emit("QuantumVulnerabilityDetected\n"),
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "verify" => {
+                        let cap = self.pki2.admin_cap;
+                        let serial = if self.pki2.cert_count > 0 {
+                            self.pki2.certs[0].serial_number
+                        } else {
+                            1001
+                        };
+                        match self.pki2.validate_cert(&cap, serial, jambo_pki2::key_usages::SERVER_AUTH) {
+                            Ok(true) => {
+                                emit("Validation de chaîne réussie : Certificat vérifié cryptographiquement jusqu'à l'ancre Root CA (Dual-Defense ML-DSA+Ed25519)\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Ok(false) => {
+                                emit("Validation de chaîne échouée : signature hybride non conforme\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                            Err(e) => {
+                                emit("Erreur lors de la validation du certificat : ");
+                                match e {
+                                    jambo_pki2::PkiError::CertRevoked => emit("Certificat Révoqué (CRL)\n"),
+                                    jambo_pki2::PkiError::CertExpired => emit("Certificat Expiré\n"),
+                                    jambo_pki2::PkiError::KeyUsageNotPermitted => emit("Usage de clé non autorisé\n"),
+                                    _ => emit("Échec de conformité PKI\n"),
+                                }
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "benchmark" => {
+                        let cap = self.pki2.admin_cap;
+                        let test_pk = jambo_pki2::HybridPublicKey::new_hybrid(b"BENCH_ED", b"BENCH_ML");
+                        let ca_sk_ed = [0x55u8; 32];
+                        let ca_sk_ml = [0x56u8; 32];
+                        let res = self.pki2.issue_certificate(
+                            &cap,
+                            1,
+                            999,
+                            b"benchmark.jambo.internal",
+                            test_pk,
+                            50_000,
+                            jambo_pki2::key_usages::CLIENT_AUTH,
+                            false,
+                            0,
+                            &ca_sk_ed,
+                            &ca_sk_ml,
+                        );
+                        if let Ok(sn) = res {
+                            let _ = self.pki2.validate_cert(&cap, sn, jambo_pki2::key_usages::CLIENT_AUTH);
+                            let _ = self.pki2.revoke_certificate(&cap, sn, jambo_pki2::RevocationReason::Superseded);
+                            let revoked_check = self.pki2.validate_cert(&cap, sn, jambo_pki2::key_usages::CLIENT_AUTH);
+                            if revoked_check == Err(jambo_pki2::PkiError::CertRevoked) {
+                                emit("Benchmark PKI2 : Émission hybride, Validation de chaîne, Révocation temps réel et Vérification CRL réussies avec succès\n");
+                                (ShellStatus::Success, write_pos)
+                            } else {
+                                emit("Benchmark PKI2 : Incohérence lors de la vérification de révocation\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        } else {
+                            emit("Benchmark PKI2 : Échec de l'émission du certificat\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        }
+                    }
+                    "audit" => {
+                        let mut b = [0u8; 20];
+                        emit("Condensat SHA-256 du Registre d'Audit PKI : ");
+                        for byte in self.pki2.audit_chain.iter() {
+                            emit(format_hex_u64(*byte as u64, &mut b));
+                        }
+                        emit("\nÉvénements d'audit consignés : ");
+                        emit(format_u64(self.pki2.audit_count as u64, &mut b));
+                        emit("\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    _ => {
+                        emit("Usage: pki [status | cas | list | crl | verify | benchmark | audit]\n");
                         (ShellStatus::ExecutionFailed, write_pos)
                     }
                 }

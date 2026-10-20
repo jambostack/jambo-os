@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.106-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.107-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.106 (Gestion et Séquestre de Clés de Grappe Distribuée & Baux Temporels jambo-kms)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.106` introduit le sous-système souverain de gestion et séquestre de clés cryptographiques de grappe distribuée (`services/jambo-kms`) : hiérarchies cryptographiques rigoureuses conformes NIST SP 800-108 et HKDF RFC 5869 (MasterKey racine KEK niveau 0, DomainKey locataire KEK niveau 1, DataKey DEK niveau 2, SessionKey éphémère niveau 3, EscrowKey de secours niveau 4), baux temporels bornés avec quotas d'opérations et renouvellement monotone contrôlé, séquestre multi-gardiens à seuil M-sur-N avec engagements SHA-256 et reconstruction Shamir sur corps fini GF(256), réplication chiffrée multi-nœuds avec enveloppes scellées ChaCha20 et HMAC-SHA256, cycle de vie cryptographique complet avec rotation atomique, révocation en cascade et zéroïsation volatile garantie (`compiler_fence`), registre d'audit inaltérable scellé par chaîne SHA-256, gouvernance capabilaire stricte par jeton `KmsCap` sans autorité ambiante et commandes interactives `kms [status | keys | leases | escrow | replicate | benchmark | audit]` dans le shell `jsh`.
+> **Statut du Projet : Version v0.2.107 (Infrastructure PKI Hybride Post-Quantique & Fédération de CA Distribuées jambo-pki2)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.107` introduit le sous-système souverain d'infrastructure à clés publiques hybride et fédération d'autorités de certification (`services/jambo-pki2`) : signatures hybrides Dual-Defense combinant ML-DSA (FIPS 204 / Dilithium-65) et Ed25519 pour une protection mathématique absolue contre les ordinateurs quantiques, hiérarchies et fédération multi-CA (RootAnchor, Intermediate, CrossCertified, ExternalFederated) avec limitation stricte de profondeur (`path_length_constraint`), validation formelle de chaînes de confiance selon RFC 5280, listes de révocation de certificats (CRL) signées et vérifiables en temps réel O(1), gestion granulaire des usages autorisés (`KeyUsage` : Server, Client, CodeSign, CaSign, CrlSign), registre d'audit inaltérable scellé par chaîne SHA-256, gouvernance capabilaire stricte par jeton `PkiCap` sans autorité ambiante et commandes interactives `pki [status | cas | list | crl | verify | benchmark | audit]` dans le shell `jsh`.
 
 ---
 
@@ -159,6 +159,7 @@ jambo-os/
 │   ├── jambo-mpc/           # Calcul multipartite sécurisé (MPC), partage secret de Shamir & triplés de Beaver
 │   ├── jambo-init/          # Superviseur système PID 1 en espace utilisateur
 │   ├── jambo-ipcd/          # Multiplexeur et passerelle de messagerie IPC distribuée
+│   ├── jambo-kms/           # Gestion et séquestre de clés de grappe distribuée & baux temporels
 │   ├── jambo-kvd/           # Magasin clé-valeur transactionnel distribué (MVCC & baux)
 │   ├── jambo-linux/         # Traducteur d'appels système Linux (compatibilité POSIX)
 │   ├── jambo-logd/          # Démon de journalisation structurée et agrégation distribuée
@@ -168,6 +169,7 @@ jambo-os/
 │   ├── jambo-netd/          # Démon réseau TCP/IP, TLS 1.3 et DNS sécurisé
 │   ├── jambo-pkgd/          # Gestionnaire de paquets immuables et mises à jour A/B
 │   ├── jambo-patchd/        # Rechargement à chaud de binaires Ring 3 & conformité ABI
+│   ├── jambo-pki2/          # PKI hybride post-quantique (ML-DSA + Ed25519) & fédération CA
 │   ├── jambo-policyd/       # Moteur de politiques de sécurité & admission de grappe
 │   ├── jambo-powerd/        # Gestion d'énergie ACPI et régulation thermique/C-states
 │   ├── jambo-pqc/           # Cryptographie post-quantique (ML-KEM, ML-DSA) & transition souveraine

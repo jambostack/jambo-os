@@ -73,6 +73,7 @@ members = [
     "services/jambo-crypto2",
     "services/jambo-tee2",
     "services/jambo-kms",
+    "services/jambo-pki2",
     "libs/jambo-ui",
     "libs/jambo-sdk",
     "drivers/virtio",

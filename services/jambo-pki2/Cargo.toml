@@ -1,0 +1,7 @@
+[package]
+name = "jambo-pki2"
+version = "0.2.107"
+edition = "2021"
+
+[dependencies]
+libjambo = { path = "../../libs/libjambo" }

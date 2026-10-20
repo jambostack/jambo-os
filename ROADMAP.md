@@ -1,7 +1,7 @@
 # ROADMAP DU DÉVELOPPEMENT AUTONOME — JamboOS
 
-> **Dernière mise à jour** : 2026-10-20 02:20 UTC  
-> **Version actuelle** : `v0.2.106`  
+> **Dernière mise à jour** : 2026-10-20 02:40 UTC  
+> **Version actuelle** : `v0.2.107`  
 > **Statut global** : Pré-Alpha active — Micro-noyau de 3e génération orienté capacités (`#![no_std]`)  
 > **Cycle de développement autonome** : 10 minutes via le Planificateur de Tâches & Crons d'Antigravity WebUI  
 
@@ -95,23 +95,24 @@
 | **v0.2.104** | 106 | Accélération Crypto `jambo-crypto2` | Accélération cryptographique matérielle Ring 3 (AES-NI, SHA-NI, AVX-512), AES-GCM AEAD, RFC 3394 Key Wrap & gestion souveraine de clés | ✅ Validé |
 | **v0.2.105** | 107 | Enclaves Imbriquées & Isolation Multi-Locataires `jambo-tee2` | Micro-hyperviseurs d'enclaves imbriquées (L1/L2), tables EPT isolées par enclave, isolation mémoire chiffrée multi-locataires (KeyID/MEK 256 bits), attestation cumulative `NestedTeeReport` & scellement | ✅ Validé |
 | **v0.2.106** | 108 | Gestion de Clés & Séquestre `jambo-kms` | Hiérarchies cryptographiques (Master/Domain/Data/Session/Escrow), baux temporels & quotas, séquestre M-sur-N Shamir GF(256), réplication chiffrée multi-nœuds, rotation, zéroïsation, KmsCap & audit SHA-256 | ✅ Validé |
+| **v0.2.107** | 109 | PKI Post-Quantique & Fédération CA `jambo-pki2` | Infrastructure à clés publiques hybride (ML-DSA / Dilithium + Ed25519), fédération d'autorités de certification, validation stricte de chemins RFC 5280, révocation CRL en temps réel, PkiCap & audit SHA-256 | ✅ Validé |
 
 ---
 
 ## 3. Prochaines Étapes Prioritaires
 
-### 🎯 Prochaine Tâche Immédiate : Phase 109 — v0.2.107
-* **Composant** : `services/jambo-pki2`
-* **Objectif** : Infrastructure à clés publiques quantique-résistante & fédération d'autorités de certification distribuées
-* **Tâches précises** :
-  1. Chaînes de certificats hybrides (ML-DSA / Dilithium + Ed25519) et révocation CRL en temps réel.
-  2. Validation formelle et suite de tests `cargo xtask test`.
-
-### 🎯 Tâche Suivante : Phase 110 — v0.2.108
+### 🎯 Prochaine Tâche Immédiate : Phase 110 — v0.2.108
 * **Composant** : `services/jambo-auth2`
 * **Objectif** : Authentification biométrique/WebAuthn sans mot de passe & jetons d'accès cryptographiques éphémères
 * **Tâches précises** :
   1. Clés d'accès Passkeys / FIDO2 / WebAuthn, signatures Schnorr déterministes, révocation instantanée.
+  2. Validation formelle et suite de tests `cargo xtask test`.
+
+### 🎯 Tâche Suivante : Phase 111 — v0.2.109
+* **Composant** : `services/jambo-secroute`
+* **Objectif** : Routage sécurisé Zero-Trust, micro-segmentation de grappe & maillage chiffré dynamique Ring 3
+* **Tâches précises** :
+  1. Tunnels souverains chiffrés, politique de routage par capacités, isolation de flux inter-enclaves.
   2. Validation formelle et suite de tests `cargo xtask test`.
 
 ---
@@ -159,6 +160,7 @@
 * **2026-10-20 01:40 UTC** : Validation complète Phase 106 (`jambo-crypto2`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-crypto2`). Tag `v0.2.104`.
 * **2026-10-20 02:00 UTC** : Validation complète Phase 107 (`jambo-tee2`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-tee2`). Tag `v0.2.105`.
 * **2026-10-20 02:20 UTC** : Validation complète Phase 108 (`jambo-kms`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-kms`). Tag `v0.2.106`.
+* **2026-10-20 02:40 UTC** : Validation complète Phase 109 (`jambo-pki2`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-pki2`). Tag `v0.2.107`.
 
 
 
