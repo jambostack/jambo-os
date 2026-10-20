@@ -60,6 +60,7 @@ pub mod ztna_test;
 pub mod casb_test;
 pub mod cspm_test;
 pub mod cwpp_test;
+pub mod ciem_test;
 pub mod eevdf;
 pub mod event_test;
 pub mod fuzz_test;

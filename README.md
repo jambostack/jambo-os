@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.124-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.125-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.124 (Protection des Charges de Travail Cloud/Grappe (CWPP), Surveillance d'Intégrité en Exécution & Confinement de Conteneurs jambo-cwpp)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.124` introduit le système souverain de Cloud Workload Protection Platform (CWPP) en espace utilisateur (`services/jambo-cwpp`) : surveillance en temps réel des charges de travail et processus Ring 3, détection d'anomalies d'exécution (appels système anormaux, injection de mémoire anonyme W+X, dérivations de pointeurs d'instructions RIP Divergence / ROP, évasions de conteneur), confinement instantané O(1) (Freeze, StripCaps, IsolateNetwork, Quarantine, Terminate), contrôle d'accès capabilaire strict `CwppCap` et scellement d'audit cryptographique inviolable par chaînage SHA-256 avec commandes interactives `cwpp [status | profiles | workloads | scan | contain | verify]` dans le shell `jsh`.
+> **Statut du Projet : Version v0.2.125 (Gestion des Droits et Privilèges Cloud/Grappe (CIEM), Détection des Droits Excessifs & Moindre Privilège Monotone jambo-ciem)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.125` introduit le système souverain de Cloud Infrastructure Entitlement Management (CIEM) en espace utilisateur (`services/jambo-ciem`) : cartographie continue des identités de grappe (utilisateurs, comptes de service, agents, tokens éphémères), détection en temps réel des privilèges dormants, des droits orphelins, des droits excessifs et des combinaisons toxiques, réduction monotone automatique vers le moindre privilège effectif (Least-Privilege Monotonic Attenuation), contrôle d'accès capabilaire strict `CiemCap` et scellement d'audit cryptographique inviolable par chaînage SHA-256 avec commandes interactives `ciem [status | identities | entitlements | scan | remediate | verify]` dans le shell `jsh`.
 
 ---
 
@@ -202,6 +202,7 @@ jambo-os/
 │   ├── jambo-casb/          # Courtier d'accès cloud/grappe (CASB), conformité multi-tenant & DLP
 │   ├── jambo-cspm/          # Gestion de posture cloud/grappe (CSPM), dérive & remédiation autonome
 │   ├── jambo-cwpp/          # Protection des charges de travail cloud/grappe (CWPP), intégrité d'exécution & confinement
+│   ├── jambo-ciem/          # Gestion des droits et privilèges cloud/grappe (CIEM), détection d'excès & moindre privilège
 │   └── pcie-bus-mgr/        # Gestionnaire de bus PCIe, MSI-X et isolation IOMMU
 └── xtask/                   # Outil de compilation, création d'ISO et test QEMU
 ```

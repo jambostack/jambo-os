@@ -194,6 +194,7 @@ pub struct JamboShell {
     pub casb: jambo_casb::JamboCasbDaemon,
     pub cspm: jambo_cspm::JamboCspmDaemon,
     pub cwpp: jambo_cwpp::JamboCwppDaemon,
+    pub ciem: jambo_ciem::JamboCiemDaemon,
 }
 
 impl Default for JamboShell {
@@ -657,6 +658,15 @@ impl JamboShell {
         );
         let mut cwpp = jambo_cwpp::JamboCwppDaemon::new(cwpp_cap);
         cwpp.init_defaults();
+
+        let ciem_cap = jambo_ciem::CiemCap::new(
+            libjambo::Handle::new(12701, 1),
+            jambo_ciem::ciem_rights::ALL,
+            5000,
+            100,
+        );
+        let mut ciem = jambo_ciem::JamboCiemDaemon::new(ciem_cap);
+        ciem.init_defaults();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -741,6 +751,7 @@ impl JamboShell {
             casb,
             cspm,
             cwpp,
+            ciem,
         }
     }
 
@@ -930,10 +941,11 @@ impl JamboShell {
                 emit("  casb [cmd]      - Courtier d'accès cloud/grappe (CASB), multi-tenant & DLP avancé\n");
                 emit("  cspm [cmd]      - Posture de sécurité cloud/grappe (CSPM), dérive & remédiation\n");
                 emit("  cwpp [cmd]      - Protection charges de travail (CWPP), intégrité d'exécution & confinement\n");
+                emit("  ciem [cmd]      - Droits cloud/grappe (CIEM), détection droits excessifs & moindre privilège\n");
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.2.124 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.2.125 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -10327,6 +10339,160 @@ impl JamboShell {
                     }
                 }
             }
+            "ciem" => {
+                let subcmd = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    "status"
+                };
+                match subcmd {
+                    "status" => {
+                        let mut b = [0u8; 20];
+                        emit("[CIEM/STATUS] Gestion des Droits et Privilèges Cloud/Grappe (CIEM)\n");
+                        emit("  Identités cartographiées: ");
+                        emit(format_u64(self.ciem.identity_count as u64, &mut b));
+                        emit("\n  Identités actives       : ");
+                        emit(format_u64(self.ciem.active_identities as u64, &mut b));
+                        emit("\n  Droits / Entitlements   : ");
+                        emit(format_u64(self.ciem.entitlement_count as u64, &mut b));
+                        emit("\n  Scans de cartographie   : ");
+                        emit(format_u64(self.ciem.total_scans, &mut b));
+                        emit("\n  Anomalies détectées     : ");
+                        emit(format_u64(self.ciem.total_anomalies_detected, &mut b));
+                        emit("\n  Remédiations Moindre Priv: ");
+                        emit(format_u64(self.ciem.total_remediations, &mut b));
+                        emit("\n  Chaîne d'audit SHA-256  : ");
+                        let valid = self.ciem.verify_ledger_integrity();
+                        emit(if valid { "VÉRIFIÉE (OK)\n" } else { "CORROMPUE (ERR)\n" });
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "identities" => {
+                        emit("[CIEM/IDENTITIES] Identités Souveraines Cartographiées :\n");
+                        for i in 0..self.ciem.identity_count {
+                            if let Some(ref id_rec) = self.ciem.identities[i] {
+                                let mut b = [0u8; 20];
+                                emit("  * [ID#");
+                                emit(format_u64(id_rec.id as u64, &mut b));
+                                emit("] ");
+                                emit(core::str::from_utf8(&id_rec.name[..id_rec.name_len]).unwrap_or(""));
+                                emit(" | Type: ");
+                                match id_rec.kind {
+                                    jambo_ciem::IdentityKind::HumanUser => emit("Utilisateur"),
+                                    jambo_ciem::IdentityKind::ServiceAccount => emit("CompteService"),
+                                    jambo_ciem::IdentityKind::WorkloadAgent => emit("AgentCharge"),
+                                    jambo_ciem::IdentityKind::TemporaryToken => emit("TokenÉphémère"),
+                                    jambo_ciem::IdentityKind::FederatedRole => emit("RôleFédéré"),
+                                }
+                                emit(" | Entitlements: ");
+                                emit(format_u64(id_rec.total_entitlements as u64, &mut b));
+                                emit(" | Actif: ");
+                                emit(if id_rec.is_active { "OUI\n" } else { "NON\n" });
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "entitlements" => {
+                        emit("[CIEM/ENTITLEMENTS] Droits et Privilèges Granulaires :\n");
+                        for i in 0..self.ciem.entitlement_count {
+                            if let Some(ref ent) = self.ciem.entitlements[i] {
+                                let mut b = [0u8; 20];
+                                emit("  * [E#");
+                                emit(format_u64(ent.id as u64, &mut b));
+                                emit(" | Ident #");
+                                emit(format_u64(ent.identity_id as u64, &mut b));
+                                emit("] Scope: ");
+                                match ent.scope {
+                                    jambo_ciem::EntitlementScope::KernelCore => emit("Noyau"),
+                                    jambo_ciem::EntitlementScope::StorageVfs => emit("Stockage"),
+                                    jambo_ciem::EntitlementScope::NetworkMesh => emit("Réseau"),
+                                    jambo_ciem::EntitlementScope::SecurityServices => emit("Sécurité"),
+                                    jambo_ciem::EntitlementScope::ClusterControl => emit("ContrôleGrappe"),
+                                    jambo_ciem::EntitlementScope::EnclaveTee => emit("EnclaveTEE"),
+                                }
+                                emit(" | Statut: ");
+                                match ent.status {
+                                    jambo_ciem::EntitlementStatus::Active => emit("Actif"),
+                                    jambo_ciem::EntitlementStatus::Dormant => emit("Dormant"),
+                                    jambo_ciem::EntitlementStatus::Orphan => emit("Orphelin"),
+                                    jambo_ciem::EntitlementStatus::Excessive => emit("Excessif"),
+                                    jambo_ciem::EntitlementStatus::Attenuated => emit("Atténué"),
+                                    jambo_ciem::EntitlementStatus::Revoked => emit("Révoqué"),
+                                }
+                                emit(" | Droits Accordés: 0x");
+                                emit(format_u64(ent.granted_rights as u64, &mut b));
+                                emit(" | Exercés: 0x");
+                                emit(format_u64(ent.exercised_rights as u64, &mut b));
+                                emit("\n");
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "scan" => {
+                        let cap = self.ciem.admin_cap;
+                        match self.ciem.scan_all_entitlements(&cap, 2500) {
+                            Ok((checked, anomalies)) => {
+                                let mut b = [0u8; 20];
+                                emit("[CIEM/SCAN] Cartographie des Privilèges Analysée :\n");
+                                emit("  Entitlements inspectés : ");
+                                emit(format_u64(checked as u64, &mut b));
+                                emit("\n  Anomalies détectées    : ");
+                                emit(format_u64(anomalies as u64, &mut b));
+                                emit("\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("[CIEM/SCAN] Échec du scan des privilèges\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "remediate" => {
+                        let cap = self.ciem.admin_cap;
+                        if parsed.arg_count > 2 {
+                            let eid = parse_u64(parsed.args[2]).unwrap_or(202) as u32;
+                            match self.ciem.enforce_least_privilege(&cap, eid, 2600) {
+                                Ok(new_r) => {
+                                    let mut b = [0u8; 20];
+                                    emit("[CIEM/REMEDIATE] Moindre privilège appliqué sur E#");
+                                    emit(format_u64(eid as u64, &mut b));
+                                    emit(" -> nouveaux droits: 0x");
+                                    emit(format_u64(new_r as u64, &mut b));
+                                    emit("\n");
+                                    (ShellStatus::Success, write_pos)
+                                }
+                                Err(_) => {
+                                    emit("[CIEM/REMEDIATE] Échec de la remédiation de l'entitlement\n");
+                                    (ShellStatus::ExecutionFailed, write_pos)
+                                }
+                            }
+                        } else {
+                            match self.ciem.remediate_all(&cap, 2600) {
+                                Ok(cnt) => {
+                                    let mut b = [0u8; 20];
+                                    emit("[CIEM/REMEDIATE] Remédiation globale CIEM exécutée : ");
+                                    emit(format_u64(cnt as u64, &mut b));
+                                    emit(" anomalies traitées\n");
+                                    (ShellStatus::Success, write_pos)
+                                }
+                                Err(_) => {
+                                    emit("[CIEM/REMEDIATE] Échec de la remédiation globale\n");
+                                    (ShellStatus::ExecutionFailed, write_pos)
+                                }
+                            }
+                        }
+                    }
+                    "verify" => {
+                        let valid = self.ciem.verify_ledger_integrity();
+                        emit("  Vérification intégrité registre CIEM SHA-256 : ");
+                        emit(if valid { "INTÈGRE (OK)\n" } else { "ALTÉRÉ (FAIL)\n" });
+                        (ShellStatus::Success, write_pos)
+                    }
+                    _ => {
+                        emit("Usage: ciem [status | identities | entitlements | scan | remediate [id] | verify]\n");
+                        (ShellStatus::ExecutionFailed, write_pos)
+                    }
+                }
+            }
             "poweroff" | "reboot" => {
                 emit("[SYSTEM] Extinction demandée...\n");
                 unsafe {
@@ -13953,6 +14119,43 @@ mod tests {
                 assert!(len5 > 0);
 
                 let (st6, len6) = shell.execute_line("cwpp verify", &mut out);
+                assert_eq!(st6, ShellStatus::Success);
+                assert!(len6 > 0);
+            })
+            .unwrap();
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn test_shell_ciem_commands() {
+        extern crate std;
+        let handle = std::thread::Builder::new()
+            .stack_size(8 * 1024 * 1024)
+            .spawn(|| {
+                let mut shell = JamboShell::new();
+                let mut out = [0u8; 1024];
+
+                let (st1, len1) = shell.execute_line("ciem status", &mut out);
+                assert_eq!(st1, ShellStatus::Success);
+                assert!(len1 > 0);
+
+                let (st2, len2) = shell.execute_line("ciem identities", &mut out);
+                assert_eq!(st2, ShellStatus::Success);
+                assert!(len2 > 0);
+
+                let (st3, len3) = shell.execute_line("ciem entitlements", &mut out);
+                assert_eq!(st3, ShellStatus::Success);
+                assert!(len3 > 0);
+
+                let (st4, len4) = shell.execute_line("ciem scan", &mut out);
+                assert_eq!(st4, ShellStatus::Success);
+                assert!(len4 > 0);
+
+                let (st5, len5) = shell.execute_line("ciem remediate 202", &mut out);
+                assert_eq!(st5, ShellStatus::Success);
+                assert!(len5 > 0);
+
+                let (st6, len6) = shell.execute_line("ciem verify", &mut out);
                 assert_eq!(st6, ShellStatus::Success);
                 assert!(len6 > 0);
             })

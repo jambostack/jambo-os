@@ -1303,6 +1303,13 @@ pub extern "C" fn _start() -> ! {
         "Échec du test de protection des charges de travail cloud/grappe jambo-cwpp"
     );
 
+    // 18terviciesquadragies. Validation de la Gestion des Droits CIEM & Moindre Privilège (Phase 127 - v0.2.125)
+    let ciem_success = sched::ciem_test::execute_ciem_daemon_test();
+    assert!(
+        ciem_success,
+        "Échec du test de gestion des droits CIEM et moindre privilège jambo-ciem"
+    );
+
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
 
     arch::init_iommu();
@@ -1563,14 +1570,15 @@ pub extern "C" fn _start() -> ! {
     kprintln!("\x1b[1;32m[PASS] Phase 124 Cloud Access Security Broker, Multi-Tenant Compliance & Advanced DLP (jambo-casb) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 125 Cloud Security Posture Management, Drift Detection & Auto-Remediation (jambo-cspm) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 126 Cloud Workload Protection Platform, Runtime Integrity & Containment (jambo-cwpp) Complete\x1b[0m");
+    kprintln!("\x1b[1;32m[PASS] Phase 127 Cloud Infrastructure Entitlement Management & Monotonic Least Privilege (jambo-ciem) Complete\x1b[0m");
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.124 (Cloud Workload Protection Platform & Runtime Integrity jambo-cwpp)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.125 (Cloud Infrastructure Entitlement Management & Monotonic Least Privilege jambo-ciem)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.124 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.125 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
