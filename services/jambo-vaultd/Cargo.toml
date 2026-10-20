@@ -1,6 +1,6 @@
 [package]
 name = "jambo-vaultd"
-version = "0.2.99"
+version = "0.2.100"
 edition = "2021"
 
 [dependencies]

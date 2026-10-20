@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.99-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.100-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.99 (Système de Détection & Prévention d'Intrusions Ring 3, Analyse Heuristique de Flux IPC & Contre-Mesures Autonomes jambo-idps)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.99` introduit le sous-système de détection et prévention d'intrusions Ring 3 (`services/jambo-idps`) : moteur heuristique et statistique d'analyse de flux IPC `#![no_std]` (détection d'inondations et rafales IPC flood, détection d'accès illicites aux canaux privilégiés du micro-noyau, détection de falsification de jetons de capacités, détection d'exfiltration et d'obfuscation par entropie de charge utile, détection de réjeu et désynchronisation), contre-mesures autonomes réactives (révocation dynamique et atténuation monotone de capacités, mise en quarantaine de processus compromis, sectionnement instantané de canaux IPC et étranglement de débit), gouvernance capabilaire stricte par jeton `IdpsCap` sans autorité ambiante, registre d'audit scellé par chaîne SHA-256 (`idps_audit_chain`) et commandes shell interactives `idps [status | inspect | mitigate | rules | audit]` dans `jsh`.
+> **Statut du Projet : Version v0.2.100 (Architecture HSM Distribuée Ring 3, Fédération de Clés à Seuil Multi-Puces & Accord de Clés de Groupe jambo-hsm2)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.100` introduit le sous-système de sécurité matérielle distribuée Ring 3 (`services/jambo-hsm2`) : architecture HSM fédérant plusieurs puces sécurisées indépendantes (FIPS 140-3 / CC EAL6+), protocole d'accord de clés de groupe (Group Key Agreement - GKA) déterministe avec rotation dynamique d'époques via HKDF-SHA256, schéma de partage secret de seuil de Shamir (SSS T-sur-N) sur le corps fini GF(256) avec interpolation de Lagrange sans exposition de la clé racine maîtresse, signatures collaboratives de seuil et détection byzantine autonome avec mise en quarantaine immédiate de toute puce défaillante ou corrompue, zéroïsation d'urgence distribuée en temps O(1), contrôle capabilaire strict par jeton `Hsm2Cap` sans autorité ambiante, registre d'audit scellé par chaîne SHA-256 (`hsm2_audit_chain`) et commandes shell interactives `hsm2 [status | federate | gka | sign | verify | audit | zeroize]` dans `jsh`.
 
 ---
 
@@ -153,6 +153,8 @@ jambo-os/
 │   ├── jambo-fuzz/          # Moteur de fuzzing offensif et tests de résilience
 │   ├── jambo-gwd/           # Passerelle réseau L4/L7 & équilibrage de charge élastique
 │   ├── jambo-hsm/           # Module de sécurité matériel HSM Ring 3, dérivation PKCS#11 & scellement KEK
+│   ├── jambo-hsm2/          # HSM distribué, fédération de clés à seuil multi-puces & GKA
+│   ├── jambo-idps/          # Détection et prévention d'intrusions Ring 3, heuristique IPC & quarantaine
 │   ├── jambo-mpc/           # Calcul multipartite sécurisé (MPC), partage secret de Shamir & triplés de Beaver
 │   ├── jambo-init/          # Superviseur système PID 1 en espace utilisateur
 │   ├── jambo-ipcd/          # Multiplexeur et passerelle de messagerie IPC distribuée

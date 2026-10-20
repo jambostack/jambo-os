@@ -170,6 +170,7 @@ pub struct JamboShell {
     pub mixnet: jambo_mixnet::JamboMixnetDaemon,
     pub secboot: jambo_secboot::JamboSecBootDaemon,
     pub idps: jambo_idps::JamboIdpsDaemon,
+    pub hsm2: jambo_hsm2::JamboHsm2Daemon,
 }
 
 impl Default for JamboShell {
@@ -436,6 +437,12 @@ impl JamboShell {
         );
         let mut idps = jambo_idps::JamboIdpsDaemon::new(idps_cap);
         idps.init_defaults();
+        let hsm2_cap = jambo_hsm2::Hsm2Cap::new(
+            libjambo::Handle::new(10201, 1),
+            jambo_hsm2::hsm2_rights::ALL,
+        );
+        let mut hsm2 = jambo_hsm2::JamboHsm2Daemon::new(hsm2_cap);
+        hsm2.init_defaults();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -496,6 +503,7 @@ impl JamboShell {
             mixnet,
             secboot,
             idps,
+            hsm2,
         }
     }
 
@@ -661,10 +669,11 @@ impl JamboShell {
                 emit("  mixnet [cmd]  - Réseau de mixage anonyme (Sphinx), dissimulation temporelle & routage en oignon\n");
                 emit("  secboot [cmd] - Démarrage sécurisé souverain (Secure Boot), mesure TPM 2.0 PCR & scellement\n");
                 emit("  idps [cmd]    - Détection/prévention d'intrusions (IDPS), heuristique flux & quarantaine\n");
+                emit("  hsm2 [cmd]    - HSM Distribué, fédération de clés à seuil multi-puces & GKA\n");
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.2.99 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.2.100 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -5966,6 +5975,142 @@ impl JamboShell {
                     }
                     _ => {
                         emit("Usage: idps [status | inspect | mitigate | rules | audit]\n");
+                        (ShellStatus::ExecutionFailed, write_pos)
+                    }
+                }
+            }
+            "hsm2" => {
+                let subcmd = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    "status"
+                };
+                match subcmd {
+                    "status" => {
+                        let mut b = [0u8; 20];
+                        emit("=== ARCHITECTURE HSM DISTRIBUÉE & FÉDÉRATION MULTI-PUCES (jambo-hsm2) ===\n");
+                        emit("Puces enregistrées dans la fédération : ");
+                        emit(format_u64(self.hsm2.chip_count as u64, &mut b));
+                        emit("\nPuces actives fédérées             : ");
+                        emit(format_u64(self.hsm2.count_active_chips() as u64, &mut b));
+                        emit("\nÉpoque GKA courante                : ");
+                        emit(format_u64(self.hsm2.active_epoch, &mut b));
+                        emit("\nSignatures de seuil générées       : ");
+                        emit(format_u64(self.hsm2.signatures_generated, &mut b));
+                        emit("\nStatut de Zéroïsation d'Urgence    : ");
+                        emit(if self.hsm2.zeroized { "ACTIF (DÉTRUIT)" } else { "NON (OPÉRATIONNEL)" });
+                        emit("\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "federate" => {
+                        let mut b = [0u8; 20];
+                        emit("[HSM2/FEDERATE] Énumération des éléments sécurisés matériels de la grappe :\n");
+                        for i in 0..self.hsm2.chip_count {
+                            let chip = &self.hsm2.chips[i];
+                            emit("  - Puce #");
+                            emit(format_u64(chip.chip_id as u64, &mut b));
+                            emit(" (Slot ");
+                            emit(format_u64(chip.slot_id as u64, &mut b));
+                            emit(") | Statut: ");
+                            match chip.status {
+                                jambo_hsm2::ChipNodeStatus::ActiveFederated => emit("ActiveFederated [CC EAL6+/FIPS 140-3]"),
+                                jambo_hsm2::ChipNodeStatus::Attested => emit("Attested"),
+                                jambo_hsm2::ChipNodeStatus::Quarantined => emit("Quarantined (Byzantine)"),
+                                jambo_hsm2::ChipNodeStatus::Zeroized => emit("Zeroized"),
+                                _ => emit("Unpaired"),
+                            }
+                            emit("\n");
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "gka" => {
+                        emit("[HSM2/GKA] Exécution d'un tour de protocole d'Accord de Clés de Groupe (Group Key Agreement)...\n");
+                        let cap = self.hsm2.cap;
+                        match self.hsm2.perform_group_key_agreement(&cap) {
+                            Ok(group_key) => {
+                                let mut b = [0u8; 20];
+                                emit("[HSM2/OK] Clé de session de groupe GKA dérivée pour l'époque #");
+                                emit(format_u64(self.hsm2.active_epoch, &mut b));
+                                emit(" : ");
+                                for byte in group_key[0..8].iter() {
+                                    emit(format_hex_u64(*byte as u64, &mut b));
+                                }
+                                emit("... [PROTÉGÉ]\n");
+                            }
+                            Err(_) => {
+                                emit("[HSM2/ERR] Échec de l'accord de clé de groupe (quorum insuffisant)\n");
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "sign" => {
+                        emit("[HSM2/SIGN] Déclenchement d'une signature collaborative de seuil (T=2, N=3)...\n");
+                        let cap = self.hsm2.cap;
+                        let sample_secret = [0x55u8; 32];
+                        let _ = self.hsm2.distribute_threshold_key(&cap, 42, &sample_secret, 2);
+                        let msg = b"ORDRE_EXECUTION_SOUVERAIN_2026";
+                        let participants = [101, 102];
+                        match self.hsm2.threshold_sign(&cap, msg, &participants) {
+                            Ok(sig) => {
+                                let mut b = [0u8; 20];
+                                emit("[HSM2/SIG] Signature de seuil 64 octets générée avec succès :\n  R=");
+                                for byte in sig[0..16].iter() {
+                                    emit(format_hex_u64(*byte as u64, &mut b));
+                                }
+                                emit("...\n  S=");
+                                for byte in sig[32..48].iter() {
+                                    emit(format_hex_u64(*byte as u64, &mut b));
+                                }
+                                emit("...\n");
+                            }
+                            Err(_) => {
+                                emit("[HSM2/ERR] Échec de la signature collaborative de seuil\n");
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "verify" => {
+                        let cap = self.hsm2.cap;
+                        let sample_secret = [0x55u8; 32];
+                        let _ = self.hsm2.distribute_threshold_key(&cap, 42, &sample_secret, 2);
+                        let msg = b"ORDRE_EXECUTION_SOUVERAIN_2026";
+                        let participants = [101, 102];
+                        if let Ok(sig) = self.hsm2.threshold_sign(&cap, msg, &participants) {
+                            let is_valid = self.hsm2.verify_threshold_signature(msg, &sig);
+                            if is_valid {
+                                emit("[HSM2/VERIFY] Preuve de signature de seuil cryptographiquement VALIDÉE\n");
+                            } else {
+                                emit("[HSM2/VERIFY] Signature de seuil REJETÉE (signature invalide)\n");
+                            }
+                        } else {
+                            emit("[HSM2/ERR] Impossible de générer la signature pour vérification\n");
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "audit" => {
+                        emit("Condensat SHA-256 d'Audit HSM2 (Registre Scellé) : ");
+                        let mut b = [0u8; 20];
+                        for byte in self.hsm2.audit_chain.iter() {
+                            emit(format_hex_u64(*byte as u64, &mut b));
+                        }
+                        emit("\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "zeroize" => {
+                        emit("[HSM2/ZEROIZE] Alerte déclenchée : Zéroïsation d'Urgence Distribuée O(1)...\n");
+                        let cap = self.hsm2.cap;
+                        match self.hsm2.emergency_zeroize(&cap, b"MANUAL_OPERATOR_OVERRIDE") {
+                            Ok(_) => {
+                                emit("[HSM2/ZEROIZED] Toutes les puces et secrets de seuil ont été anéantis.\n");
+                            }
+                            Err(_) => {
+                                emit("[HSM2/ERR] Échec de la commande de zéroïsation\n");
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    _ => {
+                        emit("Usage: hsm2 [status | federate | gka | sign | verify | audit | zeroize]\n");
                         (ShellStatus::ExecutionFailed, write_pos)
                     }
                 }

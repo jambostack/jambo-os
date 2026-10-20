@@ -1135,6 +1135,13 @@ pub extern "C" fn _start() -> ! {
         "Échec du test du système de détection/prévention d'intrusions jambo-idps"
     );
 
+    // 10tredequadragies. Validation de l'Architecture HSM Distribuée & Fédération de Clés (Phase 102 - v0.2.100)
+    let hsm2_success = sched::execute_hsm2_daemon_test();
+    assert!(
+        hsm2_success,
+        "Échec du test de l'architecture HSM distribuée et fédération multi-puces jambo-hsm2"
+    );
+
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
 
     arch::init_iommu();
@@ -1372,14 +1379,15 @@ pub extern "C" fn _start() -> ! {
     kprintln!("\x1b[1;32m[PASS] Phase 99 Anonymous Mixnet (Sphinx), Onion Routing & Traffic Analysis Resistance (jambo-mixnet) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 100 Secure Boot, TPM 2.0 PCR Integrity & Hardware Root of Trust (jambo-secboot) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 101 Intrusion Detection & Prevention System (IDPS) & Heuristic IPC Analysis (jambo-idps) Complete\x1b[0m");
+    kprintln!("\x1b[1;32m[PASS] Phase 102 Distributed HSM Architecture & Multi-Chip Threshold Key Federation (jambo-hsm2) Complete\x1b[0m");
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.99 (Détection & Prévention d'Intrusions IDPS jambo-idps)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.100 (Architecture HSM Distribuée jambo-hsm2)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.99 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.100 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
