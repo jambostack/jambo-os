@@ -53,6 +53,7 @@ pub mod ddos_test;
 pub mod soar_test;
 pub mod forensics_test;
 pub mod edr_test;
+pub mod xdr_test;
 pub mod eevdf;
 pub mod event_test;
 pub mod fuzz_test;

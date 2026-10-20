@@ -187,6 +187,7 @@ pub struct JamboShell {
     pub soar: jambo_soar::JamboSoarDaemon,
     pub forensics: jambo_forensics::JamboForensicsDaemon,
     pub edr: jambo_edr::JamboEdrDaemon,
+    pub xdr: jambo_xdr::JamboXdrDaemon,
 }
 
 impl Default for JamboShell {
@@ -587,6 +588,15 @@ impl JamboShell {
         );
         let mut edr = jambo_edr::JamboEdrDaemon::new(edr_cap);
         edr.init_defaults();
+
+        let xdr_cap = jambo_xdr::XdrCap::new(
+            libjambo::Handle::new(12001, 1),
+            jambo_xdr::xdr_rights::ALL,
+            5000,
+            100,
+        );
+        let mut xdr = jambo_xdr::JamboXdrDaemon::new(xdr_cap);
+        xdr.init_defaults();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -664,6 +674,7 @@ impl JamboShell {
             soar,
             forensics,
             edr,
+            xdr,
         }
     }
 
@@ -846,10 +857,11 @@ impl JamboShell {
                 emit("  soar [cmd]    - Orchestration SOAR, Playbooks DAG automatisés & SoarCap\n");
                 emit("  forensics [cmd] - Investigation numérique, extraction d'artefacts & scellement Ed25519/BLAKE3\n");
                 emit("  edr [cmd]     - Surveillance comportementale, détection injections .jso/W+X & EdrCap\n");
+                emit("  xdr [cmd]     - Détection & réponse étendue multi-vecteurs, APT & XdrCap\n");
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.2.117 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.2.118 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -9385,6 +9397,104 @@ impl JamboShell {
                     }
                 }
             }
+            "xdr" => {
+                let subcmd = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    "status"
+                };
+                match subcmd {
+                    "status" => {
+                        let mut b = [0u8; 20];
+                        emit("[XDR/STATUS] Démon de Détection & Réponse Étendue Multi-Vecteurs (XDR)\n");
+                        emit("  Événements télémétrie : ");
+                        emit(format_u64(self.xdr.event_count as u64, &mut b));
+                        emit("\n  Campagnes APT actives : ");
+                        emit(format_u64(self.xdr.campaign_count as u64, &mut b));
+                        emit("\n  Réponses trans-vecteur: ");
+                        emit(format_u64(self.xdr.cross_vector_responses_count as u64, &mut b));
+                        emit("\n  Entités confinées     : ");
+                        emit(format_u64(self.xdr.quarantined_entities_count as u64, &mut b));
+                        emit("\n  Chaîne d'audit SHA-256: ");
+                        let valid = self.xdr.verify_ledger_integrity();
+                        emit(if valid { "VÉRIFIÉE (OK)\n" } else { "CORROMPUE (ERR)\n" });
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "telemetry" | "events" => {
+                        emit("[XDR/TELEMETRY] Événements Multi-Vecteurs Ingérés :\n");
+                        for i in 0..self.xdr.event_count {
+                            if let Some(ref e) = self.xdr.events[i] {
+                                let mut b = [0u8; 20];
+                                emit("  #");
+                                emit(format_u64(e.id, &mut b));
+                                emit(" [");
+                                emit(e.vector.as_str());
+                                emit("] ");
+                                emit(e.entity_as_str());
+                                emit(" - ");
+                                emit(e.tactic.as_str());
+                                emit(" [");
+                                emit(e.severity.as_str());
+                                emit(", Score: ");
+                                emit(format_u64(e.threat_score as u64, &mut b));
+                                emit("/100]\n");
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "campaigns" | "apt" => {
+                        emit("[XDR/CAMPAIGNS] Campagnes APT Distribuées Corrélées :\n");
+                        if self.xdr.campaign_count == 0 {
+                            emit("  Aucune campagne détectée.\n");
+                        } else {
+                            for i in 0..self.xdr.campaign_count {
+                                if let Some(ref c) = self.xdr.campaigns[i] {
+                                    let mut b = [0u8; 20];
+                                    emit("  #");
+                                    emit(format_u64(c.id, &mut b));
+                                    emit(" ");
+                                    emit(c.name_as_str());
+                                    emit(" [Cible: ");
+                                    emit(c.primary_entity_as_str());
+                                    emit(", Vecteurs: ");
+                                    emit(format_u64(c.vector_count() as u64, &mut b));
+                                    emit(", Phase: ");
+                                    emit(c.stage.as_str());
+                                    emit(", Risque: ");
+                                    emit(format_u64(c.risk_score as u64, &mut b));
+                                    emit("/1000, Statut: ");
+                                    emit(c.status.as_str());
+                                    emit("]\n");
+                                }
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "isolate" | "quarantine" => {
+                        let cap = self.xdr.admin_cap;
+                        match self.xdr.isolate_all_vectors(&cap, 1, 3500) {
+                            Ok(()) => {
+                                emit("[XDR/ISOLATE] Confinement unifié tous vecteurs exécuté avec succès pour APT #1\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("[XDR/ISOLATE] Échec du confinement unifié\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "verify" => {
+                        let valid = self.xdr.verify_ledger_integrity();
+                        emit("  Vérification intégrité registre SHA-256 : ");
+                        emit(if valid { "INTÈGRE (OK)\n" } else { "ALTÉRÉ (FAIL)\n" });
+                        (ShellStatus::Success, write_pos)
+                    }
+                    _ => {
+                        emit("Usage: xdr [status | telemetry | campaigns | isolate | verify]\n");
+                        (ShellStatus::ExecutionFailed, write_pos)
+                    }
+                }
+            }
             "poweroff" | "reboot" => {
                 emit("[SYSTEM] Extinction demandée...\n");
                 unsafe {
@@ -12760,6 +12870,39 @@ mod tests {
                 assert!(len4 > 0);
 
                 let (st5, len5) = shell.execute_line("edr verify", &mut out);
+                assert_eq!(st5, ShellStatus::Success);
+                assert!(len5 > 0);
+            })
+            .unwrap();
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn test_shell_xdr_commands() {
+        extern crate std;
+        let handle = std::thread::Builder::new()
+            .stack_size(8 * 1024 * 1024)
+            .spawn(|| {
+                let mut shell = JamboShell::new();
+                let mut out = [0u8; 1024];
+
+                let (st1, len1) = shell.execute_line("xdr status", &mut out);
+                assert_eq!(st1, ShellStatus::Success);
+                assert!(len1 > 0);
+
+                let (st2, len2) = shell.execute_line("xdr telemetry", &mut out);
+                assert_eq!(st2, ShellStatus::Success);
+                assert!(len2 > 0);
+
+                let (st3, len3) = shell.execute_line("xdr campaigns", &mut out);
+                assert_eq!(st3, ShellStatus::Success);
+                assert!(len3 > 0);
+
+                let (st4, len4) = shell.execute_line("xdr isolate", &mut out);
+                assert_eq!(st4, ShellStatus::Success);
+                assert!(len4 > 0);
+
+                let (st5, len5) = shell.execute_line("xdr verify", &mut out);
                 assert_eq!(st5, ShellStatus::Success);
                 assert!(len5 > 0);
             })
