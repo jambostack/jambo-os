@@ -65,6 +65,7 @@ members = [
     "services/jambo-fhe",
     "services/jambo-mixnet",
     "services/jambo-secboot",
+    "services/jambo-idps",
     "libs/jambo-ui",
     "libs/jambo-sdk",
     "drivers/virtio",

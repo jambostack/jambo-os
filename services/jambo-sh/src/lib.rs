@@ -169,6 +169,7 @@ pub struct JamboShell {
     pub fhe: jambo_fhe::JamboFheDaemon,
     pub mixnet: jambo_mixnet::JamboMixnetDaemon,
     pub secboot: jambo_secboot::JamboSecBootDaemon,
+    pub idps: jambo_idps::JamboIdpsDaemon,
 }
 
 impl Default for JamboShell {
@@ -429,6 +430,12 @@ impl JamboShell {
         );
         let mut secboot = jambo_secboot::JamboSecBootDaemon::new(secboot_cap);
         secboot.init_defaults();
+        let idps_cap = jambo_idps::IdpsCap::new(
+            libjambo::Handle::new(10101, 1),
+            jambo_idps::idps_rights::ALL,
+        );
+        let mut idps = jambo_idps::JamboIdpsDaemon::new(idps_cap);
+        idps.init_defaults();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -488,6 +495,7 @@ impl JamboShell {
             fhe,
             mixnet,
             secboot,
+            idps,
         }
     }
 
@@ -652,10 +660,11 @@ impl JamboShell {
                 emit("  fhe [cmd]     - Chiffrement Homomorphe (BFV/CKKS), calculs aveugles & bootstrapping\n");
                 emit("  mixnet [cmd]  - Réseau de mixage anonyme (Sphinx), dissimulation temporelle & routage en oignon\n");
                 emit("  secboot [cmd] - Démarrage sécurisé souverain (Secure Boot), mesure TPM 2.0 PCR & scellement\n");
+                emit("  idps [cmd]    - Détection/prévention d'intrusions (IDPS), heuristique flux & quarantaine\n");
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.2.98 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.2.99 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -5858,6 +5867,105 @@ impl JamboShell {
                     }
                     _ => {
                         emit("Usage: secboot [status | measure | seal | verify | audit]\n");
+                        (ShellStatus::ExecutionFailed, write_pos)
+                    }
+                }
+            }
+            "idps" => {
+                let subcmd = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    "status"
+                };
+                match subcmd {
+                    "status" => {
+                        let mut b = [0u8; 20];
+                        emit("=== SYSTÈME DE DÉTECTION ET PRÉVENTION D'INTRUSIONS (jambo-idps) ===\n");
+                        emit("Règles heuristiques actives : ");
+                        emit(format_u64(self.idps.rule_count as u64, &mut b));
+                        emit("\nÉvénements IPC inspectés   : ");
+                        emit(format_u64(self.idps.events_inspected as u64, &mut b));
+                        emit("\nAnomalies de flux détectées : ");
+                        emit(format_u64(self.idps.anomalies_detected as u64, &mut b));
+                        emit("\nContre-mesures exécutées    : ");
+                        emit(format_u64(self.idps.countermeasures_executed as u64, &mut b));
+                        emit("\nCapacités révoquées         : ");
+                        emit(format_u64(self.idps.caps_revoked as u64, &mut b));
+                        emit("\nProcessus en quarantaine    : ");
+                        emit(format_u64(self.idps.quarantine_count as u64, &mut b));
+                        emit("\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "inspect" => {
+                        emit("[IDPS/INSPECT] Soumission d'une trame d'inspection IPC...\n");
+                        let sample_ev = jambo_idps::IpcTrafficEvent {
+                            sender_pid: 1042,
+                            receiver_pid: 2000,
+                            channel_id: 42,
+                            msg_opcode: 0x10,
+                            payload_len: 128,
+                            entropy_permille: 450,
+                            cap_token: 0x8899_AAB1,
+                            sequence_num: 1,
+                        };
+                        match self.idps.inspect_event(&sample_ev) {
+                            Ok(None) => {
+                                emit("[IDPS/OK] Trame IPC conforme : aucune anomalie détectée\n");
+                            }
+                            Ok(Some(alert)) => {
+                                emit("[IDPS/ALERT] Anomalie détectée : ");
+                                emit(alert.description);
+                                emit("\n");
+                            }
+                            Err(_) => {
+                                emit("[IDPS/ERR] Erreur lors de l'inspection de trafic\n");
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "mitigate" => {
+                        emit("[IDPS/MITIGATE] Application d'une contre-mesure autonome sur processus suspect PID 999...\n");
+                        let handle = libjambo::Handle::new(999, 1);
+                        match self.idps.revoke_capability(999, handle, 0x07) {
+                            Ok(_) => {
+                                emit("[IDPS/REVOKE] Droits capabilaires d'émission révoqués avec succès\n");
+                            }
+                            Err(_) => {
+                                emit("[IDPS/ERR] Échec de la révocation de droits\n");
+                            }
+                        }
+                        let _ = self.idps.quarantine_process(999, handle, "Suspicion d'intrusion et altération mémoire");
+                        if self.idps.is_quarantined(999) {
+                            emit("[IDPS/QUARANTINE] Processus PID 999 consigné en quarantaine active\n");
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "rules" => {
+                        let mut b = [0u8; 20];
+                        emit("=== RÈGLES HEURISTIQUES IDPS ACTIVES ===\n");
+                        for i in 0..self.idps.rule_count {
+                            let r = &self.idps.rules[i];
+                            emit("#");
+                            emit(format_u64(r.id as u64, &mut b));
+                            emit(" ");
+                            emit(r.name);
+                            emit(" (Seuil: ");
+                            emit(format_u64(r.threshold as u64, &mut b));
+                            emit(")\n");
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "audit" => {
+                        emit("Condensat SHA-256 d'Audit IDPS (Registre Scellé) : ");
+                        let mut b = [0u8; 20];
+                        for byte in self.idps.audit_chain.iter() {
+                            emit(format_hex_u64(*byte as u64, &mut b));
+                        }
+                        emit("\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    _ => {
+                        emit("Usage: idps [status | inspect | mitigate | rules | audit]\n");
                         (ShellStatus::ExecutionFailed, write_pos)
                     }
                 }

@@ -1128,6 +1128,13 @@ pub extern "C" fn _start() -> ! {
         "Échec du test du démarrage sécurisé souverain jambo-secboot"
     );
 
+    // 10duodequadragies. Validation de l'IDPS et Détection Heuristique d'Intrusions (Phase 101 - v0.2.99)
+    let idps_success = sched::execute_idps_daemon_test();
+    assert!(
+        idps_success,
+        "Échec du test du système de détection/prévention d'intrusions jambo-idps"
+    );
+
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
 
     arch::init_iommu();
@@ -1364,14 +1371,15 @@ pub extern "C" fn _start() -> ! {
     kprintln!("\x1b[1;32m[PASS] Phase 98 Fully Homomorphic Encryption (FHE), Ring BFV/CKKS & Blind Computing (jambo-fhe) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 99 Anonymous Mixnet (Sphinx), Onion Routing & Traffic Analysis Resistance (jambo-mixnet) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 100 Secure Boot, TPM 2.0 PCR Integrity & Hardware Root of Trust (jambo-secboot) Complete\x1b[0m");
+    kprintln!("\x1b[1;32m[PASS] Phase 101 Intrusion Detection & Prevention System (IDPS) & Heuristic IPC Analysis (jambo-idps) Complete\x1b[0m");
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.98 (Démarrage Sécurisé Souverain TPM 2.0 jambo-secboot)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.99 (Détection & Prévention d'Intrusions IDPS jambo-idps)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.98 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.99 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );

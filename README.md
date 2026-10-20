@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.98-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.99-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.98 (Démarrage Sécurisé Souverain, Mesure PCR TPM 2.0 & Chaîne de Confiance Matérielle jambo-secboot)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.98` introduit le sous-système de démarrage sécurisé souverain et de mesure d'intégrité matérielle TPM 2.0 (`services/jambo-secboot`) : chaîne de mesure cryptographique TCG 2.0 `#![no_std]` (CRTM PCR 0, Firmware PCR 1, Limine PCR 4, JamboKernel PCR 8, Initrd PCR 9, SecPolicy PCR 11, JamboInit PCR 12) avec extensions SHA-256 déterministes, hiérarchie de clés souveraines Secure Boot (Platform Key PK, Key Exchange Key KEK, base de clés autorisées DB et base de révocations DBX), scellement cryptographique sous contraintes PCR (*TPM Data Sealing & Unsealing*) bloquant immédiatement le déscellement en cas de tentative d'altération (anti-bootkit / anti-rootkit), gouvernance capabilaire stricte par jeton `SecBootCap` sans autorité ambiante, registre d'audit scellé par chaîne SHA-256 (`secboot_audit_chain`) et commandes shell interactives `secboot [status | measure | seal | verify | audit]` dans `jsh`.
+> **Statut du Projet : Version v0.2.99 (Système de Détection & Prévention d'Intrusions Ring 3, Analyse Heuristique de Flux IPC & Contre-Mesures Autonomes jambo-idps)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.99` introduit le sous-système de détection et prévention d'intrusions Ring 3 (`services/jambo-idps`) : moteur heuristique et statistique d'analyse de flux IPC `#![no_std]` (détection d'inondations et rafales IPC flood, détection d'accès illicites aux canaux privilégiés du micro-noyau, détection de falsification de jetons de capacités, détection d'exfiltration et d'obfuscation par entropie de charge utile, détection de réjeu et désynchronisation), contre-mesures autonomes réactives (révocation dynamique et atténuation monotone de capacités, mise en quarantaine de processus compromis, sectionnement instantané de canaux IPC et étranglement de débit), gouvernance capabilaire stricte par jeton `IdpsCap` sans autorité ambiante, registre d'audit scellé par chaîne SHA-256 (`idps_audit_chain`) et commandes shell interactives `idps [status | inspect | mitigate | rules | audit]` dans `jsh`.
 
 ---
 
