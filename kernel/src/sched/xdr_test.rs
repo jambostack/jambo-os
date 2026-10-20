@@ -81,7 +81,9 @@ pub fn execute_xdr_daemon_test() -> bool {
     assert_eq!(ev_id, 6);
 
     // Re-corrélation avec mise à jour du profil d'attaque
-    let newly = xdr.correlate_campaigns(&admin_cap, 1350).expect("Corrélation XDR");
+    let newly = xdr
+        .correlate_campaigns(&admin_cap, 1350)
+        .expect("Corrélation XDR");
     assert_eq!(newly, 0); // Déjà regroupé sous la campagne existante
 
     // 5. Orchestration de réponse trans-vectorielle : Confinement unifié (UnifiedQuarantine)
@@ -95,7 +97,9 @@ pub fn execute_xdr_daemon_test() -> bool {
     assert_eq!(updated_camp.status, CampaignStatus::Contained);
     assert_eq!(updated_camp.stage, CampaignStage::Contained);
 
-    let resp = xdr.responses[0].as_ref().expect("Enregistrement de réponse présent");
+    let resp = xdr.responses[0]
+        .as_ref()
+        .expect("Enregistrement de réponse présent");
     assert_eq!(resp.response_type, XdrResponseType::UnifiedQuarantine);
     assert_eq!(resp.target_as_str(), "admin-svc");
     assert!(resp.success);

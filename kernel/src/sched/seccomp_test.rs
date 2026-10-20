@@ -6,7 +6,7 @@ extern crate alloc;
 use crate::kprintln;
 use jambo_abi::{Handle, SysError};
 use jambo_seccomp::{
-    seccomp_rights, action_severity, BpfInsn, BpfProgram, FilterBuilder, JamboSeccompDaemon,
+    action_severity, seccomp_rights, BpfInsn, BpfProgram, FilterBuilder, JamboSeccompDaemon,
     SeccompCap, SeccompData, AUDIT_ARCH_AARCH64, AUDIT_ARCH_X86_64, SECCOMP_RET_ACTION_FULL,
     SECCOMP_RET_ALLOW, SECCOMP_RET_DATA, SECCOMP_RET_ERRNO, SECCOMP_RET_KILL_PROCESS,
     SECCOMP_RET_KILL_THREAD, SECCOMP_RET_LOG, SECCOMP_RET_TRAP,
@@ -72,7 +72,10 @@ pub fn execute_seccomp_daemon_test() -> bool {
     kprintln!("[SECCOMP/CAP] Modèle de sécurité capabilaire SeccompCap et interdiction d'amplification validés");
 
     // 2. Validation formelle DAG du bytecode BPF (Zéro boucle, sauts bornés)
-    assert_eq!(daemon.filter_count, 3, "Trois profils par défaut préchargés");
+    assert_eq!(
+        daemon.filter_count, 3,
+        "Trois profils par défaut préchargés"
+    );
     let strict_filter = daemon.find_filter_by_name("Strict").expect("find Strict");
     assert!(strict_filter.program.len > 0);
     assert_eq!(strict_filter.owner_pid, 1);
@@ -82,7 +85,10 @@ pub fn execute_seccomp_daemon_test() -> bool {
     invalid_prog.len = 2;
     // Saut de 10 instructions alors que le programme fait 2 instructions
     invalid_prog.insns[0] = BpfInsn::jump(jambo_seccomp::BPF_JMP | jambo_seccomp::BPF_JA, 10, 0, 0);
-    invalid_prog.insns[1] = BpfInsn::stmt(jambo_seccomp::BPF_RET | jambo_seccomp::BPF_K, SECCOMP_RET_ALLOW);
+    invalid_prog.insns[1] = BpfInsn::stmt(
+        jambo_seccomp::BPF_RET | jambo_seccomp::BPF_K,
+        SECCOMP_RET_ALLOW,
+    );
     assert_eq!(
         invalid_prog.validate(),
         Err(SysError::InvalidArgument),
@@ -92,13 +98,18 @@ pub fn execute_seccomp_daemon_test() -> bool {
     // Tentative avec programme sans RET à la fin
     let mut no_ret_prog = BpfProgram::default();
     no_ret_prog.len = 1;
-    no_ret_prog.insns[0] = BpfInsn::stmt(jambo_seccomp::BPF_LD | jambo_seccomp::BPF_W | jambo_seccomp::BPF_ABS, 0);
+    no_ret_prog.insns[0] = BpfInsn::stmt(
+        jambo_seccomp::BPF_LD | jambo_seccomp::BPF_W | jambo_seccomp::BPF_ABS,
+        0,
+    );
     assert_eq!(
         no_ret_prog.validate(),
         Err(SysError::InvalidArgument),
         "Programme sans terminaison RET formellement rejeté"
     );
-    kprintln!("[SECCOMP/VERIFIER] Vérificateur formel DAG BPF et détection de sauts invalides validés");
+    kprintln!(
+        "[SECCOMP/VERIFIER] Vérificateur formel DAG BPF et détection de sauts invalides validés"
+    );
 
     // 3. Exécution et conformité des actions Seccomp (Allow, Kill, Trap, Errno)
     let strict_prog = daemon.find_filter_by_name("Strict").unwrap().program;
@@ -125,9 +136,14 @@ pub fn execute_seccomp_daemon_test() -> bool {
     kprintln!("[SECCOMP/ACTIONS] Exécution des filtres BPF et sémantique des actions validées");
 
     // 4. Confinement par thread et exigence irréversible du bit no_new_privs
-    daemon.register_thread(200, 20).expect("register thread 200");
+    daemon
+        .register_thread(200, 20)
+        .expect("register thread 200");
     let thread_info = daemon.get_thread(200).unwrap();
-    assert!(!thread_info.no_new_privs, "no_new_privs initialement inactif");
+    assert!(
+        !thread_info.no_new_privs,
+        "no_new_privs initialement inactif"
+    );
 
     // Attachement sans no_new_privs rejeté
     assert_eq!(
@@ -141,7 +157,9 @@ pub fn execute_seccomp_daemon_test() -> bool {
     assert!(daemon.get_thread(200).unwrap().no_new_privs);
 
     // Attachement réussi du filtre Strict (ID 1)
-    daemon.attach_filter_to_thread(&admin_cap, 200, 1, 201).expect("attach filter 1");
+    daemon
+        .attach_filter_to_thread(&admin_cap, 200, 1, 201)
+        .expect("attach filter 1");
     assert_eq!(daemon.get_thread(200).unwrap().filter_count, 1);
     assert_eq!(daemon.get_filter(1).unwrap().use_count, 1);
 
@@ -159,10 +177,21 @@ pub fn execute_seccomp_daemon_test() -> bool {
     let mut custom_b = FilterBuilder::new();
     custom_b.check_arch(AUDIT_ARCH_X86_64);
     // Charge le numéro de syscall
-    custom_b.stmt(jambo_seccomp::BPF_LD | jambo_seccomp::BPF_W | jambo_seccomp::BPF_ABS, 0);
+    custom_b.stmt(
+        jambo_seccomp::BPF_LD | jambo_seccomp::BPF_W | jambo_seccomp::BPF_ABS,
+        0,
+    );
     // Si syscall == 0, saute à RET ERRNO 13
-    custom_b.jump(jambo_seccomp::BPF_JMP | jambo_seccomp::BPF_JEQ | jambo_seccomp::BPF_K, 0, 0, 1);
-    custom_b.stmt(jambo_seccomp::BPF_RET | jambo_seccomp::BPF_K, SECCOMP_RET_ERRNO | 13);
+    custom_b.jump(
+        jambo_seccomp::BPF_JMP | jambo_seccomp::BPF_JEQ | jambo_seccomp::BPF_K,
+        0,
+        0,
+        1,
+    );
+    custom_b.stmt(
+        jambo_seccomp::BPF_RET | jambo_seccomp::BPF_K,
+        SECCOMP_RET_ERRNO | 13,
+    );
     custom_b.default_action(SECCOMP_RET_ALLOW);
     let errno_prog = custom_b.build().expect("build errno filter");
 
@@ -171,7 +200,9 @@ pub fn execute_seccomp_daemon_test() -> bool {
         .expect("load DenyReadErrno");
 
     // Empiler ce second filtre sur le thread 200
-    daemon.attach_filter_to_thread(&admin_cap, 200, fid_errno, 211).expect("stack filter");
+    daemon
+        .attach_filter_to_thread(&admin_cap, 200, fid_errno, 211)
+        .expect("stack filter");
     assert_eq!(daemon.get_thread(200).unwrap().filter_count, 2);
 
     // Désormais, pour syscall 0 (read) :
@@ -179,7 +210,10 @@ pub fn execute_seccomp_daemon_test() -> bool {
     // - Filtre 2 (DenyReadErrno) dit ERRNO 13
     // La composition stricte exige que ERRNO (plus sévère que ALLOW) l'emporte !
     let res_stacked_read = daemon.evaluate_syscall(200, &data_read, 212);
-    assert_eq!(res_stacked_read & SECCOMP_RET_ACTION_FULL, SECCOMP_RET_ERRNO);
+    assert_eq!(
+        res_stacked_read & SECCOMP_RET_ACTION_FULL,
+        SECCOMP_RET_ERRNO
+    );
     assert_eq!(res_stacked_read & SECCOMP_RET_DATA, 13);
     kprintln!("[SECCOMP/STACKING] Empilement multi-filtres et préséance de l'action la plus restrictive validés");
 
@@ -189,12 +223,17 @@ pub fn execute_seccomp_daemon_test() -> bool {
     daemon.register_thread(302, 30).unwrap();
     daemon.register_thread(303, 30).unwrap();
 
-    let synced = daemon.sync_process_threads(&admin_cap, 30, 2, 220).expect("sync threads");
+    let synced = daemon
+        .sync_process_threads(&admin_cap, 30, 2, 220)
+        .expect("sync threads");
     assert_eq!(synced, 3, "Les 3 threads du PID 30 ont été synchronisés");
 
     for tid in [301, 302, 303] {
         let th = daemon.get_thread(tid).unwrap();
-        assert!(th.no_new_privs, "TSYNC force no_new_privs sur tous les threads");
+        assert!(
+            th.no_new_privs,
+            "TSYNC force no_new_privs sur tous les threads"
+        );
         assert_eq!(th.filter_count, 1);
         assert_eq!(th.filter_ids[0], 2, "Filtre Compute (ID 2) synchronisé");
     }

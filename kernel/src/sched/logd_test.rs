@@ -7,8 +7,8 @@ use crate::kprintln;
 use jambo_abi::{Handle, SysError};
 use jambo_dfsd::{dfs_rights, DfsBlockStore, DfsCap, BLOCK_SIZE};
 use jambo_logd::{
-    encrypt_archive_payload, log_rights, JamboLogDaemon, LogCap, LogField, LogLevel, LogQueryFilter,
-    LogRecord, RING_BUFFER_CAPACITY,
+    encrypt_archive_payload, log_rights, JamboLogDaemon, LogCap, LogField, LogLevel,
+    LogQueryFilter, LogRecord, RING_BUFFER_CAPACITY,
 };
 use jambo_sh::{JamboShell, ShellStatus};
 
@@ -183,7 +183,9 @@ pub fn execute_log_daemon_test() -> bool {
         daemon.verify_integrity(&admin_cap).unwrap(),
         "Rétablissement de la chaîne d'intégrité"
     );
-    kprintln!("[LOG/CRYPTO] Chaîne de scellement cryptographique et détection d'altération validées");
+    kprintln!(
+        "[LOG/CRYPTO] Chaîne de scellement cryptographique et détection d'altération validées"
+    );
 
     // 5. Archivage chiffré dédupliqué vers jambo-dfsd
     let mut dfs_store = DfsBlockStore::new(1);
@@ -202,7 +204,14 @@ pub fn execute_log_daemon_test() -> bool {
     // Restauration et déchiffrement depuis dfs
     let mut decrypted = [0u8; BLOCK_SIZE];
     let restored = daemon
-        .restore_archive(&admin_cap, &dfs_store, &dfs_cap, 1, &enc_key, &mut decrypted)
+        .restore_archive(
+            &admin_cap,
+            &dfs_store,
+            &dfs_cap,
+            1,
+            &enc_key,
+            &mut decrypted,
+        )
         .expect("restore archive");
     assert_eq!(restored.archive_id, 1);
     assert_eq!(&decrypted[0..4], b"JLOG");

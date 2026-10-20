@@ -7,8 +7,8 @@ extern crate alloc;
 use crate::kprintln;
 use jambo_abi::{Handle, SysError};
 use jambo_secboot::{
-    secboot_rights, BootStage, JamboSecBootDaemon, KeyType, SecBootCap, Sha256,
-    CRITICAL_PCR_MASK, HASH_SIZE, PCR_COUNT,
+    secboot_rights, BootStage, JamboSecBootDaemon, KeyType, SecBootCap, Sha256, CRITICAL_PCR_MASK,
+    HASH_SIZE, PCR_COUNT,
 };
 use jambo_sh::{JamboShell, ShellStatus};
 
@@ -43,7 +43,9 @@ pub fn execute_secboot_daemon_test() -> bool {
         Err(SysError::PermissionDenied),
         "Amplification de droits SecBootCap formellement rejetée"
     );
-    kprintln!("[SECBOOT/CAP] Contrôle d'accès capabilaire SecBootCap et atténuation monotone validés");
+    kprintln!(
+        "[SECBOOT/CAP] Contrôle d'accès capabilaire SecBootCap et atténuation monotone validés"
+    );
 
     // 2. Initialisation du démon de démarrage sécurisé
     let mut daemon = JamboSecBootDaemon::new(admin_cap);
@@ -55,11 +57,26 @@ pub fn execute_secboot_daemon_test() -> bool {
     // 3. Validation de l'intégrité des registres PCR critiques
     assert_ne!(daemon.pcrs[0], [0u8; HASH_SIZE], "PCR 0 (CRTM) initialisé");
     assert_ne!(daemon.pcrs[1], [0u8; HASH_SIZE], "PCR 1 (UEFI) initialisé");
-    assert_ne!(daemon.pcrs[4], [0u8; HASH_SIZE], "PCR 4 (Limine) initialisé");
-    assert_ne!(daemon.pcrs[8], [0u8; HASH_SIZE], "PCR 8 (Kernel) initialisé");
-    assert_ne!(daemon.pcrs[9], [0u8; HASH_SIZE], "PCR 9 (Initrd) initialisé");
-    assert_ne!(daemon.pcrs[11], [0u8; HASH_SIZE], "PCR 11 (SecPolicy) initialisé");
-    assert_ne!(daemon.pcrs[12], [0u8; HASH_SIZE], "PCR 12 (JamboInit) initialisé");
+    assert_ne!(
+        daemon.pcrs[4], [0u8; HASH_SIZE],
+        "PCR 4 (Limine) initialisé"
+    );
+    assert_ne!(
+        daemon.pcrs[8], [0u8; HASH_SIZE],
+        "PCR 8 (Kernel) initialisé"
+    );
+    assert_ne!(
+        daemon.pcrs[9], [0u8; HASH_SIZE],
+        "PCR 9 (Initrd) initialisé"
+    );
+    assert_ne!(
+        daemon.pcrs[11], [0u8; HASH_SIZE],
+        "PCR 11 (SecPolicy) initialisé"
+    );
+    assert_ne!(
+        daemon.pcrs[12], [0u8; HASH_SIZE],
+        "PCR 12 (JamboInit) initialisé"
+    );
     kprintln!("[SECBOOT/PCR] Banques PCR TPM 2.0 conformes et étendues par SHA-256");
 
     // 4. Validation des bases de signatures DB et détection de révocations DBX

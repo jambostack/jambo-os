@@ -28,29 +28,23 @@ pub struct Sha256 {
 
 impl Sha256 {
     const K: [u32; 64] = [
-        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5,
-        0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
-        0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3,
-        0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
-        0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc,
-        0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
-        0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
-        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
-        0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13,
-        0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
-        0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3,
-        0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
-        0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5,
-        0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
-        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
-        0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
+        0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
+        0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f,
+        0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc,
+        0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+        0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116,
+        0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
+        0xc67178f2,
     ];
 
     pub fn new() -> Self {
         Self {
             state: [
-                0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
-                0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+                0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
+                0x5be0cd19,
             ],
             buffer: [0u8; 64],
             buffer_len: 0,
@@ -71,7 +65,10 @@ impl Sha256 {
         for i in 16..64 {
             let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);
             let s1 = w[i - 2].rotate_right(17) ^ w[i - 2].rotate_right(19) ^ (w[i - 2] >> 10);
-            w[i] = w[i - 16].wrapping_add(s0).wrapping_add(w[i - 7]).wrapping_add(s1);
+            w[i] = w[i - 16]
+                .wrapping_add(s0)
+                .wrapping_add(w[i - 7])
+                .wrapping_add(s1);
         }
 
         let mut a = self.state[0];
@@ -176,13 +173,13 @@ impl Sha256 {
 
 pub mod cwpp_rights {
     pub const REGISTER_WORKLOAD: u32 = 1 << 0;
-    pub const INSPECT_WORKLOAD: u32  = 1 << 1;
-    pub const DETECT_ANOMALY: u32    = 1 << 2;
-    pub const CONTAIN_WORKLOAD: u32  = 1 << 3;
-    pub const MANAGE_PROFILES: u32   = 1 << 4;
-    pub const READ_METRICS: u32      = 1 << 5;
-    pub const SEAL_LEDGER: u32       = 1 << 6;
-    pub const ADMIN: u32             = 1 << 7;
+    pub const INSPECT_WORKLOAD: u32 = 1 << 1;
+    pub const DETECT_ANOMALY: u32 = 1 << 2;
+    pub const CONTAIN_WORKLOAD: u32 = 1 << 3;
+    pub const MANAGE_PROFILES: u32 = 1 << 4;
+    pub const READ_METRICS: u32 = 1 << 5;
+    pub const SEAL_LEDGER: u32 = 1 << 6;
+    pub const ADMIN: u32 = 1 << 7;
 
     pub const ALL: u32 = REGISTER_WORKLOAD
         | INSPECT_WORKLOAD
@@ -217,7 +214,12 @@ impl CwppCap {
         (self.rights & right) == right && self.invocations_left > 0
     }
 
-    pub fn attenuate(&self, new_rights: u32, max_lifetime: u64, invocations: u32) -> Result<Self, CwppError> {
+    pub fn attenuate(
+        &self,
+        new_rights: u32,
+        max_lifetime: u64,
+        invocations: u32,
+    ) -> Result<Self, CwppError> {
         if (new_rights & !self.rights) != 0 {
             return Err(CwppError::AttenuationViolation);
         }
@@ -370,7 +372,13 @@ pub struct Workload {
 }
 
 impl Workload {
-    pub fn new(id: u32, pid: u32, name_str: &str, profile_id: u32, integrity_hash: [u8; 32]) -> Self {
+    pub fn new(
+        id: u32,
+        pid: u32,
+        name_str: &str,
+        profile_id: u32,
+        integrity_hash: [u8; 32],
+    ) -> Self {
         let mut name = [0u8; 32];
         let bytes = name_str.as_bytes();
         let len = core::cmp::min(bytes.len(), 32);
@@ -463,10 +471,9 @@ pub struct JamboCwppDaemon {
 
 impl JamboCwppDaemon {
     pub const GENESIS_HASH: [u8; 32] = [
-        0x5c, 0x77, 0x70, 0x70, 0x5f, 0x67, 0x65, 0x6e,
-        0x65, 0x73, 0x69, 0x73, 0x5f, 0x68, 0x61, 0x73,
-        0x68, 0x5f, 0x73, 0x6f, 0x76, 0x65, 0x72, 0x65,
-        0x69, 0x67, 0x6e, 0x5f, 0x30, 0x30, 0x30, 0x31,
+        0x5c, 0x77, 0x70, 0x70, 0x5f, 0x67, 0x65, 0x6e, 0x65, 0x73, 0x69, 0x73, 0x5f, 0x68, 0x61,
+        0x73, 0x68, 0x5f, 0x73, 0x6f, 0x76, 0x65, 0x72, 0x65, 0x69, 0x67, 0x6e, 0x5f, 0x30, 0x30,
+        0x30, 0x31,
     ];
 
     pub fn new(admin_cap: CwppCap) -> Self {
@@ -616,7 +623,12 @@ impl JamboCwppDaemon {
         self.workload_count += 1;
         self.active_workloads += 1;
 
-        self.append_audit(ts, CwppAuditAction::WorkloadRegistered, wid, wl.integrity_hash);
+        self.append_audit(
+            ts,
+            CwppAuditAction::WorkloadRegistered,
+            wid,
+            wl.integrity_hash,
+        );
 
         Ok(wid)
     }
@@ -758,7 +770,12 @@ impl JamboCwppDaemon {
                     hash_buf[12] = action as u8;
                     let details = Sha256::hash(&hash_buf);
 
-                    self.append_audit(ts, CwppAuditAction::ContainmentEnforced, workload_id, details);
+                    self.append_audit(
+                        ts,
+                        CwppAuditAction::ContainmentEnforced,
+                        workload_id,
+                        details,
+                    );
                     return Ok(true);
                 }
             }
@@ -768,7 +785,11 @@ impl JamboCwppDaemon {
     }
 
     /// Scanne l'ensemble des charges de travail actives et renvoie (total_verifié, anomalies_trouvées)
-    pub fn scan_all_workloads(&mut self, cap: &CwppCap, ts: u64) -> Result<(usize, usize), CwppError> {
+    pub fn scan_all_workloads(
+        &mut self,
+        cap: &CwppCap,
+        ts: u64,
+    ) -> Result<(usize, usize), CwppError> {
         if !cap.has_right(cwpp_rights::INSPECT_WORKLOAD) {
             return Err(CwppError::PermissionDenied);
         }
@@ -914,29 +935,24 @@ mod tests {
         assert!(daemon.verify_ledger_integrity());
 
         // Test événement normal sur jambo-ingress (ID 101, syscall 1 autorisé)
-        let ev1 = daemon.report_execution_event(
-            &admin_cap,
-            101,
-            1,
-            16 * 1024 * 1024,
-            4,
-            false,
-            true,
-            1000,
-        ).expect("Rapport d'exécution normal");
+        let ev1 = daemon
+            .report_execution_event(&admin_cap, 101, 1, 16 * 1024 * 1024, 4, false, true, 1000)
+            .expect("Rapport d'exécution normal");
         assert_eq!(ev1, None);
 
         // Test anomalie : injection mémoire W+X sur jambo-kvd-db (ID 102)
-        let ev2 = daemon.report_execution_event(
-            &admin_cap,
-            102,
-            2,
-            32 * 1024 * 1024,
-            4,
-            true, // W+X !
-            true,
-            1050,
-        ).expect("Rapport d'anomalie W+X");
+        let ev2 = daemon
+            .report_execution_event(
+                &admin_cap,
+                102,
+                2,
+                32 * 1024 * 1024,
+                4,
+                true, // W+X !
+                true,
+                1050,
+            )
+            .expect("Rapport d'anomalie W+X");
         assert_eq!(ev2, Some(AnomalyType::MemoryInjection));
 
         let wl102 = daemon.inspect_workload(&admin_cap, 102).unwrap();
@@ -953,25 +969,24 @@ mod tests {
         daemon.init_defaults();
 
         // Détection de dérivation RIP (contrôleur d'exécution corrompu) sur ID 103
-        let ev = daemon.report_execution_event(
-            &admin_cap,
-            103,
-            0,
-            64 * 1024 * 1024,
-            2,
-            false,
-            false, // RIP invalide !
-            2000,
-        ).unwrap();
+        let ev = daemon
+            .report_execution_event(
+                &admin_cap,
+                103,
+                0,
+                64 * 1024 * 1024,
+                2,
+                false,
+                false, // RIP invalide !
+                2000,
+            )
+            .unwrap();
         assert_eq!(ev, Some(AnomalyType::RipDivergence));
 
         // Application du confinement immédiat : Quarantaine
-        let contained = daemon.contain_workload(
-            &admin_cap,
-            103,
-            ContainmentAction::Quarantine,
-            2010,
-        ).unwrap();
+        let contained = daemon
+            .contain_workload(&admin_cap, 103, ContainmentAction::Quarantine, 2010)
+            .unwrap();
         assert!(contained);
 
         let wl103 = daemon.inspect_workload(&admin_cap, 103).unwrap();
@@ -980,12 +995,9 @@ mod tests {
         assert_eq!(daemon.total_containments, 1);
 
         // Terminaison de la charge hostile
-        let killed = daemon.contain_workload(
-            &admin_cap,
-            103,
-            ContainmentAction::Terminate,
-            2020,
-        ).unwrap();
+        let killed = daemon
+            .contain_workload(&admin_cap, 103, ContainmentAction::Terminate, 2020)
+            .unwrap();
         assert!(killed);
 
         let wl103_post = daemon.inspect_workload(&admin_cap, 103).unwrap();
@@ -1001,16 +1013,9 @@ mod tests {
         daemon.init_defaults();
 
         // Syscall interdit (syscall nr 40 non autorisé pour profile 3 mask 0x1F)
-        let ev = daemon.report_execution_event(
-            &admin_cap,
-            103,
-            40,
-            10 * 1024 * 1024,
-            1,
-            false,
-            true,
-            3000,
-        ).unwrap();
+        let ev = daemon
+            .report_execution_event(&admin_cap, 103, 40, 10 * 1024 * 1024, 1, false, true, 3000)
+            .unwrap();
         assert_eq!(ev, Some(AnomalyType::UnauthorizedSyscall));
 
         // Scan global

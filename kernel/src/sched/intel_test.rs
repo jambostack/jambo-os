@@ -7,8 +7,7 @@ extern crate alloc;
 use crate::kprintln;
 use jambo_abi::Handle;
 use jambo_intel::{
-    intel_rights, IntelCap, IntelError, IocKind, JamboIntelDaemon, ThreatCategory,
-    ThreatSeverity,
+    intel_rights, IntelCap, IntelError, IocKind, JamboIntelDaemon, ThreatCategory, ThreatSeverity,
 };
 
 /// Exécute la suite complète de validation formelle du moteur CTI / IoC (Phase 121)
@@ -55,10 +54,9 @@ pub fn execute_intel_daemon_test() -> bool {
     // 3. Validation de la recherche O(1) via le filtre de Bloom et table compacte
     // a) Recherche Malware SHA-256
     let sha_malware: [u8; 32] = [
-        0xde, 0xad, 0xbe, 0xef, 0xca, 0xfe, 0xba, 0xbe,
-        0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef,
-        0xfe, 0xdc, 0xba, 0x98, 0x76, 0x54, 0x32, 0x10,
-        0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88,
+        0xde, 0xad, 0xbe, 0xef, 0xca, 0xfe, 0xba, 0xbe, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd,
+        0xef, 0xfe, 0xdc, 0xba, 0x98, 0x76, 0x54, 0x32, 0x10, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66,
+        0x77, 0x88,
     ];
     let match_sha = intel
         .query_ioc(&admin_cap, IocKind::Sha256, &sha_malware, 200)
@@ -124,7 +122,9 @@ pub fn execute_intel_daemon_test() -> bool {
         .expect("Requête après expiration");
     assert!(match_after.is_none());
 
-    let purged = intel.purge_expired(&admin_cap, 1300).expect("Purge expirés");
+    let purged = intel
+        .purge_expired(&admin_cap, 1300)
+        .expect("Purge expirés");
     assert!(purged >= 1);
 
     // 6. Vérification formelle du registre d'audit et scellement SHA-256

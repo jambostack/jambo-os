@@ -1575,7 +1575,9 @@ pub extern "C" fn _start() -> ! {
     kprintln!("\x1b[1;32m[PASS] Phase 71 Ephemeral Cluster PKI & Mutual TLS Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 72 Ring-3 PID 1 Supervisor & Service DAG Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 73 Sandboxed WebAssembly Engine & WasmCap Complete\x1b[0m");
-    kprintln!("\x1b[1;32m[PASS] Phase 74 Cluster Authoritative DNS Resolver & DnsCap Complete\x1b[0m");
+    kprintln!(
+        "\x1b[1;32m[PASS] Phase 74 Cluster Authoritative DNS Resolver & DnsCap Complete\x1b[0m"
+    );
     kprintln!("\x1b[1;32m[PASS] Phase 75 Structured Logging & Distributed Log Aggregation Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 76 Sovereign eBPF Engine & Packet Filtering (jambo-bpfd) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 77 Distributed IPC Multiplexer & Deterministic Gateway (jambo-ipcd) Complete\x1b[0m");

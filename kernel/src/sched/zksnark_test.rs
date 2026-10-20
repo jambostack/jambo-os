@@ -41,7 +41,9 @@ pub fn execute_zksnark_daemon_test() -> bool {
         Err(SysError::PermissionDenied),
         "Amplification de droits ZkSnarkCap formellement rejetée"
     );
-    kprintln!("[ZKSNARK/CAP] Contrôle d'accès capabilaire ZkSnarkCap et atténuation monotone validés");
+    kprintln!(
+        "[ZKSNARK/CAP] Contrôle d'accès capabilaire ZkSnarkCap et atténuation monotone validés"
+    );
 
     // 2. Initialisation du démon zk-SNARK et suite de circuits souverains
     let mut daemon = JamboZkSnarkDaemon::new(admin_cap);
@@ -65,7 +67,10 @@ pub fn execute_zksnark_daemon_test() -> bool {
     let is_valid = daemon
         .verify_proof(&verifier_cap, &proof_preimage)
         .expect("Vérification preuve PreimageKnowledge");
-    assert!(is_valid, "Authenticité de la preuve zk-SNARK vérifiée avec succès");
+    assert!(
+        is_valid,
+        "Authenticité de la preuve zk-SNARK vérifiée avec succès"
+    );
 
     // 4. Test d'inviolabilité et robustesse (Soundness check)
     let mut tampered_proof = proof_preimage;
@@ -77,7 +82,9 @@ pub fn execute_zksnark_daemon_test() -> bool {
         !is_tampered_valid,
         "Rejet strict de toute preuve zk-SNARK avec entrée publique altérée"
     );
-    kprintln!("[ZKSNARK/SOUNDNESS] Preuve de pré-image validée & falsification formellement bloquée");
+    kprintln!(
+        "[ZKSNARK/SOUNDNESS] Preuve de pré-image validée & falsification formellement bloquée"
+    );
 
     // 5. Preuve d'intervalle confidentielle (Circuit 1: RangeProof4Bit v in [0, 15])
     let v = Fr::from_u64(11); // 11 = 1 + 2 + 0 + 8
@@ -109,7 +116,9 @@ pub fn execute_zksnark_daemon_test() -> bool {
         daemon.verify_proof(&verifier_cap, &proof_cap).unwrap(),
         "Vérification CapTokenProof réussie"
     );
-    kprintln!("[ZKSNARK/CAP-TOKEN] Preuve Zero-Knowledge de détention de jeton capabilaire validée");
+    kprintln!(
+        "[ZKSNARK/CAP-TOKEN] Preuve Zero-Knowledge de détention de jeton capabilaire validée"
+    );
 
     // 7. Conservation d'actifs et transfert bilanciel confidentiel (Circuit 3: in1 + in2 = out1 + out2)
     let in1 = Fr::from_u64(100);

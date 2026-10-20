@@ -31,29 +31,23 @@ pub struct Sha256 {
 
 impl Sha256 {
     const K: [u32; 64] = [
-        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5,
-        0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
-        0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3,
-        0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
-        0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc,
-        0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
-        0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
-        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
-        0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13,
-        0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
-        0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3,
-        0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
-        0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5,
-        0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
-        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
-        0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
+        0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
+        0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f,
+        0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc,
+        0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+        0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116,
+        0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
+        0xc67178f2,
     ];
 
     pub fn new() -> Self {
         Self {
             state: [
-                0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
-                0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+                0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
+                0x5be0cd19,
             ],
             buffer: [0u8; 64],
             buffer_len: 0,
@@ -74,7 +68,10 @@ impl Sha256 {
         for i in 16..64 {
             let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);
             let s1 = w[i - 2].rotate_right(17) ^ w[i - 2].rotate_right(19) ^ (w[i - 2] >> 10);
-            w[i] = w[i - 16].wrapping_add(s0).wrapping_add(w[i - 7]).wrapping_add(s1);
+            w[i] = w[i - 16]
+                .wrapping_add(s0)
+                .wrapping_add(w[i - 7])
+                .wrapping_add(s1);
         }
 
         let mut a = self.state[0];
@@ -189,14 +186,14 @@ pub enum CnappError {
 }
 
 pub mod cnapp_rights {
-    pub const INGEST_SIGNALS: u32         = 1 << 0;
-    pub const CORRELATE_RISK: u32         = 1 << 1;
-    pub const BUILD_ATTACK_GRAPH: u32     = 1 << 2;
+    pub const INGEST_SIGNALS: u32 = 1 << 0;
+    pub const CORRELATE_RISK: u32 = 1 << 1;
+    pub const BUILD_ATTACK_GRAPH: u32 = 1 << 2;
     pub const ORCHESTRATE_REMEDIATION: u32 = 1 << 3;
-    pub const QUERY_POSTURE: u32          = 1 << 4;
-    pub const READ_METRICS: u32           = 1 << 5;
-    pub const SEAL_LEDGER: u32            = 1 << 6;
-    pub const ADMIN: u32                  = 1 << 7;
+    pub const QUERY_POSTURE: u32 = 1 << 4;
+    pub const READ_METRICS: u32 = 1 << 5;
+    pub const SEAL_LEDGER: u32 = 1 << 6;
+    pub const ADMIN: u32 = 1 << 7;
 
     pub const ALL: u32 = INGEST_SIGNALS
         | CORRELATE_RISK
@@ -231,7 +228,12 @@ impl CnappCap {
         (self.rights & right) == right && self.invocations_left > 0
     }
 
-    pub fn attenuate(&self, new_rights: u32, max_lifetime: u64, invocations: u32) -> Result<Self, CnappError> {
+    pub fn attenuate(
+        &self,
+        new_rights: u32,
+        max_lifetime: u64,
+        invocations: u32,
+    ) -> Result<Self, CnappError> {
         if (new_rights & !self.rights) != 0 {
             return Err(CnappError::AttenuationViolation);
         }
@@ -343,11 +345,11 @@ pub struct AttackPathNode {
     pub name: [u8; 32],
     pub name_len: usize,
     pub is_internet_exposed: bool,
-    pub has_posture_drift: bool,     // CSPM
-    pub has_excess_privilege: bool,  // CIEM
-    pub has_runtime_anomaly: bool,   // CWPP
-    pub privilege_level: u8,         // 0=Worker, 1=Service, 2=ClusterOperator, 3=Kernel/Enclave
-    pub unified_risk_score: u8,      // 0..100
+    pub has_posture_drift: bool,    // CSPM
+    pub has_excess_privilege: bool, // CIEM
+    pub has_runtime_anomaly: bool,  // CWPP
+    pub privilege_level: u8,        // 0=Worker, 1=Service, 2=ClusterOperator, 3=Kernel/Enclave
+    pub unified_risk_score: u8,     // 0..100
     pub is_toxic_combination: bool,
     pub is_quarantined: bool,
 }
@@ -561,7 +563,12 @@ impl JamboCnappDaemon {
         self.node_count += 1;
 
         let details = Sha256::hash(name.as_bytes());
-        self.append_audit_record(CnappAuditAction::WorkloadRegistered, workload_id, &details, tick)?;
+        self.append_audit_record(
+            CnappAuditAction::WorkloadRegistered,
+            workload_id,
+            &details,
+            tick,
+        )?;
 
         Ok(())
     }
@@ -589,7 +596,7 @@ impl JamboCnappDaemon {
                         SignalSource::CspmPosture => node.has_posture_drift = true,
                         SignalSource::CwppRuntime => node.has_runtime_anomaly = true,
                         SignalSource::CiemEntitlement => node.has_excess_privilege = true,
-                        SignalSource::NetworkMesh => {},
+                        SignalSource::NetworkMesh => {}
                     }
                     node.recalculate_risk();
                     break;
@@ -605,7 +612,12 @@ impl JamboCnappDaemon {
 
         let fid = finding.id;
         let details = Sha256::hash(&finding.title[..finding.title_len]);
-        self.append_audit_record(CnappAuditAction::SignalIngested, finding.workload_id, &details, finding.tick)?;
+        self.append_audit_record(
+            CnappAuditAction::SignalIngested,
+            finding.workload_id,
+            &details,
+            finding.tick,
+        )?;
 
         Ok(fid)
     }
@@ -702,7 +714,9 @@ impl JamboCnappDaemon {
         workload_id: u32,
         tick: u64,
     ) -> Result<OrchestrationAction, CnappError> {
-        if !cap.has_right(cnapp_rights::ORCHESTRATE_REMEDIATION) && !cap.has_right(cnapp_rights::ADMIN) {
+        if !cap.has_right(cnapp_rights::ORCHESTRATE_REMEDIATION)
+            && !cap.has_right(cnapp_rights::ADMIN)
+        {
             return Err(CnappError::PermissionDenied);
         }
 
@@ -764,7 +778,12 @@ impl JamboCnappDaemon {
         details[1..5].copy_from_slice(&workload_id.to_be_bytes());
         let digest = Sha256::hash(&details);
 
-        self.append_audit_record(CnappAuditAction::RemediationOrchestrated, workload_id, &digest, tick)?;
+        self.append_audit_record(
+            CnappAuditAction::RemediationOrchestrated,
+            workload_id,
+            &digest,
+            tick,
+        )?;
 
         Ok(action)
     }
@@ -775,7 +794,9 @@ impl JamboCnappDaemon {
         cap: &CnappCap,
         tick: u64,
     ) -> Result<usize, CnappError> {
-        if !cap.has_right(cnapp_rights::ORCHESTRATE_REMEDIATION) && !cap.has_right(cnapp_rights::ADMIN) {
+        if !cap.has_right(cnapp_rights::ORCHESTRATE_REMEDIATION)
+            && !cap.has_right(cnapp_rights::ADMIN)
+        {
             return Err(CnappError::PermissionDenied);
         }
 
@@ -784,7 +805,9 @@ impl JamboCnappDaemon {
 
         for opt in self.nodes.iter() {
             if let Some(ref node) = opt {
-                if (node.is_toxic_combination || node.unified_risk_score >= 75) && !node.is_quarantined {
+                if (node.is_toxic_combination || node.unified_risk_score >= 75)
+                    && !node.is_quarantined
+                {
                     critical_ids[count] = node.workload_id;
                     count += 1;
                 }
@@ -1000,7 +1023,12 @@ mod tests {
 
         // Le nœud 103 ("cluster-operator") possède CSPM drift + CIEM excess rights + CWPP runtime exploit
         // Il doit être identifié en COMBINAISON TOXIQUE (Toxic Combination) avec score 100
-        let node103 = daemon.nodes.iter().flatten().find(|n| n.workload_id == 103).unwrap();
+        let node103 = daemon
+            .nodes
+            .iter()
+            .flatten()
+            .find(|n| n.workload_id == 103)
+            .unwrap();
         assert!(node103.is_toxic_combination);
         assert_eq!(node103.unified_risk_score, 100);
 
@@ -1016,12 +1044,22 @@ mod tests {
         daemon.init_defaults();
 
         // Nœud 101 ("jambo-ingress-gw") : Exposé Internet (+15) + Service (+10) + Posture drift (+20) = 45
-        let node101 = daemon.nodes.iter().flatten().find(|n| n.workload_id == 101).unwrap();
+        let node101 = daemon
+            .nodes
+            .iter()
+            .flatten()
+            .find(|n| n.workload_id == 101)
+            .unwrap();
         assert_eq!(node101.unified_risk_score, 45);
         assert!(!node101.is_toxic_combination);
 
         // Nœud 104 ("metrics-collector") : Worker interne propre = 0
-        let node104 = daemon.nodes.iter().flatten().find(|n| n.workload_id == 104).unwrap();
+        let node104 = daemon
+            .nodes
+            .iter()
+            .flatten()
+            .find(|n| n.workload_id == 104)
+            .unwrap();
         assert_eq!(node104.unified_risk_score, 0);
         assert!(!node104.is_toxic_combination);
     }
@@ -1038,7 +1076,12 @@ mod tests {
             .expect("Remédiation unifiée");
         assert_eq!(action, OrchestrationAction::FullUnifiedContainment);
 
-        let node103 = daemon.nodes.iter().flatten().find(|n| n.workload_id == 103).unwrap();
+        let node103 = daemon
+            .nodes
+            .iter()
+            .flatten()
+            .find(|n| n.workload_id == 103)
+            .unwrap();
         assert!(node103.is_quarantined);
         assert!(!node103.is_toxic_combination);
         assert!(node103.unified_risk_score <= 10);

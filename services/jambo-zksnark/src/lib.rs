@@ -44,14 +44,16 @@ pub struct Sha256;
 
 impl Sha256 {
     const K: [u32; 64] = [
-        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
-        0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
-        0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
-        0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
-        0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
-        0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
-        0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
-        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
+        0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
+        0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f,
+        0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc,
+        0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+        0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116,
+        0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
+        0xc67178f2,
     ];
 
     #[inline(always)]
@@ -534,7 +536,10 @@ impl JamboZkSnarkDaemon {
         self.audit_chain = new_digest;
 
         let entry = ZkAuditEntry {
-            epoch: self.setup_count + self.prove_count + self.verify_success_count + self.verify_fail_count,
+            epoch: self.setup_count
+                + self.prove_count
+                + self.verify_success_count
+                + self.verify_fail_count,
             event_type,
             circuit_id,
             digest: new_digest,
@@ -551,7 +556,11 @@ impl JamboZkSnarkDaemon {
         }
     }
 
-    pub fn register_circuit(&mut self, cap: &ZkSnarkCap, circuit: R1csCircuit) -> Result<u32, SysError> {
+    pub fn register_circuit(
+        &mut self,
+        cap: &ZkSnarkCap,
+        circuit: R1csCircuit,
+    ) -> Result<u32, SysError> {
         if !cap.has_right(zksnark_rights::ADMIN) {
             return Err(SysError::PermissionDenied);
         }
@@ -584,7 +593,12 @@ impl JamboZkSnarkDaemon {
     }
 
     /// Génère les clés de preuve et de vérification pour un circuit
-    pub fn run_setup(&mut self, cap: &ZkSnarkCap, circuit_id: u32, seed: &[u8]) -> Result<(), SysError> {
+    pub fn run_setup(
+        &mut self,
+        cap: &ZkSnarkCap,
+        circuit_id: u32,
+        seed: &[u8],
+    ) -> Result<(), SysError> {
         if !cap.has_right(zksnark_rights::SETUP) {
             return Err(SysError::PermissionDenied);
         }
@@ -595,10 +609,18 @@ impl JamboZkSnarkDaemon {
         };
 
         let hash = Sha256::digest(seed);
-        let tau_seed = u64::from_le_bytes([hash[0], hash[1], hash[2], hash[3], hash[4], hash[5], hash[6], hash[7]]);
-        let alpha_seed = u64::from_le_bytes([hash[8], hash[9], hash[10], hash[11], hash[12], hash[13], hash[14], hash[15]]);
-        let beta_seed = u64::from_le_bytes([hash[16], hash[17], hash[18], hash[19], hash[20], hash[21], hash[22], hash[23]]);
-        let delta_seed = u64::from_le_bytes([hash[24], hash[25], hash[26], hash[27], hash[28], hash[29], hash[30], hash[31]]);
+        let tau_seed = u64::from_le_bytes([
+            hash[0], hash[1], hash[2], hash[3], hash[4], hash[5], hash[6], hash[7],
+        ]);
+        let alpha_seed = u64::from_le_bytes([
+            hash[8], hash[9], hash[10], hash[11], hash[12], hash[13], hash[14], hash[15],
+        ]);
+        let beta_seed = u64::from_le_bytes([
+            hash[16], hash[17], hash[18], hash[19], hash[20], hash[21], hash[22], hash[23],
+        ]);
+        let delta_seed = u64::from_le_bytes([
+            hash[24], hash[25], hash[26], hash[27], hash[28], hash[29], hash[30], hash[31],
+        ]);
 
         let tau = Fr::from_u64((tau_seed % 1_000_000) + 100);
         let alpha = Fr::from_u64((alpha_seed % 1_000_000) + 200);
@@ -882,7 +904,8 @@ impl JamboZkSnarkDaemon {
 
         let admin_cap = self.admin_cap;
         let cid1 = self.register_circuit(&admin_cap, c1).unwrap();
-        self.run_setup(&admin_cap, cid1, b"seed_circuit_preimage_knowledge_2026").unwrap();
+        self.run_setup(&admin_cap, cid1, b"seed_circuit_preimage_knowledge_2026")
+            .unwrap();
 
         // Circuit 2: RangeProof4Bit : Preuve d'intervalle [0, 15]
         // Variables: w0 = 1, w1 = v (public), w2 = b0, w3 = b1, w4 = b2, w5 = b3 (bits secrets)
@@ -894,7 +917,8 @@ impl JamboZkSnarkDaemon {
             a.add_term(var_idx, Fr::ONE).unwrap();
             let mut b = LinearCombination::new();
             b.add_term(0, Fr::ONE).unwrap();
-            b.add_term(var_idx, Fr::from_u64(GOLDILOCKS_PRIME - 1)).unwrap();
+            b.add_term(var_idx, Fr::from_u64(GOLDILOCKS_PRIME - 1))
+                .unwrap();
             let c = LinearCombination::new();
             c2.add_constraint(a, b, c).unwrap();
         }
@@ -911,7 +935,8 @@ impl JamboZkSnarkDaemon {
         c2.add_constraint(sum_a, sum_b, sum_c).unwrap();
 
         let cid2 = self.register_circuit(&admin_cap, c2).unwrap();
-        self.run_setup(&admin_cap, cid2, b"seed_circuit_range_proof_2026").unwrap();
+        self.run_setup(&admin_cap, cid2, b"seed_circuit_range_proof_2026")
+            .unwrap();
 
         // Circuit 3: CapTokenProof : Preuve de possession de jeton de capacité secret
         // (k + 42) * (k + 42) = Hpub
@@ -928,7 +953,8 @@ impl JamboZkSnarkDaemon {
         c3.add_constraint(a3, b3, c_lc3).unwrap();
 
         let cid3 = self.register_circuit(&admin_cap, c3).unwrap();
-        self.run_setup(&admin_cap, cid3, b"seed_circuit_cap_token_proof_2026").unwrap();
+        self.run_setup(&admin_cap, cid3, b"seed_circuit_cap_token_proof_2026")
+            .unwrap();
 
         // Circuit 4: ConfidentialTransfer : in1 + in2 = out1 + out2
         // (in1 + in2 - out1) * 1 = out2
@@ -945,7 +971,8 @@ impl JamboZkSnarkDaemon {
         c4.add_constraint(a4, b4, c_lc4).unwrap();
 
         let cid4 = self.register_circuit(&admin_cap, c4).unwrap();
-        self.run_setup(&admin_cap, cid4, b"seed_circuit_confidential_transfer_2026").unwrap();
+        self.run_setup(&admin_cap, cid4, b"seed_circuit_confidential_transfer_2026")
+            .unwrap();
     }
 }
 
@@ -985,20 +1012,10 @@ mod tests {
         c.add_term(3, Fr::ONE).unwrap();
         circuit.add_constraint(a, b, c).unwrap();
 
-        let witness_valid = [
-            Fr::ONE,
-            Fr::from_u64(6),
-            Fr::from_u64(7),
-            Fr::from_u64(42),
-        ];
+        let witness_valid = [Fr::ONE, Fr::from_u64(6), Fr::from_u64(7), Fr::from_u64(42)];
         assert!(circuit.is_satisfied(&witness_valid));
 
-        let witness_invalid = [
-            Fr::ONE,
-            Fr::from_u64(6),
-            Fr::from_u64(7),
-            Fr::from_u64(43),
-        ];
+        let witness_invalid = [Fr::ONE, Fr::from_u64(6), Fr::from_u64(7), Fr::from_u64(43)];
         assert!(!circuit.is_satisfied(&witness_invalid));
     }
 

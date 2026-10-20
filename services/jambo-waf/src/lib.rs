@@ -268,7 +268,11 @@ impl WafRule {
     ) -> Self {
         let mut name = [0u8; 32];
         let n_bytes = name_str.as_bytes();
-        let n_len = if n_bytes.len() > 32 { 32 } else { n_bytes.len() };
+        let n_len = if n_bytes.len() > 32 {
+            32
+        } else {
+            n_bytes.len()
+        };
         let mut i = 0;
         while i < n_len {
             name[i] = n_bytes[i];
@@ -277,7 +281,11 @@ impl WafRule {
 
         let mut pattern = [0u8; 48];
         let p_bytes = pattern_str.as_bytes();
-        let p_len = if p_bytes.len() > 48 { 48 } else { p_bytes.len() };
+        let p_len = if p_bytes.len() > 48 {
+            48
+        } else {
+            p_bytes.len()
+        };
         let mut j = 0;
         while j < p_len {
             pattern[j] = p_bytes[j];
@@ -747,8 +755,8 @@ impl Sha256 {
     pub const fn new() -> Self {
         Self {
             state: [
-                0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c,
-                0x1f83d9ab, 0x5be0cd19,
+                0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
+                0x5be0cd19,
             ],
             count: 0,
             buffer: [0u8; 64],
@@ -1538,7 +1546,8 @@ mod tests {
         daemon.init_defaults();
 
         let mut req = HttpRequest::new([10, 0, 0, 5], HttpMethod::Post, "/comments");
-        req.set_body(b"<script>alert(document.cookie)</script>").unwrap();
+        req.set_body(b"<script>alert(document.cookie)</script>")
+            .unwrap();
 
         let decision = daemon.inspect_request(&cap, &req, 102).expect("Inspect");
         match decision {
@@ -1560,7 +1569,9 @@ mod tests {
 
         let decision = daemon.inspect_request(&cap, &req, 103).expect("Inspect");
         match decision {
-            WafDecision::Quarantine { client_ip, reason, .. } => {
+            WafDecision::Quarantine {
+                client_ip, reason, ..
+            } => {
                 assert_eq!(client_ip, [10, 0, 0, 99]);
                 assert_eq!(reason, AttackType::CommandInjection);
             }
@@ -1624,7 +1635,11 @@ mod tests {
 
         let decision = daemon.inspect_request(&cap, &req, 106).expect("Inspect");
         match decision {
-            WafDecision::Block { attack_type, .. } | WafDecision::Quarantine { reason: attack_type, .. } => {
+            WafDecision::Block { attack_type, .. }
+            | WafDecision::Quarantine {
+                reason: attack_type,
+                ..
+            } => {
                 assert_eq!(attack_type, AttackType::MalformedWasm);
             }
             _ => panic!("Expected Malformed Wasm block"),
@@ -1637,9 +1652,12 @@ mod tests {
         let mut daemon = JamboWafDaemon::new(cap);
 
         let mut resp = HttpResponse::new(200);
-        resp.set_body(b"Debug info: -----BEGIN RSA PRIVATE KEY-----\nMIIEog...").unwrap();
+        resp.set_body(b"Debug info: -----BEGIN RSA PRIVATE KEY-----\nMIIEog...")
+            .unwrap();
 
-        let is_safe = daemon.inspect_response(&cap, &resp, 107).expect("Inspect Response");
+        let is_safe = daemon
+            .inspect_response(&cap, &resp, 107)
+            .expect("Inspect Response");
         assert!(!is_safe, "Response with private key must be blocked");
     }
 
@@ -1655,7 +1673,11 @@ mod tests {
         // Requête contenant une attaque mais émise par une IP blanche
         let req = HttpRequest::new(trusted_ip, HttpMethod::Get, "/test?q=' or '1'='1");
         let decision = daemon.inspect_request(&cap, &req, 108).expect("Inspect");
-        assert_eq!(decision, WafDecision::Allow, "Whitelisted IP must bypass WAF");
+        assert_eq!(
+            decision,
+            WafDecision::Allow,
+            "Whitelisted IP must bypass WAF"
+        );
     }
 
     #[test]

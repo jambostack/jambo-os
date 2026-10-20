@@ -100,7 +100,9 @@ pub fn execute_sand_daemon_test() -> bool {
     // Tout appel ultérieur par ce bac à sable est tué immédiatement
     let act_after_kill = daemon.evaluate_syscall(1, 12, [0, 0, 0, 0], 102);
     assert_eq!(act_after_kill, FilterAction::Kill);
-    kprintln!("[SAND/SECCOMP] Filtrage Seccomp-like d'appels système & neutralisation Kill validés");
+    kprintln!(
+        "[SAND/SECCOMP] Filtrage Seccomp-like d'appels système & neutralisation Kill validés"
+    );
 
     // 4. Test d'invariant de resserrement monotone (Monotonic Tightening Invariant)
     let parent_id = 2; // ComputeOnly
@@ -140,11 +142,14 @@ pub fn execute_sand_daemon_test() -> bool {
     let child_prof = daemon.get_profile(child_id).unwrap();
     assert_eq!(child_prof.parent_id, Some(parent_id));
     assert_eq!(child_prof.strictness_level, 95);
-    kprintln!("[SAND/MONOTONE] Invariant de resserrement monotone (Seccomp/Landlock) formellement prouvé");
+    kprintln!(
+        "[SAND/MONOTONE] Invariant de resserrement monotone (Seccomp/Landlock) formellement prouvé"
+    );
 
     // 5. Test de restriction Landlock-like sur chemins VFS
     // Sandbox 2 (ComputeOnly a la règle: /data/ en lecture seule)
-    let res_read_ok = daemon.evaluate_landlock(2, "/data/dataset.parquet", landlock_access::READ, 200);
+    let res_read_ok =
+        daemon.evaluate_landlock(2, "/data/dataset.parquet", landlock_access::READ, 200);
     assert_eq!(res_read_ok, Ok(()));
 
     // Écriture interdite dans /data/

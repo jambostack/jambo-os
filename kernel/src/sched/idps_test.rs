@@ -7,9 +7,9 @@ extern crate alloc;
 use crate::kprintln;
 use jambo_abi::{Handle, SysError};
 use jambo_idps::{
-    idps_rights, CountermeasureAction, IdpsCap, IpcTrafficEvent, JamboIdpsDaemon,
-    ThreatCategory, ThreatSeverity, DEFAULT_BURST_THRESHOLD, HASH_SIZE,
-    HIGH_ENTROPY_THRESHOLD, PRIVILEGED_KERNEL_CHANNEL,
+    idps_rights, CountermeasureAction, IdpsCap, IpcTrafficEvent, JamboIdpsDaemon, ThreatCategory,
+    ThreatSeverity, DEFAULT_BURST_THRESHOLD, HASH_SIZE, HIGH_ENTROPY_THRESHOLD,
+    PRIVILEGED_KERNEL_CHANNEL,
 };
 use jambo_sh::{JamboShell, ShellStatus};
 
@@ -65,8 +65,13 @@ pub fn execute_idps_daemon_test() -> bool {
         cap_token: 0x7777_8881,
         sequence_num: 1,
     };
-    let normal_res = daemon.inspect_event(&normal_ev).expect("Inspection événement normal");
-    assert!(normal_res.is_none(), "Événement normal ne doit déclencher aucune alerte");
+    let normal_res = daemon
+        .inspect_event(&normal_ev)
+        .expect("Inspection événement normal");
+    assert!(
+        normal_res.is_none(),
+        "Événement normal ne doit déclencher aucune alerte"
+    );
     assert_eq!(daemon.events_inspected, 1);
     assert_eq!(daemon.anomalies_detected, 0);
     kprintln!("[IDPS/INSPECT] Flux IPC conforme validé sans fausse alerte");
@@ -82,13 +87,18 @@ pub fn execute_idps_daemon_test() -> bool {
         cap_token: 0xBADF_00D,
         sequence_num: 1,
     };
-    let forged_alert = daemon.inspect_event(&forged_ev).expect("Inspection falsification");
+    let forged_alert = daemon
+        .inspect_event(&forged_ev)
+        .expect("Inspection falsification");
     assert!(forged_alert.is_some());
     let a1 = forged_alert.unwrap();
     assert_eq!(a1.category, ThreatCategory::CapabilityForgeryAttempt);
     assert_eq!(a1.severity, ThreatSeverity::Critical);
     assert_eq!(a1.action, CountermeasureAction::QuarantineProcess);
-    assert!(daemon.is_quarantined(666), "Processus 666 doit être consigné en quarantaine");
+    assert!(
+        daemon.is_quarantined(666),
+        "Processus 666 doit être consigné en quarantaine"
+    );
     assert_eq!(daemon.anomalies_detected, 1);
     kprintln!("[IDPS/HEURISTIC] Falsification de jeton de capacité détectée et processus 666 mis en quarantaine");
 
@@ -103,9 +113,14 @@ pub fn execute_idps_daemon_test() -> bool {
         cap_token: 0x1235,
         sequence_num: 2,
     };
-    let blocked_alert = daemon.inspect_event(&blocked_ev).expect("Inspection émission bloquée");
+    let blocked_alert = daemon
+        .inspect_event(&blocked_ev)
+        .expect("Inspection émission bloquée");
     assert!(blocked_alert.is_some());
-    assert_eq!(blocked_alert.unwrap().category, ThreatCategory::ProtocolViolation);
+    assert_eq!(
+        blocked_alert.unwrap().category,
+        ThreatCategory::ProtocolViolation
+    );
     kprintln!("[IDPS/QUARANTINE] Émission IPC bloquée pour processus en quarantaine");
 
     // 6. Détection d'accès non autorisé au canal privilégié micro-noyau (Canal 0)
@@ -119,7 +134,9 @@ pub fn execute_idps_daemon_test() -> bool {
         cap_token: 0x9999_1111,
         sequence_num: 1,
     };
-    let priv_alert = daemon.inspect_event(&priv_ev).expect("Inspection canal réservé");
+    let priv_alert = daemon
+        .inspect_event(&priv_ev)
+        .expect("Inspection canal réservé");
     assert!(priv_alert.is_some());
     let a2 = priv_alert.unwrap();
     assert_eq!(a2.category, ThreatCategory::UnauthorizedIpcChannel);
@@ -152,18 +169,26 @@ pub fn execute_idps_daemon_test() -> bool {
     };
     let burst_alert = daemon.inspect_event(&burst_ev).expect("Inspection flood");
     assert!(burst_alert.is_some());
-    assert_eq!(burst_alert.unwrap().category, ThreatCategory::RateBurstAnomaly);
+    assert_eq!(
+        burst_alert.unwrap().category,
+        ThreatCategory::RateBurstAnomaly
+    );
     kprintln!("[IDPS/FLOOD] Rafale anormale (IPC Flood) interceptée et étranglement appliqué");
 
     // 8. Révocation manuelle et réarmement de processus
     let test_handle = Handle::new(999, 1);
-    let rev_res = daemon.revoke_capability(999, test_handle, 0x03).expect("Révocation cap");
+    let rev_res = daemon
+        .revoke_capability(999, test_handle, 0x03)
+        .expect("Révocation cap");
     assert_eq!(rev_res, CountermeasureAction::RevokeCap);
     assert!(daemon.caps_revoked > 0);
 
     let rearm_res = daemon.rearm_process(666).expect("Réarmement processus");
     assert!(rearm_res);
-    assert!(!daemon.is_quarantined(666), "Quarantaine du processus 666 levée après réarmement");
+    assert!(
+        !daemon.is_quarantined(666),
+        "Quarantaine du processus 666 levée après réarmement"
+    );
     kprintln!("[IDPS/REARM] Révocation dynamique et procédure de réarmement validées");
 
     // 9. Vérification du registre d'audit scellé SHA-256

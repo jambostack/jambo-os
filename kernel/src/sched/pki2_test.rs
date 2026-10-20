@@ -6,12 +6,12 @@ extern crate alloc;
 
 use crate::kprintln;
 use jambo_abi::{Handle, SysError};
-use jambo_sh::{JamboShell, ShellStatus};
 use jambo_pki2::{
     key_usages, pki_rights, CaTrustLevel, CertStatus, FederatedCa, HybridPublicKey,
-    HybridSignature, JamboPkiDaemon, PkiAlgorithm, PkiCap, PkiCert, PkiError,
-    RevocationReason, Sha256, MAX_CAS, MAX_CERTS, MAX_CRL_ENTRIES,
+    HybridSignature, JamboPkiDaemon, PkiAlgorithm, PkiCap, PkiCert, PkiError, RevocationReason,
+    Sha256, MAX_CAS, MAX_CERTS, MAX_CRL_ENTRIES,
 };
+use jambo_sh::{JamboShell, ShellStatus};
 
 /// Exécute la suite complète de validation formelle de la PKI hybride post-quantique et fédération CA (Phase 109)
 pub fn execute_pki2_daemon_test() -> bool {
@@ -53,8 +53,14 @@ pub fn execute_pki2_daemon_test() -> bool {
     // 2. Initialisation du démon PKI et fédération de CAs
     let mut daemon = JamboPkiDaemon::new(admin_cap);
     daemon.init_defaults();
-    assert!(daemon.ca_count >= 2, "Root CA et Intermediate CA configurées");
-    assert!(daemon.cert_count >= 2, "Certificats souverains émis par défaut");
+    assert!(
+        daemon.ca_count >= 2,
+        "Root CA et Intermediate CA configurées"
+    );
+    assert!(
+        daemon.cert_count >= 2,
+        "Certificats souverains émis par défaut"
+    );
     kprintln!("[PKI2/INIT] Démon PKI souverain, hiérarchie et fédération de CA initialisées");
 
     // 3. Validation de chaîne stricte (RFC 5280 Strict Path Validation)
@@ -95,7 +101,10 @@ pub fn execute_pki2_daemon_test() -> bool {
         )
         .expect("Émission d'un certificat hybride réussie");
 
-    assert_eq!(daemon.validate_cert(&admin_cap, new_serial, key_usages::CLIENT_AUTH), Ok(true));
+    assert_eq!(
+        daemon.validate_cert(&admin_cap, new_serial, key_usages::CLIENT_AUTH),
+        Ok(true)
+    );
     kprintln!("[PKI2/DUAL] Signatures hybrides Dual-Defense (ML-DSA + Ed25519) validées");
 
     // 5. Révocation temps réel et validation CRL
@@ -103,7 +112,8 @@ pub fn execute_pki2_daemon_test() -> bool {
         .revoke_certificate(&admin_cap, new_serial, RevocationReason::KeyCompromise)
         .expect("Révocation réussie");
 
-    let post_revocation_check = daemon.validate_cert(&admin_cap, new_serial, key_usages::CLIENT_AUTH);
+    let post_revocation_check =
+        daemon.validate_cert(&admin_cap, new_serial, key_usages::CLIENT_AUTH);
     assert_eq!(
         post_revocation_check,
         Err(PkiError::CertRevoked),

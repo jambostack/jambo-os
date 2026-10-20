@@ -29,29 +29,23 @@ pub struct Sha256 {
 
 impl Sha256 {
     const K: [u32; 64] = [
-        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5,
-        0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
-        0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3,
-        0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
-        0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc,
-        0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
-        0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
-        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
-        0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13,
-        0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
-        0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3,
-        0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
-        0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5,
-        0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
-        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
-        0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
+        0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
+        0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f,
+        0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc,
+        0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+        0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116,
+        0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
+        0xc67178f2,
     ];
 
     pub fn new() -> Self {
         Self {
             state: [
-                0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
-                0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+                0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
+                0x5be0cd19,
             ],
             buffer: [0u8; 64],
             buffer_len: 0,
@@ -72,7 +66,10 @@ impl Sha256 {
         for i in 16..64 {
             let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);
             let s1 = w[i - 2].rotate_right(17) ^ w[i - 2].rotate_right(19) ^ (w[i - 2] >> 10);
-            w[i] = w[i - 16].wrapping_add(s0).wrapping_add(w[i - 7]).wrapping_add(s1);
+            w[i] = w[i - 16]
+                .wrapping_add(s0)
+                .wrapping_add(w[i - 7])
+                .wrapping_add(s1);
         }
 
         let mut a = self.state[0];
@@ -171,13 +168,13 @@ impl Sha256 {
 
 pub mod bas_rights {
     pub const RUN_SIMULATION: u32 = 1 << 0;
-    pub const QUERY_RESULTS: u32  = 1 << 1;
+    pub const QUERY_RESULTS: u32 = 1 << 1;
     pub const REGISTER_VECTOR: u32 = 1 << 2;
-    pub const RUN_PLAYBOOK: u32   = 1 << 3;
-    pub const ANALYZE_GAPS: u32   = 1 << 4;
-    pub const REMEDIATE: u32      = 1 << 5;
-    pub const SEAL_LEDGER: u32    = 1 << 6;
-    pub const ADMIN: u32          = 1 << 7;
+    pub const RUN_PLAYBOOK: u32 = 1 << 3;
+    pub const ANALYZE_GAPS: u32 = 1 << 4;
+    pub const REMEDIATE: u32 = 1 << 5;
+    pub const SEAL_LEDGER: u32 = 1 << 6;
+    pub const ADMIN: u32 = 1 << 7;
 
     pub const ALL: u32 = RUN_SIMULATION
         | QUERY_RESULTS
@@ -210,7 +207,12 @@ pub struct BasCap {
 }
 
 impl BasCap {
-    pub const fn new(handle: Handle, rights: u32, max_lifetime: u64, invocations_left: u32) -> Self {
+    pub const fn new(
+        handle: Handle,
+        rights: u32,
+        max_lifetime: u64,
+        invocations_left: u32,
+    ) -> Self {
         Self {
             handle,
             rights,
@@ -223,7 +225,12 @@ impl BasCap {
         (self.rights & right) == right
     }
 
-    pub fn attenuate(&self, new_rights: u32, new_lifetime: u64, new_invocations: u32) -> Result<Self, BasError> {
+    pub fn attenuate(
+        &self,
+        new_rights: u32,
+        new_lifetime: u64,
+        new_invocations: u32,
+    ) -> Result<Self, BasError> {
         if (new_rights & !self.rights) != 0 {
             return Err(BasError::AttenuationViolation);
         }
@@ -645,17 +652,37 @@ impl JamboBasDaemon {
                 // Défense en profondeur active
                 if v.severity_score >= 80 {
                     // Bloqué net (ex: Seccomp, WAF, Landlock, EDR)
-                    (SimulationStatus::BlockedByDefense, true, true, v.expected_defense)
+                    (
+                        SimulationStatus::BlockedByDefense,
+                        true,
+                        true,
+                        v.expected_defense,
+                    )
                 } else {
                     // Détecté et mitigé
-                    (SimulationStatus::BlockedByDefense, true, true, v.expected_defense)
+                    (
+                        SimulationStatus::BlockedByDefense,
+                        true,
+                        true,
+                        v.expected_defense,
+                    )
                 }
             } else if defense_active {
                 // Détecté mais non bloqué (manque de règle ou gap)
-                (SimulationStatus::DetectedOnly, false, true, DefenseSystem::None)
+                (
+                    SimulationStatus::DetectedOnly,
+                    false,
+                    true,
+                    DefenseSystem::None,
+                )
             } else {
                 // Défense inactive : l'attaque réussit sans détection
-                (SimulationStatus::UndetectedSuccess, false, false, DefenseSystem::None)
+                (
+                    SimulationStatus::UndetectedSuccess,
+                    false,
+                    false,
+                    DefenseSystem::None,
+                )
             }
         };
 
@@ -694,7 +721,13 @@ impl JamboBasDaemon {
         }
 
         self.calculate_resilience();
-        let code = if blocked { 0 } else if detected { 1 } else { 2 };
+        let code = if blocked {
+            0
+        } else if detected {
+            1
+        } else {
+            2
+        };
         self.log_audit_action("RUN_SIMULATION", vector_id, code, timestamp)?;
 
         Ok(res)
@@ -833,7 +866,12 @@ impl JamboBasDaemon {
         })
     }
 
-    pub fn remediate_gap(&mut self, cap: &BasCap, vector_id: u32, timestamp: u64) -> Result<(), BasError> {
+    pub fn remediate_gap(
+        &mut self,
+        cap: &BasCap,
+        vector_id: u32,
+        timestamp: u64,
+    ) -> Result<(), BasError> {
         if !cap.has_right(bas_rights::REMEDIATE) {
             return Err(BasError::PermissionDenied);
         }
@@ -1052,7 +1090,9 @@ mod tests {
         assert!(daemon.resilience_score < 100);
 
         // Remédier à la lacune
-        daemon.remediate_gap(&admin_cap, 2, 750).expect("Remédiation lacune");
+        daemon
+            .remediate_gap(&admin_cap, 2, 750)
+            .expect("Remédiation lacune");
 
         let gaps = daemon.analyze_coverage_gaps(&admin_cap).unwrap();
         assert_eq!(gaps.undetected_count, 0);

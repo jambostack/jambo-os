@@ -6,17 +6,14 @@ extern crate alloc;
 use crate::kprintln;
 use jambo_abi::{Handle, SysError};
 use jambo_bpfd::{
-    bpf_helpers, bpf_jmp, bpf_rights, bpf_size, xdp_action, BpfCap, BpfContext,
-    BpfInstruction, BpfMapType, BpfProgramType, BpfVerifier, JamboBpfDaemon,
-    VerificationError,
+    bpf_helpers, bpf_jmp, bpf_rights, bpf_size, xdp_action, BpfCap, BpfContext, BpfInstruction,
+    BpfMapType, BpfProgramType, BpfVerifier, JamboBpfDaemon, VerificationError,
 };
 use jambo_sh::{JamboShell, ShellStatus};
 
 /// Exécute la suite de tests du moteur eBPF et du filtrage réseau XDP (Phase 76)
 pub fn execute_bpf_daemon_test() -> bool {
-    kprintln!(
-        "[BPF/TEST] Démarrage du test du moteur eBPF et filtrage souverain (Phase 76)..."
-    );
+    kprintln!("[BPF/TEST] Démarrage du test du moteur eBPF et filtrage souverain (Phase 76)...");
 
     // 1. Contrôle d'accès capabilaire (BpfCap) et atténuation stricte
     let admin_cap = BpfCap::new(Handle::new(76, 1), bpf_rights::ALL);
@@ -45,10 +42,7 @@ pub fn execute_bpf_daemon_test() -> bool {
     let mut daemon = JamboBpfDaemon::new(admin_cap);
 
     // Tentative de chargement d'un programme sans droit BPF_PROG_LOAD
-    let dummy_prog = [
-        BpfInstruction::mov64_imm(0, 0),
-        BpfInstruction::exit(),
-    ];
+    let dummy_prog = [BpfInstruction::mov64_imm(0, 0), BpfInstruction::exit()];
     assert_eq!(
         daemon.load_and_verify(&run_only_cap, BpfProgramType::Xdp, "unauth", &dummy_prog),
         Err(SysError::PermissionDenied),
@@ -110,11 +104,18 @@ pub fn execute_bpf_daemon_test() -> bool {
     assert!(rep.verified);
     assert_eq!(rep.instruction_count, 7);
     assert_eq!(rep.branch_count, 1);
-    kprintln!("[BPF/VERIFIER] Vérificateur formel et preuves de terminaison (DAG sans boucle) validés");
+    kprintln!(
+        "[BPF/VERIFIER] Vérificateur formel et preuves de terminaison (DAG sans boucle) validés"
+    );
 
     // 3. Enregistrement, Attachement et Filtrage Réseau XDP
     let xdp_id = daemon
-        .load_and_verify(&admin_cap, BpfProgramType::Xdp, "xdp_dns_firewall", &valid_xdp)
+        .load_and_verify(
+            &admin_cap,
+            BpfProgramType::Xdp,
+            "xdp_dns_firewall",
+            &valid_xdp,
+        )
         .expect("load and verify valid XDP filter");
     assert_eq!(xdp_id, 1);
 

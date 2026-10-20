@@ -74,7 +74,12 @@ pub fn execute_ciem_daemon_test() -> bool {
         .expect("Application moindre privilège");
     assert_eq!(new_rights, 0x07);
 
-    let ent202 = ciem.entitlements.iter().flatten().find(|e| e.id == 202).unwrap();
+    let ent202 = ciem
+        .entitlements
+        .iter()
+        .flatten()
+        .find(|e| e.id == 202)
+        .unwrap();
     assert_eq!(ent202.status, EntitlementStatus::Attenuated);
     assert_eq!(ent202.granted_rights, 0x07);
     assert_eq!(ent202.excess_rights(), 0);
@@ -91,7 +96,12 @@ pub fn execute_ciem_daemon_test() -> bool {
         .expect("Révocation privilèges dormants");
     assert!(ok_rev);
 
-    let ent203 = ciem.entitlements.iter().flatten().find(|e| e.id == 203).unwrap();
+    let ent203 = ciem
+        .entitlements
+        .iter()
+        .flatten()
+        .find(|e| e.id == 203)
+        .unwrap();
     assert_eq!(ent203.status, EntitlementStatus::Revoked);
     assert_eq!(ent203.granted_rights, 0);
 

@@ -7,8 +7,8 @@ extern crate alloc;
 use crate::kprintln;
 use jambo_abi::Handle;
 use jambo_pam::{
-    pam_rights, AccountStatus, JamboPamDaemon, JitStatus, PamCap, PamError,
-    PrivilegeTier, SessionState,
+    pam_rights, AccountStatus, JamboPamDaemon, JitStatus, PamCap, PamError, PrivilegeTier,
+    SessionState,
 };
 
 /// Exécute la suite complète de validation formelle du démon PAM (Phase 134)
@@ -111,10 +111,24 @@ pub fn execute_pam_daemon_test() -> bool {
 
     // Enregistrement de transactions dans la session avec mise à jour du condensat SHA-256
     let hash1 = pam
-        .record_session_command(&operator_cap, sid1, "ip route add 10.0.0.0/24 via jnet0", 0, false, 6025)
+        .record_session_command(
+            &operator_cap,
+            sid1,
+            "ip route add 10.0.0.0/24 via jnet0",
+            0,
+            false,
+            6025,
+        )
         .expect("Enregistrement commande 1");
     let hash2 = pam
-        .record_session_command(&operator_cap, sid1, "sysctl -w net.ipv4.ip_forward=1", 0, false, 6030)
+        .record_session_command(
+            &operator_cap,
+            sid1,
+            "sysctl -w net.ipv4.ip_forward=1",
+            0,
+            false,
+            6030,
+        )
         .expect("Enregistrement commande 2");
     assert_ne!(hash1, hash2);
 
@@ -156,9 +170,17 @@ pub fn execute_pam_daemon_test() -> bool {
     assert_eq!(sid2, 2);
 
     // 6. Déclenchement d'urgence du Kill-Switch O(1) sur session
-    pam.kill_session(&admin_cap, sid2, "Tentative d'écriture anormale sur MSR protégé", 6065)
-        .expect("Interruption d'urgence Kill-Switch");
-    assert_eq!(pam.sessions[1].unwrap().state, SessionState::KilledAnomalous);
+    pam.kill_session(
+        &admin_cap,
+        sid2,
+        "Tentative d'écriture anormale sur MSR protégé",
+        6065,
+    )
+    .expect("Interruption d'urgence Kill-Switch");
+    assert_eq!(
+        pam.sessions[1].unwrap().state,
+        SessionState::KilledAnomalous
+    );
     assert_eq!(pam.accounts[0].unwrap().status, AccountStatus::Locked);
 
     // 7. Synthèse et vérification de l'intégrité de la chaîne cryptographique SHA-256

@@ -6,12 +6,12 @@ extern crate alloc;
 
 use crate::kprintln;
 use jambo_abi::{Handle, SysError};
-use jambo_sh::{JamboShell, ShellStatus};
 use jambo_secroute::{
-    secroute_rights, ChaCha20, EnclaveEndpoint, HmacSha256, JamboSecRouteDaemon,
-    RouteAction, SecPacketHeader, SecRouteCap, SecRouteError, SecurityZone, Sha256,
-    TrustLevel, TunnelStatus, MAX_ENCLAVES, MAX_RULES, MAX_TUNNELS, MAX_ZONES,
+    secroute_rights, ChaCha20, EnclaveEndpoint, HmacSha256, JamboSecRouteDaemon, RouteAction,
+    SecPacketHeader, SecRouteCap, SecRouteError, SecurityZone, Sha256, TrustLevel, TunnelStatus,
+    MAX_ENCLAVES, MAX_RULES, MAX_TUNNELS, MAX_ZONES,
 };
+use jambo_sh::{JamboShell, ShellStatus};
 
 /// Exécute la suite complète de validation formelle du routage sécurisé Zero-Trust et maillage chiffré (Phase 111)
 pub fn execute_secroute_daemon_test() -> bool {
@@ -32,7 +32,10 @@ pub fn execute_secroute_daemon_test() -> bool {
     assert!(admin_cap.has_right(secroute_rights::AUDIT_LOG));
 
     let attenuated_cap = admin_cap
-        .attenuate(secroute_rights::ROUTE_FORWARD | secroute_rights::INSPECT_FLOW, 4)
+        .attenuate(
+            secroute_rights::ROUTE_FORWARD | secroute_rights::INSPECT_FLOW,
+            4,
+        )
         .expect("Atténuation monotone SecRouteCap");
     assert!(attenuated_cap.has_right(secroute_rights::ROUTE_FORWARD));
     assert!(attenuated_cap.has_right(secroute_rights::INSPECT_FLOW));
@@ -60,7 +63,12 @@ pub fn execute_secroute_daemon_test() -> bool {
     let mut encrypted_payload = [0u8; 64];
     encrypted_payload[..original_payload.len()].copy_from_slice(original_payload);
 
-    ChaCha20::apply_keystream(&key, 1, &nonce, &mut encrypted_payload[..original_payload.len()]);
+    ChaCha20::apply_keystream(
+        &key,
+        1,
+        &nonce,
+        &mut encrypted_payload[..original_payload.len()],
+    );
     assert_ne!(
         &encrypted_payload[..original_payload.len()],
         original_payload,
@@ -68,7 +76,12 @@ pub fn execute_secroute_daemon_test() -> bool {
     );
 
     // Déchiffrement in-place avec même clé et nonce
-    ChaCha20::apply_keystream(&key, 1, &nonce, &mut encrypted_payload[..original_payload.len()]);
+    ChaCha20::apply_keystream(
+        &key,
+        1,
+        &nonce,
+        &mut encrypted_payload[..original_payload.len()],
+    );
     assert_eq!(
         &encrypted_payload[..original_payload.len()],
         original_payload,
@@ -115,7 +128,8 @@ pub fn execute_secroute_daemon_test() -> bool {
 
     // 5. Détection stricte d'attaque par Rejeu (Anti-Replay) et intégrité MAC
     // Rejeu du paquet précédent avec séquence 1 <= rx_seq (1)
-    let replay_err = daemon.decapsulate_and_verify(&packet_buffer[..packet_size], &mut decrypted_buffer);
+    let replay_err =
+        daemon.decapsulate_and_verify(&packet_buffer[..packet_size], &mut decrypted_buffer);
     assert_eq!(
         replay_err,
         Err(SecRouteError::AntiReplayDetected),
@@ -129,9 +143,12 @@ pub fn execute_secroute_daemon_test() -> bool {
     corrupted_packet[SecPacketHeader::SIZE + 2] ^= 0xff; // Inverser des bits de payload
     let mut corrupt_hdr = SecPacketHeader::deserialize(&corrupted_packet[..packet_size]).unwrap();
     corrupt_hdr.seq = 999; // Contourner anti-replay pour tester la falsification MAC
-    corrupt_hdr.serialize(&mut corrupted_packet[..SecPacketHeader::SIZE]).unwrap();
+    corrupt_hdr
+        .serialize(&mut corrupted_packet[..SecPacketHeader::SIZE])
+        .unwrap();
 
-    let mac_err = daemon.decapsulate_and_verify(&corrupted_packet[..packet_size], &mut decrypted_buffer);
+    let mac_err =
+        daemon.decapsulate_and_verify(&corrupted_packet[..packet_size], &mut decrypted_buffer);
     assert_eq!(
         mac_err,
         Err(SecRouteError::MacVerificationFailed),
@@ -143,17 +160,16 @@ pub fn execute_secroute_daemon_test() -> bool {
     // Tentative d'émission depuis sandbox confinée (401) vers Hyperviseur (101)
     // Créer un tunnel temporaire pour tester la règle QuarantineOnAttempt
     daemon
-        .establish_tunnel(
-            &admin_cap,
-            2,
-            401,
-            101,
-            [0x99u8; 32],
-            [0x88u8; 32],
-        )
+        .establish_tunnel(&admin_cap, 2, 401, 101, [0x99u8; 32], [0x88u8; 32])
         .expect("Établissement tunnel sandbox vers hyperviseur");
 
-    let quarantine_err = daemon.encapsulate_and_route(&admin_cap, 2, 254, b"UNAUTHORIZED_ESCAPE_ATTEMPT", &mut packet_buffer);
+    let quarantine_err = daemon.encapsulate_and_route(
+        &admin_cap,
+        2,
+        254,
+        b"UNAUTHORIZED_ESCAPE_ATTEMPT",
+        &mut packet_buffer,
+    );
     assert_eq!(
         quarantine_err,
         Err(SecRouteError::EnclaveQuarantined),

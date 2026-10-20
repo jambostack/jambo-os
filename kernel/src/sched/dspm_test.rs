@@ -7,8 +7,8 @@ extern crate alloc;
 use crate::kprintln;
 use jambo_abi::Handle;
 use jambo_dspm::{
-    dspm_rights, DataCategory, DataCompartment, DspmCap, DspmError, FlowAction,
-    JamboDspmDaemon, SensitivityLevel, StorageLocationType, ViolationType,
+    dspm_rights, DataCategory, DataCompartment, DspmCap, DspmError, FlowAction, JamboDspmDaemon,
+    SensitivityLevel, StorageLocationType, ViolationType,
 };
 
 /// Exécute la suite complète de validation formelle du démon DSPM (Phase 135)
@@ -108,7 +108,10 @@ pub fn execute_dspm_daemon_test() -> bool {
             7020,
         )
         .expect("Évaluation de flux transfrontalier");
-    assert!(!blocked_flow, "Le flux transfrontalier secret doit être bloqué");
+    assert!(
+        !blocked_flow,
+        "Le flux transfrontalier secret doit être bloqué"
+    );
 
     // Actif Public -> UserWorkload : DOIT ÊTRE AUTORISÉ
     let allowed_flow = dspm
@@ -137,7 +140,10 @@ pub fn execute_dspm_daemon_test() -> bool {
             7050,
         )
         .expect("Évaluation de flux depuis quarantaine");
-    assert!(!q_flow, "Un actif en quarantaine ne peut émettre aucun flux");
+    assert!(
+        !q_flow,
+        "Un actif en quarantaine ne peut émettre aucun flux"
+    );
 
     // 7. Balayage proactif d'inventaire
     let scanned = dspm

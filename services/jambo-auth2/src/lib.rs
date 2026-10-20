@@ -150,7 +150,9 @@ impl RevocationReason {
             RevocationReason::ExplicitLogout => "Déconnexion explicite de l'utilisateur",
             RevocationReason::CompromisedCredential => "Compromission suspectée du support Passkey",
             RevocationReason::SecurityEpochBump => "Bascule globale d'époque de sécurité de grappe",
-            RevocationReason::PolicyViolation => "Violation de politique de confinement Zero-Ambient",
+            RevocationReason::PolicyViolation => {
+                "Violation de politique de confinement Zero-Ambient"
+            }
             RevocationReason::BiometricFailure => "Échec de ré-authentification biométrique",
         }
     }
@@ -244,8 +246,14 @@ impl Sha256 {
 
     pub fn digest(data: &[u8]) -> [u8; 32] {
         let mut h = [
-            0x6a09e667u32, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c,
-            0x1f83d9ab, 0x5be0cd19,
+            0x6a09e667u32,
+            0xbb67ae85,
+            0x3c6ef372,
+            0xa54ff53a,
+            0x510e527f,
+            0x9b05688c,
+            0x1f83d9ab,
+            0x5be0cd19,
         ];
 
         let bit_len = (data.len() as u64) * 8;
@@ -431,8 +439,7 @@ pub mod schnorr {
         let k_hash = Sha256::digest(&k_input);
 
         let mut k_val = u64::from_be_bytes([
-            k_hash[0], k_hash[1], k_hash[2], k_hash[3], k_hash[4], k_hash[5], k_hash[6],
-            k_hash[7],
+            k_hash[0], k_hash[1], k_hash[2], k_hash[3], k_hash[4], k_hash[5], k_hash[6], k_hash[7],
         ]);
         if k_val == 0 || k_val >= ORDER_Q {
             k_val = 1337 + (k_val % (ORDER_Q - 2000));
@@ -536,7 +543,12 @@ pub struct EphemeralToken {
 
 impl EphemeralToken {
     #[inline(always)]
-    pub fn is_valid(&self, required_scope: u32, current_ticks: u64, current_user_epoch: u32) -> bool {
+    pub fn is_valid(
+        &self,
+        required_scope: u32,
+        current_ticks: u64,
+        current_user_epoch: u32,
+    ) -> bool {
         if self.revoked {
             return false;
         }
@@ -932,7 +944,14 @@ impl JamboAuth2Daemon {
         let expires_at = issued_at + token_ttl.min(600); // Plafond 600 ticks
         let scopes = requested_scopes & token_scopes::ALL;
 
-        let token_sig = self.sign_token(token_id, cred.user_id, scopes, issued_at, expires_at, user_epoch);
+        let token_sig = self.sign_token(
+            token_id,
+            cred.user_id,
+            scopes,
+            issued_at,
+            expires_at,
+            user_epoch,
+        );
 
         let token = EphemeralToken {
             token_id,
@@ -1232,7 +1251,6 @@ impl JamboAuth2Daemon {
         self.current_time_ticks = self.current_time_ticks.saturating_add(delta);
     }
 }
-
 
 // ============================================================================
 // TESTS UNITAIRES FORMELS DU SOUS-SYSTÈME JAMBO-AUTH2

@@ -85,7 +85,9 @@ pub fn execute_watchdog_daemon_test() -> bool {
         Err(SysError::PermissionDenied),
         "Déclenchement NMI sans WATCHDOG_TRIGGER doit échouer"
     );
-    kprintln!("[WATCHDOG/CAP] Contrôle d'accès capabilaire WatchdogCap & non-amplification validés");
+    kprintln!(
+        "[WATCHDOG/CAP] Contrôle d'accès capabilaire WatchdogCap & non-amplification validés"
+    );
 
     // 2. Vérification de la configuration nominale initiale
     assert_eq!(daemon.target_count, 4);
@@ -94,7 +96,9 @@ pub fn execute_watchdog_daemon_test() -> bool {
     assert_eq!(daemon.hw_watchdog.timeout_ms, 30000);
     assert_eq!(daemon.hw_watchdog.pre_timeout_ms, 5000);
 
-    let t1 = daemon.get_target(1).expect("Target 1 (kernel-sched) exists");
+    let t1 = daemon
+        .get_target(1)
+        .expect("Target 1 (kernel-sched) exists");
     assert_eq!(t1.name_str(), "kernel-sched");
     assert_eq!(t1.target_type, WatchdogTargetType::KernelCore);
     assert_eq!(t1.timeout_ms, 1000);
@@ -144,7 +148,10 @@ pub fn execute_watchdog_daemon_test() -> bool {
     // Cible 4 (jambo-ipcd) timeout 2500ms, dernière activité t=100. À t=28 000ms, elle est bloquée.
     // L'action requise est IsolateAndKillThread.
     let t4_before = daemon.get_target(4).unwrap();
-    assert_eq!(t4_before.failover_action, FailoverAction::IsolateAndKillThread);
+    assert_eq!(
+        t4_before.failover_action,
+        FailoverAction::IsolateAndKillThread
+    );
 
     daemon.evaluate_system_liveness(&admin_cap, 28_000).unwrap();
     let t4_after = daemon.get_target(4).unwrap();
@@ -158,13 +165,23 @@ pub fn execute_watchdog_daemon_test() -> bool {
     let n1_after = daemon.get_cluster_node(1).unwrap();
     assert_eq!(n1_after.state, NodeLivenessState::FailoverInitiated);
     assert!(daemon.stats.total_cluster_failovers >= 1);
-    kprintln!("[WATCHDOG/CLUSTER] Battements de cœur de grappe et bascule automatique (Failover) validés");
+    kprintln!(
+        "[WATCHDOG/CLUSTER] Battements de cœur de grappe et bascule automatique (Failover) validés"
+    );
 
     // 7. Déclenchement NMI manuel avec capture de contexte et isolation
     let rip = 0xFFFFFFFF80108A40u64;
     let rsp = 0xFFFF80000003F100u64;
     let alert_id = daemon
-        .trigger_nmi(&admin_cap, 1, Some(2), LockupType::HardLockup, rip, rsp, 28_500)
+        .trigger_nmi(
+            &admin_cap,
+            1,
+            Some(2),
+            LockupType::HardLockup,
+            rip,
+            rsp,
+            28_500,
+        )
         .expect("Trigger NMI alert");
     assert!(alert_id > 0);
 

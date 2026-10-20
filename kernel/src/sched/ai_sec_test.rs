@@ -71,7 +71,9 @@ pub fn execute_ai_sec_daemon_test() -> bool {
     assert_eq!(res_inj.threat, ThreatCategory::PromptInjection);
     assert!(res_inj.risk_score >= 800);
     assert_eq!(daemon.total_injections_blocked, 1);
-    kprintln!("[AI-SEC/INPUT] Garde-fous d'entrée, blocage d'injection et calcul de risque validés");
+    kprintln!(
+        "[AI-SEC/INPUT] Garde-fous d'entrée, blocage d'injection et calcul de risque validés"
+    );
 
     // 4. Filtrage et assainissement des sorties d'inférence (Data Leak Prevention)
     let mut leak_buffer = [0u8; 128];
@@ -85,7 +87,9 @@ pub fn execute_ai_sec_daemon_test() -> bool {
     assert!(out_res.redactions_count >= 2);
     let sanitized_str = core::str::from_utf8(&leak_buffer[..payload.len()]).unwrap_or("");
     assert!(sanitized_str.contains("[REDACTED_SEC]"));
-    kprintln!("[AI-SEC/OUTPUT] Détection de fuites mémoires/secrets et assainissement in-place validés");
+    kprintln!(
+        "[AI-SEC/OUTPUT] Détection de fuites mémoires/secrets et assainissement in-place validés"
+    );
 
     // 5. Vérification d'intégrité Merkle et détection d'empoisonnement de poids
     let clean_b1 = b"JAMBO_EMBED_WEIGHT_TENSOR_LAYER0_INITIAL_CLEAN_WEIGHTS";
@@ -111,7 +115,9 @@ pub fn execute_ai_sec_daemon_test() -> bool {
     assert_eq!(backdoor_res, Err(SysError::InvalidArgument));
     assert_eq!(daemon.models[1].status, ModelStatus::Quarantined);
     assert_eq!(daemon.count_quarantined_models(), 2);
-    kprintln!("[AI-SEC/BACKDOOR] Détection d'anomalie de déclencheur trojan et quarantaine validées");
+    kprintln!(
+        "[AI-SEC/BACKDOOR] Détection d'anomalie de déclencheur trojan et quarantaine validées"
+    );
 
     // 7. Restauration d'un modèle sous privilège ADMIN
     daemon
@@ -122,7 +128,9 @@ pub fn execute_ai_sec_daemon_test() -> bool {
     kprintln!("[AI-SEC/RESTORE] Restauration capabilaire de modèle après quarantaine validée");
 
     // 8. Registre d'audit scellé par chaîne SHA-256
-    let audit_chain = daemon.get_audit_chain(&admin_cap).expect("Lecture chaîne audit");
+    let audit_chain = daemon
+        .get_audit_chain(&admin_cap)
+        .expect("Lecture chaîne audit");
     assert_ne!(audit_chain, [0u8; 32]);
     assert!(daemon.audit_count >= 5);
     kprintln!("[AI-SEC/AUDIT] Chaîne d'audit cryptographique inviolable SHA-256 validée");

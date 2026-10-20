@@ -7,8 +7,8 @@ extern crate alloc;
 use crate::kprintln;
 use jambo_abi::Handle;
 use jambo_ztna::{
-    ztna_rights, AccessDecision, DevicePosture, JamboZtnaDaemon,
-    MicroPerimeterPolicy, PostureStatus, ResourceKind, ZtnaCap, ZtnaError,
+    ztna_rights, AccessDecision, DevicePosture, JamboZtnaDaemon, MicroPerimeterPolicy,
+    PostureStatus, ResourceKind, ZtnaCap, ZtnaError,
 };
 
 /// Exécute la suite complète de validation formelle du moteur Zero Trust ZTNA (Phase 123)
@@ -63,7 +63,10 @@ pub fn execute_ztna_daemon_test() -> bool {
         .evaluate_access(&admin_cap, 501, 1001, "ipc://sys.sec.kms", 200)
         .expect("Évaluation accès conforme");
     match dec1 {
-        AccessDecision::Granted { session_id, trust_score } => {
+        AccessDecision::Granted {
+            session_id,
+            trust_score,
+        } => {
             assert!(session_id > 0);
             assert!(trust_score >= 85);
         }
@@ -129,7 +132,8 @@ pub fn execute_ztna_daemon_test() -> bool {
         .expect("Accès net");
     assert!(matches!(dec_net, AccessDecision::Granted { .. }));
 
-    ztna.revoke_trust(&admin_cap, 2001, 420).expect("Quarantaine 2001");
+    ztna.revoke_trust(&admin_cap, 2001, 420)
+        .expect("Quarantaine 2001");
     let dev2001 = ztna.get_device_posture(2001).unwrap();
     assert_eq!(dev2001.posture_status, PostureStatus::Quarantined);
     assert_eq!(dev2001.composite_trust_score, 0);

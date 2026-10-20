@@ -6,14 +6,13 @@ extern crate alloc;
 
 use crate::kprintln;
 use jambo_abi::{Handle, SysError};
-use jambo_sh::{JamboShell, ShellStatus};
 use jambo_ids::{
-    ids_rights, BehavioralBaseline, CorrelatedIncident, IdsCap, IdsError,
-    JamboIdsDaemon, MitigationAction, ProbeCategory, SensorProbe, Sha256,
-    TelemetryEvent, ThreatIndicator, ThreatLevel, CRITICAL_THREAT_THRESHOLD,
-    HIGH_THREAT_THRESHOLD, MAX_BASELINES, MAX_CORRELATIONS, MAX_EVENTS,
-    MAX_PROBES, MAX_QUARANTINE_RECORDS, SUSPICIOUS_THREAT_THRESHOLD,
+    ids_rights, BehavioralBaseline, CorrelatedIncident, IdsCap, IdsError, JamboIdsDaemon,
+    MitigationAction, ProbeCategory, SensorProbe, Sha256, TelemetryEvent, ThreatIndicator,
+    ThreatLevel, CRITICAL_THREAT_THRESHOLD, HIGH_THREAT_THRESHOLD, MAX_BASELINES, MAX_CORRELATIONS,
+    MAX_EVENTS, MAX_PROBES, MAX_QUARANTINE_RECORDS, SUSPICIOUS_THREAT_THRESHOLD,
 };
+use jambo_sh::{JamboShell, ShellStatus};
 
 /// Exécute la suite complète de validation formelle de la détection et corrélation d'intrusions multi-points (Phase 112)
 pub fn execute_ids_daemon_test() -> bool {
@@ -33,7 +32,10 @@ pub fn execute_ids_daemon_test() -> bool {
     assert!(admin_cap.has_right(ids_rights::ADMIN));
 
     let attenuated_cap = admin_cap
-        .attenuate(ids_rights::INSPECT | ids_rights::REPORT_EVENT | ids_rights::CORRELATE, 32)
+        .attenuate(
+            ids_rights::INSPECT | ids_rights::REPORT_EVENT | ids_rights::CORRELATE,
+            32,
+        )
         .expect("Atténuation monotone IdsCap");
     assert!(attenuated_cap.has_right(ids_rights::INSPECT));
     assert!(attenuated_cap.has_right(ids_rights::REPORT_EVENT));
@@ -63,7 +65,12 @@ pub fn execute_ids_daemon_test() -> bool {
 
     // Enregistrement dynamique d'une nouvelle sonde de composant matériel
     let p_id = daemon
-        .register_probe(&admin_cap, ProbeCategory::CryptoHardware, "tpm_nitro_probe", 9)
+        .register_probe(
+            &admin_cap,
+            ProbeCategory::CryptoHardware,
+            "tpm_nitro_probe",
+            9,
+        )
         .expect("Enregistrement sonde dynamique");
     assert_eq!(p_id, 7);
     assert_eq!(daemon.probe_count, 7);
@@ -76,13 +83,19 @@ pub fn execute_ids_daemon_test() -> bool {
 
     // Dépassement de canal (accès canal privilégié non autorisé)
     let violation_canal = daemon.check_behavioral_anomaly(42, 100, 200, 16);
-    assert!(violation_canal.is_some(), "Accès canal non autorisé détecté");
+    assert!(
+        violation_canal.is_some(),
+        "Accès canal non autorisé détecté"
+    );
     let (ind, _) = violation_canal.unwrap();
     assert_eq!(ind, ThreatIndicator::CrossZoneBoundaryViolation);
 
     // Rafale de déni de service (Flood / Burst)
     let flood_anomaly = daemon.check_behavioral_anomaly(42, 350, 200, 1);
-    assert!(flood_anomaly.is_some(), "Rafale anormale de messages détectée");
+    assert!(
+        flood_anomaly.is_some(),
+        "Rafale anormale de messages détectée"
+    );
     let (ind2, score2) = flood_anomaly.unwrap();
     assert_eq!(ind2, ThreatIndicator::IpcFloodBurst);
     assert!(score2 >= 80);
@@ -93,39 +106,45 @@ pub fn execute_ids_daemon_test() -> bool {
     let t0 = 10_000u64;
 
     // Événement sonde 1 (Kernel Syscall)
-    let ev1 = daemon.ingest_event(
-        &admin_cap,
-        1,
-        test_actor,
-        ThreatIndicator::AbnormalSyscallSequence,
-        75,
-        0,
-        t0,
-    ).expect("Ingestion événement sonde 1");
+    let ev1 = daemon
+        .ingest_event(
+            &admin_cap,
+            1,
+            test_actor,
+            ThreatIndicator::AbnormalSyscallSequence,
+            75,
+            0,
+            t0,
+        )
+        .expect("Ingestion événement sonde 1");
     assert!(ev1 > 0);
 
     // Événement sonde 2 (IPC Router)
-    let ev2 = daemon.ingest_event(
-        &admin_cap,
-        2,
-        test_actor,
-        ThreatIndicator::IpcFloodBurst,
-        80,
-        1,
-        t0 + 20,
-    ).expect("Ingestion événement sonde 2");
+    let ev2 = daemon
+        .ingest_event(
+            &admin_cap,
+            2,
+            test_actor,
+            ThreatIndicator::IpcFloodBurst,
+            80,
+            1,
+            t0 + 20,
+        )
+        .expect("Ingestion événement sonde 2");
     assert!(ev2 > ev1);
 
     // Événement sonde 4 (SecRoute Network)
-    let ev3 = daemon.ingest_event(
-        &admin_cap,
-        4,
-        test_actor,
-        ThreatIndicator::CrossZoneBoundaryViolation,
-        85,
-        2,
-        t0 + 40,
-    ).expect("Ingestion événement sonde 4");
+    let ev3 = daemon
+        .ingest_event(
+            &admin_cap,
+            4,
+            test_actor,
+            ThreatIndicator::CrossZoneBoundaryViolation,
+            85,
+            2,
+            t0 + 40,
+        )
+        .expect("Ingestion événement sonde 4");
     assert!(ev3 > ev2);
     kprintln!("  [4/7] Ingestion d'événements de télémétrie multi-sources validée.");
 
@@ -140,8 +159,13 @@ pub fn execute_ids_daemon_test() -> bool {
     assert_eq!(correlated.event_count, 3);
     assert_eq!(correlated.threat_level, ThreatLevel::Critical);
     assert!(correlated.aggregated_score >= CRITICAL_THREAT_THRESHOLD);
-    assert_eq!(correlated.automated_mitigation, MitigationAction::QuarantineProcess);
-    kprintln!("  [5/7] Corrélation spatio-temporelle multi-points et score d'attaque coordonnée validés.");
+    assert_eq!(
+        correlated.automated_mitigation,
+        MitigationAction::QuarantineProcess
+    );
+    kprintln!(
+        "  [5/7] Corrélation spatio-temporelle multi-points et score d'attaque coordonnée validés."
+    );
 
     // 6. Révocation automatisée de capacités et quarantaine immédiate O(1)
     let mitigation = daemon
@@ -155,10 +179,15 @@ pub fn execute_ids_daemon_test() -> bool {
         .expect("Exécution mitigation autonome");
 
     assert_eq!(mitigation, MitigationAction::QuarantineProcess);
-    assert!(daemon.is_quarantined(test_actor), "Acteur placé sous quarantaine O(1)");
+    assert!(
+        daemon.is_quarantined(test_actor),
+        "Acteur placé sous quarantaine O(1)"
+    );
 
     // Test de levée de quarantaine
-    daemon.lift_quarantine(&admin_cap, test_actor).expect("Levée de quarantaine");
+    daemon
+        .lift_quarantine(&admin_cap, test_actor)
+        .expect("Levée de quarantaine");
     assert!(!daemon.is_quarantined(test_actor), "Quarantaine levée");
 
     // Remise en quarantaine pour validation
@@ -203,7 +232,10 @@ pub fn execute_ids_daemon_test() -> bool {
     let st_audit = shell.execute("ids audit");
     assert_eq!(st_audit, ShellStatus::Success);
 
-    assert!(daemon.verify_audit_chain(), "Vérification cryptographique de la chaîne d'audit");
+    assert!(
+        daemon.verify_audit_chain(),
+        "Vérification cryptographique de la chaîne d'audit"
+    );
     kprintln!("  [7/7] Commandes CLI jsh et chaîne d'audit SHA-256 scellée validées.");
 
     kprintln!(

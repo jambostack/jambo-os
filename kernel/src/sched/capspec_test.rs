@@ -7,8 +7,8 @@ extern crate alloc;
 use crate::kprintln;
 use jambo_abi::{cap_rights, Handle, SysError};
 use jambo_capspec::{
-    capspec_rights, AuditAction, CapSpecCap, CapType, ConfinementProfile,
-    InvariantViolation, JamboCapSpecDaemon, MAX_AUDIT_LOGS, MAX_CAP_NODES,
+    capspec_rights, AuditAction, CapSpecCap, CapType, ConfinementProfile, InvariantViolation,
+    JamboCapSpecDaemon, MAX_AUDIT_LOGS, MAX_CAP_NODES,
 };
 use jambo_sh::{JamboShell, ShellStatus};
 
@@ -52,7 +52,9 @@ pub fn execute_capspec_daemon_test() -> bool {
         Err(SysError::PermissionDenied),
         "Enregistrement de profil sans REGISTER_SPEC doit échouer"
     );
-    kprintln!("[CAPSPEC/CAP] Modèle de sécurité capabilaire CapSpecCap et rejet d'amplification validés");
+    kprintln!(
+        "[CAPSPEC/CAP] Modèle de sécurité capabilaire CapSpecCap et rejet d'amplification validés"
+    );
 
     // 2. Invariant 1 : Absence d'autorité ambiante (No Ambient Authority)
     // Tout accès sans handle explicite ou avec Handle::NULL doit être immédiatement rejeté
@@ -63,7 +65,9 @@ pub fn execute_capspec_daemon_test() -> bool {
     );
     assert_eq!(
         daemon.verify_operation(1, Handle::new(0xFFFF, 1), cap_rights::READ),
-        Err(InvariantViolation::InvalidCapabilityHandle { handle_val: Handle::new(0xFFFF, 1).0 }),
+        Err(InvariantViolation::InvalidCapabilityHandle {
+            handle_val: Handle::new(0xFFFF, 1).0
+        }),
         "Handle forgé ou inconnu formellement rejeté"
     );
     kprintln!("[CAPSPEC/AMBIENT] Absence d'autorité ambiante et étanchéité des handles validées");
@@ -75,7 +79,9 @@ pub fn execute_capspec_daemon_test() -> bool {
     assert_eq!(root_node.depth, 0);
 
     // Dérivation légitime avec sous-ensemble strict de droits pour PID 2 (ServiceWorker)
-    daemon.assign_profile(&admin_cap, 2, 2).expect("assign ServiceWorker to PID 2");
+    daemon
+        .assign_profile(&admin_cap, 2, 2)
+        .expect("assign ServiceWorker to PID 2");
     let child_rights = cap_rights::READ | cap_rights::WRITE | cap_rights::MAP;
     let child_id = daemon
         .derive_capability(&admin_cap, 1, child_rights, 2)
@@ -110,7 +116,9 @@ pub fn execute_capspec_daemon_test() -> bool {
 
     // 4. Invariant 3 : Profils formels de confinement & Frontières de sécurité
     // PID 10 sous StrictIsolation (droits max READ | EXECUTE, VMO/VFS uniquement, transfert interdit)
-    daemon.assign_profile(&admin_cap, 10, 1).expect("assign StrictIsolation to PID 10");
+    daemon
+        .assign_profile(&admin_cap, 10, 1)
+        .expect("assign StrictIsolation to PID 10");
 
     // Tentative de dérivation avec droits d'écriture non autorisés par le profil
     let invalid_profile_rights = cap_rights::READ | cap_rights::WRITE;
@@ -133,10 +141,15 @@ pub fn execute_capspec_daemon_test() -> bool {
     let xfer_err = daemon.transfer_capability(&admin_cap, iso_cap_id, 10, 2);
     assert_eq!(
         xfer_err,
-        Err(InvariantViolation::TransferProhibited { pid: 10, node_id: iso_cap_id }),
+        Err(InvariantViolation::TransferProhibited {
+            pid: 10,
+            node_id: iso_cap_id
+        }),
         "Transfert de capacité depuis un processus strictement confiné formellement interdit"
     );
-    kprintln!("[CAPSPEC/PROFILE] Profils formels de confinement et étanchéité des frontières validés");
+    kprintln!(
+        "[CAPSPEC/PROFILE] Profils formels de confinement et étanchéité des frontières validés"
+    );
 
     // 5. Invariant 4 : Révocation en cascade déterministe
     // Arbre : Racine (1) -> Enfant (child_id=2) -> Petit-enfant (grandchild_id)
@@ -160,7 +173,10 @@ pub fn execute_capspec_daemon_test() -> bool {
     let revoked_count = daemon
         .revoke_capability(&admin_cap, child_id)
         .expect("cascade revoke capability");
-    assert_eq!(revoked_count, 2, "La révocation doit impacter l'enfant et le petit-enfant");
+    assert_eq!(
+        revoked_count, 2,
+        "La révocation doit impacter l'enfant et le petit-enfant"
+    );
 
     // L'accès au parent et au petit-enfant doit désormais être immédiatement rejeté
     assert_eq!(
@@ -170,7 +186,9 @@ pub fn execute_capspec_daemon_test() -> bool {
     );
     assert_eq!(
         daemon.verify_operation(2, grandchild_node.handle, cap_rights::READ),
-        Err(InvariantViolation::RevokedAccess { node_id: grandchild_id }),
+        Err(InvariantViolation::RevokedAccess {
+            node_id: grandchild_id
+        }),
         "Accès à un descendant révoqué en cascade rejeté"
     );
 
@@ -184,7 +202,10 @@ pub fn execute_capspec_daemon_test() -> bool {
 
     // 6. Contrôle global formel de tous les invariants du CSpace
     let verified = daemon.check_all_invariants();
-    assert!(verified.is_ok(), "L'ensemble des invariants CSpace doit être vérifié avec succès");
+    assert!(
+        verified.is_ok(),
+        "L'ensemble des invariants CSpace doit être vérifié avec succès"
+    );
     let count = verified.unwrap();
     assert!(count >= 3, "Au moins 3 nœuds CSpace vérifiés");
     kprintln!("[CAPSPEC/INVARIANTS] Validation mathématique globale des invariants CSpace réussie ({} nœuds)", count);
@@ -200,8 +221,13 @@ pub fn execute_capspec_daemon_test() -> bool {
     );
     // Restauration du hash
     daemon.nodes[0].as_mut().unwrap().token_hash = original_hash;
-    assert_eq!(daemon.verify_operation(1, root_node.handle, cap_rights::READ), Ok(()));
-    kprintln!("[CAPSPEC/INTEGRITY] Sceau d'authenticité SHA-256 et détection de falsification validés");
+    assert_eq!(
+        daemon.verify_operation(1, root_node.handle, cap_rights::READ),
+        Ok(())
+    );
+    kprintln!(
+        "[CAPSPEC/INTEGRITY] Sceau d'authenticité SHA-256 et détection de falsification validés"
+    );
 
     // 8. Validation des commandes interactives du shell (`capspec`)
     let mut shell = JamboShell::new();
@@ -242,7 +268,9 @@ pub fn execute_capspec_daemon_test() -> bool {
     let s5 = core::str::from_utf8(&out[..len5]).unwrap_or("");
     assert!(s5.contains("Condensat SHA-256 d'Audit CapSpec"));
 
-    kprintln!("[CAPSPEC/SHELL] Commandes d'administration et de vérification formelle 'capspec' validées");
+    kprintln!(
+        "[CAPSPEC/SHELL] Commandes d'administration et de vérification formelle 'capspec' validées"
+    );
     kprintln!("[CAPSPEC/SUCCESS] Moteur de spécification et d'invariants CapSpec entièrement validé (Phase 91)");
 
     true

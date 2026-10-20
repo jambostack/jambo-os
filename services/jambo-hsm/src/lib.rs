@@ -42,14 +42,16 @@ pub struct Sha256;
 
 impl Sha256 {
     const K: [u32; 64] = [
-        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
-        0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
-        0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
-        0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
-        0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
-        0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
-        0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
-        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
+        0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
+        0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f,
+        0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc,
+        0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+        0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116,
+        0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
+        0xc67178f2,
     ];
 
     #[inline(always)]
@@ -137,8 +139,8 @@ impl Sha256 {
 
     pub fn digest(data: &[u8]) -> [u8; 32] {
         let mut state: [u32; 8] = [
-            0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
-            0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+            0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
+            0x5be0cd19,
         ];
         let total_bits = (data.len() as u64).wrapping_mul(8);
         let mut block = [0u8; 64];
@@ -300,7 +302,10 @@ impl ChaCha20Hsm {
 
     fn generate_block(key: &[u8; 32], nonce: &[u8; 12], counter: u32, out: &mut [u8; 64]) {
         let state = [
-            0x61707865, 0x3320646e, 0x79622d32, 0x6b206574,
+            0x61707865,
+            0x3320646e,
+            0x79622d32,
+            0x6b206574,
             u32::from_le_bytes([key[0], key[1], key[2], key[3]]),
             u32::from_le_bytes([key[4], key[5], key[6], key[7]]),
             u32::from_le_bytes([key[8], key[9], key[10], key[11]]),
@@ -500,15 +505,15 @@ impl Default for HsmKeyAttributes {
 
 pub mod hsm_rights {
     pub const OPEN_SESSION: u32 = 1 << 0;
-    pub const LOGIN: u32        = 1 << 1;
+    pub const LOGIN: u32 = 1 << 1;
     pub const GENERATE_KEY: u32 = 1 << 2;
-    pub const DERIVE_KEY: u32   = 1 << 3;
-    pub const CRYPTO_OP: u32    = 1 << 4;
-    pub const WRAP_KEY: u32     = 1 << 5;
-    pub const UNWRAP_KEY: u32   = 1 << 6;
-    pub const DESTROY_KEY: u32  = 1 << 7;
-    pub const ZEROIZE: u32      = 1 << 8;
-    pub const ADMIN: u32        = 1 << 9;
+    pub const DERIVE_KEY: u32 = 1 << 3;
+    pub const CRYPTO_OP: u32 = 1 << 4;
+    pub const WRAP_KEY: u32 = 1 << 5;
+    pub const UNWRAP_KEY: u32 = 1 << 6;
+    pub const DESTROY_KEY: u32 = 1 << 7;
+    pub const ZEROIZE: u32 = 1 << 8;
+    pub const ADMIN: u32 = 1 << 9;
 
     pub const ALL: u32 = OPEN_SESSION
         | LOGIN
@@ -761,7 +766,13 @@ impl JamboHsmDaemon {
     }
 
     /// Enregistre une opération dans le journal scellé par chaîne SHA-256
-    pub fn record_audit(&mut self, action: HsmAction, slot_id: u32, object_id: u32, reason_str: &str) {
+    pub fn record_audit(
+        &mut self,
+        action: HsmAction,
+        slot_id: u32,
+        object_id: u32,
+        reason_str: &str,
+    ) {
         let mut r_buf = [0u8; MAX_REASON_LEN];
         let bytes = reason_str.as_bytes();
         let copy_len = if bytes.len() > MAX_REASON_LEN {
@@ -777,7 +788,8 @@ impl JamboHsmDaemon {
         hash_input[36..40].copy_from_slice(&slot_id.to_be_bytes());
         hash_input[40..44].copy_from_slice(&object_id.to_be_bytes());
         hash_input[44..44 + MAX_REASON_LEN].copy_from_slice(&r_buf);
-        hash_input[44 + MAX_REASON_LEN..52 + MAX_REASON_LEN].copy_from_slice(&self.epoch.to_be_bytes());
+        hash_input[44 + MAX_REASON_LEN..52 + MAX_REASON_LEN]
+            .copy_from_slice(&self.epoch.to_be_bytes());
 
         let new_hash = Sha256::digest(&hash_input);
         self.audit_chain = new_hash;
@@ -936,16 +948,16 @@ impl JamboHsmDaemon {
             tok.total_keys = 1;
         }
 
-        self.record_audit(HsmAction::InitSlot, 0, 1, "Initialisation HSM racine et clé KEK maître");
+        self.record_audit(
+            HsmAction::InitSlot,
+            0,
+            1,
+            "Initialisation HSM racine et clé KEK maître",
+        );
     }
 
     /// Ouvre une nouvelle session PKCS#11 sur un slot
-    pub fn open_session(
-        &mut self,
-        cap: &HsmCap,
-        slot_id: u32,
-        rw: bool,
-    ) -> Result<u32, SysError> {
+    pub fn open_session(&mut self, cap: &HsmCap, slot_id: u32, rw: bool) -> Result<u32, SysError> {
         if !cap.has_right(hsm_rights::OPEN_SESSION) {
             return Err(SysError::PermissionDenied);
         }
@@ -987,7 +999,12 @@ impl JamboHsmDaemon {
             is_rw: rw,
         });
 
-        self.record_audit(HsmAction::OpenSession, slot_id, session_id, "Ouverture session PKCS#11");
+        self.record_audit(
+            HsmAction::OpenSession,
+            slot_id,
+            session_id,
+            "Ouverture session PKCS#11",
+        );
         Ok(session_id)
     }
 
@@ -1002,7 +1019,12 @@ impl JamboHsmDaemon {
                 if s.session_id == session_id {
                     let slot_id = s.slot_id;
                     *slot = None;
-                    self.record_audit(HsmAction::CloseSession, slot_id, session_id, "Fermeture session");
+                    self.record_audit(
+                        HsmAction::CloseSession,
+                        slot_id,
+                        session_id,
+                        "Fermeture session",
+                    );
                     return Ok(());
                 }
             }
@@ -1062,14 +1084,24 @@ impl JamboHsmDaemon {
                             }
                         }
                     }
-                    self.record_audit(HsmAction::LoginSo, slot_id, session_id, "Connexion SO réussie");
+                    self.record_audit(
+                        HsmAction::LoginSo,
+                        slot_id,
+                        session_id,
+                        "Connexion SO réussie",
+                    );
                     Ok(())
                 } else {
                     token.so_attempts_left = token.so_attempts_left.saturating_sub(1);
                     if token.so_attempts_left == 0 {
                         token.is_locked = true;
                     }
-                    self.record_audit(HsmAction::LoginSo, slot_id, session_id, "Échec authentification SO PIN");
+                    self.record_audit(
+                        HsmAction::LoginSo,
+                        slot_id,
+                        session_id,
+                        "Échec authentification SO PIN",
+                    );
                     Err(SysError::PermissionDenied)
                 }
             }
@@ -1095,14 +1127,24 @@ impl JamboHsmDaemon {
                             }
                         }
                     }
-                    self.record_audit(HsmAction::LoginUser, slot_id, session_id, "Connexion Utilisateur réussie");
+                    self.record_audit(
+                        HsmAction::LoginUser,
+                        slot_id,
+                        session_id,
+                        "Connexion Utilisateur réussie",
+                    );
                     Ok(())
                 } else {
                     token.user_attempts_left = token.user_attempts_left.saturating_sub(1);
                     if token.user_attempts_left == 0 {
                         token.is_locked = true;
                     }
-                    self.record_audit(HsmAction::LoginUser, slot_id, session_id, "Échec authentification User PIN");
+                    self.record_audit(
+                        HsmAction::LoginUser,
+                        slot_id,
+                        session_id,
+                        "Échec authentification User PIN",
+                    );
                     Err(SysError::PermissionDenied)
                 }
             }
@@ -1130,7 +1172,12 @@ impl JamboHsmDaemon {
             }
         }
         if let Some(slot_id) = target_slot {
-            self.record_audit(HsmAction::Logout, slot_id, session_id, "Déconnexion utilisateur");
+            self.record_audit(
+                HsmAction::Logout,
+                slot_id,
+                session_id,
+                "Déconnexion utilisateur",
+            );
             Ok(())
         } else {
             Err(SysError::InvalidArgument)
@@ -1188,7 +1235,11 @@ impl JamboHsmDaemon {
         };
 
         let mut seed = [0u8; 64];
-        let ent_len = if custom_entropy.len() > 32 { 32 } else { custom_entropy.len() };
+        let ent_len = if custom_entropy.len() > 32 {
+            32
+        } else {
+            custom_entropy.len()
+        };
         seed[..ent_len].copy_from_slice(&custom_entropy[..ent_len]);
         seed[32..36].copy_from_slice(&self.next_object_id.to_be_bytes());
         seed[36..44].copy_from_slice(&self.epoch.to_be_bytes());
@@ -1197,7 +1248,11 @@ impl JamboHsmDaemon {
 
         let mut l_buf = [0u8; MAX_LABEL_LEN];
         let l_bytes = label.as_bytes();
-        let l_len = if l_bytes.len() > MAX_LABEL_LEN { MAX_LABEL_LEN } else { l_bytes.len() };
+        let l_len = if l_bytes.len() > MAX_LABEL_LEN {
+            MAX_LABEL_LEN
+        } else {
+            l_bytes.len()
+        };
         l_buf[..l_len].copy_from_slice(&l_bytes[..l_len]);
 
         let object_id = self.next_object_id;
@@ -1281,7 +1336,12 @@ impl JamboHsmDaemon {
 
         // Calculer la dérivation HKDF
         let mut derived_material = [0u8; MAX_KEY_SIZE];
-        HkdfSha256::derive(salt, &base_material[..base_len], info, &mut derived_material[..derived_len])?;
+        HkdfSha256::derive(
+            salt,
+            &base_material[..base_len],
+            info,
+            &mut derived_material[..derived_len],
+        )?;
 
         // Stocker la clé dérivée
         let mut obj_idx = None;
@@ -1295,7 +1355,11 @@ impl JamboHsmDaemon {
 
         let mut l_buf = [0u8; MAX_LABEL_LEN];
         let l_bytes = label.as_bytes();
-        let l_len = if l_bytes.len() > MAX_LABEL_LEN { MAX_LABEL_LEN } else { l_bytes.len() };
+        let l_len = if l_bytes.len() > MAX_LABEL_LEN {
+            MAX_LABEL_LEN
+        } else {
+            l_bytes.len()
+        };
         l_buf[..l_len].copy_from_slice(&l_bytes[..l_len]);
 
         let object_id = self.next_object_id;
@@ -1365,7 +1429,12 @@ impl JamboHsmDaemon {
         obj.usage_count = obj.usage_count.wrapping_add(1);
         self.crypto_ops_count = self.crypto_ops_count.wrapping_add(1);
 
-        self.record_audit(HsmAction::Encrypt, slot_id, key_id, "Chiffrement symétrique in-HSM");
+        self.record_audit(
+            HsmAction::Encrypt,
+            slot_id,
+            key_id,
+            "Chiffrement symétrique in-HSM",
+        );
         Ok(())
     }
 
@@ -1411,7 +1480,12 @@ impl JamboHsmDaemon {
         obj.usage_count = obj.usage_count.wrapping_add(1);
         self.crypto_ops_count = self.crypto_ops_count.wrapping_add(1);
 
-        self.record_audit(HsmAction::Decrypt, slot_id, key_id, "Déchiffrement symétrique in-HSM");
+        self.record_audit(
+            HsmAction::Decrypt,
+            slot_id,
+            key_id,
+            "Déchiffrement symétrique in-HSM",
+        );
         Ok(())
     }
 
@@ -1499,7 +1573,11 @@ impl JamboHsmDaemon {
             HsmAction::Verify,
             slot_id,
             key_id,
-            if matches { "Vérification HMAC OK" } else { "Échec vérification HMAC" },
+            if matches {
+                "Vérification HMAC OK"
+            } else {
+                "Échec vérification HMAC"
+            },
         );
         Ok(matches)
     }
@@ -1566,7 +1644,9 @@ impl JamboHsmDaemon {
         }
 
         // Générer nonce déterministe
-        let nonce = [0x55, 0xAA, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0x00];
+        let nonce = [
+            0x55, 0xAA, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0x00,
+        ];
         out_buf[..12].copy_from_slice(&nonce);
 
         // Chiffrer le matériel de clé
@@ -1585,7 +1665,12 @@ impl JamboHsmDaemon {
         out_buf[12 + target_len..12 + target_len + 32].copy_from_slice(&mac);
 
         self.keys_wrapped = self.keys_wrapped.wrapping_add(1);
-        self.record_audit(HsmAction::WrapKey, slot_id, target_key_id, "Enveloppement sécurisé sous KEK");
+        self.record_audit(
+            HsmAction::WrapKey,
+            slot_id,
+            target_key_id,
+            "Enveloppement sécurisé sous KEK",
+        );
         Ok(total_required)
     }
 
@@ -1669,7 +1754,11 @@ impl JamboHsmDaemon {
 
         let mut l_buf = [0u8; MAX_LABEL_LEN];
         let l_bytes = label.as_bytes();
-        let l_len = if l_bytes.len() > MAX_LABEL_LEN { MAX_LABEL_LEN } else { l_bytes.len() };
+        let l_len = if l_bytes.len() > MAX_LABEL_LEN {
+            MAX_LABEL_LEN
+        } else {
+            l_bytes.len()
+        };
         l_buf[..l_len].copy_from_slice(&l_bytes[..l_len]);
 
         let object_id = self.next_object_id;
@@ -1698,7 +1787,12 @@ impl JamboHsmDaemon {
     }
 
     /// Destruction explicite d'une clé cryptographique
-    pub fn destroy_key(&mut self, cap: &HsmCap, session_id: u32, key_id: u32) -> Result<(), SysError> {
+    pub fn destroy_key(
+        &mut self,
+        cap: &HsmCap,
+        session_id: u32,
+        key_id: u32,
+    ) -> Result<(), SysError> {
         if !cap.has_right(hsm_rights::DESTROY_KEY) {
             return Err(SysError::PermissionDenied);
         }
@@ -1733,7 +1827,12 @@ impl JamboHsmDaemon {
             if let Some(tok) = self.tokens[slot_id as usize].as_mut() {
                 tok.total_keys = tok.total_keys.saturating_sub(1);
             }
-            self.record_audit(HsmAction::DestroyKey, slot_id, key_id, "Destruction sécurisée de clé");
+            self.record_audit(
+                HsmAction::DestroyKey,
+                slot_id,
+                key_id,
+                "Destruction sécurisée de clé",
+            );
             Ok(())
         } else {
             Err(SysError::InvalidArgument)
@@ -1876,7 +1975,9 @@ mod tests {
         assert!(slot0.token_present);
 
         // Ouvrir session RW
-        let sess = daemon.open_session(&admin_cap, 0, true).expect("Session ouverte");
+        let sess = daemon
+            .open_session(&admin_cap, 0, true)
+            .expect("Session ouverte");
 
         // Connexion utilisateur avec mauvais PIN -> échec
         assert_eq!(
@@ -1885,7 +1986,9 @@ mod tests {
         );
 
         // Connexion utilisateur avec bon PIN -> succès
-        daemon.login(&admin_cap, sess, HsmUserType::User, b"user_sec_pin_2026").expect("Login ok");
+        daemon
+            .login(&admin_cap, sess, HsmUserType::User, b"user_sec_pin_2026")
+            .expect("Login ok");
 
         // Générer une clé ChaCha20 extractible
         let mut attrs = HsmKeyAttributes::default();
@@ -1908,9 +2011,13 @@ mod tests {
         let nonce = [1u8; 12];
         let mut data = [0x42u8; 64];
         let original = data;
-        daemon.encrypt(&admin_cap, sess, key_id, &nonce, &mut data).expect("Encrypt ok");
+        daemon
+            .encrypt(&admin_cap, sess, key_id, &nonce, &mut data)
+            .expect("Encrypt ok");
         assert_ne!(data, original);
-        daemon.decrypt(&admin_cap, sess, key_id, &nonce, &mut data).expect("Decrypt ok");
+        daemon
+            .decrypt(&admin_cap, sess, key_id, &nonce, &mut data)
+            .expect("Decrypt ok");
         assert_eq!(data, original);
 
         // Key Wrapping sous KEK (object 1)
@@ -1938,8 +2045,12 @@ mod tests {
 
         // Vérifier que la clé désenveloppée déchiffre les mêmes données
         let mut test_buf = original;
-        daemon.encrypt(&admin_cap, sess, key_id, &nonce, &mut test_buf).expect("Encrypt");
-        daemon.decrypt(&admin_cap, sess, unwrap_id, &nonce, &mut test_buf).expect("Decrypt with unwrapped");
+        daemon
+            .encrypt(&admin_cap, sess, key_id, &nonce, &mut test_buf)
+            .expect("Encrypt");
+        daemon
+            .decrypt(&admin_cap, sess, unwrap_id, &nonce, &mut test_buf)
+            .expect("Decrypt with unwrapped");
         assert_eq!(test_buf, original);
 
         // Zéroïsation d'urgence
@@ -1975,8 +2086,12 @@ mod tests {
         let mut daemon = JamboHsmDaemon::new(admin_cap);
         daemon.init_defaults();
 
-        let sess = daemon.open_session(&admin_cap, 0, true).expect("Open session");
-        daemon.login(&admin_cap, sess, HsmUserType::User, b"user_sec_pin_2026").expect("Login");
+        let sess = daemon
+            .open_session(&admin_cap, 0, true)
+            .expect("Open session");
+        daemon
+            .login(&admin_cap, sess, HsmUserType::User, b"user_sec_pin_2026")
+            .expect("Login");
 
         // Clé non extractible (CKA_EXTRACTABLE = false)
         let mut attrs = HsmKeyAttributes::default();
@@ -2005,8 +2120,12 @@ mod tests {
         let mut daemon = JamboHsmDaemon::new(admin_cap);
         daemon.init_defaults();
 
-        let sess = daemon.open_session(&admin_cap, 0, true).expect("Open session");
-        daemon.login(&admin_cap, sess, HsmUserType::User, b"user_sec_pin_2026").expect("Login");
+        let sess = daemon
+            .open_session(&admin_cap, 0, true)
+            .expect("Open session");
+        daemon
+            .login(&admin_cap, sess, HsmUserType::User, b"user_sec_pin_2026")
+            .expect("Login");
 
         // Dériver une sous-clé depuis KEK (object 1)
         let derived_attrs = HsmKeyAttributes {
@@ -2036,17 +2155,23 @@ mod tests {
 
         // Signature HMAC in-HSM
         let msg = b"SECURE_INTER_PROCESS_MESSAGE_PAYLOAD";
-        let sig = daemon.sign_hmac(&admin_cap, sess, subkey_id, msg).expect("Sign ok");
+        let sig = daemon
+            .sign_hmac(&admin_cap, sess, subkey_id, msg)
+            .expect("Sign ok");
         assert_ne!(sig, [0u8; 32]);
 
         // Vérification HMAC valide
-        let valid = daemon.verify_hmac(&admin_cap, sess, subkey_id, msg, &sig).expect("Verify ok");
+        let valid = daemon
+            .verify_hmac(&admin_cap, sess, subkey_id, msg, &sig)
+            .expect("Verify ok");
         assert!(valid);
 
         // Vérification HMAC altéré
         let mut corrupted_sig = sig;
         corrupted_sig[0] ^= 0xFF;
-        let invalid = daemon.verify_hmac(&admin_cap, sess, subkey_id, msg, &corrupted_sig).expect("Verify altered");
+        let invalid = daemon
+            .verify_hmac(&admin_cap, sess, subkey_id, msg, &corrupted_sig)
+            .expect("Verify altered");
         assert!(!invalid);
     }
 }

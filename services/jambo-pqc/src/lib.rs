@@ -64,14 +64,16 @@ pub struct Sha256;
 
 impl Sha256 {
     const K: [u32; 64] = [
-        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
-        0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
-        0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
-        0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
-        0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
-        0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
-        0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
-        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
+        0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
+        0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f,
+        0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc,
+        0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+        0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116,
+        0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
+        0xc67178f2,
     ];
 
     #[inline(always)]
@@ -823,7 +825,11 @@ impl MlDsa {
                 let prod1 = poly_mul_negacyclic(&c_field, &s1[i], DSA_Q);
 
                 for n in 0..PQC_N {
-                    let p1 = if prod1[n] > DSA_Q / 2 { prod1[n] - DSA_Q } else { prod1[n] };
+                    let p1 = if prod1[n] > DSA_Q / 2 {
+                        prod1[n] - DSA_Q
+                    } else {
+                        prod1[n]
+                    };
 
                     let z_val = y[i][n] + p1;
                     if z_val.abs() >= (DSA_GAMMA1 - DSA_BETA) {
@@ -882,12 +888,8 @@ impl MlDsa {
         for i in 0..DSA_K {
             for n in 0..PQC_N {
                 let pos = 32 + (i * PQC_N + n) * 4;
-                t[i][n] = u32::from_le_bytes([
-                    pk[pos],
-                    pk[pos + 1],
-                    pk[pos + 2],
-                    pk[pos + 3],
-                ]) as i32;
+                t[i][n] =
+                    u32::from_le_bytes([pk[pos], pk[pos + 1], pk[pos + 2], pk[pos + 3]]) as i32;
             }
         }
 
@@ -1397,9 +1399,20 @@ impl JamboPqcDaemon {
 
         // Si PurePqcEnforced, on valide que le protocole hybride garantit la dominance post-quantique
         let mut kem_ss = [0u8; 32];
-        self.kem_encapsulate(cap, kem_key_id, b"entropy_hybrid_exchange_seed", ct, &mut kem_ss)?;
+        self.kem_encapsulate(
+            cap,
+            kem_key_id,
+            b"entropy_hybrid_exchange_seed",
+            ct,
+            &mut kem_ss,
+        )?;
 
-        HybridKeyExchange::derive_hybrid_secret(&kem_ss, classical_secret, session_info, hybrid_ss)?;
+        HybridKeyExchange::derive_hybrid_secret(
+            &kem_ss,
+            classical_secret,
+            session_info,
+            hybrid_ss,
+        )?;
         self.hybrid_kex_count += 1;
 
         self.record_audit(kem_key_id, 0x07, hybrid_ss);
@@ -1453,7 +1466,10 @@ impl JamboPqcDaemon {
 
     /// Compte les clés actives
     pub fn count_active_keys(&self) -> usize {
-        self.keys.iter().filter(|k| k.as_ref().map_or(false, |k| k.is_active)).count()
+        self.keys
+            .iter()
+            .filter(|k| k.as_ref().map_or(false, |k| k.is_active))
+            .count()
     }
 }
 
@@ -1521,7 +1537,10 @@ mod tests {
         let mut altered_msg = *message;
         altered_msg[0] ^= 0x01;
         let invalid = MlDsa::verify(&pk, &altered_msg, &sig);
-        assert!(!invalid, "Signature ML-DSA rejetée sur altération de message");
+        assert!(
+            !invalid,
+            "Signature ML-DSA rejetée sur altération de message"
+        );
     }
 
     #[test]
@@ -1530,8 +1549,13 @@ mod tests {
         let classical_ss = [0x99u8; 32];
         let mut hybrid = [0u8; 32];
 
-        HybridKeyExchange::derive_hybrid_secret(&kem_ss, &classical_ss, b"test_session", &mut hybrid)
-            .expect("Hybrid derive ok");
+        HybridKeyExchange::derive_hybrid_secret(
+            &kem_ss,
+            &classical_ss,
+            b"test_session",
+            &mut hybrid,
+        )
+        .expect("Hybrid derive ok");
         assert_ne!(hybrid, [0u8; 32]);
     }
 

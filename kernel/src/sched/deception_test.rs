@@ -7,8 +7,8 @@ extern crate alloc;
 use crate::kprintln;
 use jambo_abi::Handle;
 use jambo_deception::{
-    deception_rights, AttackerLevel, DeceptionCap, DeceptionError, DecoyKind,
-    JamboDeceptionDaemon, ProbeAction, ThreatSeverity,
+    deception_rights, AttackerLevel, DeceptionCap, DeceptionError, DecoyKind, JamboDeceptionDaemon,
+    ProbeAction, ThreatSeverity,
 };
 
 /// Exécute la suite complète de validation formelle du moteur de Cyber-Déception (Phase 122)
@@ -90,7 +90,9 @@ pub fn execute_deception_daemon_test() -> bool {
     deception
         .trigger_decoy(&admin_cap, 4, 7777, ProbeAction::EnclaveEscapeAttempt, 550)
         .expect("Deuxième sonde évasion");
-    let prof_tee2 = deception.get_attacker_profile(7777).expect("Profil 7777 après");
+    let prof_tee2 = deception
+        .get_attacker_profile(7777)
+        .expect("Profil 7777 après");
     assert_eq!(prof_tee2.threat_score, 100);
     assert!(prof_tee2.quarantined);
     assert!(deception.total_quarantines >= 1);

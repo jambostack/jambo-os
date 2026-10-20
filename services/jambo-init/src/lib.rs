@@ -167,7 +167,8 @@ impl SystemSupervisor {
         // Vérification de collision d'identifiant ou de nom
         for i in 0..self.service_count {
             if let Some(s) = &self.services[i] {
-                if s.id == service.id || &s.name[..s.name_len] == &service.name[..service.name_len] {
+                if s.id == service.id || &s.name[..s.name_len] == &service.name[..service.name_len]
+                {
                     return Err(SysError::InvalidArgument);
                 }
             }
@@ -210,7 +211,12 @@ impl SystemSupervisor {
         false
     }
 
-    fn detect_cycle_dfs(&self, current_id: u32, visited: &mut [u32; MAX_SERVICES], count: &mut usize) -> bool {
+    fn detect_cycle_dfs(
+        &self,
+        current_id: u32,
+        visited: &mut [u32; MAX_SERVICES],
+        count: &mut usize,
+    ) -> bool {
         for idx in 0..*count {
             if visited[idx] == current_id {
                 return true; // Cycle détecté !
@@ -333,7 +339,12 @@ impl SystemSupervisor {
     }
 
     /// Signale le crash d'un démon et applique la politique d'auto-guérison
-    pub fn report_crash(&mut self, cap: &InitCap, id: u32, now: u64) -> Result<DaemonState, SysError> {
+    pub fn report_crash(
+        &mut self,
+        cap: &InitCap,
+        id: u32,
+        now: u64,
+    ) -> Result<DaemonState, SysError> {
         if !cap.has_right(init_rights::INIT_RESTART) {
             return Err(SysError::PermissionDenied);
         }
@@ -417,7 +428,11 @@ impl SystemSupervisor {
         self.find_by_id(id).ok_or(SysError::InvalidArgument)
     }
 
-    pub fn get_service_by_name(&self, cap: &InitCap, name: &[u8]) -> Result<&SupervisedService, SysError> {
+    pub fn get_service_by_name(
+        &self,
+        cap: &InitCap,
+        name: &[u8],
+    ) -> Result<&SupervisedService, SysError> {
         if !cap.has_right(init_rights::INIT_STATUS) {
             return Err(SysError::PermissionDenied);
         }
@@ -540,8 +555,7 @@ impl JamboInitDaemon {
         // 10. Shell interactif jsh (dépend de certd)
         let _ = supervisor.register_service(
             &admin_cap,
-            SupervisedService::new(10, b"jsh", &[9], DEFAULT_MAX_RESTARTS, 110)
-                .expect("init jsh"),
+            SupervisedService::new(10, b"jsh", &[9], DEFAULT_MAX_RESTARTS, 110).expect("init jsh"),
         );
 
         // Démarrage ordonné de l'arbre DAG
@@ -679,7 +693,10 @@ mod tests {
         let b2 = SupervisedService::new(11, b"loop-2", &[10], 3, 21).unwrap();
         assert!(sup_bad.register_service(&admin_cap, b1).is_ok());
         // L'ajout de b2 ferme la boucle 10 -> 11 -> 10, doit être rejeté
-        assert_eq!(sup_bad.register_service(&admin_cap, b2), Err(SysError::InvalidArgument));
+        assert_eq!(
+            sup_bad.register_service(&admin_cap, b2),
+            Err(SysError::InvalidArgument)
+        );
     }
 
     #[test]
@@ -694,7 +711,10 @@ mod tests {
         sup.register_service(&admin_cap, s2).unwrap();
 
         // Tenter de démarrer s2 avant s1 doit échouer avec ResourceBusy
-        assert_eq!(sup.start_service(&admin_cap, 2, 100), Err(SysError::ResourceBusy));
+        assert_eq!(
+            sup.start_service(&admin_cap, 2, 100),
+            Err(SysError::ResourceBusy)
+        );
 
         // Démarrer s1 d'abord
         assert!(sup.start_service(&admin_cap, 1, 100).is_ok());

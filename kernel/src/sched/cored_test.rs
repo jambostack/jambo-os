@@ -6,9 +6,9 @@ extern crate alloc;
 use crate::kprintln;
 use jambo_abi::{Handle, SysError};
 use jambo_cored::{
-    core_rights, memory_flags, ArchRegisters, CoreCap, CoreMemoryRegion, CrashReason,
-    Elf64Generator, JamboCoreDaemon, RecoveryRecommendation, SealedCrashReport, Sha256,
-    X86_64Registers, AArch64Registers,
+    core_rights, memory_flags, AArch64Registers, ArchRegisters, CoreCap, CoreMemoryRegion,
+    CrashReason, Elf64Generator, JamboCoreDaemon, RecoveryRecommendation, SealedCrashReport,
+    Sha256, X86_64Registers,
 };
 use jambo_sh::{JamboShell, ShellStatus};
 
@@ -151,8 +151,13 @@ pub fn execute_core_daemon_test() -> bool {
             }
         }
     }
-    let is_tampered_valid = daemon.verify_seal(&admin_cap, 1).expect("Seal verify tampered");
-    assert!(!is_tampered_valid, "La falsification doit être immédiatement détectée");
+    let is_tampered_valid = daemon
+        .verify_seal(&admin_cap, 1)
+        .expect("Seal verify tampered");
+    assert!(
+        !is_tampered_valid,
+        "La falsification doit être immédiatement détectée"
+    );
 
     // Rétablissement du champ légitime
     for slot in daemon.reports.iter_mut() {
@@ -163,10 +168,14 @@ pub fn execute_core_daemon_test() -> bool {
         }
     }
     assert!(daemon.verify_seal(&admin_cap, 1).unwrap());
-    kprintln!("[CORE/SEAL] Scellement cryptographique SHA-256 & détection de falsification validés");
+    kprintln!(
+        "[CORE/SEAL] Scellement cryptographique SHA-256 & détection de falsification validés"
+    );
 
     // 5. Confinement et mise en quarantaine de mémoire
-    let pages = daemon.quarantine_memory(&admin_cap, 1).expect("Quarantine memory");
+    let pages = daemon
+        .quarantine_memory(&admin_cap, 1)
+        .expect("Quarantine memory");
     assert!(pages > 0);
     let r1_quarantined = daemon.get_report(1).unwrap();
     assert!(r1_quarantined.quarantined);
@@ -175,7 +184,9 @@ pub fn execute_core_daemon_test() -> bool {
     kprintln!("[CORE/QUARANTINE] Confinement et mise en quarantaine de la mémoire validés");
 
     // 6. Émission de télémétrie post-crash et recommandation d'auto-guérison
-    let tel = daemon.emit_telemetry(&admin_cap, 1, 10).expect("Emit telemetry");
+    let tel = daemon
+        .emit_telemetry(&admin_cap, 1, 10)
+        .expect("Emit telemetry");
     assert_eq!(tel.report_id, 1);
     assert_eq!(tel.node_id, 10);
     assert_eq!(tel.pid, 42);
@@ -211,7 +222,10 @@ pub fn execute_core_daemon_test() -> bool {
     assert_eq!(daemon.report_count, 3);
 
     let audit_after = daemon.get_audit_digest(&admin_cap).expect("Audit after");
-    assert_ne!(audit_initial, audit_after, "L'audit chaîné doit progresser de manière monotone");
+    assert_ne!(
+        audit_initial, audit_after,
+        "L'audit chaîné doit progresser de manière monotone"
+    );
     kprintln!("[CORE/DYNAMIC] Capture dynamique de crash & registre d'audit chaîné validés");
 
     // 8. Validation des commandes Shell interactives ('core')

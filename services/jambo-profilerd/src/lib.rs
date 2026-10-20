@@ -34,14 +34,16 @@ pub struct Sha256;
 
 impl Sha256 {
     const K: [u32; 64] = [
-        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
-        0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
-        0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
-        0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
-        0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
-        0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
-        0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
-        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
+        0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
+        0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f,
+        0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc,
+        0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+        0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116,
+        0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
+        0xc67178f2,
     ];
 
     #[inline(always)]
@@ -130,8 +132,14 @@ impl Sha256 {
 
     pub fn digest(data: &[u8]) -> [u8; 32] {
         let mut state = [
-            0x6a09e667u32, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
-            0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+            0x6a09e667u32,
+            0xbb67ae85,
+            0x3c6ef372,
+            0xa54ff53a,
+            0x510e527f,
+            0x9b05688c,
+            0x1f83d9ab,
+            0x5be0cd19,
         ];
 
         let bit_len = (data.len() as u64) * 8;
@@ -422,7 +430,11 @@ impl Default for FlameNode {
 
 impl FlameNode {
     pub fn symbol_str(&self) -> &str {
-        let len = self.symbol.iter().position(|&b| b == 0).unwrap_or(self.symbol.len());
+        let len = self
+            .symbol
+            .iter()
+            .position(|&b| b == 0)
+            .unwrap_or(self.symbol.len());
         core::str::from_utf8(&self.symbol[..len]).unwrap_or("unknown")
     }
 }
@@ -516,7 +528,11 @@ impl Default for ProfileReport {
 
 impl ProfileReport {
     pub fn bottleneck_str(&self) -> &str {
-        let len = self.top_bottleneck.iter().position(|&b| b == 0).unwrap_or(self.top_bottleneck.len());
+        let len = self
+            .top_bottleneck
+            .iter()
+            .position(|&b| b == 0)
+            .unwrap_or(self.top_bottleneck.len());
         core::str::from_utf8(&self.top_bottleneck[..len]).unwrap_or("")
     }
 }
@@ -1001,7 +1017,11 @@ impl JamboProfilerDaemon {
     }
 
     /// Vérifie l'intégrité cryptographique du sceau d'un rapport
-    pub fn verify_report_seal(&mut self, cap: &ProfileCap, report_id: u32) -> Result<bool, SysError> {
+    pub fn verify_report_seal(
+        &mut self,
+        cap: &ProfileCap,
+        report_id: u32,
+    ) -> Result<bool, SysError> {
         if !cap.has_right(profile_rights::PROFILE_INSPECT) {
             return Err(SysError::PermissionDenied);
         }
@@ -1063,7 +1083,24 @@ impl JamboProfilerDaemon {
             sp: 0x7FFF_0000,
             event: PmcEventType::Instructions,
             counter_val: 12_500_000,
-            call_stack: [0x0040_0010, 0x0040_1050, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            call_stack: [
+                0x0040_0010,
+                0x0040_1050,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+            ],
             call_stack_len: 2,
             pebs: Some(PebsRecord {
                 precise_ip: 0x0040_1050,
@@ -1083,7 +1120,24 @@ impl JamboProfilerDaemon {
             sp: 0x7FFF_0000,
             event: PmcEventType::CpuCycles,
             counter_val: 8_200_000,
-            call_stack: [0x0040_0010, 0x0040_1050, 0x0040_2050, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            call_stack: [
+                0x0040_0010,
+                0x0040_1050,
+                0x0040_2050,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+            ],
             call_stack_len: 3,
             pebs: Some(PebsRecord {
                 precise_ip: 0x0040_2050,
@@ -1103,7 +1157,24 @@ impl JamboProfilerDaemon {
             sp: 0x7FFF_1000,
             event: PmcEventType::BranchInstructions,
             counter_val: 3_100_000,
-            call_stack: [0x0040_0010, 0x0040_5050, 0x0040_6020, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            call_stack: [
+                0x0040_0010,
+                0x0040_5050,
+                0x0040_6020,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+            ],
             call_stack_len: 3,
             pebs: None,
         };
@@ -1118,7 +1189,24 @@ impl JamboProfilerDaemon {
             sp: 0x7FFF_1000,
             event: PmcEventType::BranchMisses,
             counter_val: 62_000,
-            call_stack: [0x0040_0010, 0x0040_5050, 0x0040_6020, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            call_stack: [
+                0x0040_0010,
+                0x0040_5050,
+                0x0040_6020,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+            ],
             call_stack_len: 3,
             pebs: None,
         };
@@ -1133,7 +1221,24 @@ impl JamboProfilerDaemon {
             sp: 0x7FFF_1000,
             event: PmcEventType::LlcMiss,
             counter_val: 15_400,
-            call_stack: [0x0040_0010, 0x0040_6020, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            call_stack: [
+                0x0040_0010,
+                0x0040_6020,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+            ],
             call_stack_len: 2,
             pebs: None,
         };
@@ -1254,7 +1359,9 @@ mod tests {
             sp: 0x7FFF_0000,
             event: PmcEventType::Instructions,
             counter_val: 1_000,
-            call_stack: [stack[0], stack[1], stack[2], 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            call_stack: [
+                stack[0], stack[1], stack[2], 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            ],
             call_stack_len: 3,
             pebs: None,
         };

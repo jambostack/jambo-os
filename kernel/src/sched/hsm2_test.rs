@@ -73,7 +73,9 @@ pub fn execute_hsm2_daemon_test() -> bool {
     assert_eq!(daemon.active_epoch, old_epoch + 1);
     assert_ne!(new_key, old_key);
     assert_eq!(new_key, daemon.group_session_key);
-    kprintln!("[HSM2/GKA] Protocole Group Key Agreement et rotation d'époques cryptographiques validés");
+    kprintln!(
+        "[HSM2/GKA] Protocole Group Key Agreement et rotation d'époques cryptographiques validés"
+    );
 
     // 5. Schéma de partage de seuil de Shamir (T=2, N=3) & Reconstitution de Lagrange
     let master_secret = [0x39u8; 32];
@@ -94,7 +96,9 @@ pub fn execute_hsm2_daemon_test() -> bool {
         recovered_secret, master_secret,
         "Secret maître reconstitué sans altération par interpolation de Lagrange"
     );
-    kprintln!("[HSM2/SHAMIR] Partage secret de seuil (T=2, N=3) et reconstruction de Lagrange validés");
+    kprintln!(
+        "[HSM2/SHAMIR] Partage secret de seuil (T=2, N=3) et reconstruction de Lagrange validés"
+    );
 
     // 6. Signature collaborative de seuil et détection de fautes byzantines
     let critical_command = b"EXECUTE_SECURE_KERNEL_PAYLOAD_STAGE3";

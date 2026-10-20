@@ -1824,10 +1824,8 @@ pub extern "C" fn _start() -> ! {
     );
 
     // 33. Superviseur Système PID 1, DAG de Dépendances & Tolérance aux Pannes (Phase 72 - v0.2.70)
-    let _init_cap = jambo_init::InitCap::new(
-        libjambo::Handle::new(72, 1),
-        jambo_init::init_rights::ALL,
-    );
+    let _init_cap =
+        jambo_init::InitCap::new(libjambo::Handle::new(72, 1), jambo_init::init_rights::ALL);
     let mut supervisor_daemon = jambo_init::JamboInitDaemon::new();
     assert!(supervisor_daemon.active_count() >= 10);
     assert_eq!(supervisor_daemon.failed_count(), 0);

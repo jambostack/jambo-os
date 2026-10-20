@@ -619,7 +619,9 @@ impl BpfVerifier {
     /// 3. Intégrité des registres : R10 (pointeur de trame) est strictement en lecture seule.
     /// 4. Validité des cibles de saut : toute cible atterrit sur une instruction légitime.
     /// 5. Validité de sortie : le programme se termine impérativement par une instruction EXIT.
-    pub fn verify(instructions: &[BpfInstruction]) -> Result<VerificationReport, VerificationError> {
+    pub fn verify(
+        instructions: &[BpfInstruction],
+    ) -> Result<VerificationReport, VerificationError> {
         let len = instructions.len();
         if len == 0 {
             return Err(VerificationError::EmptyProgram);
@@ -650,7 +652,10 @@ impl BpfVerifier {
 
             // 2. Interdiction absolue d'écrire dans R10
             match class {
-                bpf_class::BPF_ALU | bpf_class::BPF_ALU64 | bpf_class::BPF_LD | bpf_class::BPF_LDX => {
+                bpf_class::BPF_ALU
+                | bpf_class::BPF_ALU64
+                | bpf_class::BPF_LD
+                | bpf_class::BPF_LDX => {
                     if ins.dst_reg == 10 {
                         return Err(VerificationError::WriteToReadOnlyRegister);
                     }
@@ -881,7 +886,8 @@ impl BpfVm {
                     }
                 }
                 bpf_class::BPF_ST => {
-                    let addr = (self.regs[ins.dst_reg as usize] as isize + ins.off as isize) as usize;
+                    let addr =
+                        (self.regs[ins.dst_reg as usize] as isize + ins.off as isize) as usize;
                     if addr >= STACK_SIZE {
                         return Err(BpfError::SegmentationFault);
                     }
@@ -889,7 +895,8 @@ impl BpfVm {
                     self.pc += 1;
                 }
                 bpf_class::BPF_STX => {
-                    let addr = (self.regs[ins.dst_reg as usize] as isize + ins.off as isize) as usize;
+                    let addr =
+                        (self.regs[ins.dst_reg as usize] as isize + ins.off as isize) as usize;
                     if addr >= STACK_SIZE {
                         return Err(BpfError::SegmentationFault);
                     }
@@ -897,7 +904,8 @@ impl BpfVm {
                     self.pc += 1;
                 }
                 bpf_class::BPF_LDX => {
-                    let addr = (self.regs[ins.src_reg as usize] as isize + ins.off as isize) as usize;
+                    let addr =
+                        (self.regs[ins.src_reg as usize] as isize + ins.off as isize) as usize;
                     if addr >= STACK_SIZE {
                         return Err(BpfError::SegmentationFault);
                     }
@@ -953,7 +961,8 @@ impl BpfVm {
                 for m in maps.iter_mut() {
                     if let Some(map) = m {
                         if map.id == map_id {
-                            let _ = map.update(&key_bytes[..map.key_size], &val_bytes[..map.val_size]);
+                            let _ =
+                                map.update(&key_bytes[..map.key_size], &val_bytes[..map.val_size]);
                             self.regs[0] = 0;
                             return Ok(());
                         }
@@ -1063,8 +1072,8 @@ impl JamboBpfDaemon {
             next_prog_id: 1,
             next_map_id: 1,
             programs: [
-                None, None, None, None, None, None, None, None,
-                None, None, None, None, None, None, None, None,
+                None, None, None, None, None, None, None, None, None, None, None, None, None, None,
+                None, None,
             ],
             maps: [None, None, None, None, None, None, None, None],
             attachments: [BpfAttachment {
@@ -1331,7 +1340,9 @@ mod tests {
         assert!(admin.has_right(bpf_rights::BPF_PROG_RUN));
         assert!(admin.has_right(bpf_rights::BPF_ADMIN));
 
-        let ro = admin.attenuate(bpf_rights::BPF_PROG_RUN).expect("attenuate to run");
+        let ro = admin
+            .attenuate(bpf_rights::BPF_PROG_RUN)
+            .expect("attenuate to run");
         assert!(ro.has_right(bpf_rights::BPF_PROG_RUN));
         assert!(!ro.has_right(bpf_rights::BPF_PROG_LOAD));
         assert!(!ro.has_right(bpf_rights::BPF_ADMIN));
@@ -1369,10 +1380,7 @@ mod tests {
     #[test]
     fn test_verifier_stack_and_register_safety() {
         // Tentative d'écriture dans r10
-        let r10_write = [
-            BpfInstruction::mov64_imm(10, 42),
-            BpfInstruction::exit(),
-        ];
+        let r10_write = [BpfInstruction::mov64_imm(10, 42), BpfInstruction::exit()];
         assert_eq!(
             BpfVerifier::verify(&r10_write),
             Err(VerificationError::WriteToReadOnlyRegister)
@@ -1419,12 +1427,16 @@ mod tests {
 
         // Paquet légitime (octet 0 = 0xAA)
         let pkt_clean = [0xAA, 0x01, 0x02, 0x03];
-        let v1 = daemon.filter_packet(&admin, "eth0_xdp", &pkt_clean, 1000).expect("filter");
+        let v1 = daemon
+            .filter_packet(&admin, "eth0_xdp", &pkt_clean, 1000)
+            .expect("filter");
         assert_eq!(v1, xdp_action::XDP_PASS);
 
         // Paquet malveillant (octet 0 = 0x42)
         let pkt_bad = [0x42, 0x01, 0x02, 0x03];
-        let v2 = daemon.filter_packet(&admin, "eth0_xdp", &pkt_bad, 1001).expect("filter");
+        let v2 = daemon
+            .filter_packet(&admin, "eth0_xdp", &pkt_bad, 1001)
+            .expect("filter");
         assert_eq!(v2, xdp_action::XDP_DROP);
 
         let stats = daemon.stats(&admin).expect("stats");
@@ -1433,4 +1445,3 @@ mod tests {
         assert_eq!(stats.packets_dropped, 1);
     }
 }
-

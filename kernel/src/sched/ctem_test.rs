@@ -131,7 +131,10 @@ pub fn execute_ctem_daemon_test() -> bool {
     let initial_score = ctem.overall_exposure_score;
     ctem.remediate_exposure(&admin_cap, 1, 5050)
         .expect("Remédiation finale #1");
-    assert_eq!(ctem.exposures[0].unwrap().status, ExposureStatus::Remediated);
+    assert_eq!(
+        ctem.exposures[0].unwrap().status,
+        ExposureStatus::Remediated
+    );
     assert!(ctem.overall_exposure_score < initial_score);
 
     // 7. Cycle complet automatisé & Synthèse

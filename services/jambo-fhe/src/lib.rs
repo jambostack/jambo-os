@@ -66,20 +66,22 @@ pub struct Sha256;
 
 impl Sha256 {
     const K: [u32; 64] = [
-        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
-        0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
-        0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
-        0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
-        0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
-        0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
-        0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
-        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
+        0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
+        0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f,
+        0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc,
+        0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+        0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116,
+        0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
+        0xc67178f2,
     ];
 
     pub fn digest(data: &[u8]) -> [u8; 32] {
         let mut h: [u32; 8] = [
-            0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
-            0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+            0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
+            0x5be0cd19,
         ];
 
         let bit_len = (data.len() as u64) * 8;
@@ -104,7 +106,10 @@ impl Sha256 {
             for i in 16..64 {
                 let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);
                 let s1 = w[i - 2].rotate_right(17) ^ w[i - 2].rotate_right(19) ^ (w[i - 2] >> 10);
-                w[i] = w[i - 16].wrapping_add(s0).wrapping_add(w[i - 7]).wrapping_add(s1);
+                w[i] = w[i - 16]
+                    .wrapping_add(s0)
+                    .wrapping_add(w[i - 7])
+                    .wrapping_add(s1);
             }
 
             let mut a = h[0];
@@ -167,9 +172,7 @@ pub struct Poly {
 }
 
 impl Poly {
-    pub const ZERO: Self = Self {
-        coeffs: [0; FHE_N],
-    };
+    pub const ZERO: Self = Self { coeffs: [0; FHE_N] };
 
     pub const fn new(coeffs: [u64; FHE_N]) -> Self {
         Self { coeffs }
@@ -249,10 +252,18 @@ impl Poly {
 
         for i in 0..FHE_N {
             let a_raw = self.coeffs[i] as i128;
-            let a = if a_raw > half_q { a_raw - q_i128 } else { a_raw };
+            let a = if a_raw > half_q {
+                a_raw - q_i128
+            } else {
+                a_raw
+            };
             for j in 0..FHE_N {
                 let b_raw = other.coeffs[j] as i128;
-                let b = if b_raw > half_q { b_raw - q_i128 } else { b_raw };
+                let b = if b_raw > half_q {
+                    b_raw - q_i128
+                } else {
+                    b_raw
+                };
                 acc[i + j] += a * b;
             }
         }
@@ -293,9 +304,7 @@ pub struct Plaintext {
 }
 
 impl Plaintext {
-    pub const ZERO: Self = Self {
-        coeffs: [0; FHE_N],
-    };
+    pub const ZERO: Self = Self { coeffs: [0; FHE_N] };
 
     pub const fn from_scalar(val: u64) -> Self {
         let mut coeffs = [0u64; FHE_N];
@@ -398,7 +407,9 @@ impl FheSystem {
         let mut s_coeffs = [0u64; FHE_N];
         let mut state = seed ^ 0x9E3779B97F4A7C15;
         for i in 0..FHE_N {
-            state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             let val = (state >> 32) % 3;
             s_coeffs[i] = match val {
                 0 => 0,
@@ -417,7 +428,9 @@ impl FheSystem {
         // 2. Clé publique (p0, p1) avec p1 à coefficients bornés
         let mut p1_coeffs = [0u64; FHE_N];
         for i in 0..FHE_N {
-            state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             p1_coeffs[i] = (state % 25) + 1;
         }
         let p1 = Poly::new(p1_coeffs);
@@ -426,7 +439,9 @@ impl FheSystem {
         // Bruit d'erreur borné e
         let mut e_coeffs = [0u64; FHE_N];
         for i in 0..FHE_N {
-            state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             e_coeffs[i] = ((state >> 32) % 2) + 1; // 1 ou 2
         }
         let e = Poly::new(e_coeffs);
@@ -441,9 +456,13 @@ impl FheSystem {
         let mut a0_coeffs = [0u64; FHE_N];
         let mut a1_coeffs = [0u64; FHE_N];
         for i in 0..FHE_N {
-            state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             a0_coeffs[i] = (state % 35) + 1;
-            state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             a1_coeffs[i] = (state % 35) + 1;
         }
         let a0 = Poly::new(a0_coeffs);
@@ -481,7 +500,9 @@ impl FheSystem {
         let mut u_coeffs = [0u64; FHE_N];
         let mut state = salt ^ 0xA5A5A5A55A5A5A5A;
         for i in 0..FHE_N {
-            state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             let val = (state >> 32) % 3;
             u_coeffs[i] = match val {
                 0 => 0,
@@ -495,9 +516,13 @@ impl FheSystem {
         let mut e1_coeffs = [0u64; FHE_N];
         let mut e2_coeffs = [0u64; FHE_N];
         for i in 0..FHE_N {
-            state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             e1_coeffs[i] = ((state >> 32) % 2) + 1;
-            state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             e2_coeffs[i] = ((state >> 32) % 2) + 1;
         }
         let e1 = Poly::new(e1_coeffs);
@@ -665,9 +690,11 @@ impl BlindEngine {
             return Err(SysError::InvalidArgument);
         }
 
-        let mut acc = FheSystem::eval_mul_plain(&cipher_vec[0], &Plaintext::from_scalar(weights[0]));
+        let mut acc =
+            FheSystem::eval_mul_plain(&cipher_vec[0], &Plaintext::from_scalar(weights[0]));
         for i in 1..cipher_vec.len() {
-            let term = FheSystem::eval_mul_plain(&cipher_vec[i], &Plaintext::from_scalar(weights[i]));
+            let term =
+                FheSystem::eval_mul_plain(&cipher_vec[i], &Plaintext::from_scalar(weights[i]));
             acc = FheSystem::eval_add(&acc, &term);
         }
         Ok(acc)
@@ -675,11 +702,7 @@ impl BlindEngine {
 
     /// Porte de décision confidentielle (Blind Threshold Gate)
     /// Approximation polynomiale souple sign(x - seuil) en Ring 3
-    pub fn blind_threshold_gate(
-        ct_x: &Ciphertext,
-        threshold: u64,
-        rlk: &RelinKey,
-    ) -> Ciphertext {
+    pub fn blind_threshold_gate(ct_x: &Ciphertext, threshold: u64, rlk: &RelinKey) -> Ciphertext {
         let diff = FheSystem::eval_sub(ct_x, &FheSystem::encrypt_const(threshold));
         // Approximation x * (diff)
         FheSystem::eval_mul(ct_x, &diff, rlk)
@@ -1038,7 +1061,11 @@ mod tests {
 
         let ct_prod = FheSystem::eval_mul(&ct_6, &ct_7, &keys.rlk);
         let dec_prod = FheSystem::decrypt(&keys.sk, &ct_prod);
-        assert_eq!(dec_prod.as_scalar(), 42, "6 * 7 = 42 chiffré avec rélinéarisation");
+        assert_eq!(
+            dec_prod.as_scalar(),
+            42,
+            "6 * 7 = 42 chiffré avec rélinéarisation"
+        );
     }
 
     #[test]
@@ -1051,7 +1078,11 @@ mod tests {
         assert_eq!(refreshed.noise_budget, INITIAL_NOISE_BUDGET);
 
         let dec = FheSystem::decrypt(&keys.sk, &refreshed);
-        assert_eq!(dec.as_scalar(), 99, "Préservation de la valeur après bootstrapping");
+        assert_eq!(
+            dec.as_scalar(),
+            99,
+            "Préservation de la valeur après bootstrapping"
+        );
     }
 
     #[test]
@@ -1062,7 +1093,11 @@ mod tests {
         let ct_res = BlindEngine::blind_poly_eval(&ct_x, 5, 3, 2, &keys.rlk);
 
         let dec = FheSystem::decrypt(&keys.sk, &ct_res);
-        assert_eq!(dec.as_scalar(), 49, "Évaluation aveugle de polynôme P(4) = 49");
+        assert_eq!(
+            dec.as_scalar(),
+            49,
+            "Évaluation aveugle de polynôme P(4) = 49"
+        );
     }
 
     #[test]

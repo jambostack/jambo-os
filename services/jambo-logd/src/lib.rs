@@ -7,8 +7,8 @@
 
 #![no_std]
 
-use libjambo::{Handle, SysError};
 use jambo_dfsd::{DfsBlockStore, DfsCap, BLOCK_SIZE, HASH_SIZE as DFS_HASH_SIZE};
+use libjambo::{Handle, SysError};
 
 pub const MAX_KEY_LEN: usize = 16;
 pub const MAX_VAL_LEN: usize = 32;
@@ -29,7 +29,8 @@ pub mod log_rights {
     pub const LOG_ARCHIVE: u32 = 0x10;
     pub const LOG_EXPORT: u32 = 0x20;
     pub const LOG_ADMIN: u32 = 0x80;
-    pub const ALL: u32 = LOG_READ | LOG_WRITE | LOG_QUERY | LOG_FLUSH | LOG_ARCHIVE | LOG_EXPORT | LOG_ADMIN;
+    pub const ALL: u32 =
+        LOG_READ | LOG_WRITE | LOG_QUERY | LOG_FLUSH | LOG_ARCHIVE | LOG_EXPORT | LOG_ADMIN;
 }
 
 /// Jeton de capacité pour le contrôle d'accès au sous-système de journalisation.
@@ -95,7 +96,10 @@ impl LogLevel {
             Some(LogLevel::Warn)
         } else if s.eq_ignore_ascii_case("error") || s.eq_ignore_ascii_case("err") {
             Some(LogLevel::Error)
-        } else if s.eq_ignore_ascii_case("fatal") || s.eq_ignore_ascii_case("crit") || s.eq_ignore_ascii_case("critical") {
+        } else if s.eq_ignore_ascii_case("fatal")
+            || s.eq_ignore_ascii_case("crit")
+            || s.eq_ignore_ascii_case("critical")
+        {
             Some(LogLevel::Fatal)
         } else {
             None
@@ -127,8 +131,16 @@ impl LogField {
         let k_bytes = k.as_bytes();
         let v_bytes = v.as_bytes();
 
-        let k_len = if k_bytes.len() > MAX_KEY_LEN { MAX_KEY_LEN } else { k_bytes.len() };
-        let v_len = if v_bytes.len() > MAX_VAL_LEN { MAX_VAL_LEN } else { v_bytes.len() };
+        let k_len = if k_bytes.len() > MAX_KEY_LEN {
+            MAX_KEY_LEN
+        } else {
+            k_bytes.len()
+        };
+        let v_len = if v_bytes.len() > MAX_VAL_LEN {
+            MAX_VAL_LEN
+        } else {
+            v_bytes.len()
+        };
 
         let mut i = 0;
         while i < k_len {
@@ -422,7 +434,8 @@ impl<'a> LogQueryFilter<'a> {
             }
         }
 
-        if rec.timestamp_ns < self.since_timestamp_ns || rec.timestamp_ns > self.until_timestamp_ns {
+        if rec.timestamp_ns < self.since_timestamp_ns || rec.timestamp_ns > self.until_timestamp_ns
+        {
             return false;
         }
 
@@ -454,8 +467,16 @@ fn contains_ignore_case(haystack: &str, needle: &str) -> bool {
         while j < n_bytes.len() {
             let hb = h_bytes[i + j];
             let nb = n_bytes[j];
-            let hb_lower = if hb >= b'A' && hb <= b'Z' { hb + 32 } else { hb };
-            let nb_lower = if nb >= b'A' && nb <= b'Z' { nb + 32 } else { nb };
+            let hb_lower = if hb >= b'A' && hb <= b'Z' {
+                hb + 32
+            } else {
+                hb
+            };
+            let nb_lower = if nb >= b'A' && nb <= b'Z' {
+                nb + 32
+            } else {
+                nb
+            };
             if hb_lower != nb_lower {
                 matches = false;
                 break;
@@ -515,7 +536,9 @@ pub fn encrypt_archive_payload(
     }
 
     for idx in 0..len {
-        state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        state = state
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         let keystream_byte = (state >> 33) as u8;
         out[idx] = payload[idx] ^ keystream_byte;
     }
@@ -682,7 +705,11 @@ impl JamboLogDaemon {
 
         let total = self.ring_buffer.len();
         let take = if count > total { total } else { count };
-        let take = if take > out_records.len() { out_records.len() } else { take };
+        let take = if take > out_records.len() {
+            out_records.len()
+        } else {
+            take
+        };
 
         let start_idx = total.saturating_sub(take);
         for i in 0..take {
@@ -782,16 +809,26 @@ impl JamboLogDaemon {
                     raw_block[pos] = rec.level as u8;
                     pos += 1;
 
-                    let sub_slice_len = if rec.subsystem_len > 8 { 8 } else { rec.subsystem_len };
+                    let sub_slice_len = if rec.subsystem_len > 8 {
+                        8
+                    } else {
+                        rec.subsystem_len
+                    };
                     raw_block[pos] = sub_slice_len as u8;
                     pos += 1;
-                    raw_block[pos..pos + sub_slice_len].copy_from_slice(&rec.subsystem[..sub_slice_len]);
+                    raw_block[pos..pos + sub_slice_len]
+                        .copy_from_slice(&rec.subsystem[..sub_slice_len]);
                     pos += sub_slice_len;
 
-                    let msg_slice_len = if rec.message_len > 16 { 16 } else { rec.message_len };
+                    let msg_slice_len = if rec.message_len > 16 {
+                        16
+                    } else {
+                        rec.message_len
+                    };
                     raw_block[pos] = msg_slice_len as u8;
                     pos += 1;
-                    raw_block[pos..pos + msg_slice_len].copy_from_slice(&rec.message[..msg_slice_len]);
+                    raw_block[pos..pos + msg_slice_len]
+                        .copy_from_slice(&rec.message[..msg_slice_len]);
                     pos += msg_slice_len;
                 }
             }
@@ -817,7 +854,9 @@ impl JamboLogDaemon {
 
         self.archives[self.archives_count] = descriptor;
         self.archives_count += 1;
-        self.total_archived_entries = self.total_archived_entries.saturating_add(batch_count as u64);
+        self.total_archived_entries = self
+            .total_archived_entries
+            .saturating_add(batch_count as u64);
         self.unarchived_cursor = total;
 
         Ok(descriptor)
@@ -893,7 +932,9 @@ mod tests {
         assert!(admin_cap.has_right(log_rights::LOG_READ));
         assert!(admin_cap.has_right(log_rights::LOG_ARCHIVE));
 
-        let ro_cap = admin_cap.attenuate(log_rights::LOG_READ | log_rights::LOG_QUERY).unwrap();
+        let ro_cap = admin_cap
+            .attenuate(log_rights::LOG_READ | log_rights::LOG_QUERY)
+            .unwrap();
         assert!(ro_cap.has_right(log_rights::LOG_READ));
         assert!(!ro_cap.has_right(log_rights::LOG_WRITE));
 
@@ -933,9 +974,42 @@ mod tests {
         let admin_cap = LogCap::new(Handle::new(75, 1), log_rights::ALL);
         let mut daemon = JamboLogDaemon::new(admin_cap, 1);
 
-        daemon.log(&admin_cap, LogLevel::Info, "KERNEL", "Initialisation démarrée", None, None, &[], 1000).unwrap();
-        daemon.log(&admin_cap, LogLevel::Warn, "NET", "Lien réseau instable", None, None, &[], 2000).unwrap();
-        daemon.log(&admin_cap, LogLevel::Error, "STORAGE", "Bloc endommagé détecté", None, None, &[], 3000).unwrap();
+        daemon
+            .log(
+                &admin_cap,
+                LogLevel::Info,
+                "KERNEL",
+                "Initialisation démarrée",
+                None,
+                None,
+                &[],
+                1000,
+            )
+            .unwrap();
+        daemon
+            .log(
+                &admin_cap,
+                LogLevel::Warn,
+                "NET",
+                "Lien réseau instable",
+                None,
+                None,
+                &[],
+                2000,
+            )
+            .unwrap();
+        daemon
+            .log(
+                &admin_cap,
+                LogLevel::Error,
+                "STORAGE",
+                "Bloc endommagé détecté",
+                None,
+                None,
+                &[],
+                3000,
+            )
+            .unwrap();
 
         assert_eq!(daemon.verify_integrity(&admin_cap), Ok(true));
 
@@ -952,15 +1026,48 @@ mod tests {
         let mut dfs = DfsBlockStore::new(1);
         let key = [0x42u8; 32];
 
-        daemon.log(&admin_cap, LogLevel::Info, "AUTH", "Connexion utilisateur", None, None, &[], 1000).unwrap();
-        daemon.log(&admin_cap, LogLevel::Info, "AUDIT", "Opération validée", None, None, &[], 2000).unwrap();
+        daemon
+            .log(
+                &admin_cap,
+                LogLevel::Info,
+                "AUTH",
+                "Connexion utilisateur",
+                None,
+                None,
+                &[],
+                1000,
+            )
+            .unwrap();
+        daemon
+            .log(
+                &admin_cap,
+                LogLevel::Info,
+                "AUDIT",
+                "Opération validée",
+                None,
+                None,
+                &[],
+                2000,
+            )
+            .unwrap();
 
-        let desc = daemon.archive_to_dfs(&admin_cap, &mut dfs, &dfs_cap, &key, 5000).unwrap();
+        let desc = daemon
+            .archive_to_dfs(&admin_cap, &mut dfs, &dfs_cap, &key, 5000)
+            .unwrap();
         assert_eq!(desc.count, 2);
         assert_eq!(daemon.archives_count, 1);
 
         let mut decrypted = [0u8; BLOCK_SIZE];
-        let restored_desc = daemon.restore_archive(&admin_cap, &dfs, &dfs_cap, desc.archive_id, &key, &mut decrypted).unwrap();
+        let restored_desc = daemon
+            .restore_archive(
+                &admin_cap,
+                &dfs,
+                &dfs_cap,
+                desc.archive_id,
+                &key,
+                &mut decrypted,
+            )
+            .unwrap();
         assert_eq!(restored_desc.archive_id, desc.archive_id);
         assert_eq!(&decrypted[0..4], b"JLOG");
     }
@@ -973,10 +1080,54 @@ mod tests {
         let tid1 = [1u8; 16];
         let f1 = [LogField::new("cpu", "0"), LogField::new("task", "sched")];
 
-        daemon.log(&admin_cap, LogLevel::Debug, "KERNEL", "Initialisation APIC", None, None, &[], 100).unwrap();
-        daemon.log(&admin_cap, LogLevel::Info, "NET", "Interface eth0 UP", None, None, &[], 200).unwrap();
-        daemon.log(&admin_cap, LogLevel::Warn, "NET", "Paquet corrompu ignoré", Some(tid1), Some([1u8; 8]), &f1, 300).unwrap();
-        daemon.log(&admin_cap, LogLevel::Error, "FS", "Erreur lecture inode 42", None, None, &[], 400).unwrap();
+        daemon
+            .log(
+                &admin_cap,
+                LogLevel::Debug,
+                "KERNEL",
+                "Initialisation APIC",
+                None,
+                None,
+                &[],
+                100,
+            )
+            .unwrap();
+        daemon
+            .log(
+                &admin_cap,
+                LogLevel::Info,
+                "NET",
+                "Interface eth0 UP",
+                None,
+                None,
+                &[],
+                200,
+            )
+            .unwrap();
+        daemon
+            .log(
+                &admin_cap,
+                LogLevel::Warn,
+                "NET",
+                "Paquet corrompu ignoré",
+                Some(tid1),
+                Some([1u8; 8]),
+                &f1,
+                300,
+            )
+            .unwrap();
+        daemon
+            .log(
+                &admin_cap,
+                LogLevel::Error,
+                "FS",
+                "Erreur lecture inode 42",
+                None,
+                None,
+                &[],
+                400,
+            )
+            .unwrap();
 
         // 1. Filtre par sévérité minimale Warn
         let mut results = [LogRecord::empty(); 10];
@@ -1003,7 +1154,9 @@ mod tests {
         // 4. Filtre par trace_id
         let mut filter_trace = LogQueryFilter::empty();
         filter_trace.trace_id = Some(tid1);
-        let matched_trace = daemon.query(&admin_cap, &filter_trace, &mut results).unwrap();
+        let matched_trace = daemon
+            .query(&admin_cap, &filter_trace, &mut results)
+            .unwrap();
         assert_eq!(matched_trace, 1);
 
         // 5. Tail
@@ -1028,4 +1181,3 @@ mod tests {
         );
     }
 }
-

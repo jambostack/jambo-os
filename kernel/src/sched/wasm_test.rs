@@ -34,7 +34,9 @@ pub fn execute_wasm_runtime_test() -> bool {
 
     let mut engine = WasmEngine::new();
     assert_eq!(
-        engine.load_module_with_cap(&status_cap, SAMPLE_ADD_WASM).err(),
+        engine
+            .load_module_with_cap(&status_cap, SAMPLE_ADD_WASM)
+            .err(),
         Some(SysError::PermissionDenied),
         "Instanciation sans droit WASM_INSTANTIATE doit être rejetée"
     );
@@ -128,7 +130,9 @@ pub fn execute_wasm_runtime_test() -> bool {
         Err(SysError::ResourceBusy),
         "Épuisement de gaz doit interrompre la boucle infinie"
     );
-    kprintln!("[WASM/TRAPS] Traps Out-Of-Bounds et épuisement de gaz interceptés sans panique noyau");
+    kprintln!(
+        "[WASM/TRAPS] Traps Out-Of-Bounds et épuisement de gaz interceptés sans panique noyau"
+    );
 
     // 6. WASI Preview 1 avec confinement capabilaire
     let wasi_inst = WasmLinearMemory::new(1);
@@ -143,7 +147,12 @@ pub fn execute_wasm_runtime_test() -> bool {
         add_instance.wasi_fd_write_with_cap(&status_cap, 1, b"hello"),
         Err(SysError::PermissionDenied)
     );
-    assert!(add_instance.wasi_clock_time_get_with_cap(&admin_cap, 0).unwrap() > 0);
+    assert!(
+        add_instance
+            .wasi_clock_time_get_with_cap(&admin_cap, 0)
+            .unwrap()
+            > 0
+    );
     assert_eq!(
         add_instance.wasi_clock_time_get_with_cap(&no_grow_cap, 0),
         Err(SysError::PermissionDenied)

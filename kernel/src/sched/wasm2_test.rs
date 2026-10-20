@@ -8,8 +8,8 @@ use crate::kprintln;
 use jambo_abi::{Handle, SysError};
 use jambo_sh::{JamboShell, ShellStatus};
 use jambo_wasm2::{
-    wasm2_rights, CanonAbi, ComponentError, InstanceStatus, JamboWasm2Daemon,
-    ResourceTable, Wasm2Cap, WitValType, WitValue, WASM_COMPONENT_VERSION, WASM_MAGIC,
+    wasm2_rights, CanonAbi, ComponentError, InstanceStatus, JamboWasm2Daemon, ResourceTable,
+    Wasm2Cap, WitValType, WitValue, WASM_COMPONENT_VERSION, WASM_MAGIC,
 };
 
 /// Exécute la suite complète de validation formelle du Wasm Component Model (Phase 104)
@@ -89,7 +89,9 @@ pub fn execute_wasm2_daemon_test() -> bool {
         CanonAbi::lower_u32(1, &mut mem_arena, 254),
         Err(ComponentError::MemoryOutOfBounds)
     );
-    kprintln!("[WASM2/CABI] Canonical ABI lift/lower (u32, string, record) et bornes mémoire validés");
+    kprintln!(
+        "[WASM2/CABI] Canonical ABI lift/lower (u32, string, record) et bornes mémoire validés"
+    );
 
     // 4. Gestion du cycle de vie des ressources (ResourceTable, borrow, drop, double-free)
     let mut res_table = ResourceTable::new();
@@ -201,7 +203,9 @@ pub fn execute_wasm2_daemon_test() -> bool {
     );
     assert_eq!(starve_res, Err(ComponentError::FuelExhausted));
     assert_eq!(daemon.total_traps, 1);
-    kprintln!("[WASM2/FUEL] Épuisement de carburant intercepté de façon sécurisée (FuelExhausted trap)");
+    kprintln!(
+        "[WASM2/FUEL] Épuisement de carburant intercepté de façon sécurisée (FuelExhausted trap)"
+    );
 
     // 9. Chaîne d'audit inviolable scellée par SHA-256
     let audit_chain = daemon.get_audit_chain(&admin_cap).expect("Lecture audit");

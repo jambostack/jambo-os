@@ -40,20 +40,22 @@ pub struct Sha256;
 
 impl Sha256 {
     const K: [u32; 64] = [
-        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
-        0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
-        0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
-        0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
-        0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
-        0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
-        0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
-        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
+        0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
+        0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f,
+        0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc,
+        0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+        0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116,
+        0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
+        0xc67178f2,
     ];
 
     pub fn digest(data: &[u8]) -> [u8; 32] {
         let mut h: [u32; 8] = [
-            0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
-            0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+            0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
+            0x5be0cd19,
         ];
 
         let bit_len = (data.len() as u64).wrapping_mul(8);
@@ -101,7 +103,10 @@ impl Sha256 {
         for i in 16..64 {
             let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);
             let s1 = w[i - 2].rotate_right(17) ^ w[i - 2].rotate_right(19) ^ (w[i - 2] >> 10);
-            w[i] = w[i - 16].wrapping_add(s0).wrapping_add(w[i - 7]).wrapping_add(s1);
+            w[i] = w[i - 16]
+                .wrapping_add(s0)
+                .wrapping_add(w[i - 7])
+                .wrapping_add(s1);
         }
 
         let mut a = h[0];
@@ -187,20 +192,14 @@ impl From<SysError> for ComponentError {
 // ============================================================================
 
 pub mod wasm2_rights {
-    pub const INSTANTIATE: u32 = 1 << 0;     // Droit d'instancier un composant
-    pub const INVOKE: u32 = 1 << 1;          // Droit d'invoquer une fonction exportée
-    pub const LINK: u32 = 1 << 2;            // Droit de lier des interfaces inter-composants
+    pub const INSTANTIATE: u32 = 1 << 0; // Droit d'instancier un composant
+    pub const INVOKE: u32 = 1 << 1; // Droit d'invoquer une fonction exportée
+    pub const LINK: u32 = 1 << 2; // Droit de lier des interfaces inter-composants
     pub const RESOURCE_MANAGE: u32 = 1 << 3; // Droit d'allouer/libérer des handles de ressources
-    pub const UPGRADE: u32 = 1 << 4;         // Droit de mettre à niveau un composant
-    pub const AUDIT: u32 = 1 << 5;           // Droit de consulter le registre d'audit scellé
-    pub const ADMIN: u32 = 1 << 7;           // Contrôle administratif total
-    pub const ALL: u32 = INSTANTIATE
-        | INVOKE
-        | LINK
-        | RESOURCE_MANAGE
-        | UPGRADE
-        | AUDIT
-        | ADMIN;
+    pub const UPGRADE: u32 = 1 << 4; // Droit de mettre à niveau un composant
+    pub const AUDIT: u32 = 1 << 5; // Droit de consulter le registre d'audit scellé
+    pub const ADMIN: u32 = 1 << 7; // Contrôle administratif total
+    pub const ALL: u32 = INSTANTIATE | INVOKE | LINK | RESOURCE_MANAGE | UPGRADE | AUDIT | ADMIN;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -336,7 +335,12 @@ impl CanonAbi {
         if offset + 4 > mem.len() {
             return Err(ComponentError::MemoryOutOfBounds);
         }
-        let bytes = [mem[offset], mem[offset + 1], mem[offset + 2], mem[offset + 3]];
+        let bytes = [
+            mem[offset],
+            mem[offset + 1],
+            mem[offset + 2],
+            mem[offset + 3],
+        ];
         Ok(u32::from_le_bytes(bytes))
     }
 
@@ -359,10 +363,7 @@ impl CanonAbi {
     }
 
     /// Élève une chaîne de caractères depuis les métadonnées (canon lift string)
-    pub fn lift_string<'a>(
-        mem: &'a [u8],
-        meta_offset: usize,
-    ) -> Result<&'a str, ComponentError> {
+    pub fn lift_string<'a>(mem: &'a [u8], meta_offset: usize) -> Result<&'a str, ComponentError> {
         let ptr = Self::lift_u32(mem, meta_offset)? as usize;
         let len = Self::lift_u32(mem, meta_offset + 4)? as usize;
         if ptr + len > mem.len() {
@@ -501,7 +502,9 @@ impl ResourceTable {
     }
 
     pub fn is_valid(&self, handle_id: u32) -> bool {
-        self.entries.iter().any(|e| e.active && e.handle_id == handle_id)
+        self.entries
+            .iter()
+            .any(|e| e.active && e.handle_id == handle_id)
     }
 }
 
@@ -894,7 +897,8 @@ impl JamboWasm2Daemon {
         if !cap.has_right(wasm2_rights::INSTANTIATE) {
             return Err(ComponentError::PermissionDenied);
         }
-        if self.instance_count >= cap.max_instances as usize || self.instance_count >= MAX_INSTANCES {
+        if self.instance_count >= cap.max_instances as usize || self.instance_count >= MAX_INSTANCES
+        {
             return Err(ComponentError::TableFull);
         }
         let fuel = initial_fuel.min(cap.max_fuel);
@@ -983,7 +987,9 @@ impl JamboWasm2Daemon {
         // Validation de signature de types WIT
         let imp_type = consumer_comp.imports[import_idx];
         let exp_type = provider_comp.exports[export_idx];
-        if imp_type.param_type != exp_type.param_type || imp_type.return_type != exp_type.return_type {
+        if imp_type.param_type != exp_type.param_type
+            || imp_type.return_type != exp_type.return_type
+        {
             return Err(ComponentError::TypeMismatch);
         }
 
@@ -1080,7 +1086,9 @@ impl JamboWasm2Daemon {
                 if let WitValue::String(buf, len) = &arg {
                     let s = core::str::from_utf8(&buf[..*len]).unwrap_or("");
                     let valid = s.starts_with("JAMBO-") && len >= &10;
-                    inst.state_accumulator = inst.state_accumulator.wrapping_add(if valid { 1 } else { 0 });
+                    inst.state_accumulator =
+                        inst.state_accumulator
+                            .wrapping_add(if valid { 1 } else { 0 });
                     WitValue::Bool(valid)
                 } else {
                     return Err(ComponentError::TypeMismatch);
@@ -1186,18 +1194,15 @@ impl JamboWasm2Daemon {
 
         self.instances[consumer_idx].call_depth += 1;
         let res = self.invoke_export(cap, provider_inst, export_name, arg);
-        self.instances[consumer_idx].call_depth = self.instances[consumer_idx].call_depth.saturating_sub(1);
+        self.instances[consumer_idx].call_depth =
+            self.instances[consumer_idx].call_depth.saturating_sub(1);
 
         self.record_audit_event(0x06, link.link_id, b"INTER_COMPONENT_INVOCATION");
         res
     }
 
     /// Déduction explicite de carburant (simulation de charge ou épuisement)
-    pub fn burn_fuel(
-        &mut self,
-        instance_id: u32,
-        amount: u64,
-    ) -> Result<(), ComponentError> {
+    pub fn burn_fuel(&mut self, instance_id: u32, amount: u64) -> Result<(), ComponentError> {
         let inst = self
             .instances
             .iter_mut()
@@ -1335,7 +1340,12 @@ mod tests {
 
         // Invocation directe de hash_block sur inst1
         let res = daemon
-            .invoke_export(&admin_cap, inst1, "hash_block", WitValue::from_str("TestBlock"))
+            .invoke_export(
+                &admin_cap,
+                inst1,
+                "hash_block",
+                WitValue::from_str("TestBlock"),
+            )
             .unwrap();
         match res {
             WitValue::U32(v) => assert!(v > 0),
@@ -1350,7 +1360,12 @@ mod tests {
 
         // Invocation inter-composants
         let inter_res = daemon
-            .invoke_inter_component(&admin_cap, inst2, "hasher_dep", WitValue::from_str("CrossCall"))
+            .invoke_inter_component(
+                &admin_cap,
+                inst2,
+                "hasher_dep",
+                WitValue::from_str("CrossCall"),
+            )
             .unwrap();
         match inter_res {
             WitValue::U32(v) => assert!(v > 0),

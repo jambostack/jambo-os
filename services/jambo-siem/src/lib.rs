@@ -123,12 +123,12 @@ impl SiemCap {
 #[repr(u8)]
 pub enum EventCategory {
     Authentication = 0,
-    Network        = 1,
-    Process        = 2,
-    File           = 3,
-    Vulnerability  = 4,
-    System         = 5,
-    Other          = 6,
+    Network = 1,
+    Process = 2,
+    File = 3,
+    Vulnerability = 4,
+    System = 5,
+    Other = 6,
 }
 
 /// Sévérité de l'événement (CEF/OCSF).
@@ -136,25 +136,25 @@ pub enum EventCategory {
 #[repr(u8)]
 pub enum Severity {
     Informational = 0,
-    Low           = 1,
-    Medium        = 2,
-    High          = 3,
-    Critical      = 4,
+    Low = 1,
+    Medium = 2,
+    High = 3,
+    Critical = 4,
 }
 
 /// Source d'ingestion de l'événement.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum EventSource {
-    JamboWalld    = 0,
-    JamboIdps     = 1,
-    JamboIds      = 2,
-    JamboAuditd   = 3,
-    JamboWaf      = 4,
-    JamboDdos     = 5,
-    JamboAuthd    = 6,
-    JamboSyslog   = 7,
-    Unknown       = 255,
+    JamboWalld = 0,
+    JamboIdps = 1,
+    JamboIds = 2,
+    JamboAuditd = 3,
+    JamboWaf = 4,
+    JamboDdos = 5,
+    JamboAuthd = 6,
+    JamboSyslog = 7,
+    Unknown = 255,
 }
 
 /// Événement de sécurité normalisé (CEF/OCSF unifié).
@@ -218,8 +218,8 @@ impl SecurityEvent {
 
 /// Anneau borné circulaire d'événements de sécurité normalisés (O(1) write/read).
 pub struct EventRing {
-    buf:   [SecurityEvent; EVENT_RING_SIZE],
-    head:  usize,
+    buf: [SecurityEvent; EVENT_RING_SIZE],
+    head: usize,
     count: usize,
 }
 
@@ -227,8 +227,8 @@ impl EventRing {
     /// Crée un anneau vide.
     pub const fn new() -> Self {
         Self {
-            buf:   [SecurityEvent::zeroed(); EVENT_RING_SIZE],
-            head:  0,
+            buf: [SecurityEvent::zeroed(); EVENT_RING_SIZE],
+            head: 0,
             count: 0,
         }
     }
@@ -291,13 +291,13 @@ impl EventRing {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum RuleKind {
-    BruteForce         = 0,
-    LateralMovement    = 1,
+    BruteForce = 0,
+    LateralMovement = 1,
     PrivilegeEscalation = 2,
-    DataExfiltration   = 3,
-    C2Beacon           = 4,
-    AptMultiStage      = 5,
-    AnomalousBehavior  = 6,
+    DataExfiltration = 3,
+    C2Beacon = 4,
+    AptMultiStage = 5,
+    AnomalousBehavior = 6,
 }
 
 /// Règle de corrélation SIEM avec seuils et fenêtre temporelle.
@@ -421,23 +421,23 @@ pub struct CorrelationMatch {
 /// Fenêtre glissante de corrélation bornée.
 pub struct CorrelationWindow {
     /// Événements capturés dans la fenêtre (indices dans l'anneau principal).
-    events:   [u64; WINDOW_SIZE],   // IDs d'événements
-    sources:  [EventSource; WINDOW_SIZE],
+    events: [u64; WINDOW_SIZE], // IDs d'événements
+    sources: [EventSource; WINDOW_SIZE],
     categories: [EventCategory; WINDOW_SIZE],
     severities: [Severity; WINDOW_SIZE],
-    head:     usize,
-    count:    usize,
+    head: usize,
+    count: usize,
 }
 
 impl CorrelationWindow {
     pub const fn new() -> Self {
         Self {
-            events:     [0u64; WINDOW_SIZE],
-            sources:    [EventSource::Unknown; WINDOW_SIZE],
+            events: [0u64; WINDOW_SIZE],
+            sources: [EventSource::Unknown; WINDOW_SIZE],
             categories: [EventCategory::Other; WINDOW_SIZE],
             severities: [Severity::Informational; WINDOW_SIZE],
-            head:       0,
-            count:      0,
+            head: 0,
+            count: 0,
         }
     }
 
@@ -467,7 +467,8 @@ impl CorrelationWindow {
         let mut seen_cats = [false; 7]; // 7 catégories
 
         for i in 0..self.count {
-            let cat_ok = rule.target_category
+            let cat_ok = rule
+                .target_category
                 .map(|c| self.categories[i] == c)
                 .unwrap_or(true);
 
@@ -528,11 +529,11 @@ impl CorrelationWindow {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum AlertState {
-    New                   = 0,
-    Acknowledged          = 1,
+    New = 0,
+    Acknowledged = 1,
     InvestigationInProgress = 2,
-    Resolved              = 3,
-    FalsePositive         = 4,
+    Resolved = 3,
+    FalsePositive = 4,
 }
 
 /// Alerte SIEM complète avec contexte et empreinte cryptographique.
@@ -567,8 +568,8 @@ pub struct SiemAlert {
 /// File de priorité d'alertes SIEM bornée (`MAX_ALERTS`).
 pub struct AlertQueue {
     alerts: [SiemAlert; MAX_ALERTS],
-    head:   usize,
-    count:  usize,
+    head: usize,
+    count: usize,
 }
 
 impl AlertQueue {
@@ -587,8 +588,8 @@ impl AlertQueue {
         };
         Self {
             alerts: [BLANK; MAX_ALERTS],
-            head:   0,
-            count:  0,
+            head: 0,
+            count: 0,
         }
     }
 
@@ -649,37 +650,38 @@ impl AlertQueue {
 /// Entrée d'audit immuable.
 #[derive(Clone, Copy, Debug)]
 pub struct AuditEntry {
-    pub seq:       u64,
+    pub seq: u64,
     pub timestamp: u64,
-    pub op:        SiemOp,
-    pub sha256:    [u8; SHA256_LEN],
+    pub op: SiemOp,
+    pub sha256: [u8; SHA256_LEN],
 }
 
 /// Opération auditée.
 #[derive(Clone, Copy, Debug)]
 #[repr(u8)]
 pub enum SiemOp {
-    EventIngested   = 0,
+    EventIngested = 0,
     CorrelationFired = 1,
-    AlertGenerated  = 2,
+    AlertGenerated = 2,
     AlertAcknowledged = 3,
-    AlertResolved   = 4,
-    RuleUpdated     = 5,
+    AlertResolved = 4,
+    RuleUpdated = 5,
     ExportRequested = 6,
 }
 
 /// Anneau d'audit borné (64 entrées).
 pub struct AuditRing {
     entries: [AuditEntry; 64],
-    head:    usize,
-    seq:     u64,
+    head: usize,
+    seq: u64,
     prev_hash: [u8; SHA256_LEN],
 }
 
 impl AuditRing {
     pub const fn new() -> Self {
         const BLANK: AuditEntry = AuditEntry {
-            seq: 0, timestamp: 0,
+            seq: 0,
+            timestamp: 0,
             op: SiemOp::EventIngested,
             sha256: [0u8; SHA256_LEN],
         };
@@ -698,11 +700,20 @@ impl AuditRing {
 
         // SHA-256 simulé : chaîne déterministe prev_hash XOR (seq, op, ts)
         let mut h = self.prev_hash;
-        for i in 0..8 { h[i] ^= ((seq >> (i * 8)) & 0xff) as u8; }
+        for i in 0..8 {
+            h[i] ^= ((seq >> (i * 8)) & 0xff) as u8;
+        }
         h[8] ^= op as u8;
-        for i in 0..8 { h[9 + i] ^= ((timestamp >> (i * 8)) & 0xff) as u8; }
+        for i in 0..8 {
+            h[9 + i] ^= ((timestamp >> (i * 8)) & 0xff) as u8;
+        }
 
-        let entry = AuditEntry { seq, timestamp, op, sha256: h };
+        let entry = AuditEntry {
+            seq,
+            timestamp,
+            op,
+            sha256: h,
+        };
         self.prev_hash = h;
 
         let idx = self.head % 64;
@@ -724,23 +735,23 @@ impl AuditRing {
 /// Moteur SIEM souverain temps réel.
 pub struct SiemEngine {
     /// Handle de capacité d'accès.
-    cap:        Handle,
+    cap: Handle,
     /// Droits capabilaires courants.
-    siem_cap:   SiemCap,
+    siem_cap: SiemCap,
     /// Anneau d'événements normalisés.
-    ring:       EventRing,
+    ring: EventRing,
     /// Fenêtre de corrélation glissante.
-    window:     CorrelationWindow,
+    window: CorrelationWindow,
     /// File d'alertes SIEM.
-    alerts:     AlertQueue,
+    alerts: AlertQueue,
     /// Registre d'audit cryptographique.
-    audit:      AuditRing,
+    audit: AuditRing,
     /// Compteur monotone d'événements ingérés.
-    event_seq:  u64,
+    event_seq: u64,
     /// Compteur monotone d'alertes générées.
-    alert_seq:  u64,
+    alert_seq: u64,
     /// Règles actives pré-intégrées.
-    rules:      [CorrelationRule; 6],
+    rules: [CorrelationRule; 6],
 }
 
 impl SiemEngine {
@@ -749,10 +760,10 @@ impl SiemEngine {
         Self {
             cap,
             siem_cap,
-            ring:      EventRing::new(),
-            window:    CorrelationWindow::new(),
-            alerts:    AlertQueue::new(),
-            audit:     AuditRing::new(),
+            ring: EventRing::new(),
+            window: CorrelationWindow::new(),
+            alerts: AlertQueue::new(),
+            audit: AuditRing::new(),
             event_seq: 0,
             alert_seq: 0,
             rules: [
@@ -781,7 +792,9 @@ impl SiemEngine {
 
         // Calcul de l'empreinte SHA-256 de l'événement (simulation déterministe)
         let mut fingerprint = [0u8; SHA256_LEN];
-        for i in 0..8 { fingerprint[i] = ((event.id >> (i * 8)) & 0xff) as u8; }
+        for i in 0..8 {
+            fingerprint[i] = ((event.id >> (i * 8)) & 0xff) as u8;
+        }
         fingerprint[8] = event.source as u8;
         fingerprint[9] = event.category as u8;
         fingerprint[10] = event.severity as u8;
@@ -947,7 +960,12 @@ mod tests {
         )
     }
 
-    fn make_event(source: EventSource, cat: EventCategory, sev: Severity, success: bool) -> SecurityEvent {
+    fn make_event(
+        source: EventSource,
+        cat: EventCategory,
+        sev: Severity,
+        success: bool,
+    ) -> SecurityEvent {
         let mut ev = SecurityEvent::zeroed();
         ev.source = source;
         ev.category = cat;
@@ -974,7 +992,12 @@ mod tests {
     fn test_capability_denied_on_ingest() {
         let (cap, _) = make_cap();
         let mut engine = SiemEngine::new(cap, SiemCap::NONE);
-        let ev = make_event(EventSource::JamboAuthd, EventCategory::Authentication, Severity::Medium, false);
+        let ev = make_event(
+            EventSource::JamboAuthd,
+            EventCategory::Authentication,
+            Severity::Medium,
+            false,
+        );
         let result = engine.ingest(ev, 1_000_000);
         assert_eq!(result, Err(SiemError::CapabilityDenied));
     }
@@ -1032,11 +1055,19 @@ mod tests {
         // Injecte 10 échecs d'authentification → déclenche BRUTE_FORCE
         let mut total_alerts = 0u32;
         for i in 0..12u64 {
-            let ev = make_event(EventSource::JamboAuthd, EventCategory::Authentication, Severity::Medium, false);
+            let ev = make_event(
+                EventSource::JamboAuthd,
+                EventCategory::Authentication,
+                Severity::Medium,
+                false,
+            );
             let n = engine.ingest(ev, 1_000_000 + i * 1000).unwrap();
             total_alerts += n;
         }
-        assert!(engine.alert_count() > 0, "Brute force doit déclencher une alerte");
+        assert!(
+            engine.alert_count() > 0,
+            "Brute force doit déclencher une alerte"
+        );
         assert!(total_alerts > 0);
     }
 
@@ -1045,7 +1076,12 @@ mod tests {
         let (cap, siem_cap) = make_cap();
         let mut engine = SiemEngine::new(cap, siem_cap);
         for i in 0..5u64 {
-            let ev = make_event(EventSource::JamboWalld, EventCategory::Network, Severity::Low, true);
+            let ev = make_event(
+                EventSource::JamboWalld,
+                EventCategory::Network,
+                Severity::Low,
+                true,
+            );
             engine.ingest(ev, i * 500).unwrap();
         }
         assert_eq!(engine.event_count(), 5);
@@ -1055,7 +1091,12 @@ mod tests {
     fn test_audit_chain_non_zero_after_events() {
         let (cap, siem_cap) = make_cap();
         let mut engine = SiemEngine::new(cap, siem_cap);
-        let ev = make_event(EventSource::JamboIds, EventCategory::Network, Severity::High, false);
+        let ev = make_event(
+            EventSource::JamboIds,
+            EventCategory::Network,
+            Severity::High,
+            false,
+        );
         engine.ingest(ev, 9_999_999).unwrap();
         // La tête de chaîne doit avoir été modifiée (≠ zéro)
         let head = engine.audit_chain_head();
@@ -1068,7 +1109,11 @@ mod tests {
         let rule = CorrelationRule::APT_MULTI_STAGE;
 
         // Injecte 3 catégories distinctes : Auth, Network, File
-        let cats = [EventCategory::Authentication, EventCategory::Network, EventCategory::File];
+        let cats = [
+            EventCategory::Authentication,
+            EventCategory::Network,
+            EventCategory::File,
+        ];
         for (i, &cat) in cats.iter().enumerate() {
             let mut ev = SecurityEvent::zeroed();
             ev.id = i as u64 + 1;
@@ -1079,7 +1124,10 @@ mod tests {
         }
 
         let result = window.evaluate(&rule, 5_000_000);
-        assert!(result.is_some(), "APT Multi-Stage doit se déclencher avec 3 catégories distinctes");
+        assert!(
+            result.is_some(),
+            "APT Multi-Stage doit se déclencher avec 3 catégories distinctes"
+        );
         let m = result.unwrap();
         assert_eq!(m.rule_id, 6);
         assert_eq!(m.threat_score, 98);
@@ -1091,14 +1139,21 @@ mod tests {
         let mut engine = SiemEngine::new(cap, siem_cap);
 
         // Injecte des événements de sévérités variées
-        let sevs = [Severity::Low, Severity::Medium, Severity::High, Severity::Critical];
+        let sevs = [
+            Severity::Low,
+            Severity::Medium,
+            Severity::High,
+            Severity::Critical,
+        ];
         for (i, &sev) in sevs.iter().enumerate() {
             let ev = make_event(EventSource::JamboDdos, EventCategory::Network, sev, false);
             engine.ingest(ev, i as u64 * 100).unwrap();
         }
 
         let mut ptrs = [core::ptr::null::<SecurityEvent>(); 16];
-        let found = engine.query_events(None, Severity::High, &mut ptrs).unwrap();
+        let found = engine
+            .query_events(None, Severity::High, &mut ptrs)
+            .unwrap();
         assert!(found >= 2, "Au moins High et Critical attendus");
     }
 
@@ -1109,7 +1164,12 @@ mod tests {
 
         // Génère une alerte via brute force
         for i in 0..15u64 {
-            let ev = make_event(EventSource::JamboAuthd, EventCategory::Authentication, Severity::High, false);
+            let ev = make_event(
+                EventSource::JamboAuthd,
+                EventCategory::Authentication,
+                Severity::High,
+                false,
+            );
             engine.ingest(ev, i * 100).unwrap();
         }
 
@@ -1126,7 +1186,12 @@ mod tests {
         // Atténuation : retire INGEST
         let limited = siem_cap.attenuate(SiemCap::QUERY);
         let mut engine = SiemEngine::new(cap, limited);
-        let ev = make_event(EventSource::JamboWalld, EventCategory::Network, Severity::Low, true);
+        let ev = make_event(
+            EventSource::JamboWalld,
+            EventCategory::Network,
+            Severity::Low,
+            true,
+        );
         assert_eq!(engine.ingest(ev, 0), Err(SiemError::CapabilityDenied));
     }
 }

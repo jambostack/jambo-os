@@ -30,14 +30,16 @@ pub struct Sha256;
 
 impl Sha256 {
     const K: [u32; 64] = [
-        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
-        0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
-        0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
-        0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
-        0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
-        0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
-        0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
-        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
+        0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
+        0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f,
+        0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc,
+        0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+        0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116,
+        0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
+        0xc67178f2,
     ];
 
     #[inline(always)]
@@ -126,8 +128,14 @@ impl Sha256 {
 
     pub fn digest(data: &[u8]) -> [u8; 32] {
         let mut state = [
-            0x6a09e667u32, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
-            0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+            0x6a09e667u32,
+            0xbb67ae85,
+            0x3c6ef372,
+            0xa54ff53a,
+            0x510e527f,
+            0x9b05688c,
+            0x1f83d9ab,
+            0x5be0cd19,
         ];
 
         let bit_len = (data.len() as u64) * 8;
@@ -168,16 +176,16 @@ impl Sha256 {
 // ============================================================================
 
 pub mod dbg_rights {
-    pub const DBG_INSPECT: u32    = 1 << 0;
-    pub const DBG_ATTACH: u32     = 1 << 1;
+    pub const DBG_INSPECT: u32 = 1 << 0;
+    pub const DBG_ATTACH: u32 = 1 << 1;
     pub const DBG_BREAKPOINT: u32 = 1 << 2;
-    pub const DBG_STEP: u32       = 1 << 3;
-    pub const DBG_MEM_READ: u32   = 1 << 4;
-    pub const DBG_MEM_WRITE: u32  = 1 << 5;
-    pub const DBG_REG_READ: u32   = 1 << 6;
-    pub const DBG_REG_WRITE: u32  = 1 << 7;
-    pub const DBG_AUDIT: u32      = 1 << 8;
-    pub const DBG_ADMIN: u32      = 1 << 9;
+    pub const DBG_STEP: u32 = 1 << 3;
+    pub const DBG_MEM_READ: u32 = 1 << 4;
+    pub const DBG_MEM_WRITE: u32 = 1 << 5;
+    pub const DBG_REG_READ: u32 = 1 << 6;
+    pub const DBG_REG_WRITE: u32 = 1 << 7;
+    pub const DBG_AUDIT: u32 = 1 << 8;
+    pub const DBG_ADMIN: u32 = 1 << 9;
 
     pub const ALL: u32 = DBG_INSPECT
         | DBG_ATTACH
@@ -289,13 +297,13 @@ impl DrLength {
 /// Décodage du registre DR6 (Debug Status Register)
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub struct Dr6Status {
-    pub b0: bool,      // Condition DR0 détectée
-    pub b1: bool,      // Condition DR1 détectée
-    pub b2: bool,      // Condition DR2 détectée
-    pub b3: bool,      // Condition DR3 détectée
-    pub bd: bool,      // Détection d'accès au registre de débogage (GD)
-    pub bs: bool,      // Single step (TF activé)
-    pub bt: bool,      // Commutation de tâche (TSS)
+    pub b0: bool, // Condition DR0 détectée
+    pub b1: bool, // Condition DR1 détectée
+    pub b2: bool, // Condition DR2 détectée
+    pub b3: bool, // Condition DR3 détectée
+    pub bd: bool, // Détection d'accès au registre de débogage (GD)
+    pub bs: bool, // Single step (TF activé)
+    pub bt: bool, // Commutation de tâche (TSS)
 }
 
 impl Dr6Status {
@@ -313,13 +321,27 @@ impl Dr6Status {
 
     pub fn to_raw(self) -> u64 {
         let mut raw = 0xFFFF_0FF0u64; // Bits réservés à 1 selon architecture x86
-        if self.b0 { raw |= 1 << 0; }
-        if self.b1 { raw |= 1 << 1; }
-        if self.b2 { raw |= 1 << 2; }
-        if self.b3 { raw |= 1 << 3; }
-        if self.bd { raw |= 1 << 13; }
-        if self.bs { raw |= 1 << 14; }
-        if self.bt { raw |= 1 << 15; }
+        if self.b0 {
+            raw |= 1 << 0;
+        }
+        if self.b1 {
+            raw |= 1 << 1;
+        }
+        if self.b2 {
+            raw |= 1 << 2;
+        }
+        if self.b3 {
+            raw |= 1 << 3;
+        }
+        if self.bd {
+            raw |= 1 << 13;
+        }
+        if self.bs {
+            raw |= 1 << 14;
+        }
+        if self.bt {
+            raw |= 1 << 15;
+        }
         raw
     }
 
@@ -348,13 +370,7 @@ impl Default for HardwareDrConfig {
 
 impl HardwareDrConfig {
     /// Configure un slot matériel DR0..DR3 et met à jour le registre DR7
-    pub fn set_slot(
-        &mut self,
-        slot: DrSlot,
-        addr: u64,
-        cond: DrCondition,
-        len: DrLength,
-    ) {
+    pub fn set_slot(&mut self, slot: DrSlot, addr: u64, cond: DrCondition, len: DrLength) {
         let idx = slot.index();
         self.dr[idx] = addr;
 
@@ -457,8 +473,8 @@ impl ThreadRegisters {
             "rdi" => Some(self.rdi),
             "rbp" => Some(self.rbp),
             "rsp" => Some(self.rsp),
-            "r8"  => Some(self.r8),
-            "r9"  => Some(self.r9),
+            "r8" => Some(self.r8),
+            "r9" => Some(self.r9),
             "r10" => Some(self.r10),
             "r11" => Some(self.r11),
             "r12" => Some(self.r12),
@@ -474,24 +490,78 @@ impl ThreadRegisters {
 
     pub fn set_by_name(&mut self, name: &str, val: u64) -> Result<(), SysError> {
         match name {
-            "rax" => { self.rax = val; Ok(()) }
-            "rbx" => { self.rbx = val; Ok(()) }
-            "rcx" => { self.rcx = val; Ok(()) }
-            "rdx" => { self.rdx = val; Ok(()) }
-            "rsi" => { self.rsi = val; Ok(()) }
-            "rdi" => { self.rdi = val; Ok(()) }
-            "rbp" => { self.rbp = val; Ok(()) }
-            "rsp" => { self.rsp = val; Ok(()) }
-            "r8"  => { self.r8 = val; Ok(()) }
-            "r9"  => { self.r9 = val; Ok(()) }
-            "r10" => { self.r10 = val; Ok(()) }
-            "r11" => { self.r11 = val; Ok(()) }
-            "r12" => { self.r12 = val; Ok(()) }
-            "r13" => { self.r13 = val; Ok(()) }
-            "r14" => { self.r14 = val; Ok(()) }
-            "r15" => { self.r15 = val; Ok(()) }
-            "rip" => { self.rip = val; Ok(()) }
-            "rflags" => { self.rflags = val; Ok(()) }
+            "rax" => {
+                self.rax = val;
+                Ok(())
+            }
+            "rbx" => {
+                self.rbx = val;
+                Ok(())
+            }
+            "rcx" => {
+                self.rcx = val;
+                Ok(())
+            }
+            "rdx" => {
+                self.rdx = val;
+                Ok(())
+            }
+            "rsi" => {
+                self.rsi = val;
+                Ok(())
+            }
+            "rdi" => {
+                self.rdi = val;
+                Ok(())
+            }
+            "rbp" => {
+                self.rbp = val;
+                Ok(())
+            }
+            "rsp" => {
+                self.rsp = val;
+                Ok(())
+            }
+            "r8" => {
+                self.r8 = val;
+                Ok(())
+            }
+            "r9" => {
+                self.r9 = val;
+                Ok(())
+            }
+            "r10" => {
+                self.r10 = val;
+                Ok(())
+            }
+            "r11" => {
+                self.r11 = val;
+                Ok(())
+            }
+            "r12" => {
+                self.r12 = val;
+                Ok(())
+            }
+            "r13" => {
+                self.r13 = val;
+                Ok(())
+            }
+            "r14" => {
+                self.r14 = val;
+                Ok(())
+            }
+            "r15" => {
+                self.r15 = val;
+                Ok(())
+            }
+            "rip" => {
+                self.rip = val;
+                Ok(())
+            }
+            "rflags" => {
+                self.rflags = val;
+                Ok(())
+            }
             _ => Err(SysError::InvalidArgument),
         }
     }
@@ -942,7 +1012,7 @@ impl JamboDebuggerDaemon {
     /// Initialise une session par défaut pour PID 1 avec un thread d'espace utilisateur
     pub fn init_defaults(&mut self) {
         let mut session = DebugSession::new(1);
-        
+
         // Région de code Ring 3 (0x0040_0000)
         let mut code_reg = MemoryRegion::new(0x0040_0000, true, true);
         // Séquence d'instructions x86-64 :
@@ -1184,7 +1254,13 @@ impl JamboDebuggerDaemon {
     }
 
     /// Supprime un point d'arrêt (logiciel ou matériel) et restaure l'état d'origine
-    pub fn remove_breakpoint(&mut self, cap: &DbgCap, pid: u64, bp_id: u32, ts: u64) -> Result<(), SysError> {
+    pub fn remove_breakpoint(
+        &mut self,
+        cap: &DbgCap,
+        pid: u64,
+        bp_id: u32,
+        ts: u64,
+    ) -> Result<(), SysError> {
         if !cap.has_right(dbg_rights::DBG_BREAKPOINT) {
             return Err(SysError::PermissionDenied);
         }
@@ -1297,7 +1373,9 @@ impl JamboDebuggerDaemon {
             return Err(SysError::PermissionDenied);
         }
         let session = self.get_session_mut(pid).ok_or(SysError::InvalidArgument)?;
-        let thread = session.get_thread_mut(tid).ok_or(SysError::InvalidArgument)?;
+        let thread = session
+            .get_thread_mut(tid)
+            .ok_or(SysError::InvalidArgument)?;
         thread.regs = regs;
         self.record_audit(AuditAction::WriteRegisters, pid, tid, regs.rip, ts);
         Ok(())
@@ -1317,7 +1395,9 @@ impl JamboDebuggerDaemon {
 
         let (_cur_rip, inst) = {
             let session = self.get_session_mut(pid).ok_or(SysError::InvalidArgument)?;
-            let thread = session.get_thread_mut(tid).ok_or(SysError::InvalidArgument)?;
+            let thread = session
+                .get_thread_mut(tid)
+                .ok_or(SysError::InvalidArgument)?;
 
             // Activer le Trap Flag (TF) dans RFLAGS
             thread.regs.set_single_step(true);
@@ -1334,7 +1414,9 @@ impl JamboDebuggerDaemon {
 
         let rip_after = {
             let session = self.get_session_mut(pid).ok_or(SysError::InvalidArgument)?;
-            let thread = session.get_thread_mut(tid).ok_or(SysError::InvalidArgument)?;
+            let thread = session
+                .get_thread_mut(tid)
+                .ok_or(SysError::InvalidArgument)?;
 
             // Simuler le passage de l'instruction et l'interruption #DB (INT1)
             thread.regs.advance_rip(inst.len as u64);
@@ -1352,13 +1434,21 @@ impl JamboDebuggerDaemon {
     }
 
     /// Reprend l'exécution normale du thread
-    pub fn resume_thread(&mut self, cap: &DbgCap, pid: u64, tid: u64, ts: u64) -> Result<(), SysError> {
+    pub fn resume_thread(
+        &mut self,
+        cap: &DbgCap,
+        pid: u64,
+        tid: u64,
+        ts: u64,
+    ) -> Result<(), SysError> {
         if !cap.has_right(dbg_rights::DBG_STEP) {
             return Err(SysError::PermissionDenied);
         }
         let rip = {
             let session = self.get_session_mut(pid).ok_or(SysError::InvalidArgument)?;
-            let thread = session.get_thread_mut(tid).ok_or(SysError::InvalidArgument)?;
+            let thread = session
+                .get_thread_mut(tid)
+                .ok_or(SysError::InvalidArgument)?;
             thread.state = SessionState::Running;
             thread.stop_reason = StopReason::None;
             thread.regs.rip
@@ -1377,7 +1467,7 @@ impl JamboDebuggerDaemon {
         ts: u64,
     ) -> Result<u32, SysError> {
         let session = self.get_session_mut(pid).ok_or(SysError::InvalidArgument)?;
-        
+
         // Sur x86-64, l'exception INT3 laisse RIP pointé sur l'octet après le 0xCC
         let bp_addr = fault_rip.saturating_sub(1);
 
@@ -1419,7 +1509,9 @@ impl JamboDebuggerDaemon {
     ) -> Result<StopReason, SysError> {
         let (stop_reason, rip) = {
             let session = self.get_session_mut(pid).ok_or(SysError::InvalidArgument)?;
-            let thread = session.get_thread_mut(tid).ok_or(SysError::InvalidArgument)?;
+            let thread = session
+                .get_thread_mut(tid)
+                .ok_or(SysError::InvalidArgument)?;
 
             let status = Dr6Status::from_raw(dr6_raw);
             thread.hw_dr.dr6 = dr6_raw;
@@ -1517,7 +1609,9 @@ mod tests {
         assert!(admin_cap.has_right(dbg_rights::DBG_STEP));
         assert!(admin_cap.has_right(dbg_rights::DBG_ADMIN));
 
-        let ro_cap = admin_cap.attenuate(dbg_rights::DBG_INSPECT | dbg_rights::DBG_MEM_READ).unwrap();
+        let ro_cap = admin_cap
+            .attenuate(dbg_rights::DBG_INSPECT | dbg_rights::DBG_MEM_READ)
+            .unwrap();
         assert!(ro_cap.has_right(dbg_rights::DBG_INSPECT));
         assert!(ro_cap.has_right(dbg_rights::DBG_MEM_READ));
         assert!(!ro_cap.has_right(dbg_rights::DBG_BREAKPOINT));
@@ -1533,8 +1627,18 @@ mod tests {
     #[test]
     fn test_dr0_dr7_hardware_breakpoint_encoding() {
         let mut dr_cfg = HardwareDrConfig::default();
-        dr_cfg.set_slot(DrSlot::Dr0, 0x0040_1000, DrCondition::Execute, DrLength::Len1);
-        dr_cfg.set_slot(DrSlot::Dr1, 0x7FFF_2000, DrCondition::DataWrite, DrLength::Len4);
+        dr_cfg.set_slot(
+            DrSlot::Dr0,
+            0x0040_1000,
+            DrCondition::Execute,
+            DrLength::Len1,
+        );
+        dr_cfg.set_slot(
+            DrSlot::Dr1,
+            0x7FFF_2000,
+            DrCondition::DataWrite,
+            DrLength::Len4,
+        );
 
         assert_eq!(dr_cfg.dr[0], 0x0040_1000);
         assert_eq!(dr_cfg.dr[1], 0x7FFF_2000);
@@ -1560,12 +1664,16 @@ mod tests {
 
         // Vérifier que 0xCC est bien présent à 0x0040_0001
         let mut check_byte = [0u8; 1];
-        daemon.read_memory(&admin_cap, 1, 0x0040_0001, &mut check_byte, 1002).unwrap();
+        daemon
+            .read_memory(&admin_cap, 1, 0x0040_0001, &mut check_byte, 1002)
+            .unwrap();
         assert_eq!(check_byte[0], 0xCC);
 
         // Interception de l'exception INT3
         // RIP après INT3 est à 0x0040_0002
-        let hit_id = daemon.handle_int3_exception(1, 1, 0x0040_0002, 1003).expect("handle INT3");
+        let hit_id = daemon
+            .handle_int3_exception(1, 1, 0x0040_0002, 1003)
+            .expect("handle INT3");
         assert_eq!(hit_id, bp_id);
 
         let regs = daemon.read_registers(&admin_cap, 1, 1, 1004).unwrap();
@@ -1576,8 +1684,12 @@ mod tests {
         assert_eq!(inst.mnemonic, "int3");
 
         // Retrait du breakpoint et restauration
-        daemon.remove_breakpoint(&admin_cap, 1, bp_id, 1006).unwrap();
-        daemon.read_memory(&admin_cap, 1, 0x0040_0001, &mut check_byte, 1007).unwrap();
+        daemon
+            .remove_breakpoint(&admin_cap, 1, bp_id, 1006)
+            .unwrap();
+        daemon
+            .read_memory(&admin_cap, 1, 0x0040_0001, &mut check_byte, 1007)
+            .unwrap();
         assert_eq!(check_byte[0], 0x48); // Octet d'origine restauré !
 
         // Vérification audit SHA-256
@@ -1591,14 +1703,24 @@ mod tests {
         daemon.init_defaults();
 
         let (bp_id, slot) = daemon
-            .add_hardware_breakpoint(&admin_cap, 1, 0x7FFF_0010, DrCondition::DataWrite, DrLength::Len8, 1010)
+            .add_hardware_breakpoint(
+                &admin_cap,
+                1,
+                0x7FFF_0010,
+                DrCondition::DataWrite,
+                DrLength::Len8,
+                1010,
+            )
             .expect("add HW bp");
         assert_eq!(bp_id, 1);
         assert_eq!(slot, DrSlot::Dr0);
 
         // Simuler un accès mémoire déclenchant DR6 bit 0 (B0)
         let stop_reason = daemon.handle_int1_exception(1, 1, 1 << 0, 1011).unwrap();
-        assert_eq!(stop_reason, StopReason::HardwareWatchpoint(DrSlot::Dr0, 0x7FFF_0010));
+        assert_eq!(
+            stop_reason,
+            StopReason::HardwareWatchpoint(DrSlot::Dr0, 0x7FFF_0010)
+        );
 
         let session = daemon.get_session(1).unwrap();
         let bp = session.breakpoints[0].unwrap();

@@ -35,12 +35,12 @@ pub const MAX_DATA_PAYLOAD: usize = 512;
 
 // Paramètres ML-KEM compacts et déterministes
 pub const KEM_N: usize = 128; // Degré polynomial post-quantique (128 coefficients)
-pub const KEM_K: usize = 2;   // Dimension matricielle
-pub const KEM_Q: i32 = 3329;  // Modulus Kyber
+pub const KEM_K: usize = 2; // Dimension matricielle
+pub const KEM_Q: i32 = 3329; // Modulus Kyber
 
 pub const KEM_PUBLIC_KEY_LEN: usize = 32 + (KEM_K * KEM_N * 2); // 32 + 512 = 544 octets
 pub const KEM_SECRET_KEY_LEN: usize = (KEM_K * KEM_N * 2) + 32; // 512 + 32 = 544 octets
-pub const KEM_CIPHERTEXT_LEN: usize = (KEM_K + 1) * KEM_N * 2;  // 3 * 128 * 2 = 768 octets
+pub const KEM_CIPHERTEXT_LEN: usize = (KEM_K + 1) * KEM_N * 2; // 3 * 128 * 2 = 768 octets
 pub const KEM_SHARED_SECRET_LEN: usize = 32;
 
 pub const CURVE25519_KEY_LEN: usize = 32;
@@ -151,14 +151,16 @@ pub struct Sha256;
 
 impl Sha256 {
     const K: [u32; 64] = [
-        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
-        0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
-        0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
-        0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
-        0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
-        0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
-        0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
-        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
+        0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
+        0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f,
+        0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc,
+        0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+        0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116,
+        0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
+        0xc67178f2,
     ];
 
     #[inline(always)]
@@ -193,8 +195,14 @@ impl Sha256 {
 
     pub fn digest(data: &[u8]) -> [u8; 32] {
         let mut h = [
-            0x6a09e667u32, 0xbb67ae85u32, 0x3c6ef372u32, 0xa54ff53au32,
-            0x510e527fu32, 0x9b05688cu32, 0x1f83d9abu32, 0x5be0cd19u32,
+            0x6a09e667u32,
+            0xbb67ae85u32,
+            0x3c6ef372u32,
+            0xa54ff53au32,
+            0x510e527fu32,
+            0x9b05688cu32,
+            0x1f83d9abu32,
+            0x5be0cd19u32,
         ];
 
         let len = data.len();
@@ -242,7 +250,10 @@ impl Sha256 {
         for t in 16..64 {
             let s1 = Self::ssig1(w[t - 2]);
             let s0 = Self::ssig0(w[t - 15]);
-            w[t] = s1.wrapping_add(w[t - 7]).wrapping_add(s0).wrapping_add(w[t - 16]);
+            w[t] = s1
+                .wrapping_add(w[t - 7])
+                .wrapping_add(s0)
+                .wrapping_add(w[t - 16]);
         }
 
         let mut a = h[0];
@@ -367,12 +378,8 @@ impl ChaCha20 {
         state[3] = 0x6b206574;
 
         for i in 0..8 {
-            state[4 + i] = u32::from_le_bytes([
-                key[i * 4],
-                key[i * 4 + 1],
-                key[i * 4 + 2],
-                key[i * 4 + 3],
-            ]);
+            state[4 + i] =
+                u32::from_le_bytes([key[i * 4], key[i * 4 + 1], key[i * 4 + 2], key[i * 4 + 3]]);
         }
 
         state[12] = counter;
@@ -656,7 +663,8 @@ pub struct Curve25519;
 
 impl Curve25519 {
     pub const BASE_POINT: [u8; 32] = [
-        9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0,
     ];
 
     pub fn clamp_scalar(scalar: &mut [u8; 32]) {
@@ -1099,7 +1107,10 @@ pub struct VpnSubnet {
 
 impl VpnSubnet {
     pub const fn new(network: [u8; 4], prefix_len: u8) -> Self {
-        Self { network, prefix_len }
+        Self {
+            network,
+            prefix_len,
+        }
     }
 
     pub fn matches(&self, ip: &[u8; 4]) -> bool {
@@ -1322,7 +1333,11 @@ impl JamboVpnDaemon {
 
         let mut peer2_pk_kem = [0u8; KEM_PUBLIC_KEY_LEN];
         let mut peer2_sk_kem = [0u8; KEM_SECRET_KEY_LEN];
-        MlKem::keygen(b"JAMBO_PEER2_MLKEM_SEED", &mut peer2_pk_kem, &mut peer2_sk_kem);
+        MlKem::keygen(
+            b"JAMBO_PEER2_MLKEM_SEED",
+            &mut peer2_pk_kem,
+            &mut peer2_sk_kem,
+        );
 
         let mut subnets = [VpnSubnet::new([0, 0, 0, 0], 0); MAX_ALLOWED_IPS_PER_PEER];
         subnets[0] = VpnSubnet::new([10, 0, 2, 0], 24);
@@ -1702,7 +1717,10 @@ impl JamboVpnDaemon {
             .find(|p| p.peer_id == peer_id)
             .ok_or(VpnError::PeerNotFound)?;
 
-        let session = peer.current_session.as_mut().ok_or(VpnError::TunnelNotEstablished)?;
+        let session = peer
+            .current_session
+            .as_mut()
+            .ok_or(VpnError::TunnelNotEstablished)?;
         if !session.is_valid {
             return Err(VpnError::TunnelNotEstablished);
         }
@@ -1786,17 +1804,17 @@ impl JamboVpnDaemon {
             return Err(VpnError::IngressValidationFailed);
         }
 
-        let session = peer.current_session.as_mut().ok_or(VpnError::TunnelNotEstablished)?;
+        let session = peer
+            .current_session
+            .as_mut()
+            .ok_or(VpnError::TunnelNotEstablished)?;
 
         if !session.replay_window.check_and_update(pkt.counter) {
             self.total_replay_drops += 1;
             return Err(VpnError::AntiReplayDrop);
         }
 
-        let expected_mac = Sha256::hmac(
-            &session.receiving_key,
-            &pkt.encrypted_payload[..p_len],
-        );
+        let expected_mac = Sha256::hmac(&session.receiving_key, &pkt.encrypted_payload[..p_len]);
         if expected_mac[..16] != pkt.auth_tag {
             return Err(VpnError::MacVerificationFailed);
         }
@@ -1805,12 +1823,7 @@ impl JamboVpnDaemon {
         let mut nonce = [0u8; 12];
         nonce[4..12].copy_from_slice(&pkt.counter.to_le_bytes());
 
-        ChaCha20::apply_keystream(
-            &session.receiving_key,
-            0,
-            &nonce,
-            &mut out_payload[..p_len],
-        );
+        ChaCha20::apply_keystream(&session.receiving_key, 0, &nonce, &mut out_payload[..p_len]);
 
         peer.rx_packets += 1;
         peer.rx_bytes += p_len as u64;
@@ -1837,7 +1850,10 @@ mod tests {
         let att = cap
             .attenuate(vpn_rights::ROUTE_TRAFFIC | vpn_rights::AUDIT_INSPECT, 4)
             .expect("attenuate ok");
-        assert_eq!(att.rights, vpn_rights::ROUTE_TRAFFIC | vpn_rights::AUDIT_INSPECT);
+        assert_eq!(
+            att.rights,
+            vpn_rights::ROUTE_TRAFFIC | vpn_rights::AUDIT_INSPECT
+        );
         assert_eq!(att.max_peers, 4);
 
         assert!(att.attenuate(vpn_rights::ALL, 4).is_err());
@@ -2054,7 +2070,12 @@ mod tests {
         };
         let eph_seed_bob = [0x88u8; 32];
         let bob_peer_id = bob
-            .process_handshake_initiation_and_respond(&cap_bob, &init_pkt, &eph_seed_bob, &mut resp_pkt)
+            .process_handshake_initiation_and_respond(
+                &cap_bob,
+                &init_pkt,
+                &eph_seed_bob,
+                &mut resp_pkt,
+            )
             .expect("bob respond ok");
         assert_eq!(bob_peer_id, 20);
 

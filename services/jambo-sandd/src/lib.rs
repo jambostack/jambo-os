@@ -30,14 +30,16 @@ pub struct Sha256;
 
 impl Sha256 {
     const K: [u32; 64] = [
-        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
-        0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
-        0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
-        0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
-        0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
-        0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
-        0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
-        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
+        0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
+        0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f,
+        0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc,
+        0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+        0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116,
+        0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
+        0xc67178f2,
     ];
 
     #[inline(always)]
@@ -126,8 +128,14 @@ impl Sha256 {
 
     pub fn digest(data: &[u8]) -> [u8; 32] {
         let mut state = [
-            0x6a09e667u32, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
-            0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+            0x6a09e667u32,
+            0xbb67ae85,
+            0x3c6ef372,
+            0xa54ff53a,
+            0x510e527f,
+            0x9b05688c,
+            0x1f83d9ab,
+            0x5be0cd19,
         ];
 
         let bit_len = (data.len() as u64) * 8;
@@ -176,8 +184,13 @@ pub mod sand_rights {
     pub const SAND_AUDIT: u32 = 1 << 5;
     pub const SAND_ADMIN: u32 = 1 << 6;
 
-    pub const ALL: u32 =
-        SAND_INSPECT | SAND_CREATE | SAND_APPLY | SAND_RESTRICT | SAND_KILL | SAND_AUDIT | SAND_ADMIN;
+    pub const ALL: u32 = SAND_INSPECT
+        | SAND_CREATE
+        | SAND_APPLY
+        | SAND_RESTRICT
+        | SAND_KILL
+        | SAND_AUDIT
+        | SAND_ADMIN;
 }
 
 /// Capacité de contrôle d'accès pour les micro-bacs à sable sans autorité ambiante
@@ -563,12 +576,7 @@ impl JamboSandDaemon {
     /// Initialise les profils de confinement par défaut du système
     pub fn init_defaults(&mut self) {
         // 1. Profil Strict (Confinement maximal : calcul pur, zero-syscall except yield/exit/clock)
-        let mut p_strict = SandboxProfile::new(
-            1,
-            "Strict",
-            FilterAction::Kill,
-            100,
-        );
+        let mut p_strict = SandboxProfile::new(1, "Strict", FilterAction::Kill, 100);
         p_strict.allow_syscall_fast(11); // ThreadExit
         p_strict.allow_syscall_fast(12); // ThreadYield
         p_strict.allow_syscall_fast(24); // ClockGettime
@@ -581,9 +589,9 @@ impl JamboSandDaemon {
             FilterAction::Deny(SysError::PermissionDenied),
             80,
         );
-        p_comp.allow_syscall_fast(4);  // VmoCreate
-        p_comp.allow_syscall_fast(5);  // VmoMap
-        p_comp.allow_syscall_fast(6);  // VmoUnmap
+        p_comp.allow_syscall_fast(4); // VmoCreate
+        p_comp.allow_syscall_fast(5); // VmoMap
+        p_comp.allow_syscall_fast(6); // VmoUnmap
         p_comp.allow_syscall_fast(11); // ThreadExit
         p_comp.allow_syscall_fast(12); // ThreadYield
         p_comp.allow_syscall_fast(19); // FutexWait
@@ -615,33 +623,29 @@ impl JamboSandDaemon {
         let _ = self.register_profile_internal(p_net);
 
         // 4. Profil UntrustedPlugin (Dérivé de ComputeOnly : VMO restreint en lecture seule)
-        let mut p_plugin = SandboxProfile::new(
-            4,
-            "UntrustedPlugin",
-            FilterAction::Trap,
-            90,
-        );
+        let mut p_plugin = SandboxProfile::new(4, "UntrustedPlugin", FilterAction::Trap, 90);
         p_plugin.parent_id = Some(2); // Parent: ComputeOnly
-        p_plugin.allow_syscall_fast(5);  // VmoMap
-        p_plugin.allow_syscall_fast(6);  // VmoUnmap
+        p_plugin.allow_syscall_fast(5); // VmoMap
+        p_plugin.allow_syscall_fast(6); // VmoUnmap
         p_plugin.allow_syscall_fast(11); // ThreadExit
         p_plugin.allow_syscall_fast(12); // ThreadYield
         p_plugin.allow_syscall_fast(24); // ClockGettime
-        // Argument filter: VmoMap (syscall 5) argument prot (arg1) doit interdire l'écriture (mask WRITE == 0)
+                                         // Argument filter: VmoMap (syscall 5) argument prot (arg1) doit interdire l'écriture (mask WRITE == 0)
         let _ = p_plugin.add_rule(SyscallRule::with_arg_filters(
             5,
             FilterAction::Allow,
             [
                 ArgFilter::Any,
-                ArgFilter::MaskEq { mask: 0x02, value: 0x00 }, // No write allowed
+                ArgFilter::MaskEq {
+                    mask: 0x02,
+                    value: 0x00,
+                }, // No write allowed
                 ArgFilter::Any,
                 ArgFilter::Any,
             ],
         ));
-        let _ = p_plugin.add_landlock_rule(LandlockPathRule::new(
-            "/tmp/cache",
-            landlock_access::READ,
-        ));
+        let _ =
+            p_plugin.add_landlock_rule(LandlockPathRule::new("/tmp/cache", landlock_access::READ));
         let _ = self.register_profile_internal(p_plugin);
 
         // Instanciation de bacs à sable initiaux
@@ -735,7 +739,10 @@ impl JamboSandDaemon {
             return Err(SysError::PermissionDenied);
         }
 
-        let parent = self.get_profile(parent_id).copied().ok_or(SysError::InvalidArgument)?;
+        let parent = self
+            .get_profile(parent_id)
+            .copied()
+            .ok_or(SysError::InvalidArgument)?;
 
         let mut child = SandboxProfile::new(
             (self.profile_count as u32) + 1,
@@ -815,7 +822,14 @@ impl JamboSandDaemon {
         // 1. Vérification des règles fines avec prédicats d'arguments
         for slot in profile.rules.iter().flatten() {
             if slot.syscall_nr == syscall_nr && slot.matches_args(&args) {
-                return self.apply_decision(sandbox_id, pid, syscall_nr, args, slot.action, timestamp);
+                return self.apply_decision(
+                    sandbox_id,
+                    pid,
+                    syscall_nr,
+                    args,
+                    slot.action,
+                    timestamp,
+                );
             }
         }
 

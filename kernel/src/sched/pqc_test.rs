@@ -89,7 +89,9 @@ pub fn execute_pqc_daemon_test() -> bool {
         "Secrets partagés ML-KEM émetteur et récepteur strictement identiques"
     );
     assert_ne!(ss_sender, [0u8; 32]);
-    kprintln!("[PQC/ML-KEM] Encapsulation / Décapsulation ML-KEM validées (Secret 256 bits conforme)");
+    kprintln!(
+        "[PQC/ML-KEM] Encapsulation / Décapsulation ML-KEM validées (Secret 256 bits conforme)"
+    );
 
     // 4. Signature Numérique Post-Quantique ML-DSA (Fiat-Shamir with Aborts)
     let dsa_kid = daemon
@@ -150,11 +152,10 @@ pub fn execute_pqc_daemon_test() -> bool {
     daemon
         .set_transition_state(&admin_cap, PqcTransitionState::PurePqcEnforced)
         .expect("Bascule vers PurePqcEnforced");
-    assert_eq!(
-        daemon.transition_state,
-        PqcTransitionState::PurePqcEnforced
+    assert_eq!(daemon.transition_state, PqcTransitionState::PurePqcEnforced);
+    kprintln!(
+        "[PQC/TRANSITION] Politique souveraine de transition quantique activée (PurePqcEnforced)"
     );
-    kprintln!("[PQC/TRANSITION] Politique souveraine de transition quantique activée (PurePqcEnforced)");
 
     // 7. Zéroïsation d'urgence en mémoire volatile
     let initial_active_keys = daemon.count_active_keys();

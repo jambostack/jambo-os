@@ -6,7 +6,7 @@ extern crate alloc;
 use crate::kprintln;
 use jambo_abi::{Handle, SysError};
 use jambo_dynlinkd::{
-    dynlink_rights, build_synthetic_jso_bytes, AuditAction, DynLinkCap, GotTable,
+    build_synthetic_jso_bytes, dynlink_rights, AuditAction, DynLinkCap, GotTable,
     JamboDynLinkDaemon, LibraryState, PltTable, SharedLibrary, SymbolBinding, SymbolType,
     RTLD_GLOBAL, RTLD_LAZY, RTLD_NODELETE, RTLD_NOW, R_X86_64_GLOB_DAT, R_X86_64_JUMP_SLOT,
     R_X86_64_RELATIVE,
@@ -52,7 +52,14 @@ pub fn execute_dynlink_daemon_test() -> bool {
 
     // Rejet de chargement de bibliothèque sans DYNLINK_LOAD
     assert_eq!(
-        daemon.load_library(&read_only_cap, "libunauth.jso", 0x7000_0000, 0x1000, RTLD_LAZY, 100),
+        daemon.load_library(
+            &read_only_cap,
+            "libunauth.jso",
+            0x7000_0000,
+            0x1000,
+            RTLD_LAZY,
+            100
+        ),
         Err(SysError::PermissionDenied),
         "Chargement sans DYNLINK_LOAD doit échouer"
     );
@@ -98,10 +105,15 @@ pub fn execute_dynlink_daemon_test() -> bool {
     assert_eq!(crypto_lib.plt.count, 1);
     let plt_entry = &crypto_lib.plt.entries[0];
     assert_eq!(plt_entry.symbol_str(), "malloc");
-    assert!(!plt_entry.is_resolved, "Symbole PLT initialement non résolu (Lazy)");
+    assert!(
+        !plt_entry.is_resolved,
+        "Symbole PLT initialement non résolu (Lazy)"
+    );
 
     // Déclencher le lazy binding
-    let target = daemon.resolve_lazy(&admin_cap, 2, 0, 200).expect("lazy bind malloc");
+    let target = daemon
+        .resolve_lazy(&admin_cap, 2, 0, 200)
+        .expect("lazy bind malloc");
     assert_eq!(target, malloc_addr);
 
     let crypto_after = daemon.get_library(2).unwrap();
@@ -130,7 +142,9 @@ pub fn execute_dynlink_daemon_test() -> bool {
     }
 
     // Activer RELRO
-    daemon.enforce_relro(&admin_cap, test_lib_id, 301).expect("enforce relro");
+    daemon
+        .enforce_relro(&admin_cap, test_lib_id, 301)
+        .expect("enforce relro");
 
     // Après RELRO, tentative de modification de la GOT formellement rejetée (W^X)
     {
@@ -159,16 +173,23 @@ pub fn execute_dynlink_daemon_test() -> bool {
     assert_eq!(daemon.get_library(test_lib_id).unwrap().ref_count, 2);
 
     // Déchargement #1 -> décrémentation du compteur
-    daemon.unload_library(&admin_cap, test_lib_id, 401).expect("unload 1");
+    daemon
+        .unload_library(&admin_cap, test_lib_id, 401)
+        .expect("unload 1");
     assert_eq!(daemon.get_library(test_lib_id).unwrap().ref_count, 1);
 
     // Déchargement #2 -> suppression effective
-    daemon.unload_library(&admin_cap, test_lib_id, 402).expect("unload 2");
+    daemon
+        .unload_library(&admin_cap, test_lib_id, 402)
+        .expect("unload 2");
     assert!(daemon.get_library(test_lib_id).is_none());
     kprintln!("[DYNLINK/REFCOUNT] Cycle de vie et déchargement par référence validés");
 
     // 6. Intégrité cryptographique SHA-256 de la chaîne d'audit
-    assert!(daemon.verify_audit_integrity(), "Audit SHA-256 intègre et scellé");
+    assert!(
+        daemon.verify_audit_integrity(),
+        "Audit SHA-256 intègre et scellé"
+    );
     kprintln!("[DYNLINK/AUDIT] Chaîne d'audit cryptographique SHA-256 vérifiée et inviolable");
 
     // 7. Validation des commandes du Shell interactif JamboShell

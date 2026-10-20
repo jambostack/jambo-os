@@ -50,7 +50,9 @@ pub fn execute_crypto2_daemon_test() -> bool {
         Err(Crypto2Error::PermissionDenied),
         "Amplification de droits Crypto2Cap formellement rejetée"
     );
-    kprintln!("[CRYPTO2/CAP] Contrôle d'accès capabilaire Crypto2Cap et atténuation monotone validés");
+    kprintln!(
+        "[CRYPTO2/CAP] Contrôle d'accès capabilaire Crypto2Cap et atténuation monotone validés"
+    );
 
     // 2. Détection des capacités matérielles CPU (CPUID x86-64)
     let features = CpuCryptoFeatures::detect();
@@ -73,22 +75,25 @@ pub fn execute_crypto2_daemon_test() -> bool {
 
     // 4. Test vecteur NIST FIPS 197 AES-128
     let nist_key: [u8; 16] = [
-        0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
-        0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+        0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e,
+        0x0f,
     ];
     let nist_pt: [u8; 16] = [
-        0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
-        0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff,
+        0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee,
+        0xff,
     ];
     let expected_ct: [u8; 16] = [
-        0x69, 0xc4, 0xe0, 0xd8, 0x6a, 0x7b, 0x04, 0x30,
-        0xd8, 0xcd, 0xb7, 0x80, 0x70, 0xb4, 0xc5, 0x5a,
+        0x69, 0xc4, 0xe0, 0xd8, 0x6a, 0x7b, 0x04, 0x30, 0xd8, 0xcd, 0xb7, 0x80, 0x70, 0xb4, 0xc5,
+        0x5a,
     ];
 
     let aes = AesCipher::new(&nist_key).expect("Initialisation cipher AES");
     let mut ct = [0u8; 16];
     aes.encrypt_block(&nist_pt, &mut ct);
-    assert_eq!(ct, expected_ct, "Vecteur de chiffrement NIST AES-128 conforme");
+    assert_eq!(
+        ct, expected_ct,
+        "Vecteur de chiffrement NIST AES-128 conforme"
+    );
 
     let mut roundtrip_pt = [0u8; 16];
     aes.decrypt_block(&ct, &mut roundtrip_pt);
@@ -104,13 +109,29 @@ pub fn execute_crypto2_daemon_test() -> bool {
 
     // Chiffrement avec Storage DEK (#2)
     daemon
-        .encrypt_aes_gcm(&admin_cap, 2, &iv, aad, payload, &mut ciphertext[..payload.len()], &mut tag)
+        .encrypt_aes_gcm(
+            &admin_cap,
+            2,
+            &iv,
+            aad,
+            payload,
+            &mut ciphertext[..payload.len()],
+            &mut tag,
+        )
         .expect("Chiffrement AES-GCM DEK");
 
     // Déchiffrement nominal
     let mut decrypted = [0u8; 64];
     daemon
-        .decrypt_aes_gcm(&admin_cap, 2, &iv, aad, &ciphertext[..payload.len()], &tag, &mut decrypted[..payload.len()])
+        .decrypt_aes_gcm(
+            &admin_cap,
+            2,
+            &iv,
+            aad,
+            &ciphertext[..payload.len()],
+            &tag,
+            &mut decrypted[..payload.len()],
+        )
         .expect("Déchiffrement AES-GCM DEK");
     assert_eq!(&decrypted[..payload.len()], payload);
 
@@ -125,7 +146,11 @@ pub fn execute_crypto2_daemon_test() -> bool {
         &tag,
         &mut decrypted[..payload.len()],
     );
-    assert_eq!(fail_tamper, Err(Crypto2Error::InvalidTag), "Altération de tag interceptée");
+    assert_eq!(
+        fail_tamper,
+        Err(Crypto2Error::InvalidTag),
+        "Altération de tag interceptée"
+    );
     kprintln!("[CRYPTO2/GCM] AEAD AES-GCM NIST SP 800-38D et rejet d'altération validés");
 
     // 6. Enveloppement de clés RFC 3394 (AES Key Wrap)
@@ -157,24 +182,34 @@ pub fn execute_crypto2_daemon_test() -> bool {
     assert_eq!(k2.version, 2, "Incrémentation de version après rotation");
 
     // Quarantaine de la clé #3 (TLS DEK)
-    daemon.quarantine_key(&admin_cap, 3).expect("Quarantaine clé #3");
+    daemon
+        .quarantine_key(&admin_cap, 3)
+        .expect("Quarantaine clé #3");
     assert_eq!(daemon.get_key(3), Err(Crypto2Error::KeyQuarantined));
     assert_eq!(daemon.count_quarantined_keys(), 1);
 
     // Zéroïsation d'urgence de la clé #3
-    daemon.zeroize_key(&admin_cap, 3).expect("Zéroïsation clé #3");
+    daemon
+        .zeroize_key(&admin_cap, 3)
+        .expect("Zéroïsation clé #3");
     assert_eq!(daemon.get_key(3), Err(Crypto2Error::KeyDestroyed));
-    kprintln!("[CRYPTO2/LIFECYCLE] Rotation atomique, Quarantaine O(1) et Zéroïsation d'urgence validées");
+    kprintln!(
+        "[CRYPTO2/LIFECYCLE] Rotation atomique, Quarantaine O(1) et Zéroïsation d'urgence validées"
+    );
 
     // 8. Hachage cryptographique SHA-256 & SHA-512
-    let d256 = daemon.compute_sha256(&admin_cap, b"abc").expect("SHA-256 abc");
+    let d256 = daemon
+        .compute_sha256(&admin_cap, b"abc")
+        .expect("SHA-256 abc");
     assert_eq!(
         d256[0..4],
         [0xba, 0x78, 0x16, 0xbf],
         "Vecteur standard SHA-256 vérifié"
     );
 
-    let d512 = daemon.compute_sha512(&admin_cap, b"abc").expect("SHA-512 abc");
+    let d512 = daemon
+        .compute_sha512(&admin_cap, b"abc")
+        .expect("SHA-512 abc");
     assert_eq!(
         d512[0..4],
         [0xdd, 0xaf, 0x35, 0xa1],

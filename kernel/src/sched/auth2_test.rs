@@ -6,12 +6,12 @@ extern crate alloc;
 
 use crate::kprintln;
 use jambo_abi::{Handle, SysError};
-use jambo_sh::{JamboShell, ShellStatus};
 use jambo_auth2::{
-    auth2_rights, schnorr, token_scopes, webauthn_flags, Auth2Cap, Auth2Error,
-    AuthenticatorData, BiometricFactor, JamboAuth2Daemon, PasskeyTransport,
-    RevocationReason, Sha256, MAX_PASSKEYS, MAX_TOKENS,
+    auth2_rights, schnorr, token_scopes, webauthn_flags, Auth2Cap, Auth2Error, AuthenticatorData,
+    BiometricFactor, JamboAuth2Daemon, PasskeyTransport, RevocationReason, Sha256, MAX_PASSKEYS,
+    MAX_TOKENS,
 };
+use jambo_sh::{JamboShell, ShellStatus};
 
 /// Exécute la suite complète de validation formelle de l'authentification Passkeys WebAuthn et jetons éphémères (Phase 110)
 pub fn execute_auth2_daemon_test() -> bool {
@@ -32,7 +32,10 @@ pub fn execute_auth2_daemon_test() -> bool {
     assert!(admin_cap.has_right(auth2_rights::AUDIT_LOG));
 
     let verifier_cap = admin_cap
-        .attenuate(auth2_rights::VERIFY_TOKEN | auth2_rights::ATTENUATE_TOKEN, 32)
+        .attenuate(
+            auth2_rights::VERIFY_TOKEN | auth2_rights::ATTENUATE_TOKEN,
+            32,
+        )
         .expect("Atténuation monotone Auth2Cap");
     assert!(verifier_cap.has_right(auth2_rights::VERIFY_TOKEN));
     assert!(verifier_cap.has_right(auth2_rights::ATTENUATE_TOKEN));
@@ -55,7 +58,10 @@ pub fn execute_auth2_daemon_test() -> bool {
     // 2. Initialisation du démon Auth2 et clés d'accès Passkeys par défaut
     let mut daemon = JamboAuth2Daemon::new(admin_cap);
     daemon.init_defaults();
-    assert!(daemon.passkey_count >= 2, "Passkeys administrateur et opérateur initialisées");
+    assert!(
+        daemon.passkey_count >= 2,
+        "Passkeys administrateur et opérateur initialisées"
+    );
     kprintln!("[AUTH2/INIT] Démon Passkeys & Jetons Éphémères jambo-auth2 initialisé");
 
     // 3. Enregistrement dynamique d'une clé Passkey avec biométrie matérielle
@@ -80,7 +86,8 @@ pub fn execute_auth2_daemon_test() -> bool {
         .create_challenge(42, "sec.jambo.internal")
         .expect("Création du défi WebAuthn anti-rejeu");
 
-    let client_data_hash = Sha256::digest(b"{\"type\":\"webauthn.get\",\"origin\":\"sec.jambo.internal\"}");
+    let client_data_hash =
+        Sha256::digest(b"{\"type\":\"webauthn.get\",\"origin\":\"sec.jambo.internal\"}");
     let auth_data = AuthenticatorData {
         rp_id_hash: challenge.rp_id_hash,
         flags: webauthn_flags::FLAG_UP | webauthn_flags::FLAG_UV,
@@ -110,7 +117,10 @@ pub fn execute_auth2_daemon_test() -> bool {
         .expect("Authentification WebAuthn Schnorr réussie");
 
     assert_eq!(token.user_id, 42);
-    assert_eq!(token.scopes, token_scopes::READ | token_scopes::WRITE | token_scopes::EXEC);
+    assert_eq!(
+        token.scopes,
+        token_scopes::READ | token_scopes::WRITE | token_scopes::EXEC
+    );
     kprintln!("[AUTH2/ASSERTION] Assertion WebAuthn Schnorr ZKP et émission du jeton validées");
 
     // 5. Détection anti-clonage et anti-rejeu (Rejet sign_count <= compteur précédent)

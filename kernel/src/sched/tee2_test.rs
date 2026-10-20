@@ -10,8 +10,8 @@ use jambo_abi::{Handle, SysError};
 use jambo_sh::{JamboShell, ShellStatus};
 use jambo_tee2::{
     constant_time_eq, ept_flags, tee2_rights, EnclaveLevel, EnclaveState, JamboTee2Daemon,
-    NestedSealingPolicy, NestedTeeBackend, NestedTeeError, Sha256, Tee2Cap, KEY_LEN,
-    MAX_ENCLAVES, MAX_TENANTS,
+    NestedSealingPolicy, NestedTeeBackend, NestedTeeError, Sha256, Tee2Cap, KEY_LEN, MAX_ENCLAVES,
+    MAX_TENANTS,
 };
 
 /// Exécute la suite complète de validation formelle des enclaves imbriquées et de l'isolation multi-locataires (Phase 107)
@@ -21,7 +21,12 @@ pub fn execute_tee2_daemon_test() -> bool {
     );
 
     // 1. Contrôle d'accès capabilaire (Tee2Cap) et atténuation monotone
-    let admin_cap = Tee2Cap::new(Handle::new(10701, 1), tee2_rights::ALL, 0, MAX_ENCLAVES as u16);
+    let admin_cap = Tee2Cap::new(
+        Handle::new(10701, 1),
+        tee2_rights::ALL,
+        0,
+        MAX_ENCLAVES as u16,
+    );
     assert!(admin_cap.has_right(tee2_rights::CREATE_TENANT));
     assert!(admin_cap.has_right(tee2_rights::CREATE_L1));
     assert!(admin_cap.has_right(tee2_rights::CREATE_L2));
@@ -34,7 +39,10 @@ pub fn execute_tee2_daemon_test() -> bool {
     assert!(admin_cap.has_right(tee2_rights::AUDIT));
 
     let tenant_cap = admin_cap
-        .attenuate(tee2_rights::CREATE_L2 | tee2_rights::MAP_EPT | tee2_rights::ATTEST, 8)
+        .attenuate(
+            tee2_rights::CREATE_L2 | tee2_rights::MAP_EPT | tee2_rights::ATTEST,
+            8,
+        )
         .expect("Atténuation monotone Tee2Cap");
     assert!(tenant_cap.has_right(tee2_rights::CREATE_L2));
     assert!(tenant_cap.has_right(tee2_rights::MAP_EPT));
@@ -60,16 +68,14 @@ pub fn execute_tee2_daemon_test() -> bool {
 
     // 3. Enrôlement de locataires avec clés MEK (256 bits) et KeyID matériel
     let mek_t1 = [
-        0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
-        0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f,
-        0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27,
-        0x28, 0x29, 0x2a, 0x2b, 0x2c, 0x2d, 0x2e, 0x2f,
+        0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e,
+        0x1f, 0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2a, 0x2b, 0x2c, 0x2d,
+        0x2e, 0x2f,
     ];
     let mek_t2 = [
-        0xa0, 0xa1, 0xa2, 0xa3, 0xa4, 0xa5, 0xa6, 0xa7,
-        0xa8, 0xa9, 0xaa, 0xab, 0xac, 0xad, 0xae, 0xaf,
-        0xb0, 0xb1, 0xb2, 0xb3, 0xb4, 0xb5, 0xb6, 0xb7,
-        0xb8, 0xb9, 0xba, 0xbb, 0xbc, 0xbd, 0xbe, 0xbf,
+        0xa0, 0xa1, 0xa2, 0xa3, 0xa4, 0xa5, 0xa6, 0xa7, 0xa8, 0xa9, 0xaa, 0xab, 0xac, 0xad, 0xae,
+        0xaf, 0xb0, 0xb1, 0xb2, 0xb3, 0xb4, 0xb5, 0xb6, 0xb7, 0xb8, 0xb9, 0xba, 0xbb, 0xbc, 0xbd,
+        0xbe, 0xbf,
     ];
 
     let t1 = daemon
@@ -95,12 +101,26 @@ pub fn execute_tee2_daemon_test() -> bool {
 
     // Vérification de la prévention de collisions (KeyID dupliqué ou chevauchement GPA)
     assert_eq!(
-        daemon.create_tenant(&admin_cap, "DuplicateKey", 101, mek_t1, 0x3_0000_0000, 0x1000_0000),
+        daemon.create_tenant(
+            &admin_cap,
+            "DuplicateKey",
+            101,
+            mek_t1,
+            0x3_0000_0000,
+            0x1000_0000
+        ),
         Err(NestedTeeError::TenantAlreadyExists),
         "KeyID dupliqué rejeté"
     );
     assert_eq!(
-        daemon.create_tenant(&admin_cap, "OverlapGPA", 103, mek_t1, 0x1_1000_0000, 0x1000_0000),
+        daemon.create_tenant(
+            &admin_cap,
+            "OverlapGPA",
+            103,
+            mek_t1,
+            0x1_1000_0000,
+            0x1000_0000
+        ),
         Err(NestedTeeError::CrossTenantAccessDenied),
         "Chevauchement de plage GPA rejeté"
     );
@@ -117,12 +137,7 @@ pub fn execute_tee2_daemon_test() -> bool {
         .expect("Création L1 Supervisor FinBank");
 
     let l2_fin = daemon
-        .create_l2_nested_enclave(
-            &admin_cap,
-            t1,
-            l1_fin,
-            "FinBank-L2-LedgerWorker",
-        )
+        .create_l2_nested_enclave(&admin_cap, t1, l1_fin, "FinBank-L2-LedgerWorker")
         .expect("Création L2 Nested Workload FinBank");
 
     // Tentative illégale de rattachement cross-tenant
@@ -131,7 +146,9 @@ pub fn execute_tee2_daemon_test() -> bool {
         Err(NestedTeeError::CrossTenantAccessDenied),
         "Rattachement d'une enclave L2 à un L1 d'un autre tenant formellement interdit"
     );
-    kprintln!("[TEE2/HIERARCHY] Hiérarchie micro-hyperviseur L1/L2 et étanchéité parent/enfant validées");
+    kprintln!(
+        "[TEE2/HIERARCHY] Hiérarchie micro-hyperviseur L1/L2 et étanchéité parent/enfant validées"
+    );
 
     // 5. Configuration des tables EPT imbriquées (GPA L2 -> IPA L1 -> HPA L0)
     let dummy_data = [0x5Au8; 64];
@@ -161,7 +178,11 @@ pub fn execute_tee2_daemon_test() -> bool {
         .expect("Mappage EPT Page Code");
 
     // Vérification du calcul d'intégrité Merkle EPT
-    let l2_enc = daemon.enclaves.iter().find(|e| e.enclave_id == l2_fin).unwrap();
+    let l2_enc = daemon
+        .enclaves
+        .iter()
+        .find(|e| e.enclave_id == l2_fin)
+        .unwrap();
     assert_ne!(l2_enc.ept_table.root_hash, [0u8; 32]);
 
     // Chargement de la charge utile L2 et scellement
@@ -186,7 +207,9 @@ pub fn execute_tee2_daemon_test() -> bool {
         Err(NestedTeeError::CrossTenantAccessDenied),
         "Accès cross-tenant à la mémoire bloqué avec succès"
     );
-    kprintln!("[TEE2/ISOLATION] Traduction d'adresses et confinement strict multi-locataires prouvés");
+    kprintln!(
+        "[TEE2/ISOLATION] Traduction d'adresses et confinement strict multi-locataires prouvés"
+    );
 
     // 7. Chiffrement et déchiffrement mémoire multi-locataire
     let test_secret = b"FINANCIAL_CONSORTIUM_LEDGER_KEY!";
@@ -225,7 +248,9 @@ pub fn execute_tee2_daemon_test() -> bool {
     assert_ne!(report.hmac_signature, [0u8; 32]);
 
     assert!(
-        daemon.verify_nested_report(&report, &challenge).expect("Vérification rapport"),
+        daemon
+            .verify_nested_report(&report, &challenge)
+            .expect("Vérification rapport"),
         "Signature et fraîcheur du rapport validées"
     );
 
@@ -257,7 +282,9 @@ pub fn execute_tee2_daemon_test() -> bool {
     kprintln!("[TEE2/SEAL] Stockage scellé multi-locataire et intégrité de mesure validés");
 
     // 10. Effacement sécurisé et Zéro Résidu (Scrubbing)
-    daemon.destroy_enclave(&admin_cap, l2_fin).expect("Destruction L2");
+    daemon
+        .destroy_enclave(&admin_cap, l2_fin)
+        .expect("Destruction L2");
     assert_eq!(
         daemon.translate_nested_gpa(l2_fin, 0x1_0000_0000, false, false, t1),
         Err(NestedTeeError::EnclaveNotFound),

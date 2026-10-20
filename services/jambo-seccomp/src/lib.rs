@@ -33,14 +33,16 @@ pub struct Sha256;
 
 impl Sha256 {
     const K: [u32; 64] = [
-        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
-        0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
-        0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
-        0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
-        0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
-        0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
-        0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
-        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
+        0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
+        0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f,
+        0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc,
+        0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+        0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116,
+        0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
+        0xc67178f2,
     ];
 
     #[inline(always)]
@@ -129,8 +131,8 @@ impl Sha256 {
 
     pub fn digest(data: &[u8]) -> [u8; 32] {
         let mut state: [u32; 8] = [
-            0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
-            0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+            0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
+            0x5be0cd19,
         ];
 
         let total_len = data.len();
@@ -172,12 +174,12 @@ impl Sha256 {
 // ============================================================================
 
 pub mod seccomp_rights {
-    pub const SECCOMP_READ: u32 = 1 << 0;   // Consultation des filtres et audits
-    pub const SECCOMP_LOAD: u32 = 1 << 1;   // Chargement & validation de filtres BPF
+    pub const SECCOMP_READ: u32 = 1 << 0; // Consultation des filtres et audits
+    pub const SECCOMP_LOAD: u32 = 1 << 1; // Chargement & validation de filtres BPF
     pub const SECCOMP_ATTACH: u32 = 1 << 2; // Attachement de filtres à des threads
-    pub const SECCOMP_TSYNC: u32 = 1 << 3;  // Synchronisation inter-threads (TSYNC)
-    pub const SECCOMP_AUDIT: u32 = 1 << 4;  // Lecture du registre d'audit cryptographique
-    pub const SECCOMP_ADMIN: u32 = 1 << 5;  // Administration globale du sous-système
+    pub const SECCOMP_TSYNC: u32 = 1 << 3; // Synchronisation inter-threads (TSYNC)
+    pub const SECCOMP_AUDIT: u32 = 1 << 4; // Lecture du registre d'audit cryptographique
+    pub const SECCOMP_ADMIN: u32 = 1 << 5; // Administration globale du sous-système
 
     pub const ALL: u32 = SECCOMP_READ
         | SECCOMP_LOAD
@@ -223,32 +225,32 @@ pub const AUDIT_ARCH_AARCH64: u32 = 0xc000_00b7;
 
 // Actions de retour de filtres Seccomp (POSIX / Linux compatible)
 pub const SECCOMP_RET_KILL_PROCESS: u32 = 0x8000_0000;
-pub const SECCOMP_RET_KILL_THREAD: u32  = 0x0000_0000;
-pub const SECCOMP_RET_TRAP: u32         = 0x0003_0000;
-pub const SECCOMP_RET_ERRNO: u32        = 0x0005_0000;
-pub const SECCOMP_RET_USER_NOTIF: u32   = 0x7fc0_0000;
-pub const SECCOMP_RET_LOG: u32          = 0x7ffc_0000;
-pub const SECCOMP_RET_ALLOW: u32        = 0x7fff_0000;
+pub const SECCOMP_RET_KILL_THREAD: u32 = 0x0000_0000;
+pub const SECCOMP_RET_TRAP: u32 = 0x0003_0000;
+pub const SECCOMP_RET_ERRNO: u32 = 0x0005_0000;
+pub const SECCOMP_RET_USER_NOTIF: u32 = 0x7fc0_0000;
+pub const SECCOMP_RET_LOG: u32 = 0x7ffc_0000;
+pub const SECCOMP_RET_ALLOW: u32 = 0x7fff_0000;
 
-pub const SECCOMP_RET_ACTION_FULL: u32  = 0xffff_0000;
-pub const SECCOMP_RET_DATA: u32         = 0x0000_ffff;
+pub const SECCOMP_RET_ACTION_FULL: u32 = 0xffff_0000;
+pub const SECCOMP_RET_DATA: u32 = 0x0000_ffff;
 
 // Flags de configuration des filtres
 pub const SECCOMP_FILTER_FLAG_TSYNC: u32 = 1 << 0;
-pub const SECCOMP_FILTER_FLAG_LOG: u32   = 1 << 1;
+pub const SECCOMP_FILTER_FLAG_LOG: u32 = 1 << 1;
 
 // ============================================================================
 // INSTRUCTIONS & JEU BPF CLASSIQUE ÉTENDU
 // ============================================================================
 
 // Classes d'instructions BPF
-pub const BPF_LD: u16   = 0x00;
-pub const BPF_LDX: u16  = 0x01;
-pub const BPF_ST: u16   = 0x02;
-pub const BPF_STX: u16  = 0x03;
-pub const BPF_ALU: u16  = 0x04;
-pub const BPF_JMP: u16  = 0x05;
-pub const BPF_RET: u16  = 0x06;
+pub const BPF_LD: u16 = 0x00;
+pub const BPF_LDX: u16 = 0x01;
+pub const BPF_ST: u16 = 0x02;
+pub const BPF_STX: u16 = 0x03;
+pub const BPF_ALU: u16 = 0x04;
+pub const BPF_JMP: u16 = 0x05;
+pub const BPF_RET: u16 = 0x06;
 pub const BPF_MISC: u16 = 0x07;
 
 // Tailles d'opérandes
@@ -264,22 +266,22 @@ pub const BPF_MEM: u16 = 0x60;
 pub const BPF_LEN: u16 = 0x80;
 
 // Opérations ALU & JMP
-pub const BPF_ADD: u16  = 0x00;
-pub const BPF_SUB: u16  = 0x10;
-pub const BPF_MUL: u16  = 0x20;
-pub const BPF_DIV: u16  = 0x30;
-pub const BPF_OR: u16   = 0x40;
-pub const BPF_AND: u16  = 0x50;
-pub const BPF_LSH: u16  = 0x60;
-pub const BPF_RSH: u16  = 0x70;
-pub const BPF_NEG: u16  = 0x80;
-pub const BPF_MOD: u16  = 0x90;
-pub const BPF_XOR: u16  = 0xa0;
+pub const BPF_ADD: u16 = 0x00;
+pub const BPF_SUB: u16 = 0x10;
+pub const BPF_MUL: u16 = 0x20;
+pub const BPF_DIV: u16 = 0x30;
+pub const BPF_OR: u16 = 0x40;
+pub const BPF_AND: u16 = 0x50;
+pub const BPF_LSH: u16 = 0x60;
+pub const BPF_RSH: u16 = 0x70;
+pub const BPF_NEG: u16 = 0x80;
+pub const BPF_MOD: u16 = 0x90;
+pub const BPF_XOR: u16 = 0xa0;
 
-pub const BPF_JA: u16   = 0x00;
-pub const BPF_JEQ: u16  = 0x10;
-pub const BPF_JGT: u16  = 0x20;
-pub const BPF_JGE: u16  = 0x30;
+pub const BPF_JA: u16 = 0x00;
+pub const BPF_JEQ: u16 = 0x10;
+pub const BPF_JGT: u16 = 0x20;
+pub const BPF_JGE: u16 = 0x30;
 pub const BPF_JSET: u16 = 0x40;
 
 // Sources d'opérandes
@@ -306,7 +308,12 @@ impl BpfInsn {
     }
 
     pub const fn stmt(code: u16, k: u32) -> Self {
-        Self { code, jt: 0, jf: 0, k }
+        Self {
+            code,
+            jt: 0,
+            jf: 0,
+            k,
+        }
     }
 
     pub const fn jump(code: u16, k: u32, jt: u8, jf: u8) -> Self {
@@ -522,7 +529,7 @@ impl BpfProgram {
                             }
                         }
                         BPF_AND => a &= operand,
-                        BPF_OR  => a |= operand,
+                        BPF_OR => a |= operand,
                         BPF_XOR => a ^= operand,
                         BPF_LSH => a = a.wrapping_shl(operand),
                         BPF_RSH => a = a.wrapping_shr(operand),
@@ -614,7 +621,12 @@ impl Default for FilterBuilder {
 impl FilterBuilder {
     pub const fn new() -> Self {
         Self {
-            insns: [BpfInsn { code: 0, jt: 0, jf: 0, k: 0 }; MAX_BPF_INSTRUCTIONS],
+            insns: [BpfInsn {
+                code: 0,
+                jt: 0,
+                jf: 0,
+                k: 0,
+            }; MAX_BPF_INSTRUCTIONS],
             count: 0,
             default_act: SECCOMP_RET_KILL_PROCESS,
         }
@@ -681,10 +693,10 @@ impl FilterBuilder {
     pub fn build_strict_filter() -> Result<BpfProgram, SysError> {
         let mut b = Self::new();
         b.check_arch(AUDIT_ARCH_X86_64);
-        b.allow_syscall(0);   // sys_read
-        b.allow_syscall(1);   // sys_write
-        b.allow_syscall(15);  // sys_rt_sigreturn
-        b.allow_syscall(60);  // sys_exit
+        b.allow_syscall(0); // sys_read
+        b.allow_syscall(1); // sys_write
+        b.allow_syscall(15); // sys_rt_sigreturn
+        b.allow_syscall(60); // sys_exit
         b.allow_syscall(231); // sys_exit_group
         b.default_action(SECCOMP_RET_KILL_PROCESS);
         b.build()
@@ -694,14 +706,14 @@ impl FilterBuilder {
     pub fn build_compute_filter() -> Result<BpfProgram, SysError> {
         let mut b = Self::new();
         b.check_arch(AUDIT_ARCH_X86_64);
-        b.allow_syscall(0);   // read
-        b.allow_syscall(1);   // write
-        b.allow_syscall(3);   // close
-        b.allow_syscall(9);   // mmap
-        b.allow_syscall(11);  // munmap
-        b.allow_syscall(12);  // brk
-        b.allow_syscall(15);  // rt_sigreturn
-        b.allow_syscall(60);  // exit
+        b.allow_syscall(0); // read
+        b.allow_syscall(1); // write
+        b.allow_syscall(3); // close
+        b.allow_syscall(9); // mmap
+        b.allow_syscall(11); // munmap
+        b.allow_syscall(12); // brk
+        b.allow_syscall(15); // rt_sigreturn
+        b.allow_syscall(60); // exit
         b.allow_syscall(231); // exit_group
         b.default_action(SECCOMP_RET_ERRNO | 1); // EPERM
         b.build()
@@ -711,16 +723,16 @@ impl FilterBuilder {
     pub fn build_network_filter() -> Result<BpfProgram, SysError> {
         let mut b = Self::new();
         b.check_arch(AUDIT_ARCH_X86_64);
-        b.allow_syscall(0);   // read
-        b.allow_syscall(1);   // write
-        b.allow_syscall(3);   // close
-        b.allow_syscall(15);  // rt_sigreturn
-        b.allow_syscall(41);  // socket
-        b.allow_syscall(42);  // connect
-        b.allow_syscall(43);  // accept
-        b.allow_syscall(44);  // sendto
-        b.allow_syscall(45);  // recvfrom
-        b.allow_syscall(60);  // exit
+        b.allow_syscall(0); // read
+        b.allow_syscall(1); // write
+        b.allow_syscall(3); // close
+        b.allow_syscall(15); // rt_sigreturn
+        b.allow_syscall(41); // socket
+        b.allow_syscall(42); // connect
+        b.allow_syscall(43); // accept
+        b.allow_syscall(44); // sendto
+        b.allow_syscall(45); // recvfrom
+        b.allow_syscall(60); // exit
         b.allow_syscall(231); // exit_group
         b.default_action(SECCOMP_RET_ERRNO | 1); // EPERM
         b.build()
@@ -867,7 +879,11 @@ impl JamboSeccompDaemon {
         let fid = (self.filter_count + 1) as u32;
         let mut name_buf = [0u8; MAX_NAME_LEN];
         let bytes = name.as_bytes();
-        let copy_len = if bytes.len() > MAX_NAME_LEN { MAX_NAME_LEN } else { bytes.len() };
+        let copy_len = if bytes.len() > MAX_NAME_LEN {
+            MAX_NAME_LEN
+        } else {
+            bytes.len()
+        };
         name_buf[..copy_len].copy_from_slice(&bytes[..copy_len]);
 
         let filter = RegisteredFilter {
@@ -1126,7 +1142,11 @@ impl JamboSeccompDaemon {
         if !cap.has_right(seccomp_rights::SECCOMP_READ) {
             return Err(SysError::PermissionDenied);
         }
-        Ok((self.evaluations_count, self.violations_count, self.allowed_count))
+        Ok((
+            self.evaluations_count,
+            self.violations_count,
+            self.allowed_count,
+        ))
     }
 
     /// Enregistre une entrée dans le journal d'audit et recalcule l'empreinte SHA-256

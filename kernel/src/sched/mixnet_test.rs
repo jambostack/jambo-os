@@ -49,7 +49,9 @@ pub fn execute_mixnet_daemon_test() -> bool {
     let mut daemon = JamboMixnetDaemon::new(admin_cap);
     daemon.init_defaults();
     assert_eq!(daemon.node_count, 4);
-    kprintln!("[MIXNET/INIT] Démon Mixnet initialisé (Topologie 4 nœuds actifs [101, 102, 103, 104])");
+    kprintln!(
+        "[MIXNET/INIT] Démon Mixnet initialisé (Topologie 4 nœuds actifs [101, 102, 103, 104])"
+    );
 
     // 3. Validation de l'encapsulation et du routage multi-sauts Sphinx (4 sauts : 101 -> 102 -> 103 -> 104)
     let original_secret = b"JAMBO_CONFIDENTIAL_MULTI_HOP_SPHINX_PACKET_2026";
@@ -106,7 +108,8 @@ pub fn execute_mixnet_daemon_test() -> bool {
     kprintln!("[MIXNET/REPLAY] Protection anti-rejeu ReplayCache validée (Doublon rejeté)");
 
     // 6. Détection et blocage immédiat des altérations de paquet (Integrity MAC Failure)
-    let mut corrupted_packet = SphinxRouter::build_onion_packet(&hops, b"INTEGRITY_SHIELD", 0x7777).unwrap();
+    let mut corrupted_packet =
+        SphinxRouter::build_onion_packet(&hops, b"INTEGRITY_SHIELD", 0x7777).unwrap();
     corrupted_packet.beta[2] ^= 0xEE; // Altération d'un octet de routage
     let tamper_pass = node_101.process_packet(&corrupted_packet, 0);
     assert_eq!(
@@ -118,9 +121,12 @@ pub fn execute_mixnet_daemon_test() -> bool {
 
     // 7. Bassin de mixage (MixPool), permutation pseudo-aléatoire Fisher-Yates & trafic de leurre
     let mut pool = MixPool::new();
-    pool.inject_cover_packet(101, 10, 0x1010).expect("Injection leurre 1");
-    pool.inject_cover_packet(102, 20, 0x2020).expect("Injection leurre 2");
-    pool.inject_cover_packet(103, 30, 0x3030).expect("Injection leurre 3");
+    pool.inject_cover_packet(101, 10, 0x1010)
+        .expect("Injection leurre 1");
+    pool.inject_cover_packet(102, 20, 0x2020)
+        .expect("Injection leurre 2");
+    pool.inject_cover_packet(103, 30, 0x3030)
+        .expect("Injection leurre 3");
     assert_eq!(pool.count, 3);
     assert_eq!(pool.cover_injected, 3);
 
@@ -128,7 +134,9 @@ pub fn execute_mixnet_daemon_test() -> bool {
     assert_eq!(flushed, 3);
     assert_eq!(pool.count, 0);
     assert_eq!(pool.total_mixed, 3);
-    kprintln!("[MIXNET/POOL] Bassin MixPool et brassage Fisher-Yates validés (3 paquets décorrélés)");
+    kprintln!(
+        "[MIXNET/POOL] Bassin MixPool et brassage Fisher-Yates validés (3 paquets décorrélés)"
+    );
 
     // 8. Registre d'audit scellé par chaîne SHA-256
     assert_ne!(daemon.audit_chain, [0u8; 32]);

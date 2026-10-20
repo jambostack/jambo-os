@@ -30,14 +30,16 @@ pub struct Sha256;
 
 impl Sha256 {
     const K: [u32; 64] = [
-        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
-        0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
-        0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
-        0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
-        0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
-        0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
-        0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
-        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
+        0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
+        0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f,
+        0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc,
+        0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+        0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116,
+        0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
+        0xc67178f2,
     ];
 
     #[inline(always)]
@@ -126,8 +128,14 @@ impl Sha256 {
 
     pub fn digest(data: &[u8]) -> [u8; 32] {
         let mut state = [
-            0x6a09e667u32, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
-            0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+            0x6a09e667u32,
+            0xbb67ae85,
+            0x3c6ef372,
+            0xa54ff53a,
+            0x510e527f,
+            0x9b05688c,
+            0x1f83d9ab,
+            0x5be0cd19,
         ];
 
         let bit_len = (data.len() as u64) * 8;
@@ -357,12 +365,12 @@ impl CrashReason {
 
     pub fn signal_num(&self) -> u32 {
         match self {
-            CrashReason::KernelPanic => 6, // SIGABRT
-            CrashReason::PageFault { .. } => 11, // SIGSEGV
+            CrashReason::KernelPanic => 6,                    // SIGABRT
+            CrashReason::PageFault { .. } => 11,              // SIGSEGV
             CrashReason::GeneralProtectionFault { .. } => 11, // SIGSEGV
-            CrashReason::InvalidOpcode => 4, // SIGILL
-            CrashReason::StackOverflow => 11, // SIGSEGV
-            CrashReason::DoubleFault => 6, // SIGABRT
+            CrashReason::InvalidOpcode => 4,                  // SIGILL
+            CrashReason::StackOverflow => 11,                 // SIGSEGV
+            CrashReason::DoubleFault => 6,                    // SIGABRT
             CrashReason::SupervisorKill { signal } => *signal,
             CrashReason::WatchdogTimeout => 9, // SIGKILL
             CrashReason::AssertionFailed => 6, // SIGABRT
@@ -485,30 +493,38 @@ impl Elf64Generator {
 
         // Écriture Note Header NT_PRSTATUS
         out_buf[note_cursor..note_cursor + 4].copy_from_slice(&5u32.to_le_bytes()); // namesz ("CORE\0")
-        // placeholder pour descsz calculé ensuite
-        out_buf[note_cursor + 8..note_cursor + 12].copy_from_slice(&Self::NT_PRSTATUS.to_le_bytes());
+                                                                                    // placeholder pour descsz calculé ensuite
+        out_buf[note_cursor + 8..note_cursor + 12]
+            .copy_from_slice(&Self::NT_PRSTATUS.to_le_bytes());
         note_cursor += 12;
         out_buf[note_cursor..note_cursor + 8].copy_from_slice(b"CORE\0\0\0\0");
         note_cursor += 8;
 
         // Remplissage desc prstatus :
         // cursig (u16), pid (u32), ppid (u32), rip (u64), rsp (u64), rflags (u64)
-        out_buf[note_cursor..note_cursor + 2].copy_from_slice(&(report.reason.signal_num() as u16).to_le_bytes());
+        out_buf[note_cursor..note_cursor + 2]
+            .copy_from_slice(&(report.reason.signal_num() as u16).to_le_bytes());
         out_buf[note_cursor + 2..note_cursor + 4].copy_from_slice(&0u16.to_le_bytes());
         out_buf[note_cursor + 4..note_cursor + 8].copy_from_slice(&report.pid.to_le_bytes());
         out_buf[note_cursor + 8..note_cursor + 12].copy_from_slice(&0u32.to_le_bytes()); // ppid
-        out_buf[note_cursor + 12..note_cursor + 20].copy_from_slice(&report.regs.instruction_pointer().to_le_bytes());
-        out_buf[note_cursor + 20..note_cursor + 28].copy_from_slice(&report.regs.stack_pointer().to_le_bytes());
-        out_buf[note_cursor + 28..note_cursor + 36].copy_from_slice(&report.regs.frame_pointer().to_le_bytes());
-        out_buf[note_cursor + 36..note_cursor + 44].copy_from_slice(&report.regs.fault_address().to_le_bytes());
+        out_buf[note_cursor + 12..note_cursor + 20]
+            .copy_from_slice(&report.regs.instruction_pointer().to_le_bytes());
+        out_buf[note_cursor + 20..note_cursor + 28]
+            .copy_from_slice(&report.regs.stack_pointer().to_le_bytes());
+        out_buf[note_cursor + 28..note_cursor + 36]
+            .copy_from_slice(&report.regs.frame_pointer().to_le_bytes());
+        out_buf[note_cursor + 36..note_cursor + 44]
+            .copy_from_slice(&report.regs.fault_address().to_le_bytes());
         note_cursor += prstatus_len;
         // Mise à jour descsz NT_PRSTATUS
-        out_buf[note_offset + 4..note_offset + 8].copy_from_slice(&(prstatus_len as u32).to_le_bytes());
+        out_buf[note_offset + 4..note_offset + 8]
+            .copy_from_slice(&(prstatus_len as u32).to_le_bytes());
 
         // Note NT_PRPSINFO (nom du binaire et état)
         let prpsinfo_offset = note_cursor;
         out_buf[note_cursor..note_cursor + 4].copy_from_slice(&5u32.to_le_bytes());
-        out_buf[note_cursor + 8..note_cursor + 12].copy_from_slice(&Self::NT_PRPSINFO.to_le_bytes());
+        out_buf[note_cursor + 8..note_cursor + 12]
+            .copy_from_slice(&Self::NT_PRPSINFO.to_le_bytes());
         note_cursor += 12;
         out_buf[note_cursor..note_cursor + 8].copy_from_slice(b"CORE\0\0\0\0");
         note_cursor += 8;
@@ -518,8 +534,13 @@ impl Elf64Generator {
         out_buf[note_cursor + 1] = b'X'; // state name
         out_buf[note_cursor + 2..note_cursor + 6].copy_from_slice(&report.pid.to_le_bytes());
         note_cursor += 6;
-        let fname_len = if report.process_name_len > 16 { 16 } else { report.process_name_len };
-        out_buf[note_cursor..note_cursor + fname_len].copy_from_slice(&report.process_name[..fname_len]);
+        let fname_len = if report.process_name_len > 16 {
+            16
+        } else {
+            report.process_name_len
+        };
+        out_buf[note_cursor..note_cursor + fname_len]
+            .copy_from_slice(&report.process_name[..fname_len]);
         for b in &mut out_buf[note_cursor + fname_len..note_cursor + 16] {
             *b = 0;
         }
@@ -542,10 +563,13 @@ impl Elf64Generator {
         out_buf[note_cursor..note_cursor + 8].copy_from_slice(b"CORE\0\0\0\0");
         note_cursor += 8;
 
-        out_buf[note_cursor..note_cursor + 4].copy_from_slice(&(report.reason.signal_num() as i32).to_le_bytes());
+        out_buf[note_cursor..note_cursor + 4]
+            .copy_from_slice(&(report.reason.signal_num() as i32).to_le_bytes());
         out_buf[note_cursor + 4..note_cursor + 8].copy_from_slice(&0i32.to_le_bytes()); // si_errno
-        out_buf[note_cursor + 8..note_cursor + 12].copy_from_slice(&(report.reason.code() as i32).to_le_bytes());
-        out_buf[note_cursor + 12..note_cursor + 20].copy_from_slice(&report.regs.fault_address().to_le_bytes());
+        out_buf[note_cursor + 8..note_cursor + 12]
+            .copy_from_slice(&(report.reason.code() as i32).to_le_bytes());
+        out_buf[note_cursor + 12..note_cursor + 20]
+            .copy_from_slice(&report.regs.fault_address().to_le_bytes());
         note_cursor += 20;
         out_buf[siginfo_offset + 4..siginfo_offset + 8].copy_from_slice(&20u32.to_le_bytes());
 
@@ -555,11 +579,14 @@ impl Elf64Generator {
         let mut phdr_cursor = ehdr_size;
         out_buf[phdr_cursor..phdr_cursor + 4].copy_from_slice(&Self::PT_NOTE.to_le_bytes()); // p_type
         out_buf[phdr_cursor + 4..phdr_cursor + 8].copy_from_slice(&4u32.to_le_bytes()); // p_flags (PF_R)
-        out_buf[phdr_cursor + 8..phdr_cursor + 16].copy_from_slice(&(note_offset as u64).to_le_bytes()); // p_offset
+        out_buf[phdr_cursor + 8..phdr_cursor + 16]
+            .copy_from_slice(&(note_offset as u64).to_le_bytes()); // p_offset
         out_buf[phdr_cursor + 16..phdr_cursor + 24].copy_from_slice(&0u64.to_le_bytes()); // p_vaddr
         out_buf[phdr_cursor + 24..phdr_cursor + 32].copy_from_slice(&0u64.to_le_bytes()); // p_paddr
-        out_buf[phdr_cursor + 32..phdr_cursor + 40].copy_from_slice(&(note_total_size as u64).to_le_bytes()); // p_filesz
-        out_buf[phdr_cursor + 40..phdr_cursor + 48].copy_from_slice(&(note_total_size as u64).to_le_bytes()); // p_memsz
+        out_buf[phdr_cursor + 32..phdr_cursor + 40]
+            .copy_from_slice(&(note_total_size as u64).to_le_bytes()); // p_filesz
+        out_buf[phdr_cursor + 40..phdr_cursor + 48]
+            .copy_from_slice(&(note_total_size as u64).to_le_bytes()); // p_memsz
         out_buf[phdr_cursor + 48..phdr_cursor + 56].copy_from_slice(&4u64.to_le_bytes()); // p_align
         phdr_cursor += phdr_size;
 
@@ -603,10 +630,13 @@ impl Elf64Generator {
             // Écriture PT_LOAD
             out_buf[phdr_cursor..phdr_cursor + 4].copy_from_slice(&Self::PT_LOAD.to_le_bytes());
             out_buf[phdr_cursor + 4..phdr_cursor + 8].copy_from_slice(&pf_flags.to_le_bytes());
-            out_buf[phdr_cursor + 8..phdr_cursor + 16].copy_from_slice(&(seg_offset as u64).to_le_bytes());
-            out_buf[phdr_cursor + 16..phdr_cursor + 24].copy_from_slice(&region.vaddr.to_le_bytes());
+            out_buf[phdr_cursor + 8..phdr_cursor + 16]
+                .copy_from_slice(&(seg_offset as u64).to_le_bytes());
+            out_buf[phdr_cursor + 16..phdr_cursor + 24]
+                .copy_from_slice(&region.vaddr.to_le_bytes());
             out_buf[phdr_cursor + 24..phdr_cursor + 32].copy_from_slice(&0u64.to_le_bytes());
-            out_buf[phdr_cursor + 32..phdr_cursor + 40].copy_from_slice(&(segment_file_size as u64).to_le_bytes());
+            out_buf[phdr_cursor + 32..phdr_cursor + 40]
+                .copy_from_slice(&(segment_file_size as u64).to_le_bytes());
             out_buf[phdr_cursor + 40..phdr_cursor + 48].copy_from_slice(&region.size.to_le_bytes());
             out_buf[phdr_cursor + 48..phdr_cursor + 56].copy_from_slice(&0x1000u64.to_le_bytes());
             phdr_cursor += phdr_size;
@@ -706,7 +736,9 @@ impl SealedCrashReport {
         let dummy_region = CoreMemoryRegion::new(0, 0, 0, "");
 
         let recommendation = match reason {
-            CrashReason::KernelPanic | CrashReason::DoubleFault => RecoveryRecommendation::KernelPanicHalt,
+            CrashReason::KernelPanic | CrashReason::DoubleFault => {
+                RecoveryRecommendation::KernelPanicHalt
+            }
             CrashReason::WatchdogTimeout => RecoveryRecommendation::NodeFailover,
             CrashReason::GeneralProtectionFault { .. } | CrashReason::InvalidOpcode => {
                 RecoveryRecommendation::IsolateAndRespawnService
@@ -848,10 +880,9 @@ impl JamboCoreDaemon {
         x86_regs.rdi = 0x00007fffa000ff20;
 
         let stack_sample = [
-            0x34, 0x12, 0x04, 0x80, 0xff, 0x7f, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x28, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
+            0x34, 0x12, 0x04, 0x80, 0xff, 0x7f, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x28, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x90, 0x90, 0x90, 0x90,
+            0x90, 0x90, 0x90, 0x90,
         ];
 
         let mut report = SealedCrashReport::new(
@@ -866,18 +897,22 @@ impl JamboCoreDaemon {
             },
             ArchRegisters::X86_64(x86_regs),
         );
-        report.add_region(CoreMemoryRegion::new(
-            0x00007fff80040000,
-            0x4000,
-            memory_flags::PROT_READ | memory_flags::PROT_EXEC,
-            "[text]",
-        )).ok();
-        report.add_region(CoreMemoryRegion::new(
-            0x00007fffa0000000,
-            0x10000,
-            memory_flags::PROT_READ | memory_flags::PROT_WRITE,
-            "[stack]",
-        )).ok();
+        report
+            .add_region(CoreMemoryRegion::new(
+                0x00007fff80040000,
+                0x4000,
+                memory_flags::PROT_READ | memory_flags::PROT_EXEC,
+                "[text]",
+            ))
+            .ok();
+        report
+            .add_region(CoreMemoryRegion::new(
+                0x00007fffa0000000,
+                0x10000,
+                memory_flags::PROT_READ | memory_flags::PROT_WRITE,
+                "[stack]",
+            ))
+            .ok();
         report.set_stack_snapshot(&stack_sample);
         report.add_call_trace(0x00007fff80041234);
         report.add_call_trace(0x00007fff80040500);
@@ -899,12 +934,14 @@ impl JamboCoreDaemon {
             CrashReason::WatchdogTimeout,
             ArchRegisters::AArch64(arm_regs),
         );
-        report2.add_region(CoreMemoryRegion::new(
-            0xffff000000100000,
-            0x20000,
-            memory_flags::PROT_READ | memory_flags::PROT_EXEC,
-            "[driver-text]",
-        )).ok();
+        report2
+            .add_region(CoreMemoryRegion::new(
+                0xffff000000100000,
+                0x20000,
+                memory_flags::PROT_READ | memory_flags::PROT_EXEC,
+                "[driver-text]",
+            ))
+            .ok();
         report2.add_call_trace(0xffff000000108840);
 
         self.commit_report(&cap, report2).ok();
@@ -927,15 +964,8 @@ impl JamboCoreDaemon {
             return Err(SysError::PermissionDenied);
         }
 
-        let mut report = SealedCrashReport::new(
-            self.next_report_id,
-            timestamp,
-            pid,
-            tid,
-            name,
-            reason,
-            regs,
-        );
+        let mut report =
+            SealedCrashReport::new(self.next_report_id, timestamp, pid, tid, name, reason, regs);
 
         // Mappings standards
         report.add_region(CoreMemoryRegion::new(
@@ -960,7 +990,11 @@ impl JamboCoreDaemon {
     }
 
     /// Valide, génère le dump ELF, scelle le rapport et l'insère dans le tampon annulaire
-    pub fn commit_report(&mut self, cap: &CoreCap, mut report: SealedCrashReport) -> Result<u64, SysError> {
+    pub fn commit_report(
+        &mut self,
+        cap: &CoreCap,
+        mut report: SealedCrashReport,
+    ) -> Result<u64, SysError> {
         if !cap.has_right(core_rights::CORE_CAPTURE) {
             return Err(SysError::PermissionDenied);
         }
@@ -1007,7 +1041,9 @@ impl JamboCoreDaemon {
             return Err(SysError::PermissionDenied);
         }
 
-        let report = self.get_report(report_id).ok_or(SysError::InvalidArgument)?;
+        let report = self
+            .get_report(report_id)
+            .ok_or(SysError::InvalidArgument)?;
         Elf64Generator::generate_core_dump(report, out_buf)
     }
 
@@ -1017,7 +1053,9 @@ impl JamboCoreDaemon {
             return Err(SysError::PermissionDenied);
         }
 
-        let report = self.get_report(report_id).ok_or(SysError::InvalidArgument)?;
+        let report = self
+            .get_report(report_id)
+            .ok_or(SysError::InvalidArgument)?;
         let expected = report.compute_seal();
         let valid = expected == report.sealed_digest;
 
@@ -1067,7 +1105,9 @@ impl JamboCoreDaemon {
             return Err(SysError::PermissionDenied);
         }
 
-        let report = *self.get_report(report_id).ok_or(SysError::InvalidArgument)?;
+        let report = *self
+            .get_report(report_id)
+            .ok_or(SysError::InvalidArgument)?;
 
         let mut hash_input = [0u8; 64];
         hash_input[0..8].copy_from_slice(&report.report_id.to_le_bytes());
@@ -1252,7 +1292,10 @@ mod tests {
         assert_eq!(telemetry.report_id, 1);
         assert_eq!(telemetry.node_id, 10);
         assert_eq!(telemetry.pid, 42);
-        assert_eq!(telemetry.recommendation, RecoveryRecommendation::RestartProcess);
+        assert_eq!(
+            telemetry.recommendation,
+            RecoveryRecommendation::RestartProcess
+        );
 
         let rep = daemon.get_report(1).unwrap();
         assert!(rep.telemetry_emitted);
@@ -1269,17 +1312,19 @@ mod tests {
 
         // Capture d'un 3e crash
         let regs = X86_64Registers::default();
-        daemon.capture_crash(
-            &admin,
-            77,
-            1,
-            "failed-task",
-            CrashReason::AssertionFailed,
-            ArchRegisters::X86_64(regs),
-            &[1, 2, 3, 4],
-            &[0x1000],
-            2000,
-        ).unwrap();
+        daemon
+            .capture_crash(
+                &admin,
+                77,
+                1,
+                "failed-task",
+                CrashReason::AssertionFailed,
+                ArchRegisters::X86_64(regs),
+                &[1, 2, 3, 4],
+                &[0x1000],
+                2000,
+            )
+            .unwrap();
 
         let digest2 = daemon.get_audit_digest(&admin).unwrap();
         assert_ne!(digest1, digest2); // L'audit a évolué de manière monotone

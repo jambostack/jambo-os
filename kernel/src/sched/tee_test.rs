@@ -9,8 +9,8 @@ use crate::kprintln;
 use jambo_abi::{Handle, SysError};
 use jambo_sh::{JamboShell, ShellStatus};
 use jambo_tee::{
-    page_flags, tee_rights, EnclaveState, JamboTeeDaemon, SealingPolicy, Sha256,
-    TeeAction, TeeBackend, TeeCap, MAX_ENCLAVES,
+    page_flags, tee_rights, EnclaveState, JamboTeeDaemon, SealingPolicy, Sha256, TeeAction,
+    TeeBackend, TeeCap, MAX_ENCLAVES,
 };
 
 /// Exécute la suite complète de validation formelle du sous-système TEE (Phase 92)
@@ -193,7 +193,13 @@ pub fn execute_tee_daemon_test() -> bool {
     // Tentative de déscellement depuis une autre enclave (mismatch de mesure)
     let other_enc_id = 1; // Enclave sec-keyring (mesure différente)
     assert_eq!(
-        daemon.unseal_data(&admin_cap, other_enc_id, blob_id, &secret_key, &mut unseal_buf),
+        daemon.unseal_data(
+            &admin_cap,
+            other_enc_id,
+            blob_id,
+            &secret_key,
+            &mut unseal_buf
+        ),
         Err(SysError::PermissionDenied),
         "Déscellement inter-enclaves sans conformité de mesure formellement rejeté"
     );

@@ -7,11 +7,10 @@ extern crate alloc;
 use crate::kprintln;
 use jambo_abi::{Handle, SysError};
 use jambo_vpn::{
-    vpn_rights, AntiReplayWindow, Curve25519, Fe25519, HandshakeInitiationPacket,
-    HandshakeResponsePacket, HybridKeyExchange, JamboVpnDaemon, MlKem, Sha256,
-    VpnCap, VpnDataPacket, VpnError, VpnPeerState, VpnSubnet, ChaCha20,
-    KEM_CIPHERTEXT_LEN, KEM_PUBLIC_KEY_LEN, KEM_SECRET_KEY_LEN, KEM_SHARED_SECRET_LEN,
-    MAX_DATA_PAYLOAD, MAX_PEERS,
+    vpn_rights, AntiReplayWindow, ChaCha20, Curve25519, Fe25519, HandshakeInitiationPacket,
+    HandshakeResponsePacket, HybridKeyExchange, JamboVpnDaemon, MlKem, Sha256, VpnCap,
+    VpnDataPacket, VpnError, VpnPeerState, VpnSubnet, KEM_CIPHERTEXT_LEN, KEM_PUBLIC_KEY_LEN,
+    KEM_SECRET_KEY_LEN, KEM_SHARED_SECRET_LEN, MAX_DATA_PAYLOAD, MAX_PEERS,
 };
 
 /// Exécute la suite complète de validation formelle de la passerelle VPN souveraine (Phase 113)
@@ -62,7 +61,10 @@ pub fn execute_vpn_daemon_test() -> bool {
 
     let shared_alice = Curve25519::scalar_mult(&alice_sk, &bob_pk);
     let shared_bob = Curve25519::scalar_mult(&bob_sk, &alice_pk);
-    assert_eq!(shared_alice, shared_bob, "Accord de clé Curve25519 symétrique");
+    assert_eq!(
+        shared_alice, shared_bob,
+        "Accord de clé Curve25519 symétrique"
+    );
     assert_ne!(shared_alice, [0u8; 32]);
     kprintln!("  [OK] Échange de clés classique Curve25519 (Montgomery RFC 7748)");
 
@@ -73,11 +75,19 @@ pub fn execute_vpn_daemon_test() -> bool {
 
     let mut ct = [0u8; KEM_CIPHERTEXT_LEN];
     let mut ss_sender = [0u8; KEM_SHARED_SECRET_LEN];
-    MlKem::encapsulate(&kem_pk, b"ephemeral_seed_kernel_test", &mut ct, &mut ss_sender);
+    MlKem::encapsulate(
+        &kem_pk,
+        b"ephemeral_seed_kernel_test",
+        &mut ct,
+        &mut ss_sender,
+    );
 
     let mut ss_receiver = [0u8; KEM_SHARED_SECRET_LEN];
     MlKem::decapsulate(&kem_sk, &ct, &mut ss_receiver);
-    assert_eq!(ss_sender, ss_receiver, "Accord de clé post-quantique ML-KEM symétrique");
+    assert_eq!(
+        ss_sender, ss_receiver,
+        "Accord de clé post-quantique ML-KEM symétrique"
+    );
     kprintln!("  [OK] Encapsulation & Décapsulation Post-Quantique ML-KEM");
 
     // 4. Dérivation Dual-Defense HKDF-SHA256

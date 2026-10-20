@@ -76,20 +76,22 @@ pub struct Sha256;
 
 impl Sha256 {
     const K: [u32; 64] = [
-        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
-        0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
-        0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
-        0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
-        0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
-        0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
-        0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
-        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
+        0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
+        0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f,
+        0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc,
+        0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+        0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116,
+        0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
+        0xc67178f2,
     ];
 
     pub fn digest(data: &[u8]) -> [u8; 32] {
         let mut h: [u32; 8] = [
-            0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
-            0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+            0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
+            0x5be0cd19,
         ];
 
         let bit_len = (data.len() as u64).wrapping_mul(8);
@@ -136,7 +138,10 @@ impl Sha256 {
         for i in 16..64 {
             let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);
             let s1 = w[i - 2].rotate_right(17) ^ w[i - 2].rotate_right(19) ^ (w[i - 2] >> 10);
-            w[i] = w[i - 16].wrapping_add(s0).wrapping_add(w[i - 7]).wrapping_add(s1);
+            w[i] = w[i - 16]
+                .wrapping_add(s0)
+                .wrapping_add(w[i - 7])
+                .wrapping_add(s1);
         }
 
         let mut a = h[0];
@@ -448,7 +453,11 @@ impl SphinxRouter {
         // 4. Construction de l'en-tête de routage beta en pelure d'oignon
         let mut beta = [0u8; BETA_SIZE];
         // Remplissage aléatoire initial déterministe
-        generate_keystream(&hop_keys[hops.len() - 1].shared_secret, 0x99887766, &mut beta);
+        generate_keystream(
+            &hop_keys[hops.len() - 1].shared_secret,
+            0x99887766,
+            &mut beta,
+        );
 
         let mut next_gamma = [0u8; GAMMA_SIZE];
 
@@ -477,7 +486,11 @@ impl SphinxRouter {
 
             // Chiffrer shifted_beta avec k_beta du saut i sur la longueur active
             let active_len = BETA_SIZE - i * HOP_INFO_SIZE;
-            xor_keystream(&mut shifted_beta[0..active_len], &hop_keys[i].k_beta, 0x55667788);
+            xor_keystream(
+                &mut shifted_beta[0..active_len],
+                &hop_keys[i].k_beta,
+                0x55667788,
+            );
             beta = shifted_beta;
 
             // Calculer le gamma authentifiant cette couche
@@ -563,7 +576,11 @@ impl MixNode {
     }
 
     /// Traitement cryptographique d'épluchage d'un paquet Sphinx
-    pub fn process_packet(&mut self, packet: &SphinxPacket, hop_idx: u8) -> Result<RelayAction, SysError> {
+    pub fn process_packet(
+        &mut self,
+        packet: &SphinxPacket,
+        hop_idx: u8,
+    ) -> Result<RelayAction, SysError> {
         // 1. Détection anti-rejeu
         if self.is_replayed(&packet.gamma) {
             return Err(SysError::ResourceBusy);
@@ -574,7 +591,9 @@ impl MixNode {
         let hop_keys = DerivedHopKeys::derive(&packet.alpha, &self.public_key, hop_idx);
 
         // 3. Vérification de l'intégrité MAC gamma
-        let active_len = BETA_SIZE.saturating_sub((hop_idx as usize) * HOP_INFO_SIZE).max(HOP_INFO_SIZE);
+        let active_len = BETA_SIZE
+            .saturating_sub((hop_idx as usize) * HOP_INFO_SIZE)
+            .max(HOP_INFO_SIZE);
         let computed_mac = hmac_sha256(&hop_keys.k_mac, &packet.beta[0..active_len]);
         let mut mismatch = 0u8;
         for i in 0..GAMMA_SIZE {
@@ -590,7 +609,11 @@ impl MixNode {
 
         // 5. Déchiffrement de l'en-tête de routage beta sur la longueur active
         let mut decrypted_beta = packet.beta;
-        xor_keystream(&mut decrypted_beta[0..active_len], &hop_keys.k_beta, 0x55667788);
+        xor_keystream(
+            &mut decrypted_beta[0..active_len],
+            &hop_keys.k_beta,
+            0x55667788,
+        );
 
         // 6. Extraction de l'enregistrement de saut
         let next_node = u32::from_be_bytes([
@@ -678,7 +701,12 @@ impl MixPool {
         }
     }
 
-    pub fn push(&mut self, packet: SphinxPacket, next_node: u32, delay_ms: u16) -> Result<(), SysError> {
+    pub fn push(
+        &mut self,
+        packet: SphinxPacket,
+        next_node: u32,
+        delay_ms: u16,
+    ) -> Result<(), SysError> {
         if self.count >= MIX_POOL_CAPACITY {
             return Err(SysError::OutOfMemory);
         }
@@ -703,7 +731,9 @@ impl MixPool {
         let mut seed = prng_seed;
         for i in (1..self.count).rev() {
             // Générateur congruentiel linéaire rapide souverain
-            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             let j = (seed % ((i + 1) as u64)) as usize;
             self.entries.swap(i, j);
         }
@@ -715,13 +745,22 @@ impl MixPool {
     }
 
     /// Injection d'un paquet leurre de trafic de couverture (Cover Traffic)
-    pub fn inject_cover_packet(&mut self, target_node: u32, delay_ms: u16, seed: u64) -> Result<(), SysError> {
+    pub fn inject_cover_packet(
+        &mut self,
+        target_node: u32,
+        delay_ms: u16,
+        seed: u64,
+    ) -> Result<(), SysError> {
         if self.count >= MIX_POOL_CAPACITY {
             return Err(SysError::OutOfMemory);
         }
 
         let mut dummy_packet = SphinxPacket::empty();
-        generate_keystream(&Sha256::digest(&seed.to_be_bytes()), 0xCAFE, &mut dummy_packet.payload);
+        generate_keystream(
+            &Sha256::digest(&seed.to_be_bytes()),
+            0xCAFE,
+            &mut dummy_packet.payload,
+        );
         dummy_packet.payload[0..5].copy_from_slice(b"DUMMY");
 
         self.push(dummy_packet, target_node, delay_ms)?;
@@ -867,7 +906,8 @@ impl JamboMixnetDaemon {
         }
 
         // 2. Client : Encapsulation en oignon Sphinx
-        let packet = SphinxRouter::build_onion_packet(&hops[..route_node_ids.len()], message, seed)?;
+        let packet =
+            SphinxRouter::build_onion_packet(&hops[..route_node_ids.len()], message, seed)?;
         self.packets_routed = self.packets_routed.saturating_add(1);
 
         // 3. Relais à travers chaque nœud de mixage successif
@@ -884,7 +924,8 @@ impl JamboMixnetDaemon {
                 }) => {
                     // Simulation du passage par le bassin de mixage
                     let _ = self.mix_pool.push(next_packet, nid, delay_ms);
-                    self.mix_pool.shuffle_and_flush(seed.wrapping_add(hop_idx as u64));
+                    self.mix_pool
+                        .shuffle_and_flush(seed.wrapping_add(hop_idx as u64));
                     current_packet = next_packet;
                 }
                 Ok(RelayAction::Exit { payload }) => {
@@ -921,7 +962,15 @@ impl JamboMixnetDaemon {
     pub fn inject_cover_traffic(&mut self, target_node: u32, count: usize, seed: u64) -> usize {
         let mut injected = 0;
         for i in 0..count {
-            if self.mix_pool.inject_cover_packet(target_node, ((i + 1) * 20) as u16, seed.wrapping_add(i as u64)).is_ok() {
+            if self
+                .mix_pool
+                .inject_cover_packet(
+                    target_node,
+                    ((i + 1) * 20) as u16,
+                    seed.wrapping_add(i as u64),
+                )
+                .is_ok()
+            {
                 injected += 1;
             }
         }
@@ -1032,7 +1081,8 @@ mod tests {
             is_exit: true,
         }];
 
-        let mut packet = SphinxRouter::build_onion_packet(&hops, b"INTEGRITY_CHECK", 0x4321).unwrap();
+        let mut packet =
+            SphinxRouter::build_onion_packet(&hops, b"INTEGRITY_CHECK", 0x4321).unwrap();
         // Altération d'un seul octet dans l'en-tête beta
         packet.beta[5] ^= 0xFF;
 

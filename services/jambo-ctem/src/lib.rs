@@ -32,29 +32,23 @@ pub struct Sha256 {
 
 impl Sha256 {
     const K: [u32; 64] = [
-        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5,
-        0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
-        0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3,
-        0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
-        0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc,
-        0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
-        0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
-        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
-        0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13,
-        0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
-        0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3,
-        0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
-        0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5,
-        0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
-        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
-        0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
+        0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
+        0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f,
+        0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc,
+        0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+        0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116,
+        0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
+        0xc67178f2,
     ];
 
     pub fn new() -> Self {
         Self {
             state: [
-                0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
-                0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+                0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
+                0x5be0cd19,
             ],
             buffer: [0u8; 64],
             buffer_len: 0,
@@ -75,7 +69,10 @@ impl Sha256 {
         for i in 16..64 {
             let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);
             let s1 = w[i - 2].rotate_right(17) ^ w[i - 2].rotate_right(19) ^ (w[i - 2] >> 10);
-            w[i] = w[i - 16].wrapping_add(s0).wrapping_add(w[i - 7]).wrapping_add(s1);
+            w[i] = w[i - 16]
+                .wrapping_add(s0)
+                .wrapping_add(w[i - 7])
+                .wrapping_add(s1);
         }
 
         let mut a = self.state[0];
@@ -350,7 +347,13 @@ pub struct CtemScope {
 }
 
 impl CtemScope {
-    pub fn new(id: u32, name_str: &str, domain_str: &str, criticality: BusinessCriticality, asset_count: u32) -> Self {
+    pub fn new(
+        id: u32,
+        name_str: &str,
+        domain_str: &str,
+        criticality: BusinessCriticality,
+        asset_count: u32,
+    ) -> Self {
         let mut name = [0u8; 32];
         let n_len = name_str.len().min(32);
         name[..n_len].copy_from_slice(&name_str.as_bytes()[..n_len]);
@@ -509,7 +512,13 @@ pub struct AuditEntry {
 }
 
 impl AuditEntry {
-    pub fn new(index: u32, timestamp: u64, action_id: u8, details_str: &str, prev_hash: [u8; 32]) -> Self {
+    pub fn new(
+        index: u32,
+        timestamp: u64,
+        action_id: u8,
+        details_str: &str,
+        prev_hash: [u8; 32],
+    ) -> Self {
         let mut details = [0u8; 48];
         let d_len = details_str.len().min(48);
         details[..d_len].copy_from_slice(&details_str.as_bytes()[..d_len]);
@@ -589,10 +598,34 @@ impl JamboCtemDaemon {
     /// Initialise le scénario de référence avec les 5 sources majeures fédérées
     pub fn init_defaults(&mut self) {
         // Cadrage (Scoping) initial : 4 domaines souverains
-        self.scopes[0] = Some(CtemScope::new(1, "Core Identity & KMS", "kernel::auth,kms", BusinessCriticality::Critical, 12));
-        self.scopes[1] = Some(CtemScope::new(2, "External Ingress Gateways", "netd,gwd,vpn", BusinessCriticality::Critical, 8));
-        self.scopes[2] = Some(CtemScope::new(3, "Workload Containers Ring3", "vmm,wasm,sandd", BusinessCriticality::High, 24));
-        self.scopes[3] = Some(CtemScope::new(4, "Software Supply Chain", "pkgd,aspm,dynlinkd", BusinessCriticality::High, 16));
+        self.scopes[0] = Some(CtemScope::new(
+            1,
+            "Core Identity & KMS",
+            "kernel::auth,kms",
+            BusinessCriticality::Critical,
+            12,
+        ));
+        self.scopes[1] = Some(CtemScope::new(
+            2,
+            "External Ingress Gateways",
+            "netd,gwd,vpn",
+            BusinessCriticality::Critical,
+            8,
+        ));
+        self.scopes[2] = Some(CtemScope::new(
+            3,
+            "Workload Containers Ring3",
+            "vmm,wasm,sandd",
+            BusinessCriticality::High,
+            24,
+        ));
+        self.scopes[3] = Some(CtemScope::new(
+            4,
+            "Software Supply Chain",
+            "pkgd,aspm,dynlinkd",
+            BusinessCriticality::High,
+            16,
+        ));
         self.scope_count = 4;
 
         // Découverte (Discovery) : Expositions issues de CSPM, CIEM, CWPP, ASPM, EASM
@@ -660,7 +693,13 @@ impl JamboCtemDaemon {
 
         // Entrée d'audit initiale
         let zero_hash = [0u8; 32];
-        let entry = AuditEntry::new(1, 1000, 0x01, "CTEM Platform Initialized with 4 Scopes & 5 Exposures", zero_hash);
+        let entry = AuditEntry::new(
+            1,
+            1000,
+            0x01,
+            "CTEM Platform Initialized with 4 Scopes & 5 Exposures",
+            zero_hash,
+        );
         self.audit_ledger[0] = Some(entry);
         self.audit_count = 1;
 
@@ -669,7 +708,12 @@ impl JamboCtemDaemon {
     }
 
     /// Enregistre une entrée dans le journal d'audit scellé SHA-256
-    fn record_audit(&mut self, action_id: u8, details: &str, timestamp: u64) -> Result<(), CtemError> {
+    fn record_audit(
+        &mut self,
+        action_id: u8,
+        details: &str,
+        timestamp: u64,
+    ) -> Result<(), CtemError> {
         if self.audit_count >= self.audit_ledger.len() {
             return Err(CtemError::CapacityExceeded);
         }
@@ -699,7 +743,8 @@ impl JamboCtemDaemon {
 
         for i in 0..self.exposure_count {
             if let Some(ref e) = self.exposures[i] {
-                if e.status == ExposureStatus::Remediated || e.status == ExposureStatus::Suppressed {
+                if e.status == ExposureStatus::Remediated || e.status == ExposureStatus::Suppressed
+                {
                     continue;
                 }
 
@@ -788,7 +833,11 @@ impl JamboCtemDaemon {
     }
 
     /// Étape 3 : Hiérarchisation contextuelle & calcul d'exploitabilité (Prioritization)
-    pub fn prioritize_exposures(&mut self, cap: &CtemCap, timestamp: u64) -> Result<u32, CtemError> {
+    pub fn prioritize_exposures(
+        &mut self,
+        cap: &CtemCap,
+        timestamp: u64,
+    ) -> Result<u32, CtemError> {
         if !cap.has_right(ctem_rights::PRIORITIZE_EXPOSURES) {
             return Err(CtemError::PermissionDenied);
         }
@@ -808,7 +857,8 @@ impl JamboCtemDaemon {
                         ExposureSource::Custom => 5,
                     };
 
-                    let raw_score = (e.severity as u32) * 15 + (e.criticality as u32) * 8 + source_factor;
+                    let raw_score =
+                        (e.severity as u32) * 15 + (e.criticality as u32) * 8 + source_factor;
                     e.exploitability_score = raw_score.min(100) as u8;
                     e.status = ExposureStatus::Prioritized;
                     e.last_updated = timestamp;
@@ -818,7 +868,11 @@ impl JamboCtemDaemon {
         }
 
         self.calculate_overall_score();
-        let _ = self.record_audit(0x30, "Contextual Exposure Prioritization Computed", timestamp);
+        let _ = self.record_audit(
+            0x30,
+            "Contextual Exposure Prioritization Computed",
+            timestamp,
+        );
         Ok(prioritized)
     }
 
@@ -841,10 +895,12 @@ impl JamboCtemDaemon {
                     e.status = ExposureStatus::Validated;
                     if is_exploitable {
                         // Majoration si validé par simulation active
-                        e.exploitability_score = (e.exploitability_score as u16 + 10).min(100) as u8;
+                        e.exploitability_score =
+                            (e.exploitability_score as u16 + 10).min(100) as u8;
                     } else {
                         // Minoration si neutralisé par contrôle compensatoire
-                        e.exploitability_score = (e.exploitability_score as u16).saturating_sub(25) as u8;
+                        e.exploitability_score =
+                            (e.exploitability_score as u16).saturating_sub(25) as u8;
                     }
                     e.last_updated = timestamp;
                     self.calculate_overall_score();
@@ -890,7 +946,13 @@ impl JamboCtemDaemon {
         }
 
         let action_id = (self.action_count as u32) + 1;
-        let action = MobilizationAction::new(action_id, exposure_id, action_type, target_service, timestamp);
+        let action = MobilizationAction::new(
+            action_id,
+            exposure_id,
+            action_type,
+            target_service,
+            timestamp,
+        );
         self.actions[self.action_count] = Some(action);
         self.action_count += 1;
 
@@ -899,7 +961,12 @@ impl JamboCtemDaemon {
     }
 
     /// Finalisation de la remédiation et réduction monotone de l'exposition
-    pub fn remediate_exposure(&mut self, cap: &CtemCap, exposure_id: u32, timestamp: u64) -> Result<(), CtemError> {
+    pub fn remediate_exposure(
+        &mut self,
+        cap: &CtemCap,
+        exposure_id: u32,
+        timestamp: u64,
+    ) -> Result<(), CtemError> {
         if !cap.has_right(ctem_rights::MOBILIZE_REMEDIATION) {
             return Err(CtemError::PermissionDenied);
         }
@@ -911,7 +978,8 @@ impl JamboCtemDaemon {
                     e.exploitability_score = 0;
                     e.last_updated = timestamp;
                     self.calculate_overall_score();
-                    let _ = self.record_audit(0x51, "Threat Exposure Remediated & Hardened", timestamp);
+                    let _ =
+                        self.record_audit(0x51, "Threat Exposure Remediated & Hardened", timestamp);
                     return Ok(());
                 }
             }
@@ -939,7 +1007,11 @@ impl JamboCtemDaemon {
     }
 
     /// Exécute un cycle complet automatisé d'orchestration CTEM
-    pub fn run_full_cycle(&mut self, cap: &CtemCap, timestamp: u64) -> Result<CtemCycleSummary, CtemError> {
+    pub fn run_full_cycle(
+        &mut self,
+        cap: &CtemCap,
+        timestamp: u64,
+    ) -> Result<CtemCycleSummary, CtemError> {
         if !cap.has_right(ctem_rights::ADMIN) {
             return Err(CtemError::PermissionDenied);
         }
@@ -981,7 +1053,13 @@ impl JamboCtemDaemon {
         for i in 0..mobilize_cnt {
             let (id, tgt_buf, tgt_len) = to_mobilize[i];
             let target = core::str::from_utf8(&tgt_buf[..tgt_len]).unwrap_or("target");
-            let _ = self.mobilize_remediation(cap, id, MobilizationActionType::EnforceWaf, target, timestamp);
+            let _ = self.mobilize_remediation(
+                cap,
+                id,
+                MobilizationActionType::EnforceWaf,
+                target,
+                timestamp,
+            );
         }
 
         self.get_summary(cap)
@@ -1142,19 +1220,27 @@ mod tests {
         assert!(ctem.exposures[0].unwrap().exploitability_score > 50);
 
         // 4. Validation
-        ctem.validate_exposure(&admin, 1, true, 2030).expect("Validate #1");
+        ctem.validate_exposure(&admin, 1, true, 2030)
+            .expect("Validate #1");
         assert!(ctem.exposures[0].unwrap().validated_exploitable);
 
         // 5. Mobilization
         let act_id = ctem
-            .mobilize_remediation(&admin, 1, MobilizationActionType::EnforceWaf, "jambo-waf", 2040)
+            .mobilize_remediation(
+                &admin,
+                1,
+                MobilizationActionType::EnforceWaf,
+                "jambo-waf",
+                2040,
+            )
             .expect("Mobilize #1");
         assert_eq!(act_id, 1);
         assert_eq!(ctem.action_count, 1);
 
         // Remédiation finale
         let old_score = ctem.overall_exposure_score;
-        ctem.remediate_exposure(&admin, 1, 2050).expect("Remediate #1");
+        ctem.remediate_exposure(&admin, 1, 2050)
+            .expect("Remediate #1");
         assert!(ctem.overall_exposure_score < old_score);
 
         // Vérification audit ledger
@@ -1185,7 +1271,14 @@ mod tests {
             .expect("Attenuation read-only");
 
         assert_eq!(
-            ctem.add_scope(&read_only, "Unauthorized", "target", BusinessCriticality::Low, 1, 4000),
+            ctem.add_scope(
+                &read_only,
+                "Unauthorized",
+                "target",
+                BusinessCriticality::Low,
+                1,
+                4000
+            ),
             Err(CtemError::PermissionDenied)
         );
         assert_eq!(
@@ -1197,7 +1290,13 @@ mod tests {
             Err(CtemError::PermissionDenied)
         );
         assert_eq!(
-            ctem.mobilize_remediation(&read_only, 1, MobilizationActionType::RevokeCap, "target", 4015),
+            ctem.mobilize_remediation(
+                &read_only,
+                1,
+                MobilizationActionType::RevokeCap,
+                "target",
+                4015
+            ),
             Err(CtemError::PermissionDenied)
         );
     }

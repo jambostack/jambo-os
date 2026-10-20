@@ -32,7 +32,9 @@ pub fn execute_forensics_daemon_test() -> bool {
     // Atténuation monotone
     let attenuated = admin_cap
         .attenuate(
-            forensics_rights::CAPTURE_MEMORY | forensics_rights::EXTRACT_ARTIFACTS | forensics_rights::VERIFY_SEAL,
+            forensics_rights::CAPTURE_MEMORY
+                | forensics_rights::EXTRACT_ARTIFACTS
+                | forensics_rights::VERIFY_SEAL,
             2000,
             50,
         )
@@ -59,7 +61,11 @@ pub fn execute_forensics_daemon_test() -> bool {
 
     let keypair = ForensicKeyPair::derive_from_seed(0x118_cafe);
     let signature = Ed25519Engine::sign(&keypair, &digest);
-    assert!(Ed25519Engine::verify(&keypair.public_key, &digest, &signature));
+    assert!(Ed25519Engine::verify(
+        &keypair.public_key,
+        &digest,
+        &signature
+    ));
 
     // 3. Initialisation du démon central et preuves par défaut
     let mut forensics = JamboForensicsDaemon::new(admin_cap, keypair);
@@ -71,8 +77,14 @@ pub fn execute_forensics_daemon_test() -> bool {
 
     // 4. Capture d'empreinte mémoire d'un processus suspect d'exfiltration
     let sample_payload = [0x48, 0x31, 0xc0, 0x48, 0x89, 0xc7, 0x0f, 0x05, 0x90, 0x90];
-    let code_region = MemoryRegionSnapshot::new(0x400000, 0x4000, PROT_READ | PROT_EXEC, b"ELF_TEXT_SEGMENT");
-    let injected_region = MemoryRegionSnapshot::new(0x7fff1000, 0x1000, PROT_READ | PROT_WRITE | PROT_EXEC, &sample_payload);
+    let code_region =
+        MemoryRegionSnapshot::new(0x400000, 0x4000, PROT_READ | PROT_EXEC, b"ELF_TEXT_SEGMENT");
+    let injected_region = MemoryRegionSnapshot::new(
+        0x7fff1000,
+        0x1000,
+        PROT_READ | PROT_WRITE | PROT_EXEC,
+        &sample_payload,
+    );
     assert!(injected_region.is_suspicious_executable);
 
     let snap_id = forensics
@@ -111,7 +123,9 @@ pub fn execute_forensics_daemon_test() -> bool {
         .expect("Scellement de preuve réussi");
     assert_eq!(seal.evidence_id, snap_id);
     assert!(seal.is_snapshot);
-    assert!(forensics.verify_seal_integrity(&admin_cap, &seal).expect("Vérification intégrité"));
+    assert!(forensics
+        .verify_seal_integrity(&admin_cap, &seal)
+        .expect("Vérification intégrité"));
 
     // 7. Vérification de la chaîne de garde (Chain of Custody) inaltérable
     assert!(forensics.verify_custody_integrity());

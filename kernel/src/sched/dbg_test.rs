@@ -7,7 +7,7 @@ use crate::kprintln;
 use jambo_abi::{Handle, SysError};
 use jambo_dbg::{
     dbg_rights, AuditAction, Breakpoint, BreakpointType, DbgCap, DebugSession, DebugThread,
-    DisasmInstruction, DrCondition, DrLength, DrSlot, Dr6Status, HardwareDrConfig,
+    DisasmInstruction, Dr6Status, DrCondition, DrLength, DrSlot, HardwareDrConfig,
     JamboDebuggerDaemon, MemoryRegion, SessionState, Sha256, StopReason, ThreadRegisters,
 };
 use jambo_sh::{JamboShell, ShellStatus};
@@ -71,14 +71,20 @@ pub fn execute_dbg_daemon_test() -> bool {
         Err(SysError::PermissionDenied),
         "Écriture mémoire sans DBG_MEM_WRITE doit échouer"
     );
-    kprintln!("[DBG/CAP] Modèle de sécurité capabilaire DbgCap et interdiction d'amplification validés");
+    kprintln!(
+        "[DBG/CAP] Modèle de sécurité capabilaire DbgCap et interdiction d'amplification validés"
+    );
 
     // 2. Gestion des sessions : Attachement et Détachement
-    daemon.attach_process(&admin_cap, 42, 200).expect("attach process 42");
+    daemon
+        .attach_process(&admin_cap, 42, 200)
+        .expect("attach process 42");
     assert!(daemon.get_session(42).is_some());
     assert_eq!(daemon.session_count, 2);
 
-    daemon.detach_process(&admin_cap, 42, 201).expect("detach process 42");
+    daemon
+        .detach_process(&admin_cap, 42, 201)
+        .expect("detach process 42");
     assert!(daemon.get_session(42).is_none());
     assert_eq!(daemon.session_count, 1);
     kprintln!("[DBG/SESSION] Cycle d'attachement et détachement de processus validé");
@@ -103,7 +109,9 @@ pub fn execute_dbg_daemon_test() -> bool {
     assert!(thread.hw_dr.is_slot_enabled(DrSlot::Dr0));
 
     // Simulation de l'interception matérielle INT1 (#DB) sur accès en écriture
-    let stop_reason = daemon.handle_int1_exception(1, 1, 1 << 0, 301).expect("handle INT1 DR0");
+    let stop_reason = daemon
+        .handle_int1_exception(1, 1, 1 << 0, 301)
+        .expect("handle INT1 DR0");
     assert_eq!(
         stop_reason,
         StopReason::HardwareWatchpoint(DrSlot::Dr0, 0x7FFF_0040),
@@ -122,40 +130,72 @@ pub fn execute_dbg_daemon_test() -> bool {
 
     // Vérifier que l'instruction d'origine (CALL 0xE8) a été remplacée par 0xCC
     let mut read_buf = [0u8; 1];
-    daemon.read_memory(&admin_cap, 1, 0x0040_0004, &mut read_buf, 401).unwrap();
-    assert_eq!(read_buf[0], 0xCC, "Opcode 0xCC correctement injecté en mémoire");
+    daemon
+        .read_memory(&admin_cap, 1, 0x0040_0004, &mut read_buf, 401)
+        .unwrap();
+    assert_eq!(
+        read_buf[0], 0xCC,
+        "Opcode 0xCC correctement injecté en mémoire"
+    );
 
     // Simuler le déclenchement de l'exception INT3 (#BP)
     // Le processeur x86-64 avance RIP à 0x0040_0005 lors d'INT3
-    let hit_id = daemon.handle_int3_exception(1, 1, 0x0040_0005, 402).expect("handle INT3");
+    let hit_id = daemon
+        .handle_int3_exception(1, 1, 0x0040_0005, 402)
+        .expect("handle INT3");
     assert_eq!(hit_id, sw_bp_id);
 
     // Vérifier le rembobinage automatique de RIP vers l'adresse exacte du breakpoint
     let regs = daemon.read_registers(&admin_cap, 1, 1, 403).unwrap();
-    assert_eq!(regs.rip, 0x0040_0004, "Rembobinage automatique de RIP validé");
+    assert_eq!(
+        regs.rip, 0x0040_0004,
+        "Rembobinage automatique de RIP validé"
+    );
 
     // Suppression du breakpoint et vérification de la restauration de l'instruction originale
-    daemon.remove_breakpoint(&admin_cap, 1, sw_bp_id, 404).unwrap();
-    daemon.read_memory(&admin_cap, 1, 0x0040_0004, &mut read_buf, 405).unwrap();
-    assert_eq!(read_buf[0], 0xE8, "Opcode d'origine (CALL 0xE8) fidèlement restauré");
-    kprintln!("[DBG/INT3] Point d'arrêt INT3, rembobinage automatique de RIP et restauration validés");
+    daemon
+        .remove_breakpoint(&admin_cap, 1, sw_bp_id, 404)
+        .unwrap();
+    daemon
+        .read_memory(&admin_cap, 1, 0x0040_0004, &mut read_buf, 405)
+        .unwrap();
+    assert_eq!(
+        read_buf[0], 0xE8,
+        "Opcode d'origine (CALL 0xE8) fidèlement restauré"
+    );
+    kprintln!(
+        "[DBG/INT3] Point d'arrêt INT3, rembobinage automatique de RIP et restauration validés"
+    );
 
     // 5. Exécution pas à pas (*Single-Stepping*) via Trap Flag (TF)
     // Remettre RIP à 0x0040_0000 (NOP)
     let mut reset_regs = regs;
     reset_regs.rip = 0x0040_0000;
-    daemon.write_registers(&admin_cap, 1, 1, reset_regs, 500).unwrap();
+    daemon
+        .write_registers(&admin_cap, 1, 1, reset_regs, 500)
+        .unwrap();
 
-    let inst1 = daemon.step_instruction(&admin_cap, 1, 1, 501).expect("step 1");
+    let inst1 = daemon
+        .step_instruction(&admin_cap, 1, 1, 501)
+        .expect("step 1");
     assert_eq!(inst1.mnemonic, "nop");
     assert_eq!(inst1.len, 1);
 
     let regs_after_step = daemon.read_registers(&admin_cap, 1, 1, 502).unwrap();
-    assert_eq!(regs_after_step.rip, 0x0040_0001, "RIP avancé après pas à pas NOP");
-    assert!(!regs_after_step.is_single_step_enabled(), "TF réinitialisé après arrêt");
+    assert_eq!(
+        regs_after_step.rip, 0x0040_0001,
+        "RIP avancé après pas à pas NOP"
+    );
+    assert!(
+        !regs_after_step.is_single_step_enabled(),
+        "TF réinitialisé après arrêt"
+    );
 
     // 6. Intégrité cryptographique SHA-256 de la chaîne d'audit
-    assert!(daemon.verify_audit_integrity(), "Chaîne d'audit SHA-256 intègre et scellée");
+    assert!(
+        daemon.verify_audit_integrity(),
+        "Chaîne d'audit SHA-256 intègre et scellée"
+    );
     kprintln!("[DBG/STEP] Exécution pas à pas (TF flag) et audit cryptographique SHA-256 validés");
 
     // 7. Validation des commandes du Shell interactif JamboShell

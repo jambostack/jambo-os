@@ -6,13 +6,12 @@ extern crate alloc;
 
 use crate::kprintln;
 use jambo_abi::{Handle, SysError};
-use jambo_sh::{JamboShell, ShellStatus};
 use jambo_kms::{
-    kms_rights, lease_ops, ClusterNode, EscrowPackage, EscrowStatus, JamboKmsDaemon,
-    KeyAlgorithm, KeyEntry, KeyHierarchyLevel, KeyLease, KeyLifecycleState, KmsCap,
-    KmsError, LeaseState, Sha256, KEY_DATA_LEN, MAX_KEYS, MAX_LEASES, MAX_ESCROWS,
-    MAX_NODES,
+    kms_rights, lease_ops, ClusterNode, EscrowPackage, EscrowStatus, JamboKmsDaemon, KeyAlgorithm,
+    KeyEntry, KeyHierarchyLevel, KeyLease, KeyLifecycleState, KmsCap, KmsError, LeaseState, Sha256,
+    KEY_DATA_LEN, MAX_ESCROWS, MAX_KEYS, MAX_LEASES, MAX_NODES,
 };
+use jambo_sh::{JamboShell, ShellStatus};
 
 /// Exécute la suite complète de validation formelle du KMS distribué et du séquestre cryptographique (Phase 108)
 pub fn execute_kms_daemon_test() -> bool {
@@ -35,7 +34,10 @@ pub fn execute_kms_daemon_test() -> bool {
     assert!(admin_cap.has_right(kms_rights::AUDIT_LOG));
 
     let operator_cap = admin_cap
-        .attenuate(kms_rights::CREATE_KEY | kms_rights::DERIVE_KEY | kms_rights::GRANT_LEASE, 16)
+        .attenuate(
+            kms_rights::CREATE_KEY | kms_rights::DERIVE_KEY | kms_rights::GRANT_LEASE,
+            16,
+        )
         .expect("Atténuation monotone KmsCap");
     assert!(operator_cap.has_right(kms_rights::CREATE_KEY));
     assert!(operator_cap.has_right(kms_rights::GRANT_LEASE));
@@ -78,7 +80,9 @@ pub fn execute_kms_daemon_test() -> bool {
         )
         .expect("Dérivation hiérarchique réussie");
 
-    let session_key = *daemon.get_key(session_key_id).expect("Clé dérivée existante");
+    let session_key = *daemon
+        .get_key(session_key_id)
+        .expect("Clé dérivée existante");
     assert_eq!(session_key.parent_id, master_key.key_id);
     assert_eq!(session_key.state, KeyLifecycleState::Active);
 
@@ -113,7 +117,9 @@ pub fn execute_kms_daemon_test() -> bool {
 
     // Consommation d'opérations autorisées
     for _ in 0..10 {
-        assert!(daemon.consume_lease_op(lease_id, daemon.current_ticks + 50, lease_ops::OP_ENCRYPT).is_ok());
+        assert!(daemon
+            .consume_lease_op(lease_id, daemon.current_ticks + 50, lease_ops::OP_ENCRYPT)
+            .is_ok());
     }
     assert_eq!(daemon.get_lease(lease_id).unwrap().used_ops, 10);
 
@@ -125,9 +131,14 @@ pub fn execute_kms_daemon_test() -> bool {
     );
 
     // Renouvellement de bail
-    assert!(daemon.renew_lease(&admin_cap, lease_id, 500, daemon.current_ticks + 100).is_ok());
+    assert!(daemon
+        .renew_lease(&admin_cap, lease_id, 500, daemon.current_ticks + 100)
+        .is_ok());
     assert_eq!(daemon.get_lease(lease_id).unwrap().renewed_count, 1);
-    assert_eq!(daemon.get_lease(lease_id).unwrap().state, LeaseState::Renewed);
+    assert_eq!(
+        daemon.get_lease(lease_id).unwrap().state,
+        LeaseState::Renewed
+    );
     kprintln!("[KMS/LEASE] Baux temporels, quotas d'opérations et renouvellement validés");
 
     // 5. Séquestre M-sur-N & Partage de Secret Shamir GF(256)
@@ -166,7 +177,10 @@ pub fn execute_kms_daemon_test() -> bool {
     let recovered_mat = daemon
         .recover_escrowed_key(&admin_cap, escrow_id)
         .expect("Restauration de la clé séquestrée");
-    assert_eq!(recovered_mat, session_key.material, "Matériel cryptographique restauré intègre");
+    assert_eq!(
+        recovered_mat, session_key.material,
+        "Matériel cryptographique restauré intègre"
+    );
     assert_eq!(
         daemon.get_key(session_key_id).unwrap().state,
         KeyLifecycleState::Active,
@@ -182,8 +196,13 @@ pub fn execute_kms_daemon_test() -> bool {
     let replicated_kid = daemon
         .receive_replication_envelope(&admin_cap, env_id)
         .expect("Réception et déballage de l'enveloppe");
-    let rep_key = daemon.get_key(replicated_kid).expect("Clé répliquée présente");
-    assert_eq!(rep_key.material, session_key.material, "Clé répliquée identique");
+    let rep_key = daemon
+        .get_key(replicated_kid)
+        .expect("Clé répliquée présente");
+    assert_eq!(
+        rep_key.material, session_key.material,
+        "Clé répliquée identique"
+    );
     kprintln!("[KMS/REPLICATION] Réplication chiffrée multi-nœuds et validation HMAC validées");
 
     // 7. Rotation de clés, révocation et zéroïsation
@@ -192,7 +211,10 @@ pub fn execute_kms_daemon_test() -> bool {
         .rotate_key(&admin_cap, session_key_id, &rotated_material)
         .expect("Rotation atomique de clé");
     assert_eq!(daemon.get_key(session_key_id).unwrap().rotation_count, 1);
-    assert_eq!(daemon.get_key(session_key_id).unwrap().material, rotated_material);
+    assert_eq!(
+        daemon.get_key(session_key_id).unwrap().material,
+        rotated_material
+    );
 
     daemon
         .revoke_key(&admin_cap, session_key_id)
@@ -237,7 +259,12 @@ pub fn execute_kms_daemon_test() -> bool {
 
     for cmd in &commands {
         let (status, written) = shell.execute_line(cmd, &mut out_buf);
-        assert_eq!(status, ShellStatus::Success, "Échec commande shell : {}", cmd);
+        assert_eq!(
+            status,
+            ShellStatus::Success,
+            "Échec commande shell : {}",
+            cmd
+        );
         assert!(written > 0, "Sortie vide pour commande : {}", cmd);
     }
     kprintln!("[KMS/SHELL] Commandes interactives Shell jsh kms validées");

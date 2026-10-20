@@ -149,14 +149,16 @@ pub struct Sha256;
 
 impl Sha256 {
     const K: [u32; 64] = [
-        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
-        0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
-        0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
-        0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
-        0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
-        0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
-        0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
-        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
+        0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
+        0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f,
+        0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc,
+        0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+        0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116,
+        0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
+        0xc67178f2,
     ];
 
     #[inline(always)]
@@ -245,8 +247,8 @@ impl Sha256 {
 
     pub fn digest(data: &[u8]) -> [u8; 32] {
         let mut state: [u32; 8] = [
-            0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
-            0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+            0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
+            0x5be0cd19,
         ];
         let total_bits = (data.len() as u64).wrapping_mul(8);
         let mut block = [0u8; 64];
@@ -368,12 +370,8 @@ impl ChaCha20 {
         state[3] = 0x6b206574;
 
         for i in 0..8 {
-            state[4 + i] = u32::from_le_bytes([
-                key[i * 4],
-                key[i * 4 + 1],
-                key[i * 4 + 2],
-                key[i * 4 + 3],
-            ]);
+            state[4 + i] =
+                u32::from_le_bytes([key[i * 4], key[i * 4 + 1], key[i * 4 + 2], key[i * 4 + 3]]);
         }
 
         state[12] = counter;
@@ -534,7 +532,8 @@ impl KeyEntry {
         msg[KEY_DATA_LEN] = self.level as u8;
         msg[KEY_DATA_LEN + 1] = self.algorithm as u8;
         msg[KEY_DATA_LEN + 2..KEY_DATA_LEN + 6].copy_from_slice(&self.key_id.to_be_bytes());
-        msg[KEY_DATA_LEN + 6..KEY_DATA_LEN + 8].copy_from_slice(&(self.rotation_count as u16).to_be_bytes());
+        msg[KEY_DATA_LEN + 6..KEY_DATA_LEN + 8]
+            .copy_from_slice(&(self.rotation_count as u16).to_be_bytes());
         self.fingerprint = Sha256::digest(&msg);
     }
 }
@@ -791,33 +790,39 @@ impl JamboKmsDaemon {
 
         // Clé Racine Maîtresse (Master Key Level 0)
         let master_seed = Sha256::digest(b"JAMBO_KMS_MASTER_ROOT_KEY_2026");
-        let master_id = self.create_key(
-            &cap,
-            b"root-master-kek",
-            KeyHierarchyLevel::MasterKey,
-            KeyAlgorithm::Aes256,
-            &master_seed,
-        ).unwrap_or(0);
+        let master_id = self
+            .create_key(
+                &cap,
+                b"root-master-kek",
+                KeyHierarchyLevel::MasterKey,
+                KeyAlgorithm::Aes256,
+                &master_seed,
+            )
+            .unwrap_or(0);
 
         // Clé de Domaine Dérivée (Domain Key Level 1)
-        let domain_id = self.derive_child_key(
-            &cap,
-            master_id,
-            b"domain-tenant-alpha",
-            KeyHierarchyLevel::DomainKey,
-            KeyAlgorithm::Aes256,
-            b"tenant=alpha,region=core",
-        ).unwrap_or(0);
+        let domain_id = self
+            .derive_child_key(
+                &cap,
+                master_id,
+                b"domain-tenant-alpha",
+                KeyHierarchyLevel::DomainKey,
+                KeyAlgorithm::Aes256,
+                b"tenant=alpha,region=core",
+            )
+            .unwrap_or(0);
 
         // Clé de Données Dérivée (Data Key Level 2)
-        let data_id = self.derive_child_key(
-            &cap,
-            domain_id,
-            b"dek-storage-vfs",
-            KeyHierarchyLevel::DataKey,
-            KeyAlgorithm::ChaCha20,
-            b"dataset=vfs-cow,block=4096",
-        ).unwrap_or(0);
+        let data_id = self
+            .derive_child_key(
+                &cap,
+                domain_id,
+                b"dek-storage-vfs",
+                KeyHierarchyLevel::DataKey,
+                KeyAlgorithm::ChaCha20,
+                b"dataset=vfs-cow,block=4096",
+            )
+            .unwrap_or(0);
 
         // Octroi d'un bail temporel par défaut sur la DEK
         let _ = self.grant_lease(
@@ -883,7 +888,12 @@ impl JamboKmsDaemon {
             return Err(KmsError::KeySlotExhausted);
         }
 
-        let slot = self.keys.iter().position(|k| k.state == KeyLifecycleState::PreActive || k.state == KeyLifecycleState::Destroyed)
+        let slot = self
+            .keys
+            .iter()
+            .position(|k| {
+                k.state == KeyLifecycleState::PreActive || k.state == KeyLifecycleState::Destroyed
+            })
             .unwrap_or(self.key_count);
 
         if slot >= MAX_KEYS {
@@ -934,7 +944,10 @@ impl JamboKmsDaemon {
             return Err(KmsError::KeySlotExhausted);
         }
 
-        let parent = self.keys.iter().find(|k| k.key_id == parent_id && k.state == KeyLifecycleState::Active)
+        let parent = self
+            .keys
+            .iter()
+            .find(|k| k.key_id == parent_id && k.state == KeyLifecycleState::Active)
             .ok_or(KmsError::KeyNotFound)?;
 
         // Règle formelle de hiérarchie : parent doit être d'un niveau strictement supérieur ou égal
@@ -980,12 +993,22 @@ impl JamboKmsDaemon {
         if !cap.has_right(kms_rights::GRANT_LEASE) {
             return Err(KmsError::PermissionDenied);
         }
-        let key_exists = self.keys.iter().any(|k| k.key_id == key_id && k.state == KeyLifecycleState::Active);
+        let key_exists = self
+            .keys
+            .iter()
+            .any(|k| k.key_id == key_id && k.state == KeyLifecycleState::Active);
         if !key_exists {
             return Err(KmsError::KeyNotFound);
         }
 
-        let slot = self.leases.iter().position(|l| l.state == LeaseState::Free || l.state == LeaseState::Expired || l.state == LeaseState::Revoked)
+        let slot = self
+            .leases
+            .iter()
+            .position(|l| {
+                l.state == LeaseState::Free
+                    || l.state == LeaseState::Expired
+                    || l.state == LeaseState::Revoked
+            })
             .unwrap_or(self.lease_count);
 
         if slot >= MAX_LEASES {
@@ -1030,7 +1053,10 @@ impl JamboKmsDaemon {
         }
 
         let (kid, target) = {
-            let lease = self.leases.iter_mut().find(|l| l.lease_id == lease_id)
+            let lease = self
+                .leases
+                .iter_mut()
+                .find(|l| l.lease_id == lease_id)
                 .ok_or(KmsError::LeaseNotFound)?;
 
             if lease.state != LeaseState::Active && lease.state != LeaseState::Renewed {
@@ -1063,7 +1089,10 @@ impl JamboKmsDaemon {
         current_ticks: u64,
         op_flag: u32,
     ) -> Result<(), KmsError> {
-        let lease = self.leases.iter_mut().find(|l| l.lease_id == lease_id)
+        let lease = self
+            .leases
+            .iter_mut()
+            .find(|l| l.lease_id == lease_id)
             .ok_or(KmsError::LeaseNotFound)?;
 
         if lease.state != LeaseState::Active && lease.state != LeaseState::Renewed {
@@ -1094,7 +1123,10 @@ impl JamboKmsDaemon {
             return Err(KmsError::PermissionDenied);
         }
         let (kid, target) = {
-            let lease = self.leases.iter_mut().find(|l| l.lease_id == lease_id)
+            let lease = self
+                .leases
+                .iter_mut()
+                .find(|l| l.lease_id == lease_id)
                 .ok_or(KmsError::LeaseNotFound)?;
 
             lease.state = LeaseState::Revoked;
@@ -1115,17 +1147,26 @@ impl JamboKmsDaemon {
         if !cap.has_right(kms_rights::ESCROW_KEY) {
             return Err(KmsError::PermissionDenied);
         }
-        if threshold == 0 || threshold > total_custodians || (total_custodians as usize) > MAX_CUSTODIANS {
+        if threshold == 0
+            || threshold > total_custodians
+            || (total_custodians as usize) > MAX_CUSTODIANS
+        {
             return Err(KmsError::InvalidCustodianShare);
         }
         if out_shares.len() < total_custodians as usize {
             return Err(KmsError::InvalidCustodianShare);
         }
 
-        let key = self.keys.iter_mut().find(|k| k.key_id == key_id && k.state == KeyLifecycleState::Active)
+        let key = self
+            .keys
+            .iter_mut()
+            .find(|k| k.key_id == key_id && k.state == KeyLifecycleState::Active)
             .ok_or(KmsError::KeyNotFound)?;
 
-        let slot = self.escrows.iter().position(|e| e.status == EscrowStatus::None || e.status == EscrowStatus::Cancelled)
+        let slot = self
+            .escrows
+            .iter()
+            .position(|e| e.status == EscrowStatus::None || e.status == EscrowStatus::Cancelled)
             .unwrap_or(self.escrow_count);
 
         if slot >= MAX_ESCROWS {
@@ -1147,7 +1188,12 @@ impl JamboKmsDaemon {
         // Génération déterministe de la KEK d'escrow et des coefficients polynomiaux de Shamir
         let mut escrow_kek = [0u8; KEY_DATA_LEN];
         let salt = key.fingerprint;
-        Sha256::hkdf_derive(&salt, &key.material, b"JAMBO_KMS_ESCROW_KEK_SALT", &mut escrow_kek);
+        Sha256::hkdf_derive(
+            &salt,
+            &key.material,
+            b"JAMBO_KMS_ESCROW_KEK_SALT",
+            &mut escrow_kek,
+        );
         pkg.escrow_kek_commitment = Sha256::digest(&escrow_kek);
 
         // Coefficients polynomiaux a_1 .. a_{t-1}
@@ -1156,7 +1202,12 @@ impl JamboKmsDaemon {
             let mut info_buf = [0u8; 16];
             info_buf[..4].copy_from_slice(b"DEG_");
             info_buf[4] = deg as u8;
-            Sha256::hkdf_derive(&salt, &escrow_kek, &info_buf[..5], &mut poly_coeffs[deg - 1]);
+            Sha256::hkdf_derive(
+                &salt,
+                &escrow_kek,
+                &info_buf[..5],
+                &mut poly_coeffs[deg - 1],
+            );
         }
 
         // Évaluation P(x) pour chaque gardien x = 1 .. N
@@ -1184,7 +1235,12 @@ impl JamboKmsDaemon {
         let hmac_tag = Sha256::hmac(&escrow_kek, &key.material);
         pkg.wrapped_key[KEY_DATA_LEN..ENVELOPE_CIPHERTEXT_LEN].copy_from_slice(&hmac_tag[..16]);
 
-        ChaCha20::process(&escrow_kek, &pkg.escrow_nonce, 1, &mut pkg.wrapped_key[..KEY_DATA_LEN]);
+        ChaCha20::process(
+            &escrow_kek,
+            &pkg.escrow_nonce,
+            1,
+            &mut pkg.wrapped_key[..KEY_DATA_LEN],
+        );
 
         key.state = KeyLifecycleState::Escrowed;
 
@@ -1210,10 +1266,14 @@ impl JamboKmsDaemon {
         }
 
         let (threshold_met, kid, collected) = {
-            let pkg = self.escrows.iter_mut().find(|e| e.escrow_id == escrow_id)
+            let pkg = self
+                .escrows
+                .iter_mut()
+                .find(|e| e.escrow_id == escrow_id)
                 .ok_or(KmsError::EscrowNotFound)?;
 
-            if pkg.status != EscrowStatus::Secured && pkg.status != EscrowStatus::RecoveryInitiated {
+            if pkg.status != EscrowStatus::Secured && pkg.status != EscrowStatus::RecoveryInitiated
+            {
                 return Err(KmsError::InvalidState);
             }
 
@@ -1223,7 +1283,10 @@ impl JamboKmsDaemon {
 
             // Vérification formelle du hachage d'engagement
             let calculated_commitment = Sha256::digest(share_value);
-            if !constant_time_eq(&calculated_commitment, &pkg.custodian_commitments[custodian_idx as usize]) {
+            if !constant_time_eq(
+                &calculated_commitment,
+                &pkg.custodian_commitments[custodian_idx as usize],
+            ) {
                 return Err(KmsError::InvalidCustodianShare);
             }
 
@@ -1235,7 +1298,11 @@ impl JamboKmsDaemon {
                 pkg.status = EscrowStatus::RecoveryInitiated;
             }
 
-            (pkg.shares_collected >= pkg.threshold, pkg.key_id, pkg.shares_collected)
+            (
+                pkg.shares_collected >= pkg.threshold,
+                pkg.key_id,
+                pkg.shares_collected,
+            )
         };
 
         self.record_audit(b"ESCROW_SHARE", kid, custodian_idx as u32, collected as u32);
@@ -1250,7 +1317,10 @@ impl JamboKmsDaemon {
         if !cap.has_right(kms_rights::RECOVER_KEY) {
             return Err(KmsError::PermissionDenied);
         }
-        let pkg = self.escrows.iter_mut().find(|e| e.escrow_id == escrow_id)
+        let pkg = self
+            .escrows
+            .iter_mut()
+            .find(|e| e.escrow_id == escrow_id)
             .ok_or(KmsError::EscrowNotFound)?;
 
         if pkg.shares_collected < pkg.threshold {
@@ -1309,7 +1379,10 @@ impl JamboKmsDaemon {
         ChaCha20::process(&escrow_kek, &pkg.escrow_nonce, 1, &mut recovered_material);
 
         let hmac_tag = Sha256::hmac(&escrow_kek, &recovered_material);
-        if !constant_time_eq(&hmac_tag[..16], &pkg.wrapped_key[KEY_DATA_LEN..ENVELOPE_CIPHERTEXT_LEN]) {
+        if !constant_time_eq(
+            &hmac_tag[..16],
+            &pkg.wrapped_key[KEY_DATA_LEN..ENVELOPE_CIPHERTEXT_LEN],
+        ) {
             return Err(KmsError::CryptoError);
         }
 
@@ -1339,7 +1412,10 @@ impl JamboKmsDaemon {
             return Err(KmsError::PermissionDenied);
         }
 
-        let slot = self.nodes.iter().position(|n| !n.is_trusted || n.node_id == node_id)
+        let slot = self
+            .nodes
+            .iter()
+            .position(|n| !n.is_trusted || n.node_id == node_id)
             .unwrap_or(self.node_count);
 
         if slot >= MAX_NODES {
@@ -1375,17 +1451,26 @@ impl JamboKmsDaemon {
             return Err(KmsError::PermissionDenied);
         }
 
-        let node = self.nodes.iter().find(|n| n.node_id == target_node && n.is_trusted)
+        let node = self
+            .nodes
+            .iter()
+            .find(|n| n.node_id == target_node && n.is_trusted)
             .ok_or(KmsError::NodeNotFound)?;
 
         if node.cluster_epoch != self.cluster_epoch {
             return Err(KmsError::EpochMismatch);
         }
 
-        let key = self.keys.iter().find(|k| k.key_id == key_id && k.state == KeyLifecycleState::Active)
+        let key = self
+            .keys
+            .iter()
+            .find(|k| k.key_id == key_id && k.state == KeyLifecycleState::Active)
             .ok_or(KmsError::KeyNotFound)?;
 
-        let slot = self.envelopes.iter().position(|e| e.seq == 0)
+        let slot = self
+            .envelopes
+            .iter()
+            .position(|e| e.seq == 0)
             .unwrap_or(self.envelope_count);
 
         if slot >= MAX_ENVELOPES {
@@ -1419,10 +1504,16 @@ impl JamboKmsDaemon {
         // Authentification HMAC-SHA256
         let mut auth_input = [0u8; ENVELOPE_CIPHERTEXT_LEN + NONCE_LEN + 16];
         auth_input[..ENVELOPE_CIPHERTEXT_LEN].copy_from_slice(&env.ciphertext);
-        auth_input[ENVELOPE_CIPHERTEXT_LEN..ENVELOPE_CIPHERTEXT_LEN + NONCE_LEN].copy_from_slice(&env.nonce);
-        auth_input[ENVELOPE_CIPHERTEXT_LEN + NONCE_LEN..ENVELOPE_CIPHERTEXT_LEN + NONCE_LEN + 8].copy_from_slice(&env.seq.to_be_bytes());
-        auth_input[ENVELOPE_CIPHERTEXT_LEN + NONCE_LEN + 8..ENVELOPE_CIPHERTEXT_LEN + NONCE_LEN + 12].copy_from_slice(&target_node.to_be_bytes());
-        auth_input[ENVELOPE_CIPHERTEXT_LEN + NONCE_LEN + 12..ENVELOPE_CIPHERTEXT_LEN + NONCE_LEN + 16].copy_from_slice(&self.node_id.to_be_bytes());
+        auth_input[ENVELOPE_CIPHERTEXT_LEN..ENVELOPE_CIPHERTEXT_LEN + NONCE_LEN]
+            .copy_from_slice(&env.nonce);
+        auth_input[ENVELOPE_CIPHERTEXT_LEN + NONCE_LEN..ENVELOPE_CIPHERTEXT_LEN + NONCE_LEN + 8]
+            .copy_from_slice(&env.seq.to_be_bytes());
+        auth_input
+            [ENVELOPE_CIPHERTEXT_LEN + NONCE_LEN + 8..ENVELOPE_CIPHERTEXT_LEN + NONCE_LEN + 12]
+            .copy_from_slice(&target_node.to_be_bytes());
+        auth_input
+            [ENVELOPE_CIPHERTEXT_LEN + NONCE_LEN + 12..ENVELOPE_CIPHERTEXT_LEN + NONCE_LEN + 16]
+            .copy_from_slice(&self.node_id.to_be_bytes());
 
         env.auth_tag = Sha256::hmac(&node.shared_key, &auth_input);
 
@@ -1445,7 +1536,10 @@ impl JamboKmsDaemon {
             return Err(KmsError::PermissionDenied);
         }
 
-        let env = *self.envelopes.iter().find(|e| e.envelope_id == envelope_id)
+        let env = *self
+            .envelopes
+            .iter()
+            .find(|e| e.envelope_id == envelope_id)
             .ok_or(KmsError::CryptoError)?;
 
         let peer_id = if env.target_node == self.node_id {
@@ -1454,16 +1548,25 @@ impl JamboKmsDaemon {
             env.target_node
         };
 
-        let node = self.nodes.iter().find(|n| n.node_id == peer_id && n.is_trusted)
+        let node = self
+            .nodes
+            .iter()
+            .find(|n| n.node_id == peer_id && n.is_trusted)
             .ok_or(KmsError::NodeNotFound)?;
 
         // Validation HMAC-SHA256
         let mut auth_input = [0u8; ENVELOPE_CIPHERTEXT_LEN + NONCE_LEN + 16];
         auth_input[..ENVELOPE_CIPHERTEXT_LEN].copy_from_slice(&env.ciphertext);
-        auth_input[ENVELOPE_CIPHERTEXT_LEN..ENVELOPE_CIPHERTEXT_LEN + NONCE_LEN].copy_from_slice(&env.nonce);
-        auth_input[ENVELOPE_CIPHERTEXT_LEN + NONCE_LEN..ENVELOPE_CIPHERTEXT_LEN + NONCE_LEN + 8].copy_from_slice(&env.seq.to_be_bytes());
-        auth_input[ENVELOPE_CIPHERTEXT_LEN + NONCE_LEN + 8..ENVELOPE_CIPHERTEXT_LEN + NONCE_LEN + 12].copy_from_slice(&env.target_node.to_be_bytes());
-        auth_input[ENVELOPE_CIPHERTEXT_LEN + NONCE_LEN + 12..ENVELOPE_CIPHERTEXT_LEN + NONCE_LEN + 16].copy_from_slice(&env.origin_node.to_be_bytes());
+        auth_input[ENVELOPE_CIPHERTEXT_LEN..ENVELOPE_CIPHERTEXT_LEN + NONCE_LEN]
+            .copy_from_slice(&env.nonce);
+        auth_input[ENVELOPE_CIPHERTEXT_LEN + NONCE_LEN..ENVELOPE_CIPHERTEXT_LEN + NONCE_LEN + 8]
+            .copy_from_slice(&env.seq.to_be_bytes());
+        auth_input
+            [ENVELOPE_CIPHERTEXT_LEN + NONCE_LEN + 8..ENVELOPE_CIPHERTEXT_LEN + NONCE_LEN + 12]
+            .copy_from_slice(&env.target_node.to_be_bytes());
+        auth_input
+            [ENVELOPE_CIPHERTEXT_LEN + NONCE_LEN + 12..ENVELOPE_CIPHERTEXT_LEN + NONCE_LEN + 16]
+            .copy_from_slice(&env.origin_node.to_be_bytes());
 
         let expected_tag = Sha256::hmac(&node.shared_key, &auth_input);
         if !constant_time_eq(&expected_tag, &env.auth_tag) {
@@ -1506,7 +1609,10 @@ impl JamboKmsDaemon {
         }
 
         let rot_count = {
-            let key = self.keys.iter_mut().find(|k| k.key_id == key_id && k.state == KeyLifecycleState::Active)
+            let key = self
+                .keys
+                .iter_mut()
+                .find(|k| k.key_id == key_id && k.state == KeyLifecycleState::Active)
                 .ok_or(KmsError::KeyNotFound)?;
 
             key.material.copy_from_slice(new_material);
@@ -1525,14 +1631,19 @@ impl JamboKmsDaemon {
             return Err(KmsError::PermissionDenied);
         }
 
-        let key = self.keys.iter_mut().find(|k| k.key_id == key_id)
+        let key = self
+            .keys
+            .iter_mut()
+            .find(|k| k.key_id == key_id)
             .ok_or(KmsError::KeyNotFound)?;
 
         key.state = KeyLifecycleState::Revoked;
 
         // Révocation en cascade des baux associés
         for lease in self.leases.iter_mut() {
-            if lease.key_id == key_id && (lease.state == LeaseState::Active || lease.state == LeaseState::Renewed) {
+            if lease.key_id == key_id
+                && (lease.state == LeaseState::Active || lease.state == LeaseState::Renewed)
+            {
                 lease.state = LeaseState::Revoked;
             }
         }
@@ -1547,7 +1658,10 @@ impl JamboKmsDaemon {
             return Err(KmsError::PermissionDenied);
         }
 
-        let key = self.keys.iter_mut().find(|k| k.key_id == key_id)
+        let key = self
+            .keys
+            .iter_mut()
+            .find(|k| k.key_id == key_id)
             .ok_or(KmsError::KeyNotFound)?;
 
         zeroize_bytes(&mut key.material);
@@ -1588,14 +1702,22 @@ mod tests {
         assert!(cap.has_right(kms_rights::ESCROW_KEY));
         assert!(cap.has_right(kms_rights::RECOVER_KEY));
 
-        let sub_cap = cap.attenuate(kms_rights::CREATE_KEY | kms_rights::GRANT_LEASE, 10).expect("Attenuate");
+        let sub_cap = cap
+            .attenuate(kms_rights::CREATE_KEY | kms_rights::GRANT_LEASE, 10)
+            .expect("Attenuate");
         assert!(sub_cap.has_right(kms_rights::CREATE_KEY));
         assert!(sub_cap.has_right(kms_rights::GRANT_LEASE));
         assert!(!sub_cap.has_right(kms_rights::ESCROW_KEY));
 
         // Refus formel d'amplification
-        assert_eq!(sub_cap.attenuate(kms_rights::ALL, 10), Err(KmsError::PermissionDenied));
-        assert_eq!(sub_cap.attenuate(kms_rights::CREATE_KEY, 20), Err(KmsError::PermissionDenied));
+        assert_eq!(
+            sub_cap.attenuate(kms_rights::ALL, 10),
+            Err(KmsError::PermissionDenied)
+        );
+        assert_eq!(
+            sub_cap.attenuate(kms_rights::CREATE_KEY, 20),
+            Err(KmsError::PermissionDenied)
+        );
     }
 
     #[test]
@@ -1606,33 +1728,39 @@ mod tests {
 
         // 1. Dérivation hiérarchique
         let master = daemon.keys[0];
-        let session_id = daemon.derive_child_key(
-            &cap,
-            master.key_id,
-            b"session-ephemeral",
-            KeyHierarchyLevel::DomainKey,
-            KeyAlgorithm::Aes256,
-            b"purpose=tls-session",
-        ).expect("Derive session key");
+        let session_id = daemon
+            .derive_child_key(
+                &cap,
+                master.key_id,
+                b"session-ephemeral",
+                KeyHierarchyLevel::DomainKey,
+                KeyAlgorithm::Aes256,
+                b"purpose=tls-session",
+            )
+            .expect("Derive session key");
 
         let expected_material = daemon.get_key(session_id).expect("Key exists").material;
         let expected_parent = daemon.get_key(session_id).expect("Key exists").parent_id;
         assert_eq!(expected_parent, master.key_id);
 
         // 2. Gestion des baux
-        let lease_id = daemon.grant_lease(
-            &cap,
-            session_id,
-            0,
-            lease_ops::OP_ENCRYPT | lease_ops::OP_DECRYPT,
-            10,
-            500,
-            1000,
-            2,
-        ).expect("Grant lease");
+        let lease_id = daemon
+            .grant_lease(
+                &cap,
+                session_id,
+                0,
+                lease_ops::OP_ENCRYPT | lease_ops::OP_DECRYPT,
+                10,
+                500,
+                1000,
+                2,
+            )
+            .expect("Grant lease");
 
         // Consommation
-        assert!(daemon.consume_lease_op(lease_id, 1100, lease_ops::OP_ENCRYPT).is_ok());
+        assert!(daemon
+            .consume_lease_op(lease_id, 1100, lease_ops::OP_ENCRYPT)
+            .is_ok());
         assert_eq!(daemon.get_lease(lease_id).unwrap().used_ops, 1);
 
         // Opération interdite par le bail
@@ -1647,11 +1775,18 @@ mod tests {
 
         // 3. Séquestre M-sur-N (2 gardiens sur 3)
         let mut shares = [[0u8; KEY_DATA_LEN]; 3];
-        let escrow_id = daemon.setup_escrow(&cap, session_id, 2, 3, &mut shares).expect("Setup escrow");
-        assert_eq!(daemon.get_key(session_id).unwrap().state, KeyLifecycleState::Escrowed);
+        let escrow_id = daemon
+            .setup_escrow(&cap, session_id, 2, 3, &mut shares)
+            .expect("Setup escrow");
+        assert_eq!(
+            daemon.get_key(session_id).unwrap().state,
+            KeyLifecycleState::Escrowed
+        );
 
         // Soumission première part
-        let met = daemon.submit_escrow_share(&cap, escrow_id, 0, &shares[0]).expect("Share 1");
+        let met = daemon
+            .submit_escrow_share(&cap, escrow_id, 0, &shares[0])
+            .expect("Share 1");
         assert!(!met);
 
         // Soumission mauvaise part (falsification)
@@ -1662,27 +1797,46 @@ mod tests {
         );
 
         // Soumission deuxième part valide -> Quorum atteint
-        let met2 = daemon.submit_escrow_share(&cap, escrow_id, 1, &shares[1]).expect("Share 2");
+        let met2 = daemon
+            .submit_escrow_share(&cap, escrow_id, 1, &shares[1])
+            .expect("Share 2");
         assert!(met2);
 
         // Restauration de la clé
-        let recovered = daemon.recover_escrowed_key(&cap, escrow_id).expect("Recover");
+        let recovered = daemon
+            .recover_escrowed_key(&cap, escrow_id)
+            .expect("Recover");
         assert_eq!(recovered, expected_material);
-        assert_eq!(daemon.get_key(session_id).unwrap().state, KeyLifecycleState::Active);
+        assert_eq!(
+            daemon.get_key(session_id).unwrap().state,
+            KeyLifecycleState::Active
+        );
 
         // 4. Réplication de Grappe
-        let env_id = daemon.create_replication_envelope(&cap, session_id, 1).expect("Create env");
+        let env_id = daemon
+            .create_replication_envelope(&cap, session_id, 1)
+            .expect("Create env");
         assert!(daemon.envelopes.iter().any(|e| e.envelope_id == env_id));
-        let rep_kid = daemon.receive_replication_envelope(&cap, env_id).expect("Receive env");
+        let rep_kid = daemon
+            .receive_replication_envelope(&cap, env_id)
+            .expect("Receive env");
         assert_eq!(daemon.get_key(rep_kid).unwrap().material, expected_material);
 
         // 5. Rotation et Zéroïsation
         let new_mat = [0x77u8; KEY_DATA_LEN];
-        daemon.rotate_key(&cap, session_id, &new_mat).expect("Rotate");
+        daemon
+            .rotate_key(&cap, session_id, &new_mat)
+            .expect("Rotate");
         assert_eq!(daemon.get_key(session_id).unwrap().rotation_count, 1);
 
         daemon.zeroize_key(&cap, session_id).expect("Zeroize");
-        assert_eq!(daemon.get_key(session_id).unwrap().state, KeyLifecycleState::Destroyed);
-        assert_eq!(daemon.get_key(session_id).unwrap().material, [0u8; KEY_DATA_LEN]);
+        assert_eq!(
+            daemon.get_key(session_id).unwrap().state,
+            KeyLifecycleState::Destroyed
+        );
+        assert_eq!(
+            daemon.get_key(session_id).unwrap().material,
+            [0u8; KEY_DATA_LEN]
+        );
     }
 }

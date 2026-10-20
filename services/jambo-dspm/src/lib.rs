@@ -33,29 +33,23 @@ pub struct Sha256 {
 
 impl Sha256 {
     const K: [u32; 64] = [
-        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5,
-        0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
-        0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3,
-        0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
-        0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc,
-        0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
-        0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
-        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
-        0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13,
-        0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
-        0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3,
-        0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
-        0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5,
-        0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
-        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
-        0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
+        0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
+        0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f,
+        0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc,
+        0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+        0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116,
+        0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
+        0xc67178f2,
     ];
 
     pub fn new() -> Self {
         Self {
             state: [
-                0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
-                0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+                0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
+                0x5be0cd19,
             ],
             buffer: [0u8; 64],
             buffer_len: 0,
@@ -76,7 +70,10 @@ impl Sha256 {
         for i in 16..64 {
             let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);
             let s1 = w[i - 2].rotate_right(17) ^ w[i - 2].rotate_right(19) ^ (w[i - 2] >> 10);
-            w[i] = w[i - 16].wrapping_add(s0).wrapping_add(w[i - 7]).wrapping_add(s1);
+            w[i] = w[i - 16]
+                .wrapping_add(s0)
+                .wrapping_add(w[i - 7])
+                .wrapping_add(s1);
         }
 
         let mut a = self.state[0];
@@ -177,14 +174,14 @@ impl Sha256 {
 // ============================================================================
 
 pub mod dspm_rights {
-    pub const DISCOVER_DATA: u32    = 1 << 0; // Découverte d'actifs de données
-    pub const CLASSIFY_DATA: u32    = 1 << 1; // Classification et catégorisation sémantique
-    pub const MAP_DATA_FLOWS: u32   = 1 << 2; // Cartographie et traçage des flux de données
-    pub const ENFORCE_POLICY: u32   = 1 << 3; // Application des règles et blocage préventif
-    pub const QUARANTINE_DATA: u32  = 1 << 4; // Mise en quarantaine et isolation d'urgence
-    pub const QUERY_AUDIT: u32      = 1 << 5; // Consultation de l'audit et de l'intégrité
+    pub const DISCOVER_DATA: u32 = 1 << 0; // Découverte d'actifs de données
+    pub const CLASSIFY_DATA: u32 = 1 << 1; // Classification et catégorisation sémantique
+    pub const MAP_DATA_FLOWS: u32 = 1 << 2; // Cartographie et traçage des flux de données
+    pub const ENFORCE_POLICY: u32 = 1 << 3; // Application des règles et blocage préventif
+    pub const QUARANTINE_DATA: u32 = 1 << 4; // Mise en quarantaine et isolation d'urgence
+    pub const QUERY_AUDIT: u32 = 1 << 5; // Consultation de l'audit et de l'intégrité
     pub const EXPORT_INVENTORY: u32 = 1 << 6; // Exportation de l'inventaire des actifs
-    pub const ADMIN: u32            = 1 << 7; // Administration globale de la posture DSPM
+    pub const ADMIN: u32 = 1 << 7; // Administration globale de la posture DSPM
 
     pub const ALL: u32 = DISCOVER_DATA
         | CLASSIFY_DATA
@@ -234,12 +231,25 @@ impl DspmCap {
     }
 
     /// Atténuation strictement monotone (Least Privilege)
-    pub fn attenuate(&self, requested_rights: u32, lifetime: u64, invocations: u32) -> Result<Self, DspmError> {
+    pub fn attenuate(
+        &self,
+        requested_rights: u32,
+        lifetime: u64,
+        invocations: u32,
+    ) -> Result<Self, DspmError> {
         if (requested_rights & !self.rights) != 0 {
             return Err(DspmError::AttenuationViolation);
         }
-        let eff_lifetime = if lifetime < self.max_lifetime { lifetime } else { self.max_lifetime };
-        let eff_invocations = if invocations < self.invocations_left { invocations } else { self.invocations_left };
+        let eff_lifetime = if lifetime < self.max_lifetime {
+            lifetime
+        } else {
+            self.max_lifetime
+        };
+        let eff_invocations = if invocations < self.invocations_left {
+            invocations
+        } else {
+            self.invocations_left
+        };
 
         Ok(Self {
             handle: self.handle,
@@ -291,12 +301,12 @@ impl SensitivityLevel {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DataCategory {
     General,
-    PII,                 // Données personnelles / identifiants
-    CryptographicKey,    // Clés privées, secrets HSM, jetons JWT
-    FinancialData,       // Transactions, bilans souverains
-    HealthData,          // Données médicales / biométrie
-    KernelTelemetry,     // Traces IPC bas-niveau, logs noyau
-    IntellectualProperty,// Code source classifié, modèles d'IA souverains
+    PII,                  // Données personnelles / identifiants
+    CryptographicKey,     // Clés privées, secrets HSM, jetons JWT
+    FinancialData,        // Transactions, bilans souverains
+    HealthData,           // Données médicales / biométrie
+    KernelTelemetry,      // Traces IPC bas-niveau, logs noyau
+    IntellectualProperty, // Code source classifié, modèles d'IA souverains
 }
 
 impl DataCategory {
@@ -316,11 +326,11 @@ impl DataCategory {
 /// Emplacement physique ou logique du stockage de données
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StorageLocationType {
-    VfsMount,      // Système de fichiers Jambo VFS
-    IpcChannel,    // Canal IPC / Socket micro-noyau
-    TeeEnclave,    // Enclave sécurisée TEE / SGX / TrustZone
-    RamBuffer,     // Buffer mémoire partagé / RingBuffer
-    NvmeBlock,     // Disque bloc chiffré NVMe
+    VfsMount,   // Système de fichiers Jambo VFS
+    IpcChannel, // Canal IPC / Socket micro-noyau
+    TeeEnclave, // Enclave sécurisée TEE / SGX / TrustZone
+    RamBuffer,  // Buffer mémoire partagé / RingBuffer
+    NvmeBlock,  // Disque bloc chiffré NVMe
 }
 
 impl StorageLocationType {
@@ -338,10 +348,10 @@ impl StorageLocationType {
 /// Compartiment de sécurité hébergeant ou transitant les données
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DataCompartment {
-    SovereignCore,       // Micro-noyau, cryptomoteur, TEE
-    SecFabric,           // Services de sécurité souverains jambo-*
-    UserWorkload,        // Applications Ring 3 isolées
-    CrossBorderUntrusted,// Flux réseau externe ou zone non approuvée
+    SovereignCore,        // Micro-noyau, cryptomoteur, TEE
+    SecFabric,            // Services de sécurité souverains jambo-*
+    UserWorkload,         // Applications Ring 3 isolées
+    CrossBorderUntrusted, // Flux réseau externe ou zone non approuvée
 }
 
 impl DataCompartment {
@@ -436,7 +446,8 @@ impl DataFlow {
         if self.violation_len == 0 {
             "Conforme"
         } else {
-            core::str::from_utf8(&self.violation_reason[..self.violation_len]).unwrap_or("Non conforme")
+            core::str::from_utf8(&self.violation_reason[..self.violation_len])
+                .unwrap_or("Non conforme")
         }
     }
 }
@@ -739,12 +750,7 @@ impl JamboDspmDaemon {
         )?;
 
         if (sens >= SensitivityLevel::Confidential) && !encrypted {
-            self.raise_violation(
-                id,
-                ViolationType::UnencryptedSensitiveData,
-                4,
-                timestamp,
-            );
+            self.raise_violation(id, ViolationType::UnencryptedSensitiveData, 4, timestamp);
         }
 
         Ok(id)
@@ -811,7 +817,16 @@ impl JamboDspmDaemon {
 
         if quarantined {
             // Un actif en quarantaine ne peut émettre aucun flux
-            self.record_flow(src_asset_id, src_comp, target_comp, sens, bytes, false, "Actif en quarantaine", timestamp);
+            self.record_flow(
+                src_asset_id,
+                src_comp,
+                target_comp,
+                sens,
+                bytes,
+                false,
+                "Actif en quarantaine",
+                timestamp,
+            );
             return Ok(false);
         }
 
@@ -820,10 +835,17 @@ impl JamboDspmDaemon {
         let mut reason = "";
 
         // Règle générale : Si cible = CrossBorderUntrusted et sensibilité >= Confidential => Blocage strict
-        if target_comp == DataCompartment::CrossBorderUntrusted && sens >= SensitivityLevel::Confidential {
+        if target_comp == DataCompartment::CrossBorderUntrusted
+            && sens >= SensitivityLevel::Confidential
+        {
             allowed = false;
             reason = "Fuite transfrontaliere confidentielle bloquee";
-            self.raise_violation(src_asset_id, ViolationType::UnauthorizedCrossBorderTransfer, 5, timestamp);
+            self.raise_violation(
+                src_asset_id,
+                ViolationType::UnauthorizedCrossBorderTransfer,
+                5,
+                timestamp,
+            );
         } else {
             // Parcours des règles configurées
             for i in 0..self.flow_rule_count {
@@ -832,13 +854,23 @@ impl JamboDspmDaemon {
                         if sens > r.max_allowed_sensitivity {
                             allowed = false;
                             reason = "Depassement niveau de sensibilite autorise";
-                            self.raise_violation(src_asset_id, ViolationType::ClassificationMismatch, 3, timestamp);
+                            self.raise_violation(
+                                src_asset_id,
+                                ViolationType::ClassificationMismatch,
+                                3,
+                                timestamp,
+                            );
                             break;
                         }
                         if r.require_encryption && !enc {
                             allowed = false;
                             reason = "Chiffrement obligatoire non satisfait";
-                            self.raise_violation(src_asset_id, ViolationType::UnencryptedSensitiveData, 4, timestamp);
+                            self.raise_violation(
+                                src_asset_id,
+                                ViolationType::UnencryptedSensitiveData,
+                                4,
+                                timestamp,
+                            );
                             break;
                         }
                         if r.action == FlowAction::Block {
@@ -851,8 +883,22 @@ impl JamboDspmDaemon {
             }
         }
 
-        self.record_flow(src_asset_id, src_comp, target_comp, sens, bytes, allowed, reason, timestamp);
-        self.record_audit(if allowed { 3 } else { 4 }, src_asset_id, cap.handle.0, timestamp);
+        self.record_flow(
+            src_asset_id,
+            src_comp,
+            target_comp,
+            sens,
+            bytes,
+            allowed,
+            reason,
+            timestamp,
+        );
+        self.record_audit(
+            if allowed { 3 } else { 4 },
+            src_asset_id,
+            cap.handle.0,
+            timestamp,
+        );
         Ok(allowed)
     }
 
@@ -898,7 +944,13 @@ impl JamboDspmDaemon {
     }
 
     /// Signale et enregistre une violation
-    pub fn raise_violation(&mut self, asset_id: u32, vtype: ViolationType, severity: u8, timestamp: u64) {
+    pub fn raise_violation(
+        &mut self,
+        asset_id: u32,
+        vtype: ViolationType,
+        severity: u8,
+        timestamp: u64,
+    ) {
         if self.violation_count >= self.violations.len() {
             return;
         }
@@ -989,7 +1041,8 @@ impl JamboDspmDaemon {
                 a.scan_timestamp = timestamp;
                 scanned += 1;
 
-                if a.sensitivity >= SensitivityLevel::Confidential && !a.encrypted && !a.quarantined {
+                if a.sensitivity >= SensitivityLevel::Confidential && !a.encrypted && !a.quarantined
+                {
                     if unencrypted_count < unencrypted_violations.len() {
                         unencrypted_violations[unencrypted_count] = a.id;
                         unencrypted_count += 1;
@@ -999,7 +1052,12 @@ impl JamboDspmDaemon {
         }
 
         for i in 0..unencrypted_count {
-            self.raise_violation(unencrypted_violations[i], ViolationType::UnencryptedSensitiveData, 4, timestamp);
+            self.raise_violation(
+                unencrypted_violations[i],
+                ViolationType::UnencryptedSensitiveData,
+                4,
+                timestamp,
+            );
         }
 
         self.record_audit(7, 0, cap.handle.0, timestamp);
@@ -1087,7 +1145,9 @@ impl JamboDspmDaemon {
         let prev_hash = if self.ledger_count == 0 {
             [0u8; 32]
         } else {
-            self.ledger[self.ledger_count - 1].map(|e| e.entry_hash).unwrap_or([0u8; 32])
+            self.ledger[self.ledger_count - 1]
+                .map(|e| e.entry_hash)
+                .unwrap_or([0u8; 32])
         };
 
         let mut hasher = Sha256::new();
@@ -1196,34 +1256,41 @@ mod tests {
         let mut daemon = JamboDspmDaemon::new(cap);
         daemon.init_defaults();
 
-        let id = daemon.register_asset(
-            &mut cap,
-            "patient_medical_records",
-            "vfs:///sec/health/records.bin",
-            StorageLocationType::NvmeBlock,
-            DataCompartment::SecFabric,
-            SensitivityLevel::Secret,
-            DataCategory::HealthData,
-            8192,
-            [0xEE; 32],
-            42,
-            true,
-            1200,
-        ).unwrap();
+        let id = daemon
+            .register_asset(
+                &mut cap,
+                "patient_medical_records",
+                "vfs:///sec/health/records.bin",
+                StorageLocationType::NvmeBlock,
+                DataCompartment::SecFabric,
+                SensitivityLevel::Secret,
+                DataCategory::HealthData,
+                8192,
+                [0xEE; 32],
+                42,
+                true,
+                1200,
+            )
+            .unwrap();
 
         assert_eq!(id, 5);
         assert_eq!(daemon.asset_count, 5);
 
         // Reclassification
-        daemon.classify_asset(
-            &mut cap,
-            id,
-            SensitivityLevel::TopSecretSovereign,
-            DataCategory::HealthData,
-            1250,
-        ).unwrap();
+        daemon
+            .classify_asset(
+                &mut cap,
+                id,
+                SensitivityLevel::TopSecretSovereign,
+                DataCategory::HealthData,
+                1250,
+            )
+            .unwrap();
 
-        assert_eq!(daemon.assets[4].unwrap().sensitivity, SensitivityLevel::TopSecretSovereign);
+        assert_eq!(
+            daemon.assets[4].unwrap().sensitivity,
+            SensitivityLevel::TopSecretSovereign
+        );
         assert!(daemon.verify_ledger_integrity());
     }
 
@@ -1234,24 +1301,29 @@ mod tests {
         daemon.init_defaults();
 
         // Enregistrement d'une donnée confidentielle NON chiffrée
-        let id = daemon.register_asset(
-            &mut cap,
-            "unencrypted_bank_details",
-            "vfs:///tmp/financial.csv",
-            StorageLocationType::VfsMount,
-            DataCompartment::UserWorkload,
-            SensitivityLevel::Confidential,
-            DataCategory::FinancialData,
-            1024,
-            [0x11; 32],
-            50,
-            false, // Non chiffré !
-            1300,
-        ).unwrap();
+        let id = daemon
+            .register_asset(
+                &mut cap,
+                "unencrypted_bank_details",
+                "vfs:///tmp/financial.csv",
+                StorageLocationType::VfsMount,
+                DataCompartment::UserWorkload,
+                SensitivityLevel::Confidential,
+                DataCategory::FinancialData,
+                1024,
+                [0x11; 32],
+                50,
+                false, // Non chiffré !
+                1300,
+            )
+            .unwrap();
 
         assert!(daemon.violation_count > 0);
         assert_eq!(daemon.violations[0].unwrap().asset_id, id);
-        assert_eq!(daemon.violations[0].unwrap().violation_type, ViolationType::UnencryptedSensitiveData);
+        assert_eq!(
+            daemon.violations[0].unwrap().violation_type,
+            ViolationType::UnencryptedSensitiveData
+        );
     }
 
     #[test]
@@ -1261,26 +1333,33 @@ mod tests {
         daemon.init_defaults();
 
         // Tentative de flux de l'actif 1 (TopSecretSovereign, Root PKI) vers la zone non approuvée
-        let allowed = daemon.evaluate_flow(
-            &mut cap,
-            1,
-            DataCompartment::CrossBorderUntrusted,
-            4096,
-            1400,
-        ).unwrap();
+        let allowed = daemon
+            .evaluate_flow(
+                &mut cap,
+                1,
+                DataCompartment::CrossBorderUntrusted,
+                4096,
+                1400,
+            )
+            .unwrap();
 
-        assert!(!allowed, "Un actif Top Secret ne peut transiter vers un domaine transfrontalier non approuvé");
+        assert!(
+            !allowed,
+            "Un actif Top Secret ne peut transiter vers un domaine transfrontalier non approuvé"
+        );
         assert_eq!(daemon.flow_count, 1);
         assert!(!daemon.flows[0].unwrap().allowed);
 
         // Flux légitime de SecFabric vers UserWorkload pour données de faible sensibilité
-        let allowed_internal = daemon.evaluate_flow(
-            &mut cap,
-            4, // Public metrics
-            DataCompartment::UserWorkload,
-            512,
-            1410,
-        ).unwrap();
+        let allowed_internal = daemon
+            .evaluate_flow(
+                &mut cap,
+                4, // Public metrics
+                DataCompartment::UserWorkload,
+                512,
+                1410,
+            )
+            .unwrap();
         assert!(allowed_internal);
     }
 
@@ -1295,14 +1374,13 @@ mod tests {
         assert!(daemon.assets[1].unwrap().quarantined);
 
         // Vérification qu'un flux est bloqué d'office si actif en quarantaine
-        let allowed = daemon.evaluate_flow(
-            &mut cap,
-            2,
-            DataCompartment::SecFabric,
-            1024,
-            1510,
-        ).unwrap();
-        assert!(!allowed, "Un actif en quarantaine doit voir ses flux bloqués d'office");
+        let allowed = daemon
+            .evaluate_flow(&mut cap, 2, DataCompartment::SecFabric, 1024, 1510)
+            .unwrap();
+        assert!(
+            !allowed,
+            "Un actif en quarantaine doit voir ses flux bloqués d'office"
+        );
 
         // Levée de quarantaine
         daemon.unquarantine_asset(&mut cap, 2, 1520).unwrap();
@@ -1340,6 +1418,9 @@ mod tests {
             e.action_code = 0x9999;
         }
 
-        assert!(!daemon.verify_ledger_integrity(), "L'altération de l'audit doit être détectée");
+        assert!(
+            !daemon.verify_ledger_integrity(),
+            "L'altération de l'audit doit être détectée"
+        );
     }
 }

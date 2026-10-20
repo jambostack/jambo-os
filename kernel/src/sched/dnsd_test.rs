@@ -6,7 +6,7 @@ extern crate alloc;
 use crate::kprintln;
 use jambo_abi::{Handle, SysError};
 use jambo_dnsd::{
-    dns_rights, DnsCap, DnsRecordData, DnsRcode, DnsType, JamboDnsDaemon, MAX_DOMAIN_LEN,
+    dns_rights, DnsCap, DnsRcode, DnsRecordData, DnsType, JamboDnsDaemon, MAX_DOMAIN_LEN,
 };
 use jambo_serviced::{discovery_rights, DiscoveryCap, ServiceRegistry};
 use jambo_sh::{JamboShell, ShellStatus};
@@ -74,9 +74,7 @@ pub fn execute_cluster_dns_test() -> bool {
             "api.jambo",
             DnsType::AAAA,
             300,
-            DnsRecordData::AAAA([
-                0xfd, 0x00, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
-            ]),
+            DnsRecordData::AAAA([0xfd, 0x00, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]),
             100,
         )
         .expect("add AAAA record api.jambo");
@@ -160,8 +158,8 @@ pub fn execute_cluster_dns_test() -> bool {
         0x00, 0x00, // NSCOUNT = 0
         0x00, 0x00, // ARCOUNT = 0
         // Question: \x03api\x05jambo\x00 (api.jambo)
-        0x03, b'a', b'p', b'i', 0x05, b'j', b'a', b'm', b'b', b'o', 0x00,
-        0x00, 0x01, // QTYPE = 1 (A)
+        0x03, b'a', b'p', b'i', 0x05, b'j', b'a', b'm', b'b', b'o', 0x00, 0x00,
+        0x01, // QTYPE = 1 (A)
         0x00, 0x01, // QCLASS = 1 (IN)
     ];
 
@@ -173,12 +171,18 @@ pub fn execute_cluster_dns_test() -> bool {
     assert!(resp_len >= 27);
     assert_eq!(response_buf[0..2], [0x56, 0x78]); // Identifiant transaction
     let flags = u16::from_be_bytes([response_buf[2], response_buf[3]]);
-    assert!((flags & 0x8000) != 0, "QR doit être positionné à 1 (réponse)");
-    assert!((flags & 0x0400) != 0, "AA doit être 1 pour la zone d'autorité .jambo");
+    assert!(
+        (flags & 0x8000) != 0,
+        "QR doit être positionné à 1 (réponse)"
+    );
+    assert!(
+        (flags & 0x0400) != 0,
+        "AA doit être 1 pour la zone d'autorité .jambo"
+    );
     assert_eq!(flags & 0x000F, 0, "RCODE doit être NoError (0)");
     assert_eq!(u16::from_be_bytes([response_buf[4], response_buf[5]]), 1); // QDCOUNT = 1
     assert_eq!(u16::from_be_bytes([response_buf[6], response_buf[7]]), 1); // ANCOUNT = 1
-    // Vérification de l'adresse IP dans les 4 derniers octets du RDATA
+                                                                           // Vérification de l'adresse IP dans les 4 derniers octets du RDATA
     assert_eq!(&response_buf[resp_len - 4..resp_len], &[10, 0, 1, 50]);
     kprintln!("[DNS/WIRE] Décodage RFC 1035 et génération de réponse d'autorité validés");
 
@@ -186,22 +190,16 @@ pub fn execute_cluster_dns_test() -> bool {
     let mut disc_registry = ServiceRegistry::new();
     let disc_cap = DiscoveryCap::new(Handle::new(68, 1), discovery_rights::ALL);
     disc_registry
-        .register_instance(
-            &disc_cap,
-            b"storage",
-            1,
-            [10, 0, 5, 20],
-            9000,
-            1,
-            300,
-            200,
-        )
+        .register_instance(&disc_cap, b"storage", 1, [10, 0, 5, 20], 9000, 1, 300, 200)
         .expect("register storage in discovery");
 
     let synced = daemon
         .sync_from_service_registry(&admin_cap, &disc_registry, 210)
         .expect("sync from discovery");
-    assert!(synced >= 2, "Au moins 1 enregistrement A et 1 SRV synchronisés");
+    assert!(
+        synced >= 2,
+        "Au moins 1 enregistrement A et 1 SRV synchronisés"
+    );
 
     let storage_ip = daemon
         .resolve_a(&admin_cap, "storage.jambo", 210)
@@ -253,6 +251,8 @@ pub fn execute_cluster_dns_test() -> bool {
     assert!(s.contains("synchronisé(s)"));
     kprintln!("[DNS/SHELL] Commande 'dns sync' validée");
 
-    kprintln!("[DNS/PASS] Suite de tests Serveur et Résolveur DNS d'autorité complétée avec succès !");
+    kprintln!(
+        "[DNS/PASS] Suite de tests Serveur et Résolveur DNS d'autorité complétée avec succès !"
+    );
     true
 }

@@ -29,14 +29,16 @@ pub struct Sha256;
 
 impl Sha256 {
     const K: [u32; 64] = [
-        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
-        0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
-        0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
-        0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
-        0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
-        0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
-        0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
-        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
+        0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
+        0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f,
+        0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc,
+        0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+        0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116,
+        0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
+        0xc67178f2,
     ];
 
     #[inline(always)]
@@ -125,8 +127,14 @@ impl Sha256 {
 
     pub fn digest(data: &[u8]) -> [u8; 32] {
         let mut state = [
-            0x6a09e667u32, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
-            0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+            0x6a09e667u32,
+            0xbb67ae85,
+            0x3c6ef372,
+            0xa54ff53a,
+            0x510e527f,
+            0x9b05688c,
+            0x1f83d9ab,
+            0x5be0cd19,
         ];
 
         let bit_len = (data.len() as u64) * 8;
@@ -291,7 +299,12 @@ pub struct HwWatchdog {
 }
 
 impl HwWatchdog {
-    pub const fn new(hw_type: HwWatchdogType, io_port_base: u16, timeout_ms: u64, pre_timeout_ms: u64) -> Self {
+    pub const fn new(
+        hw_type: HwWatchdogType,
+        io_port_base: u16,
+        timeout_ms: u64,
+        pre_timeout_ms: u64,
+    ) -> Self {
         Self {
             hw_type,
             io_port_base,
@@ -324,7 +337,9 @@ impl HwWatchdog {
     }
 
     pub fn time_remaining_ms(&self, current_timestamp: u64) -> u64 {
-        if self.status == HwWatchdogStatus::Disabled || current_timestamp <= self.last_reload_timestamp {
+        if self.status == HwWatchdogStatus::Disabled
+            || current_timestamp <= self.last_reload_timestamp
+        {
             return self.timeout_ms;
         }
         let elapsed = current_timestamp - self.last_reload_timestamp;
@@ -346,7 +361,9 @@ impl HwWatchdog {
             self.status = HwWatchdogStatus::ResetTriggered;
             self.reset_count += 1;
             HwWatchdogEvent::HardwareResetTriggered
-        } else if self.nmi_enabled && elapsed >= (self.timeout_ms.saturating_sub(self.pre_timeout_ms)) {
+        } else if self.nmi_enabled
+            && elapsed >= (self.timeout_ms.saturating_sub(self.pre_timeout_ms))
+        {
             if self.status != HwWatchdogStatus::PreTimeoutWarning {
                 self.status = HwWatchdogStatus::PreTimeoutWarning;
                 self.nmi_count += 1;
@@ -468,7 +485,9 @@ impl WatchdogTarget {
     }
 
     pub fn pet(&mut self, timestamp: u64) {
-        if self.state == TargetLivenessState::Isolated || self.state == TargetLivenessState::Terminated {
+        if self.state == TargetLivenessState::Isolated
+            || self.state == TargetLivenessState::Terminated
+        {
             return;
         }
 
@@ -487,7 +506,9 @@ impl WatchdogTarget {
     }
 
     pub fn evaluate(&mut self, current_timestamp: u64) -> TargetLivenessState {
-        if self.state == TargetLivenessState::Isolated || self.state == TargetLivenessState::Terminated {
+        if self.state == TargetLivenessState::Isolated
+            || self.state == TargetLivenessState::Terminated
+        {
             return self.state;
         }
 
@@ -802,8 +823,8 @@ impl JamboWatchdogDaemon {
         let _ = self.register_cluster_node_internal(ClusterNodeHeartbeat::new(
             1,
             "node-alpha",
-            500, // intervalle 500ms
-            3,   // 3 manques = 1500ms -> failover
+            500,  // intervalle 500ms
+            3,    // 3 manques = 1500ms -> failover
             true, // Primary
             100,
         ));
@@ -839,7 +860,10 @@ impl JamboWatchdogDaemon {
         Err(SysError::OutOfMemory)
     }
 
-    fn register_cluster_node_internal(&mut self, node: ClusterNodeHeartbeat) -> Result<(), SysError> {
+    fn register_cluster_node_internal(
+        &mut self,
+        node: ClusterNodeHeartbeat,
+    ) -> Result<(), SysError> {
         if self.cluster_count >= MAX_CLUSTER_NODES {
             return Err(SysError::OutOfMemory);
         }
@@ -854,7 +878,11 @@ impl JamboWatchdogDaemon {
     }
 
     /// Enregistre un nouveau watchdog cible sous contrôle capabilaire
-    pub fn register_target(&mut self, cap: &WatchdogCap, target: WatchdogTarget) -> Result<(), SysError> {
+    pub fn register_target(
+        &mut self,
+        cap: &WatchdogCap,
+        target: WatchdogTarget,
+    ) -> Result<(), SysError> {
         if !cap.has_right(watchdog_rights::WATCHDOG_REGISTER) {
             return Err(SysError::PermissionDenied);
         }
@@ -869,7 +897,12 @@ impl JamboWatchdogDaemon {
     }
 
     /// Nourrit le chien de garde pour une cible donnée (Petting)
-    pub fn pet_target(&mut self, cap: &WatchdogCap, target_id: u32, timestamp: u64) -> Result<(), SysError> {
+    pub fn pet_target(
+        &mut self,
+        cap: &WatchdogCap,
+        target_id: u32,
+        timestamp: u64,
+    ) -> Result<(), SysError> {
         if !cap.has_right(watchdog_rights::WATCHDOG_PET) {
             return Err(SysError::PermissionDenied);
         }
@@ -882,7 +915,9 @@ impl JamboWatchdogDaemon {
                     let old_state = target.state;
                     target.pet(timestamp);
                     found = true;
-                    if target.state == TargetLivenessState::WarningDrift && old_state != TargetLivenessState::WarningDrift {
+                    if target.state == TargetLivenessState::WarningDrift
+                        && old_state != TargetLivenessState::WarningDrift
+                    {
                         is_drift = true;
                     }
                     break;
@@ -931,7 +966,11 @@ impl JamboWatchdogDaemon {
     }
 
     /// Évalue la vivacité globale de toutes les cibles et nœuds à l'instant `timestamp`
-    pub fn evaluate_system_liveness(&mut self, cap: &WatchdogCap, timestamp: u64) -> Result<(), SysError> {
+    pub fn evaluate_system_liveness(
+        &mut self,
+        cap: &WatchdogCap,
+        timestamp: u64,
+    ) -> Result<(), SysError> {
         if !cap.has_right(watchdog_rights::WATCHDOG_INSPECT) {
             return Err(SysError::PermissionDenied);
         }
@@ -939,10 +978,22 @@ impl JamboWatchdogDaemon {
         // 1. Chien de garde matériel
         match self.hw_watchdog.tick(timestamp) {
             HwWatchdogEvent::PreTimeoutNmiEmitted => {
-                self.trigger_nmi_internal(0, None, LockupType::HardwarePreTimeout, 0xFFFFFFFF80100000, 0xFFFF800000010000, timestamp);
+                self.trigger_nmi_internal(
+                    0,
+                    None,
+                    LockupType::HardwarePreTimeout,
+                    0xFFFFFFFF80100000,
+                    0xFFFF800000010000,
+                    timestamp,
+                );
             }
             HwWatchdogEvent::HardwareResetTriggered => {
-                self.commit_audit_event(WatchdogEventType::TargetStalled, 0, b"HW_WATCHDOG_RESET_TRIGGERED", timestamp);
+                self.commit_audit_event(
+                    WatchdogEventType::TargetStalled,
+                    0,
+                    b"HW_WATCHDOG_RESET_TRIGGERED",
+                    timestamp,
+                );
             }
             HwWatchdogEvent::Nominal => {}
         }
@@ -958,7 +1009,9 @@ impl JamboWatchdogDaemon {
                 None => continue,
             };
 
-            if new_state == TargetLivenessState::Stalled && prev_state != TargetLivenessState::Stalled {
+            if new_state == TargetLivenessState::Stalled
+                && prev_state != TargetLivenessState::Stalled
+            {
                 self.stats.total_stalls_detected += 1;
                 self.commit_audit_event(
                     WatchdogEventType::TargetStalled,
@@ -993,7 +1046,9 @@ impl JamboWatchdogDaemon {
                 None => continue,
             };
 
-            if new_state == NodeLivenessState::FailoverInitiated && prev_state != NodeLivenessState::FailoverInitiated {
+            if new_state == NodeLivenessState::FailoverInitiated
+                && prev_state != NodeLivenessState::FailoverInitiated
+            {
                 self.stats.total_cluster_failovers += 1;
                 self.commit_audit_event(
                     WatchdogEventType::ClusterFailoverInitiated,
@@ -1001,7 +1056,9 @@ impl JamboWatchdogDaemon {
                     b"CLUSTER_FAILOVER_INITIATED",
                     timestamp,
                 );
-            } else if new_state == NodeLivenessState::Suspect && prev_state == NodeLivenessState::Healthy {
+            } else if new_state == NodeLivenessState::Suspect
+                && prev_state == NodeLivenessState::Healthy
+            {
                 self.commit_audit_event(
                     WatchdogEventType::ClusterHeartbeatMissed,
                     node_id,
@@ -1116,7 +1173,11 @@ impl JamboWatchdogDaemon {
     ) {
         let seq = self.event_total + 1;
         let mut details_buf = [0u8; 32];
-        let copy_len = if details.len() > 32 { 32 } else { details.len() };
+        let copy_len = if details.len() > 32 {
+            32
+        } else {
+            details.len()
+        };
         details_buf[..copy_len].copy_from_slice(&details[..copy_len]);
 
         let ev = WatchdogEvent {
@@ -1224,7 +1285,10 @@ mod tests {
 
         // Advance to 26000ms: timeout=30000ms, pre_timeout=5000ms -> pre-timeout threshold is 25000ms
         daemon.evaluate_system_liveness(&admin, 26_000).unwrap();
-        assert_eq!(daemon.hw_watchdog.status, HwWatchdogStatus::PreTimeoutWarning);
+        assert_eq!(
+            daemon.hw_watchdog.status,
+            HwWatchdogStatus::PreTimeoutWarning
+        );
         assert!(daemon.stats.total_nmi_alerts >= 1);
     }
 

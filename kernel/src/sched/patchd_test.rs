@@ -6,9 +6,9 @@ extern crate alloc;
 use crate::kprintln;
 use jambo_abi::{Handle, SysError};
 use jambo_patchd::{
-    patch_rights, AbiCheckResult, AbiComplianceChecker, AuditAction, JamboPatchDaemon,
-    PatchCap, PatchRecord, PatchState, Sha256, TargetArch, TargetThread, ThreadState,
-    TrampolineGenerator, TrampolineKind,
+    patch_rights, AbiCheckResult, AbiComplianceChecker, AuditAction, JamboPatchDaemon, PatchCap,
+    PatchRecord, PatchState, Sha256, TargetArch, TargetThread, ThreadState, TrampolineGenerator,
+    TrampolineKind,
 };
 use jambo_sh::{JamboShell, ShellStatus};
 
@@ -95,30 +95,39 @@ pub fn execute_patch_daemon_test() -> bool {
 
     // 2. Validation multi-architectures des générateurs de trampolines
     let mut tramp_rel32 = [0u8; 16];
-    let rel32_len = TrampolineGenerator::build_rel32_jmp(0x0040_0000, 0x0040_1000, &mut tramp_rel32)
-        .expect("build rel32 jmp");
+    let rel32_len =
+        TrampolineGenerator::build_rel32_jmp(0x0040_0000, 0x0040_1000, &mut tramp_rel32)
+            .expect("build rel32 jmp");
     assert_eq!(rel32_len, 5);
     assert_eq!(tramp_rel32[0], 0xE9);
 
     let mut tramp_indir64 = [0u8; 16];
-    let indir64_len = TrampolineGenerator::build_indirect64_jmp(0x7FFF_DEAD_BEEF_0000, &mut tramp_indir64);
+    let indir64_len =
+        TrampolineGenerator::build_indirect64_jmp(0x7FFF_DEAD_BEEF_0000, &mut tramp_indir64);
     assert_eq!(indir64_len, 14);
     assert_eq!(tramp_indir64[0], 0xFF);
     assert_eq!(tramp_indir64[1], 0x25);
 
     let mut tramp_arm64_dir = [0u8; 16];
-    let arm_dir_len = TrampolineGenerator::build_arm64_direct_jmp(0x1000, 0x1100, &mut tramp_arm64_dir)
-        .expect("build arm64 direct");
+    let arm_dir_len =
+        TrampolineGenerator::build_arm64_direct_jmp(0x1000, 0x1100, &mut tramp_arm64_dir)
+            .expect("build arm64 direct");
     assert_eq!(arm_dir_len, 4);
 
     let mut tramp_arm64_ind = [0u8; 16];
-    let arm_ind_len = TrampolineGenerator::build_arm64_indirect_jmp(0xFFFF_0000_1234_5678, &mut tramp_arm64_ind);
+    let arm_ind_len =
+        TrampolineGenerator::build_arm64_indirect_jmp(0xFFFF_0000_1234_5678, &mut tramp_arm64_ind);
     assert_eq!(arm_ind_len, 16);
     kprintln!("[PATCH/ARCH] Générateurs de trampolines x86-64 et ARM64 validés");
 
     // 3. Validation du vérificateur formel de conformité ABI
     assert_eq!(
-        AbiComplianceChecker::verify_target(TargetArch::X86_64, 0x400000, 0x405000, &[0x55, 0x48, 0x89, 0xE5, 0x90]),
+        AbiComplianceChecker::verify_target(
+            TargetArch::X86_64,
+            0x400000,
+            0x405000,
+            &[0x55, 0x48, 0x89, 0xE5, 0x90]
+        ),
         AbiCheckResult::Compliant
     );
     assert_eq!(
@@ -126,7 +135,12 @@ pub fn execute_patch_daemon_test() -> bool {
         AbiCheckResult::PrologueTooShort
     );
     assert_eq!(
-        AbiComplianceChecker::verify_target(TargetArch::X86_64, 0x400000, 0x405000, &[0xC3, 0x90, 0x90, 0x90, 0x90]),
+        AbiComplianceChecker::verify_target(
+            TargetArch::X86_64,
+            0x400000,
+            0x405000,
+            &[0xC3, 0x90, 0x90, 0x90, 0x90]
+        ),
         AbiCheckResult::UnsafeInstruction
     );
     assert_eq!(
@@ -199,7 +213,9 @@ pub fn execute_patch_daemon_test() -> bool {
     assert_eq!(code_page[0], 0xE9, "Trampoline rel32 injecté avec succès");
 
     // Vérification de scellement cryptographique
-    let seal_ok = daemon.verify_patch_seal(&admin_cap, p_id).expect("verify seal");
+    let seal_ok = daemon
+        .verify_patch_seal(&admin_cap, p_id)
+        .expect("verify seal");
     assert!(seal_ok, "Scellement cryptographique SHA-256 valide");
 
     // Rollback / Restauration atomique
@@ -208,7 +224,9 @@ pub fn execute_patch_daemon_test() -> bool {
         .expect("revert patch");
     assert_eq!(code_page[0], 0x55, "Prologue restauré (push rbp)");
     assert_eq!(code_page[1], 0x48, "Prologue restauré (mov rbp, rsp)");
-    kprintln!("[PATCH/LIFECYCLE] Cycle complet Prepare -> Quiesce -> Apply -> Verify -> Revert validé");
+    kprintln!(
+        "[PATCH/LIFECYCLE] Cycle complet Prepare -> Quiesce -> Apply -> Verify -> Revert validé"
+    );
 
     // 5. Validation des commandes du Shell interactif JamboShell
     let mut shell = JamboShell::new();

@@ -227,10 +227,21 @@ pub enum DdosAttackType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DdosDecision {
     Allow,
-    Drop { attack_type: DdosAttackType, score: u32 },
-    ChallengeSynCookie { cookie_seq: u32 },
-    RateLimited { retry_after_ms: u32 },
-    Blackhole { ip: [u8; 4], duration_sec: u32, reason: DdosAttackType },
+    Drop {
+        attack_type: DdosAttackType,
+        score: u32,
+    },
+    ChallengeSynCookie {
+        cookie_seq: u32,
+    },
+    RateLimited {
+        retry_after_ms: u32,
+    },
+    Blackhole {
+        ip: [u8; 4],
+        duration_sec: u32,
+        reason: DdosAttackType,
+    },
 }
 
 // ============================================================================
@@ -261,8 +272,8 @@ impl Sha256 {
     pub const fn new() -> Self {
         Self {
             state: [
-                0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c,
-                0x1f83d9ab, 0x5be0cd19,
+                0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
+                0x5be0cd19,
             ],
             count: 0,
             buffer: [0u8; 64],
@@ -452,9 +463,8 @@ impl SynCookieEngine {
         hasher.update(&[time_slot]);
         let hash = hasher.finalize();
 
-        let hash_part = ((hash[0] as u32) << 24)
-            | ((hash[1] as u32) << 16)
-            | ((hash[2] as u32) << 8);
+        let hash_part =
+            ((hash[0] as u32) << 24) | ((hash[1] as u32) << 16) | ((hash[2] as u32) << 8);
 
         let time_part = ((time_slot as u32) & 0x07) << 5;
         let mss_part = (mss_idx as u32) & 0x1F;
@@ -483,7 +493,10 @@ impl SynCookieEngine {
         }
 
         let current_time_slot = ((now_sec >> 6) & 0x07) as u8;
-        let delta = (current_time_slot.wrapping_add(8).wrapping_sub(extracted_time_slot)) % 8;
+        let delta = (current_time_slot
+            .wrapping_add(8)
+            .wrapping_sub(extracted_time_slot))
+            % 8;
         if delta > 3 {
             return Err(DdosError::CookieExpired);
         }
@@ -497,9 +510,8 @@ impl SynCookieEngine {
         hasher.update(&[extracted_time_slot]);
         let hash = hasher.finalize();
 
-        let expected_hash_part = ((hash[0] as u32) << 24)
-            | ((hash[1] as u32) << 16)
-            | ((hash[2] as u32) << 8);
+        let expected_hash_part =
+            ((hash[0] as u32) << 24) | ((hash[1] as u32) << 16) | ((hash[2] as u32) << 8);
 
         let cookie_hash_part = cookie & 0xFFFF_FF00;
         if cookie_hash_part != expected_hash_part {
@@ -738,11 +750,7 @@ impl JamboDdosDaemon {
                     expires_at_sec,
                     reason,
                 });
-                self.blackhole_count = self
-                    .blackhole_table
-                    .iter()
-                    .filter(|e| e.is_some())
-                    .count();
+                self.blackhole_count = self.blackhole_table.iter().filter(|e| e.is_some()).count();
                 self.log_audit(now_sec, ip, reason, 4, 100);
                 return Ok(());
             }
@@ -860,7 +868,8 @@ impl JamboDdosDaemon {
             }
 
             // Détection de SYN Flood & Déclenchement de SYN Cookie Stateless
-            if (packet.tcp_flags & tcp_flags::SYN) != 0 && (packet.tcp_flags & tcp_flags::ACK) == 0 {
+            if (packet.tcp_flags & tcp_flags::SYN) != 0 && (packet.tcp_flags & tcp_flags::ACK) == 0
+            {
                 // Si l'IP dépasse le seuil ou s'il y a un assaut SYN, on challenge via SYN Cookie
                 let cookie = self.syn_engine.generate_cookie(
                     packet.src_ip,
@@ -912,7 +921,9 @@ impl JamboDdosDaemon {
                 });
             }
 
-            return Ok(DdosDecision::RateLimited { retry_after_ms: 1000 });
+            return Ok(DdosDecision::RateLimited {
+                retry_after_ms: 1000,
+            });
         }
 
         Ok(DdosDecision::Allow)
@@ -969,7 +980,9 @@ impl JamboDdosDaemon {
         // Détection Slowloris : connexion ouverte depuis plus de 15s avec en-têtes non terminés
         // et débit d'octets minimal anémique (< 10 octets/seconde)
         if !is_header_complete && duration_sec >= SLOWLORIS_MAX_DURATION_SEC {
-            let rate = bytes_received.checked_div(duration_sec as usize).unwrap_or(0);
+            let rate = bytes_received
+                .checked_div(duration_sec as usize)
+                .unwrap_or(0);
             if rate < SLOWLORIS_MIN_RATE_BPS {
                 self.packets_mitigated += 1;
                 self.log_audit(now_sec, src_ip, DdosAttackType::Slowloris, 1, 85);
@@ -1093,7 +1106,10 @@ impl JamboDdosDaemon {
             }
 
             // Amplification SNMP : port 161/162 avec GetBulkRequest
-            if (packet.src_port == 161 || packet.dst_port == 161 || packet.src_port == 162 || packet.dst_port == 162)
+            if (packet.src_port == 161
+                || packet.dst_port == 161
+                || packet.src_port == 162
+                || packet.dst_port == 162)
                 && packet.payload_len > 300
             {
                 return Some(DdosAttackType::SnmpAmplification);
@@ -1257,7 +1273,8 @@ mod tests {
         assert_eq!(tampered, Err(DdosError::CookieInvalid));
 
         // Test expiration (> 3 time slots = > 192s)
-        let expired = engine.verify_cookie(src_ip, dst_ip, src_port, dst_port, ack_num, now_sec + 300);
+        let expired =
+            engine.verify_cookie(src_ip, dst_ip, src_port, dst_port, ack_num, now_sec + 300);
         assert_eq!(expired, Err(DdosError::CookieExpired));
     }
 
@@ -1293,7 +1310,9 @@ mod tests {
 
         // IP 0.0.0.0
         let pkt_zero = NetworkPacket::new([0, 0, 0, 1], [10, 0, 0, 1], IpProtocol::Tcp, 1000, 80);
-        let dec_zero = daemon.inspect_packet(&cap, &pkt_zero, 100).expect("Inspect");
+        let dec_zero = daemon
+            .inspect_packet(&cap, &pkt_zero, 100)
+            .expect("Inspect");
         assert_eq!(
             dec_zero,
             DdosDecision::Drop {
@@ -1309,7 +1328,8 @@ mod tests {
         let mut daemon = JamboDdosDaemon::new(cap);
 
         // SYN + FIN
-        let mut pkt = NetworkPacket::new([198, 51, 100, 2], [10, 0, 0, 1], IpProtocol::Tcp, 1234, 80);
+        let mut pkt =
+            NetworkPacket::new([198, 51, 100, 2], [10, 0, 0, 1], IpProtocol::Tcp, 1234, 80);
         pkt.tcp_flags = tcp_flags::SYN | tcp_flags::FIN;
         let decision = daemon.inspect_packet(&cap, &pkt, 100).expect("Inspect");
         assert_eq!(
@@ -1338,7 +1358,8 @@ mod tests {
         let mut daemon = JamboDdosDaemon::new(cap);
 
         // NTP monlist
-        let mut pkt_ntp = NetworkPacket::new([198, 51, 100, 3], [10, 0, 0, 1], IpProtocol::Udp, 123, 123);
+        let mut pkt_ntp =
+            NetworkPacket::new([198, 51, 100, 3], [10, 0, 0, 1], IpProtocol::Udp, 123, 123);
         pkt_ntp.set_payload(&[0x2A, 0x01, 0x00, 0x00]).unwrap();
         let dec_ntp = daemon.inspect_packet(&cap, &pkt_ntp, 100).expect("Inspect");
         match dec_ntp {

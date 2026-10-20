@@ -7,8 +7,8 @@ extern crate alloc;
 use crate::kprintln;
 use jambo_abi::Handle;
 use jambo_cnapp::{
-    cnapp_rights, AttackPath, AttackPathNode, CnappCap, CnappError, CnappFinding,
-    CnappSeverity, JamboCnappDaemon, OrchestrationAction, SignalSource,
+    cnapp_rights, AttackPath, AttackPathNode, CnappCap, CnappError, CnappFinding, CnappSeverity,
+    JamboCnappDaemon, OrchestrationAction, SignalSource,
 };
 
 /// Exécute la suite complète de validation formelle du démon CNAPP (Phase 128)
@@ -57,7 +57,12 @@ pub fn execute_cnapp_daemon_test() -> bool {
     assert!(cnapp.verify_ledger_integrity());
 
     // 3. Détection de combinaison toxique (Toxic Combination) et score maximal sur cluster-operator (103)
-    let node103 = cnapp.nodes.iter().flatten().find(|n| n.workload_id == 103).unwrap();
+    let node103 = cnapp
+        .nodes
+        .iter()
+        .flatten()
+        .find(|n| n.workload_id == 103)
+        .unwrap();
     assert!(node103.is_toxic_combination);
     assert_eq!(node103.unified_risk_score, 100);
 
@@ -86,7 +91,12 @@ pub fn execute_cnapp_daemon_test() -> bool {
     assert_eq!(action, OrchestrationAction::FullUnifiedContainment);
 
     // Vérification de la sécurisation de la charge
-    let rem_node103 = cnapp.nodes.iter().flatten().find(|n| n.workload_id == 103).unwrap();
+    let rem_node103 = cnapp
+        .nodes
+        .iter()
+        .flatten()
+        .find(|n| n.workload_id == 103)
+        .unwrap();
     assert!(rem_node103.is_quarantined);
     assert!(!rem_node103.is_toxic_combination);
     assert!(rem_node103.unified_risk_score <= 10);

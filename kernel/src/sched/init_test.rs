@@ -76,9 +76,7 @@ pub fn execute_init_supervisor_test() -> bool {
         .report_crash(&admin_cap, 2, 200)
         .expect("report crash 1");
     assert_eq!(state_heal1, DaemonState::Running);
-    let s2_info = raw_supervisor
-        .get_service(&admin_cap, 2)
-        .expect("get s2");
+    let s2_info = raw_supervisor.get_service(&admin_cap, 2).expect("get s2");
     assert_eq!(s2_info.restart_count, 1);
 
     // Crashes successifs jusqu'à dépassement du quota de tolérance (DEFAULT_MAX_RESTARTS = 3)

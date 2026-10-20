@@ -8,8 +8,8 @@ extern crate alloc;
 use crate::kprintln;
 use jambo_abi::{Handle, SysError};
 use jambo_mpc::{
-    mpc_rights, Gf256, JamboMpcDaemon, MpcCap, MpcNodeStatus, MpcSessionType,
-    SecretShare, ShamirSecretSharing, VssCommitment, MAX_MPC_NODES, MAX_SECRET_LEN,
+    mpc_rights, Gf256, JamboMpcDaemon, MpcCap, MpcNodeStatus, MpcSessionType, SecretShare,
+    ShamirSecretSharing, VssCommitment, MAX_MPC_NODES, MAX_SECRET_LEN,
 };
 use jambo_sh::{JamboShell, ShellStatus};
 
@@ -96,13 +96,20 @@ pub fn execute_mpc_daemon_test() -> bool {
         .reconstruct_secret_in_session(&admin_cap, sess_id, &valid_subset, &mut reconstructed)
         .expect("Reconstruction du secret");
     assert_eq!(&reconstructed[..rec_len], secret_payload);
-    kprintln!("[MPC/SSS] Partage secret de Shamir (t=3, n=5) et reconstruction de Lagrange validés");
+    kprintln!(
+        "[MPC/SSS] Partage secret de Shamir (t=3, n=5) et reconstruction de Lagrange validés"
+    );
 
     // Échec attendu avec moins de t parts (ex: 2 parts)
     let insufficient_subset = [shares[0], shares[1]];
     let mut fail_buf = [0u8; MAX_SECRET_LEN];
     assert_eq!(
-        daemon.reconstruct_secret_in_session(&admin_cap, sess_id, &insufficient_subset, &mut fail_buf),
+        daemon.reconstruct_secret_in_session(
+            &admin_cap,
+            sess_id,
+            &insufficient_subset,
+            &mut fail_buf
+        ),
         Err(SysError::InvalidArgument),
         "Reconstruction rejetée avec moins de t parts"
     );

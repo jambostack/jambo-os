@@ -93,7 +93,9 @@ pub fn execute_attest_daemon_test() -> bool {
     let n1_quarantine = daemon.get_node(1).expect("Nœud 1");
     assert_eq!(n1_quarantine.status, NodeStatus::Quarantined);
     assert_eq!(n1_quarantine.confinement, ConfinementLevel::Isolated);
-    kprintln!("[ATTEST/QUARANTINE] Falsification détectée : mise en quarantaine et isolation automatique");
+    kprintln!(
+        "[ATTEST/QUARANTINE] Falsification détectée : mise en quarantaine et isolation automatique"
+    );
 
     // 5. Génération et validation mathématique d'une preuve Zero-Knowledge (ZKP Schnorr / Fiat-Shamir)
     // Réhabilitation du nœud 1 pour valider le protocole complet

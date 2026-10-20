@@ -86,7 +86,11 @@ pub fn execute_wall_daemon_test() -> bool {
     let action_syn = node1_daemon
         .filter_packet(&admin_cap, &pkt_syn, 10)
         .expect("filter SYN");
-    assert_eq!(action_syn, WallAction::Allow, "SYN autorisé par la règle d'ingress HTTPS");
+    assert_eq!(
+        action_syn,
+        WallAction::Allow,
+        "SYN autorisé par la règle d'ingress HTTPS"
+    );
     assert_eq!(node1_daemon.conntrack.active_count(), 1);
 
     let (entry_idx, is_reply) = node1_daemon
@@ -94,7 +98,10 @@ pub fn execute_wall_daemon_test() -> bool {
         .lookup(&tuple_tcp)
         .expect("conntrack lookup");
     assert!(!is_reply);
-    assert_eq!(node1_daemon.conntrack.entries[entry_idx].state, ConntrackState::New);
+    assert_eq!(
+        node1_daemon.conntrack.entries[entry_idx].state,
+        ConntrackState::New
+    );
 
     // Étape B : Paquet TCP SYN/ACK (Serveur -> Client)
     let pkt_syn_ack = PacketFilterInput {
@@ -146,13 +153,7 @@ pub fn execute_wall_daemon_test() -> bool {
 
     // 3. Détection d'anomalies de paquets, Scans (XMAS/NULL) et Auto-Blocage Zero-Trust
     let attacker_ip = [198, 51, 100, 77];
-    let tuple_malicious = ConntrackTuple::new(
-        ip_proto::TCP,
-        attacker_ip,
-        server_ip,
-        33333,
-        80,
-    );
+    let tuple_malicious = ConntrackTuple::new(ip_proto::TCP, attacker_ip, server_ip, 33333, 80);
 
     // Envoi d'un paquet XMAS scan (FIN + PSH + URG sans ACK)
     let pkt_xmas = PacketFilterInput {
@@ -166,7 +167,11 @@ pub fn execute_wall_daemon_test() -> bool {
     let action_xmas = node1_daemon
         .filter_packet(&admin_cap, &pkt_xmas, 30)
         .expect("filter XMAS scan");
-    assert_eq!(action_xmas, WallAction::Drop, "Scan malveillant doit être rejeté");
+    assert_eq!(
+        action_xmas,
+        WallAction::Drop,
+        "Scan malveillant doit être rejeté"
+    );
     assert!(node1_daemon.stats.threats_detected >= 1);
     assert!(node1_daemon.stats.dynamic_blocks_created >= 1);
 
@@ -229,7 +234,9 @@ pub fn execute_wall_daemon_test() -> bool {
         "Le Nœud 2 doit autoriser le paquet en session synchronisée"
     );
     assert_eq!(node2_daemon.stats.conntrack_fastpath_hits, 1);
-    kprintln!("[WALL/SYNC] Synchronisation d'état conntrack scellée par HMAC et bascule à chaud validées");
+    kprintln!(
+        "[WALL/SYNC] Synchronisation d'état conntrack scellée par HMAC et bascule à chaud validées"
+    );
 
     // 5. Validation des commandes Shell Interactives ('wall')
     let mut shell = JamboShell::new();
@@ -257,7 +264,8 @@ pub fn execute_wall_daemon_test() -> bool {
     kprintln!("[WALL/SHELL] Commande 'wall conntrack' validée");
 
     // Commande : wall add internal edge tcp 8080 allow
-    let (st_add, len_add) = shell.execute_line("wall add internal edge tcp 8080 allow", &mut out_buf);
+    let (st_add, len_add) =
+        shell.execute_line("wall add internal edge tcp 8080 allow", &mut out_buf);
     assert_eq!(st_add, ShellStatus::Success);
     let out_str_add = core::str::from_utf8(&out_buf[..len_add]).unwrap();
     assert!(out_str_add.contains("[WALL] Règle #"));

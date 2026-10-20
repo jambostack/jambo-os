@@ -122,7 +122,9 @@ pub fn execute_ipc_daemon_test() -> bool {
     );
 
     // Déchiffrement légitime
-    msg_sec.decrypt(&session_key).expect("decrypt valid message");
+    msg_sec
+        .decrypt(&session_key)
+        .expect("decrypt valid message");
     assert_eq!(
         &msg_sec.payload[..msg_sec.payload_len],
         b"CONFIDENTIAL_STATE_TRANSFER"
@@ -158,13 +160,21 @@ pub fn execute_ipc_daemon_test() -> bool {
     let recv_crit = daemon
         .receive_message(&admin_cap, ch_ctrl)
         .expect("recv critical");
-    assert_eq!(&recv_crit.payload[..recv_crit.payload_len], b"UrgentHeartbeat");
+    assert_eq!(
+        &recv_crit.payload[..recv_crit.payload_len],
+        b"UrgentHeartbeat"
+    );
 
     let recv_norm = daemon
         .receive_message(&admin_cap, ch_norm)
         .expect("recv normal");
-    assert_eq!(&recv_norm.payload[..recv_norm.payload_len], b"TelemetryData");
-    kprintln!("[IPC/SCHED] Ordonnancement déterministe temps réel (Critical > High > Normal) validé");
+    assert_eq!(
+        &recv_norm.payload[..recv_norm.payload_len],
+        b"TelemetryData"
+    );
+    kprintln!(
+        "[IPC/SCHED] Ordonnancement déterministe temps réel (Critical > High > Normal) validé"
+    );
 
     // 4. Passerelle inter-nœuds, routage déterministe et protection anti-rejeu
     daemon
@@ -197,7 +207,9 @@ pub fn execute_ipc_daemon_test() -> bool {
     )
     .unwrap();
 
-    daemon.process_inbound_wire(wire_msg1, 215).expect("wire packet seq 1");
+    daemon
+        .process_inbound_wire(wire_msg1, 215)
+        .expect("wire packet seq 1");
 
     // Tentative de rejeu de la séquence 1
     assert_eq!(
@@ -209,7 +221,9 @@ pub fn execute_ipc_daemon_test() -> bool {
     // Séquence 2 valide
     let mut wire_msg2 = wire_msg1;
     wire_msg2.sequence = 2;
-    daemon.process_inbound_wire(wire_msg2, 220).expect("wire packet seq 2");
+    daemon
+        .process_inbound_wire(wire_msg2, 220)
+        .expect("wire packet seq 2");
     kprintln!("[IPC/ROUTER] Passerelle de transit et immunité anti-rejeu validées");
 
     // 5. Intégration interactive du shell jsh (ipc status, ipc channels, ipc routes, ipc send, ipc dispatch)

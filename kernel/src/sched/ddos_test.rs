@@ -63,7 +63,10 @@ pub fn execute_ddos_daemon_test() -> bool {
     // 2. Initialisation du démon Anti-DDoS et politiques par défaut
     let mut ddos = JamboDdosDaemon::new(admin_cap);
     ddos.init_defaults();
-    assert!(ddos.whitelist_count >= 2, "Liste blanche par défaut initialisée");
+    assert!(
+        ddos.whitelist_count >= 2,
+        "Liste blanche par défaut initialisée"
+    );
     assert!(ddos.is_whitelisted([127, 0, 0, 1]));
     assert!(ddos.is_whitelisted([10, 0, 0, 1]));
     kprintln!("  [OK] Initialisation du moteur Anti-DDoS et liste blanche de confiance");
@@ -140,7 +143,8 @@ pub fn execute_ddos_daemon_test() -> bool {
     kprintln!("  [OK] Algorithme Token Bucket & régulation des dépassements de capacité");
 
     // 6. Filtrage Anti-Spoofing L3 (Martiens & Bogons)
-    let pkt_multicast = NetworkPacket::new([224, 0, 1, 1], [10, 0, 0, 1], IpProtocol::Udp, 1234, 80);
+    let pkt_multicast =
+        NetworkPacket::new([224, 0, 1, 1], [10, 0, 0, 1], IpProtocol::Udp, 1234, 80);
     let dec_mcast = ddos
         .inspect_packet(&admin_cap, &pkt_multicast, 2000)
         .expect("Inspect Multicast");
@@ -154,7 +158,8 @@ pub fn execute_ddos_daemon_test() -> bool {
     kprintln!("  [OK] Filtrage anti-spoofing martiens/bogons (RFC 6890)");
 
     // 7. Détection d'Anomalies de Drapeaux TCP L4 (Scan Xmas & SYN+FIN)
-    let mut pkt_flags = NetworkPacket::new([198, 51, 100, 99], [10, 0, 0, 1], IpProtocol::Tcp, 3333, 80);
+    let mut pkt_flags =
+        NetworkPacket::new([198, 51, 100, 99], [10, 0, 0, 1], IpProtocol::Tcp, 3333, 80);
     pkt_flags.tcp_flags = tcp_flags::SYN | tcp_flags::FIN;
     let dec_flags = ddos
         .inspect_packet(&admin_cap, &pkt_flags, 2000)
@@ -169,13 +174,20 @@ pub fn execute_ddos_daemon_test() -> bool {
     kprintln!("  [OK] Détection et blocage d'anomalies de drapeaux TCP L4 (Xmas/SYN+FIN)");
 
     // 8. Détection et Blocage d'Attaque par Amplification NTP (Monlist)
-    let mut pkt_ntp = NetworkPacket::new([198, 51, 100, 77], [10, 0, 0, 1], IpProtocol::Udp, 123, 123);
-    pkt_ntp.set_payload(&[0x2A, 0x00, 0x00, 0x00]).expect("Payload");
+    let mut pkt_ntp =
+        NetworkPacket::new([198, 51, 100, 77], [10, 0, 0, 1], IpProtocol::Udp, 123, 123);
+    pkt_ntp
+        .set_payload(&[0x2A, 0x00, 0x00, 0x00])
+        .expect("Payload");
     let dec_ntp = ddos
         .inspect_packet(&admin_cap, &pkt_ntp, 2000)
         .expect("Inspect NTP");
     match dec_ntp {
-        DdosDecision::Blackhole { reason, duration_sec, .. } => {
+        DdosDecision::Blackhole {
+            reason,
+            duration_sec,
+            ..
+        } => {
             assert_eq!(reason, DdosAttackType::NtpAmplification);
             assert_eq!(duration_sec, DEFAULT_BLACKHOLE_DURATION);
         }
@@ -208,13 +220,9 @@ pub fn execute_ddos_daemon_test() -> bool {
     let flood_ip = [198, 51, 100, 89];
     let dec_flood = ddos
         .inspect_l7_flow(
-            &admin_cap,
-            flood_ip,
-            1000, // 1000 requêtes
+            &admin_cap, flood_ip, 1000, // 1000 requêtes
             2,    // en 2 secondes -> 500 req/s (> 150 req/s)
-            true,
-            50000,
-            2000,
+            true, 50000, 2000,
         )
         .expect("Inspect HTTP Flood");
     match dec_flood {
@@ -232,7 +240,11 @@ pub fn execute_ddos_daemon_test() -> bool {
     let dec_trusted = ddos
         .inspect_packet(&admin_cap, &pkt_scan, 2000)
         .expect("Inspect Trusted");
-    assert_eq!(dec_trusted, DdosDecision::Allow, "Trafic de confiance toujours autorisé");
+    assert_eq!(
+        dec_trusted,
+        DdosDecision::Allow,
+        "Trafic de confiance toujours autorisé"
+    );
     kprintln!("  [OK] Contournement souverain par liste blanche (Whitelist Bypass)");
 
     // 12. Intégrité de la chaîne cryptographique d'audit SHA-256

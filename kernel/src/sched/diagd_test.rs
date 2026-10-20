@@ -6,8 +6,8 @@ extern crate alloc;
 use crate::kprintln;
 use jambo_abi::{Handle, SysError};
 use jambo_diagd::{
-    diag_rights, BusType, DeviceStatus, DiagCap, FaultSeverity, HardwareDevice,
-    HardwareErrorType, JamboDiagDaemon, RemediationAction,
+    diag_rights, BusType, DeviceStatus, DiagCap, FaultSeverity, HardwareDevice, HardwareErrorType,
+    JamboDiagDaemon, RemediationAction,
 };
 use jambo_sh::{JamboShell, ShellStatus};
 
@@ -71,13 +71,23 @@ pub fn execute_diag_daemon_test() -> bool {
     let pcie_id = 1; // pcie-root-0
     for t in 1..8 {
         let act = daemon
-            .record_error(&admin_cap, pcie_id, HardwareErrorType::PcieAerCorrectable, t)
+            .record_error(
+                &admin_cap,
+                pcie_id,
+                HardwareErrorType::PcieAerCorrectable,
+                t,
+            )
             .expect("record correctable AER");
         assert_eq!(act, RemediationAction::None);
     }
     // À la 8e erreur (seuil atteint), LinkRetrained doit se déclencher automatiquement
     let act_retrain = daemon
-        .record_error(&admin_cap, pcie_id, HardwareErrorType::PcieAerCorrectable, 8)
+        .record_error(
+            &admin_cap,
+            pcie_id,
+            HardwareErrorType::PcieAerCorrectable,
+            8,
+        )
         .expect("record threshold correctable AER");
     assert_eq!(act_retrain, RemediationAction::LinkRetrained);
 
@@ -90,7 +100,12 @@ pub fn execute_diag_daemon_test() -> bool {
     // 4. Test d'erreur fatale PCIe & Auto-Remédiation par Function Level Reset (FLR)
     let virtio_blk_id = 7; // virtio-blk-0
     let act_flr = daemon
-        .record_error(&admin_cap, virtio_blk_id, HardwareErrorType::PcieAerFatal, 10)
+        .record_error(
+            &admin_cap,
+            virtio_blk_id,
+            HardwareErrorType::PcieAerFatal,
+            10,
+        )
         .expect("record fatal PCIe AER error");
     assert_eq!(act_flr, RemediationAction::FlrReset);
 
@@ -109,7 +124,12 @@ pub fn execute_diag_daemon_test() -> bool {
 
     for t in 20..=24 {
         daemon
-            .record_error(&admin_cap, nvme_primary_id, HardwareErrorType::NvmeMediaError, t)
+            .record_error(
+                &admin_cap,
+                nvme_primary_id,
+                HardwareErrorType::NvmeMediaError,
+                t,
+            )
             .expect("record NVMe media error");
     }
 
@@ -145,7 +165,9 @@ pub fn execute_diag_daemon_test() -> bool {
     assert!(scan_sum.healthy_count > 0);
     assert!(scan_sum.failed_count > 0); // le périphérique ECC est en échec/quarantaine
 
-    let digest = daemon.get_telemetry_digest(&admin_cap).expect("get telemetry digest");
+    let digest = daemon
+        .get_telemetry_digest(&admin_cap)
+        .expect("get telemetry digest");
     assert_ne!(digest, [0u8; 32]);
     kprintln!("[DIAG/TELEMETRY] Télémétrie scellée par hachage SHA-256 et scan de bus validés");
 

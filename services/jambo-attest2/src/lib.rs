@@ -47,14 +47,16 @@ pub struct Sha256;
 
 impl Sha256 {
     const K: [u32; 64] = [
-        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
-        0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
-        0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
-        0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
-        0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
-        0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
-        0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
-        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
+        0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
+        0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f,
+        0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc,
+        0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+        0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116,
+        0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
+        0xc67178f2,
     ];
 
     #[inline(always)]
@@ -143,8 +145,8 @@ impl Sha256 {
 
     pub fn digest(data: &[u8]) -> [u8; 32] {
         let mut state: [u32; 8] = [
-            0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
-            0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+            0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
+            0x5be0cd19,
         ];
 
         let total_len = data.len();
@@ -188,8 +190,8 @@ impl Sha256 {
 
     pub fn digest_chunks(chunks: &[&[u8]]) -> [u8; 32] {
         let mut state: [u32; 8] = [
-            0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
-            0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+            0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
+            0x5be0cd19,
         ];
 
         let mut total_len: usize = 0;
@@ -359,9 +361,9 @@ impl Attest2Cap {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ChipTrustLevel {
-    SiliconRootOfTrust = 0, // Matrice matérielle CPU / Fuses
-    BoardRootOfTrust = 1,   // TPM 2.0 dédié / FPGA souverain
-    PlatformRootOfTrust = 2, // Coprocesseur HSM / Microcontrôleur sécurisé
+    SiliconRootOfTrust = 0,    // Matrice matérielle CPU / Fuses
+    BoardRootOfTrust = 1,      // TPM 2.0 dédié / FPGA souverain
+    PlatformRootOfTrust = 2,   // Coprocesseur HSM / Microcontrôleur sécurisé
     PeripheralRootOfTrust = 3, // SmartNIC / Accélérateur PCIe
 }
 
@@ -993,20 +995,22 @@ impl JamboAttest2Daemon {
         }
 
         // 4. Contrôle de conformité avec les politiques de référence (Golden Measurements)
-        let (enclave_id, enclave_status, enclave_name_buf, enclave_name_len) = match self.find_enclave(quote.header.enclave_id) {
-            Some(e) => (e.enclave_id, e.status, e.name, e.name_len),
-            None => {
-                self.total_violations += 1;
-                return Err(Attest2Error::EnclaveNotFound);
-            }
-        };
+        let (enclave_id, enclave_status, enclave_name_buf, enclave_name_len) =
+            match self.find_enclave(quote.header.enclave_id) {
+                Some(e) => (e.enclave_id, e.status, e.name, e.name_len),
+                None => {
+                    self.total_violations += 1;
+                    return Err(Attest2Error::EnclaveNotFound);
+                }
+            };
 
         if enclave_status == EnclaveStatus::Quarantined {
             self.total_violations += 1;
             return Err(Attest2Error::EnclaveQuarantined);
         }
 
-        let enc_name_str = core::str::from_utf8(&enclave_name_buf[..enclave_name_len]).unwrap_or("");
+        let enc_name_str =
+            core::str::from_utf8(&enclave_name_buf[..enclave_name_len]).unwrap_or("");
         let matching_policy = self.find_policy_for_enclave(enc_name_str).copied();
 
         if let Some(policy) = matching_policy {
@@ -1250,7 +1254,9 @@ mod tests {
 
         // Rejet formel de l'amplification
         assert!(reader.attenuate(attest2_rights::ALL, 8, 4).is_err());
-        assert!(reader.attenuate(attest2_rights::VERIFY_QUOTE, 20, 4).is_err());
+        assert!(reader
+            .attenuate(attest2_rights::VERIFY_QUOTE, 20, 4)
+            .is_err());
     }
 
     #[test]
@@ -1264,7 +1270,9 @@ mod tests {
         assert_eq!(daemon.policy_count, 2);
 
         let nonce = Sha256::digest(b"REMOTE_VERIFIER_CHALLENGE_NONCE_999");
-        let quote = daemon.generate_quote(&admin, 1, &nonce).expect("Génération du devis");
+        let quote = daemon
+            .generate_quote(&admin, 1, &nonce)
+            .expect("Génération du devis");
         assert_eq!(quote.header.enclave_id, 1);
         assert_eq!(quote.header.chip_id, 1);
 
@@ -1310,7 +1318,9 @@ mod tests {
             .expect("Enregistrement");
 
         let nonce = Sha256::digest(b"CHALLENGE_FOR_BAD_ENCLAVE");
-        let quote = daemon.generate_quote(&admin, bad_enclave_id, &nonce).unwrap();
+        let quote = daemon
+            .generate_quote(&admin, bad_enclave_id, &nonce)
+            .unwrap();
 
         // La vérification doit échouer pour discordance de mesure et placer l'enclave en quarantaine
         let res = daemon.verify_quote(&admin, &quote, &nonce);

@@ -35,14 +35,16 @@ pub struct Sha256;
 
 impl Sha256 {
     const K: [u32; 64] = [
-        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
-        0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
-        0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
-        0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
-        0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
-        0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
-        0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
-        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
+        0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
+        0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f,
+        0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc,
+        0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+        0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116,
+        0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
+        0xc67178f2,
     ];
 
     #[inline(always)]
@@ -289,7 +291,11 @@ pub struct PathBeneathRule {
 }
 
 impl PathBeneathRule {
-    pub fn new(parent_handle: Handle, path_str: &str, allowed_access: u32) -> Result<Self, SysError> {
+    pub fn new(
+        parent_handle: Handle,
+        path_str: &str,
+        allowed_access: u32,
+    ) -> Result<Self, SysError> {
         let bytes = path_str.as_bytes();
         if bytes.len() > MAX_PATH_LEN || bytes.is_empty() {
             return Err(SysError::InvalidArgument);
@@ -579,9 +585,27 @@ impl JamboLandlockDaemon {
         let h_tmp = Handle::new(101, 1);
         let h_dev = Handle::new(102, 1);
 
-        let _ = self.add_rule_path_beneath_internal(r_shell, h_root, "/", fs_access::READ | fs_access::EXEC, ts);
-        let _ = self.add_rule_path_beneath_internal(r_shell, h_tmp, "/tmp", fs_access::READ | fs_access::WRITE, ts);
-        let _ = self.add_rule_path_beneath_internal(r_shell, h_dev, "/dev", fs_access::READ | fs_access::WRITE, ts);
+        let _ = self.add_rule_path_beneath_internal(
+            r_shell,
+            h_root,
+            "/",
+            fs_access::READ | fs_access::EXEC,
+            ts,
+        );
+        let _ = self.add_rule_path_beneath_internal(
+            r_shell,
+            h_tmp,
+            "/tmp",
+            fs_access::READ | fs_access::WRITE,
+            ts,
+        );
+        let _ = self.add_rule_path_beneath_internal(
+            r_shell,
+            h_dev,
+            "/dev",
+            fs_access::READ | fs_access::WRITE,
+            ts,
+        );
 
         let _ = self.register_domain(10, "jsh");
         let _ = self.restrict_domain_internal(10, r_shell, ts);
@@ -592,9 +616,27 @@ impl JamboLandlockDaemon {
         let r_worker1 = self
             .create_ruleset_internal(fs_access::ALL, ts + 1)
             .expect("create ruleset worker1");
-        let _ = self.add_rule_path_beneath_internal(r_worker1, Handle::new(201, 1), "/usr", fs_access::READ | fs_access::EXEC, ts);
-        let _ = self.add_rule_path_beneath_internal(r_worker1, Handle::new(202, 1), "/etc", fs_access::READ, ts);
-        let _ = self.add_rule_path_beneath_internal(r_worker1, Handle::new(203, 1), "/tmp", fs_access::READ | fs_access::WRITE, ts);
+        let _ = self.add_rule_path_beneath_internal(
+            r_worker1,
+            Handle::new(201, 1),
+            "/usr",
+            fs_access::READ | fs_access::EXEC,
+            ts,
+        );
+        let _ = self.add_rule_path_beneath_internal(
+            r_worker1,
+            Handle::new(202, 1),
+            "/etc",
+            fs_access::READ,
+            ts,
+        );
+        let _ = self.add_rule_path_beneath_internal(
+            r_worker1,
+            Handle::new(203, 1),
+            "/tmp",
+            fs_access::READ | fs_access::WRITE,
+            ts,
+        );
 
         let _ = self.register_domain(20, "sandbox-worker");
         let _ = self.restrict_domain_internal(20, r_worker1, ts + 1);
@@ -603,14 +645,26 @@ impl JamboLandlockDaemon {
         let r_worker2 = self
             .create_ruleset_internal(fs_access::WRITE, ts + 2)
             .expect("create ruleset worker2");
-        let _ = self.add_rule_path_beneath_internal(r_worker2, Handle::new(204, 1), "/tmp/worker", fs_access::WRITE, ts + 2);
+        let _ = self.add_rule_path_beneath_internal(
+            r_worker2,
+            Handle::new(204, 1),
+            "/tmp/worker",
+            fs_access::WRITE,
+            ts + 2,
+        );
         let _ = self.restrict_domain_internal(20, r_worker2, ts + 2);
 
         // 4. Profil PID 30 (Micro-Service Isolé) : Lecture seule sur /usr/share, zéro écriture
         let r_isolated = self
             .create_ruleset_internal(fs_access::ALL, ts + 3)
             .expect("create ruleset isolated");
-        let _ = self.add_rule_path_beneath_internal(r_isolated, Handle::new(301, 1), "/usr/share", fs_access::READ, ts + 3);
+        let _ = self.add_rule_path_beneath_internal(
+            r_isolated,
+            Handle::new(301, 1),
+            "/usr/share",
+            fs_access::READ,
+            ts + 3,
+        );
 
         let _ = self.register_domain(30, "isolated-daemon");
         let _ = self.restrict_domain_internal(30, r_isolated, ts + 3);
@@ -629,7 +683,11 @@ impl JamboLandlockDaemon {
         self.create_ruleset_internal(handled_access_fs, timestamp)
     }
 
-    fn create_ruleset_internal(&mut self, handled_access_fs: u32, timestamp: u64) -> Result<u32, SysError> {
+    fn create_ruleset_internal(
+        &mut self,
+        handled_access_fs: u32,
+        timestamp: u64,
+    ) -> Result<u32, SysError> {
         let id = self.next_ruleset_id;
         for slot in &mut self.rulesets {
             if slot.is_none() {
@@ -661,7 +719,13 @@ impl JamboLandlockDaemon {
         if !cap.has_right(landlock_rights::RULE_ADD) {
             return Err(SysError::PermissionDenied);
         }
-        self.add_rule_path_beneath_internal(ruleset_id, parent_handle, path_prefix, allowed_access, timestamp)
+        self.add_rule_path_beneath_internal(
+            ruleset_id,
+            parent_handle,
+            path_prefix,
+            allowed_access,
+            timestamp,
+        )
     }
 
     fn add_rule_path_beneath_internal(
@@ -793,7 +857,8 @@ impl JamboLandlockDaemon {
         child_name: &str,
         timestamp: u64,
     ) -> Result<(), SysError> {
-        if !cap.has_right(landlock_rights::ADMIN) && !cap.has_right(landlock_rights::RESTRICT_SELF) {
+        if !cap.has_right(landlock_rights::ADMIN) && !cap.has_right(landlock_rights::RESTRICT_SELF)
+        {
             return Err(SysError::PermissionDenied);
         }
 
@@ -1036,17 +1101,25 @@ mod tests {
         assert_eq!(dec_read_usr, LandlockDecision::Granted);
 
         // 2. Écriture dans /tmp/worker/job.dat : Autorisée par les 2 couches !
-        let dec_write_worker = daemon.check_access(20, "/tmp/worker/job.dat", fs_access::WRITE_FILE, 2001);
+        let dec_write_worker =
+            daemon.check_access(20, "/tmp/worker/job.dat", fs_access::WRITE_FILE, 2001);
         assert_eq!(dec_write_worker, LandlockDecision::Granted);
 
         // 3. Écriture dans /tmp/evil.sh : Bloquée par la couche 2 (non présente sous /tmp/worker)
         let dec_write_tmp = daemon.check_access(20, "/tmp/evil.sh", fs_access::WRITE_FILE, 2002);
         match dec_write_tmp {
-            LandlockDecision::Denied { layer_index, missing_access, .. } => {
+            LandlockDecision::Denied {
+                layer_index,
+                missing_access,
+                ..
+            } => {
                 assert_eq!(layer_index, 1);
                 assert_eq!(missing_access, fs_access::WRITE_FILE);
             }
-            _ => panic!("Expected Denied by layer 1 (second layer), got {:?}", dec_write_tmp),
+            _ => panic!(
+                "Expected Denied by layer 1 (second layer), got {:?}",
+                dec_write_tmp
+            ),
         }
 
         // 4. Écriture dans /etc/passwd : Bloquée dès la couche 0
@@ -1063,9 +1136,17 @@ mod tests {
         assert_eq!(dec_read_etc, LandlockDecision::Granted);
 
         // 6. Monotonie formelle : Empilement d'une couche 3 interdisant TOUT accès réseau/périphérique
-        let r3 = daemon.create_ruleset_internal(fs_access::READ, 2005).unwrap();
+        let r3 = daemon
+            .create_ruleset_internal(fs_access::READ, 2005)
+            .unwrap();
         // Couche 3 n'autorise QUE /usr
-        let _ = daemon.add_rule_path_beneath_internal(r3, Handle::new(401, 1), "/usr", fs_access::READ, 2005);
+        let _ = daemon.add_rule_path_beneath_internal(
+            r3,
+            Handle::new(401, 1),
+            "/usr",
+            fs_access::READ,
+            2005,
+        );
         let _ = daemon.restrict_domain_internal(20, r3, 2005);
 
         // Maintenant, la lecture de /etc/hosts est BLOQUÉE par la couche 3 (index 2) !
@@ -1122,7 +1203,11 @@ mod tests {
         let mut prev_hash = [0u8; 32];
         for i in 0..daemon.audit_count.min(MAX_AUDIT_LOGS) {
             let entry = daemon.audit_log[i].as_ref().unwrap();
-            assert_eq!(entry.prev_hash, prev_hash, "Chaîne de hash rompue à l'indice {}", i);
+            assert_eq!(
+                entry.prev_hash, prev_hash,
+                "Chaîne de hash rompue à l'indice {}",
+                i
+            );
             prev_hash = entry.current_hash;
         }
     }

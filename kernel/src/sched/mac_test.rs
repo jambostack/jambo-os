@@ -63,7 +63,9 @@ pub fn execute_mac_daemon_test() -> bool {
         Err(SysError::PermissionDenied),
         "Enregistrement d'objet sans MAC_LABEL doit échouer"
     );
-    kprintln!("[MAC/CAP] Modèle de sécurité capabilaire MacCap et interdiction d'amplification validés");
+    kprintln!(
+        "[MAC/CAP] Modèle de sécurité capabilaire MacCap et interdiction d'amplification validés"
+    );
 
     // 2. Validation du modèle Bell-LaPadula (Confidentialité) : NRU & NWD
     // Sujet 4 (UserShell: Unclassified, USER, User)
@@ -189,7 +191,9 @@ pub fn execute_mac_daemon_test() -> bool {
     // 6. Chaîne d'audit cryptographique SHA-256
     assert!(daemon.audit_count >= 5);
     assert_ne!(daemon.last_audit_digest, [0u8; 32]);
-    kprintln!("[MAC/AUDIT] Registre d'audit scellé SHA-256 et chaîne cryptographique inviolable validés");
+    kprintln!(
+        "[MAC/AUDIT] Registre d'audit scellé SHA-256 et chaîne cryptographique inviolable validés"
+    );
 
     // 7. Commandes interactives Shell `mac`
     let mut shell = JamboShell::new();

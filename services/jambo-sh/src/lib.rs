@@ -266,23 +266,35 @@ impl JamboShell {
         let trace = jambo_traced::JamboTraceDaemon::new();
         let cert = jambo_certd::JamboCertDaemon::new();
         let init = jambo_init::JamboInitDaemon::new();
-        let dns_cap = jambo_dnsd::DnsCap::new(
-            libjambo::Handle::new(7401, 1),
-            jambo_dnsd::dns_rights::ALL,
-        );
+        let dns_cap =
+            jambo_dnsd::DnsCap::new(libjambo::Handle::new(7401, 1), jambo_dnsd::dns_rights::ALL);
         let mut dns = jambo_dnsd::JamboDnsDaemon::new(dns_cap);
         let _ = dns.sync_from_service_registry(&dns_cap, &service.registry, 100);
-        let log_cap = jambo_logd::LogCap::new(
-            libjambo::Handle::new(7501, 1),
-            jambo_logd::log_rights::ALL,
-        );
+        let log_cap =
+            jambo_logd::LogCap::new(libjambo::Handle::new(7501, 1), jambo_logd::log_rights::ALL);
         let mut logd = jambo_logd::JamboLogDaemon::new(log_cap, 1);
-        let _ = logd.log(&log_cap, jambo_logd::LogLevel::Info, "INIT", "Superviseur PID 1 initialisé", None, None, &[], 100);
-        let _ = logd.log(&log_cap, jambo_logd::LogLevel::Info, "KERNEL", "Micro-noyau JamboOS opérationnel", None, None, &[], 150);
-        let bpf_cap = jambo_bpfd::BpfCap::new(
-            libjambo::Handle::new(7601, 1),
-            jambo_bpfd::bpf_rights::ALL,
+        let _ = logd.log(
+            &log_cap,
+            jambo_logd::LogLevel::Info,
+            "INIT",
+            "Superviseur PID 1 initialisé",
+            None,
+            None,
+            &[],
+            100,
         );
+        let _ = logd.log(
+            &log_cap,
+            jambo_logd::LogLevel::Info,
+            "KERNEL",
+            "Micro-noyau JamboOS opérationnel",
+            None,
+            None,
+            &[],
+            150,
+        );
+        let bpf_cap =
+            jambo_bpfd::BpfCap::new(libjambo::Handle::new(7601, 1), jambo_bpfd::bpf_rights::ALL);
         let mut bpf = jambo_bpfd::JamboBpfDaemon::new(bpf_cap);
         let default_xdp = [
             jambo_bpfd::BpfInstruction::mov64_imm(1, 0),
@@ -293,14 +305,24 @@ impl JamboShell {
             jambo_bpfd::BpfInstruction::mov64_imm(0, jambo_bpfd::xdp_action::XDP_DROP as i32),
             jambo_bpfd::BpfInstruction::exit(),
         ];
-        if let Ok(prog_id) = bpf.load_and_verify(&bpf_cap, jambo_bpfd::BpfProgramType::Xdp, "xdp_guard", &default_xdp) {
+        if let Ok(prog_id) = bpf.load_and_verify(
+            &bpf_cap,
+            jambo_bpfd::BpfProgramType::Xdp,
+            "xdp_guard",
+            &default_xdp,
+        ) {
             let _ = bpf.attach(&bpf_cap, prog_id, "eth0_xdp");
         }
-        let _ = bpf.create_map(&bpf_cap, "packet_stats", jambo_bpfd::BpfMapType::Array, 4, 8, 8);
-        let ipc_cap = jambo_ipcd::IpcCap::new(
-            libjambo::Handle::new(7701, 1),
-            jambo_ipcd::ipc_rights::ALL,
+        let _ = bpf.create_map(
+            &bpf_cap,
+            "packet_stats",
+            jambo_bpfd::BpfMapType::Array,
+            4,
+            8,
+            8,
         );
+        let ipc_cap =
+            jambo_ipcd::IpcCap::new(libjambo::Handle::new(7701, 1), jambo_ipcd::ipc_rights::ALL);
         let mut ipc = jambo_ipcd::JamboIpcDaemon::new(1, ipc_cap);
         let _ = ipc.create_channel(
             &ipc_cap,
@@ -329,7 +351,12 @@ impl JamboShell {
         );
         let secpolicy_priv = [0x78u8; 32];
         let secpolicy_pub = [0x78u8; 32];
-        let mut secpolicy = jambo_secpolicyd::JamboSecPolicyDaemon::new(1, secpolicy_cap, secpolicy_priv, secpolicy_pub);
+        let mut secpolicy = jambo_secpolicyd::JamboSecPolicyDaemon::new(
+            1,
+            secpolicy_cap,
+            secpolicy_priv,
+            secpolicy_pub,
+        );
         let _ = secpolicy.register_remote_node(&secpolicy_cap, 2, [0x55u8; 32]);
         let wall_cap = jambo_walld::WallCap::new(
             libjambo::Handle::new(7901, 1),
@@ -373,10 +400,8 @@ impl JamboShell {
         );
         let mut profiler = jambo_profilerd::JamboProfilerDaemon::new(1, profiler_cap);
         profiler.init_defaults();
-        let dbg_cap = jambo_dbg::DbgCap::new(
-            libjambo::Handle::new(8601, 1),
-            jambo_dbg::dbg_rights::ALL,
-        );
+        let dbg_cap =
+            jambo_dbg::DbgCap::new(libjambo::Handle::new(8601, 1), jambo_dbg::dbg_rights::ALL);
         let mut dbg = jambo_dbg::JamboDebuggerDaemon::new(1, dbg_cap);
         dbg.init_defaults();
         let dynlink_cap = jambo_dynlinkd::DynLinkCap::new(
@@ -391,10 +416,8 @@ impl JamboShell {
         );
         let mut seccomp = jambo_seccomp::JamboSeccompDaemon::new(1, seccomp_cap);
         seccomp.init_defaults();
-        let mac_cap = jambo_mac::MacCap::new(
-            libjambo::Handle::new(8901, 1),
-            jambo_mac::mac_rights::ALL,
-        );
+        let mac_cap =
+            jambo_mac::MacCap::new(libjambo::Handle::new(8901, 1), jambo_mac::mac_rights::ALL);
         let mut mac = jambo_mac::JamboMacDaemon::new(mac_cap);
         mac.init_defaults();
         let landlock_cap = jambo_landlock::LandlockCap::new(
@@ -409,10 +432,8 @@ impl JamboShell {
         );
         let mut capspec = jambo_capspec::JamboCapSpecDaemon::new(capspec_cap);
         capspec.init_defaults();
-        let tee_cap = jambo_tee::TeeCap::new(
-            libjambo::Handle::new(9201, 1),
-            jambo_tee::tee_rights::ALL,
-        );
+        let tee_cap =
+            jambo_tee::TeeCap::new(libjambo::Handle::new(9201, 1), jambo_tee::tee_rights::ALL);
         let mut tee = jambo_tee::JamboTeeDaemon::new(tee_cap);
         tee.init_defaults();
         let attest_cap = jambo_attest::AttestCap::new(
@@ -421,22 +442,16 @@ impl JamboShell {
         );
         let mut attest = jambo_attest::JamboAttestDaemon::new(attest_cap);
         attest.init_defaults();
-        let hsm_cap = jambo_hsm::HsmCap::new(
-            libjambo::Handle::new(9401, 1),
-            jambo_hsm::hsm_rights::ALL,
-        );
+        let hsm_cap =
+            jambo_hsm::HsmCap::new(libjambo::Handle::new(9401, 1), jambo_hsm::hsm_rights::ALL);
         let mut hsm = jambo_hsm::JamboHsmDaemon::new(hsm_cap);
         hsm.init_defaults();
-        let mpc_cap = jambo_mpc::MpcCap::new(
-            libjambo::Handle::new(9501, 1),
-            jambo_mpc::mpc_rights::ALL,
-        );
+        let mpc_cap =
+            jambo_mpc::MpcCap::new(libjambo::Handle::new(9501, 1), jambo_mpc::mpc_rights::ALL);
         let mut mpc = jambo_mpc::JamboMpcDaemon::new(mpc_cap);
         mpc.init_defaults();
-        let pqc_cap = jambo_pqc::PqcCap::new(
-            libjambo::Handle::new(9601, 1),
-            jambo_pqc::pqc_rights::ALL,
-        );
+        let pqc_cap =
+            jambo_pqc::PqcCap::new(libjambo::Handle::new(9601, 1), jambo_pqc::pqc_rights::ALL);
         let mut pqc = jambo_pqc::JamboPqcDaemon::new(pqc_cap);
         pqc.init_defaults();
         let zksnark_cap = jambo_zksnark::ZkSnarkCap::new(
@@ -445,10 +460,8 @@ impl JamboShell {
         );
         let mut zksnark = jambo_zksnark::JamboZkSnarkDaemon::new(zksnark_cap);
         zksnark.init_defaults();
-        let fhe_cap = jambo_fhe::FheCap::new(
-            libjambo::Handle::new(9801, 1),
-            jambo_fhe::fhe_rights::ALL,
-        );
+        let fhe_cap =
+            jambo_fhe::FheCap::new(libjambo::Handle::new(9801, 1), jambo_fhe::fhe_rights::ALL);
         let mut fhe = jambo_fhe::JamboFheDaemon::new(fhe_cap);
         fhe.init_defaults();
         let mixnet_cap = jambo_mixnet::MixCap::new(
@@ -947,7 +960,9 @@ impl JamboShell {
                 emit("  ip           - Affiche la configuration réseau IPv4/MAC de eth0\n");
                 emit("  ping <ip>    - Teste la connectivité réseau ICMP Echo\n");
                 emit("  netstat      - Affiche la table des sockets TCP actives\n");
-                emit("  dns [cmd]    - Serveur & résolveur DNS d'autorité (.jambo) et DoT externe\n");
+                emit(
+                    "  dns [cmd]    - Serveur & résolveur DNS d'autorité (.jambo) et DoT externe\n",
+                );
                 emit("  log [cmd]    - Journalisation structurée (jambo-logd) et agrégation distribuée\n");
                 emit("  gui [cmd]    - Interface graphique JamboComp, VirtIO-GPU et JamboUI\n");
                 emit("  compat [cmd] - Couche de compatibilité binaire Linux ELF POSIX\n");
@@ -990,9 +1005,15 @@ impl JamboShell {
                 emit("  init [cmd]   - Superviseur PID 1, cycle de vie et DAG de services\n");
                 emit("  bpf [cmd]    - Moteur eBPF souverain et filtrage réseau XDP\n");
                 emit("  ipc [cmd]    - Multiplexeur IPC distribué et passerelle déterministe\n");
-                emit("  secpolicy [cmd] - Attestation matérielle TPM 2.0 et confinement de grappe\n");
-                emit("  wall [cmd]   - Pare-feu distribué dynamique et synchronisation conntrack\n");
-                emit("  diag [cmd]   - Diagnostic matériel autonome, auto-réparation & télémétrie\n");
+                emit(
+                    "  secpolicy [cmd] - Attestation matérielle TPM 2.0 et confinement de grappe\n",
+                );
+                emit(
+                    "  wall [cmd]   - Pare-feu distribué dynamique et synchronisation conntrack\n",
+                );
+                emit(
+                    "  diag [cmd]   - Diagnostic matériel autonome, auto-réparation & télémétrie\n",
+                );
                 emit("  profiler [cmd]- Échantillonnage PMC/PEBS, Flamegraphs et analyse de latence Ring 3\n");
                 emit("  capspec [cmd] - Spécification formelle, invariants CSpace et atténuation de capacités\n");
                 emit("  tee [cmd]     - Environnements d'Exécution de Confiance (TEE), enclaves et mémoire chiffrée\n");
@@ -1014,7 +1035,9 @@ impl JamboShell {
                 emit("  kms [cmd]     - Gestion et séquestre de clés de grappe distribuée & baux temporels\n");
                 emit("  pki [cmd]     - PKI hybride post-quantique (ML-DSA + Ed25519) & fédération CA\n");
                 emit("  auth2 [cmd]   - Passkeys FIDO2/WebAuthn, signatures Schnorr & jetons éphémères\n");
-                emit("  secroute [cmd]- Routage Zero-Trust, micro-segmentation & maillage chiffré\n");
+                emit(
+                    "  secroute [cmd]- Routage Zero-Trust, micro-segmentation & maillage chiffré\n",
+                );
                 emit("  ids [cmd]     - Détection & corrélation multi-points d'intrusions, mitigation Ring 3\n");
                 emit("  vpn [cmd]     - Passerelle VPN WireGuard post-quantique (ML-KEM + Curve25519) & transport chiffré\n");
                 emit("  waf [cmd]     - Pare-feu applicatif L7 (WAF) sandboxed, détection d'injections & WafCap\n");
@@ -1022,7 +1045,9 @@ impl JamboShell {
                 emit("  soar [cmd]    - Orchestration SOAR, Playbooks DAG automatisés & SoarCap\n");
                 emit("  forensics [cmd] - Investigation numérique, extraction d'artefacts & scellement Ed25519/BLAKE3\n");
                 emit("  edr [cmd]     - Surveillance comportementale, détection injections .jso/W+X & EdrCap\n");
-                emit("  xdr [cmd]     - Détection & réponse étendue multi-vecteurs, APT & XdrCap\n");
+                emit(
+                    "  xdr [cmd]     - Détection & réponse étendue multi-vecteurs, APT & XdrCap\n",
+                );
                 emit("  intel [cmd]   - Renseignement menaces CTI, IoC Bloom/Table, scoring & IntelCap\n");
                 emit("  deception [cmd] - Cyber-déception, HoneyCaps, VMO decoys, canaris & DeceptionCap\n");
                 emit("  ztna [cmd]      - Architecture Zero Trust, micro-périmètres continus & ZtnaCap\n");
@@ -1253,7 +1278,10 @@ impl JamboShell {
                         emit("Zone faisant autorité : .");
                         emit(self.dns.zone.origin_str());
                         emit("\nEnregistrements actifs : ");
-                        emit(format_u64(self.dns.zone.active_records_count() as u64, &mut b));
+                        emit(format_u64(
+                            self.dns.zone.active_records_count() as u64,
+                            &mut b,
+                        ));
                         emit("\nRequêtes reçues        : ");
                         emit(format_u64(self.dns.queries_total, &mut b));
                         emit("\nRequêtes résolues      : ");
@@ -1296,11 +1324,19 @@ impl JamboShell {
                                     jambo_dnsd::DnsRecordData::AAAA(_) => {
                                         emit("[IPv6]");
                                     }
-                                    jambo_dnsd::DnsRecordData::SRV { port, ref target, target_len, .. } => {
+                                    jambo_dnsd::DnsRecordData::SRV {
+                                        port,
+                                        ref target,
+                                        target_len,
+                                        ..
+                                    } => {
                                         emit("port ");
                                         emit(format_u64(port as u64, &mut b));
                                         emit(" -> ");
-                                        emit(core::str::from_utf8(&target[..target_len]).unwrap_or(""));
+                                        emit(
+                                            core::str::from_utf8(&target[..target_len])
+                                                .unwrap_or(""),
+                                        );
                                     }
                                     jambo_dnsd::DnsRecordData::TXT { ref text, text_len } => {
                                         emit("\"");
@@ -1352,11 +1388,19 @@ impl JamboShell {
                                         emit(format_u64(ip[3] as u64, &mut b));
                                         emit(" (Zone Autoritaire .jambo)\n");
                                     }
-                                    jambo_dnsd::DnsRecordData::SRV { port, target, target_len, .. } => {
+                                    jambo_dnsd::DnsRecordData::SRV {
+                                        port,
+                                        target,
+                                        target_len,
+                                        ..
+                                    } => {
                                         emit("Port ");
                                         emit(format_u64(port as u64, &mut b));
                                         emit(" Cible: ");
-                                        emit(core::str::from_utf8(&target[..target_len]).unwrap_or(""));
+                                        emit(
+                                            core::str::from_utf8(&target[..target_len])
+                                                .unwrap_or(""),
+                                        );
                                         emit("\n");
                                     }
                                     _ => {
@@ -1379,7 +1423,11 @@ impl JamboShell {
                     }
                     "sync" => {
                         let mut b = [0u8; 20];
-                        match self.dns.sync_from_service_registry(&dns_cap, &self.service.registry, 1000) {
+                        match self.dns.sync_from_service_registry(
+                            &dns_cap,
+                            &self.service.registry,
+                            1000,
+                        ) {
                             Ok(synced) => {
                                 emit("[DNS/SYNC] ");
                                 emit(format_u64(synced as u64, &mut b));
@@ -1519,10 +1567,18 @@ impl JamboShell {
                             (ShellStatus::ExecutionFailed, write_pos)
                         } else {
                             let lvl_str = parsed.args[2];
-                            let lvl = jambo_logd::LogLevel::from_str(lvl_str).unwrap_or(jambo_logd::LogLevel::Info);
+                            let lvl = jambo_logd::LogLevel::from_str(lvl_str)
+                                .unwrap_or(jambo_logd::LogLevel::Info);
                             let sub_name = parsed.args[3];
-                            let msg = if parsed.arg_count > 4 { parsed.args[4] } else { "Notification système" };
-                            match self.logd.log(&log_cap, lvl, sub_name, msg, None, None, &[], 2000) {
+                            let msg = if parsed.arg_count > 4 {
+                                parsed.args[4]
+                            } else {
+                                "Notification système"
+                            };
+                            match self
+                                .logd
+                                .log(&log_cap, lvl, sub_name, msg, None, None, &[], 2000)
+                            {
                                 Ok(id) => {
                                     let mut b = [0u8; 20];
                                     emit("[LOG] Entrée #");
@@ -1538,7 +1594,11 @@ impl JamboShell {
                         }
                     }
                     "query" => {
-                        let filter_sub = if parsed.arg_count > 2 { Some(parsed.args[2]) } else { None };
+                        let filter_sub = if parsed.arg_count > 2 {
+                            Some(parsed.args[2])
+                        } else {
+                            None
+                        };
                         let mut filter = jambo_logd::LogQueryFilter::empty();
                         filter.subsystem = filter_sub;
                         let mut records = [jambo_logd::LogRecord::empty(); 16];
@@ -1565,7 +1625,13 @@ impl JamboShell {
                     "archive" => {
                         let dfs_cap = self.dfs.cap;
                         let key = [0x5cu8; 32];
-                        match self.logd.archive_to_dfs(&log_cap, &mut self.dfs.store, &dfs_cap, &key, 5000) {
+                        match self.logd.archive_to_dfs(
+                            &log_cap,
+                            &mut self.dfs.store,
+                            &dfs_cap,
+                            &key,
+                            5000,
+                        ) {
                             Ok(desc) => {
                                 let mut b = [0u8; 20];
                                 emit("[LOG] Archive #");
@@ -1677,11 +1743,24 @@ impl JamboShell {
                     "verify" => {
                         let sample_filter = [
                             jambo_bpfd::BpfInstruction::mov64_imm(1, 0),
-                            jambo_bpfd::BpfInstruction::call(jambo_bpfd::bpf_helpers::PACKET_READ_BYTE),
-                            jambo_bpfd::BpfInstruction::jmp_imm(jambo_bpfd::bpf_jmp::BPF_JEQ, 0, 0x53, 2),
-                            jambo_bpfd::BpfInstruction::mov64_imm(0, jambo_bpfd::xdp_action::XDP_PASS as i32),
+                            jambo_bpfd::BpfInstruction::call(
+                                jambo_bpfd::bpf_helpers::PACKET_READ_BYTE,
+                            ),
+                            jambo_bpfd::BpfInstruction::jmp_imm(
+                                jambo_bpfd::bpf_jmp::BPF_JEQ,
+                                0,
+                                0x53,
+                                2,
+                            ),
+                            jambo_bpfd::BpfInstruction::mov64_imm(
+                                0,
+                                jambo_bpfd::xdp_action::XDP_PASS as i32,
+                            ),
                             jambo_bpfd::BpfInstruction::exit(),
-                            jambo_bpfd::BpfInstruction::mov64_imm(0, jambo_bpfd::xdp_action::XDP_DROP as i32),
+                            jambo_bpfd::BpfInstruction::mov64_imm(
+                                0,
+                                jambo_bpfd::xdp_action::XDP_DROP as i32,
+                            ),
                             jambo_bpfd::BpfInstruction::exit(),
                         ];
                         match jambo_bpfd::BpfVerifier::verify(&sample_filter) {
@@ -1711,7 +1790,8 @@ impl JamboShell {
                             1
                         };
                         let dummy_pkt = [0xAA, 0xBB, 0xCC, 0xDD];
-                        let mut ctx = jambo_bpfd::BpfContext::new_packet(&dummy_pkt, 1, 0x0800, 2000);
+                        let mut ctx =
+                            jambo_bpfd::BpfContext::new_packet(&dummy_pkt, 1, 0x0800, 2000);
                         match self.bpf.run_program(&bpf_cap, prog_id, &mut ctx) {
                             Ok(verdict) => {
                                 let mut b = [0u8; 20];
@@ -1808,7 +1888,9 @@ impl JamboShell {
                                 emit("   ");
                                 emit(c.name_as_str());
                                 let pad = 17usize.saturating_sub(c.name_len);
-                                for _ in 0..pad { emit(" "); }
+                                for _ in 0..pad {
+                                    emit(" ");
+                                }
                                 emit(format_u64(c.src_node as u64, &mut b));
                                 emit(":");
                                 emit(format_u64(c.src_port as u64, &mut b));
@@ -1819,8 +1901,14 @@ impl JamboShell {
                                 emit("        ");
                                 emit(c.priority.as_str());
                                 let prio_pad = 13usize.saturating_sub(c.priority.as_str().len());
-                                for _ in 0..prio_pad { emit(" "); }
-                                if c.encrypted { emit("Oui      "); } else { emit("Non      "); }
+                                for _ in 0..prio_pad {
+                                    emit(" ");
+                                }
+                                if c.encrypted {
+                                    emit("Oui      ");
+                                } else {
+                                    emit("Non      ");
+                                }
                                 emit(format_u64(c.tx_sequence, &mut b));
                                 emit("       ");
                                 emit(format_u64(c.rx_sequence, &mut b));
@@ -1843,8 +1931,16 @@ impl JamboShell {
                                 emit("         ");
                                 emit(format_u64(route.max_latency_bound_us as u64, &mut b));
                                 emit("             ");
-                                if route.encrypted { emit("Oui      "); } else { emit("Non      "); }
-                                if route.active { emit("Oui\n"); } else { emit("Non\n"); }
+                                if route.encrypted {
+                                    emit("Oui      ");
+                                } else {
+                                    emit("Non      ");
+                                }
+                                if route.active {
+                                    emit("Oui\n");
+                                } else {
+                                    emit("Non\n");
+                                }
                             }
                         }
                         (ShellStatus::Success, write_pos)
@@ -1856,7 +1952,12 @@ impl JamboShell {
                         } else {
                             let chan_id = parse_u64(parsed.args[2]).unwrap_or(1) as u32;
                             let msg_content = parsed.args[3];
-                            match self.ipc.send_message(&ipc_cap, chan_id, msg_content.as_bytes(), 100) {
+                            match self.ipc.send_message(
+                                &ipc_cap,
+                                chan_id,
+                                msg_content.as_bytes(),
+                                100,
+                            ) {
                                 Ok(msg_id) => {
                                     let mut b = [0u8; 20];
                                     emit("[IPC] Message #");
@@ -1889,7 +1990,11 @@ impl JamboShell {
             }
             "secpolicy" => {
                 let sec_cap = self.secpolicy.cap;
-                let subcmd = if parsed.arg_count > 1 { parsed.args[1] } else { "status" };
+                let subcmd = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    "status"
+                };
                 match subcmd {
                     "status" => {
                         let mut b = [0u8; 20];
@@ -1938,10 +2043,22 @@ impl JamboShell {
                         let mut b = [0u8; 20];
                         emit("=== REGISTRES PCR TPM 2.0 (BANQUE SHA-256) ===\n");
                         let pcr_names = [
-                            "Firmware/CRTM", "HW Platform Config", "Option ROM Code", "Option ROM Config",
-                            "Limine Bootloader", "GPT / Boot Config", "ACPI State / S0", "Secure Boot Policy",
-                            "JamboKernel ELF", "Initrd Ramdisk", "IMA Integrity", "Security Policy",
-                            "Cluster Credentials", "Userspace Services", "TPM EK Cert Stamp", "Consensus Epoch",
+                            "Firmware/CRTM",
+                            "HW Platform Config",
+                            "Option ROM Code",
+                            "Option ROM Config",
+                            "Limine Bootloader",
+                            "GPT / Boot Config",
+                            "ACPI State / S0",
+                            "Secure Boot Policy",
+                            "JamboKernel ELF",
+                            "Initrd Ramdisk",
+                            "IMA Integrity",
+                            "Security Policy",
+                            "Cluster Credentials",
+                            "Userspace Services",
+                            "TPM EK Cert Stamp",
+                            "Consensus Epoch",
                         ];
                         for i in 0..16 {
                             if let Some(pcr_val) = self.secpolicy.pcr_bank.get_pcr(i) {
@@ -1966,7 +2083,10 @@ impl JamboShell {
                         } else {
                             let node_id = parse_u64(parsed.args[2]).unwrap_or(2);
                             let mut b = [0u8; 20];
-                            let challenge_nonce = self.secpolicy.generate_challenge_nonce(&sec_cap, 500).unwrap_or([0u8; 32]);
+                            let challenge_nonce = self
+                                .secpolicy
+                                .generate_challenge_nonce(&sec_cap, 500)
+                                .unwrap_or([0u8; 32]);
                             let mut remote_sim = jambo_secpolicyd::JamboSecPolicyDaemon::new(
                                 node_id,
                                 sec_cap,
@@ -2024,7 +2144,12 @@ impl JamboShell {
                                 _ => jambo_secpolicyd::ConfinementState::Quarantine,
                             };
                             let mut b = [0u8; 20];
-                            match self.secpolicy.set_node_confinement(&sec_cap, node_id, state, "MANUAL_CLI_ENFORCE") {
+                            match self.secpolicy.set_node_confinement(
+                                &sec_cap,
+                                node_id,
+                                state,
+                                "MANUAL_CLI_ENFORCE",
+                            ) {
                                 Ok(_) => {
                                     emit("[SECPOLICY] Confinement du nœud #");
                                     emit(format_u64(node_id, &mut b));
@@ -2073,9 +2198,15 @@ impl JamboShell {
                             emit("INACTIF (NORMAL)\n");
                         }
                         emit("Sessions Actives     : ");
-                        emit(format_u64(self.wall.conntrack.active_count() as u64, &mut b));
+                        emit(format_u64(
+                            self.wall.conntrack.active_count() as u64,
+                            &mut b,
+                        ));
                         emit(" / ");
-                        emit(format_u64(jambo_walld::MAX_CONNTRACK_ENTRIES as u64, &mut b));
+                        emit(format_u64(
+                            jambo_walld::MAX_CONNTRACK_ENTRIES as u64,
+                            &mut b,
+                        ));
                         emit("\nRègles Actives       : ");
                         emit(format_u64(self.wall.rule_count as u64, &mut b));
                         emit(" / ");
@@ -2197,7 +2328,13 @@ impl JamboShell {
                                 _ => None,
                             };
                             let dport = parse_u64(parsed.args[5]).unwrap_or(80) as u16;
-                            let action = jambo_walld::WallAction::from_str(if parsed.arg_count > 6 { parsed.args[6] } else { "allow" }).unwrap_or(jambo_walld::WallAction::Allow);
+                            let action =
+                                jambo_walld::WallAction::from_str(if parsed.arg_count > 6 {
+                                    parsed.args[6]
+                                } else {
+                                    "allow"
+                                })
+                                .unwrap_or(jambo_walld::WallAction::Allow);
 
                             let mut r = jambo_walld::WallRule::empty();
                             r.priority = 60;
@@ -2430,7 +2567,10 @@ impl JamboShell {
                                 emit("diag: périphérique ou action de remédiation invalide\n");
                                 (ShellStatus::ExecutionFailed, write_pos)
                             } else {
-                                match self.diag.execute_remediation(&diag_cap, dev_id, action, 100) {
+                                match self
+                                    .diag
+                                    .execute_remediation(&diag_cap, dev_id, action, 100)
+                                {
                                     Ok(_) => {
                                         emit("[DIAG] Remédiation appliquée avec succès sur le composant\n");
                                         (ShellStatus::Success, write_pos)
@@ -2506,7 +2646,9 @@ impl JamboShell {
                 match subcmd {
                     "status" => {
                         let mut b = [0u8; 20];
-                        emit("=== CONFINEMENT & MICRO-BACS À SABLE ZERO-AMBIENT (jambo-sandd) ===\n");
+                        emit(
+                            "=== CONFINEMENT & MICRO-BACS À SABLE ZERO-AMBIENT (jambo-sandd) ===\n",
+                        );
                         emit("Démon Sand ID        : #");
                         emit(format_u64(self.sand.daemon_id as u64, &mut b));
                         emit("\nProfils Actifs       : ");
@@ -2594,7 +2736,11 @@ impl JamboShell {
                             for _ in 0..pad2 {
                                 emit(" ");
                             }
-                            let prof_name = self.sand.get_profile(s.profile_id).map(|p| p.name_str()).unwrap_or("?");
+                            let prof_name = self
+                                .sand
+                                .get_profile(s.profile_id)
+                                .map(|p| p.name_str())
+                                .unwrap_or("?");
                             emit(prof_name);
                             let pad3 = 18usize.saturating_sub(prof_name.len());
                             for _ in 0..pad3 {
@@ -2692,7 +2838,8 @@ impl JamboShell {
                             let mut b = [0u8; 20];
                             let s_id = parse_u64(parsed.args[2]).unwrap_or(1) as u32;
                             let sys_nr = parse_u64(parsed.args[3]).unwrap_or(0) as u32;
-                            let decision = self.sand.evaluate_syscall(s_id, sys_nr, [0, 0, 0, 0], 100);
+                            let decision =
+                                self.sand.evaluate_syscall(s_id, sys_nr, [0, 0, 0, 0], 100);
                             emit("[SANDBOX] Test Syscall #");
                             emit(format_u64(sys_nr as u64, &mut b));
                             emit(" sur Bac à Sable #");
@@ -2766,33 +2913,58 @@ impl JamboShell {
                 match subcmd {
                     "status" => {
                         let mut b = [0u8; 20];
-                        emit("=== SURVEILLANCE DE VIVACITÉ & CHIEN DE GARDE (jambo-watchdogd) ===\n");
+                        emit(
+                            "=== SURVEILLANCE DE VIVACITÉ & CHIEN DE GARDE (jambo-watchdogd) ===\n",
+                        );
                         emit("Démon Watchdog ID      : #");
                         emit(format_u64(self.watchdog.daemon_id as u64, &mut b));
                         emit("\nCibles Surveillées     : ");
                         emit(format_u64(self.watchdog.target_count as u64, &mut b));
                         emit(" / ");
-                        emit(format_u64(jambo_watchdogd::MAX_WATCHDOG_TARGETS as u64, &mut b));
+                        emit(format_u64(
+                            jambo_watchdogd::MAX_WATCHDOG_TARGETS as u64,
+                            &mut b,
+                        ));
                         emit("\nNœuds de Grappe        : ");
                         emit(format_u64(self.watchdog.cluster_count as u64, &mut b));
                         emit(" / ");
-                        emit(format_u64(jambo_watchdogd::MAX_CLUSTER_NODES as u64, &mut b));
+                        emit(format_u64(
+                            jambo_watchdogd::MAX_CLUSTER_NODES as u64,
+                            &mut b,
+                        ));
                         emit("\nChien de Garde Matériel: ");
                         emit(self.watchdog.hw_watchdog.hw_type.as_str());
-                        emit(if self.watchdog.hw_watchdog.status == jambo_watchdogd::HwWatchdogStatus::Armed { " [ARMÉ]" } else { " [DÉSARMÉ]" });
+                        emit(
+                            if self.watchdog.hw_watchdog.status
+                                == jambo_watchdogd::HwWatchdogStatus::Armed
+                            {
+                                " [ARMÉ]"
+                            } else {
+                                " [DÉSARMÉ]"
+                            },
+                        );
                         emit("\n\n--- Statistiques de Vivacité & Tolérance aux Pannes ---\n");
                         emit("Nourritures (Pets)     : ");
                         emit(format_u64(self.watchdog.stats.total_pets, &mut b));
                         emit("\nBlocages Détectés      : ");
-                        emit(format_u64(self.watchdog.stats.total_stalls_detected, &mut b));
+                        emit(format_u64(
+                            self.watchdog.stats.total_stalls_detected,
+                            &mut b,
+                        ));
                         emit(" | Dérives d'Event Loop: ");
                         emit(format_u64(self.watchdog.stats.total_drifts_warned, &mut b));
                         emit("\nAlertes NMI Reçues     : ");
                         emit(format_u64(self.watchdog.stats.total_nmi_alerts, &mut b));
                         emit(" | Threads Isolés : ");
-                        emit(format_u64(self.watchdog.stats.total_threads_isolated, &mut b));
+                        emit(format_u64(
+                            self.watchdog.stats.total_threads_isolated,
+                            &mut b,
+                        ));
                         emit("\nBascules de Grappe     : ");
-                        emit(format_u64(self.watchdog.stats.total_cluster_failovers, &mut b));
+                        emit(format_u64(
+                            self.watchdog.stats.total_cluster_failovers,
+                            &mut b,
+                        ));
                         emit(" | Recharges Matérielles: ");
                         emit(format_u64(self.watchdog.stats.total_hw_reloads, &mut b));
                         emit("\n");
@@ -2830,7 +3002,10 @@ impl JamboShell {
                         emit("Type Matériel : ");
                         emit(self.watchdog.hw_watchdog.hw_type.as_str());
                         emit("\nPort Base I/O : 0x");
-                        emit(format_hex_u64(self.watchdog.hw_watchdog.io_port_base as u64, &mut b));
+                        emit(format_hex_u64(
+                            self.watchdog.hw_watchdog.io_port_base as u64,
+                            &mut b,
+                        ));
                         emit("\nTimeout Total : ");
                         emit(format_u64(self.watchdog.hw_watchdog.timeout_ms, &mut b));
                         emit(" ms (Pré-timeout NMI: ");
@@ -2853,7 +3028,11 @@ impl JamboShell {
                                 emit(format_u64(node.node_id as u64, &mut b));
                                 emit(" : ");
                                 emit(node.name_str());
-                                emit(if node.is_primary { " [PRIMARY]" } else { " [STANDBY]" });
+                                emit(if node.is_primary {
+                                    " [PRIMARY]"
+                                } else {
+                                    " [STANDBY]"
+                                });
                                 emit(" - Intervalle: ");
                                 emit(format_u64(node.heartbeat_interval_ms, &mut b));
                                 emit("ms - Manqués: ");
@@ -2944,23 +3123,21 @@ impl JamboShell {
                         }
                         (ShellStatus::Success, write_pos)
                     }
-                    "digest" => {
-                        match self.watchdog.get_audit_digest(&self.watchdog.admin_cap) {
-                            Ok(digest) => {
-                                emit("Condensat SHA-256 de Vivacité & Watchdog : ");
-                                let mut b = [0u8; 20];
-                                for byte in digest.iter() {
-                                    emit(format_hex_u64(*byte as u64, &mut b));
-                                }
-                                emit("\n");
-                                (ShellStatus::Success, write_pos)
+                    "digest" => match self.watchdog.get_audit_digest(&self.watchdog.admin_cap) {
+                        Ok(digest) => {
+                            emit("Condensat SHA-256 de Vivacité & Watchdog : ");
+                            let mut b = [0u8; 20];
+                            for byte in digest.iter() {
+                                emit(format_hex_u64(*byte as u64, &mut b));
                             }
-                            Err(_) => {
-                                emit("watchdog: échec de lecture du condensat d'audit\n");
-                                (ShellStatus::ExecutionFailed, write_pos)
-                            }
+                            emit("\n");
+                            (ShellStatus::Success, write_pos)
                         }
-                    }
+                        Err(_) => {
+                            emit("watchdog: échec de lecture du condensat d'audit\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        }
+                    },
                     _ => {
                         emit("Usage: watchdog [status | targets | hw | nodes | pet <id> | nmi <id> | alerts | digest]\n");
                         (ShellStatus::ExecutionFailed, write_pos)
@@ -3000,7 +3177,10 @@ impl JamboShell {
                         emit("\nTélémétries Émises     : ");
                         emit(format_u64(self.core.stats.total_telemetry_emitted, &mut b));
                         emit("\nSceaux Intègres        : ");
-                        emit(format_u64(self.core.stats.total_verifications_succeeded, &mut b));
+                        emit(format_u64(
+                            self.core.stats.total_verifications_succeeded,
+                            &mut b,
+                        ));
                         emit("\n");
                         (ShellStatus::Success, write_pos)
                     }
@@ -3020,8 +3200,16 @@ impl JamboShell {
                                 emit(" | ELF: ");
                                 emit(format_u64(report.elf_size as u64, &mut b));
                                 emit(" octets | ");
-                                emit(if report.quarantined { "[QUARANTAINE]" } else { "[ACTIF]" });
-                                emit(if report.telemetry_emitted { " [TÉLÉMÉTRIE]" } else { "" });
+                                emit(if report.quarantined {
+                                    "[QUARANTAINE]"
+                                } else {
+                                    "[ACTIF]"
+                                });
+                                emit(if report.telemetry_emitted {
+                                    " [TÉLÉMÉTRIE]"
+                                } else {
+                                    ""
+                                });
                                 emit("\n");
                             }
                         }
@@ -3056,7 +3244,11 @@ impl JamboShell {
                             emit("\nTaille ELF    : ");
                             emit(format_u64(rep.elf_size as u64, &mut b));
                             emit(" octets\nQuarantaine   : ");
-                            emit(if rep.quarantined { "OUI (Mémoire isolée)" } else { "NON" });
+                            emit(if rep.quarantined {
+                                "OUI (Mémoire isolée)"
+                            } else {
+                                "NON"
+                            });
                             emit("\nRecommandation: ");
                             emit(rep.recommendation.as_str());
                             emit("\n");
@@ -3313,7 +3505,10 @@ impl JamboShell {
                                 state: jambo_patchd::ThreadState::Running,
                             },
                         ];
-                        match self.patch.quiesce_threads(&cap, patch_id, &mut threads, 2000) {
+                        match self
+                            .patch
+                            .quiesce_threads(&cap, patch_id, &mut threads, 2000)
+                        {
                             Ok(q_count) => {
                                 emit("patch: barrière de quiescence atteinte pour patch #");
                                 emit(format_u64(patch_id as u64, &mut b));
@@ -3336,8 +3531,14 @@ impl JamboShell {
                         let patch_id = parse_u64(parsed.args[2]).unwrap_or(0) as u32;
                         let mut b = [0u8; 20];
                         let cap = self.patch.cap;
-                        let mut dummy_code = [0x55, 0x48, 0x89, 0xE5, 0x48, 0x83, 0xEC, 0x20, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90];
-                        match self.patch.apply_patch(&cap, patch_id, &mut dummy_code, 0, 2010) {
+                        let mut dummy_code = [
+                            0x55, 0x48, 0x89, 0xE5, 0x48, 0x83, 0xEC, 0x20, 0x90, 0x90, 0x90, 0x90,
+                            0x90, 0x90, 0x90, 0x90,
+                        ];
+                        match self
+                            .patch
+                            .apply_patch(&cap, patch_id, &mut dummy_code, 0, 2010)
+                        {
                             Ok(()) => {
                                 emit("patch: patch #");
                                 emit(format_u64(patch_id as u64, &mut b));
@@ -3358,8 +3559,14 @@ impl JamboShell {
                         let patch_id = parse_u64(parsed.args[2]).unwrap_or(0) as u32;
                         let mut b = [0u8; 20];
                         let cap = self.patch.cap;
-                        let mut dummy_code = [0xE9, 0x00, 0x00, 0x00, 0x00, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90];
-                        match self.patch.revert_patch(&cap, patch_id, &mut dummy_code, 0, 2020) {
+                        let mut dummy_code = [
+                            0xE9, 0x00, 0x00, 0x00, 0x00, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
+                            0x90, 0x90, 0x90, 0x90,
+                        ];
+                        match self
+                            .patch
+                            .revert_patch(&cap, patch_id, &mut dummy_code, 0, 2020)
+                        {
                             Ok(()) => {
                                 emit("patch: patch #");
                                 emit(format_u64(patch_id as u64, &mut b));
@@ -3428,13 +3635,19 @@ impl JamboShell {
                         emit("Démon Profiler ID      : #");
                         emit(format_u64(self.profiler.daemon_id as u64, &mut b));
                         emit("\nÉchantillons Capturés  : ");
-                        emit(format_u64(self.profiler.stats.total_samples_collected, &mut b));
+                        emit(format_u64(
+                            self.profiler.stats.total_samples_collected,
+                            &mut b,
+                        ));
                         emit("\nEnregistrements PEBS   : ");
                         emit(format_u64(self.profiler.stats.total_pebs_records, &mut b));
                         emit("\nÉvénements de Latence  : ");
                         emit(format_u64(self.profiler.stats.total_latency_events, &mut b));
                         emit("\nRapports Générés       : ");
-                        emit(format_u64(self.profiler.stats.total_reports_generated, &mut b));
+                        emit(format_u64(
+                            self.profiler.stats.total_reports_generated,
+                            &mut b,
+                        ));
                         emit("\nSceaux SHA-256 Validés : ");
                         emit(format_u64(self.profiler.stats.total_seals_verified, &mut b));
                         emit("\nEntrées d'Audit        : ");
@@ -3458,11 +3671,17 @@ impl JamboShell {
                         }
                         emit(format_u64(ipc_frac, &mut b));
                         emit("\nInstructions de Saut   : ");
-                        emit(format_u64(self.profiler.aggregated.branch_instructions, &mut b));
+                        emit(format_u64(
+                            self.profiler.aggregated.branch_instructions,
+                            &mut b,
+                        ));
                         emit("\nFautes de Branchement  : ");
                         emit(format_u64(self.profiler.aggregated.branch_misses, &mut b));
                         emit(" (");
-                        emit(format_u64(self.profiler.aggregated.branch_miss_rate_percent() as u64, &mut b));
+                        emit(format_u64(
+                            self.profiler.aggregated.branch_miss_rate_percent() as u64,
+                            &mut b,
+                        ));
                         emit("%)\nFautes de Cache LLC    : ");
                         emit(format_u64(self.profiler.aggregated.llc_misses, &mut b));
                         emit("\nFautes L1D / L1I Cache : ");
@@ -3489,7 +3708,24 @@ impl JamboShell {
                             sp: 0x7FFF_0000,
                             event: jambo_profilerd::PmcEventType::Instructions,
                             counter_val: 50_000,
-                            call_stack: [0x0040_0010, 0x0040_3050, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                            call_stack: [
+                                0x0040_0010,
+                                0x0040_3050,
+                                0,
+                                0,
+                                0,
+                                0,
+                                0,
+                                0,
+                                0,
+                                0,
+                                0,
+                                0,
+                                0,
+                                0,
+                                0,
+                                0,
+                            ],
                             call_stack_len: 2,
                             pebs: Some(jambo_profilerd::PebsRecord {
                                 precise_ip: 0x0040_3050,
@@ -3808,8 +4044,12 @@ impl JamboShell {
                                             emit(format_u64(bp.id as u64, &mut b));
                                             emit(" | ");
                                             match bp.bp_type {
-                                                jambo_dbg::BreakpointType::Hardware => emit("Hardware   | "),
-                                                jambo_dbg::BreakpointType::SoftwareInt3 => emit("Software   | "),
+                                                jambo_dbg::BreakpointType::Hardware => {
+                                                    emit("Hardware   | ")
+                                                }
+                                                jambo_dbg::BreakpointType::SoftwareInt3 => {
+                                                    emit("Software   | ")
+                                                }
                                             }
                                             emit(bp.cond.name());
                                             emit("      | ");
@@ -3836,18 +4076,32 @@ impl JamboShell {
                                 emit("=== REGISTRES DU THREAD TID ");
                                 emit(format_u64(tid, &mut b));
                                 emit(" ===\n");
-                                emit("RIP: "); emit(format_hex_u64(regs.rip, &mut b));
-                                emit("  RSP: "); emit(format_hex_u64(regs.rsp, &mut b));
-                                emit("  RBP: "); emit(format_hex_u64(regs.rbp, &mut b));
-                                emit("\nRAX: "); emit(format_hex_u64(regs.rax, &mut b));
-                                emit("  RBX: "); emit(format_hex_u64(regs.rbx, &mut b));
-                                emit("  RCX: "); emit(format_hex_u64(regs.rcx, &mut b));
-                                emit("  RDX: "); emit(format_hex_u64(regs.rdx, &mut b));
-                                emit("\nRSI: "); emit(format_hex_u64(regs.rsi, &mut b));
-                                emit("  RDI: "); emit(format_hex_u64(regs.rdi, &mut b));
-                                emit("  RFLAGS: "); emit(format_hex_u64(regs.rflags, &mut b));
+                                emit("RIP: ");
+                                emit(format_hex_u64(regs.rip, &mut b));
+                                emit("  RSP: ");
+                                emit(format_hex_u64(regs.rsp, &mut b));
+                                emit("  RBP: ");
+                                emit(format_hex_u64(regs.rbp, &mut b));
+                                emit("\nRAX: ");
+                                emit(format_hex_u64(regs.rax, &mut b));
+                                emit("  RBX: ");
+                                emit(format_hex_u64(regs.rbx, &mut b));
+                                emit("  RCX: ");
+                                emit(format_hex_u64(regs.rcx, &mut b));
+                                emit("  RDX: ");
+                                emit(format_hex_u64(regs.rdx, &mut b));
+                                emit("\nRSI: ");
+                                emit(format_hex_u64(regs.rsi, &mut b));
+                                emit("  RDI: ");
+                                emit(format_hex_u64(regs.rdi, &mut b));
+                                emit("  RFLAGS: ");
+                                emit(format_hex_u64(regs.rflags, &mut b));
                                 emit(" [TF=");
-                                if regs.is_single_step_enabled() { emit("1"); } else { emit("0"); }
+                                if regs.is_single_step_enabled() {
+                                    emit("1");
+                                } else {
+                                    emit("0");
+                                }
                                 emit("]\n");
                                 (ShellStatus::Success, write_pos)
                             }
@@ -4006,9 +4260,17 @@ impl JamboShell {
                         if parsed.arg_count > 2 {
                             let name = parsed.args[2];
                             let now = parsed.arg_count > 3 && parsed.args[3] == "now";
-                            let flags = if now { jambo_dynlinkd::RTLD_NOW } else { jambo_dynlinkd::RTLD_LAZY };
-                            let base = 0x0000_7000_0000_0000 + ((self.dynlink.lib_count as u64 + 1) * 0x0004_0000);
-                            match self.dynlink.load_library(&cap, name, base, 0x10000, flags, 3000) {
+                            let flags = if now {
+                                jambo_dynlinkd::RTLD_NOW
+                            } else {
+                                jambo_dynlinkd::RTLD_LAZY
+                            };
+                            let base = 0x0000_7000_0000_0000
+                                + ((self.dynlink.lib_count as u64 + 1) * 0x0004_0000);
+                            match self
+                                .dynlink
+                                .load_library(&cap, name, base, 0x10000, flags, 3000)
+                            {
                                 Ok(id) => {
                                     emit("dynlink: bibliothèque chargée avec succès (ID ");
                                     let mut b = [0u8; 20];
@@ -4169,7 +4431,9 @@ impl JamboShell {
                 let cap = self.seccomp.cap;
                 match subcmd {
                     "status" => {
-                        emit("=== FILTRAGE BPF & CONFINEMENT D'APPELS SYSTÈME (jambo-seccomp) ===\n");
+                        emit(
+                            "=== FILTRAGE BPF & CONFINEMENT D'APPELS SYSTÈME (jambo-seccomp) ===\n",
+                        );
                         let mut b = [0u8; 20];
                         emit("Filtres enregistrés en mémoire : ");
                         emit(format_u64(self.seccomp.filter_count as u64, &mut b));
@@ -4215,9 +4479,12 @@ impl JamboShell {
                         if parsed.arg_count > 2 {
                             let profile = parsed.args[2];
                             let res = match profile {
-                                "strict" => jambo_seccomp::FilterBuilder::build_strict_filter().map(|p| ("Strict", p)),
-                                "compute" => jambo_seccomp::FilterBuilder::build_compute_filter().map(|p| ("Compute", p)),
-                                "net" => jambo_seccomp::FilterBuilder::build_network_filter().map(|p| ("Network", p)),
+                                "strict" => jambo_seccomp::FilterBuilder::build_strict_filter()
+                                    .map(|p| ("Strict", p)),
+                                "compute" => jambo_seccomp::FilterBuilder::build_compute_filter()
+                                    .map(|p| ("Compute", p)),
+                                "net" => jambo_seccomp::FilterBuilder::build_network_filter()
+                                    .map(|p| ("Network", p)),
                                 _ => {
                                     let mut b_n = jambo_seccomp::FilterBuilder::new();
                                     b_n.check_arch(jambo_seccomp::AUDIT_ARCH_X86_64);
@@ -4230,7 +4497,10 @@ impl JamboShell {
                             };
                             match res {
                                 Ok((name, prog)) => {
-                                    match self.seccomp.load_named_filter(&cap, name, prog, 0, 100, 3100) {
+                                    match self
+                                        .seccomp
+                                        .load_named_filter(&cap, name, prog, 0, 100, 3100)
+                                    {
                                         Ok(id) => {
                                             emit("seccomp: filtre '");
                                             emit(name);
@@ -4295,7 +4565,9 @@ impl JamboShell {
                                     (ShellStatus::Success, write_pos)
                                 }
                                 Err(_) => {
-                                    emit("seccomp: échec de la synchronisation TSYNC multi-thread\n");
+                                    emit(
+                                        "seccomp: échec de la synchronisation TSYNC multi-thread\n",
+                                    );
                                     (ShellStatus::ExecutionFailed, write_pos)
                                 }
                             }
@@ -4324,12 +4596,21 @@ impl JamboShell {
                             let act_type = action & jambo_seccomp::SECCOMP_RET_ACTION_FULL;
                             match act_type {
                                 jambo_seccomp::SECCOMP_RET_ALLOW => emit("ALLOW (Autorisé)\n"),
-                                jambo_seccomp::SECCOMP_RET_KILL_PROCESS => emit("KILL_PROCESS (Processus Terminé)\n"),
-                                jambo_seccomp::SECCOMP_RET_KILL_THREAD => emit("KILL_THREAD (Thread Terminé)\n"),
-                                jambo_seccomp::SECCOMP_RET_TRAP => emit("TRAP (Signal SIGSYS Envoyé)\n"),
+                                jambo_seccomp::SECCOMP_RET_KILL_PROCESS => {
+                                    emit("KILL_PROCESS (Processus Terminé)\n")
+                                }
+                                jambo_seccomp::SECCOMP_RET_KILL_THREAD => {
+                                    emit("KILL_THREAD (Thread Terminé)\n")
+                                }
+                                jambo_seccomp::SECCOMP_RET_TRAP => {
+                                    emit("TRAP (Signal SIGSYS Envoyé)\n")
+                                }
                                 jambo_seccomp::SECCOMP_RET_ERRNO => {
                                     emit("ERRNO (Erreur ");
-                                    emit(format_u64((action & jambo_seccomp::SECCOMP_RET_DATA) as u64, &mut b));
+                                    emit(format_u64(
+                                        (action & jambo_seccomp::SECCOMP_RET_DATA) as u64,
+                                        &mut b,
+                                    ));
                                     emit(")\n");
                                 }
                                 jambo_seccomp::SECCOMP_RET_LOG => emit("LOG (Enregistré)\n"),
@@ -4404,20 +4685,23 @@ impl JamboShell {
                             if let Some(sub) = slot {
                                 emit(format_u64(sub.id as u64, &mut b));
                                 emit(" | ");
-                                let name_str =
-                                    core::str::from_utf8(&sub.name[..sub.name_len]).unwrap_or("<utf8-err>");
+                                let name_str = core::str::from_utf8(&sub.name[..sub.name_len])
+                                    .unwrap_or("<utf8-err>");
                                 emit(name_str);
                                 for _ in 0..(16usize.saturating_sub(sub.name_len)) {
                                     emit(" ");
                                 }
                                 emit(" | ");
                                 emit(sub.label.level.as_str());
-                                for _ in 0..(12usize.saturating_sub(sub.label.level.as_str().len())) {
+                                for _ in 0..(12usize.saturating_sub(sub.label.level.as_str().len()))
+                                {
                                     emit(" ");
                                 }
                                 emit(" | ");
                                 emit(sub.label.integrity.as_str());
-                                for _ in 0..(9usize.saturating_sub(sub.label.integrity.as_str().len())) {
+                                for _ in
+                                    0..(9usize.saturating_sub(sub.label.integrity.as_str().len()))
+                                {
                                     emit(" ");
                                 }
                                 emit(" | 0x");
@@ -4435,20 +4719,23 @@ impl JamboShell {
                             if let Some(obj) = slot {
                                 emit(format_u64(obj.id as u64, &mut b));
                                 emit(" | ");
-                                let name_str =
-                                    core::str::from_utf8(&obj.name[..obj.name_len]).unwrap_or("<utf8-err>");
+                                let name_str = core::str::from_utf8(&obj.name[..obj.name_len])
+                                    .unwrap_or("<utf8-err>");
                                 emit(name_str);
                                 for _ in 0..(16usize.saturating_sub(obj.name_len)) {
                                     emit(" ");
                                 }
                                 emit(" | ");
                                 emit(obj.label.level.as_str());
-                                for _ in 0..(12usize.saturating_sub(obj.label.level.as_str().len())) {
+                                for _ in 0..(12usize.saturating_sub(obj.label.level.as_str().len()))
+                                {
                                     emit(" ");
                                 }
                                 emit(" | ");
                                 emit(obj.label.integrity.as_str());
-                                for _ in 0..(9usize.saturating_sub(obj.label.integrity.as_str().len())) {
+                                for _ in
+                                    0..(9usize.saturating_sub(obj.label.integrity.as_str().len()))
+                                {
                                     emit(" ");
                                 }
                                 emit(" | 0x");
@@ -4472,7 +4759,8 @@ impl JamboShell {
                             } else {
                                 jambo_mac::AccessType::Read
                             };
-                            let decision = self.mac.evaluate_access(sub_id, obj_id, access_mode, 3200);
+                            let decision =
+                                self.mac.evaluate_access(sub_id, obj_id, access_mode, 3200);
                             emit("Évaluation MAC Sujet ");
                             let mut b = [0u8; 20];
                             emit(format_u64(sub_id as u64, &mut b));
@@ -4517,7 +4805,9 @@ impl JamboShell {
                                         jambo_mac::MacViolationReason::DowngradeProhibited => {
                                             emit("Déclassification Interdite")
                                         }
-                                        jambo_mac::MacViolationReason::None => emit("Raison Inconnue"),
+                                        jambo_mac::MacViolationReason::None => {
+                                            emit("Raison Inconnue")
+                                        }
                                     }
                                     emit(")\n");
                                 }
@@ -4650,7 +4940,9 @@ impl JamboShell {
                                 jambo_landlock::fs_access::READ_FILE
                             };
 
-                            let decision = self.landlock.check_access(pid, target_path, access_op, 5000);
+                            let decision =
+                                self.landlock
+                                    .check_access(pid, target_path, access_op, 5000);
                             emit("[Évaluation Landlock PID ");
                             let mut b = [0u8; 20];
                             emit(format_u64(pid as u64, &mut b));
@@ -4664,7 +4956,11 @@ impl JamboShell {
                                 jambo_landlock::LandlockDecision::ProcessUnconfined => {
                                     emit("ACCORDÉ (Processus non confiné)\n");
                                 }
-                                jambo_landlock::LandlockDecision::Denied { layer_index, missing_access, .. } => {
+                                jambo_landlock::LandlockDecision::Denied {
+                                    layer_index,
+                                    missing_access,
+                                    ..
+                                } => {
                                     emit("REFUSÉ (Bloqué par la couche ");
                                     emit(format_u64(layer_index as u64, &mut b));
                                     emit(", droits manquants: 0x");
@@ -4735,8 +5031,12 @@ impl JamboShell {
                     }
                     "profiles" | "prof" => {
                         let mut b = [0u8; 20];
-                        emit("ID  | NOM              | TYPES AUTORISÉS | DROITS MAX | DÉLÉGATION\n");
-                        emit("----+------------------+-----------------+------------+-----------\n");
+                        emit(
+                            "ID  | NOM              | TYPES AUTORISÉS | DROITS MAX | DÉLÉGATION\n",
+                        );
+                        emit(
+                            "----+------------------+-----------------+------------+-----------\n",
+                        );
                         for slot in &self.capspec.profiles {
                             if let Some(prof) = slot {
                                 emit(format_u64(prof.id as u64, &mut b));
@@ -4792,7 +5092,9 @@ impl JamboShell {
                         (ShellStatus::Success, write_pos)
                     }
                     "verify" => {
-                        emit("[Vérification Formelle CSpace] Contrôle exhaustif des invariants...\n");
+                        emit(
+                            "[Vérification Formelle CSpace] Contrôle exhaustif des invariants...\n",
+                        );
                         let res = self.capspec.check_all_invariants();
                         let mut b = [0u8; 20];
                         match res {
@@ -4911,7 +5213,10 @@ impl JamboShell {
                     "report" => {
                         emit("[Attestation TEE] Génération du rapport cryptographique pour l'enclave 1...\n");
                         let admin_cap = self.tee.admin_cap;
-                        match self.tee.generate_report(&admin_cap, 1, b"JAMBO_SHELL_CHALLENGE") {
+                        match self
+                            .tee
+                            .generate_report(&admin_cap, 1, b"JAMBO_SHELL_CHALLENGE")
+                        {
                             Ok(rep) => {
                                 emit("Enclave ID     : 1\n");
                                 emit("Backend        : ");
@@ -4933,7 +5238,9 @@ impl JamboShell {
                                 (ShellStatus::Success, write_pos)
                             }
                             Err(_) => {
-                                emit("[ERREUR] Impossible de générer le rapport pour l'enclave 1\n");
+                                emit(
+                                    "[ERREUR] Impossible de générer le rapport pour l'enclave 1\n",
+                                );
                                 (ShellStatus::ExecutionFailed, write_pos)
                             }
                         }
@@ -4975,7 +5282,10 @@ impl JamboShell {
                         emit(" / ");
                         emit(format_u64(jambo_attest::MAX_NODES as u64, &mut b));
                         emit("\nNœuds certifiés (OK)   : ");
-                        emit(format_u64(self.attest.count_active_trusted() as u64, &mut b));
+                        emit(format_u64(
+                            self.attest.count_active_trusted() as u64,
+                            &mut b,
+                        ));
                         emit("\nNœuds en quarantaine   : ");
                         emit(format_u64(self.attest.count_quarantined() as u64, &mut b));
                         emit("\nRevendications générées: ");
@@ -5032,12 +5342,23 @@ impl JamboShell {
                                 emit("[1/3] Revendication d'intégrité signée émise avec succès.\n");
                                 match self.attest.verify_claim(&admin_cap, &claim) {
                                     Ok(true) => {
-                                        emit("[2/3] Signature HMAC & Mesure matérielle conformes.\n");
+                                        emit(
+                                            "[2/3] Signature HMAC & Mesure matérielle conformes.\n",
+                                        );
                                         let claim_digest = claim.compute_digest();
-                                        match self.attest.generate_zkp_proof(&admin_cap, 1, 0x1337_4242, 0x5544_3322, claim_digest) {
+                                        match self.attest.generate_zkp_proof(
+                                            &admin_cap,
+                                            1,
+                                            0x1337_4242,
+                                            0x5544_3322,
+                                            claim_digest,
+                                        ) {
                                             Ok(proof) => {
                                                 emit("[3/3] Preuve Schnorr ZKP générée. Vérification formelle...\n");
-                                                match self.attest.verify_zkp_proof(&admin_cap, &proof) {
+                                                match self
+                                                    .attest
+                                                    .verify_zkp_proof(&admin_cap, &proof)
+                                                {
                                                     Ok(true) => {
                                                         emit("\x1b[1;32m[SUCCÈS] Preuve Zero-Knowledge validée avec succès ! Nœud 1 certifié conforme et restrictions levées.\x1b[0m\n");
                                                         (ShellStatus::Success, write_pos)
@@ -5069,7 +5390,12 @@ impl JamboShell {
                     "confine" => {
                         let admin_cap = self.attest.admin_cap;
                         emit("[Sécurité Grappe] Confinement d'urgence et mise en quarantaine du nœud 2...\n");
-                        match self.attest.confine_node(&admin_cap, 2, jambo_attest::ConfinementLevel::Isolated, "Confinement manuel opérateur") {
+                        match self.attest.confine_node(
+                            &admin_cap,
+                            2,
+                            jambo_attest::ConfinementLevel::Isolated,
+                            "Confinement manuel opérateur",
+                        ) {
                             Ok(()) => {
                                 emit("\x1b[1;33m[ISOLATION] Nœud 2 isolé du réseau et du bus IPC de grappe.\x1b[0m\n");
                                 (ShellStatus::Success, write_pos)
@@ -5083,7 +5409,10 @@ impl JamboShell {
                     "rotate" => {
                         let admin_cap = self.attest.admin_cap;
                         emit("[Anti-Rejeu] Renouvellement du nonce de défi cryptographique de grappe...\n");
-                        match self.attest.rotate_cluster_challenge(&admin_cap, b"JAMBO_MANUAL_ROTATE_SALT") {
+                        match self
+                            .attest
+                            .rotate_cluster_challenge(&admin_cap, b"JAMBO_MANUAL_ROTATE_SALT")
+                        {
                             Ok(_) => {
                                 emit("\x1b[1;32m[OK] Défi renouvelé, incrémentation de l'époque et invalidation des anciens nonces.\x1b[0m\n");
                                 (ShellStatus::Success, write_pos)
@@ -5104,7 +5433,9 @@ impl JamboShell {
                         (ShellStatus::Success, write_pos)
                     }
                     _ => {
-                        emit("Usage: attest [status | nodes | verify | confine | rotate | audit]\n");
+                        emit(
+                            "Usage: attest [status | nodes | verify | confine | rotate | audit]\n",
+                        );
                         (ShellStatus::ExecutionFailed, write_pos)
                     }
                 }
@@ -5217,9 +5548,17 @@ impl JamboShell {
                                     emit(" ");
                                 }
                                 emit("| ");
-                                emit(if o.attrs.sensitive { "OUI       " } else { "NON       " });
+                                emit(if o.attrs.sensitive {
+                                    "OUI       "
+                                } else {
+                                    "NON       "
+                                });
                                 emit("| ");
-                                emit(if o.attrs.extractable { "OUI         " } else { "NON (SCELLÉ)" });
+                                emit(if o.attrs.extractable {
+                                    "OUI         "
+                                } else {
+                                    "NON (SCELLÉ)"
+                                });
                                 emit("| ");
                                 emit(format_u64(o.usage_count, &mut b));
                                 emit("\n");
@@ -5232,7 +5571,12 @@ impl JamboShell {
                         let admin_cap = self.hsm.admin_cap;
                         match self.hsm.open_session(&admin_cap, 0, true) {
                             Ok(sess) => {
-                                match self.hsm.login(&admin_cap, sess, jambo_hsm::HsmUserType::User, b"user_sec_pin_2026") {
+                                match self.hsm.login(
+                                    &admin_cap,
+                                    sess,
+                                    jambo_hsm::HsmUserType::User,
+                                    b"user_sec_pin_2026",
+                                ) {
                                     Ok(()) => {
                                         emit("[OK] Session authentifiée. Dérivation HKDF-SHA256 d'une clé de stockage (DEK)...\n");
                                         let attrs = jambo_hsm::HsmKeyAttributes {
@@ -5289,7 +5633,12 @@ impl JamboShell {
                         let admin_cap = self.hsm.admin_cap;
                         match self.hsm.open_session(&admin_cap, 0, true) {
                             Ok(sess) => {
-                                let _ = self.hsm.login(&admin_cap, sess, jambo_hsm::HsmUserType::User, b"user_sec_pin_2026");
+                                let _ = self.hsm.login(
+                                    &admin_cap,
+                                    sess,
+                                    jambo_hsm::HsmUserType::User,
+                                    b"user_sec_pin_2026",
+                                );
                                 let mut attrs = jambo_hsm::HsmKeyAttributes::default();
                                 attrs.extractable = true;
                                 match self.hsm.generate_key(
@@ -5303,7 +5652,13 @@ impl JamboShell {
                                 ) {
                                     Ok(key_id) => {
                                         let mut wrapped = [0u8; 128];
-                                        match self.hsm.wrap_key(&admin_cap, sess, 1, key_id, &mut wrapped) {
+                                        match self.hsm.wrap_key(
+                                            &admin_cap,
+                                            sess,
+                                            1,
+                                            key_id,
+                                            &mut wrapped,
+                                        ) {
                                             Ok(len) => {
                                                 let mut b = [0u8; 20];
                                                 emit("[OK] Clé enveloppée sous KEK avec intégrité HMAC (taille: ");
@@ -5323,12 +5678,16 @@ impl JamboShell {
                                                         emit("\x1b[1;32m[SUCCÈS] Clé désenveloppée et réintégrée dans l'enclave sécurisée ID: ");
                                                         emit(format_u64(new_id as u64, &mut b));
                                                         emit("\x1b[0m\n");
-                                                        let _ = self.hsm.close_session(&admin_cap, sess);
+                                                        let _ = self
+                                                            .hsm
+                                                            .close_session(&admin_cap, sess);
                                                         (ShellStatus::Success, write_pos)
                                                     }
                                                     Err(_) => {
                                                         emit("Échec désenveloppement de clé.\n");
-                                                        let _ = self.hsm.close_session(&admin_cap, sess);
+                                                        let _ = self
+                                                            .hsm
+                                                            .close_session(&admin_cap, sess);
                                                         (ShellStatus::ExecutionFailed, write_pos)
                                                     }
                                                 }
@@ -5444,7 +5803,12 @@ impl JamboShell {
                     "share" => {
                         let admin_cap = self.mpc.admin_cap;
                         emit("Création d'une session de partage secret de Shamir (Seuil t=3, n=5)...\n");
-                        match self.mpc.create_session(&admin_cap, jambo_mpc::MpcSessionType::ThresholdSharing, 3, 5) {
+                        match self.mpc.create_session(
+                            &admin_cap,
+                            jambo_mpc::MpcSessionType::ThresholdSharing,
+                            3,
+                            5,
+                        ) {
                             Ok(sess_id) => {
                                 let mut shares = [jambo_mpc::SecretShare {
                                     node_id: 0,
@@ -5474,10 +5838,17 @@ impl JamboShell {
                                         // Reconstitution avec les parts {1, 3, 5} (t=3)
                                         let subset = [shares[0], shares[2], shares[4]];
                                         let mut recovered = [0u8; jambo_mpc::MAX_SECRET_LEN];
-                                        match self.mpc.reconstruct_secret_in_session(&admin_cap, sess_id, &subset, &mut recovered) {
+                                        match self.mpc.reconstruct_secret_in_session(
+                                            &admin_cap,
+                                            sess_id,
+                                            &subset,
+                                            &mut recovered,
+                                        ) {
                                             Ok(rec_len) => {
                                                 emit("\x1b[1;32m[SUCCÈS] Secret reconstruit par interpolation de Lagrange (3/5 parts) : ");
-                                                if let Ok(rec_str) = core::str::from_utf8(&recovered[..rec_len]) {
+                                                if let Ok(rec_str) =
+                                                    core::str::from_utf8(&recovered[..rec_len])
+                                                {
                                                     emit(rec_str);
                                                 }
                                                 emit("\x1b[0m\n");
@@ -5508,7 +5879,10 @@ impl JamboShell {
                         let y = jambo_mpc::Gf256(0x05);
                         let exp = x.mul(y);
 
-                        match self.mpc.execute_beaver_mult(&admin_cap, x, y, 4, b"seed_beaver_exec") {
+                        match self
+                            .mpc
+                            .execute_beaver_mult(&admin_cap, x, y, 4, b"seed_beaver_exec")
+                        {
                             Ok(res) => {
                                 let mut b = [0u8; 20];
                                 emit("\x1b[1;32m[SUCCÈS] Multiplication MPC réussie : x=0x0B * y=0x05 = 0x");
@@ -5533,7 +5907,11 @@ impl JamboShell {
                                     id = id.wrapping_mul(10).wrapping_add(*byte - b'0');
                                 }
                             }
-                            if id == 0 { 5 } else { id }
+                            if id == 0 {
+                                5
+                            } else {
+                                id
+                            }
                         } else {
                             5 // Par défaut nœud 5
                         };
@@ -5543,7 +5921,11 @@ impl JamboShell {
                         emit(format_u64(target_node as u64, &mut b));
                         emit(" pour altération de part cryptographique...\n");
 
-                        match self.mpc.slash_byzantine_node(&admin_cap, target_node, "Preuve d'altération VSS") {
+                        match self.mpc.slash_byzantine_node(
+                            &admin_cap,
+                            target_node,
+                            "Preuve d'altération VSS",
+                        ) {
                             Ok(()) => {
                                 emit("\x1b[1;32m[SUCCÈS] Nœud byzantin banni avec succès (Slashing cryptographique appliqué).\x1b[0m\n");
                                 (ShellStatus::Success, write_pos)
@@ -5582,9 +5964,15 @@ impl JamboShell {
                         emit("Algorithmes Standards       : ML-KEM (Kyber-768) & ML-DSA (Dilithium-65)\n");
                         emit("État Transition Quantique   : ");
                         match self.pqc.transition_state {
-                            jambo_pqc::PqcTransitionState::ClassicalOnly => emit("ClassicalOnly (Déprécié)\n"),
-                            jambo_pqc::PqcTransitionState::HybridPqcClassical => emit("HybridPqcClassical (Dual-Defense Active)\n"),
-                            jambo_pqc::PqcTransitionState::PurePqcEnforced => emit("PurePqcEnforced (Post-Quantique Strict)\n"),
+                            jambo_pqc::PqcTransitionState::ClassicalOnly => {
+                                emit("ClassicalOnly (Déprécié)\n")
+                            }
+                            jambo_pqc::PqcTransitionState::HybridPqcClassical => {
+                                emit("HybridPqcClassical (Dual-Defense Active)\n")
+                            }
+                            jambo_pqc::PqcTransitionState::PurePqcEnforced => {
+                                emit("PurePqcEnforced (Post-Quantique Strict)\n")
+                            }
                         }
                         emit("Clés PQC Actives            : ");
                         emit(format_u64(self.pqc.count_active_keys() as u64, &mut b));
@@ -5648,15 +6036,34 @@ impl JamboShell {
                     "kem" => {
                         let admin_cap = self.pqc.admin_cap;
                         emit("Exécution de l'échange de clé post-quantique ML-KEM-768...\n");
-                        let kem_key_id = self.pqc.keys.iter().filter_map(|k| k.as_ref()).find(|k| k.is_active && k.algorithm == jambo_pqc::PqcAlgorithm::MlKem768).map(|k| k.key_id);
+                        let kem_key_id = self
+                            .pqc
+                            .keys
+                            .iter()
+                            .filter_map(|k| k.as_ref())
+                            .find(|k| {
+                                k.is_active && k.algorithm == jambo_pqc::PqcAlgorithm::MlKem768
+                            })
+                            .map(|k| k.key_id);
                         if let Some(kid) = kem_key_id {
                             let mut ct = [0u8; jambo_pqc::KEM_CIPHERTEXT_LEN];
                             let mut ss_sender = [0u8; jambo_pqc::KEM_SHARED_SECRET_LEN];
                             let mut ss_receiver = [0u8; jambo_pqc::KEM_SHARED_SECRET_LEN];
 
-                            match self.pqc.kem_encapsulate(&admin_cap, kid, b"shell_entropy_kem_seed", &mut ct, &mut ss_sender) {
+                            match self.pqc.kem_encapsulate(
+                                &admin_cap,
+                                kid,
+                                b"shell_entropy_kem_seed",
+                                &mut ct,
+                                &mut ss_sender,
+                            ) {
                                 Ok(()) => {
-                                    match self.pqc.kem_decapsulate(&admin_cap, kid, &ct, &mut ss_receiver) {
+                                    match self.pqc.kem_decapsulate(
+                                        &admin_cap,
+                                        kid,
+                                        &ct,
+                                        &mut ss_receiver,
+                                    ) {
                                         Ok(()) => {
                                             if ss_sender == ss_receiver {
                                                 emit("\x1b[1;32m[SUCCÈS] Encapsulation & Décapsulation ML-KEM validées (Secrets partagés identiques).\x1b[0m\n");
@@ -5685,23 +6092,35 @@ impl JamboShell {
                     "dsa" => {
                         let admin_cap = self.pqc.admin_cap;
                         emit("Signature et vérification numérique post-quantique ML-DSA-65...\n");
-                        let dsa_key_id = self.pqc.keys.iter().filter_map(|k| k.as_ref()).find(|k| k.is_active && k.algorithm == jambo_pqc::PqcAlgorithm::MlDsa65).map(|k| k.key_id);
+                        let dsa_key_id = self
+                            .pqc
+                            .keys
+                            .iter()
+                            .filter_map(|k| k.as_ref())
+                            .find(|k| {
+                                k.is_active && k.algorithm == jambo_pqc::PqcAlgorithm::MlDsa65
+                            })
+                            .map(|k| k.key_id);
                         if let Some(kid) = dsa_key_id {
                             let msg = b"JAMBO_PQC_SHELL_TEST_MESSAGE_2026";
                             let mut sig = [0u8; jambo_pqc::DSA_SIGNATURE_LEN];
-                            match self.pqc.dsa_sign(&admin_cap, kid, msg, b"nonce_shell_dsa", &mut sig) {
-                                Ok(_) => {
-                                    match self.pqc.dsa_verify(&admin_cap, kid, msg, &sig) {
-                                        Ok(valid) if valid => {
-                                            emit("\x1b[1;32m[SUCCÈS] Signature ML-DSA apposée et vérifiée avec succès (Authenticité post-quantique garantie).\x1b[0m\n");
-                                            (ShellStatus::Success, write_pos)
-                                        }
-                                        _ => {
-                                            emit("Échec de la vérification ML-DSA.\n");
-                                            (ShellStatus::ExecutionFailed, write_pos)
-                                        }
+                            match self.pqc.dsa_sign(
+                                &admin_cap,
+                                kid,
+                                msg,
+                                b"nonce_shell_dsa",
+                                &mut sig,
+                            ) {
+                                Ok(_) => match self.pqc.dsa_verify(&admin_cap, kid, msg, &sig) {
+                                    Ok(valid) if valid => {
+                                        emit("\x1b[1;32m[SUCCÈS] Signature ML-DSA apposée et vérifiée avec succès (Authenticité post-quantique garantie).\x1b[0m\n");
+                                        (ShellStatus::Success, write_pos)
                                     }
-                                }
+                                    _ => {
+                                        emit("Échec de la vérification ML-DSA.\n");
+                                        (ShellStatus::ExecutionFailed, write_pos)
+                                    }
+                                },
                                 Err(_) => {
                                     emit("Échec de la signature ML-DSA.\n");
                                     (ShellStatus::ExecutionFailed, write_pos)
@@ -5715,12 +6134,27 @@ impl JamboShell {
                     "hybrid" => {
                         let admin_cap = self.pqc.admin_cap;
                         emit("Échange de clés hybride Dual-Defense (ML-KEM + ECDH)...\n");
-                        let kem_key_id = self.pqc.keys.iter().filter_map(|k| k.as_ref()).find(|k| k.is_active && k.algorithm == jambo_pqc::PqcAlgorithm::MlKem768).map(|k| k.key_id);
+                        let kem_key_id = self
+                            .pqc
+                            .keys
+                            .iter()
+                            .filter_map(|k| k.as_ref())
+                            .find(|k| {
+                                k.is_active && k.algorithm == jambo_pqc::PqcAlgorithm::MlKem768
+                            })
+                            .map(|k| k.key_id);
                         if let Some(kid) = kem_key_id {
                             let classical_ss = [0x5cu8; 32];
                             let mut ct = [0u8; jambo_pqc::KEM_CIPHERTEXT_LEN];
                             let mut hybrid_ss = [0u8; 32];
-                            match self.pqc.execute_hybrid_kex(&admin_cap, kid, &classical_ss, b"SHELL_HYBRID_KEX", &mut ct, &mut hybrid_ss) {
+                            match self.pqc.execute_hybrid_kex(
+                                &admin_cap,
+                                kid,
+                                &classical_ss,
+                                b"SHELL_HYBRID_KEX",
+                                &mut ct,
+                                &mut hybrid_ss,
+                            ) {
                                 Ok(()) => {
                                     emit("\x1b[1;32m[SUCCÈS] Secret dérivé hybride généré via HKDF-SHA256 (Dual-Defense certifiée).\x1b[0m\n");
                                     (ShellStatus::Success, write_pos)
@@ -5783,10 +6217,13 @@ impl JamboShell {
                 match sub {
                     "status" => {
                         let mut b = [0u8; 20];
-                        emit("=== PREUVES À DIVULGATION NULLE DE CONNAISSANCE (jambo-zksnark) ===\n");
+                        emit(
+                            "=== PREUVES À DIVULGATION NULLE DE CONNAISSANCE (jambo-zksnark) ===\n",
+                        );
                         emit("Corps de base       : Goldilocks prime P = 2^64 - 2^32 + 1\n");
                         emit("Système formel      : R1CS (Rank-1 Constraint Systems) & Groth16 zk-SNARK\n");
-                        let active_circuits = self.zksnark.circuits.iter().filter(|c| c.is_some()).count();
+                        let active_circuits =
+                            self.zksnark.circuits.iter().filter(|c| c.is_some()).count();
                         emit("Circuits enregistrés: ");
                         emit(format_u64(active_circuits as u64, &mut b));
                         emit(" / ");
@@ -5809,7 +6246,8 @@ impl JamboShell {
                                 let mut b = [0u8; 20];
                                 emit(format_u64(i as u64, &mut b));
                                 emit("   ");
-                                let name_str = core::str::from_utf8(&c.name[..c.name_len]).unwrap_or("Circuit");
+                                let name_str = core::str::from_utf8(&c.name[..c.name_len])
+                                    .unwrap_or("Circuit");
                                 emit(name_str);
                                 for _ in name_str.len()..22 {
                                     emit(" ");
@@ -5831,7 +6269,10 @@ impl JamboShell {
                         let s3 = jambo_zksnark::Fr::from_u64(27);
                         let y = jambo_zksnark::Fr::from_u64(49);
                         let witness = [jambo_zksnark::Fr::ONE, s, s2, s3, y];
-                        match self.zksnark.create_proof(&admin_cap, 0, &witness, 0x1234_5678) {
+                        match self
+                            .zksnark
+                            .create_proof(&admin_cap, 0, &witness, 0x1234_5678)
+                        {
                             Ok(proof) => {
                                 let mut b = [0u8; 20];
                                 emit("[ZKSNARK/PROVE] Preuve générée avec succès (ID: ");
@@ -5861,7 +6302,10 @@ impl JamboShell {
                         let s3 = jambo_zksnark::Fr::from_u64(27);
                         let y = jambo_zksnark::Fr::from_u64(49);
                         let witness = [jambo_zksnark::Fr::ONE, s, s2, s3, y];
-                        let proof = self.zksnark.create_proof(&admin_cap, 0, &witness, 0x9999).unwrap();
+                        let proof = self
+                            .zksnark
+                            .create_proof(&admin_cap, 0, &witness, 0x9999)
+                            .unwrap();
                         match self.zksnark.verify_proof(&admin_cap, &proof) {
                             Ok(true) => {
                                 emit("[ZKSNARK/VERIFY] Preuve Groth16 formellement vérifiée et acceptée (O(1))\n");
@@ -5950,7 +6394,8 @@ impl JamboShell {
                         let dec_add = jambo_fhe::FheSystem::decrypt(&self.fhe.keys.sk, &ct_add);
 
                         // Multiplication homomorphe avec rélinéarisation : 6 * 7 = 42
-                        let ct_mul = jambo_fhe::FheSystem::eval_mul(&ct_6, &ct_7, &self.fhe.keys.rlk);
+                        let ct_mul =
+                            jambo_fhe::FheSystem::eval_mul(&ct_6, &ct_7, &self.fhe.keys.rlk);
                         let dec_mul = jambo_fhe::FheSystem::decrypt(&self.fhe.keys.sk, &ct_mul);
 
                         let mut b = [0u8; 20];
@@ -6054,7 +6499,10 @@ impl JamboShell {
                         emit(", Total mixés: ");
                         emit(format_u64(self.mixnet.mix_pool.total_mixed as u64, &mut b));
                         emit(", Leurre injecté: ");
-                        emit(format_u64(self.mixnet.mix_pool.cover_injected as u64, &mut b));
+                        emit(format_u64(
+                            self.mixnet.mix_pool.cover_injected as u64,
+                            &mut b,
+                        ));
                         emit("]\nTrafic & Sécurité   : [Routés: ");
                         emit(format_u64(self.mixnet.packets_routed as u64, &mut b));
                         emit(", Dépaquetés: ");
@@ -6070,18 +6518,26 @@ impl JamboShell {
                         let route_nodes = [101, 102, 103, 104];
                         let secret_payload = b"JAMBO_ONION_ROUTING_PACKET_CONFIDENTIAL";
                         emit("[MIXNET/ROUTE] Encapsulation paquet Sphinx 4 sauts (101 -> 102 -> 103 -> 104)...\n");
-                        match self.mixnet.route_onion_message(&route_nodes, secret_payload, 0xCAFE1234) {
+                        match self.mixnet.route_onion_message(
+                            &route_nodes,
+                            secret_payload,
+                            0xCAFE1234,
+                        ) {
                             Ok(payload) => {
                                 emit("[MIXNET/ROUTE] Routage achevé avec succès sans fuite de métadonnées!\n");
                                 emit("[MIXNET/ROUTE] Message extrait au nœud de sortie : ");
-                                if let Ok(s) = core::str::from_utf8(&payload[..secret_payload.len()]) {
+                                if let Ok(s) =
+                                    core::str::from_utf8(&payload[..secret_payload.len()])
+                                {
                                     emit(s);
                                 }
                                 emit("\n");
                                 (ShellStatus::Success, write_pos)
                             }
                             Err(_) => {
-                                emit("[MIXNET/ROUTE] Erreur lors du routage du paquet en oignon!\n");
+                                emit(
+                                    "[MIXNET/ROUTE] Erreur lors du routage du paquet en oignon!\n",
+                                );
                                 (ShellStatus::ExecutionFailed, write_pos)
                             }
                         }
@@ -6137,7 +6593,10 @@ impl JamboShell {
                         emit(" banques SHA-256 (PCR 0..23)\n");
                         emit("Chaîne de confiance  : CRTM (PCR 0) -> UEFI (PCR 1) -> Limine (PCR 4) -> Kernel (PCR 8) -> Initrd (PCR 9)\n");
                         emit("Mesures enregistrées : ");
-                        emit(format_u64(self.secboot.measurements_recorded as u64, &mut b));
+                        emit(format_u64(
+                            self.secboot.measurements_recorded as u64,
+                            &mut b,
+                        ));
                         emit(" événements TCG 2.0\n");
                         emit("Clés Secure Boot     : ");
                         emit(format_u64(self.secboot.key_count as u64, &mut b));
@@ -6152,7 +6611,9 @@ impl JamboShell {
                         emit("]\nViolations Intégrité : ");
                         emit(format_u64(self.secboot.tamper_violations as u64, &mut b));
                         emit(" tentatives de tampering bloquées\n");
-                        let composite = self.secboot.compute_pcr_composite(jambo_secboot::CRITICAL_PCR_MASK);
+                        let composite = self
+                            .secboot
+                            .compute_pcr_composite(jambo_secboot::CRITICAL_PCR_MASK);
                         emit("Composite PCRs       : ");
                         for byte in composite[..8].iter() {
                             emit(format_hex_u64(*byte as u64, &mut b));
@@ -6188,7 +6649,10 @@ impl JamboShell {
                     "seal" => {
                         let confidential = b"JAMBO_VAULT_MASTER_KEY_PROTECTED_BY_TPM_PCR";
                         emit("[SECBOOT/SEAL] Scellement cryptographique sous politique PCR critiques (0, 4, 8, 9, 11, 12)...\n");
-                        match self.secboot.seal_secret(jambo_secboot::CRITICAL_PCR_MASK, confidential) {
+                        match self
+                            .secboot
+                            .seal_secret(jambo_secboot::CRITICAL_PCR_MASK, confidential)
+                        {
                             Ok(secret_id) => {
                                 let mut b = [0u8; 20];
                                 emit("[SECBOOT/SEAL] Secret scellé avec succès, identifiant : ");
@@ -6217,8 +6681,10 @@ impl JamboShell {
                         }
                     }
                     "verify" => {
-                        let authorized_digest = jambo_secboot::Sha256::digest(b"JAMBO_KERNEL_OFFICIAL_RELEASE_KEY");
-                        let rogue_digest = jambo_secboot::Sha256::digest(b"UNTRUSTED_ROOTKIT_PAYLOAD_2026");
+                        let authorized_digest =
+                            jambo_secboot::Sha256::digest(b"JAMBO_KERNEL_OFFICIAL_RELEASE_KEY");
+                        let rogue_digest =
+                            jambo_secboot::Sha256::digest(b"UNTRUSTED_ROOTKIT_PAYLOAD_2026");
                         emit("[SECBOOT/VERIFY] Vérification signature officielle noyau JamboOS : ");
                         if self.secboot.verify_binary(&authorized_digest) == Ok(true) {
                             emit("AUTORISÉ (DB)\n");
@@ -6265,7 +6731,10 @@ impl JamboShell {
                         emit("\nAnomalies de flux détectées : ");
                         emit(format_u64(self.idps.anomalies_detected as u64, &mut b));
                         emit("\nContre-mesures exécutées    : ");
-                        emit(format_u64(self.idps.countermeasures_executed as u64, &mut b));
+                        emit(format_u64(
+                            self.idps.countermeasures_executed as u64,
+                            &mut b,
+                        ));
                         emit("\nCapacités révoquées         : ");
                         emit(format_u64(self.idps.caps_revoked as u64, &mut b));
                         emit("\nProcessus en quarantaine    : ");
@@ -6311,7 +6780,11 @@ impl JamboShell {
                                 emit("[IDPS/ERR] Échec de la révocation de droits\n");
                             }
                         }
-                        let _ = self.idps.quarantine_process(999, handle, "Suspicion d'intrusion et altération mémoire");
+                        let _ = self.idps.quarantine_process(
+                            999,
+                            handle,
+                            "Suspicion d'intrusion et altération mémoire",
+                        );
                         if self.idps.is_quarantined(999) {
                             emit("[IDPS/QUARANTINE] Processus PID 999 consigné en quarantaine active\n");
                         }
@@ -6366,7 +6839,11 @@ impl JamboShell {
                         emit("\nSignatures de seuil générées       : ");
                         emit(format_u64(self.hsm2.signatures_generated, &mut b));
                         emit("\nStatut de Zéroïsation d'Urgence    : ");
-                        emit(if self.hsm2.zeroized { "ACTIF (DÉTRUIT)" } else { "NON (OPÉRATIONNEL)" });
+                        emit(if self.hsm2.zeroized {
+                            "ACTIF (DÉTRUIT)"
+                        } else {
+                            "NON (OPÉRATIONNEL)"
+                        });
                         emit("\n");
                         (ShellStatus::Success, write_pos)
                     }
@@ -6381,9 +6858,13 @@ impl JamboShell {
                             emit(format_u64(chip.slot_id as u64, &mut b));
                             emit(") | Statut: ");
                             match chip.status {
-                                jambo_hsm2::ChipNodeStatus::ActiveFederated => emit("ActiveFederated [CC EAL6+/FIPS 140-3]"),
+                                jambo_hsm2::ChipNodeStatus::ActiveFederated => {
+                                    emit("ActiveFederated [CC EAL6+/FIPS 140-3]")
+                                }
                                 jambo_hsm2::ChipNodeStatus::Attested => emit("Attested"),
-                                jambo_hsm2::ChipNodeStatus::Quarantined => emit("Quarantined (Byzantine)"),
+                                jambo_hsm2::ChipNodeStatus::Quarantined => {
+                                    emit("Quarantined (Byzantine)")
+                                }
                                 jambo_hsm2::ChipNodeStatus::Zeroized => emit("Zeroized"),
                                 _ => emit("Unpaired"),
                             }
@@ -6415,7 +6896,9 @@ impl JamboShell {
                         emit("[HSM2/SIGN] Déclenchement d'une signature collaborative de seuil (T=2, N=3)...\n");
                         let cap = self.hsm2.cap;
                         let sample_secret = [0x55u8; 32];
-                        let _ = self.hsm2.distribute_threshold_key(&cap, 42, &sample_secret, 2);
+                        let _ = self
+                            .hsm2
+                            .distribute_threshold_key(&cap, 42, &sample_secret, 2);
                         let msg = b"ORDRE_EXECUTION_SOUVERAIN_2026";
                         let participants = [101, 102];
                         match self.hsm2.threshold_sign(&cap, msg, &participants) {
@@ -6440,7 +6923,9 @@ impl JamboShell {
                     "verify" => {
                         let cap = self.hsm2.cap;
                         let sample_secret = [0x55u8; 32];
-                        let _ = self.hsm2.distribute_threshold_key(&cap, 42, &sample_secret, 2);
+                        let _ = self
+                            .hsm2
+                            .distribute_threshold_key(&cap, 42, &sample_secret, 2);
                         let msg = b"ORDRE_EXECUTION_SOUVERAIN_2026";
                         let participants = [101, 102];
                         if let Ok(sig) = self.hsm2.threshold_sign(&cap, msg, &participants) {
@@ -6451,7 +6936,9 @@ impl JamboShell {
                                 emit("[HSM2/VERIFY] Signature de seuil REJETÉE (signature invalide)\n");
                             }
                         } else {
-                            emit("[HSM2/ERR] Impossible de générer la signature pour vérification\n");
+                            emit(
+                                "[HSM2/ERR] Impossible de générer la signature pour vérification\n",
+                            );
                         }
                         (ShellStatus::Success, write_pos)
                     }
@@ -6467,7 +6954,10 @@ impl JamboShell {
                     "zeroize" => {
                         emit("[HSM2/ZEROIZE] Alerte déclenchée : Zéroïsation d'Urgence Distribuée O(1)...\n");
                         let cap = self.hsm2.cap;
-                        match self.hsm2.emergency_zeroize(&cap, b"MANUAL_OPERATOR_OVERRIDE") {
+                        match self
+                            .hsm2
+                            .emergency_zeroize(&cap, b"MANUAL_OPERATOR_OVERRIDE")
+                        {
                             Ok(_) => {
                                 emit("[HSM2/ZEROIZED] Toutes les puces et secrets de seuil ont été anéantis.\n");
                             }
@@ -6496,7 +6986,10 @@ impl JamboShell {
                         emit("Modèles enregistrés en espace Ring 3 : ");
                         emit(format_u64(self.ai_sec.model_count as u64, &mut b));
                         emit("\nModèles actuellement en quarantaine   : ");
-                        emit(format_u64(self.ai_sec.count_quarantined_models() as u64, &mut b));
+                        emit(format_u64(
+                            self.ai_sec.count_quarantined_models() as u64,
+                            &mut b,
+                        ));
                         emit("\nPrompts d'entrée scannés              : ");
                         emit(format_u64(self.ai_sec.total_scanned_inputs, &mut b));
                         emit("\nInjections de prompt bloquées         : ");
@@ -6522,7 +7015,9 @@ impl JamboShell {
                             match m.status {
                                 jambo_ai_sec::ModelStatus::Active => emit("Actif (Sain)"),
                                 jambo_ai_sec::ModelStatus::Suspect => emit("Suspect (Anomalie)"),
-                                jambo_ai_sec::ModelStatus::Quarantined => emit("QUARANTAINE (Empoisonné)"),
+                                jambo_ai_sec::ModelStatus::Quarantined => {
+                                    emit("QUARANTAINE (Empoisonné)")
+                                }
                                 jambo_ai_sec::ModelStatus::Revoked => emit("Révoqué"),
                             }
                             emit("\n");
@@ -6539,7 +7034,8 @@ impl JamboShell {
                                     prompt_buf[prompt_len] = b' ';
                                     prompt_len += 1;
                                 }
-                                prompt_buf[prompt_len..prompt_len + arg_bytes.len()].copy_from_slice(arg_bytes);
+                                prompt_buf[prompt_len..prompt_len + arg_bytes.len()]
+                                    .copy_from_slice(arg_bytes);
                                 prompt_len += arg_bytes.len();
                             }
                         }
@@ -6566,9 +7062,15 @@ impl JamboShell {
                                 emit("\n  Catégorie de menace : ");
                                 match res.threat {
                                     jambo_ai_sec::ThreatCategory::Clean => emit("Clean / Bénin\n"),
-                                    jambo_ai_sec::ThreatCategory::PromptInjection => emit("Prompt Injection / Jailbreak\n"),
-                                    jambo_ai_sec::ThreatCategory::JailbreakAttempt => emit("Tentative d'évasion (Jailbreak)\n"),
-                                    jambo_ai_sec::ThreatCategory::AdversarialPerturbation => emit("Perturbation stéganographique adverse\n"),
+                                    jambo_ai_sec::ThreatCategory::PromptInjection => {
+                                        emit("Prompt Injection / Jailbreak\n")
+                                    }
+                                    jambo_ai_sec::ThreatCategory::JailbreakAttempt => {
+                                        emit("Tentative d'évasion (Jailbreak)\n")
+                                    }
+                                    jambo_ai_sec::ThreatCategory::AdversarialPerturbation => {
+                                        emit("Perturbation stéganographique adverse\n")
+                                    }
                                     _ => emit("Autre violation\n"),
                                 }
                             }
@@ -6588,7 +7090,8 @@ impl JamboShell {
                                     filter_buf[filter_len] = b' ';
                                     filter_len += 1;
                                 }
-                                filter_buf[filter_len..filter_len + arg_bytes.len()].copy_from_slice(arg_bytes);
+                                filter_buf[filter_len..filter_len + arg_bytes.len()]
+                                    .copy_from_slice(arg_bytes);
                                 filter_len += arg_bytes.len();
                             }
                         }
@@ -6635,7 +7138,10 @@ impl JamboShell {
                         let cap = self.ai_sec.cap;
                         let block1 = b"JAMBO_EMBED_WEIGHT_TENSOR_LAYER0_INITIAL_CLEAN_WEIGHTS";
                         let block2 = b"JAMBO_EMBED_WEIGHT_TENSOR_LAYER1_INITIAL_CLEAN_WEIGHTS";
-                        match self.ai_sec.verify_model_weights(&cap, model_id, &[block1, block2]) {
+                        match self
+                            .ai_sec
+                            .verify_model_weights(&cap, model_id, &[block1, block2])
+                        {
                             Ok(true) => {
                                 emit("[AI-SEC/VERIFIED] Intégrité formelle des poids validée par racine Merkle SHA-256.\n");
                             }
@@ -6658,8 +7164,13 @@ impl JamboShell {
 
                         let cap = self.ai_sec.cap;
                         let clean_b1 = b"JAMBO_EMBED_WEIGHT_TENSOR_LAYER0_INITIAL_CLEAN_WEIGHTS";
-                        let corrupted_b2 = b"JAMBO_EMBED_WEIGHT_TENSOR_LAYER1_POISONED_BY_MALICIOUS_ACTOR";
-                        match self.ai_sec.verify_model_weights(&cap, model_id, &[clean_b1, corrupted_b2]) {
+                        let corrupted_b2 =
+                            b"JAMBO_EMBED_WEIGHT_TENSOR_LAYER1_POISONED_BY_MALICIOUS_ACTOR";
+                        match self.ai_sec.verify_model_weights(
+                            &cap,
+                            model_id,
+                            &[clean_b1, corrupted_b2],
+                        ) {
                             Ok(_) => {
                                 emit("[AI-SEC/ERR] Échec inattendu : l'empoisonnement n'a pas été détecté !\n");
                             }
@@ -6676,12 +7187,18 @@ impl JamboShell {
                             1
                         };
                         let cap = self.ai_sec.cap;
-                        match self.ai_sec.quarantine_model(&cap, model_id, b"MANUAL_SECURITY_OPERATOR_QUARANTINE") {
+                        match self.ai_sec.quarantine_model(
+                            &cap,
+                            model_id,
+                            b"MANUAL_SECURITY_OPERATOR_QUARANTINE",
+                        ) {
                             Ok(_) => {
                                 emit("[AI-SEC/QUARANTINE] Modèle placé en quarantaine immédiate O(1).\n");
                             }
                             Err(_) => {
-                                emit("[AI-SEC/ERR] Impossible de mettre en quarantaine le modèle\n");
+                                emit(
+                                    "[AI-SEC/ERR] Impossible de mettre en quarantaine le modèle\n",
+                                );
                             }
                         }
                         (ShellStatus::Success, write_pos)
@@ -6710,7 +7227,9 @@ impl JamboShell {
                 match subcmd {
                     "status" => {
                         let mut b = [0u8; 20];
-                        emit("=== MOTEUR DE COMPOSANTS WASM & INTERFACES RING 3 (jambo-wasm2) ===\n");
+                        emit(
+                            "=== MOTEUR DE COMPOSANTS WASM & INTERFACES RING 3 (jambo-wasm2) ===\n",
+                        );
                         emit("  Composants catalogues : ");
                         emit(format_u64(self.wasm2.component_count as u64, &mut b));
                         emit("\n  Instances actives     : ");
@@ -6830,7 +7349,11 @@ impl JamboShell {
                                         emit(format_hex_u64(v, &mut b));
                                     }
                                     jambo_wasm2::WitValue::Bool(v) => {
-                                        emit(if v { "true (Valide)" } else { "false (Invalide)" });
+                                        emit(if v {
+                                            "true (Valide)"
+                                        } else {
+                                            "false (Invalide)"
+                                        });
                                     }
                                     jambo_wasm2::WitValue::Resource(h) => {
                                         emit("ResourceHandle #");
@@ -6840,7 +7363,9 @@ impl JamboShell {
                                         emit("Record[");
                                         for i in 0..n {
                                             emit(format_u64(fields[i] as u64, &mut b));
-                                            if i + 1 < n { emit(", "); }
+                                            if i + 1 < n {
+                                                emit(", ");
+                                            }
                                         }
                                         emit("]");
                                     }
@@ -6852,9 +7377,15 @@ impl JamboShell {
                             Err(e) => {
                                 emit("[WASM2] Erreur d'invocation : ");
                                 emit(match e {
-                                    jambo_wasm2::ComponentError::FuelExhausted => "Carburant epuise (FuelExhausted trap)",
-                                    jambo_wasm2::ComponentError::TypeMismatch => "Incompatibilite de type WIT",
-                                    jambo_wasm2::ComponentError::ExportNotFound => "Fonction exportee introuvable",
+                                    jambo_wasm2::ComponentError::FuelExhausted => {
+                                        "Carburant epuise (FuelExhausted trap)"
+                                    }
+                                    jambo_wasm2::ComponentError::TypeMismatch => {
+                                        "Incompatibilite de type WIT"
+                                    }
+                                    jambo_wasm2::ComponentError::ExportNotFound => {
+                                        "Fonction exportee introuvable"
+                                    }
                                     _ => "Erreur d'execution",
                                 });
                                 emit("\n");
@@ -6873,7 +7404,13 @@ impl JamboShell {
                             Ok(id) => id,
                             Err(_) => 2,
                         };
-                        match self.wasm2.link_components(&cap, inst2, "hasher_dep", inst1, "hash_block") {
+                        match self.wasm2.link_components(
+                            &cap,
+                            inst2,
+                            "hasher_dep",
+                            inst1,
+                            "hash_block",
+                        ) {
                             Ok(link_id) => {
                                 emit("[WASM2] Liaison de composants reussie : Link #");
                                 emit(format_u64(link_id as u64, &mut b));
@@ -6897,7 +7434,13 @@ impl JamboShell {
                         } else {
                             1
                         };
-                        if let Some(c) = self.wasm2.components.iter().take(self.wasm2.component_count).find(|c| c.component_id == comp_id) {
+                        if let Some(c) = self
+                            .wasm2
+                            .components
+                            .iter()
+                            .take(self.wasm2.component_count)
+                            .find(|c| c.component_id == comp_id)
+                        {
                             emit("=== INSPECTION WIT DU COMPOSANT ");
                             emit(c.name_str());
                             emit(" ===\n  Hash de bytecode : ");
@@ -6933,7 +7476,12 @@ impl JamboShell {
                         let cap = self.wasm2.admin_cap;
                         let inst_id = self.wasm2.instantiate(&cap, 1, 1000).unwrap_or(0);
                         emit("[WASM2] Test d'epuisement de carburant (Quota de 1000 gas alloue, cout=1500)...\n");
-                        let res = self.wasm2.invoke_export(&cap, inst_id, "hash_block", jambo_wasm2::WitValue::from_str("TestBlock"));
+                        let res = self.wasm2.invoke_export(
+                            &cap,
+                            inst_id,
+                            "hash_block",
+                            jambo_wasm2::WitValue::from_str("TestBlock"),
+                        );
                         if let Err(jambo_wasm2::ComponentError::FuelExhausted) = res {
                             emit("[WASM2] INTERCEPTION REUSSIE : Trap FuelExhausted declenche. Execution interrompue de maniere sure.\n");
                             emit("  Total traps interceptes : ");
@@ -6975,7 +7523,10 @@ impl JamboShell {
                         emit(" / ");
                         emit(format_u64(jambo_attest2::MAX_CHIPS as u64, &mut b));
                         emit("\nPuces de confiance (OK) : ");
-                        emit(format_u64(self.attest2.count_active_trusted_chips() as u64, &mut b));
+                        emit(format_u64(
+                            self.attest2.count_active_trusted_chips() as u64,
+                            &mut b,
+                        ));
                         emit("\nMicro-enclaves actives  : ");
                         emit(format_u64(self.attest2.enclave_count as u64, &mut b));
                         emit(" / ");
@@ -6999,7 +7550,9 @@ impl JamboShell {
                     }
                     "chips" | "list-chips" => {
                         let mut b = [0u8; 20];
-                        emit("ID  | NOM              | NIVEAU DE CONFIANCE              | STATUT\n");
+                        emit(
+                            "ID  | NOM              | NIVEAU DE CONFIANCE              | STATUT\n",
+                        );
                         emit("----+------------------+----------------------------------+--------------------\n");
                         for slot in &self.attest2.chips[..self.attest2.chip_count] {
                             if let Some(c) = slot {
@@ -7011,10 +7564,18 @@ impl JamboShell {
                                 }
                                 emit("| ");
                                 let level_str = match c.trust_level {
-                                    jambo_attest2::ChipTrustLevel::SiliconRootOfTrust => "Silicon Root of Trust (CPU)",
-                                    jambo_attest2::ChipTrustLevel::BoardRootOfTrust => "Board Root of Trust (TPM 2.0)",
-                                    jambo_attest2::ChipTrustLevel::PlatformRootOfTrust => "Platform RoT (Dedicated HSM)",
-                                    jambo_attest2::ChipTrustLevel::PeripheralRootOfTrust => "Peripheral RoT (SmartNIC)",
+                                    jambo_attest2::ChipTrustLevel::SiliconRootOfTrust => {
+                                        "Silicon Root of Trust (CPU)"
+                                    }
+                                    jambo_attest2::ChipTrustLevel::BoardRootOfTrust => {
+                                        "Board Root of Trust (TPM 2.0)"
+                                    }
+                                    jambo_attest2::ChipTrustLevel::PlatformRootOfTrust => {
+                                        "Platform RoT (Dedicated HSM)"
+                                    }
+                                    jambo_attest2::ChipTrustLevel::PeripheralRootOfTrust => {
+                                        "Peripheral RoT (SmartNIC)"
+                                    }
                                 };
                                 emit(level_str);
                                 for _ in 0..(33usize.saturating_sub(level_str.len())) {
@@ -7074,7 +7635,8 @@ impl JamboShell {
                             1
                         };
                         let mut b = [0u8; 20];
-                        let nonce = jambo_attest2::Sha256::digest(b"MANUAL_SHELL_CHALLENGE_NONCE_2026");
+                        let nonce =
+                            jambo_attest2::Sha256::digest(b"MANUAL_SHELL_CHALLENGE_NONCE_2026");
                         let cap = self.attest2.admin_cap;
                         match self.attest2.generate_quote(&cap, enclave_id, &nonce) {
                             Ok(quote) => {
@@ -7122,7 +7684,9 @@ impl JamboShell {
                                 }
                             }
                             Err(_) => {
-                                emit("[ERREUR] Impossible de produire le devis pour vérification\n");
+                                emit(
+                                    "[ERREUR] Impossible de produire le devis pour vérification\n",
+                                );
                                 (ShellStatus::ExecutionFailed, write_pos)
                             }
                         }
@@ -7152,7 +7716,11 @@ impl JamboShell {
                             1
                         };
                         let cap = self.attest2.admin_cap;
-                        match self.attest2.confine_enclave(&cap, enclave_id, "Ordre opérateur shell") {
+                        match self.attest2.confine_enclave(
+                            &cap,
+                            enclave_id,
+                            "Ordre opérateur shell",
+                        ) {
                             Ok(()) => {
                                 let mut b = [0u8; 20];
                                 emit("[CONFIRMÉ] Micro-enclave #");
@@ -7200,7 +7768,10 @@ impl JamboShell {
                         emit("\nClés actives (prêtes)   : ");
                         emit(format_u64(self.crypto2.count_active_keys() as u64, &mut b));
                         emit("\nClés en quarantaine     : ");
-                        emit(format_u64(self.crypto2.count_quarantined_keys() as u64, &mut b));
+                        emit(format_u64(
+                            self.crypto2.count_quarantined_keys() as u64,
+                            &mut b,
+                        ));
                         emit("\nOpérations cryptos total: ");
                         emit(format_u64(self.crypto2.total_ops, &mut b));
                         emit("\nViolations d'intégrité  : ");
@@ -7221,15 +7792,35 @@ impl JamboShell {
                     "cpu-features" => {
                         emit("=== DÉTECTION DES FONCTIONS CRYPTO MATÉRIELLES (CPUID) ===\n");
                         emit("AES-NI   : ");
-                        emit(if self.crypto2.cpu_features.aes_ni { "SUPPORTÉ\n" } else { "NON DISPONIBLE (Repli constant-time)\n" });
+                        emit(if self.crypto2.cpu_features.aes_ni {
+                            "SUPPORTÉ\n"
+                        } else {
+                            "NON DISPONIBLE (Repli constant-time)\n"
+                        });
                         emit("SHA-NI   : ");
-                        emit(if self.crypto2.cpu_features.sha_ni { "SUPPORTÉ\n" } else { "NON DISPONIBLE (Repli constant-time)\n" });
+                        emit(if self.crypto2.cpu_features.sha_ni {
+                            "SUPPORTÉ\n"
+                        } else {
+                            "NON DISPONIBLE (Repli constant-time)\n"
+                        });
                         emit("AVX2     : ");
-                        emit(if self.crypto2.cpu_features.avx2 { "SUPPORTÉ\n" } else { "NON DISPONIBLE\n" });
+                        emit(if self.crypto2.cpu_features.avx2 {
+                            "SUPPORTÉ\n"
+                        } else {
+                            "NON DISPONIBLE\n"
+                        });
                         emit("AVX-512F : ");
-                        emit(if self.crypto2.cpu_features.avx512f { "SUPPORTÉ\n" } else { "NON DISPONIBLE\n" });
+                        emit(if self.crypto2.cpu_features.avx512f {
+                            "SUPPORTÉ\n"
+                        } else {
+                            "NON DISPONIBLE\n"
+                        });
                         emit("SSE4.1   : ");
-                        emit(if self.crypto2.cpu_features.sse4_1 { "SUPPORTÉ\n" } else { "NON DISPONIBLE\n" });
+                        emit(if self.crypto2.cpu_features.sse4_1 {
+                            "SUPPORTÉ\n"
+                        } else {
+                            "NON DISPONIBLE\n"
+                        });
                         (ShellStatus::Success, write_pos)
                     }
                     "keys" | "list-keys" => {
@@ -7307,7 +7898,10 @@ impl JamboShell {
                             2
                         };
                         let cap = self.crypto2.admin_cap;
-                        match self.crypto2.rotate_key(&cap, key_id, b"SHELL_OPERATOR_ENTROPY") {
+                        match self
+                            .crypto2
+                            .rotate_key(&cap, key_id, b"SHELL_OPERATOR_ENTROPY")
+                        {
                             Ok(()) => {
                                 let mut b = [0u8; 20];
                                 emit("[CONFIRMÉ] Rotation atomique de la clé souveraine #");
@@ -7364,12 +7958,21 @@ impl JamboShell {
                         }
                     }
                     "hash" => {
-                        let algo = if parsed.arg_count > 2 { parsed.args[2] } else { "sha256" };
-                        let payload = if parsed.arg_count > 3 { parsed.args[3] } else { "JamboOS" };
+                        let algo = if parsed.arg_count > 2 {
+                            parsed.args[2]
+                        } else {
+                            "sha256"
+                        };
+                        let payload = if parsed.arg_count > 3 {
+                            parsed.args[3]
+                        } else {
+                            "JamboOS"
+                        };
                         let mut b = [0u8; 20];
                         let cap = self.crypto2.admin_cap;
                         match algo {
-                            "sha512" => match self.crypto2.compute_sha512(&cap, payload.as_bytes()) {
+                            "sha512" => match self.crypto2.compute_sha512(&cap, payload.as_bytes())
+                            {
                                 Ok(digest) => {
                                     emit("[SHA-512] ");
                                     for byte in digest.iter() {
@@ -7524,7 +8127,12 @@ impl JamboShell {
                             101
                         };
                         let mut b = [0u8; 20];
-                        if let Some(enc) = self.tee2.enclaves.iter().find(|e| e.enclave_id == target_id) {
+                        if let Some(enc) = self
+                            .tee2
+                            .enclaves
+                            .iter()
+                            .find(|e| e.enclave_id == target_id)
+                        {
                             emit("=== TABLE EPT IMBRIQUÉE POUR ENCLAVE #");
                             emit(format_u64(target_id as u64, &mut b));
                             emit(" ===\n");
@@ -7563,7 +8171,10 @@ impl JamboShell {
                         let challenge = [0x55u8; 32];
                         let user_data = [0xAAu8; 32];
                         let cap = self.tee2.admin_cap;
-                        match self.tee2.generate_nested_report(&cap, target_id, &challenge, &user_data) {
+                        match self
+                            .tee2
+                            .generate_nested_report(&cap, target_id, &challenge, &user_data)
+                        {
                             Ok(report) => {
                                 let mut b = [0u8; 20];
                                 emit("=== RAPPORT D'ATTESTATION D'ENCLAVE IMBRIQUÉE (NestedTeeReport) ===\n");
@@ -7585,7 +8196,9 @@ impl JamboShell {
                                 }
                                 emit("...\nVérification formelle : ");
                                 match self.tee2.verify_nested_report(&report, &challenge) {
-                                    Ok(true) => emit("VALIDE (Authenticité & Fraîcheur prouvées)\n"),
+                                    Ok(true) => {
+                                        emit("VALIDE (Authenticité & Fraîcheur prouvées)\n")
+                                    }
                                     _ => emit("ÉCHEC\n"),
                                 }
                                 (ShellStatus::Success, write_pos)
@@ -7607,9 +8220,17 @@ impl JamboShell {
                         let cap = self.tee2.admin_cap;
                         for i in 0..1000u64 {
                             let gpa = 0x1_0000_0000 + (i % 2) * 0x1000;
-                            if let Ok((hpa, _)) = self.tee2.translate_nested_gpa(101, gpa, false, false, 1) {
-                                if self.tee2.encrypt_tenant_page(&cap, 1, hpa, plaintext, &mut cipher).is_ok()
-                                    && self.tee2.decrypt_tenant_page(1, hpa, &cipher, &mut dec).is_ok()
+                            if let Ok((hpa, _)) =
+                                self.tee2.translate_nested_gpa(101, gpa, false, false, 1)
+                            {
+                                if self
+                                    .tee2
+                                    .encrypt_tenant_page(&cap, 1, hpa, plaintext, &mut cipher)
+                                    .is_ok()
+                                    && self
+                                        .tee2
+                                        .decrypt_tenant_page(1, hpa, &cipher, &mut dec)
+                                        .is_ok()
                                 {
                                     if &dec == plaintext {
                                         success_count += 1;
@@ -7776,7 +8397,9 @@ impl JamboShell {
                                 match e.status {
                                     jambo_kms::EscrowStatus::None => emit("None"),
                                     jambo_kms::EscrowStatus::Secured => emit("Secured"),
-                                    jambo_kms::EscrowStatus::RecoveryInitiated => emit("RecoveryInitiated"),
+                                    jambo_kms::EscrowStatus::RecoveryInitiated => {
+                                        emit("RecoveryInitiated")
+                                    }
                                     jambo_kms::EscrowStatus::Recovered => emit("Recovered"),
                                     jambo_kms::EscrowStatus::Cancelled => emit("Cancelled"),
                                 }
@@ -7824,7 +8447,13 @@ impl JamboShell {
                         let cap = self.kms.admin_cap;
                         let seed = jambo_kms::Sha256::digest(b"KMS_BENCHMARK_SEED");
                         let mut kid = 0;
-                        if let Ok(id) = self.kms.create_key(&cap, b"bench-key", jambo_kms::KeyHierarchyLevel::DataKey, jambo_kms::KeyAlgorithm::Aes256, &seed) {
+                        if let Ok(id) = self.kms.create_key(
+                            &cap,
+                            b"bench-key",
+                            jambo_kms::KeyHierarchyLevel::DataKey,
+                            jambo_kms::KeyAlgorithm::Aes256,
+                            &seed,
+                        ) {
                             kid = id;
                         }
                         let mut shares = [[0u8; jambo_kms::KEY_DATA_LEN]; 3];
@@ -7904,7 +8533,9 @@ impl JamboShell {
                                 jambo_pki2::CaTrustLevel::RootAnchor => emit("RootAnchor"),
                                 jambo_pki2::CaTrustLevel::Intermediate => emit("Intermediate"),
                                 jambo_pki2::CaTrustLevel::CrossCertified => emit("CrossCertified"),
-                                jambo_pki2::CaTrustLevel::ExternalFederated => emit("ExternalFederated"),
+                                jambo_pki2::CaTrustLevel::ExternalFederated => {
+                                    emit("ExternalFederated")
+                                }
                             }
                             emit(" | Profondeur Max: ");
                             emit(format_u64(ca.max_sub_depth as u64, &mut b));
@@ -7958,12 +8589,22 @@ impl JamboShell {
                             emit(" | Motif: ");
                             match e.reason {
                                 jambo_pki2::RevocationReason::Unspecified => emit("Unspecified\n"),
-                                jambo_pki2::RevocationReason::KeyCompromise => emit("KeyCompromise\n"),
-                                jambo_pki2::RevocationReason::CaCompromise => emit("CaCompromise\n"),
-                                jambo_pki2::RevocationReason::AffiliationChanged => emit("AffiliationChanged\n"),
+                                jambo_pki2::RevocationReason::KeyCompromise => {
+                                    emit("KeyCompromise\n")
+                                }
+                                jambo_pki2::RevocationReason::CaCompromise => {
+                                    emit("CaCompromise\n")
+                                }
+                                jambo_pki2::RevocationReason::AffiliationChanged => {
+                                    emit("AffiliationChanged\n")
+                                }
                                 jambo_pki2::RevocationReason::Superseded => emit("Superseded\n"),
-                                jambo_pki2::RevocationReason::CessationOfOperation => emit("CessationOfOperation\n"),
-                                jambo_pki2::RevocationReason::QuantumVulnerabilityDetected => emit("QuantumVulnerabilityDetected\n"),
+                                jambo_pki2::RevocationReason::CessationOfOperation => {
+                                    emit("CessationOfOperation\n")
+                                }
+                                jambo_pki2::RevocationReason::QuantumVulnerabilityDetected => {
+                                    emit("QuantumVulnerabilityDetected\n")
+                                }
                             }
                         }
                         (ShellStatus::Success, write_pos)
@@ -7975,7 +8616,11 @@ impl JamboShell {
                         } else {
                             1001
                         };
-                        match self.pki2.validate_cert(&cap, serial, jambo_pki2::key_usages::SERVER_AUTH) {
+                        match self.pki2.validate_cert(
+                            &cap,
+                            serial,
+                            jambo_pki2::key_usages::SERVER_AUTH,
+                        ) {
                             Ok(true) => {
                                 emit("Validation de chaîne réussie : Certificat vérifié cryptographiquement jusqu'à l'ancre Root CA (Dual-Defense ML-DSA+Ed25519)\n");
                                 (ShellStatus::Success, write_pos)
@@ -7987,9 +8632,15 @@ impl JamboShell {
                             Err(e) => {
                                 emit("Erreur lors de la validation du certificat : ");
                                 match e {
-                                    jambo_pki2::PkiError::CertRevoked => emit("Certificat Révoqué (CRL)\n"),
-                                    jambo_pki2::PkiError::CertExpired => emit("Certificat Expiré\n"),
-                                    jambo_pki2::PkiError::KeyUsageNotPermitted => emit("Usage de clé non autorisé\n"),
+                                    jambo_pki2::PkiError::CertRevoked => {
+                                        emit("Certificat Révoqué (CRL)\n")
+                                    }
+                                    jambo_pki2::PkiError::CertExpired => {
+                                        emit("Certificat Expiré\n")
+                                    }
+                                    jambo_pki2::PkiError::KeyUsageNotPermitted => {
+                                        emit("Usage de clé non autorisé\n")
+                                    }
                                     _ => emit("Échec de conformité PKI\n"),
                                 }
                                 (ShellStatus::ExecutionFailed, write_pos)
@@ -7998,7 +8649,8 @@ impl JamboShell {
                     }
                     "benchmark" => {
                         let cap = self.pki2.admin_cap;
-                        let test_pk = jambo_pki2::HybridPublicKey::new_hybrid(b"BENCH_ED", b"BENCH_ML");
+                        let test_pk =
+                            jambo_pki2::HybridPublicKey::new_hybrid(b"BENCH_ED", b"BENCH_ML");
                         let ca_sk_ed = [0x55u8; 32];
                         let ca_sk_ml = [0x56u8; 32];
                         let res = self.pki2.issue_certificate(
@@ -8015,9 +8667,21 @@ impl JamboShell {
                             &ca_sk_ml,
                         );
                         if let Ok(sn) = res {
-                            let _ = self.pki2.validate_cert(&cap, sn, jambo_pki2::key_usages::CLIENT_AUTH);
-                            let _ = self.pki2.revoke_certificate(&cap, sn, jambo_pki2::RevocationReason::Superseded);
-                            let revoked_check = self.pki2.validate_cert(&cap, sn, jambo_pki2::key_usages::CLIENT_AUTH);
+                            let _ = self.pki2.validate_cert(
+                                &cap,
+                                sn,
+                                jambo_pki2::key_usages::CLIENT_AUTH,
+                            );
+                            let _ = self.pki2.revoke_certificate(
+                                &cap,
+                                sn,
+                                jambo_pki2::RevocationReason::Superseded,
+                            );
+                            let revoked_check = self.pki2.validate_cert(
+                                &cap,
+                                sn,
+                                jambo_pki2::key_usages::CLIENT_AUTH,
+                            );
                             if revoked_check == Err(jambo_pki2::PkiError::CertRevoked) {
                                 emit("Benchmark PKI2 : Émission hybride, Validation de chaîne, Révocation temps réel et Vérification CRL réussies avec succès\n");
                                 (ShellStatus::Success, write_pos)
@@ -8042,7 +8706,9 @@ impl JamboShell {
                         (ShellStatus::Success, write_pos)
                     }
                     _ => {
-                        emit("Usage: pki [status | cas | list | crl | verify | benchmark | audit]\n");
+                        emit(
+                            "Usage: pki [status | cas | list | crl | verify | benchmark | audit]\n",
+                        );
                         (ShellStatus::ExecutionFailed, write_pos)
                     }
                 }
@@ -8131,7 +8797,8 @@ impl JamboShell {
                     "verify" => {
                         let cap = self.auth2.admin_cap;
                         let user_secret = 0xABCD_EF01_2345_6789;
-                        let challenge = match self.auth2.create_challenge(1, "auth.jambo.internal") {
+                        let challenge = match self.auth2.create_challenge(1, "auth.jambo.internal")
+                        {
                             Ok(c) => c,
                             Err(_) => {
                                 emit("Échec lors de la création du défi WebAuthn\n");
@@ -8141,7 +8808,8 @@ impl JamboShell {
                         let client_data_hash = jambo_auth2::Sha256::digest(b"cli_assertion_jsh");
                         let auth_data = jambo_auth2::AuthenticatorData {
                             rp_id_hash: challenge.rp_id_hash,
-                            flags: jambo_auth2::webauthn_flags::FLAG_UP | jambo_auth2::webauthn_flags::FLAG_UV,
+                            flags: jambo_auth2::webauthn_flags::FLAG_UP
+                                | jambo_auth2::webauthn_flags::FLAG_UV,
                             sign_count: self.auth2.passkeys[0].sign_count + 1,
                         };
                         let mut msg_buf = [0u8; 37 + 32];
@@ -8188,7 +8856,8 @@ impl JamboShell {
                             bench_pub,
                             jambo_auth2::BiometricFactor::IrisScan,
                             jambo_auth2::PasskeyTransport::InternalPlatform,
-                            jambo_auth2::webauthn_flags::FLAG_UP | jambo_auth2::webauthn_flags::FLAG_UV,
+                            jambo_auth2::webauthn_flags::FLAG_UP
+                                | jambo_auth2::webauthn_flags::FLAG_UV,
                         );
                         if let Ok(cid) = reg_res {
                             let ch = match self.auth2.create_challenge(42, "bench.jambo.internal") {
@@ -8198,7 +8867,8 @@ impl JamboShell {
                             let cdata = jambo_auth2::Sha256::digest(b"bench_client_data");
                             let adata = jambo_auth2::AuthenticatorData {
                                 rp_id_hash: ch.rp_id_hash,
-                                flags: jambo_auth2::webauthn_flags::FLAG_UP | jambo_auth2::webauthn_flags::FLAG_UV,
+                                flags: jambo_auth2::webauthn_flags::FLAG_UP
+                                    | jambo_auth2::webauthn_flags::FLAG_UV,
                                 sign_count: 1,
                             };
                             let mut mbuf = [0u8; 37 + 32];
@@ -8206,7 +8876,8 @@ impl JamboShell {
                             mbuf[..37].copy_from_slice(&abytes);
                             mbuf[37..].copy_from_slice(&cdata);
                             let mdigest = jambo_auth2::Sha256::digest(&mbuf);
-                            let (t, s) = jambo_auth2::schnorr::sign_deterministic(bench_secret, &mdigest);
+                            let (t, s) =
+                                jambo_auth2::schnorr::sign_deterministic(bench_secret, &mdigest);
                             let tok = match self.auth2.authenticate_webauthn(
                                 &cap,
                                 &cid,
@@ -8221,13 +8892,28 @@ impl JamboShell {
                                 Ok(tk) => tk,
                                 Err(_) => return (ShellStatus::ExecutionFailed, write_pos),
                             };
-                            let child = match self.auth2.attenuate_token(tok.token_id, jambo_auth2::token_scopes::READ, 60) {
+                            let child = match self.auth2.attenuate_token(
+                                tok.token_id,
+                                jambo_auth2::token_scopes::READ,
+                                60,
+                            ) {
                                 Ok(ch_tk) => ch_tk,
                                 Err(_) => return (ShellStatus::ExecutionFailed, write_pos),
                             };
-                            let _ = self.auth2.revoke_token(&cap, tok.token_id, jambo_auth2::RevocationReason::ExplicitLogout);
-                            let _ = self.auth2.revoke_user_sessions(&cap, 42, jambo_auth2::RevocationReason::PolicyViolation);
-                            let is_child_revoked = self.auth2.verify_token(child.token_id, jambo_auth2::token_scopes::READ).is_err();
+                            let _ = self.auth2.revoke_token(
+                                &cap,
+                                tok.token_id,
+                                jambo_auth2::RevocationReason::ExplicitLogout,
+                            );
+                            let _ = self.auth2.revoke_user_sessions(
+                                &cap,
+                                42,
+                                jambo_auth2::RevocationReason::PolicyViolation,
+                            );
+                            let is_child_revoked = self
+                                .auth2
+                                .verify_token(child.token_id, jambo_auth2::token_scopes::READ)
+                                .is_err();
                             if is_child_revoked {
                                 emit("Benchmark Auth2 : Enregistrement Passkey, Assertion Schnorr ZKP, Émission de Jeton, Atténuation Monotone et Révocations instantanées réussies avec succès\n");
                                 (ShellStatus::Success, write_pos)
@@ -8392,9 +9078,13 @@ impl JamboShell {
                             emit("      ");
                             match r.action {
                                 jambo_secroute::RouteAction::AllowDirect => emit("AllowDirect   "),
-                                jambo_secroute::RouteAction::RequireTunnel => emit("RequireTunnel "),
+                                jambo_secroute::RouteAction::RequireTunnel => {
+                                    emit("RequireTunnel ")
+                                }
                                 jambo_secroute::RouteAction::Deny => emit("Deny          "),
-                                jambo_secroute::RouteAction::QuarantineOnAttempt => emit("Quarantine    "),
+                                jambo_secroute::RouteAction::QuarantineOnAttempt => {
+                                    emit("Quarantine    ")
+                                }
                             }
                             emit(" ");
                             emit(format_u64(r.priority as u64, &mut b));
@@ -8409,13 +9099,22 @@ impl JamboShell {
                         let cap = self.secroute.admin_cap;
                         let msg = b"SECURE_IPC_RPC_PAYLOAD_TEST_PHASE111";
                         let mut packet_buf = [0u8; 512];
-                        match self.secroute.encapsulate_and_route(&cap, 1, 254, msg, &mut packet_buf) {
+                        match self.secroute.encapsulate_and_route(
+                            &cap,
+                            1,
+                            254,
+                            msg,
+                            &mut packet_buf,
+                        ) {
                             Ok(packet_len) => {
                                 emit("[SECROUTE] Paquet encapsulé & chiffré ChaCha20 (");
                                 emit(format_u64(packet_len as u64, &mut b));
                                 emit(" octets)\n");
                                 let mut dec_buf = [0u8; 256];
-                                match self.secroute.decapsulate_and_verify(&packet_buf[..packet_len], &mut dec_buf) {
+                                match self
+                                    .secroute
+                                    .decapsulate_and_verify(&packet_buf[..packet_len], &mut dec_buf)
+                                {
                                     Ok((hdr, dec_len)) => {
                                         emit("[SECROUTE] Décapsulation réussie ! En-tête validé (Seq: ");
                                         emit(format_u64(hdr.seq, &mut b));
@@ -8467,8 +9166,13 @@ impl JamboShell {
                         let mut success = 0u64;
 
                         for _ in 0..10 {
-                            if let Ok(len) = self.secroute.encapsulate_and_route(&cap, 1, 254, msg, &mut pkt) {
-                                if let Ok((_, dlen)) = self.secroute.decapsulate_and_verify(&pkt[..len], &mut dec) {
+                            if let Ok(len) = self
+                                .secroute
+                                .encapsulate_and_route(&cap, 1, 254, msg, &mut pkt)
+                            {
+                                if let Ok((_, dlen)) =
+                                    self.secroute.decapsulate_and_verify(&pkt[..len], &mut dec)
+                                {
                                     if dlen == msg.len() {
                                         success += 1;
                                     }
@@ -8597,9 +9301,33 @@ impl JamboShell {
                             42
                         };
                         let cap = self.ids.admin_cap;
-                        let _ = self.ids.ingest_event(&cap, 1, target_actor, jambo_ids::ThreatIndicator::AbnormalSyscallSequence, 75, 0, 1000);
-                        let _ = self.ids.ingest_event(&cap, 2, target_actor, jambo_ids::ThreatIndicator::IpcFloodBurst, 80, 1, 1010);
-                        let _ = self.ids.ingest_event(&cap, 4, target_actor, jambo_ids::ThreatIndicator::CrossZoneBoundaryViolation, 85, 2, 1020);
+                        let _ = self.ids.ingest_event(
+                            &cap,
+                            1,
+                            target_actor,
+                            jambo_ids::ThreatIndicator::AbnormalSyscallSequence,
+                            75,
+                            0,
+                            1000,
+                        );
+                        let _ = self.ids.ingest_event(
+                            &cap,
+                            2,
+                            target_actor,
+                            jambo_ids::ThreatIndicator::IpcFloodBurst,
+                            80,
+                            1,
+                            1010,
+                        );
+                        let _ = self.ids.ingest_event(
+                            &cap,
+                            4,
+                            target_actor,
+                            jambo_ids::ThreatIndicator::CrossZoneBoundaryViolation,
+                            85,
+                            2,
+                            1020,
+                        );
                         match self.ids.correlate_events(&cap, target_actor, 1050) {
                             Ok(Some(inc)) => {
                                 emit("[IDS] Corrélation multi-points réussie pour Acteur ");
@@ -8611,7 +9339,13 @@ impl JamboShell {
                                 emit(", Sondes: ");
                                 emit(format_u64(inc.distinct_probes_count as u64, &mut b));
                                 emit(")\n");
-                                let _ = self.ids.execute_automated_mitigation(&cap, target_actor, inc.aggregated_score, inc.primary_indicator, 1060);
+                                let _ = self.ids.execute_automated_mitigation(
+                                    &cap,
+                                    target_actor,
+                                    inc.aggregated_score,
+                                    inc.primary_indicator,
+                                    1060,
+                                );
                                 emit("[IDS] Mitigation autonome exécutée : ");
                                 emit(inc.automated_mitigation.as_str());
                                 emit("\n");
@@ -8634,10 +9368,25 @@ impl JamboShell {
                             42
                         };
                         let cap = self.ids.admin_cap;
-                        match self.ids.quarantine_actor(&cap, target_actor, jambo_ids::ThreatIndicator::PrivilegeEscalationAttempt, 2000) {
+                        match self.ids.quarantine_actor(
+                            &cap,
+                            target_actor,
+                            jambo_ids::ThreatIndicator::PrivilegeEscalationAttempt,
+                            2000,
+                        ) {
                             Ok(()) => {
-                                let _ = self.ids.revoke_capability(&cap, target_actor, 0xFFFFFFFF, 2000);
-                                self.ids.log_audit(target_actor, jambo_ids::MitigationAction::QuarantineProcess, 100, 2000);
+                                let _ = self.ids.revoke_capability(
+                                    &cap,
+                                    target_actor,
+                                    0xFFFFFFFF,
+                                    2000,
+                                );
+                                self.ids.log_audit(
+                                    target_actor,
+                                    jambo_ids::MitigationAction::QuarantineProcess,
+                                    100,
+                                    2000,
+                                );
                                 emit("[IDS] Acteur ");
                                 emit(format_u64(target_actor as u64, &mut b));
                                 emit(" placé en quarantaine O(1) et capacités révoquées avec succès\n");
@@ -8657,7 +9406,12 @@ impl JamboShell {
                         let cap = self.ids.admin_cap;
                         match self.ids.lift_quarantine(&cap, target_actor) {
                             Ok(()) => {
-                                self.ids.log_audit(target_actor, jambo_ids::MitigationAction::None, 0, 3000);
+                                self.ids.log_audit(
+                                    target_actor,
+                                    jambo_ids::MitigationAction::None,
+                                    0,
+                                    3000,
+                                );
                                 emit("[IDS] Quarantaine levée avec succès pour Acteur ");
                                 emit(format_u64(target_actor as u64, &mut b));
                                 emit("\n");
@@ -8688,10 +9442,24 @@ impl JamboShell {
                         let cap = self.ids.admin_cap;
                         emit("[BENCHMARK/IDS] Début du test de performance corrélation & mitigation...\n");
                         for i in 1..=50 {
-                            let _ = self.ids.ingest_event(&cap, 1, 999, jambo_ids::ThreatIndicator::IpcFloodBurst, 60 + (i % 30), 1, i as u64);
+                            let _ = self.ids.ingest_event(
+                                &cap,
+                                1,
+                                999,
+                                jambo_ids::ThreatIndicator::IpcFloodBurst,
+                                60 + (i % 30),
+                                1,
+                                i as u64,
+                            );
                         }
                         let _ = self.ids.correlate_events(&cap, 999, 100);
-                        let _ = self.ids.execute_automated_mitigation(&cap, 999, 85, jambo_ids::ThreatIndicator::IpcFloodBurst, 150);
+                        let _ = self.ids.execute_automated_mitigation(
+                            &cap,
+                            999,
+                            85,
+                            jambo_ids::ThreatIndicator::IpcFloodBurst,
+                            150,
+                        );
                         emit("[BENCHMARK/IDS] 50 événements ingérés, corrélation multi-points & mitigation O(1) exécutées (< 1ms)\n");
                         (ShellStatus::Success, write_pos)
                     }
@@ -8839,7 +9607,12 @@ impl JamboShell {
                             encrypted_payload: [0u8; jambo_vpn::MAX_DATA_PAYLOAD],
                             auth_tag: [0u8; 16],
                         };
-                        match self.vpn.route_and_encrypt_packet(&cap, &dest_ip, payload, &mut out_pkt) {
+                        match self.vpn.route_and_encrypt_packet(
+                            &cap,
+                            &dest_ip,
+                            payload,
+                            &mut out_pkt,
+                        ) {
                             Ok(peer_id) => {
                                 emit("[VPN] Routage cryptographique réussi vers 10.0.2.42 via Pair #");
                                 emit(format_u64(peer_id as u64, &mut b));
@@ -8853,7 +9626,9 @@ impl JamboShell {
                                 emit("[VPN/INFO] Tunnel non encore établi. Exécutez 'vpn handshake' au préalable.\n");
                             }
                             Err(_) => {
-                                emit("[VPN/ERREUR] Échec du routage ou destination non autorisée\n");
+                                emit(
+                                    "[VPN/ERREUR] Échec du routage ou destination non autorisée\n",
+                                );
                             }
                         }
                         (ShellStatus::Success, write_pos)
@@ -8883,7 +9658,10 @@ impl JamboShell {
                             mac2: [0u8; 16],
                         };
                         let eph_seed = [0x99u8; 32];
-                        if let Ok((_, pq_ss)) = self.vpn.create_handshake_initiation(&cap, 2, &eph_seed, &mut init_pkt) {
+                        if let Ok((_, pq_ss)) =
+                            self.vpn
+                                .create_handshake_initiation(&cap, 2, &eph_seed, &mut init_pkt)
+                        {
                             let resp_pkt = jambo_vpn::HandshakeResponsePacket {
                                 msg_type: jambo_vpn::WG_PKT_HANDSHAKE_RESPONSE,
                                 sender_index: 0x9002,
@@ -8895,7 +9673,9 @@ impl JamboShell {
                                 mac2: [0u8; 16],
                             };
                             let eph_sk = jambo_vpn::Sha256::digest(&eph_seed);
-                            let _ = self.vpn.complete_handshake_initiation_session(&cap, 2, &eph_sk, &pq_ss, &resp_pkt);
+                            let _ = self.vpn.complete_handshake_initiation_session(
+                                &cap, 2, &eph_sk, &pq_ss, &resp_pkt,
+                            );
                         }
                         let mut data_pkt = jambo_vpn::VpnDataPacket {
                             msg_type: 0,
@@ -8905,15 +9685,23 @@ impl JamboShell {
                             encrypted_payload: [0u8; jambo_vpn::MAX_DATA_PAYLOAD],
                             auth_tag: [0u8; 16],
                         };
-                        let sample = b"BENCHMARK_SOVEREIGN_FRAME_PACKET_64_BYTES_STREAM_ENCRYPT_2026_TEST";
+                        let sample =
+                            b"BENCHMARK_SOVEREIGN_FRAME_PACKET_64_BYTES_STREAM_ENCRYPT_2026_TEST";
                         for _ in 0..50 {
-                            let _ = self.vpn.route_and_encrypt_packet(&cap, &[10, 0, 2, 1], sample, &mut data_pkt);
+                            let _ = self.vpn.route_and_encrypt_packet(
+                                &cap,
+                                &[10, 0, 2, 1],
+                                sample,
+                                &mut data_pkt,
+                            );
                         }
                         emit("[BENCHMARK/VPN] 50 paquets chiffrés et étiquetés avec succès (< 1ms)\n");
                         (ShellStatus::Success, write_pos)
                     }
                     _ => {
-                        emit("Usage: vpn [status | peers | handshake | route | audit | benchmark]\n");
+                        emit(
+                            "Usage: vpn [status | peers | handshake | route | audit | benchmark]\n",
+                        );
                         (ShellStatus::ExecutionFailed, write_pos)
                     }
                 }
@@ -8958,7 +9746,8 @@ impl JamboShell {
                             emit(" [Règle ");
                             emit(format_u64(rule.id as u64, &mut b));
                             emit("] ");
-                            if let Ok(name_str) = core::str::from_utf8(&rule.name[..rule.name_len]) {
+                            if let Ok(name_str) = core::str::from_utf8(&rule.name[..rule.name_len])
+                            {
                                 emit(name_str);
                             }
                             emit(" | Type: ");
@@ -8984,20 +9773,32 @@ impl JamboShell {
                     "inspect" => {
                         emit("[WAF/INSPECT] Test d'inspection en direct...\n");
                         let cap = self.waf.admin_cap;
-                        let mut req_clean = jambo_waf::HttpRequest::new([192, 168, 1, 100], jambo_waf::HttpMethod::Get, "/api/v1/status");
+                        let mut req_clean = jambo_waf::HttpRequest::new(
+                            [192, 168, 1, 100],
+                            jambo_waf::HttpMethod::Get,
+                            "/api/v1/status",
+                        );
                         let _ = req_clean.add_header("Host", "jambo.local");
                         match self.waf.inspect_request(&cap, &req_clean, 5001) {
                             Ok(jambo_waf::WafDecision::Allow) => {
-                                emit("  Requête 1 GET /api/v1/status : [ALLOW] Conforme RFC 7230\n");
+                                emit(
+                                    "  Requête 1 GET /api/v1/status : [ALLOW] Conforme RFC 7230\n",
+                                );
                             }
                             _ => {
                                 emit("  Requête 1 : Échec inattendu\n");
                             }
                         }
 
-                        let req_sqli = jambo_waf::HttpRequest::new([10, 0, 0, 88], jambo_waf::HttpMethod::Get, "/items?q=' or '1'='1");
+                        let req_sqli = jambo_waf::HttpRequest::new(
+                            [10, 0, 0, 88],
+                            jambo_waf::HttpMethod::Get,
+                            "/items?q=' or '1'='1",
+                        );
                         match self.waf.inspect_request(&cap, &req_sqli, 5002) {
-                            Ok(jambo_waf::WafDecision::Block { attack_type, score, .. }) => {
+                            Ok(jambo_waf::WafDecision::Block {
+                                attack_type, score, ..
+                            }) => {
                                 emit("  Requête 2 GET /items?q=...   : [BLOCK] ");
                                 emit(attack_type.as_str());
                                 emit(" (Score: ");
@@ -9019,9 +9820,12 @@ impl JamboShell {
                                 let q = &self.waf.quarantined[i];
                                 if q.active {
                                     emit("  IP: ");
-                                    emit(format_u64(q.ip[0] as u64, &mut b)); emit(".");
-                                    emit(format_u64(q.ip[1] as u64, &mut b)); emit(".");
-                                    emit(format_u64(q.ip[2] as u64, &mut b)); emit(".");
+                                    emit(format_u64(q.ip[0] as u64, &mut b));
+                                    emit(".");
+                                    emit(format_u64(q.ip[1] as u64, &mut b));
+                                    emit(".");
+                                    emit(format_u64(q.ip[2] as u64, &mut b));
+                                    emit(".");
                                     emit(format_u64(q.ip[3] as u64, &mut b));
                                     emit(" | Fautes: ");
                                     emit(format_u64(q.strikes as u64, &mut b));
@@ -9041,9 +9845,12 @@ impl JamboShell {
                             for i in 0..self.waf.whitelist_count {
                                 let ip = &self.waf.whitelisted_ips[i];
                                 emit("  IP de confiance: ");
-                                emit(format_u64(ip[0] as u64, &mut b)); emit(".");
-                                emit(format_u64(ip[1] as u64, &mut b)); emit(".");
-                                emit(format_u64(ip[2] as u64, &mut b)); emit(".");
+                                emit(format_u64(ip[0] as u64, &mut b));
+                                emit(".");
+                                emit(format_u64(ip[1] as u64, &mut b));
+                                emit(".");
+                                emit(format_u64(ip[2] as u64, &mut b));
+                                emit(".");
                                 emit(format_u64(ip[3] as u64, &mut b));
                                 emit("\n");
                             }
@@ -9064,7 +9871,11 @@ impl JamboShell {
                     "benchmark" => {
                         emit("[BENCHMARK/WAF] Évaluation de latence d'inspection L7 (100 requêtes)...\n");
                         let cap = self.waf.admin_cap;
-                        let req = jambo_waf::HttpRequest::new([127, 0, 0, 1], jambo_waf::HttpMethod::Get, "/api/v1/bench");
+                        let req = jambo_waf::HttpRequest::new(
+                            [127, 0, 0, 1],
+                            jambo_waf::HttpMethod::Get,
+                            "/api/v1/bench",
+                        );
                         for _ in 0..100 {
                             let _ = self.waf.inspect_request(&cap, &req, 9999);
                         }
@@ -9110,15 +9921,21 @@ impl JamboShell {
                         let c_port = 54321;
                         let s_port = 80;
                         let now_sec = 1000;
-                        let cookie = self.ddos.syn_engine.generate_cookie(
-                            client_ip, srv_ip, c_port, s_port, 1460, now_sec,
-                        );
+                        let cookie = self
+                            .ddos
+                            .syn_engine
+                            .generate_cookie(client_ip, srv_ip, c_port, s_port, 1460, now_sec);
                         emit("SYN Cookie généré (seq initial) : 0x");
                         emit(format_hex_u64(cookie as u64, &mut b));
                         emit("\nValidation de l'ACK client (ack_num = seq + 1)...\n");
                         let ack_num = cookie.wrapping_add(1);
                         let mss = self.ddos.syn_engine.verify_cookie(
-                            client_ip, srv_ip, c_port, s_port, ack_num, now_sec + 2,
+                            client_ip,
+                            srv_ip,
+                            c_port,
+                            s_port,
+                            ack_num,
+                            now_sec + 2,
                         );
                         match mss {
                             Ok(val) => {
@@ -9149,7 +9966,9 @@ impl JamboShell {
                             );
                             match self.ddos.inspect_packet(&cap, &pkt, 2000) {
                                 Ok(jambo_ddos::DdosDecision::Allow) => allowed_count += 1,
-                                Ok(jambo_ddos::DdosDecision::RateLimited { .. }) => limited_count += 1,
+                                Ok(jambo_ddos::DdosDecision::RateLimited { .. }) => {
+                                    limited_count += 1
+                                }
                                 _ => {}
                             }
                         }
@@ -9168,9 +9987,12 @@ impl JamboShell {
                             for entry in self.ddos.blackhole_table.iter() {
                                 if let Some(bh) = entry {
                                     emit("  IP: ");
-                                    emit(format_u64(bh.ip[0] as u64, &mut b)); emit(".");
-                                    emit(format_u64(bh.ip[1] as u64, &mut b)); emit(".");
-                                    emit(format_u64(bh.ip[2] as u64, &mut b)); emit(".");
+                                    emit(format_u64(bh.ip[0] as u64, &mut b));
+                                    emit(".");
+                                    emit(format_u64(bh.ip[1] as u64, &mut b));
+                                    emit(".");
+                                    emit(format_u64(bh.ip[2] as u64, &mut b));
+                                    emit(".");
                                     emit(format_u64(bh.ip[3] as u64, &mut b));
                                     emit(" - Raison: ");
                                     emit(format_u64(bh.reason as u64, &mut b));
@@ -9190,9 +10012,12 @@ impl JamboShell {
                             for i in 0..self.ddos.whitelist_count {
                                 let ip = &self.ddos.whitelisted_ips[i];
                                 emit("  IP de confiance: ");
-                                emit(format_u64(ip[0] as u64, &mut b)); emit(".");
-                                emit(format_u64(ip[1] as u64, &mut b)); emit(".");
-                                emit(format_u64(ip[2] as u64, &mut b)); emit(".");
+                                emit(format_u64(ip[0] as u64, &mut b));
+                                emit(".");
+                                emit(format_u64(ip[1] as u64, &mut b));
+                                emit(".");
+                                emit(format_u64(ip[2] as u64, &mut b));
+                                emit(".");
                                 emit(format_u64(ip[3] as u64, &mut b));
                                 emit("\n");
                             }
@@ -9314,7 +10139,11 @@ impl JamboShell {
                                     emit("[SOAR/MITIGATE] Playbook exécuté. Etapes réussies: ");
                                     emit(format_u64(res.steps_succeeded as u64, &mut b));
                                     emit(", Entièrement mitigé: ");
-                                    emit(if res.fully_mitigated { "OUI\n" } else { "NON\n" });
+                                    emit(if res.fully_mitigated {
+                                        "OUI\n"
+                                    } else {
+                                        "NON\n"
+                                    });
                                     (ShellStatus::Success, write_pos)
                                 }
                                 Err(_) => {
@@ -9330,7 +10159,13 @@ impl JamboShell {
                             let hi = (byte >> 4) & 0x0f;
                             let lo = byte & 0x0f;
                             let hex_chars = b"0123456789abcdef";
-                            emit(core::str::from_utf8(&[hex_chars[hi as usize], hex_chars[lo as usize]]).unwrap());
+                            emit(
+                                core::str::from_utf8(&[
+                                    hex_chars[hi as usize],
+                                    hex_chars[lo as usize],
+                                ])
+                                .unwrap(),
+                            );
                         }
                         emit("... [Total : ");
                         let mut b = [0u8; 20];
@@ -9338,7 +10173,11 @@ impl JamboShell {
                         emit("]\n");
                         let valid = self.soar.verify_audit_integrity();
                         emit("  Intégrité formelle : ");
-                        emit(if valid { "VÉRIFIÉE (OK)\n" } else { "CORROMPUE (ERR)\n" });
+                        emit(if valid {
+                            "VÉRIFIÉE (OK)\n"
+                        } else {
+                            "CORROMPUE (ERR)\n"
+                        });
                         (ShellStatus::Success, write_pos)
                     }
                     _ => {
@@ -9368,7 +10207,11 @@ impl JamboShell {
                         emit(" entrées\n");
                         let valid = self.forensics.verify_custody_integrity();
                         emit("  Intégrité chaîne garde: ");
-                        emit(if valid { "VÉRIFIÉE (OK)\n" } else { "CORROMPUE (ERR)\n" });
+                        emit(if valid {
+                            "VÉRIFIÉE (OK)\n"
+                        } else {
+                            "CORROMPUE (ERR)\n"
+                        });
                         (ShellStatus::Success, write_pos)
                     }
                     "timeline" => {
@@ -9381,7 +10224,9 @@ impl JamboShell {
                                 emit("ms] PID ");
                                 emit(format_u64(art.source_pid as u64, &mut b));
                                 emit(" - ");
-                                if let Ok(s) = core::str::from_utf8(&art.description[..art.desc_len]) {
+                                if let Ok(s) =
+                                    core::str::from_utf8(&art.description[..art.desc_len])
+                                {
                                     emit(s);
                                 }
                                 emit(" (Gravité: ");
@@ -9396,7 +10241,9 @@ impl JamboShell {
                         let reg = jambo_forensics::MemoryRegionSnapshot::new(
                             0x7fff0000,
                             0x1000,
-                            jambo_forensics::PROT_READ | jambo_forensics::PROT_WRITE | jambo_forensics::PROT_EXEC,
+                            jambo_forensics::PROT_READ
+                                | jambo_forensics::PROT_WRITE
+                                | jambo_forensics::PROT_EXEC,
                             b"\x90\x90\xcc\x0f\x05INJECTED_PAYLOAD",
                         );
                         match self.forensics.capture_process_memory(
@@ -9412,7 +10259,9 @@ impl JamboShell {
                         ) {
                             Ok(id) => {
                                 let mut b = [0u8; 20];
-                                emit("[FORENSICS/CAPTURE] Instantané mémoire volatile capturé [ID: ");
+                                emit(
+                                    "[FORENSICS/CAPTURE] Instantané mémoire volatile capturé [ID: ",
+                                );
                                 emit(format_u64(id, &mut b));
                                 emit("] avec région suspecte W+X détectée\n");
                                 (ShellStatus::Success, write_pos)
@@ -9464,7 +10313,11 @@ impl JamboShell {
                                 }
                             }
                             emit("  Vérification signatures Ed25519 & condensats BLAKE3 : ");
-                            emit(if all_valid { "INTÈGRE (OK)\n" } else { "ALTÉRÉ (FAIL)\n" });
+                            emit(if all_valid {
+                                "INTÈGRE (OK)\n"
+                            } else {
+                                "ALTÉRÉ (FAIL)\n"
+                            });
                             (ShellStatus::Success, write_pos)
                         }
                     }
@@ -9491,12 +10344,19 @@ impl JamboShell {
                         emit("\n  Injections bloquées   : ");
                         emit(format_u64(self.edr.injection_blocked_count as u64, &mut b));
                         emit("\n  Évasions TEE bloquées : ");
-                        emit(format_u64(self.edr.enclave_escape_blocked_count as u64, &mut b));
+                        emit(format_u64(
+                            self.edr.enclave_escape_blocked_count as u64,
+                            &mut b,
+                        ));
                         emit("\n  Crochets détectés     : ");
                         emit(format_u64(self.edr.hooks_detected_count as u64, &mut b));
                         emit("\n  Chaîne d'audit SHA-256: ");
                         let valid = self.edr.verify_ledger_integrity();
-                        emit(if valid { "VÉRIFIÉE (OK)\n" } else { "CORROMPUE (ERR)\n" });
+                        emit(if valid {
+                            "VÉRIFIÉE (OK)\n"
+                        } else {
+                            "CORROMPUE (ERR)\n"
+                        });
                         (ShellStatus::Success, write_pos)
                     }
                     "processes" | "tree" => {
@@ -9568,7 +10428,11 @@ impl JamboShell {
                     "verify" => {
                         let valid = self.edr.verify_ledger_integrity();
                         emit("  Vérification intégrité registre SHA-256 : ");
-                        emit(if valid { "INTÈGRE (OK)\n" } else { "ALTÉRÉ (FAIL)\n" });
+                        emit(if valid {
+                            "INTÈGRE (OK)\n"
+                        } else {
+                            "ALTÉRÉ (FAIL)\n"
+                        });
                         (ShellStatus::Success, write_pos)
                     }
                     _ => {
@@ -9592,12 +10456,22 @@ impl JamboShell {
                         emit("\n  Campagnes APT actives : ");
                         emit(format_u64(self.xdr.campaign_count as u64, &mut b));
                         emit("\n  Réponses trans-vecteur: ");
-                        emit(format_u64(self.xdr.cross_vector_responses_count as u64, &mut b));
+                        emit(format_u64(
+                            self.xdr.cross_vector_responses_count as u64,
+                            &mut b,
+                        ));
                         emit("\n  Entités confinées     : ");
-                        emit(format_u64(self.xdr.quarantined_entities_count as u64, &mut b));
+                        emit(format_u64(
+                            self.xdr.quarantined_entities_count as u64,
+                            &mut b,
+                        ));
                         emit("\n  Chaîne d'audit SHA-256: ");
                         let valid = self.xdr.verify_ledger_integrity();
-                        emit(if valid { "VÉRIFIÉE (OK)\n" } else { "CORROMPUE (ERR)\n" });
+                        emit(if valid {
+                            "VÉRIFIÉE (OK)\n"
+                        } else {
+                            "CORROMPUE (ERR)\n"
+                        });
                         (ShellStatus::Success, write_pos)
                     }
                     "telemetry" | "events" => {
@@ -9666,7 +10540,11 @@ impl JamboShell {
                     "verify" => {
                         let valid = self.xdr.verify_ledger_integrity();
                         emit("  Vérification intégrité registre SHA-256 : ");
-                        emit(if valid { "INTÈGRE (OK)\n" } else { "ALTÉRÉ (FAIL)\n" });
+                        emit(if valid {
+                            "INTÈGRE (OK)\n"
+                        } else {
+                            "ALTÉRÉ (FAIL)\n"
+                        });
                         (ShellStatus::Success, write_pos)
                     }
                     _ => {
@@ -9695,7 +10573,11 @@ impl JamboShell {
                         emit(format_u64(self.intel.total_hits, &mut b));
                         emit("\n  Chaîne d'audit SHA-256  : ");
                         let valid = self.intel.verify_ledger_integrity();
-                        emit(if valid { "VÉRIFIÉE (OK)\n" } else { "CORROMPUE (ERR)\n" });
+                        emit(if valid {
+                            "VÉRIFIÉE (OK)\n"
+                        } else {
+                            "CORROMPUE (ERR)\n"
+                        });
                         (ShellStatus::Success, write_pos)
                     }
                     "feeds" => {
@@ -9746,7 +10628,10 @@ impl JamboShell {
                     "check" | "query" => {
                         let cap = self.intel.admin_cap;
                         let test_ip = [198, 51, 100, 23];
-                        match self.intel.query_ioc(&cap, jambo_intel::IocKind::Ipv4, &test_ip, 500) {
+                        match self
+                            .intel
+                            .query_ioc(&cap, jambo_intel::IocKind::Ipv4, &test_ip, 500)
+                        {
                             Ok(Some(m)) => {
                                 let mut b = [0u8; 20];
                                 emit("[INTEL/CHECK] Alerte CTI : IP malveillante détectée (IoC #");
@@ -9785,7 +10670,11 @@ impl JamboShell {
                     "verify" => {
                         let valid = self.intel.verify_ledger_integrity();
                         emit("  Vérification intégrité registre SHA-256 : ");
-                        emit(if valid { "INTÈGRE (OK)\n" } else { "ALTÉRÉ (FAIL)\n" });
+                        emit(if valid {
+                            "INTÈGRE (OK)\n"
+                        } else {
+                            "ALTÉRÉ (FAIL)\n"
+                        });
                         (ShellStatus::Success, write_pos)
                     }
                     _ => {
@@ -9816,7 +10705,11 @@ impl JamboShell {
                         emit(format_u64(self.deception.total_quarantines, &mut b));
                         emit("\n  Chaîne d'audit SHA-256 : ");
                         let valid = self.deception.verify_ledger_integrity();
-                        emit(if valid { "VÉRIFIÉE (OK)\n" } else { "CORROMPUE (ERR)\n" });
+                        emit(if valid {
+                            "VÉRIFIÉE (OK)\n"
+                        } else {
+                            "CORROMPUE (ERR)\n"
+                        });
                         (ShellStatus::Success, write_pos)
                     }
                     "decoys" => {
@@ -9906,7 +10799,11 @@ impl JamboShell {
                     "verify" => {
                         let valid = self.deception.verify_ledger_integrity();
                         emit("  Vérification intégrité registre SHA-256 : ");
-                        emit(if valid { "INTÈGRE (OK)\n" } else { "ALTÉRÉ (FAIL)\n" });
+                        emit(if valid {
+                            "INTÈGRE (OK)\n"
+                        } else {
+                            "ALTÉRÉ (FAIL)\n"
+                        });
                         (ShellStatus::Success, write_pos)
                     }
                     _ => {
@@ -9941,7 +10838,11 @@ impl JamboShell {
                         emit(format_u64(self.ztna.total_revocations, &mut b));
                         emit("\n  Chaîne d'audit SHA-256  : ");
                         let valid = self.ztna.verify_ledger_integrity();
-                        emit(if valid { "VÉRIFIÉE (OK)\n" } else { "CORROMPUE (ERR)\n" });
+                        emit(if valid {
+                            "VÉRIFIÉE (OK)\n"
+                        } else {
+                            "CORROMPUE (ERR)\n"
+                        });
                         (ShellStatus::Success, write_pos)
                     }
                     "policies" => {
@@ -9975,7 +10876,11 @@ impl JamboShell {
                                 emit(" | Statut: ");
                                 emit(d.posture_status.as_str());
                                 emit(" | TPM/TEE: ");
-                                emit(if d.tpm_tee_attested { "ATTESTÉ\n" } else { "NON\n" });
+                                emit(if d.tpm_tee_attested {
+                                    "ATTESTÉ\n"
+                                } else {
+                                    "NON\n"
+                                });
                             }
                         }
                         (ShellStatus::Success, write_pos)
@@ -10001,10 +10906,16 @@ impl JamboShell {
                     }
                     "eval" => {
                         let cap = self.ztna.admin_cap;
-                        match self.ztna.evaluate_access(&cap, 101, 1001, "ipc://sys.sec.kms", 500) {
+                        match self
+                            .ztna
+                            .evaluate_access(&cap, 101, 1001, "ipc://sys.sec.kms", 500)
+                        {
                             Ok(decision) => {
                                 match decision {
-                                    jambo_ztna::AccessDecision::Granted { session_id, trust_score } => {
+                                    jambo_ztna::AccessDecision::Granted {
+                                        session_id,
+                                        trust_score,
+                                    } => {
                                         let mut b = [0u8; 20];
                                         emit("[ZTNA/EVAL] Accès ACCORDÉ - Session #");
                                         emit(format_u64(session_id, &mut b));
@@ -10012,7 +10923,10 @@ impl JamboShell {
                                         emit(format_u64(trust_score as u64, &mut b));
                                         emit(")\n");
                                     }
-                                    jambo_ztna::AccessDecision::Denied { reason_code, trust_score } => {
+                                    jambo_ztna::AccessDecision::Denied {
+                                        reason_code,
+                                        trust_score,
+                                    } => {
                                         let mut b = [0u8; 20];
                                         emit("[ZTNA/EVAL] Accès REFUSÉ - Raison: ");
                                         emit(format_u64(reason_code as u64, &mut b));
@@ -10020,7 +10934,10 @@ impl JamboShell {
                                         emit(format_u64(trust_score as u64, &mut b));
                                         emit(")\n");
                                     }
-                                    jambo_ztna::AccessDecision::StepUpRequired { required_score, current_score } => {
+                                    jambo_ztna::AccessDecision::StepUpRequired {
+                                        required_score,
+                                        current_score,
+                                    } => {
                                         let mut b = [0u8; 20];
                                         emit("[ZTNA/EVAL] Step-Up Requis (Requis: ");
                                         emit(format_u64(required_score as u64, &mut b));
@@ -10040,7 +10957,11 @@ impl JamboShell {
                     "verify" => {
                         let valid = self.ztna.verify_ledger_integrity();
                         emit("  Vérification intégrité registre SHA-256 : ");
-                        emit(if valid { "INTÈGRE (OK)\n" } else { "ALTÉRÉ (FAIL)\n" });
+                        emit(if valid {
+                            "INTÈGRE (OK)\n"
+                        } else {
+                            "ALTÉRÉ (FAIL)\n"
+                        });
                         (ShellStatus::Success, write_pos)
                     }
                     _ => {
@@ -10075,7 +10996,11 @@ impl JamboShell {
                         emit(format_u64(self.casb.total_quarantines, &mut b));
                         emit("\n  Chaîne d'audit SHA-256  : ");
                         let valid = self.casb.verify_ledger_integrity();
-                        emit(if valid { "VÉRIFIÉE (OK)\n" } else { "CORROMPUE (ERR)\n" });
+                        emit(if valid {
+                            "VÉRIFIÉE (OK)\n"
+                        } else {
+                            "CORROMPUE (ERR)\n"
+                        });
                         (ShellStatus::Success, write_pos)
                     }
                     "tenants" => {
@@ -10127,24 +11052,39 @@ impl JamboShell {
                             false,
                             b"card=4242424242424242&val=100",
                         );
-                        match self.casb.scan_and_broker_admission(&cap, &req, &mut sanitized, 4000) {
+                        match self
+                            .casb
+                            .scan_and_broker_admission(&cap, &req, &mut sanitized, 4000)
+                        {
                             Ok(decision) => {
                                 match decision {
-                                    jambo_casb::AdmissionDecision::Approved { transaction_id, .. } => {
+                                    jambo_casb::AdmissionDecision::Approved {
+                                        transaction_id,
+                                        ..
+                                    } => {
                                         let mut b = [0u8; 20];
                                         emit("[CASB/INSPECT] Requête Approuvée - Trans #");
                                         emit(format_u64(transaction_id, &mut b));
                                         emit("\n");
                                     }
-                                    jambo_casb::AdmissionDecision::RedactedAndApproved { transaction_id, redacted_count, .. } => {
+                                    jambo_casb::AdmissionDecision::RedactedAndApproved {
+                                        transaction_id,
+                                        redacted_count,
+                                        ..
+                                    } => {
                                         let mut b = [0u8; 20];
-                                        emit("[CASB/INSPECT] Requête Masquée & Approuvée - Trans #");
+                                        emit(
+                                            "[CASB/INSPECT] Requête Masquée & Approuvée - Trans #",
+                                        );
                                         emit(format_u64(transaction_id, &mut b));
                                         emit(" (Champs masqués: ");
                                         emit(format_u64(redacted_count as u64, &mut b));
                                         emit(")\n");
                                     }
-                                    jambo_casb::AdmissionDecision::Blocked { violation_code, reason } => {
+                                    jambo_casb::AdmissionDecision::Blocked {
+                                        violation_code,
+                                        reason,
+                                    } => {
                                         let mut b = [0u8; 20];
                                         emit("[CASB/INSPECT] Requête Bloquée - Code: ");
                                         emit(format_u64(violation_code as u64, &mut b));
@@ -10169,7 +11109,11 @@ impl JamboShell {
                     "verify" => {
                         let valid = self.casb.verify_ledger_integrity();
                         emit("  Vérification intégrité registre SHA-256 : ");
-                        emit(if valid { "INTÈGRE (OK)\n" } else { "ALTÉRÉ (FAIL)\n" });
+                        emit(if valid {
+                            "INTÈGRE (OK)\n"
+                        } else {
+                            "ALTÉRÉ (FAIL)\n"
+                        });
                         (ShellStatus::Success, write_pos)
                     }
                     _ => {
@@ -10204,7 +11148,11 @@ impl JamboShell {
                         emit(format_u64(self.cspm.current_risk_index as u64, &mut b));
                         emit(" / 1000\n  Chaîne d'audit SHA-256  : ");
                         let valid = self.cspm.verify_ledger_integrity();
-                        emit(if valid { "VÉRIFIÉE (OK)\n" } else { "CORROMPUE (ERR)\n" });
+                        emit(if valid {
+                            "VÉRIFIÉE (OK)\n"
+                        } else {
+                            "CORROMPUE (ERR)\n"
+                        });
                         (ShellStatus::Success, write_pos)
                     }
                     "baselines" => {
@@ -10215,7 +11163,10 @@ impl JamboShell {
                                 emit("  * [#");
                                 emit(format_u64(r.rule_id as u64, &mut b));
                                 emit("] ");
-                                emit(core::str::from_utf8(&r.name[..r.name_len]).unwrap_or("unknown"));
+                                emit(
+                                    core::str::from_utf8(&r.name[..r.name_len])
+                                        .unwrap_or("unknown"),
+                                );
                                 emit(" | Ref: ");
                                 emit(r.standard.as_str());
                                 emit(" | Périmètre: ");
@@ -10236,11 +11187,20 @@ impl JamboShell {
                                 emit("  * [#");
                                 emit(format_u64(it.resource_id as u64, &mut b));
                                 emit("] ");
-                                emit(core::str::from_utf8(&it.component[..it.comp_len]).unwrap_or(""));
+                                emit(
+                                    core::str::from_utf8(&it.component[..it.comp_len])
+                                        .unwrap_or(""),
+                                );
                                 emit(" -> ");
-                                emit(core::str::from_utf8(&it.parameter_key[..it.key_len]).unwrap_or(""));
+                                emit(
+                                    core::str::from_utf8(&it.parameter_key[..it.key_len])
+                                        .unwrap_or(""),
+                                );
                                 emit(" = '");
-                                emit(core::str::from_utf8(&it.current_value[..it.val_len]).unwrap_or(""));
+                                emit(
+                                    core::str::from_utf8(&it.current_value[..it.val_len])
+                                        .unwrap_or(""),
+                                );
                                 emit("' [Statut: ");
                                 emit(it.status.as_str());
                                 emit("]\n");
@@ -10295,7 +11255,11 @@ impl JamboShell {
                     "verify" => {
                         let valid = self.cspm.verify_ledger_integrity();
                         emit("  Vérification intégrité registre SHA-256 : ");
-                        emit(if valid { "INTÈGRE (OK)\n" } else { "ALTÉRÉ (FAIL)\n" });
+                        emit(if valid {
+                            "INTÈGRE (OK)\n"
+                        } else {
+                            "ALTÉRÉ (FAIL)\n"
+                        });
                         (ShellStatus::Success, write_pos)
                     }
                     _ => {
@@ -10313,7 +11277,9 @@ impl JamboShell {
                 match subcmd {
                     "status" => {
                         let mut b = [0u8; 20];
-                        emit("[CWPP/STATUS] Protection des Charges de Travail Cloud/Grappe (CWPP)\n");
+                        emit(
+                            "[CWPP/STATUS] Protection des Charges de Travail Cloud/Grappe (CWPP)\n",
+                        );
                         emit("  Profils enregistrés     : ");
                         emit(format_u64(self.cwpp.profile_count as u64, &mut b));
                         emit("\n  Charges surveillées     : ");
@@ -10328,7 +11294,11 @@ impl JamboShell {
                         emit(format_u64(self.cwpp.total_containments, &mut b));
                         emit("\n  Chaîne d'audit SHA-256  : ");
                         let valid = self.cwpp.verify_ledger_integrity();
-                        emit(if valid { "VÉRIFIÉE (OK)\n" } else { "CORROMPUE (ERR)\n" });
+                        emit(if valid {
+                            "VÉRIFIÉE (OK)\n"
+                        } else {
+                            "CORROMPUE (ERR)\n"
+                        });
                         (ShellStatus::Success, write_pos)
                     }
                     "profiles" => {
@@ -10412,7 +11382,9 @@ impl JamboShell {
                         match self.cwpp.contain_workload(&cap, wid, action, 2000) {
                             Ok(true) => {
                                 let mut b = [0u8; 20];
-                                emit("[CWPP/CONTAIN] Confinement appliqué avec succès sur charge #");
+                                emit(
+                                    "[CWPP/CONTAIN] Confinement appliqué avec succès sur charge #",
+                                );
                                 emit(format_u64(wid as u64, &mut b));
                                 emit("\n");
                                 (ShellStatus::Success, write_pos)
@@ -10426,7 +11398,11 @@ impl JamboShell {
                     "verify" => {
                         let valid = self.cwpp.verify_ledger_integrity();
                         emit("  Vérification intégrité registre CWPP SHA-256 : ");
-                        emit(if valid { "INTÈGRE (OK)\n" } else { "ALTÉRÉ (FAIL)\n" });
+                        emit(if valid {
+                            "INTÈGRE (OK)\n"
+                        } else {
+                            "ALTÉRÉ (FAIL)\n"
+                        });
                         (ShellStatus::Success, write_pos)
                     }
                     _ => {
@@ -10444,7 +11420,9 @@ impl JamboShell {
                 match subcmd {
                     "status" => {
                         let mut b = [0u8; 20];
-                        emit("[CIEM/STATUS] Gestion des Droits et Privilèges Cloud/Grappe (CIEM)\n");
+                        emit(
+                            "[CIEM/STATUS] Gestion des Droits et Privilèges Cloud/Grappe (CIEM)\n",
+                        );
                         emit("  Identités cartographiées: ");
                         emit(format_u64(self.ciem.identity_count as u64, &mut b));
                         emit("\n  Identités actives       : ");
@@ -10459,7 +11437,11 @@ impl JamboShell {
                         emit(format_u64(self.ciem.total_remediations, &mut b));
                         emit("\n  Chaîne d'audit SHA-256  : ");
                         let valid = self.ciem.verify_ledger_integrity();
-                        emit(if valid { "VÉRIFIÉE (OK)\n" } else { "CORROMPUE (ERR)\n" });
+                        emit(if valid {
+                            "VÉRIFIÉE (OK)\n"
+                        } else {
+                            "CORROMPUE (ERR)\n"
+                        });
                         (ShellStatus::Success, write_pos)
                     }
                     "identities" => {
@@ -10470,13 +11452,20 @@ impl JamboShell {
                                 emit("  * [ID#");
                                 emit(format_u64(id_rec.id as u64, &mut b));
                                 emit("] ");
-                                emit(core::str::from_utf8(&id_rec.name[..id_rec.name_len]).unwrap_or(""));
+                                emit(
+                                    core::str::from_utf8(&id_rec.name[..id_rec.name_len])
+                                        .unwrap_or(""),
+                                );
                                 emit(" | Type: ");
                                 match id_rec.kind {
                                     jambo_ciem::IdentityKind::HumanUser => emit("Utilisateur"),
-                                    jambo_ciem::IdentityKind::ServiceAccount => emit("CompteService"),
+                                    jambo_ciem::IdentityKind::ServiceAccount => {
+                                        emit("CompteService")
+                                    }
                                     jambo_ciem::IdentityKind::WorkloadAgent => emit("AgentCharge"),
-                                    jambo_ciem::IdentityKind::TemporaryToken => emit("TokenÉphémère"),
+                                    jambo_ciem::IdentityKind::TemporaryToken => {
+                                        emit("TokenÉphémère")
+                                    }
                                     jambo_ciem::IdentityKind::FederatedRole => emit("RôleFédéré"),
                                 }
                                 emit(" | Entitlements: ");
@@ -10501,8 +11490,12 @@ impl JamboShell {
                                     jambo_ciem::EntitlementScope::KernelCore => emit("Noyau"),
                                     jambo_ciem::EntitlementScope::StorageVfs => emit("Stockage"),
                                     jambo_ciem::EntitlementScope::NetworkMesh => emit("Réseau"),
-                                    jambo_ciem::EntitlementScope::SecurityServices => emit("Sécurité"),
-                                    jambo_ciem::EntitlementScope::ClusterControl => emit("ContrôleGrappe"),
+                                    jambo_ciem::EntitlementScope::SecurityServices => {
+                                        emit("Sécurité")
+                                    }
+                                    jambo_ciem::EntitlementScope::ClusterControl => {
+                                        emit("ContrôleGrappe")
+                                    }
                                     jambo_ciem::EntitlementScope::EnclaveTee => emit("EnclaveTEE"),
                                 }
                                 emit(" | Statut: ");
@@ -10580,7 +11573,11 @@ impl JamboShell {
                     "verify" => {
                         let valid = self.ciem.verify_ledger_integrity();
                         emit("  Vérification intégrité registre CIEM SHA-256 : ");
-                        emit(if valid { "INTÈGRE (OK)\n" } else { "ALTÉRÉ (FAIL)\n" });
+                        emit(if valid {
+                            "INTÈGRE (OK)\n"
+                        } else {
+                            "ALTÉRÉ (FAIL)\n"
+                        });
                         (ShellStatus::Success, write_pos)
                     }
                     _ => {
@@ -10606,7 +11603,10 @@ impl JamboShell {
                         emit("\n  Chemins d'attaque corrélés: ");
                         emit(format_u64(self.cnapp.path_count as u64, &mut b));
                         emit("\n  Combinaisons toxiques    : ");
-                        emit(format_u64(self.cnapp.toxic_combinations_count as u64, &mut b));
+                        emit(format_u64(
+                            self.cnapp.toxic_combinations_count as u64,
+                            &mut b,
+                        ));
                         emit("\n  Score moyen risque grappe: ");
                         emit(format_u64(self.cnapp.average_cluster_risk as u64, &mut b));
                         emit("/100\n  Corrélations exécutées   : ");
@@ -10615,32 +11615,64 @@ impl JamboShell {
                         emit(format_u64(self.cnapp.total_remediations, &mut b));
                         emit("\n  Chaîne d'audit SHA-256   : ");
                         let valid = self.cnapp.verify_ledger_integrity();
-                        emit(if valid { "VÉRIFIÉE (OK)\n" } else { "CORROMPUE (ERR)\n" });
+                        emit(if valid {
+                            "VÉRIFIÉE (OK)\n"
+                        } else {
+                            "CORROMPUE (ERR)\n"
+                        });
                         (ShellStatus::Success, write_pos)
                     }
                     "workloads" | "nodes" => {
-                        emit("[CNAPP/WORKLOADS] Matrice Unifiée de Posture & Risque par Charge :\n");
+                        emit(
+                            "[CNAPP/WORKLOADS] Matrice Unifiée de Posture & Risque par Charge :\n",
+                        );
                         for i in 0..self.cnapp.node_count {
                             if let Some(ref node) = self.cnapp.nodes[i] {
                                 let mut b = [0u8; 20];
                                 emit("  * [W#");
                                 emit(format_u64(node.workload_id as u64, &mut b));
                                 emit("] ");
-                                emit(core::str::from_utf8(&node.name[..node.name_len]).unwrap_or(""));
+                                emit(
+                                    core::str::from_utf8(&node.name[..node.name_len]).unwrap_or(""),
+                                );
                                 emit(" | Score: ");
                                 emit(format_u64(node.unified_risk_score as u64, &mut b));
                                 emit("/100 | Ingress: ");
-                                emit(if node.is_internet_exposed { "EXT" } else { "INT" });
+                                emit(if node.is_internet_exposed {
+                                    "EXT"
+                                } else {
+                                    "INT"
+                                });
                                 emit(" | CSPM: ");
-                                emit(if node.has_posture_drift { "DRIFT" } else { "OK" });
+                                emit(if node.has_posture_drift {
+                                    "DRIFT"
+                                } else {
+                                    "OK"
+                                });
                                 emit(" | CIEM: ");
-                                emit(if node.has_excess_privilege { "EXCESS" } else { "OK" });
+                                emit(if node.has_excess_privilege {
+                                    "EXCESS"
+                                } else {
+                                    "OK"
+                                });
                                 emit(" | CWPP: ");
-                                emit(if node.has_runtime_anomaly { "ANOMALY" } else { "OK" });
+                                emit(if node.has_runtime_anomaly {
+                                    "ANOMALY"
+                                } else {
+                                    "OK"
+                                });
                                 emit(" | Toxique: ");
-                                emit(if node.is_toxic_combination { "OUI (CRITIQUE)" } else { "NON" });
+                                emit(if node.is_toxic_combination {
+                                    "OUI (CRITIQUE)"
+                                } else {
+                                    "NON"
+                                });
                                 emit(" | Confiné: ");
-                                emit(if node.is_quarantined { "OUI\n" } else { "NON\n" });
+                                emit(if node.is_quarantined {
+                                    "OUI\n"
+                                } else {
+                                    "NON\n"
+                                });
                             }
                         }
                         (ShellStatus::Success, write_pos)
@@ -10700,7 +11732,9 @@ impl JamboShell {
                             match self.cnapp.orchestrate_remediation(&cap, wid, 2600) {
                                 Ok(action) => {
                                     let mut b = [0u8; 20];
-                                    emit("[CNAPP/REMEDIATE] Orchestration autonome exécutée sur W#");
+                                    emit(
+                                        "[CNAPP/REMEDIATE] Orchestration autonome exécutée sur W#",
+                                    );
                                     emit(format_u64(wid as u64, &mut b));
                                     emit(" -> Action: ");
                                     match action {
@@ -10744,7 +11778,11 @@ impl JamboShell {
                     "verify" => {
                         let valid = self.cnapp.verify_ledger_integrity();
                         emit("  Vérification intégrité registre CNAPP SHA-256 : ");
-                        emit(if valid { "INTÈGRE (OK)\n" } else { "ALTÉRÉ (FAIL)\n" });
+                        emit(if valid {
+                            "INTÈGRE (OK)\n"
+                        } else {
+                            "ALTÉRÉ (FAIL)\n"
+                        });
                         (ShellStatus::Success, write_pos)
                     }
                     _ => {
@@ -10755,10 +11793,16 @@ impl JamboShell {
             }
             "aspm" => {
                 let mut b = [0u8; 20];
-                let sub = if parsed.arg_count > 1 { parsed.args[1] } else { "status" };
+                let sub = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    "status"
+                };
                 match sub {
                     "status" => {
-                        emit("--- [JAMBO-ASPM] POSTURE DE SÉCURITÉ APPLICATIVE & SUPPLY CHAIN ---\n");
+                        emit(
+                            "--- [JAMBO-ASPM] POSTURE DE SÉCURITÉ APPLICATIVE & SUPPLY CHAIN ---\n",
+                        );
                         emit("  Composants dans le SBOM      : ");
                         emit(format_u64(self.aspm.component_count as u64, &mut b));
                         emit("\n  Vulnérabilités signalées     : ");
@@ -10773,35 +11817,73 @@ impl JamboShell {
                         emit(format_u64(self.aspm.total_remediations, &mut b));
                         emit("\n  Registre d'audit SHA-256     : ");
                         let valid = self.aspm.verify_ledger_integrity();
-                        emit(if valid { "SCELLEMENT VALIDE (OK)\n" } else { "ALTÉRATION DÉTECTÉE\n" });
+                        emit(if valid {
+                            "SCELLEMENT VALIDE (OK)\n"
+                        } else {
+                            "ALTÉRATION DÉTECTÉE\n"
+                        });
                         (ShellStatus::Success, write_pos)
                     }
                     "components" | "sbom" => {
                         emit("--- [JAMBO-ASPM] INVENTAIRE DES COMPOSANTS LOGICIELS (SBOM) ---\n");
-                        emit("ID | NOM                  | VERSION   | MENACE AMONT     | BLOCAGE\n");
-                        emit("---+----------------------+-----------+------------------+--------\n");
+                        emit(
+                            "ID | NOM                  | VERSION   | MENACE AMONT     | BLOCAGE\n",
+                        );
+                        emit(
+                            "---+----------------------+-----------+------------------+--------\n",
+                        );
                         for i in 0..self.aspm.component_count {
                             if let Some(ref comp) = self.aspm.components[i] {
                                 emit(format_u64(comp.id as u64, &mut b));
                                 emit("  | ");
                                 emit(comp.name_as_str());
-                                let pad = if comp.name_len < 20 { 20 - comp.name_len } else { 1 };
-                                for _ in 0..pad { emit(" "); }
+                                let pad = if comp.name_len < 20 {
+                                    20 - comp.name_len
+                                } else {
+                                    1
+                                };
+                                for _ in 0..pad {
+                                    emit(" ");
+                                }
                                 emit(" | ");
                                 emit(comp.version_as_str());
-                                let vpad = if comp.version_len < 9 { 9 - comp.version_len } else { 1 };
-                                for _ in 0..vpad { emit(" "); }
+                                let vpad = if comp.version_len < 9 {
+                                    9 - comp.version_len
+                                } else {
+                                    1
+                                };
+                                for _ in 0..vpad {
+                                    emit(" ");
+                                }
                                 emit(" | ");
                                 match comp.threat {
-                                    jambo_aspm::SupplyChainThreat::None => emit("Aucune           | "),
-                                    jambo_aspm::SupplyChainThreat::MaliciousBuildScript => emit("build.rs suspect | "),
-                                    jambo_aspm::SupplyChainThreat::DigestMismatch => emit("Digest altéré    | "),
-                                    jambo_aspm::SupplyChainThreat::Typosquatting => emit("Typosquatting    | "),
-                                    jambo_aspm::SupplyChainThreat::KnownVulnerability => emit("CVE connue       | "),
-                                    jambo_aspm::SupplyChainThreat::YankedPackage => emit("Paquet yanked    | "),
-                                    jambo_aspm::SupplyChainThreat::UntrustedSource => emit("Source inconnue  | "),
+                                    jambo_aspm::SupplyChainThreat::None => {
+                                        emit("Aucune           | ")
+                                    }
+                                    jambo_aspm::SupplyChainThreat::MaliciousBuildScript => {
+                                        emit("build.rs suspect | ")
+                                    }
+                                    jambo_aspm::SupplyChainThreat::DigestMismatch => {
+                                        emit("Digest altéré    | ")
+                                    }
+                                    jambo_aspm::SupplyChainThreat::Typosquatting => {
+                                        emit("Typosquatting    | ")
+                                    }
+                                    jambo_aspm::SupplyChainThreat::KnownVulnerability => {
+                                        emit("CVE connue       | ")
+                                    }
+                                    jambo_aspm::SupplyChainThreat::YankedPackage => {
+                                        emit("Paquet yanked    | ")
+                                    }
+                                    jambo_aspm::SupplyChainThreat::UntrustedSource => {
+                                        emit("Source inconnue  | ")
+                                    }
                                 }
-                                emit(if comp.is_blocked { "OUI (BLOQUÉ)\n" } else { "NON (OK)\n" });
+                                emit(if comp.is_blocked {
+                                    "OUI (BLOQUÉ)\n"
+                                } else {
+                                    "NON (OK)\n"
+                                });
                             }
                         }
                         (ShellStatus::Success, write_pos)
@@ -10818,18 +11900,28 @@ impl JamboShell {
                                 emit("    | ");
                                 emit(v.cve_as_str());
                                 let cpad = if v.cve_len < 14 { 14 - v.cve_len } else { 1 };
-                                for _ in 0..cpad { emit(" "); }
+                                for _ in 0..cpad {
+                                    emit(" ");
+                                }
                                 emit(" | ");
                                 emit(format_u64(v.cvss_score as u64, &mut b));
                                 emit("   | ");
                                 match v.severity {
-                                    jambo_aspm::VulnerabilitySeverity::Critical => emit("CRITIQUE | "),
+                                    jambo_aspm::VulnerabilitySeverity::Critical => {
+                                        emit("CRITIQUE | ")
+                                    }
                                     jambo_aspm::VulnerabilitySeverity::High => emit("ÉLEVÉ    | "),
-                                    jambo_aspm::VulnerabilitySeverity::Medium => emit("MOYEN    | "),
+                                    jambo_aspm::VulnerabilitySeverity::Medium => {
+                                        emit("MOYEN    | ")
+                                    }
                                     jambo_aspm::VulnerabilitySeverity::Low => emit("FAIBLE   | "),
                                     jambo_aspm::VulnerabilitySeverity::Info => emit("INFO     | "),
                                 }
-                                emit(if v.is_remediated { "CORRIGÉ\n" } else { "ACTIF\n" });
+                                emit(if v.is_remediated {
+                                    "CORRIGÉ\n"
+                                } else {
+                                    "ACTIF\n"
+                                });
                             }
                         }
                         (ShellStatus::Success, write_pos)
@@ -10908,7 +12000,11 @@ impl JamboShell {
                     "verify" => {
                         let valid = self.aspm.verify_ledger_integrity();
                         emit("  Vérification intégrité registre ASPM SHA-256 : ");
-                        emit(if valid { "INTÈGRE (OK)\n" } else { "ALTÉRÉ (FAIL)\n" });
+                        emit(if valid {
+                            "INTÈGRE (OK)\n"
+                        } else {
+                            "ALTÉRÉ (FAIL)\n"
+                        });
                         (ShellStatus::Success, write_pos)
                     }
                     _ => {
@@ -10918,7 +12014,11 @@ impl JamboShell {
                 }
             }
             "bas" => {
-                let subcmd = if parsed.arg_count > 1 { parsed.args[1] } else { "status" };
+                let subcmd = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    "status"
+                };
                 match subcmd {
                     "status" => {
                         emit("=== SIMULATION AUTONOME DE BRÈCHES ET D'ATTAQUES (BAS) ===\n");
@@ -10939,7 +12039,11 @@ impl JamboShell {
                         emit(format_u64(self.bas.total_missed, &mut b));
                         let valid = self.bas.verify_ledger_integrity();
                         emit("\n  Registre d'audit SHA-256       : ");
-                        emit(if valid { "SCELLÉ & INTÈGRE (OK)\n" } else { "ALTÉRÉ (FAIL)\n" });
+                        emit(if valid {
+                            "SCELLÉ & INTÈGRE (OK)\n"
+                        } else {
+                            "ALTÉRÉ (FAIL)\n"
+                        });
                         (ShellStatus::Success, write_pos)
                     }
                     "vectors" => {
@@ -10957,10 +12061,18 @@ impl JamboShell {
                                 emit(format_u64(v.severity_score as u64, &mut b));
                                 emit(" | Statut: ");
                                 match v.last_status {
-                                    jambo_bas::SimulationStatus::BlockedByDefense => emit("BLOQUÉ NET\n"),
-                                    jambo_bas::SimulationStatus::DetectedOnly => emit("DÉTECTÉ SEUL\n"),
-                                    jambo_bas::SimulationStatus::UndetectedSuccess => emit("NON DÉTECTÉ (FAILLE)\n"),
-                                    jambo_bas::SimulationStatus::Remediated => emit("REMÉDIÉ (DURCI)\n"),
+                                    jambo_bas::SimulationStatus::BlockedByDefense => {
+                                        emit("BLOQUÉ NET\n")
+                                    }
+                                    jambo_bas::SimulationStatus::DetectedOnly => {
+                                        emit("DÉTECTÉ SEUL\n")
+                                    }
+                                    jambo_bas::SimulationStatus::UndetectedSuccess => {
+                                        emit("NON DÉTECTÉ (FAILLE)\n")
+                                    }
+                                    jambo_bas::SimulationStatus::Remediated => {
+                                        emit("REMÉDIÉ (DURCI)\n")
+                                    }
                                     jambo_bas::SimulationStatus::Pending => emit("EN ATTENTE\n"),
                                     jambo_bas::SimulationStatus::Running => emit("EN COURS\n"),
                                 }
@@ -11093,7 +12205,11 @@ impl JamboShell {
                     "verify" => {
                         let valid = self.bas.verify_ledger_integrity();
                         emit("  Vérification intégrité registre BAS SHA-256 : ");
-                        emit(if valid { "INTÈGRE (OK)\n" } else { "ALTÉRÉ (FAIL)\n" });
+                        emit(if valid {
+                            "INTÈGRE (OK)\n"
+                        } else {
+                            "ALTÉRÉ (FAIL)\n"
+                        });
                         (ShellStatus::Success, write_pos)
                     }
                     _ => {
@@ -11103,7 +12219,11 @@ impl JamboShell {
                 }
             }
             "easm" => {
-                let subcmd = if parsed.arg_count > 1 { parsed.args[1] } else { "status" };
+                let subcmd = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    "status"
+                };
                 match subcmd {
                     "status" => {
                         emit("=== GESTION DE LA SURFACE D'ATTAQUE EXTERNE (EASM) ===\n");
@@ -11129,7 +12249,11 @@ impl JamboShell {
                         }
                         let valid = self.easm.verify_ledger_integrity();
                         emit("  Registre d'audit SHA-256     : ");
-                        emit(if valid { "SCELLÉ & INTÈGRE (OK)\n" } else { "ALTÉRÉ (FAIL)\n" });
+                        emit(if valid {
+                            "SCELLÉ & INTÈGRE (OK)\n"
+                        } else {
+                            "ALTÉRÉ (FAIL)\n"
+                        });
                         (ShellStatus::Success, write_pos)
                     }
                     "assets" => {
@@ -11151,11 +12275,21 @@ impl JamboShell {
                                 emit(if a.is_shadow_it { "OUI" } else { "NON" });
                                 emit(" | Exp: ");
                                 match a.exposure {
-                                    jambo_easm::ExposureLevel::PublicHardened => emit("PublicHardened\n"),
-                                    jambo_easm::ExposureLevel::PublicVulnerable => emit("PublicVulnerable\n"),
-                                    jambo_easm::ExposureLevel::RestrictedAccess => emit("RestrictedAccess\n"),
-                                    jambo_easm::ExposureLevel::ShadowItOrphaned => emit("ShadowItOrphaned\n"),
-                                    jambo_easm::ExposureLevel::InternalLeaked => emit("InternalLeaked\n"),
+                                    jambo_easm::ExposureLevel::PublicHardened => {
+                                        emit("PublicHardened\n")
+                                    }
+                                    jambo_easm::ExposureLevel::PublicVulnerable => {
+                                        emit("PublicVulnerable\n")
+                                    }
+                                    jambo_easm::ExposureLevel::RestrictedAccess => {
+                                        emit("RestrictedAccess\n")
+                                    }
+                                    jambo_easm::ExposureLevel::ShadowItOrphaned => {
+                                        emit("ShadowItOrphaned\n")
+                                    }
+                                    jambo_easm::ExposureLevel::InternalLeaked => {
+                                        emit("InternalLeaked\n")
+                                    }
                                 }
                             }
                         }
@@ -11208,7 +12342,9 @@ impl JamboShell {
                                     jambo_easm::FindingStatus::Open => emit(" OUVERTE\n"),
                                     jambo_easm::FindingStatus::Remediated => emit(" REMÉDIÉE\n"),
                                     jambo_easm::FindingStatus::Suppressed => emit(" IGNORÉE\n"),
-                                    jambo_easm::FindingStatus::FalsePositive => emit(" FAUX_POSITIF\n"),
+                                    jambo_easm::FindingStatus::FalsePositive => {
+                                        emit(" FAUX_POSITIF\n")
+                                    }
                                 }
                             }
                         }
@@ -11243,7 +12379,11 @@ impl JamboShell {
                     "verify" => {
                         let valid = self.easm.verify_ledger_integrity();
                         emit("  Vérification intégrité registre EASM SHA-256 : ");
-                        emit(if valid { "INTÈGRE (OK)\n" } else { "ALTÉRÉ (FAIL)\n" });
+                        emit(if valid {
+                            "INTÈGRE (OK)\n"
+                        } else {
+                            "ALTÉRÉ (FAIL)\n"
+                        });
                         (ShellStatus::Success, write_pos)
                     }
                     _ => {
@@ -11253,7 +12393,11 @@ impl JamboShell {
                 }
             }
             "ctem" => {
-                let subcmd = if parsed.arg_count > 1 { parsed.args[1] } else { "status" };
+                let subcmd = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    "status"
+                };
                 match subcmd {
                     "status" => {
                         emit("=== GESTION CONTINUE DE L'EXPOSITION AUX MENACES (CTEM) ===\n");
@@ -11266,9 +12410,13 @@ impl JamboShell {
                         match self.ctem.current_phase {
                             jambo_ctem::CtemPhase::Scoping => emit("Cadrage (Scoping)\n"),
                             jambo_ctem::CtemPhase::Discovery => emit("Découverte (Discovery)\n"),
-                            jambo_ctem::CtemPhase::Prioritization => emit("Hiérarchisation (Prioritization)\n"),
+                            jambo_ctem::CtemPhase::Prioritization => {
+                                emit("Hiérarchisation (Prioritization)\n")
+                            }
                             jambo_ctem::CtemPhase::Validation => emit("Validation (Validation)\n"),
-                            jambo_ctem::CtemPhase::Mobilization => emit("Mobilisation (Mobilization)\n"),
+                            jambo_ctem::CtemPhase::Mobilization => {
+                                emit("Mobilisation (Mobilization)\n")
+                            }
                         }
                         emit("  Indice Global d'Exposition   : ");
                         emit(format_u64(self.ctem.overall_exposure_score as u64, &mut b));
@@ -11287,7 +12435,11 @@ impl JamboShell {
                         }
                         let valid = self.ctem.verify_ledger_integrity();
                         emit("  Registre d'audit SHA-256     : ");
-                        emit(if valid { "SCELLÉ & INTÈGRE (OK)\n" } else { "ALTÉRÉ (FAIL)\n" });
+                        emit(if valid {
+                            "SCELLÉ & INTÈGRE (OK)\n"
+                        } else {
+                            "ALTÉRÉ (FAIL)\n"
+                        });
                         (ShellStatus::Success, write_pos)
                     }
                     "scopes" => {
@@ -11338,7 +12490,9 @@ impl JamboShell {
                                 emit("/100 | Statut: ");
                                 match e.status {
                                     jambo_ctem::ExposureStatus::Discovered => emit("DÉCOUVERTE\n"),
-                                    jambo_ctem::ExposureStatus::Prioritized => emit("HIÉRARCHISÉE\n"),
+                                    jambo_ctem::ExposureStatus::Prioritized => {
+                                        emit("HIÉRARCHISÉE\n")
+                                    }
                                     jambo_ctem::ExposureStatus::Validated => emit("VALIDÉE\n"),
                                     jambo_ctem::ExposureStatus::Mobilized => emit("MOBILISÉE\n"),
                                     jambo_ctem::ExposureStatus::Remediated => emit("REMÉDIÉE\n"),
@@ -11406,9 +12560,17 @@ impl JamboShell {
                             1
                         };
                         let cap = self.ctem.admin_cap;
-                        match self.ctem.mobilize_remediation(&cap, eid, jambo_ctem::MobilizationActionType::EnforceWaf, "jambo-waf", 5020) {
+                        match self.ctem.mobilize_remediation(
+                            &cap,
+                            eid,
+                            jambo_ctem::MobilizationActionType::EnforceWaf,
+                            "jambo-waf",
+                            5020,
+                        ) {
                             Ok(aid) => {
-                                emit("  [OK] Playbook de remédiation mobilisé avec succès (Action #");
+                                emit(
+                                    "  [OK] Playbook de remédiation mobilisé avec succès (Action #",
+                                );
                                 let mut b = [0u8; 20];
                                 emit(format_u64(aid as u64, &mut b));
                                 emit(") pour exposition #");
@@ -11471,7 +12633,11 @@ impl JamboShell {
                     "verify" => {
                         let valid = self.ctem.verify_ledger_integrity();
                         emit("  Vérification intégrité registre CTEM SHA-256 : ");
-                        emit(if valid { "INTÈGRE (OK)\n" } else { "ALTÉRÉ (FAIL)\n" });
+                        emit(if valid {
+                            "INTÈGRE (OK)\n"
+                        } else {
+                            "ALTÉRÉ (FAIL)\n"
+                        });
                         (ShellStatus::Success, write_pos)
                     }
                     _ => {
@@ -11481,7 +12647,11 @@ impl JamboShell {
                 }
             }
             "itdr" => {
-                let subcmd = if parsed.arg_count > 1 { parsed.args[1] } else { "status" };
+                let subcmd = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    "status"
+                };
                 match subcmd {
                     "status" => {
                         emit("=== DÉTECTION ET RÉPONSE AUX MENACES SUR L'IDENTITÉ (ITDR) ===\n");
@@ -11509,7 +12679,11 @@ impl JamboShell {
                         }
                         let valid = self.itdr.verify_ledger_integrity();
                         emit("  Registre d'audit SHA-256     : ");
-                        emit(if valid { "SCELLÉ & INTÈGRE (OK)\n" } else { "ALTÉRÉ (FAIL)\n" });
+                        emit(if valid {
+                            "SCELLÉ & INTÈGRE (OK)\n"
+                        } else {
+                            "ALTÉRÉ (FAIL)\n"
+                        });
                         (ShellStatus::Success, write_pos)
                     }
                     "identities" => {
@@ -11525,9 +12699,13 @@ impl JamboShell {
                                 match id_rec.id_type {
                                     jambo_itdr::IdentityType::KernelService => emit("Noyau"),
                                     jambo_itdr::IdentityType::SystemDaemon => emit("Daemon"),
-                                    jambo_itdr::IdentityType::DistributedPrincipal => emit("Principal Grappe"),
+                                    jambo_itdr::IdentityType::DistributedPrincipal => {
+                                        emit("Principal Grappe")
+                                    }
                                     jambo_itdr::IdentityType::AdminRole => emit("Rôle Admin"),
-                                    jambo_itdr::IdentityType::EphemeralSession => emit("Session Éphémère"),
+                                    jambo_itdr::IdentityType::EphemeralSession => {
+                                        emit("Session Éphémère")
+                                    }
                                 }
                                 emit(") - Confiance: ");
                                 emit(format_u64(id_rec.trust_score as u64, &mut b));
@@ -11553,12 +12731,24 @@ impl JamboShell {
                                 emit(format_u64(th.identity_id as u64, &mut b));
                                 emit(" - Type: ");
                                 match th.threat_type {
-                                    jambo_itdr::IdentityThreatType::TokenCompromise => emit("Vol de Jeton"),
-                                    jambo_itdr::IdentityThreatType::SessionReplay => emit("Rejeu de Session"),
-                                    jambo_itdr::IdentityThreatType::CapabilityUsurpation => emit("Usurpation Capabilité"),
-                                    jambo_itdr::IdentityThreatType::PrivilegeEscalation => emit("Élévation Privilège"),
-                                    jambo_itdr::IdentityThreatType::AnomalousAuthRate => emit("Brute-Force Auth"),
-                                    jambo_itdr::IdentityThreatType::DivergentGeoMesh => emit("Saut Topologique"),
+                                    jambo_itdr::IdentityThreatType::TokenCompromise => {
+                                        emit("Vol de Jeton")
+                                    }
+                                    jambo_itdr::IdentityThreatType::SessionReplay => {
+                                        emit("Rejeu de Session")
+                                    }
+                                    jambo_itdr::IdentityThreatType::CapabilityUsurpation => {
+                                        emit("Usurpation Capabilité")
+                                    }
+                                    jambo_itdr::IdentityThreatType::PrivilegeEscalation => {
+                                        emit("Élévation Privilège")
+                                    }
+                                    jambo_itdr::IdentityThreatType::AnomalousAuthRate => {
+                                        emit("Brute-Force Auth")
+                                    }
+                                    jambo_itdr::IdentityThreatType::DivergentGeoMesh => {
+                                        emit("Saut Topologique")
+                                    }
                                 }
                                 emit(" - Sévérité: ");
                                 match th.severity {
@@ -11571,7 +12761,9 @@ impl JamboShell {
                                 emit(" - Statut: ");
                                 match th.status {
                                     jambo_itdr::ThreatStatus::Detected => emit("DÉTECTÉE\n"),
-                                    jambo_itdr::ThreatStatus::Investigating => emit("EN COURS D'ANALYSE\n"),
+                                    jambo_itdr::ThreatStatus::Investigating => {
+                                        emit("EN COURS D'ANALYSE\n")
+                                    }
                                     jambo_itdr::ThreatStatus::Contained => emit("CONTENUE\n"),
                                     jambo_itdr::ThreatStatus::Remediated => emit("REMÉDIÉE\n"),
                                     jambo_itdr::ThreatStatus::Dismissed => emit("IGNORÉE\n"),
@@ -11596,11 +12788,21 @@ impl JamboShell {
                                 emit(act.target_as_str());
                                 emit(" (");
                                 match act.action_type {
-                                    jambo_itdr::ResponseActionType::RevokeToken => emit("Révocation Jeton"),
-                                    jambo_itdr::ResponseActionType::QuarantineIdentity => emit("Quarantaine"),
-                                    jambo_itdr::ResponseActionType::DowngradeCapabilities => emit("Dégradation Capabilités"),
-                                    jambo_itdr::ResponseActionType::StepUpMfaChallenge => emit("Défi MFA Step-Up"),
-                                    jambo_itdr::ResponseActionType::AlertSecurityOfficer => emit("Alerte SecOps"),
+                                    jambo_itdr::ResponseActionType::RevokeToken => {
+                                        emit("Révocation Jeton")
+                                    }
+                                    jambo_itdr::ResponseActionType::QuarantineIdentity => {
+                                        emit("Quarantaine")
+                                    }
+                                    jambo_itdr::ResponseActionType::DowngradeCapabilities => {
+                                        emit("Dégradation Capabilités")
+                                    }
+                                    jambo_itdr::ResponseActionType::StepUpMfaChallenge => {
+                                        emit("Défi MFA Step-Up")
+                                    }
+                                    jambo_itdr::ResponseActionType::AlertSecurityOfficer => {
+                                        emit("Alerte SecOps")
+                                    }
                                 }
                                 emit(") - Exécutée: ");
                                 emit(if act.executed { "OUI\n" } else { "NON\n" });
@@ -11634,9 +12836,16 @@ impl JamboShell {
                         };
                         let mut b = [0u8; 20];
                         let cap = self.itdr.admin_cap;
-                        match self.itdr.respond_to_threat(&cap, tid, jambo_itdr::ResponseActionType::RevokeToken, 7010) {
+                        match self.itdr.respond_to_threat(
+                            &cap,
+                            tid,
+                            jambo_itdr::ResponseActionType::RevokeToken,
+                            7010,
+                        ) {
                             Ok(aid) => {
-                                emit("  [OK] Réponse proactive orchestrée avec succès sur menace #");
+                                emit(
+                                    "  [OK] Réponse proactive orchestrée avec succès sur menace #",
+                                );
                                 emit(format_u64(tid as u64, &mut b));
                                 emit(" (Action #");
                                 emit(format_u64(aid as u64, &mut b));
@@ -11694,7 +12903,11 @@ impl JamboShell {
                     "verify" => {
                         let valid = self.itdr.verify_ledger_integrity();
                         emit("  Vérification intégrité registre ITDR SHA-256 : ");
-                        emit(if valid { "INTÈGRE (OK)\n" } else { "ALTÉRÉ (FAIL)\n" });
+                        emit(if valid {
+                            "INTÈGRE (OK)\n"
+                        } else {
+                            "ALTÉRÉ (FAIL)\n"
+                        });
                         (ShellStatus::Success, write_pos)
                     }
                     _ => {
@@ -11704,7 +12917,11 @@ impl JamboShell {
                 }
             }
             "pam" => {
-                let subcmd = if parsed.arg_count > 1 { parsed.args[1] } else { "status" };
+                let subcmd = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    "status"
+                };
                 match subcmd {
                     "status" => {
                         emit("=== GESTION DES ACCÈS PRIVILÉGIÉS (PAM) ===\n");
@@ -11722,7 +12939,11 @@ impl JamboShell {
                             emit("\n  Commandes enregistrées      : ");
                             emit(format_u64(summary.total_commands_recorded as u64, &mut b));
                             emit("\n  Grand livre d'audit SHA-256 : ");
-                            emit(if summary.ledger_valid { "INTÈGRE (OK)\n" } else { "ALTÉRÉ (FAIL)\n" });
+                            emit(if summary.ledger_valid {
+                                "INTÈGRE (OK)\n"
+                            } else {
+                                "ALTÉRÉ (FAIL)\n"
+                            });
                         }
                         (ShellStatus::Success, write_pos)
                     }
@@ -11737,9 +12958,15 @@ impl JamboShell {
                                 emit(acc.name_as_str());
                                 emit(" | Rang: ");
                                 match acc.tier {
-                                    jambo_pam::PrivilegeTier::Tier0KernelCore => emit("Tier 0 (Noyau/Crypto)"),
-                                    jambo_pam::PrivilegeTier::Tier1SystemFabric => emit("Tier 1 (Fabric/Système)"),
-                                    jambo_pam::PrivilegeTier::Tier2AppWorkload => emit("Tier 2 (Workloads/Apps)"),
+                                    jambo_pam::PrivilegeTier::Tier0KernelCore => {
+                                        emit("Tier 0 (Noyau/Crypto)")
+                                    }
+                                    jambo_pam::PrivilegeTier::Tier1SystemFabric => {
+                                        emit("Tier 1 (Fabric/Système)")
+                                    }
+                                    jambo_pam::PrivilegeTier::Tier2AppWorkload => {
+                                        emit("Tier 2 (Workloads/Apps)")
+                                    }
                                 }
                                 emit(" | Dual-Auth: ");
                                 emit(if acc.requires_dual_auth { "OUI" } else { "NON" });
@@ -11775,7 +13002,9 @@ impl JamboShell {
                                     match s.state {
                                         jambo_pam::SessionState::Active => emit("ACTIF"),
                                         jambo_pam::SessionState::Terminated => emit("FERMÉ"),
-                                        jambo_pam::SessionState::KilledAnomalous => emit("STOPPÉ-ANOMALIE"),
+                                        jambo_pam::SessionState::KilledAnomalous => {
+                                            emit("STOPPÉ-ANOMALIE")
+                                        }
                                         jambo_pam::SessionState::Expired => emit("EXPIRÉ"),
                                     }
                                     emit(" | Commandes: ");
@@ -11833,7 +13062,14 @@ impl JamboShell {
                             "Maintenance réseau"
                         };
                         let cap = self.pam.admin_cap;
-                        match self.pam.request_jit(&cap, "admin_operator", target_id, justification, 1800, 5000) {
+                        match self.pam.request_jit(
+                            &cap,
+                            "admin_operator",
+                            target_id,
+                            justification,
+                            1800,
+                            5000,
+                        ) {
                             Ok(req_id) => {
                                 let mut b = [0u8; 20];
                                 emit("  [OK] Demande JIT créée avec succès (ID: ");
@@ -11912,7 +13148,10 @@ impl JamboShell {
                             "modprobe virtio_net"
                         };
                         let cap = self.pam.admin_cap;
-                        match self.pam.record_session_command(&cap, sid, cmd_str, 0, false, 5030) {
+                        match self
+                            .pam
+                            .record_session_command(&cap, sid, cmd_str, 0, false, 5030)
+                        {
                             Ok(_) => {
                                 emit("  [OK] Commande enregistrée et scellée dans la session\n");
                                 (ShellStatus::Success, write_pos)
@@ -11985,7 +13224,11 @@ impl JamboShell {
                     "verify" => {
                         let valid = self.pam.verify_ledger_integrity();
                         emit("  Vérification intégrité registre PAM SHA-256 : ");
-                        emit(if valid { "INTÈGRE (OK)\n" } else { "ALTÉRÉ (FAIL)\n" });
+                        emit(if valid {
+                            "INTÈGRE (OK)\n"
+                        } else {
+                            "ALTÉRÉ (FAIL)\n"
+                        });
                         (ShellStatus::Success, write_pos)
                     }
                     _ => {
@@ -11995,7 +13238,11 @@ impl JamboShell {
                 }
             }
             "dspm" => {
-                let subcmd = if parsed.arg_count > 1 { parsed.args[1] } else { "status" };
+                let subcmd = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    "status"
+                };
                 match subcmd {
                     "status" => {
                         emit("=== GESTION DE LA POSTURE DE SÉCURITÉ DES DONNÉES (DSPM) ===\n");
@@ -12017,7 +13264,11 @@ impl JamboShell {
                             emit("\n  Score de risque global (0..100) : ");
                             emit(format_u64(summary.global_risk_score as u64, &mut b));
                             emit("/100\n  Conformité souveraine Zero-Ambient : ");
-                            emit(if summary.sovereign_posture_ok { "\x1b[1;32mCONFORME\x1b[0m\n" } else { "\x1b[1;31mRISQUE ÉLEVÉ\x1b[0m\n" });
+                            emit(if summary.sovereign_posture_ok {
+                                "\x1b[1;32mCONFORME\x1b[0m\n"
+                            } else {
+                                "\x1b[1;31mRISQUE ÉLEVÉ\x1b[0m\n"
+                            });
                         } else {
                             emit("  [ERREUR] Accès refusé à la synthèse DSPM\n");
                         }
@@ -12074,7 +13325,11 @@ impl JamboShell {
                                     emit(" | Volume: ");
                                     emit(format_u64(f.bytes_transferred, &mut b));
                                     emit(" B\n    Décision: ");
-                                    emit(if f.allowed { "\x1b[1;32mAUTORISÉ\x1b[0m" } else { "\x1b[1;31mBLOQUÉ\x1b[0m" });
+                                    emit(if f.allowed {
+                                        "\x1b[1;32mAUTORISÉ\x1b[0m"
+                                    } else {
+                                        "\x1b[1;31mBLOQUÉ\x1b[0m"
+                                    });
                                     emit(" | Raison: ");
                                     emit(f.reason_as_str());
                                     emit("\n");
@@ -12154,7 +13409,9 @@ impl JamboShell {
                         let mut cap = self.dspm.admin_cap;
                         match self.dspm.quarantine_asset(&mut cap, asset_id, 8010) {
                             Ok(()) => {
-                                emit("  [OK] Actif mis en quarantaine et flux coupés avec succès\n");
+                                emit(
+                                    "  [OK] Actif mis en quarantaine et flux coupés avec succès\n",
+                                );
                                 (ShellStatus::Success, write_pos)
                             }
                             Err(_) => {
@@ -12187,7 +13444,11 @@ impl JamboShell {
                         } else {
                             1
                         };
-                        let target = if parsed.arg_count > 3 { parsed.args[3] } else { "untrusted" };
+                        let target = if parsed.arg_count > 3 {
+                            parsed.args[3]
+                        } else {
+                            "untrusted"
+                        };
                         let target_comp = match target {
                             "core" => jambo_dspm::DataCompartment::SovereignCore,
                             "fabric" => jambo_dspm::DataCompartment::SecFabric,
@@ -12195,10 +13456,17 @@ impl JamboShell {
                             _ => jambo_dspm::DataCompartment::CrossBorderUntrusted,
                         };
                         let mut cap = self.dspm.admin_cap;
-                        match self.dspm.evaluate_flow(&mut cap, asset_id, target_comp, 1024, 8030) {
+                        match self
+                            .dspm
+                            .evaluate_flow(&mut cap, asset_id, target_comp, 1024, 8030)
+                        {
                             Ok(allowed) => {
                                 emit("  Évaluation de flux DSPM : ");
-                                emit(if allowed { "\x1b[1;32mAUTORISÉ\x1b[0m\n" } else { "\x1b[1;31mBLOQUÉ PAR POLITIQUE SOUVERAINE\x1b[0m\n" });
+                                emit(if allowed {
+                                    "\x1b[1;32mAUTORISÉ\x1b[0m\n"
+                                } else {
+                                    "\x1b[1;31mBLOQUÉ PAR POLITIQUE SOUVERAINE\x1b[0m\n"
+                                });
                                 (ShellStatus::Success, write_pos)
                             }
                             Err(_) => {
@@ -12210,7 +13478,11 @@ impl JamboShell {
                     "verify" => {
                         let valid = self.dspm.verify_ledger_integrity();
                         emit("  Vérification intégrité registre DSPM SHA-256 : ");
-                        emit(if valid { "INTÈGRE (OK)\n" } else { "ALTÉRÉ (FAIL)\n" });
+                        emit(if valid {
+                            "INTÈGRE (OK)\n"
+                        } else {
+                            "ALTÉRÉ (FAIL)\n"
+                        });
                         (ShellStatus::Success, write_pos)
                     }
                     _ => {
@@ -15001,16 +16273,25 @@ impl JamboShell {
                         (ShellStatus::Success, write_pos)
                     }
                     "issue" => {
-                        let (cn, not_before, not_after) = if parsed.arg_count > 3 && parse_u64(parsed.args[2]).is_some() {
-                            let cn = parsed.args[3];
-                            let nb = if parsed.arg_count > 4 { parse_u64(parsed.args[4]).unwrap_or(100) } else { 100 };
-                            let na = if parsed.arg_count > 5 { parse_u64(parsed.args[5]).unwrap_or(5000) } else { 5000 };
-                            (cn, nb, na)
-                        } else if parsed.arg_count > 2 {
-                            (parsed.args[2], 100, 5000)
-                        } else {
-                            ("mesh.service", 100, 5000)
-                        };
+                        let (cn, not_before, not_after) =
+                            if parsed.arg_count > 3 && parse_u64(parsed.args[2]).is_some() {
+                                let cn = parsed.args[3];
+                                let nb = if parsed.arg_count > 4 {
+                                    parse_u64(parsed.args[4]).unwrap_or(100)
+                                } else {
+                                    100
+                                };
+                                let na = if parsed.arg_count > 5 {
+                                    parse_u64(parsed.args[5]).unwrap_or(5000)
+                                } else {
+                                    5000
+                                };
+                                (cn, nb, na)
+                            } else if parsed.arg_count > 2 {
+                                (parsed.args[2], 100, 5000)
+                            } else {
+                                ("mesh.service", 100, 5000)
+                            };
                         match self.cert.issue_cert(
                             cn.as_bytes(),
                             [0xEE; 32],
@@ -15171,21 +16452,19 @@ impl JamboShell {
                             (ShellStatus::Success, write_pos)
                         }
                     }
-                    "shutdown" => {
-                        match self.init.shutdown_system() {
-                            Ok(stopped) => {
-                                let mut b = [0u8; 20];
-                                emit("[INIT/SHUTDOWN] Arrêt ordonné du système accompli (");
-                                emit(format_u64(stopped as u64, &mut b));
-                                emit(" services arrêtés selon le DAG inverse)\n");
-                                (ShellStatus::Success, write_pos)
-                            }
-                            Err(_) => {
-                                emit("[INIT] Échec lors de l'arrêt du système\n");
-                                (ShellStatus::ExecutionFailed, write_pos)
-                            }
+                    "shutdown" => match self.init.shutdown_system() {
+                        Ok(stopped) => {
+                            let mut b = [0u8; 20];
+                            emit("[INIT/SHUTDOWN] Arrêt ordonné du système accompli (");
+                            emit(format_u64(stopped as u64, &mut b));
+                            emit(" services arrêtés selon le DAG inverse)\n");
+                            (ShellStatus::Success, write_pos)
                         }
-                    }
+                        Err(_) => {
+                            emit("[INIT] Échec lors de l'arrêt du système\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        }
+                    },
                     _ => {
                         emit("Usage: init [status | restart <daemon> | shutdown]\n");
                         (ShellStatus::Success, write_pos)

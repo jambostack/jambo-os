@@ -31,11 +31,7 @@ pub fn execute_attest2_daemon_test() -> bool {
     assert!(admin_cap.has_right(attest2_rights::ADMIN));
 
     let attenuated_cap = admin_cap
-        .attenuate(
-            attest2_rights::VERIFY_QUOTE | attest2_rights::AUDIT,
-            8,
-            4,
-        )
+        .attenuate(attest2_rights::VERIFY_QUOTE | attest2_rights::AUDIT, 8, 4)
         .expect("Atténuation monotone Attest2Cap");
     assert!(attenuated_cap.has_right(attest2_rights::VERIFY_QUOTE));
     assert!(attenuated_cap.has_right(attest2_rights::AUDIT));
@@ -61,7 +57,9 @@ pub fn execute_attest2_daemon_test() -> bool {
         Err(SysError::PermissionDenied),
         "Augmentation de puces maximales formellement rejetée"
     );
-    kprintln!("[ATTEST2/CAP] Contrôle d'accès capabilaire Attest2Cap et atténuation monotone validés");
+    kprintln!(
+        "[ATTEST2/CAP] Contrôle d'accès capabilaire Attest2Cap et atténuation monotone validés"
+    );
 
     // 2. Initialisation du démon et topologie de chaîne de confiance multi-puces
     let mut daemon = JamboAttest2Daemon::new(admin_cap);
@@ -76,7 +74,10 @@ pub fn execute_attest2_daemon_test() -> bool {
     // 3. Validation de l'endossement croisé inter-puces (Cross-Chip Mutual Attestation)
     assert!(daemon.cross_endorsement_count >= 2);
     let cross_check_res = daemon.cross_endorse_chip(&admin_cap, 1, 3);
-    assert!(cross_check_res.is_ok(), "Endossement croisé SoC -> HSM valide");
+    assert!(
+        cross_check_res.is_ok(),
+        "Endossement croisé SoC -> HSM valide"
+    );
     kprintln!("[ATTEST2/CROSS] Endossement croisé et validation mutuelle inter-puces validés");
 
     // 4. Génération de devis d'attestation distante avec défi anti-rejeu (Challenge-Response)
@@ -88,7 +89,9 @@ pub fn execute_attest2_daemon_test() -> bool {
     assert_eq!(quote.header.chip_id, 1);
     assert_eq!(quote.report_data, fresh_nonce);
     assert_eq!(quote.compound_platform_hash, daemon.compound_platform_id);
-    kprintln!("[ATTEST2/QUOTE] Devis d'attestation distante scellé par HMAC-SHA256 avec nonce anti-rejeu");
+    kprintln!(
+        "[ATTEST2/QUOTE] Devis d'attestation distante scellé par HMAC-SHA256 avec nonce anti-rejeu"
+    );
 
     // 5. Vérification formelle du devis contre la politique de référence dorée (Golden Policy)
     assert_eq!(
@@ -96,7 +99,9 @@ pub fn execute_attest2_daemon_test() -> bool {
         Ok(()),
         "Vérification nominale du devis d'attestation"
     );
-    kprintln!("[ATTEST2/VERIFY] Vérification formelle d'intégrité MRENCLAVE / MRSIGNER / SVN validée");
+    kprintln!(
+        "[ATTEST2/VERIFY] Vérification formelle d'intégrité MRENCLAVE / MRSIGNER / SVN validée"
+    );
 
     // 6. Détection stricte de rejeu (Anti-Replay Attack)
     let stale_nonce = Sha256::digest(b"STALE_OLD_REPLAYED_NONCE");

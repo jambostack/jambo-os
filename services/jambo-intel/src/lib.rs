@@ -29,29 +29,23 @@ pub struct Sha256 {
 
 impl Sha256 {
     const K: [u32; 64] = [
-        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5,
-        0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
-        0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3,
-        0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
-        0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc,
-        0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
-        0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
-        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
-        0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13,
-        0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
-        0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3,
-        0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
-        0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5,
-        0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
-        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
-        0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
+        0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
+        0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f,
+        0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc,
+        0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+        0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116,
+        0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
+        0xc67178f2,
     ];
 
     pub fn new() -> Self {
         Self {
             state: [
-                0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
-                0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+                0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
+                0x5be0cd19,
             ],
             buffer: [0u8; 64],
             buffer_len: 0,
@@ -72,7 +66,10 @@ impl Sha256 {
         for i in 16..64 {
             let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);
             let s1 = w[i - 2].rotate_right(17) ^ w[i - 2].rotate_right(19) ^ (w[i - 2] >> 10);
-            w[i] = w[i - 16].wrapping_add(s0).wrapping_add(w[i - 7]).wrapping_add(s1);
+            w[i] = w[i - 16]
+                .wrapping_add(s0)
+                .wrapping_add(w[i - 7])
+                .wrapping_add(s1);
         }
 
         let mut a = self.state[0];
@@ -568,13 +565,7 @@ impl JamboIntelDaemon {
         let mut d = [0u8; 48];
         d[..chunk_len].copy_from_slice(&det_bytes[..chunk_len]);
 
-        let h = AuditRecord::compute_hash(
-            tick,
-            action,
-            ioc_id,
-            &d[..chunk_len],
-            &self.ledger_hash,
-        );
+        let h = AuditRecord::compute_hash(tick, action, ioc_id, &d[..chunk_len], &self.ledger_hash);
 
         let record = AuditRecord {
             tick,
@@ -829,7 +820,11 @@ impl JamboIntelDaemon {
     }
 
     /// Purge dynamique des IoC expirés par dépassement de TTL
-    pub fn purge_expired(&mut self, cap: &IntelCap, current_tick: u64) -> Result<usize, IntelError> {
+    pub fn purge_expired(
+        &mut self,
+        cap: &IntelCap,
+        current_tick: u64,
+    ) -> Result<usize, IntelError> {
         if !cap.has_right(intel_rights::EXPIRE_IOC) {
             return Err(IntelError::PermissionDenied);
         }
@@ -848,7 +843,12 @@ impl JamboIntelDaemon {
 
         if had_expired {
             self.rebuild_bloom();
-            self.append_audit(current_tick, AuditAction::ExpirePurge, 0, "TTL_EXPIRED_PURGE");
+            self.append_audit(
+                current_tick,
+                AuditAction::ExpirePurge,
+                0,
+                "TTL_EXPIRED_PURGE",
+            );
         }
 
         Ok(purged)
@@ -866,10 +866,9 @@ impl JamboIntelDaemon {
         // 2. Ingestion de signatures IoC
         // SHA-256 Malware Payload (ex: Emotet/BlackCat binary)
         let sha_malware: [u8; 32] = [
-            0xde, 0xad, 0xbe, 0xef, 0xca, 0xfe, 0xba, 0xbe,
-            0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef,
-            0xfe, 0xdc, 0xba, 0x98, 0x76, 0x54, 0x32, 0x10,
-            0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88,
+            0xde, 0xad, 0xbe, 0xef, 0xca, 0xfe, 0xba, 0xbe, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab,
+            0xcd, 0xef, 0xfe, 0xdc, 0xba, 0x98, 0x76, 0x54, 0x32, 0x10, 0x11, 0x22, 0x33, 0x44,
+            0x55, 0x66, 0x77, 0x88,
         ];
         let _ = self.ingest_ioc(
             &cap,
@@ -885,10 +884,9 @@ impl JamboIntelDaemon {
 
         // BLAKE3 Trojan Payload
         let blake_trojan: [u8; 32] = [
-            0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0,
-            0x0f, 0xed, 0xcb, 0xa9, 0x87, 0x65, 0x43, 0x21,
-            0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x00, 0x11,
-            0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99,
+            0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0, 0x0f, 0xed, 0xcb, 0xa9, 0x87, 0x65,
+            0x43, 0x21, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x00, 0x11, 0x22, 0x33, 0x44, 0x55,
+            0x66, 0x77, 0x88, 0x99,
         ];
         let _ = self.ingest_ioc(
             &cap,
@@ -1002,12 +1000,13 @@ mod tests {
 
         // Recherche SHA-256 Malware
         let sha_malware: [u8; 32] = [
-            0xde, 0xad, 0xbe, 0xef, 0xca, 0xfe, 0xba, 0xbe,
-            0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef,
-            0xfe, 0xdc, 0xba, 0x98, 0x76, 0x54, 0x32, 0x10,
-            0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88,
+            0xde, 0xad, 0xbe, 0xef, 0xca, 0xfe, 0xba, 0xbe, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab,
+            0xcd, 0xef, 0xfe, 0xdc, 0xba, 0x98, 0x76, 0x54, 0x32, 0x10, 0x11, 0x22, 0x33, 0x44,
+            0x55, 0x66, 0x77, 0x88,
         ];
-        let res = daemon.query_ioc(&admin, IocKind::Sha256, &sha_malware, 200).unwrap();
+        let res = daemon
+            .query_ioc(&admin, IocKind::Sha256, &sha_malware, 200)
+            .unwrap();
         assert!(res.is_some());
         let m = res.unwrap();
         assert_eq!(m.ioc_id, 1);
@@ -1017,14 +1016,18 @@ mod tests {
 
         // Recherche IP Bogon
         let ip_bogon = [198, 51, 100, 23];
-        let res_ip = daemon.query_ioc(&admin, IocKind::Ipv4, &ip_bogon, 200).unwrap();
+        let res_ip = daemon
+            .query_ioc(&admin, IocKind::Ipv4, &ip_bogon, 200)
+            .unwrap();
         assert!(res_ip.is_some());
         let m_ip = res_ip.unwrap();
         assert_eq!(m_ip.category, ThreatCategory::BogonIp);
 
         // Recherche élément inexistant
         let ip_clean = [192, 168, 1, 10];
-        let res_clean = daemon.query_ioc(&admin, IocKind::Ipv4, &ip_clean, 200).unwrap();
+        let res_clean = daemon
+            .query_ioc(&admin, IocKind::Ipv4, &ip_clean, 200)
+            .unwrap();
         assert!(res_clean.is_none());
 
         assert!(daemon.verify_ledger_integrity());
@@ -1038,11 +1041,15 @@ mod tests {
 
         // Le domaine C2 a un TTL de 3600 ticks créé au tick 140 -> expire à 3741
         let domain_c2 = b"c2.apt-bear.sovereign";
-        let before_exp = daemon.query_ioc(&admin, IocKind::Domain, domain_c2, 1000).unwrap();
+        let before_exp = daemon
+            .query_ioc(&admin, IocKind::Domain, domain_c2, 1000)
+            .unwrap();
         assert!(before_exp.is_some());
 
         // À tick 4000, il est expiré
-        let after_exp = daemon.query_ioc(&admin, IocKind::Domain, domain_c2, 4000).unwrap();
+        let after_exp = daemon
+            .query_ioc(&admin, IocKind::Domain, domain_c2, 4000)
+            .unwrap();
         assert!(after_exp.is_none());
 
         // Purge

@@ -36,14 +36,16 @@ pub struct Sha256;
 
 impl Sha256 {
     const K: [u32; 64] = [
-        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
-        0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
-        0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
-        0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
-        0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
-        0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
-        0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
-        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
+        0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
+        0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f,
+        0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc,
+        0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+        0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116,
+        0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
+        0xc67178f2,
     ];
 
     #[inline(always)]
@@ -131,8 +133,8 @@ impl Sha256 {
 
     pub fn digest(data: &[u8]) -> [u8; 32] {
         let mut state: [u32; 8] = [
-            0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
-            0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+            0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
+            0x5be0cd19,
         ];
         let total_bits = (data.len() as u64).wrapping_mul(8);
         let mut block = [0u8; 64];
@@ -212,11 +214,11 @@ impl Sha256 {
 
 pub mod tee_rights {
     pub const CREATE: u32 = 1 << 0;
-    pub const LOAD: u32   = 1 << 1;
-    pub const ENTER: u32  = 1 << 2;
-    pub const SEAL: u32   = 1 << 3;
+    pub const LOAD: u32 = 1 << 1;
+    pub const ENTER: u32 = 1 << 2;
+    pub const SEAL: u32 = 1 << 3;
     pub const REPORT: u32 = 1 << 4;
-    pub const ADMIN: u32  = 1 << 5;
+    pub const ADMIN: u32 = 1 << 5;
 
     pub const ALL: u32 = CREATE | LOAD | ENTER | SEAL | REPORT | ADMIN;
 }
@@ -289,12 +291,12 @@ pub enum EnclaveState {
 }
 
 pub mod page_flags {
-    pub const READ: u8    = 1 << 0;
-    pub const WRITE: u8   = 1 << 1;
-    pub const EXEC: u8    = 1 << 2;
-    pub const SEALED: u8  = 1 << 3;
+    pub const READ: u8 = 1 << 0;
+    pub const WRITE: u8 = 1 << 1;
+    pub const EXEC: u8 = 1 << 2;
+    pub const SEALED: u8 = 1 << 3;
     pub const REGULAR: u8 = READ | WRITE;
-    pub const CODE: u8    = READ | EXEC;
+    pub const CODE: u8 = READ | EXEC;
 }
 
 /// Page mémoire d'enclave isolée et chiffrée
@@ -312,7 +314,11 @@ impl EnclavePage {
     pub fn new(vaddr: u64, paddr: u64, flags: u8, data: &[u8]) -> Self {
         let page_hash = Sha256::digest(data);
         let mut sample = [0u8; MAX_PAGE_SAMPLE];
-        let copy_len = if data.len() < MAX_PAGE_SAMPLE { data.len() } else { MAX_PAGE_SAMPLE };
+        let copy_len = if data.len() < MAX_PAGE_SAMPLE {
+            data.len()
+        } else {
+            MAX_PAGE_SAMPLE
+        };
         sample[..copy_len].copy_from_slice(&data[..copy_len]);
 
         Self {
@@ -489,7 +495,13 @@ impl JamboTeeDaemon {
             64 * 1024,
             signer,
         ) {
-            let _ = self.load_page(&admin_cap, id1, 0x0000_7000_0000_0000, page_flags::CODE, b"SEC_KEYRING_BOOT_CODE");
+            let _ = self.load_page(
+                &admin_cap,
+                id1,
+                0x0000_7000_0000_0000,
+                page_flags::CODE,
+                b"SEC_KEYRING_BOOT_CODE",
+            );
             let _ = self.finalize_enclave(&admin_cap, id1, 0x0000_7000_0000_0000);
         }
 
@@ -502,7 +514,13 @@ impl JamboTeeDaemon {
             128 * 1024,
             signer,
         ) {
-            let _ = self.load_page(&admin_cap, id2, 0x0000_7001_0000_0000, page_flags::CODE, b"REALM_CRYPTO_BOOT_CODE");
+            let _ = self.load_page(
+                &admin_cap,
+                id2,
+                0x0000_7001_0000_0000,
+                page_flags::CODE,
+                b"REALM_CRYPTO_BOOT_CODE",
+            );
             let _ = self.finalize_enclave(&admin_cap, id2, 0x0000_7001_0000_0000);
         }
     }
@@ -565,7 +583,11 @@ impl JamboTeeDaemon {
         let id = (idx as u32) + 1;
         let mut name_buf = [0u8; MAX_NAME_LEN];
         let bytes = name.as_bytes();
-        let copy_len = if bytes.len() < MAX_NAME_LEN { bytes.len() } else { MAX_NAME_LEN };
+        let copy_len = if bytes.len() < MAX_NAME_LEN {
+            bytes.len()
+        } else {
+            MAX_NAME_LEN
+        };
         name_buf[..copy_len].copy_from_slice(&bytes[..copy_len]);
 
         let enclave = Enclave {
@@ -698,7 +720,12 @@ impl JamboTeeDaemon {
         };
 
         self.total_entries += 1;
-        self.append_audit(1003, TeeAction::EnclaveEntered, enclave_id, caller_context as u32);
+        self.append_audit(
+            1003,
+            TeeAction::EnclaveEntered,
+            enclave_id,
+            caller_context as u32,
+        );
         Ok(entry_point)
     }
 
@@ -720,7 +747,12 @@ impl JamboTeeDaemon {
         }
 
         enclave.total_exits += 1;
-        self.append_audit(1004, TeeAction::EnclaveExited, enclave_id, return_code as u32);
+        self.append_audit(
+            1004,
+            TeeAction::EnclaveExited,
+            enclave_id,
+            return_code as u32,
+        );
         Ok(())
     }
 
@@ -845,14 +877,24 @@ impl JamboTeeDaemon {
             SealingPolicy::ExactMeasurement => {
                 if blob.expected_measurement != enclave.mrenclave {
                     self.total_violations += 1;
-                    self.append_audit(1006, TeeAction::ViolationDetected, enclave_id, AUDIT_BAD_MRENCLAVE);
+                    self.append_audit(
+                        1006,
+                        TeeAction::ViolationDetected,
+                        enclave_id,
+                        AUDIT_BAD_MRENCLAVE,
+                    );
                     return Err(SysError::PermissionDenied);
                 }
             }
             SealingPolicy::SignerIdentity => {
                 if blob.signer_id != enclave.mrsigner {
                     self.total_violations += 1;
-                    self.append_audit(1006, TeeAction::ViolationDetected, enclave_id, AUDIT_BAD_SIGNER);
+                    self.append_audit(
+                        1006,
+                        TeeAction::ViolationDetected,
+                        enclave_id,
+                        AUDIT_BAD_SIGNER,
+                    );
                     return Err(SysError::PermissionDenied);
                 }
             }
@@ -916,7 +958,11 @@ impl JamboTeeDaemon {
         }
 
         let mut udata = [0u8; 64];
-        let copy_len = if user_data.len() < 64 { user_data.len() } else { 64 };
+        let copy_len = if user_data.len() < 64 {
+            user_data.len()
+        } else {
+            64
+        };
         udata[..copy_len].copy_from_slice(&user_data[..copy_len]);
 
         // Construction du payload pour signature MAC
@@ -954,7 +1000,9 @@ impl JamboTeeDaemon {
             return Err(SysError::PermissionDenied);
         }
 
-        let idx = (enclave_id as usize).checked_sub(1).ok_or(SysError::InvalidArgument)?;
+        let idx = (enclave_id as usize)
+            .checked_sub(1)
+            .ok_or(SysError::InvalidArgument)?;
         if idx >= MAX_ENCLAVES {
             return Err(SysError::InvalidArgument);
         }
@@ -985,7 +1033,9 @@ impl JamboTeeDaemon {
     }
 
     pub fn get_enclave(&self, id: u32) -> Result<&Enclave, SysError> {
-        let idx = (id as usize).checked_sub(1).ok_or(SysError::InvalidArgument)?;
+        let idx = (id as usize)
+            .checked_sub(1)
+            .ok_or(SysError::InvalidArgument)?;
         if idx < MAX_ENCLAVES {
             if let Some(ref enc) = self.enclaves[idx] {
                 return Ok(enc);
@@ -995,7 +1045,9 @@ impl JamboTeeDaemon {
     }
 
     fn get_enclave_mut(&mut self, id: u32) -> Result<&mut Enclave, SysError> {
-        let idx = (id as usize).checked_sub(1).ok_or(SysError::InvalidArgument)?;
+        let idx = (id as usize)
+            .checked_sub(1)
+            .ok_or(SysError::InvalidArgument)?;
         if idx < MAX_ENCLAVES {
             if let Some(ref mut enc) = self.enclaves[idx] {
                 return Ok(enc);
@@ -1057,7 +1109,9 @@ mod tests {
         assert_ne!(mrenclave, [0u8; 32]);
 
         // Entrée et sortie
-        let entry = daemon.enter_enclave(&admin_cap, enc_id, 1234).expect("Enter");
+        let entry = daemon
+            .enter_enclave(&admin_cap, enc_id, 1234)
+            .expect("Enter");
         assert_eq!(entry, 0x7000_0000);
         daemon.exit_enclave(&admin_cap, enc_id, 0).expect("Exit");
 
@@ -1096,7 +1150,9 @@ mod tests {
     #[test]
     fn test_tee_attenuation() {
         let admin_cap = TeeCap::new(Handle::new(100, 1), tee_rights::ALL);
-        let attenuated = admin_cap.attenuate(tee_rights::ENTER | tee_rights::REPORT).unwrap();
+        let attenuated = admin_cap
+            .attenuate(tee_rights::ENTER | tee_rights::REPORT)
+            .unwrap();
 
         assert!(attenuated.has_right(tee_rights::ENTER));
         assert!(attenuated.has_right(tee_rights::REPORT));

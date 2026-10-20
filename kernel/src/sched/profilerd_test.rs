@@ -6,9 +6,9 @@ extern crate alloc;
 use crate::kprintln;
 use jambo_abi::{Handle, SysError};
 use jambo_profilerd::{
-    profile_rights, AuditAction, FlameNode, JamboProfilerDaemon, LatencyCategory,
-    PebsRecord, PmcConfig, PmcEventType, PmcSample, ProfileCap, ProfileReport, RingFilter,
-    Sha256, TargetArch, MAX_CALL_STACK_DEPTH,
+    profile_rights, AuditAction, FlameNode, JamboProfilerDaemon, LatencyCategory, PebsRecord,
+    PmcConfig, PmcEventType, PmcSample, ProfileCap, ProfileReport, RingFilter, Sha256, TargetArch,
+    MAX_CALL_STACK_DEPTH,
 };
 use jambo_sh::{JamboShell, ShellStatus};
 
@@ -65,7 +65,13 @@ pub fn execute_profiler_daemon_test() -> bool {
 
     // Rejet de mesure de latence sans PROFILE_COLLECT
     assert_eq!(
-        daemon.record_latency(&inspect_only_cap, LatencyCategory::ContextSwitch, 500, 1, 100),
+        daemon.record_latency(
+            &inspect_only_cap,
+            LatencyCategory::ContextSwitch,
+            500,
+            1,
+            100
+        ),
         Err(SysError::PermissionDenied),
         "Mesure de latence sans PROFILE_COLLECT doit échouer"
     );
@@ -76,7 +82,9 @@ pub fn execute_profiler_daemon_test() -> bool {
         Err(SysError::PermissionDenied),
         "Génération de rapport sans PROFILE_EXPORT doit échouer"
     );
-    kprintln!("[PROFILER/SECURITY] Contrôles capabilaires et atténuation sans amplification validés");
+    kprintln!(
+        "[PROFILER/SECURITY] Contrôles capabilaires et atténuation sans amplification validés"
+    );
 
     // 2. Compteurs PMC matériels et calculs IPC / Branch miss rate
     let sample_inst = PmcSample {
@@ -92,7 +100,9 @@ pub fn execute_profiler_daemon_test() -> bool {
         call_stack_len: 0,
         pebs: None,
     };
-    daemon.record_sample(&admin_cap, sample_inst).expect("sample instructions");
+    daemon
+        .record_sample(&admin_cap, sample_inst)
+        .expect("sample instructions");
 
     let sample_cyc = PmcSample {
         sample_id: 11,
@@ -107,7 +117,9 @@ pub fn execute_profiler_daemon_test() -> bool {
         call_stack_len: 0,
         pebs: None,
     };
-    daemon.record_sample(&admin_cap, sample_cyc).expect("sample cycles");
+    daemon
+        .record_sample(&admin_cap, sample_cyc)
+        .expect("sample cycles");
 
     let (ipc_whole, _) = daemon.aggregated.ipc_ratio();
     assert!(ipc_whole >= 1, "Ratio IPC cohérent");
@@ -124,7 +136,9 @@ pub fn execute_profiler_daemon_test() -> bool {
         sp: 0x7FFF_0000,
         event: PmcEventType::Instructions,
         counter_val: 100_000,
-        call_stack: [stack[0], stack[1], stack[2], 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        call_stack: [
+            stack[0], stack[1], stack[2], 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        ],
         call_stack_len: 3,
         pebs: Some(PebsRecord {
             precise_ip: 0x0040_2050,
@@ -133,7 +147,9 @@ pub fn execute_profiler_daemon_test() -> bool {
             event_index: 0,
         }),
     };
-    daemon.record_sample(&admin_cap, sample_stack).expect("sample with stack");
+    daemon
+        .record_sample(&admin_cap, sample_stack)
+        .expect("sample with stack");
     assert!(daemon.flame_count >= 3, "Nœuds de l'arbre d'appels créés");
     kprintln!("[PROFILER/FLAME] Déroulement de pile et agrégation de nœuds Flamegraph validés");
 
@@ -154,18 +170,29 @@ pub fn execute_profiler_daemon_test() -> bool {
     let rep_id = daemon
         .generate_report(&admin_cap, 42, 5_000_000, 1020)
         .expect("generate report");
-    let seal_valid = daemon.verify_report_seal(&admin_cap, rep_id).expect("verify seal");
+    let seal_valid = daemon
+        .verify_report_seal(&admin_cap, rep_id)
+        .expect("verify seal");
     assert!(seal_valid, "Sceau SHA-256 du rapport de profilage valide");
 
     // Détection de falsification
     let rep_idx = daemon
         .reports
         .iter()
-        .position(|r| r.as_ref().map(|rep| rep.report_id == rep_id).unwrap_or(false))
+        .position(|r| {
+            r.as_ref()
+                .map(|rep| rep.report_id == rep_id)
+                .unwrap_or(false)
+        })
         .unwrap();
     daemon.reports[rep_idx].as_mut().unwrap().pmc.cycles ^= 0xCAFE;
-    let seal_tampered = daemon.verify_report_seal(&admin_cap, rep_id).expect("verify tampered");
-    assert!(!seal_tampered, "Détection immédiate d'altération de métriques dans le rapport");
+    let seal_tampered = daemon
+        .verify_report_seal(&admin_cap, rep_id)
+        .expect("verify tampered");
+    assert!(
+        !seal_tampered,
+        "Détection immédiate d'altération de métriques dans le rapport"
+    );
     kprintln!("[PROFILER/CRYPTO] Scellement SHA-256 et détection de falsification validés");
 
     // 6. Validation des commandes du Shell interactif JamboShell

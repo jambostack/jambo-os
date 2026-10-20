@@ -101,12 +101,7 @@ pub fn execute_itdr_daemon_test() -> bool {
 
     // 6. Déclenchement d'une réponse proactive et mise en quarantaine
     let act_id = itdr
-        .respond_to_threat(
-            &admin_cap,
-            threat_id,
-            ResponseActionType::RevokeToken,
-            6030,
-        )
+        .respond_to_threat(&admin_cap, threat_id, ResponseActionType::RevokeToken, 6030)
         .expect("Réponse proactive révocation de jeton");
     assert_eq!(act_id, 1);
     assert_eq!(itdr.identities[5].unwrap().state, IdentityState::Revoked);
@@ -114,7 +109,10 @@ pub fn execute_itdr_daemon_test() -> bool {
     // Quarantaine formelle sur identité #3
     itdr.quarantine_identity(&admin_cap, 3, 6035)
         .expect("Mise en quarantaine identité");
-    assert_eq!(itdr.identities[2].unwrap().state, IdentityState::Quarantined);
+    assert_eq!(
+        itdr.identities[2].unwrap().state,
+        IdentityState::Quarantined
+    );
 
     // 7. Remédiation et clôture d'incident
     itdr.remediate_threat(&admin_cap, 1, 6040)

@@ -26,12 +26,8 @@ pub mod wasm_rights {
     pub const WASM_WASI_TIME: u32 = 0x08;
     pub const WASM_INSTANTIATE: u32 = 0x10;
     pub const WASM_ADMIN: u32 = 0x80;
-    pub const ALL: u32 = WASM_EXEC
-        | WASM_MEM_GROW
-        | WASM_WASI_IO
-        | WASM_WASI_TIME
-        | WASM_INSTANTIATE
-        | WASM_ADMIN;
+    pub const ALL: u32 =
+        WASM_EXEC | WASM_MEM_GROW | WASM_WASI_IO | WASM_WASI_TIME | WASM_INSTANTIATE | WASM_ADMIN;
 }
 
 /// Jeton de capacité pour le confinement d'exécution WebAssembly
@@ -547,7 +543,8 @@ impl WasmEngine {
 
         let func_info = instance.functions[func_idx];
         let code_bytes = if func_info.code_offset + func_info.code_len <= instance.bytecode_len {
-            &instance.bytecode_buf[func_info.code_offset..func_info.code_offset + func_info.code_len]
+            &instance.bytecode_buf
+                [func_info.code_offset..func_info.code_offset + func_info.code_len]
         } else {
             return Err(SysError::BadAddress);
         };
@@ -902,8 +899,7 @@ pub const SAMPLE_ADD_WASM: &[u8] = &[
     // Section 1: Type (id 1, len 7)
     0x01, 0x07, 0x01, 0x60, 0x02, 0x7F, 0x7F, 0x01, 0x7F,
     // Section 3: Function (id 3, len 2)
-    0x03, 0x02, 0x01, 0x00,
-    // Section 7: Export (id 7, len 7: name "add", kind 0, idx 0)
+    0x03, 0x02, 0x01, 0x00, // Section 7: Export (id 7, len 7: name "add", kind 0, idx 0)
     0x07, 0x07, 0x01, 0x03, b'a', b'd', b'd', 0x00, 0x00,
     // Section 10: Code (id 10, len 9: 1 func body, size 7)
     0x0A, 0x09, 0x01, 0x07, 0x00, 0x20, 0x00, 0x20, 0x01, 0x6A, 0x0B,
@@ -914,14 +910,13 @@ pub const SAMPLE_MEM_WASM: &[u8] = &[
     0x00, 0x61, 0x73, 0x6D, // magic "\0asm"
     0x01, 0x00, 0x00, 0x00, // version 1
     // Section 1: Type (id 1, len 6: 1 param i32, 1 result i32)
-    0x01, 0x06, 0x01, 0x60, 0x01, 0x7F, 0x01, 0x7F,
-    // Section 3: Function (id 3, len 2)
+    0x01, 0x06, 0x01, 0x60, 0x01, 0x7F, 0x01, 0x7F, // Section 3: Function (id 3, len 2)
     0x03, 0x02, 0x01, 0x00,
     // Section 7: Export (id 7, len 12: name "mem_test", kind 0, idx 0)
     0x07, 0x0C, 0x01, 0x08, b'm', b'e', b'm', b'_', b't', b'e', b's', b't', 0x00, 0x00,
     // Section 10: Code (id 10, len 19: 1 body, size 17)
-    0x0A, 0x13, 0x01, 0x11, 0x00, 0x41, 0x10, 0x20, 0x00, 0x36, 0x02, 0x00, 0x41, 0x10, 0x28,
-    0x02, 0x00, 0x41, 0x0A, 0x6A, 0x0B,
+    0x0A, 0x13, 0x01, 0x11, 0x00, 0x41, 0x10, 0x20, 0x00, 0x36, 0x02, 0x00, 0x41, 0x10, 0x28, 0x02,
+    0x00, 0x41, 0x0A, 0x6A, 0x0B,
 ];
 
 /// Module binaire WASM précompilé pour tentative de violation mémoire hors-bornes (oob_test)
@@ -929,8 +924,7 @@ pub const SAMPLE_OOB_WASM: &[u8] = &[
     0x00, 0x61, 0x73, 0x6D, // magic "\0asm"
     0x01, 0x00, 0x00, 0x00, // version 1
     // Section 1: Type (id 1, len 5: 0 params, 1 result i32)
-    0x01, 0x05, 0x01, 0x60, 0x00, 0x01, 0x7F,
-    // Section 3: Function (id 3, len 2)
+    0x01, 0x05, 0x01, 0x60, 0x00, 0x01, 0x7F, // Section 3: Function (id 3, len 2)
     0x03, 0x02, 0x01, 0x00,
     // Section 7: Export (id 7, len 12: name "oob_test", kind 0, idx 0)
     0x07, 0x0C, 0x01, 0x08, b'o', b'o', b'b', b'_', b't', b'e', b's', b't', 0x00, 0x00,
@@ -944,8 +938,7 @@ pub const SAMPLE_GAS_WASM: &[u8] = &[
     0x00, 0x61, 0x73, 0x6D, // magic "\0asm"
     0x01, 0x00, 0x00, 0x00, // version 1
     // Section 1: Type (id 1, len 5: 0 params, 1 result i32)
-    0x01, 0x05, 0x01, 0x60, 0x00, 0x01, 0x7F,
-    // Section 3: Function (id 3, len 2)
+    0x01, 0x05, 0x01, 0x60, 0x00, 0x01, 0x7F, // Section 3: Function (id 3, len 2)
     0x03, 0x02, 0x01, 0x00,
     // Section 7: Export (id 7, len 12: name "gas_test", kind 0, idx 0)
     0x07, 0x0C, 0x01, 0x08, b'g', b'a', b's', b'_', b't', b'e', b's', b't', 0x00, 0x00,

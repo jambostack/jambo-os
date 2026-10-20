@@ -7,8 +7,8 @@ extern crate alloc;
 use crate::kprintln;
 use jambo_abi::Handle;
 use jambo_casb::{
-    casb_rights, data_classes, AdmissionDecision, CasbCap, CasbError, CasbRequest,
-    ComplianceTier, DataClassification, DlpAction, DlpPatternType, JamboCasbDaemon,
+    casb_rights, data_classes, AdmissionDecision, CasbCap, CasbError, CasbRequest, ComplianceTier,
+    DataClassification, DlpAction, DlpPatternType, JamboCasbDaemon,
 };
 
 /// Exécute la suite complète de validation formelle du courtier CASB et DLP (Phase 124)
@@ -75,7 +75,10 @@ pub fn execute_casb_daemon_test() -> bool {
         .scan_and_broker_admission(&admin_cap, &req_legit, &mut sanitized, 200)
         .expect("Admission requête légitime");
     match dec1 {
-        AdmissionDecision::Approved { transaction_id, sanitized_len } => {
+        AdmissionDecision::Approved {
+            transaction_id,
+            sanitized_len,
+        } => {
             assert!(transaction_id >= 5000);
             assert_eq!(sanitized_len, req_legit.payload_len);
         }
@@ -99,7 +102,11 @@ pub fn execute_casb_daemon_test() -> bool {
         .scan_and_broker_admission(&admin_cap, &req_pci, &mut sanitized, 210)
         .expect("Admission avec masquage");
     match dec_redact {
-        AdmissionDecision::RedactedAndApproved { transaction_id, redacted_count, .. } => {
+        AdmissionDecision::RedactedAndApproved {
+            transaction_id,
+            redacted_count,
+            ..
+        } => {
             assert!(transaction_id > 0);
             assert_eq!(redacted_count, 1);
             // Vérifie que les 16 chiffres de la carte sont remplacés par '*'

@@ -352,12 +352,7 @@ impl HybridSignature {
     }
 
     /// Signe de manière déterministe un hachage avec les composantes classique (Ed25519) et réseau euclidien (ML-DSA)
-    pub fn sign(
-        msg_hash: &[u8; 32],
-        ed_sk: &[u8; 32],
-        ml_sk: &[u8; 32],
-        timestamp: u64,
-    ) -> Self {
+    pub fn sign(msg_hash: &[u8; 32], ed_sk: &[u8; 32], ml_sk: &[u8; 32], timestamp: u64) -> Self {
         let mut ed_sig = [0u8; ED25519_SIG_LEN];
         let mut ml_sig = [0u8; MLDSA_SIG_LEN];
 
@@ -742,12 +737,7 @@ impl JamboPkiDaemon {
     }
 
     /// Enregistre une entrée dans le registre d'audit inaltérable SHA-256
-    pub fn log_audit(
-        &mut self,
-        event: PkiAuditEvent,
-        subject_id: u32,
-        ca_id: u32,
-    ) {
+    pub fn log_audit(&mut self, event: PkiAuditEvent, subject_id: u32, ca_id: u32) {
         let seq = self.audit_count as u64 + 1;
         let mut buf = [0u8; 96];
         buf[..8].copy_from_slice(&seq.to_be_bytes());
@@ -974,7 +964,8 @@ impl JamboPkiDaemon {
         let issuer_ca = self.certs[idx].issuer_ca_id;
         let subject_id = self.certs[idx].subject_id;
 
-        self.crl.add_revocation(serial, reason, self.current_time_ticks, issuer_ca)?;
+        self.crl
+            .add_revocation(serial, reason, self.current_time_ticks, issuer_ca)?;
         self.log_audit(PkiAuditEvent::CertRevoked, subject_id, issuer_ca);
         Ok(())
     }
@@ -1005,19 +996,31 @@ impl JamboPkiDaemon {
 
         // 1. Statut de révocation CRL temps réel
         if cert.status == CertStatus::Revoked || self.crl.is_revoked(cert.serial_number).is_some() {
-            self.log_audit(PkiAuditEvent::ChainValidationFailed, cert.subject_id, cert.issuer_ca_id);
+            self.log_audit(
+                PkiAuditEvent::ChainValidationFailed,
+                cert.subject_id,
+                cert.issuer_ca_id,
+            );
             return Err(PkiError::CertRevoked);
         }
 
         // 2. Fenêtre temporelle
         if !cert.is_time_valid(self.current_time_ticks) {
-            self.log_audit(PkiAuditEvent::ChainValidationFailed, cert.subject_id, cert.issuer_ca_id);
+            self.log_audit(
+                PkiAuditEvent::ChainValidationFailed,
+                cert.subject_id,
+                cert.issuer_ca_id,
+            );
             return Err(PkiError::CertExpired);
         }
 
         // 3. Usages de clé
         if !cert.allows_usage(required_usage) {
-            self.log_audit(PkiAuditEvent::ChainValidationFailed, cert.subject_id, cert.issuer_ca_id);
+            self.log_audit(
+                PkiAuditEvent::ChainValidationFailed,
+                cert.subject_id,
+                cert.issuer_ca_id,
+            );
             return Err(PkiError::KeyUsageNotPermitted);
         }
 
@@ -1039,25 +1042,34 @@ impl JamboPkiDaemon {
             let ca = match ca_entry {
                 Some(c) => c,
                 None => {
-                    self.log_audit(PkiAuditEvent::ChainValidationFailed, cert.subject_id, current_ca_id);
+                    self.log_audit(
+                        PkiAuditEvent::ChainValidationFailed,
+                        cert.subject_id,
+                        current_ca_id,
+                    );
                     return Err(PkiError::TrustAnchorNotFound);
                 }
             };
 
             // Vérification de la signature hybride avec la clé publique de la CA
-            let sig_ok = target_sig.verify(
-                &target_fp,
-                &ca.public_key,
-                PkiAlgorithm::HybridMlDsaEd25519,
-            )?;
+            let sig_ok =
+                target_sig.verify(&target_fp, &ca.public_key, PkiAlgorithm::HybridMlDsaEd25519)?;
             if !sig_ok {
-                self.log_audit(PkiAuditEvent::ChainValidationFailed, cert.subject_id, ca.ca_id);
+                self.log_audit(
+                    PkiAuditEvent::ChainValidationFailed,
+                    cert.subject_id,
+                    ca.ca_id,
+                );
                 return Err(PkiError::InvalidSignature);
             }
 
             // Atteinte de l'ancre de confiance racine (Root Anchor)
             if ca.trust_level == CaTrustLevel::RootAnchor || ca.parent_ca_id == ca.ca_id {
-                self.log_audit(PkiAuditEvent::ChainValidationSucceeded, cert.subject_id, ca.ca_id);
+                self.log_audit(
+                    PkiAuditEvent::ChainValidationSucceeded,
+                    cert.subject_id,
+                    ca.ca_id,
+                );
                 return Ok(true);
             }
 

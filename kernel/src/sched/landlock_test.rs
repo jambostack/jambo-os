@@ -6,7 +6,7 @@ extern crate alloc;
 use crate::kprintln;
 use jambo_abi::{Handle, SysError};
 use jambo_landlock::{
-    fs_access, landlock_rights, is_path_beneath, JamboLandlockDaemon, LandlockCap,
+    fs_access, is_path_beneath, landlock_rights, JamboLandlockDaemon, LandlockCap,
     LandlockDecision, MAX_AUDIT_LOGS,
 };
 use jambo_sh::{JamboShell, ShellStatus};
@@ -82,7 +82,11 @@ pub fn execute_landlock_daemon_test() -> bool {
 
     let dec_sh_write_etc = daemon.check_access(10, "/etc/passwd", fs_access::WRITE_FILE, 1004);
     match dec_sh_write_etc {
-        LandlockDecision::Denied { layer_index, missing_access, .. } => {
+        LandlockDecision::Denied {
+            layer_index,
+            missing_access,
+            ..
+        } => {
             assert_eq!(layer_index, 0);
             assert_eq!(missing_access, fs_access::WRITE_FILE);
         }
@@ -93,19 +97,25 @@ pub fn execute_landlock_daemon_test() -> bool {
     // 5. Empilement de Couches Monotones (PID 20 sandbox-worker)
     // Couche 0 : /usr (Read|Exec), /etc (Read), /tmp (Read|Write)
     // Couche 1 : /tmp/worker (Write)
-    let dec_w_read_usr = daemon.check_access(20, "/usr/lib/libjambo.so", fs_access::READ_FILE, 1005);
+    let dec_w_read_usr =
+        daemon.check_access(20, "/usr/lib/libjambo.so", fs_access::READ_FILE, 1005);
     assert_eq!(dec_w_read_usr, LandlockDecision::Granted);
 
     let dec_w_read_etc = daemon.check_access(20, "/etc/resolv.conf", fs_access::READ_FILE, 1006);
     assert_eq!(dec_w_read_etc, LandlockDecision::Granted);
 
-    let dec_w_write_ok = daemon.check_access(20, "/tmp/worker/task.dat", fs_access::WRITE_FILE, 1007);
+    let dec_w_write_ok =
+        daemon.check_access(20, "/tmp/worker/task.dat", fs_access::WRITE_FILE, 1007);
     assert_eq!(dec_w_write_ok, LandlockDecision::Granted);
 
     // Bloqué par la couche 1 car en dehors de /tmp/worker
     let dec_w_write_bad = daemon.check_access(20, "/tmp/malicious.sh", fs_access::WRITE_FILE, 1008);
     match dec_w_write_bad {
-        LandlockDecision::Denied { layer_index, missing_access, .. } => {
+        LandlockDecision::Denied {
+            layer_index,
+            missing_access,
+            ..
+        } => {
             assert_eq!(layer_index, 1);
             assert_eq!(missing_access, fs_access::WRITE_FILE);
         }
@@ -117,14 +127,22 @@ pub fn execute_landlock_daemon_test() -> bool {
         .create_ruleset(&admin_cap, fs_access::READ_FILE, 1009)
         .expect("create ruleset layer2");
     daemon
-        .add_rule_path_beneath(&admin_cap, r_layer2, Handle::new(920, 1), "/usr", fs_access::READ_FILE, 1009)
+        .add_rule_path_beneath(
+            &admin_cap,
+            r_layer2,
+            Handle::new(920, 1),
+            "/usr",
+            fs_access::READ_FILE,
+            1009,
+        )
         .expect("add rule layer2");
     daemon
         .restrict_self(&admin_cap, 20, r_layer2, 1010)
         .expect("restrict self layer2");
 
     // Désormais, la lecture de /etc/resolv.conf est bloquée par la couche 2 !
-    let dec_w_read_etc_blocked = daemon.check_access(20, "/etc/resolv.conf", fs_access::READ_FILE, 1011);
+    let dec_w_read_etc_blocked =
+        daemon.check_access(20, "/etc/resolv.conf", fs_access::READ_FILE, 1011);
     match dec_w_read_etc_blocked {
         LandlockDecision::Denied { layer_index, .. } => {
             assert_eq!(layer_index, 2);
@@ -149,7 +167,12 @@ pub fn execute_landlock_daemon_test() -> bool {
 
     // Le processus enfant hérite exactement des 3 couches de restriction
     assert_eq!(
-        daemon.check_access(child_pid, "/tmp/worker/result.bin", fs_access::WRITE_FILE, 1014),
+        daemon.check_access(
+            child_pid,
+            "/tmp/worker/result.bin",
+            fs_access::WRITE_FILE,
+            1014
+        ),
         LandlockDecision::Granted
     );
     match daemon.check_access(child_pid, "/tmp/other.bin", fs_access::WRITE_FILE, 1015) {
@@ -158,7 +181,9 @@ pub fn execute_landlock_daemon_test() -> bool {
         }
         _ => panic!("Le processus enfant doit être confiné à l'identique"),
     }
-    kprintln!("[LANDLOCK/FORK] Héritage complet des couches de confinement par les sous-processus validé");
+    kprintln!(
+        "[LANDLOCK/FORK] Héritage complet des couches de confinement par les sous-processus validé"
+    );
 
     // 7. Chaîne d'audit cryptographique SHA-256
     assert!(daemon.audit_count >= 5);

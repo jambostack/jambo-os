@@ -34,14 +34,16 @@ pub struct Sha256;
 
 impl Sha256 {
     const K: [u32; 64] = [
-        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
-        0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
-        0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
-        0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
-        0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
-        0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
-        0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
-        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
+        0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
+        0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f,
+        0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc,
+        0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+        0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116,
+        0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
+        0xc67178f2,
     ];
 
     #[inline(always)]
@@ -129,8 +131,8 @@ impl Sha256 {
 
     pub fn digest(data: &[u8]) -> [u8; 32] {
         let mut state: [u32; 8] = [
-            0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
-            0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+            0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
+            0x5be0cd19,
         ];
         let total_bits = (data.len() as u64).wrapping_mul(8);
         let mut block = [0u8; 64];
@@ -334,7 +336,12 @@ impl ShamirSecretSharing {
         shares_out: &mut [SecretShare],
         commitments_out: &mut [VssCommitment],
     ) -> Result<usize, SysError> {
-        if t == 0 || t > n || n > MAX_MPC_NODES || secret.is_empty() || secret.len() > MAX_SECRET_LEN {
+        if t == 0
+            || t > n
+            || n > MAX_MPC_NODES
+            || secret.is_empty()
+            || secret.len() > MAX_SECRET_LEN
+        {
             return Err(SysError::InvalidArgument);
         }
         if shares_out.len() < n || commitments_out.len() < t {
@@ -360,7 +367,8 @@ impl ShamirSecretSharing {
             for b in 0..sec_len {
                 commit_data[b] = poly_coeffs[b][deg].0;
             }
-            commit_data[MAX_SECRET_LEN..MAX_SECRET_LEN + 8].copy_from_slice(&(deg as u64).to_be_bytes());
+            commit_data[MAX_SECRET_LEN..MAX_SECRET_LEN + 8]
+                .copy_from_slice(&(deg as u64).to_be_bytes());
             commitments_out[deg] = VssCommitment {
                 coeff_index: deg,
                 commitment_hash: Sha256::digest(&commit_data),
@@ -494,7 +502,12 @@ impl BeaverProtocol {
     }
 
     /// Partage additif d'une valeur v entre n parties (v = \sum_{i=1}^n v_i)
-    pub fn share_additive(val: Gf256, n: usize, seed: &[u8], shares_out: &mut [Gf256]) -> Result<(), SysError> {
+    pub fn share_additive(
+        val: Gf256,
+        n: usize,
+        seed: &[u8],
+        shares_out: &mut [Gf256],
+    ) -> Result<(), SysError> {
         if n == 0 || n > MAX_MPC_NODES || shares_out.len() < n {
             return Err(SysError::InvalidArgument);
         }
@@ -537,15 +550,15 @@ impl BeaverProtocol {
 // ============================================================================
 
 pub mod mpc_rights {
-    pub const INIT_SESSION: u32     = 1 << 0;
-    pub const REGISTER_NODE: u32    = 1 << 1;
-    pub const SHARE_SECRET: u32     = 1 << 2;
-    pub const RECONSTRUCT: u32      = 1 << 3;
-    pub const BEAVER_TRIPLET: u32   = 1 << 4;
-    pub const SECURE_COMPUTE: u32   = 1 << 5;
-    pub const SLASH_BYZANTINE: u32  = 1 << 6;
-    pub const ZEROIZE: u32          = 1 << 7;
-    pub const ADMIN: u32            = 1 << 8;
+    pub const INIT_SESSION: u32 = 1 << 0;
+    pub const REGISTER_NODE: u32 = 1 << 1;
+    pub const SHARE_SECRET: u32 = 1 << 2;
+    pub const RECONSTRUCT: u32 = 1 << 3;
+    pub const BEAVER_TRIPLET: u32 = 1 << 4;
+    pub const SECURE_COMPUTE: u32 = 1 << 5;
+    pub const SLASH_BYZANTINE: u32 = 1 << 6;
+    pub const ZEROIZE: u32 = 1 << 7;
+    pub const ADMIN: u32 = 1 << 8;
 
     pub const ALL: u32 = INIT_SESSION
         | REGISTER_NODE
@@ -771,7 +784,13 @@ impl JamboMpcDaemon {
     }
 
     /// Enregistre une opération dans le journal scellé par chaîne SHA-256
-    pub fn record_audit(&mut self, action: MpcAction, session_id: u32, node_id: u8, reason_str: &str) {
+    pub fn record_audit(
+        &mut self,
+        action: MpcAction,
+        session_id: u32,
+        node_id: u8,
+        reason_str: &str,
+    ) {
         let mut r_buf = [0u8; MAX_REASON_LEN];
         let bytes = reason_str.as_bytes();
         let copy_len = if bytes.len() > MAX_REASON_LEN {
@@ -787,7 +806,8 @@ impl JamboMpcDaemon {
         hash_input[36..40].copy_from_slice(&session_id.to_be_bytes());
         hash_input[40] = node_id;
         hash_input[41..41 + MAX_REASON_LEN].copy_from_slice(&r_buf);
-        hash_input[41 + MAX_REASON_LEN..49 + MAX_REASON_LEN].copy_from_slice(&self.epoch.to_be_bytes());
+        hash_input[41 + MAX_REASON_LEN..49 + MAX_REASON_LEN]
+            .copy_from_slice(&self.epoch.to_be_bytes());
 
         let new_hash = Sha256::digest(&hash_input);
         self.audit_chain = new_hash;
@@ -837,17 +857,25 @@ impl JamboMpcDaemon {
             });
         }
 
-        self.record_audit(MpcAction::InitDaemon, 0, 0, "Cluster MPC par défaut initialisé (5 nœuds)");
+        self.record_audit(
+            MpcAction::InitDaemon,
+            0,
+            0,
+            "Cluster MPC par défaut initialisé (5 nœuds)",
+        );
     }
 
     pub fn count_active_nodes(&self) -> usize {
-        self.nodes.iter().filter(|n| {
-            if let Some(node) = n {
-                node.status == MpcNodeStatus::Active
-            } else {
-                false
-            }
-        }).count()
+        self.nodes
+            .iter()
+            .filter(|n| {
+                if let Some(node) = n {
+                    node.status == MpcNodeStatus::Active
+                } else {
+                    false
+                }
+            })
+            .count()
     }
 
     pub fn register_node(&mut self, cap: &MpcCap, name: &str) -> Result<u8, SysError> {
@@ -860,7 +888,11 @@ impl JamboMpcDaemon {
                 let id = (i + 1) as u8;
                 let mut name_buf = [0u8; MAX_LABEL_LEN];
                 let b = name.as_bytes();
-                let len = if b.len() > MAX_LABEL_LEN { MAX_LABEL_LEN } else { b.len() };
+                let len = if b.len() > MAX_LABEL_LEN {
+                    MAX_LABEL_LEN
+                } else {
+                    b.len()
+                };
                 name_buf[..len].copy_from_slice(&b[..len]);
 
                 *slot = Some(MpcNode {
@@ -879,7 +911,12 @@ impl JamboMpcDaemon {
         Err(SysError::OutOfMemory)
     }
 
-    pub fn slash_byzantine_node(&mut self, cap: &MpcCap, node_id: u8, reason: &str) -> Result<(), SysError> {
+    pub fn slash_byzantine_node(
+        &mut self,
+        cap: &MpcCap,
+        node_id: u8,
+        reason: &str,
+    ) -> Result<(), SysError> {
         if !cap.has_right(mpc_rights::SLASH_BYZANTINE) {
             return Err(SysError::PermissionDenied);
         }
@@ -954,14 +991,8 @@ impl JamboMpcDaemon {
             (s.threshold_t, s.total_nodes_n)
         };
 
-        let count = ShamirSecretSharing::split_secret(
-            secret,
-            t,
-            n,
-            seed,
-            shares_out,
-            commitments_out,
-        )?;
+        let count =
+            ShamirSecretSharing::split_secret(secret, t, n, seed, shares_out, commitments_out)?;
 
         let commit_hash = Sha256::digest(secret);
 
@@ -979,7 +1010,12 @@ impl JamboMpcDaemon {
         }
 
         self.secrets_split = self.secrets_split.wrapping_add(1);
-        self.record_audit(MpcAction::SplitSecret, session_id, 0, "Secret divisé et partagé");
+        self.record_audit(
+            MpcAction::SplitSecret,
+            session_id,
+            0,
+            "Secret divisé et partagé",
+        );
         Ok(count)
     }
 
@@ -1019,12 +1055,21 @@ impl JamboMpcDaemon {
         sess.state = MpcSessionState::Reconstructed;
 
         self.secrets_reconstructed = self.secrets_reconstructed.wrapping_add(1);
-        self.record_audit(MpcAction::ReconstructSecret, session_id, 0, "Secret reconstruit avec succès");
+        self.record_audit(
+            MpcAction::ReconstructSecret,
+            session_id,
+            0,
+            "Secret reconstruit avec succès",
+        );
         Ok(len)
     }
 
     /// Alloue un triplet de Beaver pour des multiplications MPC
-    pub fn allocate_beaver_triplet(&mut self, cap: &MpcCap, seed: &[u8]) -> Result<BeaverTriplet, SysError> {
+    pub fn allocate_beaver_triplet(
+        &mut self,
+        cap: &MpcCap,
+        seed: &[u8],
+    ) -> Result<BeaverTriplet, SysError> {
         if !cap.has_right(mpc_rights::BEAVER_TRIPLET) {
             return Err(SysError::PermissionDenied);
         }
@@ -1037,7 +1082,12 @@ impl JamboMpcDaemon {
                 let trip = BeaverProtocol::generate_triplet(id, seed);
                 *slot = Some(trip);
 
-                self.record_audit(MpcAction::GenerateBeaverTriplet, 0, 0, "Triplet de Beaver alloué");
+                self.record_audit(
+                    MpcAction::GenerateBeaverTriplet,
+                    0,
+                    0,
+                    "Triplet de Beaver alloué",
+                );
                 return Ok(trip);
             }
         }
@@ -1066,16 +1116,41 @@ impl JamboMpcDaemon {
         // 2. Partager additivement x et y
         let mut x_shares = [Gf256::ZERO; MAX_MPC_NODES];
         let mut y_shares = [Gf256::ZERO; MAX_MPC_NODES];
-        BeaverProtocol::share_additive(x_val, n_parties, b"seed_share_x", &mut x_shares[..n_parties])?;
-        BeaverProtocol::share_additive(y_val, n_parties, b"seed_share_y", &mut y_shares[..n_parties])?;
+        BeaverProtocol::share_additive(
+            x_val,
+            n_parties,
+            b"seed_share_x",
+            &mut x_shares[..n_parties],
+        )?;
+        BeaverProtocol::share_additive(
+            y_val,
+            n_parties,
+            b"seed_share_y",
+            &mut y_shares[..n_parties],
+        )?;
 
         // 3. Partager additivement les composantes du triplet (a, b, c)
         let mut a_shares = [Gf256::ZERO; MAX_MPC_NODES];
         let mut b_shares = [Gf256::ZERO; MAX_MPC_NODES];
         let mut c_shares = [Gf256::ZERO; MAX_MPC_NODES];
-        BeaverProtocol::share_additive(trip.a_val, n_parties, b"seed_share_a", &mut a_shares[..n_parties])?;
-        BeaverProtocol::share_additive(trip.b_val, n_parties, b"seed_share_b", &mut b_shares[..n_parties])?;
-        BeaverProtocol::share_additive(trip.c_val, n_parties, b"seed_share_c", &mut c_shares[..n_parties])?;
+        BeaverProtocol::share_additive(
+            trip.a_val,
+            n_parties,
+            b"seed_share_a",
+            &mut a_shares[..n_parties],
+        )?;
+        BeaverProtocol::share_additive(
+            trip.b_val,
+            n_parties,
+            b"seed_share_b",
+            &mut b_shares[..n_parties],
+        )?;
+        BeaverProtocol::share_additive(
+            trip.c_val,
+            n_parties,
+            b"seed_share_c",
+            &mut c_shares[..n_parties],
+        )?;
 
         // 4. Calcul de [d]_i = [x]_i - [a]_i et [e]_i = [y]_i - [b]_i puis ouverture publique
         let mut d_sum = Gf256::ZERO;
@@ -1102,7 +1177,12 @@ impl JamboMpcDaemon {
         }
 
         self.beaver_mults_computed = self.beaver_mults_computed.wrapping_add(1);
-        self.record_audit(MpcAction::ComputeBeaverMult, 0, 0, "Multiplication Beaver MPC réussie");
+        self.record_audit(
+            MpcAction::ComputeBeaverMult,
+            0,
+            0,
+            "Multiplication Beaver MPC réussie",
+        );
         Ok(final_result)
     }
 
@@ -1207,20 +1287,23 @@ mod tests {
             b"test_seed_mpc",
             &mut shares,
             &mut commitments,
-        ).expect("Split secret");
+        )
+        .expect("Split secret");
 
         assert_eq!(n, 5);
 
         // Reconstruire avec les parts {1, 2, 4} (taille 3 >= seuil 3)
         let subset = [shares[0], shares[1], shares[3]];
         let mut recovered = [0u8; MAX_SECRET_LEN];
-        let r_len = ShamirSecretSharing::reconstruct_secret(&subset, 3, &mut recovered).expect("Reconstruct");
+        let r_len = ShamirSecretSharing::reconstruct_secret(&subset, 3, &mut recovered)
+            .expect("Reconstruct");
         assert_eq!(&recovered[..r_len], secret);
 
         // Reconstruire avec une combinaison différente {2, 3, 5}
         let subset2 = [shares[1], shares[2], shares[4]];
         let mut recovered2 = [0u8; MAX_SECRET_LEN];
-        let r_len2 = ShamirSecretSharing::reconstruct_secret(&subset2, 3, &mut recovered2).expect("Reconstruct 2");
+        let r_len2 = ShamirSecretSharing::reconstruct_secret(&subset2, 3, &mut recovered2)
+            .expect("Reconstruct 2");
         assert_eq!(&recovered2[..r_len2], secret);
     }
 
@@ -1233,7 +1316,8 @@ mod tests {
         let y = Gf256(0x09);
         let expected = x.mul(y);
 
-        let result = daemon.execute_beaver_mult(&admin_cap, x, y, 4, b"test_beaver_seed")
+        let result = daemon
+            .execute_beaver_mult(&admin_cap, x, y, 4, b"test_beaver_seed")
             .expect("Beaver multiplication");
 
         assert_eq!(result, expected);
@@ -1249,7 +1333,8 @@ mod tests {
         assert_eq!(daemon.count_active_nodes(), 5);
 
         // Atténuation monotone
-        let user_cap = admin_cap.attenuate(mpc_rights::INIT_SESSION | mpc_rights::SHARE_SECRET)
+        let user_cap = admin_cap
+            .attenuate(mpc_rights::INIT_SESSION | mpc_rights::SHARE_SECRET)
             .expect("Attenuate");
         assert!(!user_cap.has_right(mpc_rights::SLASH_BYZANTINE));
 
@@ -1260,7 +1345,9 @@ mod tests {
         );
 
         // Bannissement d'un nœud byzantin
-        daemon.slash_byzantine_node(&admin_cap, 2, "Tentative d'altération de part").expect("Slash node");
+        daemon
+            .slash_byzantine_node(&admin_cap, 2, "Tentative d'altération de part")
+            .expect("Slash node");
         assert_eq!(daemon.byzantine_slashes, 1);
         assert_eq!(daemon.count_active_nodes(), 4);
     }

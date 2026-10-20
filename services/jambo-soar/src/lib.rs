@@ -95,7 +95,12 @@ pub struct SoarCap {
 }
 
 impl SoarCap {
-    pub const fn new(handle: Handle, rights: u32, max_lifetime: u64, invocations_left: u32) -> Self {
+    pub const fn new(
+        handle: Handle,
+        rights: u32,
+        max_lifetime: u64,
+        invocations_left: u32,
+    ) -> Self {
         Self {
             handle,
             rights,
@@ -565,8 +570,8 @@ impl Sha256 {
     pub const fn new() -> Self {
         Self {
             state: [
-                0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c,
-                0x1f83d9ab, 0x5be0cd19,
+                0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
+                0x5be0cd19,
             ],
             count: 0,
             buffer: [0u8; 64],
@@ -712,10 +717,9 @@ pub struct JamboSoarDaemon {
 
 impl JamboSoarDaemon {
     pub const GENESIS_HASH: [u8; 32] = [
-        0x53, 0x4f, 0x41, 0x52, 0x2d, 0x4a, 0x41, 0x4d,
-        0x42, 0x4f, 0x2d, 0x4f, 0x53, 0x2d, 0x53, 0x45,
-        0x43, 0x55, 0x52, 0x49, 0x54, 0x59, 0x2d, 0x52,
-        0x45, 0x53, 0x50, 0x4f, 0x4e, 0x53, 0x45, 0x01,
+        0x53, 0x4f, 0x41, 0x52, 0x2d, 0x4a, 0x41, 0x4d, 0x42, 0x4f, 0x2d, 0x4f, 0x53, 0x2d, 0x53,
+        0x45, 0x43, 0x55, 0x52, 0x49, 0x54, 0x59, 0x2d, 0x52, 0x45, 0x53, 0x50, 0x4f, 0x4e, 0x53,
+        0x45, 0x01,
     ];
 
     pub fn new(admin_cap: SoarCap) -> Self {
@@ -885,7 +889,11 @@ impl JamboSoarDaemon {
     }
 
     /// Enregistre un playbook après vérification de la capacité et validation DAG.
-    pub fn register_playbook(&mut self, cap: &SoarCap, playbook: Playbook) -> Result<u32, SoarError> {
+    pub fn register_playbook(
+        &mut self,
+        cap: &SoarCap,
+        playbook: Playbook,
+    ) -> Result<u32, SoarError> {
         if !cap.has_right(soar_rights::REGISTER_PLAYBOOK) && !cap.has_right(soar_rights::ADMIN) {
             return Err(SoarError::PermissionDenied);
         }
@@ -897,12 +905,7 @@ impl JamboSoarDaemon {
             if let Some(ref mut pb) = self.playbooks[i] {
                 if pb.id == playbook.id {
                     *pb = playbook;
-                    self.append_audit(
-                        SoarAuditEventType::PlaybookRegistered,
-                        0,
-                        playbook.id,
-                        100,
-                    );
+                    self.append_audit(SoarAuditEventType::PlaybookRegistered, 0, playbook.id, 100);
                     return Ok(playbook.id);
                 }
             }
@@ -977,7 +980,11 @@ impl JamboSoarDaemon {
 
         // Trouver le playbook
         let pb_idx = (0..self.playbook_count)
-            .find(|&i| self.playbooks[i].as_ref().map_or(false, |p| p.id == playbook_id))
+            .find(|&i| {
+                self.playbooks[i]
+                    .as_ref()
+                    .map_or(false, |p| p.id == playbook_id)
+            })
             .ok_or(SoarError::PlaybookNotFound)?;
 
         let mut pb = self.playbooks[pb_idx].unwrap();
@@ -987,7 +994,11 @@ impl JamboSoarDaemon {
 
         // Trouver l'incident
         let inc_idx = (0..self.incident_count)
-            .find(|&i| self.incidents[i].as_ref().map_or(false, |inc| inc.id == incident_id))
+            .find(|&i| {
+                self.incidents[i]
+                    .as_ref()
+                    .map_or(false, |inc| inc.id == incident_id)
+            })
             .ok_or(SoarError::IncidentNotFound)?;
 
         let mut incident = self.incidents[inc_idx].unwrap();
@@ -1122,12 +1133,15 @@ impl JamboSoarDaemon {
         // Contrôle de capacité selon l'action
         match action {
             SoarAction::RevokeCapability { .. } => {
-                if !cap.has_right(soar_rights::REVOKE_CAPABILITY) && !cap.has_right(soar_rights::ADMIN) {
+                if !cap.has_right(soar_rights::REVOKE_CAPABILITY)
+                    && !cap.has_right(soar_rights::ADMIN)
+                {
                     return Err(SoarError::PermissionDenied);
                 }
             }
             SoarAction::IsolateProcess { .. } | SoarAction::EnforceMlsContainment { .. } => {
-                if !cap.has_right(soar_rights::ISOLATE_ENTITY) && !cap.has_right(soar_rights::ADMIN) {
+                if !cap.has_right(soar_rights::ISOLATE_ENTITY) && !cap.has_right(soar_rights::ADMIN)
+                {
                     return Err(SoarError::PermissionDenied);
                 }
             }
@@ -1153,9 +1167,10 @@ impl JamboSoarDaemon {
             SoarAction::ApplyRateLimit { .. } => {
                 (IntegrationTarget::JamboDdos, "ApplyRateLimit dispatched")
             }
-            SoarAction::QuarantineWafPattern { .. } => {
-                (IntegrationTarget::JamboWaf, "QuarantineWafPattern dispatched")
-            }
+            SoarAction::QuarantineWafPattern { .. } => (
+                IntegrationTarget::JamboWaf,
+                "QuarantineWafPattern dispatched",
+            ),
             SoarAction::RevokeCapability { .. } => {
                 (IntegrationTarget::JamboIds, "RevokeCapability dispatched")
             }
@@ -1165,12 +1180,14 @@ impl JamboSoarDaemon {
             SoarAction::CaptureMemoryForensics { .. } => {
                 (IntegrationTarget::JamboSiem, "CaptureForensics dispatched")
             }
-            SoarAction::NotifySecurityAdmin { .. } => {
-                (IntegrationTarget::JamboSiem, "NotifySecurityAdmin dispatched")
-            }
-            SoarAction::EnforceMlsContainment { .. } => {
-                (IntegrationTarget::JamboIds, "EnforceMlsContainment dispatched")
-            }
+            SoarAction::NotifySecurityAdmin { .. } => (
+                IntegrationTarget::JamboSiem,
+                "NotifySecurityAdmin dispatched",
+            ),
+            SoarAction::EnforceMlsContainment { .. } => (
+                IntegrationTarget::JamboIds,
+                "EnforceMlsContainment dispatched",
+            ),
         };
 
         let action_id = self.dispatched_count as u64 + 1;
@@ -1385,7 +1402,9 @@ mod tests {
             1000,
         );
 
-        let inc_id = daemon.create_incident(&cap, inc).expect("Création incident");
+        let inc_id = daemon
+            .create_incident(&cap, inc)
+            .expect("Création incident");
         assert_eq!(inc_id, 1);
 
         // Détection de playbook correspondant

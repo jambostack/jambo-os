@@ -30,14 +30,16 @@ pub struct Sha256;
 
 impl Sha256 {
     const K: [u32; 64] = [
-        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
-        0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
-        0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
-        0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
-        0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
-        0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
-        0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
-        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
+        0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
+        0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f,
+        0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc,
+        0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+        0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116,
+        0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
+        0xc67178f2,
     ];
 
     #[inline(always)]
@@ -126,8 +128,14 @@ impl Sha256 {
 
     pub fn digest(data: &[u8]) -> [u8; 32] {
         let mut state = [
-            0x6a09e667u32, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
-            0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+            0x6a09e667u32,
+            0xbb67ae85,
+            0x3c6ef372,
+            0xa54ff53a,
+            0x510e527f,
+            0x9b05688c,
+            0x1f83d9ab,
+            0x5be0cd19,
         ];
 
         let bit_len = (data.len() as u64) * 8;
@@ -209,8 +217,12 @@ pub mod wall_rights {
     pub const WALL_FILTER: u32 = 0x08;
     pub const WALL_ZONE_MANAGE: u32 = 0x10;
     pub const WALL_ADMIN: u32 = 0x80;
-    pub const ALL: u32 =
-        WALL_INSPECT | WALL_RULE_MANAGE | WALL_CONNTRACK_SYNC | WALL_FILTER | WALL_ZONE_MANAGE | WALL_ADMIN;
+    pub const ALL: u32 = WALL_INSPECT
+        | WALL_RULE_MANAGE
+        | WALL_CONNTRACK_SYNC
+        | WALL_FILTER
+        | WALL_ZONE_MANAGE
+        | WALL_ADMIN;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -381,7 +393,8 @@ pub fn is_valid_tcp_flags(flags: u8) -> bool {
         return false;
     }
     // XMAS Scan : FIN + PSH + URG sans ACK
-    if (flags & (tcp_flags::FIN | tcp_flags::PSH | tcp_flags::URG)) == (tcp_flags::FIN | tcp_flags::PSH | tcp_flags::URG)
+    if (flags & (tcp_flags::FIN | tcp_flags::PSH | tcp_flags::URG))
+        == (tcp_flags::FIN | tcp_flags::PSH | tcp_flags::URG)
         && (flags & tcp_flags::ACK) == 0
     {
         return false;
@@ -403,7 +416,13 @@ pub struct ConntrackTuple {
 }
 
 impl ConntrackTuple {
-    pub const fn new(proto: u8, src_ip: [u8; 4], dst_ip: [u8; 4], src_port: u16, dst_port: u16) -> Self {
+    pub const fn new(
+        proto: u8,
+        src_ip: [u8; 4],
+        dst_ip: [u8; 4],
+        src_port: u16,
+        dst_port: u16,
+    ) -> Self {
         Self {
             proto,
             src_ip,
@@ -543,7 +562,11 @@ impl ConntrackTable {
         payload_len: usize,
         tick: u64,
         node_id: u64,
-    ) -> (ConntrackState, bool /* is_reply */, bool /* state_changed */) {
+    ) -> (
+        ConntrackState,
+        bool, /* is_reply */
+        bool, /* state_changed */
+    ) {
         if tuple.proto == ip_proto::TCP && !is_valid_tcp_flags(tcp_flags) {
             return (ConntrackState::Invalid, false, false);
         }
@@ -622,9 +645,17 @@ impl ConntrackTable {
                     return (ConntrackState::Invalid, false, false);
                 }
             } else if tuple.proto == ip_proto::UDP {
-                (ConntrackState::New, TcpFsm::Established, TIMEOUT_UDP_GENERIC)
+                (
+                    ConntrackState::New,
+                    TcpFsm::Established,
+                    TIMEOUT_UDP_GENERIC,
+                )
             } else {
-                (ConntrackState::New, TcpFsm::Established, TIMEOUT_ICMP_GENERIC)
+                (
+                    ConntrackState::New,
+                    TcpFsm::Established,
+                    TIMEOUT_ICMP_GENERIC,
+                )
             };
 
             self.entries[slot] = ConntrackEntry {
@@ -1163,7 +1194,10 @@ impl JamboWallDaemon {
             return Err(SysError::PermissionDenied);
         }
 
-        let (idx, _) = self.conntrack.lookup(tuple).ok_or(SysError::InvalidArgument)?;
+        let (idx, _) = self
+            .conntrack
+            .lookup(tuple)
+            .ok_or(SysError::InvalidArgument)?;
         let entry = &self.conntrack.entries[idx];
 
         let mut event = ConntrackSyncEvent {
@@ -1284,13 +1318,8 @@ mod tests {
         let mut daemon = JamboWallDaemon::new(1, admin_cap, key);
         daemon.init_defaults();
 
-        let tuple = ConntrackTuple::new(
-            ip_proto::TCP,
-            [192, 168, 1, 10],
-            [10, 0, 0, 50],
-            54321,
-            80,
-        );
+        let tuple =
+            ConntrackTuple::new(ip_proto::TCP, [192, 168, 1, 10], [10, 0, 0, 50], 54321, 80);
 
         // 1. SYN
         let pkt_syn = PacketFilterInput {
@@ -1325,7 +1354,10 @@ mod tests {
         let _ = daemon.filter_packet(&admin_cap, &pkt_ack, 14).unwrap();
 
         let (idx, _) = daemon.conntrack.lookup(&tuple).unwrap();
-        assert_eq!(daemon.conntrack.entries[idx].state, ConntrackState::Established);
+        assert_eq!(
+            daemon.conntrack.entries[idx].state,
+            ConntrackState::Established
+        );
 
         // 4. Data packet -> Fastpath hit
         let pkt_data = PacketFilterInput {
@@ -1347,13 +1379,7 @@ mod tests {
         let mut node1 = JamboWallDaemon::new(1, admin_cap, key);
         let mut node2 = JamboWallDaemon::new(2, admin_cap, key);
 
-        let tuple = ConntrackTuple::new(
-            ip_proto::TCP,
-            [172, 16, 0, 2],
-            [10, 0, 0, 8],
-            12345,
-            443,
-        );
+        let tuple = ConntrackTuple::new(ip_proto::TCP, [172, 16, 0, 2], [10, 0, 0, 8], 12345, 443);
 
         // Handshake sur Node 1
         let (s, _, _) = node1.conntrack.process_packet(
@@ -1391,10 +1417,15 @@ mod tests {
         );
 
         // Acceptation sur le Nœud 2
-        node2.receive_sync_event(&admin_cap, &sync_event, 10).unwrap();
+        node2
+            .receive_sync_event(&admin_cap, &sync_event, 10)
+            .unwrap();
         assert_eq!(node2.conntrack.active_count(), 1);
         let (idx2, _) = node2.conntrack.lookup(&tuple).unwrap();
-        assert_eq!(node2.conntrack.entries[idx2].state, ConntrackState::Established);
+        assert_eq!(
+            node2.conntrack.entries[idx2].state,
+            ConntrackState::Established
+        );
     }
 
     #[test]
@@ -1405,13 +1436,8 @@ mod tests {
         daemon.init_defaults();
 
         let attacker_ip = [203, 0, 113, 99];
-        let tuple_attack = ConntrackTuple::new(
-            ip_proto::TCP,
-            attacker_ip,
-            [10, 0, 0, 1],
-            40000,
-            80,
-        );
+        let tuple_attack =
+            ConntrackTuple::new(ip_proto::TCP, attacker_ip, [10, 0, 0, 1], 40000, 80);
 
         // Drapeaux invalides (NULL scan)
         let pkt_null = PacketFilterInput {

@@ -29,20 +29,15 @@ pub const HASH_SIZE: usize = 32;
 // ============================================================================
 
 pub mod ai_sec_rights {
-    pub const INSPECT: u32 = 1 << 0;          // Lecture des métriques et état
-    pub const FILTER_INPUT: u32 = 1 << 1;     // Analyse et filtrage des requêtes
-    pub const FILTER_OUTPUT: u32 = 1 << 2;    // Analyse et assainissement des sorties
-    pub const CHECK_POISON: u32 = 1 << 3;     // Vérification d'intégrité et empoisonnement
-    pub const QUARANTINE: u32 = 1 << 4;       // Mise en quarantaine de modèles
-    pub const AUDIT: u32 = 1 << 5;            // Consultation du registre scellé
-    pub const ADMIN: u32 = 1 << 7;            // Enregistrement, révocation, restauration
-    pub const ALL: u32 = INSPECT
-        | FILTER_INPUT
-        | FILTER_OUTPUT
-        | CHECK_POISON
-        | QUARANTINE
-        | AUDIT
-        | ADMIN;
+    pub const INSPECT: u32 = 1 << 0; // Lecture des métriques et état
+    pub const FILTER_INPUT: u32 = 1 << 1; // Analyse et filtrage des requêtes
+    pub const FILTER_OUTPUT: u32 = 1 << 2; // Analyse et assainissement des sorties
+    pub const CHECK_POISON: u32 = 1 << 3; // Vérification d'intégrité et empoisonnement
+    pub const QUARANTINE: u32 = 1 << 4; // Mise en quarantaine de modèles
+    pub const AUDIT: u32 = 1 << 5; // Consultation du registre scellé
+    pub const ADMIN: u32 = 1 << 7; // Enregistrement, révocation, restauration
+    pub const ALL: u32 =
+        INSPECT | FILTER_INPUT | FILTER_OUTPUT | CHECK_POISON | QUARANTINE | AUDIT | ADMIN;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,20 +76,22 @@ pub struct Sha256;
 
 impl Sha256 {
     const K: [u32; 64] = [
-        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
-        0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
-        0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
-        0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
-        0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
-        0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
-        0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
-        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
+        0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
+        0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f,
+        0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc,
+        0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+        0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116,
+        0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
+        0xc67178f2,
     ];
 
     pub fn digest(data: &[u8]) -> [u8; 32] {
         let mut h: [u32; 8] = [
-            0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
-            0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+            0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
+            0x5be0cd19,
         ];
 
         let bit_len = (data.len() as u64).wrapping_mul(8);
@@ -142,7 +139,10 @@ impl Sha256 {
         for i in 16..64 {
             let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);
             let s1 = w[i - 2].rotate_right(17) ^ w[i - 2].rotate_right(19) ^ (w[i - 2] >> 10);
-            w[i] = w[i - 16].wrapping_add(s0).wrapping_add(w[i - 7]).wrapping_add(s1);
+            w[i] = w[i - 16]
+                .wrapping_add(s0)
+                .wrapping_add(w[i - 7])
+                .wrapping_add(s1);
         }
 
         let mut a = h[0];
@@ -305,13 +305,23 @@ impl InputGuardrail {
         let copy_len = core::cmp::min(len, MAX_PROMPT_LEN);
         for i in 0..copy_len {
             let b = bytes[i];
-            lower_buf[i] = if (b'A'..=b'Z').contains(&b) { b + 32 } else { b };
+            lower_buf[i] = if (b'A'..=b'Z').contains(&b) {
+                b + 32
+            } else {
+                b
+            };
         }
         let lower_slice = &lower_buf[..copy_len];
 
         for (idx, pattern) in Self::INJECTION_PATTERNS.iter().enumerate() {
             if Self::contains_subslice(lower_slice, pattern) {
-                let risk = if idx < 3 { 900 } else if idx < 6 { 850 } else { 750 };
+                let risk = if idx < 3 {
+                    900
+                } else if idx < 6 {
+                    850
+                } else {
+                    750
+                };
                 return InputScreenResult {
                     allowed: false,
                     risk_score: risk,
@@ -476,25 +486,13 @@ impl JamboAiSecDaemon {
         let block1 = b"JAMBO_EMBED_WEIGHT_TENSOR_LAYER0_INITIAL_CLEAN_WEIGHTS";
         let block2 = b"JAMBO_EMBED_WEIGHT_TENSOR_LAYER1_INITIAL_CLEAN_WEIGHTS";
         let root = Self::compute_merkle_root(&[block1, block2]);
-        let _ = self.register_model_internal(
-            1,
-            "jambo-embed-tiny",
-            1,
-            root,
-            2,
-        );
+        let _ = self.register_model_internal(1, "jambo-embed-tiny", 1, root, 2);
 
         // Modèle 2 : Classificateur d'intentions shell (jambo-intent-v1)
         let b_intent1 = b"INTENT_DETERMINISTIC_MLP_LAYER0_PARAM_WEIGHT_SET_ALPHA";
         let b_intent2 = b"INTENT_DETERMINISTIC_MLP_LAYER1_PARAM_WEIGHT_SET_BETA";
         let root2 = Self::compute_merkle_root(&[b_intent1, b_intent2]);
-        let _ = self.register_model_internal(
-            2,
-            "jambo-intent-v1",
-            1,
-            root2,
-            2,
-        );
+        let _ = self.register_model_internal(2, "jambo-intent-v1", 1, root2, 2);
 
         self.record_audit_event(0x01, 1, b"INIT_AI_SEC_DEFAULTS");
     }
@@ -632,7 +630,9 @@ impl JamboAiSecDaemon {
         }
         self.total_poison_checks += 1;
 
-        let idx = self.find_model_idx(model_id).ok_or(SysError::InvalidArgument)?;
+        let idx = self
+            .find_model_idx(model_id)
+            .ok_or(SysError::InvalidArgument)?;
         let manifest = &mut self.models[idx];
 
         // 1. Calcul de la racine Merkle effective
@@ -688,7 +688,9 @@ impl JamboAiSecDaemon {
         if !cap.has_right(ai_sec_rights::QUARANTINE) {
             return Err(SysError::PermissionDenied);
         }
-        let idx = self.find_model_idx(model_id).ok_or(SysError::InvalidArgument)?;
+        let idx = self
+            .find_model_idx(model_id)
+            .ok_or(SysError::InvalidArgument)?;
         self.models[idx].status = ModelStatus::Quarantined;
         self.total_quarantines += 1;
         self.record_audit_event(0x30, model_id, reason);
@@ -700,7 +702,9 @@ impl JamboAiSecDaemon {
         if !cap.has_right(ai_sec_rights::ADMIN) {
             return Err(SysError::PermissionDenied);
         }
-        let idx = self.find_model_idx(model_id).ok_or(SysError::InvalidArgument)?;
+        let idx = self
+            .find_model_idx(model_id)
+            .ok_or(SysError::InvalidArgument)?;
         self.models[idx].status = ModelStatus::Active;
         self.models[idx].poison_detected = false;
         self.models[idx].anomaly_score = 0;
@@ -709,11 +713,10 @@ impl JamboAiSecDaemon {
     }
 
     /// Incrémente le compteur d'inférence sécurisée si le modèle est actif
-    pub fn record_inference_execution(
-        &mut self,
-        model_id: u32,
-    ) -> Result<(), SysError> {
-        let idx = self.find_model_idx(model_id).ok_or(SysError::InvalidArgument)?;
+    pub fn record_inference_execution(&mut self, model_id: u32) -> Result<(), SysError> {
+        let idx = self
+            .find_model_idx(model_id)
+            .ok_or(SysError::InvalidArgument)?;
         if self.models[idx].status != ModelStatus::Active {
             return Err(SysError::PermissionDenied);
         }
@@ -806,7 +809,8 @@ mod tests {
 
     #[test]
     fn test_output_screening_sanitization() {
-        let mut output = *b"Le resultat d'inference contient cap:0x1234567890abcdef et token=secret";
+        let mut output =
+            *b"Le resultat d'inference contient cap:0x1234567890abcdef et token=secret";
         let len = output.len();
         let res = OutputGuardrail::screen_and_sanitize(&mut output, len);
         assert!(!res.allowed);

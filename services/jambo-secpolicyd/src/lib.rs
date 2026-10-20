@@ -19,14 +19,14 @@ pub const MAX_NODES: usize = 16;
 pub const MAX_NAME_LEN: usize = 24;
 
 pub const TPM2_MAGIC: u32 = 0x54504D32; // "TPM2"
-pub const TPM2_VERSION: u16 = 0x0200;   // 2.0
+pub const TPM2_VERSION: u16 = 0x0200; // 2.0
 
 /// Masque standard des PCR critiques du démarrage mesuré (PCR 0, 4, 8, 9, 11)
 pub const DEFAULT_CRITICAL_PCR_MASK: u32 = (1 << 0)  // Firmware / CRTM
     | (1 << 4)                                       // Limine Bootloader
     | (1 << 8)                                       // JamboKernel Core
     | (1 << 9)                                       // Initrd Ramdisk
-    | (1 << 11);                                     // Security Policy Baseline
+    | (1 << 11); // Security Policy Baseline
 
 /// Droits capabilitaires pour le contrôle de l'attestation et du confinement
 pub mod secpolicy_rights {
@@ -37,12 +37,8 @@ pub mod secpolicy_rights {
     pub const CONFINEMENT_MANAGE: u32 = 0x10;
     pub const ADMIN: u32 = 0x80;
 
-    pub const ALL: u32 = ATTEST_READ
-        | ATTEST_CHALLENGE
-        | PCR_EXTEND
-        | POLICY_ENFORCE
-        | CONFINEMENT_MANAGE
-        | ADMIN;
+    pub const ALL: u32 =
+        ATTEST_READ | ATTEST_CHALLENGE | PCR_EXTEND | POLICY_ENFORCE | CONFINEMENT_MANAGE | ADMIN;
 }
 
 /// Jeton de capacité pour le démon de politique de sécurité matérielle
@@ -78,14 +74,16 @@ pub struct Sha256;
 
 impl Sha256 {
     const K: [u32; 64] = [
-        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
-        0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
-        0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
-        0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
-        0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
-        0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
-        0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
-        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
+        0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
+        0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f,
+        0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc,
+        0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+        0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116,
+        0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
+        0xc67178f2,
     ];
 
     #[inline(always)]
@@ -174,8 +172,8 @@ impl Sha256 {
 
     pub fn digest(data: &[u8]) -> [u8; 32] {
         let mut state = [
-            0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
-            0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+            0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
+            0x5be0cd19,
         ];
 
         let total_len = data.len();
@@ -304,7 +302,11 @@ impl PcrBank {
     }
 
     /// Étend un PCR selon l'algorithme cryptographique TCG
-    pub fn extend(&mut self, pcr_idx: usize, event_digest: &[u8; 32]) -> Result<[u8; 32], SysError> {
+    pub fn extend(
+        &mut self,
+        pcr_idx: usize,
+        event_digest: &[u8; 32],
+    ) -> Result<[u8; 32], SysError> {
         if pcr_idx >= PCR_COUNT {
             return Err(SysError::InvalidArgument);
         }
@@ -561,24 +563,16 @@ impl JamboSecPolicyDaemon {
         }
 
         let updated = self.pcr_bank.extend(pcr_idx, event_digest)?;
-        let _ = self.event_log.record(
-            pcr_idx as u8,
-            event_type,
-            desc,
-            event_digest,
-            now_ticks,
-        );
+        let _ = self
+            .event_log
+            .record(pcr_idx as u8, event_type, desc, event_digest, now_ticks);
 
         self.stats_data.pcrs_extended += 1;
         Ok(updated)
     }
 
     /// Construit l'empreinte composite d'une sélection de PCRs combinée au défi nonce
-    pub fn compute_composite_digest(
-        bank: &PcrBank,
-        pcr_mask: u32,
-        nonce: &[u8; 32],
-    ) -> [u8; 32] {
+    pub fn compute_composite_digest(bank: &PcrBank, pcr_mask: u32, nonce: &[u8; 32]) -> [u8; 32] {
         // Tampon pour concaténer jusqu'à 24 PCRs de 32 octets + 32 octets de nonce (800 octets max)
         let mut buffer = [0u8; (PCR_COUNT + 1) * HASH_LEN];
         let mut offset = 0;
@@ -632,7 +626,9 @@ impl JamboSecPolicyDaemon {
         node_id: u64,
         ak_pub: [u8; 32],
     ) -> Result<(), SysError> {
-        if !cap.has_right(secpolicy_rights::ADMIN) && !cap.has_right(secpolicy_rights::POLICY_ENFORCE) {
+        if !cap.has_right(secpolicy_rights::ADMIN)
+            && !cap.has_right(secpolicy_rights::POLICY_ENFORCE)
+        {
             return Err(SysError::PermissionDenied);
         }
 
@@ -665,7 +661,11 @@ impl JamboSecPolicyDaemon {
     }
 
     /// Génère un nonce défi déterministe pour éviter toute attaque par rejeu
-    pub fn generate_challenge_nonce(&self, cap: &SecPolicyCap, seed_ticks: u64) -> Result<[u8; 32], SysError> {
+    pub fn generate_challenge_nonce(
+        &self,
+        cap: &SecPolicyCap,
+        seed_ticks: u64,
+    ) -> Result<[u8; 32], SysError> {
         if !cap.has_right(secpolicy_rights::ATTEST_CHALLENGE) {
             return Err(SysError::PermissionDenied);
         }
@@ -713,22 +713,35 @@ impl JamboSecPolicyDaemon {
         // 2. Protection stricte contre le rejeu
         if quote.nonce != *expected_nonce {
             self.stats_data.attestations_failed += 1;
-            self.apply_confinement_internal(idx, ConfinementState::Quarantine, "REPLAY_NONCE_MISMATCH");
+            self.apply_confinement_internal(
+                idx,
+                ConfinementState::Quarantine,
+                "REPLAY_NONCE_MISMATCH",
+            );
             return Ok(AttestationStatus::NonceMismatch);
         }
 
         // 3. Masque PCR suffisant
         if (quote.pcr_mask & required_pcr_mask) != required_pcr_mask {
             self.stats_data.attestations_failed += 1;
-            self.apply_confinement_internal(idx, ConfinementState::Quarantine, "INCOMPLETE_PCR_MASK");
+            self.apply_confinement_internal(
+                idx,
+                ConfinementState::Quarantine,
+                "INCOMPLETE_PCR_MASK",
+            );
             return Ok(AttestationStatus::PcrMaskIncomplete);
         }
 
         // 4. Vérification de la signature cryptographique de la citation
         let ak_pub = self.nodes[idx].ak_public_key;
-        if !TpmAttestationKey::verify_signature(&ak_pub, &quote.composite_digest, &quote.signature) {
+        if !TpmAttestationKey::verify_signature(&ak_pub, &quote.composite_digest, &quote.signature)
+        {
             self.stats_data.attestations_failed += 1;
-            self.apply_confinement_internal(idx, ConfinementState::Quarantine, "INVALID_QUOTE_SIGNATURE");
+            self.apply_confinement_internal(
+                idx,
+                ConfinementState::Quarantine,
+                "INVALID_QUOTE_SIGNATURE",
+            );
             return Ok(AttestationStatus::InvalidSignature);
         }
 
@@ -738,7 +751,11 @@ impl JamboSecPolicyDaemon {
 
         if quote.composite_digest != expected_composite {
             self.stats_data.attestations_failed += 1;
-            self.apply_confinement_internal(idx, ConfinementState::Quarantine, "BOOT_INTEGRITY_TAMPERED");
+            self.apply_confinement_internal(
+                idx,
+                ConfinementState::Quarantine,
+                "BOOT_INTEGRITY_TAMPERED",
+            );
             return Ok(AttestationStatus::MeasurementMismatch);
         }
 
@@ -752,7 +769,12 @@ impl JamboSecPolicyDaemon {
     }
 
     /// Application interne du confinement
-    fn apply_confinement_internal(&mut self, node_idx: usize, state: ConfinementState, reason: &str) {
+    fn apply_confinement_internal(
+        &mut self,
+        node_idx: usize,
+        state: ConfinementState,
+        reason: &str,
+    ) {
         self.nodes[node_idx].violations_count += 1;
         if self.nodes[node_idx].violations_count >= 3 {
             self.nodes[node_idx].confinement = ConfinementState::Revoked;
@@ -836,10 +858,9 @@ mod tests {
         assert_eq!(
             empty_digest,
             [
-                0xe3, 0xb0, 0xc4, 0x42, 0x98, 0xfc, 0x1c, 0x14,
-                0x9a, 0xfb, 0xf4, 0xc8, 0x99, 0x6f, 0xb9, 0x24,
-                0x27, 0xae, 0x41, 0xe4, 0x64, 0x9b, 0x93, 0x4c,
-                0xa4, 0x95, 0x99, 0x1b, 0x78, 0x52, 0xb8, 0x55
+                0xe3, 0xb0, 0xc4, 0x42, 0x98, 0xfc, 0x1c, 0x14, 0x9a, 0xfb, 0xf4, 0xc8, 0x99, 0x6f,
+                0xb9, 0x24, 0x27, 0xae, 0x41, 0xe4, 0x64, 0x9b, 0x93, 0x4c, 0xa4, 0x95, 0x99, 0x1b,
+                0x78, 0x52, 0xb8, 0x55
             ]
         );
 
@@ -848,10 +869,9 @@ mod tests {
         assert_eq!(
             abc_digest,
             [
-                0xba, 0x78, 0x16, 0xbf, 0x8f, 0x01, 0xcf, 0xea,
-                0x41, 0x41, 0x40, 0xde, 0x5d, 0xae, 0x22, 0x23,
-                0xb0, 0x03, 0x61, 0xa3, 0x96, 0x17, 0x7a, 0x9c,
-                0xb4, 0x10, 0xff, 0x61, 0xf2, 0x00, 0x15, 0xad
+                0xba, 0x78, 0x16, 0xbf, 0x8f, 0x01, 0xcf, 0xea, 0x41, 0x41, 0x40, 0xde, 0x5d, 0xae,
+                0x22, 0x23, 0xb0, 0x03, 0x61, 0xa3, 0x96, 0x17, 0x7a, 0x9c, 0xb4, 0x10, 0xff, 0x61,
+                0xf2, 0x00, 0x15, 0xad
             ]
         );
     }
@@ -884,7 +904,9 @@ mod tests {
 
         let node2_priv = [0x22u8; 32];
         let node2_pub = [0x22u8; 32];
-        verifier.register_remote_node(&admin_cap, 2, node2_pub).unwrap();
+        verifier
+            .register_remote_node(&admin_cap, 2, node2_pub)
+            .unwrap();
 
         let mut node2 = JamboSecPolicyDaemon::new(2, admin_cap, node2_priv, node2_pub);
 

@@ -7,8 +7,8 @@ extern crate alloc;
 use crate::kprintln;
 use jambo_abi::Handle;
 use jambo_cwpp::{
-    cwpp_rights, AnomalyType, ContainmentAction, CwppCap, CwppError, JamboCwppDaemon,
-    Workload, WorkloadProfile, WorkloadState, WorkloadType,
+    cwpp_rights, AnomalyType, ContainmentAction, CwppCap, CwppError, JamboCwppDaemon, Workload,
+    WorkloadProfile, WorkloadState, WorkloadType,
 };
 
 /// Exécute la suite complète de validation formelle du démon CWPP (Phase 126)
@@ -63,16 +63,7 @@ pub fn execute_cwpp_daemon_test() -> bool {
     // 3. Détection d'anomalies en temps réel
     // Événement nominal sur ID 101 (jambo-ingress)
     let ev1 = cwpp
-        .report_execution_event(
-            &admin_cap,
-            101,
-            1,
-            8 * 1024 * 1024,
-            2,
-            false,
-            true,
-            1000,
-        )
+        .report_execution_event(&admin_cap, 101, 1, 8 * 1024 * 1024, 2, false, true, 1000)
         .expect("Événement nominal");
     assert_eq!(ev1, None);
 
@@ -109,16 +100,7 @@ pub fn execute_cwpp_daemon_test() -> bool {
     // Détection appel système interdit sur ID 104 (jambo-log-audit)
     // Profile 4 a mask 0x3FF (bits 0..9). Syscall 45 est interdit
     let ev4 = cwpp
-        .report_execution_event(
-            &admin_cap,
-            104,
-            45,
-            16 * 1024 * 1024,
-            2,
-            false,
-            true,
-            1300,
-        )
+        .report_execution_event(&admin_cap, 104, 45, 16 * 1024 * 1024, 2, false, true, 1300)
         .expect("Événement syscall interdit");
     assert_eq!(ev4, Some(AnomalyType::UnauthorizedSyscall));
 

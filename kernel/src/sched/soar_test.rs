@@ -56,8 +56,10 @@ pub fn execute_soar_daemon_test() -> bool {
 
     // 3. Validation DAG (détection anti-cycle)
     let mut cyclic_pb = Playbook::new(99, "CyclicTest", None, IncidentSeverity::Low);
-    let c1 = PlaybookStep::new(1, "Step1", SoarAction::IsolateProcess { pid: 1 }, true).with_dependency(2);
-    let c2 = PlaybookStep::new(2, "Step2", SoarAction::IsolateProcess { pid: 2 }, true).with_dependency(1);
+    let c1 = PlaybookStep::new(1, "Step1", SoarAction::IsolateProcess { pid: 1 }, true)
+        .with_dependency(2);
+    let c2 = PlaybookStep::new(2, "Step2", SoarAction::IsolateProcess { pid: 2 }, true)
+        .with_dependency(1);
     cyclic_pb.add_step(c1).unwrap();
     cyclic_pb.add_step(c2).unwrap();
     assert_eq!(cyclic_pb.validate_dag(), Err(SoarError::CyclicDependency));
@@ -75,11 +77,15 @@ pub fn execute_soar_daemon_test() -> bool {
         None,
         1000,
     );
-    let ddos_inc_id = soar.create_incident(&admin_cap, ddos_inc).expect("Incident DDoS");
+    let ddos_inc_id = soar
+        .create_incident(&admin_cap, ddos_inc)
+        .expect("Incident DDoS");
     let pb_id = soar
         .find_matching_playbook(IncidentCategory::DDoSFlood, IncidentSeverity::High)
         .expect("Playbook DDoS trouvé");
-    let ddos_res = soar.execute_playbook(&admin_cap, pb_id, ddos_inc_id, 1010).expect("Exécution PB DDoS");
+    let ddos_res = soar
+        .execute_playbook(&admin_cap, pb_id, ddos_inc_id, 1010)
+        .expect("Exécution PB DDoS");
     assert!(ddos_res.fully_mitigated);
     assert_eq!(ddos_res.steps_succeeded, 3);
     assert_eq!(soar.incidents[0].unwrap().status, IncidentStatus::Mitigated);
@@ -97,8 +103,12 @@ pub fn execute_soar_daemon_test() -> bool {
         None,
         2000,
     );
-    let sqli_inc_id = soar.create_incident(&admin_cap, sqli_inc).expect("Incident SQLi");
-    let sqli_res = soar.execute_playbook(&admin_cap, 2, sqli_inc_id, 2010).expect("Exécution PB WAF");
+    let sqli_inc_id = soar
+        .create_incident(&admin_cap, sqli_inc)
+        .expect("Incident SQLi");
+    let sqli_res = soar
+        .execute_playbook(&admin_cap, 2, sqli_inc_id, 2010)
+        .expect("Exécution PB WAF");
     assert!(sqli_res.fully_mitigated);
     assert_eq!(sqli_res.steps_succeeded, 4);
     assert_eq!(soar.incidents[1].unwrap().status, IncidentStatus::Mitigated);
@@ -116,8 +126,12 @@ pub fn execute_soar_daemon_test() -> bool {
         Some(8888),
         3000,
     );
-    let priv_inc_id = soar.create_incident(&admin_cap, priv_inc).expect("Incident Escalade");
-    let priv_res = soar.execute_playbook(&admin_cap, 3, priv_inc_id, 3010).expect("Exécution PB Revocation");
+    let priv_inc_id = soar
+        .create_incident(&admin_cap, priv_inc)
+        .expect("Incident Escalade");
+    let priv_res = soar
+        .execute_playbook(&admin_cap, 3, priv_inc_id, 3010)
+        .expect("Exécution PB Revocation");
     assert!(priv_res.fully_mitigated);
     assert_eq!(priv_res.steps_succeeded, 4);
     assert_eq!(soar.incidents[2].unwrap().status, IncidentStatus::Mitigated);

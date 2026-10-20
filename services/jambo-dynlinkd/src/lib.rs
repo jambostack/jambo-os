@@ -33,14 +33,16 @@ pub struct Sha256;
 
 impl Sha256 {
     const K: [u32; 64] = [
-        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
-        0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
-        0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
-        0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
-        0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
-        0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
-        0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
-        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
+        0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
+        0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f,
+        0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc,
+        0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+        0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116,
+        0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
+        0xc67178f2,
     ];
 
     #[inline(always)]
@@ -129,8 +131,8 @@ impl Sha256 {
 
     pub fn digest(data: &[u8]) -> [u8; 32] {
         let mut state: [u32; 8] = [
-            0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
-            0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+            0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
+            0x5be0cd19,
         ];
 
         let total_len = data.len();
@@ -172,14 +174,14 @@ impl Sha256 {
 // ============================================================================
 
 pub mod dynlink_rights {
-    pub const DYNLINK_READ: u32 = 1 << 0;     // Inspection des bibliothèques et tables
-    pub const DYNLINK_LOAD: u32 = 1 << 1;     // Chargement en mémoire virtuelle (.jso)
-    pub const DYNLINK_BIND: u32 = 1 << 2;     // Résolution et application des relocations
-    pub const DYNLINK_RESOLVE: u32 = 1 << 3;  // Résolution différée (Lazy Binding PLT)
-    pub const DYNLINK_RELRO: u32 = 1 << 4;    // Protection W^X et scellement GOT en lecture seule
-    pub const DYNLINK_UNLOAD: u32 = 1 << 5;   // Déchargement de bibliothèques (dlclose)
-    pub const DYNLINK_AUDIT: u32 = 1 << 6;    // Consultation de l'audit cryptographique
-    pub const DYNLINK_ADMIN: u32 = 1 << 7;    // Administration système et reconfiguration
+    pub const DYNLINK_READ: u32 = 1 << 0; // Inspection des bibliothèques et tables
+    pub const DYNLINK_LOAD: u32 = 1 << 1; // Chargement en mémoire virtuelle (.jso)
+    pub const DYNLINK_BIND: u32 = 1 << 2; // Résolution et application des relocations
+    pub const DYNLINK_RESOLVE: u32 = 1 << 3; // Résolution différée (Lazy Binding PLT)
+    pub const DYNLINK_RELRO: u32 = 1 << 4; // Protection W^X et scellement GOT en lecture seule
+    pub const DYNLINK_UNLOAD: u32 = 1 << 5; // Déchargement de bibliothèques (dlclose)
+    pub const DYNLINK_AUDIT: u32 = 1 << 6; // Consultation de l'audit cryptographique
+    pub const DYNLINK_ADMIN: u32 = 1 << 7; // Administration système et reconfiguration
 
     pub const ALL: u32 = DYNLINK_READ
         | DYNLINK_LOAD
@@ -254,21 +256,21 @@ pub const DT_FLAGS: i64 = 30;
 
 // Types de Relocations x86-64
 pub const R_X86_64_NONE: u32 = 0;
-pub const R_X86_64_64: u32 = 1;        // S + A
-pub const R_X86_64_PC32: u32 = 2;      // S + A - P
+pub const R_X86_64_64: u32 = 1; // S + A
+pub const R_X86_64_PC32: u32 = 2; // S + A - P
 pub const R_X86_64_GOT32: u32 = 3;
 pub const R_X86_64_PLT32: u32 = 4;
 pub const R_X86_64_COPY: u32 = 5;
-pub const R_X86_64_GLOB_DAT: u32 = 6;  // S
+pub const R_X86_64_GLOB_DAT: u32 = 6; // S
 pub const R_X86_64_JUMP_SLOT: u32 = 7; // S
-pub const R_X86_64_RELATIVE: u32 = 8;  // B + A
-pub const R_X86_64_32: u32 = 10;       // S + A
+pub const R_X86_64_RELATIVE: u32 = 8; // B + A
+pub const R_X86_64_32: u32 = 10; // S + A
 
 // Drapeaux de liaison dynamique (RTLD_*)
-pub const RTLD_LAZY: u32 = 1 << 0;     // Résolution différée PLT
-pub const RTLD_NOW: u32 = 1 << 1;      // Résolution immédiate de tous les symboles
-pub const RTLD_GLOBAL: u32 = 1 << 2;   // Symboles disponibles pour d'autres bibliothèques
-pub const RTLD_LOCAL: u32 = 1 << 3;    // Symboles isolés au module
+pub const RTLD_LAZY: u32 = 1 << 0; // Résolution différée PLT
+pub const RTLD_NOW: u32 = 1 << 1; // Résolution immédiate de tous les symboles
+pub const RTLD_GLOBAL: u32 = 1 << 2; // Symboles disponibles pour d'autres bibliothèques
+pub const RTLD_LOCAL: u32 = 1 << 3; // Symboles isolés au module
 pub const RTLD_NODELETE: u32 = 1 << 4; // Interdiction de déchargement
 
 #[repr(C, packed)]
@@ -587,7 +589,7 @@ impl SharedLibrary {
 
         // Configurer GOT[0..2]
         lib.got.entries[0] = base_address; // link_map
-        lib.got.entries[1] = id as u64;     // lib_id
+        lib.got.entries[1] = id as u64; // lib_id
         lib.got.entries[2] = 0x7FFF_0000_1000; // Adresse du resolver dynamique Ring 3
         lib
     }
@@ -847,7 +849,13 @@ impl JamboDynLinkDaemon {
             if slot.is_none() {
                 *slot = Some(lib);
                 self.lib_count += 1;
-                self.record_audit(timestamp, AuditAction::LibraryLoaded, lib_id, base_address, name);
+                self.record_audit(
+                    timestamp,
+                    AuditAction::LibraryLoaded,
+                    lib_id,
+                    base_address,
+                    name,
+                );
                 return Ok(lib_id);
             }
         }
@@ -939,7 +947,13 @@ impl JamboDynLinkDaemon {
             let (reloc_type, sym_name_buf, sym_len, offset, addend) = {
                 let lib = self.get_library(lib_id).unwrap();
                 let r = &lib.relocations[r_idx];
-                (r.reloc_type, r.symbol_name, r.symbol_name_len, r.offset, r.addend)
+                (
+                    r.reloc_type,
+                    r.symbol_name,
+                    r.symbol_name_len,
+                    r.offset,
+                    r.addend,
+                )
             };
             let sym_name = core::str::from_utf8(&sym_name_buf[..sym_len]).unwrap_or("");
 
@@ -1052,7 +1066,9 @@ impl JamboDynLinkDaemon {
             return Err(SysError::PermissionDenied);
         }
 
-        let lib = self.get_library_mut(lib_id).ok_or(SysError::InvalidArgument)?;
+        let lib = self
+            .get_library_mut(lib_id)
+            .ok_or(SysError::InvalidArgument)?;
         lib.got.is_readonly = true;
         lib.relro_enabled = true;
         lib.state = LibraryState::Ready;
@@ -1122,7 +1138,13 @@ impl JamboDynLinkDaemon {
             let lib = self.libraries[idx].as_ref().unwrap();
             let mut buf = [0u8; MAX_NAME_LEN];
             buf[..lib.name_len].copy_from_slice(&lib.name[..lib.name_len]);
-            (lib.flags, lib.ref_count, lib.base_address, buf, lib.name_len)
+            (
+                lib.flags,
+                lib.ref_count,
+                lib.base_address,
+                buf,
+                lib.name_len,
+            )
         };
 
         if (flags & RTLD_NODELETE) != 0 {
@@ -1160,30 +1182,98 @@ impl JamboDynLinkDaemon {
 
         // 1. Charger `libjambo-c.jso` (Bibliothèque C standard de base)
         let libc_id = self
-            .load_library(&admin_cap, "libjambo-c.jso", 0x0000_7000_0000_0000, 0x20000, RTLD_GLOBAL, 100)
+            .load_library(
+                &admin_cap,
+                "libjambo-c.jso",
+                0x0000_7000_0000_0000,
+                0x20000,
+                RTLD_GLOBAL,
+                100,
+            )
             .expect("load libc");
 
         if let Some(libc) = self.get_library_mut(libc_id) {
-            let _ = libc.add_symbol("malloc", 0x0000_7000_0000_1000, 64, SymbolBinding::Global, SymbolType::Func);
-            let _ = libc.add_symbol("free", 0x0000_7000_0000_1040, 48, SymbolBinding::Global, SymbolType::Func);
-            let _ = libc.add_symbol("memcpy", 0x0000_7000_0000_1080, 80, SymbolBinding::Global, SymbolType::Func);
-            let _ = libc.add_symbol("strlen", 0x0000_7000_0000_10E0, 32, SymbolBinding::Global, SymbolType::Func);
-            let _ = libc.add_symbol("printf", 0x0000_7000_0000_1100, 128, SymbolBinding::Global, SymbolType::Func);
-            let _ = libc.add_symbol("exit", 0x0000_7000_0000_1180, 24, SymbolBinding::Global, SymbolType::Func);
+            let _ = libc.add_symbol(
+                "malloc",
+                0x0000_7000_0000_1000,
+                64,
+                SymbolBinding::Global,
+                SymbolType::Func,
+            );
+            let _ = libc.add_symbol(
+                "free",
+                0x0000_7000_0000_1040,
+                48,
+                SymbolBinding::Global,
+                SymbolType::Func,
+            );
+            let _ = libc.add_symbol(
+                "memcpy",
+                0x0000_7000_0000_1080,
+                80,
+                SymbolBinding::Global,
+                SymbolType::Func,
+            );
+            let _ = libc.add_symbol(
+                "strlen",
+                0x0000_7000_0000_10E0,
+                32,
+                SymbolBinding::Global,
+                SymbolType::Func,
+            );
+            let _ = libc.add_symbol(
+                "printf",
+                0x0000_7000_0000_1100,
+                128,
+                SymbolBinding::Global,
+                SymbolType::Func,
+            );
+            let _ = libc.add_symbol(
+                "exit",
+                0x0000_7000_0000_1180,
+                24,
+                SymbolBinding::Global,
+                SymbolType::Func,
+            );
             let _ = libc.add_relocation(0x18, R_X86_64_RELATIVE, "", 0x1000);
             libc.init_fn = 0x0000_7000_0000_1200;
         }
 
         // 2. Charger `libcrypto.jso` (Bibliothèque cryptographique ChaCha20/SHA-256)
         let crypto_id = self
-            .load_library(&admin_cap, "libcrypto.jso", 0x0000_7000_0004_0000, 0x18000, RTLD_GLOBAL, 101)
+            .load_library(
+                &admin_cap,
+                "libcrypto.jso",
+                0x0000_7000_0004_0000,
+                0x18000,
+                RTLD_GLOBAL,
+                101,
+            )
             .expect("load libcrypto");
 
         if let Some(crypto) = self.get_library_mut(crypto_id) {
             let _ = crypto.add_dependency(libc_id);
-            let _ = crypto.add_symbol("sha256_hash", 0x0000_7000_0004_1000, 256, SymbolBinding::Global, SymbolType::Func);
-            let _ = crypto.add_symbol("chacha20_encrypt", 0x0000_7000_0004_1100, 320, SymbolBinding::Global, SymbolType::Func);
-            let _ = crypto.add_symbol("ed25519_verify", 0x0000_7000_0004_1240, 400, SymbolBinding::Global, SymbolType::Func);
+            let _ = crypto.add_symbol(
+                "sha256_hash",
+                0x0000_7000_0004_1000,
+                256,
+                SymbolBinding::Global,
+                SymbolType::Func,
+            );
+            let _ = crypto.add_symbol(
+                "chacha20_encrypt",
+                0x0000_7000_0004_1100,
+                320,
+                SymbolBinding::Global,
+                SymbolType::Func,
+            );
+            let _ = crypto.add_symbol(
+                "ed25519_verify",
+                0x0000_7000_0004_1240,
+                400,
+                SymbolBinding::Global,
+                SymbolType::Func,
+            );
             // Relocations pointant vers `memcpy` et `malloc` de libc
             let _ = crypto.add_relocation(0x28, R_X86_64_GLOB_DAT, "memcpy", 0);
             let _ = crypto.add_relocation(0x30, R_X86_64_JUMP_SLOT, "malloc", 0);
@@ -1192,13 +1282,38 @@ impl JamboDynLinkDaemon {
 
         // 3. Charger `libmath.jso` (Calcul mathématique flottant et trigonométrie)
         let math_id = self
-            .load_library(&admin_cap, "libmath.jso", 0x0000_7000_0008_0000, 0x10000, RTLD_LAZY, 102)
+            .load_library(
+                &admin_cap,
+                "libmath.jso",
+                0x0000_7000_0008_0000,
+                0x10000,
+                RTLD_LAZY,
+                102,
+            )
             .expect("load libmath");
 
         if let Some(math) = self.get_library_mut(math_id) {
-            let _ = math.add_symbol("sin", 0x0000_7000_0008_1000, 96, SymbolBinding::Global, SymbolType::Func);
-            let _ = math.add_symbol("cos", 0x0000_7000_0008_1060, 96, SymbolBinding::Global, SymbolType::Func);
-            let _ = math.add_symbol("sqrt", 0x0000_7000_0008_10C0, 48, SymbolBinding::Global, SymbolType::Func);
+            let _ = math.add_symbol(
+                "sin",
+                0x0000_7000_0008_1000,
+                96,
+                SymbolBinding::Global,
+                SymbolType::Func,
+            );
+            let _ = math.add_symbol(
+                "cos",
+                0x0000_7000_0008_1060,
+                96,
+                SymbolBinding::Global,
+                SymbolType::Func,
+            );
+            let _ = math.add_symbol(
+                "sqrt",
+                0x0000_7000_0008_10C0,
+                48,
+                SymbolBinding::Global,
+                SymbolType::Func,
+            );
             let _ = math.plt.add_entry("sin", 3, 0x0000_7000_0008_2000);
             let _ = math.plt.add_entry("cos", 4, 0x0000_7000_0008_2010);
         }
@@ -1282,10 +1397,22 @@ pub fn build_synthetic_jso_bytes(name: &str, sym_name: &str, sym_addr: u64) -> [
 
     // 3. DT_DYNAMIC tags (offset 176)
     let dyn_tags: [Elf64Dyn; 4] = [
-        Elf64Dyn { d_tag: DT_SONAME, d_val: 1 },
-        Elf64Dyn { d_tag: DT_SYMTAB, d_val: 0x0040_0120 },
-        Elf64Dyn { d_tag: DT_STRTAB, d_val: 0x0040_0180 },
-        Elf64Dyn { d_tag: DT_NULL, d_val: 0 },
+        Elf64Dyn {
+            d_tag: DT_SONAME,
+            d_val: 1,
+        },
+        Elf64Dyn {
+            d_tag: DT_SYMTAB,
+            d_val: 0x0040_0120,
+        },
+        Elf64Dyn {
+            d_tag: DT_STRTAB,
+            d_val: 0x0040_0180,
+        },
+        Elf64Dyn {
+            d_tag: DT_NULL,
+            d_val: 0,
+        },
     ];
     unsafe {
         let dyn_ptr = buf.as_mut_ptr().add(176) as *mut Elf64Dyn;
@@ -1406,7 +1533,14 @@ mod tests {
         daemon.init_defaults();
 
         let lib_id = daemon
-            .load_library(&admin_cap, "libtest.jso", 0x0000_7000_000C_0000, 0x10000, RTLD_NOW, 1010)
+            .load_library(
+                &admin_cap,
+                "libtest.jso",
+                0x0000_7000_000C_0000,
+                0x10000,
+                RTLD_NOW,
+                1010,
+            )
             .unwrap();
 
         // Avant RELRO, écriture autorisée dans GOT
@@ -1419,7 +1553,10 @@ mod tests {
 
         // Après RELRO, tentative d'écriture dans GOT formellement rejetée
         let lib = daemon.get_library_mut(lib_id).unwrap();
-        assert_eq!(lib.got.set_entry(4, 0x5678), Err(SysError::PermissionDenied));
+        assert_eq!(
+            lib.got.set_entry(4, 0x5678),
+            Err(SysError::PermissionDenied)
+        );
         assert_eq!(lib.got.get_entry(4), Some(0x1234)); // Inchangé !
 
         assert!(daemon.verify_audit_integrity());

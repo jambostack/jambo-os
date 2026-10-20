@@ -126,10 +126,7 @@ pub fn execute_cluster_ca_test() -> bool {
     kprintln!("[CERT/SHELL] Commande 'cert status' validée");
 
     // cert issue
-    let (st, len) = shell.execute_line(
-        "cert issue 1001 test-node.mesh 1000 3000",
-        &mut out_buf,
-    );
+    let (st, len) = shell.execute_line("cert issue 1001 test-node.mesh 1000 3000", &mut out_buf);
     assert_eq!(st, ShellStatus::Success);
     let s = core::str::from_utf8(&out_buf[..len]).unwrap_or("");
     assert!(s.contains("[CERT/ISSUE]"));

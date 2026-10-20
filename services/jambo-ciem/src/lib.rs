@@ -28,29 +28,23 @@ pub struct Sha256 {
 
 impl Sha256 {
     const K: [u32; 64] = [
-        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5,
-        0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
-        0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3,
-        0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
-        0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc,
-        0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
-        0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
-        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
-        0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13,
-        0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
-        0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3,
-        0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
-        0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5,
-        0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
-        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
-        0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
+        0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
+        0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f,
+        0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc,
+        0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+        0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116,
+        0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
+        0xc67178f2,
     ];
 
     pub fn new() -> Self {
         Self {
             state: [
-                0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
-                0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+                0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
+                0x5be0cd19,
             ],
             buffer: [0u8; 64],
             buffer_len: 0,
@@ -71,7 +65,10 @@ impl Sha256 {
         for i in 16..64 {
             let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);
             let s1 = w[i - 2].rotate_right(17) ^ w[i - 2].rotate_right(19) ^ (w[i - 2] >> 10);
-            w[i] = w[i - 16].wrapping_add(s0).wrapping_add(w[i - 7]).wrapping_add(s1);
+            w[i] = w[i - 16]
+                .wrapping_add(s0)
+                .wrapping_add(w[i - 7])
+                .wrapping_add(s1);
         }
 
         let mut a = self.state[0];
@@ -187,15 +184,15 @@ pub enum CiemError {
 }
 
 pub mod ciem_rights {
-    pub const REGISTER_IDENTITY: u32     = 1 << 0;
-    pub const INSPECT_ENTITLEMENTS: u32  = 1 << 1;
-    pub const ANALYZE_EXCESS: u32        = 1 << 2;
-    pub const ENFORCE_LEAST_PRIV: u32    = 1 << 3;
-    pub const REVOKE_DORMANT: u32        = 1 << 4;
-    pub const MANAGE_POLICIES: u32       = 1 << 5;
-    pub const READ_METRICS: u32          = 1 << 6;
-    pub const SEAL_LEDGER: u32           = 1 << 7;
-    pub const ADMIN: u32                 = 1 << 8;
+    pub const REGISTER_IDENTITY: u32 = 1 << 0;
+    pub const INSPECT_ENTITLEMENTS: u32 = 1 << 1;
+    pub const ANALYZE_EXCESS: u32 = 1 << 2;
+    pub const ENFORCE_LEAST_PRIV: u32 = 1 << 3;
+    pub const REVOKE_DORMANT: u32 = 1 << 4;
+    pub const MANAGE_POLICIES: u32 = 1 << 5;
+    pub const READ_METRICS: u32 = 1 << 6;
+    pub const SEAL_LEDGER: u32 = 1 << 7;
+    pub const ADMIN: u32 = 1 << 8;
 
     pub const ALL: u32 = REGISTER_IDENTITY
         | INSPECT_ENTITLEMENTS
@@ -231,7 +228,12 @@ impl CiemCap {
         (self.rights & right) == right && self.invocations_left > 0
     }
 
-    pub fn attenuate(&self, new_rights: u32, max_lifetime: u64, invocations: u32) -> Result<Self, CiemError> {
+    pub fn attenuate(
+        &self,
+        new_rights: u32,
+        max_lifetime: u64,
+        invocations: u32,
+    ) -> Result<Self, CiemError> {
         if (new_rights & !self.rights) != 0 {
             return Err(CiemError::AttenuationViolation);
         }
@@ -262,8 +264,6 @@ impl CiemCap {
         Ok(())
     }
 }
-
-
 
 // ============================================================================
 // TYPES DE DONNÉES & ENTITLEMENTS CIEM
@@ -921,11 +921,7 @@ impl JamboCiemDaemon {
     }
 
     /// Remédie automatiquement à toutes les anomalies détectées (atténuation monotone ou révocation)
-    pub fn remediate_all(
-        &mut self,
-        cap: &CiemCap,
-        current_tick: u64,
-    ) -> Result<usize, CiemError> {
+    pub fn remediate_all(&mut self, cap: &CiemCap, current_tick: u64) -> Result<usize, CiemError> {
         if !cap.has_right(ciem_rights::ENFORCE_LEAST_PRIV) && !cap.has_right(ciem_rights::ADMIN) {
             return Err(CiemError::PermissionDenied);
         }
@@ -995,7 +991,13 @@ impl JamboCiemDaemon {
         let _ = self.record_usage(&cap, 101, 201, 0x0F, 120);
 
         // 2. Identité Service Ingress Gateway (ServiceAccount) avec droits excessifs
-        let _ = self.register_identity(&cap, 102, "jambo-ingress-gw", IdentityKind::ServiceAccount, 100);
+        let _ = self.register_identity(
+            &cap,
+            102,
+            "jambo-ingress-gw",
+            IdentityKind::ServiceAccount,
+            100,
+        );
         let _ = self.grant_entitlement(
             &cap,
             202,
@@ -1009,7 +1011,13 @@ impl JamboCiemDaemon {
         let _ = self.record_usage(&cap, 102, 202, 0x07, 150);
 
         // 3. Identité Sauvegarde Ancienne (WorkloadAgent) devenue dormante
-        let _ = self.register_identity(&cap, 103, "legacy-backup-job", IdentityKind::WorkloadAgent, 100);
+        let _ = self.register_identity(
+            &cap,
+            103,
+            "legacy-backup-job",
+            IdentityKind::WorkloadAgent,
+            100,
+        );
         let _ = self.grant_entitlement(
             &cap,
             203,
@@ -1103,11 +1111,18 @@ mod tests {
         let _ = daemon.scan_all_entitlements(&admin_cap, 2500).unwrap();
 
         // Réduire entitlement 202 (jambo-ingress-gw) : granted 0xFF -> doit devenir 0x07 (exercised)
-        let new_rights = daemon.enforce_least_privilege(&admin_cap, 202, 2600).unwrap();
+        let new_rights = daemon
+            .enforce_least_privilege(&admin_cap, 202, 2600)
+            .unwrap();
         assert_eq!(new_rights, 0x07);
 
         // Vérifier que le statut est Attenuated
-        let ent = daemon.entitlements.iter().flatten().find(|e| e.id == 202).unwrap();
+        let ent = daemon
+            .entitlements
+            .iter()
+            .flatten()
+            .find(|e| e.id == 202)
+            .unwrap();
         assert_eq!(ent.status, EntitlementStatus::Attenuated);
         assert_eq!(ent.granted_rights, 0x07);
         assert_eq!(ent.excess_rights(), 0);
@@ -1116,7 +1131,12 @@ mod tests {
         let revoked = daemon.revoke_entitlement(&admin_cap, 203, 2610).unwrap();
         assert!(revoked);
 
-        let ent203 = daemon.entitlements.iter().flatten().find(|e| e.id == 203).unwrap();
+        let ent203 = daemon
+            .entitlements
+            .iter()
+            .flatten()
+            .find(|e| e.id == 203)
+            .unwrap();
         assert_eq!(ent203.status, EntitlementStatus::Revoked);
         assert_eq!(ent203.granted_rights, 0);
 

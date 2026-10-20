@@ -786,15 +786,19 @@ impl JamboDnsDaemon {
         data: DnsRecordData,
         now: u64,
     ) -> Result<(), SysError> {
-        if !cap.has_right(dns_rights::DNS_REGISTER) && !cap.has_right(dns_rights::DNS_ZONE_UPDATE)
-        {
+        if !cap.has_right(dns_rights::DNS_REGISTER) && !cap.has_right(dns_rights::DNS_ZONE_UPDATE) {
             return Err(SysError::PermissionDenied);
         }
         self.zone.add_record(name, rtype, ttl, data, now)
     }
 
     /// Supprime un enregistrement sous contrôle capabilaire (`DNS_ZONE_UPDATE` ou `DNS_ADMIN`).
-    pub fn remove_record(&mut self, cap: &DnsCap, name: &str, rtype: DnsType) -> Result<bool, SysError> {
+    pub fn remove_record(
+        &mut self,
+        cap: &DnsCap,
+        name: &str,
+        rtype: DnsType,
+    ) -> Result<bool, SysError> {
         if !cap.has_right(dns_rights::DNS_ZONE_UPDATE) && !cap.has_right(dns_rights::DNS_ADMIN) {
             return Err(SysError::PermissionDenied);
         }
@@ -1014,9 +1018,9 @@ impl JamboDnsDaemon {
         let mut answers_count = 0;
 
         if is_auth {
-            answers_count = self
-                .zone
-                .find_records(qname_str, query.question.qtype, now, &mut answers);
+            answers_count =
+                self.zone
+                    .find_records(qname_str, query.question.qtype, now, &mut answers);
         } else if let Some(cached_data) = self.cache.lookup(qname_str, query.question.qtype, now) {
             let mut rec = DnsRecord::empty();
             let name_bytes = query.question.qname;
@@ -1118,9 +1122,7 @@ mod tests {
                 "api.jambo",
                 DnsType::AAAA,
                 300,
-                DnsRecordData::AAAA([
-                    0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
-                ]),
+                DnsRecordData::AAAA([0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]),
                 100,
             )
             .expect("add AAAA record");

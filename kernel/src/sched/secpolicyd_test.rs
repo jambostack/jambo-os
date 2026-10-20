@@ -58,19 +58,15 @@ pub fn execute_secpolicy_daemon_test() -> bool {
     let kernel_patch_digest = Sha256::digest(b"KERNEL_LIVEPATCH_SECURITY_V1");
 
     let updated_pcr8 = local_daemon
-        .extend_pcr(
-            &admin_cap,
-            8,
-            3,
-            "livepatch_sec",
-            &kernel_patch_digest,
-            20,
-        )
+        .extend_pcr(&admin_cap, 8, 3, "livepatch_sec", &kernel_patch_digest, 20)
         .expect("extension PCR 8");
 
     assert_ne!(initial_pcr8, updated_pcr8);
     let expected_ext = Sha256::pcr_extend(&initial_pcr8, &kernel_patch_digest);
-    assert_eq!(updated_pcr8, expected_ext, "Formule TCG SHA256(PCR || digest)");
+    assert_eq!(
+        updated_pcr8, expected_ext,
+        "Formule TCG SHA256(PCR || digest)"
+    );
     assert_eq!(local_daemon.event_log.count, 1);
     assert_eq!(local_daemon.stats_data.pcrs_extended, 1);
     kprintln!("[SECPOLICY/PCR] Registres PCR 0..23, extensions SHA-256 et TCG Event Log validés");
@@ -81,7 +77,12 @@ pub fn execute_secpolicy_daemon_test() -> bool {
         .expect("nonce 1");
 
     let quote_node1 = local_daemon
-        .generate_quote(&admin_cap, DEFAULT_CRITICAL_PCR_MASK, &challenge_nonce_1, 105)
+        .generate_quote(
+            &admin_cap,
+            DEFAULT_CRITICAL_PCR_MASK,
+            &challenge_nonce_1,
+            105,
+        )
         .expect("generate quote node 1");
 
     assert_eq!(quote_node1.node_id, 1);
@@ -176,7 +177,10 @@ pub fn execute_secpolicy_daemon_test() -> bool {
 
     // Vérification du confinement automatique immédiat : mise en quarantaine
     assert!(!local_daemon.is_node_trusted(2));
-    assert_eq!(local_daemon.nodes[1].confinement, ConfinementState::Quarantine);
+    assert_eq!(
+        local_daemon.nodes[1].confinement,
+        ConfinementState::Quarantine
+    );
     kprintln!("[SECPOLICY/CONFINEMENT] Attestation distante, détection d'altération et auto-quarantaine validées");
 
     // 5. Intégration des commandes Shell jsh ('secpolicy')
@@ -208,7 +212,8 @@ pub fn execute_secpolicy_daemon_test() -> bool {
     kprintln!("[SECPOLICY/SHELL] Commande 'secpolicy verify' validée");
 
     // Commande : secpolicy confine 2 quarantine
-    let (st_confine, len_confine) = shell.execute_line("secpolicy confine 2 quarantine", &mut out_buf);
+    let (st_confine, len_confine) =
+        shell.execute_line("secpolicy confine 2 quarantine", &mut out_buf);
     assert_eq!(st_confine, ShellStatus::Success);
     let out_str_confine = core::str::from_utf8(&out_buf[..len_confine]).unwrap();
     assert!(out_str_confine.contains("QUARANTINE"));

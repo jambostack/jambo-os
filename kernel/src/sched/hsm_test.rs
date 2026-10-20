@@ -8,8 +8,8 @@ extern crate alloc;
 use crate::kprintln;
 use jambo_abi::{Handle, SysError};
 use jambo_hsm::{
-    hsm_rights, HsmCap, HsmKeyAttributes, HsmKeyType, HsmObjectClass, HsmUserType,
-    JamboHsmDaemon, Sha256, MAX_OBJECTS, MAX_SLOTS,
+    hsm_rights, HsmCap, HsmKeyAttributes, HsmKeyType, HsmObjectClass, HsmUserType, JamboHsmDaemon,
+    Sha256, MAX_OBJECTS, MAX_SLOTS,
 };
 use jambo_sh::{JamboShell, ShellStatus};
 
@@ -78,7 +78,9 @@ pub fn execute_hsm_daemon_test() -> bool {
     daemon
         .login(&admin_cap, sess, HsmUserType::User, b"user_sec_pin_2026")
         .expect("Connexion utilisateur réussie");
-    kprintln!("[HSM/AUTH] Authentification PKCS#11 (PIN User) et protection anti-bruteforce validées");
+    kprintln!(
+        "[HSM/AUTH] Authentification PKCS#11 (PIN User) et protection anti-bruteforce validées"
+    );
 
     // 4. Dérivation de clés cryptographiques hiérarchiques HKDF-SHA256 (RFC 5869)
     let dek_attrs = HsmKeyAttributes {
@@ -109,19 +111,27 @@ pub fn execute_hsm_daemon_test() -> bool {
     kprintln!("[HSM/DERIVE] Dérivation HKDF-SHA256 depuis la KEK racine validée (clé DEK scellée)");
 
     // 5. Chiffrement et Déchiffrement in-HSM sans exposition de la clé
-    let nonce = [0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC];
+    let nonce = [
+        0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC,
+    ];
     let mut payload = [0x5Au8; 64];
     let original_payload = payload;
 
     daemon
         .encrypt(&admin_cap, sess, derived_dek_id, &nonce, &mut payload)
         .expect("Chiffrement in-HSM");
-    assert_ne!(payload, original_payload, "Les données doivent être chiffrées");
+    assert_ne!(
+        payload, original_payload,
+        "Les données doivent être chiffrées"
+    );
 
     daemon
         .decrypt(&admin_cap, sess, derived_dek_id, &nonce, &mut payload)
         .expect("Déchiffrement in-HSM");
-    assert_eq!(payload, original_payload, "Les données restaurées doivent être identiques");
+    assert_eq!(
+        payload, original_payload,
+        "Les données restaurées doivent être identiques"
+    );
     kprintln!("[HSM/CRYPTO] Chiffrement/Déchiffrement symétrique in-HSM sans fuite de clé validé");
 
     // 6. Signature et Vérification HMAC-SHA256 in-HSM
@@ -202,18 +212,30 @@ pub fn execute_hsm_daemon_test() -> bool {
         )
         .expect("Désenveloppement de clé sous KEK");
     assert_ne!(unwrap_id, exportable_key_id);
-    kprintln!("[HSM/WRAP] Enveloppement (Wrapping) et Désenveloppement (Unwrapping) sous KEK validés");
+    kprintln!(
+        "[HSM/WRAP] Enveloppement (Wrapping) et Désenveloppement (Unwrapping) sous KEK validés"
+    );
 
     // 8. Zéroïsation matérielle d'urgence (Emergency Zeroization)
     daemon
         .emergency_zeroize(&admin_cap, 0)
         .expect("Zéroïsation d'urgence Slot 0");
-    assert_eq!(daemon.count_active_keys(), 0, "Toutes les clés du slot 0 doivent être détruites");
-    assert_eq!(daemon.count_active_sessions(), 0, "Toutes les sessions doivent être closes");
+    assert_eq!(
+        daemon.count_active_keys(),
+        0,
+        "Toutes les clés du slot 0 doivent être détruites"
+    );
+    assert_eq!(
+        daemon.count_active_sessions(),
+        0,
+        "Toutes les sessions doivent être closes"
+    );
     let tok0_after = daemon.get_token(0).expect("Token 0");
     assert!(tok0_after.is_zeroized);
     assert!(tok0_after.is_locked);
-    kprintln!("[HSM/ZEROIZE] Zéroïsation matérielle d'urgence détruisant toutes les clés en O(1) validée");
+    kprintln!(
+        "[HSM/ZEROIZE] Zéroïsation matérielle d'urgence détruisant toutes les clés en O(1) validée"
+    );
 
     // 9. Registre d'audit inaltérable scellé par chaîne SHA-256
     assert_ne!(daemon.audit_chain, [0u8; 32]);
