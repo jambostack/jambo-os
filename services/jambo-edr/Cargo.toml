@@ -1,0 +1,7 @@
+[package]
+name = "jambo-edr"
+version = "0.2.117"
+edition = "2021"
+
+[dependencies]
+libjambo = { path = "../../libs/libjambo" }

@@ -1247,6 +1247,13 @@ pub extern "C" fn _start() -> ! {
         "Échec du test de l'investigation numérique & analyse forensique jambo-forensics"
     );
 
+    // 14undevigintiesquadragies. Validation de la Détection & Réponse sur les Terminaux (Phase 119 - v0.2.117)
+    let edr_success = sched::edr_test::execute_edr_daemon_test();
+    assert!(
+        edr_success,
+        "Échec du test de la détection & réponse sur les terminaux jambo-edr"
+    );
+
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
 
     arch::init_iommu();
@@ -1499,14 +1506,15 @@ pub extern "C" fn _start() -> ! {
     kprintln!("\x1b[1;32m[PASS] Phase 115 Multi-Layer L3/L4/L7 Anti-DDoS Mitigation & SYN Cookies (jambo-ddos) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 117 Security Orchestration, Automation & Incident Response (jambo-soar) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 118 Digital Forensics, Volatile Memory Capture & Evidence Sealing (jambo-forensics) Complete\x1b[0m");
+    kprintln!("\x1b[1;32m[PASS] Phase 119 Endpoint Detection & Response, Behavioral Surveillance & Injection Defense (jambo-edr) Complete\x1b[0m");
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.116 (Digital Forensics & Volatile Evidence Sealing jambo-forensics)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.117 (Endpoint Detection & Response jambo-edr)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.116 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.117 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );

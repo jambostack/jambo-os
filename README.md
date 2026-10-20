@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.116-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.117-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.116 (Investigation Numérique Forensique, Capture Mémoire Volatile, Scellement Ed25519/BLAKE3 & ForensicsCap jambo-forensics)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.116` introduit le moteur souverain d'investigation numérique et analyse forensique post-incident en espace utilisateur (`services/jambo-forensics`) : contrôle d'accès capabilaire strict `ForensicsCap` (Zero-Ambient Authority), capture d'instantanés d'états mémoire volatiles (`ProcessForensicImage`), détection d'anomalies W+X et calcul d'entropie d'injections, extraction chronologique de timelines d'artefacts d'attaques, hachage BLAKE3 déterministe `#![no_std]`, scellement cryptographique par signature asymétrique Ed25519 (`EvidenceSeal`), registre inaltérable de chaîne de garde (Chain of Custody) scellé par chaîne SHA-256 avec commandes interactives `forensics [status | timeline | capture | seal | verify]` dans le shell `jsh`.
+> **Statut du Projet : Version v0.2.117 (Détection & Réponse sur les Terminaux EDR, Surveillance Comportementale, Détection Injections .jso/W+X & EdrCap jambo-edr)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.117` introduit le système souverain de Détection & Réponse sur les Terminaux (EDR) en espace utilisateur (`services/jambo-edr`) : contrôle d'accès capabilaire strict `EdrCap` (Zero-Ambient Authority), surveillance d'arborescences de processus et détection d'anomalies de filiation, interception d'injections dynamiques de modules `.jso` et de segments mémoire W+X, protection contre le détournement de tables GOT/PLT, garde-fou heuristique contre l'évasion d'enclaves TEE, inspection d'intégrité contre les crochets (hooks) système, mécanismes de confinement et quarantaine O(1), scellement cryptographique d'audit SHA-256 inaltérable avec commandes interactives `edr [status | processes | alerts | isolate | verify]` dans le shell `jsh`.
 
 ---
 
@@ -145,6 +145,8 @@ jambo-os/
 │   ├── jambo-dbg/           # Débogage dynamique d'espace utilisateur, DR0..DR7 & introspection
 │   ├── jambo-ddos/          # Mitigation Anti-DDoS L3/L4/L7, SYN Cookies & seaux à jetons
 │   ├── jambo-dynlinkd/      # Édition de liens dynamiques Ring 3, ELF64 .jso, GOT/PLT & lazy binding
+│   ├── jambo-edr/           # Détection & Réponse Terminaux (EDR), filiations, injections & EdrCap
+│   ├── jambo-forensics/     # Forensique, capture mémoire volatile & scellement Ed25519/BLAKE3
 │   ├── jambo-cryptod/       # Chiffrement de bloc transparent ChaCha20 et scellement TPM 2.0
 │   ├── jambo-dfsd/          # Stockage distribué adressable par contenu (CAS) & réplication
 │   ├── jambo-diagd/         # Diagnostic matériel autonome, auto-réparation & télémétrie

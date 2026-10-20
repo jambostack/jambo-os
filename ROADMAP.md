@@ -1,7 +1,7 @@
 # ROADMAP DU DÉVELOPPEMENT AUTONOME — JamboOS
 
-> **Dernière mise à jour** : 2026-10-20 05:20 UTC  
-> **Version actuelle** : `v0.2.116`  
+> **Dernière mise à jour** : 2026-10-20 05:35 UTC  
+> **Version actuelle** : `v0.2.117`  
 > **Statut global** : Pré-Alpha active — Micro-noyau de 3e génération orienté capacités (`#![no_std]`)  
 > **Cycle de développement autonome** : 10 minutes via le Planificateur de Tâches & Crons d'Antigravity WebUI  
 
@@ -105,16 +105,17 @@
 | **v0.2.113** | 115 | Mitigation Anti-DDoS Distribuée L3/L4/L7 `jambo-ddos` | Mitigation Anti-DDoS multicouches (L3/L4/L7), filtrage anti-spoofing martiens/bogons (RFC 6890), SYN Cookies stateless déterministes (fenêtres 64s, SHA-256), limitation de débit par seaux à jetons (Token Bucket), détection d'amplification (DNS/NTP/SNMP), détection Slowloris & HTTP Flood, trou noir O(1) avec TTL, liste blanche prioritaire, DdosCap & registre d'audit SHA-256 inaltérable | ✅ Validé |
 | **v0.2.115** | 117 | Orchestration SOAR & Réponse aux Incidents `jambo-soar` | Orchestration SOAR, playbooks automatisés d'atténuation d'incidents, workflows conditionnels DAG, intégrations croisées `jambo-waf`, `jambo-ddos`, `jambo-ids` et `jambo-walld`, SoarCap & audit SHA-256 | ✅ Validé |
 | **v0.2.116** | 118 | Investigation Numérique & Forensique `jambo-forensics` | Acquisition forensique volatile, extraction de timelines chronologiques d'artefacts, détection W+X et calcul d'entropie, scellement cryptographique Ed25519/BLAKE3, chaîne de garde SHA-256 inaltérable & ForensicsCap | ✅ Validé |
+| **v0.2.117** | 119 | Détection & Réponse Terminaux `jambo-edr` | Surveillance comportementale d'arborescences de processus, détection heuristique d'évasion d'enclave TEE, injection DLL/.jso et crochets système suspects, EdrCap & scellement SHA-256 | ✅ Validé |
 
 ---
 
 ## 3. Prochaines Étapes Prioritaires
 
-### 🎯 Prochaine Tâche Immédiate : Phase 119 — v0.2.117
-* **Composant** : `services/jambo-edr`
-* **Objectif** : Détection & Réponse sur les Terminaux (Endpoint Detection & Response - EDR)
+### 🎯 Prochaine Tâche Immédiate : Phase 120 — v0.2.118
+* **Composant** : `services/jambo-xdr`
+* **Objectif** : Détection & Réponse Étendue (Extended Detection & Response - XDR)
 * **Tâches précises** :
-  1. Surveillance comportementale d'arborescences de processus, détection heuristique d'évasion d'enclave, injection DLL/.jso et crochets système suspects, EdrCap & scellement SHA-256.
+  1. Corrélation unifiée multi-vecteurs (EDR terminaux, passerelle VPN, pare-feu applicatif WAF, identités Auth2), détection de campagnes APT distribuées, XdrCap & scellement SHA-256.
   2. Validation formelle et suite de tests `cargo xtask test`.
 
 ---
@@ -172,6 +173,7 @@
 * **2026-10-20 04:35 UTC** : Validation complète Phase 115 (`jambo-ddos`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-ddos`). Tag `v0.2.113`.
 * **2026-10-20 04:58 UTC** : Validation complète Phase 117 (`jambo-soar`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-soar`, 7/7). Tag `v0.2.115`.
 * **2026-10-20 05:20 UTC** : Validation complète Phase 118 (`jambo-forensics`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-forensics`, 7/7). Tag `v0.2.116`.
+* **2026-10-20 05:35 UTC** : Validation complète Phase 119 (`jambo-edr`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-edr`, 7/7). Tag `v0.2.117`.
 
 
 

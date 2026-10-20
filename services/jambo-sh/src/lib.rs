@@ -186,6 +186,7 @@ pub struct JamboShell {
     pub ddos: jambo_ddos::JamboDdosDaemon,
     pub soar: jambo_soar::JamboSoarDaemon,
     pub forensics: jambo_forensics::JamboForensicsDaemon,
+    pub edr: jambo_edr::JamboEdrDaemon,
 }
 
 impl Default for JamboShell {
@@ -577,6 +578,15 @@ impl JamboShell {
         let forensics_kp = jambo_forensics::ForensicKeyPair::derive_from_seed(0x118_cafe);
         let mut forensics = jambo_forensics::JamboForensicsDaemon::new(forensics_cap, forensics_kp);
         forensics.init_defaults();
+
+        let edr_cap = jambo_edr::EdrCap::new(
+            libjambo::Handle::new(11901, 1),
+            jambo_edr::edr_rights::ALL,
+            5000,
+            100,
+        );
+        let mut edr = jambo_edr::JamboEdrDaemon::new(edr_cap);
+        edr.init_defaults();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -653,6 +663,7 @@ impl JamboShell {
             ddos,
             soar,
             forensics,
+            edr,
         }
     }
 
@@ -834,10 +845,11 @@ impl JamboShell {
                 emit("  ddos [cmd]    - Mitigation Anti-DDoS L3/L4/L7, SYN Cookies, seaux à jetons & DdosCap\n");
                 emit("  soar [cmd]    - Orchestration SOAR, Playbooks DAG automatisés & SoarCap\n");
                 emit("  forensics [cmd] - Investigation numérique, extraction d'artefacts & scellement Ed25519/BLAKE3\n");
+                emit("  edr [cmd]     - Surveillance comportementale, détection injections .jso/W+X & EdrCap\n");
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.2.116 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.2.117 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -9270,6 +9282,109 @@ impl JamboShell {
                     }
                 }
             }
+            "edr" => {
+                let subcmd = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    "status"
+                };
+                match subcmd {
+                    "status" => {
+                        let mut b = [0u8; 20];
+                        emit("[EDR/STATUS] Démon de Détection & Réponse sur les Terminaux (Endpoint Detection & Response)\n");
+                        emit("  Processus surveillés  : ");
+                        emit(format_u64(self.edr.process_count as u64, &mut b));
+                        emit("\n  Alertes générées      : ");
+                        emit(format_u64(self.edr.alert_count as u64, &mut b));
+                        emit("\n  Injections bloquées   : ");
+                        emit(format_u64(self.edr.injection_blocked_count as u64, &mut b));
+                        emit("\n  Évasions TEE bloquées : ");
+                        emit(format_u64(self.edr.enclave_escape_blocked_count as u64, &mut b));
+                        emit("\n  Crochets détectés     : ");
+                        emit(format_u64(self.edr.hooks_detected_count as u64, &mut b));
+                        emit("\n  Chaîne d'audit SHA-256: ");
+                        let valid = self.edr.verify_ledger_integrity();
+                        emit(if valid { "VÉRIFIÉE (OK)\n" } else { "CORROMPUE (ERR)\n" });
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "processes" | "tree" => {
+                        emit("[EDR/PROCESSES] Arborescence des Processus & Indices de Menace :\n");
+                        for i in 0..self.edr.process_count {
+                            if let Some(ref p) = self.edr.processes[i] {
+                                let mut b = [0u8; 20];
+                                emit("  PID ");
+                                emit(format_u64(p.pid, &mut b));
+                                emit(" (PPID ");
+                                emit(format_u64(p.ppid, &mut b));
+                                emit(") - ");
+                                emit(p.name_as_str());
+                                emit(" [Statut: ");
+                                emit(match p.status {
+                                    jambo_edr::ProcessStatus::Running => "Running",
+                                    jambo_edr::ProcessStatus::Suspended => "Suspended",
+                                    jambo_edr::ProcessStatus::Quarantined => "Quarantined",
+                                    jambo_edr::ProcessStatus::Terminated => "Terminated",
+                                });
+                                emit(", Menace: ");
+                                emit(format_u64(p.threat_score as u64, &mut b));
+                                emit("/100]\n");
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "alerts" => {
+                        emit("[EDR/ALERTS] Historique des Alertes de Sécurité Terminal :\n");
+                        if self.edr.alert_count == 0 {
+                            emit("  Aucune alerte enregistrée.\n");
+                        } else {
+                            for i in 0..self.edr.alert_count {
+                                if let Some(ref a) = self.edr.alerts[i] {
+                                    let mut b = [0u8; 20];
+                                    emit("  #");
+                                    emit(format_u64(a.id, &mut b));
+                                    emit(" [PID ");
+                                    emit(format_u64(a.pid, &mut b));
+                                    emit("] - ");
+                                    emit(a.desc_as_str());
+                                    emit(" [Action: ");
+                                    emit(match a.action_taken {
+                                        jambo_edr::EdrAction::LogAndPass => "LogAndPass",
+                                        jambo_edr::EdrAction::SuspendProcess => "Suspend",
+                                        jambo_edr::EdrAction::RevokeCapabilities => "RevokeCaps",
+                                        jambo_edr::EdrAction::QuarantineIsolate => "Quarantine",
+                                        jambo_edr::EdrAction::TerminateProcess => "Terminate",
+                                    });
+                                    emit("]\n");
+                                }
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "isolate" => {
+                        let cap = self.edr.admin_cap;
+                        match self.edr.isolate_process(&cap, 4, 3200) {
+                            Ok(()) => {
+                                emit("[EDR/ISOLATE] Processus PID 4 confiné en quarantaine avec succès (capacités révoquées)\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("[EDR/ISOLATE] Échec du confinement du processus\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "verify" => {
+                        let valid = self.edr.verify_ledger_integrity();
+                        emit("  Vérification intégrité registre SHA-256 : ");
+                        emit(if valid { "INTÈGRE (OK)\n" } else { "ALTÉRÉ (FAIL)\n" });
+                        (ShellStatus::Success, write_pos)
+                    }
+                    _ => {
+                        emit("Usage: edr [status | processes | alerts | isolate | verify]\n");
+                        (ShellStatus::ExecutionFailed, write_pos)
+                    }
+                }
+            }
             "poweroff" | "reboot" => {
                 emit("[SYSTEM] Extinction demandée...\n");
                 unsafe {
@@ -12612,6 +12727,39 @@ mod tests {
                 assert!(len4 > 0);
 
                 let (st5, len5) = shell.execute_line("forensics verify", &mut out);
+                assert_eq!(st5, ShellStatus::Success);
+                assert!(len5 > 0);
+            })
+            .unwrap();
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn test_shell_edr_commands() {
+        extern crate std;
+        let handle = std::thread::Builder::new()
+            .stack_size(8 * 1024 * 1024)
+            .spawn(|| {
+                let mut shell = JamboShell::new();
+                let mut out = [0u8; 1024];
+
+                let (st1, len1) = shell.execute_line("edr status", &mut out);
+                assert_eq!(st1, ShellStatus::Success);
+                assert!(len1 > 0);
+
+                let (st2, len2) = shell.execute_line("edr processes", &mut out);
+                assert_eq!(st2, ShellStatus::Success);
+                assert!(len2 > 0);
+
+                let (st3, len3) = shell.execute_line("edr alerts", &mut out);
+                assert_eq!(st3, ShellStatus::Success);
+                assert!(len3 > 0);
+
+                let (st4, len4) = shell.execute_line("edr isolate", &mut out);
+                assert_eq!(st4, ShellStatus::Success);
+                assert!(len4 > 0);
+
+                let (st5, len5) = shell.execute_line("edr verify", &mut out);
                 assert_eq!(st5, ShellStatus::Success);
                 assert!(len5 > 0);
             })
