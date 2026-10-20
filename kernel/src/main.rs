@@ -1324,6 +1324,13 @@ pub extern "C" fn _start() -> ! {
         "Échec du test de posture de sécurité applicative et supply chain jambo-aspm"
     );
 
+    // 18sexiesviciesquadragies. Validation de la Simulation de Brèches et d'Attaques BAS (Phase 130 - v0.2.128)
+    let bas_success = sched::bas_test::execute_bas_daemon_test();
+    assert!(
+        bas_success,
+        "Échec du test de simulation de brèches et d'attaques jambo-bas"
+    );
+
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
 
     arch::init_iommu();
@@ -1587,14 +1594,15 @@ pub extern "C" fn _start() -> ! {
     kprintln!("\x1b[1;32m[PASS] Phase 127 Cloud Infrastructure Entitlement Management & Monotonic Least Privilege (jambo-ciem) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 128 Cloud-Native Application Protection Platform, Unified Risk & Correlation (jambo-cnapp) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 129 Application Security Posture Management, Supply Chain & SBOM CycloneDX (jambo-aspm) Complete\x1b[0m");
+    kprintln!("\x1b[1;32m[PASS] Phase 130 Breach and Attack Simulation & Defense-in-Depth Validation (jambo-bas) Complete\x1b[0m");
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.127 (Application Security Posture Management & SBOM CycloneDX jambo-aspm)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.128 (Breach and Attack Simulation & Defense Validation jambo-bas)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.127 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.128 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );

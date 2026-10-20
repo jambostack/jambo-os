@@ -1,7 +1,7 @@
 # ROADMAP DU DÉVELOPPEMENT AUTONOME — JamboOS
 
-> **Dernière mise à jour** : 2026-10-20 07:38 UTC  
-> **Version actuelle** : `v0.2.127`  
+> **Dernière mise à jour** : 2026-10-20 07:50 UTC  
+> **Version actuelle** : `v0.2.128`  
 > **Statut global** : Pré-Alpha active — Micro-noyau de 3e génération orienté capacités (`#![no_std]`)  
 > **Cycle de développement autonome** : 10 minutes via le Planificateur de Tâches & Crons d'Antigravity WebUI  
 
@@ -116,16 +116,17 @@
 | **v0.2.125** | 127 | Gestion Droits CIEM `jambo-ciem` | Analyse continue des cartographies de droits et jetons de capacités de grappe, détection des privilèges dormants, orphelins et excessifs, réduction monotone automatique des surfaces d'attaque, CiemCap & registre d'audit SHA-256 inaltérable | ✅ Validé |
 | **v0.2.126** | 128 | Protection Applicative CNAPP `jambo-cnapp` | Plateforme intégrée de protection des applications cloud-natives (CNAPP), corrélation contextuelle multidimensionnelle CSPM + CWPP + CIEM, détection des combinaisons toxiques (Toxic Combinations), modélisation de graphes d'attaque (Attack Paths), score de risque unifié (0..100), orchestration autonome de la remédiation unifiée, CnappCap & registre d'audit SHA-256 inaltérable | ✅ Validé |
 | **v0.2.127** | 129 | Posture Applicative ASPM & SBOM CycloneDX `jambo-aspm` | Posture de sécurité applicative continue (ASPM), analyse de dépendances et chaîne d'approvisionnement (Supply Chain), détection des menaces amont (build.rs malveillants, altération d'intégrité, typosquatting), génération/vérification SBOM CycloneDX 1.5, barrière d'admission O(1), AspmCap & registre d'audit SHA-256 inaltérable | ✅ Validé |
+| **v0.2.128** | 130 | Simulation Brèches/Attaques BAS `jambo-bas` | Moteur souverain d'émulation d'adversaires et techniques MITRE ATT&CK (Ring 3, IPC, VFS, TEE, réseau), validation continue des contrôles de sécurité (WAF, EDR, IDPS, CSPM, CIEM, CNAPP, ASPM), calcul déterministe de résilience et détection des lacunes de couverture, BasCap & registre d'audit SHA-256 inaltérable | ✅ Validé |
 
 ---
 
 ## 3. Prochaines Étapes Prioritaires
 
-### 🎯 Prochaine Tâche Immédiate : Phase 130 — v0.2.128
-* **Composant** : `services/jambo-bas`
-* **Objectif** : Simulation Autonome de Brèches et d'Attaques (BAS - Breach and Attack Simulation) & Validation Continue des Contrôles de Sécurité
+### 🎯 Prochaine Tâche Immédiate : Phase 131 — v0.2.129
+* **Composant** : `services/jambo-easm`
+* **Objectif** : Gestion de la Surface d'Attaque Externe (EASM - External Attack Surface Management) & Découverte Continue d'Actifs Numériques
 * **Tâches précises** :
-  1. Moteur souverain de simulation autonome de brèches et d'attaques (BAS), émulation d'adversaires et techniques MITRE ATT&CK (Ring 3, IPC, VFS, TEE, réseau), validation continue de l'efficacité des contrôles et défenses en profondeur (WAF, EDR, IDPS, CSPM, CIEM, CNAPP, ASPM), calcul de résilience et détection des lacunes de couverture, BasCap & registre d'audit SHA-256 inaltérable.
+  1. Moteur souverain de cartographie et découverte continue de la surface d'attaque externe (EASM), recensement dynamique des actifs, ports, certificats, domaines DNS et services exposés de grappe, détection proactive des configurations défaillantes, fuites d'informations et vulnérabilités périmétriques, EasmCap & registre d'audit SHA-256 inaltérable.
   2. Validation formelle et suite de tests `cargo xtask test`.
 
 ---
@@ -194,6 +195,7 @@
 * **2026-10-20 07:10 UTC** : Validation complète Phase 127 (`jambo-ciem`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-ciem`, 4/4). Tag `v0.2.125`.
 * **2026-10-20 07:25 UTC** : Validation complète Phase 128 (`jambo-cnapp`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-cnapp`, 4/4). Tag `v0.2.126`.
 * **2026-10-20 07:37 UTC** : Validation complète Phase 129 (`jambo-aspm`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-aspm`, 4/4). Tag `v0.2.127`.
+* **2026-10-20 07:50 UTC** : Validation complète Phase 130 (`jambo-bas`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-bas`, 4/4). Tag `v0.2.128`.
 
 
 

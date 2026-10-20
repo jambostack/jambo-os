@@ -197,6 +197,7 @@ pub struct JamboShell {
     pub ciem: jambo_ciem::JamboCiemDaemon,
     pub cnapp: jambo_cnapp::JamboCnappDaemon,
     pub aspm: jambo_aspm::JamboAspmDaemon,
+    pub bas: jambo_bas::JamboBasDaemon,
 }
 
 impl Default for JamboShell {
@@ -687,6 +688,15 @@ impl JamboShell {
         );
         let mut aspm = jambo_aspm::JamboAspmDaemon::new(aspm_cap);
         aspm.init_defaults();
+
+        let bas_cap = jambo_bas::BasCap::new(
+            libjambo::Handle::new(13001, 1),
+            jambo_bas::bas_rights::ALL,
+            5000,
+            100,
+        );
+        let mut bas = jambo_bas::JamboBasDaemon::new(bas_cap);
+        bas.init_defaults();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -774,6 +784,7 @@ impl JamboShell {
             ciem,
             cnapp,
             aspm,
+            bas,
         }
     }
 
@@ -966,10 +977,11 @@ impl JamboShell {
                 emit("  ciem [cmd]      - Droits cloud/grappe (CIEM), détection droits excessifs & moindre privilège\n");
                 emit("  cnapp [cmd]     - Protection unifiée (CNAPP), corrélation CSPM+CWPP+CIEM & risques\n");
                 emit("  aspm [cmd]      - Posture applicative (ASPM), supply chain, SBOM CycloneDX & admission\n");
+                emit("  bas [cmd]       - Simulation brèches/attaques (BAS), validation continue & gaps\n");
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.2.127 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.2.128 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -10845,6 +10857,191 @@ impl JamboShell {
                     }
                 }
             }
+            "bas" => {
+                let subcmd = if parsed.arg_count > 1 { parsed.args[1] } else { "status" };
+                match subcmd {
+                    "status" => {
+                        emit("=== SIMULATION AUTONOME DE BRÈCHES ET D'ATTAQUES (BAS) ===\n");
+                        let mut b = [0u8; 20];
+                        emit("  Vecteurs d'attaque enregistrés : ");
+                        emit(format_u64(self.bas.vector_count as u64, &mut b));
+                        emit("\n  Playbooks d'adversaires        : ");
+                        emit(format_u64(self.bas.playbook_count as u64, &mut b));
+                        emit("\n  Score de Résilience global     : ");
+                        emit(format_u64(self.bas.resilience_score as u64, &mut b));
+                        emit("/100\n  Total simulations exécutées    : ");
+                        emit(format_u64(self.bas.total_simulations, &mut b));
+                        emit("\n  Attaques bloquées net          : ");
+                        emit(format_u64(self.bas.total_blocked, &mut b));
+                        emit("\n  Attaques détectées uniquement  : ");
+                        emit(format_u64(self.bas.total_detected, &mut b));
+                        emit("\n  Attaques manquées (lacunes)    : ");
+                        emit(format_u64(self.bas.total_missed, &mut b));
+                        let valid = self.bas.verify_ledger_integrity();
+                        emit("\n  Registre d'audit SHA-256       : ");
+                        emit(if valid { "SCELLÉ & INTÈGRE (OK)\n" } else { "ALTÉRÉ (FAIL)\n" });
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "vectors" => {
+                        emit("=== VECTEURS D'ATTAQUE MITRE ATT&CK ===\n");
+                        let mut b = [0u8; 20];
+                        for i in 0..self.bas.vector_count {
+                            if let Some(ref v) = self.bas.vectors[i] {
+                                emit("  [#");
+                                emit(format_u64(v.id as u64, &mut b));
+                                emit("] ");
+                                emit(v.name_as_str());
+                                emit(" (");
+                                emit(v.mitre_as_str());
+                                emit(") | Sév: ");
+                                emit(format_u64(v.severity_score as u64, &mut b));
+                                emit(" | Statut: ");
+                                match v.last_status {
+                                    jambo_bas::SimulationStatus::BlockedByDefense => emit("BLOQUÉ NET\n"),
+                                    jambo_bas::SimulationStatus::DetectedOnly => emit("DÉTECTÉ SEUL\n"),
+                                    jambo_bas::SimulationStatus::UndetectedSuccess => emit("NON DÉTECTÉ (FAILLE)\n"),
+                                    jambo_bas::SimulationStatus::Remediated => emit("REMÉDIÉ (DURCI)\n"),
+                                    jambo_bas::SimulationStatus::Pending => emit("EN ATTENTE\n"),
+                                    jambo_bas::SimulationStatus::Running => emit("EN COURS\n"),
+                                }
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "playbooks" => {
+                        emit("=== PLAYBOOKS D'ADVERSAIRES (SCÉNARIOS D'ATTAQUE) ===\n");
+                        let mut b = [0u8; 20];
+                        for i in 0..self.bas.playbook_count {
+                            if let Some(ref pb) = self.bas.playbooks[i] {
+                                emit("  [#");
+                                emit(format_u64(pb.id as u64, &mut b));
+                                emit("] ");
+                                emit(pb.name_as_str());
+                                emit(" (Vecteurs: ");
+                                emit(format_u64(pb.vector_count as u64, &mut b));
+                                emit(")\n");
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "run" => {
+                        let vid = if parsed.arg_count > 2 {
+                            match parsed.args[2] {
+                                "2" => 2,
+                                "3" => 3,
+                                "4" => 4,
+                                "5" => 5,
+                                _ => 1,
+                            }
+                        } else {
+                            1
+                        };
+                        let cap = self.bas.admin_cap;
+                        match self.bas.run_simulation(&cap, vid, true, 3000) {
+                            Ok(res) => {
+                                emit("  [OK] Simulation exécutée avec succès pour le vecteur #");
+                                let mut b = [0u8; 20];
+                                emit(format_u64(vid as u64, &mut b));
+                                emit(" | Bloqué: ");
+                                emit(if res.blocked { "OUI\n" } else { "NON\n" });
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("  [FAIL] Échec de la simulation d'attaque\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "run-playbook" => {
+                        let pid = if parsed.arg_count > 2 {
+                            match parsed.args[2] {
+                                "102" => 102,
+                                _ => 101,
+                            }
+                        } else {
+                            101
+                        };
+                        let cap = self.bas.admin_cap;
+                        match self.bas.run_playbook(&cap, pid, 3100) {
+                            Ok((exec, blocked)) => {
+                                emit("  [OK] Playbook exécuté avec succès : ");
+                                let mut b = [0u8; 20];
+                                emit(format_u64(exec as u64, &mut b));
+                                emit(" vecteurs testés, ");
+                                emit(format_u64(blocked as u64, &mut b));
+                                emit(" bloqués net\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("  [FAIL] Échec de l'exécution du playbook\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "gaps" => {
+                        let cap = self.bas.admin_cap;
+                        match self.bas.analyze_coverage_gaps(&cap) {
+                            Ok(g) => {
+                                emit("=== ANALYSE DES LACUNES DE COUVERTURE DÉFENSIVE ===\n");
+                                let mut b = [0u8; 20];
+                                emit("  Vecteurs testés     : ");
+                                emit(format_u64(g.total_vectors_tested as u64, &mut b));
+                                emit("\n  Bloqués net         : ");
+                                emit(format_u64(g.blocked_count as u64, &mut b));
+                                emit("\n  Détectés uniquement : ");
+                                emit(format_u64(g.detected_only_count as u64, &mut b));
+                                emit("\n  Non détectés        : ");
+                                emit(format_u64(g.undetected_count as u64, &mut b));
+                                emit("\n  Résilience          : ");
+                                emit(format_u64(g.resilience_score as u64, &mut b));
+                                emit("/100\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("  [FAIL] Impossible d'analyser les lacunes\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "remediate" => {
+                        let vid = if parsed.arg_count > 2 {
+                            match parsed.args[2] {
+                                "2" => 2,
+                                "3" => 3,
+                                "4" => 4,
+                                "5" => 5,
+                                _ => 1,
+                            }
+                        } else {
+                            1
+                        };
+                        let cap = self.bas.admin_cap;
+                        match self.bas.remediate_gap(&cap, vid, 3200) {
+                            Ok(()) => {
+                                emit("  [OK] Lacune remédiée et durcie pour le vecteur #");
+                                let mut b = [0u8; 20];
+                                emit(format_u64(vid as u64, &mut b));
+                                emit("\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("  [FAIL] Erreur lors de la remédiation de la lacune\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "verify" => {
+                        let valid = self.bas.verify_ledger_integrity();
+                        emit("  Vérification intégrité registre BAS SHA-256 : ");
+                        emit(if valid { "INTÈGRE (OK)\n" } else { "ALTÉRÉ (FAIL)\n" });
+                        (ShellStatus::Success, write_pos)
+                    }
+                    _ => {
+                        emit("Usage: bas [status | vectors | playbooks | run [vid] | run-playbook [pid] | gaps | remediate [vid] | verify]\n");
+                        (ShellStatus::ExecutionFailed, write_pos)
+                    }
+                }
+            }
             "poweroff" | "reboot" => {
                 emit("[SYSTEM] Extinction demandée...\n");
                 unsafe {
@@ -14588,6 +14785,51 @@ mod tests {
                 let (st7, len7) = shell.execute_line("aspm verify", &mut out);
                 assert_eq!(st7, ShellStatus::Success);
                 assert!(len7 > 0);
+            })
+            .unwrap();
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn test_shell_bas_commands() {
+        extern crate std;
+        let handle = std::thread::Builder::new()
+            .stack_size(8 * 1024 * 1024)
+            .spawn(|| {
+                let mut shell = JamboShell::new();
+                let mut out = [0u8; 1024];
+
+                let (st1, len1) = shell.execute_line("bas status", &mut out);
+                assert_eq!(st1, ShellStatus::Success);
+                assert!(len1 > 0);
+
+                let (st2, len2) = shell.execute_line("bas vectors", &mut out);
+                assert_eq!(st2, ShellStatus::Success);
+                assert!(len2 > 0);
+
+                let (st3, len3) = shell.execute_line("bas playbooks", &mut out);
+                assert_eq!(st3, ShellStatus::Success);
+                assert!(len3 > 0);
+
+                let (st4, len4) = shell.execute_line("bas run 1", &mut out);
+                assert_eq!(st4, ShellStatus::Success);
+                assert!(len4 > 0);
+
+                let (st5, len5) = shell.execute_line("bas run-playbook 101", &mut out);
+                assert_eq!(st5, ShellStatus::Success);
+                assert!(len5 > 0);
+
+                let (st6, len6) = shell.execute_line("bas gaps", &mut out);
+                assert_eq!(st6, ShellStatus::Success);
+                assert!(len6 > 0);
+
+                let (st7, len7) = shell.execute_line("bas remediate 1", &mut out);
+                assert_eq!(st7, ShellStatus::Success);
+                assert!(len7 > 0);
+
+                let (st8, len8) = shell.execute_line("bas verify", &mut out);
+                assert_eq!(st8, ShellStatus::Success);
+                assert!(len8 > 0);
             })
             .unwrap();
         handle.join().unwrap();
