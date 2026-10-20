@@ -192,6 +192,7 @@ pub struct JamboShell {
     pub deception: jambo_deception::JamboDeceptionDaemon,
     pub ztna: jambo_ztna::JamboZtnaDaemon,
     pub casb: jambo_casb::JamboCasbDaemon,
+    pub cspm: jambo_cspm::JamboCspmDaemon,
 }
 
 impl Default for JamboShell {
@@ -637,6 +638,15 @@ impl JamboShell {
         );
         let mut casb = jambo_casb::JamboCasbDaemon::new(casb_cap);
         casb.init_defaults();
+
+        let cspm_cap = jambo_cspm::CspmCap::new(
+            libjambo::Handle::new(12501, 1),
+            jambo_cspm::cspm_rights::ALL,
+            5000,
+            100,
+        );
+        let mut cspm = jambo_cspm::JamboCspmDaemon::new(cspm_cap);
+        cspm.init_defaults();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -719,6 +729,7 @@ impl JamboShell {
             deception,
             ztna,
             casb,
+            cspm,
         }
     }
 
@@ -906,10 +917,11 @@ impl JamboShell {
                 emit("  deception [cmd] - Cyber-déception, HoneyCaps, VMO decoys, canaris & DeceptionCap\n");
                 emit("  ztna [cmd]      - Architecture Zero Trust, micro-périmètres continus & ZtnaCap\n");
                 emit("  casb [cmd]      - Courtier d'accès cloud/grappe (CASB), multi-tenant & DLP avancé\n");
+                emit("  cspm [cmd]      - Posture de sécurité cloud/grappe (CSPM), dérive & remédiation\n");
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.2.122 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.2.123 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -10046,6 +10058,132 @@ impl JamboShell {
                     }
                 }
             }
+            "cspm" => {
+                let subcmd = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    "status"
+                };
+                match subcmd {
+                    "status" => {
+                        let mut b = [0u8; 20];
+                        emit("[CSPM/STATUS] Posture de Sécurité Cloud/Grappe & Remédiation Autonome\n");
+                        emit("  Règles durcies actives  : ");
+                        emit(format_u64(self.cspm.rule_count as u64, &mut b));
+                        emit("\n  Éléments surveillés     : ");
+                        emit(format_u64(self.cspm.item_count as u64, &mut b));
+                        emit("\n  Audits / Scans exécutés : ");
+                        emit(format_u64(self.cspm.total_scans, &mut b));
+                        emit("\n  Dérives (Drifts) cumulés: ");
+                        emit(format_u64(self.cspm.total_drifts_detected, &mut b));
+                        emit("\n  Remédiations autonomes  : ");
+                        emit(format_u64(self.cspm.total_remediations, &mut b));
+                        emit("\n  Score de Posture        : ");
+                        emit(format_u64(self.cspm.current_posture_score as u64, &mut b));
+                        emit(" / 100\n  Indice de Risque Grappe : ");
+                        emit(format_u64(self.cspm.current_risk_index as u64, &mut b));
+                        emit(" / 1000\n  Chaîne d'audit SHA-256  : ");
+                        let valid = self.cspm.verify_ledger_integrity();
+                        emit(if valid { "VÉRIFIÉE (OK)\n" } else { "CORROMPUE (ERR)\n" });
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "baselines" => {
+                        emit("[CSPM/BASELINES] Règles de Conformité Durcies Enregistrées :\n");
+                        for i in 0..self.cspm.rule_count {
+                            if let Some(ref r) = self.cspm.rules[i] {
+                                let mut b = [0u8; 20];
+                                emit("  * [#");
+                                emit(format_u64(r.rule_id as u64, &mut b));
+                                emit("] ");
+                                emit(core::str::from_utf8(&r.name[..r.name_len]).unwrap_or("unknown"));
+                                emit(" | Ref: ");
+                                emit(r.standard.as_str());
+                                emit(" | Périmètre: ");
+                                emit(r.scope.as_str());
+                                emit(" | Sévérité: ");
+                                emit(r.severity.as_str());
+                                emit(" | Auto-fix: ");
+                                emit(if r.auto_remediate { "OUI\n" } else { "NON\n" });
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "items" => {
+                        emit("[CSPM/ITEMS] Configuration Active des Services Surveillés :\n");
+                        for i in 0..self.cspm.item_count {
+                            if let Some(ref it) = self.cspm.items[i] {
+                                let mut b = [0u8; 20];
+                                emit("  * [#");
+                                emit(format_u64(it.resource_id as u64, &mut b));
+                                emit("] ");
+                                emit(core::str::from_utf8(&it.component[..it.comp_len]).unwrap_or(""));
+                                emit(" -> ");
+                                emit(core::str::from_utf8(&it.parameter_key[..it.key_len]).unwrap_or(""));
+                                emit(" = '");
+                                emit(core::str::from_utf8(&it.current_value[..it.val_len]).unwrap_or(""));
+                                emit("' [Statut: ");
+                                emit(it.status.as_str());
+                                emit("]\n");
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "scan" => {
+                        let cap = self.cspm.admin_cap;
+                        match self.cspm.scan_drift(&cap, 1500) {
+                            Ok((checked, drifts, posture, risk)) => {
+                                let mut b = [0u8; 20];
+                                emit("[CSPM/SCAN] Scan de Conformité Terminé avec Succès :\n");
+                                emit("  Paramètres audités : ");
+                                emit(format_u64(checked as u64, &mut b));
+                                emit("\n  Dérives détectées  : ");
+                                emit(format_u64(drifts as u64, &mut b));
+                                emit("\n  Score de Posture   : ");
+                                emit(format_u64(posture as u64, &mut b));
+                                emit(" / 100\n  Indice de Risque   : ");
+                                emit(format_u64(risk as u64, &mut b));
+                                emit(" / 1000\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("[CSPM/SCAN] Échec de l'audit de dérive\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "remediate" => {
+                        let cap = self.cspm.admin_cap;
+                        match self.cspm.remediate_all_auto(&cap, 2500) {
+                            Ok(count) => {
+                                let mut b = [0u8; 20];
+                                emit("[CSPM/REMEDIATE] Remédiation Autonome Effectuée :\n");
+                                emit("  Paramètres corrigés : ");
+                                emit(format_u64(count as u64, &mut b));
+                                emit("\n  Nouveau Score Posture: ");
+                                emit(format_u64(self.cspm.current_posture_score as u64, &mut b));
+                                emit(" / 100\n  Nouvel Indice Risque : ");
+                                emit(format_u64(self.cspm.current_risk_index as u64, &mut b));
+                                emit(" / 1000\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("[CSPM/REMEDIATE] Échec de la remédiation autonome\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "verify" => {
+                        let valid = self.cspm.verify_ledger_integrity();
+                        emit("  Vérification intégrité registre SHA-256 : ");
+                        emit(if valid { "INTÈGRE (OK)\n" } else { "ALTÉRÉ (FAIL)\n" });
+                        (ShellStatus::Success, write_pos)
+                    }
+                    _ => {
+                        emit("Usage: cspm [status | baselines | items | scan | remediate | verify]\n");
+                        (ShellStatus::ExecutionFailed, write_pos)
+                    }
+                }
+            }
             "poweroff" | "reboot" => {
                 emit("[SYSTEM] Extinction demandée...\n");
                 unsafe {
@@ -13600,6 +13738,43 @@ mod tests {
                 let (st5, len5) = shell.execute_line("casb verify", &mut out);
                 assert_eq!(st5, ShellStatus::Success);
                 assert!(len5 > 0);
+            })
+            .unwrap();
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn test_shell_cspm_commands() {
+        extern crate std;
+        let handle = std::thread::Builder::new()
+            .stack_size(8 * 1024 * 1024)
+            .spawn(|| {
+                let mut shell = JamboShell::new();
+                let mut out = [0u8; 1024];
+
+                let (st1, len1) = shell.execute_line("cspm status", &mut out);
+                assert_eq!(st1, ShellStatus::Success);
+                assert!(len1 > 0);
+
+                let (st2, len2) = shell.execute_line("cspm baselines", &mut out);
+                assert_eq!(st2, ShellStatus::Success);
+                assert!(len2 > 0);
+
+                let (st3, len3) = shell.execute_line("cspm items", &mut out);
+                assert_eq!(st3, ShellStatus::Success);
+                assert!(len3 > 0);
+
+                let (st4, len4) = shell.execute_line("cspm scan", &mut out);
+                assert_eq!(st4, ShellStatus::Success);
+                assert!(len4 > 0);
+
+                let (st5, len5) = shell.execute_line("cspm remediate", &mut out);
+                assert_eq!(st5, ShellStatus::Success);
+                assert!(len5 > 0);
+
+                let (st6, len6) = shell.execute_line("cspm verify", &mut out);
+                assert_eq!(st6, ShellStatus::Success);
+                assert!(len6 > 0);
             })
             .unwrap();
         handle.join().unwrap();

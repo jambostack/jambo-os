@@ -1289,6 +1289,13 @@ pub extern "C" fn _start() -> ! {
         "Échec du test du courtier CASB et DLP jambo-casb"
     );
 
+    // 18semelviciesquadragies. Validation de la Gestion de Posture CSPM & Remédiation Autonome (Phase 125 - v0.2.123)
+    let cspm_success = sched::cspm_test::execute_cspm_daemon_test();
+    assert!(
+        cspm_success,
+        "Échec du test de gestion de posture CSPM et remédiation jambo-cspm"
+    );
+
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
 
     arch::init_iommu();
@@ -1547,14 +1554,15 @@ pub extern "C" fn _start() -> ! {
     kprintln!("\x1b[1;32m[PASS] Phase 122 Cyber Deception, High-Fidelity Honeypots, System Canaries & Enclave Escape Traps (jambo-deception) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 123 Zero Trust Architecture, Continuous Micro-Perimeters & Dynamic Posture Re-evaluation (jambo-ztna) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 124 Cloud Access Security Broker, Multi-Tenant Compliance & Advanced DLP (jambo-casb) Complete\x1b[0m");
+    kprintln!("\x1b[1;32m[PASS] Phase 125 Cloud Security Posture Management, Drift Detection & Auto-Remediation (jambo-cspm) Complete\x1b[0m");
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.122 (Cloud Access Security Broker & Advanced DLP jambo-casb)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.123 (Cloud Security Posture Management & Drift Remediation jambo-cspm)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.122 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.123 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
