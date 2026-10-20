@@ -1,7 +1,7 @@
 # ROADMAP DU DÉVELOPPEMENT AUTONOME — JamboOS
 
-> **Dernière mise à jour** : 2026-10-20 07:50 UTC  
-> **Version actuelle** : `v0.2.128`  
+> **Dernière mise à jour** : 2026-10-20 08:05 UTC  
+> **Version actuelle** : `v0.2.129`  
 > **Statut global** : Pré-Alpha active — Micro-noyau de 3e génération orienté capacités (`#![no_std]`)  
 > **Cycle de développement autonome** : 10 minutes via le Planificateur de Tâches & Crons d'Antigravity WebUI  
 
@@ -117,16 +117,17 @@
 | **v0.2.126** | 128 | Protection Applicative CNAPP `jambo-cnapp` | Plateforme intégrée de protection des applications cloud-natives (CNAPP), corrélation contextuelle multidimensionnelle CSPM + CWPP + CIEM, détection des combinaisons toxiques (Toxic Combinations), modélisation de graphes d'attaque (Attack Paths), score de risque unifié (0..100), orchestration autonome de la remédiation unifiée, CnappCap & registre d'audit SHA-256 inaltérable | ✅ Validé |
 | **v0.2.127** | 129 | Posture Applicative ASPM & SBOM CycloneDX `jambo-aspm` | Posture de sécurité applicative continue (ASPM), analyse de dépendances et chaîne d'approvisionnement (Supply Chain), détection des menaces amont (build.rs malveillants, altération d'intégrité, typosquatting), génération/vérification SBOM CycloneDX 1.5, barrière d'admission O(1), AspmCap & registre d'audit SHA-256 inaltérable | ✅ Validé |
 | **v0.2.128** | 130 | Simulation Brèches/Attaques BAS `jambo-bas` | Moteur souverain d'émulation d'adversaires et techniques MITRE ATT&CK (Ring 3, IPC, VFS, TEE, réseau), validation continue des contrôles de sécurité (WAF, EDR, IDPS, CSPM, CIEM, CNAPP, ASPM), calcul déterministe de résilience et détection des lacunes de couverture, BasCap & registre d'audit SHA-256 inaltérable | ✅ Validé |
+| **v0.2.129** | 131 | Surface Externe EASM `jambo-easm` | Gestion de la surface d'attaque externe (EASM), recensement dynamique des actifs, découverte continue de Shadow IT, sous-domaines orphelins, score d'exposition (0..100), remédiation proactive, EasmCap & registre d'audit SHA-256 inaltérable | ✅ Validé |
 
 ---
 
 ## 3. Prochaines Étapes Prioritaires
 
-### 🎯 Prochaine Tâche Immédiate : Phase 131 — v0.2.129
-* **Composant** : `services/jambo-easm`
-* **Objectif** : Gestion de la Surface d'Attaque Externe (EASM - External Attack Surface Management) & Découverte Continue d'Actifs Numériques
+### 🎯 Prochaine Tâche Immédiate : Phase 132 — v0.2.130
+* **Composant** : `services/jambo-ctem`
+* **Objectif** : Programme Continu de Gestion de l'Exposition aux Menaces (CTEM - Continuous Threat Exposure Management)
 * **Tâches précises** :
-  1. Moteur souverain de cartographie et découverte continue de la surface d'attaque externe (EASM), recensement dynamique des actifs, ports, certificats, domaines DNS et services exposés de grappe, détection proactive des configurations défaillantes, fuites d'informations et vulnérabilités périmétriques, EasmCap & registre d'audit SHA-256 inaltérable.
+  1. Moteur souverain d'orchestration CTEM (Continuous Threat Exposure Management) fédérant CSPM, CIEM, CWPP, ASPM, BAS et EASM, cycle en 5 étapes (Scoping, Discovery, Prioritization, Validation, Mobilization), modélisation des chemins d'attaque contextuels et calcul d'exploitabilité prédictive, CtemCap & registre d'audit SHA-256 inaltérable.
   2. Validation formelle et suite de tests `cargo xtask test`.
 
 ---
@@ -196,6 +197,7 @@
 * **2026-10-20 07:25 UTC** : Validation complète Phase 128 (`jambo-cnapp`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-cnapp`, 4/4). Tag `v0.2.126`.
 * **2026-10-20 07:37 UTC** : Validation complète Phase 129 (`jambo-aspm`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-aspm`, 4/4). Tag `v0.2.127`.
 * **2026-10-20 07:50 UTC** : Validation complète Phase 130 (`jambo-bas`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-bas`, 4/4). Tag `v0.2.128`.
+* **2026-10-20 08:08 UTC** : Validation complète Phase 131 (`jambo-easm`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-easm`, 5/5). Tag `v0.2.129`.
 
 
 

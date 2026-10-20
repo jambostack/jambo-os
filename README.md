@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.128-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.129-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.128 (Simulation Autonome de Brèches et d'Attaques (BAS), Émulation d'Adversaires MITRE ATT&CK & Validation Continue des Contrôles de Sécurité jambo-bas)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.128` introduit la plateforme souveraine de Breach and Attack Simulation (BAS) en espace utilisateur (`services/jambo-bas`) : moteur souverain d'émulation d'adversaires et techniques MITRE ATT&CK (Ring 3, IPC, VFS, TEE, réseau), validation continue de l'efficacité des défenses en profondeur (WAF, EDR, IDPS, CSPM, CIEM, CNAPP, ASPM, Firewall, Landlock, Seccomp), modélisation et exécution automatisée de scénarios d'attaque (Playbooks APT29, Ransomware VFS), calcul déterministe du score de résilience (0..100), analyse des lacunes de couverture (Gap Analysis), contrôle d'accès capabilaire strict `BasCap` et scellement d'audit cryptographique inviolable par chaînage SHA-256 avec commandes interactives `bas [status | vectors | playbooks | run | run-playbook | gaps | remediate | verify]` dans le shell `jsh`.
+> **Statut du Projet : Version v0.2.129 (Gestion de la Surface d'Attaque Externe (EASM), Découverte Continue d'Actifs Numériques & Détection de Shadow IT jambo-easm)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.129` introduit la plateforme souveraine d'External Attack Surface Management (EASM) en espace utilisateur (`services/jambo-easm`) : recensement dynamique des actifs numériques exposés (domaines DNS, adresses IP, ports, certificats TLS, buckets de stockage), découverte continue de Shadow IT, sous-domaines orphelins (Dangling DNS) et interfaces d'administration exposées, analyse proactive des configurations périmétriques défaillantes, calcul déterministe de l'Indice d'Exposition Externe (0..100), remédiation automatisée des vulnérabilités périmétriques, contrôle d'accès capabilaire strict `EasmCap` et registre d'audit cryptographique inviolable scellé par chaînage SHA-256 avec commandes interactives `easm [status | assets | scan | findings | remediate | verify]` dans le shell `jsh`.
 
 ---
 
@@ -206,6 +206,7 @@ jambo-os/
 │   ├── jambo-cnapp/         # Plateforme intégrée de protection cloud-native (CNAPP), corrélation contextuelle & risque unifié
 │   ├── jambo-aspm/          # Posture de sécurité applicative (ASPM), supply chain & SBOM CycloneDX
 │   ├── jambo-bas/           # Simulation de brèches et d'attaques (BAS), validation continue & gaps
+│   ├── jambo-easm/          # Gestion de la surface d'attaque externe (EASM), découverte d'actifs & Shadow IT
 │   └── pcie-bus-mgr/        # Gestionnaire de bus PCIe, MSI-X et isolation IOMMU
 └── xtask/                   # Outil de compilation, création d'ISO et test QEMU
 ```

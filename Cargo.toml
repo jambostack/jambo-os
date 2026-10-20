@@ -95,6 +95,7 @@ members = [
     "services/jambo-cnapp",
     "services/jambo-aspm",
     "services/jambo-bas",
+    "services/jambo-easm",
     "libs/jambo-ui",
     "libs/jambo-sdk",
     "drivers/virtio",
