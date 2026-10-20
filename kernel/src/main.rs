@@ -1261,6 +1261,13 @@ pub extern "C" fn _start() -> ! {
         "Échec du test de la détection & réponse étendue jambo-xdr"
     );
 
+    // 14semelviciesquadragies. Validation du Renseignement Cyber & Flux d'IoC (Phase 121 - v0.2.119)
+    let intel_success = sched::intel_test::execute_intel_daemon_test();
+    assert!(
+        intel_success,
+        "Échec du test du renseignement cyber jambo-intel"
+    );
+
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
 
     arch::init_iommu();
@@ -1515,14 +1522,15 @@ pub extern "C" fn _start() -> ! {
     kprintln!("\x1b[1;32m[PASS] Phase 118 Digital Forensics, Volatile Memory Capture & Evidence Sealing (jambo-forensics) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 119 Endpoint Detection & Response, Behavioral Surveillance & Injection Defense (jambo-edr) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 120 Extended Detection & Response, Multi-Vector APT Correlation & Unified Containment (jambo-xdr) Complete\x1b[0m");
+    kprintln!("\x1b[1;32m[PASS] Phase 121 Cyber Threat Intelligence, IoC Bloom/Table Search & Dynamic TTL Purge (jambo-intel) Complete\x1b[0m");
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.118 (Extended Detection & Response jambo-xdr)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.119 (Cyber Threat Intelligence jambo-intel)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.118 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.119 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );

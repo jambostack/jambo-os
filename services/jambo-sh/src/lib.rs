@@ -188,6 +188,7 @@ pub struct JamboShell {
     pub forensics: jambo_forensics::JamboForensicsDaemon,
     pub edr: jambo_edr::JamboEdrDaemon,
     pub xdr: jambo_xdr::JamboXdrDaemon,
+    pub intel: jambo_intel::JamboIntelDaemon,
 }
 
 impl Default for JamboShell {
@@ -597,6 +598,15 @@ impl JamboShell {
         );
         let mut xdr = jambo_xdr::JamboXdrDaemon::new(xdr_cap);
         xdr.init_defaults();
+
+        let intel_cap = jambo_intel::IntelCap::new(
+            libjambo::Handle::new(12101, 1),
+            jambo_intel::intel_rights::ALL,
+            5000,
+            100,
+        );
+        let mut intel = jambo_intel::JamboIntelDaemon::new(intel_cap);
+        intel.init_defaults();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -675,6 +685,7 @@ impl JamboShell {
             forensics,
             edr,
             xdr,
+            intel,
         }
     }
 
@@ -858,10 +869,11 @@ impl JamboShell {
                 emit("  forensics [cmd] - Investigation numérique, extraction d'artefacts & scellement Ed25519/BLAKE3\n");
                 emit("  edr [cmd]     - Surveillance comportementale, détection injections .jso/W+X & EdrCap\n");
                 emit("  xdr [cmd]     - Détection & réponse étendue multi-vecteurs, APT & XdrCap\n");
+                emit("  intel [cmd]   - Renseignement menaces CTI, IoC Bloom/Table, scoring & IntelCap\n");
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.2.118 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.2.119 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -9495,6 +9507,125 @@ impl JamboShell {
                     }
                 }
             }
+            "intel" => {
+                let subcmd = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    "status"
+                };
+                match subcmd {
+                    "status" => {
+                        let mut b = [0u8; 20];
+                        emit("[INTEL/STATUS] Démon de Renseignement Cyber & Flux d'IoC (CTI)\n");
+                        emit("  Indicateurs IoC actifs  : ");
+                        emit(format_u64(self.intel.ioc_count as u64, &mut b));
+                        emit("\n  Flux enregistrés (Feeds): ");
+                        emit(format_u64(self.intel.feed_count as u64, &mut b));
+                        emit("\n  Requêtes totales (Bloom): ");
+                        emit(format_u64(self.intel.total_queries, &mut b));
+                        emit("\n  Correspondances (Hits)  : ");
+                        emit(format_u64(self.intel.total_hits, &mut b));
+                        emit("\n  Chaîne d'audit SHA-256  : ");
+                        let valid = self.intel.verify_ledger_integrity();
+                        emit(if valid { "VÉRIFIÉE (OK)\n" } else { "CORROMPUE (ERR)\n" });
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "feeds" => {
+                        emit("[INTEL/FEEDS] Flux de Renseignement Actifs :\n");
+                        for i in 0..self.intel.feed_count {
+                            if let Some(ref f) = self.intel.feeds[i] {
+                                let mut b = [0u8; 20];
+                                emit("  * ");
+                                emit(f.name_as_str());
+                                emit(" [Confiance: ");
+                                emit(format_u64(f.trust_score as u64, &mut b));
+                                emit("/100, IoCs: ");
+                                emit(format_u64(f.ioc_count as u64, &mut b));
+                                emit("]\n");
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "iocs" => {
+                        emit("[INTEL/IOCS] Indicateurs de Compromission Actifs :\n");
+                        for i in 0..self.intel.ioc_count {
+                            if let Some(ref e) = self.intel.iocs[i] {
+                                if e.active {
+                                    let mut b = [0u8; 20];
+                                    emit("  #");
+                                    emit(format_u64(e.id as u64, &mut b));
+                                    emit(" [");
+                                    let kind_str = match e.kind {
+                                        jambo_intel::IocKind::Sha256 => "SHA-256",
+                                        jambo_intel::IocKind::Blake3 => "BLAKE3",
+                                        jambo_intel::IocKind::Ipv4 => "IPv4",
+                                        jambo_intel::IocKind::Domain => "Domaine",
+                                        jambo_intel::IocKind::UrlPattern => "URL",
+                                    };
+                                    emit(kind_str);
+                                    emit("] ");
+                                    emit(e.pattern_as_str());
+                                    emit(" (Source: ");
+                                    emit(e.feed_as_str());
+                                    emit(", Confiance: ");
+                                    emit(format_u64(e.confidence as u64, &mut b));
+                                    emit("%)\n");
+                                }
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "check" | "query" => {
+                        let cap = self.intel.admin_cap;
+                        let test_ip = [198, 51, 100, 23];
+                        match self.intel.query_ioc(&cap, jambo_intel::IocKind::Ipv4, &test_ip, 500) {
+                            Ok(Some(m)) => {
+                                let mut b = [0u8; 20];
+                                emit("[INTEL/CHECK] Alerte CTI : IP malveillante détectée (IoC #");
+                                emit(format_u64(m.ioc_id as u64, &mut b));
+                                emit(", Confiance: ");
+                                emit(format_u64(m.confidence as u64, &mut b));
+                                emit("%)\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Ok(None) => {
+                                emit("[INTEL/CHECK] Aucune correspondance CTI trouvée\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("[INTEL/CHECK] Échec de la requête CTI\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "purge" => {
+                        let cap = self.intel.admin_cap;
+                        match self.intel.purge_expired(&cap, 10000) {
+                            Ok(count) => {
+                                let mut b = [0u8; 20];
+                                emit("[INTEL/PURGE] Purge TTL réussie : ");
+                                emit(format_u64(count as u64, &mut b));
+                                emit(" IoC(s) expiré(s) retiré(s)\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("[INTEL/PURGE] Échec de la purge TTL\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "verify" => {
+                        let valid = self.intel.verify_ledger_integrity();
+                        emit("  Vérification intégrité registre SHA-256 : ");
+                        emit(if valid { "INTÈGRE (OK)\n" } else { "ALTÉRÉ (FAIL)\n" });
+                        (ShellStatus::Success, write_pos)
+                    }
+                    _ => {
+                        emit("Usage: intel [status | feeds | iocs | check | purge | verify]\n");
+                        (ShellStatus::ExecutionFailed, write_pos)
+                    }
+                }
+            }
             "poweroff" | "reboot" => {
                 emit("[SYSTEM] Extinction demandée...\n");
                 unsafe {
@@ -12905,6 +13036,43 @@ mod tests {
                 let (st5, len5) = shell.execute_line("xdr verify", &mut out);
                 assert_eq!(st5, ShellStatus::Success);
                 assert!(len5 > 0);
+            })
+            .unwrap();
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn test_shell_intel_commands() {
+        extern crate std;
+        let handle = std::thread::Builder::new()
+            .stack_size(8 * 1024 * 1024)
+            .spawn(|| {
+                let mut shell = JamboShell::new();
+                let mut out = [0u8; 1024];
+
+                let (st1, len1) = shell.execute_line("intel status", &mut out);
+                assert_eq!(st1, ShellStatus::Success);
+                assert!(len1 > 0);
+
+                let (st2, len2) = shell.execute_line("intel feeds", &mut out);
+                assert_eq!(st2, ShellStatus::Success);
+                assert!(len2 > 0);
+
+                let (st3, len3) = shell.execute_line("intel iocs", &mut out);
+                assert_eq!(st3, ShellStatus::Success);
+                assert!(len3 > 0);
+
+                let (st4, len4) = shell.execute_line("intel check", &mut out);
+                assert_eq!(st4, ShellStatus::Success);
+                assert!(len4 > 0);
+
+                let (st5, len5) = shell.execute_line("intel purge", &mut out);
+                assert_eq!(st5, ShellStatus::Success);
+                assert!(len5 > 0);
+
+                let (st6, len6) = shell.execute_line("intel verify", &mut out);
+                assert_eq!(st6, ShellStatus::Success);
+                assert!(len6 > 0);
             })
             .unwrap();
         handle.join().unwrap();

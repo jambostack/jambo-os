@@ -1,7 +1,7 @@
 # ROADMAP DU DÉVELOPPEMENT AUTONOME — JamboOS
 
-> **Dernière mise à jour** : 2026-10-20 05:47 UTC  
-> **Version actuelle** : `v0.2.118`  
+> **Dernière mise à jour** : 2026-10-20 05:55 UTC  
+> **Version actuelle** : `v0.2.119`  
 > **Statut global** : Pré-Alpha active — Micro-noyau de 3e génération orienté capacités (`#![no_std]`)  
 > **Cycle de développement autonome** : 10 minutes via le Planificateur de Tâches & Crons d'Antigravity WebUI  
 
@@ -107,16 +107,17 @@
 | **v0.2.116** | 118 | Investigation Numérique & Forensique `jambo-forensics` | Acquisition forensique volatile, extraction de timelines chronologiques d'artefacts, détection W+X et calcul d'entropie, scellement cryptographique Ed25519/BLAKE3, chaîne de garde SHA-256 inaltérable & ForensicsCap | ✅ Validé |
 | **v0.2.117** | 119 | Détection & Réponse Terminaux `jambo-edr` | Surveillance comportementale d'arborescences de processus, détection heuristique d'évasion d'enclave TEE, injection DLL/.jso et crochets système suspects, EdrCap & scellement SHA-256 | ✅ Validé |
 | **v0.2.118** | 120 | Détection & Réponse Étendue (XDR) `jambo-xdr` | Corrélation unifiée multi-vecteurs (EDR, VPN, WAF, Auth2), détection de campagnes APT distribuées, orchestration de réponse de confinement unifié trans-vectorielle, XdrCap & scellement SHA-256 | ✅ Validé |
+| **v0.2.119** | 121 | Renseignement Cyber (CTI/IoC) `jambo-intel` | Ingestion de flux IoC normalisés (SHA-256/BLAKE3, IPv4 bogons, domaines/URL), recherche O(1) par filtre de Bloom cryptographique & table compacte, scoring de confiance, expiration dynamique TTL, IntelCap & scellement SHA-256 | ✅ Validé |
 
 ---
 
 ## 3. Prochaines Étapes Prioritaires
 
-### 🎯 Prochaine Tâche Immédiate : Phase 121 — v0.2.119
-* **Composant** : `services/jambo-intel`
-* **Objectif** : Renseignement sur les Menaces Cyber & Flux d'Indicateurs de Compromission (CTI / IoC)
+### 🎯 Prochaine Tâche Immédiate : Phase 122 — v0.2.120
+* **Composant** : `services/jambo-deception`
+* **Objectif** : Cyber-Déception, Honeypots Haute Fidélité & Canaris Système (Deception Defense)
 * **Tâches précises** :
-  1. Ingestion de flux IoC normalisés (hachages BLAKE3/SHA-256, adresses IP bogons, motifs d'URL malveillants), recherche O(1) par filtre de Bloom cryptographique & table de hachage compacte `#![no_std]`, scoring de confiance et expiration TTL dynamique, IntelCap & scellement SHA-256.
+  1. Déploiement de faux jetons de capacités (HoneyCaps), leurres de mémoire VMO délibérément vulnérables et faux endpoints IPC/RPC avec déclenchement d'alertes silencieuses en O(1), profilage de l'attaquant, pièges à évasion d'enclave, DeceptionCap & scellement SHA-256.
   2. Validation formelle et suite de tests `cargo xtask test`.
 
 ---
@@ -176,6 +177,7 @@
 * **2026-10-20 05:20 UTC** : Validation complète Phase 118 (`jambo-forensics`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-forensics`, 7/7). Tag `v0.2.116`.
 * **2026-10-20 05:35 UTC** : Validation complète Phase 119 (`jambo-edr`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-edr`, 7/7). Tag `v0.2.117`.
 * **2026-10-20 05:47 UTC** : Validation complète Phase 120 (`jambo-xdr`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-xdr`, 6/6). Tag `v0.2.118`.
+* **2026-10-20 05:56 UTC** : Validation complète Phase 121 (`jambo-intel`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-intel`, 5/5). Tag `v0.2.119`.
 
 
 
