@@ -1,7 +1,7 @@
 # ROADMAP DU DÉVELOPPEMENT AUTONOME — JamboOS
 
-> **Dernière mise à jour** : 2026-10-20 01:20 UTC  
-> **Version actuelle** : `v0.2.103`  
+> **Dernière mise à jour** : 2026-10-20 01:40 UTC  
+> **Version actuelle** : `v0.2.104`  
 > **Statut global** : Pré-Alpha active — Micro-noyau de 3e génération orienté capacités (`#![no_std]`)  
 > **Cycle de développement autonome** : 10 minutes via le Planificateur de Tâches & Crons d'Antigravity WebUI  
 
@@ -92,23 +92,24 @@
 | **v0.2.101** | 103 | Sécurité IA & Détection d'Empoisonnement `jambo-ai-sec` | Garde-fous d'inférence `#![no_std]`, détection d'injections de prompt/jailbreak, validation Merkle SHA-256 de poids, détection de trojans & quarantaine O(1) | ✅ Validé |
 | **v0.2.102** | 104 | Wasm Component Model `jambo-wasm2` | Isolation Wasm Component Model, interfaces WIT, Canonical ABI, composition inter-composants sandboxed & audit SHA-256 | ✅ Validé |
 | **v0.2.103** | 105 | Attestation Multi-Puces `jambo-attest2` | Attestation distante d'enclaves matérielles, chaînes de confiance multi-puces, devis HMAC-SHA256, politiques de référence & confinement O(1) | ✅ Validé |
+| **v0.2.104** | 106 | Accélération Crypto `jambo-crypto2` | Accélération cryptographique matérielle Ring 3 (AES-NI, SHA-NI, AVX-512), AES-GCM AEAD, RFC 3394 Key Wrap & gestion souveraine de clés | ✅ Validé |
 
 ---
 
 ## 3. Prochaines Étapes Prioritaires
 
-### 🎯 Prochaine Tâche Immédiate : Phase 106 — v0.2.104
-* **Composant** : `services/jambo-crypto2`
-* **Objectif** : Accélération cryptographique matérielle Ring 3 (AES-NI, SHA-NI, AVX-512) & gestion de clés souveraine
-* **Tâches précises** :
-  1. Primitives cryptographiques accélérées zéro-allocation.
-  2. Validation formelle et suite de tests `cargo xtask test`.
-
-### 🎯 Tâche Suivante : Phase 107 — v0.2.105
+### 🎯 Prochaine Tâche Immédiate : Phase 107 — v0.2.105
 * **Composant** : `services/jambo-tee2`
 * **Objectif** : Micro-hyperviseurs d'enclaves de confiance imbriquées & isolation de mémoire chiffrée multi-locataires
 * **Tâches précises** :
   1. Confinement imbriqué et tables EPT isolées par enclave.
+  2. Validation formelle et suite de tests `cargo xtask test`.
+
+### 🎯 Tâche Suivante : Phase 108 — v0.2.106
+* **Composant** : `services/jambo-kms`
+* **Objectif** : Système souverain de gestion et séquestre de clés de grappe distribuée & hiérarchies cryptographiques
+* **Tâches précises** :
+  1. Séquestre de clés, baux temporels, réplication chiffrée multi-nœuds.
   2. Validation formelle et suite de tests `cargo xtask test`.
 
 ---
@@ -153,6 +154,7 @@
 * **2026-10-20 00:36 UTC** : Validation complète Phase 103 (`jambo-ai-sec`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-ai-sec`). Tag `v0.2.101`.
 * **2026-10-20 00:58 UTC** : Validation complète Phase 104 (`jambo-wasm2`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-wasm2`). Tag `v0.2.102`.
 * **2026-10-20 01:20 UTC** : Validation complète Phase 105 (`jambo-attest2`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-attest2`). Tag `v0.2.103`.
+* **2026-10-20 01:40 UTC** : Validation complète Phase 106 (`jambo-crypto2`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-crypto2`). Tag `v0.2.104`.
 
 
 

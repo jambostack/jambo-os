@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.103-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.104-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.103 (Attestation d'Enclaves Matérielles Distantes & Chaînes de Confiance Multi-Puces jambo-attest2)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.103` introduit le sous-système d'attestation d'enclaves matérielles distantes et de chaînes de confiance multi-puces (`services/jambo-attest2`) : hiérarchie de confiance multi-puces (Silicon RoT CPU, Board RoT TPM 2.0, Platform RoT HSM dédié, Peripheral RoT SmartNIC), identité de plateforme composée (`CompoundPlatformId`) calculée par agrégation Merkle SHA-256 en arbre, gestion et mesure de micro-enclaves Ring 3 souveraines (MRENCLAVE, MRSIGNER, SVN anti-rollback, attributs d'isolation matérielle), génération et vérification de devis d'attestation distante scellés par HMAC-SHA256 avec nonces de défi anti-rejeu, validation formelle contre les politiques de référence dorées (Golden Reference Policies), endossement croisé inter-puces (Cross-Chip Mutual Attestation), mise en quarantaine autonome en temps O(1) de toute enclave ou puce corrompue avec propagation en cascade, registre d'audit inaltérable scellé par chaîne de blocs SHA-256 (`attest2_audit_chain`), gouvernance capabilaire par jeton `Attest2Cap` sans autorité ambiante et commandes interactives `attest2 [status | chips | enclaves | quote | verify | cross-check | quarantine | audit]` dans le shell `jsh`.
+> **Statut du Projet : Version v0.2.104 (Accélération Cryptographique Matérielle Ring 3 & Gestion Souveraine de Clés jambo-crypto2)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.104` introduit le sous-système d'accélération cryptographique matérielle et de gestion de clés souveraine (`services/jambo-crypto2`) : détection dynamique CPUID des jeux d'instructions matériels (AES-NI, SHA-NI, AVX-512, SSE4.1) avec repli logiciel souverain constant-time `#![no_std]`, primitives de chiffrement par bloc AES (FIPS 197) en versions 128 et 256 bits (modes ECB, CBC, CTR et Galois/Counter Mode AES-GCM AEAD NIST SP 800-38D), enveloppement et déballage sécurisé de clés conforme RFC 3394 / NIST SP 800-38F (AES Key Wrap), hachage cryptographique SHA-256 et SHA-512 FIPS 180-4, HMAC-SHA256, dérivation HKDF (RFC 5869) et PBKDF2 (RFC 2898) zéro-allocation, gestion souveraine du cycle de vie des clés (génération, étiquetage, contrôle d'usages, rotation atomique, quarantaine O(1) et zéroïsation d'urgence en mémoire volatile), registre d'audit inaltérable scellé par chaîne de blocs SHA-256 (`crypto2_audit_chain`), gouvernance capabilaire stricte par jeton `Crypto2Cap` sans autorité ambiante et commandes interactives `crypto2 [status | cpu-features | keys | wrap | rotate | quarantine | zeroize | hash | audit]` dans le shell `jsh`.
 
 ---
 

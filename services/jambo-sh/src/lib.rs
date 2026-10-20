@@ -174,6 +174,7 @@ pub struct JamboShell {
     pub ai_sec: jambo_ai_sec::JamboAiSecDaemon,
     pub wasm2: jambo_wasm2::JamboWasm2Daemon,
     pub attest2: jambo_attest2::JamboAttest2Daemon,
+    pub crypto2: jambo_crypto2::JamboCrypto2Daemon,
 }
 
 impl Default for JamboShell {
@@ -468,6 +469,14 @@ impl JamboShell {
         );
         let mut attest2 = jambo_attest2::JamboAttest2Daemon::new(attest2_cap);
         attest2.init_defaults();
+        let crypto2_cap = jambo_crypto2::Crypto2Cap::new(
+            libjambo::Handle::new(10601, 1),
+            jambo_crypto2::crypto2_rights::ALL,
+            jambo_crypto2::MAX_KEYS as u16,
+            jambo_crypto2::key_usages::ALL as u16,
+        );
+        let mut crypto2 = jambo_crypto2::JamboCrypto2Daemon::new(crypto2_cap);
+        crypto2.init_defaults();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -532,6 +541,7 @@ impl JamboShell {
             ai_sec,
             wasm2,
             attest2,
+            crypto2,
         }
     }
 
@@ -701,10 +711,11 @@ impl JamboShell {
                 emit("  ai-sec [cmd]  - Garde-fous de sécurité IA, détection d'injections & empoisonnement\n");
                 emit("  wasm2 [cmd]   - Moteur Wasm Component Model, interfaces WIT, liaison & bac à sable\n");
                 emit("  attest2 [cmd] - Attestation distante d'enclaves, chaînes multi-puces & devis d'intégrité\n");
+                emit("  crypto2 [cmd] - Accélération cryptographique matérielle Ring 3 & gestion de clés souveraines\n");
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.2.103 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.2.104 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -6842,6 +6853,239 @@ impl JamboShell {
                     }
                     _ => {
                         emit("Usage: attest2 [status | chips | enclaves | quote <id> | verify <id> | cross-check | quarantine <id> | audit]\n");
+                        (ShellStatus::ExecutionFailed, write_pos)
+                    }
+                }
+            }
+            "crypto2" => {
+                let sub = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    "status"
+                };
+                match sub {
+                    "status" => {
+                        let mut b = [0u8; 20];
+                        emit("=== ACCÉLÉRATION CRYPTO & GESTION DE CLÉS SOUVERAINE (jambo-crypto2) ===\n");
+                        emit("Clés enregistrées       : ");
+                        emit(format_u64(self.crypto2.key_count as u64, &mut b));
+                        emit(" / ");
+                        emit(format_u64(jambo_crypto2::MAX_KEYS as u64, &mut b));
+                        emit("\nClés actives (prêtes)   : ");
+                        emit(format_u64(self.crypto2.count_active_keys() as u64, &mut b));
+                        emit("\nClés en quarantaine     : ");
+                        emit(format_u64(self.crypto2.count_quarantined_keys() as u64, &mut b));
+                        emit("\nOpérations cryptos total: ");
+                        emit(format_u64(self.crypto2.total_ops, &mut b));
+                        emit("\nViolations d'intégrité  : ");
+                        emit(format_u64(self.crypto2.total_violations, &mut b));
+                        emit("\nMatériel accéléré       : ");
+                        if self.crypto2.cpu_features.constant_time_hw {
+                            emit("OUI (AES-NI / SHA-NI détecté)\n");
+                        } else {
+                            emit("NON (Repli logiciel constant-time souverain actif)\n");
+                        }
+                        emit("Condensat chaîne audit  : ");
+                        for byte in self.crypto2.audit_chain.iter().take(8) {
+                            emit(format_hex_u64(*byte as u64, &mut b));
+                        }
+                        emit("...\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "cpu-features" => {
+                        emit("=== DÉTECTION DES FONCTIONS CRYPTO MATÉRIELLES (CPUID) ===\n");
+                        emit("AES-NI   : ");
+                        emit(if self.crypto2.cpu_features.aes_ni { "SUPPORTÉ\n" } else { "NON DISPONIBLE (Repli constant-time)\n" });
+                        emit("SHA-NI   : ");
+                        emit(if self.crypto2.cpu_features.sha_ni { "SUPPORTÉ\n" } else { "NON DISPONIBLE (Repli constant-time)\n" });
+                        emit("AVX2     : ");
+                        emit(if self.crypto2.cpu_features.avx2 { "SUPPORTÉ\n" } else { "NON DISPONIBLE\n" });
+                        emit("AVX-512F : ");
+                        emit(if self.crypto2.cpu_features.avx512f { "SUPPORTÉ\n" } else { "NON DISPONIBLE\n" });
+                        emit("SSE4.1   : ");
+                        emit(if self.crypto2.cpu_features.sse4_1 { "SUPPORTÉ\n" } else { "NON DISPONIBLE\n" });
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "keys" | "list-keys" => {
+                        let mut b = [0u8; 20];
+                        emit("=== REGISTRE DES CLÉS SOUVERAINES (jambo-crypto2) ===\n");
+                        for k in self.crypto2.keys.iter() {
+                            if k.status != jambo_crypto2::KeyStatus::Unused {
+                                emit("Clé #");
+                                emit(format_u64(k.id as u64, &mut b));
+                                emit(" [v");
+                                emit(format_u64(k.version as u64, &mut b));
+                                emit("] : ");
+                                if let Ok(s) = core::str::from_utf8(&k.label[..k.label_len]) {
+                                    emit(s);
+                                } else {
+                                    emit("CLÉ_INCONNUE");
+                                }
+                                emit(" | Type: ");
+                                match k.key_type {
+                                    jambo_crypto2::KeyType::Aes128 => emit("AES-128"),
+                                    jambo_crypto2::KeyType::Aes256 => emit("AES-256"),
+                                    jambo_crypto2::KeyType::HmacSha256 => emit("HMAC-256"),
+                                }
+                                emit(" | Statut: ");
+                                match k.status {
+                                    jambo_crypto2::KeyStatus::Active => emit("ACTIVE\n"),
+                                    jambo_crypto2::KeyStatus::Suspended => emit("SUSPENDUE\n"),
+                                    jambo_crypto2::KeyStatus::Quarantined => emit("QUARANTAINE\n"),
+                                    jambo_crypto2::KeyStatus::Destroyed => emit("DÉTRUITE\n"),
+                                    _ => emit("INCONNU\n"),
+                                }
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "wrap" => {
+                        let kek_id = if parsed.arg_count > 2 {
+                            parse_u64(parsed.args[2]).unwrap_or(1) as u32
+                        } else {
+                            1
+                        };
+                        let dek_id = if parsed.arg_count > 3 {
+                            parse_u64(parsed.args[3]).unwrap_or(2) as u32
+                        } else {
+                            2
+                        };
+                        let mut wrapped = [0u8; 40];
+                        let cap = self.crypto2.admin_cap;
+                        match self.crypto2.wrap_key(&cap, kek_id, dek_id, &mut wrapped) {
+                            Ok(len) => {
+                                let mut b = [0u8; 20];
+                                emit("[SUCCÈS] Enveloppement RFC 3394 de la clé #");
+                                emit(format_u64(dek_id as u64, &mut b));
+                                emit(" sous la KEK #");
+                                emit(format_u64(kek_id as u64, &mut b));
+                                emit(" réussi (");
+                                emit(format_u64(len as u64, &mut b));
+                                emit(" octets) :\n");
+                                for byte in wrapped[..len].iter() {
+                                    emit(format_hex_u64(*byte as u64, &mut b));
+                                }
+                                emit("\nIntégrité cryptographique scellée.\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("[ERREUR] Échec de l'enveloppement RFC 3394 de la clé demandée\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "rotate" => {
+                        let key_id = if parsed.arg_count > 2 {
+                            parse_u64(parsed.args[2]).unwrap_or(2) as u32
+                        } else {
+                            2
+                        };
+                        let cap = self.crypto2.admin_cap;
+                        match self.crypto2.rotate_key(&cap, key_id, b"SHELL_OPERATOR_ENTROPY") {
+                            Ok(()) => {
+                                let mut b = [0u8; 20];
+                                emit("[CONFIRMÉ] Rotation atomique de la clé souveraine #");
+                                emit(format_u64(key_id as u64, &mut b));
+                                emit(" effectuée avec succès (nouvelle version dérivée HKDF).\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("[ERREUR] Impossible d'effectuer la rotation de la clé\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "quarantine" => {
+                        let key_id = if parsed.arg_count > 2 {
+                            parse_u64(parsed.args[2]).unwrap_or(3) as u32
+                        } else {
+                            3
+                        };
+                        let cap = self.crypto2.admin_cap;
+                        match self.crypto2.quarantine_key(&cap, key_id) {
+                            Ok(()) => {
+                                let mut b = [0u8; 20];
+                                emit("[CONFIRMÉ] Clé #");
+                                emit(format_u64(key_id as u64, &mut b));
+                                emit(" placée en QUARANTAINE immédiate en temps O(1).\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("[ERREUR] Échec de mise en quarantaine de la clé\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "zeroize" => {
+                        let key_id = if parsed.arg_count > 2 {
+                            parse_u64(parsed.args[2]).unwrap_or(3) as u32
+                        } else {
+                            3
+                        };
+                        let cap = self.crypto2.admin_cap;
+                        match self.crypto2.zeroize_key(&cap, key_id) {
+                            Ok(()) => {
+                                let mut b = [0u8; 20];
+                                emit("[CONFIRMÉ] Clé #");
+                                emit(format_u64(key_id as u64, &mut b));
+                                emit(" ZÉROÏSÉE en mémoire volatile et définitivement détruite.\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("[ERREUR] Échec de la zéroïsation de la clé\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "hash" => {
+                        let algo = if parsed.arg_count > 2 { parsed.args[2] } else { "sha256" };
+                        let payload = if parsed.arg_count > 3 { parsed.args[3] } else { "JamboOS" };
+                        let mut b = [0u8; 20];
+                        let cap = self.crypto2.admin_cap;
+                        match algo {
+                            "sha512" => match self.crypto2.compute_sha512(&cap, payload.as_bytes()) {
+                                Ok(digest) => {
+                                    emit("[SHA-512] ");
+                                    for byte in digest.iter() {
+                                        emit(format_hex_u64(*byte as u64, &mut b));
+                                    }
+                                    emit("\n");
+                                    (ShellStatus::Success, write_pos)
+                                }
+                                Err(_) => {
+                                    emit("[ERREUR] Calcul de hachage refusé\n");
+                                    (ShellStatus::ExecutionFailed, write_pos)
+                                }
+                            },
+                            _ => match self.crypto2.compute_sha256(&cap, payload.as_bytes()) {
+                                Ok(digest) => {
+                                    emit("[SHA-256] ");
+                                    for byte in digest.iter() {
+                                        emit(format_hex_u64(*byte as u64, &mut b));
+                                    }
+                                    emit("\n");
+                                    (ShellStatus::Success, write_pos)
+                                }
+                                Err(_) => {
+                                    emit("[ERREUR] Calcul de hachage refusé\n");
+                                    (ShellStatus::ExecutionFailed, write_pos)
+                                }
+                            },
+                        }
+                    }
+                    "audit" => {
+                        let mut b = [0u8; 20];
+                        emit("Condensat SHA-256 du Registre d'Audit Crypto : ");
+                        for byte in self.crypto2.audit_chain.iter() {
+                            emit(format_hex_u64(*byte as u64, &mut b));
+                        }
+                        emit("\nÉvénements d'audit consignés : ");
+                        emit(format_u64(self.crypto2.audit_count as u64, &mut b));
+                        emit("\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    _ => {
+                        emit("Usage: crypto2 [status | cpu-features | keys | wrap <kek> <dek> | rotate <id> | quarantine <id> | zeroize <id> | hash <algo> <data> | audit]\n");
                         (ShellStatus::ExecutionFailed, write_pos)
                     }
                 }
