@@ -1,7 +1,7 @@
 # ROADMAP DU DÉVELOPPEMENT AUTONOME — JamboOS
 
-> **Dernière mise à jour** : 2026-10-20 04:20 UTC  
-> **Version actuelle** : `v0.2.112`  
+> **Dernière mise à jour** : 2026-10-20 04:35 UTC  
+> **Version actuelle** : `v0.2.113`  
 > **Statut global** : Pré-Alpha active — Micro-noyau de 3e génération orienté capacités (`#![no_std]`)  
 > **Cycle de développement autonome** : 10 minutes via le Planificateur de Tâches & Crons d'Antigravity WebUI  
 
@@ -101,23 +101,24 @@
 | **v0.2.110** | 112 | Prévention & Corrélation d'Intrusions `jambo-ids` | Détection d'anomalies de flux IPC, profilage comportemental, corrélation multi-points hétérogène, calcul de score de menace APT, révocation automatisée de capacités, quarantaine O(1), IdsCap & registre d'audit SHA-256 | ✅ Validé |
 | **v0.2.111** | 113 | Passerelle VPN Post-Quantique WireGuard `jambo-vpn` | Passerelle VPN souveraine inspirée de WireGuard, échange de clés hybride Dual-Defense (ML-KEM + Curve25519), transport chiffré ChaCha20/HMAC-SHA256, anti-rejeu par fenêtre glissante (128 paquets), cryptokey routing par sous-réseaux CIDR AllowedIPs, VpnCap & audit SHA-256 | ✅ Validé |
 | **v0.2.112** | 114 | Pare-Feu Applicatif L7 & Filtrage d'Injections `jambo-waf` | Pare-feu applicatif de couche 7 (WAF) sandboxed, filtrage protocolaire HTTP RFC 7230 (CRLF, null bytes), moteurs d'injections (SQLi, XSS, RCE, Path Traversal), analyseur JSON borné avec détection de pollution de prototype, inspecteur de bytecode Wasm avec détection de bombes mémoire, prévention de fuites de données sortantes, quarantaine O(1), WafCap & audit SHA-256 | ✅ Validé |
+| **v0.2.113** | 115 | Mitigation Anti-DDoS Distribuée L3/L4/L7 `jambo-ddos` | Mitigation Anti-DDoS multicouches (L3/L4/L7), filtrage anti-spoofing martiens/bogons (RFC 6890), SYN Cookies stateless déterministes (fenêtres 64s, SHA-256), limitation de débit par seaux à jetons (Token Bucket), détection d'amplification (DNS/NTP/SNMP), détection Slowloris & HTTP Flood, trou noir O(1) avec TTL, liste blanche prioritaire, DdosCap & registre d'audit SHA-256 inaltérable | ✅ Validé |
 
 ---
 
 ## 3. Prochaines Étapes Prioritaires
 
-### 🎯 Prochaine Tâche Immédiate : Phase 115 — v0.2.113
-* **Composant** : `services/jambo-ddos`
-* **Objectif** : Mitigation Anti-DDoS Distribuée L3/L4/L7, Limiteurs de Débit à Jetons & SYN Cookies
-* **Tâches précises** :
-  1. Filtrage anti-amplification, syn-cookies Ring 3, limitation de débit adaptative par IP/zone, DdosCap.
-  2. Validation formelle et suite de tests `cargo xtask test`.
-
-### 🎯 Tâche Suivante : Phase 116 — v0.2.114
+### 🎯 Prochaine Tâche Immédiate : Phase 116 — v0.2.114
 * **Composant** : `services/jambo-siem`
 * **Objectif** : Corrélation d'Événements de Sécurité Distribuée & Moteur SIEM Temps Réel
 * **Tâches précises** :
-  1. Ingestion de flux télémétriques, normalisation CEF/OCSF, détection de patterns APT complexes, SiemCap.
+  1. Ingestion de flux télémétriques multi-sources, normalisation de schémas (CEF/OCSF), moteur de corrélation de règles complexes en fenêtres temporelles glissantes, SiemCap.
+  2. Validation formelle et suite de tests `cargo xtask test`.
+
+### 🎯 Tâche Suivante : Phase 117 — v0.2.115
+* **Composant** : `services/jambo-soar`
+* **Objectif** : Orchestration de Sécurité, Automatisation & Réponse aux Incidents (SOAR)
+* **Tâches précises** :
+  1. Playbooks automatisés d'atténuation d'incidents, workflows conditionnels DAG, intégration croisée avec `jambo-waf`, `jambo-ddos`, `jambo-ids` et `jambo-walld`, SoarCap.
   2. Validation formelle et suite de tests `cargo xtask test`.
 
 ---
@@ -171,6 +172,7 @@
 * **2026-10-20 03:40 UTC** : Validation complète Phase 112 (`jambo-ids`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-ids`). Tag `v0.2.110`.
 * **2026-10-20 04:05 UTC** : Validation complète Phase 113 (`jambo-vpn`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-vpn`). Tag `v0.2.111`.
 * **2026-10-20 04:20 UTC** : Validation complète Phase 114 (`jambo-waf`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-waf`). Tag `v0.2.112`.
+* **2026-10-20 04:35 UTC** : Validation complète Phase 115 (`jambo-ddos`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-ddos`). Tag `v0.2.113`.
 
 
 

@@ -1226,6 +1226,13 @@ pub extern "C" fn _start() -> ! {
         "Échec du test du pare-feu applicatif L7 sandboxed jambo-waf"
     );
 
+    // 14sedeciesquadragies. Validation de la Mitigation Anti-DDoS L3/L4/L7 & SYN Cookies (Phase 115 - v0.2.113)
+    let ddos_success = sched::execute_ddos_daemon_test();
+    assert!(
+        ddos_success,
+        "Échec du test de la mitigation anti-DDoS L3/L4/L7 jambo-ddos"
+    );
+
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
 
     arch::init_iommu();
@@ -1475,14 +1482,15 @@ pub extern "C" fn _start() -> ! {
     kprintln!("\x1b[1;32m[PASS] Phase 112 Multi-Point Intrusion Prevention, Correlation & Capability Revocation (jambo-ids) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 113 Sovereign Post-Quantum WireGuard Gateway & Encrypted Transport (jambo-vpn) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 114 Sandboxed L7 Web Application Firewall (jambo-waf) Complete\x1b[0m");
+    kprintln!("\x1b[1;32m[PASS] Phase 115 Multi-Layer L3/L4/L7 Anti-DDoS Mitigation & SYN Cookies (jambo-ddos) Complete\x1b[0m");
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.112 (Sandboxed L7 Web Application Firewall jambo-waf)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.113 (Distributed Multi-Layer Anti-DDoS & SYN Cookies jambo-ddos)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.112 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.113 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );

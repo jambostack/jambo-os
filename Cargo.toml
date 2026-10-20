@@ -79,6 +79,7 @@ members = [
     "services/jambo-ids",
     "services/jambo-vpn",
     "services/jambo-waf",
+    "services/jambo-ddos",
     "libs/jambo-ui",
     "libs/jambo-sdk",
     "drivers/virtio",

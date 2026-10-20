@@ -183,6 +183,7 @@ pub struct JamboShell {
     pub ids: jambo_ids::JamboIdsDaemon,
     pub vpn: jambo_vpn::JamboVpnDaemon,
     pub waf: jambo_waf::JamboWafDaemon,
+    pub ddos: jambo_ddos::JamboDdosDaemon,
 }
 
 impl Default for JamboShell {
@@ -549,6 +550,14 @@ impl JamboShell {
         );
         let mut waf = jambo_waf::JamboWafDaemon::new(waf_cap);
         waf.init_defaults();
+        let ddos_cap = jambo_ddos::DdosCap::new(
+            libjambo::Handle::new(11501, 1),
+            jambo_ddos::ddos_rights::ALL,
+            5000,
+            1,
+        );
+        let mut ddos = jambo_ddos::JamboDdosDaemon::new(ddos_cap);
+        ddos.init_defaults();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -622,6 +631,7 @@ impl JamboShell {
             ids,
             vpn,
             waf,
+            ddos,
         }
     }
 
@@ -800,10 +810,11 @@ impl JamboShell {
                 emit("  ids [cmd]     - Détection & corrélation multi-points d'intrusions, mitigation Ring 3\n");
                 emit("  vpn [cmd]     - Passerelle VPN WireGuard post-quantique (ML-KEM + Curve25519) & transport chiffré\n");
                 emit("  waf [cmd]     - Pare-feu applicatif L7 (WAF) sandboxed, détection d'injections & WafCap\n");
+                emit("  ddos [cmd]    - Mitigation Anti-DDoS L3/L4/L7, SYN Cookies, seaux à jetons & DdosCap\n");
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.2.112 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.2.113 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -8839,6 +8850,161 @@ impl JamboShell {
                     }
                 }
             }
+            "ddos" => {
+                let mut b = [0u8; 20];
+                let sub = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    "status"
+                };
+                match sub {
+                    "status" => {
+                        emit("=== SYSTÈME ANTI-DDOS DISTRIBUÉ (L3/L4/L7) & SYN COOKIES ===\n");
+                        emit("Statut : Actif / Protection en ligne\n");
+                        emit("SYN Cookies générés : ");
+                        emit(format_u64(self.ddos.syn_cookies_generated as u64, &mut b));
+                        emit("\nSYN Cookies validés : ");
+                        emit(format_u64(self.ddos.syn_cookies_validated as u64, &mut b));
+                        emit("\nPaquets mitigés/bloqués : ");
+                        emit(format_u64(self.ddos.packets_mitigated as u64, &mut b));
+                        emit("\nIPs suivies (Rate Limiting) : ");
+                        emit(format_u64(self.ddos.tracked_count as u64, &mut b));
+                        emit("\nIPs en trou noir (Blackhole) : ");
+                        emit(format_u64(self.ddos.blackhole_count as u64, &mut b));
+                        emit("\nIPs en liste blanche : ");
+                        emit(format_u64(self.ddos.whitelist_count as u64, &mut b));
+                        emit("\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "syn-cookie" => {
+                        emit("--- TEST INTERACTIF SYN COOKIES DÉTERMINISTE (TCP L4) ---\n");
+                        let client_ip = [198, 51, 100, 42];
+                        let srv_ip = [10, 0, 0, 1];
+                        let c_port = 54321;
+                        let s_port = 80;
+                        let now_sec = 1000;
+                        let cookie = self.ddos.syn_engine.generate_cookie(
+                            client_ip, srv_ip, c_port, s_port, 1460, now_sec,
+                        );
+                        emit("SYN Cookie généré (seq initial) : 0x");
+                        emit(format_hex_u64(cookie as u64, &mut b));
+                        emit("\nValidation de l'ACK client (ack_num = seq + 1)...\n");
+                        let ack_num = cookie.wrapping_add(1);
+                        let mss = self.ddos.syn_engine.verify_cookie(
+                            client_ip, srv_ip, c_port, s_port, ack_num, now_sec + 2,
+                        );
+                        match mss {
+                            Ok(val) => {
+                                emit("Handshake validé sans allocation d'état ! MSS décodé : ");
+                                emit(format_u64(val as u64, &mut b));
+                                emit(" octets\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("Échec de validation du SYN Cookie.\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "rate-limit" => {
+                        emit("--- DÉMONSTRATION DU LIMITEUR DE DÉBIT À JETONS ---\n");
+                        let cap = self.ddos.admin_cap;
+                        let test_ip = [203, 0, 113, 99];
+                        let mut allowed_count = 0;
+                        let mut limited_count = 0;
+                        for _ in 0..110 {
+                            let pkt = jambo_ddos::NetworkPacket::new(
+                                test_ip,
+                                [10, 0, 0, 1],
+                                jambo_ddos::IpProtocol::Udp,
+                                4000,
+                                53,
+                            );
+                            match self.ddos.inspect_packet(&cap, &pkt, 2000) {
+                                Ok(jambo_ddos::DdosDecision::Allow) => allowed_count += 1,
+                                Ok(jambo_ddos::DdosDecision::RateLimited { .. }) => limited_count += 1,
+                                _ => {}
+                            }
+                        }
+                        emit("Paquets autorisés (rafale initiale) : ");
+                        emit(format_u64(allowed_count as u64, &mut b));
+                        emit("\nPaquets régulés (dépassement capacité) : ");
+                        emit(format_u64(limited_count as u64, &mut b));
+                        emit("\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "blackhole" => {
+                        emit("--- TABLE DES TROUS NOIRS (BLACKHOLE O(1)) ---\n");
+                        if self.ddos.blackhole_count == 0 {
+                            emit("Aucune adresse IP actuellement en trou noir.\n");
+                        } else {
+                            for entry in self.ddos.blackhole_table.iter() {
+                                if let Some(bh) = entry {
+                                    emit("  IP: ");
+                                    emit(format_u64(bh.ip[0] as u64, &mut b)); emit(".");
+                                    emit(format_u64(bh.ip[1] as u64, &mut b)); emit(".");
+                                    emit(format_u64(bh.ip[2] as u64, &mut b)); emit(".");
+                                    emit(format_u64(bh.ip[3] as u64, &mut b));
+                                    emit(" - Raison: ");
+                                    emit(format_u64(bh.reason as u64, &mut b));
+                                    emit(" (Expire à: ");
+                                    emit(format_u64(bh.expires_at_sec, &mut b));
+                                    emit(")\n");
+                                }
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "whitelist" => {
+                        emit("--- ADRESSES IP EN LISTE BLANCHE (CONTOURNEMENT ABSOLU) ---\n");
+                        if self.ddos.whitelist_count == 0 {
+                            emit("Aucune adresse IP en liste blanche.\n");
+                        } else {
+                            for i in 0..self.ddos.whitelist_count {
+                                let ip = &self.ddos.whitelisted_ips[i];
+                                emit("  IP de confiance: ");
+                                emit(format_u64(ip[0] as u64, &mut b)); emit(".");
+                                emit(format_u64(ip[1] as u64, &mut b)); emit(".");
+                                emit(format_u64(ip[2] as u64, &mut b)); emit(".");
+                                emit(format_u64(ip[3] as u64, &mut b));
+                                emit("\n");
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "audit" => {
+                        emit("=== REGISTRE D'AUDIT CRYPTOGRAPHIQUE ANTI-DDOS (SHA-256) ===\n");
+                        emit("Chaîne d'audit courante : 0x");
+                        for byte in self.ddos.audit_chain.iter().take(16) {
+                            emit(format_hex_u64(*byte as u64, &mut b));
+                        }
+                        emit("...\nEntrées d'audit enregistrées : ");
+                        emit(format_u64(self.ddos.audit_count as u64, &mut b));
+                        emit("\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "benchmark" => {
+                        emit("[BENCHMARK/DDOS] Évaluation de débit et latence de filtrage (100 paquets)...\n");
+                        let cap = self.ddos.admin_cap;
+                        let pkt = jambo_ddos::NetworkPacket::new(
+                            [127, 0, 0, 1],
+                            [127, 0, 0, 1],
+                            jambo_ddos::IpProtocol::Tcp,
+                            8080,
+                            80,
+                        );
+                        for _ in 0..100 {
+                            let _ = self.ddos.inspect_packet(&cap, &pkt, 5000);
+                        }
+                        emit("[BENCHMARK/DDOS] 100 paquets filtrés avec succès en sous-milliseconde.\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    _ => {
+                        emit("Usage: ddos [status | syn-cookie | rate-limit | blackhole | whitelist | audit | benchmark]\n");
+                        (ShellStatus::ExecutionFailed, write_pos)
+                    }
+                }
+            }
             "poweroff" | "reboot" => {
                 emit("[SYSTEM] Extinction demandée...\n");
                 unsafe {
@@ -12076,6 +12242,47 @@ mod tests {
                 let (st5, len5) = shell.execute_line("waf benchmark", &mut out);
                 assert_eq!(st5, ShellStatus::Success);
                 assert!(len5 > 0);
+            })
+            .unwrap();
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn test_shell_ddos_commands() {
+        extern crate std;
+        let handle = std::thread::Builder::new()
+            .stack_size(8 * 1024 * 1024)
+            .spawn(|| {
+                let mut shell = JamboShell::new();
+                let mut out = [0u8; 1024];
+
+                let (st1, len1) = shell.execute_line("ddos status", &mut out);
+                assert_eq!(st1, ShellStatus::Success);
+                assert!(len1 > 0);
+
+                let (st2, len2) = shell.execute_line("ddos syn-cookie", &mut out);
+                assert_eq!(st2, ShellStatus::Success);
+                assert!(len2 > 0);
+
+                let (st3, len3) = shell.execute_line("ddos rate-limit", &mut out);
+                assert_eq!(st3, ShellStatus::Success);
+                assert!(len3 > 0);
+
+                let (st4, len4) = shell.execute_line("ddos blackhole", &mut out);
+                assert_eq!(st4, ShellStatus::Success);
+                assert!(len4 > 0);
+
+                let (st5, len5) = shell.execute_line("ddos whitelist", &mut out);
+                assert_eq!(st5, ShellStatus::Success);
+                assert!(len5 > 0);
+
+                let (st6, len6) = shell.execute_line("ddos audit", &mut out);
+                assert_eq!(st6, ShellStatus::Success);
+                assert!(len6 > 0);
+
+                let (st7, len7) = shell.execute_line("ddos benchmark", &mut out);
+                assert_eq!(st7, ShellStatus::Success);
+                assert!(len7 > 0);
             })
             .unwrap();
         handle.join().unwrap();

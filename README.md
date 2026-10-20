@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.112-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.113-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.112 (Pare-Feu Applicatif L7 Sandboxed & Filtrage d'Injections Protocolaire jambo-waf)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.112` introduit le pare-feu applicatif de couche 7 (WAF) sandboxed en espace utilisateur (`services/jambo-waf`) : contrôle d'accès capabilaire strict `WafCap` (Zero-Ambient Authority), filtrage protocolaire HTTP et en-têtes stricts RFC 7230 (CRLF, null-bytes, HTTP Request Smuggling), moteurs d'injections et heuristiques (SQLi, XSS, RCE, Path Traversal), analyseur JSON récursif borné avec détection de pollution de prototype (`__proto__`), inspecteur sandboxed de bytecode WebAssembly (Wasm) avec détection de bombes mémoire et filtrage d'appels d'hôtes interdits, prévention de fuites de données sensibles sortantes (Data Leakage Prevention), table de quarantaine dynamique O(1), liste blanche et registre d'audit inaltérable scellé par chaîne SHA-256 avec commandes interactives `waf [status | rules | inspect | quarantine | whitelist | audit | benchmark]` dans le shell `jsh`.
+> **Statut du Projet : Version v0.2.113 (Mitigation Anti-DDoS Distribuée L3/L4/L7, Limiteurs de Débit à Jetons & SYN Cookies jambo-ddos)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.113` introduit le système souverain de défense et mitigation anti-DDoS haute sécurité en espace utilisateur (`services/jambo-ddos`) : contrôle d'accès capabilaire strict `DdosCap` (Zero-Ambient Authority), mitigation multicouches (L3 anti-spoofing martiens/bogons RFC 6890, L4 SYN Cookies stateless déterministes à fenêtres glissantes de 64s sans allocation d'état mémoire, détection de scans de ports et anomalies de drapeaux TCP, L7 détection de requêtes volumétriques HTTP Floods et d'attaques lentes Slowloris), détection d'amplification (DNS/NTP/SNMP reflection), algorithmes de limitation de débit par seaux à jetons (Token Bucket), gestion des trous noirs O(1) avec TTL et de liste blanche de contournement prioritaire, registre d'audit cryptographique inaltérable scellé par chaîne SHA-256 avec commandes interactives `ddos [status | syn-cookie | rate-limit | blackhole | whitelist | audit | benchmark]` dans le shell `jsh`.
 
 ---
 
@@ -143,6 +143,7 @@ jambo-os/
 │   ├── jambo-coreutils/     # Utilitaires système (ps, capstat, top, jpkg)
 │   ├── jambo-cored/         # Capture d'état post-mortem, crash dumps ELF scellés & télémétrie
 │   ├── jambo-dbg/           # Débogage dynamique d'espace utilisateur, DR0..DR7 & introspection
+│   ├── jambo-ddos/          # Mitigation Anti-DDoS L3/L4/L7, SYN Cookies & seaux à jetons
 │   ├── jambo-dynlinkd/      # Édition de liens dynamiques Ring 3, ELF64 .jso, GOT/PLT & lazy binding
 │   ├── jambo-cryptod/       # Chiffrement de bloc transparent ChaCha20 et scellement TPM 2.0
 │   ├── jambo-dfsd/          # Stockage distribué adressable par contenu (CAS) & réplication
