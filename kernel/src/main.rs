@@ -1177,6 +1177,13 @@ pub extern "C" fn _start() -> ! {
         "Échec du test des micro-hyperviseurs d'enclaves imbriquées et mémoire chiffrée multi-locataires jambo-tee2"
     );
 
+    // 10noviesquadragies. Validation de la Gestion et Séquestre de Clés Distribuées (Phase 108 - v0.2.106)
+    let kms_success = sched::execute_kms_daemon_test();
+    assert!(
+        kms_success,
+        "Échec du test de gestion et séquestre de clés distribuées jambo-kms"
+    );
+
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
 
     arch::init_iommu();
@@ -1419,14 +1426,15 @@ pub extern "C" fn _start() -> ! {
     kprintln!("\x1b[1;32m[PASS] Phase 105 Remote Hardware Enclave Attestation & Multi-Chip Trust Chains (jambo-attest2) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 106 Hardware Crypto Acceleration & Sovereign Key Lifecycle (jambo-crypto2) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 107 Nested Trusted Execution Environments & Multi-Tenant Encrypted Isolation (jambo-tee2) Complete\x1b[0m");
+    kprintln!("\x1b[1;32m[PASS] Phase 108 Distributed Key Management, Escrow & Hierarchical Custody (jambo-kms) Complete\x1b[0m");
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.105 (Nested Trusted Execution Environments & Multi-Tenant Encrypted Isolation jambo-tee2)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.106 (Distributed Key Management, Escrow & Hierarchical Custody jambo-kms)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.105 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.106 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );

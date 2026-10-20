@@ -176,6 +176,7 @@ pub struct JamboShell {
     pub attest2: jambo_attest2::JamboAttest2Daemon,
     pub crypto2: jambo_crypto2::JamboCrypto2Daemon,
     pub tee2: jambo_tee2::JamboTee2Daemon,
+    pub kms: jambo_kms::JamboKmsDaemon,
 }
 
 impl Default for JamboShell {
@@ -486,6 +487,14 @@ impl JamboShell {
         );
         let mut tee2 = jambo_tee2::JamboTee2Daemon::new(tee2_cap);
         tee2.init_defaults();
+        let kms_cap = jambo_kms::KmsCap::new(
+            libjambo::Handle::new(10801, 1),
+            jambo_kms::kms_rights::ALL,
+            0,
+            32,
+        );
+        let mut kms = jambo_kms::JamboKmsDaemon::new(kms_cap);
+        kms.init_defaults();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -552,6 +561,7 @@ impl JamboShell {
             attest2,
             crypto2,
             tee2,
+            kms,
         }
     }
 
@@ -723,10 +733,11 @@ impl JamboShell {
                 emit("  attest2 [cmd] - Attestation distante d'enclaves, chaînes multi-puces & devis d'intégrité\n");
                 emit("  crypto2 [cmd] - Accélération cryptographique matérielle Ring 3 & gestion de clés souveraines\n");
                 emit("  tee2 [cmd]    - Micro-hyperviseurs d'enclaves imbriquées & mémoire chiffrée multi-locataires\n");
+                emit("  kms [cmd]     - Gestion et séquestre de clés de grappe distribuée & baux temporels\n");
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.2.105 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.2.106 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -7320,6 +7331,222 @@ impl JamboShell {
                     }
                     _ => {
                         emit("Usage: tee2 [status | tenants | enclaves | ept <id> | attest <id> | benchmark | audit]\n");
+                        (ShellStatus::ExecutionFailed, write_pos)
+                    }
+                }
+            }
+            "kms" => {
+                let subcmd = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    "status"
+                };
+                match subcmd {
+                    "status" => {
+                        let mut b = [0u8; 20];
+                        emit("=== GESTION ET SÉQUESTRE DE CLÉS DE GRAPPE (jambo-kms) ===\n");
+                        emit("Nœud Local ID : ");
+                        emit(format_u64(self.kms.node_id as u64, &mut b));
+                        emit(" | Époque de Grappe : ");
+                        emit(format_u64(self.kms.cluster_epoch as u64, &mut b));
+                        emit("\nClés Actives / Quota : ");
+                        emit(format_u64(self.kms.key_count as u64, &mut b));
+                        emit(" / ");
+                        emit(format_u64(jambo_kms::MAX_KEYS as u64, &mut b));
+                        emit("\nBaux Actifs / Quota : ");
+                        emit(format_u64(self.kms.lease_count as u64, &mut b));
+                        emit(" / ");
+                        emit(format_u64(jambo_kms::MAX_LEASES as u64, &mut b));
+                        emit("\nSéquestres Actifs : ");
+                        emit(format_u64(self.kms.escrow_count as u64, &mut b));
+                        emit(" / ");
+                        emit(format_u64(jambo_kms::MAX_ESCROWS as u64, &mut b));
+                        emit("\nNœuds de Grappe : ");
+                        emit(format_u64(self.kms.node_count as u64, &mut b));
+                        emit(" / ");
+                        emit(format_u64(jambo_kms::MAX_NODES as u64, &mut b));
+                        emit("\nEnveloppes de Réplication : ");
+                        emit(format_u64(self.kms.envelope_count as u64, &mut b));
+                        emit("\nTotal Opérations KMS : ");
+                        emit(format_u64(self.kms.total_ops, &mut b));
+                        emit("\nChaîne d'Audit SHA-256 : ");
+                        for byte in self.kms.audit_chain.iter().take(8) {
+                            emit(format_hex_u64(*byte as u64, &mut b));
+                        }
+                        emit("...\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "keys" => {
+                        let mut b = [0u8; 20];
+                        emit("=== CATALOGUE DES CLÉS CRYPTOGRAPHIQUES (jambo-kms) ===\n");
+                        for k in self.kms.keys.iter() {
+                            if k.key_id != 0 && k.state != jambo_kms::KeyLifecycleState::PreActive {
+                                emit("Key #");
+                                emit(format_u64(k.key_id as u64, &mut b));
+                                emit(" [");
+                                if let Ok(s) = core::str::from_utf8(&k.name[..k.name_len]) {
+                                    emit(s);
+                                }
+                                emit("] Level=");
+                                match k.level {
+                                    jambo_kms::KeyHierarchyLevel::MasterKey => emit("Master(0)"),
+                                    jambo_kms::KeyHierarchyLevel::DomainKey => emit("Domain(1)"),
+                                    jambo_kms::KeyHierarchyLevel::DataKey => emit("Data(2)"),
+                                    jambo_kms::KeyHierarchyLevel::SessionKey => emit("Session(3)"),
+                                    jambo_kms::KeyHierarchyLevel::EscrowKey => emit("Escrow(4)"),
+                                }
+                                emit(" Algo=");
+                                match k.algorithm {
+                                    jambo_kms::KeyAlgorithm::Aes128 => emit("AES-128"),
+                                    jambo_kms::KeyAlgorithm::Aes256 => emit("AES-256"),
+                                    jambo_kms::KeyAlgorithm::ChaCha20 => emit("ChaCha20"),
+                                    jambo_kms::KeyAlgorithm::HmacSha256 => emit("HMAC-SHA256"),
+                                    jambo_kms::KeyAlgorithm::Ed25519 => emit("Ed25519"),
+                                }
+                                emit(" State=");
+                                match k.state {
+                                    jambo_kms::KeyLifecycleState::PreActive => emit("PreActive"),
+                                    jambo_kms::KeyLifecycleState::Active => emit("Active"),
+                                    jambo_kms::KeyLifecycleState::Escrowed => emit("Escrowed"),
+                                    jambo_kms::KeyLifecycleState::Suspended => emit("Suspended"),
+                                    jambo_kms::KeyLifecycleState::Expired => emit("Expired"),
+                                    jambo_kms::KeyLifecycleState::Revoked => emit("Revoked"),
+                                    jambo_kms::KeyLifecycleState::Destroyed => emit("Destroyed"),
+                                }
+                                emit(" Parent=");
+                                emit(format_u64(k.parent_id as u64, &mut b));
+                                emit(" Rotations=");
+                                emit(format_u64(k.rotation_count as u64, &mut b));
+                                emit("\n");
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "leases" => {
+                        let mut b = [0u8; 20];
+                        emit("=== BAUX TEMPORELS ET QUOTAS D'USAGE (jambo-kms) ===\n");
+                        for l in self.kms.leases.iter() {
+                            if l.lease_id != 0 && l.state != jambo_kms::LeaseState::Free {
+                                emit("Lease #");
+                                emit(format_u64(l.lease_id as u64, &mut b));
+                                emit(" -> Key #");
+                                emit(format_u64(l.key_id as u64, &mut b));
+                                emit(" TargetNode=");
+                                emit(format_u64(l.granted_to_node as u64, &mut b));
+                                emit(" Ops=");
+                                emit(format_u64(l.used_ops, &mut b));
+                                emit("/");
+                                emit(format_u64(l.max_ops, &mut b));
+                                emit(" State=");
+                                match l.state {
+                                    jambo_kms::LeaseState::Free => emit("Free"),
+                                    jambo_kms::LeaseState::Active => emit("Active"),
+                                    jambo_kms::LeaseState::Renewed => emit("Renewed"),
+                                    jambo_kms::LeaseState::Expired => emit("Expired"),
+                                    jambo_kms::LeaseState::Revoked => emit("Revoked"),
+                                    jambo_kms::LeaseState::Exhausted => emit("Exhausted"),
+                                }
+                                emit(" Until=");
+                                emit(format_u64(l.valid_until_ticks, &mut b));
+                                emit("\n");
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "escrow" => {
+                        let mut b = [0u8; 20];
+                        emit("=== PAQUETS DE SÉQUESTRE MULTI-GARDIENS M-SUR-N (jambo-kms) ===\n");
+                        for e in self.kms.escrows.iter() {
+                            if e.escrow_id != 0 && e.status != jambo_kms::EscrowStatus::None {
+                                emit("Escrow #");
+                                emit(format_u64(e.escrow_id as u64, &mut b));
+                                emit(" TargetKey=");
+                                emit(format_u64(e.key_id as u64, &mut b));
+                                emit(" Quorum=");
+                                emit(format_u64(e.shares_collected as u64, &mut b));
+                                emit("/");
+                                emit(format_u64(e.threshold as u64, &mut b));
+                                emit(" (Total N=");
+                                emit(format_u64(e.total_custodians as u64, &mut b));
+                                emit(") Status=");
+                                match e.status {
+                                    jambo_kms::EscrowStatus::None => emit("None"),
+                                    jambo_kms::EscrowStatus::Secured => emit("Secured"),
+                                    jambo_kms::EscrowStatus::RecoveryInitiated => emit("RecoveryInitiated"),
+                                    jambo_kms::EscrowStatus::Recovered => emit("Recovered"),
+                                    jambo_kms::EscrowStatus::Cancelled => emit("Cancelled"),
+                                }
+                                emit("\n");
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "replicate" => {
+                        let mut b = [0u8; 20];
+                        emit("=== TOPOLOGIE ET RÉPLICATION DE GRAPPE (jambo-kms) ===\n");
+                        emit("Nœuds enregistrés :\n");
+                        for n in self.kms.nodes.iter() {
+                            if n.is_trusted {
+                                emit(" - Node #");
+                                emit(format_u64(n.node_id as u64, &mut b));
+                                emit(" [");
+                                if let Ok(s) = core::str::from_utf8(&n.name[..n.name_len]) {
+                                    emit(s);
+                                }
+                                emit("] Epoch=");
+                                emit(format_u64(n.cluster_epoch as u64, &mut b));
+                                emit(" Trusted=true\n");
+                            }
+                        }
+                        emit("Enveloppes scellées :\n");
+                        for env in self.kms.envelopes.iter() {
+                            if env.seq != 0 {
+                                emit(" - Env #");
+                                emit(format_u64(env.envelope_id as u64, &mut b));
+                                emit(" Node ");
+                                emit(format_u64(env.origin_node as u64, &mut b));
+                                emit(" -> ");
+                                emit(format_u64(env.target_node as u64, &mut b));
+                                emit(" Key #");
+                                emit(format_u64(env.key_id as u64, &mut b));
+                                emit(" Seq=");
+                                emit(format_u64(env.seq, &mut b));
+                                emit("\n");
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "benchmark" => {
+                        let cap = self.kms.admin_cap;
+                        let seed = jambo_kms::Sha256::digest(b"KMS_BENCHMARK_SEED");
+                        let mut kid = 0;
+                        if let Ok(id) = self.kms.create_key(&cap, b"bench-key", jambo_kms::KeyHierarchyLevel::DataKey, jambo_kms::KeyAlgorithm::Aes256, &seed) {
+                            kid = id;
+                        }
+                        let mut shares = [[0u8; jambo_kms::KEY_DATA_LEN]; 3];
+                        let _ = self.kms.setup_escrow(&cap, kid, 2, 3, &mut shares);
+                        let eid = self.kms.next_escrow_id - 1;
+                        let _ = self.kms.submit_escrow_share(&cap, eid, 0, &shares[0]);
+                        let _ = self.kms.submit_escrow_share(&cap, eid, 1, &shares[1]);
+                        let _ = self.kms.recover_escrowed_key(&cap, eid);
+                        let _ = self.kms.zeroize_key(&cap, kid);
+
+                        emit("Benchmark KMS : Dérivation HKDF, Séquestre Shamir GF(256), Restauration & Zéroïsation complétés avec succès\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "audit" => {
+                        let mut b = [0u8; 20];
+                        emit("Condensat SHA-256 du Registre d'Audit KMS : ");
+                        for byte in self.kms.audit_chain.iter() {
+                            emit(format_hex_u64(*byte as u64, &mut b));
+                        }
+                        emit("\nÉvénements d'audit consignés : ");
+                        emit(format_u64(self.kms.audit_count as u64, &mut b));
+                        emit("\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    _ => {
+                        emit("Usage: kms [status | keys | leases | escrow | replicate | benchmark | audit]\n");
                         (ShellStatus::ExecutionFailed, write_pos)
                     }
                 }

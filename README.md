@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.105-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.106-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.105 (Micro-hyperviseurs d'Enclaves Imbriquées & Isolation Mémoire Multi-Locataires jambo-tee2)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.105` introduit le sous-système de micro-hyperviseurs d'enclaves de confiance imbriquées et d'isolation de mémoire chiffrée multi-locataires (`services/jambo-tee2`) : virtualisation d'enclaves à deux niveaux (L0 Hôte -> L1 Superviseur d'Enclave de Locataire -> L2 Enclave Imbriquée / Conteneur Realm), isolation mémoire matérielle par partition de locataire avec attribution stricte de KeyID/HKID/ASID et clés MEK (Multi-tenant Encryption Key) 256 bits, tables de pages étendues imbriquées (Nested Extended Page Tables / Stage-2 Nested Translation) assurant la traduction GPA -> IPA -> HPA avec empreinte Merkle SHA-256 de configuration EPT, chaîne de mesure cryptographique imbriquée combinant MRENCLAVE_L1, MRENCLAVE_L2 et la racine EPT, devis d'attestation distante `NestedTeeReport` scellés par signature HMAC-SHA256 avec défi anti-rejeu, stockage scellé multi-locataire (Nested Sealed Storage) à politique de mesure exacte ou domaine de locataire, détection et confinement instantané O(1) des violations EPT et accès cross-tenant, effacement sécurisé à zéro résidu (Memory Scrubbing) à la destruction, registre d'audit inaltérable scellé par chaîne SHA-256, gouvernance capabilaire stricte par jeton `Tee2Cap` et commandes interactives `tee2 [status | tenants | enclaves | ept | attest | benchmark | audit]` dans le shell `jsh`.
+> **Statut du Projet : Version v0.2.106 (Gestion et Séquestre de Clés de Grappe Distribuée & Baux Temporels jambo-kms)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.106` introduit le sous-système souverain de gestion et séquestre de clés cryptographiques de grappe distribuée (`services/jambo-kms`) : hiérarchies cryptographiques rigoureuses conformes NIST SP 800-108 et HKDF RFC 5869 (MasterKey racine KEK niveau 0, DomainKey locataire KEK niveau 1, DataKey DEK niveau 2, SessionKey éphémère niveau 3, EscrowKey de secours niveau 4), baux temporels bornés avec quotas d'opérations et renouvellement monotone contrôlé, séquestre multi-gardiens à seuil M-sur-N avec engagements SHA-256 et reconstruction Shamir sur corps fini GF(256), réplication chiffrée multi-nœuds avec enveloppes scellées ChaCha20 et HMAC-SHA256, cycle de vie cryptographique complet avec rotation atomique, révocation en cascade et zéroïsation volatile garantie (`compiler_fence`), registre d'audit inaltérable scellé par chaîne SHA-256, gouvernance capabilaire stricte par jeton `KmsCap` sans autorité ambiante et commandes interactives `kms [status | keys | leases | escrow | replicate | benchmark | audit]` dans le shell `jsh`.
 
 ---
 
