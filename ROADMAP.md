@@ -123,17 +123,18 @@
 | **v0.3.1** | 134 | Gestion des Accès Privilégiés PAM `jambo-pam` | Moteur souverain PAM de courtage de sessions à privilèges élevés, rotation dynamique de secrets éphémères, attribution just-in-time (JIT) de capabilités administratives, double contrôle (Dual-Auth / Four-Eyes Tier 0), enregistrement cryptographique inviolable de sessions Ring 3/IPC et coupure d'urgence (Kill-Switch O(1)), PamCap & registre d'audit SHA-256 inaltérable | ✅ Validé |
 | **v0.3.2** | 135 | Posture de Sécurité des Données DSPM `jambo-dspm` | Moteur souverain DSPM de découverte, cartographie et classification continue des données au repos et en transit (VFS, IPC, TEE, NVMe, RAM), détection des flux sensibles transfrontaliers / inter-compartiments, isolation & quarantaine O(1), évaluation des risques d'exposition, DspmCap & registre d'audit SHA-256 inaltérable | ✅ Validé |
 | **v0.3.3** | 136 | Gestion Posture Sécurité Services & SaaS SSPM `jambo-sspm` | Moteur souverain SSPM d'évaluation continue de la conformité et des dérives de configuration des services applicatifs, micro-services décentralisés et connecteurs souverains, détection des permissions permissives et des partages tiers non autorisés, remédiation automatisée, quarantaine O(1), SspmCap & registre d'audit SHA-256 inaltérable | ✅ Validé |
+| **v0.3.4** | 137 | Opérations IT Pilotées par l'IA AIOps `jambo-aiops` | Moteur souverain AIOps d'ingestion télémétrique, calcul de z-score glissant, détection d'anomalies statistiques, corrélation topologique multi-sources, RCA (Root Cause Analysis), déclenchement automatique de playbooks d'auto-remédiation, AiopsCap & registre d'audit SHA-256 inaltérable | ✅ Validé |
 
 ---
 
 ## 3. Prochaines Étapes Prioritaires
 
-### 🎯 Prochaine Tâche Immédiate : Phase 137 — v0.3.4
-* **Composant** : `services/jambo-aiops`
-* **Versionnement** : Poursuite de la série `v0.3.*` (Jalon `v0.3.4`)
-* **Objectif** : Opérations IT pilotées par l'IA (AIOps) — Corrélation d'événements par apprentissage automatique `#![no_std]`, détection d'anomalies prédictives, corrélation multi-sources, réponse autonome, AiopsCap & audit SHA-256.
+### 🎯 Prochaine Tâche Immédiate : Phase 138 — v0.3.5
+* **Composant** : `services/jambo-devsecops`
+* **Versionnement** : Poursuite de la série `v0.3.*` (Jalon `v0.3.5`)
+* **Objectif** : Sécurité des Pipelines & Orchestration DevSecOps Souveraine — Analyse statique et dynamique de conformité des manifests, contrôle d'admission des conteneurs/micro-services, attestation de provenance SLSA / in-toto, vérification continue de signature cryptographique, DevSecOpsCap & registre d'audit SHA-256 inaltérable.
 * **Tâches précises** :
-  1. Moteur AIOps souverain : fenêtres d'événements bornées, scoring d'anomalie par z-score glissant, corrélation topologique de services, déclenchement automatique de playbooks de remédiation.
+  1. Moteur DevSecOps souverain : règles d'admission strictes, vérification de provenance cryptographique, enforcement de politiques de sécurité applicative à l'embarquement.
   2. Validation formelle et suite de tests `cargo xtask test`.
 
 ---
@@ -209,6 +210,7 @@
 * **2026-10-20 08:52 UTC** : Validation complète Phase 134 (`jambo-pam`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-pam`, 7/7). Tag `v0.3.1`.
 * **2026-10-20 09:07 UTC** : Validation complète Phase 135 (`jambo-dspm`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-dspm`, 8/8). Tag `v0.3.2`.
 * **2026-10-20 09:21 UTC** : Validation complète Phase 136 (`jambo-sspm`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0). SSPM — 6 services évalués, 2 connecteurs surveillés, dérive MFA remédiée, quarantaine O(1) validée, audit SHA-256 vérifié. Tag `v0.3.3`.
+* **2026-10-20 10:45 UTC** : Validation complète Phase 137 (`jambo-aiops`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-aiops`, 6/6). AIOps — 5 services topologiques surveillés, Z-score glissant & RCA validés, playbooks d'auto-remédiation opérationnels, audit SHA-256 vérifié. Tag `v0.3.4`.
 
 
 

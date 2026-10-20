@@ -203,6 +203,7 @@ pub struct JamboShell {
     pub itdr: jambo_itdr::JamboItdrDaemon,
     pub pam: jambo_pam::JamboPamDaemon,
     pub dspm: jambo_dspm::JamboDspmDaemon,
+    pub aiops: jambo_aiops::JamboAiopsDaemon,
 }
 
 impl Default for JamboShell {
@@ -760,6 +761,15 @@ impl JamboShell {
         );
         let mut dspm = jambo_dspm::JamboDspmDaemon::new(dspm_cap);
         dspm.init_defaults();
+
+        let aiops_cap = jambo_aiops::AiopsCap::new(
+            libjambo::Handle::new(13701, 1),
+            jambo_aiops::aiops_rights::ALL,
+            5000,
+            100,
+        );
+        let mut aiops = jambo_aiops::JamboAiopsDaemon::new(aiops_cap);
+        aiops.init_defaults();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -853,6 +863,7 @@ impl JamboShell {
             itdr,
             pam,
             dspm,
+            aiops,
         }
     }
 
@@ -1063,10 +1074,11 @@ impl JamboShell {
                 emit("  itdr [cmd]      - Détection et réponse aux menaces sur l'identité (ITDR), analyse de posture & remédiation\n");
                 emit("  pam [cmd]       - Gestion des accès privilégiés (PAM), élévation JIT, sessions & rotation secrets\n");
                 emit("  dspm [cmd]      - Posture des données (DSPM), cartographie, flux transfrontaliers & quarantaine\n");
+                emit("  aiops [cmd]     - Opérations IT pilotées par l'IA (AIOps), Z-score, corrélation topologique & remédiation\n");
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.3.2 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.3.4 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -13491,6 +13503,156 @@ impl JamboShell {
                     }
                 }
             }
+            "aiops" => {
+                let subcmd = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    "status"
+                };
+                match subcmd {
+                    "status" | "summary" => {
+                        emit("=== OPÉRATIONS IT PILOTÉES PAR L'IA (AIOPS v0.3.4) ===\n");
+                        let mut b = [0u8; 20];
+                        let cap = self.aiops.admin_cap;
+                        if let Ok(sum) = self.aiops.get_summary(&cap) {
+                            emit("  Services topologiques surveillés : ");
+                            emit(format_u64(sum.total_services as u64, &mut b));
+                            emit("\n  Événements télémétriques ingérés  : ");
+                            emit(format_u64(sum.total_events as u64, &mut b));
+                            emit("\n  Anomalies statistiques détectées  : ");
+                            emit(format_u64(sum.total_anomalies as u64, &mut b));
+                            emit("\n  Incidents corrélés actifs         : ");
+                            emit(format_u64(sum.active_incidents as u64, &mut b));
+                            emit("\n  Incidents auto-remédiés           : ");
+                            emit(format_u64(sum.resolved_incidents as u64, &mut b));
+                            emit("\n  Playbooks d'auto-remédiation armés: ");
+                            emit(format_u64(sum.total_playbooks as u64, &mut b));
+                            emit("\n  Score de santé global de la flotte: ");
+                            emit(format_u64(sum.health_score as u64, &mut b));
+                            emit("/100\n");
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "services" | "topology" => {
+                        emit("=== TOPOLOGIE DES SERVICES & DÉPENDANCES ===\n");
+                        let mut b = [0u8; 20];
+                        for i in 0..self.aiops.topology_count {
+                            if let Some(ref n) = self.aiops.topology[i] {
+                                emit("  [Svc ");
+                                emit(format_u64(n.id as u64, &mut b));
+                                emit("] ");
+                                emit(n.name_str());
+                                emit(" (Tier ");
+                                emit(format_u64(n.tier as u64, &mut b));
+                                emit(") - État: ");
+                                emit(if n.healthy {
+                                    "SAIN (Nominal)\n"
+                                } else {
+                                    "DÉGRADÉ (Anomalie)\n"
+                                });
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "anomalies" => {
+                        emit("=== ANOMALIES STATISTIQUES TÉLÉMÉTRIQUES ===\n");
+                        let mut b = [0u8; 20];
+                        if self.aiops.anomaly_count == 0 {
+                            emit("  Aucune anomalie détectée sur la flotte.\n");
+                        } else {
+                            for i in 0..self.aiops.anomaly_count {
+                                if let Some(ref a) = self.aiops.anomalies[i] {
+                                    emit("  [Anom ");
+                                    emit(format_u64(a.id as u64, &mut b));
+                                    emit("] Svc:");
+                                    emit(format_u64(a.service_id as u64, &mut b));
+                                    emit(" Z-score:");
+                                    emit(format_u64(a.z_score as u64, &mut b));
+                                    emit("/100 (Obs: ");
+                                    emit(format_u64(a.observed_value as u64, &mut b));
+                                    emit(")\n");
+                                }
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "incidents" => {
+                        emit("=== INCIDENTS CORRÉLÉS & ROOT CAUSE ANALYSIS ===\n");
+                        let mut b = [0u8; 20];
+                        if self.aiops.incident_count == 0 {
+                            emit("  Aucun incident actif.\n");
+                        } else {
+                            for i in 0..self.aiops.incident_count {
+                                if let Some(ref inc) = self.aiops.incidents[i] {
+                                    emit("  [Inc ");
+                                    emit(format_u64(inc.id as u64, &mut b));
+                                    emit("] Cause Racine Svc:");
+                                    emit(format_u64(inc.root_cause_service_id as u64, &mut b));
+                                    emit(" Confiance: ");
+                                    emit(format_u64(inc.confidence_score as u64, &mut b));
+                                    emit("%\n");
+                                }
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "remediate" => {
+                        let mut cap = self.aiops.admin_cap;
+                        if self.aiops.incident_count > 0 {
+                            let inc_id = self.aiops.incidents[0].unwrap().id;
+                            match self.aiops.trigger_remediation(&mut cap, inc_id, 9999) {
+                                Ok(action) => {
+                                    emit(
+                                        "  [OK] Auto-remédiation déclenchée avec succès. Action: ",
+                                    );
+                                    match action {
+                                        jambo_aiops::PlaybookAction::ScaleResource => {
+                                            emit("ScaleResource\n")
+                                        }
+                                        jambo_aiops::PlaybookAction::RestartWorker => {
+                                            emit("RestartWorker\n")
+                                        }
+                                        jambo_aiops::PlaybookAction::ThrottleIngress => {
+                                            emit("ThrottleIngress\n")
+                                        }
+                                        jambo_aiops::PlaybookAction::DrainFailover => {
+                                            emit("DrainFailover\n")
+                                        }
+                                        jambo_aiops::PlaybookAction::QuarantineNode => {
+                                            emit("QuarantineNode\n")
+                                        }
+                                        jambo_aiops::PlaybookAction::FlushCaches => {
+                                            emit("FlushCaches\n")
+                                        }
+                                    }
+                                    (ShellStatus::Success, write_pos)
+                                }
+                                Err(_) => {
+                                    emit("  [FAIL] Échec du déclenchement du playbook\n");
+                                    (ShellStatus::ExecutionFailed, write_pos)
+                                }
+                            }
+                        } else {
+                            emit("  [INFO] Aucun incident actif nécessitant de remédiation.\n");
+                            (ShellStatus::Success, write_pos)
+                        }
+                    }
+                    "verify" => {
+                        let valid = self.aiops.verify_ledger_integrity();
+                        emit("  Vérification intégrité registre AIOps SHA-256 : ");
+                        emit(if valid {
+                            "INTÈGRE (OK)\n"
+                        } else {
+                            "ALTÉRÉ (FAIL)\n"
+                        });
+                        (ShellStatus::Success, write_pos)
+                    }
+                    _ => {
+                        emit("Usage: aiops [status | topology | anomalies | incidents | remediate | verify]\n");
+                        (ShellStatus::ExecutionFailed, write_pos)
+                    }
+                }
+            }
             "poweroff" | "reboot" => {
                 emit("[SYSTEM] Extinction demandée...\n");
                 unsafe {
@@ -17531,6 +17693,43 @@ mod tests {
                 let (st10, len10) = shell.execute_line("dspm verify", &mut out);
                 assert_eq!(st10, ShellStatus::Success);
                 assert!(len10 > 0);
+            })
+            .unwrap();
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn test_shell_aiops_commands() {
+        extern crate std;
+        let handle = std::thread::Builder::new()
+            .stack_size(8 * 1024 * 1024)
+            .spawn(|| {
+                let mut shell = JamboShell::new();
+                let mut out = [0u8; 1024];
+
+                let (st1, len1) = shell.execute_line("aiops status", &mut out);
+                assert_eq!(st1, ShellStatus::Success);
+                assert!(len1 > 0);
+
+                let (st2, len2) = shell.execute_line("aiops topology", &mut out);
+                assert_eq!(st2, ShellStatus::Success);
+                assert!(len2 > 0);
+
+                let (st3, len3) = shell.execute_line("aiops anomalies", &mut out);
+                assert_eq!(st3, ShellStatus::Success);
+                assert!(len3 > 0);
+
+                let (st4, len4) = shell.execute_line("aiops incidents", &mut out);
+                assert_eq!(st4, ShellStatus::Success);
+                assert!(len4 > 0);
+
+                let (st5, len5) = shell.execute_line("aiops remediate", &mut out);
+                assert_eq!(st5, ShellStatus::Success);
+                assert!(len5 > 0);
+
+                let (st6, len6) = shell.execute_line("aiops verify", &mut out);
+                assert_eq!(st6, ShellStatus::Success);
+                assert!(len6 > 0);
             })
             .unwrap();
         handle.join().unwrap();

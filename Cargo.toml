@@ -101,6 +101,7 @@ members = [
     "services/jambo-pam",
     "services/jambo-dspm",
     "services/jambo-sspm",
+    "services/jambo-aiops",
     "libs/jambo-ui",
     "libs/jambo-sdk",
     "drivers/virtio",

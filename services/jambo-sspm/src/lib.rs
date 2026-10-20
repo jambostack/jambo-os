@@ -33,29 +33,23 @@ pub struct Sha256 {
 
 impl Sha256 {
     const K: [u32; 64] = [
-        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5,
-        0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
-        0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3,
-        0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
-        0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc,
-        0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
-        0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
-        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
-        0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13,
-        0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
-        0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3,
-        0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
-        0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5,
-        0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
-        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
-        0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
+        0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
+        0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f,
+        0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc,
+        0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+        0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116,
+        0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
+        0xc67178f2,
     ];
 
     pub fn new() -> Self {
         Self {
             state: [
-                0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
-                0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+                0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
+                0x5be0cd19,
             ],
             buffer: [0u8; 64],
             buffer_len: 0,
@@ -184,14 +178,14 @@ impl Sha256 {
 // ============================================================================
 
 pub mod sspm_rights {
-    pub const ASSESS_POSTURE: u32        = 0x0001;
-    pub const SCAN_CONFIGS: u32          = 0x0002;
-    pub const DETECT_DRIFT: u32          = 0x0004;
-    pub const MANAGE_INTEGRATIONS: u32   = 0x0008;
-    pub const REMEDIATE_DRIFT: u32       = 0x0010;
-    pub const QUARANTINE_SERVICE: u32    = 0x0020;
-    pub const QUERY_AUDIT: u32           = 0x0040;
-    pub const ADMIN: u32                 = 0x0080;
+    pub const ASSESS_POSTURE: u32 = 0x0001;
+    pub const SCAN_CONFIGS: u32 = 0x0002;
+    pub const DETECT_DRIFT: u32 = 0x0004;
+    pub const MANAGE_INTEGRATIONS: u32 = 0x0008;
+    pub const REMEDIATE_DRIFT: u32 = 0x0010;
+    pub const QUARANTINE_SERVICE: u32 = 0x0020;
+    pub const QUERY_AUDIT: u32 = 0x0040;
+    pub const ADMIN: u32 = 0x0080;
 
     pub const ALL: u32 = ASSESS_POSTURE
         | SCAN_CONFIGS
@@ -242,12 +236,25 @@ impl SspmCap {
     }
 
     /// Atténuation strictement monotone (Least Privilege)
-    pub fn attenuate(&self, requested_rights: u32, lifetime: u64, invocations: u32) -> Result<Self, SspmError> {
+    pub fn attenuate(
+        &self,
+        requested_rights: u32,
+        lifetime: u64,
+        invocations: u32,
+    ) -> Result<Self, SspmError> {
         if (requested_rights & !self.rights) != 0 {
             return Err(SspmError::AttenuationViolation);
         }
-        let eff_lifetime = if lifetime < self.max_lifetime { lifetime } else { self.max_lifetime };
-        let eff_invocations = if invocations < self.invocations_left { invocations } else { self.invocations_left };
+        let eff_lifetime = if lifetime < self.max_lifetime {
+            lifetime
+        } else {
+            self.max_lifetime
+        };
+        let eff_invocations = if invocations < self.invocations_left {
+            invocations
+        } else {
+            self.invocations_left
+        };
 
         Ok(Self {
             handle: self.handle,
@@ -667,9 +674,9 @@ impl JamboSspmDaemon {
             "external_analytics_hook",
             4,
             "GlobalMetric SaaS Corp",
-            false, // Non approuvé !
+            false,                               // Non approuvé !
             PermissionScope::WildcardFullAccess, // Permissif !
-            172800, // Durée excessive 48h !
+            172800,                              // Durée excessive 48h !
             150,
         );
     }
@@ -748,7 +755,13 @@ impl JamboSspmDaemon {
             }
         }
 
-        self.append_audit(0x0101, id, cap.handle.0, current_tick, b"Service registered");
+        self.append_audit(
+            0x0101,
+            id,
+            cap.handle.0,
+            current_tick,
+            b"Service registered",
+        );
 
         // Détection immédiate d'anomalies de configuration
         self.detect_service_drifts(id, current_tick);
@@ -822,7 +835,13 @@ impl JamboSspmDaemon {
             }
         }
 
-        self.append_audit(0x0102, service_id, cap.handle.0, current_tick, b"Connector registered");
+        self.append_audit(
+            0x0102,
+            service_id,
+            cap.handle.0,
+            current_tick,
+            b"Connector registered",
+        );
 
         // Analyse immédiate des risques du connecteur
         self.detect_connector_drifts(id, current_tick);
@@ -984,7 +1003,13 @@ impl JamboSspmDaemon {
             }
         }
 
-        self.append_audit(0x0201, service_id, 0, current_tick, b"Config drift detected");
+        self.append_audit(
+            0x0201,
+            service_id,
+            0,
+            current_tick,
+            b"Config drift detected",
+        );
     }
 
     /// Auto-remédiation d'une dérive de configuration
@@ -1096,7 +1121,13 @@ impl JamboSspmDaemon {
             return Err(SspmError::ServiceNotFound);
         }
 
-        self.append_audit(0x0401, service_id, cap.handle.0, current_tick, b"Service quarantined");
+        self.append_audit(
+            0x0401,
+            service_id,
+            cap.handle.0,
+            current_tick,
+            b"Service quarantined",
+        );
         Ok(())
     }
 
@@ -1122,7 +1153,13 @@ impl JamboSspmDaemon {
             return Err(SspmError::ServiceNotFound);
         }
 
-        self.append_audit(0x0402, service_id, cap.handle.0, current_tick, b"Service unquarantined");
+        self.append_audit(
+            0x0402,
+            service_id,
+            cap.handle.0,
+            current_tick,
+            b"Service unquarantined",
+        );
         Ok(())
     }
 
@@ -1150,12 +1187,22 @@ impl JamboSspmDaemon {
             return Err(SspmError::ConnectorNotFound);
         }
 
-        self.append_audit(0x0403, target_service_id, cap.handle.0, current_tick, b"Connector quarantined");
+        self.append_audit(
+            0x0403,
+            target_service_id,
+            cap.handle.0,
+            current_tick,
+            b"Connector quarantined",
+        );
         Ok(())
     }
 
     /// Balayage d'évaluation complet de posture pour tous les services et connecteurs
-    pub fn run_full_posture_scan(&mut self, cap: &mut SspmCap, current_tick: u64) -> Result<usize, SspmError> {
+    pub fn run_full_posture_scan(
+        &mut self,
+        cap: &mut SspmCap,
+        current_tick: u64,
+    ) -> Result<usize, SspmError> {
         cap.consume(sspm_rights::SCAN_CONFIGS | sspm_rights::DETECT_DRIFT)?;
 
         let mut scanned = 0;
@@ -1187,7 +1234,13 @@ impl JamboSspmDaemon {
             self.detect_connector_drifts(conn_ids[i], current_tick);
         }
 
-        self.append_audit(0x0501, 0, cap.handle.0, current_tick, b"Full posture scan completed");
+        self.append_audit(
+            0x0501,
+            0,
+            cap.handle.0,
+            current_tick,
+            b"Full posture scan completed",
+        );
 
         Ok(scanned)
     }
@@ -1430,7 +1483,11 @@ mod tests {
 
         // Atténuation monotone valide
         let auditor_cap = root_cap
-            .attenuate(sspm_rights::ASSESS_POSTURE | sspm_rights::QUERY_AUDIT, 5000, 50)
+            .attenuate(
+                sspm_rights::ASSESS_POSTURE | sspm_rights::QUERY_AUDIT,
+                5000,
+                50,
+            )
             .expect("Atténuation monotone");
         assert!(auditor_cap.has_right(sspm_rights::ASSESS_POSTURE));
         assert!(auditor_cap.has_right(sspm_rights::QUERY_AUDIT));
@@ -1473,7 +1530,10 @@ mod tests {
 
         assert_eq!(svc_id, 1);
         assert_eq!(daemon.drift_count, 1);
-        assert_eq!(daemon.drifts[0].unwrap().drift_type, DriftType::BaselineConfigurationDrift);
+        assert_eq!(
+            daemon.drifts[0].unwrap().drift_type,
+            DriftType::BaselineConfigurationDrift
+        );
         assert!(!daemon.drifts[0].unwrap().resolved);
     }
 
@@ -1578,6 +1638,9 @@ mod tests {
             entry.action_code = 0xDEAD;
         }
 
-        assert!(!daemon.verify_ledger_integrity(), "L'altération de l'audit doit être détectée");
+        assert!(
+            !daemon.verify_ledger_integrity(),
+            "L'altération de l'audit doit être détectée"
+        );
     }
 }

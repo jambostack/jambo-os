@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.3.3-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.3.4-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.3.3 (Gestion de la Posture de Sécurité des Services & SaaS (SSPM), Détection de Dérive & Connecteurs Souverains jambo-sspm)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.3.3` introduit le moteur souverain de SaaS Security Posture Management (SSPM) en espace utilisateur (`services/jambo-sspm`) : évaluation continue de la conformité et des dérives de configuration des services applicatifs, micro-services décentralisés et connecteurs souverains SaaS, détection des permissions permissives et des partages tiers non autorisés (Shadow SaaS), remédiation automatisée, quarantaine O(1), calcul déterministe de l'indice global de posture SSPM (0..100), contrôle d'accès capabilaire strict `SspmCap` sans autorité ambiante et registre d'audit cryptographique inviolable scellé par chaînage SHA-256.
+> **Statut du Projet : Version v0.3.4 (Opérations IT Pilotées par l'IA (AIOps), RCA & Auto-Remédiation jambo-aiops)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.3.4` introduit le moteur souverain d'Intelligence Artificielle pour les Opérations IT (AIOps) en espace utilisateur (`services/jambo-aiops`) : ingestion continue des flux de métriques télémétriques, calcul déterministe de z-score glissant, corrélation topologique multi-sources avec identification de cause racine (Root Cause Analysis - RCA), exécution autonome de playbooks d'auto-remédiation (Scale, Restart, Throttle, Drain, Quarantine), contrôle d'accès capabilaire strict `AiopsCap` sans autorité ambiante et registre d'audit cryptographique inviolable scellé par chaînage SHA-256.
 
 ---
 

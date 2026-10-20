@@ -7,9 +7,9 @@ extern crate alloc;
 use crate::kprintln;
 use jambo_abi::Handle;
 use jambo_sspm::{
-    sspm_rights, ComplianceStandard, ConfigDriftEvent, DriftSeverity, DriftType,
-    JamboSspmDaemon, PermissionScope, ServiceEnvironment, ServiceType, Sha256,
-    SspmCap, SspmConnector, SspmError, SspmServiceAsset,
+    sspm_rights, ComplianceStandard, ConfigDriftEvent, DriftSeverity, DriftType, JamboSspmDaemon,
+    PermissionScope, ServiceEnvironment, ServiceType, Sha256, SspmCap, SspmConnector, SspmError,
+    SspmServiceAsset,
 };
 
 /// Exécute la suite complète de validation formelle du démon SSPM (Phase 136)
@@ -114,7 +114,10 @@ pub fn execute_sspm_daemon_test() -> bool {
     // 5. Remédiation automatisée de la dérive
     sspm.remediate_drift(&mut admin_cap, mfa_drift_id.unwrap(), 8020)
         .expect("Remédiation de la dérive MFA");
-    assert!(sspm.services[5].unwrap().mfa_enforced, "MFA restauré sur le service");
+    assert!(
+        sspm.services[5].unwrap().mfa_enforced,
+        "MFA restauré sur le service"
+    );
 
     // 6. Détection et mise en quarantaine immédiate O(1) d'un connecteur tiers Shadow SaaS
     let shadow_conn_id = 2; // external_analytics_hook enregistré dans init_defaults
@@ -146,7 +149,10 @@ pub fn execute_sspm_daemon_test() -> bool {
     assert!(summary.global_sspm_score <= 100);
 
     // 9. Vérification de l'intégrité cryptographique du registre d'audit SHA-256
-    assert!(sspm.verify_ledger_integrity(), "Registre d'audit SSPM cryptographiquement intègre");
+    assert!(
+        sspm.verify_ledger_integrity(),
+        "Registre d'audit SSPM cryptographiquement intègre"
+    );
 
     kprintln!(
         "[SSPM/TEST] Validation réussie : 6 services évalués, 2 connecteurs surveillés, dérive MFA remédiée, quarantaine O(1) validée, audit SHA-256 vérifié."
