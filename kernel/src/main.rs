@@ -1338,6 +1338,13 @@ pub extern "C" fn _start() -> ! {
         "Échec du test de gestion de la surface d'attaque externe jambo-easm"
     );
 
+    // 18octiesviciesquadragies. Validation du Programme Continu de Gestion de l'Exposition aux Menaces CTEM (Phase 132 - v0.2.130)
+    let ctem_success = sched::ctem_test::execute_ctem_daemon_test();
+    assert!(
+        ctem_success,
+        "Échec du test de gestion continue de l'exposition aux menaces jambo-ctem"
+    );
+
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
 
     arch::init_iommu();
@@ -1603,14 +1610,15 @@ pub extern "C" fn _start() -> ! {
     kprintln!("\x1b[1;32m[PASS] Phase 129 Application Security Posture Management, Supply Chain & SBOM CycloneDX (jambo-aspm) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 130 Breach and Attack Simulation & Defense-in-Depth Validation (jambo-bas) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 131 External Attack Surface Management & Shadow IT Discovery (jambo-easm) Complete\x1b[0m");
+    kprintln!("\x1b[1;32m[PASS] Phase 132 Continuous Threat Exposure Management & Federated Risk Orchestration (jambo-ctem) Complete\x1b[0m");
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.129 (External Attack Surface Management & Asset Discovery jambo-easm)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.130 (Continuous Threat Exposure Management & Federated Risk Orchestration jambo-ctem)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.129 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.130 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );

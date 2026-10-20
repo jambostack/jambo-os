@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.129-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.130-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.129 (Gestion de la Surface d'Attaque Externe (EASM), Découverte Continue d'Actifs Numériques & Détection de Shadow IT jambo-easm)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.129` introduit la plateforme souveraine d'External Attack Surface Management (EASM) en espace utilisateur (`services/jambo-easm`) : recensement dynamique des actifs numériques exposés (domaines DNS, adresses IP, ports, certificats TLS, buckets de stockage), découverte continue de Shadow IT, sous-domaines orphelins (Dangling DNS) et interfaces d'administration exposées, analyse proactive des configurations périmétriques défaillantes, calcul déterministe de l'Indice d'Exposition Externe (0..100), remédiation automatisée des vulnérabilités périmétriques, contrôle d'accès capabilaire strict `EasmCap` et registre d'audit cryptographique inviolable scellé par chaînage SHA-256 avec commandes interactives `easm [status | assets | scan | findings | remediate | verify]` dans le shell `jsh`.
+> **Statut du Projet : Version v0.2.130 (Programme Continu de Gestion de l'Exposition aux Menaces (CTEM), Orchestration Fédérée des Risques & Remédiation Proactive jambo-ctem)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.130` introduit le moteur souverain de Continuous Threat Exposure Management (CTEM) en espace utilisateur (`services/jambo-ctem`) : cycle itératif en 5 étapes (Cadrage/Scoping, Découverte/Discovery, Hiérarchisation/Prioritization, Validation/Validation, Mobilisation/Mobilization), fédération unifiée des signaux de sécurité (CSPM, CIEM, CWPP, ASPM, BAS, EASM), modélisation des chemins d'attaque contextuels et calcul prédictif d'exploitabilité (0..100), validation empirique des failles, orchestration de remédiation proactive (révocation de droits, durcissement WAF, mise en quarantaine), contrôle d'accès capabilaire strict `CtemCap` sans autorité ambiante et registre d'audit cryptographique inviolable scellé par chaînage SHA-256 avec commandes interactives `ctem [status | scopes | exposures | prioritize | validate | mobilize | remediate | cycle | verify]` dans le shell `jsh`.
 
 ---
 

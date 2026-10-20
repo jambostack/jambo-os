@@ -96,6 +96,7 @@ members = [
     "services/jambo-aspm",
     "services/jambo-bas",
     "services/jambo-easm",
+    "services/jambo-ctem",
     "libs/jambo-ui",
     "libs/jambo-sdk",
     "drivers/virtio",

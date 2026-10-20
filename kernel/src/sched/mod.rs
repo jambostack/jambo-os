@@ -65,6 +65,7 @@ pub mod cnapp_test;
 pub mod aspm_test;
 pub mod bas_test;
 pub mod easm_test;
+pub mod ctem_test;
 pub mod eevdf;
 pub mod event_test;
 pub mod fuzz_test;

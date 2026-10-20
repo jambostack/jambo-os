@@ -199,6 +199,7 @@ pub struct JamboShell {
     pub aspm: jambo_aspm::JamboAspmDaemon,
     pub bas: jambo_bas::JamboBasDaemon,
     pub easm: jambo_easm::JamboEasmDaemon,
+    pub ctem: jambo_ctem::JamboCtemDaemon,
 }
 
 impl Default for JamboShell {
@@ -707,6 +708,15 @@ impl JamboShell {
         );
         let mut easm = jambo_easm::JamboEasmDaemon::new(easm_cap);
         easm.init_defaults();
+
+        let ctem_cap = jambo_ctem::CtemCap::new(
+            libjambo::Handle::new(13201, 1),
+            jambo_ctem::ctem_rights::ALL,
+            5000,
+            100,
+        );
+        let mut ctem = jambo_ctem::JamboCtemDaemon::new(ctem_cap);
+        ctem.init_defaults();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -796,6 +806,7 @@ impl JamboShell {
             aspm,
             bas,
             easm,
+            ctem,
         }
     }
 
@@ -990,10 +1001,11 @@ impl JamboShell {
                 emit("  aspm [cmd]      - Posture applicative (ASPM), supply chain, SBOM CycloneDX & admission\n");
                 emit("  bas [cmd]       - Simulation brèches/attaques (BAS), validation continue & gaps\n");
                 emit("  easm [cmd]      - Surface d'attaque externe (EASM), recensement d'actifs, Shadow IT & failles\n");
+                emit("  ctem [cmd]      - Gestion continue d'exposition aux menaces (CTEM), cadrage, validation & remédiation\n");
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.2.129 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.2.130 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -11204,6 +11216,234 @@ impl JamboShell {
                     }
                 }
             }
+            "ctem" => {
+                let subcmd = if parsed.arg_count > 1 { parsed.args[1] } else { "status" };
+                match subcmd {
+                    "status" => {
+                        emit("=== GESTION CONTINUE DE L'EXPOSITION AUX MENACES (CTEM) ===\n");
+                        let mut b = [0u8; 20];
+                        emit("  Périmètres (Scopes) actifs   : ");
+                        emit(format_u64(self.ctem.scope_count as u64, &mut b));
+                        emit("\n  Menaces & Expositions totales: ");
+                        emit(format_u64(self.ctem.exposure_count as u64, &mut b));
+                        emit("\n  Phase actuelle du cycle CTEM : ");
+                        match self.ctem.current_phase {
+                            jambo_ctem::CtemPhase::Scoping => emit("Cadrage (Scoping)\n"),
+                            jambo_ctem::CtemPhase::Discovery => emit("Découverte (Discovery)\n"),
+                            jambo_ctem::CtemPhase::Prioritization => emit("Hiérarchisation (Prioritization)\n"),
+                            jambo_ctem::CtemPhase::Validation => emit("Validation (Validation)\n"),
+                            jambo_ctem::CtemPhase::Mobilization => emit("Mobilisation (Mobilization)\n"),
+                        }
+                        emit("  Indice Global d'Exposition   : ");
+                        emit(format_u64(self.ctem.overall_exposure_score as u64, &mut b));
+                        emit("/100\n");
+                        let cap = self.ctem.admin_cap;
+                        if let Ok(summary) = self.ctem.get_summary(&cap) {
+                            emit("  Expositions hiérarchisées    : ");
+                            emit(format_u64(summary.prioritized_count as u64, &mut b));
+                            emit("\n  Expositions validées         : ");
+                            emit(format_u64(summary.validated_count as u64, &mut b));
+                            emit("\n  Actions mobilisées           : ");
+                            emit(format_u64(summary.mobilized_count as u64, &mut b));
+                            emit("\n  Expositions remédiées        : ");
+                            emit(format_u64(summary.remediated_count as u64, &mut b));
+                            emit("\n");
+                        }
+                        let valid = self.ctem.verify_ledger_integrity();
+                        emit("  Registre d'audit SHA-256     : ");
+                        emit(if valid { "SCELLÉ & INTÈGRE (OK)\n" } else { "ALTÉRÉ (FAIL)\n" });
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "scopes" => {
+                        emit("=== PÉRIMÈTRES DE SÉCURITÉ CADRÉS (SCOPES) ===\n");
+                        let mut b = [0u8; 20];
+                        for i in 0..self.ctem.scope_count {
+                            if let Some(ref s) = self.ctem.scopes[i] {
+                                emit("  [Scope #");
+                                emit(format_u64(s.id as u64, &mut b));
+                                emit("] ");
+                                emit(s.name_as_str());
+                                emit(" | Domaine: ");
+                                emit(s.domain_as_str());
+                                emit(" | Actifs: ");
+                                emit(format_u64(s.asset_count as u64, &mut b));
+                                emit(" | Criticité: ");
+                                match s.criticality {
+                                    jambo_ctem::BusinessCriticality::Critical => emit("CRITIQUE\n"),
+                                    jambo_ctem::BusinessCriticality::High => emit("ÉLEVÉE\n"),
+                                    jambo_ctem::BusinessCriticality::Medium => emit("MOYENNE\n"),
+                                    jambo_ctem::BusinessCriticality::Low => emit("FAIBLE\n"),
+                                }
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "exposures" => {
+                        emit("=== MENACES & EXPOSITIONS FÉDÉRÉES (CTEM) ===\n");
+                        let mut b = [0u8; 20];
+                        for i in 0..self.ctem.exposure_count {
+                            if let Some(ref e) = self.ctem.exposures[i] {
+                                emit("  [Exp #");
+                                emit(format_u64(e.id as u64, &mut b));
+                                emit("] ");
+                                emit(e.title_as_str());
+                                emit(" | Source: ");
+                                match e.source {
+                                    jambo_ctem::ExposureSource::Cspm => emit("CSPM"),
+                                    jambo_ctem::ExposureSource::Ciem => emit("CIEM"),
+                                    jambo_ctem::ExposureSource::Cwpp => emit("CWPP"),
+                                    jambo_ctem::ExposureSource::Aspm => emit("ASPM"),
+                                    jambo_ctem::ExposureSource::Bas => emit("BAS"),
+                                    jambo_ctem::ExposureSource::Easm => emit("EASM"),
+                                    jambo_ctem::ExposureSource::Custom => emit("CUSTOM"),
+                                }
+                                emit(" | Exploitabilité: ");
+                                emit(format_u64(e.exploitability_score as u64, &mut b));
+                                emit("/100 | Statut: ");
+                                match e.status {
+                                    jambo_ctem::ExposureStatus::Discovered => emit("DÉCOUVERTE\n"),
+                                    jambo_ctem::ExposureStatus::Prioritized => emit("HIÉRARCHISÉE\n"),
+                                    jambo_ctem::ExposureStatus::Validated => emit("VALIDÉE\n"),
+                                    jambo_ctem::ExposureStatus::Mobilized => emit("MOBILISÉE\n"),
+                                    jambo_ctem::ExposureStatus::Remediated => emit("REMÉDIÉE\n"),
+                                    jambo_ctem::ExposureStatus::Suppressed => emit("IGNORÉE\n"),
+                                }
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "prioritize" => {
+                        let cap = self.ctem.admin_cap;
+                        match self.ctem.prioritize_exposures(&cap, 5000) {
+                            Ok(cnt) => {
+                                emit("  [OK] Hiérarchisation contextuelle achevée sur ");
+                                let mut b = [0u8; 20];
+                                emit(format_u64(cnt as u64, &mut b));
+                                emit(" expositions. Nouvel indice: ");
+                                emit(format_u64(self.ctem.overall_exposure_score as u64, &mut b));
+                                emit("/100\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("  [FAIL] Échec de la hiérarchisation des expositions\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "validate" => {
+                        let eid = if parsed.arg_count > 2 {
+                            match parsed.args[2] {
+                                "2" => 2,
+                                "3" => 3,
+                                "4" => 4,
+                                "5" => 5,
+                                _ => 1,
+                            }
+                        } else {
+                            1
+                        };
+                        let cap = self.ctem.admin_cap;
+                        match self.ctem.validate_exposure(&cap, eid, true, 5010) {
+                            Ok(()) => {
+                                emit("  [OK] Validation empirique d'exploitabilité confirmée pour exposition #");
+                                let mut b = [0u8; 20];
+                                emit(format_u64(eid as u64, &mut b));
+                                emit("\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("  [FAIL] Échec de la validation de l'exposition\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "mobilize" => {
+                        let eid = if parsed.arg_count > 2 {
+                            match parsed.args[2] {
+                                "2" => 2,
+                                "3" => 3,
+                                "4" => 4,
+                                "5" => 5,
+                                _ => 1,
+                            }
+                        } else {
+                            1
+                        };
+                        let cap = self.ctem.admin_cap;
+                        match self.ctem.mobilize_remediation(&cap, eid, jambo_ctem::MobilizationActionType::EnforceWaf, "jambo-waf", 5020) {
+                            Ok(aid) => {
+                                emit("  [OK] Playbook de remédiation mobilisé avec succès (Action #");
+                                let mut b = [0u8; 20];
+                                emit(format_u64(aid as u64, &mut b));
+                                emit(") pour exposition #");
+                                emit(format_u64(eid as u64, &mut b));
+                                emit("\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("  [FAIL] Échec de la mobilisation de la remédiation\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "remediate" => {
+                        let eid = if parsed.arg_count > 2 {
+                            match parsed.args[2] {
+                                "2" => 2,
+                                "3" => 3,
+                                "4" => 4,
+                                "5" => 5,
+                                _ => 1,
+                            }
+                        } else {
+                            1
+                        };
+                        let cap = self.ctem.admin_cap;
+                        match self.ctem.remediate_exposure(&cap, eid, 5030) {
+                            Ok(()) => {
+                                emit("  [OK] Exposition #");
+                                let mut b = [0u8; 20];
+                                emit(format_u64(eid as u64, &mut b));
+                                emit(" remédiée et neutralisée avec succès\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("  [FAIL] Échec de la remédiation de l'exposition\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "cycle" => {
+                        let cap = self.ctem.admin_cap;
+                        match self.ctem.run_full_cycle(&cap, 5040) {
+                            Ok(summary) => {
+                                emit("  [OK] Cycle complet CTEM orchestré avec succès !\n");
+                                let mut b = [0u8; 20];
+                                emit("  Expositions mobilisées : ");
+                                emit(format_u64(summary.mobilized_count as u64, &mut b));
+                                emit(" | Indice résiduel: ");
+                                emit(format_u64(summary.overall_exposure_score as u64, &mut b));
+                                emit("/100\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("  [FAIL] Échec de l'exécution du cycle CTEM\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "verify" => {
+                        let valid = self.ctem.verify_ledger_integrity();
+                        emit("  Vérification intégrité registre CTEM SHA-256 : ");
+                        emit(if valid { "INTÈGRE (OK)\n" } else { "ALTÉRÉ (FAIL)\n" });
+                        (ShellStatus::Success, write_pos)
+                    }
+                    _ => {
+                        emit("Usage: ctem [status | scopes | exposures | prioritize | validate [eid] | mobilize [eid] | remediate [eid] | cycle | verify]\n");
+                        (ShellStatus::ExecutionFailed, write_pos)
+                    }
+                }
+            }
             "poweroff" | "reboot" => {
                 emit("[SYSTEM] Extinction demandée...\n");
                 unsafe {
@@ -15029,6 +15269,55 @@ mod tests {
                 let (st6, len6) = shell.execute_line("easm verify", &mut out);
                 assert_eq!(st6, ShellStatus::Success);
                 assert!(len6 > 0);
+            })
+            .unwrap();
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn test_shell_ctem_commands() {
+        extern crate std;
+        let handle = std::thread::Builder::new()
+            .stack_size(8 * 1024 * 1024)
+            .spawn(|| {
+                let mut shell = JamboShell::new();
+                let mut out = [0u8; 1024];
+
+                let (st1, len1) = shell.execute_line("ctem status", &mut out);
+                assert_eq!(st1, ShellStatus::Success);
+                assert!(len1 > 0);
+
+                let (st2, len2) = shell.execute_line("ctem scopes", &mut out);
+                assert_eq!(st2, ShellStatus::Success);
+                assert!(len2 > 0);
+
+                let (st3, len3) = shell.execute_line("ctem exposures", &mut out);
+                assert_eq!(st3, ShellStatus::Success);
+                assert!(len3 > 0);
+
+                let (st4, len4) = shell.execute_line("ctem prioritize", &mut out);
+                assert_eq!(st4, ShellStatus::Success);
+                assert!(len4 > 0);
+
+                let (st5, len5) = shell.execute_line("ctem validate 1", &mut out);
+                assert_eq!(st5, ShellStatus::Success);
+                assert!(len5 > 0);
+
+                let (st6, len6) = shell.execute_line("ctem mobilize 1", &mut out);
+                assert_eq!(st6, ShellStatus::Success);
+                assert!(len6 > 0);
+
+                let (st7, len7) = shell.execute_line("ctem remediate 1", &mut out);
+                assert_eq!(st7, ShellStatus::Success);
+                assert!(len7 > 0);
+
+                let (st8, len8) = shell.execute_line("ctem cycle", &mut out);
+                assert_eq!(st8, ShellStatus::Success);
+                assert!(len8 > 0);
+
+                let (st9, len9) = shell.execute_line("ctem verify", &mut out);
+                assert_eq!(st9, ShellStatus::Success);
+                assert!(len9 > 0);
             })
             .unwrap();
         handle.join().unwrap();
