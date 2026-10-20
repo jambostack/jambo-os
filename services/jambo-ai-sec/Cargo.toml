@@ -1,0 +1,7 @@
+[package]
+name = "jambo-ai-sec"
+version = "0.2.101"
+edition = "2021"
+
+[dependencies]
+libjambo = { path = "../../libs/libjambo" }

@@ -1,6 +1,6 @@
 [package]
 name = "jambo-sh"
-version = "0.2.100"
+version = "0.2.101"
 edition = "2021"
 
 [lib]
@@ -37,6 +37,7 @@ jambo-mixnet = { path = "../jambo-mixnet" }
 jambo-secboot = { path = "../jambo-secboot" }
 jambo-idps = { path = "../jambo-idps" }
 jambo-hsm2 = { path = "../jambo-hsm2" }
+jambo-ai-sec = { path = "../jambo-ai-sec" }
 jambo-cryptod = { path = "../jambo-cryptod" }
 jambo-dfsd = { path = "../jambo-dfsd" }
 jambo-diagd = { path = "../jambo-diagd" }

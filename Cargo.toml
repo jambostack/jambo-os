@@ -67,6 +67,7 @@ members = [
     "services/jambo-secboot",
     "services/jambo-idps",
     "services/jambo-hsm2",
+    "services/jambo-ai-sec",
     "libs/jambo-ui",
     "libs/jambo-sdk",
     "drivers/virtio",

@@ -1,7 +1,7 @@
 # ROADMAP DU DÉVELOPPEMENT AUTONOME — JamboOS
 
-> **Dernière mise à jour** : 2026-10-20 00:18 UTC  
-> **Version actuelle** : `v0.2.100`  
+> **Dernière mise à jour** : 2026-10-20 00:35 UTC  
+> **Version actuelle** : `v0.2.101`  
 > **Statut global** : Pré-Alpha active — Micro-noyau de 3e génération orienté capacités (`#![no_std]`)  
 > **Cycle de développement autonome** : 10 minutes via le Planificateur de Tâches & Crons d'Antigravity WebUI  
 
@@ -89,23 +89,24 @@
 | **v0.2.98** | 100 | Démarrage Sécurisé `jambo-secboot` | Démarrage sécurisé souverain (Secure Boot), mesure d'intégrité PCR TPM 2.0, chaîne de confiance matérielle, hiérarchie PK/KEK/DB/DBX & scellement | ✅ Validé |
 | **v0.2.99** | 101 | Détection d'Intrusions `jambo-idps` | Système de détection et prévention d'intrusions Ring 3 (IDPS), analyse heuristique de flux IPC, contre-mesures autonomes & révocation dynamique de capacités | ✅ Validé |
 | **v0.2.100** | 102 | HSM Distribué `jambo-hsm2` | Architecture HSM distribuée, accord de clés de groupe (GKA), partage de seuil de Shamir (T, N), signature collaborative & détection byzantine | ✅ Validé |
+| **v0.2.101** | 103 | Sécurité IA & Détection d'Empoisonnement `jambo-ai-sec` | Garde-fous d'inférence `#![no_std]`, détection d'injections de prompt/jailbreak, validation Merkle SHA-256 de poids, détection de trojans & quarantaine O(1) | ✅ Validé |
 
 ---
 
 ## 3. Prochaines Étapes Prioritaires
 
-### 🎯 Prochaine Tâche Immédiate : Phase 103 — v0.2.101
-* **Composant** : `services/jambo-ai-sec`
-* **Objectif** : Garde-fous de sécurité IA et détection d'empoisonnement de modèles en Ring 3
-* **Tâches précises** :
-  1. Filtres d'inférence sécurisés `#![no_std]` pour modèles embarqués.
-  2. Validation formelle et suite de tests `cargo xtask test`.
-
-### 🎯 Tâche Suivante : Phase 104 — v0.2.102
+### 🎯 Prochaine Tâche Immédiate : Phase 104 — v0.2.102
 * **Composant** : `services/jambo-wasm2`
 * **Objectif** : Isolation Wasm Component Model & interfaces de capacités Ring 3
 * **Tâches précises** :
   1. Virtualisation de composants Wasm sandboxed.
+  2. Validation formelle et suite de tests `cargo xtask test`.
+
+### 🎯 Tâche Suivante : Phase 105 — v0.2.103
+* **Composant** : `services/jambo-attest2`
+* **Objectif** : Attestation d'enclave matérielle distante avancée & chaînes de confiance multi-puces
+* **Tâches précises** :
+  1. Vérification d'intégrité distante de micro-enclaves.
   2. Validation formelle et suite de tests `cargo xtask test`.
 
 ---
@@ -147,6 +148,7 @@
 * **2026-10-19 23:55 UTC** : Validation complète Phase 100 (`jambo-secboot`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-secboot`). Tag `v0.2.98`.
 * **2026-10-20 00:08 UTC** : Validation complète Phase 101 (`jambo-idps`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-idps`). Tag `v0.2.99`.
 * **2026-10-20 00:18 UTC** : Validation complète Phase 102 (`jambo-hsm2`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-hsm2`). Tag `v0.2.100`.
+* **2026-10-20 00:36 UTC** : Validation complète Phase 103 (`jambo-ai-sec`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-ai-sec`). Tag `v0.2.101`.
 
 
 

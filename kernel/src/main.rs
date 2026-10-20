@@ -1142,6 +1142,13 @@ pub extern "C" fn _start() -> ! {
         "Échec du test de l'architecture HSM distribuée et fédération multi-puces jambo-hsm2"
     );
 
+    // 10quattuordequadragies. Validation des Garde-fous de Sécurité IA & Détection d'Empoisonnement (Phase 103 - v0.2.101)
+    let ai_sec_success = sched::execute_ai_sec_daemon_test();
+    assert!(
+        ai_sec_success,
+        "Échec du test des garde-fous de sécurité IA et détection d'empoisonnement jambo-ai-sec"
+    );
+
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
 
     arch::init_iommu();
@@ -1380,14 +1387,15 @@ pub extern "C" fn _start() -> ! {
     kprintln!("\x1b[1;32m[PASS] Phase 100 Secure Boot, TPM 2.0 PCR Integrity & Hardware Root of Trust (jambo-secboot) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 101 Intrusion Detection & Prevention System (IDPS) & Heuristic IPC Analysis (jambo-idps) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 102 Distributed HSM Architecture & Multi-Chip Threshold Key Federation (jambo-hsm2) Complete\x1b[0m");
+    kprintln!("\x1b[1;32m[PASS] Phase 103 AI Security Guardrails, Prompt Injection & Poisoning Detection (jambo-ai-sec) Complete\x1b[0m");
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.100 (Architecture HSM Distribuée jambo-hsm2)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.101 (Garde-fous Sécurité IA jambo-ai-sec)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.100 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.101 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
