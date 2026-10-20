@@ -185,6 +185,7 @@ pub struct JamboShell {
     pub waf: jambo_waf::JamboWafDaemon,
     pub ddos: jambo_ddos::JamboDdosDaemon,
     pub soar: jambo_soar::JamboSoarDaemon,
+    pub forensics: jambo_forensics::JamboForensicsDaemon,
 }
 
 impl Default for JamboShell {
@@ -567,6 +568,15 @@ impl JamboShell {
         );
         let mut soar = jambo_soar::JamboSoarDaemon::new(soar_cap);
         soar.init_defaults();
+        let forensics_cap = jambo_forensics::ForensicsCap::new(
+            libjambo::Handle::new(11801, 1),
+            jambo_forensics::forensics_rights::ALL,
+            5000,
+            100,
+        );
+        let forensics_kp = jambo_forensics::ForensicKeyPair::derive_from_seed(0x118_cafe);
+        let mut forensics = jambo_forensics::JamboForensicsDaemon::new(forensics_cap, forensics_kp);
+        forensics.init_defaults();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -642,6 +652,7 @@ impl JamboShell {
             waf,
             ddos,
             soar,
+            forensics,
         }
     }
 
@@ -822,10 +833,11 @@ impl JamboShell {
                 emit("  waf [cmd]     - Pare-feu applicatif L7 (WAF) sandboxed, détection d'injections & WafCap\n");
                 emit("  ddos [cmd]    - Mitigation Anti-DDoS L3/L4/L7, SYN Cookies, seaux à jetons & DdosCap\n");
                 emit("  soar [cmd]    - Orchestration SOAR, Playbooks DAG automatisés & SoarCap\n");
+                emit("  forensics [cmd] - Investigation numérique, extraction d'artefacts & scellement Ed25519/BLAKE3\n");
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.2.115 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.2.116 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -9131,6 +9143,133 @@ impl JamboShell {
                     }
                 }
             }
+            "forensics" => {
+                let subcmd = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    "status"
+                };
+                match subcmd {
+                    "status" => {
+                        let mut b = [0u8; 20];
+                        emit("[FORENSICS/STATUS] Démon d'Investigation Numérique & Analyse Post-Incident\n");
+                        emit("  Instantanés capturés  : ");
+                        emit(format_u64(self.forensics.snapshot_count as u64, &mut b));
+                        emit("\n  Artefacts répertoriés : ");
+                        emit(format_u64(self.forensics.artifact_count as u64, &mut b));
+                        emit("\n  Preuves scellées      : ");
+                        emit(format_u64(self.forensics.seal_count as u64, &mut b));
+                        emit("\n  Chaîne de garde       : ");
+                        emit(format_u64(self.forensics.custody_count as u64, &mut b));
+                        emit(" entrées\n");
+                        let valid = self.forensics.verify_custody_integrity();
+                        emit("  Intégrité chaîne garde: ");
+                        emit(if valid { "VÉRIFIÉE (OK)\n" } else { "CORROMPUE (ERR)\n" });
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "timeline" => {
+                        emit("[FORENSICS/TIMELINE] Chronologie des Artefacts de Sécurité :\n");
+                        for i in 0..self.forensics.artifact_count {
+                            if let Some(ref art) = self.forensics.artifacts[i] {
+                                let mut b = [0u8; 20];
+                                emit("  [T+");
+                                emit(format_u64(art.timestamp, &mut b));
+                                emit("ms] PID ");
+                                emit(format_u64(art.source_pid as u64, &mut b));
+                                emit(" - ");
+                                if let Ok(s) = core::str::from_utf8(&art.description[..art.desc_len]) {
+                                    emit(s);
+                                }
+                                emit(" (Gravité: ");
+                                emit(format_u64(art.severity_score as u64, &mut b));
+                                emit("/100)\n");
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "capture" => {
+                        let cap = self.forensics.admin_cap;
+                        let reg = jambo_forensics::MemoryRegionSnapshot::new(
+                            0x7fff0000,
+                            0x1000,
+                            jambo_forensics::PROT_READ | jambo_forensics::PROT_WRITE | jambo_forensics::PROT_EXEC,
+                            b"\x90\x90\xcc\x0f\x05INJECTED_PAYLOAD",
+                        );
+                        match self.forensics.capture_process_memory(
+                            &cap,
+                            99,
+                            1,
+                            "captured-victim",
+                            0x100000,
+                            0x7fff0004,
+                            0x7ffffff0,
+                            &[reg],
+                            3000,
+                        ) {
+                            Ok(id) => {
+                                let mut b = [0u8; 20];
+                                emit("[FORENSICS/CAPTURE] Instantané mémoire volatile capturé [ID: ");
+                                emit(format_u64(id, &mut b));
+                                emit("] avec région suspecte W+X détectée\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("[FORENSICS/CAPTURE] Échec capture mémoire\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "seal" => {
+                        let cap = self.forensics.admin_cap;
+                        let snap_id = self.forensics.snapshot_count as u64;
+                        if snap_id == 0 {
+                            emit("[FORENSICS/SEAL] Aucun instantané à sceller.\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        } else {
+                            match self.forensics.seal_evidence(&cap, snap_id, true, 42, 3100) {
+                                Ok(seal) => {
+                                    let mut b = [0u8; 20];
+                                    emit("[FORENSICS/SEAL] Preuve scellée avec succès [ID: ");
+                                    emit(format_u64(seal.evidence_id, &mut b));
+                                    emit("] via BLAKE3 + signature Ed25519\n");
+                                    (ShellStatus::Success, write_pos)
+                                }
+                                Err(_) => {
+                                    emit("[FORENSICS/SEAL] Échec scellement de preuve\n");
+                                    (ShellStatus::ExecutionFailed, write_pos)
+                                }
+                            }
+                        }
+                    }
+                    "verify" => {
+                        let cap = self.forensics.admin_cap;
+                        let seal_count = self.forensics.seal_count;
+                        if seal_count == 0 {
+                            emit("[FORENSICS/VERIFY] Aucun scellement à vérifier.\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        } else {
+                            let mut all_valid = true;
+                            for i in 0..seal_count {
+                                if let Some(ref seal) = self.forensics.seals[i] {
+                                    match self.forensics.verify_seal_integrity(&cap, seal) {
+                                        Ok(true) => {}
+                                        _ => {
+                                            all_valid = false;
+                                        }
+                                    }
+                                }
+                            }
+                            emit("  Vérification signatures Ed25519 & condensats BLAKE3 : ");
+                            emit(if all_valid { "INTÈGRE (OK)\n" } else { "ALTÉRÉ (FAIL)\n" });
+                            (ShellStatus::Success, write_pos)
+                        }
+                    }
+                    _ => {
+                        emit("Usage: forensics [status | timeline | capture | seal | verify]\n");
+                        (ShellStatus::ExecutionFailed, write_pos)
+                    }
+                }
+            }
             "poweroff" | "reboot" => {
                 emit("[SYSTEM] Extinction demandée...\n");
                 unsafe {
@@ -12440,6 +12579,39 @@ mod tests {
                 assert!(len4 > 0);
 
                 let (st5, len5) = shell.execute_line("soar audit", &mut out);
+                assert_eq!(st5, ShellStatus::Success);
+                assert!(len5 > 0);
+            })
+            .unwrap();
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn test_shell_forensics_commands() {
+        extern crate std;
+        let handle = std::thread::Builder::new()
+            .stack_size(8 * 1024 * 1024)
+            .spawn(|| {
+                let mut shell = JamboShell::new();
+                let mut out = [0u8; 1024];
+
+                let (st1, len1) = shell.execute_line("forensics status", &mut out);
+                assert_eq!(st1, ShellStatus::Success);
+                assert!(len1 > 0);
+
+                let (st2, len2) = shell.execute_line("forensics timeline", &mut out);
+                assert_eq!(st2, ShellStatus::Success);
+                assert!(len2 > 0);
+
+                let (st3, len3) = shell.execute_line("forensics capture", &mut out);
+                assert_eq!(st3, ShellStatus::Success);
+                assert!(len3 > 0);
+
+                let (st4, len4) = shell.execute_line("forensics seal", &mut out);
+                assert_eq!(st4, ShellStatus::Success);
+                assert!(len4 > 0);
+
+                let (st5, len5) = shell.execute_line("forensics verify", &mut out);
                 assert_eq!(st5, ShellStatus::Success);
                 assert!(len5 > 0);
             })

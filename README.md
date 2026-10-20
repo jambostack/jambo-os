@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.115-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.116-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.115 (Orchestration SOAR, Automatisation des Incidents, Workflows DAG & SoarCap jambo-soar)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.115` introduit le moteur souverain d'orchestration de sécurité, automatisation et réponse aux incidents en espace utilisateur (`services/jambo-soar`) : contrôle d'accès capabilaire strict `SoarCap` (Zero-Ambient Authority), modélisation des incidents de sécurité avec empreinte SHA-256 unique, moteur d'exécution de playbooks conditionnels en graphe acyclique dirigé (DAG) avec détection formelle de cycles et ordonnancement topologique, intégrations croisées distribuées (`jambo-walld`, `jambo-ddos`, `jambo-waf`, `jambo-ids`, `jambo-siem`), playbooks intégrés (mitigation DDoS, neutralisation d'injections applicatives WAF, révocation immédiate de capacités compromises et confinement), registre d'audit inaltérable scellé par chaîne de hachage SHA-256 avec commandes interactives `soar [status | playbooks | trigger | mitigate | audit]` dans le shell `jsh`.
+> **Statut du Projet : Version v0.2.116 (Investigation Numérique Forensique, Capture Mémoire Volatile, Scellement Ed25519/BLAKE3 & ForensicsCap jambo-forensics)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.116` introduit le moteur souverain d'investigation numérique et analyse forensique post-incident en espace utilisateur (`services/jambo-forensics`) : contrôle d'accès capabilaire strict `ForensicsCap` (Zero-Ambient Authority), capture d'instantanés d'états mémoire volatiles (`ProcessForensicImage`), détection d'anomalies W+X et calcul d'entropie d'injections, extraction chronologique de timelines d'artefacts d'attaques, hachage BLAKE3 déterministe `#![no_std]`, scellement cryptographique par signature asymétrique Ed25519 (`EvidenceSeal`), registre inaltérable de chaîne de garde (Chain of Custody) scellé par chaîne SHA-256 avec commandes interactives `forensics [status | timeline | capture | seal | verify]` dans le shell `jsh`.
 
 ---
 
