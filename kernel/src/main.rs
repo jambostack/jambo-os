@@ -1205,6 +1205,13 @@ pub extern "C" fn _start() -> ! {
         "Échec du test du routage sécurisé Zero-Trust et maillage chiffré jambo-secroute"
     );
 
+    // 14tredeciesquadragies. Validation de la Prévention & Corrélation d'Intrusions Multi-Points et Révocation Automatisée (Phase 112 - v0.2.110)
+    let ids_success = sched::execute_ids_daemon_test();
+    assert!(
+        ids_success,
+        "Échec du test de prévention et corrélation d'intrusions multi-points jambo-ids"
+    );
+
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
 
     arch::init_iommu();
@@ -1451,14 +1458,15 @@ pub extern "C" fn _start() -> ! {
     kprintln!("\x1b[1;32m[PASS] Phase 109 Post-Quantum PKI & Distributed CA Federation (jambo-pki2) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 110 Passkeys WebAuthn & Ephemeral Access Tokens (jambo-auth2) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 111 Zero-Trust Secure Routing, Micro-Segmentation & Encrypted Mesh (jambo-secroute) Complete\x1b[0m");
+    kprintln!("\x1b[1;32m[PASS] Phase 112 Multi-Point Intrusion Prevention, Correlation & Capability Revocation (jambo-ids) Complete\x1b[0m");
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.109 (Zero-Trust Secure Routing & Encrypted Mesh jambo-secroute)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.110 (Multi-Point Intrusion Prevention & Capability Revocation jambo-ids)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.109 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.110 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );

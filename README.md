@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.109-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.110-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.109 (Routage Sécurisé Zero-Trust, Micro-Segmentation de Grappe & Maillage Chiffré jambo-secroute)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.109` introduit le sous-système de routage sécurisé Zero-Trust, de micro-segmentation de grappe et de maillage chiffré dynamique Ring 3 (`services/jambo-secroute`) : micro-segmentation en zones de sécurité étanches (`SecurityZone`) avec niveaux de confiance (Hypervisor, TEE Enclaves, Standard Apps, Confined Sandbox), tunnels souverains chiffrés point-à-point (`SecureTunnel`) protégés par ChaCha20 (256 bits) et authentification par étiquette MAC HMAC-SHA256, protection formelle anti-rejeu par séquence strictement monotone (`seq > rx_seq`), gouvernance capabilaire stricte `SecRouteCap` avec atténuation monotone (Zero-Ambient Authority), règles de routage Zero-Trust Deny-by-Default (`SecRouteRule`), détection immédiate de violations inter-zones et mise en quarantaine O(1) d'enclaves compromises, registre d'audit inaltérable scellé par SHA-256 et commandes interactives `secroute [status | zones | enclaves | tunnels | routes | send | isolate | benchmark | audit]` dans le shell `jsh`.
+> **Statut du Projet : Version v0.2.110 (Prévention & Corrélation d'Intrusions Multi-Points & Révocation Automatisée de Capacités jambo-ids)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.110` introduit le système de prévention et de corrélation d'intrusions multi-points et de révocation automatisée de capacités Ring 3 (`services/jambo-ids`) : réseau distribué de sondes d'intrusions (`SensorProbe`) couvrant Kernel Syscall, IPC Router, VFS CoW, SecRoute Network, Auth & Identités, Sandbox & Enclaves, moteur de profilage comportemental et détection d'anomalies statistiques (`BehavioralBaseline`), moteur de corrélation spatio-temporelle d'événements hétérogènes avec calcul de score de menace agrégé et coefficient d'attaque coordonnée (APT), gouvernance capabilaire stricte `IdsCap` (Zero-Ambient Authority), contre-mesures autonomes avec révocation instantanée de capacités et quarantaine O(1), registre d'audit inaltérable scellé par chaîne SHA-256 et commandes interactives `ids [status | probes | baselines | alerts | correlate | quarantine | lift | audit | benchmark]` dans le shell `jsh`.
 
 ---
 

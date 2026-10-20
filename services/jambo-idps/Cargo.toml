@@ -1,6 +1,6 @@
 [package]
 name = "jambo-idps"
-version = "0.2.109"
+version = "0.2.110"
 edition = "2021"
 
 [dependencies]
