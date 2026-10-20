@@ -1,6 +1,6 @@
 [package]
 name = "jambo-sh"
-version = "0.2.123"
+version = "0.2.124"
 edition = "2021"
 
 [lib]
@@ -59,6 +59,7 @@ jambo-deception = { path = "../jambo-deception" }
 jambo-ztna = { path = "../jambo-ztna" }
 jambo-casb = { path = "../jambo-casb" }
 jambo-cspm = { path = "../jambo-cspm" }
+jambo-cwpp = { path = "../jambo-cwpp" }
 jambo-cryptod = { path = "../jambo-cryptod" }
 jambo-dfsd = { path = "../jambo-dfsd" }
 jambo-diagd = { path = "../jambo-diagd" }

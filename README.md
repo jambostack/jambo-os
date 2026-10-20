@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.123-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.124-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.123 (Gestion de la Posture de Sécurité Cloud/Grappe (CSPM), Détection de Dérive & Remédiation Autonome jambo-cspm)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.123` introduit le système souverain de Gestion de Posture de Sécurité Cloud/Grappe (CSPM) en espace utilisateur (`services/jambo-cspm`) : moteur d'audit continu de conformité par rapport aux baselines durcies souveraines (CIS Microkernel, DISA STIG, ANSSI SecNumCloud, JamboOS Sovereign), détection de dérive de configuration (drift detection) en temps réel, calcul d'indice de risque de grappe (0-1000) et score de posture (0-100), remédiation autonome en temps réel réalignant les paramètres déviants, contrôle d'accès capabilaire strict `CspmCap` et scellement d'audit cryptographique inviolable par chaînage SHA-256 avec commandes interactives `cspm [status | baselines | items | scan | remediate | verify]` dans le shell `jsh`.
+> **Statut du Projet : Version v0.2.124 (Protection des Charges de Travail Cloud/Grappe (CWPP), Surveillance d'Intégrité en Exécution & Confinement de Conteneurs jambo-cwpp)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.124` introduit le système souverain de Cloud Workload Protection Platform (CWPP) en espace utilisateur (`services/jambo-cwpp`) : surveillance en temps réel des charges de travail et processus Ring 3, détection d'anomalies d'exécution (appels système anormaux, injection de mémoire anonyme W+X, dérivations de pointeurs d'instructions RIP Divergence / ROP, évasions de conteneur), confinement instantané O(1) (Freeze, StripCaps, IsolateNetwork, Quarantine, Terminate), contrôle d'accès capabilaire strict `CwppCap` et scellement d'audit cryptographique inviolable par chaînage SHA-256 avec commandes interactives `cwpp [status | profiles | workloads | scan | contain | verify]` dans le shell `jsh`.
 
 ---
 
@@ -201,6 +201,7 @@ jambo-os/
 │   ├── jambo-ztna/          # Architecture Zero Trust (ZTNA), micro-périmètres & ré-évaluation de posture
 │   ├── jambo-casb/          # Courtier d'accès cloud/grappe (CASB), conformité multi-tenant & DLP
 │   ├── jambo-cspm/          # Gestion de posture cloud/grappe (CSPM), dérive & remédiation autonome
+│   ├── jambo-cwpp/          # Protection des charges de travail cloud/grappe (CWPP), intégrité d'exécution & confinement
 │   └── pcie-bus-mgr/        # Gestionnaire de bus PCIe, MSI-X et isolation IOMMU
 └── xtask/                   # Outil de compilation, création d'ISO et test QEMU
 ```

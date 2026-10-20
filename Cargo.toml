@@ -90,6 +90,7 @@ members = [
     "services/jambo-ztna",
     "services/jambo-casb",
     "services/jambo-cspm",
+    "services/jambo-cwpp",
     "libs/jambo-ui",
     "libs/jambo-sdk",
     "drivers/virtio",

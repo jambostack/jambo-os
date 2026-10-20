@@ -193,6 +193,7 @@ pub struct JamboShell {
     pub ztna: jambo_ztna::JamboZtnaDaemon,
     pub casb: jambo_casb::JamboCasbDaemon,
     pub cspm: jambo_cspm::JamboCspmDaemon,
+    pub cwpp: jambo_cwpp::JamboCwppDaemon,
 }
 
 impl Default for JamboShell {
@@ -647,6 +648,15 @@ impl JamboShell {
         );
         let mut cspm = jambo_cspm::JamboCspmDaemon::new(cspm_cap);
         cspm.init_defaults();
+
+        let cwpp_cap = jambo_cwpp::CwppCap::new(
+            libjambo::Handle::new(12601, 1),
+            jambo_cwpp::cwpp_rights::ALL,
+            5000,
+            100,
+        );
+        let mut cwpp = jambo_cwpp::JamboCwppDaemon::new(cwpp_cap);
+        cwpp.init_defaults();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -730,6 +740,7 @@ impl JamboShell {
             ztna,
             casb,
             cspm,
+            cwpp,
         }
     }
 
@@ -918,10 +929,11 @@ impl JamboShell {
                 emit("  ztna [cmd]      - Architecture Zero Trust, micro-périmètres continus & ZtnaCap\n");
                 emit("  casb [cmd]      - Courtier d'accès cloud/grappe (CASB), multi-tenant & DLP avancé\n");
                 emit("  cspm [cmd]      - Posture de sécurité cloud/grappe (CSPM), dérive & remédiation\n");
+                emit("  cwpp [cmd]      - Protection charges de travail (CWPP), intégrité d'exécution & confinement\n");
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.2.123 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.2.124 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -10184,6 +10196,137 @@ impl JamboShell {
                     }
                 }
             }
+            "cwpp" => {
+                let subcmd = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    "status"
+                };
+                match subcmd {
+                    "status" => {
+                        let mut b = [0u8; 20];
+                        emit("[CWPP/STATUS] Protection des Charges de Travail Cloud/Grappe (CWPP)\n");
+                        emit("  Profils enregistrés     : ");
+                        emit(format_u64(self.cwpp.profile_count as u64, &mut b));
+                        emit("\n  Charges surveillées     : ");
+                        emit(format_u64(self.cwpp.workload_count as u64, &mut b));
+                        emit("\n  Charges actives         : ");
+                        emit(format_u64(self.cwpp.active_workloads as u64, &mut b));
+                        emit("\n  Scans d'intégrité       : ");
+                        emit(format_u64(self.cwpp.total_scans, &mut b));
+                        emit("\n  Anomalies détectées     : ");
+                        emit(format_u64(self.cwpp.total_anomalies_detected, &mut b));
+                        emit("\n  Confinements exécutés   : ");
+                        emit(format_u64(self.cwpp.total_containments, &mut b));
+                        emit("\n  Chaîne d'audit SHA-256  : ");
+                        let valid = self.cwpp.verify_ledger_integrity();
+                        emit(if valid { "VÉRIFIÉE (OK)\n" } else { "CORROMPUE (ERR)\n" });
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "profiles" => {
+                        emit("[CWPP/PROFILES] Profils d'Exécution Souverains :\n");
+                        for i in 0..self.cwpp.profile_count {
+                            if let Some(ref p) = self.cwpp.profiles[i] {
+                                let mut b = [0u8; 20];
+                                emit("  * [P#");
+                                emit(format_u64(p.profile_id as u64, &mut b));
+                                emit("] ");
+                                emit(core::str::from_utf8(&p.name[..p.name_len]).unwrap_or(""));
+                                emit(" | MaxMem: ");
+                                emit(format_u64(p.max_memory_bytes / 1024 / 1024, &mut b));
+                                emit(" MiB | MaxThreads: ");
+                                emit(format_u64(p.max_threads as u64, &mut b));
+                                emit(" | Réseau: ");
+                                emit(if p.allow_network { "OUI\n" } else { "NON\n" });
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "workloads" => {
+                        emit("[CWPP/WORKLOADS] Charges de Travail Ring 3 Sous Surveillance :\n");
+                        for i in 0..self.cwpp.workload_count {
+                            if let Some(ref wl) = self.cwpp.workloads[i] {
+                                let mut b = [0u8; 20];
+                                emit("  * [W#");
+                                emit(format_u64(wl.id as u64, &mut b));
+                                emit(" | PID ");
+                                emit(format_u64(wl.pid as u64, &mut b));
+                                emit("] ");
+                                emit(core::str::from_utf8(&wl.name[..wl.name_len]).unwrap_or(""));
+                                emit(" | Profil #");
+                                emit(format_u64(wl.profile_id as u64, &mut b));
+                                emit(" | Statut: ");
+                                match wl.state {
+                                    jambo_cwpp::WorkloadState::Healthy => emit("Sain"),
+                                    jambo_cwpp::WorkloadState::Suspicious => emit("Suspect"),
+                                    jambo_cwpp::WorkloadState::Anomalous => emit("Anormal"),
+                                    jambo_cwpp::WorkloadState::Contained => emit("Confiné"),
+                                    jambo_cwpp::WorkloadState::Terminated => emit("Terminé"),
+                                }
+                                emit(" | Anomalies: ");
+                                emit(format_u64(wl.anomaly_count as u64, &mut b));
+                                emit("\n");
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "scan" => {
+                        let cap = self.cwpp.admin_cap;
+                        match self.cwpp.scan_all_workloads(&cap, 1500) {
+                            Ok((checked, anomalies)) => {
+                                let mut b = [0u8; 20];
+                                emit("[CWPP/SCAN] Audit d'Exécution Global Terminé :\n");
+                                emit("  Charges inspectées : ");
+                                emit(format_u64(checked as u64, &mut b));
+                                emit("\n  Anomalies actives  : ");
+                                emit(format_u64(anomalies as u64, &mut b));
+                                emit("\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("[CWPP/SCAN] Échec du scan des charges de travail\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "contain" => {
+                        let wid = if parsed.arg_count > 2 {
+                            parse_u64(parsed.args[2]).unwrap_or(101) as u32
+                        } else {
+                            101
+                        };
+                        let action = if parsed.arg_count > 3 && parsed.args[3] == "kill" {
+                            jambo_cwpp::ContainmentAction::Terminate
+                        } else {
+                            jambo_cwpp::ContainmentAction::Quarantine
+                        };
+                        let cap = self.cwpp.admin_cap;
+                        match self.cwpp.contain_workload(&cap, wid, action, 2000) {
+                            Ok(true) => {
+                                let mut b = [0u8; 20];
+                                emit("[CWPP/CONTAIN] Confinement appliqué avec succès sur charge #");
+                                emit(format_u64(wid as u64, &mut b));
+                                emit("\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Ok(false) | Err(_) => {
+                                emit("[CWPP/CONTAIN] Échec du confinement de la charge\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "verify" => {
+                        let valid = self.cwpp.verify_ledger_integrity();
+                        emit("  Vérification intégrité registre CWPP SHA-256 : ");
+                        emit(if valid { "INTÈGRE (OK)\n" } else { "ALTÉRÉ (FAIL)\n" });
+                        (ShellStatus::Success, write_pos)
+                    }
+                    _ => {
+                        emit("Usage: cwpp [status | profiles | workloads | scan | contain <id> [quarantine|kill] | verify]\n");
+                        (ShellStatus::ExecutionFailed, write_pos)
+                    }
+                }
+            }
             "poweroff" | "reboot" => {
                 emit("[SYSTEM] Extinction demandée...\n");
                 unsafe {
@@ -13773,6 +13916,43 @@ mod tests {
                 assert!(len5 > 0);
 
                 let (st6, len6) = shell.execute_line("cspm verify", &mut out);
+                assert_eq!(st6, ShellStatus::Success);
+                assert!(len6 > 0);
+            })
+            .unwrap();
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn test_shell_cwpp_commands() {
+        extern crate std;
+        let handle = std::thread::Builder::new()
+            .stack_size(8 * 1024 * 1024)
+            .spawn(|| {
+                let mut shell = JamboShell::new();
+                let mut out = [0u8; 1024];
+
+                let (st1, len1) = shell.execute_line("cwpp status", &mut out);
+                assert_eq!(st1, ShellStatus::Success);
+                assert!(len1 > 0);
+
+                let (st2, len2) = shell.execute_line("cwpp profiles", &mut out);
+                assert_eq!(st2, ShellStatus::Success);
+                assert!(len2 > 0);
+
+                let (st3, len3) = shell.execute_line("cwpp workloads", &mut out);
+                assert_eq!(st3, ShellStatus::Success);
+                assert!(len3 > 0);
+
+                let (st4, len4) = shell.execute_line("cwpp scan", &mut out);
+                assert_eq!(st4, ShellStatus::Success);
+                assert!(len4 > 0);
+
+                let (st5, len5) = shell.execute_line("cwpp contain 101 quarantine", &mut out);
+                assert_eq!(st5, ShellStatus::Success);
+                assert!(len5 > 0);
+
+                let (st6, len6) = shell.execute_line("cwpp verify", &mut out);
                 assert_eq!(st6, ShellStatus::Success);
                 assert!(len6 > 0);
             })
