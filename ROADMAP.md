@@ -124,8 +124,9 @@
 
 ## 3. Prochaines Étapes Prioritaires
 
-### 🎯 Prochaine Tâche Immédiate : Phase 133 — v0.2.131
+### 🎯 Prochaine Tâche Immédiate : Phase 133 — v0.3.0
 * **Composant** : `services/jambo-itdr`
+* **Versionnement** : Transition obligatoire vers la série `v0.3.*` (démarrant à `v0.3.0`, puis `v0.3.1`, etc.)
 * **Objectif** : Détection et Réponse aux Menaces sur l'Identité (ITDR - Identity Threat Detection and Response)
 * **Tâches précises** :
   1. Moteur souverain ITDR de détection et réponse aux menaces sur l'identité (compromission de jetons, attaques par rejeu de sessions, usurpation de capabilités, élévation de privilèges d'identités distribuées, détection d'anomalies d'authentification en temps réel, ItdrCap & registre d'audit SHA-256 inaltérable).
