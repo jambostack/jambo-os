@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.104-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.105-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.104 (Accélération Cryptographique Matérielle Ring 3 & Gestion Souveraine de Clés jambo-crypto2)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.104` introduit le sous-système d'accélération cryptographique matérielle et de gestion de clés souveraine (`services/jambo-crypto2`) : détection dynamique CPUID des jeux d'instructions matériels (AES-NI, SHA-NI, AVX-512, SSE4.1) avec repli logiciel souverain constant-time `#![no_std]`, primitives de chiffrement par bloc AES (FIPS 197) en versions 128 et 256 bits (modes ECB, CBC, CTR et Galois/Counter Mode AES-GCM AEAD NIST SP 800-38D), enveloppement et déballage sécurisé de clés conforme RFC 3394 / NIST SP 800-38F (AES Key Wrap), hachage cryptographique SHA-256 et SHA-512 FIPS 180-4, HMAC-SHA256, dérivation HKDF (RFC 5869) et PBKDF2 (RFC 2898) zéro-allocation, gestion souveraine du cycle de vie des clés (génération, étiquetage, contrôle d'usages, rotation atomique, quarantaine O(1) et zéroïsation d'urgence en mémoire volatile), registre d'audit inaltérable scellé par chaîne de blocs SHA-256 (`crypto2_audit_chain`), gouvernance capabilaire stricte par jeton `Crypto2Cap` sans autorité ambiante et commandes interactives `crypto2 [status | cpu-features | keys | wrap | rotate | quarantine | zeroize | hash | audit]` dans le shell `jsh`.
+> **Statut du Projet : Version v0.2.105 (Micro-hyperviseurs d'Enclaves Imbriquées & Isolation Mémoire Multi-Locataires jambo-tee2)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.105` introduit le sous-système de micro-hyperviseurs d'enclaves de confiance imbriquées et d'isolation de mémoire chiffrée multi-locataires (`services/jambo-tee2`) : virtualisation d'enclaves à deux niveaux (L0 Hôte -> L1 Superviseur d'Enclave de Locataire -> L2 Enclave Imbriquée / Conteneur Realm), isolation mémoire matérielle par partition de locataire avec attribution stricte de KeyID/HKID/ASID et clés MEK (Multi-tenant Encryption Key) 256 bits, tables de pages étendues imbriquées (Nested Extended Page Tables / Stage-2 Nested Translation) assurant la traduction GPA -> IPA -> HPA avec empreinte Merkle SHA-256 de configuration EPT, chaîne de mesure cryptographique imbriquée combinant MRENCLAVE_L1, MRENCLAVE_L2 et la racine EPT, devis d'attestation distante `NestedTeeReport` scellés par signature HMAC-SHA256 avec défi anti-rejeu, stockage scellé multi-locataire (Nested Sealed Storage) à politique de mesure exacte ou domaine de locataire, détection et confinement instantané O(1) des violations EPT et accès cross-tenant, effacement sécurisé à zéro résidu (Memory Scrubbing) à la destruction, registre d'audit inaltérable scellé par chaîne SHA-256, gouvernance capabilaire stricte par jeton `Tee2Cap` et commandes interactives `tee2 [status | tenants | enclaves | ept | attest | benchmark | audit]` dans le shell `jsh`.
 
 ---
 

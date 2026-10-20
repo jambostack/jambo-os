@@ -1,0 +1,7 @@
+[package]
+name = "jambo-tee2"
+version = "0.2.105"
+edition = "2021"
+
+[dependencies]
+libjambo = { path = "../../libs/libjambo" }

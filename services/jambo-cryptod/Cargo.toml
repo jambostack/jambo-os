@@ -1,6 +1,6 @@
 [package]
 name = "jambo-cryptod"
-version = "0.2.104"
+version = "0.2.105"
 edition = "2021"
 
 [dependencies]
