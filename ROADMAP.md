@@ -1,7 +1,7 @@
 # ROADMAP DU DÉVELOPPEMENT AUTONOME — JamboOS
 
-> **Dernière mise à jour** : 2026-10-20 07:10 UTC  
-> **Version actuelle** : `v0.2.125`  
+> **Dernière mise à jour** : 2026-10-20 07:25 UTC  
+> **Version actuelle** : `v0.2.126`  
 > **Statut global** : Pré-Alpha active — Micro-noyau de 3e génération orienté capacités (`#![no_std]`)  
 > **Cycle de développement autonome** : 10 minutes via le Planificateur de Tâches & Crons d'Antigravity WebUI  
 
@@ -114,16 +114,17 @@
 | **v0.2.123** | 125 | Gestion Posture CSPM & Remédiation `jambo-cspm` | Moteur d'audit continu de conformité des configurations de services, détection de dérive (drift detection) par rapport aux baselines souveraines durcies (CIS Microkernel, DISA STIG, ANSSI SecNumCloud), calcul d'indice de risque de grappe, auto-remédiation de règles et paramètres défaillants, CspmCap & registre d'audit SHA-256 inaltérable | ✅ Validé |
 | **v0.2.124** | 126 | Protection Charges CWPP `jambo-cwpp` | Surveillance en temps réel des charges de travail Ring 3, détection d'anomalies d'exécution (appels système anormaux, injection de mémoire anonyme W+X, dérivations RIP Divergence / ROP), confinement instantané O(1), CwppCap & registre d'audit SHA-256 inaltérable | ✅ Validé |
 | **v0.2.125** | 127 | Gestion Droits CIEM `jambo-ciem` | Analyse continue des cartographies de droits et jetons de capacités de grappe, détection des privilèges dormants, orphelins et excessifs, réduction monotone automatique des surfaces d'attaque, CiemCap & registre d'audit SHA-256 inaltérable | ✅ Validé |
+| **v0.2.126** | 128 | Protection Applicative CNAPP `jambo-cnapp` | Plateforme intégrée de protection des applications cloud-natives (CNAPP), corrélation contextuelle multidimensionnelle CSPM + CWPP + CIEM, détection des combinaisons toxiques (Toxic Combinations), modélisation de graphes d'attaque (Attack Paths), score de risque unifié (0..100), orchestration autonome de la remédiation unifiée, CnappCap & registre d'audit SHA-256 inaltérable | ✅ Validé |
 
 ---
 
 ## 3. Prochaines Étapes Prioritaires
 
-### 🎯 Prochaine Tâche Immédiate : Phase 128 — v0.2.126
-* **Composant** : `services/jambo-cnapp`
-* **Objectif** : Plateforme Intégrée de Protection des Applications Cloud Natives (CNAPP), Corrélation Contextuelle CSPM + CWPP + CIEM & Score de Risque Unifié
+### 🎯 Prochaine Tâche Immédiate : Phase 129 — v0.2.127
+* **Composant** : `services/jambo-aspm`
+* **Objectif** : Posture de Sécurité Applicative (ASPM) & Traçabilité de la Chaîne d'Approvisionnement Logicielle / SBOM CycloneDX Souverain
 * **Tâches précises** :
-  1. Corrélation contextuelle des signaux de configuration et posture (CSPM), d'exécution et confinement de charges (CWPP) et de droits d'accès excessifs (CIEM), matrice de risque unifiée par graphe d'attaque et hiérarchisation des risques critiques, CnappCap & registre d'audit SHA-256 inaltérable.
+  1. Gestion continue de la posture de sécurité applicative (ASPM), analyse statique/dynamique de dépendances et composants Rust/Wasm, génération et vérification de nomenclatures logicielles (SBOM CycloneDX/SPDX), détection de vulnérabilités amont (supply-chain attacks), AspmCap & registre d'audit SHA-256 inaltérable.
   2. Validation formelle et suite de tests `cargo xtask test`.
 
 ---
@@ -190,6 +191,7 @@
 * **2026-10-20 06:45 UTC** : Validation complète Phase 125 (`jambo-cspm`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-cspm`, 4/4). Tag `v0.2.123`.
 * **2026-10-20 06:55 UTC** : Validation complète Phase 126 (`jambo-cwpp`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-cwpp`, 4/4). Tag `v0.2.124`.
 * **2026-10-20 07:10 UTC** : Validation complète Phase 127 (`jambo-ciem`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-ciem`, 4/4). Tag `v0.2.125`.
+* **2026-10-20 07:25 UTC** : Validation complète Phase 128 (`jambo-cnapp`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-cnapp`, 4/4). Tag `v0.2.126`.
 
 
 

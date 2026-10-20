@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.125-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.126-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.125 (Gestion des Droits et Privilèges Cloud/Grappe (CIEM), Détection des Droits Excessifs & Moindre Privilège Monotone jambo-ciem)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.125` introduit le système souverain de Cloud Infrastructure Entitlement Management (CIEM) en espace utilisateur (`services/jambo-ciem`) : cartographie continue des identités de grappe (utilisateurs, comptes de service, agents, tokens éphémères), détection en temps réel des privilèges dormants, des droits orphelins, des droits excessifs et des combinaisons toxiques, réduction monotone automatique vers le moindre privilège effectif (Least-Privilege Monotonic Attenuation), contrôle d'accès capabilaire strict `CiemCap` et scellement d'audit cryptographique inviolable par chaînage SHA-256 avec commandes interactives `ciem [status | identities | entitlements | scan | remediate | verify]` dans le shell `jsh`.
+> **Statut du Projet : Version v0.2.126 (Plateforme Intégrée de Protection des Applications Cloud Natives (CNAPP), Corrélation Contextuelle CSPM + CWPP + CIEM & Score de Risque Unifié jambo-cnapp)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.126` introduit la plateforme unifiée de protection applicative cloud-native CNAPP (`services/jambo-cnapp`) : corrélation multidimensionnelle entre signaux de posture et dérive de conformité (CSPM), surveillance temps réel et intégrité d'exécution (CWPP) et cartographie des privilèges et droits d'accès (CIEM), identification en temps réel des combinaisons toxiques (Toxic Combinations) et modélisation de graphes d'attaque (Attack Paths), calcul déterministe du score de risque unifié de grappe (0..100), orchestration autonome de la remédiation unifiée (confinement CWPP, moindre privilège CIEM, durcissement CSPM), contrôle d'accès capabilaire strict `CnappCap` et registre d'audit cryptographique inviolable scellé par chaînage SHA-256 avec commandes interactives `cnapp [status | workloads | paths | correlate | remediate | verify]` dans le shell `jsh`.
 
 ---
 
@@ -203,6 +203,7 @@ jambo-os/
 │   ├── jambo-cspm/          # Gestion de posture cloud/grappe (CSPM), dérive & remédiation autonome
 │   ├── jambo-cwpp/          # Protection des charges de travail cloud/grappe (CWPP), intégrité d'exécution & confinement
 │   ├── jambo-ciem/          # Gestion des droits et privilèges cloud/grappe (CIEM), détection d'excès & moindre privilège
+│   ├── jambo-cnapp/         # Plateforme intégrée de protection cloud-native (CNAPP), corrélation contextuelle & risque unifié
 │   └── pcie-bus-mgr/        # Gestionnaire de bus PCIe, MSI-X et isolation IOMMU
 └── xtask/                   # Outil de compilation, création d'ISO et test QEMU
 ```

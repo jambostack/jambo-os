@@ -195,6 +195,7 @@ pub struct JamboShell {
     pub cspm: jambo_cspm::JamboCspmDaemon,
     pub cwpp: jambo_cwpp::JamboCwppDaemon,
     pub ciem: jambo_ciem::JamboCiemDaemon,
+    pub cnapp: jambo_cnapp::JamboCnappDaemon,
 }
 
 impl Default for JamboShell {
@@ -667,6 +668,15 @@ impl JamboShell {
         );
         let mut ciem = jambo_ciem::JamboCiemDaemon::new(ciem_cap);
         ciem.init_defaults();
+
+        let cnapp_cap = jambo_cnapp::CnappCap::new(
+            libjambo::Handle::new(12801, 1),
+            jambo_cnapp::cnapp_rights::ALL,
+            5000,
+            100,
+        );
+        let mut cnapp = jambo_cnapp::JamboCnappDaemon::new(cnapp_cap);
+        cnapp.init_defaults();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -752,6 +762,7 @@ impl JamboShell {
             cspm,
             cwpp,
             ciem,
+            cnapp,
         }
     }
 
@@ -942,10 +953,11 @@ impl JamboShell {
                 emit("  cspm [cmd]      - Posture de sécurité cloud/grappe (CSPM), dérive & remédiation\n");
                 emit("  cwpp [cmd]      - Protection charges de travail (CWPP), intégrité d'exécution & confinement\n");
                 emit("  ciem [cmd]      - Droits cloud/grappe (CIEM), détection droits excessifs & moindre privilège\n");
+                emit("  cnapp [cmd]     - Protection unifiée (CNAPP), corrélation CSPM+CWPP+CIEM & risques\n");
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.2.125 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.2.126 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -10493,6 +10505,170 @@ impl JamboShell {
                     }
                 }
             }
+            "cnapp" => {
+                let subcmd = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    "status"
+                };
+                match subcmd {
+                    "status" => {
+                        let mut b = [0u8; 20];
+                        emit("[CNAPP/STATUS] Plateforme Intégrée de Protection Cloud-Native (CNAPP)\n");
+                        emit("  Charges cartographiées   : ");
+                        emit(format_u64(self.cnapp.node_count as u64, &mut b));
+                        emit("\n  Signaux ingérés (CSPM/CWPP/CIEM): ");
+                        emit(format_u64(self.cnapp.finding_count as u64, &mut b));
+                        emit("\n  Chemins d'attaque corrélés: ");
+                        emit(format_u64(self.cnapp.path_count as u64, &mut b));
+                        emit("\n  Combinaisons toxiques    : ");
+                        emit(format_u64(self.cnapp.toxic_combinations_count as u64, &mut b));
+                        emit("\n  Score moyen risque grappe: ");
+                        emit(format_u64(self.cnapp.average_cluster_risk as u64, &mut b));
+                        emit("/100\n  Corrélations exécutées   : ");
+                        emit(format_u64(self.cnapp.total_correlations, &mut b));
+                        emit("\n  Remédiations orchestrées : ");
+                        emit(format_u64(self.cnapp.total_remediations, &mut b));
+                        emit("\n  Chaîne d'audit SHA-256   : ");
+                        let valid = self.cnapp.verify_ledger_integrity();
+                        emit(if valid { "VÉRIFIÉE (OK)\n" } else { "CORROMPUE (ERR)\n" });
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "workloads" | "nodes" => {
+                        emit("[CNAPP/WORKLOADS] Matrice Unifiée de Posture & Risque par Charge :\n");
+                        for i in 0..self.cnapp.node_count {
+                            if let Some(ref node) = self.cnapp.nodes[i] {
+                                let mut b = [0u8; 20];
+                                emit("  * [W#");
+                                emit(format_u64(node.workload_id as u64, &mut b));
+                                emit("] ");
+                                emit(core::str::from_utf8(&node.name[..node.name_len]).unwrap_or(""));
+                                emit(" | Score: ");
+                                emit(format_u64(node.unified_risk_score as u64, &mut b));
+                                emit("/100 | Ingress: ");
+                                emit(if node.is_internet_exposed { "EXT" } else { "INT" });
+                                emit(" | CSPM: ");
+                                emit(if node.has_posture_drift { "DRIFT" } else { "OK" });
+                                emit(" | CIEM: ");
+                                emit(if node.has_excess_privilege { "EXCESS" } else { "OK" });
+                                emit(" | CWPP: ");
+                                emit(if node.has_runtime_anomaly { "ANOMALY" } else { "OK" });
+                                emit(" | Toxique: ");
+                                emit(if node.is_toxic_combination { "OUI (CRITIQUE)" } else { "NON" });
+                                emit(" | Confiné: ");
+                                emit(if node.is_quarantined { "OUI\n" } else { "NON\n" });
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "paths" => {
+                        emit("[CNAPP/PATHS] Chemins d'Attaque & Vecteurs de Menace Corrélés :\n");
+                        for i in 0..self.cnapp.path_count {
+                            if let Some(ref path) = self.cnapp.attack_paths[i] {
+                                let mut b = [0u8; 20];
+                                emit("  * [P#");
+                                emit(format_u64(path.id as u64, &mut b));
+                                emit("] W#");
+                                emit(format_u64(path.source_id as u64, &mut b));
+                                emit(" -> W#");
+                                emit(format_u64(path.target_id as u64, &mut b));
+                                emit(" | Sévérité: ");
+                                match path.severity {
+                                    jambo_cnapp::CnappSeverity::Critical => emit("CRITIQUE"),
+                                    jambo_cnapp::CnappSeverity::High => emit("ÉLEVÉ"),
+                                    jambo_cnapp::CnappSeverity::Medium => emit("MOYEN"),
+                                    jambo_cnapp::CnappSeverity::Low => emit("FAIBLE"),
+                                    jambo_cnapp::CnappSeverity::Info => emit("INFO"),
+                                }
+                                emit(" | Toxique: ");
+                                emit(if path.toxic_combination { "OUI" } else { "NON" });
+                                emit(" | Actif: ");
+                                emit(if path.active { "OUI\n" } else { "NON\n" });
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "correlate" => {
+                        let cap = self.cnapp.admin_cap;
+                        match self.cnapp.correlate_signals(&cap, 2500) {
+                            Ok((paths, toxics)) => {
+                                let mut b = [0u8; 20];
+                                emit("[CNAPP/CORRELATE] Corrélation contextuelle multidimensionnelle exécutée :\n");
+                                emit("  Chemins d'attaque découverts : ");
+                                emit(format_u64(paths as u64, &mut b));
+                                emit("\n  Combinaisons toxiques actives: ");
+                                emit(format_u64(toxics as u64, &mut b));
+                                emit("\n  Score moyen de grappe        : ");
+                                emit(format_u64(self.cnapp.average_cluster_risk as u64, &mut b));
+                                emit("/100\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("[CNAPP/CORRELATE] Échec de la corrélation contextuelle\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "remediate" => {
+                        let cap = self.cnapp.admin_cap;
+                        if parsed.arg_count > 2 {
+                            let wid = parse_u64(parsed.args[2]).unwrap_or(103) as u32;
+                            match self.cnapp.orchestrate_remediation(&cap, wid, 2600) {
+                                Ok(action) => {
+                                    let mut b = [0u8; 20];
+                                    emit("[CNAPP/REMEDIATE] Orchestration autonome exécutée sur W#");
+                                    emit(format_u64(wid as u64, &mut b));
+                                    emit(" -> Action: ");
+                                    match action {
+                                        jambo_cnapp::OrchestrationAction::FullUnifiedContainment => {
+                                            emit("Confinement Unifié Total (CWPP+CIEM+CSPM)\n")
+                                        }
+                                        jambo_cnapp::OrchestrationAction::IsolateWorkload => {
+                                            emit("Isolement Charge (CWPP)\n")
+                                        }
+                                        jambo_cnapp::OrchestrationAction::AttenuateEntitlements => {
+                                            emit("Atténuation Moindre Privilège (CIEM)\n")
+                                        }
+                                        jambo_cnapp::OrchestrationAction::RemediatePosture => {
+                                            emit("Durcissement Posture (CSPM)\n")
+                                        }
+                                        jambo_cnapp::OrchestrationAction::NoAction => emit("Aucune\n"),
+                                    }
+                                    (ShellStatus::Success, write_pos)
+                                }
+                                Err(_) => {
+                                    emit("[CNAPP/REMEDIATE] Échec de l'orchestration sur la charge demandée\n");
+                                    (ShellStatus::ExecutionFailed, write_pos)
+                                }
+                            }
+                        } else {
+                            match self.cnapp.remediate_all_critical(&cap, 2600) {
+                                Ok(cnt) => {
+                                    let mut b = [0u8; 20];
+                                    emit("[CNAPP/REMEDIATE] Remédiation globale critique orchestrée : ");
+                                    emit(format_u64(cnt as u64, &mut b));
+                                    emit(" charges sécurisées\n");
+                                    (ShellStatus::Success, write_pos)
+                                }
+                                Err(_) => {
+                                    emit("[CNAPP/REMEDIATE] Échec de la remédiation globale\n");
+                                    (ShellStatus::ExecutionFailed, write_pos)
+                                }
+                            }
+                        }
+                    }
+                    "verify" => {
+                        let valid = self.cnapp.verify_ledger_integrity();
+                        emit("  Vérification intégrité registre CNAPP SHA-256 : ");
+                        emit(if valid { "INTÈGRE (OK)\n" } else { "ALTÉRÉ (FAIL)\n" });
+                        (ShellStatus::Success, write_pos)
+                    }
+                    _ => {
+                        emit("Usage: cnapp [status | workloads | paths | correlate | remediate [wid] | verify]\n");
+                        (ShellStatus::ExecutionFailed, write_pos)
+                    }
+                }
+            }
             "poweroff" | "reboot" => {
                 emit("[SYSTEM] Extinction demandée...\n");
                 unsafe {
@@ -14156,6 +14332,43 @@ mod tests {
                 assert!(len5 > 0);
 
                 let (st6, len6) = shell.execute_line("ciem verify", &mut out);
+                assert_eq!(st6, ShellStatus::Success);
+                assert!(len6 > 0);
+            })
+            .unwrap();
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn test_shell_cnapp_commands() {
+        extern crate std;
+        let handle = std::thread::Builder::new()
+            .stack_size(8 * 1024 * 1024)
+            .spawn(|| {
+                let mut shell = JamboShell::new();
+                let mut out = [0u8; 1024];
+
+                let (st1, len1) = shell.execute_line("cnapp status", &mut out);
+                assert_eq!(st1, ShellStatus::Success);
+                assert!(len1 > 0);
+
+                let (st2, len2) = shell.execute_line("cnapp workloads", &mut out);
+                assert_eq!(st2, ShellStatus::Success);
+                assert!(len2 > 0);
+
+                let (st3, len3) = shell.execute_line("cnapp paths", &mut out);
+                assert_eq!(st3, ShellStatus::Success);
+                assert!(len3 > 0);
+
+                let (st4, len4) = shell.execute_line("cnapp correlate", &mut out);
+                assert_eq!(st4, ShellStatus::Success);
+                assert!(len4 > 0);
+
+                let (st5, len5) = shell.execute_line("cnapp remediate 103", &mut out);
+                assert_eq!(st5, ShellStatus::Success);
+                assert!(len5 > 0);
+
+                let (st6, len6) = shell.execute_line("cnapp verify", &mut out);
                 assert_eq!(st6, ShellStatus::Success);
                 assert!(len6 > 0);
             })
