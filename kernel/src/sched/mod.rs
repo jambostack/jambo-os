@@ -56,6 +56,7 @@ pub mod edr_test;
 pub mod xdr_test;
 pub mod intel_test;
 pub mod deception_test;
+pub mod ztna_test;
 pub mod eevdf;
 pub mod event_test;
 pub mod fuzz_test;

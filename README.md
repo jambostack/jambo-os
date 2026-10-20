@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.120 (Cyber-Déception, Honeypots Haute Fidélité, Pièges d'Évasion TEE & DeceptionCap jambo-deception)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.120` introduit le système souverain de Cyber-Déception et Honeypots haute fidélité en espace utilisateur (`services/jambo-deception`) : déploiement de faux jetons de capacités (`HoneyCaps`), leurres de mémoire VMO délibérément vulnérables, faux endpoints IPC/RPC et canaris de fichiers sensibles, déclenchement d'alertes silencieuses en O(1), pièges d'évasion d'enclave TEE/SGX, profilage comportemental continu de l'attaquant avec seuils d'élévation APT et auto-quarantaine, contrôle d'accès capabilaire strict `DeceptionCap` et scellement d'audit cryptographique inviolable par chaînage SHA-256 avec commandes interactives `deception [status | decoys | alerts | profiles | trip | verify]` dans le shell `jsh`.
+> **Statut du Projet : Version v0.2.121 (Architecture Zero Trust, Micro-Périmètres Continus & Ré-évaluation Dynamique de Posture jambo-ztna)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.121` introduit le système souverain d'Architecture Zero Trust (ZTNA) en espace utilisateur (`services/jambo-ztna`) : courtage de confiance continu sans périmètre implicite ("Never Trust, Always Verify"), évaluation dynamique et continue de posture de terminal (santé noyau, intégrité mémoire, attestation matérielle TPM 2.0 / TEE), micro-périmètres applicatifs stricts avec validation unitaire par transaction (IPC, VFS, TEE, réseau), baux éphémères ré-évalués dynamiquement, révocation instantanée O(1) de confiance, contrôle d'accès capabilaire strict `ZtnaCap` et scellement d'audit cryptographique inviolable par chaînage SHA-256 avec commandes interactives `ztna [status | policies | devices | sessions | eval | verify]` dans le shell `jsh`.
 
 ---
 
@@ -198,6 +198,7 @@ jambo-os/
 │   ├── jambo-wasm2/         # Wasm Component Model, interfaces WIT, Canonical ABI & bac à sable
 │   ├── jambo-watchdogd/     # Surveillance de vivacité matérielle/logicielle & chien de garde
 │   ├── jambo-zksnark/       # Preuves à divulgation nulle de connaissance (zk-SNARKs) & contraintes R1CS
+│   ├── jambo-ztna/          # Architecture Zero Trust (ZTNA), micro-périmètres & ré-évaluation de posture
 │   └── pcie-bus-mgr/        # Gestionnaire de bus PCIe, MSI-X et isolation IOMMU
 └── xtask/                   # Outil de compilation, création d'ISO et test QEMU
 ```

@@ -190,6 +190,7 @@ pub struct JamboShell {
     pub xdr: jambo_xdr::JamboXdrDaemon,
     pub intel: jambo_intel::JamboIntelDaemon,
     pub deception: jambo_deception::JamboDeceptionDaemon,
+    pub ztna: jambo_ztna::JamboZtnaDaemon,
 }
 
 impl Default for JamboShell {
@@ -617,6 +618,15 @@ impl JamboShell {
         );
         let mut deception = jambo_deception::JamboDeceptionDaemon::new(deception_cap);
         deception.init_defaults();
+
+        let ztna_cap = jambo_ztna::ZtnaCap::new(
+            libjambo::Handle::new(12301, 1),
+            jambo_ztna::ztna_rights::ALL,
+            5000,
+            100,
+        );
+        let mut ztna = jambo_ztna::JamboZtnaDaemon::new(ztna_cap);
+        ztna.init_defaults();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -697,6 +707,7 @@ impl JamboShell {
             xdr,
             intel,
             deception,
+            ztna,
         }
     }
 
@@ -882,10 +893,11 @@ impl JamboShell {
                 emit("  xdr [cmd]     - Détection & réponse étendue multi-vecteurs, APT & XdrCap\n");
                 emit("  intel [cmd]   - Renseignement menaces CTI, IoC Bloom/Table, scoring & IntelCap\n");
                 emit("  deception [cmd] - Cyber-déception, HoneyCaps, VMO decoys, canaris & DeceptionCap\n");
+                emit("  ztna [cmd]      - Architecture Zero Trust, micro-périmètres continus & ZtnaCap\n");
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.2.120 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.2.121 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -9759,6 +9771,140 @@ impl JamboShell {
                     }
                 }
             }
+            "ztna" => {
+                let subcmd = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    "status"
+                };
+                match subcmd {
+                    "status" => {
+                        let mut b = [0u8; 20];
+                        emit("[ZTNA/STATUS] Architecture Zero Trust (ZTNA) & Micro-Périmètres\n");
+                        emit("  Micro-périmètres actifs : ");
+                        emit(format_u64(self.ztna.policy_count as u64, &mut b));
+                        emit("\n  Terminaux enregistrés   : ");
+                        emit(format_u64(self.ztna.device_count as u64, &mut b));
+                        emit("\n  Sessions éphémères      : ");
+                        emit(format_u64(self.ztna.session_count as u64, &mut b));
+                        emit("\n  Évaluations totales     : ");
+                        emit(format_u64(self.ztna.total_evaluations, &mut b));
+                        emit("\n  Accès accordés          : ");
+                        emit(format_u64(self.ztna.total_grants, &mut b));
+                        emit("\n  Accès refusés           : ");
+                        emit(format_u64(self.ztna.total_denials, &mut b));
+                        emit("\n  Révocations / Quarant.  : ");
+                        emit(format_u64(self.ztna.total_revocations, &mut b));
+                        emit("\n  Chaîne d'audit SHA-256  : ");
+                        let valid = self.ztna.verify_ledger_integrity();
+                        emit(if valid { "VÉRIFIÉE (OK)\n" } else { "CORROMPUE (ERR)\n" });
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "policies" => {
+                        emit("[ZTNA/POLICIES] Micro-Périmètres Applicatifs Enregistrés :\n");
+                        for i in 0..self.ztna.policy_count {
+                            if let Some(ref p) = self.ztna.policies[i] {
+                                let mut b = [0u8; 20];
+                                emit("  * [#");
+                                emit(format_u64(p.policy_id as u64, &mut b));
+                                emit("] ");
+                                emit(p.resource_as_str());
+                                emit(" (");
+                                emit(p.resource_kind.as_str());
+                                emit(") | Score min: ");
+                                emit(format_u64(p.min_trust_score as u64, &mut b));
+                                emit(" | TPM Requis: ");
+                                emit(if p.require_tpm_tee { "OUI\n" } else { "NON\n" });
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "devices" => {
+                        emit("[ZTNA/DEVICES] Postures des Terminaux & Nœuds :\n");
+                        for i in 0..self.ztna.device_count {
+                            if let Some(ref d) = self.ztna.devices[i] {
+                                let mut b = [0u8; 20];
+                                emit("  * Device #");
+                                emit(format_u64(d.device_id, &mut b));
+                                emit(" | Score: ");
+                                emit(format_u64(d.composite_trust_score as u64, &mut b));
+                                emit(" | Statut: ");
+                                emit(d.posture_status.as_str());
+                                emit(" | TPM/TEE: ");
+                                emit(if d.tpm_tee_attested { "ATTESTÉ\n" } else { "NON\n" });
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "sessions" => {
+                        emit("[ZTNA/SESSIONS] Sessions Éphémères de Confiance Active :\n");
+                        for i in 0..self.ztna.session_count {
+                            if let Some(ref s) = self.ztna.sessions[i] {
+                                let mut b = [0u8; 20];
+                                emit("  * Session #");
+                                emit(format_u64(s.session_id, &mut b));
+                                emit(" | Subject: ");
+                                emit(format_u64(s.subject_id, &mut b));
+                                emit(" | Device: ");
+                                emit(format_u64(s.device_id, &mut b));
+                                emit(" | Tx: ");
+                                emit(format_u64(s.transaction_count as u64, &mut b));
+                                emit(" | Révoqué: ");
+                                emit(if s.revoked { "OUI\n" } else { "NON\n" });
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "eval" => {
+                        let cap = self.ztna.admin_cap;
+                        match self.ztna.evaluate_access(&cap, 101, 1001, "ipc://sys.sec.kms", 500) {
+                            Ok(decision) => {
+                                match decision {
+                                    jambo_ztna::AccessDecision::Granted { session_id, trust_score } => {
+                                        let mut b = [0u8; 20];
+                                        emit("[ZTNA/EVAL] Accès ACCORDÉ - Session #");
+                                        emit(format_u64(session_id, &mut b));
+                                        emit(" (Score: ");
+                                        emit(format_u64(trust_score as u64, &mut b));
+                                        emit(")\n");
+                                    }
+                                    jambo_ztna::AccessDecision::Denied { reason_code, trust_score } => {
+                                        let mut b = [0u8; 20];
+                                        emit("[ZTNA/EVAL] Accès REFUSÉ - Raison: ");
+                                        emit(format_u64(reason_code as u64, &mut b));
+                                        emit(" (Score: ");
+                                        emit(format_u64(trust_score as u64, &mut b));
+                                        emit(")\n");
+                                    }
+                                    jambo_ztna::AccessDecision::StepUpRequired { required_score, current_score } => {
+                                        let mut b = [0u8; 20];
+                                        emit("[ZTNA/EVAL] Step-Up Requis (Requis: ");
+                                        emit(format_u64(required_score as u64, &mut b));
+                                        emit(", Actuel: ");
+                                        emit(format_u64(current_score as u64, &mut b));
+                                        emit(")\n");
+                                    }
+                                }
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("[ZTNA/EVAL] Erreur interne d'évaluation\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "verify" => {
+                        let valid = self.ztna.verify_ledger_integrity();
+                        emit("  Vérification intégrité registre SHA-256 : ");
+                        emit(if valid { "INTÈGRE (OK)\n" } else { "ALTÉRÉ (FAIL)\n" });
+                        (ShellStatus::Success, write_pos)
+                    }
+                    _ => {
+                        emit("Usage: ztna [status | policies | devices | sessions | eval | verify]\n");
+                        (ShellStatus::ExecutionFailed, write_pos)
+                    }
+                }
+            }
             "poweroff" | "reboot" => {
                 emit("[SYSTEM] Extinction demandée...\n");
                 unsafe {
@@ -13241,6 +13387,43 @@ mod tests {
                 assert!(len5 > 0);
 
                 let (st6, len6) = shell.execute_line("deception verify", &mut out);
+                assert_eq!(st6, ShellStatus::Success);
+                assert!(len6 > 0);
+            })
+            .unwrap();
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn test_shell_ztna_commands() {
+        extern crate std;
+        let handle = std::thread::Builder::new()
+            .stack_size(8 * 1024 * 1024)
+            .spawn(|| {
+                let mut shell = JamboShell::new();
+                let mut out = [0u8; 1024];
+
+                let (st1, len1) = shell.execute_line("ztna status", &mut out);
+                assert_eq!(st1, ShellStatus::Success);
+                assert!(len1 > 0);
+
+                let (st2, len2) = shell.execute_line("ztna policies", &mut out);
+                assert_eq!(st2, ShellStatus::Success);
+                assert!(len2 > 0);
+
+                let (st3, len3) = shell.execute_line("ztna devices", &mut out);
+                assert_eq!(st3, ShellStatus::Success);
+                assert!(len3 > 0);
+
+                let (st4, len4) = shell.execute_line("ztna sessions", &mut out);
+                assert_eq!(st4, ShellStatus::Success);
+                assert!(len4 > 0);
+
+                let (st5, len5) = shell.execute_line("ztna eval", &mut out);
+                assert_eq!(st5, ShellStatus::Success);
+                assert!(len5 > 0);
+
+                let (st6, len6) = shell.execute_line("ztna verify", &mut out);
                 assert_eq!(st6, ShellStatus::Success);
                 assert!(len6 > 0);
             })
