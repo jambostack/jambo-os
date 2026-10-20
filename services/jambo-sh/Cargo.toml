@@ -1,6 +1,6 @@
 [package]
 name = "jambo-sh"
-version = "0.2.119"
+version = "0.2.120"
 edition = "2021"
 
 [lib]
@@ -55,6 +55,7 @@ jambo-forensics = { path = "../jambo-forensics" }
 jambo-edr = { path = "../jambo-edr" }
 jambo-xdr = { path = "../jambo-xdr" }
 jambo-intel = { path = "../jambo-intel" }
+jambo-deception = { path = "../jambo-deception" }
 jambo-cryptod = { path = "../jambo-cryptod" }
 jambo-dfsd = { path = "../jambo-dfsd" }
 jambo-diagd = { path = "../jambo-diagd" }

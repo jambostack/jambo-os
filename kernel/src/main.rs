@@ -1268,6 +1268,13 @@ pub extern "C" fn _start() -> ! {
         "Échec du test du renseignement cyber jambo-intel"
     );
 
+    // 15semelviciesquadragies. Validation de la Cyber-Déception & Honeypots (Phase 122 - v0.2.120)
+    let deception_success = sched::deception_test::execute_deception_daemon_test();
+    assert!(
+        deception_success,
+        "Échec du test de la cyber-déception jambo-deception"
+    );
+
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
 
     arch::init_iommu();
@@ -1523,14 +1530,15 @@ pub extern "C" fn _start() -> ! {
     kprintln!("\x1b[1;32m[PASS] Phase 119 Endpoint Detection & Response, Behavioral Surveillance & Injection Defense (jambo-edr) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 120 Extended Detection & Response, Multi-Vector APT Correlation & Unified Containment (jambo-xdr) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 121 Cyber Threat Intelligence, IoC Bloom/Table Search & Dynamic TTL Purge (jambo-intel) Complete\x1b[0m");
+    kprintln!("\x1b[1;32m[PASS] Phase 122 Cyber Deception, High-Fidelity Honeypots, System Canaries & Enclave Escape Traps (jambo-deception) Complete\x1b[0m");
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.119 (Cyber Threat Intelligence jambo-intel)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.2.120 (Cyber Deception & Honeypots jambo-deception)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.119 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.2.120 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );

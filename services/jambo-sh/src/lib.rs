@@ -189,6 +189,7 @@ pub struct JamboShell {
     pub edr: jambo_edr::JamboEdrDaemon,
     pub xdr: jambo_xdr::JamboXdrDaemon,
     pub intel: jambo_intel::JamboIntelDaemon,
+    pub deception: jambo_deception::JamboDeceptionDaemon,
 }
 
 impl Default for JamboShell {
@@ -607,6 +608,15 @@ impl JamboShell {
         );
         let mut intel = jambo_intel::JamboIntelDaemon::new(intel_cap);
         intel.init_defaults();
+
+        let deception_cap = jambo_deception::DeceptionCap::new(
+            libjambo::Handle::new(12201, 1),
+            jambo_deception::deception_rights::ALL,
+            5000,
+            100,
+        );
+        let mut deception = jambo_deception::JamboDeceptionDaemon::new(deception_cap);
+        deception.init_defaults();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -686,6 +696,7 @@ impl JamboShell {
             edr,
             xdr,
             intel,
+            deception,
         }
     }
 
@@ -870,10 +881,11 @@ impl JamboShell {
                 emit("  edr [cmd]     - Surveillance comportementale, détection injections .jso/W+X & EdrCap\n");
                 emit("  xdr [cmd]     - Détection & réponse étendue multi-vecteurs, APT & XdrCap\n");
                 emit("  intel [cmd]   - Renseignement menaces CTI, IoC Bloom/Table, scoring & IntelCap\n");
+                emit("  deception [cmd] - Cyber-déception, HoneyCaps, VMO decoys, canaris & DeceptionCap\n");
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.2.119 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.2.120 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -9626,6 +9638,127 @@ impl JamboShell {
                     }
                 }
             }
+            "deception" => {
+                let subcmd = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    "status"
+                };
+                match subcmd {
+                    "status" => {
+                        let mut b = [0u8; 20];
+                        emit("[DECEPTION/STATUS] Moteur de Cyber-Déception & Honeypots\n");
+                        emit("  Leurres/Canaris actifs : ");
+                        emit(format_u64(self.deception.decoy_count as u64, &mut b));
+                        emit("\n  Sondes détectées (Hits): ");
+                        emit(format_u64(self.deception.total_probes, &mut b));
+                        emit("\n  Alertes générées       : ");
+                        emit(format_u64(self.deception.alert_count as u64, &mut b));
+                        emit("\n  Profils attaquants     : ");
+                        emit(format_u64(self.deception.profile_count as u64, &mut b));
+                        emit("\n  Quarantaines appliquées: ");
+                        emit(format_u64(self.deception.total_quarantines, &mut b));
+                        emit("\n  Chaîne d'audit SHA-256 : ");
+                        let valid = self.deception.verify_ledger_integrity();
+                        emit(if valid { "VÉRIFIÉE (OK)\n" } else { "CORROMPUE (ERR)\n" });
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "decoys" => {
+                        emit("[DECEPTION/DECOYS] Liste des Pièges & Canaris Déployés :\n");
+                        for i in 0..self.deception.decoy_count {
+                            if let Some(ref d) = self.deception.decoys[i] {
+                                let mut b = [0u8; 20];
+                                emit("  * [#");
+                                emit(format_u64(d.id as u64, &mut b));
+                                emit("] ");
+                                emit(d.name_as_str());
+                                emit(" (");
+                                emit(d.kind.as_str());
+                                emit(") @ ");
+                                emit(d.location_as_str());
+                                emit(" [Sévérité: ");
+                                emit(d.severity.as_str());
+                                emit(", Hits: ");
+                                emit(format_u64(d.hit_count as u64, &mut b));
+                                emit("]\n");
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "alerts" => {
+                        emit("[DECEPTION/ALERTS] Alertes Silencieuses Récentes :\n");
+                        for i in 0..self.deception.alert_count {
+                            if let Some(ref a) = self.deception.alerts[i] {
+                                let mut b = [0u8; 20];
+                                emit("  * Alerte #");
+                                emit(format_u64(a.alert_id, &mut b));
+                                emit(" | Source: ");
+                                emit(format_u64(a.attacker_source, &mut b));
+                                emit(" | Action: ");
+                                emit(a.action.as_str());
+                                emit(" | Sévérité: ");
+                                emit(a.severity.as_str());
+                                emit(" | Silencieuse: ");
+                                emit(if a.silent { "OUI\n" } else { "NON\n" });
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "profiles" => {
+                        emit("[DECEPTION/PROFILES] Profils Comportementaux Attaquants :\n");
+                        for i in 0..self.deception.profile_count {
+                            if let Some(ref p) = self.deception.profiles[i] {
+                                let mut b = [0u8; 20];
+                                emit("  * Source: ");
+                                emit(format_u64(p.source_id, &mut b));
+                                emit(" | Score: ");
+                                emit(format_u64(p.threat_score as u64, &mut b));
+                                emit("/100 | Niveau: ");
+                                emit(p.level.as_str());
+                                emit(" | Quarantaine: ");
+                                emit(if p.quarantined { "OUI\n" } else { "NON\n" });
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "trip" => {
+                        let cap = self.deception.admin_cap;
+                        match self.deception.trigger_decoy(
+                            &cap,
+                            1,
+                            8888,
+                            jambo_deception::ProbeAction::InvokeHoneyCap,
+                            1000,
+                        ) {
+                            Ok(alert) => {
+                                let mut b = [0u8; 20];
+                                emit("[DECEPTION/TRIP] Alerte déclenchée : Piège #");
+                                emit(format_u64(alert.decoy_id as u64, &mut b));
+                                emit(" touché par source ");
+                                emit(format_u64(alert.attacker_source, &mut b));
+                                emit(" (Sévérité: ");
+                                emit(alert.severity.as_str());
+                                emit(")\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("[DECEPTION/TRIP] Échec du déclenchement\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "verify" => {
+                        let valid = self.deception.verify_ledger_integrity();
+                        emit("  Vérification intégrité registre SHA-256 : ");
+                        emit(if valid { "INTÈGRE (OK)\n" } else { "ALTÉRÉ (FAIL)\n" });
+                        (ShellStatus::Success, write_pos)
+                    }
+                    _ => {
+                        emit("Usage: deception [status | decoys | alerts | profiles | trip | verify]\n");
+                        (ShellStatus::ExecutionFailed, write_pos)
+                    }
+                }
+            }
             "poweroff" | "reboot" => {
                 emit("[SYSTEM] Extinction demandée...\n");
                 unsafe {
@@ -13071,6 +13204,43 @@ mod tests {
                 assert!(len5 > 0);
 
                 let (st6, len6) = shell.execute_line("intel verify", &mut out);
+                assert_eq!(st6, ShellStatus::Success);
+                assert!(len6 > 0);
+            })
+            .unwrap();
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn test_shell_deception_commands() {
+        extern crate std;
+        let handle = std::thread::Builder::new()
+            .stack_size(8 * 1024 * 1024)
+            .spawn(|| {
+                let mut shell = JamboShell::new();
+                let mut out = [0u8; 1024];
+
+                let (st1, len1) = shell.execute_line("deception status", &mut out);
+                assert_eq!(st1, ShellStatus::Success);
+                assert!(len1 > 0);
+
+                let (st2, len2) = shell.execute_line("deception decoys", &mut out);
+                assert_eq!(st2, ShellStatus::Success);
+                assert!(len2 > 0);
+
+                let (st3, len3) = shell.execute_line("deception alerts", &mut out);
+                assert_eq!(st3, ShellStatus::Success);
+                assert!(len3 > 0);
+
+                let (st4, len4) = shell.execute_line("deception profiles", &mut out);
+                assert_eq!(st4, ShellStatus::Success);
+                assert!(len4 > 0);
+
+                let (st5, len5) = shell.execute_line("deception trip", &mut out);
+                assert_eq!(st5, ShellStatus::Success);
+                assert!(len5 > 0);
+
+                let (st6, len6) = shell.execute_line("deception verify", &mut out);
                 assert_eq!(st6, ShellStatus::Success);
                 assert!(len6 > 0);
             })

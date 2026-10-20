@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.119-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.2.120-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.2.119 (Renseignement Cyber CTI / IoC, Recherche Bloom O(1), Expiration Dynamique TTL & IntelCap jambo-intel)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.119` introduit le moteur souverain de Renseignement sur les Menaces Cyber (CTI / IoC) en espace utilisateur (`services/jambo-intel`) : contrôle d'accès capabilaire strict `IntelCap` (Zero-Ambient Authority), ingestion normalisée multi-flux (SHA-256, BLAKE3, IPv4 bogons/C2, domaines APT et motifs d'URL), recherche ultra-rapide O(1) combinant un filtre de Bloom cryptographique (2048 bits, 4 hachages FNV-1a) et une table compacte indexée, modèle de scoring de confiance (0..100) et purge dynamique par dépassement de TTL, scellement cryptographique d'audit SHA-256 inaltérable avec commandes interactives `intel [status | feeds | iocs | check | purge | verify]` dans le shell `jsh`.
+> **Statut du Projet : Version v0.2.120 (Cyber-Déception, Honeypots Haute Fidélité, Pièges d'Évasion TEE & DeceptionCap jambo-deception)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.2.120` introduit le système souverain de Cyber-Déception et Honeypots haute fidélité en espace utilisateur (`services/jambo-deception`) : déploiement de faux jetons de capacités (`HoneyCaps`), leurres de mémoire VMO délibérément vulnérables, faux endpoints IPC/RPC et canaris de fichiers sensibles, déclenchement d'alertes silencieuses en O(1), pièges d'évasion d'enclave TEE/SGX, profilage comportemental continu de l'attaquant avec seuils d'élévation APT et auto-quarantaine, contrôle d'accès capabilaire strict `DeceptionCap` et scellement d'audit cryptographique inviolable par chaînage SHA-256 avec commandes interactives `deception [status | decoys | alerts | profiles | trip | verify]` dans le shell `jsh`.
 
 ---
 
