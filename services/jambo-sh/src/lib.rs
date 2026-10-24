@@ -14998,6 +14998,170 @@ impl JamboShell {
                             }
                         }
                     }
+                    "remediate-all" => {
+                        let mut cap = self.dspm.admin_cap;
+                        match self.dspm.remediate_all_exposed(&mut cap, 8040) {
+                            Ok(count) => {
+                                emit("  [OK] Playbook de remédiation proactive O(1) DSPM exécuté avec succès\n");
+                                emit("  Actifs mis en quarantaine chirurgicale : ");
+                                let mut b = [0u8; 20];
+                                emit(format_u64(count as u64, &mut b));
+                                emit("\n  Toutes les violations actives ont été neutralisées et résolues.\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("  [FAIL] Échec de la remédiation globale DSPM\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "report-posture" => {
+                        let cap = self.dspm.admin_cap;
+                        match self.dspm.generate_posture_report(&cap, 8050) {
+                            Ok(rep) => {
+                                emit("=== RAPPORT SOUVERAIN DE POSTURE DSPM (SHA-256) ===\n");
+                                let mut b = [0u8; 20];
+                                emit("  Rapport ID                    : ");
+                                emit(format_u64(rep.report_id as u64, &mut b));
+                                emit("\n  Actifs cartographiés          : ");
+                                emit(format_u64(rep.total_assets as u64, &mut b));
+                                emit("\n  Actifs en quarantaine         : ");
+                                emit(format_u64(rep.quarantined_assets as u64, &mut b));
+                                emit("\n  Indice d'exposition (0..100)  : ");
+                                emit(format_u64(rep.exposure_index as u64, &mut b));
+                                emit("/100\n  Conformité SecNumCloud        : ");
+                                emit(format_u64(rep.secnumcloud_compliance as u64, &mut b));
+                                emit("/100\n  Conformité RGPD Souverain     : ");
+                                emit(format_u64(rep.rgpd_compliance as u64, &mut b));
+                                emit("/100\n  Sceau cryptographique SHA-256 : ");
+                                for byte in rep.report_hash.iter() {
+                                    let hex_chars = b"0123456789abcdef";
+                                    let hi = hex_chars[(*byte >> 4) as usize];
+                                    let lo = hex_chars[(*byte & 0x0f) as usize];
+                                    emit(core::str::from_utf8(&[hi, lo]).unwrap_or("??"));
+                                }
+                                emit("\n  Validation intégrité sceau    : ");
+                                emit(
+                                    if jambo_dspm::JamboDspmDaemon::verify_posture_report_hash(&rep)
+                                    {
+                                        "\x1b[1;32mVALIDE\x1b[0m\n"
+                                    } else {
+                                        "\x1b[1;31mINVALIDE\x1b[0m\n"
+                                    },
+                                );
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit(
+                                    "  [FAIL] Échec de la génération du rapport de posture DSPM\n",
+                                );
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "report-remediation" => {
+                        let cap = self.dspm.admin_cap;
+                        let risk_before = self.dspm.calculate_risk_score();
+                        let exp_before = self.dspm.calculate_exposure_index();
+                        match self.dspm.generate_remediation_report(
+                            &cap,
+                            0,
+                            0,
+                            0,
+                            risk_before,
+                            exp_before,
+                            8060,
+                        ) {
+                            Ok(rep) => {
+                                emit("=== RAPPORT SOUVERAIN DE REMÉDIATION DSPM (SHA-256) ===\n");
+                                let mut b = [0u8; 20];
+                                emit("  Rapport ID                    : ");
+                                emit(format_u64(rep.report_id as u64, &mut b));
+                                emit("\n  Actifs remédiés               : ");
+                                emit(format_u64(rep.remediated_count as u64, &mut b));
+                                emit("\n  Violations résolues           : ");
+                                emit(format_u64(rep.resolved_violations as u64, &mut b));
+                                emit("\n  Violations restantes          : ");
+                                emit(format_u64(rep.remaining_violations as u64, &mut b));
+                                emit("\n  Score de risque après reméd.  : ");
+                                emit(format_u64(rep.risk_score_after as u64, &mut b));
+                                emit("/100\n  Sceau cryptographique SHA-256 : ");
+                                for byte in rep.report_hash.iter() {
+                                    let hex_chars = b"0123456789abcdef";
+                                    let hi = hex_chars[(*byte >> 4) as usize];
+                                    let lo = hex_chars[(*byte & 0x0f) as usize];
+                                    emit(core::str::from_utf8(&[hi, lo]).unwrap_or("??"));
+                                }
+                                emit("\n  Validation intégrité sceau    : ");
+                                emit(
+                                    if jambo_dspm::JamboDspmDaemon::verify_remediation_report_hash(
+                                        &rep,
+                                    ) {
+                                        "\x1b[1;32mVALIDE\x1b[0m\n"
+                                    } else {
+                                        "\x1b[1;31mINVALIDE\x1b[0m\n"
+                                    },
+                                );
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit(
+                                    "  [FAIL] Échec de la génération du rapport de remédiation DSPM\n",
+                                );
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "compliance" => {
+                        emit("=== CONFORMITÉ RÉGLEMENTAIRE & EXPOSITION SOUVERAINE DSPM ===\n");
+                        let mut b = [0u8; 20];
+                        let exp = self.dspm.calculate_exposure_index();
+                        let secnum = self.dspm.calculate_secnumcloud_compliance();
+                        let rgpd = self.dspm.calculate_rgpd_compliance();
+                        emit("  Indice d'exposition globale : ");
+                        emit(format_u64(exp as u64, &mut b));
+                        emit("/100 (");
+                        emit(if exp < 30 {
+                            "Faible - Sécurisé"
+                        } else if exp < 70 {
+                            "Modéré"
+                        } else {
+                            "Critique"
+                        });
+                        emit(")\n  Conformité SecNumCloud      : ");
+                        emit(format_u64(secnum as u64, &mut b));
+                        emit("/100\n  Conformité RGPD Souverain   : ");
+                        emit(format_u64(rgpd as u64, &mut b));
+                        emit("/100\n");
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "topology" => {
+                        emit("=== CARTOGRAPHIE MULTI-COUCHES DSPM (VFS/IPC/TEE/NVME/RAM) ===\n");
+                        let cap = self.dspm.admin_cap;
+                        match self.dspm.map_multilayer_topology(&cap) {
+                            Ok(t) => {
+                                let mut b = [0u8; 20];
+                                emit("  Total des actifs cartographiés : ");
+                                emit(format_u64(t.total_assets as u64, &mut b));
+                                emit("\n  - Couche Enclave TEE (Confidential Compute) : ");
+                                emit(format_u64(t.tee_assets as u64, &mut b));
+                                emit("\n  - Couche Stockage NVMe Chiffré              : ");
+                                emit(format_u64(t.nvme_assets as u64, &mut b));
+                                emit("\n  - Couche VFS / Points de montage            : ");
+                                emit(format_u64(t.vfs_assets as u64, &mut b));
+                                emit("\n  - Couche IPC / Canaux micro-noyau           : ");
+                                emit(format_u64(t.ipc_assets as u64, &mut b));
+                                emit("\n  - Couche Mémoire RAM partagée               : ");
+                                emit(format_u64(t.ram_assets as u64, &mut b));
+                                emit("\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("  [FAIL] Échec de la cartographie topologique DSPM\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
                     "verify" => {
                         let valid = self.dspm.verify_ledger_integrity();
                         emit("  Vérification intégrité registre DSPM SHA-256 : ");
@@ -15009,7 +15173,7 @@ impl JamboShell {
                         (ShellStatus::Success, write_pos)
                     }
                     _ => {
-                        emit("Usage: dspm [status | assets | flows | rules | violations | scan | quarantine [id] | unquarantine [id] | flow-test [id] [target] | verify]\n");
+                        emit("Usage: dspm [status | assets | flows | rules | violations | scan | quarantine [id] | unquarantine [id] | flow-test [id] [target] | remediate-all | report-posture | report-remediation | compliance | topology | verify]\n");
                         (ShellStatus::ExecutionFailed, write_pos)
                     }
                 }
@@ -21063,6 +21227,26 @@ mod tests {
                 let (st10, len10) = shell.execute_line("dspm verify", &mut out);
                 assert_eq!(st10, ShellStatus::Success);
                 assert!(len10 > 0);
+
+                let (st11, len11) = shell.execute_line("dspm remediate-all", &mut out);
+                assert_eq!(st11, ShellStatus::Success);
+                assert!(len11 > 0);
+
+                let (st12, len12) = shell.execute_line("dspm report-posture", &mut out);
+                assert_eq!(st12, ShellStatus::Success);
+                assert!(len12 > 0);
+
+                let (st13, len13) = shell.execute_line("dspm report-remediation", &mut out);
+                assert_eq!(st13, ShellStatus::Success);
+                assert!(len13 > 0);
+
+                let (st14, len14) = shell.execute_line("dspm compliance", &mut out);
+                assert_eq!(st14, ShellStatus::Success);
+                assert!(len14 > 0);
+
+                let (st15, len15) = shell.execute_line("dspm topology", &mut out);
+                assert_eq!(st15, ShellStatus::Success);
+                assert!(len15 > 0);
             })
             .unwrap();
         handle.join().unwrap();

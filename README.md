@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.3.31-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.3.32-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.3.31 (Gestion Souveraine des Accès Privilégiés PAM, Élévation Just-In-Time JIT & Courtage de Sessions Privilégiées ZSP jambo-pam)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.3.31` introduit la modernisation et la souveraineté complète de la Gestion des Accès Privilégiés (PAM — `services/jambo-pam`) : moteur souverain PAM `#![no_std]` d'authentification et autorisation renforcée à privilèges zéro (ZSP - Zero Standing Privileges), élévation dynamique Just-In-Time (JIT) avec TTL cryptographique strict et motif audité, enregistrement et courtage cryptographique de sessions privilégiées (Ring 3/IPC) avec condensats cumulatifs SHA-256, coupure d'urgence (Kill-Switch O(1)), moisson autonome de sessions et baux expirés (`reap_expired_sessions`), rotation autonome globale de secrets et clés éphémères (`rotate_all_secrets`), réconciliation déterministe de posture ZSP (`reconcile_zsp_posture`), génération de rapports d'audit scellés SHA-256 (`PamAuditReport`), contrôle capabilaire strict `PamCap` sans autorité ambiante avec atténuation monotone et grand livre d'audit cryptographique SHA-256 inaltérable.
+> **Statut du Projet : Version v0.3.32 (Posture de Sécurité des Données Souveraines DSPM, Cartographie Multi-Couches & Classification des Flux Transfrontaliers jambo-dspm)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.3.32` introduit la modernisation et la souveraineté complète de la Posture de Sécurité des Données (DSPM — `services/jambo-dspm`) : moteur souverain DSPM `#![no_std]` de découverte, cartographie multi-couches (VFS, IPC, TEE, NVMe, RAM) et classification de données sensibles, détection et interception en temps réel des flux sensibles transfrontaliers et inter-compartiments, calcul déterministe de l'indice d'exposition et de conformité aux réglementations (SecNumCloud, RGPD souverain), playbooks de remédiation proactive O(1) et isolation chirurgicale (`remediate_all_exposed`), rapports de posture (`DspmPostureReport`) et de remédiation (`DspmRemediationReport`) scellés SHA-256 avec contrôle capabilaire strict `DspmCap` sans autorité ambiante avec atténuation monotone et registre d'audit cryptographique SHA-256 inaltérable.
 
 ---
 
