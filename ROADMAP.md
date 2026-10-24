@@ -124,17 +124,18 @@
 | **v0.3.2** | 135 | Posture de Sécurité des Données DSPM `jambo-dspm` | Moteur souverain DSPM de découverte, cartographie et classification continue des données au repos et en transit (VFS, IPC, TEE, NVMe, RAM), détection des flux sensibles transfrontaliers / inter-compartiments, isolation & quarantaine O(1), évaluation des risques d'exposition, DspmCap & registre d'audit SHA-256 inaltérable | ✅ Validé |
 | **v0.3.3** | 136 | Gestion Posture Sécurité Services & SaaS SSPM `jambo-sspm` | Moteur souverain SSPM d'évaluation continue de la conformité et des dérives de configuration des services applicatifs, micro-services décentralisés et connecteurs souverains, détection des permissions permissives et des partages tiers non autorisés, remédiation automatisée, quarantaine O(1), SspmCap & registre d'audit SHA-256 inaltérable | ✅ Validé |
 | **v0.3.4** | 137 | Opérations IT Pilotées par l'IA AIOps `jambo-aiops` | Moteur souverain AIOps d'ingestion télémétrique, calcul de z-score glissant, détection d'anomalies statistiques, corrélation topologique multi-sources, RCA (Root Cause Analysis), déclenchement automatique de playbooks d'auto-remédiation, AiopsCap & registre d'audit SHA-256 inaltérable | ✅ Validé |
+| **v0.3.5** | 138 | Sécurité des Pipelines & Orchestration DevSecOps `jambo-devsecops` | Moteur souverain DevSecOps d'analyse statique et dynamique de manifests, contrôle d'admission strict (Gatekeeper / Policy Engine), attestation de provenance SLSA L1-L4 et in-toto, vérification continue de signature cryptographique souveraine des artéfacts, exécution de pipelines ordonnancés (SAST, SCA, attestation, admission), DevSecOpsCap & registre d'audit SHA-256 inaltérable | ✅ Validé |
 
 ---
 
 ## 3. Prochaines Étapes Prioritaires
 
-### 🎯 Prochaine Tâche Immédiate : Phase 138 — v0.3.5
-* **Composant** : `services/jambo-devsecops`
-* **Versionnement** : Poursuite de la série `v0.3.*` (Jalon `v0.3.5`)
-* **Objectif** : Sécurité des Pipelines & Orchestration DevSecOps Souveraine — Analyse statique et dynamique de conformité des manifests, contrôle d'admission des conteneurs/micro-services, attestation de provenance SLSA / in-toto, vérification continue de signature cryptographique, DevSecOpsCap & registre d'audit SHA-256 inaltérable.
+### 🎯 Prochaine Tâche Immédiate : Phase 139 — v0.3.6
+* **Composant** : `services/jambo-tprm`
+* **Versionnement** : Poursuite de la série `v0.3.*` (Jalon `v0.3.6`)
+* **Objectif** : Évaluation Continue des Risques Fournisseurs & Dépendances Tierces (Third-Party Risk Management - TPRM) — Cartographie des dépendances externes, scoring dynamique de réputation et de criticité des fournisseurs, surveillance continue des flux d'ingestion, vérification des attestations de conformité tierces, politique d'isolation et de quarantaine automatique des composants amont compromis, TprmCap & registre d'audit SHA-256 inaltérable.
 * **Tâches précises** :
-  1. Moteur DevSecOps souverain : règles d'admission strictes, vérification de provenance cryptographique, enforcement de politiques de sécurité applicative à l'embarquement.
+  1. Moteur TPRM souverain : registre de fournisseurs tiers, scoring de risque multidimensionnel, détection proactive de vulnérabilités amont, politique de blocage automatique des dépendances toxiques.
   2. Validation formelle et suite de tests `cargo xtask test`.
 
 ---
@@ -211,6 +212,7 @@
 * **2026-10-20 09:07 UTC** : Validation complète Phase 135 (`jambo-dspm`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-dspm`, 8/8). Tag `v0.3.2`.
 * **2026-10-20 09:21 UTC** : Validation complète Phase 136 (`jambo-sspm`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0). SSPM — 6 services évalués, 2 connecteurs surveillés, dérive MFA remédiée, quarantaine O(1) validée, audit SHA-256 vérifié. Tag `v0.3.3`.
 * **2026-10-20 10:45 UTC** : Validation complète Phase 137 (`jambo-aiops`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-aiops`, 6/6). AIOps — 5 services topologiques surveillés, Z-score glissant & RCA validés, playbooks d'auto-remédiation opérationnels, audit SHA-256 vérifié. Tag `v0.3.4`.
+* **2026-10-24 06:33 UTC** : Validation complète Phase 138 (`jambo-devsecops`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-devsecops`, 6/6). DevSecOps — 5 manifests gérés, attestations SLSA L3 et signatures vérifiées, contrôle d'admission strict (4 admis, 1 rejeté), pipelines exécutés, audit SHA-256 scellé. Tag `v0.3.5`.
 
 
 

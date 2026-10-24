@@ -1380,6 +1380,13 @@ pub extern "C" fn _start() -> ! {
         "Échec du test des opérations IT pilotées par l'IA jambo-aiops"
     );
 
+    // 23viciesquadragies. Validation de la Sécurité des Pipelines & DevSecOps Souverain (Phase 138 - v0.3.5)
+    let devsecops_success = sched::devsecops_test::execute_devsecops_daemon_test();
+    assert!(
+        devsecops_success,
+        "Échec du test de sécurité des pipelines & DevSecOps jambo-devsecops"
+    );
+
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
 
     arch::init_iommu();
@@ -1653,14 +1660,15 @@ pub extern "C" fn _start() -> ! {
     kprintln!("\x1b[1;32m[PASS] Phase 135 Data Security Posture Management (DSPM), Flow Mapping & Quarantine (jambo-dspm) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 136 SaaS Security Posture Management (SSPM), Drift Detection & Connectors (jambo-sspm) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 137 Artificial Intelligence for IT Operations (AIOps), RCA & Auto-Remediation (jambo-aiops) Complete\x1b[0m");
+    kprintln!("\x1b[1;32m[PASS] Phase 138 Pipeline Security & Sovereign DevSecOps Orchestration (jambo-devsecops) Complete\x1b[0m");
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.3.4 (Artificial Intelligence for IT Operations jambo-aiops)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.3.5 (Pipeline Security & DevSecOps Orchestration jambo-devsecops)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.3.4 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.3.5 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );

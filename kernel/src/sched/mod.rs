@@ -27,6 +27,7 @@ pub mod cwpp_test;
 pub mod dbg_test;
 pub mod ddos_test;
 pub mod deception_test;
+pub mod devsecops_test;
 pub mod dfs_test;
 pub mod diagd_test;
 pub mod dnsd_test;

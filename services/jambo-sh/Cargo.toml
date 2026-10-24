@@ -1,6 +1,6 @@
 [package]
 name = "jambo-sh"
-version = "0.3.4"
+version = "0.3.5"
 edition = "2021"
 
 [lib]
@@ -21,6 +21,7 @@ jambo-itdr = { path = "../jambo-itdr" }
 jambo-pam = { path = "../jambo-pam" }
 jambo-dspm = { path = "../jambo-dspm" }
 jambo-aiops = { path = "../jambo-aiops" }
+jambo-devsecops = { path = "../jambo-devsecops" }
 jambo-auditd = { path = "../jambo-auditd" }
 jambo-authd = { path = "../jambo-authd" }
 jambo-bpfd = { path = "../jambo-bpfd" }

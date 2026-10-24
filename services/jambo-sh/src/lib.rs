@@ -204,6 +204,7 @@ pub struct JamboShell {
     pub pam: jambo_pam::JamboPamDaemon,
     pub dspm: jambo_dspm::JamboDspmDaemon,
     pub aiops: jambo_aiops::JamboAiopsDaemon,
+    pub devsecops: jambo_devsecops::JamboDevSecOpsDaemon,
 }
 
 impl Default for JamboShell {
@@ -770,6 +771,15 @@ impl JamboShell {
         );
         let mut aiops = jambo_aiops::JamboAiopsDaemon::new(aiops_cap);
         aiops.init_defaults();
+
+        let devsecops_cap = jambo_devsecops::DevSecOpsCap::new(
+            libjambo::Handle::new(13801, 1),
+            jambo_devsecops::devsecops_rights::ALL,
+            5000,
+            100,
+        );
+        let mut devsecops = jambo_devsecops::JamboDevSecOpsDaemon::new(devsecops_cap);
+        devsecops.init_defaults();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -864,6 +874,7 @@ impl JamboShell {
             pam,
             dspm,
             aiops,
+            devsecops,
         }
     }
 
@@ -1075,10 +1086,11 @@ impl JamboShell {
                 emit("  pam [cmd]       - Gestion des accès privilégiés (PAM), élévation JIT, sessions & rotation secrets\n");
                 emit("  dspm [cmd]      - Posture des données (DSPM), cartographie, flux transfrontaliers & quarantaine\n");
                 emit("  aiops [cmd]     - Opérations IT pilotées par l'IA (AIOps), Z-score, corrélation topologique & remédiation\n");
+                emit("  devsecops [cmd] - Sécurité pipelines DevSecOps, contrôle admission, attestations SLSA & signatures\n");
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.3.4 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.3.5 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -13653,6 +13665,211 @@ impl JamboShell {
                     }
                 }
             }
+            "devsecops" => {
+                let subcmd = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    "status"
+                };
+                match subcmd {
+                    "status" | "summary" => {
+                        emit("=== SÉCURITÉ DES PIPELINES & DEVSECOPS SOUVERAIN (v0.3.5) ===\n");
+                        let mut b = [0u8; 20];
+                        let cap = self.devsecops.admin_cap;
+                        if let Ok(sum) = self.devsecops.get_summary(&cap) {
+                            emit("  Manifests de micro-services gérés : ");
+                            emit(format_u64(sum.total_manifests as u64, &mut b));
+                            emit("\n  Attestations de provenance SLSA   : ");
+                            emit(format_u64(sum.total_attestations as u64, &mut b));
+                            emit("\n  Micro-services admis (Gatekeeper) : ");
+                            emit(format_u64(sum.admitted_count as u64, &mut b));
+                            emit("\n  Micro-services rejetés / bloqués  : ");
+                            emit(format_u64(sum.rejected_count as u64, &mut b));
+                            emit("\n  Attestations SLSA L3+ vérifiées   : ");
+                            emit(format_u64(sum.slsa_l3_or_higher_count as u64, &mut b));
+                            emit("\n  Étapes de pipelines exécutées     : ");
+                            emit(format_u64(sum.pipelines_executed as u64, &mut b));
+                            emit("\n  Score de conformité DevSecOps     : ");
+                            emit(format_u64(sum.compliance_score as u64, &mut b));
+                            emit("%\n");
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "manifests" => {
+                        emit("=== MANIFESTS DE SERVICES & POLITIQUES DE SÉCURITÉ ===\n");
+                        let mut b = [0u8; 20];
+                        for m in self.devsecops.manifests.iter().flatten() {
+                            emit("  [ID ");
+                            emit(format_u64(m.id as u64, &mut b));
+                            emit("] ");
+                            emit(m.name_as_str());
+                            emit(" | Mem: ");
+                            emit(format_u64(m.max_memory_kb as u64, &mut b));
+                            emit(" KB | Profil: ");
+                            match m.sandboxing {
+                                jambo_devsecops::SandboxingProfile::CapabilityConfined => {
+                                    emit("CapConfined")
+                                }
+                                jambo_devsecops::SandboxingProfile::StrictSeccomp => {
+                                    emit("StrictSeccomp")
+                                }
+                                jambo_devsecops::SandboxingProfile::TeeEnclave => {
+                                    emit("TeeEnclave")
+                                }
+                                jambo_devsecops::SandboxingProfile::Unconfined => {
+                                    emit("Unconfined(DANGER)")
+                                }
+                            }
+                            emit(" | SLSA min: ");
+                            match m.required_slsa {
+                                jambo_devsecops::SlsaLevel::None => emit("None"),
+                                jambo_devsecops::SlsaLevel::L1 => emit("L1"),
+                                jambo_devsecops::SlsaLevel::L2 => emit("L2"),
+                                jambo_devsecops::SlsaLevel::L3 => emit("L3"),
+                                jambo_devsecops::SlsaLevel::L4 => emit("L4"),
+                            }
+                            emit(" | Vulns Crit/Haut: ");
+                            emit(format_u64(m.critical_vulnerabilities_count as u64, &mut b));
+                            emit("/");
+                            emit(format_u64(m.high_vulnerabilities_count as u64, &mut b));
+                            emit("\n");
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "attestations" => {
+                        emit("=== ATTESTATIONS DE PROVENANCE SLSA & SIGNATURES ===\n");
+                        let mut b = [0u8; 20];
+                        for att in self.devsecops.attestations.iter().flatten() {
+                            emit("  [Attestation ");
+                            emit(format_u64(att.id as u64, &mut b));
+                            emit("] Pour Manifest ID: ");
+                            emit(format_u64(att.manifest_id as u64, &mut b));
+                            emit(" | Builder: ");
+                            emit(att.builder_as_str());
+                            emit(" | SLSA: ");
+                            match att.slsa_level {
+                                jambo_devsecops::SlsaLevel::None => emit("None"),
+                                jambo_devsecops::SlsaLevel::L1 => emit("L1"),
+                                jambo_devsecops::SlsaLevel::L2 => emit("L2"),
+                                jambo_devsecops::SlsaLevel::L3 => emit("L3"),
+                                jambo_devsecops::SlsaLevel::L4 => emit("L4"),
+                            }
+                            emit(" | Signature: ");
+                            emit(if att.is_verified {
+                                "VÉRIFIÉE (OK)\n"
+                            } else {
+                                "NON VÉRIFIÉE\n"
+                            });
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "admit" => {
+                        let mut b = [0u8; 20];
+                        let mut cap = self.devsecops.admin_cap;
+                        let target_id = if parsed.arg_count > 2 {
+                            parse_u64(parsed.args[2]).map(|v| v as u32)
+                        } else {
+                            None
+                        };
+
+                        if let Some(mid) = target_id {
+                            match self.devsecops.evaluate_admission(&mut cap, mid, 9999) {
+                                Ok(dec) => {
+                                    emit("  Admission Manifest ID ");
+                                    emit(format_u64(mid as u64, &mut b));
+                                    emit(" : ");
+                                    match dec.status {
+                                        jambo_devsecops::AdmissionStatus::Admitted => {
+                                            emit("ADMIS (OK)\n")
+                                        }
+                                        jambo_devsecops::AdmissionStatus::Rejected => {
+                                            emit("REJETÉ (Code violation: ");
+                                            emit(format_u64(
+                                                dec.rejection_reason_code as u64,
+                                                &mut b,
+                                            ));
+                                            emit(")\n");
+                                        }
+                                        _ => emit("EN ATTENTE\n"),
+                                    }
+                                    (ShellStatus::Success, write_pos)
+                                }
+                                Err(_) => {
+                                    emit("  [FAIL] Manifest introuvable ou erreur de politique\n");
+                                    (ShellStatus::ExecutionFailed, write_pos)
+                                }
+                            }
+                        } else {
+                            emit("=== CONTRÔLE D'ADMISSION DES SERVICES (GATEKEEPER) ===\n");
+                            for adm in self.devsecops.admissions.iter().flatten() {
+                                emit("  [Manifest ");
+                                emit(format_u64(adm.manifest_id as u64, &mut b));
+                                emit("] Statut: ");
+                                match adm.status {
+                                    jambo_devsecops::AdmissionStatus::Admitted => {
+                                        emit("ADMIS | SLSA: OK | Sig: OK\n")
+                                    }
+                                    jambo_devsecops::AdmissionStatus::Rejected => {
+                                        emit("REJETÉ | Code motif: ");
+                                        emit(format_u64(adm.rejection_reason_code as u64, &mut b));
+                                        emit("\n");
+                                    }
+                                    _ => emit("EN ATTENTE\n"),
+                                }
+                            }
+                            (ShellStatus::Success, write_pos)
+                        }
+                    }
+                    "pipelines" => {
+                        emit("=== EXÉCUTIONS DE PIPELINES DEVSECOPS SOUVERAINS ===\n");
+                        let mut b = [0u8; 20];
+                        for ex in self.devsecops.executions.iter().flatten() {
+                            emit("  [Pipeline ");
+                            emit(format_u64(ex.id as u64, &mut b));
+                            emit("] Manifest: ");
+                            emit(format_u64(ex.manifest_id as u64, &mut b));
+                            emit(" | Étape: ");
+                            match ex.stage {
+                                jambo_devsecops::PipelineStage::StaticAnalysisLint => {
+                                    emit("SAST-Lint")
+                                }
+                                jambo_devsecops::PipelineStage::DependencySecurityAudit => {
+                                    emit("SCA-Audit")
+                                }
+                                jambo_devsecops::PipelineStage::AttestationVerification => {
+                                    emit("SLSA-Attest")
+                                }
+                                jambo_devsecops::PipelineStage::CryptographicSignatureCheck => {
+                                    emit("Crypto-Sig")
+                                }
+                                jambo_devsecops::PipelineStage::AdmissionControlGate => {
+                                    emit("Admission-Gate")
+                                }
+                            }
+                            emit(" | Statut: ");
+                            emit(if ex.passed { "PASS" } else { "FAIL" });
+                            emit(" (Score: ");
+                            emit(format_u64(ex.score as u64, &mut b));
+                            emit("/100)\n");
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "verify" => {
+                        let valid = self.devsecops.verify_ledger_integrity();
+                        emit("  Vérification intégrité registre DevSecOps SHA-256 : ");
+                        emit(if valid {
+                            "INTÈGRE (OK)\n"
+                        } else {
+                            "ALTÉRÉ (FAIL)\n"
+                        });
+                        (ShellStatus::Success, write_pos)
+                    }
+                    _ => {
+                        emit("Usage: devsecops [status | manifests | attestations | admit [id] | pipelines | verify]\n");
+                        (ShellStatus::ExecutionFailed, write_pos)
+                    }
+                }
+            }
             "poweroff" | "reboot" => {
                 emit("[SYSTEM] Extinction demandée...\n");
                 unsafe {
@@ -17730,6 +17947,51 @@ mod tests {
                 let (st6, len6) = shell.execute_line("aiops verify", &mut out);
                 assert_eq!(st6, ShellStatus::Success);
                 assert!(len6 > 0);
+            })
+            .unwrap();
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn test_shell_devsecops_commands() {
+        extern crate std;
+        let handle = std::thread::Builder::new()
+            .stack_size(8 * 1024 * 1024)
+            .spawn(|| {
+                let mut shell = JamboShell::new();
+                let mut out = [0u8; 1024];
+
+                let (st1, len1) = shell.execute_line("devsecops status", &mut out);
+                assert_eq!(st1, ShellStatus::Success);
+                assert!(len1 > 0);
+
+                let (st2, len2) = shell.execute_line("devsecops manifests", &mut out);
+                assert_eq!(st2, ShellStatus::Success);
+                assert!(len2 > 0);
+
+                let (st3, len3) = shell.execute_line("devsecops attestations", &mut out);
+                assert_eq!(st3, ShellStatus::Success);
+                assert!(len3 > 0);
+
+                let (st4, len4) = shell.execute_line("devsecops admit", &mut out);
+                assert_eq!(st4, ShellStatus::Success);
+                assert!(len4 > 0);
+
+                let (st5, len5) = shell.execute_line("devsecops admit 1", &mut out);
+                assert_eq!(st5, ShellStatus::Success);
+                assert!(len5 > 0);
+
+                let (st6, len6) = shell.execute_line("devsecops admit 4", &mut out);
+                assert_eq!(st6, ShellStatus::Success);
+                assert!(len6 > 0);
+
+                let (st7, len7) = shell.execute_line("devsecops pipelines", &mut out);
+                assert_eq!(st7, ShellStatus::Success);
+                assert!(len7 > 0);
+
+                let (st8, len8) = shell.execute_line("devsecops verify", &mut out);
+                assert_eq!(st8, ShellStatus::Success);
+                assert!(len8 > 0);
             })
             .unwrap();
         handle.join().unwrap();
