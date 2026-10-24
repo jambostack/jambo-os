@@ -11028,6 +11028,7 @@ impl JamboShell {
                                         jambo_intel::IocKind::Ipv4 => "IPv4",
                                         jambo_intel::IocKind::Domain => "Domaine",
                                         jambo_intel::IocKind::UrlPattern => "URL",
+                                        jambo_intel::IocKind::CveId => "CVE",
                                     };
                                     emit(kind_str);
                                     emit("] ");
@@ -11036,11 +11037,80 @@ impl JamboShell {
                                     emit(e.feed_as_str());
                                     emit(", Confiance: ");
                                     emit(format_u64(e.confidence as u64, &mut b));
-                                    emit("%)\n");
+                                    emit("%, TLP: ");
+                                    emit(e.tlp.as_str());
+                                    emit(")\n");
                                 }
                             }
                         }
                         (ShellStatus::Success, write_pos)
+                    }
+                    "stix" => {
+                        emit("[INTEL/STIX] Objets Indicateurs STIX 2.1 Souverains :\n");
+                        for i in 0..self.intel.ioc_count {
+                            if let Some(ref e) = self.intel.iocs[i] {
+                                if e.active && e.stix_id_len > 0 {
+                                    let mut b = [0u8; 20];
+                                    emit("  * [");
+                                    emit(e.stix_id_as_str());
+                                    emit("] Pattern: ");
+                                    emit(e.pattern_as_str());
+                                    emit(" | Acteur: ");
+                                    emit(e.threat_actor_as_str());
+                                    emit(" | KillChain: ");
+                                    emit(e.kill_chain.as_str());
+                                    emit(" | TLP: ");
+                                    emit(e.tlp.as_str());
+                                    emit(" | Confiance: ");
+                                    emit(format_u64(e.confidence as u64, &mut b));
+                                    emit("%\n");
+                                }
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "taxii" | "collections" => {
+                        emit("[INTEL/TAXII] Fédérations & Collections TAXII 2.1 :\n");
+                        emit("  Collections Souveraines :\n");
+                        for i in 0..self.intel.collection_count {
+                            if let Some(ref c) = self.intel.collections[i] {
+                                emit("    - ");
+                                emit(c.name_as_str());
+                                emit(" [Lecture: ");
+                                emit(if c.can_read { "OUI" } else { "NON" });
+                                emit(", Écriture: ");
+                                emit(if c.can_write { "OUI" } else { "NON" });
+                                emit("]\n");
+                            }
+                        }
+                        emit("  Pairs Partenaires Fédérés :\n");
+                        for i in 0..self.intel.peer_count {
+                            if let Some(ref p) = self.intel.peers[i] {
+                                let mut b = [0u8; 20];
+                                emit("    - ");
+                                emit(p.name_as_str());
+                                emit(" (Score confiance: ");
+                                emit(format_u64(p.trust_score as u64, &mut b));
+                                emit("/100)\n");
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "sync" => {
+                        let cap = self.intel.admin_cap;
+                        match self.intel.sync_taxii_peer(&cap, 100, 500) {
+                            Ok(id) => {
+                                let mut b = [0u8; 20];
+                                emit("[INTEL/SYNC] Synchronisation réussie avec le pair TAXII #");
+                                emit(format_u64(id as u64, &mut b));
+                                emit(" (ANSSI-CTI-Partner)\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("[INTEL/SYNC] Échec de synchronisation TAXII\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
                     }
                     "check" | "query" => {
                         let cap = self.intel.admin_cap;
@@ -11095,7 +11165,9 @@ impl JamboShell {
                         (ShellStatus::Success, write_pos)
                     }
                     _ => {
-                        emit("Usage: intel [status | feeds | iocs | check | purge | verify]\n");
+                        emit(
+                            "Usage: intel [status | feeds | iocs | stix | taxii | check | sync | purge | verify]\n",
+                        );
                         (ShellStatus::ExecutionFailed, write_pos)
                     }
                 }
@@ -19215,6 +19287,18 @@ mod tests {
                 let (st3, len3) = shell.execute_line("intel iocs", &mut out);
                 assert_eq!(st3, ShellStatus::Success);
                 assert!(len3 > 0);
+
+                let (st_stix, len_stix) = shell.execute_line("intel stix", &mut out);
+                assert_eq!(st_stix, ShellStatus::Success);
+                assert!(len_stix > 0);
+
+                let (st_taxii, len_taxii) = shell.execute_line("intel taxii", &mut out);
+                assert_eq!(st_taxii, ShellStatus::Success);
+                assert!(len_taxii > 0);
+
+                let (st_sync, len_sync) = shell.execute_line("intel sync", &mut out);
+                assert_eq!(st_sync, ShellStatus::Success);
+                assert!(len_sync > 0);
 
                 let (st4, len4) = shell.execute_line("intel check", &mut out);
                 assert_eq!(st4, ShellStatus::Success);

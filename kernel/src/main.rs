@@ -1241,12 +1241,7 @@ pub extern "C" fn _start() -> ! {
 
     // Note: La Détection et Réponse Étendue Souveraine XDR est validée en Phase 150 (v0.3.17).
 
-    // 14semelviciesquadragies. Validation du Renseignement Cyber & Flux d'IoC (Phase 121 - v0.2.119)
-    let intel_success = sched::intel_test::execute_intel_daemon_test();
-    assert!(
-        intel_success,
-        "Échec du test du renseignement cyber jambo-intel"
-    );
+    // Note: Le Renseignement Cyber & Partage de Flux d'IoC Souverain CTI est validé en Phase 151 (v0.3.18).
 
     // 15semelviciesquadragies. Validation de la Cyber-Déception & Honeypots (Phase 122 - v0.2.120)
     let deception_success = sched::deception_test::execute_deception_daemon_test();
@@ -1449,6 +1444,13 @@ pub extern "C" fn _start() -> ! {
     assert!(
         xdr_success,
         "Échec du test de la détection et réponse étendue souveraine jambo-xdr"
+    );
+
+    // 36viciesquadragies. Validation Renseignement Cyber & Partage de Flux d'IoC Souverain CTI (Phase 151 - v0.3.18)
+    let intel_success = sched::intel_test::execute_intel_daemon_test();
+    assert!(
+        intel_success,
+        "Échec du test du renseignement cyber & partage de flux d'IoC souverain jambo-intel"
     );
 
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
@@ -1751,14 +1753,17 @@ pub extern "C" fn _start() -> ! {
     kprintln!(
         "\x1b[1;32m[PASS] Phase 150 Sovereign Extended Detection & Response (jambo-xdr) Complete\x1b[0m"
     );
+    kprintln!(
+        "\x1b[1;32m[PASS] Phase 151 Sovereign Cyber Threat Intelligence & IoC Sharing (jambo-intel) Complete\x1b[0m"
+    );
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.3.17 (Sovereign Extended Detection & Response Resilience jambo-xdr)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.3.18 (Sovereign Cyber Threat Intelligence Resilience jambo-intel)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.3.17 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.3.18 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
