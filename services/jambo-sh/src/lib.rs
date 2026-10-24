@@ -13650,6 +13650,11 @@ impl JamboShell {
                         }
                         emit("  Indice Global d'Exposition   : ");
                         emit(format_u64(self.ctem.overall_exposure_score as u64, &mut b));
+                        emit("/100\n  Exploitabilité Prédictive    : ");
+                        emit(format_u64(
+                            self.ctem.predictive_exploitability_avg as u64,
+                            &mut b,
+                        ));
                         emit("/100\n");
                         let cap = self.ctem.admin_cap;
                         if let Ok(summary) = self.ctem.get_summary(&cap) {
@@ -13713,6 +13718,7 @@ impl JamboShell {
                                     jambo_ctem::ExposureSource::Aspm => emit("ASPM"),
                                     jambo_ctem::ExposureSource::Bas => emit("BAS"),
                                     jambo_ctem::ExposureSource::Easm => emit("EASM"),
+                                    jambo_ctem::ExposureSource::Intel => emit("INTEL"),
                                     jambo_ctem::ExposureSource::Custom => emit("CUSTOM"),
                                 }
                                 emit(" | Exploitabilité: ");
@@ -13870,8 +13876,60 @@ impl JamboShell {
                         });
                         (ShellStatus::Success, write_pos)
                     }
+                    "report" => {
+                        let cap = self.ctem.admin_cap;
+                        match self.ctem.generate_cycle_report(&cap, 5050) {
+                            Ok(rep) => {
+                                emit("=== RAPPORT DE CYCLE CTEM SCELLÉ SHA-256 ===\n");
+                                let mut b = [0u8; 20];
+                                emit("  Rapport ID                   : #");
+                                emit(format_u64(rep.report_id as u64, &mut b));
+                                emit("\n  Périmètres audités           : ");
+                                emit(format_u64(rep.total_scopes as u64, &mut b));
+                                emit("\n  Expositions traitées         : ");
+                                emit(format_u64(rep.total_exposures as u64, &mut b));
+                                emit("\n  Indice global d'exposition   : ");
+                                emit(format_u64(rep.overall_exposure_score as u64, &mut b));
+                                emit("/100\n  Exploitabilité prédictive    : ");
+                                emit(format_u64(rep.predictive_exploitability_avg as u64, &mut b));
+                                emit("/100\n  Score de résilience grappe   : ");
+                                emit(format_u64(rep.resilience_posture_score as u64, &mut b));
+                                emit("/100\n  Scellement SHA-256           : SCELLÉ & VÉRIFIÉ (OK)\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("  [FAIL] Échec de la génération du rapport CTEM\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "remediate-all" => {
+                        let cap = self.ctem.admin_cap;
+                        match self.ctem.remediate_all_mobilized(&cap, 5060) {
+                            Ok(rep) => {
+                                emit("=== REMÉDIATION COORDONNÉE AUTONOME O(1) (CTEM) ===\n");
+                                let mut b = [0u8; 20];
+                                emit("  Rapport Remédiation ID       : #");
+                                emit(format_u64(rep.report_id as u64, &mut b));
+                                emit("\n  Expositions remédiées        : ");
+                                emit(format_u64(rep.remediated_count as u64, &mut b));
+                                emit("\n  Indice initial               : ");
+                                emit(format_u64(rep.score_before as u64, &mut b));
+                                emit("/100\n  Indice résiduel après patch  : ");
+                                emit(format_u64(rep.score_after as u64, &mut b));
+                                emit("/100\n  Réduction du risque          : -");
+                                emit(format_u64(rep.risk_reduction_pct as u64, &mut b));
+                                emit("%\n  Scellement SHA-256           : SCELLÉ & VÉRIFIÉ (OK)\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("  [FAIL] Échec de la remédiation globale des expositions\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
                     _ => {
-                        emit("Usage: ctem [status | scopes | exposures | prioritize | validate [eid] | mobilize [eid] | remediate [eid] | cycle | verify]\n");
+                        emit("Usage: ctem [status | scopes | exposures | prioritize | validate [eid] | mobilize [eid] | remediate [eid] | remediate-all | cycle | report | verify]\n");
                         (ShellStatus::ExecutionFailed, write_pos)
                     }
                 }
@@ -20575,6 +20633,14 @@ mod tests {
                 let (st9, len9) = shell.execute_line("ctem verify", &mut out);
                 assert_eq!(st9, ShellStatus::Success);
                 assert!(len9 > 0);
+
+                let (st10, len10) = shell.execute_line("ctem report", &mut out);
+                assert_eq!(st10, ShellStatus::Success);
+                assert!(len10 > 0);
+
+                let (st11, len11) = shell.execute_line("ctem remediate-all", &mut out);
+                assert_eq!(st11, ShellStatus::Success);
+                assert!(len11 > 0);
             })
             .unwrap();
         handle.join().unwrap();

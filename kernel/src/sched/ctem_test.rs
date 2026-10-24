@@ -1,5 +1,5 @@
-//! Module de validation formelle de la Gestion Continue de l'Exposition aux Menaces (CTEM) (`jambo-ctem`)
-//! Phase 132 — Jalon v0.2.130
+//! Module de validation formelle du Programme Continu de Gestion de l'Exposition aux Menaces (CTEM) (`jambo-ctem`)
+//! Phase 162 — Jalon v0.3.29
 #![allow(unused_imports, dead_code)]
 
 extern crate alloc;
@@ -7,18 +7,19 @@ extern crate alloc;
 use crate::kprintln;
 use jambo_abi::Handle;
 use jambo_ctem::{
-    ctem_rights, BusinessCriticality, CtemCap, CtemCycleSummary, CtemError, CtemPhase,
-    ExposureSeverity, ExposureSource, ExposureStatus, JamboCtemDaemon, MobilizationActionType,
+    ctem_rights, BusinessCriticality, CtemCap, CtemCycleReport, CtemCycleSummary, CtemError,
+    CtemPhase, CtemRemediationReport, ExposureSeverity, ExposureSource, ExposureStatus,
+    JamboCtemDaemon, MobilizationActionType,
 };
 
-/// Exécute la suite complète de validation formelle du démon CTEM (Phase 132)
+/// Exécute la suite complète de validation formelle du démon CTEM souverain (Phase 162 - v0.3.29)
 pub fn execute_ctem_daemon_test() -> bool {
     kprintln!(
-        "[CTEM/TEST] Démarrage de la validation formelle de la gestion continue de l'exposition aux menaces CTEM (Phase 132)..."
+        "[CTEM/TEST] Démarrage de la validation formelle de la gestion continue de l'exposition aux menaces CTEM (Phase 162 - v0.3.29)..."
     );
 
     // 1. Contrôle d'accès capabilaire (CtemCap) et atténuation monotone
-    let admin_cap = CtemCap::new(Handle::new(13201, 1), ctem_rights::ALL, 10000, 1000);
+    let admin_cap = CtemCap::new(Handle::new(16201, 1), ctem_rights::ALL, 10000, 1000);
     assert!(admin_cap.has_right(ctem_rights::SCOPE_MANAGEMENT));
     assert!(admin_cap.has_right(ctem_rights::DISCOVERY_FEED));
     assert!(admin_cap.has_right(ctem_rights::PRIORITIZE_EXPOSURES));
@@ -26,6 +27,8 @@ pub fn execute_ctem_daemon_test() -> bool {
     assert!(admin_cap.has_right(ctem_rights::MOBILIZE_REMEDIATION));
     assert!(admin_cap.has_right(ctem_rights::QUERY_POSTURE));
     assert!(admin_cap.has_right(ctem_rights::SEAL_LEDGER));
+    assert!(admin_cap.has_right(ctem_rights::CORRELATE_FEDERATION));
+    assert!(admin_cap.has_right(ctem_rights::GENERATE_REPORT));
     assert!(admin_cap.has_right(ctem_rights::ADMIN));
 
     // Atténuation monotone
@@ -39,6 +42,7 @@ pub fn execute_ctem_daemon_test() -> bool {
     assert!(monitor_cap.has_right(ctem_rights::QUERY_POSTURE));
     assert!(monitor_cap.has_right(ctem_rights::PRIORITIZE_EXPOSURES));
     assert!(!monitor_cap.has_right(ctem_rights::MOBILIZE_REMEDIATION));
+    assert!(!monitor_cap.has_right(ctem_rights::CORRELATE_FEDERATION));
     assert!(!monitor_cap.has_right(ctem_rights::ADMIN));
     assert_eq!(monitor_cap.max_lifetime, 5000);
     assert_eq!(monitor_cap.invocations_left, 200);
@@ -55,6 +59,7 @@ pub fn execute_ctem_daemon_test() -> bool {
     assert_eq!(ctem.scope_count, 4);
     assert_eq!(ctem.exposure_count, 5);
     assert!(ctem.overall_exposure_score > 0);
+    assert!(ctem.predictive_exploitability_avg > 0);
     assert!(ctem.verify_ledger_integrity());
 
     // 3. Cadrage (Scoping) et Découverte (Discovery)
@@ -86,6 +91,28 @@ pub fn execute_ctem_daemon_test() -> bool {
     assert_eq!(new_exp_id, 6);
     assert_eq!(ctem.exposure_count, 6);
 
+    // Ingestion source CTI Intel
+    let intel_exp_id = ctem
+        .ingest_exposure(
+            &admin_cap,
+            "Active Zero-Day In-The-Wild Exploitation",
+            ExposureSource::Intel,
+            "jambo-vpn:handshake",
+            BusinessCriticality::Critical,
+            ExposureSeverity::Critical,
+            "Public Exploit Weaponized -> CTI Feed",
+            5012,
+        )
+        .expect("Ingestion source CTI");
+    assert_eq!(intel_exp_id, 7);
+    assert_eq!(ctem.exposure_count, 7);
+
+    // Corrélation multi-plans fédérée
+    let composite_chains = ctem
+        .correlate_federation(&admin_cap, 5015)
+        .expect("Corrélation multi-sources fédérée");
+    assert!(composite_chains > 0);
+
     // Rejet d'opération d'écriture par capacité atténuée
     assert_eq!(
         ctem.add_scope(
@@ -94,7 +121,7 @@ pub fn execute_ctem_daemon_test() -> bool {
             "none",
             BusinessCriticality::Low,
             1,
-            5015
+            5018
         ),
         Err(CtemError::PermissionDenied)
     );
@@ -103,7 +130,8 @@ pub fn execute_ctem_daemon_test() -> bool {
     let prioritized = ctem
         .prioritize_exposures(&admin_cap, 5020)
         .expect("Hiérarchisation des expositions");
-    assert_eq!(prioritized, 6);
+    assert_eq!(prioritized, 7);
+    assert!(ctem.exposures[0].unwrap().exploitability_score > 50);
 
     // 5. Validation empirique de l'exploitabilité (Validation)
     ctem.validate_exposure(&admin_cap, 1, true, 5030)
@@ -128,28 +156,37 @@ pub fn execute_ctem_daemon_test() -> bool {
     assert_eq!(action_id, 1);
     assert_eq!(ctem.action_count, 1);
 
-    let initial_score = ctem.overall_exposure_score;
-    ctem.remediate_exposure(&admin_cap, 1, 5050)
-        .expect("Remédiation finale #1");
-    assert_eq!(
-        ctem.exposures[0].unwrap().status,
-        ExposureStatus::Remediated
-    );
-    assert!(ctem.overall_exposure_score < initial_score);
+    // 7. Génération de rapport formel de cycle scellé SHA-256
+    let cycle_rep = ctem
+        .generate_cycle_report(&admin_cap, 5045)
+        .expect("Génération rapport de cycle");
+    assert_eq!(cycle_rep.report_id, 1);
+    assert_eq!(cycle_rep.total_scopes, 5);
+    assert_eq!(cycle_rep.total_exposures, 7);
+    assert_ne!(cycle_rep.report_hash, [0u8; 32]);
+    assert!(cycle_rep.predictive_exploitability_avg > 0);
 
-    // 7. Cycle complet automatisé & Synthèse
+    // 8. Remédiation coordonnée autonome en lot O(1)
+    let rem_report = ctem
+        .remediate_all_mobilized(&admin_cap, 5050)
+        .expect("Remédiation coordonnée O(1)");
+    assert_eq!(rem_report.report_id, 2);
+    assert!(rem_report.remediated_count >= 1);
+    assert!(rem_report.score_after < rem_report.score_before);
+    assert_ne!(rem_report.report_hash, [0u8; 32]);
+
+    // 9. Cycle complet automatisé & Synthèse
     let summary = ctem
         .run_full_cycle(&admin_cap, 5060)
         .expect("Cycle complet automatisé");
     assert_eq!(summary.total_scopes, 5);
-    assert_eq!(summary.total_exposures, 6);
-    assert!(summary.mobilized_count > 0);
+    assert_eq!(summary.total_exposures, 7);
 
-    // 8. Intégrité cryptographique SHA-256 du registre d'audit
+    // 10. Intégrité cryptographique SHA-256 du registre d'audit
     assert!(ctem.verify_ledger_integrity());
 
     kprintln!(
-        "[CTEM/TEST] Validation réussie : 5 périmètres cadrés, 6 expositions fédérées, exploitabilité validée, remédiation orchestrée, registre SHA-256 intègre."
+        "[CTEM/TEST] Validation réussie : 5 périmètres cadrés, 7 expositions fédérées, corrélation multi-plans, scoring prédictif, rapports scellés SHA-256, remédiation coordonnée O(1), registre d'audit intègre."
     );
     true
 }

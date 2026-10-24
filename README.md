@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.3.28-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.3.29-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.3.28 (Gestion Souveraine de la Surface d'Attaque Externe EASM, Découverte Continue d'Actifs & Cartographie des Risques d'Exposition jambo-easm)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.3.28` introduit la modernisation et la souveraineté complète de la Gestion de la Surface d'Attaque Externe (EASM — `services/jambo-easm`) : moteur souverain de cartographie et découverte continue de la surface d'attaque externe `#![no_std]`, inventaire dynamique des actifs exposés (adresses IP, ports, certificats TLS, endpoints d'API, micro-services, TEE Enclave Gateways), détection en temps réel du Shadow IT et sous-domaines orphelins (Subdomain / Dangling DNS Takeover), calcul déterministe de l'indice d'exposition externe (0..100) et du score de durcissement périmétrique (0..100), corrélation proactive avec le renseignement sur les menaces cyber CTI (`jambo-intel`), profils de découverte avancés (Continuous, AdversaryReconnaissance, SecNumCloudAudit, ZeroTrustPerimeter), génération de rapports d'exposition (`EasmPerimeterReport`) et de remédiation (`EasmRemediationReport`) scellés SHA-256 avec contrôle capabilaire strict `EasmCap` et registre d'audit cryptographique SHA-256 inaltérable.
+> **Statut du Projet : Version v0.3.29 (Programme Continu de Gestion de l'Exposition aux Menaces CTEM, Orchestration Fédérée & Priorisation Prédictive des Risques jambo-ctem)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.3.29` introduit la modernisation et la souveraineté complète du Programme Continu de Gestion de l'Exposition aux Menaces (CTEM — `services/jambo-ctem`) : cycle souverain d'orchestration continue CTEM en 5 phases `#![no_std]` (Scoping, Discovery, Prioritization, Validation, Mobilization), fédération multi-plans unifiant les signaux CSPM, CIEM, CWPP, ASPM, BAS, EASM et CTI Intel, modélisation de chemins d'attaque contextuels et calcul prédictif d'exploitabilité (0..100), playbooks de mobilisation coordonnée et remédiation autonome O(1) (`remediate_all_mobilized`), rapports de cycle (`CtemCycleReport`) et de remédiation (`CtemRemediationReport`) scellés SHA-256 avec contrôle capabilaire strict `CtemCap` sans autorité ambiante avec atténuation monotone et registre d'audit cryptographique SHA-256 inaltérable.
 
 ---
 

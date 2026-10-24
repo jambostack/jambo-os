@@ -1,6 +1,6 @@
 [package]
 name = "kernel"
-version = "0.3.28"
+version = "0.3.29"
 edition = "2021"
 [[bin]]
 name = "kernel"
