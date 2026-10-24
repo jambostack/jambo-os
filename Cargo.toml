@@ -103,6 +103,7 @@ members = [
     "services/jambo-sspm",
     "services/jambo-aiops",
     "services/jambo-devsecops",
+    "services/jambo-tprm",
     "libs/jambo-ui",
     "libs/jambo-sdk",
     "drivers/virtio",

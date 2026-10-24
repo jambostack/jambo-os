@@ -205,6 +205,7 @@ pub struct JamboShell {
     pub dspm: jambo_dspm::JamboDspmDaemon,
     pub aiops: jambo_aiops::JamboAiopsDaemon,
     pub devsecops: jambo_devsecops::JamboDevSecOpsDaemon,
+    pub tprm: jambo_tprm::JamboTprmDaemon,
 }
 
 impl Default for JamboShell {
@@ -780,6 +781,15 @@ impl JamboShell {
         );
         let mut devsecops = jambo_devsecops::JamboDevSecOpsDaemon::new(devsecops_cap);
         devsecops.init_defaults();
+
+        let tprm_cap = jambo_tprm::TprmCap::new(
+            libjambo::Handle::new(13901, 1),
+            jambo_tprm::tprm_rights::ALL,
+            5000,
+            100,
+        );
+        let mut tprm = jambo_tprm::JamboTprmDaemon::new(tprm_cap);
+        tprm.init_defaults();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -875,6 +885,7 @@ impl JamboShell {
             dspm,
             aiops,
             devsecops,
+            tprm,
         }
     }
 
@@ -1087,10 +1098,11 @@ impl JamboShell {
                 emit("  dspm [cmd]      - Posture des données (DSPM), cartographie, flux transfrontaliers & quarantaine\n");
                 emit("  aiops [cmd]     - Opérations IT pilotées par l'IA (AIOps), Z-score, corrélation topologique & remédiation\n");
                 emit("  devsecops [cmd] - Sécurité pipelines DevSecOps, contrôle admission, attestations SLSA & signatures\n");
+                emit("  tprm [cmd]      - Gestion des risques fournisseurs (TPRM), dépendances & quarantaine\n");
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.3.5 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.3.6 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -13870,6 +13882,251 @@ impl JamboShell {
                     }
                 }
             }
+            "tprm" => {
+                let subcmd = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    "status"
+                };
+
+                let mut b = [0u8; 20];
+
+                match subcmd {
+                    "status" => {
+                        let cap = self.tprm.admin_cap;
+                        if let Ok(sum) = self.tprm.get_summary(&cap) {
+                            emit("--- TPRM SUPPLY-CHAIN HEALTH (PHASE 139) ---\n");
+                            emit("Fournisseurs enregistrés: ");
+                            emit(format_u64(sum.total_vendors as u64, &mut b));
+                            emit("\nDépendances cartographiées: ");
+                            emit(format_u64(sum.total_dependencies as u64, &mut b));
+                            emit("\nDépendances en quarantaine: ");
+                            emit(format_u64(sum.quarantined_dependencies as u64, &mut b));
+                            emit("\nAttestations vérifiées: ");
+                            emit(format_u64(sum.verified_attestations as u64, &mut b));
+                            emit("\nFournisseurs haut risque: ");
+                            emit(format_u64(sum.high_risk_vendors_count as u64, &mut b));
+                            emit("\nScore réputation moyen: ");
+                            emit(format_u64(sum.average_reputation_score as u64, &mut b));
+                            emit("/100\nIndice santé supply chain: ");
+                            emit(format_u64(sum.global_supply_chain_health as u64, &mut b));
+                            emit("/100\n");
+                            (ShellStatus::Success, write_pos)
+                        } else {
+                            emit("Erreur lecture synthèse TPRM\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        }
+                    }
+                    "vendors" => {
+                        emit("--- CATALOGUE FOURNISSEURS TIERS ---\n");
+                        for v in self.tprm.vendors.iter().flatten() {
+                            emit("[#");
+                            emit(format_u64(v.id as u64, &mut b));
+                            emit("] ");
+                            emit(v.name_as_str());
+                            emit(" | Tier: ");
+                            match v.tier {
+                                jambo_tprm::VendorTier::Tier1SovereignCore => {
+                                    emit("Tier 1 (Sovereign Core)")
+                                }
+                                jambo_tprm::VendorTier::Tier2HighAssurance => {
+                                    emit("Tier 2 (High Assurance)")
+                                }
+                                jambo_tprm::VendorTier::Tier3StandardEcosystem => {
+                                    emit("Tier 3 (Standard)")
+                                }
+                                jambo_tprm::VendorTier::Tier4UntrustedCommunity => {
+                                    emit("Tier 4 (Untrusted)")
+                                }
+                            }
+                            emit(" | Rép: ");
+                            emit(format_u64(v.reputation_score as u64, &mut b));
+                            emit(" | Risque: ");
+                            emit(format_u64(v.composite_risk_score as u64, &mut b));
+                            emit(" | Statut: ");
+                            match v.status {
+                                jambo_tprm::VendorStatus::Active => emit("Actif\n"),
+                                jambo_tprm::VendorStatus::UnderReview => emit("Revue\n"),
+                                jambo_tprm::VendorStatus::Restricted => emit("Restreint\n"),
+                                jambo_tprm::VendorStatus::Quarantined => emit("Quarantaine\n"),
+                                jambo_tprm::VendorStatus::Revoked => emit("Révoqué\n"),
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "deps" => {
+                        emit("--- DÉPENDANCES CARTOGRAPHIÉES ---\n");
+                        for d in self.tprm.dependencies.iter().flatten() {
+                            emit("[#");
+                            emit(format_u64(d.id as u64, &mut b));
+                            emit("] ");
+                            emit(d.name_as_str());
+                            emit(" (v");
+                            emit(format_u64(d.version_code as u64, &mut b));
+                            emit(") | Fournisseur: #");
+                            emit(format_u64(d.vendor_id as u64, &mut b));
+                            emit(" | Type: ");
+                            match d.dep_type {
+                                jambo_tprm::DependencyType::RustCrate => emit("Crate"),
+                                jambo_tprm::DependencyType::CSharedLib => emit("LibC"),
+                                jambo_tprm::DependencyType::WasmModule => emit("Wasm"),
+                                jambo_tprm::DependencyType::HardwareFirmware => emit("Firmware"),
+                                jambo_tprm::DependencyType::ContainerImage => emit("Container"),
+                            }
+                            emit(" | CVE Crit/High: ");
+                            emit(format_u64(d.cve_critical_count as u64, &mut b));
+                            emit("/");
+                            emit(format_u64(d.cve_high_count as u64, &mut b));
+                            emit(" | Toxique: ");
+                            match d.risk_factor {
+                                jambo_tprm::ToxicRiskFactor::None => emit("Aucun"),
+                                jambo_tprm::ToxicRiskFactor::MaliciousBuildScript => {
+                                    emit("BuildScript")
+                                }
+                                jambo_tprm::ToxicRiskFactor::TyposquattingSuspect => {
+                                    emit("Typosquatting")
+                                }
+                                jambo_tprm::ToxicRiskFactor::UnknownMaintainer => {
+                                    emit("MaintainerInconnu")
+                                }
+                                jambo_tprm::ToxicRiskFactor::CriticalCveUnpatched => {
+                                    emit("CveCritique")
+                                }
+                                jambo_tprm::ToxicRiskFactor::BackdoorTelemetry => {
+                                    emit("Backdoor/Télémétrie")
+                                }
+                                jambo_tprm::ToxicRiskFactor::OutdatedCrypto => {
+                                    emit("CryptoObsolète")
+                                }
+                            }
+                            emit(" | Quarantaine: ");
+                            emit(if d.is_quarantined { "OUI\n" } else { "NON\n" });
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "attestations" => {
+                        emit("--- ATTESTATIONS DE CONFORMITÉ TIERCES ---\n");
+                        for a in self.tprm.attestations.iter().flatten() {
+                            emit("[#");
+                            emit(format_u64(a.id as u64, &mut b));
+                            emit("] Fournisseur: #");
+                            emit(format_u64(a.vendor_id as u64, &mut b));
+                            emit(" | Norme: ");
+                            match a.standard {
+                                jambo_tprm::ComplianceStandard::SecNumCloud => emit("SecNumCloud"),
+                                jambo_tprm::ComplianceStandard::SovereignDefense => {
+                                    emit("SovereignDefense")
+                                }
+                                jambo_tprm::ComplianceStandard::ISO27001 => emit("ISO 27001"),
+                                jambo_tprm::ComplianceStandard::SOC2Type2 => emit("SOC 2 Type II"),
+                                jambo_tprm::ComplianceStandard::None => emit("Aucune"),
+                            }
+                            emit(" | Auditeur: ");
+                            emit(a.auditor_as_str());
+                            emit(" | Vérifié: ");
+                            emit(if a.is_verified {
+                                "VALIDE\n"
+                            } else {
+                                "EXPIRÉ\n"
+                            });
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "eval" => {
+                        if parsed.arg_count > 2 {
+                            let did = parse_u64(parsed.args[2]).unwrap_or(1) as u32;
+                            let mut cap = self.tprm.admin_cap;
+                            match self.tprm.evaluate_ingestion(&mut cap, did, 9999) {
+                                Ok(decision) => {
+                                    emit("Évaluation dépendance #");
+                                    emit(format_u64(did as u64, &mut b));
+                                    emit(" -> Décision: ");
+                                    match decision {
+                                        jambo_tprm::IngestionDecision::Approved => {
+                                            emit("APPROUVÉ\n")
+                                        }
+                                        jambo_tprm::IngestionDecision::ConditionalSandbox => {
+                                            emit("BAC À SABLE CONDITIONNEL\n")
+                                        }
+                                        jambo_tprm::IngestionDecision::Quarantined => {
+                                            emit("QUARANTAINE\n")
+                                        }
+                                        jambo_tprm::IngestionDecision::Rejected => emit("REJETÉ\n"),
+                                    }
+                                    (ShellStatus::Success, write_pos)
+                                }
+                                Err(_) => {
+                                    emit("Erreur évaluation dépendance\n");
+                                    (ShellStatus::ExecutionFailed, write_pos)
+                                }
+                            }
+                        } else {
+                            emit("--- DÉCISIONS D'ADMISSION & INGESTION ---\n");
+                            for ev in self.tprm.evaluations.iter().flatten() {
+                                emit("[#");
+                                emit(format_u64(ev.id as u64, &mut b));
+                                emit("] Dépendance: #");
+                                emit(format_u64(ev.dependency_id as u64, &mut b));
+                                emit(" | Décision: ");
+                                match ev.decision {
+                                    jambo_tprm::IngestionDecision::Approved => emit("APPROUVÉ"),
+                                    jambo_tprm::IngestionDecision::ConditionalSandbox => {
+                                        emit("BAC À SABLE")
+                                    }
+                                    jambo_tprm::IngestionDecision::Quarantined => {
+                                        emit("QUARANTAINE")
+                                    }
+                                    jambo_tprm::IngestionDecision::Rejected => emit("REJETÉ"),
+                                }
+                                emit(" | Risque: ");
+                                emit(format_u64(ev.risk_score as u64, &mut b));
+                                emit(" | Isolation: ");
+                                emit(if ev.isolation_required {
+                                    "OUI\n"
+                                } else {
+                                    "NON\n"
+                                });
+                            }
+                            (ShellStatus::Success, write_pos)
+                        }
+                    }
+                    "quarantine" => {
+                        if parsed.arg_count > 2 {
+                            let did = parse_u64(parsed.args[2]).unwrap_or(1) as u32;
+                            let mut cap = self.tprm.admin_cap;
+                            match self.tprm.quarantine_dependency(&mut cap, did, 9999) {
+                                Ok(_) => {
+                                    emit("Dépendance #");
+                                    emit(format_u64(did as u64, &mut b));
+                                    emit(" placée en QUARANTAINE avec succès\n");
+                                    (ShellStatus::Success, write_pos)
+                                }
+                                Err(_) => {
+                                    emit("Erreur mise en quarantaine\n");
+                                    (ShellStatus::ExecutionFailed, write_pos)
+                                }
+                            }
+                        } else {
+                            emit("Usage: tprm quarantine <dep_id>\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        }
+                    }
+                    "verify" => {
+                        let valid = self.tprm.verify_ledger_integrity();
+                        emit("Registre d'audit cryptographique SHA-256 TPRM: ");
+                        emit(if valid {
+                            "INTÈGRE (OK)\n"
+                        } else {
+                            "ALTÉRÉ (FAIL)\n"
+                        });
+                        (ShellStatus::Success, write_pos)
+                    }
+                    _ => {
+                        emit("Usage: tprm [status | vendors | deps | attestations | eval [id] | quarantine [id] | verify]\n");
+                        (ShellStatus::ExecutionFailed, write_pos)
+                    }
+                }
+            }
             "poweroff" | "reboot" => {
                 emit("[SYSTEM] Extinction demandée...\n");
                 unsafe {
@@ -17992,6 +18249,55 @@ mod tests {
                 let (st8, len8) = shell.execute_line("devsecops verify", &mut out);
                 assert_eq!(st8, ShellStatus::Success);
                 assert!(len8 > 0);
+            })
+            .unwrap();
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn test_shell_tprm_commands() {
+        extern crate std;
+        let handle = std::thread::Builder::new()
+            .stack_size(8 * 1024 * 1024)
+            .spawn(|| {
+                let mut shell = JamboShell::new();
+                let mut out = [0u8; 1024];
+
+                let (st1, len1) = shell.execute_line("tprm status", &mut out);
+                assert_eq!(st1, ShellStatus::Success);
+                assert!(len1 > 0);
+
+                let (st2, len2) = shell.execute_line("tprm vendors", &mut out);
+                assert_eq!(st2, ShellStatus::Success);
+                assert!(len2 > 0);
+
+                let (st3, len3) = shell.execute_line("tprm deps", &mut out);
+                assert_eq!(st3, ShellStatus::Success);
+                assert!(len3 > 0);
+
+                let (st4, len4) = shell.execute_line("tprm attestations", &mut out);
+                assert_eq!(st4, ShellStatus::Success);
+                assert!(len4 > 0);
+
+                let (st5, len5) = shell.execute_line("tprm eval", &mut out);
+                assert_eq!(st5, ShellStatus::Success);
+                assert!(len5 > 0);
+
+                let (st6, len6) = shell.execute_line("tprm eval 1", &mut out);
+                assert_eq!(st6, ShellStatus::Success);
+                assert!(len6 > 0);
+
+                let (st7, len7) = shell.execute_line("tprm eval 4", &mut out);
+                assert_eq!(st7, ShellStatus::Success);
+                assert!(len7 > 0);
+
+                let (st8, len8) = shell.execute_line("tprm quarantine 2", &mut out);
+                assert_eq!(st8, ShellStatus::Success);
+                assert!(len8 > 0);
+
+                let (st9, len9) = shell.execute_line("tprm verify", &mut out);
+                assert_eq!(st9, ShellStatus::Success);
+                assert!(len9 > 0);
             })
             .unwrap();
         handle.join().unwrap();
