@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.3.15-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.3.16-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.3.15 (Investigation Numérique & Forensique Souveraine en Mémoire Vive jambo-forensics)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.3.15` introduit la modernisation et la souveraineté complète de l'investigation numérique et de l'analyse forensique post-incident en mémoire vive (`services/jambo-forensics`) : acquisition d'empreintes volatiles de processus, capture et scellement d'objets mémoire virtuels souverains (VMO), analyse chirurgicale des résidus mémoire (Memory Residue Analyzer détectant les clés privées, tokens fuités, fragments d'instructions shellcodes et chaînes de gadgets ROP dans le slack space), journalisation chronologique bornée d'artefacts temporels et corrélation multi-sources (DLP, UEBA, SOAR, KDIR), module de triage post-incident orchestré atomique (`orchestrate_post_incident_triage`), scellement cryptographique inviolable multi-algorithmique (BLAKE3 + SHA-256 + signature asymétrique Ed25519), contrôle d'accès sans autorité ambiante `ForensicsCap` avec atténuation monotone et registre de chaîne de garde (Chain of Custody) inaltérable chaîné en SHA-256.
+> **Statut du Projet : Version v0.3.16 (Détection et Réponse sur les Terminaux Souveraine EDR jambo-edr)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.3.16` introduit la modernisation et la souveraineté complète de la Détection et Réponse sur les Terminaux (EDR souverain — `services/jambo-edr`) : surveillance comportementale avancée des processus Ring 3, détection de filiations suspectes et usurpations d'identité noyau (masquerading), interception temps réel des injections dynamiques de modules (.jso non autorisés, segments W+X, détournements de tables GOT/PLT et Process Hollowing), scanneur d'opcodes malveillants et de shellcodes en mémoire vive (NOP sleds, pièges INT3, boucles furtives de syscalls 0x0F 0x05, pivots de pile ROP), garde-fou d'enclaves matérielles TEE (détection de violations de frontières d'isolation, tentatives d'accès aux MSRs privilégiés IA32_LSTAR/IA32_EFER et dérive d'attestation matérielle), détection de trampolines de saut et crochets (Hooks) dans les tables d'appels système et IDT, confinement instantané O(1) avec rapport structuré de remédiation déterministe (`EdrRemediationReport`), contrôle capabilaire strict `EdrCap` sans autorité ambiante et registre d'audit SHA-256 scellé et inaltérable.
 
 ---
 

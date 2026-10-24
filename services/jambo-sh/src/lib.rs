@@ -1154,7 +1154,7 @@ impl JamboShell {
                 emit("  ddos [cmd]    - Mitigation Anti-DDoS L3/L4/L7, SYN Cookies, seaux à jetons & DdosCap\n");
                 emit("  soar [cmd]    - Orchestration SOAR, Playbooks DAG automatisés & SoarCap\n");
                 emit("  forensics [cmd] - Investigation numérique, extraction d'artefacts & scellement Ed25519/BLAKE3\n");
-                emit("  edr [cmd]     - Surveillance comportementale, détection injections .jso/W+X & EdrCap\n");
+                emit("  edr [cmd]     - Détection & réponse souveraine EDR, scans mémoire shellcodes, enclaves TEE & EdrCap\n");
                 emit(
                     "  xdr [cmd]     - Détection & réponse étendue multi-vecteurs, APT & XdrCap\n",
                 );
@@ -10583,23 +10583,28 @@ impl JamboShell {
                 match subcmd {
                     "status" => {
                         let mut b = [0u8; 20];
-                        emit("[EDR/STATUS] Démon de Détection & Réponse sur les Terminaux (Endpoint Detection & Response)\n");
+                        let sum = self.edr.summary();
+                        emit("[EDR/STATUS] Démon Souverain de Détection & Réponse sur les Terminaux (EDR)\n");
                         emit("  Processus surveillés  : ");
-                        emit(format_u64(self.edr.process_count as u64, &mut b));
-                        emit("\n  Alertes générées      : ");
-                        emit(format_u64(self.edr.alert_count as u64, &mut b));
+                        emit(format_u64(sum.total_processes as u64, &mut b));
+                        emit(" (Actifs: ");
+                        emit(format_u64(sum.running_processes as u64, &mut b));
+                        emit(", Quarantaine: ");
+                        emit(format_u64(sum.quarantined_processes as u64, &mut b));
+                        emit(", Terminés: ");
+                        emit(format_u64(sum.terminated_processes as u64, &mut b));
+                        emit(")\n  Alertes générées      : ");
+                        emit(format_u64(sum.alert_count as u64, &mut b));
                         emit("\n  Injections bloquées   : ");
-                        emit(format_u64(self.edr.injection_blocked_count as u64, &mut b));
+                        emit(format_u64(sum.injections_blocked as u64, &mut b));
+                        emit("\n  Shellcodes interceptés: ");
+                        emit(format_u64(sum.shellcodes_intercepted as u64, &mut b));
                         emit("\n  Évasions TEE bloquées : ");
-                        emit(format_u64(
-                            self.edr.enclave_escape_blocked_count as u64,
-                            &mut b,
-                        ));
+                        emit(format_u64(sum.enclave_escapes_blocked as u64, &mut b));
                         emit("\n  Crochets détectés     : ");
-                        emit(format_u64(self.edr.hooks_detected_count as u64, &mut b));
+                        emit(format_u64(sum.hooks_detected as u64, &mut b));
                         emit("\n  Chaîne d'audit SHA-256: ");
-                        let valid = self.edr.verify_ledger_integrity();
-                        emit(if valid {
+                        emit(if sum.ledger_valid {
                             "VÉRIFIÉE (OK)\n"
                         } else {
                             "CORROMPUE (ERR)\n"
@@ -10626,7 +10631,19 @@ impl JamboShell {
                                 });
                                 emit(", Menace: ");
                                 emit(format_u64(p.threat_score as u64, &mut b));
-                                emit("/100]\n");
+                                emit("/100");
+                                if p.is_enclave {
+                                    emit(", Enclave TEE: ");
+                                    emit(match p.enclave_status {
+                                        jambo_edr::EnclaveStatus::EnclaveValid => "Valide",
+                                        jambo_edr::EnclaveStatus::EnclaveSuspect => "Suspecte",
+                                        jambo_edr::EnclaveStatus::EnclaveQuarantined => {
+                                            "Quarantaine"
+                                        }
+                                        jambo_edr::EnclaveStatus::NotEnclave => "Non",
+                                    });
+                                }
+                                emit("]\n");
                             }
                         }
                         (ShellStatus::Success, write_pos)
@@ -10659,11 +10676,61 @@ impl JamboShell {
                         }
                         (ShellStatus::Success, write_pos)
                     }
+                    "scan" => {
+                        let cap = self.edr.admin_cap;
+                        let target_pid = 3u64;
+                        let sample_code = [0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90]; // NOP sled test
+                        match self
+                            .edr
+                            .scan_process_memory(&cap, target_pid, &sample_code, 4000)
+                        {
+                            Ok(res) => {
+                                let mut b = [0u8; 20];
+                                emit("[EDR/SCAN] Analyse de mémoire vive sur PID ");
+                                emit(format_u64(target_pid, &mut b));
+                                emit(" : ");
+                                emit(match res {
+                                    jambo_edr::ShellcodeScanResult::Clean => {
+                                        "Mémoire intègre (Clean)\n"
+                                    }
+                                    jambo_edr::ShellcodeScanResult::NopSledDetected => {
+                                        "Alerte : NOP sled détecté (Quarantaine O(1))\n"
+                                    }
+                                    jambo_edr::ShellcodeScanResult::SyscallTrapLoop => {
+                                        "Alerte : Boucle de syscalls 0x0F 0x05 détectée\n"
+                                    }
+                                    jambo_edr::ShellcodeScanResult::StackPivotDetected => {
+                                        "Alerte : Pivot de pile ROP détecté\n"
+                                    }
+                                    jambo_edr::ShellcodeScanResult::Int3TrapDetected => {
+                                        "Alerte : Piège INT3 détecté\n"
+                                    }
+                                });
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("[EDR/SCAN] Échec de l'analyse mémoire du processus\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
                     "isolate" => {
                         let cap = self.edr.admin_cap;
-                        match self.edr.isolate_process(&cap, 4, 3200) {
-                            Ok(()) => {
-                                emit("[EDR/ISOLATE] Processus PID 4 confiné en quarantaine avec succès (capacités révoquées)\n");
+                        match self.edr.isolate_process_with_report(
+                            &cap,
+                            4,
+                            "Operator manual containment",
+                            4100,
+                        ) {
+                            Ok(rep) => {
+                                let mut b = [0u8; 20];
+                                emit("[EDR/ISOLATE] Processus PID ");
+                                emit(format_u64(rep.pid, &mut b));
+                                emit(" confiné en quarantaine O(1) avec succès [Menace: ");
+                                emit(format_u64(rep.threat_score as u64, &mut b));
+                                emit("/100, Capacités révoquées : 0x");
+                                emit(format_u64(rep.revoked_rights as u64, &mut b));
+                                emit("]\n");
                                 (ShellStatus::Success, write_pos)
                             }
                             Err(_) => {
@@ -10671,6 +10738,65 @@ impl JamboShell {
                                 (ShellStatus::ExecutionFailed, write_pos)
                             }
                         }
+                    }
+                    "enclave" => {
+                        emit("[EDR/ENCLAVE] Statut de Protection des Enclaves Matérielles TEE :\n");
+                        let mut count = 0usize;
+                        for i in 0..self.edr.process_count {
+                            if let Some(ref p) = self.edr.processes[i] {
+                                if p.is_enclave {
+                                    let mut b = [0u8; 20];
+                                    count += 1;
+                                    emit("  Enclave PID ");
+                                    emit(format_u64(p.pid, &mut b));
+                                    emit(" (");
+                                    emit(p.name_as_str());
+                                    emit(") - État d'attestation: ");
+                                    emit(match p.enclave_status {
+                                        jambo_edr::EnclaveStatus::EnclaveValid => {
+                                            "Valide & Sécurisée (Hardware RoT)\n"
+                                        }
+                                        jambo_edr::EnclaveStatus::EnclaveSuspect => {
+                                            "Suspecte (Anomalie d'accès)\n"
+                                        }
+                                        jambo_edr::EnclaveStatus::EnclaveQuarantined => {
+                                            "Quarantaine (Violation TEE interceptée)\n"
+                                        }
+                                        jambo_edr::EnclaveStatus::NotEnclave => "Non enclave\n",
+                                    });
+                                }
+                            }
+                        }
+                        if count == 0 {
+                            emit("  Aucune enclave matérielle enregistrée.\n");
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "summary" => {
+                        let sum = self.edr.summary();
+                        let mut b = [0u8; 20];
+                        emit("[EDR/SUMMARY] Synthèse Opérationnelle EDR Souveraine :\n");
+                        emit("  Total processus : ");
+                        emit(format_u64(sum.total_processes as u64, &mut b));
+                        emit(" | En cours: ");
+                        emit(format_u64(sum.running_processes as u64, &mut b));
+                        emit(" | Quarantaine: ");
+                        emit(format_u64(sum.quarantined_processes as u64, &mut b));
+                        emit(" | Terminés: ");
+                        emit(format_u64(sum.terminated_processes as u64, &mut b));
+                        emit("\n  Injections bloquées: ");
+                        emit(format_u64(sum.injections_blocked as u64, &mut b));
+                        emit(" | Shellcodes neutralisés: ");
+                        emit(format_u64(sum.shellcodes_intercepted as u64, &mut b));
+                        emit(" | Évasions TEE neutralisées: ");
+                        emit(format_u64(sum.enclave_escapes_blocked as u64, &mut b));
+                        emit("\n  Registre SHA-256: ");
+                        emit(if sum.ledger_valid {
+                            "VALIDE\n"
+                        } else {
+                            "INVALIDE\n"
+                        });
+                        (ShellStatus::Success, write_pos)
                     }
                     "verify" => {
                         let valid = self.edr.verify_ledger_integrity();
@@ -10683,7 +10809,7 @@ impl JamboShell {
                         (ShellStatus::Success, write_pos)
                     }
                     _ => {
-                        emit("Usage: edr [status | processes | alerts | isolate | verify]\n");
+                        emit("Usage: edr [status | processes | alerts | scan | isolate | enclave | summary | verify]\n");
                         (ShellStatus::ExecutionFailed, write_pos)
                     }
                 }
@@ -18963,6 +19089,18 @@ mod tests {
                 let (st4, len4) = shell.execute_line("edr isolate", &mut out);
                 assert_eq!(st4, ShellStatus::Success);
                 assert!(len4 > 0);
+
+                let (st4b, len4b) = shell.execute_line("edr scan", &mut out);
+                assert_eq!(st4b, ShellStatus::Success);
+                assert!(len4b > 0);
+
+                let (st4c, len4c) = shell.execute_line("edr enclave", &mut out);
+                assert_eq!(st4c, ShellStatus::Success);
+                assert!(len4c > 0);
+
+                let (st4d, len4d) = shell.execute_line("edr summary", &mut out);
+                assert_eq!(st4d, ShellStatus::Success);
+                assert!(len4d > 0);
 
                 let (st5, len5) = shell.execute_line("edr verify", &mut out);
                 assert_eq!(st5, ShellStatus::Success);

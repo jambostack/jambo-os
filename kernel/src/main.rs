@@ -1237,12 +1237,7 @@ pub extern "C" fn _start() -> ! {
 
     // Note: L'Investigation Numérique & Forensique Souveraine est validée en Phase 148 (v0.3.15).
 
-    // 14undevigintiesquadragies. Validation de la Détection & Réponse sur les Terminaux (Phase 119 - v0.2.117)
-    let edr_success = sched::edr_test::execute_edr_daemon_test();
-    assert!(
-        edr_success,
-        "Échec du test de la détection & réponse sur les terminaux jambo-edr"
-    );
+    // Note: La Détection et Réponse sur les Terminaux Souveraine EDR est validée en Phase 149 (v0.3.16).
 
     // 14viciesquadragies. Validation de la Détection & Réponse Étendue Multi-Vecteurs (Phase 120 - v0.2.118)
     let xdr_success = sched::xdr_test::execute_xdr_daemon_test();
@@ -1445,6 +1440,13 @@ pub extern "C" fn _start() -> ! {
     assert!(
         forensics_success,
         "Échec du test de l'investigation numérique & forensique souveraine jambo-forensics"
+    );
+
+    // 34viciesquadragies. Validation Détection et Réponse sur les Terminaux Souveraine EDR (Phase 149 - v0.3.16)
+    let edr_success = sched::edr_test::execute_edr_daemon_test();
+    assert!(
+        edr_success,
+        "Échec du test de la détection et réponse sur les terminaux souveraine jambo-edr"
     );
 
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
@@ -1741,14 +1743,17 @@ pub extern "C" fn _start() -> ! {
     kprintln!(
         "\x1b[1;32m[PASS] Phase 148 Volatile Memory Forensics & Digital Investigation (jambo-forensics) Complete\x1b[0m"
     );
+    kprintln!(
+        "\x1b[1;32m[PASS] Phase 149 Sovereign Endpoint Detection and Response (jambo-edr) Complete\x1b[0m"
+    );
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.3.15 (Volatile Memory Forensics Resilience jambo-forensics)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.3.16 (Sovereign Endpoint Detection & Response Resilience jambo-edr)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.3.15 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.3.16 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );

@@ -1,41 +1,49 @@
-//! Détection & Réponse sur les Terminaux (Endpoint Detection & Response - EDR)
+//! Détection et Réponse sur les Terminaux Souveraine EDR (`jambo-edr`)
 //!
-//! Phase 119 — Jalon v0.2.117
+//! Phase 149 — Jalon v0.3.16
 //!
-//! Fournit une surveillance comportementale en temps réel, la détection d'intrusions,
-//! l'interception d'injections dynamiques DLL/.jso, la protection contre les évasions
-//! d'enclaves TEE et le scellement cryptographique d'audit SHA-256 en environnement `#![no_std]`.
+//! Fournit un système souverain complet de surveillance comportementale en temps réel,
+//! d'interception d'injections dynamiques DLL/.jso/GOT-PLT, de protection contre les évasions
+//! d'enclaves TEE, de neutralisation de shellcodes en mémoire, d'isolation O(1) et
+//! de scellement cryptographique d'audit SHA-256 en environnement `#![no_std]`.
 //!
 //! Fonctionnalités clés :
 //! 1. Contrôle d'Accès Capabilaire Strict (`EdrCap`) :
-//!    - Modèle Zero-Ambient Authority.
-//!    - Atténuation monotone vérifiée sans amplification de privilèges.
+//!    - Modèle Zero-Ambient Authority (ZAA).
+//!    - Atténuation monotone sans amplification de privilèges.
 //!    - Droits granulaires : `MONITOR_PROCESS`, `DETECT_INJECTION`, `ENCLAVE_GUARD`,
-//!      `SYSTEM_HOOK_INSPECT`, `RESPOND_ISOLATE`, `SEAL_REPORT`, `AUDIT_READ`, `ADMIN`.
+//!      `SYSTEM_HOOK_INSPECT`, `RESPOND_ISOLATE`, `SEAL_REPORT`, `AUDIT_READ`,
+//!      `SCAN_MEMORY`, `ADMIN`.
 //!
-//! 2. Surveillance Comportementale d'Arborescence de Processus :
+//! 2. Surveillance Comportementale Avancée d'Arborescence & Télémétrie Syscalls :
 //!    - Suivi des filiations parent-enfant (PID/PPID) et détection d'anomalies de lignage
-//!      (ex: démon non-interactif engendrant un shell ou un outil de compilation).
-//!    - Détection d'usurpation de noms système (masquerading).
+//!      (démons réseau engendrant un shell interactif ou usurpation de workers noyau).
+//!    - Détection de fork-bombs, déni de service et patterns d'appels système interdits.
 //!    - Calcul d'indice de menace dynamique (0..100) par processus.
 //!
-//! 3. Moteur d'Interception d'Injections Dynamiques (.jso / DLL / GOT-PLT) :
-//!    - Recensement des modules partagés chargés par processus.
-//!    - Détection de modules tiers non-approuvés ou de segments W+X (Writable & Executable).
+//! 3. Moteur d'Interception d'Injections Dynamiques (.jso / GOT-PLT / W+X) :
+//!    - Détection de modules tiers non-approuvés ou segments W+X (Writable & Executable).
 //!    - Détection de détournement de tables de saut GOT/PLT hors des bornes mémoires valides.
+//!    - Détection de Process Hollowing (altération d'en-tête / divergence du point d'entrée ELF).
 //!
-//! 4. Garde-Fou d'Enclave Matérielle / TEE (`EnclaveGuard`) :
+//! 4. Scanneur de Shellcode en Mémoire Vive (`scan_process_memory`) :
+//!    - Détection d'atterrissages NOP sled (séries d'opcodes 0x90).
+//!    - Détection de pièges INT3 (0xCC) et boucles de syscalls furtifs (0x0F 0x05).
+//!    - Détection de pivots de pile ROP (`mov rsp, rbp` / `pop rsp; ret`).
+//!
+//! 5. Garde-Fou d'Enclave Matérielle / TEE (`EnclaveGuard`) :
 //!    - Détection heuristique de franchissement de frontière d'isolation d'enclave.
-//!    - Blocage d'accès illicites aux MSRs privilégiés et tentatives d'extraction de clés scellées.
+//!    - Blocage d'accès illicites aux MSRs privilégiés (IA32_LSTAR, IA32_EFER) et mémoire basse.
+//!    - Suivi d'état d'attestation d'enclave (Valid, Suspect, Quarantined).
 //!
-//! 5. Inspection de Crochets Système & Intégrité Noyau (`HookInspector`) :
+//! 6. Inspection de Crochets Système & Intégrité Noyau (`HookInspector`) :
 //!    - Détection d'injections de trampolines de saut (JMP 0xE9 / CALL indirect) dans les
 //!      tables d'appels système ou gestionnaires de vecteurs d'interruptions IDT.
 //!
-//! 6. Moteur de Réponse & Confinement Automatisé :
-//!    - Quarantaine immédiate, suspension de thread, révocation de capacités ou arrêt forcé.
+//! 7. Confinement O(1) Instantané & Remédiation Déterministe (`EdrRemediationReport`) :
+//!    - Quarantaine immédiate, révocation instantanée des capabilités, suspension ou terminaison.
 //!
-//! 7. Registre d'Audit Inaltérable Scellé SHA-256 :
+//! 8. Registre d'Audit Inaltérable Scellé SHA-256 (`EdrSummary`) :
 //!    - Chaînage cryptographique inviolable de chaque alerte et action de remédiation.
 
 #![no_std]
@@ -202,8 +210,9 @@ pub mod edr_rights {
     pub const RESPOND_ISOLATE: u32 = 1 << 4; // 0x10: Actions de remédiation et mise en quarantaine
     pub const SEAL_REPORT: u32 = 1 << 5; // 0x20: Scellement cryptographique des rapports
     pub const AUDIT_READ: u32 = 1 << 6; // 0x40: Lecture des alertes et du journal d'audit
-    pub const ADMIN: u32 = 1 << 7; // 0x80: Administration globale du démon EDR
-    pub const ALL: u32 = 0xFF;
+    pub const SCAN_MEMORY: u32 = 1 << 7; // 0x80: Analyse de mémoire vive et shellcodes
+    pub const ADMIN: u32 = 1 << 8; // 0x100: Administration globale du démon EDR
+    pub const ALL: u32 = 0x1FF;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -219,6 +228,8 @@ pub enum EdrError {
     EnclaveBreach,
     HookDetected,
     InjectionDetected,
+    ShellcodeDetected,
+    MemoryScanFailed,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -255,7 +266,6 @@ impl EdrCap {
         new_lifetime: u64,
         new_invocations: u32,
     ) -> Result<Self, EdrError> {
-        // Règle d'or des capacités monotones : aucun droit nouveau ne peut être créé
         if (new_rights & !self.rights) != 0 {
             return Err(EdrError::AttenuationViolation);
         }
@@ -305,6 +315,17 @@ pub enum ProcessAnomaly {
     MasqueradingName = 2,
     PrivilegeEscalationAttempt = 3,
     ForkBombBurst = 4,
+    ProcessHollowingAttempt = 5,
+    RogueSyscallPattern = 6,
+    ShellcodeInjected = 7,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EnclaveStatus {
+    NotEnclave = 0,
+    EnclaveValid = 1,
+    EnclaveSuspect = 2,
+    EnclaveQuarantined = 3,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -319,6 +340,10 @@ pub struct ProcessNode {
     pub cap_rights: u32,
     pub modules_count: usize,
     pub anomaly: ProcessAnomaly,
+    pub is_enclave: bool,
+    pub enclave_status: EnclaveStatus,
+    pub syscall_count: u32,
+    pub last_entry_point: u64,
 }
 
 impl ProcessNode {
@@ -339,6 +364,10 @@ impl ProcessNode {
             cap_rights,
             modules_count: 0,
             anomaly: ProcessAnomaly::None,
+            is_enclave: false,
+            enclave_status: EnclaveStatus::NotEnclave,
+            syscall_count: 0,
+            last_entry_point: 0x0040_0000,
         }
     }
 
@@ -348,7 +377,7 @@ impl ProcessNode {
 }
 
 // ============================================================================
-// STRUCTURES D'INJECTION DYNAMIQUE & MODULES PARTAGÉS (.jso)
+// STRUCTURES D'INJECTION DYNAMIQUE & SCANNEUR DE SHELLCODE
 // ============================================================================
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -358,6 +387,16 @@ pub enum InjectionType {
     WritableExecutableSegment = 2,
     GotPltRedirect = 3,
     RemoteThreadCreated = 4,
+    MemoryShellcode = 5,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShellcodeScanResult {
+    Clean = 0,
+    NopSledDetected = 1,
+    SyscallTrapLoop = 2,
+    StackPivotDetected = 3,
+    Int3TrapDetected = 4,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -378,7 +417,6 @@ impl ModuleDescriptor {
         let copy_len = bytes.len().min(48);
         path[..copy_len].copy_from_slice(&bytes[..copy_len]);
 
-        // Empreinte SHA-256 déterministe basée sur le chemin et l'adresse
         let mut hasher = Sha256::new();
         hasher.update(&base_addr.to_le_bytes());
         hasher.update(&size.to_le_bytes());
@@ -412,6 +450,7 @@ pub enum EnclaveAnomaly {
     MsrTamperAttempt = 2,
     UnsealedKeyExtraction = 3,
     IllegalPagingRemap = 4,
+    SideChannelSpeculativeEscape = 5,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -432,7 +471,7 @@ pub struct HookAnomaly {
 }
 
 // ============================================================================
-// GESTIONNAIRE D'ALERTES & ACTIONS DE RÉPONSE AUTOMATISÉE
+// GESTIONNAIRE D'ALERTES & REMÉDIATION O(1)
 // ============================================================================
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -504,8 +543,26 @@ impl EdrAlert {
     }
 }
 
+/// Rapport d'action de remédiation déterministe O(1)
+#[derive(Debug, Clone, Copy)]
+pub struct EdrRemediationReport {
+    pub pid: u64,
+    pub action: EdrAction,
+    pub threat_score: u8,
+    pub reason: [u8; 64],
+    pub reason_len: usize,
+    pub revoked_rights: u32,
+    pub timestamp: u64,
+}
+
+impl EdrRemediationReport {
+    pub fn reason_as_str(&self) -> &str {
+        core::str::from_utf8(&self.reason[..self.reason_len]).unwrap_or("<invalid-utf8>")
+    }
+}
+
 // ============================================================================
-// REGISTRE D'AUDIT INALTÉRABLE SCISSELÉ (Audit Ledger)
+// REGISTRE D'AUDIT INALTÉRABLE SCELLÉ (Audit Ledger) & RÉSUMÉ
 // ============================================================================
 
 #[derive(Debug, Clone, Copy)]
@@ -543,6 +600,22 @@ impl EdrAuditEntry {
     }
 }
 
+/// Synthèse globale de l'état opérationnel EDR
+#[derive(Debug, Clone, Copy)]
+pub struct EdrSummary {
+    pub total_processes: usize,
+    pub running_processes: usize,
+    pub quarantined_processes: usize,
+    pub terminated_processes: usize,
+    pub alert_count: usize,
+    pub audit_count: usize,
+    pub injections_blocked: u32,
+    pub enclave_escapes_blocked: u32,
+    pub hooks_detected: u32,
+    pub shellcodes_intercepted: u32,
+    pub ledger_valid: bool,
+}
+
 // ============================================================================
 // DÉMON CENTRAL EDR (`JamboEdrDaemon`)
 // ============================================================================
@@ -560,6 +633,7 @@ pub struct JamboEdrDaemon {
     pub enclave_escape_blocked_count: u32,
     pub injection_blocked_count: u32,
     pub hooks_detected_count: u32,
+    pub shellcodes_intercepted_count: u32,
 }
 
 impl JamboEdrDaemon {
@@ -588,6 +662,7 @@ impl JamboEdrDaemon {
             enclave_escape_blocked_count: 0,
             injection_blocked_count: 0,
             hooks_detected_count: 0,
+            shellcodes_intercepted_count: 0,
         }
     }
 
@@ -598,6 +673,14 @@ impl JamboEdrDaemon {
         let _ = self.register_process_internal(2, 1, "jambo-schedd", 0x000000FF, 20);
         let _ = self.register_process_internal(3, 1, "jambo-sh", 0x0000003F, 30);
         let _ = self.register_process_internal(4, 1, "jambo-netd", 0x0000001F, 40);
+
+        // Enclave TEE matérielle pour PID 2 (jambo-schedd)
+        if let Some(slot) = self.find_proc_slot(2) {
+            if let Some(ref mut proc) = self.processes[slot] {
+                proc.is_enclave = true;
+                proc.enclave_status = EnclaveStatus::EnclaveValid;
+            }
+        }
 
         // Modules de base sains pour PID 3 (jambo-sh)
         let _ =
@@ -650,6 +733,26 @@ impl JamboEdrDaemon {
         }
         self.register_process_internal(pid, ppid, name, cap_rights, timestamp)
             .map(|_| pid)
+    }
+
+    /// Enregistre un processus dans une enclave matérielle TEE protégée
+    pub fn register_enclave_process(
+        &mut self,
+        cap: &EdrCap,
+        pid: u64,
+        _enclave_id: u32,
+        timestamp: u64,
+    ) -> Result<(), EdrError> {
+        if !cap.has_right(edr_rights::ENCLAVE_GUARD) {
+            return Err(EdrError::Unauthorized);
+        }
+        let slot = self.find_proc_slot(pid).ok_or(EdrError::ProcessNotFound)?;
+        if let Some(ref mut proc) = self.processes[slot] {
+            proc.is_enclave = true;
+            proc.enclave_status = EnclaveStatus::EnclaveValid;
+        }
+        let _ = self.record_audit_entry_internal("ENCLAVE_REGISTER", timestamp);
+        Ok(())
     }
 
     /// Engendre un processus enfant avec détection heuristique d'anomalies de lignage
@@ -796,11 +899,9 @@ impl JamboEdrDaemon {
 
         let mut inj_type = InjectionType::None;
 
-        // Détection 1 : Segment W+X (Writable et Executable en même temps)
         if has_wx {
             inj_type = InjectionType::WritableExecutableSegment;
         } else if !is_trusted || path.starts_with("/tmp/") || path.contains("rogue") {
-            // Détection 2 : Module tiers non fiable injecté depuis un répertoire non sécurisé
             inj_type = InjectionType::RogueSharedObject;
         }
 
@@ -876,6 +977,205 @@ impl JamboEdrDaemon {
         Ok(true)
     }
 
+    /// Détection de Process Hollowing (altération d'en-tête / divergence du point d'entrée exécutable)
+    pub fn detect_process_hollowing(
+        &mut self,
+        cap: &EdrCap,
+        pid: u64,
+        expected_entry: u64,
+        actual_entry: u64,
+        timestamp: u64,
+    ) -> Result<bool, EdrError> {
+        if !cap.has_right(edr_rights::DETECT_INJECTION) {
+            return Err(EdrError::Unauthorized);
+        }
+
+        let slot = self.find_proc_slot(pid).ok_or(EdrError::ProcessNotFound)?;
+        if expected_entry != actual_entry {
+            self.injection_blocked_count += 1;
+            if let Some(ref mut proc) = self.processes[slot] {
+                proc.threat_score = 100;
+                proc.status = ProcessStatus::Terminated;
+                proc.cap_rights = 0;
+                proc.anomaly = ProcessAnomaly::ProcessHollowingAttempt;
+            }
+
+            self.record_alert_internal(
+                pid,
+                timestamp,
+                AlertSeverity::Critical,
+                "Process hollowing detected: entrypoint hijacked from binary spec",
+                EdrAction::TerminateProcess,
+            );
+            return Ok(true);
+        }
+
+        Ok(false)
+    }
+
+    /// Analyse et scanneur de shellcode en mémoire vive (NOP sleds, INT3 loops, syscall loops, stack pivots)
+    pub fn scan_process_memory(
+        &mut self,
+        cap: &EdrCap,
+        pid: u64,
+        memory_buffer: &[u8],
+        timestamp: u64,
+    ) -> Result<ShellcodeScanResult, EdrError> {
+        if !cap.has_right(edr_rights::SCAN_MEMORY) {
+            return Err(EdrError::Unauthorized);
+        }
+
+        let slot = self.find_proc_slot(pid).ok_or(EdrError::ProcessNotFound)?;
+        let mut scan_result = ShellcodeScanResult::Clean;
+
+        // 1. Détection de NOP Sled (au moins 8 NOP consécutifs 0x90)
+        let mut nop_run = 0usize;
+        for &b in memory_buffer {
+            if b == 0x90 {
+                nop_run += 1;
+                if nop_run >= 8 {
+                    scan_result = ShellcodeScanResult::NopSledDetected;
+                    break;
+                }
+            } else {
+                nop_run = 0;
+            }
+        }
+
+        // 2. Détection de pièges INT3 répétitifs (au moins 4 octets 0xCC consécutifs)
+        if scan_result == ShellcodeScanResult::Clean {
+            let mut int3_run = 0usize;
+            for &b in memory_buffer {
+                if b == 0xCC {
+                    int3_run += 1;
+                    if int3_run >= 4 {
+                        scan_result = ShellcodeScanResult::Int3TrapDetected;
+                        break;
+                    }
+                } else {
+                    int3_run = 0;
+                }
+            }
+        }
+
+        // 3. Détection de motif de boucle de syscalls malveillante (0x0F 0x05)
+        if scan_result == ShellcodeScanResult::Clean && memory_buffer.len() >= 2 {
+            for i in 0..(memory_buffer.len() - 1) {
+                if memory_buffer[i] == 0x0F && memory_buffer[i + 1] == 0x05 {
+                    scan_result = ShellcodeScanResult::SyscallTrapLoop;
+                    break;
+                }
+            }
+        }
+
+        // 4. Détection de pivot de pile ROP (ex: mov rsp, rbp: 0x48 0x89 0xEC ou pop rsp; ret: 0x5C 0xC3)
+        if scan_result == ShellcodeScanResult::Clean && memory_buffer.len() >= 2 {
+            for i in 0..(memory_buffer.len() - 1) {
+                if (memory_buffer[i] == 0x5C && memory_buffer[i + 1] == 0xC3)
+                    || (i + 2 < memory_buffer.len()
+                        && memory_buffer[i] == 0x48
+                        && memory_buffer[i + 1] == 0x89
+                        && memory_buffer[i + 2] == 0xEC)
+                {
+                    scan_result = ShellcodeScanResult::StackPivotDetected;
+                    break;
+                }
+            }
+        }
+
+        if scan_result != ShellcodeScanResult::Clean {
+            self.shellcodes_intercepted_count += 1;
+            if let Some(ref mut proc) = self.processes[slot] {
+                proc.threat_score = 95;
+                proc.status = ProcessStatus::Quarantined;
+                proc.cap_rights = 0;
+                proc.anomaly = ProcessAnomaly::ShellcodeInjected;
+            }
+
+            let desc = match scan_result {
+                ShellcodeScanResult::NopSledDetected => {
+                    "In-memory NOP sled payload pattern detected in process buffer"
+                }
+                ShellcodeScanResult::SyscallTrapLoop => {
+                    "In-memory raw syscall 0x0F 0x05 opcode loop trap detected"
+                }
+                ShellcodeScanResult::StackPivotDetected => {
+                    "In-memory ROP gadget stack-pivot sequence detected"
+                }
+                ShellcodeScanResult::Int3TrapDetected => {
+                    "In-memory repetitive INT3 debug trap sequence detected"
+                }
+                ShellcodeScanResult::Clean => "Clean",
+            };
+
+            self.record_alert_internal(
+                pid,
+                timestamp,
+                AlertSeverity::Critical,
+                desc,
+                EdrAction::QuarantineIsolate,
+            );
+        }
+
+        Ok(scan_result)
+    }
+
+    /// Évaluation de la télémétrie des appels système (détection de fork bombs et numéros anormaux)
+    pub fn evaluate_syscall_telemetry(
+        &mut self,
+        cap: &EdrCap,
+        pid: u64,
+        syscall_nr: u32,
+        call_rate_per_sec: u32,
+        timestamp: u64,
+    ) -> Result<ProcessAnomaly, EdrError> {
+        if !cap.has_right(edr_rights::MONITOR_PROCESS) {
+            return Err(EdrError::Unauthorized);
+        }
+
+        let slot = self.find_proc_slot(pid).ok_or(EdrError::ProcessNotFound)?;
+        let mut anomaly = ProcessAnomaly::None;
+
+        if call_rate_per_sec > 10_000 {
+            // Burst excessif de syscalls (Fork bomb / flooding)
+            anomaly = ProcessAnomaly::ForkBombBurst;
+            if let Some(ref mut proc) = self.processes[slot] {
+                proc.threat_score = proc.threat_score.saturating_add(85);
+                proc.status = ProcessStatus::Quarantined;
+                proc.cap_rights = 0;
+                proc.anomaly = anomaly;
+            }
+
+            self.record_alert_internal(
+                pid,
+                timestamp,
+                AlertSeverity::Critical,
+                "Process syscall burst frequency exceeded threshold: fork bomb rate",
+                EdrAction::QuarantineIsolate,
+            );
+        } else if syscall_nr == 0xDEAD || syscall_nr == 0xFFFF {
+            // Numéro de syscall illicite ou corrompu
+            anomaly = ProcessAnomaly::RogueSyscallPattern;
+            if let Some(ref mut proc) = self.processes[slot] {
+                proc.threat_score = proc.threat_score.saturating_add(70);
+                proc.status = ProcessStatus::Suspended;
+                proc.anomaly = anomaly;
+            }
+
+            self.record_alert_internal(
+                pid,
+                timestamp,
+                AlertSeverity::High,
+                "Rogue illegal syscall number intercepted: possible probe attack",
+                EdrAction::SuspendProcess,
+            );
+        } else if let Some(ref mut proc) = self.processes[slot] {
+            proc.syscall_count = proc.syscall_count.saturating_add(1);
+        }
+
+        Ok(anomaly)
+    }
+
     /// Heuristique de détection d'évasion d'enclave TEE / sandbox
     pub fn inspect_enclave_access(
         &mut self,
@@ -900,7 +1200,6 @@ impl JamboEdrDaemon {
             anomaly = EnclaveAnomaly::MsrTamperAttempt;
         } else if attempted_phys_addr < 0x0010_0000 || attempted_phys_addr >= 0xFFFF_8000_0000_0000
         {
-            // Tentative de franchissement : lecture de la mémoire physique basse ou espace noyau
             anomaly = EnclaveAnomaly::BoundaryViolation;
         }
 
@@ -910,6 +1209,7 @@ impl JamboEdrDaemon {
                 if let Some(ref mut proc) = self.processes[slot] {
                     proc.threat_score = 100;
                     proc.status = ProcessStatus::Quarantined;
+                    proc.enclave_status = EnclaveStatus::EnclaveQuarantined;
                     proc.cap_rights = 0;
                 }
             }
@@ -983,26 +1283,56 @@ impl JamboEdrDaemon {
         pid: u64,
         timestamp: u64,
     ) -> Result<(), EdrError> {
+        let _ = self.isolate_process_with_report(cap, pid, "Manual isolation", timestamp)?;
+        Ok(())
+    }
+
+    /// Action de confinement instantané O(1) avec rapport structuré de remédiation
+    pub fn isolate_process_with_report(
+        &mut self,
+        cap: &EdrCap,
+        pid: u64,
+        reason: &str,
+        timestamp: u64,
+    ) -> Result<EdrRemediationReport, EdrError> {
         if !cap.has_right(edr_rights::RESPOND_ISOLATE) {
             return Err(EdrError::Unauthorized);
         }
 
         let slot = self.find_proc_slot(pid).ok_or(EdrError::ProcessNotFound)?;
+        let mut revoked_rights = 0u32;
+        let mut final_threat = 80u8;
+
         if let Some(ref mut proc) = self.processes[slot] {
+            revoked_rights = proc.cap_rights;
             proc.status = ProcessStatus::Quarantined;
             proc.cap_rights = 0;
             proc.threat_score = proc.threat_score.max(80);
+            final_threat = proc.threat_score;
         }
+
+        let mut r_buf = [0u8; 64];
+        let bytes = reason.as_bytes();
+        let copy_len = bytes.len().min(64);
+        r_buf[..copy_len].copy_from_slice(&bytes[..copy_len]);
 
         self.record_alert_internal(
             pid,
             timestamp,
             AlertSeverity::High,
-            "Operator manual EDR process isolation and capability revocation",
+            reason,
             EdrAction::QuarantineIsolate,
         );
 
-        Ok(())
+        Ok(EdrRemediationReport {
+            pid,
+            action: EdrAction::QuarantineIsolate,
+            threat_score: final_threat,
+            reason: r_buf,
+            reason_len: copy_len,
+            revoked_rights,
+            timestamp,
+        })
     }
 
     fn record_alert_internal(
@@ -1050,6 +1380,38 @@ impl JamboEdrDaemon {
             return Err(EdrError::Unauthorized);
         }
         self.record_audit_entry_internal(tag, timestamp)
+    }
+
+    /// Fournit un résumé consolidé de l'état EDR
+    pub fn summary(&self) -> EdrSummary {
+        let mut running = 0usize;
+        let mut quarantined = 0usize;
+        let mut terminated = 0usize;
+
+        for i in 0..self.process_count {
+            if let Some(ref p) = self.processes[i] {
+                match p.status {
+                    ProcessStatus::Running => running += 1,
+                    ProcessStatus::Quarantined => quarantined += 1,
+                    ProcessStatus::Terminated => terminated += 1,
+                    ProcessStatus::Suspended => {}
+                }
+            }
+        }
+
+        EdrSummary {
+            total_processes: self.process_count,
+            running_processes: running,
+            quarantined_processes: quarantined,
+            terminated_processes: terminated,
+            alert_count: self.alert_count,
+            audit_count: self.audit_count,
+            injections_blocked: self.injection_blocked_count,
+            enclave_escapes_blocked: self.enclave_escape_blocked_count,
+            hooks_detected: self.hooks_detected_count,
+            shellcodes_intercepted: self.shellcodes_intercepted_count,
+            ledger_valid: self.verify_ledger_integrity(),
+        }
     }
 
     /// Vérifie formellement l'intégrité de la chaîne cryptographique SHA-256 du registre d'audit
@@ -1103,18 +1465,20 @@ mod tests {
         assert!(root_cap.has_right(edr_rights::MONITOR_PROCESS));
         assert!(root_cap.has_right(edr_rights::DETECT_INJECTION));
         assert!(root_cap.has_right(edr_rights::ENCLAVE_GUARD));
+        assert!(root_cap.has_right(edr_rights::SCAN_MEMORY));
         assert!(root_cap.has_right(edr_rights::ADMIN));
 
         // Atténuation légitime
         let monitor_cap = root_cap
             .attenuate(
-                edr_rights::MONITOR_PROCESS | edr_rights::AUDIT_READ,
+                edr_rights::MONITOR_PROCESS | edr_rights::AUDIT_READ | edr_rights::SCAN_MEMORY,
                 5000,
                 50,
             )
             .expect("Atténuation monotone");
         assert!(monitor_cap.has_right(edr_rights::MONITOR_PROCESS));
         assert!(monitor_cap.has_right(edr_rights::AUDIT_READ));
+        assert!(monitor_cap.has_right(edr_rights::SCAN_MEMORY));
         assert!(!monitor_cap.has_right(edr_rights::RESPOND_ISOLATE));
         assert!(!monitor_cap.has_right(edr_rights::ADMIN));
 
@@ -1188,8 +1552,65 @@ mod tests {
     }
 
     #[test]
-    fn test_enclave_guard_escape_heuristic() {
+    fn test_process_hollowing_detection() {
         let admin_cap = EdrCap::new(Handle::new(11904, 1), edr_rights::ALL, 10000, 100);
+        let mut daemon = JamboEdrDaemon::new(admin_cap);
+        daemon.init_defaults();
+
+        // Point d'entrée attendu 0x0040_0000 vs actuel détourné 0xCAFE_0000
+        let hollowed = daemon
+            .detect_process_hollowing(&admin_cap, 3, 0x0040_0000, 0xCAFE_0000, 350)
+            .expect("Hollowing check");
+        assert!(hollowed);
+
+        let proc = daemon.get_process(3).unwrap();
+        assert_eq!(proc.status, ProcessStatus::Terminated);
+        assert_eq!(proc.anomaly, ProcessAnomaly::ProcessHollowingAttempt);
+    }
+
+    #[test]
+    fn test_in_memory_shellcode_scanner() {
+        let admin_cap = EdrCap::new(Handle::new(11905, 1), edr_rights::ALL, 10000, 100);
+        let mut daemon = JamboEdrDaemon::new(admin_cap);
+        daemon.init_defaults();
+
+        // 1. Buffer avec un NOP sled malveillant (10 octets 0x90)
+        let mut nop_buffer = [0x90u8; 16];
+        nop_buffer[10] = 0xC3;
+        let scan_nop = daemon
+            .scan_process_memory(&admin_cap, 3, &nop_buffer, 360)
+            .expect("Memory scan");
+        assert_eq!(scan_nop, ShellcodeScanResult::NopSledDetected);
+        assert_eq!(daemon.shellcodes_intercepted_count, 1);
+
+        // 2. Buffer avec un appel système brut (0x0F 0x05)
+        let syscall_buf = [0x48, 0x31, 0xC0, 0x0F, 0x05, 0xC3];
+        let scan_sys = daemon
+            .scan_process_memory(&admin_cap, 4, &syscall_buf, 370)
+            .expect("Memory scan");
+        assert_eq!(scan_sys, ShellcodeScanResult::SyscallTrapLoop);
+        assert_eq!(daemon.shellcodes_intercepted_count, 2);
+    }
+
+    #[test]
+    fn test_syscall_telemetry_forkbomb_and_rogue() {
+        let admin_cap = EdrCap::new(Handle::new(11906, 1), edr_rights::ALL, 10000, 100);
+        let mut daemon = JamboEdrDaemon::new(admin_cap);
+        daemon.init_defaults();
+
+        // Syscall anormale avec cadence > 10000 / sec
+        let anomaly = daemon
+            .evaluate_syscall_telemetry(&admin_cap, 4, 1, 15_000, 380)
+            .expect("Syscall telemetry check");
+        assert_eq!(anomaly, ProcessAnomaly::ForkBombBurst);
+
+        let proc = daemon.get_process(4).unwrap();
+        assert_eq!(proc.status, ProcessStatus::Quarantined);
+    }
+
+    #[test]
+    fn test_enclave_guard_escape_heuristic() {
+        let admin_cap = EdrCap::new(Handle::new(11907, 1), edr_rights::ALL, 10000, 100);
         let mut daemon = JamboEdrDaemon::new(admin_cap);
         daemon.init_defaults();
 
@@ -1206,7 +1627,7 @@ mod tests {
 
     #[test]
     fn test_system_hook_trampoline_inspection() {
-        let admin_cap = EdrCap::new(Handle::new(11905, 1), edr_rights::ALL, 10000, 100);
+        let admin_cap = EdrCap::new(Handle::new(11908, 1), edr_rights::ALL, 10000, 100);
         let mut daemon = JamboEdrDaemon::new(admin_cap);
         daemon.init_defaults();
 
@@ -1233,8 +1654,27 @@ mod tests {
     }
 
     #[test]
+    fn test_remediation_report_and_summary() {
+        let admin_cap = EdrCap::new(Handle::new(11909, 1), edr_rights::ALL, 10000, 100);
+        let mut daemon = JamboEdrDaemon::new(admin_cap);
+        daemon.init_defaults();
+
+        let report = daemon
+            .isolate_process_with_report(&admin_cap, 3, "Compromise detected", 550)
+            .expect("Isolation report");
+        assert_eq!(report.pid, 3);
+        assert_eq!(report.action, EdrAction::QuarantineIsolate);
+        assert_eq!(report.reason_as_str(), "Compromise detected");
+
+        let summary = daemon.summary();
+        assert_eq!(summary.total_processes, 4);
+        assert_eq!(summary.quarantined_processes, 1);
+        assert!(summary.ledger_valid);
+    }
+
+    #[test]
     fn test_audit_ledger_cryptographic_integrity() {
-        let admin_cap = EdrCap::new(Handle::new(11906, 1), edr_rights::ALL, 10000, 100);
+        let admin_cap = EdrCap::new(Handle::new(11910, 1), edr_rights::ALL, 10000, 100);
         let mut daemon = JamboEdrDaemon::new(admin_cap);
         daemon.init_defaults();
 

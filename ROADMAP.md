@@ -1,7 +1,7 @@
 # ROADMAP DU DÉVELOPPEMENT AUTONOME — JamboOS
 
-> **Dernière mise à jour** : 2026-10-24 08:40 UTC  
-> **Version actuelle** : `v0.3.15`  
+> **Dernière mise à jour** : 2026-10-24 08:50 UTC  
+> **Version actuelle** : `v0.3.16`  
 > **Statut global** : Pré-Alpha active — Micro-noyau de 3e génération orienté capacités (`#![no_std]`)  
 > **Cycle de développement autonome** : 10 minutes via le Planificateur de Tâches & Crons d'Antigravity WebUI  
 
@@ -135,22 +135,25 @@
 | **v0.3.13** | 146 | Analyse Comportementale Utilisateurs et Entités UEBA `jambo-ueba` | Profilage comportemental des acteurs et services Ring 3, baselines statistiques multidimensionnelles (z-scores fixed-point), détection d'anomalies volumétriques, mouvements latéraux, temporalité (off-hours) et abus de privilèges, scoring adaptatif de risque (0..100), actions graduées (Allow, ElevateAudit, Throttle, Quarantine O(1)), UebaCap & registre SHA-256 inaltérable | ✅ Validé |
 | **v0.3.14** | 147 | Orchestration & Réponse aux Incidents Souveraine SOAR `jambo-soar` | Moteur souverain SOAR d'ingestion et de corrélation unifiée multi-sources (SIEM, EDR, NDR, DLP, UEBA, KDIR, FDR, WAF, DDoS), 6 playbooks DAG déterministes anti-cycles, remédiation chirurgicale O(1), actions distribuées vers 11 composants, SoarCap & registre d'audit SHA-256 inaltérable | ✅ Validé |
 | **v0.3.15** | 148 | Investigation Numérique & Forensique Souveraine en Mémoire Vive `jambo-forensics` | Snapshots mémoire VMO scellés, timeline des artefacts système & preuves cryptographiques, capture chirurgicale post-incident orchestrée, analyse de résidus mémoire (slack space & sensitive leaks), ForensicsCap & registre d'audit SHA-256 inaltérable | ✅ Validé |
+| **v0.3.16** | 149 | Détection et Réponse sur les Terminaux Souveraine EDR `jambo-edr` | Surveillance comportementale avancée des processus Ring 3, détection de filiations suspectes et masquerading, interception en temps réel des injections dynamiques (.jso / GOT-PLT / W+X) & Process Hollowing, scanneur de shellcodes mémoire (NOP sleds, INT3, boucles syscalls 0x0F 0x05, pivots ROP), garde-fou d'enclaves matérielles TEE (violations de frontières & accès MSRs illicites), détection de crochets IDT/Syscall, confinement O(1) avec rapport structuré de remédiation déterministe (EdrRemediationReport), EdrCap & registre d'audit SHA-256 inaltérable | ✅ Validé |
 
 ---
 
 ## 3. Prochaines Étapes Prioritaires
 
-### 🎯 Prochaine Tâche Immédiate : Phase 149 — v0.3.16
-* **Composant** : `services/jambo-edr`
-* **Versionnement** : Poursuite de la série `v0.3.*` (Jalon `v0.3.16`)
-* **Objectif** : Détection et Réponse sur les Terminaux Souveraine (`jambo-edr`) — Surveillance comportementale avancée des processus Ring 3, détection d'évasion d'enclave TEE, neutralisation d'injections en temps réel, EdrCap & registre d'audit SHA-256 inaltérable.
+### 🎯 Prochaine Tâche Immédiate : Phase 150 — v0.3.17
+* **Composant** : `services/jambo-xdr`
+* **Versionnement** : Poursuite de la série `v0.3.*` (Jalon `v0.3.17`)
+* **Objectif** : Détection et Réponse Étendue Souveraine XDR (`jambo-xdr`) — Corrélation unifiée multi-vecteurs (Endpoint, Réseau, Cloud, Identité, Enclaves TEE), traçage d'attaques persistantes avancées (APT), détection heuristique de campagnes distribuées, orchestration de remédiation globale O(1), XdrCap & registre d'audit SHA-256 inaltérable.
 * **Tâches précises** :
-  1. Moteur EDR souverain : surveillance d'activité des processus, traçage d'injections et détection d'évasions d'enclave `#![no_std]`.
-  2. Intégration capabilaire EdrCap, confinement O(1) et validation formelle `cargo xtask test`.
+  1. Moteur XDR souverain : corrélation multi-télémétries, graphe de propagation de menaces et détection APT `#![no_std]`.
+  2. Intégration capabilaire XdrCap, remédiation coordonnée multi-composants et validation formelle `cargo xtask test`.
 
 ---
 
 ## 4. Journal d'Exécution des Cycles
+
+* **2026-10-24 08:50 UTC** : Validation complète Phase 149 (`jambo-edr`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-edr`, 11/11). Détection et Réponse sur les Terminaux Souveraine EDR (`jambo-edr`) — Surveillance comportementale avancée des processus Ring 3, filiations suspectes & masquerading, interception temps réel des injections (.jso / GOT-PLT / W+X) & Process Hollowing, scanneur de shellcodes mémoire (NOP sleds, INT3, boucles syscalls 0x0F 0x05, pivots ROP), garde-fou d'enclaves TEE (violations de frontières & accès MSRs privilégiés), inspection de crochets système IDT/syscalls, confinement instantané O(1) avec rapport de remédiation déterministe (`EdrRemediationReport`), EdrCap & registre d'audit SHA-256 inaltérable. Tag `v0.3.16`.
 
 * **2026-10-24 08:40 UTC** : Validation complète Phase 148 (`jambo-forensics`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-forensics`, 11/11). Investigation Numérique & Forensique Souveraine en Mémoire Vive (`jambo-forensics`) — Snapshots mémoire VMO scellés, analyse de résidus mémoire (Memory Residue Analyzer, détection clés privées, tokens et shellcodes), extraction de timeline d'artefacts `#![no_std]`, triage post-incident chirurgical orchestré atomique, scellement multi-algorithmique BLAKE3 + SHA-256 + Ed25519, ForensicsCap & registre d'audit SHA-256 inaltérable. Tag `v0.3.15`.
 
