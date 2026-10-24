@@ -1,5 +1,5 @@
-//! Module de validation formelle de la Sécurité Applicative Dynamique & RASP (`jambo-appsec`)
-//! Phase 140 — Jalon v0.3.7
+//! Module de validation formelle de la Sécurité Applicative Dynamique RASP Souverain (`jambo-appsec`)
+//! Phase 170 — Jalon v0.3.37
 #![allow(unused_imports, dead_code)]
 
 extern crate alloc;
@@ -7,14 +7,15 @@ extern crate alloc;
 use crate::kprintln;
 use jambo_abi::Handle;
 use jambo_appsec::{
-    appsec_rights, AppSecCap, AppSecError, AppSecProfile, AppSecSummary, JamboAppSecDaemon,
+    appsec_rights, inspect_payload_heuristics, AppSecCap, AppSecError, AppSecPostureReport,
+    AppSecProfile, AppSecRemediationReport, AppSecSummary, AppSecTargetReport, JamboAppSecDaemon,
     RaspAction, RaspPolicy, Sha256, TargetStatus, ThreatCategory, ThreatSeverity,
 };
 
-/// Exécute la suite complète de validation formelle du démon RASP (Phase 140)
+/// Exécute la suite complète de validation formelle du démon RASP (Phase 170)
 pub fn execute_appsec_daemon_test() -> bool {
     kprintln!(
-        "[APPSEC/TEST] Démarrage de la validation formelle RASP & sécurité applicative dynamique (Phase 140)..."
+        "[APPSEC/TEST] Démarrage de la validation formelle RASP souverain & détection d'attaques en vol O(1) (Phase 170)..."
     );
 
     // 1. Contrôle d'accès capabilaire (AppSecCap) et atténuation monotone
@@ -27,19 +28,25 @@ pub fn execute_appsec_daemon_test() -> bool {
     assert!(admin_cap.has_right(appsec_rights::VERIFY_INTEGRITY));
     assert!(admin_cap.has_right(appsec_rights::QUERY_AUDIT));
     assert!(admin_cap.has_right(appsec_rights::ADMIN));
+    assert!(admin_cap.has_right(appsec_rights::REMEDIATE));
+    assert!(admin_cap.has_right(appsec_rights::GENERATE_REPORT));
 
     // Atténuation monotone
     let telemetry_cap = admin_cap
         .attenuate(
-            appsec_rights::ANALYZE_TELEMETRY | appsec_rights::QUERY_AUDIT,
+            appsec_rights::ANALYZE_TELEMETRY
+                | appsec_rights::QUERY_AUDIT
+                | appsec_rights::GENERATE_REPORT,
             5000,
             250,
         )
         .expect("Atténuation monotone AppSecCap");
     assert!(telemetry_cap.has_right(appsec_rights::ANALYZE_TELEMETRY));
     assert!(telemetry_cap.has_right(appsec_rights::QUERY_AUDIT));
+    assert!(telemetry_cap.has_right(appsec_rights::GENERATE_REPORT));
     assert!(!telemetry_cap.has_right(appsec_rights::ADMIN));
     assert!(!telemetry_cap.has_right(appsec_rights::REGISTER_TARGET));
+    assert!(!telemetry_cap.has_right(appsec_rights::REMEDIATE));
     assert_eq!(telemetry_cap.max_lifetime, 5000);
     assert_eq!(telemetry_cap.invocations_left, 250);
 
@@ -68,7 +75,20 @@ pub fn execute_appsec_daemon_test() -> bool {
     assert_eq!(wasm.violations_count, 1);
     assert_eq!(wasm.threats_neutralized, 1);
 
-    // 4. Enregistrement d'un nouveau microservice : jambo-kms (id 5, pid 105)
+    // 4. Test des heuristiques d'inspection des charges utiles en vol
+    let nop_payload = [0x90, 0x90, 0x90, 0x90, 0x48, 0x31, 0xC0];
+    let (det_nop, cat_nop, sev_nop, _) = inspect_payload_heuristics(&nop_payload);
+    assert!(det_nop);
+    assert_eq!(cat_nop, ThreatCategory::ControlFlowHijack);
+    assert_eq!(sev_nop, ThreatSeverity::Critical);
+
+    let cmd_payload = b"request: system /bin/sh attack payload";
+    let (det_cmd, cat_cmd, sev_cmd, _) = inspect_payload_heuristics(cmd_payload);
+    assert!(det_cmd);
+    assert_eq!(cat_cmd, ThreatCategory::PayloadInjection);
+    assert_eq!(sev_cmd, ThreatSeverity::High);
+
+    // 5. Enregistrement d'un nouveau microservice : jambo-kms (id 5, pid 105)
     appsec
         .register_target(
             &mut admin_cap,
@@ -83,7 +103,7 @@ pub fn execute_appsec_daemon_test() -> bool {
         .expect("Enregistrement jambo-kms");
     assert_eq!(appsec.target_count, 5);
 
-    // 5. Configuration de la politique RASP pour jambo-kms
+    // 6. Configuration de la politique RASP pour jambo-kms
     appsec
         .set_policy(
             &mut admin_cap,
@@ -102,7 +122,7 @@ pub fn execute_appsec_daemon_test() -> bool {
         .expect("Configuration politique jambo-kms");
     assert_eq!(appsec.policy_count, 5);
 
-    // 6. Test d'inspection télémétrique nominale (PassThrough)
+    // 7. Test d'inspection télémétrique nominale (PassThrough)
     let act_pass = appsec
         .inspect_execution(
             &mut admin_cap,
@@ -119,7 +139,7 @@ pub fn execute_appsec_daemon_test() -> bool {
         .expect("Inspection nominale");
     assert_eq!(act_pass, RaspAction::PassThrough);
 
-    // 7. Détection et neutralisation RASP d'un détournement CFI (Shadow Stack invalide)
+    // 8. Détection et neutralisation RASP d'un détournement CFI (Shadow Stack invalide)
     let act_cfi = appsec
         .inspect_execution(
             &mut admin_cap,
@@ -138,7 +158,7 @@ pub fn execute_appsec_daemon_test() -> bool {
     let th5 = appsec.find_threat(5).expect("Menace #5");
     assert!(th5.is_neutralized);
 
-    // 8. Détection d'altération de canari mémoire -> TerminateThread
+    // 9. Détection d'altération de canari mémoire -> TerminateThread
     let act_canary = appsec
         .inspect_execution(
             &mut admin_cap,
@@ -155,7 +175,7 @@ pub fn execute_appsec_daemon_test() -> bool {
         .expect("Inspection canary");
     assert_eq!(act_canary, RaspAction::TerminateThread);
 
-    // 9. Mise en quarantaine ciblée de la cible #4 (jambo-netd)
+    // 10. Mise en quarantaine ciblée de la cible #4 (jambo-netd)
     appsec
         .quarantine_target(&mut admin_cap, 4, 2050)
         .expect("Quarantaine jambo-netd");
@@ -164,7 +184,7 @@ pub fn execute_appsec_daemon_test() -> bool {
         TargetStatus::Quarantined
     );
 
-    // 10. Vérification de la synthèse RASP globale
+    // 11. Vérification de la synthèse RASP globale
     let summary = appsec.get_summary(&admin_cap).expect("Synthèse RASP");
     assert_eq!(summary.total_targets, 5);
     assert_eq!(summary.active_targets, 4);
@@ -174,11 +194,35 @@ pub fn execute_appsec_daemon_test() -> bool {
     assert!(summary.cfi_violations_blocked >= 2);
     assert!(summary.global_appsec_health_score >= 60);
 
-    // 11. Vérification du registre d'audit cryptographique SHA-256
+    // 12. Génération et vérification du rapport de posture scellé SHA-256
+    let posture_rep = appsec
+        .generate_posture_report(&admin_cap, 2060)
+        .expect("Génération posture report");
+    assert!(posture_rep.verify_seal());
+
+    // Détection formelle d'altération du rapport
+    let mut tampered = posture_rep;
+    tampered.total_inspections += 1000;
+    assert!(!tampered.verify_seal());
+
+    // 13. Génération et vérification du rapport individuel de cible scellé SHA-256
+    let target_rep = appsec
+        .generate_target_report(&admin_cap, 1, 2070)
+        .expect("Génération target report");
+    assert_eq!(target_rep.name_str(), "jambo-auth2");
+    assert!(target_rep.verify_seal());
+
+    // 14. Exécution du playbook de remédiation proactive O(1) et rapport scellé
+    let rem_rep = appsec
+        .generate_remediation_report(&mut admin_cap, 2080)
+        .expect("Génération remediation report");
+    assert!(rem_rep.verify_seal());
+
+    // 15. Vérification du registre d'audit cryptographique SHA-256
     assert!(appsec.verify_ledger_integrity());
 
     kprintln!(
-        "[APPSEC/TEST] Validation formelle RASP réussie : 5 microservices Ring 3 surveillés, neutralisation CFI & injections O(1) opérationnelles, registre SHA-256 intègre."
+        "[APPSEC/TEST] Validation formelle RASP réussie : 5 microservices Ring 3 supervisés, neutralisation CFI & canaris O(1), rapports scellés SHA-256 intègres."
     );
     true
 }

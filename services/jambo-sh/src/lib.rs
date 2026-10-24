@@ -16822,7 +16822,7 @@ impl JamboShell {
                     "status" => {
                         let cap = self.appsec.admin_cap;
                         if let Ok(sum) = self.appsec.get_summary(&cap) {
-                            emit("--- JAMBO RASP APPSEC STATUS (PHASE 140) ---\n");
+                            emit("--- JAMBO RASP APPSEC STATUS (PHASE 170) ---\n");
                             emit("Microservices surveillés: ");
                             emit(format_u64(sum.total_targets as u64, &mut b));
                             emit("\nMicroservices actifs: ");
@@ -17028,6 +17028,196 @@ impl JamboShell {
                             (ShellStatus::ExecutionFailed, write_pos)
                         }
                     }
+                    "remediate" => {
+                        let tid = if parsed.arg_count > 2 {
+                            parse_u64(parsed.args[2]).unwrap_or(0) as u32
+                        } else {
+                            0
+                        };
+                        let mut cap = self.appsec.admin_cap;
+                        if tid > 0 {
+                            match self.appsec.neutralize_threat(&mut cap, tid, 6000) {
+                                Ok(()) => {
+                                    emit("Menace RASP #");
+                                    emit(format_u64(tid as u64, &mut b));
+                                    emit(" NEUTRALISÉE & REMÉDIÉE avec succès\n");
+                                    (ShellStatus::Success, write_pos)
+                                }
+                                Err(_) => {
+                                    emit("Échec de remédiation de la menace RASP\n");
+                                    (ShellStatus::ExecutionFailed, write_pos)
+                                }
+                            }
+                        } else {
+                            match self.appsec.remediate_all_threats(&mut cap, 6000) {
+                                Ok(cnt) => {
+                                    emit("=== REMÉDIATION AUTONOME PROACTIVE RASP O(1) EXÉCUTÉE ===\n");
+                                    emit("Menaces neutralisées et cibles durcies: ");
+                                    emit(format_u64(cnt as u64, &mut b));
+                                    emit("\nConfinement & assainissement appliqués avec succès.\n");
+                                    (ShellStatus::Success, write_pos)
+                                }
+                                Err(_) => {
+                                    emit("Erreur exécution remédiation proactive RASP\n");
+                                    (ShellStatus::ExecutionFailed, write_pos)
+                                }
+                            }
+                        }
+                    }
+                    "remediate-all" => {
+                        let mut cap = self.appsec.admin_cap;
+                        match self.appsec.remediate_all_threats(&mut cap, 6000) {
+                            Ok(cnt) => {
+                                emit("=== REMÉDIATION AUTONOME GLOBALE O(1) EXÉCUTÉE ===\n");
+                                emit("Menaces neutralisées et cibles durcies: ");
+                                emit(format_u64(cnt as u64, &mut b));
+                                emit("\nConfinement & assainissement appliqués sans délai.\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("Erreur exécution remédiation globale RASP\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "report-posture" => {
+                        let cap = self.appsec.admin_cap;
+                        match self.appsec.generate_posture_report(&cap, 9999) {
+                            Ok(rep) => {
+                                emit("=== RAPPORT SCELLÉ DE POSTURE RASP (SHA-256) ===\n");
+                                emit("Identifiant rapport     : ");
+                                emit(format_u64(rep.report_id as u64, &mut b));
+                                emit("\nMicroservices gérés     : ");
+                                emit(format_u64(rep.total_targets as u64, &mut b));
+                                emit("\n  - Actifs              : ");
+                                emit(format_u64(rep.active_targets as u64, &mut b));
+                                emit("\n  - Hardened (durcis)   : ");
+                                emit(format_u64(rep.hardened_targets as u64, &mut b));
+                                emit("\n  - En quarantaine      : ");
+                                emit(format_u64(rep.quarantined_targets as u64, &mut b));
+                                emit("\nInspections totales     : ");
+                                emit(format_u64(rep.total_inspections, &mut b));
+                                emit("\nMenaces détectées       : ");
+                                emit(format_u64(rep.total_threats_detected as u64, &mut b));
+                                emit("\nMenaces neutralisées    : ");
+                                emit(format_u64(rep.total_threats_neutralized as u64, &mut b));
+                                emit("\nDétournements CFI bloqués: ");
+                                emit(format_u64(rep.cfi_violations_blocked as u64, &mut b));
+                                emit("\nInjections payload bloq : ");
+                                emit(format_u64(rep.injection_attempts_blocked as u64, &mut b));
+                                emit("\nDésérialisations bloq   : ");
+                                emit(format_u64(
+                                    rep.deserialization_attacks_blocked as u64,
+                                    &mut b,
+                                ));
+                                emit("\nScore de santé RASP     : ");
+                                emit(format_u64(rep.global_health_score as u64, &mut b));
+                                emit(" / 100\nSceau SHA-256 scellé    : ");
+                                emit(if rep.verify_seal() {
+                                    "VALIDE (CONFORME)\n"
+                                } else {
+                                    "INVALIDE\n"
+                                });
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("Erreur génération rapport de posture RASP\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "report-target" => {
+                        let tid = if parsed.arg_count > 2 {
+                            parse_u64(parsed.args[2]).unwrap_or(1) as u32
+                        } else {
+                            1
+                        };
+                        let cap = self.appsec.admin_cap;
+                        match self.appsec.generate_target_report(&cap, tid, 9999) {
+                            Ok(rep) => {
+                                emit("=== RAPPORT SCELLÉ MICROSERVICE RASP [ID ");
+                                emit(format_u64(rep.target_id as u64, &mut b));
+                                emit("] ===\n");
+                                emit("Nom Microservice        : ");
+                                emit(rep.name_str());
+                                emit("\nPID Processus           : ");
+                                emit(format_u64(rep.pid as u64, &mut b));
+                                emit("\nProfil Durcissement     : ");
+                                match rep.profile {
+                                    jambo_appsec::AppSecProfile::Standard => emit("Standard"),
+                                    jambo_appsec::AppSecProfile::Hardened => emit("Hardened"),
+                                    jambo_appsec::AppSecProfile::MilitarySovereign => {
+                                        emit("MilitarySovereign")
+                                    }
+                                    jambo_appsec::AppSecProfile::AirGappedCritical => {
+                                        emit("AirGappedCritical")
+                                    }
+                                }
+                                emit("\nStatut Opérationnel     : ");
+                                match rep.status {
+                                    jambo_appsec::TargetStatus::Active => emit("Actif"),
+                                    jambo_appsec::TargetStatus::Hardened => emit("Confiné/Durci"),
+                                    jambo_appsec::TargetStatus::Degraded => emit("Dégradé"),
+                                    jambo_appsec::TargetStatus::Quarantined => emit("QUARANTAINE"),
+                                    jambo_appsec::TargetStatus::Terminated => emit("Terminé"),
+                                }
+                                emit("\nInspections d'exécution : ");
+                                emit(format_u64(rep.inspections_count, &mut b));
+                                emit("\nViolations détectées    : ");
+                                emit(format_u64(rep.violations_count as u64, &mut b));
+                                emit("\nMenaces neutralisées    : ");
+                                emit(format_u64(rep.threats_neutralized as u64, &mut b));
+                                emit("\nIntégrité Shadow/Canary : ");
+                                emit(if rep.integrity_verified {
+                                    "VÉRIFIÉE (OK)"
+                                } else {
+                                    "ÉCHEC"
+                                });
+                                emit("\nSceau SHA-256 scellé    : ");
+                                emit(if rep.verify_seal() {
+                                    "VALIDE (CONFORME)\n"
+                                } else {
+                                    "INVALIDE\n"
+                                });
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("Erreur génération rapport cible RASP\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "report-remediation" => {
+                        let mut cap = self.appsec.admin_cap;
+                        match self.appsec.generate_remediation_report(&mut cap, 9999) {
+                            Ok(rep) => {
+                                emit("=== RAPPORT SCELLÉ DE REMÉDIATION RASP (SHA-256) ===\n");
+                                emit("Identifiant rapport     : ");
+                                emit(format_u64(rep.report_id as u64, &mut b));
+                                emit("\nMenaces neutralisées    : ");
+                                emit(format_u64(rep.remediated_threats_count as u64, &mut b));
+                                emit("\nCibles en quarantaine   : ");
+                                emit(format_u64(rep.quarantined_targets_count as u64, &mut b));
+                                emit("\nCibles durcies/confinées: ");
+                                emit(format_u64(rep.hardened_targets_count as u64, &mut b));
+                                emit("\nIndice santé avant      : ");
+                                emit(format_u64(rep.health_score_before as u64, &mut b));
+                                emit(" %\nIndice santé après      : ");
+                                emit(format_u64(rep.health_score_after as u64, &mut b));
+                                emit(" %\nSceau SHA-256 scellé    : ");
+                                emit(if rep.verify_seal() {
+                                    "VALIDE (CONFORME)\n"
+                                } else {
+                                    "INVALIDE\n"
+                                });
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("Erreur génération rapport de remédiation RASP\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
                     "verify" => {
                         let valid = self.appsec.verify_ledger_integrity();
                         emit("Registre d'audit cryptographique SHA-256 RASP: ");
@@ -17039,7 +17229,7 @@ impl JamboShell {
                         (ShellStatus::Success, write_pos)
                     }
                     _ => {
-                        emit("Usage: appsec [status | targets | threats | policies | neutralize <id> | quarantine <id> | verify]\n");
+                        emit("Usage: appsec [status | targets | threats | policies | neutralize <id> | quarantine <id> | remediate [id] | remediate-all | report-posture | report-target [id] | report-remediation | verify]\n");
                         (ShellStatus::ExecutionFailed, write_pos)
                     }
                 }

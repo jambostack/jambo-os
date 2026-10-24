@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.3.36-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.3.37-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.3.36 (Gestion des Risques Fournisseurs TPRM Souverain, Cartographie de Chaîne d'Approvisionnement & Quarantaine O(1) jambo-tprm)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.3.36` introduit la modernisation et la souveraineté complète de la Gestion des Risques Fournisseurs & Dépendances Tierces (`services/jambo-tprm`) : moteur souverain TPRM `#![no_std]` de cartographie dynamique multi-fournisseurs (SecNumCloud, souveraineté européenne, TEE Hardware), scoring continu de réputation et de criticité en virgule fixe, surveillance d'ingestion de packages et signatures Ed25519, playbooks de remédiation proactive O(1) et quarantaine chirurgicale des fournisseurs compromis (`remediate_all_compromised`), rapports de posture (`TprmPostureReport`), de fournisseur (`TprmVendorReport`) et de remédiation (`TprmRemediationReport`) scellés SHA-256 avec validation formelle et détection d'altération, intégration shell interactif `jsh` (`services/jambo-sh`), contrôle capabilaire strict `TprmCap` sans autorité ambiante avec atténuation monotone et registre d'audit cryptographique SHA-256 inaltérable.
+> **Statut du Projet : Version v0.3.37 (Sécurité Applicative Dynamique RASP Souverain, Détection d'Attaques en Vol, CFI & Neutralisation O(1) jambo-appsec)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.3.37` introduit la modernisation et la souveraineté complète de la Sécurité Applicative Dynamique RASP (`services/jambo-appsec`) : moteur souverain RASP `#![no_std]` de surveillance continue des microservices Ring 3 (canaris mémoire, intégrité Shadow Stack), détection en temps réel des détournements de flux de contrôle (CFI, ROP/JOP), détection et neutralisation des injections de charges utiles malveillantes et désérialisations non sécurisées, playbooks d'atténuation proactive O(1) et neutralisation instantanée des menaces (`remediate_all_threats`), rapports de posture (`AppSecPostureReport`), de cible (`AppSecTargetReport`) et de remédiation (`AppSecRemediationReport`) scellés SHA-256 avec validation formelle et détection d'altération, intégration shell interactif `jsh` (`services/jambo-sh`), contrôle capabilaire strict `AppSecCap` sans autorité ambiante avec atténuation monotone et registre d'audit cryptographique SHA-256 inaltérable.
 
 ---
 

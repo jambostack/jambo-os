@@ -1329,7 +1329,7 @@ pub extern "C" fn _start() -> ! {
         "Échec du test de gestion des risques fournisseurs TPRM jambo-tprm"
     );
 
-    // 25viciesquadragies. Validation de la Sécurité Applicative Dynamique RASP (Phase 140 - v0.3.7)
+    // 25viciesquadragies. Validation de la Sécurité Applicative Dynamique RASP Souverain (Phase 170 - v0.3.37)
     let appsec_success = sched::appsec_test::execute_appsec_daemon_test();
     assert!(
         appsec_success,
@@ -1828,9 +1828,9 @@ pub extern "C" fn _start() -> ! {
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.3.36 (Sovereign TPRM, Third-Party Supply-Chain Governance & O(1) Quarantine jambo-tprm)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.3.37 (Sovereign RASP Dynamic Application Security, CFI & O(1) Neutralization jambo-appsec)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.3.35 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.3.36 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );

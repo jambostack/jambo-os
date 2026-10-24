@@ -1,6 +1,6 @@
 [package]
 name = "jambo-appsec"
-version = "0.3.7"
+version = "0.3.37"
 edition = "2021"
 
 [dependencies]
