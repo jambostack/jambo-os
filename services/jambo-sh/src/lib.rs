@@ -12493,13 +12493,15 @@ impl JamboShell {
                 match subcmd {
                     "status" => {
                         let mut b = [0u8; 20];
-                        emit("[CNAPP/STATUS] Plateforme Intégrée de Protection Cloud-Native (CNAPP)\n");
+                        emit("[CNAPP/STATUS] Plateforme Unifiée de Protection Cloud-Native (CNAPP - Phase 158)\n");
                         emit("  Charges cartographiées   : ");
                         emit(format_u64(self.cnapp.node_count as u64, &mut b));
                         emit("\n  Signaux ingérés (CSPM/CWPP/CIEM): ");
                         emit(format_u64(self.cnapp.finding_count as u64, &mut b));
                         emit("\n  Chemins d'attaque corrélés: ");
                         emit(format_u64(self.cnapp.path_count as u64, &mut b));
+                        emit("\n  Chemins d'attaque actifs : ");
+                        emit(format_u64(self.cnapp.active_paths_count() as u64, &mut b));
                         emit("\n  Combinaisons toxiques    : ");
                         emit(format_u64(
                             self.cnapp.toxic_combinations_count as u64,
@@ -12511,6 +12513,8 @@ impl JamboShell {
                         emit(format_u64(self.cnapp.total_correlations, &mut b));
                         emit("\n  Remédiations orchestrées : ");
                         emit(format_u64(self.cnapp.total_remediations, &mut b));
+                        emit("\n  Rapports scellés SHA-256 : ");
+                        emit(format_u64(self.cnapp.report_count as u64, &mut b));
                         emit("\n  Chaîne d'audit SHA-256   : ");
                         let valid = self.cnapp.verify_ledger_integrity();
                         emit(if valid {
@@ -12648,6 +12652,9 @@ impl JamboShell {
                                         jambo_cnapp::OrchestrationAction::RemediatePosture => {
                                             emit("Durcissement Posture (CSPM)\n")
                                         }
+                                        jambo_cnapp::OrchestrationAction::SeverNetworkRoute => {
+                                            emit("Coupure Route Réseau\n")
+                                        }
                                         jambo_cnapp::OrchestrationAction::NoAction => emit("Aucune\n"),
                                     }
                                     (ShellStatus::Success, write_pos)
@@ -12673,6 +12680,53 @@ impl JamboShell {
                             }
                         }
                     }
+                    "reports" => {
+                        let mut b = [0u8; 20];
+                        emit("[CNAPP/REPORTS] Rapports d'Évaluation & Remédiation Unifiée Scellés SHA-256 :\n");
+                        emit("  Total rapports générés : ");
+                        emit(format_u64(self.cnapp.report_count as u64, &mut b));
+                        emit("\n");
+                        if let Some(rep) = self.cnapp.latest_report() {
+                            emit("  Dernier rapport scellé : #");
+                            emit(format_u64(rep.report_id, &mut b));
+                            emit(" | Charge: W#");
+                            emit(format_u64(rep.workload_id as u64, &mut b));
+                            emit(" | Action: ");
+                            match rep.action {
+                                jambo_cnapp::OrchestrationAction::FullUnifiedContainment => {
+                                    emit("ConfinementUnifiéTotal")
+                                }
+                                jambo_cnapp::OrchestrationAction::IsolateWorkload => {
+                                    emit("IsolementCharge")
+                                }
+                                jambo_cnapp::OrchestrationAction::AttenuateEntitlements => {
+                                    emit("AtténuationCIEM")
+                                }
+                                jambo_cnapp::OrchestrationAction::RemediatePosture => {
+                                    emit("DurcissementCSPM")
+                                }
+                                jambo_cnapp::OrchestrationAction::SeverNetworkRoute => {
+                                    emit("CoupureRéseau")
+                                }
+                                jambo_cnapp::OrchestrationAction::NoAction => emit("Aucune"),
+                            }
+                            emit(" | Risque: ");
+                            emit(format_u64(rep.initial_risk as u64, &mut b));
+                            emit(" -> ");
+                            emit(format_u64(rep.post_risk as u64, &mut b));
+                            emit(" | Toxique brisé: ");
+                            emit(if rep.toxic_broken { "OUI" } else { "NON" });
+                            emit(" | Chemins neutralisés: ");
+                            emit(format_u64(rep.attack_paths_neutralized as u64, &mut b));
+                            emit(" | Sceau: ");
+                            emit(if self.cnapp.verify_ledger_integrity() {
+                                "VALIDE (SHA-256)\n"
+                            } else {
+                                "CORROMPU\n"
+                            });
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
                     "verify" => {
                         let valid = self.cnapp.verify_ledger_integrity();
                         emit("  Vérification intégrité registre CNAPP SHA-256 : ");
@@ -12684,7 +12738,7 @@ impl JamboShell {
                         (ShellStatus::Success, write_pos)
                     }
                     _ => {
-                        emit("Usage: cnapp [status | workloads | paths | correlate | remediate [wid] | verify]\n");
+                        emit("Usage: cnapp [status | workloads | paths | correlate | remediate [wid] | reports | verify]\n");
                         (ShellStatus::ExecutionFailed, write_pos)
                     }
                 }
@@ -20031,6 +20085,10 @@ mod tests {
                 let (st5, len5) = shell.execute_line("cnapp remediate 103", &mut out);
                 assert_eq!(st5, ShellStatus::Success);
                 assert!(len5 > 0);
+
+                let (st_rep, len_rep) = shell.execute_line("cnapp reports", &mut out);
+                assert_eq!(st_rep, ShellStatus::Success);
+                assert!(len_rep > 0);
 
                 let (st6, len6) = shell.execute_line("cnapp verify", &mut out);
                 assert_eq!(st6, ShellStatus::Success);

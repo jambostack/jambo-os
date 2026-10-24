@@ -1,7 +1,7 @@
 # ROADMAP DU DÉVELOPPEMENT AUTONOME — JamboOS
 
-> **Dernière mise à jour** : 2026-10-24 09:30 UTC  
-> **Version actuelle** : `v0.3.20`  
+> **Dernière mise à jour** : 2026-10-24 10:35 UTC  
+> **Version actuelle** : `v0.3.25`  
 > **Statut global** : Pré-Alpha active — Micro-noyau de 3e génération orienté capacités (`#![no_std]`)  
 > **Cycle de développement autonome** : 10 minutes via le Planificateur de Tâches & Crons d'Antigravity WebUI  
 
@@ -144,22 +144,25 @@
 | **v0.3.22** | 155 | Gestion de Posture de Sécurité Cloud Souverain CSPM & Remédiation Autonome `jambo-cspm` | Moteur souverain d'audit continu de conformité multi-cloud souverain (SecNumCloud, CIS Microkernel, DISA STIG, NIST SP 800-53), détection de dérive (drift detection) en temps réel par rapport aux baselines durcies, analyse d'exposition multi-vecteurs et calcul d'indice de risque de grappe souveraine avec rayon d'impact (Blast Radius 0..100), moteur de remédiation autonome O(1) avec rapports scellés SHA-256 (`CspmRemediationReport`), topologie multi-cloud souverain (SovereignBareMetal, SecNumCloudEnclave, EuropeanSovereignMesh, PrivateAirGappedEdge) et géo-zones souveraines, capacité d'isolement chirurgical O(1) de nœuds défaillants ou compromis, filtrage capabilaire strict `CspmCap` sans autorité ambiante avec atténuation monotone et registre d'audit SHA-256 inaltérable | ✅ Validé |
 | **v0.3.23** | 156 | Protection des Charges de Travail Cloud Souveraines CWPP, Intégrité d'Exécution & Confinement Autonome `jambo-cwpp` | Protection continue à l'exécution (Runtime Workload Protection) pour micro-VMs et conteneurs d'enclaves souveraines, surveillance temps réel de l'intégrité mémoire (W^X enforcement, CFI, canaris de pile), détection des dérives comportementales des processus conteneurisés et violations d'enclaves TEE, confinement chirurgical O(1) (Freeze, StripCaps, IsolateNetwork, Quarantine, RollbackGoldenSnapshot, Terminate), rapports d'incidents scellés SHA-256 (`CwppIncidentReport`), contrôle d'accès capabilaire strict `CwppCap` sans autorité ambiante avec atténuation monotone et registre d'audit SHA-256 inaltérable | ✅ Validé |
 | **v0.3.24** | 157 | Gestion des Droits sur l'Infrastructure Cloud Souveraine CIEM, Analyse des Droits Excessifs & Principe du Moindre Privilège `jambo-ciem` | Moteur d'analyse des identités machines, services et humaines, calcul des écarts d'autorisations (Entitlement Gap) entre permissions accordées et exercées, détection en temps réel des privilèges dormants, des droits orphelins et des combinaisons toxiques (Toxic Combinations), réduction automatique et monotone O(1) vers le moindre privilège effectif (Least-Privilege Monotonic Attenuation), génération de rapports de remédiation scellés SHA-256 (`CiemRemediationReport`), contrôle capabilaire strict `CiemCap` sans autorité ambiante avec atténuation monotone et registre d'audit cryptographique SHA-256 inaltérable | ✅ Validé |
+| **v0.3.25** | 158 | Plateforme Unifiée de Protection des Applications Cloud-Natives CNAPP, Corrélation Multi-Signaux CSPM+CWPP+CIEM & Calcul de Graphe de Risque Holistique `jambo-cnapp` | Moteur souverain d'ingestion et corrélation multi-dimensionnelle unifiant la posture d'infrastructure (CSPM), la sécurité d'exécution des charges (CWPP) et la gestion des droits et identités (CIEM), identification des chemins d'attaque combinés (Combined Attack Paths), calcul d'indice de risque holistique (0..100) tenant compte de l'exposition publique, des vulnérabilités actives et des privilèges excessifs, orchestration de confinement autonome global O(1) avec rapports scellés SHA-256 (`CnappAssessmentReport`), contrôle capabilaire strict `CnappCap` et registre d'audit cryptographique SHA-256 inaltérable | ✅ Validé |
 
 ---
 
 ## 3. Prochaines Étapes Prioritaires
 
-### 🎯 Prochaine Tâche Immédiate : Phase 158 — v0.3.25
-* **Composant** : `services/jambo-cnapp`
-* **Versionnement** : Poursuite de la série `v0.3.*` (Jalon `v0.3.25`)
-* **Objectif** : Plateforme Unifiée de Protection des Applications Cloud-Natives CNAPP, Corrélation Multi-Signaux CSPM+CWPP+CIEM & Calcul de Graphe de Risque Holistique (`jambo-cnapp`) — Moteur souverain d'ingestion et corrélation multi-dimensionnelle unifiant la posture d'infrastructure (CSPM), la sécurité d'exécution des charges (CWPP) et la gestion des droits et identités (CIEM), identification des chemins d'attaque combinés (Combined Attack Paths), calcul d'indice de risque holistique (0..100) tenant compte de l'exposition publique, des vulnérabilités actives et des privilèges excessifs, orchestration de confinement autonome global O(1), contrôle capabilaire strict `CnappCap` et registre d'audit cryptographique SHA-256 inaltérable.
+### 🎯 Prochaine Tâche Immédiate : Phase 159 — v0.3.26
+* **Composant** : `services/jambo-aspm`
+* **Versionnement** : Poursuite de la série `v0.3.*` (Jalon `v0.3.26`)
+* **Objectif** : Gestion de la Posture de Sécurité Applicative ASPM, Sécurité de la Chaîne d'Approvisionnement Logicielle & Vérification d'Admission SBOM CycloneDX (`jambo-aspm`) — Moteur souverain de gouvernance de la chaîne de compilation et distribution logicielle `#![no_std]`, validation cryptographique de SBOMs normalisés CycloneDX 1.5/1.6, calcul du score de posture de supply chain, détection continue de composants vulnérables/obsolètes, vérification de signatures de packages souverains et contrôle d'admission strict à l'exécution avec audit SHA-256 inaltérable et contrôle capabilaire strict `AspmCap`.
 * **Tâches précises** :
-  1. Moteur unifié d'ingestion multi-signaux CSPM/CWPP/CIEM et calcul de graphe d'attaque holistique `#![no_std]`.
-  2. Intégration capabilaire CnappCap, corrélation des combinaisons toxiques multi-plans et validation formelle `cargo xtask test`.
+  1. Moteur unifié d'ingestion SBOM CycloneDX, scoring de posture de code source et analyse de conformité de chaîne logicielle `#![no_std]`.
+  2. Intégration capabilaire AspmCap, rapports d'admission signés et validation formelle `cargo xtask test`.
 
 ---
 
 ## 4. Journal d'Exécution des Cycles
+
+* **2026-10-24 10:35 UTC** : Validation complète Phase 158 (`jambo-cnapp`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-cnapp`, 6/6). Plateforme Unifiée de Protection des Applications Cloud-Natives CNAPP, Corrélation Multi-Signaux CSPM+CWPP+CIEM & Calcul de Graphe de Risque Holistique (`jambo-cnapp`) — Moteur souverain d'ingestion et corrélation multi-dimensionnelle unifiant la posture d'infrastructure (CSPM), la sécurité d'exécution des charges (CWPP) et la gestion des droits et identités (CIEM), détection fine des combinaisons toxiques multi-plans (Tri-Plane Sovereign Breach, Enclave Data Exfiltration, Privilege Escalation Pivot), modélisation de graphes d'attaques combinés avec chemins critiques et goulots d'étranglement, calcul d'indice de risque holistique (0..100), orchestration autonome de confinement global O(1) avec rapports d'évaluation et de remédiation scellés SHA-256 (`CnappAssessmentReport`), contrôle capabilaire strict `CnappCap` sans autorité ambiante avec atténuation monotone et registre d'audit cryptographique SHA-256 inaltérable. Tag `v0.3.25`.
 
 * **2026-10-24 10:25 UTC** : Validation complète Phase 157 (`jambo-ciem`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-ciem`, 6/6). Gestion des Droits sur l'Infrastructure Cloud Souveraine CIEM, Analyse des Droits Excessifs & Principe du Moindre Privilège (`jambo-ciem`) — Moteur souverain d'analyse continue des identités machines, comptes de services et opérateurs humains, calcul précis de l'écart d'entitlement (Entitlement Gap) entre privilèges accordés et privilèges réellement observés, détection en temps réel des privilèges dormants, des droits orphelins et des combinaisons toxiques (Toxic Combinations : élévation de privilèges, exfiltration de clés et sabotage de traces), atténuation automatique et monotone O(1) vers le strict moindre privilège (Least-Privilege Monotonic Attenuation), rapports de remédiation scellés SHA-256 (`CiemRemediationReport`), contrôle capabilaire strict `CiemCap` sans autorité ambiante avec atténuation monotone et registre d'audit cryptographique SHA-256 inaltérable. Tag `v0.3.24`.
 

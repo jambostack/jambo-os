@@ -1,16 +1,18 @@
-//! Plateforme Intégrée de Protection des Applications Cloud Natives (CNAPP)
-//! Corrélation Contextuelle CSPM + CWPP + CIEM & Score de Risque Unifié
+//! Plateforme Unifiée de Protection des Applications Cloud-Natives CNAPP
+//! Corrélation Multi-Signaux CSPM+CWPP+CIEM & Calcul de Graphe de Risque Holistique
 //!
-//! Phase 128 — Jalon v0.2.126
+//! Phase 158 — Jalon v0.3.25
 //!
 //! Fournit une plateforme souveraine CNAPP (Cloud-Native Application Protection Platform) en `#![no_std]` :
-//! 1. Corrélation contextuelle multidimensionnelle : Posture & Configuration (CSPM),
-//!    Surveillance & Confinement Temps Réel (CWPP), et Gestion des Privilèges & Droits (CIEM).
-//! 2. Détection des Combinaisons Toxiques (Toxic Combinations) & Modélisation de Graphes d'Attaque (Attack Paths).
-//! 3. Calcul unifié et déterministe du Score de Risque de Grappe (0..100).
-//! 4. Orchestration autonome de la remédiation unifiée (confinement CWPP, atténuation CIEM, durcissement CSPM).
-//! 5. Contrôle d'accès capabilaire (`CnappCap`) sans autorité ambiante.
-//! 6. Registre d'audit cryptographique inviolable scellé par chaînage SHA-256.
+//! 1. Corrélation multidimensionnelle unifiée : Posture d'Infrastructure (CSPM),
+//!    Surveillance & Confinement d'Exécution (CWPP), et Droits & Entitlements Moindre Privilège (CIEM).
+//! 2. Détection de Combinaisons Toxiques Multi-Plans (Multi-Plane Toxic Combinations)
+//!    et calcul d'itinéraires d'attaque combinés (Combined Attack Paths) sur topologie souveraine.
+//! 3. Calcul déterministe du Score de Risque Holistique de Grappe (0..100) avec pondération de surface d'exposition.
+//! 4. Orchestration autonome de confinement global O(1) et remédiation croisée synchronisée.
+//! 5. Génération de Rapports d'Évaluation et de Remédiation Scellés SHA-256 (`CnappAssessmentReport`).
+//! 6. Contrôle d'accès capabilaire strict (`CnappCap`) sans autorité ambiante avec atténuation monotone.
+//! 7. Registre d'audit cryptographique inviolable scellé par chaînage SHA-256 déterministe.
 
 #![no_std]
 
@@ -183,6 +185,7 @@ pub enum CnappError {
     CapacityExceeded,
     LedgerTampered,
     InvalidSignal,
+    ReportNotFound,
 }
 
 pub mod cnapp_rights {
@@ -266,8 +269,24 @@ impl CnappCap {
 }
 
 // ============================================================================
-// MODÈLE DE DONNÉES & SIGNAUX CNAPP MULTIDIMENSIONNELS
+// TOPOLOGIE SOUVERAINE & CLASSIFICATION DES CHARGES
 // ============================================================================
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CloudEnvironment {
+    SovereignBareMetal,
+    SecNumCloudEnclave,
+    EuropeanSovereignMesh,
+    PrivateAirGappedEdge,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WorkloadKind {
+    MicroVM,
+    EnclaveTEE,
+    Ring3Container,
+    HostKernelService,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CnappSeverity {
@@ -284,6 +303,16 @@ pub enum SignalSource {
     CwppRuntime,
     CiemEntitlement,
     NetworkMesh,
+    CasbAdmission,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ToxicCombinationType {
+    None,
+    TriPlaneSovereignBreach,
+    EnclaveDataExfiltration,
+    PrivilegeEscalationPivot,
+    EdgePerimeterBreach,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -292,8 +321,13 @@ pub enum OrchestrationAction {
     IsolateWorkload,
     AttenuateEntitlements,
     RemediatePosture,
+    SeverNetworkRoute,
     FullUnifiedContainment,
 }
+
+// ============================================================================
+// MODÈLE DE DONNÉES & SIGNAUX CNAPP MULTIDIMENSIONNELS
+// ============================================================================
 
 /// Signal unitaire de vulnérabilité, dérive ou menace ingéré
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -344,13 +378,20 @@ pub struct AttackPathNode {
     pub workload_id: u32,
     pub name: [u8; 32],
     pub name_len: usize,
+    pub env: CloudEnvironment,
+    pub kind: WorkloadKind,
     pub is_internet_exposed: bool,
     pub has_posture_drift: bool,    // CSPM
     pub has_excess_privilege: bool, // CIEM
     pub has_runtime_anomaly: bool,  // CWPP
+    pub has_mesh_egress: bool,      // Réseau / Mesh
     pub privilege_level: u8,        // 0=Worker, 1=Service, 2=ClusterOperator, 3=Kernel/Enclave
+    pub entitlement_gap_pct: u8,    // 0..100
+    pub runtime_exploit_score: u8,  // 0..100
+    pub posture_drift_score: u8,    // 0..100
     pub unified_risk_score: u8,     // 0..100
     pub is_toxic_combination: bool,
+    pub toxic_type: ToxicCombinationType,
     pub is_quarantined: bool,
 }
 
@@ -358,6 +399,24 @@ impl AttackPathNode {
     pub fn new(
         workload_id: u32,
         name_str: &str,
+        is_internet_exposed: bool,
+        privilege_level: u8,
+    ) -> Self {
+        Self::new_detailed(
+            workload_id,
+            name_str,
+            CloudEnvironment::SecNumCloudEnclave,
+            WorkloadKind::Ring3Container,
+            is_internet_exposed,
+            privilege_level,
+        )
+    }
+
+    pub fn new_detailed(
+        workload_id: u32,
+        name_str: &str,
+        env: CloudEnvironment,
+        kind: WorkloadKind,
         is_internet_exposed: bool,
         privilege_level: u8,
     ) -> Self {
@@ -370,22 +429,30 @@ impl AttackPathNode {
             workload_id,
             name,
             name_len: len,
+            env,
+            kind,
             is_internet_exposed,
             has_posture_drift: false,
             has_excess_privilege: false,
             has_runtime_anomaly: false,
+            has_mesh_egress: false,
             privilege_level,
+            entitlement_gap_pct: 0,
+            runtime_exploit_score: 0,
+            posture_drift_score: 0,
             unified_risk_score: 0,
             is_toxic_combination: false,
+            toxic_type: ToxicCombinationType::None,
             is_quarantined: false,
         }
     }
 
-    /// Calcule le score unifié de risque en corrélant les signaux multidimensionnels
+    /// Calcule le score unifié et déterministe de risque holistique (0..100)
     pub fn recalculate_risk(&mut self) -> u8 {
         if self.is_quarantined {
             self.unified_risk_score = 5;
             self.is_toxic_combination = false;
+            self.toxic_type = ToxicCombinationType::None;
             return self.unified_risk_score;
         }
 
@@ -414,12 +481,28 @@ impl AttackPathNode {
             score += 35;
         }
 
-        // Combinaison toxique : Dérive CSPM + Droits CIEM + Menace CWPP
+        // Détection fine des Combinaisons Toxiques Multi-Plans
         if self.has_posture_drift && self.has_excess_privilege && self.has_runtime_anomaly {
             self.is_toxic_combination = true;
-            score += 30; // Pénalité critique de synergie offensive
+            self.toxic_type = ToxicCombinationType::TriPlaneSovereignBreach;
+            score += 30; // Synergie offensive critique multi-plans
+        } else if self.kind == WorkloadKind::EnclaveTEE
+            && self.has_excess_privilege
+            && (self.is_internet_exposed || self.has_mesh_egress)
+        {
+            self.is_toxic_combination = true;
+            self.toxic_type = ToxicCombinationType::EnclaveDataExfiltration;
+            score += 25;
+        } else if self.has_runtime_anomaly && self.has_excess_privilege {
+            self.is_toxic_combination = true;
+            self.toxic_type = ToxicCombinationType::PrivilegeEscalationPivot;
+            score += 20;
+        } else if self.is_internet_exposed && self.has_posture_drift {
+            self.toxic_type = ToxicCombinationType::EdgePerimeterBreach;
+            self.is_toxic_combination = false;
         } else {
             self.is_toxic_combination = false;
+            self.toxic_type = ToxicCombinationType::None;
         }
 
         if score > 100 {
@@ -441,6 +524,48 @@ pub struct AttackPath {
     pub severity: CnappSeverity,
     pub toxic_combination: bool,
     pub active: bool,
+    pub bottleneck_workload_id: u32,
+    pub risk_score: u8,
+}
+
+// ============================================================================
+// RAPPORT D'ÉVALUATION ET DE REMÉDIATION SCELLÉ SHA-256
+// ============================================================================
+
+/// Rapport déterministe d'évaluation CNAPP scellé cryptographiquement
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CnappAssessmentReport {
+    pub report_id: u64,
+    pub workload_id: u32,
+    pub timestamp: u64,
+    pub action: OrchestrationAction,
+    pub initial_risk: u8,
+    pub post_risk: u8,
+    pub toxic_broken: bool,
+    pub attack_paths_neutralized: u32,
+    pub report_seal: [u8; 32],
+}
+
+impl CnappAssessmentReport {
+    pub fn compute_seal(
+        report_id: u64,
+        workload_id: u32,
+        timestamp: u64,
+        action: OrchestrationAction,
+        initial_risk: u8,
+        post_risk: u8,
+        toxic_broken: bool,
+        paths_neutralized: u32,
+    ) -> [u8; 32] {
+        let mut hasher = Sha256::new();
+        hasher.update(&report_id.to_be_bytes());
+        hasher.update(&workload_id.to_be_bytes());
+        hasher.update(&timestamp.to_be_bytes());
+        hasher.update(&[action as u8]);
+        hasher.update(&[initial_risk, post_risk, if toxic_broken { 1 } else { 0 }]);
+        hasher.update(&paths_neutralized.to_be_bytes());
+        hasher.finalize()
+    }
 }
 
 // ============================================================================
@@ -455,6 +580,7 @@ pub enum CnappAuditAction {
     AttackPathDiscovered,
     RiskScored,
     RemediationOrchestrated,
+    ReportGenerated,
     LedgerSealed,
 }
 
@@ -501,6 +627,8 @@ pub struct JamboCnappDaemon {
     pub finding_count: usize,
     pub attack_paths: [Option<AttackPath>; 16],
     pub path_count: usize,
+    pub reports: [Option<CnappAssessmentReport>; 16],
+    pub report_count: usize,
     pub audit_ledger: [Option<CnappAuditRecord>; 32],
     pub audit_count: usize,
     pub last_block_hash: [u8; 32],
@@ -508,6 +636,7 @@ pub struct JamboCnappDaemon {
     pub total_remediations: u64,
     pub toxic_combinations_count: usize,
     pub average_cluster_risk: u8,
+    pub total_reports: u64,
 }
 
 impl JamboCnappDaemon {
@@ -520,6 +649,8 @@ impl JamboCnappDaemon {
             finding_count: 0,
             attack_paths: [None; 16],
             path_count: 0,
+            reports: [None; 16],
+            report_count: 0,
             audit_ledger: [None; 32],
             audit_count: 0,
             last_block_hash: [0u8; 32],
@@ -527,15 +658,40 @@ impl JamboCnappDaemon {
             total_remediations: 0,
             toxic_combinations_count: 0,
             average_cluster_risk: 0,
+            total_reports: 0,
         }
     }
 
-    /// Enregistre un nœud de charge de travail dans la topologie de grappe
+    /// Enregistre un nœud de charge de travail standard dans la topologie de grappe
     pub fn register_workload(
         &mut self,
         cap: &CnappCap,
         workload_id: u32,
         name: &str,
+        is_internet_exposed: bool,
+        privilege_level: u8,
+        tick: u64,
+    ) -> Result<(), CnappError> {
+        self.register_workload_detailed(
+            cap,
+            workload_id,
+            name,
+            CloudEnvironment::SecNumCloudEnclave,
+            WorkloadKind::Ring3Container,
+            is_internet_exposed,
+            privilege_level,
+            tick,
+        )
+    }
+
+    /// Enregistre une charge de travail avec détails de topologie et environnement
+    pub fn register_workload_detailed(
+        &mut self,
+        cap: &CnappCap,
+        workload_id: u32,
+        name: &str,
+        env: CloudEnvironment,
+        kind: WorkloadKind,
         is_internet_exposed: bool,
         privilege_level: u8,
         tick: u64,
@@ -556,7 +712,14 @@ impl JamboCnappDaemon {
             }
         }
 
-        let mut node = AttackPathNode::new(workload_id, name, is_internet_exposed, privilege_level);
+        let mut node = AttackPathNode::new_detailed(
+            workload_id,
+            name,
+            env,
+            kind,
+            is_internet_exposed,
+            privilege_level,
+        );
         node.recalculate_risk();
 
         self.nodes[self.node_count] = Some(node);
@@ -593,10 +756,22 @@ impl JamboCnappDaemon {
                 if node.workload_id == finding.workload_id {
                     found = true;
                     match finding.source {
-                        SignalSource::CspmPosture => node.has_posture_drift = true,
-                        SignalSource::CwppRuntime => node.has_runtime_anomaly = true,
-                        SignalSource::CiemEntitlement => node.has_excess_privilege = true,
-                        SignalSource::NetworkMesh => {}
+                        SignalSource::CspmPosture => {
+                            node.has_posture_drift = true;
+                            node.posture_drift_score = finding.score;
+                        }
+                        SignalSource::CwppRuntime => {
+                            node.has_runtime_anomaly = true;
+                            node.runtime_exploit_score = finding.score;
+                        }
+                        SignalSource::CiemEntitlement => {
+                            node.has_excess_privilege = true;
+                            node.entitlement_gap_pct = finding.score;
+                        }
+                        SignalSource::NetworkMesh => {
+                            node.has_mesh_egress = true;
+                        }
+                        SignalSource::CasbAdmission => {}
                     }
                     node.recalculate_risk();
                     break;
@@ -653,8 +828,7 @@ impl JamboCnappDaemon {
             self.average_cluster_risk = 0;
         }
 
-        // 2. Construire ou mettre à jour les chemins d'attaque corrélés
-        // Ex: si un nœud exposé Internet a un risque moyen/élevé et peut communiquer vers un nœud interne avec combinaison toxique
+        // 2. Construire ou mettre à jour les chemins d'attaque combinés (Combined Attack Paths)
         self.path_count = 0;
         let mut discovered_paths = 0;
 
@@ -664,7 +838,7 @@ impl JamboCnappDaemon {
                     for j in 0..self.node_count {
                         if i != j {
                             if let Some(tgt) = self.nodes[j] {
-                                // Si le nœud cible a des privilèges élevés ou une combinaison toxique
+                                // Si la cible présente une sensibilité élevée ou une combinaison toxique
                                 if tgt.privilege_level >= 2 || tgt.is_toxic_combination {
                                     if self.path_count < self.attack_paths.len() {
                                         let severity = if tgt.is_toxic_combination {
@@ -675,6 +849,12 @@ impl JamboCnappDaemon {
                                             CnappSeverity::Medium
                                         };
 
+                                        let path_risk = if tgt.is_toxic_combination {
+                                            100
+                                        } else {
+                                            tgt.unified_risk_score
+                                        };
+
                                         self.attack_paths[self.path_count] = Some(AttackPath {
                                             id: 300 + self.path_count as u32,
                                             source_id: src.workload_id,
@@ -683,6 +863,8 @@ impl JamboCnappDaemon {
                                             severity,
                                             toxic_combination: tgt.is_toxic_combination,
                                             active: !tgt.is_quarantined,
+                                            bottleneck_workload_id: tgt.workload_id,
+                                            risk_score: path_risk,
                                         });
                                         self.path_count += 1;
                                         discovered_paths += 1;
@@ -721,10 +903,16 @@ impl JamboCnappDaemon {
         }
 
         let mut action = OrchestrationAction::NoAction;
+        let mut initial_risk = 0;
+        let mut post_risk = 0;
+        let mut had_toxic = false;
 
         for opt in self.nodes.iter_mut() {
             if let Some(ref mut node) = opt {
                 if node.workload_id == workload_id {
+                    initial_risk = node.unified_risk_score;
+                    had_toxic = node.is_toxic_combination;
+
                     if node.is_toxic_combination {
                         // Combinaison toxique : confinement d'urgence total (CWPP + CIEM + CSPM)
                         action = OrchestrationAction::FullUnifiedContainment;
@@ -732,18 +920,28 @@ impl JamboCnappDaemon {
                         node.has_runtime_anomaly = false;
                         node.has_excess_privilege = false;
                         node.has_posture_drift = false;
+                        node.has_mesh_egress = false;
+                        node.entitlement_gap_pct = 0;
+                        node.runtime_exploit_score = 0;
+                        node.posture_drift_score = 0;
                     } else if node.has_runtime_anomaly {
                         action = OrchestrationAction::IsolateWorkload;
                         node.is_quarantined = true;
                         node.has_runtime_anomaly = false;
+                        node.runtime_exploit_score = 0;
                     } else if node.has_excess_privilege {
                         action = OrchestrationAction::AttenuateEntitlements;
                         node.has_excess_privilege = false;
+                        node.entitlement_gap_pct = 0;
                     } else if node.has_posture_drift {
                         action = OrchestrationAction::RemediatePosture;
                         node.has_posture_drift = false;
+                        node.posture_drift_score = 0;
+                    } else if node.has_mesh_egress {
+                        action = OrchestrationAction::SeverNetworkRoute;
+                        node.has_mesh_egress = false;
                     }
-                    node.recalculate_risk();
+                    post_risk = node.recalculate_risk();
                     break;
                 }
             }
@@ -763,19 +961,57 @@ impl JamboCnappDaemon {
         }
 
         // Désactiver les chemins d'attaque ciblant cette charge
+        let mut neutralized_paths = 0u32;
         for opt in self.attack_paths.iter_mut() {
             if let Some(ref mut path) = opt {
-                if path.target_id == workload_id {
+                if path.target_id == workload_id || path.source_id == workload_id {
                     path.active = false;
+                    neutralized_paths += 1;
                 }
             }
         }
 
         self.total_remediations += 1;
+        self.total_reports += 1;
+        let report_id = self.total_reports;
+
+        let seal = CnappAssessmentReport::compute_seal(
+            report_id,
+            workload_id,
+            tick,
+            action,
+            initial_risk,
+            post_risk,
+            had_toxic,
+            neutralized_paths,
+        );
+
+        let report = CnappAssessmentReport {
+            report_id,
+            workload_id,
+            timestamp: tick,
+            action,
+            initial_risk,
+            post_risk,
+            toxic_broken: had_toxic,
+            attack_paths_neutralized: neutralized_paths,
+            report_seal: seal,
+        };
+
+        if self.report_count < self.reports.len() {
+            self.reports[self.report_count] = Some(report);
+            self.report_count += 1;
+        } else {
+            for i in 1..self.reports.len() {
+                self.reports[i - 1] = self.reports[i];
+            }
+            self.reports[self.reports.len() - 1] = Some(report);
+        }
 
         let mut details = [0u8; 32];
         details[0] = action as u8;
         details[1..5].copy_from_slice(&workload_id.to_be_bytes());
+        details[5..9].copy_from_slice(&(report_id as u32).to_be_bytes());
         let digest = Sha256::hash(&details);
 
         self.append_audit_record(
@@ -825,6 +1061,43 @@ impl JamboCnappDaemon {
         let _ = self.correlate_signals(cap, tick + 10)?;
 
         Ok(remediated)
+    }
+
+    /// Dernier rapport d'évaluation/remédiation scellé
+    pub fn latest_report(&self) -> Option<&CnappAssessmentReport> {
+        if self.report_count == 0 {
+            None
+        } else {
+            self.reports[self.report_count - 1].as_ref()
+        }
+    }
+
+    /// Charge ayant le risque le plus élevé
+    pub fn highest_risk_node(&self) -> Option<&AttackPathNode> {
+        let mut highest: Option<&AttackPathNode> = None;
+        for opt in self.nodes.iter() {
+            if let Some(ref node) = opt {
+                if highest.is_none()
+                    || node.unified_risk_score > highest.unwrap().unified_risk_score
+                {
+                    highest = Some(node);
+                }
+            }
+        }
+        highest
+    }
+
+    /// Nombre de chemins d'attaque actifs
+    pub fn active_paths_count(&self) -> usize {
+        let mut active = 0;
+        for opt in self.attack_paths.iter() {
+            if let Some(ref path) = opt {
+                if path.active {
+                    active += 1;
+                }
+            }
+        }
+        active
     }
 
     /// Ajoute un enregistrement d'audit scellé cryptographiquement (SHA-256)
@@ -902,16 +1175,52 @@ impl JamboCnappDaemon {
         let cap = self.admin_cap;
 
         // 1. Ingress Gateway : Exposée Internet, Privilèges intermédiaires
-        let _ = self.register_workload(&cap, 101, "jambo-ingress-gw", true, 1, 100);
+        let _ = self.register_workload_detailed(
+            &cap,
+            101,
+            "jambo-ingress-gw",
+            CloudEnvironment::EuropeanSovereignMesh,
+            WorkloadKind::Ring3Container,
+            true,
+            1,
+            100,
+        );
 
         // 2. Microservice Paiement / Traitement : Interne, Privilège service
-        let _ = self.register_workload(&cap, 102, "payment-processor", false, 1, 100);
+        let _ = self.register_workload_detailed(
+            &cap,
+            102,
+            "payment-processor",
+            CloudEnvironment::SecNumCloudEnclave,
+            WorkloadKind::Ring3Container,
+            false,
+            1,
+            100,
+        );
 
         // 3. Opérateur de Grappe / Contrôleur Kernel : Interne, Privilège Cluster/Opérateur
-        let _ = self.register_workload(&cap, 103, "cluster-operator", false, 2, 100);
+        let _ = self.register_workload_detailed(
+            &cap,
+            103,
+            "cluster-operator",
+            CloudEnvironment::SovereignBareMetal,
+            WorkloadKind::HostKernelService,
+            false,
+            2,
+            100,
+        );
 
         // 4. Agent Métriques & Surveillance : Interne, Privilège minimal Worker
-        let _ = self.register_workload(&cap, 104, "metrics-collector", false, 0, 100);
+        let _ = self.register_workload_detailed(
+            &cap,
+            104,
+            "metrics-collector",
+            CloudEnvironment::PrivateAirGappedEdge,
+            WorkloadKind::MicroVM,
+            false,
+            0,
+            100,
+        );
 
         // Ingérer les signaux multidimensionnels :
         // Signal A (CSPM) sur 101: Dérive de conformité (Port externe non durci)
@@ -1030,6 +1339,10 @@ mod tests {
             .find(|n| n.workload_id == 103)
             .unwrap();
         assert!(node103.is_toxic_combination);
+        assert_eq!(
+            node103.toxic_type,
+            ToxicCombinationType::TriPlaneSovereignBreach
+        );
         assert_eq!(node103.unified_risk_score, 100);
 
         // Au moins 1 chemin d'attaque critique découvert
@@ -1092,5 +1405,56 @@ mod tests {
 
         // Intégrité du ledger cryptographique SHA-256
         assert!(daemon.verify_ledger_integrity());
+    }
+
+    #[test]
+    fn test_cnapp_multiplane_toxic_matrix_and_reports() {
+        let admin_cap = CnappCap::new(Handle::new(12805, 1), cnapp_rights::ALL, 10000, 500);
+        let mut daemon = JamboCnappDaemon::new(admin_cap);
+        daemon.init_defaults();
+
+        // Vérifier la génération du rapport de remédiation
+        let act = daemon
+            .orchestrate_remediation(&admin_cap, 103, 300)
+            .unwrap();
+        assert_eq!(act, OrchestrationAction::FullUnifiedContainment);
+
+        assert!(daemon.report_count > 0);
+        let rep = daemon.latest_report().expect("Rapport scellé");
+        assert_eq!(rep.workload_id, 103);
+        assert_eq!(rep.action, OrchestrationAction::FullUnifiedContainment);
+        assert!(rep.toxic_broken);
+        assert!(rep.initial_risk >= 90);
+        assert!(rep.post_risk <= 10);
+
+        // Vérifier intégrité du sceau de rapport
+        let expected_seal = CnappAssessmentReport::compute_seal(
+            rep.report_id,
+            rep.workload_id,
+            rep.timestamp,
+            rep.action,
+            rep.initial_risk,
+            rep.post_risk,
+            rep.toxic_broken,
+            rep.attack_paths_neutralized,
+        );
+        assert_eq!(rep.report_seal, expected_seal);
+    }
+
+    #[test]
+    fn test_cnapp_holistic_attack_path_containment() {
+        let admin_cap = CnappCap::new(Handle::new(12806, 1), cnapp_rights::ALL, 10000, 500);
+        let mut daemon = JamboCnappDaemon::new(admin_cap);
+        daemon.init_defaults();
+
+        assert_eq!(daemon.active_paths_count(), daemon.path_count);
+
+        // Remédier la cible d'attaque (103)
+        let _ = daemon
+            .orchestrate_remediation(&admin_cap, 103, 400)
+            .unwrap();
+
+        // Le chemin ciblant 103 doit être désactivé
+        assert_eq!(daemon.active_paths_count(), 0);
     }
 }
