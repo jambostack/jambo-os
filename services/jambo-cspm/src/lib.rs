@@ -1,14 +1,16 @@
-//! Gestion de la Posture de Sécurité Cloud/Grappe (CSPM), Détection de Dérive (Drift) & Remédiation Autonome
+//! Gestion de la Posture de Sécurité Cloud Souverain (CSPM), Détection de Dérive (Drift) & Remédiation Autonome
 //!
-//! Phase 125 — Jalon v0.2.123
+//! Phase 155 — Jalon v0.3.22
 //!
 //! Fournit un système souverain Cloud Security Posture Management (CSPM) en environnement `#![no_std]` :
-//! 1. Moteur d'audit continu de conformité par rapport aux baselines souveraines durcies (CIS Microkernel, DISA STIG, ANSSI SecNumCloud).
-//! 2. Détection de dérive de configuration (Configuration Drift) sur les scopes critiques (Noyau, TEE, VFS, Réseau, Bac à sable, Audit, Zero-Trust).
-//! 3. Calcul de posture de sécurité (Score de Posture 0-100) et indice de risque de grappe (Risk Index 0-1000).
-//! 4. Remédiation autonome en temps réel réalignant les paramètres déviants sur les valeurs nominales souveraines.
-//! 5. Contrôle d'accès capabilaire (`CspmCap`) sans autorité ambiante et atténuation monotone.
-//! 6. Registre d'audit cryptographique inviolable scellé par chaînage SHA-256.
+//! 1. Moteur d'audit continu de conformité par rapport aux baselines souveraines durcies (CIS Microkernel, DISA STIG, ANSSI SecNumCloud, NIST SP 800-53).
+//! 2. Détection de dérive de configuration (Configuration Drift) sur les périmètres critiques (KernelCore, HardwareTee, StorageVfs, NetworkL4, ProcessSandbox, AuditLedger, IdentityZeroTrust, EnclaveDlp, CryptographicPqc).
+//! 3. Analyse d'exposition multi-vecteurs, calcul de rayon d'impact (Blast Radius 0-100) et indice de risque souverain pondéré (0-1000).
+//! 4. Remédiation autonome en temps réel O(1) réalignant les paramètres déviants sur les baselines souveraines avec génération de rapports scellés par SHA-256 (`CspmRemediationReport`).
+//! 5. Support de la topologie multi-cloud souverain (SovereignBareMetal, SecNumCloudEnclave, EuropeanSovereignMesh, PrivateAirGappedEdge) et géo-zones souveraines.
+//! 6. Capacité d'isolement instantané O(1) de nœuds de grappe défaillants ou compromis (`isolate_cluster_node`).
+//! 7. Contrôle d'accès capabilaire (`CspmCap`) sans autorité ambiante et atténuation monotone.
+//! 8. Registre d'audit cryptographique inviolable scellé par chaînage SHA-256.
 
 #![no_std]
 
@@ -172,8 +174,10 @@ pub mod cspm_rights {
     pub const CONFIGURE_RULES: u32 = 1 << 4;
     pub const READ_METRICS: u32 = 1 << 5;
     pub const SEAL_LEDGER: u32 = 1 << 6;
-    pub const ADMIN: u32 = 1 << 7;
-    pub const ALL: u32 = 0xFF;
+    pub const ISOLATE_NODE: u32 = 1 << 7;
+    pub const REMEDIATE_HARDWARE: u32 = 1 << 8;
+    pub const ADMIN: u32 = 1 << 9;
+    pub const ALL: u32 = 0x3FF;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -186,6 +190,7 @@ pub enum CspmError {
     LedgerCorrupted,
     InvalidParameter,
     CapacityExceeded,
+    NodeNotFound,
 }
 
 /// Capabilité CSPM avec atténuation monotone et expiration bornée
@@ -243,7 +248,7 @@ impl CspmCap {
 }
 
 // ============================================================================
-// STANDARDS DE SÉCURITÉ, SEVÉRITÉS & DOMAINES D'APPLICATION
+// STANDARDS DE SÉCURITÉ, SEVÉRITÉS, FOURNISSEURS & DOMAINES D'APPLICATION
 // ============================================================================
 
 /// Standards et référentiels de sécurité durcis
@@ -253,6 +258,7 @@ pub enum BaselineStandard {
     DisaStig,
     JamboSovereign,
     AnssiSecNumCloud,
+    Nist800_53Rev5,
 }
 
 impl BaselineStandard {
@@ -262,6 +268,7 @@ impl BaselineStandard {
             Self::DisaStig => "DISA-STIG",
             Self::JamboSovereign => "JamboOS-Sovereign",
             Self::AnssiSecNumCloud => "ANSSI-SecNumCloud",
+            Self::Nist800_53Rev5 => "NIST-SP-800-53-Rev5",
         }
     }
 }
@@ -305,6 +312,7 @@ pub enum ComplianceStatus {
     DriftDetected,
     Remediated,
     Suppressed,
+    Isolated,
 }
 
 impl ComplianceStatus {
@@ -314,6 +322,7 @@ impl ComplianceStatus {
             Self::DriftDetected => "DRIFT_DETECTED",
             Self::Remediated => "REMEDIATED",
             Self::Suppressed => "SUPPRESSED",
+            Self::Isolated => "ISOLATED",
         }
     }
 }
@@ -328,6 +337,8 @@ pub enum ConfigScope {
     ProcessSandbox,
     AuditLedger,
     IdentityZeroTrust,
+    EnclaveDlp,
+    CryptographicPqc,
 }
 
 impl ConfigScope {
@@ -340,6 +351,109 @@ impl ConfigScope {
             Self::ProcessSandbox => "process_sandbox",
             Self::AuditLedger => "audit_ledger",
             Self::IdentityZeroTrust => "identity_zt",
+            Self::EnclaveDlp => "enclave_dlp",
+            Self::CryptographicPqc => "crypto_pqc",
+        }
+    }
+}
+
+/// Fournisseur et typologie d'infrastructure cloud souverain
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SovereignCloudProvider {
+    SovereignBareMetal,
+    SecNumCloudEnclave,
+    EuropeanSovereignMesh,
+    PrivateAirGappedEdge,
+    InterClusterFederation,
+}
+
+impl SovereignCloudProvider {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::SovereignBareMetal => "SovereignBareMetal",
+            Self::SecNumCloudEnclave => "SecNumCloudEnclave",
+            Self::EuropeanSovereignMesh => "EuropeanSovereignMesh",
+            Self::PrivateAirGappedEdge => "PrivateAirGappedEdge",
+            Self::InterClusterFederation => "InterClusterFederation",
+        }
+    }
+}
+
+/// Zone géographique et d'enclave souveraine
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClusterZone {
+    ZoneFrParis1,
+    ZoneDeFrankfurt1,
+    ZoneDefenseEnclave,
+    ZoneSecureGov,
+}
+
+impl ClusterZone {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::ZoneFrParis1 => "FR-Paris-1",
+            Self::ZoneDeFrankfurt1 => "DE-Frankfurt-1",
+            Self::ZoneDefenseEnclave => "Defense-Enclave-0",
+            Self::ZoneSecureGov => "Secure-Gov-EU",
+        }
+    }
+}
+
+/// Vecteurs d'exposition de menace associés à une dérive
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AttackVectorRisk {
+    PublicExposure,
+    PrivilegeEscalation,
+    LateralMovementPath,
+    UnencryptedPayload,
+    WeakAttestation,
+    None,
+}
+
+impl AttackVectorRisk {
+    pub fn score_multiplier(&self) -> u32 {
+        match self {
+            Self::PublicExposure => 3,
+            Self::PrivilegeEscalation => 4,
+            Self::LateralMovementPath => 3,
+            Self::UnencryptedPayload => 2,
+            Self::WeakAttestation => 3,
+            Self::None => 1,
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::PublicExposure => "PublicExposure",
+            Self::PrivilegeEscalation => "PrivilegeEscalation",
+            Self::LateralMovementPath => "LateralMovementPath",
+            Self::UnencryptedPayload => "UnencryptedPayload",
+            Self::WeakAttestation => "WeakAttestation",
+            Self::None => "None",
+        }
+    }
+}
+
+/// Types d'actions de remédiation autonome
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RemediationAction {
+    RestoreNominalConfig,
+    EnforceWxorXMemory,
+    IsolateNetworkSubnet,
+    QuarantineClusterNode,
+    RevokeCompromisedCap,
+    TriggerAttestationRefresh,
+}
+
+impl RemediationAction {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::RestoreNominalConfig => "RestoreNominalConfig",
+            Self::EnforceWxorXMemory => "EnforceWxorXMemory",
+            Self::IsolateNetworkSubnet => "IsolateNetworkSubnet",
+            Self::QuarantineClusterNode => "QuarantineClusterNode",
+            Self::RevokeCompromisedCap => "RevokeCompromisedCap",
+            Self::TriggerAttestationRefresh => "TriggerAttestationRefresh",
         }
     }
 }
@@ -362,6 +476,8 @@ pub struct CspmRule {
     pub expected_len: usize,
     pub severity: RuleSeverity,
     pub auto_remediate: bool,
+    pub attack_vector: AttackVectorRisk,
+    pub blast_radius_base: u32, // 0..100
 }
 
 impl CspmRule {
@@ -374,6 +490,32 @@ impl CspmRule {
         expected_str: &str,
         severity: RuleSeverity,
         auto_remediate: bool,
+    ) -> Self {
+        Self::with_exposure(
+            rule_id,
+            standard,
+            scope,
+            name_str,
+            key_str,
+            expected_str,
+            severity,
+            auto_remediate,
+            AttackVectorRisk::None,
+            severity.weight(),
+        )
+    }
+
+    pub fn with_exposure(
+        rule_id: u32,
+        standard: BaselineStandard,
+        scope: ConfigScope,
+        name_str: &str,
+        key_str: &str,
+        expected_str: &str,
+        severity: RuleSeverity,
+        auto_remediate: bool,
+        attack_vector: AttackVectorRisk,
+        blast_radius_base: u32,
     ) -> Self {
         let mut name = [0u8; 48];
         let n_len = name_str.len().min(48);
@@ -399,6 +541,8 @@ impl CspmRule {
             expected_len: e_len,
             severity,
             auto_remediate,
+            attack_vector,
+            blast_radius_base,
         }
     }
 
@@ -425,6 +569,9 @@ pub struct ConfigItem {
     pub status: ComplianceStatus,
     pub last_scan: u64,
     pub last_remediated: u64,
+    pub provider: SovereignCloudProvider,
+    pub zone: ClusterZone,
+    pub cluster_node_id: u32,
 }
 
 impl ConfigItem {
@@ -434,6 +581,28 @@ impl ConfigItem {
         comp_str: &str,
         key_str: &str,
         val_str: &str,
+    ) -> Self {
+        Self::with_topology(
+            resource_id,
+            scope,
+            comp_str,
+            key_str,
+            val_str,
+            SovereignCloudProvider::SovereignBareMetal,
+            ClusterZone::ZoneFrParis1,
+            1,
+        )
+    }
+
+    pub fn with_topology(
+        resource_id: u32,
+        scope: ConfigScope,
+        comp_str: &str,
+        key_str: &str,
+        val_str: &str,
+        provider: SovereignCloudProvider,
+        zone: ClusterZone,
+        cluster_node_id: u32,
     ) -> Self {
         let mut component = [0u8; 32];
         let c_len = comp_str.len().min(32);
@@ -459,6 +628,9 @@ impl ConfigItem {
             status: ComplianceStatus::Compliant,
             last_scan: 0,
             last_remediated: 0,
+            provider,
+            zone,
+            cluster_node_id,
         }
     }
 
@@ -471,18 +643,35 @@ impl ConfigItem {
     }
 }
 
-/// Rapport d'anomalie de dérive détectée
+/// Rapport d'anomalie de dérive détectée avec calcul de rayon d'impact
 #[derive(Clone, Copy)]
 pub struct DriftReport {
     pub rule_id: u32,
     pub resource_id: u32,
     pub scope: ConfigScope,
     pub severity: RuleSeverity,
+    pub attack_vector: AttackVectorRisk,
+    pub blast_radius: u32, // 0..100
     pub current_val: [u8; 32],
     pub current_len: usize,
     pub expected_val: [u8; 32],
     pub expected_len: usize,
     pub auto_remediated: bool,
+}
+
+/// Rapport scellé de remédiation autonome CSPM
+#[derive(Clone, Copy)]
+pub struct CspmRemediationReport {
+    pub report_id: u64,
+    pub timestamp: u64,
+    pub rule_id: u32,
+    pub resource_id: u32,
+    pub action: RemediationAction,
+    pub pre_remediation_score: u32,
+    pub post_remediation_score: u32,
+    pub pre_risk_index: u32,
+    pub post_risk_index: u32,
+    pub report_seal: [u8; 32],
 }
 
 // ============================================================================
@@ -497,6 +686,7 @@ pub enum CspmAuditAction {
     AutonomousRemediation,
     ManualOverride,
     LedgerCheckpoint,
+    NodeIsolated,
 }
 
 #[derive(Clone, Copy)]
@@ -522,7 +712,10 @@ pub struct JamboCspmDaemon {
     pub item_count: usize,
     pub drifts: [Option<DriftReport>; 32],
     pub drift_count: usize,
-    pub ledger: [Option<CspmAuditEntry>; 32],
+    pub remediation_reports: [Option<CspmRemediationReport>; 32],
+    pub report_count: usize,
+    pub next_report_id: u64,
+    pub ledger: [Option<CspmAuditEntry>; 64],
     pub ledger_len: usize,
     pub next_entry_id: u64,
     pub ledger_hash: [u8; 32],
@@ -531,8 +724,10 @@ pub struct JamboCspmDaemon {
     pub total_scans: u64,
     pub total_drifts_detected: u64,
     pub total_remediations: u64,
+    pub total_isolated_nodes: u64,
     pub current_posture_score: u32, // 0..100
     pub current_risk_index: u32,    // 0..1000
+    pub max_blast_radius: u32,      // 0..100
 }
 
 impl JamboCspmDaemon {
@@ -547,15 +742,20 @@ impl JamboCspmDaemon {
             item_count: 0,
             drifts: [None; 32],
             drift_count: 0,
-            ledger: [None; 32],
+            remediation_reports: [None; 32],
+            report_count: 0,
+            next_report_id: 1,
+            ledger: [None; 64],
             ledger_len: 0,
             next_entry_id: 1,
             ledger_hash: Self::GENESIS_HASH,
             total_scans: 0,
             total_drifts_detected: 0,
             total_remediations: 0,
+            total_isolated_nodes: 0,
             current_posture_score: 100,
             current_risk_index: 0,
+            max_blast_radius: 0,
         }
     }
 
@@ -586,9 +786,9 @@ impl JamboCspmDaemon {
             entry_hash: new_hash,
         };
 
-        let slot = (self.next_entry_id as usize - 1) % 32;
+        let slot = ((self.next_entry_id - 1) % 64) as usize;
         self.ledger[slot] = Some(entry);
-        if self.ledger_len < 32 {
+        if self.ledger_len < 64 {
             self.ledger_len += 1;
         }
 
@@ -603,14 +803,14 @@ impl JamboCspmDaemon {
         }
 
         let mut expected_prev = Self::GENESIS_HASH;
-        let start_id = if self.next_entry_id > 32 {
-            self.next_entry_id - 32
+        let start_id = if self.next_entry_id > 64 {
+            self.next_entry_id - 64
         } else {
             1
         };
 
         for id in start_id..self.next_entry_id {
-            let slot = ((id - 1) % 32) as usize;
+            let slot = ((id - 1) % 64) as usize;
             if let Some(entry) = self.ledger[slot] {
                 if id == start_id && start_id > 1 {
                     expected_prev = entry.prev_hash;
@@ -693,6 +893,36 @@ impl JamboCspmDaemon {
         Ok(id)
     }
 
+    /// Isole un nœud de grappe présentant une dérive critique de sécurité
+    pub fn isolate_cluster_node(
+        &mut self,
+        cap: &CspmCap,
+        node_id: u32,
+        timestamp: u64,
+    ) -> Result<bool, CspmError> {
+        if !cap.has_right(cspm_rights::ISOLATE_NODE) && !cap.has_right(cspm_rights::ADMIN) {
+            return Err(CspmError::PermissionDenied);
+        }
+
+        let mut found = false;
+        for i in 0..self.item_count {
+            if let Some(ref mut item) = self.items[i] {
+                if item.cluster_node_id == node_id {
+                    item.status = ComplianceStatus::Isolated;
+                    found = true;
+                }
+            }
+        }
+
+        if found {
+            self.total_isolated_nodes += 1;
+            self.record_audit(timestamp, CspmAuditAction::NodeIsolated, node_id, 0);
+            Ok(true)
+        } else {
+            Err(CspmError::NodeNotFound)
+        }
+    }
+
     /// Initialise les baselines durcies souveraines par défaut
     pub fn init_defaults(&mut self) {
         let cap = self.admin_cap;
@@ -700,7 +930,7 @@ impl JamboCspmDaemon {
         // 1. MMU SMEP & SMAP durci (CIS-Microkernel 1.1)
         let _ = self.add_rule(
             &cap,
-            CspmRule::new(
+            CspmRule::with_exposure(
                 101,
                 BaselineStandard::CisMicrokernel,
                 ConfigScope::KernelCore,
@@ -709,13 +939,15 @@ impl JamboCspmDaemon {
                 "enabled",
                 RuleSeverity::Critical,
                 true,
+                AttackVectorRisk::PrivilegeEscalation,
+                85,
             ),
         );
 
         // 2. W^X Enforcing strict (DISA STIG KRN-001)
         let _ = self.add_rule(
             &cap,
-            CspmRule::new(
+            CspmRule::with_exposure(
                 102,
                 BaselineStandard::DisaStig,
                 ConfigScope::KernelCore,
@@ -724,13 +956,15 @@ impl JamboCspmDaemon {
                 "strict",
                 RuleSeverity::Critical,
                 true,
+                AttackVectorRisk::PrivilegeEscalation,
+                90,
             ),
         );
 
         // 3. TEE Attestation PCR Quotes (ANSSI-SecNumCloud TEE-04)
         let _ = self.add_rule(
             &cap,
-            CspmRule::new(
+            CspmRule::with_exposure(
                 103,
                 BaselineStandard::AnssiSecNumCloud,
                 ConfigScope::HardwareTee,
@@ -739,13 +973,15 @@ impl JamboCspmDaemon {
                 "pcr_quote_required",
                 RuleSeverity::High,
                 true,
+                AttackVectorRisk::WeakAttestation,
+                65,
             ),
         );
 
         // 4. VFS Zero Ambient Authority (JamboOS-Sovereign VFS-01)
         let _ = self.add_rule(
             &cap,
-            CspmRule::new(
+            CspmRule::with_exposure(
                 104,
                 BaselineStandard::JamboSovereign,
                 ConfigScope::StorageVfs,
@@ -754,13 +990,15 @@ impl JamboCspmDaemon {
                 "disabled",
                 RuleSeverity::Critical,
                 true,
+                AttackVectorRisk::LateralMovementPath,
+                80,
             ),
         );
 
-        // 5. Réseau Chiffré WireGuard Obrigatoire (ANSSI-SecNumCloud NET-02)
+        // 5. Réseau Chiffré WireGuard Obligatoire (ANSSI-SecNumCloud NET-02)
         let _ = self.add_rule(
             &cap,
-            CspmRule::new(
+            CspmRule::with_exposure(
                 105,
                 BaselineStandard::AnssiSecNumCloud,
                 ConfigScope::NetworkL4,
@@ -769,13 +1007,15 @@ impl JamboCspmDaemon {
                 "wireguard_chachapoly",
                 RuleSeverity::High,
                 true,
+                AttackVectorRisk::UnencryptedPayload,
+                70,
             ),
         );
 
         // 6. Seccomp / Confinement Sandboxing (CIS-Microkernel 3.4)
         let _ = self.add_rule(
             &cap,
-            CspmRule::new(
+            CspmRule::with_exposure(
                 106,
                 BaselineStandard::CisMicrokernel,
                 ConfigScope::ProcessSandbox,
@@ -784,13 +1024,15 @@ impl JamboCspmDaemon {
                 "kill_thread",
                 RuleSeverity::High,
                 true,
+                AttackVectorRisk::PrivilegeEscalation,
+                60,
             ),
         );
 
         // 7. Scellement Inaltérable Audit SHA-256 (DISA STIG AUD-009)
         let _ = self.add_rule(
             &cap,
-            CspmRule::new(
+            CspmRule::with_exposure(
                 107,
                 BaselineStandard::DisaStig,
                 ConfigScope::AuditLedger,
@@ -799,13 +1041,15 @@ impl JamboCspmDaemon {
                 "sha256_chained",
                 RuleSeverity::Critical,
                 true,
+                AttackVectorRisk::None,
+                40,
             ),
         );
 
         // 8. ZTNA Micro-Périmètres Continus (JamboOS-Sovereign ZT-01)
         let _ = self.add_rule(
             &cap,
-            CspmRule::new(
+            CspmRule::with_exposure(
                 108,
                 BaselineStandard::JamboSovereign,
                 ConfigScope::IdentityZeroTrust,
@@ -813,7 +1057,9 @@ impl JamboCspmDaemon {
                 "ztna.continuous_eval",
                 "enforced_subsecond",
                 RuleSeverity::Medium,
-                false, // Nécessite validation manuelle
+                false, // Nécessite validation ciblée
+                AttackVectorRisk::LateralMovementPath,
+                50,
             ),
         );
 
@@ -821,91 +1067,115 @@ impl JamboCspmDaemon {
         // Items conformes
         let _ = self.set_config_item(
             &cap,
-            ConfigItem::new(
+            ConfigItem::with_topology(
                 1,
                 ConfigScope::KernelCore,
                 "microkernel_mmu",
                 "kernel.mmu.smep_smap",
                 "enabled",
+                SovereignCloudProvider::SovereignBareMetal,
+                ClusterZone::ZoneFrParis1,
+                1,
             ),
             100,
         );
         let _ = self.set_config_item(
             &cap,
-            ConfigItem::new(
+            ConfigItem::with_topology(
                 3,
                 ConfigScope::HardwareTee,
                 "jambo_tee",
                 "tee.enclave.attestation",
                 "pcr_quote_required",
+                SovereignCloudProvider::SecNumCloudEnclave,
+                ClusterZone::ZoneDefenseEnclave,
+                2,
             ),
             100,
         );
         let _ = self.set_config_item(
             &cap,
-            ConfigItem::new(
+            ConfigItem::with_topology(
                 4,
                 ConfigScope::StorageVfs,
                 "jambo_fs",
                 "vfs.ambient_authority",
                 "disabled",
+                SovereignCloudProvider::SovereignBareMetal,
+                ClusterZone::ZoneFrParis1,
+                1,
             ),
             100,
         );
         let _ = self.set_config_item(
             &cap,
-            ConfigItem::new(
+            ConfigItem::with_topology(
                 7,
                 ConfigScope::AuditLedger,
                 "jambo_auditd",
                 "audit.ledger.immutable_seal",
                 "sha256_chained",
+                SovereignCloudProvider::EuropeanSovereignMesh,
+                ClusterZone::ZoneSecureGov,
+                3,
             ),
             100,
         );
 
-        // Items présentant une dérive (Drift) simulant une attaque ou une défaillance de déploiement
+        // Items présentant une dérive (Drift) simulant une anomalie ou défaillance de déploiement
         let _ = self.set_config_item(
             &cap,
-            ConfigItem::new(
+            ConfigItem::with_topology(
                 2,
                 ConfigScope::KernelCore,
                 "microkernel_mmu",
                 "kernel.mmu.wx_enforcement",
                 "permissive", // Dérive critique !
+                SovereignCloudProvider::SovereignBareMetal,
+                ClusterZone::ZoneFrParis1,
+                1,
             ),
             100,
         );
         let _ = self.set_config_item(
             &cap,
-            ConfigItem::new(
+            ConfigItem::with_topology(
                 5,
                 ConfigScope::NetworkL4,
                 "jambo_netd",
                 "net.traffic.encryption",
                 "plaintext_fallback", // Dérive High !
+                SovereignCloudProvider::EuropeanSovereignMesh,
+                ClusterZone::ZoneDeFrankfurt1,
+                4,
             ),
             100,
         );
         let _ = self.set_config_item(
             &cap,
-            ConfigItem::new(
+            ConfigItem::with_topology(
                 6,
                 ConfigScope::ProcessSandbox,
                 "jambo_seccomp",
                 "proc.seccomp.default_action",
                 "allow_all", // Dérive High !
+                SovereignCloudProvider::SovereignBareMetal,
+                ClusterZone::ZoneFrParis1,
+                1,
             ),
             100,
         );
         let _ = self.set_config_item(
             &cap,
-            ConfigItem::new(
+            ConfigItem::with_topology(
                 8,
                 ConfigScope::IdentityZeroTrust,
                 "jambo_ztna",
                 "ztna.continuous_eval",
                 "disabled_bypass", // Dérive Medium !
+                SovereignCloudProvider::SecNumCloudEnclave,
+                ClusterZone::ZoneDefenseEnclave,
+                2,
             ),
             100,
         );
@@ -925,6 +1195,7 @@ impl JamboCspmDaemon {
         let mut total_checked = 0usize;
         let mut total_weight = 0u32;
         let mut penalty_weight = 0u32;
+        let mut peak_blast = 0u32;
 
         for i in 0..self.rule_count {
             if let Some(rule) = self.rules[i] {
@@ -955,12 +1226,19 @@ impl JamboCspmDaemon {
                 }
 
                 if let Some((res_id, cur_val, cur_len)) = drift_detected {
+                    let blast = rule.blast_radius_base.min(100);
+                    if blast > peak_blast {
+                        peak_blast = blast;
+                    }
+
                     if self.drift_count < 32 {
                         self.drifts[self.drift_count] = Some(DriftReport {
                             rule_id: rule.rule_id,
                             resource_id: res_id,
                             scope: rule.scope,
                             severity: rule.severity,
+                            attack_vector: rule.attack_vector,
+                            blast_radius: blast,
                             current_val: cur_val,
                             current_len: cur_len,
                             expected_val: rule.expected_value,
@@ -988,6 +1266,7 @@ impl JamboCspmDaemon {
         }
 
         self.total_scans += 1;
+        self.max_blast_radius = peak_blast;
 
         // Calcul du score de posture (0..100) et de l'indice de risque (0..1000)
         let posture = if total_weight == 0 {
@@ -1018,6 +1297,24 @@ impl JamboCspmDaemon {
         rule_id: u32,
         timestamp: u64,
     ) -> Result<bool, CspmError> {
+        let report = self.remediate_drift_with_report(
+            cap,
+            rule_id,
+            RemediationAction::RestoreNominalConfig,
+            timestamp,
+        )?;
+        Ok(report.post_remediation_score > report.pre_remediation_score
+            || report.rule_id == rule_id)
+    }
+
+    /// Corrige de manière autonome une dérive de configuration avec scellement de rapport
+    pub fn remediate_drift_with_report(
+        &mut self,
+        cap: &CspmCap,
+        rule_id: u32,
+        action: RemediationAction,
+        timestamp: u64,
+    ) -> Result<CspmRemediationReport, CspmError> {
         if !cap.has_right(cspm_rights::REMEDIATE_DRIFT) {
             return Err(CspmError::PermissionDenied);
         }
@@ -1030,6 +1327,9 @@ impl JamboCspmDaemon {
             .find(|r| r.rule_id == rule_id)
             .copied()
             .ok_or(CspmError::RuleNotFound)?;
+
+        let pre_score = self.current_posture_score;
+        let pre_risk = self.current_risk_index;
 
         let mut remediated_res_id: Option<u32> = None;
 
@@ -1062,9 +1362,46 @@ impl JamboCspmDaemon {
                     d.auto_remediated = true;
                 }
             }
-            Ok(true)
+
+            // Recalcul du score
+            let _ = self.scan_drift(cap, timestamp)?;
+            let post_score = self.current_posture_score;
+            let post_risk = self.current_risk_index;
+
+            // Scellement cryptographique du rapport de remédiation
+            let mut hasher = Sha256::new();
+            hasher.update(&self.next_report_id.to_be_bytes());
+            hasher.update(&timestamp.to_be_bytes());
+            hasher.update(&rule.rule_id.to_be_bytes());
+            hasher.update(&res_id.to_be_bytes());
+            hasher.update(&[action as u8]);
+            hasher.update(&pre_score.to_be_bytes());
+            hasher.update(&post_score.to_be_bytes());
+            let report_seal = hasher.finalize();
+
+            let report = CspmRemediationReport {
+                report_id: self.next_report_id,
+                timestamp,
+                rule_id: rule.rule_id,
+                resource_id: res_id,
+                action,
+                pre_remediation_score: pre_score,
+                post_remediation_score: post_score,
+                pre_risk_index: pre_risk,
+                post_risk_index: post_risk,
+                report_seal,
+            };
+
+            let slot = ((self.next_report_id - 1) % 32) as usize;
+            self.remediation_reports[slot] = Some(report);
+            if self.report_count < 32 {
+                self.report_count += 1;
+            }
+            self.next_report_id += 1;
+
+            Ok(report)
         } else {
-            Ok(false)
+            Err(CspmError::RuleNotFound)
         }
     }
 
@@ -1121,6 +1458,15 @@ impl JamboCspmDaemon {
 
         Ok(fixed_count)
     }
+
+    /// Retourne le dernier rapport de remédiation enregistré
+    pub fn latest_report(&self) -> Option<CspmRemediationReport> {
+        if self.report_count == 0 {
+            return None;
+        }
+        let slot = ((self.next_report_id - 2) % 32) as usize;
+        self.remediation_reports[slot]
+    }
 }
 
 // ============================================================================
@@ -1144,6 +1490,8 @@ mod tests {
         let root_cap = CspmCap::new(Handle::new(12501, 1), cspm_rights::ALL, 10000, 500);
         assert!(root_cap.has_right(cspm_rights::SCAN_DRIFT));
         assert!(root_cap.has_right(cspm_rights::REMEDIATE_DRIFT));
+        assert!(root_cap.has_right(cspm_rights::ISOLATE_NODE));
+        assert!(root_cap.has_right(cspm_rights::REMEDIATE_HARDWARE));
         assert!(root_cap.has_right(cspm_rights::ADMIN));
 
         let auditor_cap = root_cap
@@ -1156,6 +1504,7 @@ mod tests {
 
         assert!(auditor_cap.has_right(cspm_rights::SCAN_DRIFT));
         assert!(!auditor_cap.has_right(cspm_rights::REMEDIATE_DRIFT));
+        assert!(!auditor_cap.has_right(cspm_rights::ISOLATE_NODE));
         assert!(!auditor_cap.has_right(cspm_rights::ADMIN));
 
         // Escalade illégale rejetée
@@ -1182,6 +1531,7 @@ mod tests {
         assert_eq!(drifts, 4);
         assert!(posture <= 65); // Posture dégradée due aux 4 dérives critiques/hautes
         assert!(risk >= 350); // Risque élevé
+        assert!(daemon.max_blast_radius >= 50);
 
         // Intégrité du ledger
         assert!(daemon.verify_ledger_integrity());
@@ -1206,9 +1556,18 @@ mod tests {
         assert!(daemon.current_risk_index < initial_risk);
         assert_eq!(daemon.drift_count, 1); // Seul ZTNA persiste car auto_remediate = false
 
-        // Remédiation ciblée pour la règle 108
-        let r108 = daemon.remediate_drift(&root_cap, 108, 3000).unwrap();
-        assert!(r108);
+        // Remédiation ciblée pour la règle 108 avec génération de rapport scellé
+        let rep108 = daemon
+            .remediate_drift_with_report(
+                &root_cap,
+                108,
+                RemediationAction::RestoreNominalConfig,
+                3000,
+            )
+            .expect("Remédiation ciblée ZTNA avec rapport");
+        assert_eq!(rep108.rule_id, 108);
+        assert_ne!(rep108.report_seal, [0u8; 32]);
+        assert_eq!(rep108.post_remediation_score, 100);
 
         // Rescan complet
         let (_, final_drifts, final_posture, final_risk) =
@@ -1219,5 +1578,27 @@ mod tests {
 
         // Vérification de la chaîne d'audit inaltérable SHA-256
         assert!(daemon.verify_ledger_integrity());
+    }
+
+    #[test]
+    fn test_cspm_node_isolation_and_quarantine() {
+        let root_cap = CspmCap::new(Handle::new(12504, 1), cspm_rights::ALL, 10000, 500);
+        let mut daemon = JamboCspmDaemon::new(root_cap);
+        daemon.init_defaults();
+
+        // Isolement du nœud 4 (jambo_netd)
+        let isolated = daemon
+            .isolate_cluster_node(&root_cap, 4, 1500)
+            .expect("Isolement du nœud 4");
+        assert!(isolated);
+        assert_eq!(daemon.total_isolated_nodes, 1);
+
+        let auditor_cap = root_cap
+            .attenuate(cspm_rights::SCAN_DRIFT, 1000, 10)
+            .unwrap();
+        assert_eq!(
+            daemon.isolate_cluster_node(&auditor_cap, 4, 1600),
+            Err(CspmError::PermissionDenied)
+        );
     }
 }

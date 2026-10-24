@@ -1249,12 +1249,7 @@ pub extern "C" fn _start() -> ! {
 
     // Note: Le Courtier d'Accès Sécurisé Cloud Souverain (CASB) & Passerelle DLP d'Enclave est validé en Phase 154 (v0.3.21).
 
-    // 18semelviciesquadragies. Validation de la Gestion de Posture CSPM & Remédiation Autonome (Phase 125 - v0.2.123)
-    let cspm_success = sched::cspm_test::execute_cspm_daemon_test();
-    assert!(
-        cspm_success,
-        "Échec du test de gestion de posture CSPM et remédiation jambo-cspm"
-    );
+    // Note: La Gestion de Posture de Sécurité Cloud Souverain (CSPM) & Remédiation Autonome est validée en Phase 155 (v0.3.22).
 
     // 18duoviciesquadragies. Validation de la Protection des Charges de Travail CWPP (Phase 126 - v0.2.124)
     let cwpp_success = sched::cwpp_test::execute_cwpp_daemon_test();
@@ -1457,6 +1452,13 @@ pub extern "C" fn _start() -> ! {
     assert!(
         casb_success,
         "Échec du test du courtier CASB souverain et passerelle DLP d'enclave jambo-casb"
+    );
+
+    // 40viciesquadragies. Validation Gestion de Posture de Sécurité Cloud Souverain CSPM & Remédiation Autonome (Phase 155 - v0.3.22)
+    let cspm_success = sched::cspm_test::execute_cspm_daemon_test();
+    assert!(
+        cspm_success,
+        "Échec du test de gestion de posture CSPM et remédiation autonome jambo-cspm"
     );
 
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
@@ -1771,14 +1773,17 @@ pub extern "C" fn _start() -> ! {
     kprintln!(
         "\x1b[1;32m[PASS] Phase 154 Sovereign Cloud Access Security Broker & Enclave DLP Gateway (jambo-casb) Complete\x1b[0m"
     );
+    kprintln!(
+        "\x1b[1;32m[PASS] Phase 155 Sovereign Cloud Security Posture Management & Autonomous Remediation (jambo-cspm) Complete\x1b[0m"
+    );
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.3.21 (Sovereign Cloud Access Security Broker & Enclave DLP Gateway jambo-casb)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.3.22 (Sovereign Cloud Security Posture Management & Autonomous Remediation jambo-cspm)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.3.21 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.3.22 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );

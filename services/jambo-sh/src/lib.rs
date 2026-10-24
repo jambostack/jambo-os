@@ -11985,6 +11985,52 @@ impl JamboShell {
                             }
                         }
                     }
+                    "exposure" => {
+                        let mut b = [0u8; 20];
+                        emit("[CSPM/EXPOSURE] Analyse d'Exposition & Rayon d'Impact (Blast Radius) :\n");
+                        emit("  Rayon d'impact maximal : ");
+                        emit(format_u64(self.cspm.max_blast_radius as u64, &mut b));
+                        emit(" / 100\n  Dérives actives répertoriées :\n");
+                        for i in 0..self.cspm.drift_count {
+                            if let Some(ref d) = self.cspm.drifts[i] {
+                                emit("  * Règle #");
+                                emit(format_u64(d.rule_id as u64, &mut b));
+                                emit(" | Vecteur: ");
+                                emit(d.attack_vector.as_str());
+                                emit(" | Blast Radius: ");
+                                emit(format_u64(d.blast_radius as u64, &mut b));
+                                emit(" | Sévérité: ");
+                                emit(d.severity.as_str());
+                                emit("\n");
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "report" => {
+                        let mut b = [0u8; 20];
+                        emit("[CSPM/REPORT] Rapports de Remédiation Autonome Scellés SHA-256 :\n");
+                        emit("  Total rapports générés : ");
+                        emit(format_u64(self.cspm.report_count as u64, &mut b));
+                        emit("\n");
+                        if let Some(rep) = self.cspm.latest_report() {
+                            emit("  Dernier rapport [#");
+                            emit(format_u64(rep.report_id, &mut b));
+                            emit("] Règle #");
+                            emit(format_u64(rep.rule_id as u64, &mut b));
+                            emit(" Action: ");
+                            emit(rep.action.as_str());
+                            emit("\n  Posture: ");
+                            emit(format_u64(rep.pre_remediation_score as u64, &mut b));
+                            emit(" -> ");
+                            emit(format_u64(rep.post_remediation_score as u64, &mut b));
+                            emit(" | Risque: ");
+                            emit(format_u64(rep.pre_risk_index as u64, &mut b));
+                            emit(" -> ");
+                            emit(format_u64(rep.post_risk_index as u64, &mut b));
+                            emit("\n");
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
                     "verify" => {
                         let valid = self.cspm.verify_ledger_integrity();
                         emit("  Vérification intégrité registre SHA-256 : ");
@@ -11996,7 +12042,7 @@ impl JamboShell {
                         (ShellStatus::Success, write_pos)
                     }
                     _ => {
-                        emit("Usage: cspm [status | baselines | items | scan | remediate | verify]\n");
+                        emit("Usage: cspm [status | baselines | items | scan | remediate | exposure | report | verify]\n");
                         (ShellStatus::ExecutionFailed, write_pos)
                     }
                 }
@@ -19728,9 +19774,17 @@ mod tests {
                 assert_eq!(st4, ShellStatus::Success);
                 assert!(len4 > 0);
 
+                let (ste, lene) = shell.execute_line("cspm exposure", &mut out);
+                assert_eq!(ste, ShellStatus::Success);
+                assert!(lene > 0);
+
                 let (st5, len5) = shell.execute_line("cspm remediate", &mut out);
                 assert_eq!(st5, ShellStatus::Success);
                 assert!(len5 > 0);
+
+                let (strp, lenrp) = shell.execute_line("cspm report", &mut out);
+                assert_eq!(strp, ShellStatus::Success);
+                assert!(lenrp > 0);
 
                 let (st6, len6) = shell.execute_line("cspm verify", &mut out);
                 assert_eq!(st6, ShellStatus::Success);

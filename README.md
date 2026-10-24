@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.3.21-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.3.22-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.3.21 (Courtier d'Accès Sécurisé Cloud Souverain CASB & Passerelle DLP d'Enclave jambo-casb)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.3.21` introduit la modernisation et la souveraineté complète du Courtier d'Accès Sécurisé Cloud (CASB souverain & passerelle DLP d'enclave — `services/jambo-casb`) : courtage d'admission et passerelle mandataire inverse d'admission inter-services & cloud souverain, conformité multi-locataires (SecNumCloud, SovereignDefense, etc.) et géo-fencing souverain, interception et courtage des flux d'enclaves matérielles TEE (Intel SGX, AMD SEV-SNP, ARM CCA, Sovereign JamboEnclave), inspection profonde L7 sans rupture de chiffrement souverain (Sovereign Blind Inspection) via enveloppes d'attestation et scellements cryptographiques déterministes, moteur DLP hybride avancé (Luhn, clés cryptographiques, secrets d'enclaves SEV-SNP VMPCK, clés de scellement SGX, parts secrètes ML-KEM/PQC et analyse d'entropie), actions DLP en temps réel (Allow, Redact, Block, QuarantineTenant, IsolateEnclave O(1)), contrôle d'accès capabilaire strict `CasbCap` sans autorité ambiante avec atténuation monotone et registre d'audit SHA-256 scellé et inaltérable.
+> **Statut du Projet : Version v0.3.22 (Gestion de Posture de Sécurité Cloud Souverain CSPM & Remédiation Autonome jambo-cspm)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.3.22` introduit la modernisation et la souveraineté complète de la Gestion de Posture de Sécurité Cloud Souverain (CSPM & remédiation autonome — `services/jambo-cspm`) : moteur d'audit continu de conformité multi-cloud souverain (SecNumCloud, CIS Microkernel, DISA STIG, NIST SP 800-53), détection de dérive (drift detection) en temps réel par rapport aux baselines durcies, analyse d'exposition multi-vecteurs et calcul d'indice de risque de grappe souveraine avec rayon d'impact (Blast Radius 0..100), moteur de remédiation autonome O(1) avec rapports scellés SHA-256 (`CspmRemediationReport`), topologie multi-cloud souverain (SovereignBareMetal, SecNumCloudEnclave, EuropeanSovereignMesh, PrivateAirGappedEdge) et géo-zones souveraines, capacité d'isolement chirurgical O(1) de nœuds défaillants ou compromis, filtrage capabilaire strict `CspmCap` sans autorité ambiante avec atténuation monotone et registre d'audit SHA-256 scellé et inaltérable.
 
 ---
 
