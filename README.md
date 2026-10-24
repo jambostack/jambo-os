@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.3.29-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.3.30-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.3.29 (Programme Continu de Gestion de l'Exposition aux Menaces CTEM, Orchestration Fédérée & Priorisation Prédictive des Risques jambo-ctem)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.3.29` introduit la modernisation et la souveraineté complète du Programme Continu de Gestion de l'Exposition aux Menaces (CTEM — `services/jambo-ctem`) : cycle souverain d'orchestration continue CTEM en 5 phases `#![no_std]` (Scoping, Discovery, Prioritization, Validation, Mobilization), fédération multi-plans unifiant les signaux CSPM, CIEM, CWPP, ASPM, BAS, EASM et CTI Intel, modélisation de chemins d'attaque contextuels et calcul prédictif d'exploitabilité (0..100), playbooks de mobilisation coordonnée et remédiation autonome O(1) (`remediate_all_mobilized`), rapports de cycle (`CtemCycleReport`) et de remédiation (`CtemRemediationReport`) scellés SHA-256 avec contrôle capabilaire strict `CtemCap` sans autorité ambiante avec atténuation monotone et registre d'audit cryptographique SHA-256 inaltérable.
+> **Statut du Projet : Version v0.3.30 (Détection et Réponse aux Menaces sur l'Identité ITDR, Détection d'Attaques sur les Jetons/Capabilités & Confinement Autonome d'Identités Compromises jambo-itdr)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.3.30` introduit la modernisation et la souveraineté complète de la Détection et Réponse aux Menaces sur l'Identité (ITDR — `services/jambo-itdr`) : moteur souverain ITDR `#![no_std]` de détection continue des menaces avancées sur l'identité (compromission de jetons, attaques par rejeu, usurpation de capabilités, Pass-The-Capability, déplacement latéral, voyage impossible, bourrage d'identifiants, altération MAC sur jetons), évaluation continue du Trust Score d'identité dynamique (0..100) et calcul déterministe de l'indice de risque global, playbooks de remédiation proactive O(1) (mise en quarantaine, révocation de jetons, défi Step-Up MFA, rupture de session, rollback au moindre privilège), confinement autonome O(1) de toutes les identités compromises (`remediate_all_compromised`), rapports de posture (`ItdrAssessmentReport`) et de remédiation (`ItdrRemediationReport`) scellés SHA-256 avec contrôle capabilaire strict `ItdrCap` sans autorité ambiante avec atténuation monotone et registre d'audit cryptographique SHA-256 inaltérable.
 
 ---
 

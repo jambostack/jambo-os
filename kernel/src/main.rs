@@ -1280,7 +1280,7 @@ pub extern "C" fn _start() -> ! {
         "Échec du test de gestion continue souveraine de l'exposition aux menaces jambo-ctem"
     );
 
-    // 18noniesviciesquadragies. Validation de la Détection et Réponse aux Menaces sur l'Identité ITDR (Phase 133 - v0.3.0)
+    // 18noniesviciesquadragies. Validation de la Détection et Réponse aux Menaces sur l'Identité ITDR (Phase 163 - v0.3.30)
     let itdr_success = sched::itdr_test::execute_itdr_daemon_test();
     assert!(
         itdr_success,
@@ -1805,14 +1805,17 @@ pub extern "C" fn _start() -> ! {
     kprintln!(
         "\x1b[1;32m[PASS] Phase 162 Sovereign Continuous Threat Exposure Management & Federated Risk Orchestration (jambo-ctem) Complete\x1b[0m"
     );
+    kprintln!(
+        "\x1b[1;32m[PASS] Phase 163 Sovereign Identity Threat Detection and Response ITDR & Autonomous Confinement (jambo-itdr) Complete\x1b[0m"
+    );
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.3.29 (Sovereign Continuous Threat Exposure Management CTEM jambo-ctem)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.3.30 (Sovereign Identity Threat Detection and Response ITDR jambo-itdr)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.3.28 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.3.29 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );

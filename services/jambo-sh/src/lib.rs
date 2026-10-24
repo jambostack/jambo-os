@@ -14037,6 +14037,21 @@ impl JamboShell {
                                     jambo_itdr::IdentityThreatType::DivergentGeoMesh => {
                                         emit("Saut Topologique")
                                     }
+                                    jambo_itdr::IdentityThreatType::PassTheCapability => {
+                                        emit("Pass-The-Capability")
+                                    }
+                                    jambo_itdr::IdentityThreatType::LateralPrivilegeMovement => {
+                                        emit("Déplacement Latéral")
+                                    }
+                                    jambo_itdr::IdentityThreatType::ImpossibleTravel => {
+                                        emit("Voyage Impossible")
+                                    }
+                                    jambo_itdr::IdentityThreatType::CredentialStuffing => {
+                                        emit("Bourrage Identifiants")
+                                    }
+                                    jambo_itdr::IdentityThreatType::ForgedCapabilityToken => {
+                                        emit("Jeton Cap Falsifié")
+                                    }
                                 }
                                 emit(" - Sévérité: ");
                                 match th.severity {
@@ -14090,6 +14105,12 @@ impl JamboShell {
                                     }
                                     jambo_itdr::ResponseActionType::AlertSecurityOfficer => {
                                         emit("Alerte SecOps")
+                                    }
+                                    jambo_itdr::ResponseActionType::TerminateSession => {
+                                        emit("Terminaison Session")
+                                    }
+                                    jambo_itdr::ResponseActionType::LeastPrivilegeRollback => {
+                                        emit("Rollback Moindre Privilège")
                                     }
                                 }
                                 emit(") - Exécutée: ");
@@ -14167,6 +14188,117 @@ impl JamboShell {
                             }
                         }
                     }
+                    "remediate" => {
+                        let tid = if parsed.arg_count > 2 {
+                            parse_u64(parsed.args[2]).unwrap_or(1) as u32
+                        } else {
+                            1
+                        };
+                        let mut b = [0u8; 20];
+                        let cap = self.itdr.admin_cap;
+                        match self.itdr.remediate_threat(&cap, tid, 7025) {
+                            Ok(_) => {
+                                emit("  [OK] Menace sur l'identité #");
+                                emit(format_u64(tid as u64, &mut b));
+                                emit(" remédiée et incident clôturé\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("  [FAIL] Échec de la remédiation de la menace ITDR\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "remediate-all" => {
+                        let cap = self.itdr.admin_cap;
+                        let mut b = [0u8; 20];
+                        match self.itdr.remediate_all_compromised(&cap, 7035) {
+                            Ok(rep) => {
+                                emit("=== CONFINEMENT AUTONOME O(1) & REMÉDIATION DES IDENTITÉS (ITDR) ===\n");
+                                emit("  Rapport Remédiation ID       : #");
+                                emit(format_u64(rep.report_id as u64, &mut b));
+                                emit("\n  Menaces remédiées            : ");
+                                emit(format_u64(rep.remediated_count as u64, &mut b));
+                                emit("\n  Identités confinées (quar.)  : ");
+                                emit(format_u64(rep.quarantined_count as u64, &mut b));
+                                emit("\n  Identités révoquées          : ");
+                                emit(format_u64(rep.revoked_count as u64, &mut b));
+                                emit("\n  Indice de Risque Avant/Après : ");
+                                emit(format_u64(rep.risk_before as u64, &mut b));
+                                emit("/100 -> ");
+                                emit(format_u64(rep.score_after as u64, &mut b));
+                                emit("/100\n  Réduction du risque          : ");
+                                emit(format_u64(rep.risk_reduction_pct as u64, &mut b));
+                                emit("%\n  Confiance Moyenne Avant/Après: ");
+                                emit(format_u64(rep.avg_trust_before as u64, &mut b));
+                                emit("/100 -> ");
+                                emit(format_u64(rep.avg_trust_after as u64, &mut b));
+                                emit("/100\n  Sceau Cryptographique SHA-256: ");
+                                let valid =
+                                    jambo_itdr::JamboItdrDaemon::verify_remediation_report_hash(
+                                        &rep,
+                                    );
+                                emit(if valid {
+                                    "INTÈGRE (OK)\n"
+                                } else {
+                                    "ALTÉRÉ (FAIL)\n"
+                                });
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("  [FAIL] Échec du confinement autonome des identités compromises\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "report" => {
+                        let cap = self.itdr.admin_cap;
+                        let mut b = [0u8; 20];
+                        match self.itdr.generate_assessment_report(&cap, 7040) {
+                            Ok(rep) => {
+                                emit("=== RAPPORT DE POSTURE D'IDENTITÉ ITDR SCELLÉ SHA-256 ===\n");
+                                emit("  Rapport Posture ID           : #");
+                                emit(format_u64(rep.report_id as u64, &mut b));
+                                emit("\n  Identités surveillées totales: ");
+                                emit(format_u64(rep.total_identities as u64, &mut b));
+                                emit(" (Actives: ");
+                                emit(format_u64(rep.active_identities as u64, &mut b));
+                                emit(", Suspectes: ");
+                                emit(format_u64(rep.suspicious_identities as u64, &mut b));
+                                emit(", Quarantaine: ");
+                                emit(format_u64(rep.quarantined_identities as u64, &mut b));
+                                emit(", Révoquées: ");
+                                emit(format_u64(rep.revoked_identities as u64, &mut b));
+                                emit(")\n  Menaces détectées totales    : ");
+                                emit(format_u64(rep.total_threats as u64, &mut b));
+                                emit(" (Actives: ");
+                                emit(format_u64(rep.active_threats as u64, &mut b));
+                                emit(", Remédiées: ");
+                                emit(format_u64(rep.remediated_threats as u64, &mut b));
+                                emit(")\n  Score Moyen de Confiance     : ");
+                                emit(format_u64(rep.avg_trust_score as u64, &mut b));
+                                emit("/100\n  Indice Global de Risque      : ");
+                                emit(format_u64(rep.global_identity_risk as u64, &mut b));
+                                emit("/100\n  Score de Santé Périmétrique  : ");
+                                emit(format_u64(rep.health_posture_score as u64, &mut b));
+                                emit("/100\n  Sceau Cryptographique SHA-256: ");
+                                let valid =
+                                    jambo_itdr::JamboItdrDaemon::verify_assessment_report_hash(
+                                        &rep,
+                                    );
+                                emit(if valid {
+                                    "INTÈGRE (OK)\n"
+                                } else {
+                                    "ALTÉRÉ (FAIL)\n"
+                                });
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("  [FAIL] Échec de la génération du rapport ITDR scellé\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
                     "cycle" => {
                         let cap = self.itdr.admin_cap;
                         match self.itdr.run_full_cycle(&cap, 7030) {
@@ -14199,7 +14331,7 @@ impl JamboShell {
                         (ShellStatus::Success, write_pos)
                     }
                     _ => {
-                        emit("Usage: itdr [status | identities | threats | actions | analyze | respond [tid] | quarantine [iid] | cycle | verify]\n");
+                        emit("Usage: itdr [status | identities | threats | actions | analyze | respond [tid] | quarantine [iid] | remediate [tid] | remediate-all | cycle | report | verify]\n");
                         (ShellStatus::ExecutionFailed, write_pos)
                     }
                 }
@@ -20683,13 +20815,25 @@ mod tests {
                 assert_eq!(st7, ShellStatus::Success);
                 assert!(len7 > 0);
 
-                let (st8, len8) = shell.execute_line("itdr cycle", &mut out);
+                let (st8, len8) = shell.execute_line("itdr remediate 1", &mut out);
                 assert_eq!(st8, ShellStatus::Success);
                 assert!(len8 > 0);
 
-                let (st9, len9) = shell.execute_line("itdr verify", &mut out);
+                let (st9, len9) = shell.execute_line("itdr cycle", &mut out);
                 assert_eq!(st9, ShellStatus::Success);
                 assert!(len9 > 0);
+
+                let (st10, len10) = shell.execute_line("itdr verify", &mut out);
+                assert_eq!(st10, ShellStatus::Success);
+                assert!(len10 > 0);
+
+                let (st11, len11) = shell.execute_line("itdr report", &mut out);
+                assert_eq!(st11, ShellStatus::Success);
+                assert!(len11 > 0);
+
+                let (st12, len12) = shell.execute_line("itdr remediate-all", &mut out);
+                assert_eq!(st12, ShellStatus::Success);
+                assert!(len12 > 0);
             })
             .unwrap();
         handle.join().unwrap();
