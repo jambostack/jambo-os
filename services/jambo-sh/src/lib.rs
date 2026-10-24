@@ -11295,8 +11295,80 @@ impl JamboShell {
                         });
                         (ShellStatus::Success, write_pos)
                     }
+                    "traps" => {
+                        let mut b = [0u8; 20];
+                        emit("[DECEPTION/TRAPS] Pièges d'Évasion Enclaves Matérielles TEE :\n");
+                        emit("  Pièges TEE déclenchés : ");
+                        emit(format_u64(self.deception.tee_traps_fired as u64, &mut b));
+                        emit("\n  Vecteurs surveillés   : AMD SEV-SNP (VMSA), Intel TDX (#VE), Intel SGX (EPC), MMIO\n");
+                        for i in 0..self.deception.decoy_count {
+                            if let Some(ref d) = self.deception.decoys[i] {
+                                if d.kind == jambo_deception::DecoyKind::EnclaveTrapDecoy {
+                                    emit("  * ");
+                                    emit(d.name_as_str());
+                                    emit(" @ ");
+                                    emit(d.location_as_str());
+                                    emit(" [Sévérité: ");
+                                    emit(d.severity.as_str());
+                                    emit("]\n");
+                                }
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "xdr" => {
+                        let mut b = [0u8; 20];
+                        emit("[DECEPTION/XDR] Notifications Transmises à XDR / SOAR :\n");
+                        emit("  Total notifications : ");
+                        emit(format_u64(self.deception.total_xdr_notifications, &mut b));
+                        emit("\n");
+                        for i in 0..self.deception.xdr_dispatch_count {
+                            if let Some(ref n) = self.deception.xdr_dispatches[i] {
+                                emit("  * [#");
+                                emit(format_u64(n.dispatch_id, &mut b));
+                                emit("] Source: ");
+                                emit(format_u64(n.attacker_source, &mut b));
+                                emit(" | MITRE: ");
+                                emit(n.mitre_as_str());
+                                emit(" | Action: ");
+                                emit(n.recommended_action.as_str());
+                                emit(" | Statut: ");
+                                emit(if n.dispatched {
+                                    "TRANSMIS\n"
+                                } else {
+                                    "EN_ATTENTE\n"
+                                });
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "gen" => {
+                        let cap = self.deception.admin_cap;
+                        match self.deception.generate_fake_secret(
+                            &cap,
+                            "Bait-JwtSessionToken",
+                            "eyJhbGciOiJFZERTQSI...",
+                            "sec://ring3/fake_session.jwt",
+                            0xCAFE_1234,
+                            1000,
+                        ) {
+                            Ok(id) => {
+                                let mut b = [0u8; 20];
+                                emit("[DECEPTION/GEN] Nouveau leurre haute fidélité déployé : #");
+                                emit(format_u64(id as u64, &mut b));
+                                emit(" (FakeSecret Ring 3)\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("[DECEPTION/GEN] Échec du déploiement dynamique de leurre\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
                     _ => {
-                        emit("Usage: deception [status | decoys | alerts | profiles | trip | verify]\n");
+                        emit(
+                            "Usage: deception [status | decoys | alerts | profiles | traps | xdr | gen | trip | verify]\n",
+                        );
                         (ShellStatus::ExecutionFailed, write_pos)
                     }
                 }
@@ -19344,6 +19416,18 @@ mod tests {
                 let (st5, len5) = shell.execute_line("deception trip", &mut out);
                 assert_eq!(st5, ShellStatus::Success);
                 assert!(len5 > 0);
+
+                let (st_traps, len_traps) = shell.execute_line("deception traps", &mut out);
+                assert_eq!(st_traps, ShellStatus::Success);
+                assert!(len_traps > 0);
+
+                let (st_xdr, len_xdr) = shell.execute_line("deception xdr", &mut out);
+                assert_eq!(st_xdr, ShellStatus::Success);
+                assert!(len_xdr > 0);
+
+                let (st_gen, len_gen) = shell.execute_line("deception gen", &mut out);
+                assert_eq!(st_gen, ShellStatus::Success);
+                assert!(len_gen > 0);
 
                 let (st6, len6) = shell.execute_line("deception verify", &mut out);
                 assert_eq!(st6, ShellStatus::Success);

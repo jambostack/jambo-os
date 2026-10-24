@@ -1243,12 +1243,7 @@ pub extern "C" fn _start() -> ! {
 
     // Note: Le Renseignement Cyber & Partage de Flux d'IoC Souverain CTI est validé en Phase 151 (v0.3.18).
 
-    // 15semelviciesquadragies. Validation de la Cyber-Déception & Honeypots (Phase 122 - v0.2.120)
-    let deception_success = sched::deception_test::execute_deception_daemon_test();
-    assert!(
-        deception_success,
-        "Échec du test de la cyber-déception jambo-deception"
-    );
+    // Note: La Cyber-Déception, Honeypots Souverains & Pièges Évasion Enclaves est validée en Phase 152 (v0.3.19).
 
     // 16semelviciesquadragies. Validation de l'Architecture Zero Trust & Micro-Périmètres (Phase 123 - v0.2.121)
     let ztna_success = sched::ztna_test::execute_ztna_daemon_test();
@@ -1451,6 +1446,13 @@ pub extern "C" fn _start() -> ! {
     assert!(
         intel_success,
         "Échec du test du renseignement cyber & partage de flux d'IoC souverain jambo-intel"
+    );
+
+    // 37viciesquadragies. Validation Cyber-Déception, Honeypots Souverains & Pièges Évasion Enclaves (Phase 152 - v0.3.19)
+    let deception_success = sched::deception_test::execute_deception_daemon_test();
+    assert!(
+        deception_success,
+        "Échec du test de la cyber-déception et pièges d'évasion jambo-deception"
     );
 
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
@@ -1756,14 +1758,17 @@ pub extern "C" fn _start() -> ! {
     kprintln!(
         "\x1b[1;32m[PASS] Phase 151 Sovereign Cyber Threat Intelligence & IoC Sharing (jambo-intel) Complete\x1b[0m"
     );
+    kprintln!(
+        "\x1b[1;32m[PASS] Phase 152 Sovereign Cyber Deception, Honeypots & Enclave Escape Traps (jambo-deception) Complete\x1b[0m"
+    );
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.3.18 (Sovereign Cyber Threat Intelligence Resilience jambo-intel)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.3.19 (Sovereign Cyber Deception & Enclave Traps jambo-deception)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.3.18 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.3.19 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );

@@ -1,14 +1,16 @@
-//! Cyber-Déception, Honeypots Haute Fidélité & Canaris Système (Deception Defense)
+//! Cyber-Déception, Honeypots Haute Fidélité, Canaris Système & Pièges d'Évasion TEE
 //!
-//! Phase 122 — Jalon v0.2.120
+//! Phase 152 — Jalon v0.3.19
 //!
-//! Fournit un système souverain de défense par déception en environnement `#![no_std]` :
-//! 1. Déploiement de faux jetons de capacités (`HoneyCaps`), leurres de mémoire VMO délibérément
-//!    vulnérables, faux endpoints IPC/RPC et canaris de fichiers sensibles.
-//! 2. Déclenchement silencieux d'alertes en temps constant O(1) avec pièges à évasion d'enclave TEE.
-//! 3. Profilage comportemental progressif des attaquants (scores de menace, seuils APT et mise en quarantaine).
-//! 4. Contrôle d'accès capabilaire strict (`DeceptionCap`) sans autorité ambiante.
-//! 5. Scellement cryptographique d'audit inviolable par chaînage SHA-256.
+//! Fournit un système souverain de défense par cyber-déception et contre-ingérence en environnement `#![no_std]` :
+//! 1. Déploiement dynamique de leurres de haute fidélité (HoneyCaps avec jetons piégés, objets de mémoire VMO
+//!    délibérément vulnérables avec faux secrets déchiffrés, fausses clés privées Ring 3 Ed25519/AES-XTS).
+//! 2. Détection en temps constant O(1) de mouvements latéraux (`LateralMovementDecoy`) et canaris d'infrastructure.
+//! 3. Pièges d'évasion d'enclaves matérielles TEE (SEV-SNP VMSA poisoning, Intel TDX #VE handler tamper, SGX EPC breaches).
+//! 4. Notification immédiate O(1) vers XDR/SOAR avec corrélation MITRE ATT&CK et recommandations de confinement coordonnées.
+//! 5. Profilage comportemental progressif des attaquants (scores de menace cumulatifs 0..100, classification APT, quarantaine automatique).
+//! 6. Contrôle d'accès capabilaire strict (`DeceptionCap`) sans autorité ambiante avec atténuation monotone.
+//! 7. Scellement cryptographique d'audit inviolable par chaînage SHA-256 déterministe.
 
 #![no_std]
 
@@ -18,7 +20,7 @@ use libjambo::Handle;
 // HACHEUR CRYPTOGRAPHIQUE SHA-256 (#![no_std])
 // ============================================================================
 
-/// Implémentation déterministe et autonome de SHA-256
+/// Implémentation déterministe et autonome de SHA-256 (#![no_std])
 #[derive(Clone, Copy)]
 pub struct Sha256 {
     state: [u32; 8],
@@ -114,9 +116,10 @@ impl Sha256 {
     }
 
     pub fn update(&mut self, data: &[u8]) {
-        self.total_bytes += data.len() as u64;
         let mut offset = 0;
-        while offset < data.len() {
+        self.total_bytes += data.len() as u64;
+
+        if self.buffer_len > 0 {
             let space = 64 - self.buffer_len;
             let chunk = (data.len() - offset).min(space);
             self.buffer[self.buffer_len..self.buffer_len + chunk]
@@ -128,6 +131,19 @@ impl Sha256 {
                 self.transform_block(&block);
                 self.buffer_len = 0;
             }
+        }
+
+        while offset + 64 <= data.len() {
+            let mut block = [0u8; 64];
+            block.copy_from_slice(&data[offset..offset + 64]);
+            self.transform_block(&block);
+            offset += 64;
+        }
+
+        if offset < data.len() {
+            let chunk = data.len() - offset;
+            self.buffer[..chunk].copy_from_slice(&data[offset..]);
+            self.buffer_len = chunk;
         }
     }
 
@@ -166,15 +182,17 @@ impl Sha256 {
 // ============================================================================
 
 pub mod deception_rights {
-    pub const DEPLOY_DECOY: u32 = 0x01;
-    pub const TRIGGER_ALERT: u32 = 0x02;
-    pub const PROBE_DECOY: u32 = 0x04;
-    pub const PROFILE_ATTACKER: u32 = 0x08;
-    pub const QUARANTINE: u32 = 0x10;
-    pub const SEAL_LEDGER: u32 = 0x20;
-    pub const AUDIT_READ: u32 = 0x40;
-    pub const ADMIN: u32 = 0x80;
-    pub const ALL: u32 = 0xFF;
+    pub const DEPLOY_DECOY: u32 = 0x0001;
+    pub const TRIGGER_ALERT: u32 = 0x0002;
+    pub const PROBE_DECOY: u32 = 0x0004;
+    pub const PROFILE_ATTACKER: u32 = 0x0008;
+    pub const QUARANTINE: u32 = 0x0010;
+    pub const SEAL_LEDGER: u32 = 0x0020;
+    pub const AUDIT_READ: u32 = 0x0040;
+    pub const XDR_DISPATCH: u32 = 0x0080;
+    pub const TEE_TRAP_MANAGE: u32 = 0x0100;
+    pub const ADMIN: u32 = 0x0200;
+    pub const ALL: u32 = 0x03FF;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -186,6 +204,7 @@ pub enum DeceptionError {
     ProfileTableFull,
     AlertTableFull,
     AuditLogFull,
+    XdrQueueFull,
     InvalidParameter,
 }
 
@@ -249,12 +268,16 @@ pub enum DecoyKind {
     HoneyCap,
     /// Objet de mémoire VMO délibérément vulnérable (faux identifiants, fausse table de pages)
     VmoDecoy,
+    /// Faux secret Ring 3 (ex: clé privée Ed25519 leurre, secret de chiffrement AES-XTS)
+    Ring3FakeKey,
     /// Faux endpoint IPC/RPC silencieux ("sys.crypto.master", "cluster.admin.rpc")
     IpcEndpointDecoy,
     /// Piège à évasion d'enclave TEE / SGX / TDX (détection d'exploitation hyperviseur)
     EnclaveTrapDecoy,
     /// Fichier canari VFS hautement attractif ("/etc/master.key", "/etc/shadow.bak")
     CanaryFileDecoy,
+    /// Leurre de mouvement latéral réseau / maillage ("mesh://cluster/node9/admin")
+    LateralMovementDecoy,
 }
 
 impl DecoyKind {
@@ -262,9 +285,11 @@ impl DecoyKind {
         match self {
             Self::HoneyCap => "HoneyCap",
             Self::VmoDecoy => "VmoDecoy",
+            Self::Ring3FakeKey => "Ring3FakeKey",
             Self::IpcEndpointDecoy => "IpcEndpointDecoy",
             Self::EnclaveTrapDecoy => "EnclaveTrapDecoy",
             Self::CanaryFileDecoy => "CanaryFileDecoy",
+            Self::LateralMovementDecoy => "LateralMovementDecoy",
         }
     }
 }
@@ -278,6 +303,9 @@ pub enum ProbeAction {
     IpcConnect,
     EnclaveEscapeAttempt,
     FileAccess,
+    LateralMovementScan,
+    FakeKeyExfiltration,
+    TeeVmsaTamper,
 }
 
 impl ProbeAction {
@@ -289,6 +317,9 @@ impl ProbeAction {
             Self::IpcConnect => "IpcConnect",
             Self::EnclaveEscapeAttempt => "EnclaveEscapeAttempt",
             Self::FileAccess => "FileAccess",
+            Self::LateralMovementScan => "LateralMovementScan",
+            Self::FakeKeyExfiltration => "FakeKeyExfiltration",
+            Self::TeeVmsaTamper => "TeeVmsaTamper",
         }
     }
 }
@@ -319,6 +350,8 @@ pub enum AttackerLevel {
     Benign,
     Reconnaissance,
     ActiveProbe,
+    LateralMovement,
+    PrivilegeEscalation,
     EnclaveEscapeAttempt,
     HighRiskAPT,
 }
@@ -329,9 +362,96 @@ impl AttackerLevel {
             Self::Benign => "Benign",
             Self::Reconnaissance => "Reconnaissance",
             Self::ActiveProbe => "ActiveProbe",
+            Self::LateralMovement => "LateralMovement",
+            Self::PrivilegeEscalation => "PrivilegeEscalation",
             Self::EnclaveEscapeAttempt => "EnclaveEscapeAttempt",
             Self::HighRiskAPT => "HighRiskAPT",
         }
+    }
+}
+
+/// Vecteurs d'évasion d'enclaves matérielles TEE protégées
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TeeTrapVector {
+    /// Altération de la zone de sauvegarde VMSA AMD SEV-SNP
+    SevSnpVmsaPoisoning,
+    /// Interception ou détournement du gestionnaire d'exception de virtualisation #VE Intel TDX
+    TdxVeHandlerTamper,
+    /// Violation des frontières de pages chiffrées EPC Intel SGX
+    SgxEnclavePageBreach,
+    /// Accès illicite aux registres MMIO virtuels piégés de l'enclave
+    TeeMmioTrap,
+}
+
+impl TeeTrapVector {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::SevSnpVmsaPoisoning => "AMD-SEV-SNP/VMSA-Poisoning",
+            Self::TdxVeHandlerTamper => "Intel-TDX/#VE-Handler-Tamper",
+            Self::SgxEnclavePageBreach => "Intel-SGX/EPC-PageBreach",
+            Self::TeeMmioTrap => "TEE/MMIO-VirtualTrap",
+        }
+    }
+}
+
+/// Actions de confinement recommandées pour transmission XDR/SOAR
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeceptionContainmentAction {
+    NoAction,
+    MonitorAndTrace,
+    ImmediateProcessQuarantine,
+    IsolateEnclave,
+    RevokeHoneyCap,
+    BlockLateralSubnet,
+}
+
+impl DeceptionContainmentAction {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::NoAction => "NO_ACTION",
+            Self::MonitorAndTrace => "MONITOR_AND_TRACE",
+            Self::ImmediateProcessQuarantine => "IMMEDIATE_PROCESS_QUARANTINE",
+            Self::IsolateEnclave => "ISOLATE_ENCLAVE",
+            Self::RevokeHoneyCap => "REVOKE_HONEY_CAP",
+            Self::BlockLateralSubnet => "BLOCK_LATERAL_SUBNET",
+        }
+    }
+}
+
+/// Charge utile haute fidélité associée à un leurre
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DecoyPayload {
+    pub data: [u8; 64],
+    pub data_len: usize,
+    pub canary_tag: u64,
+    pub trap_action_mask: u32,
+}
+
+impl DecoyPayload {
+    pub const fn empty() -> Self {
+        Self {
+            data: [0u8; 64],
+            data_len: 0,
+            canary_tag: 0,
+            trap_action_mask: 0,
+        }
+    }
+
+    pub fn new(bait_str: &str, canary_tag: u64, trap_mask: u32) -> Self {
+        let mut data = [0u8; 64];
+        let bytes = bait_str.as_bytes();
+        let len = bytes.len().min(64);
+        data[..len].copy_from_slice(&bytes[..len]);
+        Self {
+            data,
+            data_len: len,
+            canary_tag,
+            trap_action_mask: trap_mask,
+        }
+    }
+
+    pub fn data_as_str(&self) -> &str {
+        core::str::from_utf8(&self.data[..self.data_len]).unwrap_or("")
     }
 }
 
@@ -349,6 +469,7 @@ pub struct DecoyEntry {
     pub silent_alarm: bool,
     pub active: bool,
     pub hit_count: u32,
+    pub payload: DecoyPayload,
 }
 
 impl DecoyEntry {
@@ -372,6 +493,29 @@ pub struct DeceptionAlert {
     pub action: ProbeAction,
     pub severity: ThreatSeverity,
     pub silent: bool,
+    pub canary_breached: bool,
+}
+
+/// Notification en temps constant O(1) transmise à XDR / SOAR
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XdrDeceptionNotification {
+    pub dispatch_id: u64,
+    pub timestamp: u64,
+    pub decoy_id: u32,
+    pub attacker_source: u64,
+    pub decoy_kind: DecoyKind,
+    pub probe_action: ProbeAction,
+    pub severity: ThreatSeverity,
+    pub mitre_technique: [u8; 12],
+    pub mitre_len: usize,
+    pub recommended_action: DeceptionContainmentAction,
+    pub dispatched: bool,
+}
+
+impl XdrDeceptionNotification {
+    pub fn mitre_as_str(&self) -> &str {
+        core::str::from_utf8(&self.mitre_technique[..self.mitre_len]).unwrap_or("T0000")
+    }
 }
 
 /// Fiche de profilage comportemental de l'attaquant
@@ -399,6 +543,8 @@ pub enum AuditAction {
     QuarantineEnacted,
     DecoyDeactivated,
     LedgerSealed,
+    XdrAlertDispatched,
+    TeeTrapTriggered,
 }
 
 impl AuditAction {
@@ -410,6 +556,8 @@ impl AuditAction {
             Self::QuarantineEnacted => "QuarantineEnacted",
             Self::DecoyDeactivated => "DecoyDeactivated",
             Self::LedgerSealed => "LedgerSealed",
+            Self::XdrAlertDispatched => "XdrAlertDispatched",
+            Self::TeeTrapTriggered => "TeeTrapTriggered",
         }
     }
 }
@@ -444,6 +592,11 @@ pub struct JamboDeceptionDaemon {
     pub ledger_hash: [u8; 32],
     pub total_probes: u64,
     pub total_quarantines: u64,
+    pub xdr_dispatches: [Option<XdrDeceptionNotification>; 32],
+    pub xdr_dispatch_count: usize,
+    pub next_dispatch_id: u64,
+    pub total_xdr_notifications: u64,
+    pub tee_traps_fired: u32,
 }
 
 impl JamboDeceptionDaemon {
@@ -465,6 +618,11 @@ impl JamboDeceptionDaemon {
             ledger_hash: Self::GENESIS_HASH,
             total_probes: 0,
             total_quarantines: 0,
+            xdr_dispatches: [None; 32],
+            xdr_dispatch_count: 0,
+            next_dispatch_id: 1,
+            total_xdr_notifications: 0,
+            tee_traps_fired: 0,
         }
     }
 
@@ -542,6 +700,28 @@ impl JamboDeceptionDaemon {
         severity: ThreatSeverity,
         current_tick: u64,
     ) -> Result<u32, DeceptionError> {
+        self.deploy_decoy_with_payload(
+            cap,
+            name,
+            kind,
+            location,
+            severity,
+            DecoyPayload::empty(),
+            current_tick,
+        )
+    }
+
+    /// Déploie un nouveau leurre avec charge utile et canari cryptographique
+    pub fn deploy_decoy_with_payload(
+        &mut self,
+        cap: &DeceptionCap,
+        name: &str,
+        kind: DecoyKind,
+        location: &str,
+        severity: ThreatSeverity,
+        payload: DecoyPayload,
+        current_tick: u64,
+    ) -> Result<u32, DeceptionError> {
         if !cap.has_right(deception_rights::DEPLOY_DECOY) {
             return Err(DeceptionError::PermissionDenied);
         }
@@ -574,6 +754,7 @@ impl JamboDeceptionDaemon {
             silent_alarm: true,
             active: true,
             hit_count: 0,
+            payload,
         };
 
         self.decoys[self.decoy_count] = Some(entry);
@@ -581,6 +762,123 @@ impl JamboDeceptionDaemon {
 
         self.append_audit(current_tick, AuditAction::DeployDecoy, id as u64, name);
         Ok(id)
+    }
+
+    /// Génère dynamiquement un faux jeton de capacité (HoneyCap)
+    pub fn generate_honey_cap(
+        &mut self,
+        cap: &DeceptionCap,
+        name: &str,
+        fake_slot: u32,
+        canary_tag: u64,
+        current_tick: u64,
+    ) -> Result<u32, DeceptionError> {
+        let payload = DecoyPayload::new("HONEY_CAP_TRAP_SLOT", canary_tag, 0x01);
+        let mut loc_buf = [0u8; 48];
+        let prefix = b"cspace://slot/0x";
+        loc_buf[..prefix.len()].copy_from_slice(prefix);
+        let mut b = [0u8; 10];
+        let slot_str = format_u32_hex(fake_slot, &mut b);
+        let slot_bytes = slot_str.as_bytes();
+        let total_len = prefix.len() + slot_bytes.len();
+        loc_buf[prefix.len()..total_len].copy_from_slice(slot_bytes);
+        let loc_str = core::str::from_utf8(&loc_buf[..total_len]).unwrap_or("cspace://slot/trap");
+
+        self.deploy_decoy_with_payload(
+            cap,
+            name,
+            DecoyKind::HoneyCap,
+            loc_str,
+            ThreatSeverity::Critical,
+            payload,
+            current_tick,
+        )
+    }
+
+    /// Déploie un faux secret Ring 3 (ex: clé privée Ed25519 ou secret de coffre)
+    pub fn generate_fake_secret(
+        &mut self,
+        cap: &DeceptionCap,
+        name: &str,
+        secret_content: &str,
+        location: &str,
+        canary_tag: u64,
+        current_tick: u64,
+    ) -> Result<u32, DeceptionError> {
+        let payload = DecoyPayload::new(secret_content, canary_tag, 0x02);
+        self.deploy_decoy_with_payload(
+            cap,
+            name,
+            DecoyKind::Ring3FakeKey,
+            location,
+            ThreatSeverity::Critical,
+            payload,
+            current_tick,
+        )
+    }
+
+    /// Déploie un leurre mémoire VMO piégé
+    pub fn generate_trapped_vmo(
+        &mut self,
+        cap: &DeceptionCap,
+        name: &str,
+        vmo_name: &str,
+        canary_tag: u64,
+        current_tick: u64,
+    ) -> Result<u32, DeceptionError> {
+        let payload = DecoyPayload::new("VMO_POISON_PAGE_DATA", canary_tag, 0x04);
+        self.deploy_decoy_with_payload(
+            cap,
+            name,
+            DecoyKind::VmoDecoy,
+            vmo_name,
+            ThreatSeverity::High,
+            payload,
+            current_tick,
+        )
+    }
+
+    /// Déploie un piège d'évasion d'enclave matérielle TEE
+    pub fn deploy_tee_trap(
+        &mut self,
+        cap: &DeceptionCap,
+        enclave_id: u32,
+        vector: TeeTrapVector,
+        current_tick: u64,
+    ) -> Result<u32, DeceptionError> {
+        if !cap.has_right(deception_rights::TEE_TRAP_MANAGE) {
+            return Err(DeceptionError::PermissionDenied);
+        }
+        let payload = DecoyPayload::new(vector.as_str(), enclave_id as u64, 0x08);
+        self.deploy_decoy_with_payload(
+            cap,
+            vector.as_str(),
+            DecoyKind::EnclaveTrapDecoy,
+            "tee://enclave/trap_vector",
+            ThreatSeverity::Critical,
+            payload,
+            current_tick,
+        )
+    }
+
+    /// Déploie un leurre pour la détection de mouvements latéraux
+    pub fn deploy_lateral_decoy(
+        &mut self,
+        cap: &DeceptionCap,
+        name: &str,
+        endpoint_uri: &str,
+        current_tick: u64,
+    ) -> Result<u32, DeceptionError> {
+        let payload = DecoyPayload::new("LATERAL_PROBE_INTERCEPT", 0xCAFE_BABE, 0x10);
+        self.deploy_decoy_with_payload(
+            cap,
+            name,
+            DecoyKind::LateralMovementDecoy,
+            endpoint_uri,
+            ThreatSeverity::High,
+            payload,
+            current_tick,
+        )
     }
 
     /// Déclenchement d'un canari / fil-piège (Tripwire) en temps constant O(1)
@@ -615,6 +913,8 @@ impl JamboDeceptionDaemon {
         let alert_id = self.next_alert_id;
         self.next_alert_id = self.next_alert_id.saturating_add(1);
 
+        let canary_breached = decoy.payload.canary_tag != 0;
+
         let alert = DeceptionAlert {
             alert_id,
             timestamp: current_tick,
@@ -624,6 +924,7 @@ impl JamboDeceptionDaemon {
             action,
             severity: decoy.severity,
             silent: decoy.silent_alarm,
+            canary_breached,
         };
 
         if self.alert_count < self.alerts.len() {
@@ -634,6 +935,9 @@ impl JamboDeceptionDaemon {
         // Mise à jour ou création du profil comportemental de l'attaquant
         self.update_attacker_profile(attacker_source, decoy, action, current_tick);
 
+        // Envoi automatique d'une notification à destination de XDR/SOAR
+        self.queue_xdr_notification(decoy, attacker_source, action, current_tick);
+
         self.append_audit(
             current_tick,
             AuditAction::TripwireFired,
@@ -642,6 +946,31 @@ impl JamboDeceptionDaemon {
         );
 
         Ok(alert)
+    }
+
+    /// Déclenchement d'un piège d'évasion d'enclave matérielle TEE
+    pub fn trigger_tee_escape_trap(
+        &mut self,
+        cap: &DeceptionCap,
+        decoy_id: u32,
+        vector: TeeTrapVector,
+        attacker_source: u64,
+        current_tick: u64,
+    ) -> Result<DeceptionAlert, DeceptionError> {
+        self.tee_traps_fired = self.tee_traps_fired.saturating_add(1);
+        self.append_audit(
+            current_tick,
+            AuditAction::TeeTrapTriggered,
+            decoy_id as u64,
+            vector.as_str(),
+        );
+        self.trigger_decoy(
+            cap,
+            decoy_id,
+            attacker_source,
+            ProbeAction::EnclaveEscapeAttempt,
+            current_tick,
+        )
     }
 
     /// Mise à jour du profil comportemental avec calcul de score de menace cumulatif
@@ -655,7 +984,9 @@ impl JamboDeceptionDaemon {
         let score_increment = match decoy.kind {
             DecoyKind::EnclaveTrapDecoy => 50,
             DecoyKind::HoneyCap => 35,
+            DecoyKind::Ring3FakeKey => 40,
             DecoyKind::IpcEndpointDecoy => 30,
+            DecoyKind::LateralMovementDecoy => 35,
             DecoyKind::VmoDecoy => 25,
             DecoyKind::CanaryFileDecoy => 20,
         };
@@ -678,8 +1009,14 @@ impl JamboDeceptionDaemon {
                 p.threat_score = (p.threat_score + score_increment).min(100);
                 p.last_decoy_id = decoy.id;
 
-                if action == ProbeAction::EnclaveEscapeAttempt {
+                if action == ProbeAction::EnclaveEscapeAttempt
+                    || action == ProbeAction::TeeVmsaTamper
+                {
                     p.level = AttackerLevel::EnclaveEscapeAttempt;
+                } else if action == ProbeAction::LateralMovementScan {
+                    p.level = AttackerLevel::LateralMovement;
+                } else if action == ProbeAction::InvokeHoneyCap {
+                    p.level = AttackerLevel::PrivilegeEscalation;
                 } else if p.threat_score >= 80 {
                     p.level = AttackerLevel::HighRiskAPT;
                 } else if p.threat_score >= 50 {
@@ -702,8 +1039,14 @@ impl JamboDeceptionDaemon {
             }
         } else if self.profile_count < self.profiles.len() {
             let initial_score = score_increment.min(100);
-            let initial_level = if action == ProbeAction::EnclaveEscapeAttempt {
+            let initial_level = if action == ProbeAction::EnclaveEscapeAttempt
+                || action == ProbeAction::TeeVmsaTamper
+            {
                 AttackerLevel::EnclaveEscapeAttempt
+            } else if action == ProbeAction::LateralMovementScan {
+                AttackerLevel::LateralMovement
+            } else if action == ProbeAction::InvokeHoneyCap {
+                AttackerLevel::PrivilegeEscalation
             } else if initial_score >= 50 {
                 AttackerLevel::ActiveProbe
             } else {
@@ -741,6 +1084,88 @@ impl JamboDeceptionDaemon {
                 "PROFILE_CREATED",
             );
         }
+    }
+
+    /// Enfile une notification O(1) prête pour ingestion par XDR / SOAR
+    fn queue_xdr_notification(
+        &mut self,
+        decoy: DecoyEntry,
+        attacker_source: u64,
+        action: ProbeAction,
+        current_tick: u64,
+    ) {
+        if self.xdr_dispatch_count >= self.xdr_dispatches.len() {
+            return;
+        }
+
+        let (mitre, rec_action) = match (decoy.kind, action) {
+            (DecoyKind::EnclaveTrapDecoy, _) => (
+                b"T1211\0\0\0\0\0\0\0",
+                DeceptionContainmentAction::IsolateEnclave,
+            ),
+            (DecoyKind::HoneyCap, _) => (
+                b"T1078\0\0\0\0\0\0\0",
+                DeceptionContainmentAction::RevokeHoneyCap,
+            ),
+            (DecoyKind::LateralMovementDecoy, _) => (
+                b"T1021\0\0\0\0\0\0\0",
+                DeceptionContainmentAction::BlockLateralSubnet,
+            ),
+            (DecoyKind::Ring3FakeKey, _) => (
+                b"T1552\0\0\0\0\0\0\0",
+                DeceptionContainmentAction::ImmediateProcessQuarantine,
+            ),
+            (DecoyKind::VmoDecoy, _) => (
+                b"T1055\0\0\0\0\0\0\0",
+                DeceptionContainmentAction::ImmediateProcessQuarantine,
+            ),
+            _ => (
+                b"T1000\0\0\0\0\0\0\0",
+                DeceptionContainmentAction::MonitorAndTrace,
+            ),
+        };
+
+        let mut mitre_buf = [0u8; 12];
+        mitre_buf[..7].copy_from_slice(&mitre[..7]);
+
+        let notif = XdrDeceptionNotification {
+            dispatch_id: self.next_dispatch_id,
+            timestamp: current_tick,
+            decoy_id: decoy.id,
+            attacker_source,
+            decoy_kind: decoy.kind,
+            probe_action: action,
+            severity: decoy.severity,
+            mitre_technique: mitre_buf,
+            mitre_len: 5,
+            recommended_action: rec_action,
+            dispatched: false,
+        };
+
+        self.next_dispatch_id = self.next_dispatch_id.saturating_add(1);
+        self.xdr_dispatches[self.xdr_dispatch_count] = Some(notif);
+        self.xdr_dispatch_count += 1;
+        self.total_xdr_notifications = self.total_xdr_notifications.saturating_add(1);
+    }
+
+    /// Récupère et dépile la prochaine notification en attente vers XDR/SOAR
+    pub fn pop_pending_xdr_notification(
+        &mut self,
+        cap: &DeceptionCap,
+    ) -> Result<Option<XdrDeceptionNotification>, DeceptionError> {
+        if !cap.has_right(deception_rights::XDR_DISPATCH) {
+            return Err(DeceptionError::PermissionDenied);
+        }
+
+        for i in 0..self.xdr_dispatch_count {
+            if let Some(ref mut notif) = self.xdr_dispatches[i] {
+                if !notif.dispatched {
+                    notif.dispatched = true;
+                    return Ok(Some(*notif));
+                }
+            }
+        }
+        Ok(None)
     }
 
     /// Récupère la fiche de profilage d'un attaquant identifié
@@ -817,7 +1242,7 @@ impl JamboDeceptionDaemon {
         Err(DeceptionError::DecoyNotFound)
     }
 
-    /// Déploie les canaris et leurres souverains par défaut
+    /// Déploie les canaris et leurres souverains par défaut (Phase 152)
     pub fn init_defaults(&mut self) {
         let cap = self.admin_cap;
 
@@ -870,7 +1295,48 @@ impl JamboDeceptionDaemon {
             ThreatSeverity::Critical,
             140,
         );
+
+        // 6. Fausse clé privée Ring 3 (Ed25519)
+        let _ = self.generate_fake_secret(
+            &cap,
+            "FakeSecret-Ed25519Root",
+            "MIGTAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBHkwdwIBAQQgDEADBEEFCAFEBABE",
+            "sec://ring3/ed25519_root.key",
+            0xDECA_FBAD,
+            150,
+        );
+
+        // 7. Leurre de mouvement latéral réseau / maillage
+        let _ = self.deploy_lateral_decoy(
+            &cap,
+            "LateralDecoy-ClusterNode9",
+            "mesh://cluster/node9/admin",
+            160,
+        );
     }
+}
+
+// ============================================================================
+// FORMATTEURS UTILITAIRES NO_STD
+// ============================================================================
+
+fn format_u32_hex<'a>(mut val: u32, buf: &'a mut [u8; 10]) -> &'a str {
+    if val == 0 {
+        buf[0] = b'0';
+        return core::str::from_utf8(&buf[..1]).unwrap_or("0");
+    }
+    let hex_chars = b"0123456789abcdef";
+    let mut i = 0;
+    let mut temp = [0u8; 8];
+    while val > 0 && i < 8 {
+        temp[i] = hex_chars[(val & 0xF) as usize];
+        val >>= 4;
+        i += 1;
+    }
+    for j in 0..i {
+        buf[j] = temp[i - 1 - j];
+    }
+    core::str::from_utf8(&buf[..i]).unwrap_or("0")
 }
 
 // ============================================================================
@@ -883,10 +1349,12 @@ mod tests {
 
     #[test]
     fn test_deception_cap_attenuation() {
-        let admin = DeceptionCap::new(Handle::new(12201, 1), deception_rights::ALL, 5000, 100);
+        let admin = DeceptionCap::new(Handle::new(15201, 1), deception_rights::ALL, 5000, 100);
         assert!(admin.has_right(deception_rights::DEPLOY_DECOY));
         assert!(admin.has_right(deception_rights::TRIGGER_ALERT));
         assert!(admin.has_right(deception_rights::QUARANTINE));
+        assert!(admin.has_right(deception_rights::XDR_DISPATCH));
+        assert!(admin.has_right(deception_rights::TEE_TRAP_MANAGE));
         assert!(admin.has_right(deception_rights::ADMIN));
 
         // Atténuation monotone
@@ -901,6 +1369,7 @@ mod tests {
         assert!(monitor.has_right(deception_rights::AUDIT_READ));
         assert!(!monitor.has_right(deception_rights::DEPLOY_DECOY));
         assert!(!monitor.has_right(deception_rights::ADMIN));
+        assert!(!monitor.has_right(deception_rights::XDR_DISPATCH));
 
         // Rejet d'escalade
         let esc = monitor.attenuate(deception_rights::ALL, 2000, 50);
@@ -909,11 +1378,11 @@ mod tests {
 
     #[test]
     fn test_daemon_initialization_and_tripwire() {
-        let admin = DeceptionCap::new(Handle::new(12202, 1), deception_rights::ALL, 5000, 100);
+        let admin = DeceptionCap::new(Handle::new(15202, 1), deception_rights::ALL, 5000, 100);
         let mut daemon = JamboDeceptionDaemon::new(admin);
         daemon.init_defaults();
 
-        assert_eq!(daemon.decoy_count, 5);
+        assert_eq!(daemon.decoy_count, 7);
         assert_eq!(daemon.total_probes, 0);
         assert!(daemon.verify_ledger_integrity());
 
@@ -930,7 +1399,7 @@ mod tests {
         let profile1 = daemon.get_attacker_profile(4001).expect("Profil 4001");
         assert_eq!(profile1.hit_count, 1);
         assert_eq!(profile1.threat_score, 35);
-        assert_eq!(profile1.level, AttackerLevel::Reconnaissance);
+        assert_eq!(profile1.level, AttackerLevel::PrivilegeEscalation);
         assert!(!profile1.quarantined);
 
         // Attaquant PID 4001 déclenche maintenant le leurre RPC (Decoy #3)
@@ -958,7 +1427,7 @@ mod tests {
 
     #[test]
     fn test_enclave_escape_tripwire_and_immediate_high_risk() {
-        let admin = DeceptionCap::new(Handle::new(12203, 1), deception_rights::ALL, 5000, 100);
+        let admin = DeceptionCap::new(Handle::new(15203, 1), deception_rights::ALL, 5000, 100);
         let mut daemon = JamboDeceptionDaemon::new(admin);
         daemon.init_defaults();
 
@@ -985,7 +1454,7 @@ mod tests {
 
     #[test]
     fn test_manual_quarantine_and_deactivation() {
-        let admin = DeceptionCap::new(Handle::new(12204, 1), deception_rights::ALL, 5000, 100);
+        let admin = DeceptionCap::new(Handle::new(15204, 1), deception_rights::ALL, 5000, 100);
         let mut daemon = JamboDeceptionDaemon::new(admin);
         daemon.init_defaults();
 
@@ -1014,5 +1483,128 @@ mod tests {
         assert_eq!(err, Err(DeceptionError::DecoyNotFound));
 
         assert!(daemon.verify_ledger_integrity());
+    }
+
+    #[test]
+    fn test_dynamic_bait_generation_and_payloads() {
+        let admin = DeceptionCap::new(Handle::new(15205, 1), deception_rights::ALL, 5000, 100);
+        let mut daemon = JamboDeceptionDaemon::new(admin);
+
+        // Génération dynamique d'un HoneyCap
+        let honey_id = daemon
+            .generate_honey_cap(&admin, "HoneyCap-DynamicAdmin", 0xBEEF, 0x1234_5678, 100)
+            .expect("Generate HoneyCap");
+        assert_eq!(honey_id, 1);
+
+        // Génération d'une fausse clé secrète Ring 3
+        let secret_id = daemon
+            .generate_fake_secret(
+                &admin,
+                "FakeKey-JwtMaster",
+                "SUPER_SECRET_SOVEREIGN_SIGNING_TOKEN",
+                "sec://auth/jwt_key",
+                0x9999_8888,
+                110,
+            )
+            .expect("Generate Fake Secret");
+        assert_eq!(secret_id, 2);
+
+        // Génération d'un leurre mémoire VMO piégé
+        let vmo_id = daemon
+            .generate_trapped_vmo(
+                &admin,
+                "Vmo-KdirBait",
+                "vmo://kdir/shadow_idt",
+                0xAAAA_BBBB,
+                120,
+            )
+            .expect("Generate Trapped VMO");
+        assert_eq!(vmo_id, 3);
+
+        assert_eq!(daemon.decoy_count, 3);
+        assert!(daemon.verify_ledger_integrity());
+    }
+
+    #[test]
+    fn test_xdr_soar_o1_dispatch_and_mitre_mapping() {
+        let admin = DeceptionCap::new(Handle::new(15206, 1), deception_rights::ALL, 5000, 100);
+        let mut daemon = JamboDeceptionDaemon::new(admin);
+        daemon.init_defaults();
+
+        // Attaquant touche le HoneyCap #1
+        daemon
+            .trigger_decoy(&admin, 1, 5555, ProbeAction::InvokeHoneyCap, 200)
+            .expect("Trigger HoneyCap");
+
+        assert_eq!(daemon.xdr_dispatch_count, 1);
+        let notif = daemon
+            .pop_pending_xdr_notification(&admin)
+            .expect("Pop XDR")
+            .expect("Notification présente");
+        assert_eq!(notif.decoy_id, 1);
+        assert_eq!(notif.attacker_source, 5555);
+        assert_eq!(notif.mitre_as_str(), "T1078");
+        assert_eq!(
+            notif.recommended_action,
+            DeceptionContainmentAction::RevokeHoneyCap
+        );
+
+        // Deuxième tentative : queue vide
+        let empty = daemon
+            .pop_pending_xdr_notification(&admin)
+            .expect("Pop XDR");
+        assert!(empty.is_none());
+    }
+
+    #[test]
+    fn test_tee_escape_trap_sev_snp() {
+        let admin = DeceptionCap::new(Handle::new(15207, 1), deception_rights::ALL, 5000, 100);
+        let mut daemon = JamboDeceptionDaemon::new(admin);
+        daemon.init_defaults();
+
+        // Piège TEE matériel spécifique
+        let alert = daemon
+            .trigger_tee_escape_trap(&admin, 4, TeeTrapVector::SevSnpVmsaPoisoning, 9991, 300)
+            .expect("TEE Trap");
+        assert_eq!(alert.decoy_kind, DecoyKind::EnclaveTrapDecoy);
+        assert_eq!(alert.severity, ThreatSeverity::Critical);
+        assert_eq!(daemon.tee_traps_fired, 1);
+
+        // Vérification de la notification XDR avec MITRE T1211
+        let notif = daemon
+            .pop_pending_xdr_notification(&admin)
+            .expect("Pop XDR")
+            .expect("Notification TEE XDR");
+        assert_eq!(notif.mitre_as_str(), "T1211");
+        assert_eq!(
+            notif.recommended_action,
+            DeceptionContainmentAction::IsolateEnclave
+        );
+    }
+
+    #[test]
+    fn test_lateral_movement_detection() {
+        let admin = DeceptionCap::new(Handle::new(15208, 1), deception_rights::ALL, 5000, 100);
+        let mut daemon = JamboDeceptionDaemon::new(admin);
+        daemon.init_defaults();
+
+        // Leurre #7 est le LateralDecoy
+        let alert = daemon
+            .trigger_decoy(&admin, 7, 6666, ProbeAction::LateralMovementScan, 400)
+            .expect("Trigger Lateral Decoy");
+        assert_eq!(alert.decoy_kind, DecoyKind::LateralMovementDecoy);
+
+        let prof = daemon.get_attacker_profile(6666).expect("Profil 6666");
+        assert_eq!(prof.level, AttackerLevel::LateralMovement);
+
+        let notif = daemon
+            .pop_pending_xdr_notification(&admin)
+            .expect("Pop XDR")
+            .unwrap();
+        assert_eq!(notif.mitre_as_str(), "T1021");
+        assert_eq!(
+            notif.recommended_action,
+            DeceptionContainmentAction::BlockLateralSubnet
+        );
     }
 }

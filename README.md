@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.3.18-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.3.19-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.3.18 (Renseignement Cyber & Partage de Flux d'IoC Souverain CTI jambo-intel)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.3.18` introduit la modernisation et la souveraineté complète du Renseignement sur les Menaces Cyber (CTI souverain — `services/jambo-intel`) : ingestion et normalisation multi-formats d'indicateurs de compromission (STIX 2.1, TAXII 2.1, Bogons RFC 5737 et formats souverains), recherche ultra-rapide O(1) à double étage couplant un filtre de Bloom cryptographique (2048 bits, 4 graines) et une table de hachage compacte indexée par buckets O(1) avec chaînage direct, support complet des métadonnées STIX 2.1 (TLP 2.0 Clear/Green/Amber/Red, Lockheed Martin Cyber Kill Chain, attribution d'acteurs étatiques/APT et fenêtres de validité temporelle), fédération souveraine TAXII 2.1 (collections partagées, synchronisation chiffrée entre nœuds partenaires et enveloppes déterministes), évaluation approfondie de menace et scoring de réputation adaptatif (0..100) avec recommandations d'actions de remédiation directes pour SOAR/XDR/EDR (Allow, Monitor, BlockTraffic, QuarantineProcess, RevokeCredentials, IsolateEndpoint), purge adaptative par TTL dynamique, contrôle d'accès capabilaire strict `IntelCap` sans autorité ambiante et registre d'audit SHA-256 scellé et inaltérable.
+> **Statut du Projet : Version v0.3.19 (Cyber-Déception, Honeypots Souverains & Pièges Évasion Enclaves jambo-deception)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.3.19` introduit la modernisation et la souveraineté complète de la Cyber-Déception et Contre-Ingérence (`services/jambo-deception`) : déploiement dynamique de leurres de haute fidélité (HoneyCaps avec jetons piégés, objets de mémoire VMO délibérément vulnérables avec faux secrets déchiffrés, fausses clés privées Ring 3 Ed25519/AES-XTS), détection en temps constant O(1) de mouvements latéraux (`LateralMovementDecoy`), pièges d'évasion d'enclaves matérielles TEE (AMD SEV-SNP VMSA poisoning, Intel TDX #VE handler tamper, SGX EPC breaches), notification O(1) vers XDR/SOAR avec corrélation MITRE ATT&CK et recommandations de confinement coordonnées (IsolateEnclave, RevokeHoneyCap, BlockLateralSubnet), profilage comportemental adaptatif d'attaquants avec classification APT et mise en quarantaine automatique O(1), contrôle d'accès capabilaire strict `DeceptionCap` sans autorité ambiante et registre d'audit SHA-256 scellé et inaltérable.
 
 ---
 
