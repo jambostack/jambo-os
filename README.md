@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.3.16-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.3.17-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.3.16 (Détection et Réponse sur les Terminaux Souveraine EDR jambo-edr)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.3.16` introduit la modernisation et la souveraineté complète de la Détection et Réponse sur les Terminaux (EDR souverain — `services/jambo-edr`) : surveillance comportementale avancée des processus Ring 3, détection de filiations suspectes et usurpations d'identité noyau (masquerading), interception temps réel des injections dynamiques de modules (.jso non autorisés, segments W+X, détournements de tables GOT/PLT et Process Hollowing), scanneur d'opcodes malveillants et de shellcodes en mémoire vive (NOP sleds, pièges INT3, boucles furtives de syscalls 0x0F 0x05, pivots de pile ROP), garde-fou d'enclaves matérielles TEE (détection de violations de frontières d'isolation, tentatives d'accès aux MSRs privilégiés IA32_LSTAR/IA32_EFER et dérive d'attestation matérielle), détection de trampolines de saut et crochets (Hooks) dans les tables d'appels système et IDT, confinement instantané O(1) avec rapport structuré de remédiation déterministe (`EdrRemediationReport`), contrôle capabilaire strict `EdrCap` sans autorité ambiante et registre d'audit SHA-256 scellé et inaltérable.
+> **Statut du Projet : Version v0.3.17 (Détection et Réponse Étendue Souveraine XDR jambo-xdr)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.3.17` introduit la modernisation et la souveraineté complète de la Détection et Réponse Étendue (XDR souverain — `services/jambo-xdr`) : corrélation unifiée multi-vecteurs (Endpoint EDR, Réseau NDR/VPN, Pare-feu applicatif WAF, Identités Auth2, Infrastructure Cloud, Enclaves TEE protégées), traçage d'attaques persistantes avancées (APT) via un graphe de propagation de menaces déterministe (`ThreatPropagationGraph`), détection heuristique de campagnes distribuées avec calcul de synergie trans-vectorielle et sur-pénalisation d'enclave TEE compromise, orchestration de remédiation globale O(1) coordonnée (isolement EDR, coupure réseau VPN, blocage de routes WAF, révocation d'identités Auth2, verrouillage et purge d'enclaves TEE) avec génération de rapport de remédiation déterministe scellé SHA-256 (`XdrRemediationReport`), contrôle d'accès capabilaire strict `XdrCap` avec atténuation monotone (Zero-Ambient Authority) et registre d'audit SHA-256 scellé et inaltérable.
 
 ---
 

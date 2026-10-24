@@ -1,7 +1,7 @@
 # ROADMAP DU DÉVELOPPEMENT AUTONOME — JamboOS
 
-> **Dernière mise à jour** : 2026-10-24 08:50 UTC  
-> **Version actuelle** : `v0.3.16`  
+> **Dernière mise à jour** : 2026-10-24 09:00 UTC  
+> **Version actuelle** : `v0.3.17`  
 > **Statut global** : Pré-Alpha active — Micro-noyau de 3e génération orienté capacités (`#![no_std]`)  
 > **Cycle de développement autonome** : 10 minutes via le Planificateur de Tâches & Crons d'Antigravity WebUI  
 
@@ -136,22 +136,25 @@
 | **v0.3.14** | 147 | Orchestration & Réponse aux Incidents Souveraine SOAR `jambo-soar` | Moteur souverain SOAR d'ingestion et de corrélation unifiée multi-sources (SIEM, EDR, NDR, DLP, UEBA, KDIR, FDR, WAF, DDoS), 6 playbooks DAG déterministes anti-cycles, remédiation chirurgicale O(1), actions distribuées vers 11 composants, SoarCap & registre d'audit SHA-256 inaltérable | ✅ Validé |
 | **v0.3.15** | 148 | Investigation Numérique & Forensique Souveraine en Mémoire Vive `jambo-forensics` | Snapshots mémoire VMO scellés, timeline des artefacts système & preuves cryptographiques, capture chirurgicale post-incident orchestrée, analyse de résidus mémoire (slack space & sensitive leaks), ForensicsCap & registre d'audit SHA-256 inaltérable | ✅ Validé |
 | **v0.3.16** | 149 | Détection et Réponse sur les Terminaux Souveraine EDR `jambo-edr` | Surveillance comportementale avancée des processus Ring 3, détection de filiations suspectes et masquerading, interception en temps réel des injections dynamiques (.jso / GOT-PLT / W+X) & Process Hollowing, scanneur de shellcodes mémoire (NOP sleds, INT3, boucles syscalls 0x0F 0x05, pivots ROP), garde-fou d'enclaves matérielles TEE (violations de frontières & accès MSRs illicites), détection de crochets IDT/Syscall, confinement O(1) avec rapport structuré de remédiation déterministe (EdrRemediationReport), EdrCap & registre d'audit SHA-256 inaltérable | ✅ Validé |
+| **v0.3.17** | 150 | Détection et Réponse Étendue Souveraine XDR `jambo-xdr` | Corrélation unifiée multi-vecteurs (Endpoint EDR, Réseau NDR/VPN, WAF, Identités Auth2, Cloud, Enclaves TEE protégées), traçage d'attaques persistantes avancées (APT) via un graphe de propagation de menaces déterministe (`ThreatPropagationGraph`), détection heuristique de campagnes distribuées avec synergie trans-vectorielle, orchestration de remédiation globale O(1) coordonnée (isolement EDR, coupure VPN, blocage WAF, révocation Auth2, confinement TEE) avec rapport de remédiation déterministe scellé SHA-256 (`XdrRemediationReport`), XdrCap & registre d'audit SHA-256 inaltérable | ✅ Validé |
 
 ---
 
 ## 3. Prochaines Étapes Prioritaires
 
-### 🎯 Prochaine Tâche Immédiate : Phase 150 — v0.3.17
-* **Composant** : `services/jambo-xdr`
-* **Versionnement** : Poursuite de la série `v0.3.*` (Jalon `v0.3.17`)
-* **Objectif** : Détection et Réponse Étendue Souveraine XDR (`jambo-xdr`) — Corrélation unifiée multi-vecteurs (Endpoint, Réseau, Cloud, Identité, Enclaves TEE), traçage d'attaques persistantes avancées (APT), détection heuristique de campagnes distribuées, orchestration de remédiation globale O(1), XdrCap & registre d'audit SHA-256 inaltérable.
+### 🎯 Prochaine Tâche Immédiate : Phase 151 — v0.3.18
+* **Composant** : `services/jambo-intel`
+* **Versionnement** : Poursuite de la série `v0.3.*` (Jalon `v0.3.18`)
+* **Objectif** : Renseignement Cyber & Partage de Flux d'IoC Souverain CTI (`jambo-intel`) — Ingestion et normalisation de flux de renseignement sur les menaces (STIX 2.1 / TAXII / formats souverains), filtres de Bloom et indexation de tables de hachage O(1) pour la recherche ultra-rapide d'IoC (adresses IP, domaines, condensats SHA-256/BLAKE3), purge adaptative avec TTL dynamique, réputation déterministe, IntelCap & registre d'audit SHA-256 inaltérable.
 * **Tâches précises** :
-  1. Moteur XDR souverain : corrélation multi-télémétries, graphe de propagation de menaces et détection APT `#![no_std]`.
-  2. Intégration capabilaire XdrCap, remédiation coordonnée multi-composants et validation formelle `cargo xtask test`.
+  1. Moteur CTI souverain : recherche rapide O(1) d'IoC via filtres de Bloom et tables de hachage `#![no_std]`.
+  2. Intégration capabilaire IntelCap, synchronisation des flux et validation formelle `cargo xtask test`.
 
 ---
 
 ## 4. Journal d'Exécution des Cycles
+
+* **2026-10-24 09:00 UTC** : Validation complète Phase 150 (`jambo-xdr`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-xdr`, 11/11). Détection et Réponse Étendue Souveraine XDR (`jambo-xdr`) — Corrélation unifiée multi-vecteurs (Endpoint EDR, Réseau NDR/VPN, Pare-feu WAF, Identités Auth2, Infrastructure Cloud, Enclaves TEE protégées), traçage d'attaques persistantes avancées (APT) avec graphe de propagation de menaces déterministe (`ThreatPropagationGraph`), détection heuristique de campagnes distribuées avec synergie trans-vectorielle, orchestration de remédiation globale O(1) coordonnée (isolement EDR, coupure VPN, blocage WAF, révocation Auth2, confinement TEE) avec rapport de remédiation déterministe scellé SHA-256 (`XdrRemediationReport`), XdrCap & registre d'audit SHA-256 inaltérable. Tag `v0.3.17`.
 
 * **2026-10-24 08:50 UTC** : Validation complète Phase 149 (`jambo-edr`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-edr`, 11/11). Détection et Réponse sur les Terminaux Souveraine EDR (`jambo-edr`) — Surveillance comportementale avancée des processus Ring 3, filiations suspectes & masquerading, interception temps réel des injections (.jso / GOT-PLT / W+X) & Process Hollowing, scanneur de shellcodes mémoire (NOP sleds, INT3, boucles syscalls 0x0F 0x05, pivots ROP), garde-fou d'enclaves TEE (violations de frontières & accès MSRs privilégiés), inspection de crochets système IDT/syscalls, confinement instantané O(1) avec rapport de remédiation déterministe (`EdrRemediationReport`), EdrCap & registre d'audit SHA-256 inaltérable. Tag `v0.3.16`.
 
