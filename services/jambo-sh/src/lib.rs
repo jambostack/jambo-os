@@ -11600,13 +11600,17 @@ impl JamboShell {
                 match subcmd {
                     "status" => {
                         let mut b = [0u8; 20];
-                        emit("[CASB/STATUS] Courtier Sécurité Accès Cloud/Grappe (CASB) & DLP\n");
+                        emit("[CASB/STATUS] Courtier Sécurité Accès Cloud Souverain (CASB) & DLP d'Enclave\n");
                         emit("  Locataires enregistrés  : ");
                         emit(format_u64(self.casb.tenant_count as u64, &mut b));
                         emit("\n  Règles DLP actives      : ");
                         emit(format_u64(self.casb.dlp_rule_count as u64, &mut b));
+                        emit("\n  Flux d'enclaves actifs  : ");
+                        emit(format_u64(self.casb.enclave_flow_count as u64, &mut b));
                         emit("\n  Inspections totales     : ");
                         emit(format_u64(self.casb.total_inspections, &mut b));
+                        emit("\n  Inspections aveugles L7 : ");
+                        emit(format_u64(self.casb.total_blind_inspections, &mut b));
                         emit("\n  Admissions approuvées   : ");
                         emit(format_u64(self.casb.total_approvals, &mut b));
                         emit("\n  Rédactions (masquage)   : ");
@@ -11615,6 +11619,8 @@ impl JamboShell {
                         emit(format_u64(self.casb.total_blocks, &mut b));
                         emit("\n  Mises en quarantaine    : ");
                         emit(format_u64(self.casb.total_quarantines, &mut b));
+                        emit("\n  Isolations d'enclave    : ");
+                        emit(format_u64(self.casb.total_enclave_isolations, &mut b));
                         emit("\n  Chaîne d'audit SHA-256  : ");
                         let valid = self.casb.verify_ledger_integrity();
                         emit(if valid {
@@ -11660,6 +11666,101 @@ impl JamboShell {
                             }
                         }
                         (ShellStatus::Success, write_pos)
+                    }
+                    "flows" | "enclaves" => {
+                        let mut b = [0u8; 20];
+                        emit(
+                            "[CASB/FLOWS] Canaux & Flux d'Enclaves Matérielles TEE Interceptés :\n",
+                        );
+                        for i in 0..self.casb.enclave_flow_count {
+                            if let Some(ref f) = self.casb.enclave_flows[i] {
+                                emit("  * [#");
+                                emit(format_u64(f.flow_id, &mut b));
+                                emit("] Enclave #");
+                                emit(format_u64(f.enclave_id as u64, &mut b));
+                                emit(" (");
+                                emit(f.enclave_type.as_str());
+                                emit(") | Sens: ");
+                                emit(f.direction.as_str());
+                                emit(" | Dest: ");
+                                emit(f.dst_as_str());
+                                emit(" | Zero-Egress: ");
+                                emit(if f.zero_egress_enforced {
+                                    "ACTIF"
+                                } else {
+                                    "NON"
+                                });
+                                emit(" | Isolé: ");
+                                emit(if f.isolated { "OUI\n" } else { "NON\n" });
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "blind" => {
+                        let cap = self.casb.admin_cap;
+                        let env = jambo_casb::SovereignEnvelopeMetadata {
+                            session_id: 8888,
+                            sender_enclave_id: 7001,
+                            claimed_classification: jambo_casb::DataClassification::Secret,
+                            blinded_payload_hash: [0x55; 32],
+                            attestation_token_tag: [0x77; 16],
+                            target_geo_zone: jambo_casb::GeoZone::SovereignSoil,
+                            payload_entropy_millibits: 7100,
+                            is_homomorphic_tagged: true,
+                        };
+                        match self
+                            .casb
+                            .inspect_enclave_blind_envelope(&cap, 8000, &env, 5000)
+                        {
+                            Ok(decision) => {
+                                match decision {
+                                    jambo_casb::AdmissionDecision::Approved {
+                                        transaction_id,
+                                        ..
+                                    } => {
+                                        let mut b = [0u8; 20];
+                                        emit("[CASB/BLIND] Enveloppe Approuvée - Trans #");
+                                        emit(format_u64(transaction_id, &mut b));
+                                        emit("\n");
+                                    }
+                                    jambo_casb::AdmissionDecision::Blocked {
+                                        violation_code,
+                                        reason,
+                                    } => {
+                                        let mut b = [0u8; 20];
+                                        emit("[CASB/BLIND] Enveloppe Bloquée - Code: ");
+                                        emit(format_u64(violation_code as u64, &mut b));
+                                        emit(" (");
+                                        emit(reason);
+                                        emit(")\n");
+                                    }
+                                    _ => {
+                                        emit("[CASB/BLIND] Décision rendue\n");
+                                    }
+                                }
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("[CASB/BLIND] Erreur lors de l'inspection aveugle\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "isolate" => {
+                        let cap = self.casb.admin_cap;
+                        match self
+                            .casb
+                            .isolate_enclave(&cap, 7001, "Suspicion de fuite TEE", 5010)
+                        {
+                            Ok(()) => {
+                                emit("[CASB/ISOLATE] Enclave #7001 isolée avec succès O(1)\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("[CASB/ISOLATE] Erreur lors de l'isolation de l'enclave\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
                     }
                     "inspect" => {
                         let cap = self.casb.admin_cap;
@@ -11718,6 +11819,17 @@ impl JamboShell {
                                         emit(reason);
                                         emit(")\n");
                                     }
+                                    jambo_casb::AdmissionDecision::EnclaveIsolated {
+                                        enclave_id,
+                                        reason,
+                                    } => {
+                                        let mut b = [0u8; 20];
+                                        emit("[CASB/INSPECT] Enclave #");
+                                        emit(format_u64(enclave_id as u64, &mut b));
+                                        emit(" Isolée (");
+                                        emit(reason);
+                                        emit(")\n");
+                                    }
                                 }
                                 (ShellStatus::Success, write_pos)
                             }
@@ -11738,7 +11850,7 @@ impl JamboShell {
                         (ShellStatus::Success, write_pos)
                     }
                     _ => {
-                        emit("Usage: casb [status | tenants | rules | inspect | verify]\n");
+                        emit("Usage: casb [status | tenants | rules | flows | blind | isolate | inspect | verify]\n");
                         (ShellStatus::ExecutionFailed, write_pos)
                     }
                 }
@@ -19574,6 +19686,18 @@ mod tests {
                 let (st5, len5) = shell.execute_line("casb verify", &mut out);
                 assert_eq!(st5, ShellStatus::Success);
                 assert!(len5 > 0);
+
+                let (st6, len6) = shell.execute_line("casb flows", &mut out);
+                assert_eq!(st6, ShellStatus::Success);
+                assert!(len6 > 0);
+
+                let (st7, len7) = shell.execute_line("casb blind", &mut out);
+                assert_eq!(st7, ShellStatus::Success);
+                assert!(len7 > 0);
+
+                let (st8, len8) = shell.execute_line("casb isolate", &mut out);
+                assert_eq!(st8, ShellStatus::Success);
+                assert!(len8 > 0);
             })
             .unwrap();
         handle.join().unwrap();

@@ -1,18 +1,21 @@
-//! Courtier de Sécurité d'Accès Cloud/Grappe (CASB), Contrôle de Conformité Multi-Tenant & DLP Avancé
+//! Courtier d'Accès Sécurisé Cloud Souverain (CASB) & Passerelle DLP d'Enclave
 //!
-//! Phase 124 — Jalon v0.2.122
+//! Phase 154 — Jalon v0.3.21
 //!
-//! Fournit un système souverain Cloud/Cluster Access Security Broker (CASB) en environnement `#![no_std]` :
-//! 1. Courtier d'admission et passerelle mandataire inverse d'admission inter-services.
-//! 2. Gestion de conformité multi-locataires (tenants) par compartimentage étanche et niveaux de conformité.
-//! 3. Moteur autonome de prévention des fuites de données (DLP) avec inspection profonde de contenu :
-//!    - Détection de numéros de cartes de paiement avec vérification d'intégrité par algorithme de Luhn.
-//!    - Détection de clés cryptographiques et secrets d'API (PEM, tokens JWT, clés maîtres).
-//!    - Détection de marqueurs de classification souveraine (Confidentiel, Secret Défense).
-//!    - Détection de données d'identification personnelle (PII / identifiants fiscaux).
-//! 4. Actions DLP en temps réel : Blocage, Masquage/Rédaction à la volée (`*`), Quarantaine de locataire.
-//! 5. Contrôle d'accès capabilaire (`CasbCap`) sans autorité ambiante et atténuation monotone.
-//! 6. Registre d'audit cryptographique inviolable scellé par chaînage SHA-256.
+//! Fournit un système souverain Cloud Access Security Broker (CASB) et passerelle DLP d'enclave `#![no_std]` :
+//! 1. Courtage d'admission et passerelle mandataire inverse d'admission inter-services & cloud souverain.
+//! 2. Gestion de conformité multi-locataires (tenants) par compartimentage étanche, niveaux de conformité (SecNumCloud, SovereignDefense, etc.) et géo-fencing souverain.
+//! 3. Interception et courtage des flux d'enclaves matérielles TEE (Intel SGX, AMD SEV-SNP, ARM CCA, Sovereign JamboEnclave).
+//! 4. Inspection profonde L7 sans rupture de chiffrement souverain (Sovereign Blind Inspection) via enveloppes d'attestation et scellements cryptographiques déterministes.
+//! 5. Moteur autonome de prévention des fuites de données (DLP) hybride :
+//!    - Détection de numéros de cartes de paiement avec vérification de Luhn.
+//!    - Détection de clés cryptographiques, secrets d'API, clés privées PEM.
+//!    - Détection de secrets d'enclaves TEE (SEV-SNP VMPCKs, SGX Sealing Keys, Master Seeds, parts ML-KEM/PQC).
+//!    - Détection de marqueurs de classification souveraine et identifiants PII/fiscaux.
+//!    - Détection d'exfiltration et stéganographie sur buffers d'egress d'enclave (analyse d'entropie).
+//! 6. Actions DLP en temps réel : Allow, Redact (masquage `*`), Block, QuarantineTenant, IsolateEnclave.
+//! 7. Contrôle d'accès capabilaire (`CasbCap`) sans autorité ambiante avec atténuation monotone stricte.
+//! 8. Registre d'audit cryptographique inviolable scellé par chaînage SHA-256 déterministe.
 
 #![no_std]
 
@@ -166,19 +169,58 @@ impl Sha256 {
 }
 
 // ============================================================================
+// CALCULATEUR D'ENTROPIE ENTIÈRE (#![no_std])
+// ============================================================================
+
+/// Calcule une approximation déterministe de l'entropie de Shannon en milli-bits (0..8000)
+pub fn calculate_entropy_millibits(data: &[u8]) -> u32 {
+    if data.is_empty() {
+        return 0;
+    }
+    let mut freq = [0u32; 256];
+    for &b in data {
+        freq[b as usize] += 1;
+    }
+    let n = data.len() as u32;
+    let mut entropy_milli: u32 = 0;
+    for &count in freq.iter() {
+        if count > 0 {
+            let log2_ratio = integer_log2_milli(n) - integer_log2_milli(count);
+            entropy_milli = entropy_milli.saturating_add((count * log2_ratio) / n);
+        }
+    }
+    entropy_milli
+}
+
+fn integer_log2_milli(val: u32) -> u32 {
+    if val <= 1 {
+        return 0;
+    }
+    let leading_zeros = val.leading_zeros();
+    let int_part = (31 - leading_zeros) as u32;
+    let lower = 1u32 << int_part;
+    let fraction = ((val - lower) * 1000) / lower;
+    (int_part * 1000).saturating_add(fraction)
+}
+
+// ============================================================================
 // CONTRÔLE D'ACCÈS CAPABILAIRE (CasbCap)
 // ============================================================================
 
 pub mod casb_rights {
-    pub const INSPECT_TRAFFIC: u32 = 0x01;
-    pub const ENFORCE_DLP: u32 = 0x02;
-    pub const MANAGE_TENANTS: u32 = 0x04;
-    pub const CONFIGURE_POLICIES: u32 = 0x08;
-    pub const QUARANTINE_ACTION: u32 = 0x10;
-    pub const AUDIT_READ: u32 = 0x20;
-    pub const SEAL_LEDGER: u32 = 0x40;
-    pub const ADMIN: u32 = 0x80;
-    pub const ALL: u32 = 0xFF;
+    pub const INSPECT_TRAFFIC: u32 = 0x0001;
+    pub const ENFORCE_DLP: u32 = 0x0002;
+    pub const MANAGE_TENANTS: u32 = 0x0004;
+    pub const CONFIGURE_POLICIES: u32 = 0x0008;
+    pub const QUARANTINE_ACTION: u32 = 0x0010;
+    pub const AUDIT_READ: u32 = 0x0020;
+    pub const SEAL_LEDGER: u32 = 0x0040;
+    pub const INTERCEPT_ENCLAVE: u32 = 0x0080;
+    pub const BLIND_INSPECT: u32 = 0x0100;
+    pub const MANAGE_HYBRID_CLOUD: u32 = 0x0200;
+    pub const ISOLATE_ENCLAVE: u32 = 0x0400;
+    pub const ADMIN: u32 = 0x8000;
+    pub const ALL: u32 = 0xFFFF;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -194,6 +236,12 @@ pub enum CasbError {
     EncryptionRequired,
     PayloadTooLarge,
     InvalidParameter,
+    EnclaveFlowTableFull,
+    EnclaveNotFound,
+    EnclaveIsolated,
+    ZeroEgressViolation,
+    GeoFencingViolation,
+    AttestationValidationFailed,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -246,16 +294,17 @@ impl CasbCap {
 }
 
 // ============================================================================
-// CONFORMITÉ & MULTI-LOCATAIRES (TENANTS)
+// CONFORMITÉ, GÉO-FENCING & MULTI-LOCATAIRES (TENANTS)
 // ============================================================================
 
-/// Niveaux de conformité et d'isolation pour les locataires de la grappe
+/// Niveaux de conformité et d'isolation pour les locataires et flux cloud
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ComplianceTier {
     Community,
     Enterprise,
     FedRampHigh,
     SovereignDefense,
+    SecNumCloudSovereign,
 }
 
 impl ComplianceTier {
@@ -265,7 +314,35 @@ impl ComplianceTier {
             Self::Enterprise => "ENTERPRISE",
             Self::FedRampHigh => "FEDRAMP_HIGH",
             Self::SovereignDefense => "SOVEREIGN_DEFENSE",
+            Self::SecNumCloudSovereign => "SECNUMCLOUD_SOVEREIGN",
         }
+    }
+}
+
+/// Zones géopolitiques souveraines pour le géo-fencing cloud
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GeoZone {
+    SovereignSoil,
+    EuropeanUnion,
+    GlobalAirGapped,
+    UntrustedForeign,
+}
+
+impl GeoZone {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::SovereignSoil => "SOVEREIGN_SOIL",
+            Self::EuropeanUnion => "EUROPEAN_UNION",
+            Self::GlobalAirGapped => "GLOBAL_AIR_GAPPED",
+            Self::UntrustedForeign => "UNTRUSTED_FOREIGN",
+        }
+    }
+
+    pub fn is_sovereign_compliant(&self) -> bool {
+        matches!(
+            self,
+            Self::SovereignSoil | Self::EuropeanUnion | Self::GlobalAirGapped
+        )
     }
 }
 
@@ -277,6 +354,7 @@ pub mod data_classes {
     pub const PII: u8 = 0x10;
     pub const FINANCIAL_PCI: u8 = 0x20;
     pub const CRYPTO_KEY: u8 = 0x40;
+    pub const ENCLAVE_SECRET: u8 = 0x80;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -288,6 +366,7 @@ pub enum DataClassification {
     Pii,
     FinancialPci,
     CryptoKey,
+    EnclaveSecret,
 }
 
 impl DataClassification {
@@ -300,6 +379,7 @@ impl DataClassification {
             Self::Pii => data_classes::PII,
             Self::FinancialPci => data_classes::FINANCIAL_PCI,
             Self::CryptoKey => data_classes::CRYPTO_KEY,
+            Self::EnclaveSecret => data_classes::ENCLAVE_SECRET,
         }
     }
 
@@ -312,6 +392,7 @@ impl DataClassification {
             Self::Pii => "PII",
             Self::FinancialPci => "PCI_FINANCIAL",
             Self::CryptoKey => "CRYPTO_KEY",
+            Self::EnclaveSecret => "ENCLAVE_SECRET",
         }
     }
 }
@@ -327,6 +408,7 @@ pub struct TenantContext {
     pub require_encryption: bool,
     pub max_payload_bytes: usize,
     pub is_quarantined: bool,
+    pub geo_zone: GeoZone,
     pub total_requests: u64,
     pub total_violations: u64,
 }
@@ -353,9 +435,15 @@ impl TenantContext {
             require_encryption,
             max_payload_bytes,
             is_quarantined: false,
+            geo_zone: GeoZone::SovereignSoil,
             total_requests: 0,
             total_violations: 0,
         }
+    }
+
+    pub fn with_geo_zone(mut self, geo: GeoZone) -> Self {
+        self.geo_zone = geo;
+        self
     }
 
     pub fn name_as_str(&self) -> &str {
@@ -368,10 +456,93 @@ impl TenantContext {
 }
 
 // ============================================================================
-// MOTEUR DLP (DATA LOSS PREVENTION)
+// MOTEUR DE FLUX & COURTAGE D'ENCLAVES TEE (ENCLAVE BROKERAGE)
 // ============================================================================
 
-/// Type de motif recherché par l'inspection de contenu
+/// Type d'enclave matérielle ou isolat souverain
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EnclaveType {
+    SovereignJamboEnclave,
+    AmdSevSnp,
+    IntelSgx,
+    ArmCca,
+}
+
+impl EnclaveType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::SovereignJamboEnclave => "SOVEREIGN_JAMBO_ENCLAVE",
+            Self::AmdSevSnp => "AMD_SEV_SNP",
+            Self::IntelSgx => "INTEL_SGX",
+            Self::ArmCca => "ARM_CCA",
+        }
+    }
+}
+
+/// Sens du flux de données transitant par la passerelle CASB
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EnclaveFlowDirection {
+    Ingress,
+    Egress,
+    InterEnclave,
+}
+
+impl EnclaveFlowDirection {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Ingress => "INGRESS",
+            Self::Egress => "EGRESS",
+            Self::InterEnclave => "INTER_ENCLAVE",
+        }
+    }
+}
+
+/// Contexte de canal d'interception d'enclave matérielle
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EnclaveFlowContext {
+    pub flow_id: u64,
+    pub enclave_id: u32,
+    pub enclave_type: EnclaveType,
+    pub mrenclave: [u8; 32],
+    pub security_version: u32,
+    pub direction: EnclaveFlowDirection,
+    pub destination_endpoint: [u8; 32],
+    pub destination_len: usize,
+    pub zero_egress_enforced: bool,
+    pub isolated: bool,
+    pub total_messages: u64,
+    pub total_bytes: u64,
+}
+
+impl EnclaveFlowContext {
+    pub fn dst_as_str(&self) -> &str {
+        core::str::from_utf8(&self.destination_endpoint[..self.destination_len])
+            .unwrap_or("unknown_endpoint")
+    }
+}
+
+// ============================================================================
+// INSPECTION PROFONDE L7 SANS RUPTURE DE CHIFFREMENT (SOVEREIGN BLIND INSPECTION)
+// ============================================================================
+
+/// Métadonnées scellées d'enveloppe souveraine pour inspection L7 aveugle
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SovereignEnvelopeMetadata {
+    pub session_id: u64,
+    pub sender_enclave_id: u32,
+    pub claimed_classification: DataClassification,
+    pub blinded_payload_hash: [u8; 32],
+    pub attestation_token_tag: [u8; 16],
+    pub target_geo_zone: GeoZone,
+    pub payload_entropy_millibits: u32,
+    pub is_homomorphic_tagged: bool,
+}
+
+// ============================================================================
+// MOTEUR DLP (DATA LOSS PREVENTION) HYBRIDE & ENCLAVES
+// ============================================================================
+
+/// Type de motif recherché par l'inspection de contenu et l'analyse heuristique
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DlpPatternType {
     CreditCardLuhn,
@@ -379,6 +550,10 @@ pub enum DlpPatternType {
     PrivateKeyPem,
     ClassifiedMarker,
     PiiTaxId,
+    EnclaveVmpckLeak,
+    SgxSealingKey,
+    PqcSecretShare,
+    HighEntropySteganography,
 }
 
 impl DlpPatternType {
@@ -389,6 +564,10 @@ impl DlpPatternType {
             Self::PrivateKeyPem => "PRIVATE_KEY_PEM",
             Self::ClassifiedMarker => "CLASSIFIED_MARKER",
             Self::PiiTaxId => "PII_TAX_ID",
+            Self::EnclaveVmpckLeak => "ENCLAVE_VMPCK_LEAK",
+            Self::SgxSealingKey => "SGX_SEALING_KEY",
+            Self::PqcSecretShare => "PQC_SECRET_SHARE",
+            Self::HighEntropySteganography => "HIGH_ENTROPY_STEGANO",
         }
     }
 }
@@ -400,6 +579,7 @@ pub enum DlpAction {
     Redact,
     Block,
     QuarantineTenant,
+    IsolateEnclave,
 }
 
 impl DlpAction {
@@ -409,6 +589,7 @@ impl DlpAction {
             Self::Redact => "REDACT",
             Self::Block => "BLOCK",
             Self::QuarantineTenant => "QUARANTINE_TENANT",
+            Self::IsolateEnclave => "ISOLATE_ENCLAVE",
         }
     }
 }
@@ -429,16 +610,6 @@ impl DlpRule {
     pub fn name_as_str(&self) -> &str {
         core::str::from_utf8(&self.name[..self.name_len]).unwrap_or("unnamed_rule")
     }
-}
-
-/// Rapport de détection DLP pour une région de données
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct DlpDetection {
-    pub matched: bool,
-    pub pattern_type: DlpPatternType,
-    pub classification: DataClassification,
-    pub offset: usize,
-    pub length: usize,
 }
 
 /// Algorithme de Luhn pour valider les numéros de cartes bancaires (13-19 chiffres)
@@ -465,11 +636,10 @@ pub fn luhn_check(digits: &[u8]) -> bool {
     (sum % 10) == 0
 }
 
-/// Fonctions de détection de motifs DLP
+/// Scanneur de motifs DLP d'enclave et contenu
 pub struct DlpScanner;
 
 impl DlpScanner {
-    /// Recherche une sous-chaîne d'octets dans un tampon
     fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
         if needle.is_empty() || needle.len() > haystack.len() {
             return None;
@@ -482,7 +652,6 @@ impl DlpScanner {
         None
     }
 
-    /// Scanne le tampon pour détecter des motifs de carte de crédit conformes à Luhn
     pub fn scan_credit_card(payload: &[u8]) -> Option<(usize, usize)> {
         let len = payload.len();
         if len < 13 {
@@ -521,12 +690,10 @@ impl DlpScanner {
         None
     }
 
-    /// Scanne le tampon pour détecter des clés secrètes / jetons d'API
     pub fn scan_api_key(payload: &[u8]) -> Option<(usize, usize)> {
         const PATTERNS: [&[u8]; 4] = [b"jambokey_", b"Bearer eyJ", b"sk_live_", b"AKIA"];
         for pat in PATTERNS.iter() {
             if let Some(pos) = Self::find_subslice(payload, pat) {
-                // Détermine la longueur du jeton (jusqu'à un espace, délimiteur ou max 32 octets)
                 let mut len = pat.len();
                 while pos + len < payload.len() && len < 48 {
                     let b = payload[pos + len];
@@ -542,7 +709,6 @@ impl DlpScanner {
         None
     }
 
-    /// Scanne le tampon pour détecter des en-têtes PEM de clés privées
     pub fn scan_private_key_pem(payload: &[u8]) -> Option<(usize, usize)> {
         const PATTERNS: [&[u8]; 3] = [
             b"-----BEGIN PRIVATE KEY-----",
@@ -557,7 +723,6 @@ impl DlpScanner {
         None
     }
 
-    /// Scanne le tampon pour détecter des marqueurs de classification souveraine
     pub fn scan_classified_marker(payload: &[u8]) -> Option<(usize, usize)> {
         const PATTERNS: [&[u8]; 3] = [
             b"CONFIDENTIAL_JAMBO",
@@ -572,13 +737,11 @@ impl DlpScanner {
         None
     }
 
-    /// Scanne le tampon pour détecter des identifiants fiscaux / PII (format 3-2-4 chiffres)
     pub fn scan_pii_tax_id(payload: &[u8]) -> Option<(usize, usize)> {
         if payload.len() < 11 {
             return None;
         }
         for i in 0..=(payload.len() - 11) {
-            // Pattern: DDD-DD-DDDD
             if payload[i].is_ascii_digit()
                 && payload[i + 1].is_ascii_digit()
                 && payload[i + 2].is_ascii_digit()
@@ -592,6 +755,73 @@ impl DlpScanner {
                 && payload[i + 10].is_ascii_digit()
             {
                 return Some((i, 11));
+            }
+        }
+        None
+    }
+
+    pub fn scan_enclave_vmpck(payload: &[u8]) -> Option<(usize, usize)> {
+        const PATTERNS: [&[u8]; 3] = [b"VMPCK_", b"vmsa_secret_", b"sev_secret_"];
+        for pat in PATTERNS.iter() {
+            if let Some(pos) = Self::find_subslice(payload, pat) {
+                let mut len = pat.len();
+                while pos + len < payload.len() && len < 40 {
+                    let b = payload[pos + len];
+                    if b.is_ascii_alphanumeric() || b == b'_' || b == b'-' {
+                        len += 1;
+                    } else {
+                        break;
+                    }
+                }
+                return Some((pos, len));
+            }
+        }
+        None
+    }
+
+    pub fn scan_sgx_sealing_key(payload: &[u8]) -> Option<(usize, usize)> {
+        const PATTERNS: [&[u8]; 2] = [b"MRENCLAVE_SEAL_", b"sgx_seal_key_"];
+        for pat in PATTERNS.iter() {
+            if let Some(pos) = Self::find_subslice(payload, pat) {
+                let mut len = pat.len();
+                while pos + len < payload.len() && len < 40 {
+                    let b = payload[pos + len];
+                    if b.is_ascii_alphanumeric() || b == b'_' || b == b'-' {
+                        len += 1;
+                    } else {
+                        break;
+                    }
+                }
+                return Some((pos, len));
+            }
+        }
+        None
+    }
+
+    pub fn scan_pqc_secret(payload: &[u8]) -> Option<(usize, usize)> {
+        const PATTERNS: [&[u8]; 3] = [b"mlkem_priv_", b"pqc_priv_seed_", b"dilithium_priv_"];
+        for pat in PATTERNS.iter() {
+            if let Some(pos) = Self::find_subslice(payload, pat) {
+                let mut len = pat.len();
+                while pos + len < payload.len() && len < 48 {
+                    let b = payload[pos + len];
+                    if b.is_ascii_alphanumeric() || b == b'_' || b == b'-' {
+                        len += 1;
+                    } else {
+                        break;
+                    }
+                }
+                return Some((pos, len));
+            }
+        }
+        None
+    }
+
+    pub fn scan_high_entropy(payload: &[u8], threshold_milli: u32) -> Option<(usize, usize)> {
+        if payload.len() >= 32 {
+            let ent = calculate_entropy_millibits(payload);
+            if ent >= threshold_milli {
+                return Some((0, payload.len()));
             }
         }
         None
@@ -691,6 +921,10 @@ pub enum AdmissionDecision {
     Quarantined {
         reason: &'static str,
     },
+    EnclaveIsolated {
+        enclave_id: u32,
+        reason: &'static str,
+    },
 }
 
 // ============================================================================
@@ -707,6 +941,12 @@ pub enum CasbAuditAction {
     RequestRedacted,
     RequestBlocked,
     LedgerSealed,
+    EnclaveFlowRegistered,
+    EnclaveIsolated,
+    EnclaveIsolationLifted,
+    BlindInspectionApproved,
+    BlindInspectionBlocked,
+    EnclaveDlpViolation,
 }
 
 impl CasbAuditAction {
@@ -720,6 +960,12 @@ impl CasbAuditAction {
             Self::RequestRedacted => "RequestRedacted",
             Self::RequestBlocked => "RequestBlocked",
             Self::LedgerSealed => "LedgerSealed",
+            Self::EnclaveFlowRegistered => "EnclaveFlowRegistered",
+            Self::EnclaveIsolated => "EnclaveIsolated",
+            Self::EnclaveIsolationLifted => "EnclaveIsolationLifted",
+            Self::BlindInspectionApproved => "BlindInspectionApproved",
+            Self::BlindInspectionBlocked => "BlindInspectionBlocked",
+            Self::EnclaveDlpViolation => "EnclaveDlpViolation",
         }
     }
 }
@@ -745,17 +991,23 @@ pub struct JamboCasbDaemon {
     pub tenant_count: usize,
     pub dlp_rules: [Option<DlpRule>; 16],
     pub dlp_rule_count: usize,
+    pub enclave_flows: [Option<EnclaveFlowContext>; 16],
+    pub enclave_flow_count: usize,
     pub audit_log: [Option<CasbAuditEntry>; 64],
     pub audit_count: usize,
     pub ledger_hash: [u8; 32],
     pub next_tenant_id: u32,
     pub next_rule_id: u32,
+    pub next_flow_id: u64,
     pub next_transaction_id: u64,
     pub total_inspections: u64,
     pub total_approvals: u64,
     pub total_redactions: u64,
     pub total_blocks: u64,
     pub total_quarantines: u64,
+    pub total_enclave_flows: u64,
+    pub total_blind_inspections: u64,
+    pub total_enclave_isolations: u64,
 }
 
 impl JamboCasbDaemon {
@@ -768,22 +1020,28 @@ impl JamboCasbDaemon {
             tenant_count: 0,
             dlp_rules: [None; 16],
             dlp_rule_count: 0,
+            enclave_flows: [None; 16],
+            enclave_flow_count: 0,
             audit_log: [None; 64],
             audit_count: 0,
             ledger_hash: Self::GENESIS_HASH,
             next_tenant_id: 100,
             next_rule_id: 1,
+            next_flow_id: 8000,
             next_transaction_id: 5000,
             total_inspections: 0,
             total_approvals: 0,
             total_redactions: 0,
             total_blocks: 0,
             total_quarantines: 0,
+            total_enclave_flows: 0,
+            total_blind_inspections: 0,
+            total_enclave_isolations: 0,
         }
     }
 
     /// Journalise une action dans le registre immuable chaîné par SHA-256
-    fn append_audit(
+    pub fn append_audit(
         &mut self,
         timestamp: u64,
         action: CasbAuditAction,
@@ -930,6 +1188,250 @@ impl JamboCasbDaemon {
         self.append_audit(timestamp, CasbAuditAction::DlpRuleRegistered, rule_id, name);
 
         Ok(rule_id)
+    }
+
+    /// Enregistre un flux d'enclave matérielle TEE pour courtage et contrôle de sortie
+    pub fn register_enclave_flow(
+        &mut self,
+        cap: &CasbCap,
+        enclave_id: u32,
+        enclave_type: EnclaveType,
+        mrenclave: [u8; 32],
+        security_version: u32,
+        direction: EnclaveFlowDirection,
+        dst_endpoint: &str,
+        zero_egress: bool,
+        timestamp: u64,
+    ) -> Result<u64, CasbError> {
+        if !cap.has_right(casb_rights::INTERCEPT_ENCLAVE) {
+            return Err(CasbError::PermissionDenied);
+        }
+        if self.enclave_flow_count >= self.enclave_flows.len() {
+            return Err(CasbError::EnclaveFlowTableFull);
+        }
+
+        let flow_id = self.next_flow_id;
+        self.next_flow_id = self.next_flow_id.saturating_add(1);
+
+        let mut destination_endpoint = [0u8; 32];
+        let d_bytes = dst_endpoint.as_bytes();
+        let d_len = d_bytes.len().min(32);
+        destination_endpoint[..d_len].copy_from_slice(&d_bytes[..d_len]);
+
+        let flow = EnclaveFlowContext {
+            flow_id,
+            enclave_id,
+            enclave_type,
+            mrenclave,
+            security_version,
+            direction,
+            destination_endpoint,
+            destination_len: d_len,
+            zero_egress_enforced: zero_egress,
+            isolated: false,
+            total_messages: 0,
+            total_bytes: 0,
+        };
+
+        self.enclave_flows[self.enclave_flow_count] = Some(flow);
+        self.enclave_flow_count += 1;
+        self.total_enclave_flows = self.total_enclave_flows.saturating_add(1);
+
+        self.append_audit(
+            timestamp,
+            CasbAuditAction::EnclaveFlowRegistered,
+            enclave_id,
+            dst_endpoint,
+        );
+
+        Ok(flow_id)
+    }
+
+    /// Isole immédiatement une enclave matérielle (arrêt O(1) de tout flux réseau/cloud)
+    pub fn isolate_enclave(
+        &mut self,
+        cap: &CasbCap,
+        enclave_id: u32,
+        reason: &str,
+        timestamp: u64,
+    ) -> Result<(), CasbError> {
+        if !cap.has_right(casb_rights::ISOLATE_ENCLAVE) {
+            return Err(CasbError::PermissionDenied);
+        }
+
+        let mut found = false;
+        for i in 0..self.enclave_flow_count {
+            if let Some(ref mut flow) = self.enclave_flows[i] {
+                if flow.enclave_id == enclave_id {
+                    flow.isolated = true;
+                    found = true;
+                }
+            }
+        }
+
+        if !found {
+            return Err(CasbError::EnclaveNotFound);
+        }
+
+        self.total_enclave_isolations = self.total_enclave_isolations.saturating_add(1);
+        self.append_audit(
+            timestamp,
+            CasbAuditAction::EnclaveIsolated,
+            enclave_id,
+            reason,
+        );
+
+        Ok(())
+    }
+
+    /// Lève l'isolation d'une enclave
+    pub fn lift_enclave_isolation(
+        &mut self,
+        cap: &CasbCap,
+        enclave_id: u32,
+        timestamp: u64,
+    ) -> Result<(), CasbError> {
+        if !cap.has_right(casb_rights::ISOLATE_ENCLAVE) {
+            return Err(CasbError::PermissionDenied);
+        }
+
+        let mut found = false;
+        for i in 0..self.enclave_flow_count {
+            if let Some(ref mut flow) = self.enclave_flows[i] {
+                if flow.enclave_id == enclave_id {
+                    flow.isolated = false;
+                    found = true;
+                }
+            }
+        }
+
+        if !found {
+            return Err(CasbError::EnclaveNotFound);
+        }
+
+        self.append_audit(
+            timestamp,
+            CasbAuditAction::EnclaveIsolationLifted,
+            enclave_id,
+            "Enclave isolation lifted",
+        );
+
+        Ok(())
+    }
+
+    /// Inspection L7 aveugle d'enveloppe chiffrée de bout en bout (Sovereign Blind Inspection)
+    pub fn inspect_enclave_blind_envelope(
+        &mut self,
+        cap: &CasbCap,
+        flow_id: u64,
+        envelope: &SovereignEnvelopeMetadata,
+        timestamp: u64,
+    ) -> Result<AdmissionDecision, CasbError> {
+        if !cap.has_right(casb_rights::BLIND_INSPECT) {
+            return Err(CasbError::PermissionDenied);
+        }
+
+        self.total_blind_inspections = self.total_blind_inspections.saturating_add(1);
+        self.total_inspections = self.total_inspections.saturating_add(1);
+
+        // 1. Recherche du flux d'enclave
+        let mut flow_idx = None;
+        for i in 0..self.enclave_flow_count {
+            if let Some(ref f) = self.enclave_flows[i] {
+                if f.flow_id == flow_id {
+                    flow_idx = Some(i);
+                    break;
+                }
+            }
+        }
+
+        let fidx = match flow_idx {
+            Some(idx) => idx,
+            None => return Err(CasbError::EnclaveNotFound),
+        };
+
+        let flow = self.enclave_flows[fidx].unwrap();
+
+        // 2. Vérification statut d'isolation
+        if flow.isolated {
+            self.total_blocks = self.total_blocks.saturating_add(1);
+            self.append_audit(
+                timestamp,
+                CasbAuditAction::BlindInspectionBlocked,
+                flow.enclave_id,
+                "Enclave is isolated",
+            );
+            return Ok(AdmissionDecision::EnclaveIsolated {
+                enclave_id: flow.enclave_id,
+                reason: "Enclave flow blocked: enclave is isolated",
+            });
+        }
+
+        // 3. Vérification Zero-Egress
+        if flow.zero_egress_enforced && flow.direction == EnclaveFlowDirection::Egress {
+            self.total_blocks = self.total_blocks.saturating_add(1);
+            self.append_audit(
+                timestamp,
+                CasbAuditAction::BlindInspectionBlocked,
+                flow.enclave_id,
+                "Zero-egress policy violation",
+            );
+            return Ok(AdmissionDecision::Blocked {
+                violation_code: 4051,
+                reason: "Zero-egress policy strictly forbids cloud outbound flows",
+            });
+        }
+
+        // 4. Contrôle de conformité géo-fencing souverain
+        if !envelope.target_geo_zone.is_sovereign_compliant() {
+            self.total_blocks = self.total_blocks.saturating_add(1);
+            self.append_audit(
+                timestamp,
+                CasbAuditAction::BlindInspectionBlocked,
+                flow.enclave_id,
+                "Geo-fencing foreign jurisdiction violation",
+            );
+            return Ok(AdmissionDecision::Blocked {
+                violation_code: 4052,
+                reason: "Target geo-zone violates Sovereign Cloud SecNumCloud geo-fencing",
+            });
+        }
+
+        // 5. Vérification d'attestation token tag
+        if envelope.attestation_token_tag == [0u8; 16] {
+            self.total_blocks = self.total_blocks.saturating_add(1);
+            self.append_audit(
+                timestamp,
+                CasbAuditAction::BlindInspectionBlocked,
+                flow.enclave_id,
+                "Invalid zero-length attestation tag",
+            );
+            return Ok(AdmissionDecision::Blocked {
+                violation_code: 4053,
+                reason: "Enclave envelope missing valid hardware attestation token tag",
+            });
+        }
+
+        // Mise à jour statistique du flux
+        if let Some(ref mut f) = self.enclave_flows[fidx] {
+            f.total_messages = f.total_messages.saturating_add(1);
+        }
+
+        let transaction_id = self.next_transaction_id;
+        self.next_transaction_id = self.next_transaction_id.saturating_add(1);
+        self.total_approvals = self.total_approvals.saturating_add(1);
+
+        self.append_audit(
+            timestamp,
+            CasbAuditAction::BlindInspectionApproved,
+            flow.enclave_id,
+            "Blind L7 envelope approved",
+        );
+
+        Ok(AdmissionDecision::Approved {
+            transaction_id,
+            sanitized_len: 32,
+        })
     }
 
     /// Met en quarantaine un locataire après incident de conformité ou fuite grave
@@ -1099,6 +1601,7 @@ impl JamboCasbDaemon {
         let mut total_redactions = 0usize;
         let mut block_reason: Option<&'static str> = None;
         let mut trigger_quarantine = false;
+        let mut trigger_isolate_enclave = false;
 
         // 6. Évaluation des règles DLP actives
         for r_idx in 0..self.dlp_rule_count {
@@ -1123,19 +1626,27 @@ impl JamboCasbDaemon {
                     DlpPatternType::PiiTaxId => {
                         DlpScanner::scan_pii_tax_id(&sanitized_payload[..req.payload_len])
                     }
+                    DlpPatternType::EnclaveVmpckLeak => {
+                        DlpScanner::scan_enclave_vmpck(&sanitized_payload[..req.payload_len])
+                    }
+                    DlpPatternType::SgxSealingKey => {
+                        DlpScanner::scan_sgx_sealing_key(&sanitized_payload[..req.payload_len])
+                    }
+                    DlpPatternType::PqcSecretShare => {
+                        DlpScanner::scan_pqc_secret(&sanitized_payload[..req.payload_len])
+                    }
+                    DlpPatternType::HighEntropySteganography => {
+                        DlpScanner::scan_high_entropy(&sanitized_payload[..req.payload_len], 7800)
+                    }
                 };
 
                 if let Some((offset, len)) = detection {
-                    // Vérifie si le locataire est autorisé pour cette classification
                     let allowed = tenant_copy.is_classification_allowed(rule.target_classification);
 
                     if !allowed {
                         match rule.default_action {
-                            DlpAction::Allow => {
-                                // Explicitement toléré par règle
-                            }
+                            DlpAction::Allow => {}
                             DlpAction::Redact => {
-                                // Masque la portion sensible avec des astérisques '*'
                                 for b in &mut sanitized_payload[offset..offset + len] {
                                     *b = b'*';
                                 }
@@ -1151,6 +1662,12 @@ impl JamboCasbDaemon {
                                     Some("Critical DLP leak triggered tenant quarantine");
                                 break;
                             }
+                            DlpAction::IsolateEnclave => {
+                                trigger_isolate_enclave = true;
+                                block_reason =
+                                    Some("Critical enclave secret leak triggered isolation");
+                                break;
+                            }
                         }
                     }
                 }
@@ -1160,6 +1677,23 @@ impl JamboCasbDaemon {
         // 7. Prise de décision finale
         let transaction_id = self.next_transaction_id;
         self.next_transaction_id = self.next_transaction_id.saturating_add(1);
+
+        if trigger_isolate_enclave {
+            if let Some(ref mut t) = self.tenants[tidx] {
+                t.total_violations = t.total_violations.saturating_add(1);
+            }
+            self.total_blocks = self.total_blocks.saturating_add(1);
+            self.append_audit(
+                timestamp,
+                CasbAuditAction::EnclaveDlpViolation,
+                req.tenant_id,
+                "Enclave Secret Exfiltration Detected",
+            );
+            return Ok(AdmissionDecision::EnclaveIsolated {
+                enclave_id: req.tenant_id,
+                reason: "Enclave secret exfiltration detected by DLP engine",
+            });
+        }
 
         if trigger_quarantine {
             if let Some(ref mut t) = self.tenants[tidx] {
@@ -1226,12 +1760,11 @@ impl JamboCasbDaemon {
         })
     }
 
-    /// Initialise la configuration par défaut du CASB
+    /// Initialise la configuration par défaut du CASB souverain
     pub fn init_defaults(&mut self) {
         let cap = self.admin_cap;
 
-        // Locataires initiaux :
-        // 1. Locataire Souverain Défense (Autorisé: Public, Internal, Confidential, Secret, CryptoKey)
+        // 1. Locataire Souverain Défense (Autorisé: Public, Internal, Confidential, Secret, CryptoKey, EnclaveSecret)
         let _ = self.register_tenant(
             &cap,
             "sovereign.core",
@@ -1240,17 +1773,18 @@ impl JamboCasbDaemon {
                 | data_classes::INTERNAL
                 | data_classes::CONFIDENTIAL
                 | data_classes::SECRET
-                | data_classes::CRYPTO_KEY,
+                | data_classes::CRYPTO_KEY
+                | data_classes::ENCLAVE_SECRET,
             true, // Chiffrement obligatoire
             256,
             1000,
         );
 
-        // 2. Locataire Entreprise Bancaire (Autorisé: Public, Internal, Confidential, FinancialPci)
+        // 2. Locataire Entreprise SecNumCloud (Autorisé: Public, Internal, Confidential, FinancialPci)
         let _ = self.register_tenant(
             &cap,
-            "enterprise.banking",
-            ComplianceTier::Enterprise,
+            "enterprise.secnumcloud",
+            ComplianceTier::SecNumCloudSovereign,
             data_classes::PUBLIC
                 | data_classes::INTERNAL
                 | data_classes::CONFIDENTIAL
@@ -1272,7 +1806,7 @@ impl JamboCasbDaemon {
         );
 
         // Règles DLP par défaut :
-        // 1. Détection de cartes bancaires (Redact par défaut pour Enterprise, Block pour autres)
+        // 1. Cartes bancaires (Redact par défaut)
         let _ = self.register_dlp_rule(
             &cap,
             "dlp_pci_cards",
@@ -1282,7 +1816,7 @@ impl JamboCasbDaemon {
             1003,
         );
 
-        // 2. Détection de clés API (Quarantine immédiate)
+        // 2. Clés API (Quarantine immédiate)
         let _ = self.register_dlp_rule(
             &cap,
             "dlp_api_keys",
@@ -1292,7 +1826,7 @@ impl JamboCasbDaemon {
             1004,
         );
 
-        // 3. Détection de clés privées PEM (Quarantine immédiate)
+        // 3. Clés privées PEM (Quarantine immédiate)
         let _ = self.register_dlp_rule(
             &cap,
             "dlp_pem_keys",
@@ -1302,7 +1836,7 @@ impl JamboCasbDaemon {
             1005,
         );
 
-        // 4. Détection de marqueurs secret défense (Block)
+        // 4. Marqueurs secret défense (Block)
         let _ = self.register_dlp_rule(
             &cap,
             "dlp_secret_defense",
@@ -1312,7 +1846,7 @@ impl JamboCasbDaemon {
             1006,
         );
 
-        // 5. Détection de numéros PII fiscaux (Redact)
+        // 5. Numéros PII fiscaux (Redact)
         let _ = self.register_dlp_rule(
             &cap,
             "dlp_pii_tax",
@@ -1320,6 +1854,50 @@ impl JamboCasbDaemon {
             DataClassification::Pii,
             DlpAction::Redact,
             1007,
+        );
+
+        // 6. Fuite de clé d'enclave VMPCK AMD SEV-SNP (IsolateEnclave)
+        let _ = self.register_dlp_rule(
+            &cap,
+            "dlp_enclave_vmpck",
+            DlpPatternType::EnclaveVmpckLeak,
+            DataClassification::EnclaveSecret,
+            DlpAction::IsolateEnclave,
+            1008,
+        );
+
+        // 7. Fuite de clé de scellement SGX (IsolateEnclave)
+        let _ = self.register_dlp_rule(
+            &cap,
+            "dlp_sgx_sealing",
+            DlpPatternType::SgxSealingKey,
+            DataClassification::EnclaveSecret,
+            DlpAction::IsolateEnclave,
+            1009,
+        );
+
+        // 8. Fuite de part secrète ML-KEM post-quantique (IsolateEnclave)
+        let _ = self.register_dlp_rule(
+            &cap,
+            "dlp_pqc_secret",
+            DlpPatternType::PqcSecretShare,
+            DataClassification::EnclaveSecret,
+            DlpAction::IsolateEnclave,
+            1010,
+        );
+
+        // Enregistrement d'un flux d'enclave souveraine par défaut (Sovereign JamboEnclave avec Zero-Egress)
+        let default_mrenclave = [0x7A; 32];
+        let _ = self.register_enclave_flow(
+            &cap,
+            7001,
+            EnclaveType::SovereignJamboEnclave,
+            default_mrenclave,
+            1,
+            EnclaveFlowDirection::Egress,
+            "cloud.sovereign.vault",
+            true, // Zero egress imposé
+            1011,
         );
     }
 }
@@ -1338,6 +1916,9 @@ mod tests {
         assert!(admin_cap.has_right(casb_rights::INSPECT_TRAFFIC));
         assert!(admin_cap.has_right(casb_rights::MANAGE_TENANTS));
         assert!(admin_cap.has_right(casb_rights::ENFORCE_DLP));
+        assert!(admin_cap.has_right(casb_rights::INTERCEPT_ENCLAVE));
+        assert!(admin_cap.has_right(casb_rights::BLIND_INSPECT));
+        assert!(admin_cap.has_right(casb_rights::ISOLATE_ENCLAVE));
 
         let attenuated = admin_cap
             .attenuate(
@@ -1351,6 +1932,7 @@ mod tests {
         assert!(attenuated.has_right(casb_rights::AUDIT_READ));
         assert!(!attenuated.has_right(casb_rights::ADMIN));
         assert!(!attenuated.has_right(casb_rights::MANAGE_TENANTS));
+        assert!(!attenuated.has_right(casb_rights::ISOLATE_ENCLAVE));
 
         // Rejet d'escalade
         assert_eq!(
@@ -1361,11 +1943,9 @@ mod tests {
 
     #[test]
     fn test_luhn_algorithm() {
-        // Numéro de test valide Visa (4242 4242 4242 4242) -> Luhn OK
         let valid_visa = b"4242424242424242";
         assert!(luhn_check(valid_visa));
 
-        // Numéro invalide
         let invalid = b"4242424242424243";
         assert!(!luhn_check(invalid));
     }
@@ -1377,7 +1957,8 @@ mod tests {
         daemon.init_defaults();
 
         assert_eq!(daemon.tenant_count, 3);
-        assert_eq!(daemon.dlp_rule_count, 5);
+        assert_eq!(daemon.dlp_rule_count, 8);
+        assert_eq!(daemon.enclave_flow_count, 1);
         assert!(daemon.verify_ledger_integrity());
 
         let mut sanitized = [0u8; 256];
@@ -1405,7 +1986,7 @@ mod tests {
         // 2. Requête du locataire public contenant un numéro de carte bancaire valide -> Redact
         let req2 = CasbRequest::new(
             2,
-            102, // community.guest (non autorisé pour PCI)
+            102,
             "web_frontend",
             "payment_gateway",
             "PAY",
@@ -1418,7 +1999,6 @@ mod tests {
         match res2 {
             AdmissionDecision::RedactedAndApproved { redacted_count, .. } => {
                 assert_eq!(redacted_count, 1);
-                // Vérifie que les 16 chiffres ont été masqués
                 assert_eq!(&sanitized[5..21], b"****************");
             }
             _ => panic!("Requête 2 aurait dû être masquée et approuvée"),
@@ -1442,7 +2022,6 @@ mod tests {
             _ => panic!("Requête 3 aurait dû déclencher la mise en quarantaine"),
         }
 
-        // Vérifie que le locataire 102 est maintenant en quarantaine
         assert!(daemon.tenants[2].unwrap().is_quarantined);
 
         // 4. Toute nouvelle requête de ce locataire doit être bloquée
@@ -1463,7 +2042,6 @@ mod tests {
             _ => panic!("Le locataire en quarantaine doit être rejeté"),
         }
 
-        // Vérifie l'intégrité de la chaîne d'audit SHA-256
         assert!(daemon.verify_ledger_integrity());
     }
 
@@ -1473,20 +2051,208 @@ mod tests {
         let mut daemon = JamboCasbDaemon::new(cap);
         daemon.init_defaults();
 
-        // Locataire 101 (enterprise.banking)
         assert!(!daemon.tenants[1].unwrap().is_quarantined);
 
-        // Mise en quarantaine manuelle
         daemon
             .quarantine_tenant(&cap, 101, "Suspicious activity detected", 3000)
             .expect("Quarantine OK");
         assert!(daemon.tenants[1].unwrap().is_quarantined);
 
-        // Levée de quarantaine
         daemon
             .lift_quarantine(&cap, 101, 3001)
             .expect("Lift quarantine OK");
         assert!(!daemon.tenants[1].unwrap().is_quarantined);
+
+        assert!(daemon.verify_ledger_integrity());
+    }
+
+    #[test]
+    fn test_enclave_blind_inspection_and_isolation() {
+        let cap = CasbCap::new(Handle::new(15401, 1), casb_rights::ALL, 10000, 500);
+        let mut daemon = JamboCasbDaemon::new(cap);
+        daemon.init_defaults();
+
+        // Enregistrement d'un flux d'enclave AMD SEV-SNP sans Zero-Egress
+        let mrenclave = [0x5E; 32];
+        let flow_id = daemon
+            .register_enclave_flow(
+                &cap,
+                8801,
+                EnclaveType::AmdSevSnp,
+                mrenclave,
+                2,
+                EnclaveFlowDirection::Egress,
+                "sovereign.cloud.secnum",
+                false, // Non zero-egress
+                3100,
+            )
+            .expect("Enregistrement flux d'enclave");
+
+        assert_eq!(flow_id, 8001);
+
+        // 1. Enveloppe conforme pour Sovereign Soil -> Approuvée
+        let env_ok = SovereignEnvelopeMetadata {
+            session_id: 9001,
+            sender_enclave_id: 8801,
+            claimed_classification: DataClassification::Secret,
+            blinded_payload_hash: [0x11; 32],
+            attestation_token_tag: [0xAA; 16],
+            target_geo_zone: GeoZone::SovereignSoil,
+            payload_entropy_millibits: 7200,
+            is_homomorphic_tagged: true,
+        };
+
+        let dec1 = daemon
+            .inspect_enclave_blind_envelope(&cap, flow_id, &env_ok, 3105)
+            .expect("Blind inspection OK");
+        match dec1 {
+            AdmissionDecision::Approved { transaction_id, .. } => {
+                assert!(transaction_id >= 5000);
+            }
+            _ => panic!("L'enveloppe souveraine aurait dû être approuvée"),
+        }
+
+        // 2. Enveloppe ciblant une juridiction non souveraine (UntrustedForeign) -> Bloquée (Geo-fencing)
+        let env_foreign = SovereignEnvelopeMetadata {
+            target_geo_zone: GeoZone::UntrustedForeign,
+            ..env_ok
+        };
+        let dec2 = daemon
+            .inspect_enclave_blind_envelope(&cap, flow_id, &env_foreign, 3110)
+            .expect("Blind inspection foreign");
+        match dec2 {
+            AdmissionDecision::Blocked { violation_code, .. } => {
+                assert_eq!(violation_code, 4052);
+            }
+            _ => panic!("Le flux vers l'étranger aurait dû être bloqué par géo-fencing"),
+        }
+
+        // 3. Enveloppe avec tag d'attestation nul -> Bloquée
+        let env_bad_attest = SovereignEnvelopeMetadata {
+            attestation_token_tag: [0u8; 16],
+            ..env_ok
+        };
+        let dec3 = daemon
+            .inspect_enclave_blind_envelope(&cap, flow_id, &env_bad_attest, 3115)
+            .expect("Blind inspection bad attest");
+        match dec3 {
+            AdmissionDecision::Blocked { violation_code, .. } => {
+                assert_eq!(violation_code, 4053);
+            }
+            _ => panic!("Attestation manquante aurait dû être bloquée"),
+        }
+
+        // 4. Test Zero-Egress sur flux 8000 (enregistré dans init_defaults avec zero_egress = true)
+        let env_zero_egress = SovereignEnvelopeMetadata {
+            sender_enclave_id: 7001,
+            ..env_ok
+        };
+        let dec_ze = daemon
+            .inspect_enclave_blind_envelope(&cap, 8000, &env_zero_egress, 3120)
+            .expect("Zero egress check");
+        match dec_ze {
+            AdmissionDecision::Blocked { violation_code, .. } => {
+                assert_eq!(violation_code, 4051);
+            }
+            _ => panic!("Le flux Zero-Egress aurait dû être bloqué"),
+        }
+
+        // 5. Isolation O(1) de l'enclave 8801
+        daemon
+            .isolate_enclave(&cap, 8801, "Alerte de sécurité TEE", 3125)
+            .expect("Isolation enclave OK");
+
+        let dec_iso = daemon
+            .inspect_enclave_blind_envelope(&cap, flow_id, &env_ok, 3130)
+            .expect("Check isolated enclave");
+        match dec_iso {
+            AdmissionDecision::EnclaveIsolated { enclave_id, .. } => {
+                assert_eq!(enclave_id, 8801);
+            }
+            _ => panic!("L'enclave isolée aurait dû être rejetée"),
+        }
+
+        // Levée de l'isolation
+        daemon
+            .lift_enclave_isolation(&cap, 8801, 3135)
+            .expect("Levée isolation OK");
+        let dec_lifted = daemon
+            .inspect_enclave_blind_envelope(&cap, flow_id, &env_ok, 3140)
+            .expect("Check unisolated enclave");
+        assert!(matches!(dec_lifted, AdmissionDecision::Approved { .. }));
+
+        assert!(daemon.verify_ledger_integrity());
+    }
+
+    #[test]
+    fn test_enclave_secret_dlp_detection() {
+        let cap = CasbCap::new(Handle::new(15402, 1), casb_rights::ALL, 10000, 500);
+        let mut daemon = JamboCasbDaemon::new(cap);
+        daemon.init_defaults();
+
+        let mut sanitized = [0u8; 256];
+
+        // Fuite de VMPCK AMD SEV-SNP par le locataire 102
+        let req_vmpck = CasbRequest::new(
+            91,
+            102,
+            "tainted_enclave_client",
+            "cloud_sync",
+            "EXFILTRATE",
+            false,
+            b"secret=VMPCK_3f8a91b2c4e5d6a7b8c9d0e1f2a3b4c5",
+        );
+        let res_vmpck = daemon
+            .scan_and_broker_admission(&cap, &req_vmpck, &mut sanitized, 3200)
+            .expect("DLP scan VMPCK");
+        match res_vmpck {
+            AdmissionDecision::EnclaveIsolated { enclave_id, .. } => {
+                assert_eq!(enclave_id, 102);
+            }
+            _ => panic!("Fuite de VMPCK aurait dû déclencher l'isolation d'enclave"),
+        }
+
+        // Fuite de clé de scellement SGX par le locataire 102
+        let req_sgx = CasbRequest::new(
+            92,
+            102,
+            "tainted_enclave_client",
+            "cloud_sync",
+            "EXFILTRATE",
+            false,
+            b"payload=MRENCLAVE_SEAL_abcdef0123456789",
+        );
+        let res_sgx = daemon
+            .scan_and_broker_admission(&cap, &req_sgx, &mut sanitized, 3201)
+            .expect("DLP scan SGX");
+        match res_sgx {
+            AdmissionDecision::EnclaveIsolated { enclave_id, .. } => {
+                assert_eq!(enclave_id, 102);
+            }
+            _ => {
+                panic!("Fuite de clé de scellement SGX aurait dû déclencher l'isolation d'enclave")
+            }
+        }
+
+        // Fuite de clé privée post-quantique ML-KEM
+        let req_pqc = CasbRequest::new(
+            93,
+            102,
+            "tainted_enclave_client",
+            "cloud_sync",
+            "EXFILTRATE",
+            false,
+            b"seed=mlkem_priv_key_998877665544332211",
+        );
+        let res_pqc = daemon
+            .scan_and_broker_admission(&cap, &req_pqc, &mut sanitized, 3202)
+            .expect("DLP scan PQC");
+        match res_pqc {
+            AdmissionDecision::EnclaveIsolated { enclave_id, .. } => {
+                assert_eq!(enclave_id, 102);
+            }
+            _ => panic!("Fuite de part secrète ML-KEM aurait dû déclencher l'isolation d'enclave"),
+        }
 
         assert!(daemon.verify_ledger_integrity());
     }

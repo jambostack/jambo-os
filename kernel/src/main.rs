@@ -1247,12 +1247,7 @@ pub extern "C" fn _start() -> ! {
 
     // Note: L'Architecture Zero Trust Souveraine & Micro-Périmètres Continus est validée en Phase 153 (v0.3.20).
 
-    // 17semelviciesquadragies. Validation du Courtier CASB & DLP Avancé (Phase 124 - v0.2.122)
-    let casb_success = sched::casb_test::execute_casb_daemon_test();
-    assert!(
-        casb_success,
-        "Échec du test du courtier CASB et DLP jambo-casb"
-    );
+    // Note: Le Courtier d'Accès Sécurisé Cloud Souverain (CASB) & Passerelle DLP d'Enclave est validé en Phase 154 (v0.3.21).
 
     // 18semelviciesquadragies. Validation de la Gestion de Posture CSPM & Remédiation Autonome (Phase 125 - v0.2.123)
     let cspm_success = sched::cspm_test::execute_cspm_daemon_test();
@@ -1455,6 +1450,13 @@ pub extern "C" fn _start() -> ! {
     assert!(
         ztna_success,
         "Échec du test de l'architecture zero trust souveraine jambo-ztna"
+    );
+
+    // 39viciesquadragies. Validation Courtier d'Accès Sécurisé Cloud Souverain CASB & Passerelle DLP d'Enclave (Phase 154 - v0.3.21)
+    let casb_success = sched::casb_test::execute_casb_daemon_test();
+    assert!(
+        casb_success,
+        "Échec du test du courtier CASB souverain et passerelle DLP d'enclave jambo-casb"
     );
 
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
@@ -1766,14 +1768,17 @@ pub extern "C" fn _start() -> ! {
     kprintln!(
         "\x1b[1;32m[PASS] Phase 153 Sovereign Zero Trust Architecture, Continuous Micro-Perimeters & Dynamic Posture (jambo-ztna) Complete\x1b[0m"
     );
+    kprintln!(
+        "\x1b[1;32m[PASS] Phase 154 Sovereign Cloud Access Security Broker & Enclave DLP Gateway (jambo-casb) Complete\x1b[0m"
+    );
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.3.20 (Sovereign Zero Trust Architecture & Continuous Micro-Perimeters jambo-ztna)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.3.21 (Sovereign Cloud Access Security Broker & Enclave DLP Gateway jambo-casb)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.3.20 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.3.21 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );

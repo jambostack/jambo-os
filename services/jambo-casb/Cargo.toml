@@ -1,6 +1,6 @@
 [package]
 name = "jambo-casb"
-version = "0.2.122"
+version = "0.3.21"
 edition = "2021"
 
 [dependencies]
