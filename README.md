@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.3.13-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.3.14-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.3.13 (Analyse Comportementale Utilisateurs et Entités Souveraine jambo-ueba)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.3.13` introduit le sous-système souverain d'analyse comportementale des utilisateurs et entités en espace utilisateur (`services/jambo-ueba`) : profilage adaptatif d'activité des processus Ring 3, démons et comptes utilisateurs, modélisation de références statistiques (baselines) multidimensionnelles no_std (z-scores en virgule fixe sans allocation flottante), détection précoce d'anomalies de volumétrie, mouvements latéraux inter-services, temporalité hors-plage (off-hours) et élévation/abus de privilèges, calcul d'un score de risque adaptatif (0..100), actions de remédiation graduées (Allow, ElevateAudit, Throttle, Quarantine O(1)), contrôle capabilaire strict `UebaCap` avec atténuation monotone et registre d'audit inviolable scellé par chaînage SHA-256.
+> **Statut du Projet : Version v0.3.14 (Orchestration & Réponse aux Incidents Souveraine SOAR jambo-soar)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.3.14` introduit la modernisation et l'unification souveraine de la plateforme SOAR (Security Orchestration, Automation and Response) en espace utilisateur (`services/jambo-soar`) : ingestion et corrélation temps réel unifiée d'alertes multi-sources (SIEM, EDR, NDR, DLP, UEBA, KDIR, FDR, WAF, DDoS), moteur de workflows et de playbooks déterministes modélisés en graphe acyclique dirigé (DAG) avec validation anti-cycles, 6 playbooks de référence intégrés par défaut (anti-DDoS, injections applicatives WAF, révocation immédiate de capacités compromises, endiguement de fuite DLP, neutralisation d'anomalies comportementales UEBA et auto-restauration de l'intégrité noyau KDIR), actions chirurgicales instantanées dispatchées vers 11 sous-systèmes de défense, contrôle d'accès capabilaire strict `SoarCap` avec atténuation monotone et registre d'audit cryptographique SHA-256 scellé par chaînage inaltérable.
 
 ---
 

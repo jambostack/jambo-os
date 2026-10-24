@@ -133,22 +133,25 @@
 | **v0.3.11** | 144 | Désarmement & Reconstruction de Contenu Souverain CDR `jambo-cdr` | Désarmement et reconstruction de contenu (CDR), neutralisation proactive de macros, segments W+X, gadgets de désérialisation, traversées de répertoires et scripts malveillants, reconstruction saine déterministe, mise en quarantaine O(1), CdrCap & registre d'audit SHA-256 inaltérable | ✅ Validé |
 | **v0.3.12** | 145 | Protection Fuites Données Souveraines DLP `jambo-dlp` | Protection contre les fuites de données souveraines (DLP), classification temps réel PII/secrets/clés, validation Luhn, calcul d'entropie Shannon, masquage dynamique, blocage & quarantaine O(1), DlpCap & registre d'audit SHA-256 inaltérable | ✅ Validé |
 | **v0.3.13** | 146 | Analyse Comportementale Utilisateurs et Entités UEBA `jambo-ueba` | Profilage comportemental des acteurs et services Ring 3, baselines statistiques multidimensionnelles (z-scores fixed-point), détection d'anomalies volumétriques, mouvements latéraux, temporalité (off-hours) et abus de privilèges, scoring adaptatif de risque (0..100), actions graduées (Allow, ElevateAudit, Throttle, Quarantine O(1)), UebaCap & registre SHA-256 inaltérable | ✅ Validé |
+| **v0.3.14** | 147 | Orchestration & Réponse aux Incidents Souveraine SOAR `jambo-soar` | Moteur souverain SOAR d'ingestion et de corrélation unifiée multi-sources (SIEM, EDR, NDR, DLP, UEBA, KDIR, FDR, WAF, DDoS), 6 playbooks DAG déterministes anti-cycles, remédiation chirurgicale O(1), actions distribuées vers 11 composants, SoarCap & registre d'audit SHA-256 inaltérable | ✅ Validé |
 
 ---
 
 ## 3. Prochaines Étapes Prioritaires
 
-### 🎯 Prochaine Tâche Immédiate : Phase 147 — v0.3.14
-* **Composant** : `services/jambo-soar`
-* **Versionnement** : Poursuite de la série `v0.3.*` (Jalon `v0.3.14`)
-* **Objectif** : Orchestration, Automatisation et Réponse aux Incidents de Sécurité Souveraine (SOAR - Security Orchestration, Automation and Response) — Playbooks d'intervention automatisés, corrélation unifiée d'alertes multi-sources (SIEM/EDR/NDR/DLP/UEBA), déclenchement d'actions chirurgicales instantanées, SoarCap & registre d'audit SHA-256 inaltérable.
+### 🎯 Prochaine Tâche Immédiate : Phase 148 — v0.3.15
+* **Composant** : `services/jambo-forensics`
+* **Versionnement** : Poursuite de la série `v0.3.*` (Jalon `v0.3.15`)
+* **Objectif** : Investigation Numérique & Forensique Souveraine en Mémoire Vive (`jambo-forensics`) — Snapshots mémoire VMO scellés, timeline des artefacts système & preuves cryptographiques, capture chirurgicale post-incident orchestrée, ForensicsCap & registre d'audit SHA-256 inaltérable.
 * **Tâches précises** :
-  1. Moteur SOAR souverain : moteur d'exécution de playbooks déterministes et corrélation d'incidents no_std.
-  2. Intégration capabilaire SoarCap, remédiation orchestrée et validation formelle `cargo xtask test`.
+  1. Moteur forensique souverain : capture de snapshot mémoire VMO, analyse de résidus et extraction de timeline d'artefacts `#![no_std]`.
+  2. Intégration capabilaire ForensicsCap, scellement SHA-256 des preuves et validation formelle `cargo xtask test`.
 
 ---
 
 ## 4. Journal d'Exécution des Cycles
+
+* **2026-10-24 08:30 UTC** : Validation complète Phase 147 (`jambo-soar`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-soar`, 8/8). SOAR — Moteur d'orchestration et réponse aux incidents souverain, corrélation unifiée multi-sources (SIEM/EDR/NDR/DLP/UEBA/KDIR/FDR/WAF/DDoS), 6 playbooks DAG déterministes validés sans cycle, remédiation chirurgicale et dispatch vers 11 sous-systèmes, auto-mitigation instantanée, SoarCap & registre d'audit SHA-256 inaltérable. Tag `v0.3.14`.
 
 * **2026-10-24 08:18 UTC** : Validation complète Phase 146 (`jambo-ueba`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-ueba`, 8/8). UEBA — Profilage comportemental des acteurs et services Ring 3, baselines statistiques multidimensionnelles no_std (z-scores en virgule fixe), détection d'anomalies de volumétrie, mouvements latéraux, temporalité off-hours et abus de privilèges, scoring adaptatif de risque (0..100), actions graduées (Allow, ElevateAudit, Throttle, Quarantine O(1)), UebaCap & registre d'audit SHA-256 inaltérable. Tag `v0.3.13`.
 

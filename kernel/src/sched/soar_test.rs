@@ -1,5 +1,5 @@
-//! Module de validation de l'Orchestration de Sécurité, Automatisation & Réponse aux Incidents (`jambo-soar`)
-//! Phase 117 — Jalon v0.2.115
+//! Module de validation formelle de l'Orchestration SOAR Souveraine (`jambo-soar`)
+//! Phase 147 — Jalon v0.3.14
 #![allow(unused_imports, dead_code)]
 
 extern crate alloc;
@@ -7,18 +7,19 @@ extern crate alloc;
 use crate::kprintln;
 use jambo_abi::Handle;
 use jambo_soar::{
-    soar_rights, BlockTarget, Incident, IncidentCategory, IncidentSeverity, IncidentStatus,
-    JamboSoarDaemon, Playbook, PlaybookStep, SoarAction, SoarCap, SoarError,
+    id_to_str, soar_rights, BlockTarget, Incident, IncidentCategory, IncidentSeverity,
+    IncidentStatus, JamboSoarDaemon, Playbook, PlaybookStep, SoarAction, SoarCap, SoarError,
+    SoarSummary,
 };
 
-/// Exécute la suite complète de validation formelle du moteur SOAR (Phase 117)
+/// Exécute la suite complète de validation formelle du moteur SOAR souverain (Phase 147)
 pub fn execute_soar_daemon_test() -> bool {
     kprintln!(
-        "[SOAR/TEST] Démarrage du test de validation de l'Orchestration SOAR & Playbooks (Phase 117)..."
+        "[SOAR/TEST] Démarrage de la validation formelle Orchestration, Automatisation et Réponse aux Incidents (Phase 147)..."
     );
 
     // 1. Contrôle d'accès capabilaire (SoarCap) et atténuation monotone
-    let admin_cap = SoarCap::new(Handle::new(11701, 1), soar_rights::ALL, 5000, 100);
+    let admin_cap = SoarCap::new(Handle::new(14701, 1), soar_rights::ALL, 10000, 1000);
     assert!(admin_cap.has_right(soar_rights::EXECUTE_PLAYBOOK));
     assert!(admin_cap.has_right(soar_rights::TRIGGER_INCIDENT));
     assert!(admin_cap.has_right(soar_rights::REGISTER_PLAYBOOK));
@@ -29,33 +30,39 @@ pub fn execute_soar_daemon_test() -> bool {
     assert!(admin_cap.has_right(soar_rights::ADMIN));
 
     // Atténuation monotone
-    let attenuated = admin_cap
+    let ops_cap = admin_cap
         .attenuate(
-            soar_rights::EXECUTE_PLAYBOOK | soar_rights::TRIGGER_INCIDENT,
-            2000,
-            50,
+            soar_rights::EXECUTE_PLAYBOOK
+                | soar_rights::TRIGGER_INCIDENT
+                | soar_rights::AUDIT_INSPECT,
+            5000,
+            250,
         )
         .expect("Atténuation monotone SoarCap");
-    assert!(attenuated.has_right(soar_rights::EXECUTE_PLAYBOOK));
-    assert!(attenuated.has_right(soar_rights::TRIGGER_INCIDENT));
-    assert!(!attenuated.has_right(soar_rights::ADMIN));
-    assert!(!attenuated.has_right(soar_rights::REVOKE_CAPABILITY));
-    assert_eq!(attenuated.max_lifetime, 2000);
-    assert_eq!(attenuated.invocations_left, 50);
+    assert!(ops_cap.has_right(soar_rights::EXECUTE_PLAYBOOK));
+    assert!(ops_cap.has_right(soar_rights::TRIGGER_INCIDENT));
+    assert!(ops_cap.has_right(soar_rights::AUDIT_INSPECT));
+    assert!(!ops_cap.has_right(soar_rights::ADMIN));
+    assert!(!ops_cap.has_right(soar_rights::REGISTER_PLAYBOOK));
+    assert_eq!(ops_cap.max_lifetime, 5000);
+    assert_eq!(ops_cap.invocations_left, 250);
 
     // Rejet d'escalade
     assert_eq!(
-        attenuated.attenuate(soar_rights::ALL, 2000, 50),
+        ops_cap.attenuate(soar_rights::ALL, 5000, 250),
         Err(SoarError::AttenuationViolation)
     );
 
-    // 2. Initialisation du démon SOAR et playbooks par défaut
+    // 2. Initialisation du démon SOAR et vérification des 6 playbooks de référence
     let mut soar = JamboSoarDaemon::new(admin_cap);
     soar.init_defaults();
-    assert_eq!(soar.playbook_count, 3, "3 playbooks intégrés par défaut");
+    assert_eq!(
+        soar.playbook_count, 6,
+        "6 playbooks souverains intégrés par défaut"
+    );
 
     // 3. Validation DAG (détection anti-cycle)
-    let mut cyclic_pb = Playbook::new(99, "CyclicTest", None, IncidentSeverity::Low);
+    let mut cyclic_pb = Playbook::new(99, "CyclicDAG", None, IncidentSeverity::Low);
     let c1 = PlaybookStep::new(1, "Step1", SoarAction::IsolateProcess { pid: 1 }, true)
         .with_dependency(2);
     let c2 = PlaybookStep::new(2, "Step2", SoarAction::IsolateProcess { pid: 2 }, true)
@@ -136,15 +143,87 @@ pub fn execute_soar_daemon_test() -> bool {
     assert_eq!(priv_res.steps_succeeded, 4);
     assert_eq!(soar.incidents[2].unwrap().status, IncidentStatus::Mitigated);
 
-    // 7. Vérification de la chaîne d'audit inaltérable SHA-256
+    // 7. Test Playbook 4 : Endiguement Fuite Données DLP (Phase 145 / 147)
+    let dlp_inc = Incident::new(
+        104,
+        "Fuite de donnees PCI-DSS / PAN detectee",
+        IncidentCategory::SensitiveDataLeak,
+        IncidentSeverity::High,
+        "jambo-dlp",
+        [192, 168, 1, 80],
+        443,
+        Some(89),
+        None,
+        4000,
+    )
+    .with_affected_entity("exfil_endpoint");
+    let dlp_inc_id = soar
+        .create_incident(&admin_cap, dlp_inc)
+        .expect("Incident DLP");
+    let dlp_res = soar
+        .execute_playbook(&admin_cap, 4, dlp_inc_id, 4010)
+        .expect("Exécution PB DLP");
+    assert!(dlp_res.fully_mitigated);
+    assert_eq!(dlp_res.steps_succeeded, 4);
+    assert_eq!(soar.incidents[3].unwrap().status, IncidentStatus::Mitigated);
+
+    // 8. Test Ingestion & Auto-Mitigation Playbook 5 : Anomalie UEBA (Phase 146 / 147)
+    let (ueba_inc_id, ueba_exec_opt) = soar
+        .ingest_alert(
+            &admin_cap,
+            "jambo-ueba",
+            IncidentCategory::BehavioralAnomaly,
+            IncidentSeverity::High,
+            "Z-Score eleve et acces off-hours suspect",
+            [10, 1, 2, 3],
+            Some(101),
+            None,
+            Some("compromised_worker"),
+            5000,
+        )
+        .expect("Ingestion alerte UEBA");
+    assert_eq!(ueba_inc_id, 5);
+    let ueba_res = ueba_exec_opt.expect("Auto-mitigation UEBA déclenchée");
+    assert_eq!(ueba_res.playbook_id, 5);
+    assert!(ueba_res.fully_mitigated);
+    assert_eq!(ueba_res.steps_succeeded, 4);
+
+    // 9. Test Ingestion & Auto-Mitigation Playbook 6 : Restauration KDIR Kernel Rootkit (Phase 141 / 147)
+    let (kdir_inc_id, kdir_exec_opt) = soar
+        .ingest_alert(
+            &admin_cap,
+            "jambo-kdir",
+            IncidentCategory::KernelTampering,
+            IncidentSeverity::Critical,
+            "DKOM rootkit alterant la table de vecteurs IDT",
+            [0, 0, 0, 0],
+            Some(999),
+            None,
+            Some("kernel_intruder"),
+            6000,
+        )
+        .expect("Ingestion alerte KDIR");
+    assert_eq!(kdir_inc_id, 6);
+    let kdir_res = kdir_exec_opt.expect("Auto-mitigation KDIR");
+    assert_eq!(kdir_res.playbook_id, 6);
+    assert!(kdir_res.fully_mitigated);
+    assert_eq!(kdir_res.steps_succeeded, 4);
+
+    // 10. Métriques et vérification d'intégrité du registre d'audit SHA-256
+    let summary: SoarSummary = soar.get_summary();
+    assert_eq!(summary.total_incidents, 6);
+    assert_eq!(summary.mitigated_incidents, 6);
+    assert_eq!(summary.escalated_incidents, 0);
+    assert_eq!(summary.active_playbooks, 6);
+    assert!(summary.dispatched_actions >= 20);
+    assert!(summary.audit_chain_valid);
     assert!(soar.verify_audit_integrity());
     assert_ne!(soar.audit_chain, JamboSoarDaemon::GENESIS_HASH);
-    assert!(soar.audit_count >= 10);
-    assert!(soar.dispatched_count >= 10);
 
     kprintln!(
-        "[SOAR/TEST] \x1b[1;32mSuccès : 3 playbooks DAG validés, 3 incidents neutralisés, audit SHA-256 intègre ({} entrées)\x1b[0m",
-        soar.audit_count
+        "[SOAR/TEST] \x1b[1;32mSuccès : 6 playbooks DAG validés, 6 incidents multi-sources neutralisés, {} actions dispatchées, audit SHA-256 scellé ({} entrées)\x1b[0m",
+        summary.dispatched_actions,
+        summary.audit_records_count
     );
     true
 }

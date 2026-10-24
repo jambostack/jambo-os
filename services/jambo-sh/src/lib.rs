@@ -10186,15 +10186,18 @@ impl JamboShell {
                 match subcmd {
                     "status" => {
                         let mut b = [0u8; 20];
-                        emit("[SOAR/STATUS] Moteur SOAR & Orchestration d'Incidents\n");
+                        let sum = self.soar.get_summary();
+                        emit("[SOAR/STATUS] Moteur SOAR Souverain & Orchestration d'Incidents\n");
                         emit("  Playbooks actifs      : ");
-                        emit(format_u64(self.soar.playbook_count as u64, &mut b));
+                        emit(format_u64(sum.active_playbooks as u64, &mut b));
                         emit("\n  Incidents enregistrés : ");
-                        emit(format_u64(self.soar.incident_count as u64, &mut b));
-                        emit("\n  Actions dispatchées   : ");
-                        emit(format_u64(self.soar.dispatched_count as u64, &mut b));
+                        emit(format_u64(sum.total_incidents as u64, &mut b));
+                        emit(" (Mitigés: ");
+                        emit(format_u64(sum.mitigated_incidents as u64, &mut b));
+                        emit(")\n  Actions dispatchées   : ");
+                        emit(format_u64(sum.dispatched_actions as u64, &mut b));
                         emit("\n  Chaîne audit SHA-256  : ");
-                        emit(format_u64(self.soar.audit_count as u64, &mut b));
+                        emit(format_u64(sum.audit_records_count, &mut b));
                         emit(" entrées\n");
                         (ShellStatus::Success, write_pos)
                     }
@@ -10300,8 +10303,52 @@ impl JamboShell {
                         });
                         (ShellStatus::Success, write_pos)
                     }
+                    "ingest" => {
+                        let cap = self.soar.admin_cap;
+                        match self.soar.ingest_alert(
+                            &cap,
+                            "jambo-dlp",
+                            jambo_soar::IncidentCategory::SensitiveDataLeak,
+                            jambo_soar::IncidentSeverity::High,
+                            "Fuite PII interceptee par le DLP",
+                            [192, 168, 1, 100],
+                            Some(42),
+                            None,
+                            Some("data_leak_node"),
+                            2500,
+                        ) {
+                            Ok((id, exec_opt)) => {
+                                let mut b = [0u8; 20];
+                                emit("[SOAR/INGEST] Alerte ingérée avec succès [Incident ID: ");
+                                emit(format_u64(id, &mut b));
+                                emit("]\n");
+                                if let Some(exec) = exec_opt {
+                                    emit("  Auto-mitigation : Playbook ");
+                                    emit(format_u64(exec.playbook_id as u64, &mut b));
+                                    emit(" exécuté (Succès: ");
+                                    emit(if exec.fully_mitigated { "OUI" } else { "NON" });
+                                    emit(")\n");
+                                }
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("[SOAR/INGEST] Échec de l'ingestion d'alerte\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "verify" => {
+                        let valid = self.soar.verify_audit_integrity();
+                        emit("[SOAR/VERIFY] Vérification formelle du registre d'audit SHA-256 : ");
+                        emit(if valid {
+                            "INTÈGRE (OK)\n"
+                        } else {
+                            "ALTÉRÉ (ERREUR)\n"
+                        });
+                        (ShellStatus::Success, write_pos)
+                    }
                     _ => {
-                        emit("Usage: soar [status | playbooks | trigger | mitigate | audit]\n");
+                        emit("Usage: soar [status | playbooks | trigger | mitigate | ingest | audit | verify]\n");
                         (ShellStatus::ExecutionFailed, write_pos)
                     }
                 }
@@ -18758,6 +18805,14 @@ mod tests {
                 let (st5, len5) = shell.execute_line("soar audit", &mut out);
                 assert_eq!(st5, ShellStatus::Success);
                 assert!(len5 > 0);
+
+                let (st6, len6) = shell.execute_line("soar ingest", &mut out);
+                assert_eq!(st6, ShellStatus::Success);
+                assert!(len6 > 0);
+
+                let (st7, len7) = shell.execute_line("soar verify", &mut out);
+                assert_eq!(st7, ShellStatus::Success);
+                assert!(len7 > 0);
             })
             .unwrap();
         handle.join().unwrap();

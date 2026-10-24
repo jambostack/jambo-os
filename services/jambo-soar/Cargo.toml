@@ -1,6 +1,6 @@
 [package]
 name = "jambo-soar"
-version = "0.2.115"
+version = "0.3.14"
 edition = "2021"
 
 [dependencies]

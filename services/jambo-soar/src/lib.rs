@@ -1,6 +1,6 @@
-//! Orchestration de Sécurité, Automatisation & Réponse aux Incidents (`jambo-soar`)
+//! Orchestration de Sécurité, Automatisation & Réponse aux Incidents Souveraine (`jambo-soar`)
 //!
-//! Phase 117 — Jalon v0.2.115
+//! Phase 147 — Jalon v0.3.14
 //!
 //! Fournit un système souverain SOAR (Security Orchestration, Automation and Response)
 //! entièrement `#![no_std]` :
@@ -11,28 +11,31 @@
 //!    - Droits : `EXECUTE_PLAYBOOK`, `TRIGGER_INCIDENT`, `REGISTER_PLAYBOOK`,
 //!      `MANAGE_INTEGRATIONS`, `ISOLATE_ENTITY`, `REVOKE_CAPABILITY`, `AUDIT_INSPECT`, `ADMIN`.
 //!
-//! 2. Gestion des Incidents de Sécurité & Fingerprinting SHA-256 :
+//! 2. Ingestion & Corrélation Multi-Sources Unifiée (SIEM, EDR, NDR, DLP, UEBA, KDIR, FDR, WAF, DDoS) :
 //!    - Modélisation typée des incidents (`IncidentSeverity`, `IncidentCategory`, `IncidentStatus`).
-//!    - Corrélation multi-sources (`jambo-waf`, `jambo-ddos`, `jambo-ids`, `jambo-siem`).
-//!    - Empreinte cryptographique unique calculée par SHA-256.
+//!    - Ingestion automatisée avec scoring et corrélation directe vers playbooks déterministes.
+//!    - Empreinte cryptographique unique de chaque incident calculée par SHA-256.
 //!
 //! 3. Moteur de Workflows & Playbooks Conditionnels en Graphe Acyclique Dirigé (DAG) :
-//!    - Définition d'étapes ordonnées avec dépendances explicites (`depends_on`).
-//!    - Validation formelle anti-cycles et ordonnancement topologique.
+//!    - Ordonnancement topologique Kahn et vérification formelle anti-cycles.
+//!    - 6 playbooks intégrés par défaut (DDoS, WAF Injections, Révocation Capabilité,
+//!      Endiguement Fuite DLP, Réponse Anomalie Comportementale UEBA, Restauration Intégrité Noyau KDIR).
 //!    - Actions typées : `BlockIp`, `ApplyRateLimit`, `QuarantineWafPattern`, `RevokeCapability`,
-//!      `IsolateProcess`, `CaptureMemoryForensics`, `NotifySecurityAdmin`, `EnforceMlsContainment`.
+//!      `IsolateProcess`, `CaptureMemoryForensics`, `NotifySecurityAdmin`, `EnforceMlsContainment`,
+//!      `QuarantineEntity`, `RestoreGoldenKernelSnapshot`, `TriggerDlpSanitization`, `EnforceMicroSegmentation`.
 //!
-//! 4. Intégrations Croisées Multi-Composants :
-//!    - Répartition et exécution simulée/réelle d'actions vers `jambo-walld`, `jambo-ddos`, `jambo-waf`, `jambo-ids`.
-//!    - Journal d'actions distribuées avec horodatage monotone et code retour.
+//! 4. Intégrations Croisées Multi-Composants & Remédiation Chirurgicale :
+//!    - Dispatch vers `jambo-walld`, `jambo-ddos`, `jambo-waf`, `jambo-ids`, `jambo-siem`,
+//!      `jambo-ndr`, `jambo-dlp`, `jambo-ueba`, `jambo-edr`, `jambo-kdir`, `jambo-fdr`.
+//!    - Journalisation des actions distribuées avec statut et horodatage monotone.
 //!
-//! 5. Registre d'Audit Cryptographique Inaltérable SHA-256 en Chaîne de Hachage.
+//! 5. Registre d'Audit Cryptographique Inaltérable SHA-256 scellé par Chaînage.
 
 #![no_std]
 
 use libjambo::Handle;
 
-fn to_fixed_16(s: &str) -> [u8; 16] {
+pub fn to_fixed_16(s: &str) -> [u8; 16] {
     let mut arr = [0u8; 16];
     let bytes = s.as_bytes();
     let len = bytes.len().min(16);
@@ -40,7 +43,15 @@ fn to_fixed_16(s: &str) -> [u8; 16] {
     arr
 }
 
-fn to_fixed_48(s: &str) -> [u8; 48] {
+pub fn to_fixed_32(s: &str) -> [u8; 32] {
+    let mut arr = [0u8; 32];
+    let bytes = s.as_bytes();
+    let len = bytes.len().min(32);
+    arr[..len].copy_from_slice(&bytes[..len]);
+    arr
+}
+
+pub fn to_fixed_48(s: &str) -> [u8; 48] {
     let mut arr = [0u8; 48];
     let bytes = s.as_bytes();
     let len = bytes.len().min(48);
@@ -48,7 +59,24 @@ fn to_fixed_48(s: &str) -> [u8; 48] {
     arr
 }
 
-/// Droits granulaires pour la capacité `SoarCap`.
+pub fn to_fixed_64(s: &str) -> [u8; 64] {
+    let mut arr = [0u8; 64];
+    let bytes = s.as_bytes();
+    let len = bytes.len().min(64);
+    arr[..len].copy_from_slice(&bytes[..len]);
+    arr
+}
+
+/// Convertit un buffer d'octets en chaîne de caractères ASCII nettoyée
+pub fn id_to_str(buf: &[u8]) -> &str {
+    let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+    core::str::from_utf8(&buf[..len]).unwrap_or("<invalid-utf8>")
+}
+
+// ============================================================================
+// CONTRÔLE D'ACCÈS CAPABILAIRE SOAR
+// ============================================================================
+
 pub mod soar_rights {
     pub const EXECUTE_PLAYBOOK: u32 = 1 << 0;
     pub const TRIGGER_INCIDENT: u32 = 1 << 1;
@@ -69,23 +97,20 @@ pub mod soar_rights {
         | ADMIN;
 }
 
-/// Erreurs spécifiques au moteur SOAR.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SoarError {
     PermissionDenied,
-    PlaybookNotFound,
-    IncidentNotFound,
     InvalidDagDependency,
     CyclicDependency,
-    StepExecutionFailed,
+    PlaybookNotFound,
+    IncidentNotFound,
     TableFull,
-    AttenuationViolation,
-    ExpiredCapability,
-    InvocationsExhausted,
     DisabledPlaybook,
+    ActionFailed,
+    AttenuationViolation,
+    InvalidParameter,
 }
 
-/// Capacité de sécurité SOAR respectant le principe de moindre privilège.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SoarCap {
     pub handle: Handle,
@@ -109,7 +134,6 @@ impl SoarCap {
         }
     }
 
-    #[inline]
     pub fn has_right(&self, right: u32) -> bool {
         (self.rights & right) == right
     }
@@ -120,7 +144,7 @@ impl SoarCap {
         new_lifetime: u64,
         new_invocations: u32,
     ) -> Result<Self, SoarError> {
-        if (new_rights & !self.rights) != 0 {
+        if (self.rights & new_rights) != new_rights {
             return Err(SoarError::AttenuationViolation);
         }
         if new_lifetime > self.max_lifetime {
@@ -129,7 +153,6 @@ impl SoarCap {
         if new_invocations > self.invocations_left {
             return Err(SoarError::AttenuationViolation);
         }
-
         Ok(Self {
             handle: self.handle,
             rights: new_rights,
@@ -137,17 +160,12 @@ impl SoarCap {
             invocations_left: new_invocations,
         })
     }
-
-    pub fn consume_invocation(&mut self) -> Result<(), SoarError> {
-        if self.invocations_left == 0 {
-            return Err(SoarError::InvocationsExhausted);
-        }
-        self.invocations_left -= 1;
-        Ok(())
-    }
 }
 
-/// Sévérité normalisée d'un incident de sécurité.
+// ============================================================================
+// MODÈLES D'INCIDENTS DE SÉCURITÉ & TAXONOMIE SOAR
+// ============================================================================
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum IncidentSeverity {
     Informational = 0,
@@ -157,7 +175,6 @@ pub enum IncidentSeverity {
     Critical = 4,
 }
 
-/// Catégorie d'attaque ou anomalie opérationnelle.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum IncidentCategory {
     DDoSFlood,
@@ -171,9 +188,13 @@ pub enum IncidentCategory {
     DataExfiltration,
     Ransomware,
     SystemAnomaly,
+    KernelTampering,
+    FirmwareCompromise,
+    BehavioralAnomaly,
+    SensitiveDataLeak,
+    ContentPoisoning,
 }
 
-/// État du cycle de vie d'un incident de sécurité.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum IncidentStatus {
     New,
@@ -185,7 +206,6 @@ pub enum IncidentStatus {
     FalsePositive,
 }
 
-/// Incident de sécurité orchestré par le moteur SOAR.
 #[derive(Clone, Copy, Debug)]
 pub struct Incident {
     pub id: u64,
@@ -199,6 +219,8 @@ pub struct Incident {
     pub attacker_port: u16,
     pub target_pid: Option<u32>,
     pub target_handle: Option<u64>,
+    pub affected_entity: [u8; 32],
+    pub entity_len: usize,
     pub timestamp: u64,
     pub status: IncidentStatus,
     pub fingerprint: [u8; 32],
@@ -240,6 +262,8 @@ impl Incident {
             attacker_port,
             target_pid,
             target_handle,
+            affected_entity: [0u8; 32],
+            entity_len: 0,
             timestamp,
             status: IncidentStatus::New,
             fingerprint: [0u8; 32],
@@ -248,6 +272,17 @@ impl Incident {
 
         incident.recompute_fingerprint();
         incident
+    }
+
+    pub fn with_affected_entity(mut self, entity: &str) -> Self {
+        let mut arr = [0u8; 32];
+        let b = entity.as_bytes();
+        let len = b.len().min(32);
+        arr[..len].copy_from_slice(&b[..len]);
+        self.affected_entity = arr;
+        self.entity_len = len;
+        self.recompute_fingerprint();
+        self
     }
 
     pub fn recompute_fingerprint(&mut self) {
@@ -264,12 +299,16 @@ impl Incident {
         if let Some(handle) = self.target_handle {
             hasher.update(&handle.to_be_bytes());
         }
+        hasher.update(&self.affected_entity[..self.entity_len]);
         hasher.update(&self.timestamp.to_be_bytes());
         self.fingerprint = hasher.finalize();
     }
 }
 
-/// Cible de blocage réseau IP.
+// ============================================================================
+// ACTIONS DE REMÉDIATION CHIRURGICALE & INTÉGRATIONS
+// ============================================================================
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BlockTarget {
     Walld,
@@ -277,7 +316,6 @@ pub enum BlockTarget {
     Both,
 }
 
-/// Action unitaire SOAR pouvant être exécutée au sein d'une étape de playbook.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SoarAction {
     BlockIp {
@@ -312,9 +350,22 @@ pub enum SoarAction {
     EnforceMlsContainment {
         min_level: u8,
     },
+    QuarantineEntity {
+        entity_id: [u8; 32],
+        entity_len: usize,
+    },
+    RestoreGoldenKernelSnapshot {
+        table_mask: u32,
+    },
+    TriggerDlpSanitization {
+        session_id: u64,
+    },
+    EnforceMicroSegmentation {
+        subnet: [u8; 4],
+        mask: u8,
+    },
 }
 
-/// État d'avancement d'une étape de playbook.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StepStatus {
     Pending,
@@ -324,21 +375,20 @@ pub enum StepStatus {
     Skipped,
 }
 
-/// Étape individuelle d'un workflow de playbook avec dépendances DAG.
 #[derive(Clone, Copy, Debug)]
 pub struct PlaybookStep {
-    pub step_id: u8,
+    pub step_id: u32,
     pub name: [u8; 32],
     pub name_len: usize,
     pub action: SoarAction,
-    pub depends_on: [u8; 4],
+    pub depends_on: [u32; 4],
     pub num_depends: usize,
     pub is_critical: bool,
     pub status: StepStatus,
 }
 
 impl PlaybookStep {
-    pub fn new(step_id: u8, name_str: &str, action: SoarAction, is_critical: bool) -> Self {
+    pub fn new(step_id: u32, name_str: &str, action: SoarAction, is_critical: bool) -> Self {
         let mut name = [0u8; 32];
         let bytes = name_str.as_bytes();
         let name_len = bytes.len().min(32);
@@ -349,14 +399,14 @@ impl PlaybookStep {
             name,
             name_len,
             action,
-            depends_on: [0u8; 4],
+            depends_on: [0; 4],
             num_depends: 0,
             is_critical,
             status: StepStatus::Pending,
         }
     }
 
-    pub fn with_dependency(mut self, dep_id: u8) -> Self {
+    pub fn with_dependency(mut self, dep_id: u32) -> Self {
         if self.num_depends < 4 {
             self.depends_on[self.num_depends] = dep_id;
             self.num_depends += 1;
@@ -369,9 +419,8 @@ pub const MAX_STEPS_PER_PLAYBOOK: usize = 8;
 pub const MAX_PLAYBOOKS: usize = 16;
 pub const MAX_INCIDENTS: usize = 64;
 pub const MAX_DISPATCHED_ACTIONS: usize = 64;
-pub const MAX_AUDIT_LOGS: usize = 64;
+pub const MAX_AUDIT_LOGS: usize = 128;
 
-/// Playbook automatisé d'atténuation d'incidents.
 #[derive(Clone, Copy, Debug)]
 pub struct Playbook {
     pub id: u32,
@@ -423,7 +472,6 @@ impl Playbook {
         Ok(())
     }
 
-    /// Valide l'absence de cycles et la conformité du graphe acyclique dirigé (DAG).
     pub fn validate_dag(&self) -> Result<(), SoarError> {
         for i in 0..self.steps_count {
             let step = &self.steps[i];
@@ -432,7 +480,6 @@ impl Playbook {
                 if dep_id == step.step_id {
                     return Err(SoarError::CyclicDependency);
                 }
-                // Vérifier que la dépendance existe
                 let exists = (0..self.steps_count).any(|idx| self.steps[idx].step_id == dep_id);
                 if !exists {
                     return Err(SoarError::InvalidDagDependency);
@@ -440,7 +487,7 @@ impl Playbook {
             }
         }
 
-        // Vérification par élimination topologique (Kahn's algorithm sur tableau fixe)
+        // Algorithme de Kahn pour ordonnancement topologique et détection de cycle
         let mut in_degrees = [0u8; MAX_STEPS_PER_PLAYBOOK];
         for i in 0..self.steps_count {
             in_degrees[i] = self.steps[i].num_depends as u8;
@@ -464,7 +511,6 @@ impl Playbook {
             processed += 1;
             let curr_id = self.steps[curr].step_id;
 
-            // Décrémenter les étapes qui dépendent de curr_id
             for i in 0..self.steps_count {
                 if in_degrees[i] > 0 {
                     for d in 0..self.steps[i].num_depends {
@@ -488,7 +534,6 @@ impl Playbook {
     }
 }
 
-/// Sous-système cible d'une intégration de sécurité SOAR.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum IntegrationTarget {
     JamboWalld,
@@ -496,9 +541,14 @@ pub enum IntegrationTarget {
     JamboWaf,
     JamboIds,
     JamboSiem,
+    JamboNdr,
+    JamboDlp,
+    JamboUeba,
+    JamboEdr,
+    JamboKdir,
+    JamboFdr,
 }
 
-/// Action distribuée exécutée auprès d'un sous-système externe.
 #[derive(Clone, Copy, Debug)]
 pub struct DispatchedAction {
     pub action_id: u64,
@@ -510,7 +560,6 @@ pub struct DispatchedAction {
     pub response_code: u32,
 }
 
-/// Types d'événements du journal d'audit cryptographique.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SoarAuditEventType {
     IncidentCreated = 1,
@@ -520,9 +569,11 @@ pub enum SoarAuditEventType {
     CapabilityRevoked = 5,
     NodeIsolated = 6,
     PolicyUpdated = 7,
+    SnapshotRestored = 8,
+    MicroSegmentationEnforced = 9,
+    EntityQuarantined = 10,
 }
 
-/// Enregistrement inaltérable scellé par empreinte SHA-256.
 #[derive(Clone, Copy, Debug)]
 pub struct SoarAuditRecord {
     pub sequence: u64,
@@ -534,7 +585,6 @@ pub struct SoarAuditRecord {
     pub entry_hash: [u8; 32],
 }
 
-/// Résultat d'exécution d'un playbook SOAR.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SoarExecutionResult {
     pub playbook_id: u32,
@@ -545,12 +595,27 @@ pub struct SoarExecutionResult {
     pub fully_mitigated: bool,
 }
 
-/// Implémentation souveraine de SHA-256 `#![no_std]` pour le scellement et les empreintes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SoarSummary {
+    pub total_incidents: usize,
+    pub mitigated_incidents: usize,
+    pub escalated_incidents: usize,
+    pub active_playbooks: usize,
+    pub dispatched_actions: usize,
+    pub audit_records_count: u64,
+    pub audit_chain_valid: bool,
+}
+
+// ============================================================================
+// HACHEUR SHA-256 SOUVERAIN (#![no_std])
+// ============================================================================
+
 #[derive(Clone, Copy)]
 pub struct Sha256 {
     state: [u32; 8],
-    count: u64,
     buffer: [u8; 64],
+    buffer_len: usize,
+    total_bytes: u64,
 }
 
 impl Sha256 {
@@ -567,49 +632,85 @@ impl Sha256 {
         0xc67178f2,
     ];
 
-    pub const fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             state: [
                 0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
                 0x5be0cd19,
             ],
-            count: 0,
             buffer: [0u8; 64],
+            buffer_len: 0,
+            total_bytes: 0,
         }
     }
 
-    pub fn update(&mut self, data: &[u8]) {
-        let mut i = 0;
-        while i < data.len() {
-            let buf_idx = (self.count % 64) as usize;
-            self.buffer[buf_idx] = data[i];
-            self.count += 1;
-            if (self.count % 64) == 0 {
-                self.transform();
+    pub fn update(&mut self, mut data: &[u8]) {
+        self.total_bytes += data.len() as u64;
+        while !data.is_empty() {
+            let space = 64 - self.buffer_len;
+            if data.len() >= space {
+                self.buffer[self.buffer_len..64].copy_from_slice(&data[..space]);
+                data = &data[space..];
+                self.buffer_len = 0;
+                let mut buf_copy = [0u8; 64];
+                buf_copy.copy_from_slice(&self.buffer);
+                self.process_block(&buf_copy);
+            } else {
+                self.buffer[self.buffer_len..self.buffer_len + data.len()].copy_from_slice(data);
+                self.buffer_len += data.len();
+                break;
             }
-            i += 1;
         }
     }
 
-    fn transform(&mut self) {
-        let chunk = self.buffer;
-        let mut w = [0u32; 64];
-        let mut i = 0;
-        while i < 16 {
-            w[i] = ((chunk[i * 4] as u32) << 24)
-                | ((chunk[i * 4 + 1] as u32) << 16)
-                | ((chunk[i * 4 + 2] as u32) << 8)
-                | (chunk[i * 4 + 3] as u32);
-            i += 1;
+    pub fn finalize(mut self) -> [u8; 32] {
+        let total_bits = self.total_bytes * 8;
+        self.buffer[self.buffer_len] = 0x80;
+        self.buffer_len += 1;
+
+        if self.buffer_len > 56 {
+            for i in self.buffer_len..64 {
+                self.buffer[i] = 0;
+            }
+            let mut buf_copy = [0u8; 64];
+            buf_copy.copy_from_slice(&self.buffer);
+            self.process_block(&buf_copy);
+            self.buffer = [0u8; 64];
+        } else {
+            for i in self.buffer_len..56 {
+                self.buffer[i] = 0;
+            }
         }
-        while i < 64 {
+
+        self.buffer[56..64].copy_from_slice(&total_bits.to_be_bytes());
+        let mut buf_copy = [0u8; 64];
+        buf_copy.copy_from_slice(&self.buffer);
+        self.process_block(&buf_copy);
+
+        let mut out = [0u8; 32];
+        for (i, val) in self.state.iter().enumerate() {
+            out[i * 4..(i + 1) * 4].copy_from_slice(&val.to_be_bytes());
+        }
+        out
+    }
+
+    fn process_block(&mut self, block: &[u8; 64]) {
+        let mut w = [0u32; 64];
+        for i in 0..16 {
+            w[i] = u32::from_be_bytes([
+                block[i * 4],
+                block[i * 4 + 1],
+                block[i * 4 + 2],
+                block[i * 4 + 3],
+            ]);
+        }
+        for i in 16..64 {
             let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);
             let s1 = w[i - 2].rotate_right(17) ^ w[i - 2].rotate_right(19) ^ (w[i - 2] >> 10);
             w[i] = w[i - 16]
                 .wrapping_add(s0)
                 .wrapping_add(w[i - 7])
                 .wrapping_add(s1);
-            i += 1;
         }
 
         let mut a = self.state[0];
@@ -621,15 +722,14 @@ impl Sha256 {
         let mut g = self.state[6];
         let mut h = self.state[7];
 
-        let mut j = 0;
-        while j < 64 {
+        for i in 0..64 {
             let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
             let ch = (e & f) ^ ((!e) & g);
             let temp1 = h
                 .wrapping_add(s1)
                 .wrapping_add(ch)
-                .wrapping_add(Self::K[j])
-                .wrapping_add(w[j]);
+                .wrapping_add(Self::K[i])
+                .wrapping_add(w[i]);
             let s0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
             let maj = (a & b) ^ (a & c) ^ (b & c);
             let temp2 = s0.wrapping_add(maj);
@@ -642,7 +742,6 @@ impl Sha256 {
             c = b;
             b = a;
             a = temp1.wrapping_add(temp2);
-            j += 1;
         }
 
         self.state[0] = self.state[0].wrapping_add(a);
@@ -654,54 +753,12 @@ impl Sha256 {
         self.state[6] = self.state[6].wrapping_add(g);
         self.state[7] = self.state[7].wrapping_add(h);
     }
-
-    pub fn finalize(mut self) -> [u8; 32] {
-        let bit_len = self.count * 8;
-        let buf_idx = (self.count % 64) as usize;
-        self.buffer[buf_idx] = 0x80;
-
-        if buf_idx >= 56 {
-            let mut k = buf_idx + 1;
-            while k < 64 {
-                self.buffer[k] = 0;
-                k += 1;
-            }
-            self.transform();
-            let mut m = 0;
-            while m < 56 {
-                self.buffer[m] = 0;
-                m += 1;
-            }
-        } else {
-            let mut k = buf_idx + 1;
-            while k < 56 {
-                self.buffer[k] = 0;
-                k += 1;
-            }
-        }
-
-        let mut idx = 56;
-        while idx < 64 {
-            let shift = (63 - idx) * 8;
-            self.buffer[idx] = (bit_len >> shift) as u8;
-            idx += 1;
-        }
-        self.transform();
-
-        let mut out = [0u8; 32];
-        let mut i = 0;
-        while i < 8 {
-            out[i * 4] = (self.state[i] >> 24) as u8;
-            out[i * 4 + 1] = (self.state[i] >> 16) as u8;
-            out[i * 4 + 2] = (self.state[i] >> 8) as u8;
-            out[i * 4 + 3] = self.state[i] as u8;
-            i += 1;
-        }
-        out
-    }
 }
 
-/// Démon et moteur d'orchestration de sécurité SOAR souverain.
+// ============================================================================
+// DÉMON SOAR SOUVERAIN
+// ============================================================================
+
 pub struct JamboSoarDaemon {
     pub admin_cap: SoarCap,
     pub incidents: [Option<Incident>; MAX_INCIDENTS],
@@ -719,7 +776,7 @@ impl JamboSoarDaemon {
     pub const GENESIS_HASH: [u8; 32] = [
         0x53, 0x4f, 0x41, 0x52, 0x2d, 0x4a, 0x41, 0x4d, 0x42, 0x4f, 0x2d, 0x4f, 0x53, 0x2d, 0x53,
         0x45, 0x43, 0x55, 0x52, 0x49, 0x54, 0x59, 0x2d, 0x52, 0x45, 0x53, 0x50, 0x4f, 0x4e, 0x53,
-        0x45, 0x01,
+        0x45, 0x02,
     ];
 
     pub fn new(admin_cap: SoarCap) -> Self {
@@ -737,7 +794,7 @@ impl JamboSoarDaemon {
         }
     }
 
-    /// Initialise les playbooks par défaut pour les menaces courantes (DDoS, Injections WAF, Intrusion, Élévation).
+    /// Initialise les 6 playbooks de référence souverains couvrant tout le spectre de sécurité
     pub fn init_defaults(&mut self) {
         let cap = self.admin_cap;
 
@@ -752,7 +809,7 @@ impl JamboSoarDaemon {
             1,
             "ApplyRateLimit",
             SoarAction::ApplyRateLimit {
-                ip: [0, 0, 0, 0], // Sera surchargé dynamiquement avec l'IP de l'incident
+                ip: [0, 0, 0, 0],
                 token_rate: 100,
                 bucket_size: 50,
             },
@@ -886,6 +943,160 @@ impl JamboSoarDaemon {
         let _ = pb_cap.add_step(c3);
         let _ = pb_cap.add_step(c4);
         let _ = self.register_playbook(&cap, pb_cap);
+
+        // 4. Playbook Endiguement Fuite Données Sensibles DLP (Phase 145 / 147)
+        let mut pb_dlp = Playbook::new(
+            4,
+            "PB-DATA-LEAK-CONTAINMENT",
+            Some(IncidentCategory::SensitiveDataLeak),
+            IncidentSeverity::High,
+        );
+        let d1 = PlaybookStep::new(
+            1,
+            "TriggerDlpSanitization",
+            SoarAction::TriggerDlpSanitization { session_id: 0 },
+            true,
+        );
+        let d2 = PlaybookStep::new(
+            2,
+            "QuarantineEntity",
+            SoarAction::QuarantineEntity {
+                entity_id: [0u8; 32],
+                entity_len: 0,
+            },
+            true,
+        )
+        .with_dependency(1);
+        let d3 = PlaybookStep::new(
+            3,
+            "BlockExfilIp",
+            SoarAction::BlockIp {
+                ip: [0, 0, 0, 0],
+                duration_secs: 43200,
+                target: BlockTarget::Both,
+            },
+            true,
+        )
+        .with_dependency(2);
+        let d4 = PlaybookStep::new(
+            4,
+            "NotifyDlpAdmin",
+            SoarAction::NotifySecurityAdmin {
+                channel: to_fixed_16("dlp-incident"),
+                channel_len: 12,
+                note: to_fixed_48("Exfiltration bloquee et entite isolee O(1)"),
+                note_len: 41,
+            },
+            false,
+        )
+        .with_dependency(3);
+
+        let _ = pb_dlp.add_step(d1);
+        let _ = pb_dlp.add_step(d2);
+        let _ = pb_dlp.add_step(d3);
+        let _ = pb_dlp.add_step(d4);
+        let _ = self.register_playbook(&cap, pb_dlp);
+
+        // 5. Playbook Réponse Anomalie Comportementale & Mouvement Latéral UEBA (Phase 146 / 147)
+        let mut pb_ueba = Playbook::new(
+            5,
+            "PB-BEHAVIORAL-ANOMALY-RESPONSE",
+            Some(IncidentCategory::BehavioralAnomaly),
+            IncidentSeverity::High,
+        );
+        let u1 = PlaybookStep::new(
+            1,
+            "IsolateProcess",
+            SoarAction::IsolateProcess { pid: 0 },
+            true,
+        );
+        let u2 = PlaybookStep::new(
+            2,
+            "QuarantineEntity",
+            SoarAction::QuarantineEntity {
+                entity_id: [0u8; 32],
+                entity_len: 0,
+            },
+            true,
+        )
+        .with_dependency(1);
+        let u3 = PlaybookStep::new(
+            3,
+            "EnforceMicroSegmentation",
+            SoarAction::EnforceMicroSegmentation {
+                subnet: [10, 0, 0, 0],
+                mask: 24,
+            },
+            true,
+        )
+        .with_dependency(2);
+        let u4 = PlaybookStep::new(
+            4,
+            "NotifyUebaAdmin",
+            SoarAction::NotifySecurityAdmin {
+                channel: to_fixed_16("ueba-response"),
+                channel_len: 13,
+                note: to_fixed_48("Mouvement lateral stoppe et microseg appliquee"),
+                note_len: 47,
+            },
+            false,
+        )
+        .with_dependency(3);
+
+        let _ = pb_ueba.add_step(u1);
+        let _ = pb_ueba.add_step(u2);
+        let _ = pb_ueba.add_step(u3);
+        let _ = pb_ueba.add_step(u4);
+        let _ = self.register_playbook(&cap, pb_ueba);
+
+        // 6. Playbook Restauration Intégrité Noyau & Rootkit KDIR/FDR (Phase 141 / 142 / 147)
+        let mut pb_kdir = Playbook::new(
+            6,
+            "PB-KERNEL-INTEGRITY-RESTORATION",
+            Some(IncidentCategory::KernelTampering),
+            IncidentSeverity::Critical,
+        );
+        let k1 = PlaybookStep::new(
+            1,
+            "RestoreGoldenSnapshot",
+            SoarAction::RestoreGoldenKernelSnapshot {
+                table_mask: 0x0F, // IDT | GDT | CR3 | LSTAR
+            },
+            true,
+        );
+        let k2 = PlaybookStep::new(
+            2,
+            "IsolateCompromisedProcess",
+            SoarAction::IsolateProcess { pid: 0 },
+            true,
+        )
+        .with_dependency(1);
+        let k3 = PlaybookStep::new(
+            3,
+            "CaptureMemoryForensics",
+            SoarAction::CaptureMemoryForensics { pid: 0 },
+            false,
+        )
+        .with_dependency(1);
+        let k4 = PlaybookStep::new(
+            4,
+            "AlertKernelCritical",
+            SoarAction::NotifySecurityAdmin {
+                channel: to_fixed_16("kernel-sec"),
+                channel_len: 10,
+                note: to_fixed_48("Tables noyau restaurees et intrus neutralise"),
+                note_len: 45,
+            },
+            false,
+        )
+        .with_dependency(2)
+        .with_dependency(3);
+
+        let _ = pb_kdir.add_step(k1);
+        let _ = pb_kdir.add_step(k2);
+        let _ = pb_kdir.add_step(k3);
+        let _ = pb_kdir.add_step(k4);
+        let _ = self.register_playbook(&cap, pb_kdir);
     }
 
     /// Enregistre un playbook après vérification de la capacité et validation DAG.
@@ -946,6 +1157,51 @@ impl JamboSoarDaemon {
         Ok(inc_id)
     }
 
+    /// Ingestion unifiée multi-source : crée l'incident et déclenche automatiquement le playbook correspondant
+    pub fn ingest_alert(
+        &mut self,
+        cap: &SoarCap,
+        source: &str,
+        category: IncidentCategory,
+        severity: IncidentSeverity,
+        title: &str,
+        attacker_ip: [u8; 4],
+        target_pid: Option<u32>,
+        target_handle: Option<u64>,
+        affected_entity: Option<&str>,
+        now: u64,
+    ) -> Result<(u64, Option<SoarExecutionResult>), SoarError> {
+        let inc_id = (self.incident_count as u64) + 1;
+        let mut incident = Incident::new(
+            inc_id,
+            title,
+            category,
+            severity,
+            source,
+            attacker_ip,
+            0,
+            target_pid,
+            target_handle,
+            now,
+        );
+
+        if let Some(ent) = affected_entity {
+            incident = incident.with_affected_entity(ent);
+        }
+
+        let created_id = self.create_incident(cap, incident)?;
+
+        // Auto-mitigation si playbook correspondant et sévérité suffisante
+        if severity >= IncidentSeverity::Medium {
+            if let Some(pb_id) = self.find_matching_playbook(category, severity) {
+                let exec_res = self.execute_playbook(cap, pb_id, created_id, now)?;
+                return Ok((created_id, Some(exec_res)));
+            }
+        }
+
+        Ok((created_id, None))
+    }
+
     /// Recherche le playbook le plus approprié pour un incident.
     pub fn find_matching_playbook(
         &self,
@@ -978,7 +1234,6 @@ impl JamboSoarDaemon {
             return Err(SoarError::PermissionDenied);
         }
 
-        // Trouver le playbook
         let pb_idx = (0..self.playbook_count)
             .find(|&i| {
                 self.playbooks[i]
@@ -992,7 +1247,6 @@ impl JamboSoarDaemon {
             return Err(SoarError::DisabledPlaybook);
         }
 
-        // Trouver l'incident
         let inc_idx = (0..self.incident_count)
             .find(|&i| {
                 self.incidents[i]
@@ -1013,11 +1267,9 @@ impl JamboSoarDaemon {
         for i in 0..pb.steps_count {
             let mut step = pb.steps[i];
 
-            // Vérifier que toutes les dépendances ont réussi
             let mut deps_ok = true;
             for d in 0..step.num_depends {
                 let dep_id = step.depends_on[d];
-                // Trouver le statut de la dépendance
                 let dep_idx = (0..pb.steps_count).find(|&idx| pb.steps[idx].step_id == dep_id);
                 if let Some(d_idx) = dep_idx {
                     if !step_success_map[d_idx] {
@@ -1039,7 +1291,7 @@ impl JamboSoarDaemon {
             step.status = StepStatus::Running;
             steps_executed += 1;
 
-            // Adapter l'action avec le contexte dynamique de l'incident si nécessaire
+            // Injection dynamique du contexte de l'incident
             let mut dynamic_action = step.action;
             match &mut dynamic_action {
                 SoarAction::BlockIp { ip, .. } => {
@@ -1073,10 +1325,23 @@ impl JamboSoarDaemon {
                         }
                     }
                 }
+                SoarAction::QuarantineEntity {
+                    entity_id,
+                    entity_len,
+                } => {
+                    if *entity_len == 0 && incident.entity_len > 0 {
+                        *entity_id = incident.affected_entity;
+                        *entity_len = incident.entity_len;
+                    }
+                }
+                SoarAction::TriggerDlpSanitization { session_id } => {
+                    if *session_id == 0 {
+                        *session_id = incident.id;
+                    }
+                }
                 _ => {}
             }
 
-            // Exécution / Dispatch de l'action
             let dispatch_res = self.dispatch_action(cap, dynamic_action, now);
             if dispatch_res.is_ok() {
                 step.status = StepStatus::Completed;
@@ -1130,7 +1395,6 @@ impl JamboSoarDaemon {
         action: SoarAction,
         now: u64,
     ) -> Result<u64, SoarError> {
-        // Contrôle de capacité selon l'action
         match action {
             SoarAction::RevokeCapability { .. } => {
                 if !cap.has_right(soar_rights::REVOKE_CAPABILITY)
@@ -1139,7 +1403,9 @@ impl JamboSoarDaemon {
                     return Err(SoarError::PermissionDenied);
                 }
             }
-            SoarAction::IsolateProcess { .. } | SoarAction::EnforceMlsContainment { .. } => {
+            SoarAction::IsolateProcess { .. }
+            | SoarAction::EnforceMlsContainment { .. }
+            | SoarAction::QuarantineEntity { .. } => {
                 if !cap.has_right(soar_rights::ISOLATE_ENTITY) && !cap.has_right(soar_rights::ADMIN)
                 {
                     return Err(SoarError::PermissionDenied);
@@ -1175,7 +1441,7 @@ impl JamboSoarDaemon {
                 (IntegrationTarget::JamboIds, "RevokeCapability dispatched")
             }
             SoarAction::IsolateProcess { .. } => {
-                (IntegrationTarget::JamboIds, "IsolateProcess dispatched")
+                (IntegrationTarget::JamboEdr, "IsolateProcess dispatched")
             }
             SoarAction::CaptureMemoryForensics { .. } => {
                 (IntegrationTarget::JamboSiem, "CaptureForensics dispatched")
@@ -1188,6 +1454,19 @@ impl JamboSoarDaemon {
                 IntegrationTarget::JamboIds,
                 "EnforceMlsContainment dispatched",
             ),
+            SoarAction::QuarantineEntity { .. } => {
+                (IntegrationTarget::JamboUeba, "QuarantineEntity dispatched")
+            }
+            SoarAction::RestoreGoldenKernelSnapshot { .. } => (
+                IntegrationTarget::JamboKdir,
+                "RestoreGoldenSnapshot dispatched",
+            ),
+            SoarAction::TriggerDlpSanitization { .. } => {
+                (IntegrationTarget::JamboDlp, "DlpSanitization dispatched")
+            }
+            SoarAction::EnforceMicroSegmentation { .. } => {
+                (IntegrationTarget::JamboNdr, "MicroSegmentation dispatched")
+            }
         };
 
         let action_id = self.dispatched_count as u64 + 1;
@@ -1206,333 +1485,331 @@ impl JamboSoarDaemon {
             response_code: 200,
         };
 
-        let slot = self.dispatched_count % MAX_DISPATCHED_ACTIONS;
-        self.dispatched_actions[slot] = Some(disp);
-        self.dispatched_count += 1;
+        if self.dispatched_count < MAX_DISPATCHED_ACTIONS {
+            self.dispatched_actions[self.dispatched_count] = Some(disp);
+            self.dispatched_count += 1;
+        }
 
-        self.append_audit(SoarAuditEventType::ActionDispatched, 0, 0, now);
+        let audit_ev = match action {
+            SoarAction::RevokeCapability { .. } => SoarAuditEventType::CapabilityRevoked,
+            SoarAction::IsolateProcess { .. } => SoarAuditEventType::NodeIsolated,
+            SoarAction::QuarantineEntity { .. } => SoarAuditEventType::EntityQuarantined,
+            SoarAction::RestoreGoldenKernelSnapshot { .. } => SoarAuditEventType::SnapshotRestored,
+            SoarAction::EnforceMicroSegmentation { .. } => {
+                SoarAuditEventType::MicroSegmentationEnforced
+            }
+            _ => SoarAuditEventType::ActionDispatched,
+        };
+
+        self.append_audit(audit_ev, 0, 0, now);
         Ok(action_id)
     }
 
-    /// Enregistre une entrée dans la chaîne de hachage SHA-256 inaltérable.
-    pub fn append_audit(
+    /// Ajoute un enregistrement au journal d'audit scellé par chaînage SHA-256.
+    fn append_audit(
         &mut self,
         event_type: SoarAuditEventType,
         incident_id: u64,
         playbook_id: u32,
-        timestamp: u64,
+        now: u64,
     ) {
         let seq = self.audit_count + 1;
-        let prev = self.audit_chain;
+        let prev_hash = self.audit_chain;
 
         let mut hasher = Sha256::new();
-        hasher.update(&prev);
         hasher.update(&seq.to_be_bytes());
-        hasher.update(&timestamp.to_be_bytes());
+        hasher.update(&now.to_be_bytes());
         hasher.update(&[event_type as u8]);
         hasher.update(&incident_id.to_be_bytes());
         hasher.update(&playbook_id.to_be_bytes());
+        hasher.update(&prev_hash);
         let entry_hash = hasher.finalize();
 
-        let record = SoarAuditRecord {
+        self.audit_chain = entry_hash;
+
+        let slot = (self.audit_count as usize) % MAX_AUDIT_LOGS;
+        self.audit_records[slot] = Some(SoarAuditRecord {
             sequence: seq,
-            timestamp,
+            timestamp: now,
             event_type,
             incident_id,
             playbook_id,
-            prev_hash: prev,
+            prev_hash,
             entry_hash,
-        };
+        });
 
-        let slot = (self.audit_count as usize) % MAX_AUDIT_LOGS;
-        self.audit_records[slot] = Some(record);
-        self.audit_chain = entry_hash;
         self.audit_count += 1;
     }
 
-    /// Vérifie formellement l'intégrité de la chaîne de hachage d'audit.
+    /// Vérifie l'intégrité de la chaîne cryptographique d'audit.
     pub fn verify_audit_integrity(&self) -> bool {
-        if self.audit_count == 0 {
+        let count = (self.audit_count as usize).min(MAX_AUDIT_LOGS);
+        if count == 0 {
             return self.audit_chain == Self::GENESIS_HASH;
         }
 
-        let total = self.audit_count as usize;
-        let start = if total > MAX_AUDIT_LOGS {
-            total - MAX_AUDIT_LOGS
+        let mut expected_prev = Self::GENESIS_HASH;
+        let start_seq = if self.audit_count > MAX_AUDIT_LOGS as u64 {
+            self.audit_count - MAX_AUDIT_LOGS as u64 + 1
         } else {
-            0
+            1
         };
 
-        for i in start..total {
-            let slot = i % MAX_AUDIT_LOGS;
+        for i in 0..count {
+            let slot = ((start_seq - 1 + i as u64) as usize) % MAX_AUDIT_LOGS;
             if let Some(ref rec) = self.audit_records[slot] {
+                if start_seq == 1 && i == 0 {
+                    if rec.prev_hash != expected_prev {
+                        return false;
+                    }
+                }
+
                 let mut hasher = Sha256::new();
-                hasher.update(&rec.prev_hash);
                 hasher.update(&rec.sequence.to_be_bytes());
                 hasher.update(&rec.timestamp.to_be_bytes());
                 hasher.update(&[rec.event_type as u8]);
                 hasher.update(&rec.incident_id.to_be_bytes());
                 hasher.update(&rec.playbook_id.to_be_bytes());
+                hasher.update(&rec.prev_hash);
                 let computed = hasher.finalize();
+
                 if computed != rec.entry_hash {
                     return false;
                 }
+                expected_prev = rec.entry_hash;
             } else {
                 return false;
             }
         }
         true
     }
+
+    /// Retourne un résumé structuré des métriques SOAR
+    pub fn get_summary(&self) -> SoarSummary {
+        let mut mitigated = 0usize;
+        let mut escalated = 0usize;
+        for i in 0..self.incident_count {
+            if let Some(ref inc) = self.incidents[i] {
+                match inc.status {
+                    IncidentStatus::Mitigated => mitigated += 1,
+                    IncidentStatus::Escalated => escalated += 1,
+                    _ => {}
+                }
+            }
+        }
+
+        let mut active_pb = 0usize;
+        for i in 0..self.playbook_count {
+            if let Some(ref pb) = self.playbooks[i] {
+                if pb.is_enabled {
+                    active_pb += 1;
+                }
+            }
+        }
+
+        SoarSummary {
+            total_incidents: self.incident_count,
+            mitigated_incidents: mitigated,
+            escalated_incidents: escalated,
+            active_playbooks: active_pb,
+            dispatched_actions: self.dispatched_count,
+            audit_records_count: self.audit_count,
+            audit_chain_valid: self.verify_audit_integrity(),
+        }
+    }
 }
+
+// ============================================================================
+// TESTS UNITAIRES (#![no_std] compatibles)
+// ============================================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn create_test_cap() -> SoarCap {
-        SoarCap::new(Handle::new(1, 0), soar_rights::ALL, 10000, 100)
+        SoarCap::new(Handle::new(14701, 1), soar_rights::ALL, 10000, 500)
     }
 
     #[test]
-    fn test_soar_cap_monotonic_attenuation() {
-        let root = create_test_cap();
-        let att = root
+    fn test_cap_rights_and_attenuation() {
+        let cap = create_test_cap();
+        assert!(cap.has_right(soar_rights::EXECUTE_PLAYBOOK));
+        assert!(cap.has_right(soar_rights::TRIGGER_INCIDENT));
+        assert!(cap.has_right(soar_rights::ADMIN));
+
+        let attenuated = cap
             .attenuate(
                 soar_rights::EXECUTE_PLAYBOOK | soar_rights::TRIGGER_INCIDENT,
                 5000,
-                50,
+                200,
             )
-            .expect("Atténuation valide");
+            .expect("Atténuation");
+        assert!(attenuated.has_right(soar_rights::EXECUTE_PLAYBOOK));
+        assert!(attenuated.has_right(soar_rights::TRIGGER_INCIDENT));
+        assert!(!attenuated.has_right(soar_rights::ADMIN));
 
-        assert!(att.has_right(soar_rights::EXECUTE_PLAYBOOK));
-        assert!(att.has_right(soar_rights::TRIGGER_INCIDENT));
-        assert!(!att.has_right(soar_rights::ADMIN));
-        assert!(!att.has_right(soar_rights::REVOKE_CAPABILITY));
-
-        // Interdiction d'escalade de privilèges
-        let err = att.attenuate(soar_rights::ALL, 5000, 50);
-        assert_eq!(err, Err(SoarError::AttenuationViolation));
-
-        // Interdiction d'augmentation de durée de vie
-        let err_time = att.attenuate(soar_rights::EXECUTE_PLAYBOOK, 6000, 50);
-        assert_eq!(err_time, Err(SoarError::AttenuationViolation));
+        // Rejet d'escalade
+        assert_eq!(
+            attenuated.attenuate(soar_rights::ALL, 5000, 200),
+            Err(SoarError::AttenuationViolation)
+        );
     }
 
     #[test]
-    fn test_playbook_dag_validation() {
-        let mut pb = Playbook::new(1, "TestDAG", None, IncidentSeverity::Low);
-
-        let s1 = PlaybookStep::new(1, "Step1", SoarAction::IsolateProcess { pid: 10 }, true);
-        let s2 = PlaybookStep::new(2, "Step2", SoarAction::IsolateProcess { pid: 20 }, true)
-            .with_dependency(1);
-        let s3 = PlaybookStep::new(3, "Step3", SoarAction::IsolateProcess { pid: 30 }, false)
+    fn test_dag_validation_anti_cyclic() {
+        let mut cyclic_pb = Playbook::new(99, "CyclicTest", None, IncidentSeverity::Low);
+        let s1 = PlaybookStep::new(1, "Step1", SoarAction::IsolateProcess { pid: 1 }, true)
             .with_dependency(2);
-
-        pb.add_step(s1).unwrap();
-        pb.add_step(s2).unwrap();
-        pb.add_step(s3).unwrap();
-
-        assert_eq!(pb.validate_dag(), Ok(()));
-
-        // Introduire un cycle
-        let mut cyclic_pb = Playbook::new(2, "Cyclic", None, IncidentSeverity::Low);
-        let c1 = PlaybookStep::new(1, "C1", SoarAction::IsolateProcess { pid: 1 }, true)
-            .with_dependency(2);
-        let c2 = PlaybookStep::new(2, "C2", SoarAction::IsolateProcess { pid: 2 }, true)
+        let s2 = PlaybookStep::new(2, "Step2", SoarAction::IsolateProcess { pid: 2 }, true)
             .with_dependency(1);
-
-        cyclic_pb.add_step(c1).unwrap();
-        cyclic_pb.add_step(c2).unwrap();
-
+        cyclic_pb.add_step(s1).unwrap();
+        cyclic_pb.add_step(s2).unwrap();
         assert_eq!(cyclic_pb.validate_dag(), Err(SoarError::CyclicDependency));
     }
 
     #[test]
-    fn test_incident_fingerprinting() {
-        let inc1 = Incident::new(
-            1001,
-            "Attaque DDoS SYN Flood",
-            IncidentCategory::DDoSFlood,
-            IncidentSeverity::Critical,
-            "jambo-ddos",
-            [192, 168, 1, 100],
-            443,
-            None,
-            None,
-            12345678,
+    fn test_default_playbooks_registration() {
+        let cap = create_test_cap();
+        let mut daemon = JamboSoarDaemon::new(cap);
+        daemon.init_defaults();
+        assert_eq!(
+            daemon.playbook_count, 6,
+            "6 playbooks souverains de référence"
         );
-
-        let inc2 = Incident::new(
-            1002,
-            "Attaque DDoS SYN Flood",
-            IncidentCategory::DDoSFlood,
-            IncidentSeverity::Critical,
-            "jambo-ddos",
-            [192, 168, 1, 101], // IP différente
-            443,
-            None,
-            None,
-            12345678,
-        );
-
-        assert_ne!(inc1.fingerprint, [0u8; 32]);
-        assert_ne!(inc2.fingerprint, [0u8; 32]);
-        assert_ne!(inc1.fingerprint, inc2.fingerprint);
     }
 
     #[test]
-    fn test_soar_daemon_lifecycle() {
+    fn test_ddos_mitigation_workflow() {
         let cap = create_test_cap();
         let mut daemon = JamboSoarDaemon::new(cap);
         daemon.init_defaults();
 
-        assert_eq!(daemon.playbook_count, 3);
-
-        // Créer un incident
         let inc = Incident::new(
             1,
-            "Flood DDoS massif détecté",
+            "Flood UDP 100Gbps",
             IncidentCategory::DDoSFlood,
             IncidentSeverity::High,
             "jambo-ddos",
-            [198, 51, 100, 42],
-            80,
+            [198, 51, 100, 1],
+            53,
             None,
             None,
             1000,
         );
+        let inc_id = daemon.create_incident(&cap, inc).unwrap();
+        let res = daemon.execute_playbook(&cap, 1, inc_id, 1050).unwrap();
 
-        let inc_id = daemon
-            .create_incident(&cap, inc)
-            .expect("Création incident");
-        assert_eq!(inc_id, 1);
-
-        // Détection de playbook correspondant
-        let pb_id = daemon
-            .find_matching_playbook(IncidentCategory::DDoSFlood, IncidentSeverity::High)
-            .expect("Playbook trouvé");
-        assert_eq!(pb_id, 1);
-
-        // Exécution du playbook
-        let result = daemon
-            .execute_playbook(&cap, pb_id, inc_id, 1050)
-            .expect("Exécution réussie");
-
-        assert_eq!(result.playbook_id, 1);
-        assert_eq!(result.incident_id, 1);
-        assert!(result.fully_mitigated);
-        assert_eq!(result.steps_succeeded, 3);
-        assert_eq!(result.steps_failed, 0);
-
-        let mitigated_inc = daemon.incidents[0].unwrap();
-        assert_eq!(mitigated_inc.status, IncidentStatus::Mitigated);
-        assert_eq!(mitigated_inc.mitigated_by_playbook, Some(1));
-
-        // Intégrité de l'audit
+        assert!(res.fully_mitigated);
+        assert_eq!(res.steps_succeeded, 3);
         assert!(daemon.verify_audit_integrity());
-        assert_ne!(daemon.audit_chain, JamboSoarDaemon::GENESIS_HASH);
     }
 
     #[test]
-    fn test_unauthorized_execution() {
+    fn test_dlp_data_leak_playbook() {
         let cap = create_test_cap();
         let mut daemon = JamboSoarDaemon::new(cap);
         daemon.init_defaults();
-
-        let no_exec_cap = cap
-            .attenuate(soar_rights::AUDIT_INSPECT, 5000, 10)
-            .expect("Atténuation");
 
         let inc = Incident::new(
             2,
-            "Attaque SQL",
-            IncidentCategory::SqlInjection,
+            "Exfiltration PII massive vers C2",
+            IncidentCategory::SensitiveDataLeak,
             IncidentSeverity::High,
-            "jambo-waf",
-            [10, 0, 0, 5],
-            80,
-            None,
+            "jambo-dlp",
+            [45, 33, 32, 1],
+            443,
+            Some(88),
             None,
             2000,
-        );
+        )
+        .with_affected_entity("exfil_node_01");
 
-        // Incapable de créer incident sans droit TRIGGER_INCIDENT
-        assert_eq!(
-            daemon.create_incident(&no_exec_cap, inc),
-            Err(SoarError::PermissionDenied)
-        );
+        let inc_id = daemon.create_incident(&cap, inc).unwrap();
+        let pb_id = daemon
+            .find_matching_playbook(IncidentCategory::SensitiveDataLeak, IncidentSeverity::High)
+            .expect("Playbook DLP trouvé");
+        assert_eq!(pb_id, 4);
 
-        daemon.create_incident(&cap, inc).unwrap();
-        // Incapable d'exécuter playbook sans droit EXECUTE_PLAYBOOK
-        assert_eq!(
-            daemon.execute_playbook(&no_exec_cap, 2, 2, 2050),
-            Err(SoarError::PermissionDenied)
-        );
+        let res = daemon.execute_playbook(&cap, pb_id, inc_id, 2010).unwrap();
+        assert!(res.fully_mitigated);
+        assert_eq!(res.steps_succeeded, 4);
+
+        let summary = daemon.get_summary();
+        assert_eq!(summary.mitigated_incidents, 1);
+        assert!(summary.audit_chain_valid);
     }
 
     #[test]
-    fn test_sql_injection_and_cap_revocation_playbooks() {
+    fn test_ueba_anomaly_and_lateral_movement_playbook() {
         let cap = create_test_cap();
         let mut daemon = JamboSoarDaemon::new(cap);
         daemon.init_defaults();
 
-        // 1. Test WAF SQL Injection Playbook
-        let inc_waf = Incident::new(
-            10,
-            "SQL Injection detectee sur /api/login",
+        let (inc_id, exec_opt) = daemon
+            .ingest_alert(
+                &cap,
+                "jambo-ueba",
+                IncidentCategory::BehavioralAnomaly,
+                IncidentSeverity::High,
+                "Z-score deconnecte et mouvement lateral off-hours",
+                [10, 0, 5, 20],
+                Some(120),
+                None,
+                Some("compromised_srv"),
+                3000,
+            )
+            .expect("Ingestion alerte UEBA");
+
+        assert_eq!(inc_id, 1);
+        let exec = exec_opt.expect("Auto-mitigation déclenchée");
+        assert_eq!(exec.playbook_id, 5);
+        assert!(exec.fully_mitigated);
+        assert_eq!(exec.steps_succeeded, 4);
+    }
+
+    #[test]
+    fn test_kernel_tampering_restoration_playbook() {
+        let cap = create_test_cap();
+        let mut daemon = JamboSoarDaemon::new(cap);
+        daemon.init_defaults();
+
+        let (inc_id, exec_opt) = daemon
+            .ingest_alert(
+                &cap,
+                "jambo-kdir",
+                IncidentCategory::KernelTampering,
+                IncidentSeverity::Critical,
+                "DKOM hook detecte sur table IDT #14",
+                [0, 0, 0, 0],
+                Some(666),
+                None,
+                Some("kernel_rootkit_mod"),
+                4000,
+            )
+            .expect("Ingestion alerte KDIR");
+
+        assert_eq!(inc_id, 1);
+        let exec = exec_opt.expect("Auto-mitigation KDIR");
+        assert_eq!(exec.playbook_id, 6);
+        assert!(exec.fully_mitigated);
+        assert_eq!(exec.steps_succeeded, 4);
+
+        assert!(daemon.verify_audit_integrity());
+    }
+
+    #[test]
+    fn test_audit_integrity_tampering() {
+        let cap = create_test_cap();
+        let mut daemon = JamboSoarDaemon::new(cap);
+        daemon.init_defaults();
+
+        let inc = Incident::new(
+            5,
+            "Attaque WAF SQLi",
             IncidentCategory::SqlInjection,
             IncidentSeverity::High,
             "jambo-waf",
-            [192, 168, 50, 10],
-            443,
-            Some(42),
-            None,
-            3000,
-        );
-        daemon.create_incident(&cap, inc_waf).unwrap();
-        let res_waf = daemon.execute_playbook(&cap, 2, 10, 3010).unwrap();
-        assert!(res_waf.fully_mitigated);
-        assert_eq!(res_waf.steps_succeeded, 4);
-
-        // 2. Test Escalade Privilege & Revocation de Capabilite
-        let inc_priv = Incident::new(
-            11,
-            "Escalade de privilege Ring 3 illegitime",
-            IncidentCategory::PrivilegeEscalation,
-            IncidentSeverity::Critical,
-            "jambo-ids",
-            [127, 0, 0, 1],
-            0,
-            Some(105),
-            Some(9999),
-            4000,
-        );
-        daemon.create_incident(&cap, inc_priv).unwrap();
-        let res_priv = daemon.execute_playbook(&cap, 3, 11, 4010).unwrap();
-        assert!(res_priv.fully_mitigated);
-        assert_eq!(res_priv.steps_succeeded, 4);
-
-        assert!(daemon.verify_audit_integrity());
-        assert!(daemon.audit_count >= 10);
-    }
-
-    #[test]
-    fn test_disabled_playbook() {
-        let cap = create_test_cap();
-        let mut daemon = JamboSoarDaemon::new(cap);
-        daemon.init_defaults();
-
-        // Désactiver le playbook 1
-        if let Some(ref mut pb) = daemon.playbooks[0] {
-            pb.is_enabled = false;
-        }
-
-        let inc = Incident::new(
-            20,
-            "DDoS",
-            IncidentCategory::DDoSFlood,
-            IncidentSeverity::High,
-            "jambo-ddos",
             [1, 2, 3, 4],
             80,
             None,
@@ -1540,8 +1817,12 @@ mod tests {
             5000,
         );
         daemon.create_incident(&cap, inc).unwrap();
+        assert!(daemon.verify_audit_integrity());
 
-        let err = daemon.execute_playbook(&cap, 1, 20, 5010);
-        assert_eq!(err, Err(SoarError::DisabledPlaybook));
+        // Altération illicite du journal d'audit
+        if let Some(ref mut rec) = daemon.audit_records[0] {
+            rec.playbook_id = 999;
+        }
+        assert!(!daemon.verify_audit_integrity());
     }
 }

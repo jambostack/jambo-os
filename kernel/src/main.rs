@@ -1233,12 +1233,7 @@ pub extern "C" fn _start() -> ! {
         "Échec du test de la mitigation anti-DDoS L3/L4/L7 jambo-ddos"
     );
 
-    // 14septiesdeciesquadragies. Validation de l'Orchestration SOAR & Réponse aux Incidents (Phase 117 - v0.2.115)
-    let soar_success = sched::execute_soar_daemon_test();
-    assert!(
-        soar_success,
-        "Échec du test de l'orchestration SOAR & réponse aux incidents jambo-soar"
-    );
+    // Note: L'Orchestration SOAR & Réponse aux Incidents est validée en Phase 147 (v0.3.14).
 
     // 14duodevigintiesquadragies. Validation de l'Investigation Numérique & Forensique (Phase 118 - v0.2.116)
     let forensics_success = sched::execute_forensics_daemon_test();
@@ -1441,6 +1436,13 @@ pub extern "C" fn _start() -> ! {
     assert!(
         ueba_success,
         "Échec du test d'analyse comportementale des utilisateurs et entités jambo-ueba"
+    );
+
+    // 32viciesquadragies. Validation Orchestration, Automatisation et Réponse aux Incidents Souveraine SOAR (Phase 147 - v0.3.14)
+    let soar_success = sched::soar_test::execute_soar_daemon_test();
+    assert!(
+        soar_success,
+        "Échec du test de l'orchestration SOAR & réponse aux incidents souveraine jambo-soar"
     );
 
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
@@ -1731,14 +1733,17 @@ pub extern "C" fn _start() -> ! {
     kprintln!(
         "\x1b[1;32m[PASS] Phase 146 User and Entity Behavior Analytics Resilience (jambo-ueba) Complete\x1b[0m"
     );
+    kprintln!(
+        "\x1b[1;32m[PASS] Phase 147 Security Orchestration, Automation & Response Resilience (jambo-soar) Complete\x1b[0m"
+    );
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.3.13 (User and Entity Behavior Analytics Resilience jambo-ueba)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.3.14 (Security Orchestration, Automation & Response Resilience jambo-soar)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.3.13 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.3.14 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
