@@ -1,6 +1,6 @@
 //! Résilience & Défense Matérielle et Firmware (FDR - Firmware & Hardware Defense Resilience)
 //!
-//! Phase 142 — Jalon v0.3.9
+//! Phase 172 — Jalon v0.3.39
 //!
 //! Fournit un sous-système souverain de cyber-résilience matérielle et de contrôle d'intégrité firmware en `#![no_std]` :
 //! 1. Surveillance et attestation continue du firmware UEFI/BIOS SPI Flash et partitions Dual-BIOS.
@@ -10,8 +10,10 @@
 //! 5. Détection proactive de bootkits Ring -2/-3 (SMM, implants SPI Flash, Option ROMs altérées).
 //! 6. Confinement et isolation matérielle instantanée O(1) des périphériques PCI suspects.
 //! 7. Auto-restauration des firmwares altérés à partir de l'image de référence (golden snapshot / Dual-BIOS).
-//! 8. Contrôle d'accès capabilaire (`FdrCap`) avec atténuation monotone stricte.
-//! 9. Registre d'audit SHA-256 inaltérable scellé par chaînage cryptographique.
+//! 8. Playbooks de remédiation proactive globale O(1) et assainissement des firmwares et périphériques suspects.
+//! 9. Rapports de cyber-résilience matérielle scellés SHA-256 (`FdrPostureReport`, `FdrProbeReport`, `FdrRemediationReport`).
+//! 10. Contrôle d'accès capabilaire (`FdrCap`) avec atténuation monotone stricte sans autorité ambiante.
+//! 11. Registre d'audit SHA-256 inaltérable scellé par chaînage cryptographique.
 
 #![no_std]
 
@@ -193,7 +195,9 @@ pub mod fdr_rights {
     pub const CONFIGURE_POLICY: u32 = 1 << 6;
     pub const QUERY_AUDIT: u32 = 1 << 7;
     pub const ADMIN: u32 = 1 << 8;
-    pub const ALL: u32 = 0x1FF;
+    pub const GENERATE_REPORT: u32 = 1 << 9;
+    pub const REMEDIATE: u32 = 1 << 10;
+    pub const ALL: u32 = 0x7FF;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -209,6 +213,8 @@ pub enum FdrError {
     DeviceAlreadyIsolated,
     InvalidParameter,
     MeasurementMismatch,
+    ThreatNotFound,
+    ReportGenerationFailed,
 }
 
 /// Capabilité de contrôle d'accès avec atténuation monotone stricte pour le moteur FDR
@@ -371,6 +377,17 @@ pub enum ThreatSeverity {
     Critical,
 }
 
+impl ThreatSeverity {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ThreatSeverity::Low => "FAIBLE",
+            ThreatSeverity::Medium => "MOYENNE",
+            ThreatSeverity::High => "ÉLEVÉE",
+            ThreatSeverity::Critical => "CRITIQUE",
+        }
+    }
+}
+
 /// Sonde d'intégrité firmware et table système
 #[derive(Debug, Clone, Copy)]
 pub struct FirmwareProbe {
@@ -451,9 +468,134 @@ pub struct FdrSummary {
     pub isolated_devices_count: usize,
     pub threats_detected: usize,
     pub threats_remediated: usize,
+    pub global_resilience_score: u8,
     pub ledger_entries: usize,
     pub ledger_valid: bool,
     pub dice_attested: bool,
+}
+
+/// Rapport scellé de posture globale de cyber-résilience matérielle et firmware (SHA-256)
+#[derive(Debug, Clone, Copy)]
+pub struct FdrPostureReport {
+    pub report_id: u32,
+    pub timestamp: u64,
+    pub probes_count: usize,
+    pub intact_count: usize,
+    pub tampered_count: usize,
+    pub restored_count: usize,
+    pub pcr_banks_measured: usize,
+    pub devices_count: usize,
+    pub isolated_devices_count: usize,
+    pub threats_detected: usize,
+    pub remediated_threats: usize,
+    pub global_resilience_score: u8,
+    pub ledger_entries: usize,
+    pub ledger_valid: bool,
+    pub dice_attested: bool,
+    pub seal_hash: [u8; 32],
+}
+
+impl FdrPostureReport {
+    pub fn compute_seal(&self) -> [u8; 32] {
+        let mut hasher = Sha256::new();
+        hasher.update(&self.report_id.to_be_bytes());
+        hasher.update(&self.timestamp.to_be_bytes());
+        hasher.update(&(self.probes_count as u64).to_be_bytes());
+        hasher.update(&(self.intact_count as u64).to_be_bytes());
+        hasher.update(&(self.tampered_count as u64).to_be_bytes());
+        hasher.update(&(self.restored_count as u64).to_be_bytes());
+        hasher.update(&(self.pcr_banks_measured as u64).to_be_bytes());
+        hasher.update(&(self.devices_count as u64).to_be_bytes());
+        hasher.update(&(self.isolated_devices_count as u64).to_be_bytes());
+        hasher.update(&(self.threats_detected as u64).to_be_bytes());
+        hasher.update(&(self.remediated_threats as u64).to_be_bytes());
+        hasher.update(&[self.global_resilience_score]);
+        hasher.update(&(self.ledger_entries as u64).to_be_bytes());
+        hasher.update(&[if self.ledger_valid { 1u8 } else { 0u8 }]);
+        hasher.update(&[if self.dice_attested { 1u8 } else { 0u8 }]);
+        hasher.finalize()
+    }
+
+    pub fn verify_seal(&self) -> bool {
+        self.seal_hash == self.compute_seal()
+    }
+}
+
+/// Rapport individuel d'intégrité sur une sonde firmware spécifique scellé SHA-256
+#[derive(Debug, Clone, Copy)]
+pub struct FdrProbeReport {
+    pub report_id: u32,
+    pub timestamp: u64,
+    pub probe_id: u32,
+    pub name: [u8; 32],
+    pub name_len: usize,
+    pub fw_type: FirmwareType,
+    pub base_address: u64,
+    pub size_bytes: usize,
+    pub status: FirmwareIntegrityStatus,
+    pub tamper_count: u32,
+    pub last_check_timestamp: u64,
+    pub golden_hash: [u8; 32],
+    pub current_hash: [u8; 32],
+    pub seal_hash: [u8; 32],
+}
+
+impl FdrProbeReport {
+    pub fn name_str(&self) -> &str {
+        core::str::from_utf8(&self.name[..self.name_len]).unwrap_or("<invalide>")
+    }
+
+    pub fn compute_seal(&self) -> [u8; 32] {
+        let mut hasher = Sha256::new();
+        hasher.update(&self.report_id.to_be_bytes());
+        hasher.update(&self.timestamp.to_be_bytes());
+        hasher.update(&self.probe_id.to_be_bytes());
+        hasher.update(&self.name[..self.name_len]);
+        hasher.update(&(self.fw_type as u32).to_be_bytes());
+        hasher.update(&self.base_address.to_be_bytes());
+        hasher.update(&(self.size_bytes as u64).to_be_bytes());
+        hasher.update(&(self.status as u32).to_be_bytes());
+        hasher.update(&self.tamper_count.to_be_bytes());
+        hasher.update(&self.last_check_timestamp.to_be_bytes());
+        hasher.update(&self.golden_hash);
+        hasher.update(&self.current_hash);
+        hasher.finalize()
+    }
+
+    pub fn verify_seal(&self) -> bool {
+        self.seal_hash == self.compute_seal()
+    }
+}
+
+/// Rapport scellé de remédiation et d'auto-restauration O(1) Dual-BIOS SHA-256
+#[derive(Debug, Clone, Copy)]
+pub struct FdrRemediationReport {
+    pub report_id: u32,
+    pub timestamp: u64,
+    pub restored_probes_count: usize,
+    pub isolated_devices_count: usize,
+    pub remediated_threats_count: usize,
+    pub resilience_score_before: u8,
+    pub resilience_score_after: u8,
+    pub seal_hash: [u8; 32],
+}
+
+impl FdrRemediationReport {
+    pub fn compute_seal(&self) -> [u8; 32] {
+        let mut hasher = Sha256::new();
+        hasher.update(&self.report_id.to_be_bytes());
+        hasher.update(&self.timestamp.to_be_bytes());
+        hasher.update(&(self.restored_probes_count as u64).to_be_bytes());
+        hasher.update(&(self.isolated_devices_count as u64).to_be_bytes());
+        hasher.update(&(self.remediated_threats_count as u64).to_be_bytes());
+        hasher.update(&[self.resilience_score_before]);
+        hasher.update(&[self.resilience_score_after]);
+        hasher.finalize()
+    }
+
+    pub fn verify_seal(&self) -> bool {
+        self.seal_hash == self.compute_seal()
+    }
 }
 
 // ============================================================================
@@ -475,6 +617,7 @@ pub struct JamboFdrDaemon {
     pub next_probe_id: u32,
     pub next_device_id: u32,
     pub next_threat_id: u32,
+    pub next_report_id: u32,
     pub dice_cdi: [u8; 32],
     pub dice_verified: bool,
 }
@@ -499,6 +642,7 @@ impl JamboFdrDaemon {
             next_probe_id: 1,
             next_device_id: 1,
             next_threat_id: 1,
+            next_report_id: 1,
             dice_cdi,
             dice_verified: true,
         }
@@ -1098,10 +1242,327 @@ impl JamboFdrDaemon {
             isolated_devices_count,
             threats_detected: self.threat_count,
             threats_remediated,
+            global_resilience_score: self.compute_resilience_score(),
             ledger_entries: self.audit_count,
             ledger_valid: self.verify_ledger_integrity(),
             dice_attested: self.dice_verified,
         }
+    }
+
+    /// Calcule l'indice déterministe de cyber-résilience matérielle et firmware (0..100)
+    pub fn compute_resilience_score(&self) -> u8 {
+        let mut score: i32 = 100;
+
+        for probe in self.probes.iter().flatten() {
+            if probe.status == FirmwareIntegrityStatus::Tampered {
+                score -= 25;
+            }
+        }
+
+        for pcr in self.pcrs.iter().flatten() {
+            if !pcr.attestation_verified {
+                score -= 5;
+            }
+        }
+
+        for dev in self.devices.iter().flatten() {
+            if dev.status == DeviceStatus::Untrusted {
+                score -= 15;
+            }
+        }
+
+        for threat in self.threats.iter().flatten() {
+            if !threat.remediated {
+                match threat.severity {
+                    ThreatSeverity::Critical => score -= 20,
+                    ThreatSeverity::High => score -= 15,
+                    ThreatSeverity::Medium => score -= 10,
+                    ThreatSeverity::Low => score -= 5,
+                }
+            }
+        }
+
+        if !self.dice_verified {
+            score -= 25;
+        }
+
+        if !self.verify_ledger_integrity() {
+            score -= 30;
+        }
+
+        if score < 0 {
+            0
+        } else if score > 100 {
+            100
+        } else {
+            score as u8
+        }
+    }
+
+    /// Remédie chirurgicalement à une menace bootkit identifiée
+    pub fn remediate_threat(&mut self, threat_id: u32, timestamp: u64) -> Result<(), FdrError> {
+        self.cap.consume()?;
+        if !self.cap.has_right(fdr_rights::ADMIN) && !self.cap.has_right(fdr_rights::REMEDIATE) {
+            return Err(FdrError::PermissionDenied);
+        }
+
+        let mut target_probe_id = None;
+        let mut found = false;
+
+        for t_opt in self.threats.iter_mut() {
+            if let Some(ref mut t) = t_opt {
+                if t.threat_id == threat_id {
+                    found = true;
+                    if t.remediated {
+                        return Ok(());
+                    }
+                    target_probe_id = Some(t.probe_id);
+                    t.remediated = true;
+                    t.auto_restored = true;
+                    break;
+                }
+            }
+        }
+
+        if !found {
+            return Err(FdrError::ThreatNotFound);
+        }
+
+        if let Some(pid) = target_probe_id {
+            for probe_opt in self.probes.iter_mut() {
+                if let Some(ref mut p) = probe_opt {
+                    if p.probe_id == pid {
+                        p.status = FirmwareIntegrityStatus::Restored;
+                        p.current_hash = p.golden_hash;
+                        p.last_check_timestamp = timestamp;
+                        break;
+                    }
+                }
+            }
+        }
+
+        self.record_audit(
+            "THREAT_REMEDIATED",
+            threat_id,
+            "Menace bootkit remédiée et firmware restauré via Dual-BIOS",
+            timestamp,
+        );
+
+        Ok(())
+    }
+
+    /// Playbook souverain de remédiation proactive et d'auto-restauration O(1) de toutes les menaces firmware
+    pub fn remediate_all_threats(
+        &mut self,
+        timestamp: u64,
+    ) -> Result<FdrRemediationReport, FdrError> {
+        self.cap.consume()?;
+        if !self.cap.has_right(fdr_rights::ADMIN) && !self.cap.has_right(fdr_rights::REMEDIATE) {
+            return Err(FdrError::PermissionDenied);
+        }
+
+        let score_before = self.compute_resilience_score();
+        let mut restored_count = 0;
+        let mut isolated_count = 0;
+        let mut remediated_threats = 0;
+
+        // 1. Restauration O(1) des sondes firmware altérées via Dual-BIOS
+        for probe_opt in self.probes.iter_mut() {
+            if let Some(ref mut probe) = probe_opt {
+                if probe.status == FirmwareIntegrityStatus::Tampered {
+                    probe.status = FirmwareIntegrityStatus::Restored;
+                    probe.current_hash = probe.golden_hash;
+                    probe.last_check_timestamp = timestamp;
+                    restored_count += 1;
+                }
+            }
+        }
+
+        // 2. Confinement O(1) des périphériques suspects / non approuvés
+        for dev_opt in self.devices.iter_mut() {
+            if let Some(ref mut dev) = dev_opt {
+                if dev.status == DeviceStatus::Untrusted {
+                    dev.status = DeviceStatus::Isolated;
+                    dev.isolated_timestamp = timestamp;
+                    isolated_count += 1;
+                }
+            }
+        }
+
+        // 3. Remédiation globale de toutes les menaces bootkit
+        for threat_opt in self.threats.iter_mut() {
+            if let Some(ref mut threat) = threat_opt {
+                if !threat.remediated {
+                    threat.remediated = true;
+                    threat.auto_restored = true;
+                    remediated_threats += 1;
+                }
+            }
+        }
+
+        let score_after = self.compute_resilience_score();
+        let report_id = self.next_report_id;
+        self.next_report_id += 1;
+
+        let mut report = FdrRemediationReport {
+            report_id,
+            timestamp,
+            restored_probes_count: restored_count,
+            isolated_devices_count: isolated_count,
+            remediated_threats_count: remediated_threats,
+            resilience_score_before: score_before,
+            resilience_score_after: score_after,
+            seal_hash: [0u8; 32],
+        };
+        report.seal_hash = report.compute_seal();
+
+        self.record_audit(
+            "REMEDIATE_ALL",
+            report_id,
+            "Remédiation globale FDR O(1) exécutée via Dual-BIOS",
+            timestamp,
+        );
+
+        Ok(report)
+    }
+
+    /// Génère un rapport scellé SHA-256 de posture globale FDR
+    pub fn generate_posture_report(
+        &mut self,
+        timestamp: u64,
+    ) -> Result<FdrPostureReport, FdrError> {
+        self.cap.consume()?;
+        if !self.cap.has_right(fdr_rights::ADMIN)
+            && !self.cap.has_right(fdr_rights::GENERATE_REPORT)
+        {
+            return Err(FdrError::PermissionDenied);
+        }
+
+        let sum = self.get_summary();
+        let report_id = self.next_report_id;
+        self.next_report_id += 1;
+
+        let mut rep = FdrPostureReport {
+            report_id,
+            timestamp,
+            probes_count: sum.probes_count,
+            intact_count: sum.intact_count,
+            tampered_count: sum.tampered_count,
+            restored_count: sum.restored_count,
+            pcr_banks_measured: sum.pcr_banks_measured,
+            devices_count: sum.devices_count,
+            isolated_devices_count: sum.isolated_devices_count,
+            threats_detected: sum.threats_detected,
+            remediated_threats: sum.threats_remediated,
+            global_resilience_score: sum.global_resilience_score,
+            ledger_entries: sum.ledger_entries,
+            ledger_valid: sum.ledger_valid,
+            dice_attested: sum.dice_attested,
+            seal_hash: [0u8; 32],
+        };
+        rep.seal_hash = rep.compute_seal();
+
+        self.record_audit(
+            "REPORT_POSTURE",
+            report_id,
+            "Rapport de posture FDR scellé SHA-256 émis",
+            timestamp,
+        );
+
+        Ok(rep)
+    }
+
+    /// Génère un rapport individuel scellé SHA-256 d'une sonde firmware
+    pub fn generate_probe_report(
+        &mut self,
+        probe_id: u32,
+        timestamp: u64,
+    ) -> Result<FdrProbeReport, FdrError> {
+        self.cap.consume()?;
+        if !self.cap.has_right(fdr_rights::ADMIN)
+            && !self.cap.has_right(fdr_rights::GENERATE_REPORT)
+        {
+            return Err(FdrError::PermissionDenied);
+        }
+
+        let mut probe_copy = None;
+        for p in self.probes.iter().flatten() {
+            if p.probe_id == probe_id {
+                probe_copy = Some(*p);
+                break;
+            }
+        }
+
+        let p = probe_copy.ok_or(FdrError::ProbeNotFound)?;
+        let report_id = self.next_report_id;
+        self.next_report_id += 1;
+
+        let mut rep = FdrProbeReport {
+            report_id,
+            timestamp,
+            probe_id: p.probe_id,
+            name: p.name,
+            name_len: p.name_len,
+            fw_type: p.fw_type,
+            base_address: p.base_address,
+            size_bytes: p.size_bytes,
+            status: p.status,
+            tamper_count: p.tamper_count,
+            last_check_timestamp: p.last_check_timestamp,
+            golden_hash: p.golden_hash,
+            current_hash: p.current_hash,
+            seal_hash: [0u8; 32],
+        };
+        rep.seal_hash = rep.compute_seal();
+
+        self.record_audit(
+            "REPORT_PROBE",
+            probe_id,
+            "Rapport individuel de sonde FDR scellé SHA-256 émis",
+            timestamp,
+        );
+
+        Ok(rep)
+    }
+
+    /// Génère un rapport scellé SHA-256 de remédiation FDR
+    pub fn generate_remediation_report(
+        &mut self,
+        timestamp: u64,
+    ) -> Result<FdrRemediationReport, FdrError> {
+        self.cap.consume()?;
+        if !self.cap.has_right(fdr_rights::ADMIN)
+            && !self.cap.has_right(fdr_rights::GENERATE_REPORT)
+        {
+            return Err(FdrError::PermissionDenied);
+        }
+
+        let sum = self.get_summary();
+        let report_id = self.next_report_id;
+        self.next_report_id += 1;
+
+        let score = sum.global_resilience_score;
+
+        let mut rep = FdrRemediationReport {
+            report_id,
+            timestamp,
+            restored_probes_count: sum.restored_count,
+            isolated_devices_count: sum.isolated_devices_count,
+            remediated_threats_count: sum.threats_remediated,
+            resilience_score_before: score,
+            resilience_score_after: score,
+            seal_hash: [0u8; 32],
+        };
+        rep.seal_hash = rep.compute_seal();
+
+        self.record_audit(
+            "REPORT_REMEDIATION",
+            report_id,
+            "Rapport de remédiation FDR scellé SHA-256 émis",
+            timestamp,
+        );
+
+        Ok(rep)
     }
 }
 
@@ -1295,5 +1756,108 @@ mod tests {
         // Altération malicieuse d'un bloc d'audit
         daemon.audit_log[0].as_mut().unwrap().detail[0] ^= 0xFF;
         assert!(!daemon.verify_ledger_integrity());
+    }
+
+    #[test]
+    fn test_global_resilience_score() {
+        let cap = FdrCap::new(Handle::new(142, 1), fdr_rights::ALL, 10000, 500);
+        let mut daemon = JamboFdrDaemon::new(cap);
+        daemon.init_defaults();
+
+        assert_eq!(daemon.compute_resilience_score(), 100);
+
+        // Altération d'une région firmware
+        let tampered = b"CORRUPTED_PRIMARY_UEFI_FIRMWARE_PAYLOAD";
+        let _ = daemon.verify_probe_integrity(1, tampered, 1735001000);
+
+        let score_tampered = daemon.compute_resilience_score();
+        assert!(score_tampered < 100);
+
+        // Remédiation par playbook global
+        let rep = daemon
+            .remediate_all_threats(1735001100)
+            .expect("remediate_all_threats");
+        assert_eq!(rep.restored_probes_count, 1);
+        assert_eq!(rep.resilience_score_after, 100);
+        assert_eq!(daemon.compute_resilience_score(), 100);
+    }
+
+    #[test]
+    fn test_fdr_posture_report_sealing() {
+        let cap = FdrCap::new(Handle::new(142, 1), fdr_rights::ALL, 10000, 500);
+        let mut daemon = JamboFdrDaemon::new(cap);
+        daemon.init_defaults();
+
+        let report = daemon
+            .generate_posture_report(1735001200)
+            .expect("posture report");
+        assert!(report.verify_seal());
+        assert_eq!(report.global_resilience_score, 100);
+        assert_eq!(report.probes_count, 4);
+
+        // Altération du rapport
+        let mut tampered = report;
+        tampered.global_resilience_score = 50;
+        assert!(!tampered.verify_seal());
+    }
+
+    #[test]
+    fn test_fdr_probe_report_sealing() {
+        let cap = FdrCap::new(Handle::new(142, 1), fdr_rights::ALL, 10000, 500);
+        let mut daemon = JamboFdrDaemon::new(cap);
+        daemon.init_defaults();
+
+        let rep = daemon
+            .generate_probe_report(1, 1735001300)
+            .expect("probe report");
+        assert!(rep.verify_seal());
+        assert_eq!(rep.probe_id, 1);
+        assert_eq!(rep.name_str(), "uefi-primary");
+
+        let mut tampered = rep;
+        tampered.tamper_count += 1;
+        assert!(!tampered.verify_seal());
+    }
+
+    #[test]
+    fn test_fdr_remediation_report_sealing() {
+        let cap = FdrCap::new(Handle::new(142, 1), fdr_rights::ALL, 10000, 500);
+        let mut daemon = JamboFdrDaemon::new(cap);
+        daemon.init_defaults();
+
+        // Tamper UEFI probe
+        let _ = daemon.verify_probe_integrity(1, b"COMPROMISED_SPI", 1735001400);
+
+        let rem_rep = daemon
+            .remediate_all_threats(1735001500)
+            .expect("remediation report");
+        assert!(rem_rep.verify_seal());
+        assert_eq!(rem_rep.restored_probes_count, 1);
+        assert_eq!(rem_rep.resilience_score_after, 100);
+
+        let mut tampered = rem_rep;
+        tampered.resilience_score_after = 42;
+        assert!(!tampered.verify_seal());
+    }
+
+    #[test]
+    fn test_remediate_individual_threat() {
+        let cap = FdrCap::new(Handle::new(142, 1), fdr_rights::ALL, 10000, 500);
+        let mut daemon = JamboFdrDaemon::new(cap);
+        daemon.init_defaults();
+
+        let _ = daemon.verify_probe_integrity(2, b"TAMPERED_DUAL_BIOS", 1735001600);
+        assert_eq!(daemon.threat_count, 1);
+        let tid = daemon.threats[0].unwrap().threat_id;
+
+        daemon
+            .remediate_threat(tid, 1735001700)
+            .expect("remediate_threat");
+        assert!(daemon.threats[0].unwrap().remediated);
+        assert_eq!(
+            daemon.probes[1].unwrap().status,
+            FirmwareIntegrityStatus::Restored
+        );
+        assert_eq!(daemon.compute_resilience_score(), 100);
     }
 }

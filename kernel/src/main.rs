@@ -1343,7 +1343,7 @@ pub extern "C" fn _start() -> ! {
         "Échec du test de cyber-résilience et intégrité noyau/pilotes jambo-kdir"
     );
 
-    // 27viciesquadragies. Validation Résilience & Défense Matérielle / Firmware (Phase 142 - v0.3.9)
+    // 27viciesquadragies. Validation Résilience & Défense Matérielle / Firmware (Phase 172 - v0.3.39)
     let fdr_success = sched::fdr_test::execute_fdr_daemon_test();
     assert!(
         fdr_success,
@@ -1746,7 +1746,7 @@ pub extern "C" fn _start() -> ! {
     kprintln!("\x1b[1;32m[PASS] Phase 139 Third-Party Risk Management & Supplier Governance (jambo-tprm) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 140 Dynamic Application Security & RASP (jambo-appsec) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 171 Kernel & Driver Integrity Resilience (jambo-kdir) Complete\x1b[0m");
-    kprintln!("\x1b[1;32m[PASS] Phase 142 Firmware & Hardware Defense Resilience (jambo-fdr) Complete\x1b[0m");
+    kprintln!("\x1b[1;32m[PASS] Phase 172 Firmware & Hardware Defense Resilience (jambo-fdr) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 143 Network Detection & Sovereign Microsegmentation Resilience (jambo-ndr) Complete\x1b[0m");
     kprintln!(
         "\x1b[1;32m[PASS] Phase 144 Content Disarm and Reconstruction (jambo-cdr) Complete\x1b[0m"
@@ -1828,9 +1828,9 @@ pub extern "C" fn _start() -> ! {
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.3.38 (Sovereign KDIR Kernel & Driver Integrity Resilience, Rootkit Detection & O(1) Auto-Restoration jambo-kdir)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.3.39 (Sovereign FDR Firmware & Hardware Defense Resilience, TPM 2.0 / Dual-BIOS & O(1) Confinement jambo-fdr)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.3.37 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.3.38 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );

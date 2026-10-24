@@ -1,5 +1,5 @@
 //! Module de validation formelle de la Résilience & Défense Matérielle/Firmware (`jambo-fdr`)
-//! Phase 142 — Jalon v0.3.9
+//! Phase 172 — Jalon v0.3.39
 #![allow(unused_imports, dead_code)]
 
 extern crate alloc;
@@ -7,14 +7,15 @@ extern crate alloc;
 use crate::kprintln;
 use jambo_abi::Handle;
 use jambo_fdr::{
-    fdr_rights, BootkitThreatType, DeviceStatus, FdrCap, FdrError, FdrSummary,
-    FirmwareIntegrityStatus, FirmwareProbe, FirmwareType, JamboFdrDaemon, Sha256, ThreatSeverity,
+    fdr_rights, BootkitThreatType, DeviceStatus, FdrCap, FdrError, FdrPostureReport,
+    FdrProbeReport, FdrRemediationReport, FdrSummary, FirmwareIntegrityStatus, FirmwareProbe,
+    FirmwareType, JamboFdrDaemon, Sha256, ThreatSeverity,
 };
 
-/// Exécute la suite complète de validation formelle du moteur FDR souverain (Phase 142)
+/// Exécute la suite complète de validation formelle du moteur FDR souverain (Phase 172)
 pub fn execute_fdr_daemon_test() -> bool {
     kprintln!(
-        "[FDR/TEST] Démarrage de la validation formelle Résilience & Défense Matérielle/Firmware (Phase 142)..."
+        "[FDR/TEST] Démarrage de la validation formelle Résilience & Défense Matérielle/Firmware (Phase 172)..."
     );
 
     // 1. Contrôle d'accès capabilaire (FdrCap) et atténuation monotone
@@ -28,20 +29,24 @@ pub fn execute_fdr_daemon_test() -> bool {
     assert!(admin_cap.has_right(fdr_rights::CONFIGURE_POLICY));
     assert!(admin_cap.has_right(fdr_rights::QUERY_AUDIT));
     assert!(admin_cap.has_right(fdr_rights::ADMIN));
+    assert!(admin_cap.has_right(fdr_rights::GENERATE_REPORT));
+    assert!(admin_cap.has_right(fdr_rights::REMEDIATE));
 
     // Atténuation monotone
     let monitor_cap = admin_cap
         .attenuate(
-            fdr_rights::VERIFY_FIRMWARE | fdr_rights::QUERY_AUDIT,
+            fdr_rights::VERIFY_FIRMWARE | fdr_rights::QUERY_AUDIT | fdr_rights::GENERATE_REPORT,
             5000,
             250,
         )
         .expect("Atténuation monotone FdrCap");
     assert!(monitor_cap.has_right(fdr_rights::VERIFY_FIRMWARE));
     assert!(monitor_cap.has_right(fdr_rights::QUERY_AUDIT));
+    assert!(monitor_cap.has_right(fdr_rights::GENERATE_REPORT));
     assert!(!monitor_cap.has_right(fdr_rights::ADMIN));
     assert!(!monitor_cap.has_right(fdr_rights::RESTORE_FIRMWARE));
     assert!(!monitor_cap.has_right(fdr_rights::ISOLATE_DEVICE));
+    assert!(!monitor_cap.has_right(fdr_rights::REMEDIATE));
     assert_eq!(monitor_cap.max_lifetime, 5000);
     assert_eq!(monitor_cap.invocations_left, 250);
 
@@ -66,6 +71,7 @@ pub fn execute_fdr_daemon_test() -> bool {
     assert_eq!(summary0.devices_count, 3);
     assert_eq!(summary0.isolated_devices_count, 0);
     assert_eq!(summary0.pcr_banks_measured, 8);
+    assert_eq!(summary0.global_resilience_score, 100);
     assert!(summary0.dice_attested);
     assert!(summary0.ledger_valid);
 
@@ -115,7 +121,15 @@ pub fn execute_fdr_daemon_test() -> bool {
         ThreatSeverity::Critical
     );
 
-    // 6. Auto-restauration UEFI depuis le snapshot de référence Dual-BIOS
+    // 6. Rapport individuel de sonde scellé SHA-256
+    let probe_rep = fdr
+        .generate_probe_report(uefi_probe_id, 1735001250)
+        .expect("Génération rapport de sonde");
+    assert!(probe_rep.verify_seal());
+    assert_eq!(probe_rep.probe_id, uefi_probe_id);
+    assert_eq!(probe_rep.status, FirmwareIntegrityStatus::Tampered);
+
+    // 7. Auto-restauration UEFI depuis le snapshot de référence Dual-BIOS
     let mut restored_uefi = [0u8; 128];
     let bytes_restored = fdr
         .auto_restore_firmware(uefi_probe_id, &mut restored_uefi, 1735001300)
@@ -133,7 +147,7 @@ pub fn execute_fdr_daemon_test() -> bool {
     assert_eq!(summary2.threats_remediated, 1);
     assert!(fdr.threats[0].as_ref().unwrap().auto_restored);
 
-    // 7. Extension PCR TPM 2.0 et vérification du quote composite
+    // 8. Extension PCR TPM 2.0 et vérification du quote composite
     let kernel_measurement = b"JAMBO_KERNEL_IMAGE_MEASUREMENT_SHA256_v0.3.9";
     let new_pcr4 = fdr
         .extend_pcr(
@@ -151,7 +165,7 @@ pub fn execute_fdr_daemon_test() -> bool {
     let expected_quote = quote_hasher.finalize();
     assert!(fdr.verify_tpm_quote((1 << 0) | (1 << 4), &expected_quote));
 
-    // 8. Enregistrement d'un périphérique non conforme et confinement matériel instantané O(1)
+    // 9. Enregistrement d'un périphérique non conforme et confinement matériel instantané O(1)
     let rogue_rom_sig = Sha256::digest(b"ROGUE_PCI_EXPRESS_OPTION_ROM_IMPLANT");
     let rogue_dev_id = fdr
         .register_device("compromised-nic-rom", 0x000400, rogue_rom_sig)
@@ -177,19 +191,47 @@ pub fn execute_fdr_daemon_test() -> bool {
         Err(FdrError::DeviceAlreadyIsolated)
     );
 
-    // 9. Validation du DICE Compound Device Identifier (RoT)
+    // 10. Altération table ACPI, rapport de posture scellé et Playbook O(1) de remédiation globale
+    let acpi_probe_id = 3;
+    let acpi_tampered = b"JAMBO_POISONED_ACPI_RSDP_ROOTKIT_IMPLANT";
+    let _ = fdr.verify_probe_integrity(acpi_probe_id, acpi_tampered, 1735001650);
+    assert_eq!(fdr.get_summary().tampered_count, 1);
+    assert!(fdr.compute_resilience_score() < 100);
+
+    let posture_rep = fdr
+        .generate_posture_report(1735001700)
+        .expect("Rapport de posture FDR");
+    assert!(posture_rep.verify_seal());
+    assert_eq!(posture_rep.tampered_count, 1);
+
+    // Playbook O(1) bulk auto-restauration Dual-BIOS
+    let rem_rep = fdr
+        .remediate_all_threats(1735001800)
+        .expect("Playbook remédiation globale FDR");
+    assert!(rem_rep.verify_seal());
+    assert_eq!(rem_rep.restored_probes_count, 1);
+    assert_eq!(rem_rep.resilience_score_after, 100);
+    assert_eq!(fdr.compute_resilience_score(), 100);
+
+    // Rapport de remédiation
+    let rep_report = fdr
+        .generate_remediation_report(1735001900)
+        .expect("Rapport de remédiation");
+    assert!(rep_report.verify_seal());
+
+    // 11. Validation du DICE Compound Device Identifier (RoT)
     assert!(fdr.dice_verified);
     assert_ne!(fdr.dice_cdi, [0u8; 32]);
 
-    // 10. Vérification de l'intégrité de la chaîne cryptographique SHA-256
+    // 12. Vérification de l'intégrité de la chaîne cryptographique SHA-256
     assert!(
         fdr.verify_ledger_integrity(),
         "Le registre d'audit cryptographique FDR doit être inviolé"
     );
-    assert!(fdr.audit_count >= 5);
+    assert!(fdr.audit_count >= 8);
 
     kprintln!(
-        "[FDR/TEST] \x1b[1;32m[PASS]\x1b[0m Surveillance SPI Flash/ACPI, RoT TPM 2.0/DICE, auto-restauration Dual-BIOS, isolation O(1) et registre SHA-256 validés avec succès!"
+        "[FDR/TEST] \x1b[1;32m[PASS]\x1b[0m Surveillance SPI Flash/ACPI, RoT TPM 2.0/DICE, auto-restauration Dual-BIOS, isolation O(1), rapports scellés SHA-256 et registre validés avec succès!"
     );
 
     true

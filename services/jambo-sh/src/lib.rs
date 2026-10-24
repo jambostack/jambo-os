@@ -17599,7 +17599,7 @@ impl JamboShell {
                 match subcmd {
                     "status" => {
                         let sum = self.fdr.get_summary();
-                        emit("--- JAMBO RÉSILIENCE MATÉRIELLE & FIRMWARE FDR (PHASE 142) ---\n");
+                        emit("--- JAMBO RÉSILIENCE MATÉRIELLE & FIRMWARE FDR (PHASE 172) ---\n");
                         emit("Sondes firmware déployées: ");
                         emit(format_u64(sum.probes_count as u64, &mut b));
                         emit("\nRégions firmware intactes: ");
@@ -17618,7 +17618,9 @@ impl JamboShell {
                         emit(format_u64(sum.threats_detected as u64, &mut b));
                         emit("\nMenaces auto-restaurées / remédiées: ");
                         emit(format_u64(sum.threats_remediated as u64, &mut b));
-                        emit("\nRacine de confiance (DICE RoT): ");
+                        emit("\nScore global de résilience matérielle: ");
+                        emit(format_u64(sum.global_resilience_score as u64, &mut b));
+                        emit("/100\nRacine de confiance (DICE RoT): ");
                         emit(if sum.dice_attested {
                             "ATTESTÉE (OK)\n"
                         } else {
@@ -17632,6 +17634,13 @@ impl JamboShell {
                         } else {
                             "ALTÉRÉ (FAIL)\n"
                         });
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "score" => {
+                        let score = self.fdr.compute_resilience_score();
+                        emit("Score global de résilience matérielle & firmware FDR: ");
+                        emit(format_u64(score as u64, &mut b));
+                        emit("/100\n");
                         (ShellStatus::Success, write_pos)
                     }
                     "probes" => {
@@ -17772,6 +17781,180 @@ impl JamboShell {
                             (ShellStatus::ExecutionFailed, write_pos)
                         }
                     }
+                    "remediate" => {
+                        if parsed.arg_count > 2 {
+                            let tid = parse_u64(parsed.args[2]).unwrap_or(0) as u32;
+                            match self.fdr.remediate_threat(tid, 1735003000) {
+                                Ok(()) => {
+                                    emit("Menace bootkit #");
+                                    emit(format_u64(tid as u64, &mut b));
+                                    emit(" neutralisée et région restaurée via Dual-BIOS\n");
+                                    (ShellStatus::Success, write_pos)
+                                }
+                                Err(_) => {
+                                    emit("Échec remédiation menace bootkit\n");
+                                    (ShellStatus::ExecutionFailed, write_pos)
+                                }
+                            }
+                        } else {
+                            match self.fdr.remediate_all_threats(1735003000) {
+                                Ok(rep) => {
+                                    emit("=== REMÉDIATION GLOBALE FDR O(1) EXÉCUTÉE ===\n");
+                                    emit("Firmwares restaurés via Dual-BIOS : ");
+                                    emit(format_u64(rep.restored_probes_count as u64, &mut b));
+                                    emit("\nPériphériques confinés / isolés   : ");
+                                    emit(format_u64(rep.isolated_devices_count as u64, &mut b));
+                                    emit("\nMenaces neutralisées              : ");
+                                    emit(format_u64(rep.remediated_threats_count as u64, &mut b));
+                                    emit("\nScore résilience avant/après      : ");
+                                    emit(format_u64(rep.resilience_score_before as u64, &mut b));
+                                    emit(" -> ");
+                                    emit(format_u64(rep.resilience_score_after as u64, &mut b));
+                                    emit("/100\n");
+                                    (ShellStatus::Success, write_pos)
+                                }
+                                Err(_) => {
+                                    emit("Échec remédiation globale FDR\n");
+                                    (ShellStatus::ExecutionFailed, write_pos)
+                                }
+                            }
+                        }
+                    }
+                    "remediate-all" => match self.fdr.remediate_all_threats(1735003000) {
+                        Ok(rep) => {
+                            emit("=== REMÉDIATION GLOBALE FDR O(1) EXÉCUTÉE ===\n");
+                            emit("Firmwares restaurés via Dual-BIOS : ");
+                            emit(format_u64(rep.restored_probes_count as u64, &mut b));
+                            emit("\nPériphériques confinés / isolés   : ");
+                            emit(format_u64(rep.isolated_devices_count as u64, &mut b));
+                            emit("\nMenaces neutralisées              : ");
+                            emit(format_u64(rep.remediated_threats_count as u64, &mut b));
+                            emit("\nScore résilience avant/après      : ");
+                            emit(format_u64(rep.resilience_score_before as u64, &mut b));
+                            emit(" -> ");
+                            emit(format_u64(rep.resilience_score_after as u64, &mut b));
+                            emit("/100\n");
+                            (ShellStatus::Success, write_pos)
+                        }
+                        Err(_) => {
+                            emit("Erreur exécution remédiation globale FDR\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        }
+                    },
+                    "report-posture" => match self.fdr.generate_posture_report(1735004000) {
+                        Ok(rep) => {
+                            emit("=== RAPPORT SCELLÉ DE POSTURE MATÉRIELLE & FIRMWARE FDR (SHA-256) ===\n");
+                            emit("Identifiant rapport         : ");
+                            emit(format_u64(rep.report_id as u64, &mut b));
+                            emit("\nSondes firmware gérées      : ");
+                            emit(format_u64(rep.probes_count as u64, &mut b));
+                            emit("\n  - Intactes (Golden)       : ");
+                            emit(format_u64(rep.intact_count as u64, &mut b));
+                            emit("\n  - Altérées/bootkits       : ");
+                            emit(format_u64(rep.tampered_count as u64, &mut b));
+                            emit("\n  - Restaurées (Dual-BIOS)  : ");
+                            emit(format_u64(rep.restored_count as u64, &mut b));
+                            emit("\nBanques PCR mesurées        : ");
+                            emit(format_u64(rep.pcr_banks_measured as u64, &mut b));
+                            emit("\nPériphériques supervisés    : ");
+                            emit(format_u64(rep.devices_count as u64, &mut b));
+                            emit("\n  - Confinés / isolés       : ");
+                            emit(format_u64(rep.isolated_devices_count as u64, &mut b));
+                            emit("\nMenaces bootkit détectées   : ");
+                            emit(format_u64(rep.threats_detected as u64, &mut b));
+                            emit("\nMenaces remédiées           : ");
+                            emit(format_u64(rep.remediated_threats as u64, &mut b));
+                            emit("\nScore global résilience     : ");
+                            emit(format_u64(rep.global_resilience_score as u64, &mut b));
+                            emit("/100\nRacine DICE Root of Trust   : ");
+                            emit(if rep.dice_attested {
+                                "CONFORME\n"
+                            } else {
+                                "NON CONFORME\n"
+                            });
+                            emit("Sceau SHA-256               : [VALIDÉ] ");
+                            emit(if rep.verify_seal() {
+                                "AUTHENTIQUE\n"
+                            } else {
+                                "ALTÉRÉ (FAIL)\n"
+                            });
+                            (ShellStatus::Success, write_pos)
+                        }
+                        Err(_) => {
+                            emit("Erreur génération rapport de posture FDR\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        }
+                    },
+                    "report-probe" => {
+                        if parsed.arg_count > 2 {
+                            let pid = parse_u64(parsed.args[2]).unwrap_or(0) as u32;
+                            match self.fdr.generate_probe_report(pid, 1735005000) {
+                                Ok(rep) => {
+                                    emit("=== RAPPORT SCELLÉ DE SONDE FIRMWARE (SHA-256) ===\n");
+                                    emit("Identifiant rapport : ");
+                                    emit(format_u64(rep.report_id as u64, &mut b));
+                                    emit("\nIdentifiant sonde   : #");
+                                    emit(format_u64(rep.probe_id as u64, &mut b));
+                                    emit("\nNom sonde           : ");
+                                    emit(rep.name_str());
+                                    emit("\nType de firmware    : ");
+                                    emit(rep.fw_type.as_str());
+                                    emit("\nAdresse de base     : ");
+                                    emit(format_hex_u64(rep.base_address, &mut b));
+                                    emit("\nTaille (octets)     : ");
+                                    emit(format_u64(rep.size_bytes as u64, &mut b));
+                                    emit("\nStatut d'intégrité  : ");
+                                    emit(rep.status.as_str());
+                                    emit("\nNombre de violations: ");
+                                    emit(format_u64(rep.tamper_count as u64, &mut b));
+                                    emit("\nSceau SHA-256       : [VALIDÉ] ");
+                                    emit(if rep.verify_seal() {
+                                        "AUTHENTIQUE\n"
+                                    } else {
+                                        "ALTÉRÉ (FAIL)\n"
+                                    });
+                                    (ShellStatus::Success, write_pos)
+                                }
+                                Err(_) => {
+                                    emit("Erreur génération rapport de sonde FDR\n");
+                                    (ShellStatus::ExecutionFailed, write_pos)
+                                }
+                            }
+                        } else {
+                            emit("Usage: fdr report-probe <probe_id>\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        }
+                    }
+                    "report-remediation" => {
+                        match self.fdr.generate_remediation_report(1735006000) {
+                            Ok(rep) => {
+                                emit("=== RAPPORT SCELLÉ DE REMÉDIATION AUTONOME FDR (SHA-256) ===\n");
+                                emit("Identifiant rapport       : ");
+                                emit(format_u64(rep.report_id as u64, &mut b));
+                                emit("\nFirmwares auto-restaurés  : ");
+                                emit(format_u64(rep.restored_probes_count as u64, &mut b));
+                                emit("\nPériphériques isolés O(1) : ");
+                                emit(format_u64(rep.isolated_devices_count as u64, &mut b));
+                                emit("\nMenaces bootkit remédiées : ");
+                                emit(format_u64(rep.remediated_threats_count as u64, &mut b));
+                                emit("\nScore résilience avant    : ");
+                                emit(format_u64(rep.resilience_score_before as u64, &mut b));
+                                emit("/100\nScore résilience après    : ");
+                                emit(format_u64(rep.resilience_score_after as u64, &mut b));
+                                emit("/100\nSceau SHA-256             : [VALIDÉ] ");
+                                emit(if rep.verify_seal() {
+                                    "AUTHENTIQUE\n"
+                                } else {
+                                    "ALTÉRÉ (FAIL)\n"
+                                });
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("Erreur génération rapport de remédiation FDR\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
                     "verify" => {
                         let valid = self.fdr.verify_ledger_integrity();
                         emit("Registre d'audit cryptographique SHA-256 FDR: ");
@@ -17783,7 +17966,7 @@ impl JamboShell {
                         (ShellStatus::Success, write_pos)
                     }
                     _ => {
-                        emit("Usage: fdr [status | probes | pcrs | devices | threats | restore <probe_id> | isolate <device_id> | verify]\n");
+                        emit("Usage: fdr [status | score | probes | pcrs | devices | threats | restore <probe_id> | isolate <device_id> | remediate [id] | remediate-all | report-posture | report-probe <id> | report-remediation | verify]\n");
                         (ShellStatus::ExecutionFailed, write_pos)
                     }
                 }
