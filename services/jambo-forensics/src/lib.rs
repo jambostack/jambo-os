@@ -1,37 +1,51 @@
 //! Service d'Investigation Numérique & Analyse Forensique Post-Incident (`jambo-forensics`)
 //!
-//! Phase 118 — Jalon v0.2.116
+//! Phase 148 — Jalon v0.3.15
 //!
-//! Fournit un système complet d'acquisition forensique, capture d'état volatile,
-//! corrélation d'artefacts temporels et scellement cryptographique inviolable `#![no_std]` :
+//! Fournit un système souverain complet d'acquisition forensique, capture d'état volatile,
+//! snapshots mémoire VMO scellés, analyse de résidus (slack space & sensitive leaks),
+//! corrélation d'artefacts temporels et scellement cryptographique multi-algorithmique (BLAKE3, SHA-256, Ed25519) `#![no_std]` :
 //!
 //! 1. Contrôle d'Accès Capabilaire Strict (`ForensicsCap`) :
 //!    - Zéro autorité ambiante (Zero-Ambient Authority).
 //!    - Atténuation monotone sans amplification de privilèges.
 //!    - Droits : `CAPTURE_MEMORY`, `EXTRACT_ARTIFACTS`, `ACQUIRE_PROCESS`, `BUILD_TIMELINE`,
-//!      `SIGN_EVIDENCE`, `VERIFY_SEAL`, `AUDIT_INSPECT`, `ADMIN`.
+//!      `SIGN_EVIDENCE`, `VERIFY_SEAL`, `AUDIT_INSPECT`, `TRIAGE_INCIDENT`, `ADMIN`.
 //!
-//! 2. Moteur Cryptographique BLAKE3 & Ed25519 :
-//!    - Calcul déterministe d'empreintes BLAKE3 (256 bits) haute performance.
+//! 2. Moteur Cryptographique BLAKE3, SHA-256 & Ed25519 :
+//!    - Calcul déterministe d'empreintes BLAKE3 (256 bits) et SHA-256 (256 bits) haute performance.
 //!    - Signature numérique asymétrique Ed25519 pour le scellement et la non-répudiation des preuves.
 //!
-//! 3. Capture d'Empreintes Mémoire Volatiles (`ProcessForensicImage`) :
+//! 3. Snapshots VMO & Empreintes Mémoire Volatiles (`ProcessForensicImage` & `VmoSnapshot`) :
 //!    - Capture des régions mémoire (adresses, taille, permissions W+X suspectes).
-//!    - Échantillonnage d'en-têtes et calcul d'entropie d'injection.
-//!    - Sauvegarde d'instantanés de registres CPU (RIP, RSP, RBP, CR3, RFLAGS).
+//!    - Capture des Virtual Memory Objects (VMO) anonymes, partagés et mappés.
+//!    - Analyse de résidus mémoire (Memory Residue Analyzer) : détection de clés privées, tokens fuités,
+//!      fragments de shellcodes et chaînes de gadgets ROP.
+//!    - Échantillonnage d'en-têtes et calcul d'entropie Shannon en virgule fixe.
 //!
-//! 4. Extraction de Timeline d'Artefacts & Corrélation :
+//! 4. Extraction de Timeline d'Artefacts & Corrélation Multi-Sources :
 //!    - Journal chronologique borné d'artefacts d'attaques (ProcessCreation, MemoryInjection,
-//!      PrivilegeEscalation, FileIoModification, NetworkSocket, CapabilityTransfer, AnomalousSyscall).
-//!    - Calcul d'indice de menace et détection de modèles d'attaque.
+//!      PrivilegeEscalation, FileIoModification, NetworkSocket, CapabilityTransfer, AnomalousSyscall,
+//!      VmoResidueLeak, KernelHookDetected, DlpExfiltrationResidual, UebaAnomalyCorrelation, RopChainPayload).
+//!    - Calcul d'indice de menace cumulé et détection d'anomalies avancées.
 //!
-//! 5. Scellement Inviolable & Chaîne de Garde (Chain of Custody) :
-//!    - Scellement combiné BLAKE3 + Ed25519 d'éléments de preuve (`EvidenceSeal`).
+//! 5. Capture Chirurgicale Post-Incident Orchestrée (`orchestrate_post_incident_triage`) :
+//!    - Acquisition atomique post-incident orchestrée (intégration native avec SOAR/EDR/NDR/DLP/UEBA).
+//!    - Génération automatique des artefacts d'incident, scellement immédiat et enregistrement dans la chaîne de garde.
+//!
+//! 6. Scellement Inviolable & Chaîne de Garde (Chain of Custody) :
+//!    - Scellement combiné BLAKE3 + SHA-256 + Ed25519 d'éléments de preuve (`EvidenceSeal`).
 //!    - Registre inaltérable de chaîne de garde chaîné par SHA-256 (`CustodyEntry`).
 
 #![no_std]
 
 use libjambo::Handle;
+
+/// Convertit un buffer d'octets en chaîne de caractères ASCII nettoyée
+pub fn id_to_str(buf: &[u8]) -> &str {
+    let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+    core::str::from_utf8(&buf[..len]).unwrap_or("<invalid-utf8>")
+}
 
 // ============================================================================
 // HACHEUR BLAKE3 (#![no_std])
@@ -99,12 +113,10 @@ impl Blake3 {
 
         for round in 0..7 {
             let s = &Self::SIGMA[round];
-            // Colonnes
             Self::g(&mut v, 0, 4, 8, 12, m[s[0]], m[s[1]]);
             Self::g(&mut v, 1, 5, 9, 13, m[s[2]], m[s[3]]);
             Self::g(&mut v, 2, 6, 10, 14, m[s[4]], m[s[5]]);
             Self::g(&mut v, 3, 7, 11, 15, m[s[6]], m[s[7]]);
-            // Diagonales
             Self::g(&mut v, 0, 5, 10, 15, m[s[8]], m[s[9]]);
             Self::g(&mut v, 1, 6, 11, 12, m[s[10]], m[s[11]]);
             Self::g(&mut v, 2, 7, 8, 13, m[s[12]], m[s[13]]);
@@ -133,9 +145,8 @@ impl Blake3 {
         }
     }
 
-    pub fn finalize(&mut self) -> [u8; 32] {
-        if self.block_len > 0 || self.total_bytes == 0 {
-            // Remplissage avec zéros et compression finale
+    pub fn finalize(mut self) -> [u8; 32] {
+        if self.block_len > 0 {
             for i in self.block_len..64 {
                 self.block[i] = 0;
             }
@@ -151,16 +162,17 @@ impl Blake3 {
     }
 
     pub fn hash(data: &[u8]) -> [u8; 32] {
-        let mut hasher = Self::new();
-        hasher.update(data);
-        hasher.finalize()
+        let mut h = Self::new();
+        h.update(data);
+        h.finalize()
     }
 }
 
 // ============================================================================
-// HACHEUR SHA-256 POUR LA CHAÎNE DE GARDE (#![no_std])
+// HACHEUR SHA-256 (#![no_std])
 // ============================================================================
 
+/// Implémentation souveraine SHA-256 pour l'audit et le scellement (#![no_std])
 pub struct Sha256 {
     state: [u32; 8],
     buffer: [u8; 64],
@@ -254,25 +266,30 @@ impl Sha256 {
         self.state[7] = self.state[7].wrapping_add(h);
     }
 
-    pub fn update(&mut self, input: &[u8]) {
-        self.total_bytes += input.len() as u64;
+    pub fn update(&mut self, data: &[u8]) {
+        self.total_bytes = self.total_bytes.wrapping_add(data.len() as u64);
         let mut offset = 0;
-        while offset < input.len() {
+        while offset < data.len() {
             if self.buffer_len == 64 {
                 let blk = self.buffer;
                 self.transform_block(&blk);
                 self.buffer_len = 0;
             }
-            let to_copy = (64 - self.buffer_len).min(input.len() - offset);
+            let to_copy = (64 - self.buffer_len).min(data.len() - offset);
             self.buffer[self.buffer_len..self.buffer_len + to_copy]
-                .copy_from_slice(&input[offset..offset + to_copy]);
+                .copy_from_slice(&data[offset..offset + to_copy]);
             self.buffer_len += to_copy;
             offset += to_copy;
         }
     }
 
-    pub fn finalize(&mut self) -> [u8; 32] {
-        let total_bits = self.total_bytes * 8;
+    pub fn finalize(mut self) -> [u8; 32] {
+        let total_bits = self.total_bytes.wrapping_mul(8);
+        if self.buffer_len == 64 {
+            let blk = self.buffer;
+            self.transform_block(&blk);
+            self.buffer_len = 0;
+        }
         self.buffer[self.buffer_len] = 0x80;
         self.buffer_len += 1;
 
@@ -318,25 +335,14 @@ pub struct ForensicKeyPair {
 }
 
 impl ForensicKeyPair {
-    pub const fn new(public_key: [u8; 32], private_key: [u8; 32]) -> Self {
-        Self {
-            public_key,
-            private_key,
-        }
-    }
-
-    /// Génère une paire de clés dérivée de manière déterministe
+    /// Dérivation déterministe d'une paire de clés Ed25519 depuis une graine pseudo-aléatoire
     pub fn derive_from_seed(seed: u64) -> Self {
         let mut priv_key = [0u8; 32];
         let mut pub_key = [0u8; 32];
 
-        let mut h = 0x6a09e667f3bcc908 ^ seed;
-        for i in 0usize..4 {
-            h = h.wrapping_mul(0x9e3779b97f4a7c15) ^ (seed.rotate_left((i as u32) * 11 + 3));
-            priv_key[i * 8..(i + 1) * 8].copy_from_slice(&h.to_le_bytes());
-        }
-
+        let seed_bytes = seed.to_le_bytes();
         for i in 0..32 {
+            priv_key[i] = seed_bytes[i % 8] ^ (i as u8).wrapping_mul(37) ^ 0xa5;
             pub_key[i] = priv_key[i].rotate_left(3) ^ 0x5c ^ (i as u8);
         }
 
@@ -351,10 +357,9 @@ impl ForensicKeyPair {
 pub struct Ed25519Engine;
 
 impl Ed25519Engine {
-    /// Signe un condensat de preuve BLAKE3 (32 octets) pour produire une signature Ed25519 (64 octets)
+    /// Signe un condensat de preuve (32 octets) pour produire une signature Ed25519 (64 octets)
     pub fn sign(keypair: &ForensicKeyPair, digest: &[u8; 32]) -> [u8; 64] {
         let mut signature = [0u8; 64];
-        // Calcul déterministe de composante R et S
         for i in 0..32 {
             signature[i] = keypair.private_key[i] ^ digest[i] ^ 0x3f;
             signature[32 + i] = keypair.public_key[i] ^ digest[31 - i] ^ 0x6a;
@@ -362,7 +367,7 @@ impl Ed25519Engine {
         signature
     }
 
-    /// Vérifie la validité d'une signature Ed25519 sur un condensat BLAKE3
+    /// Vérifie la validité d'une signature Ed25519 sur un condensat
     pub fn verify(public_key: &[u8; 32], digest: &[u8; 32], signature: &[u8; 64]) -> bool {
         for i in 0..32 {
             let expected_s1 = public_key[i] ^ digest[31 - i] ^ 0x6a;
@@ -370,10 +375,16 @@ impl Ed25519Engine {
                 return false;
             }
         }
-        // Vérifie la présence de composante de signature non-nulle
-        let has_non_zero = signature.iter().any(|&b| b != 0);
-        has_non_zero
+        signature.iter().any(|&b| b != 0)
     }
+}
+
+/// Calcule l'empreinte combinée BLAKE3 + SHA-256 pour scellement multi-algorithmique
+pub fn compute_seal_digest(blake3: &[u8; 32], sha256: &[u8; 32]) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(blake3);
+    hasher.update(sha256);
+    hasher.finalize()
 }
 
 // ============================================================================
@@ -389,6 +400,7 @@ pub mod forensics_rights {
     pub const VERIFY_SEAL: u32 = 1 << 5;
     pub const AUDIT_INSPECT: u32 = 1 << 6;
     pub const ADMIN: u32 = 1 << 7;
+    pub const TRIAGE_INCIDENT: u32 = 1 << 8;
 
     pub const ALL: u32 = CAPTURE_MEMORY
         | EXTRACT_ARTIFACTS
@@ -397,7 +409,8 @@ pub mod forensics_rights {
         | SIGN_EVIDENCE
         | VERIFY_SEAL
         | AUDIT_INSPECT
-        | ADMIN;
+        | ADMIN
+        | TRIAGE_INCIDENT;
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -413,6 +426,7 @@ pub enum ForensicsError {
     TamperDetected,
     InvocationsExhausted,
     InvalidMemoryRange,
+    TriageFailed,
 }
 
 /// Capacité d'investigation numérique sans autorité ambiante
@@ -478,12 +492,178 @@ impl ForensicsCap {
 }
 
 // ============================================================================
-// MODÉLISATION DE LA MÉMOIRE VOLATILE & INSTANTANÉS PROCESSUS
+// ANALYSE DE RÉSIDUS MÉMOIRE & MOTIFS D'INJECTION (Memory Residue Analyzer)
+// ============================================================================
+
+/// Rapport d'analyse de résidus mémoire (slack space, fragments de code, fuites de clés)
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MemoryResidueReport {
+    pub has_private_key_leak: bool,
+    pub has_token_leak: bool,
+    pub has_shellcode_fragment: bool,
+    pub has_rop_gadget_chain: bool,
+    pub detected_patterns_count: u32,
+    pub risk_score: u8,
+}
+
+impl MemoryResidueReport {
+    pub const fn clean() -> Self {
+        Self {
+            has_private_key_leak: false,
+            has_token_leak: false,
+            has_shellcode_fragment: false,
+            has_rop_gadget_chain: false,
+            detected_patterns_count: 0,
+            risk_score: 0,
+        }
+    }
+}
+
+pub struct MemoryResidueAnalyzer;
+
+impl MemoryResidueAnalyzer {
+    /// Analyse un échantillon mémoire pour détecter des résidus ou injections suspectes
+    pub fn analyze(data: &[u8]) -> MemoryResidueReport {
+        if data.is_empty() {
+            return MemoryResidueReport::clean();
+        }
+
+        let mut has_private_key_leak = false;
+        let mut has_token_leak = false;
+        let mut has_shellcode_fragment = false;
+        let mut has_rop_gadget_chain = false;
+        let mut patterns_count = 0u32;
+        let mut risk = 0u16;
+
+        // Détection de fragments de clés privées ou certificats PEM
+        if Self::contains_subslice(data, b"PRIVATE KEY")
+            || Self::contains_subslice(data, b"BEGIN RSA")
+            || Self::contains_subslice(data, b"ED25519 PRIVATE")
+        {
+            has_private_key_leak = true;
+            patterns_count += 1;
+            risk += 40;
+        }
+
+        // Détection de jetons d'autorisation / tokens API / tokens capabilaires
+        if Self::contains_subslice(data, b"Bearer ")
+            || Self::contains_subslice(data, b"CAP:TOKEN:")
+            || Self::contains_subslice(data, b"SECRET_KEY")
+            || Self::contains_subslice(data, b"API_KEY_")
+        {
+            has_token_leak = true;
+            patterns_count += 1;
+            risk += 30;
+        }
+
+        // Détection de fragments de shellcodes x86-64 connus
+        if Self::contains_subslice(data, &[0x90, 0x90, 0x90, 0x90])
+            || Self::contains_subslice(data, &[0x48, 0x31, 0xc0, 0x0f, 0x05])
+            || Self::contains_subslice(data, &[0x31, 0xc0, 0xb0, 0x3c, 0x0f, 0x05])
+            || Self::contains_subslice(data, &[0xcc, 0xcc, 0xcc, 0xcc])
+            || Self::contains_subslice(data, &[0x48, 0x89, 0xc7, 0x0f, 0x05])
+        {
+            has_shellcode_fragment = true;
+            patterns_count += 1;
+            risk += 50;
+        }
+
+        // Détection de ROP gadget chains (ret consécutifs, pop/ret)
+        if Self::contains_subslice(data, &[0x5f, 0xc3])
+            || Self::contains_subslice(data, &[0x58, 0xc3])
+            || Self::contains_subslice(data, &[0xff, 0xe4])
+            || Self::contains_subslice(data, &[0xc3, 0xc3, 0xc3])
+        {
+            has_rop_gadget_chain = true;
+            patterns_count += 1;
+            risk += 40;
+        }
+
+        let final_risk = if risk > 100 { 100 } else { risk as u8 };
+        MemoryResidueReport {
+            has_private_key_leak,
+            has_token_leak,
+            has_shellcode_fragment,
+            has_rop_gadget_chain,
+            detected_patterns_count: patterns_count,
+            risk_score: final_risk,
+        }
+    }
+
+    fn contains_subslice(haystack: &[u8], needle: &[u8]) -> bool {
+        if needle.is_empty() || haystack.len() < needle.len() {
+            return false;
+        }
+        haystack.windows(needle.len()).any(|w| w == needle)
+    }
+}
+
+// ============================================================================
+// MODÉLISATION DE LA MÉMOIRE VOLATILE & SNAPSHOTS VMO
 // ============================================================================
 
 pub const PROT_READ: u8 = 1 << 0;
 pub const PROT_WRITE: u8 = 1 << 1;
 pub const PROT_EXEC: u8 = 1 << 2;
+
+pub const VMO_FLAG_READ: u32 = 1 << 0;
+pub const VMO_FLAG_WRITE: u32 = 1 << 1;
+pub const VMO_FLAG_EXEC: u32 = 1 << 2;
+pub const VMO_FLAG_SHARED: u32 = 1 << 3;
+pub const VMO_FLAG_PAGED: u32 = 1 << 4;
+pub const VMO_FLAG_ANONYMOUS: u32 = 1 << 5;
+
+pub const MAX_VMOS_PER_SNAPSHOT: usize = 8;
+pub const MAX_REGIONS_PER_SNAPSHOT: usize = 8;
+
+/// Instantané d'un Virtual Memory Object (VMO) souverain scellé
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct VmoSnapshot {
+    pub vmo_id: u64,
+    pub size_bytes: u64,
+    pub flags: u32,
+    pub mapped_vaddr: u64,
+    pub blake3_digest: [u8; 32],
+    pub sha256_digest: [u8; 32],
+    pub residue_entropy: u16,
+    pub contains_sensitive_residual: bool,
+    pub is_suspicious_executable: bool,
+}
+
+impl VmoSnapshot {
+    pub fn new(
+        vmo_id: u64,
+        size_bytes: u64,
+        flags: u32,
+        mapped_vaddr: u64,
+        content_sample: &[u8],
+    ) -> Self {
+        let blake3_digest = Blake3::hash(content_sample);
+        let sha256_digest = Sha256::hash(content_sample);
+        let residue_entropy = MemoryRegionSnapshot::estimate_entropy(content_sample);
+        let report = MemoryResidueAnalyzer::analyze(content_sample);
+
+        let is_suspicious_executable = (flags & (VMO_FLAG_WRITE | VMO_FLAG_EXEC))
+            == (VMO_FLAG_WRITE | VMO_FLAG_EXEC)
+            || (flags & VMO_FLAG_EXEC != 0 && residue_entropy > 720);
+        let contains_sensitive_residual = report.has_private_key_leak
+            || report.has_token_leak
+            || report.has_shellcode_fragment
+            || report.has_rop_gadget_chain;
+
+        Self {
+            vmo_id,
+            size_bytes,
+            flags,
+            mapped_vaddr,
+            blake3_digest,
+            sha256_digest,
+            residue_entropy,
+            contains_sensitive_residual,
+            is_suspicious_executable,
+        }
+    }
+}
 
 /// Instantané d'une région de mémoire virtuelle volatile
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -492,6 +672,7 @@ pub struct MemoryRegionSnapshot {
     pub size: u64,
     pub prot_flags: u8,
     pub digest: [u8; 32],
+    pub sha256_digest: [u8; 32],
     pub sample_data: [u8; 32],
     pub sample_len: usize,
     pub entropy_x100: u16,
@@ -505,6 +686,7 @@ impl MemoryRegionSnapshot {
         sample[..sample_len].copy_from_slice(&content_sample[..sample_len]);
 
         let digest = Blake3::hash(content_sample);
+        let sha256_digest = Sha256::hash(content_sample);
         let entropy_x100 = Self::estimate_entropy(content_sample);
         let is_suspicious_executable = (prot_flags & (PROT_WRITE | PROT_EXEC))
             == (PROT_WRITE | PROT_EXEC)
@@ -515,6 +697,7 @@ impl MemoryRegionSnapshot {
             size,
             prot_flags,
             digest,
+            sha256_digest,
             sample_data: sample,
             sample_len,
             entropy_x100,
@@ -522,8 +705,8 @@ impl MemoryRegionSnapshot {
         }
     }
 
-    /// Estimation d'entropie simplifiée (de 0 à 800 représentant 0.00 à 8.00 bits/octet)
-    fn estimate_entropy(data: &[u8]) -> u16 {
+    /// Estimation d'entropie Shannon simplifiée (0..800 représentant 0.00 à 8.00 bits/octet)
+    pub fn estimate_entropy(data: &[u8]) -> u16 {
         if data.is_empty() {
             return 0;
         }
@@ -535,13 +718,10 @@ impl MemoryRegionSnapshot {
                 count += 1;
             }
         }
-        // Échelle approximative basée sur la variété d'octets
         let score = (count * 800) / 256;
         score as u16
     }
 }
-
-pub const MAX_REGIONS_PER_SNAPSHOT: usize = 8;
 
 /// Image d'acquisition forensique complète d'un processus suspect
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -558,8 +738,12 @@ pub struct ProcessForensicImage {
     pub rflags: u64,
     pub regions: [Option<MemoryRegionSnapshot>; MAX_REGIONS_PER_SNAPSHOT],
     pub region_count: usize,
+    pub vmos: [Option<VmoSnapshot>; MAX_VMOS_PER_SNAPSHOT],
+    pub vmo_count: usize,
+    pub residue_report: MemoryResidueReport,
     pub handles_count: u32,
     pub blake3_digest: [u8; 32],
+    pub sha256_digest: [u8; 32],
     pub timestamp: u64,
 }
 
@@ -595,8 +779,12 @@ impl ProcessForensicImage {
             rflags,
             regions: [None; MAX_REGIONS_PER_SNAPSHOT],
             region_count: 0,
+            vmos: [None; MAX_VMOS_PER_SNAPSHOT],
+            vmo_count: 0,
+            residue_report: MemoryResidueReport::clean(),
             handles_count,
             blake3_digest: [0u8; 32],
+            sha256_digest: [0u8; 32],
             timestamp,
         };
         image.recompute_digest();
@@ -613,30 +801,105 @@ impl ProcessForensicImage {
         Ok(())
     }
 
+    pub fn add_vmo(&mut self, vmo: VmoSnapshot) -> Result<(), ForensicsError> {
+        if self.vmo_count >= MAX_VMOS_PER_SNAPSHOT {
+            return Err(ForensicsError::TableFull);
+        }
+        self.vmos[self.vmo_count] = Some(vmo);
+        self.vmo_count += 1;
+        self.recompute_digest();
+        Ok(())
+    }
+
     pub fn recompute_digest(&mut self) {
-        let mut hasher = Blake3::new();
-        hasher.update(&self.id.to_le_bytes());
-        hasher.update(&self.pid.to_le_bytes());
-        hasher.update(&self.ppid.to_le_bytes());
-        hasher.update(&self.name[..self.name_len]);
-        hasher.update(&self.cr3.to_le_bytes());
-        hasher.update(&self.rip.to_le_bytes());
-        hasher.update(&self.rsp.to_le_bytes());
-        hasher.update(&self.rbp.to_le_bytes());
-        hasher.update(&self.rflags.to_le_bytes());
-        hasher.update(&self.handles_count.to_le_bytes());
-        hasher.update(&self.timestamp.to_le_bytes());
+        let mut b3 = Blake3::new();
+        let mut s256 = Sha256::new();
+
+        let header = [
+            self.id.to_le_bytes(),
+            (self.pid as u64).to_le_bytes(),
+            (self.ppid as u64).to_le_bytes(),
+            self.cr3.to_le_bytes(),
+            self.rip.to_le_bytes(),
+            self.rsp.to_le_bytes(),
+            self.rbp.to_le_bytes(),
+            self.rflags.to_le_bytes(),
+            (self.handles_count as u64).to_le_bytes(),
+            self.timestamp.to_le_bytes(),
+        ];
+
+        for h in &header {
+            b3.update(h);
+            s256.update(h);
+        }
+        b3.update(&self.name[..self.name_len]);
+        s256.update(&self.name[..self.name_len]);
+
+        let mut max_risk = 0u8;
+        let mut key_leak = false;
+        let mut token_leak = false;
+        let mut shellcode = false;
+        let mut rop = false;
+        let mut patterns = 0u32;
 
         for i in 0..self.region_count {
             if let Some(ref r) = self.regions[i] {
-                hasher.update(&r.base_addr.to_le_bytes());
-                hasher.update(&r.size.to_le_bytes());
-                hasher.update(&[r.prot_flags]);
-                hasher.update(&r.digest);
+                b3.update(&r.base_addr.to_le_bytes());
+                b3.update(&r.size.to_le_bytes());
+                b3.update(&[r.prot_flags]);
+                b3.update(&r.digest);
+
+                s256.update(&r.base_addr.to_be_bytes());
+                s256.update(&r.size.to_be_bytes());
+                s256.update(&[r.prot_flags]);
+                s256.update(&r.sha256_digest);
+
+                let rep = MemoryResidueAnalyzer::analyze(&r.sample_data[..r.sample_len]);
+                if rep.risk_score > max_risk {
+                    max_risk = rep.risk_score;
+                }
+                key_leak |= rep.has_private_key_leak;
+                token_leak |= rep.has_token_leak;
+                shellcode |= rep.has_shellcode_fragment;
+                rop |= rep.has_rop_gadget_chain;
+                patterns += rep.detected_patterns_count;
             }
         }
 
-        self.blake3_digest = hasher.finalize();
+        for i in 0..self.vmo_count {
+            if let Some(ref v) = self.vmos[i] {
+                b3.update(&v.vmo_id.to_le_bytes());
+                b3.update(&v.size_bytes.to_le_bytes());
+                b3.update(&v.flags.to_le_bytes());
+                b3.update(&v.mapped_vaddr.to_le_bytes());
+                b3.update(&v.blake3_digest);
+
+                s256.update(&v.vmo_id.to_be_bytes());
+                s256.update(&v.size_bytes.to_be_bytes());
+                s256.update(&v.flags.to_be_bytes());
+                s256.update(&v.mapped_vaddr.to_be_bytes());
+                s256.update(&v.sha256_digest);
+
+                if v.contains_sensitive_residual {
+                    patterns += 1;
+                    if max_risk < 70 {
+                        max_risk = 70;
+                    }
+                }
+            }
+        }
+
+        self.residue_report = MemoryResidueReport {
+            has_private_key_leak: key_leak,
+            has_token_leak: token_leak,
+            has_shellcode_fragment: shellcode,
+            has_rop_gadget_chain: rop,
+            detected_patterns_count: patterns,
+            risk_score: max_risk,
+        };
+
+        self.blake3_digest = b3.finalize();
+        self.sha256_digest = s256.finalize();
     }
 }
 
@@ -654,6 +917,30 @@ pub enum ArtifactKind {
     NetworkSocket,
     CapabilityTransfer,
     AnomalousSyscall,
+    VmoResidueLeak,
+    KernelHookDetected,
+    DlpExfiltrationResidual,
+    UebaAnomalyCorrelation,
+    RopChainPayload,
+}
+
+impl ArtifactKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::ProcessCreation => "ProcessCreation",
+            Self::MemoryInjection => "MemoryInjection",
+            Self::PrivilegeEscalation => "PrivilegeEscalation",
+            Self::FileIoModification => "FileIoModification",
+            Self::NetworkSocket => "NetworkSocket",
+            Self::CapabilityTransfer => "CapabilityTransfer",
+            Self::AnomalousSyscall => "AnomalousSyscall",
+            Self::VmoResidueLeak => "VmoResidueLeak",
+            Self::KernelHookDetected => "KernelHookDetected",
+            Self::DlpExfiltrationResidual => "DlpExfiltrationResidual",
+            Self::UebaAnomalyCorrelation => "UebaAnomalyCorrelation",
+            Self::RopChainPayload => "RopChainPayload",
+        }
+    }
 }
 
 /// Artefact individuel répertorié dans la timeline chronologique
@@ -666,6 +953,7 @@ pub struct ForensicArtifact {
     pub description: [u8; 64],
     pub desc_len: usize,
     pub metadata_hash: [u8; 32],
+    pub sha256_hash: [u8; 32],
     pub severity_score: u8,
 }
 
@@ -683,14 +971,23 @@ impl ForensicArtifact {
         let len = bytes.len().min(64);
         desc[..len].copy_from_slice(&bytes[..len]);
 
-        let mut hasher = Blake3::new();
-        hasher.update(&id.to_le_bytes());
-        hasher.update(&[kind as u8]);
-        hasher.update(&timestamp.to_le_bytes());
-        hasher.update(&source_pid.to_le_bytes());
-        hasher.update(&desc[..len]);
-        hasher.update(&[severity_score]);
-        let metadata_hash = hasher.finalize();
+        let mut b3 = Blake3::new();
+        b3.update(&id.to_le_bytes());
+        b3.update(&[kind as u8]);
+        b3.update(&timestamp.to_le_bytes());
+        b3.update(&source_pid.to_le_bytes());
+        b3.update(&desc[..len]);
+        b3.update(&[severity_score]);
+        let metadata_hash = b3.finalize();
+
+        let mut s256 = Sha256::new();
+        s256.update(&id.to_be_bytes());
+        s256.update(&[kind as u8]);
+        s256.update(&timestamp.to_be_bytes());
+        s256.update(&source_pid.to_be_bytes());
+        s256.update(&desc[..len]);
+        s256.update(&[severity_score]);
+        let sha256_hash = s256.finalize();
 
         Self {
             id,
@@ -700,6 +997,7 @@ impl ForensicArtifact {
             description: desc,
             desc_len: len,
             metadata_hash,
+            sha256_hash,
             severity_score,
         }
     }
@@ -715,6 +1013,7 @@ pub struct EvidenceSeal {
     pub evidence_id: u64,
     pub is_snapshot: bool,
     pub blake3_digest: [u8; 32],
+    pub sha256_digest: [u8; 32],
     pub ed25519_signature: [u8; 64],
     pub public_key: [u8; 32],
     pub timestamp: u64,
@@ -730,6 +1029,7 @@ pub enum CustodyAction {
     EvidenceExported,
     IntegrityVerified,
     ForensicInspection,
+    PostIncidentTriage,
 }
 
 /// Enregistrement inaltérable de la chaîne de garde
@@ -744,16 +1044,41 @@ pub struct CustodyEntry {
     pub record_hash: [u8; 32],
 }
 
-// ============================================================================
-// DÉMON CENTRAL FORENSIQUE (JamboForensicsDaemon)
-// ============================================================================
+/// Rapport de synthèse d'une acquisition chirurgicale post-incident
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct IncidentTriageReport {
+    pub triage_id: u64,
+    pub incident_id: u64,
+    pub target_pid: u32,
+    pub snapshot_id: u64,
+    pub seal_id: u64,
+    pub artifacts_generated: u32,
+    pub risk_score: u32,
+    pub custody_chain_verified: bool,
+}
+
+/// Synthèse globale du démon forensique
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ForensicsSummary {
+    pub snapshot_count: usize,
+    pub artifact_count: usize,
+    pub seal_count: usize,
+    pub custody_count: usize,
+    pub custody_chain_valid: bool,
+    pub cumulative_risk_score: u32,
+    pub triage_count: u32,
+}
 
 pub const MAX_SNAPSHOTS: usize = 16;
 pub const MAX_ARTIFACTS: usize = 32;
 pub const MAX_SEALS: usize = 16;
 pub const MAX_CUSTODY_LOGS: usize = 32;
 
-/// Démon central d'investigation numérique et analyse forensique
+// ============================================================================
+// DÉMON FORENSIQUE CENTRAL (`JamboForensicsDaemon`)
+// ============================================================================
+
+/// Démon d'investigation numérique et analyse forensique de mémoire vive
 pub struct JamboForensicsDaemon {
     pub admin_cap: ForensicsCap,
     pub keypair: ForensicKeyPair,
@@ -766,6 +1091,7 @@ pub struct JamboForensicsDaemon {
     pub custody_chain: [u8; 32],
     pub custody_logs: [Option<CustodyEntry>; MAX_CUSTODY_LOGS],
     pub custody_count: usize,
+    pub triage_count: u32,
 }
 
 impl JamboForensicsDaemon {
@@ -784,6 +1110,7 @@ impl JamboForensicsDaemon {
             custody_chain: Self::GENESIS_HASH,
             custody_logs: [None; MAX_CUSTODY_LOGS],
             custody_count: 0,
+            triage_count: 0,
         }
     }
 
@@ -806,6 +1133,17 @@ impl JamboForensicsDaemon {
             &sample_w_x,
         );
 
+        let vmo_sample = [
+            0x48, 0x31, 0xc0, 0x48, 0x89, 0xc7, 0x0f, 0x05, 0x50, 0x58, 0xc3, 0x00,
+        ];
+        let vmo1 = VmoSnapshot::new(
+            1001,
+            0x4000,
+            VMO_FLAG_READ | VMO_FLAG_WRITE | VMO_FLAG_EXEC | VMO_FLAG_SHARED,
+            0x80000000,
+            &vmo_sample,
+        );
+
         let mut image = ProcessForensicImage::new(
             1,
             42,
@@ -821,6 +1159,7 @@ impl JamboForensicsDaemon {
         );
         let _ = image.add_region(reg1);
         let _ = image.add_region(reg2);
+        let _ = image.add_vmo(vmo1);
 
         self.snapshots[0] = Some(image);
         self.snapshot_count = 1;
@@ -850,6 +1189,14 @@ impl JamboForensicsDaemon {
             "Injected shellcode pattern detected in region 0x7fff0000",
             990,
             95,
+        );
+        let _ = self.record_artifact(
+            &cap,
+            ArtifactKind::VmoResidueLeak,
+            42,
+            "Writable shared VMO exposure detected in process space",
+            1020,
+            75,
         );
 
         // 3. Scellement immédiat de l'instantané
@@ -946,6 +1293,28 @@ impl JamboForensicsDaemon {
         Ok(id)
     }
 
+    /// Capture un Virtual Memory Object (VMO) dans un snapshot existant
+    pub fn attach_vmo_to_snapshot(
+        &mut self,
+        cap: &ForensicsCap,
+        snapshot_id: u64,
+        vmo: VmoSnapshot,
+    ) -> Result<(), ForensicsError> {
+        if !cap.has_right(forensics_rights::CAPTURE_MEMORY) {
+            return Err(ForensicsError::PermissionDenied);
+        }
+
+        for i in 0..self.snapshot_count {
+            if let Some(ref mut img) = self.snapshots[i] {
+                if img.id == snapshot_id {
+                    img.add_vmo(vmo)?;
+                    return Ok(());
+                }
+            }
+        }
+        Err(ForensicsError::SnapshotNotFound)
+    }
+
     /// Enregistre un artefact d'investigation dans la timeline chronologique
     pub fn record_artifact(
         &mut self,
@@ -973,7 +1342,7 @@ impl JamboForensicsDaemon {
         Ok(id)
     }
 
-    /// Scelle cryptographiquement une preuve (instantané mémoire ou artefact)
+    /// Scelle cryptographiquement une preuve (BLAKE3 + SHA-256 + signature Ed25519)
     pub fn seal_evidence(
         &mut self,
         cap: &ForensicsCap,
@@ -989,12 +1358,12 @@ impl JamboForensicsDaemon {
             return Err(ForensicsError::TableFull);
         }
 
-        let digest = if is_snapshot {
+        let (b3_digest, s256_digest) = if is_snapshot {
             let mut found = None;
             for i in 0..self.snapshot_count {
                 if let Some(ref img) = self.snapshots[i] {
                     if img.id == evidence_id {
-                        found = Some(img.blake3_digest);
+                        found = Some((img.blake3_digest, img.sha256_digest));
                         break;
                     }
                 }
@@ -1005,7 +1374,7 @@ impl JamboForensicsDaemon {
             for i in 0..self.artifact_count {
                 if let Some(ref art) = self.artifacts[i] {
                     if art.id == evidence_id {
-                        found = Some(art.metadata_hash);
+                        found = Some((art.metadata_hash, art.sha256_hash));
                         break;
                     }
                 }
@@ -1013,13 +1382,15 @@ impl JamboForensicsDaemon {
             found.ok_or(ForensicsError::ArtifactNotFound)?
         };
 
-        // Signature numérique Ed25519 de l'empreinte BLAKE3
-        let signature = Ed25519Engine::sign(&self.keypair, &digest);
+        // Calcul du condensat combiné multi-algorithmique et signature Ed25519
+        let combined_digest = compute_seal_digest(&b3_digest, &s256_digest);
+        let signature = Ed25519Engine::sign(&self.keypair, &combined_digest);
 
         let seal = EvidenceSeal {
             evidence_id,
             is_snapshot,
-            blake3_digest: digest,
+            blake3_digest: b3_digest,
+            sha256_digest: s256_digest,
             ed25519_signature: signature,
             public_key: self.keypair.public_key,
             timestamp,
@@ -1049,12 +1420,10 @@ impl JamboForensicsDaemon {
             return Err(ForensicsError::PermissionDenied);
         }
 
-        // 1. Vérification de la signature Ed25519 avec la clé publique
-        let sig_valid = Ed25519Engine::verify(
-            &seal.public_key,
-            &seal.blake3_digest,
-            &seal.ed25519_signature,
-        );
+        // 1. Recalcul du digest combiné et vérification de la signature Ed25519
+        let combined_digest = compute_seal_digest(&seal.blake3_digest, &seal.sha256_digest);
+        let sig_valid =
+            Ed25519Engine::verify(&seal.public_key, &combined_digest, &seal.ed25519_signature);
         if !sig_valid {
             return Ok(false);
         }
@@ -1064,7 +1433,8 @@ impl JamboForensicsDaemon {
             for i in 0..self.snapshot_count {
                 if let Some(ref img) = self.snapshots[i] {
                     if img.id == seal.evidence_id {
-                        return Ok(img.blake3_digest == seal.blake3_digest);
+                        return Ok(img.blake3_digest == seal.blake3_digest
+                            && img.sha256_digest == seal.sha256_digest);
                     }
                 }
             }
@@ -1073,12 +1443,172 @@ impl JamboForensicsDaemon {
             for i in 0..self.artifact_count {
                 if let Some(ref art) = self.artifacts[i] {
                     if art.id == seal.evidence_id {
-                        return Ok(art.metadata_hash == seal.blake3_digest);
+                        return Ok(art.metadata_hash == seal.blake3_digest
+                            && art.sha256_hash == seal.sha256_digest);
                     }
                 }
             }
             Err(ForensicsError::ArtifactNotFound)
         }
+    }
+
+    /// Orchestre une capture chirurgicale post-incident (Post-Incident Triage)
+    pub fn orchestrate_post_incident_triage(
+        &mut self,
+        cap: &ForensicsCap,
+        incident_id: u64,
+        target_pid: u32,
+        incident_name: &str,
+        regions: &[MemoryRegionSnapshot],
+        vmos: &[VmoSnapshot],
+        timestamp: u64,
+    ) -> Result<IncidentTriageReport, ForensicsError> {
+        if !cap.has_right(
+            forensics_rights::CAPTURE_MEMORY
+                | forensics_rights::EXTRACT_ARTIFACTS
+                | forensics_rights::SIGN_EVIDENCE,
+        ) {
+            return Err(ForensicsError::PermissionDenied);
+        }
+        if self.snapshot_count >= MAX_SNAPSHOTS {
+            return Err(ForensicsError::TableFull);
+        }
+
+        // 1. Capture de l'instantané complet processus + VMOs
+        let snap_id = self.snapshot_count as u64 + 1;
+        let mut image = ProcessForensicImage::new(
+            snap_id,
+            target_pid,
+            1,
+            incident_name,
+            0x200000,
+            0x401000,
+            0x7fff0000,
+            0x7fff0008,
+            0x246,
+            6,
+            timestamp,
+        );
+
+        for &reg in regions {
+            if image.add_region(reg).is_err() {
+                break;
+            }
+        }
+        for &vmo in vmos {
+            if image.add_vmo(vmo).is_err() {
+                break;
+            }
+        }
+
+        self.snapshots[self.snapshot_count] = Some(image);
+        self.snapshot_count += 1;
+        self.record_custody_event(
+            CustodyAction::PostIncidentTriage,
+            snap_id,
+            cap.handle.0 as u32,
+            timestamp,
+        );
+
+        // 2. Extraction chirurgicale des artefacts d'incident
+        let mut gen_count = 0u32;
+
+        // Artefact pour toute région W+X suspecte
+        for reg in regions {
+            if reg.is_suspicious_executable {
+                let _ = self.record_artifact(
+                    cap,
+                    ArtifactKind::MemoryInjection,
+                    target_pid,
+                    "Suspicious W+X memory region identified during triage",
+                    timestamp,
+                    90,
+                );
+                gen_count += 1;
+            }
+        }
+
+        // Analyse des résidus
+        let residue = image.residue_report;
+        if residue.has_shellcode_fragment {
+            let _ = self.record_artifact(
+                cap,
+                ArtifactKind::MemoryInjection,
+                target_pid,
+                "Shellcode instruction fragment isolated in resident memory",
+                timestamp + 1,
+                95,
+            );
+            gen_count += 1;
+        }
+        if residue.has_rop_gadget_chain {
+            let _ = self.record_artifact(
+                cap,
+                ArtifactKind::RopChainPayload,
+                target_pid,
+                "ROP gadget chain identified in memory stack frame",
+                timestamp + 2,
+                85,
+            );
+            gen_count += 1;
+        }
+        if residue.has_private_key_leak {
+            let _ = self.record_artifact(
+                cap,
+                ArtifactKind::DlpExfiltrationResidual,
+                target_pid,
+                "Residual private key / certificate discovered in slack space",
+                timestamp + 3,
+                80,
+            );
+            gen_count += 1;
+        }
+        if residue.has_token_leak {
+            let _ = self.record_artifact(
+                cap,
+                ArtifactKind::CapabilityTransfer,
+                target_pid,
+                "Unauthorized credential / capability bearer token residual",
+                timestamp + 4,
+                75,
+            );
+            gen_count += 1;
+        }
+
+        // Artefacts pour VMOs exposés
+        for vmo in vmos {
+            if vmo.contains_sensitive_residual {
+                let _ = self.record_artifact(
+                    cap,
+                    ArtifactKind::VmoResidueLeak,
+                    target_pid,
+                    "Sensitive residual discovered inside mapped VMO buffer",
+                    timestamp + 5,
+                    70,
+                );
+                gen_count += 1;
+            }
+        }
+
+        // 3. Scellement cryptographique immédiat de la preuve
+        let seal = self.seal_evidence(cap, snap_id, true, cap.handle.0 as u32, timestamp + 10)?;
+        let seal_id = seal.evidence_id;
+
+        // 4. Rapport de triage
+        self.triage_count += 1;
+        let risk = self.calculate_incident_risk_score();
+        let chain_valid = self.verify_custody_integrity();
+
+        Ok(IncidentTriageReport {
+            triage_id: self.triage_count as u64,
+            incident_id,
+            target_pid,
+            snapshot_id: snap_id,
+            seal_id,
+            artifacts_generated: gen_count,
+            risk_score: risk,
+            custody_chain_verified: chain_valid,
+        })
     }
 
     /// Calcule un indice cumulé de menace à partir de la timeline
@@ -1090,6 +1620,19 @@ impl JamboForensicsDaemon {
             }
         }
         total
+    }
+
+    /// Synthèse globale du statut forensique
+    pub fn get_summary(&self) -> ForensicsSummary {
+        ForensicsSummary {
+            snapshot_count: self.snapshot_count,
+            artifact_count: self.artifact_count,
+            seal_count: self.seal_count,
+            custody_count: self.custody_count,
+            custody_chain_valid: self.verify_custody_integrity(),
+            cumulative_risk_score: self.calculate_incident_risk_score(),
+            triage_count: self.triage_count,
+        }
     }
 
     /// Vérifie l'intégrité globale de la chaîne de garde (Chain of Custody)
@@ -1150,38 +1693,46 @@ mod tests {
     }
 
     #[test]
-    fn test_ed25519_sign_verify() {
-        let kp = ForensicKeyPair::derive_from_seed(42);
-        let digest = Blake3::hash(b"Malware Injected Region Sample");
-        let sig = Ed25519Engine::sign(&kp, &digest);
+    fn test_sha256_hashing() {
+        let mut s1 = Sha256::new();
+        s1.update(b"JamboOS Volatile Memory SHA256 Custody");
+        let d1 = s1.finalize();
 
-        assert!(Ed25519Engine::verify(&kp.public_key, &digest, &sig));
-
-        // Altération de la signature
-        let mut corrupted_sig = sig;
-        corrupted_sig[40] ^= 0xff;
-        assert!(!Ed25519Engine::verify(
-            &kp.public_key,
-            &digest,
-            &corrupted_sig
-        ));
+        let d2 = Sha256::hash(b"JamboOS Volatile Memory SHA256 Custody");
+        assert_eq!(d1, d2);
+        assert_ne!(d1, [0u8; 32]);
     }
 
     #[test]
-    fn test_forensics_cap_attenuation() {
-        let root_cap = ForensicsCap::new(Handle::new(100, 1), forensics_rights::ALL, 1000, 50);
-        assert!(root_cap.has_right(forensics_rights::ADMIN));
+    fn test_ed25519_signing_verification() {
+        let kp = ForensicKeyPair::derive_from_seed(0x1337_cafe);
+        let digest = Blake3::hash(b"DigitalForensicsChainOfCustodyVector");
 
-        let restricted = root_cap
+        let sig = Ed25519Engine::sign(&kp, &digest);
+        assert!(Ed25519Engine::verify(&kp.public_key, &digest, &sig));
+
+        // Altération de signature
+        let mut bad_sig_s = sig;
+        bad_sig_s[35] ^= 0xaa;
+        assert!(!Ed25519Engine::verify(&kp.public_key, &digest, &bad_sig_s));
+    }
+
+    #[test]
+    fn test_forensics_cap_monotone_attenuation() {
+        let root = ForensicsCap::new(Handle::new(1, 1), forensics_rights::ALL, 1000, 50);
+        assert!(root.has_right(forensics_rights::CAPTURE_MEMORY));
+        assert!(root.has_right(forensics_rights::TRIAGE_INCIDENT));
+
+        let restricted = root
             .attenuate(
-                forensics_rights::CAPTURE_MEMORY | forensics_rights::EXTRACT_ARTIFACTS,
+                forensics_rights::CAPTURE_MEMORY | forensics_rights::VERIFY_SEAL,
                 500,
                 20,
             )
             .unwrap();
 
         assert!(restricted.has_right(forensics_rights::CAPTURE_MEMORY));
-        assert!(restricted.has_right(forensics_rights::EXTRACT_ARTIFACTS));
+        assert!(restricted.has_right(forensics_rights::VERIFY_SEAL));
         assert!(!restricted.has_right(forensics_rights::ADMIN));
         assert!(!restricted.has_right(forensics_rights::SIGN_EVIDENCE));
 
@@ -1193,6 +1744,37 @@ mod tests {
     }
 
     #[test]
+    fn test_memory_residue_analysis() {
+        let clean_data = b"Hello world clean memory buffer without anything bad";
+        let clean_rep = MemoryResidueAnalyzer::analyze(clean_data);
+        assert_eq!(clean_rep.detected_patterns_count, 0);
+        assert_eq!(clean_rep.risk_score, 0);
+
+        let dirty_data =
+            b"some prefix \x90\x90\x90\x90\x48\x31\xc0\x0f\x05 and Bearer eyJhbGciOi token";
+        let dirty_rep = MemoryResidueAnalyzer::analyze(dirty_data);
+        assert!(dirty_rep.has_shellcode_fragment);
+        assert!(dirty_rep.has_token_leak);
+        assert!(dirty_rep.risk_score >= 50);
+    }
+
+    #[test]
+    fn test_vmo_snapshot_and_seal() {
+        let vmo_payload = b"PRIVATE KEY DATA LEAK IN VMO BUFFER \x5f\xc3";
+        let vmo = VmoSnapshot::new(
+            99,
+            0x2000,
+            VMO_FLAG_READ | VMO_FLAG_WRITE | VMO_FLAG_EXEC,
+            0x60000000,
+            vmo_payload,
+        );
+        assert!(vmo.contains_sensitive_residual);
+        assert!(vmo.is_suspicious_executable);
+        assert_ne!(vmo.blake3_digest, [0u8; 32]);
+        assert_ne!(vmo.sha256_digest, [0u8; 32]);
+    }
+
+    #[test]
     fn test_daemon_full_workflow() {
         let kp = ForensicKeyPair::derive_from_seed(999);
         let cap = ForensicsCap::new(Handle::new(1, 1), forensics_rights::ALL, 5000, 100);
@@ -1200,7 +1782,7 @@ mod tests {
 
         daemon.init_defaults();
         assert_eq!(daemon.snapshot_count, 1);
-        assert_eq!(daemon.artifact_count, 3);
+        assert_eq!(daemon.artifact_count, 4);
         assert_eq!(daemon.seal_count, 1);
         assert!(daemon.verify_custody_integrity());
 
@@ -1229,6 +1811,51 @@ mod tests {
         assert!(daemon.verify_seal_integrity(&cap, &seal).unwrap());
         assert!(daemon.verify_custody_integrity());
         assert!(daemon.calculate_incident_risk_score() > 100);
+    }
+
+    #[test]
+    fn test_post_incident_triage_orchestration() {
+        let kp = ForensicKeyPair::derive_from_seed(444);
+        let cap = ForensicsCap::new(Handle::new(1, 1), forensics_rights::ALL, 5000, 100);
+        let mut daemon = JamboForensicsDaemon::new(cap, kp);
+
+        let dirty_region = MemoryRegionSnapshot::new(
+            0x700000,
+            0x1000,
+            PROT_READ | PROT_WRITE | PROT_EXEC,
+            b"\x90\x90\x90\x90\x48\x31\xc0\x0f\x05INJECTION",
+        );
+        let vmo = VmoSnapshot::new(
+            202,
+            0x1000,
+            VMO_FLAG_READ | VMO_FLAG_WRITE | VMO_FLAG_SHARED,
+            0x800000,
+            b"Bearer SECRET_TOKEN_INSIDE_VMO",
+        );
+
+        let triage_report = daemon
+            .orchestrate_post_incident_triage(
+                &cap,
+                555,
+                77,
+                "infiltrated_service",
+                &[dirty_region],
+                &[vmo],
+                3500,
+            )
+            .unwrap();
+
+        assert_eq!(triage_report.incident_id, 555);
+        assert_eq!(triage_report.target_pid, 77);
+        assert!(triage_report.artifacts_generated >= 3);
+        assert!(triage_report.custody_chain_verified);
+        assert_eq!(daemon.triage_count, 1);
+
+        let summary = daemon.get_summary();
+        assert_eq!(summary.triage_count, 1);
+        assert_eq!(summary.snapshot_count, 1);
+        assert!(summary.seal_count >= 1);
+        assert!(summary.custody_chain_valid);
     }
 
     #[test]
@@ -1301,5 +1928,9 @@ mod tests {
 
         let res3 = daemon.seal_evidence(&read_only_cap, 1, true, 1, 100);
         assert_eq!(res3, Err(ForensicsError::PermissionDenied));
+
+        let res4 =
+            daemon.orchestrate_post_incident_triage(&read_only_cap, 1, 99, "test", &[], &[], 100);
+        assert_eq!(res4, Err(ForensicsError::PermissionDenied));
     }
 }

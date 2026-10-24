@@ -10362,19 +10362,23 @@ impl JamboShell {
                 match subcmd {
                     "status" => {
                         let mut b = [0u8; 20];
-                        emit("[FORENSICS/STATUS] Démon d'Investigation Numérique & Analyse Post-Incident\n");
+                        let sum = self.forensics.get_summary();
+                        emit("[FORENSICS/STATUS] Démon d'Investigation Numérique & Analyse Post-Incident (v0.3.15)\n");
                         emit("  Instantanés capturés  : ");
-                        emit(format_u64(self.forensics.snapshot_count as u64, &mut b));
+                        emit(format_u64(sum.snapshot_count as u64, &mut b));
                         emit("\n  Artefacts répertoriés : ");
-                        emit(format_u64(self.forensics.artifact_count as u64, &mut b));
+                        emit(format_u64(sum.artifact_count as u64, &mut b));
                         emit("\n  Preuves scellées      : ");
-                        emit(format_u64(self.forensics.seal_count as u64, &mut b));
+                        emit(format_u64(sum.seal_count as u64, &mut b));
+                        emit("\n  Triages post-incident : ");
+                        emit(format_u64(sum.triage_count as u64, &mut b));
+                        emit("\n  Score de risque cumulé: ");
+                        emit(format_u64(sum.cumulative_risk_score as u64, &mut b));
                         emit("\n  Chaîne de garde       : ");
-                        emit(format_u64(self.forensics.custody_count as u64, &mut b));
+                        emit(format_u64(sum.custody_count as u64, &mut b));
                         emit(" entrées\n");
-                        let valid = self.forensics.verify_custody_integrity();
                         emit("  Intégrité chaîne garde: ");
-                        emit(if valid {
+                        emit(if sum.custody_chain_valid {
                             "VÉRIFIÉE (OK)\n"
                         } else {
                             "CORROMPUE (ERR)\n"
@@ -10391,6 +10395,8 @@ impl JamboShell {
                                 emit("ms] PID ");
                                 emit(format_u64(art.source_pid as u64, &mut b));
                                 emit(" - ");
+                                emit(art.kind.as_str());
+                                emit(" : ");
                                 if let Ok(s) =
                                     core::str::from_utf8(&art.description[..art.desc_len])
                                 {
@@ -10400,6 +10406,80 @@ impl JamboShell {
                                 emit(format_u64(art.severity_score as u64, &mut b));
                                 emit("/100)\n");
                             }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "triage" => {
+                        let cap = self.forensics.admin_cap;
+                        let reg = jambo_forensics::MemoryRegionSnapshot::new(
+                            0x70001000,
+                            0x2000,
+                            jambo_forensics::PROT_READ
+                                | jambo_forensics::PROT_WRITE
+                                | jambo_forensics::PROT_EXEC,
+                            b"\x90\x90\x90\x90\x48\x31\xc0\x0f\x05INJECTED_POST_INCIDENT_SHELLCODE",
+                        );
+                        let vmo = jambo_forensics::VmoSnapshot::new(
+                            9901,
+                            0x2000,
+                            jambo_forensics::VMO_FLAG_READ
+                                | jambo_forensics::VMO_FLAG_WRITE
+                                | jambo_forensics::VMO_FLAG_ANONYMOUS,
+                            0xa0000000,
+                            b"CAP:TOKEN:LEAKED_SECRET_BEARER_TOKEN \x58\xc3",
+                        );
+                        match self.forensics.orchestrate_post_incident_triage(
+                            &cap,
+                            7701,
+                            105,
+                            "triage_compromised_worker",
+                            &[reg],
+                            &[vmo],
+                            5000,
+                        ) {
+                            Ok(rep) => {
+                                let mut b = [0u8; 20];
+                                emit("[FORENSICS/TRIAGE] Triage post-incident réussi [TriageID: ");
+                                emit(format_u64(rep.triage_id, &mut b));
+                                emit(", SnapID: ");
+                                emit(format_u64(rep.snapshot_id, &mut b));
+                                emit(", Artefacts: ");
+                                emit(format_u64(rep.artifacts_generated as u64, &mut b));
+                                emit(", Scellement Ed25519/BLAKE3/SHA-256 OK]\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("[FORENSICS/TRIAGE] Échec triage post-incident\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "vmo" => {
+                        emit("[FORENSICS/VMO] Virtual Memory Objects (VMO) Capturés :\n");
+                        let mut total_vmos = 0usize;
+                        for i in 0..self.forensics.snapshot_count {
+                            if let Some(ref snap) = self.forensics.snapshots[i] {
+                                for j in 0..snap.vmo_count {
+                                    if let Some(ref vmo) = snap.vmos[j] {
+                                        let mut b = [0u8; 20];
+                                        total_vmos += 1;
+                                        emit("  VMO ID ");
+                                        emit(format_u64(vmo.vmo_id, &mut b));
+                                        emit(" [Taille: ");
+                                        emit(format_u64(vmo.size_bytes, &mut b));
+                                        emit(" octets] Mappé: 0x");
+                                        emit(format_u64(vmo.mapped_vaddr, &mut b));
+                                        emit(if vmo.contains_sensitive_residual {
+                                            " [RÉSIDU SUSPECT DÉTECTÉ]\n"
+                                        } else {
+                                            " [INTÈGRE]\n"
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                        if total_vmos == 0 {
+                            emit("  Aucun VMO associé aux instantanés courants.\n");
                         }
                         (ShellStatus::Success, write_pos)
                     }
@@ -10489,7 +10569,7 @@ impl JamboShell {
                         }
                     }
                     _ => {
-                        emit("Usage: forensics [status | timeline | capture | seal | verify]\n");
+                        emit("Usage: forensics [status | timeline | capture | triage | vmo | seal | verify]\n");
                         (ShellStatus::ExecutionFailed, write_pos)
                     }
                 }
@@ -18842,6 +18922,14 @@ mod tests {
                 let (st4, len4) = shell.execute_line("forensics seal", &mut out);
                 assert_eq!(st4, ShellStatus::Success);
                 assert!(len4 > 0);
+
+                let (st4b, len4b) = shell.execute_line("forensics triage", &mut out);
+                assert_eq!(st4b, ShellStatus::Success);
+                assert!(len4b > 0);
+
+                let (st4c, len4c) = shell.execute_line("forensics vmo", &mut out);
+                assert_eq!(st4c, ShellStatus::Success);
+                assert!(len4c > 0);
 
                 let (st5, len5) = shell.execute_line("forensics verify", &mut out);
                 assert_eq!(st5, ShellStatus::Success);

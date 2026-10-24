@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.3.14-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.3.15-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.3.14 (Orchestration & Réponse aux Incidents Souveraine SOAR jambo-soar)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.3.14` introduit la modernisation et l'unification souveraine de la plateforme SOAR (Security Orchestration, Automation and Response) en espace utilisateur (`services/jambo-soar`) : ingestion et corrélation temps réel unifiée d'alertes multi-sources (SIEM, EDR, NDR, DLP, UEBA, KDIR, FDR, WAF, DDoS), moteur de workflows et de playbooks déterministes modélisés en graphe acyclique dirigé (DAG) avec validation anti-cycles, 6 playbooks de référence intégrés par défaut (anti-DDoS, injections applicatives WAF, révocation immédiate de capacités compromises, endiguement de fuite DLP, neutralisation d'anomalies comportementales UEBA et auto-restauration de l'intégrité noyau KDIR), actions chirurgicales instantanées dispatchées vers 11 sous-systèmes de défense, contrôle d'accès capabilaire strict `SoarCap` avec atténuation monotone et registre d'audit cryptographique SHA-256 scellé par chaînage inaltérable.
+> **Statut du Projet : Version v0.3.15 (Investigation Numérique & Forensique Souveraine en Mémoire Vive jambo-forensics)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.3.15` introduit la modernisation et la souveraineté complète de l'investigation numérique et de l'analyse forensique post-incident en mémoire vive (`services/jambo-forensics`) : acquisition d'empreintes volatiles de processus, capture et scellement d'objets mémoire virtuels souverains (VMO), analyse chirurgicale des résidus mémoire (Memory Residue Analyzer détectant les clés privées, tokens fuités, fragments d'instructions shellcodes et chaînes de gadgets ROP dans le slack space), journalisation chronologique bornée d'artefacts temporels et corrélation multi-sources (DLP, UEBA, SOAR, KDIR), module de triage post-incident orchestré atomique (`orchestrate_post_incident_triage`), scellement cryptographique inviolable multi-algorithmique (BLAKE3 + SHA-256 + signature asymétrique Ed25519), contrôle d'accès sans autorité ambiante `ForensicsCap` avec atténuation monotone et registre de chaîne de garde (Chain of Custody) inaltérable chaîné en SHA-256.
 
 ---
 

@@ -1235,12 +1235,7 @@ pub extern "C" fn _start() -> ! {
 
     // Note: L'Orchestration SOAR & Réponse aux Incidents est validée en Phase 147 (v0.3.14).
 
-    // 14duodevigintiesquadragies. Validation de l'Investigation Numérique & Forensique (Phase 118 - v0.2.116)
-    let forensics_success = sched::execute_forensics_daemon_test();
-    assert!(
-        forensics_success,
-        "Échec du test de l'investigation numérique & analyse forensique jambo-forensics"
-    );
+    // Note: L'Investigation Numérique & Forensique Souveraine est validée en Phase 148 (v0.3.15).
 
     // 14undevigintiesquadragies. Validation de la Détection & Réponse sur les Terminaux (Phase 119 - v0.2.117)
     let edr_success = sched::edr_test::execute_edr_daemon_test();
@@ -1443,6 +1438,13 @@ pub extern "C" fn _start() -> ! {
     assert!(
         soar_success,
         "Échec du test de l'orchestration SOAR & réponse aux incidents souveraine jambo-soar"
+    );
+
+    // 33viciesquadragies. Validation Investigation Numérique & Forensique Souveraine en Mémoire Vive (Phase 148 - v0.3.15)
+    let forensics_success = sched::forensics_test::execute_forensics_daemon_test();
+    assert!(
+        forensics_success,
+        "Échec du test de l'investigation numérique & forensique souveraine jambo-forensics"
     );
 
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
@@ -1736,14 +1738,17 @@ pub extern "C" fn _start() -> ! {
     kprintln!(
         "\x1b[1;32m[PASS] Phase 147 Security Orchestration, Automation & Response Resilience (jambo-soar) Complete\x1b[0m"
     );
+    kprintln!(
+        "\x1b[1;32m[PASS] Phase 148 Volatile Memory Forensics & Digital Investigation (jambo-forensics) Complete\x1b[0m"
+    );
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.3.14 (Security Orchestration, Automation & Response Resilience jambo-soar)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.3.15 (Volatile Memory Forensics Resilience jambo-forensics)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.3.14 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.3.15 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
