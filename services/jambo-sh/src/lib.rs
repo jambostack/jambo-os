@@ -208,6 +208,7 @@ pub struct JamboShell {
     pub tprm: jambo_tprm::JamboTprmDaemon,
     pub appsec: jambo_appsec::JamboAppSecDaemon,
     pub kdir: jambo_kdir::JamboKdirDaemon,
+    pub fdr: jambo_fdr::JamboFdrDaemon,
 }
 
 impl Default for JamboShell {
@@ -810,6 +811,15 @@ impl JamboShell {
         );
         let mut kdir = jambo_kdir::JamboKdirDaemon::new(kdir_cap);
         kdir.init_defaults();
+
+        let fdr_cap = jambo_fdr::FdrCap::new(
+            libjambo::Handle::new(14201, 1),
+            jambo_fdr::fdr_rights::ALL,
+            5000,
+            100,
+        );
+        let mut fdr = jambo_fdr::JamboFdrDaemon::new(fdr_cap);
+        fdr.init_defaults();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -908,6 +918,7 @@ impl JamboShell {
             tprm,
             appsec,
             kdir,
+            fdr,
         }
     }
 
@@ -1123,10 +1134,11 @@ impl JamboShell {
                 emit("  tprm [cmd]      - Gestion des risques fournisseurs (TPRM), dépendances & quarantaine\n");
                 emit("  appsec [cmd]    - Sécurité applicative dynamique (RASP), CFI, canaris mémoire & neutralisation O(1)\n");
                 emit("  kdir [cmd]      - Cyber-résilience & intégrité noyau/pilotes (KDIR), IDT/GDT/CR3 & auto-restauration O(1)\n");
+                emit("  fdr [cmd]       - Résilience firmware & matériel (FDR), SPI Flash, TPM 2.0 / DICE & isolation O(1)\n");
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.3.8 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.3.9 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -14566,6 +14578,207 @@ impl JamboShell {
                     }
                     _ => {
                         emit("Usage: kdir [status | probes | drivers | threats | restore <probe_id> | isolate <driver_id> | verify]\n");
+                        (ShellStatus::ExecutionFailed, write_pos)
+                    }
+                }
+            }
+            "fdr" => {
+                let subcmd = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    "status"
+                };
+
+                let mut b = [0u8; 20];
+
+                match subcmd {
+                    "status" => {
+                        let sum = self.fdr.get_summary();
+                        emit("--- JAMBO RÉSILIENCE MATÉRIELLE & FIRMWARE FDR (PHASE 142) ---\n");
+                        emit("Sondes firmware déployées: ");
+                        emit(format_u64(sum.probes_count as u64, &mut b));
+                        emit("\nRégions firmware intactes: ");
+                        emit(format_u64(sum.intact_count as u64, &mut b));
+                        emit("\nRégions altérées / bootkits: ");
+                        emit(format_u64(sum.tampered_count as u64, &mut b));
+                        emit("\nRégions restaurées (Dual-BIOS): ");
+                        emit(format_u64(sum.restored_count as u64, &mut b));
+                        emit("\nBanques PCR TPM 2.0 mesurées: ");
+                        emit(format_u64(sum.pcr_banks_measured as u64, &mut b));
+                        emit("\nPériphériques matériels supervisés: ");
+                        emit(format_u64(sum.devices_count as u64, &mut b));
+                        emit("\nPériphériques isolés O(1): ");
+                        emit(format_u64(sum.isolated_devices_count as u64, &mut b));
+                        emit("\nMenaces bootkit détectées: ");
+                        emit(format_u64(sum.threats_detected as u64, &mut b));
+                        emit("\nMenaces auto-restaurées / remédiées: ");
+                        emit(format_u64(sum.threats_remediated as u64, &mut b));
+                        emit("\nRacine de confiance (DICE RoT): ");
+                        emit(if sum.dice_attested {
+                            "ATTESTÉE (OK)\n"
+                        } else {
+                            "NON CONFORME\n"
+                        });
+                        emit("Entrées d'audit SHA-256: ");
+                        emit(format_u64(sum.ledger_entries as u64, &mut b));
+                        emit("\nRegistre cryptographique: ");
+                        emit(if sum.ledger_valid {
+                            "INTÈGRE (OK)\n"
+                        } else {
+                            "ALTÉRÉ (FAIL)\n"
+                        });
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "probes" => {
+                        emit("--- SONDES D'INTÉGRITÉ FIRMWARE & TABLES SYSTÈME ---\n");
+                        for probe in self.fdr.probes.iter().flatten() {
+                            emit("[#");
+                            emit(format_u64(probe.probe_id as u64, &mut b));
+                            emit("] ");
+                            if let Ok(name_str) =
+                                core::str::from_utf8(&probe.name[..probe.name_len])
+                            {
+                                emit(name_str);
+                            }
+                            emit(" | ");
+                            emit(probe.fw_type.as_str());
+                            emit(" | Base: ");
+                            emit(format_hex_u64(probe.base_address, &mut b));
+                            emit(" | Taille: ");
+                            emit(format_u64(probe.size_bytes as u64, &mut b));
+                            emit(" octets | Statut: ");
+                            emit(probe.status.as_str());
+                            emit(" | Violations: ");
+                            emit(format_u64(probe.tamper_count as u64, &mut b));
+                            emit("\n");
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "pcrs" => {
+                        emit("--- REGISTRES PCR TPM 2.0 (ROOT OF TRUST) ---\n");
+                        for pcr in self.fdr.pcrs.iter().flatten() {
+                            emit("[PCR ");
+                            emit(format_u64(pcr.pcr_index as u64, &mut b));
+                            emit("] Événements: ");
+                            emit(format_u64(pcr.event_count as u64, &mut b));
+                            emit(" | Attesté: ");
+                            emit(if pcr.attestation_verified {
+                                "OUI"
+                            } else {
+                                "NON"
+                            });
+                            emit(" | Desc: ");
+                            if let Ok(desc_str) =
+                                core::str::from_utf8(&pcr.description[..pcr.description_len])
+                            {
+                                emit(desc_str);
+                            }
+                            emit("\n");
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "devices" => {
+                        emit("--- PÉRIPHÉRIQUES MATÉRIELS & OPTION ROMS ---\n");
+                        for dev in self.fdr.devices.iter().flatten() {
+                            emit("[#");
+                            emit(format_u64(dev.device_id as u64, &mut b));
+                            emit("] ");
+                            if let Ok(name_str) = core::str::from_utf8(&dev.name[..dev.name_len]) {
+                                emit(name_str);
+                            }
+                            emit(" | PCI BDF: ");
+                            emit(format_hex_u64(dev.pci_bdf as u64, &mut b));
+                            emit(" | Statut: ");
+                            emit(dev.status.as_str());
+                            emit("\n");
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "threats" => {
+                        emit("--- MENACES BOOTKIT & IMPLANTS MATÉRIELS DÉTECTÉS ---\n");
+                        for threat in self.fdr.threats.iter().flatten() {
+                            emit("[#");
+                            emit(format_u64(threat.threat_id as u64, &mut b));
+                            emit("] Sonde #");
+                            emit(format_u64(threat.probe_id as u64, &mut b));
+                            emit(" | Vecteur: ");
+                            emit(threat.threat_type.as_str());
+                            emit(" | Sévérité: ");
+                            match threat.severity {
+                                jambo_fdr::ThreatSeverity::Low => emit("Faible"),
+                                jambo_fdr::ThreatSeverity::Medium => emit("Moyenne"),
+                                jambo_fdr::ThreatSeverity::High => emit("Élevée"),
+                                jambo_fdr::ThreatSeverity::Critical => emit("CRITIQUE"),
+                            }
+                            emit(" | Remédiée: ");
+                            emit(if threat.remediated { "OUI" } else { "NON" });
+                            emit(" | Auto-restaurée: ");
+                            emit(if threat.auto_restored {
+                                "OUI\n"
+                            } else {
+                                "NON\n"
+                            });
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "restore" => {
+                        if parsed.arg_count > 2 {
+                            let probe_id = parse_u64(parsed.args[2]).unwrap_or(0) as u32;
+                            let mut buf = [0u8; 128];
+                            match self
+                                .fdr
+                                .auto_restore_firmware(probe_id, &mut buf, 1735002000)
+                            {
+                                Ok(bytes) => {
+                                    emit("Région firmware #");
+                                    emit(format_u64(probe_id as u64, &mut b));
+                                    emit(" auto-restaurée avec succès via Dual-BIOS (");
+                                    emit(format_u64(bytes as u64, &mut b));
+                                    emit(" octets réécrits)\n");
+                                    (ShellStatus::Success, write_pos)
+                                }
+                                Err(_) => {
+                                    emit("Échec restauration firmware\n");
+                                    (ShellStatus::ExecutionFailed, write_pos)
+                                }
+                            }
+                        } else {
+                            emit("Usage: fdr restore <probe_id>\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        }
+                    }
+                    "isolate" => {
+                        if parsed.arg_count > 2 {
+                            let device_id = parse_u64(parsed.args[2]).unwrap_or(0) as u32;
+                            match self.fdr.isolate_device(device_id, 1735002100) {
+                                Ok(()) => {
+                                    emit("Périphérique #");
+                                    emit(format_u64(device_id as u64, &mut b));
+                                    emit(" CONFINÉ et ISOLÉ O(1) avec succès (BARs révoqués)\n");
+                                    (ShellStatus::Success, write_pos)
+                                }
+                                Err(_) => {
+                                    emit("Échec confinement périphérique\n");
+                                    (ShellStatus::ExecutionFailed, write_pos)
+                                }
+                            }
+                        } else {
+                            emit("Usage: fdr isolate <device_id>\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        }
+                    }
+                    "verify" => {
+                        let valid = self.fdr.verify_ledger_integrity();
+                        emit("Registre d'audit cryptographique SHA-256 FDR: ");
+                        emit(if valid {
+                            "INTÈGRE (OK)\n"
+                        } else {
+                            "ALTÉRÉ (FAIL)\n"
+                        });
+                        (ShellStatus::Success, write_pos)
+                    }
+                    _ => {
+                        emit("Usage: fdr [status | probes | pcrs | devices | threats | restore <probe_id> | isolate <device_id> | verify]\n");
                         (ShellStatus::ExecutionFailed, write_pos)
                     }
                 }

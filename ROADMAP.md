@@ -128,22 +128,25 @@
 | **v0.3.6** | 139 | Gestion des Risques Fournisseurs & Dépendances TPRM `jambo-tprm` | Évaluation continue des risques fournisseurs & dépendances tierces (TPRM), cartographie des dépendances externes, scoring dynamique de réputation et de criticité, surveillance continue des flux d'ingestion, attestations tierces SecNumCloud/ISO27001, quarantaine O(1) des composants amont compromis, TprmCap & registre d'audit SHA-256 inaltérable | ✅ Validé |
 | **v0.3.7** | 140 | Sécurité Applicative Dynamique & RASP `jambo-appsec` | Plateforme souveraine RASP, surveillance microservices Ring 3, détection de détournement de flux de contrôle (CFI / Shadow Stack), neutralisation instantanée des injections de charge utile, blocage désérialisation non sécurisée, canaris mémoire, quarantaine O(1), AppSecCap & audit SHA-256 | ✅ Validé |
 | **v0.3.8** | 141 | Cyber-Résilience & Intégrité Noyau / Pilotes KDIR `jambo-kdir` | Surveillance continue d'intégrité des structures critiques du noyau (IDT, GDT, tables de pages CR3, dispatchers syscalls), détection d'altérations non autorisées et rootkits Ring 0/hyperviseur (DKOM, hooks IDT), validation signatures pilotes VMO, auto-restauration des tables système, confinement O(1), KdirCap & registre SHA-256 inaltérable | ✅ Validé |
+| **v0.3.9** | 142 | Résilience & Défense Matérielle et Firmware FDR `jambo-fdr` | Surveillance et attestation continue du firmware UEFI/BIOS SPI Flash, partitions Dual-BIOS, racine de confiance matérielle (RoT TPM 2.0 / DICE), banques PCR 0..23, intégrité des tables ACPI (MADT/DSDT) et SMBIOS, détection de bootkits et d'implants matériels Ring -2/-3, confinement O(1) des périphériques compromis, auto-restauration Dual-BIOS, FdrCap & registre SHA-256 inaltérable | ✅ Validé |
 
 ---
 
 ## 3. Prochaines Étapes Prioritaires
 
-### 🎯 Prochaine Tâche Immédiate : Phase 142 — v0.3.9
-* **Composant** : `services/jambo-fdr`
-* **Versionnement** : Poursuite de la série `v0.3.*` (Jalon `v0.3.9`)
-* **Objectif** : Résilience & Défense Matérielle et Firmware (Firmware & Hardware Defense Resilience) — Surveillance et attestation continue du firmware UEFI/BIOS SPI Flash, racine de confiance matérielle (Root of Trust TPM 2.0 / DICE), intégrité des tables ACPI/SMBIOS, détection de bootkits et d'implants matériels, FdrCap & registre d'audit SHA-256 inaltérable.
+### 🎯 Prochaine Tâche Immédiate : Phase 143 — v0.3.10
+* **Composant** : `services/jambo-ndr`
+* **Versionnement** : Poursuite de la série `v0.3.*` (Jalon `v0.3.10`)
+* **Objectif** : Détection Réseau & Micro-segmentation Souveraine (Network Detection & Sovereign Microsegmentation Resilience - NDR) — Surveillance active des flux réseau inter-services et périphériques, détection d'anomalies de trafic L2-L7, micro-segmentation dynamique Zero-Trust, blocage immédiat des flux suspects O(1), NdrCap & registre d'audit SHA-256 inaltérable.
 * **Tâches précises** :
-  1. Moteur FDR souverain : sondes d'attestation TPM, validation des mesures PCR, confinement des firmwares corrompus.
-  2. Validation formelle et suite de tests `cargo xtask test`.
+  1. Moteur NDR souverain : analyse heuristique et détection d'exfiltration ou balisage C2.
+  2. Confinement réseau dynamique et validation formelle `cargo xtask test`.
 
 ---
 
 ## 4. Journal d'Exécution des Cycles
+
+* **2026-10-24 07:20 UTC** : Validation complète Phase 142 (`jambo-fdr`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-fdr`, 7/7). FDR — Surveillance continue UEFI SPI Flash / Dual-BIOS / ACPI / SMBIOS, attestation RoT TPM 2.0 & DICE, extension PCR, détection bootkits & auto-restauration, confinement O(1) des périphériques PCI compromis, registre SHA-256 intègre. Tag `v0.3.9`.
 
 * **2026-10-24 07:10 UTC** : Validation complète Phase 141 (`jambo-kdir`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-kdir`, 6/6). KDIR — Surveillance continue IDT/GDT/CR3/LSTAR, détection rootkits & hooks, auto-restauration instantanée depuis golden snapshot, validation & confinement immédiat O(1) des pilotes non conformes, registre SHA-256 intègre. Tag `v0.3.8`.
 

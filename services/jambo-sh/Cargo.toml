@@ -25,6 +25,7 @@ jambo-devsecops = { path = "../jambo-devsecops" }
 jambo-tprm = { path = "../jambo-tprm" }
 jambo-appsec = { path = "../jambo-appsec" }
 jambo-kdir = { path = "../jambo-kdir" }
+jambo-fdr = { path = "../jambo-fdr" }
 jambo-auditd = { path = "../jambo-auditd" }
 jambo-authd = { path = "../jambo-authd" }
 jambo-bpfd = { path = "../jambo-bpfd" }
