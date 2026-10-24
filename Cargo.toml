@@ -109,6 +109,7 @@ members = [
     "services/jambo-fdr",
     "services/jambo-ndr",
     "services/jambo-cdr",
+    "services/jambo-dlp",
     "libs/jambo-ui",
     "libs/jambo-sdk",
     "drivers/virtio",

@@ -211,6 +211,7 @@ pub struct JamboShell {
     pub fdr: jambo_fdr::JamboFdrDaemon,
     pub ndr: jambo_ndr::JamboNdrDaemon,
     pub cdr: jambo_cdr::JamboCdrDaemon,
+    pub dlp: jambo_dlp::JamboDlpDaemon,
 }
 
 impl Default for JamboShell {
@@ -840,6 +841,15 @@ impl JamboShell {
         );
         let mut cdr = jambo_cdr::JamboCdrDaemon::new(cdr_cap);
         cdr.init_defaults();
+
+        let dlp_cap = jambo_dlp::DlpCap::new(
+            libjambo::Handle::new(14501, 1),
+            jambo_dlp::dlp_rights::ALL,
+            5000,
+            100,
+        );
+        let mut dlp = jambo_dlp::JamboDlpDaemon::new(dlp_cap);
+        dlp.init_defaults();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -941,6 +951,7 @@ impl JamboShell {
             fdr,
             ndr,
             cdr,
+            dlp,
         }
     }
 
@@ -1159,10 +1170,11 @@ impl JamboShell {
                 emit("  fdr [cmd]       - Résilience firmware & matériel (FDR), SPI Flash, TPM 2.0 / DICE & isolation O(1)\n");
                 emit("  ndr [cmd]       - Détection réseau & micro-segmentation Zero-Trust (NDR), analyse L2-L7 & confinement O(1)\n");
                 emit("  cdr [cmd]       - Désarmement et reconstruction de contenu (CDR), neutralisation macros/W+X & quarantaine O(1)\n");
+                emit("  dlp [cmd]       - Protection fuites de données (DLP), classification, masquage & quarantaine O(1)\n");
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.3.11 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.3.12 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -15150,6 +15162,152 @@ impl JamboShell {
                     }
                     _ => {
                         emit("Usage: cdr [status | policies | threats | quarantine | scan | verify]\n");
+                        (ShellStatus::ExecutionFailed, write_pos)
+                    }
+                }
+            }
+            "dlp" => {
+                let subcmd = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    "status"
+                };
+
+                match subcmd {
+                    "status" => {
+                        let sum = self.dlp.get_summary();
+                        emit("=== Moteur Souverain DLP (Protection Fuites de Données) ===\n");
+                        emit("  Flux inspectés       : ");
+                        let mut b = [0u8; 20];
+                        emit(format_u64(sum.flows_scanned as u64, &mut b));
+                        emit("\n  Violations détectées : ");
+                        emit(format_u64(sum.violations_detected as u64, &mut b));
+                        emit("\n  Charges masquées     : ");
+                        emit(format_u64(sum.payloads_masked as u64, &mut b));
+                        emit("\n  Flux bloqués         : ");
+                        emit(format_u64(sum.flows_blocked as u64, &mut b));
+                        emit("\n  Flux en quarantaine  : ");
+                        emit(format_u64(sum.flows_quarantined as u64, &mut b));
+                        emit("\n  Politiques actives   : ");
+                        emit(format_u64(sum.policies_count as u64, &mut b));
+                        emit("\n  Entrées en quarant.  : ");
+                        emit(format_u64(sum.quarantine_count as u64, &mut b));
+                        emit("\n  Registre d'audit     : ");
+                        emit(if sum.ledger_valid {
+                            "SCELLÉ & INTÈGRE (OK)\n"
+                        } else {
+                            "ALTÉRÉ (FAIL)\n"
+                        });
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "policies" => {
+                        emit("=== Politiques DLP Actives ===\n");
+                        for pol in self.dlp.policies.iter().flatten() {
+                            emit("  [P#");
+                            let mut b = [0u8; 20];
+                            emit(format_u64(pol.policy_id as u64, &mut b));
+                            emit("] ");
+                            if let Ok(name_str) = core::str::from_utf8(&pol.name[..pol.name_len]) {
+                                emit(name_str);
+                            }
+                            emit(" | Type: ");
+                            emit(pol.data_type.as_str());
+                            emit(" | Sévérité: ");
+                            emit(pol.severity.as_str());
+                            emit(" | Action: ");
+                            emit(pol.action.as_str());
+                            emit(" | Quarantaine: ");
+                            emit(if pol.quarantine_on_match {
+                                "OUI"
+                            } else {
+                                "NON"
+                            });
+                            emit("\n");
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "violations" => {
+                        emit("=== Violations Détectées par DLP ===\n");
+                        for v in self.dlp.violations.iter().flatten() {
+                            emit("  [V#");
+                            let mut b = [0u8; 20];
+                            emit(format_u64(v.violation_id as u64, &mut b));
+                            emit("] Flux#");
+                            emit(format_u64(v.flow_id as u64, &mut b));
+                            emit(" | Type: ");
+                            emit(v.data_type.as_str());
+                            emit(" | Sévérité: ");
+                            emit(v.severity.as_str());
+                            emit(" | Action: ");
+                            emit(v.action_taken.as_str());
+                            emit(" | Entropie: ");
+                            emit(format_u64(v.entropy_millibits as u64, &mut b));
+                            emit(" mbits\n");
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "quarantine" => {
+                        emit("=== Flux en Quarantaine Souveraine O(1) ===\n");
+                        for q in self.dlp.quarantine_store.iter().flatten() {
+                            emit("  [Q#");
+                            let mut b = [0u8; 20];
+                            emit(format_u64(q.flow_id as u64, &mut b));
+                            emit("] Source: ");
+                            if let Ok(src_str) = core::str::from_utf8(&q.source[..q.source_len]) {
+                                emit(src_str);
+                            }
+                            emit(" -> Dest: ");
+                            if let Ok(dst_str) =
+                                core::str::from_utf8(&q.destination[..q.destination_len])
+                            {
+                                emit(dst_str);
+                            }
+                            emit(" | Type: ");
+                            emit(q.data_type.as_str());
+                            emit(" | Sévérité: ");
+                            emit(q.severity.as_str());
+                            emit(" | Isolé: ");
+                            emit(if q.isolated { "OUI\n" } else { "NON\n" });
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "scan" => {
+                        let sample_payload = b"Transfer authorization: card 4111-1111-1111-1111";
+                        let mut output = [0u8; 128];
+                        match self.dlp.inspect_flow(
+                            999,
+                            "cli_demo",
+                            "remote_gateway",
+                            sample_payload,
+                            &mut output,
+                            1735109999,
+                        ) {
+                            Ok(res) => {
+                                emit("[DLP/SCAN] Flux analysé avec succès : ");
+                                emit(res.action.as_str());
+                                emit(" (Type: ");
+                                emit(res.data_type.as_str());
+                                emit(")\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("[DLP/SCAN] Échec de l'analyse DLP\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "verify" => {
+                        let valid = self.dlp.verify_audit_integrity();
+                        emit("Registre d'audit cryptographique SHA-256 DLP: ");
+                        emit(if valid {
+                            "INTÈGRE (OK)\n"
+                        } else {
+                            "ALTÉRÉ (FAIL)\n"
+                        });
+                        (ShellStatus::Success, write_pos)
+                    }
+                    _ => {
+                        emit("Usage: dlp [status | policies | violations | quarantine | scan | verify]\n");
                         (ShellStatus::ExecutionFailed, write_pos)
                     }
                 }

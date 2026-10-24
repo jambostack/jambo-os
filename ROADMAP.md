@@ -1,7 +1,7 @@
 # ROADMAP DU DÉVELOPPEMENT AUTONOME — JamboOS
 
-> **Dernière mise à jour** : 2026-10-24 07:45 UTC  
-> **Version actuelle** : `v0.3.11`  
+> **Dernière mise à jour** : 2026-10-24 08:08 UTC  
+> **Version actuelle** : `v0.3.12`  
 > **Statut global** : Pré-Alpha active — Micro-noyau de 3e génération orienté capacités (`#![no_std]`)  
 > **Cycle de développement autonome** : 10 minutes via le Planificateur de Tâches & Crons d'Antigravity WebUI  
 
@@ -131,22 +131,25 @@
 | **v0.3.9** | 142 | Résilience & Défense Matérielle et Firmware FDR `jambo-fdr` | Surveillance et attestation continue du firmware UEFI/BIOS SPI Flash, partitions Dual-BIOS, racine de confiance matérielle (RoT TPM 2.0 / DICE), banques PCR 0..23, intégrité des tables ACPI (MADT/DSDT) et SMBIOS, détection de bootkits et d'implants matériels Ring -2/-3, confinement O(1) des périphériques compromis, auto-restauration Dual-BIOS, FdrCap & registre SHA-256 inaltérable | ✅ Validé |
 | **v0.3.10** | 143 | Détection Réseau & Micro-segmentation Souveraine NDR `jambo-ndr` | Surveillance active des flux réseau inter-services (L2-L7), détection heuristique d'anomalies de trafic (C2 beaconing, exfiltration massive, DNS tunneling), micro-segmentation dynamique Zero-Trust, blocage immédiat et confinement O(1) des endpoints suspects, NdrCap & registre d'audit SHA-256 inaltérable | ✅ Validé |
 | **v0.3.11** | 144 | Désarmement & Reconstruction de Contenu Souverain CDR `jambo-cdr` | Désarmement et reconstruction de contenu (CDR), neutralisation proactive de macros, segments W+X, gadgets de désérialisation, traversées de répertoires et scripts malveillants, reconstruction saine déterministe, mise en quarantaine O(1), CdrCap & registre d'audit SHA-256 inaltérable | ✅ Validé |
+| **v0.3.12** | 145 | Protection Fuites Données Souveraines DLP `jambo-dlp` | Protection contre les fuites de données souveraines (DLP), classification temps réel PII/secrets/clés, validation Luhn, calcul d'entropie Shannon, masquage dynamique, blocage & quarantaine O(1), DlpCap & registre d'audit SHA-256 inaltérable | ✅ Validé |
 
 ---
 
 ## 3. Prochaines Étapes Prioritaires
 
-### 🎯 Prochaine Tâche Immédiate : Phase 145 — v0.3.12
-* **Composant** : `services/jambo-dlp`
-* **Versionnement** : Poursuite de la série `v0.3.*` (Jalon `v0.3.12`)
-* **Objectif** : Protection contre les Fuites de Données Souveraines (Data Loss Prevention - DLP) — Inspection profonde et classification en temps réel des flux exfiltrables (PII, secrets cryptographiques, clés privées, empreintes confidentielles), blocage instantané et masquage dynamique, DlpCap & registre d'audit SHA-256 inaltérable.
+### 🎯 Prochaine Tâche Immédiate : Phase 146 — v0.3.13
+* **Composant** : `services/jambo-ueba`
+* **Versionnement** : Poursuite de la série `v0.3.*` (Jalon `v0.3.13`)
+* **Objectif** : Analyse Comportementale des Utilisateurs et Entités Souveraine (UEBA - User and Entity Behavior Analytics) — Profilage comportemental des acteurs et services Ring 3, détection d'anomalies multidimensionnelles par écarts statistiques aux baselines, scoring de risque adaptatif, détection d'usurpations et mouvements latéraux, UebaCap & registre d'audit SHA-256 inaltérable.
 * **Tâches précises** :
-  1. Moteur DLP souverain : classification par expressions régulières no_std et détection d'entropie de secrets.
-  2. Blocage immédiat des flux sortants non autorisés et validation formelle `cargo xtask test`.
+  1. Moteur UEBA souverain : profilage d'activité et calcul de scores de risque d'anomalies comportementales no_std.
+  2. Intégration capabilaire UebaCap, alertes proactives et validation formelle `cargo xtask test`.
 
 ---
 
 ## 4. Journal d'Exécution des Cycles
+
+* **2026-10-24 08:08 UTC** : Validation complète Phase 145 (`jambo-dlp`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-dlp`, 9/9). DLP — Classification en temps réel PII/secrets/clés/classifiés, validation Luhn des cartes bancaires, calcul d'entropie Shannon en virgule fixe, masquage dynamique, blocage immédiat et quarantaine O(1), DlpCap & registre d'audit SHA-256 scellé. Tag `v0.3.12`.
 
 * **2026-10-24 07:45 UTC** : Validation complète Phase 144 (`jambo-cdr`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-cdr`, 9/9). CDR — Détection structurelle récursive sans exécution, désarmement W+X / macros / traversées / shellcodes, assainissement déterministe, quarantaine O(1), CdrCap & registre SHA-256 scellé. Tag `v0.3.11`.
 
