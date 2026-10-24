@@ -14358,6 +14358,10 @@ impl JamboShell {
                             emit(format_u64(summary.active_sessions_count as u64, &mut b));
                             emit("\n  Commandes enregistrées      : ");
                             emit(format_u64(summary.total_commands_recorded as u64, &mut b));
+                            emit("\n  Score de conformité ZSP     : ");
+                            emit(format_u64(summary.zsp_compliance_score as u64, &mut b));
+                            emit("/100\n  Secrets éphémères tournés   : ");
+                            emit(format_u64(summary.secrets_rotated_count as u64, &mut b));
                             emit("\n  Grand livre d'audit SHA-256 : ");
                             emit(if summary.ledger_valid {
                                 "INTÈGRE (OK)\n"
@@ -14651,8 +14655,107 @@ impl JamboShell {
                         });
                         (ShellStatus::Success, write_pos)
                     }
+                    "rotate-all" => {
+                        emit("=== ROTATION AUTONOME DE TOUS LES SECRETS PAM ===\n");
+                        let mut b = [0u8; 20];
+                        let cap = self.pam.admin_cap;
+                        match self.pam.rotate_all_secrets(&cap, 5080) {
+                            Ok(count) => {
+                                emit("  [OK] ");
+                                emit(format_u64(count as u64, &mut b));
+                                emit(" secrets de comptes privilégiés renouvelés avec succès\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("  [FAIL] Échec de la rotation globale des secrets\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "reap" => {
+                        emit("=== MOISSONNAGE AUTONOME DES SESSIONS EXPIRÉES ===\n");
+                        let mut b = [0u8; 20];
+                        let cap = self.pam.admin_cap;
+                        match self.pam.reap_expired_sessions(&cap, 99999) {
+                            Ok(count) => {
+                                emit("  [OK] ");
+                                emit(format_u64(count as u64, &mut b));
+                                emit(" sessions expirées purgées et secrets renouvelés\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("  [FAIL] Échec du moissonnage de sessions\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "reconcile" => {
+                        emit("=== RÉCONCILIATION POSTURE ZERO STANDING PRIVILEGES (ZSP) ===\n");
+                        let mut b = [0u8; 20];
+                        let cap = self.pam.admin_cap;
+                        match self.pam.reconcile_zsp_posture(&cap, 5090) {
+                            Ok(score) => {
+                                emit("  [OK] Score de conformité ZSP : ");
+                                emit(format_u64(score as u64, &mut b));
+                                emit("/100\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("  [FAIL] Échec de la réconciliation ZSP\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "report" => {
+                        emit("=== RAPPORT D'AUDIT SOUVERAIN PAM (SHA-256 SCELLÉ) ===\n");
+                        let mut b = [0u8; 20];
+                        let cap = self.pam.admin_cap;
+                        match self.pam.generate_audit_report(&cap, 5100) {
+                            Ok(report) => {
+                                emit("  Rapport ID                 : #");
+                                emit(format_u64(report.report_id as u64, &mut b));
+                                emit("\n  Total Comptes Supervisés   : ");
+                                emit(format_u64(report.total_accounts as u64, &mut b));
+                                emit("\n  Comptes Actifs             : ");
+                                emit(format_u64(report.active_accounts as u64, &mut b));
+                                emit("\n  Comptes en Service (JIT)   : ");
+                                emit(format_u64(report.in_use_accounts as u64, &mut b));
+                                emit("\n  Comptes Verrouillés        : ");
+                                emit(format_u64(report.locked_accounts as u64, &mut b));
+                                emit("\n  Demandes JIT Soumises      : ");
+                                emit(format_u64(report.total_jit_requests as u64, &mut b));
+                                emit("\n  Demandes JIT Approuvées    : ");
+                                emit(format_u64(report.approved_jit_requests as u64, &mut b));
+                                emit("\n  Sessions Actives           : ");
+                                emit(format_u64(report.active_sessions as u64, &mut b));
+                                emit("\n  Sessions Fermées           : ");
+                                emit(format_u64(report.terminated_sessions as u64, &mut b));
+                                emit("\n  Sessions Interrompues O(1) : ");
+                                emit(format_u64(report.killed_sessions as u64, &mut b));
+                                emit("\n  Sessions Expirées          : ");
+                                emit(format_u64(report.expired_sessions as u64, &mut b));
+                                emit("\n  Score Conformité ZSP       : ");
+                                emit(format_u64(report.zsp_compliance_score as u64, &mut b));
+                                emit("/100\n  Grand Livre d'Audit Entrées: ");
+                                emit(format_u64(report.ledger_entries_count as u64, &mut b));
+                                emit("\n  Sceau SHA-256 Rapport      : ");
+                                let valid =
+                                    jambo_pam::JamboPamDaemon::verify_audit_report_hash(&report);
+                                emit(if valid {
+                                    "SCELLÉ & INTÈGRE (OK)\n"
+                                } else {
+                                    "ALTÉRÉ (FAIL)\n"
+                                });
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("  [FAIL] Échec de la génération du rapport d'audit PAM\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
                     _ => {
-                        emit("Usage: pam [status | accounts | sessions | jit-requests | request | approve | session-start | record | terminate | kill | rotate | verify]\n");
+                        emit("Usage: pam [status | accounts | sessions | jit-requests | request | approve | session-start | record | terminate | kill | rotate | rotate-all | reap | reconcile | report | verify]\n");
                         (ShellStatus::ExecutionFailed, write_pos)
                     }
                 }
@@ -20891,6 +20994,22 @@ mod tests {
                 let (st11, len11) = shell.execute_line("pam verify", &mut out);
                 assert_eq!(st11, ShellStatus::Success);
                 assert!(len11 > 0);
+
+                let (st12, len12) = shell.execute_line("pam rotate-all", &mut out);
+                assert_eq!(st12, ShellStatus::Success);
+                assert!(len12 > 0);
+
+                let (st13, len13) = shell.execute_line("pam reap", &mut out);
+                assert_eq!(st13, ShellStatus::Success);
+                assert!(len13 > 0);
+
+                let (st14, len14) = shell.execute_line("pam reconcile", &mut out);
+                assert_eq!(st14, ShellStatus::Success);
+                assert!(len14 > 0);
+
+                let (st15, len15) = shell.execute_line("pam report", &mut out);
+                assert_eq!(st15, ShellStatus::Success);
+                assert!(len15 > 0);
             })
             .unwrap();
         handle.join().unwrap();

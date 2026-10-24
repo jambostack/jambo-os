@@ -1,5 +1,5 @@
 //! Module de validation formelle de la Gestion des Accès Privilégiés (PAM) (`jambo-pam`)
-//! Phase 134 — Jalon v0.3.1
+//! Phase 164 — Jalon v0.3.31
 #![allow(unused_imports, dead_code)]
 
 extern crate alloc;
@@ -7,14 +7,14 @@ extern crate alloc;
 use crate::kprintln;
 use jambo_abi::Handle;
 use jambo_pam::{
-    pam_rights, AccountStatus, JamboPamDaemon, JitStatus, PamCap, PamError, PrivilegeTier,
-    SessionState,
+    pam_rights, AccountStatus, JamboPamDaemon, JitStatus, PamAuditReport, PamCap, PamError,
+    PrivilegeTier, SessionState,
 };
 
-/// Exécute la suite complète de validation formelle du démon PAM (Phase 134)
+/// Exécute la suite complète de validation formelle du démon PAM (Phase 164 - v0.3.31)
 pub fn execute_pam_daemon_test() -> bool {
     kprintln!(
-        "[PAM/TEST] Démarrage de la validation formelle de la gestion des accès privilégiés PAM (Phase 134)..."
+        "[PAM/TEST] Démarrage de la validation formelle de la gestion des accès privilégiés PAM (Phase 164 - v0.3.31)..."
     );
 
     // 1. Contrôle d'accès capabilaire (PamCap) et atténuation monotone
@@ -26,6 +26,8 @@ pub fn execute_pam_daemon_test() -> bool {
     assert!(admin_cap.has_right(pam_rights::TERMINATE_SESSION));
     assert!(admin_cap.has_right(pam_rights::RECORD_SESSION));
     assert!(admin_cap.has_right(pam_rights::QUERY_AUDIT));
+    assert!(admin_cap.has_right(pam_rights::GENERATE_REPORT));
+    assert!(admin_cap.has_right(pam_rights::REAP_SESSIONS));
     assert!(admin_cap.has_right(pam_rights::ADMIN));
 
     // Atténuation monotone
@@ -40,6 +42,7 @@ pub fn execute_pam_daemon_test() -> bool {
     assert!(operator_cap.has_right(pam_rights::REQUEST_JIT));
     assert!(operator_cap.has_right(pam_rights::RECORD_SESSION));
     assert!(!operator_cap.has_right(pam_rights::APPROVE_JIT));
+    assert!(!operator_cap.has_right(pam_rights::GENERATE_REPORT));
     assert!(!operator_cap.has_right(pam_rights::ADMIN));
     assert_eq!(operator_cap.max_lifetime, 5000);
     assert_eq!(operator_cap.invocations_left, 200);
@@ -50,12 +53,17 @@ pub fn execute_pam_daemon_test() -> bool {
         Err(PamError::AttenuationViolation)
     );
 
-    // 2. Initialisation du démon central et comptes souverains par défaut
+    // 2. Initialisation du démon central et vérification du modèle ZSP
     let mut pam = JamboPamDaemon::new(admin_cap);
     pam.init_defaults();
     assert_eq!(pam.account_count, 5);
     assert_eq!(pam.session_count, 0);
     assert!(pam.verify_ledger_integrity());
+
+    // Vérification que tous les comptes appliquent strictement Zero Standing Privileges (ZSP)
+    for i in 0..pam.account_count {
+        assert!(!pam.accounts[i].unwrap().standing_privileges);
+    }
 
     // 3. Enregistrement d'un rôle privilégié supplémentaire
     let new_acc_id = pam
@@ -183,16 +191,71 @@ pub fn execute_pam_daemon_test() -> bool {
     );
     assert_eq!(pam.accounts[0].unwrap().status, AccountStatus::Locked);
 
-    // 7. Synthèse et vérification de l'intégrité de la chaîne cryptographique SHA-256
+    // 7. Rotation autonome globale des clés & secrets éphémères
+    let rotated_total = pam
+        .rotate_all_secrets(&admin_cap, 6070)
+        .expect("Rotation globale des secrets");
+    assert_eq!(rotated_total, 6);
+
+    // 8. Session avec TTL strict et moisson autonome (Autonomous Session Reaper)
+    let req3_id = pam
+        .request_jit(
+            &operator_cap,
+            "batch_job",
+            3,
+            "Traitement télémétrie",
+            40,
+            6075,
+        )
+        .expect("Demande JIT batch");
+    pam.approve_jit(&admin_cap, req3_id, "supervisor_gamma", 6078)
+        .expect("Approbation JIT batch");
+    let sid3 = pam
+        .start_session(&operator_cap, req3_id, "batch_job", 6080)
+        .expect("Démarrage session JIT");
+    assert_eq!(sid3, 3);
+
+    let session3 = pam.sessions[2].unwrap();
+    assert!(session3.is_active_at(6100));
+    assert_eq!(session3.ttl_remaining(6100), 20); // 6080 + 40 = 6120; 6120 - 6100 = 20
+    assert!(!session3.is_active_at(6130));
+
+    // Moissonnage à t=6130 -> clôture la session expirée
+    let reaped = pam
+        .reap_expired_sessions(&admin_cap, 6130)
+        .expect("Moissonnage des sessions expirées");
+    assert_eq!(reaped, 1);
+    assert_eq!(pam.sessions[2].unwrap().state, SessionState::Expired);
+
+    // 9. Réconciliation de la posture Zero-Standing-Privileges (ZSP)
+    let zsp_score = pam
+        .reconcile_zsp_posture(&admin_cap, 6135)
+        .expect("Réconciliation posture ZSP");
+    assert!(zsp_score > 0);
+
+    // 10. Génération et validation formelle du rapport d'audit scellé SHA-256 (PamAuditReport)
+    let audit_report = pam
+        .generate_audit_report(&admin_cap, 6140)
+        .expect("Génération PamAuditReport");
+    assert_eq!(audit_report.report_id, 1);
+    assert_eq!(audit_report.total_accounts, 6);
+    assert!(JamboPamDaemon::verify_audit_report_hash(&audit_report));
+
+    // Détection d'altération du rapport scellé
+    let mut tampered_report = audit_report;
+    tampered_report.zsp_compliance_score ^= 0x33;
+    assert!(!JamboPamDaemon::verify_audit_report_hash(&tampered_report));
+
+    // 11. Synthèse et vérification de l'intégrité de la chaîne cryptographique SHA-256
     let summary = pam.get_summary(&admin_cap).expect("Synthèse globale PAM");
     assert_eq!(summary.account_count, 6);
-    assert_eq!(summary.jit_requests_count, 2);
+    assert_eq!(summary.jit_requests_count, 3);
     assert_eq!(summary.active_sessions_count, 0);
     assert!(summary.ledger_valid);
     assert!(pam.verify_ledger_integrity());
 
     kprintln!(
-        "[PAM/TEST] Validation réussie : 6 comptes supervisés (ZSP), élévation JIT validée, Dual-Auth Tier 0 prouvée, enregistrement infalsifiable de sessions, Kill-Switch O(1) opérationnel, registre SHA-256 intègre."
+        "[PAM/TEST] Validation réussie : 6 comptes supervisés (ZSP), élévation JIT avec TTL cryptographique, moisson autonome validée, rotation globale de secrets, rapports scellés SHA-256 intègres."
     );
     true
 }

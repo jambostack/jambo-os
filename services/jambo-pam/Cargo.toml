@@ -1,6 +1,6 @@
 [package]
 name = "jambo-pam"
-version = "0.3.1"
+version = "0.3.31"
 edition = "2021"
 
 [dependencies]

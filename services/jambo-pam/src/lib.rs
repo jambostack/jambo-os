@@ -1,17 +1,19 @@
-//! Gestion des Accès Privilégiés (PAM - Privileged Access Management)
-//! Moteur souverain de courtage de sessions à privilèges élevés, rotation de secrets,
-//! attribution Just-In-Time (JIT) de capabilités et enregistrement cryptographique de sessions.
+//! Gestion des Accès Privilégiés (PAM - Privileged Access Management),
+//! Élévation Just-In-Time (JIT) & Courtage de Sessions Privilégiées ZSP
 //!
-//! Phase 134 — Jalon v0.3.1
+//! Phase 164 — Jalon v0.3.31
 //!
 //! Fournit une plateforme souveraine PAM (Privileged Access Management) en `#![no_std]` :
 //! 1. Modélisation et surveillance des comptes privilégiés à privilèges nuls permanents (Zero-Standing-Privileges / ZSP).
-//! 2. Gestion de l'élévation Just-in-Time (JIT) avec contrôle strict des durées de vie, justifications et principe du double contrôle (Dual-Auth / Four-Eyes) pour les comptes de rang critique (Tier 0).
+//! 2. Gestion de l'élévation Just-in-Time (JIT) avec contrôle strict des durées de vie (TTL cryptographique), justifications et principe du double contrôle (Dual-Auth / Four-Eyes) pour les comptes de rang critique (Tier 0).
 //! 3. Courtage et enregistrement infalsifiable des sessions privilégiées Ring 3/IPC avec condensats cumulatifs SHA-256.
-//! 4. Mécanisme de coupure d'urgence (Kill-Switch) O(1) de sessions suspectes ou déviantes.
-//! 5. Rotation dynamique des secrets éphémères et dérivation cryptographique.
-//! 6. Contrôle d'accès capabilaire strict (`PamCap`) sans autorité ambiante avec atténuation monotone.
-//! 7. Registre d'audit cryptographique inviolable scellé par chaînage SHA-256.
+//! 4. Mécanisme de coupure d'urgence (Kill-Switch) O(1) de sessions suspectes ou déviantes avec révocation immédiate.
+//! 5. Moisson autonome des sessions et baux JIT expirés (`reap_expired_sessions`).
+//! 6. Rotation autonome et planifiée de tous les secrets et clés éphémères (`rotate_all_secrets`).
+//! 7. Réconciliation de posture ZSP et calcul déterministe du score de conformité ZSP (0..100) (`reconcile_zsp_posture`).
+//! 8. Génération de rapports d'audit souverains scellés par SHA-256 (`PamAuditReport`).
+//! 9. Contrôle d'accès capabilaire strict (`PamCap`) sans autorité ambiante avec atténuation monotone.
+//! 10. Registre d'audit cryptographique inviolable scellé par chaînage SHA-256.
 
 #![no_std]
 
@@ -184,6 +186,8 @@ pub mod pam_rights {
     pub const RECORD_SESSION: u32 = 1 << 5;
     pub const QUERY_AUDIT: u32 = 1 << 6;
     pub const ADMIN: u32 = 1 << 7;
+    pub const GENERATE_REPORT: u32 = 1 << 8;
+    pub const REAP_SESSIONS: u32 = 1 << 9;
 
     pub const ALL: u32 = VIEW_ACCOUNTS
         | REQUEST_JIT
@@ -192,7 +196,9 @@ pub mod pam_rights {
         | TERMINATE_SESSION
         | RECORD_SESSION
         | QUERY_AUDIT
-        | ADMIN;
+        | ADMIN
+        | GENERATE_REPORT
+        | REAP_SESSIONS;
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -315,6 +321,7 @@ pub struct PrivilegedAccount {
     pub current_token_hash: [u8; 32],
     pub active_sessions_count: u32,
     pub last_rotation_timestamp: u64,
+    pub standing_privileges: bool,
 }
 
 impl PrivilegedAccount {
@@ -342,6 +349,7 @@ impl PrivilegedAccount {
             current_token_hash: token_hash,
             active_sessions_count: 0,
             last_rotation_timestamp: timestamp,
+            standing_privileges: false, // Règle stricte ZSP (Zero Standing Privileges)
         }
     }
 
@@ -478,6 +486,18 @@ impl PrivilegedSession {
     pub fn operator_as_str(&self) -> &str {
         core::str::from_utf8(&self.operator[..self.operator_len]).unwrap_or("<invalide>")
     }
+
+    pub fn is_active_at(&self, timestamp: u64) -> bool {
+        self.state == SessionState::Active && timestamp <= self.expires_at
+    }
+
+    pub fn ttl_remaining(&self, timestamp: u64) -> u64 {
+        if self.state == SessionState::Active && timestamp < self.expires_at {
+            self.expires_at - timestamp
+        } else {
+            0
+        }
+    }
 }
 
 /// Commande ou action enregistrée au sein d'une session privilégiée
@@ -511,6 +531,10 @@ pub enum PamEventType {
     SessionTerminated,
     SessionKilled,
     SecretRotated,
+    SessionsReaped,
+    ReportGenerated,
+    AllSecretsRotated,
+    ZspPostureReconciled,
 }
 
 /// Entrée scellée du registre d'audit cryptographique PAM
@@ -538,6 +562,28 @@ impl PamAuditEntry {
     }
 }
 
+/// Rapport d'audit de gouvernance PAM scellé cryptographiquement par SHA-256
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PamAuditReport {
+    pub report_id: u32,
+    pub timestamp: u64,
+    pub total_accounts: usize,
+    pub active_accounts: usize,
+    pub in_use_accounts: usize,
+    pub locked_accounts: usize,
+    pub total_jit_requests: usize,
+    pub approved_jit_requests: usize,
+    pub active_sessions: usize,
+    pub terminated_sessions: usize,
+    pub killed_sessions: usize,
+    pub expired_sessions: usize,
+    pub recorded_commands: usize,
+    pub secrets_rotated_count: usize,
+    pub zsp_compliance_score: u8, // 0..100 (100 = ZSP strict)
+    pub ledger_entries_count: usize,
+    pub report_hash: [u8; 32],
+}
+
 /// Synthèse de posture PAM pour introspection et diagnostic
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PamSummary {
@@ -547,6 +593,8 @@ pub struct PamSummary {
     pub active_sessions_count: usize,
     pub total_commands_recorded: usize,
     pub ledger_valid: bool,
+    pub zsp_compliance_score: u8,
+    pub secrets_rotated_count: usize,
 }
 
 // ============================================================================
@@ -566,6 +614,8 @@ pub struct JamboPamDaemon {
     pub ledger: [Option<PamAuditEntry>; 64],
     pub ledger_count: usize,
     pub last_ledger_hash: [u8; 32],
+    pub report_counter: u32,
+    pub secrets_rotated_count: usize,
 }
 
 impl JamboPamDaemon {
@@ -583,6 +633,8 @@ impl JamboPamDaemon {
             ledger: [None; 64],
             ledger_count: 0,
             last_ledger_hash: [0u8; 32],
+            report_counter: 0,
+            secrets_rotated_count: 0,
         }
     }
 
@@ -1137,6 +1189,7 @@ impl JamboPamDaemon {
 
                     acc.current_token_hash = new_hash;
                     acc.last_rotation_timestamp = timestamp;
+                    self.secrets_rotated_count += 1;
 
                     let mut name_buf = [0u8; 32];
                     let n_len = acc.name_len;
@@ -1252,6 +1305,317 @@ impl JamboPamDaemon {
         true
     }
 
+    /// Calcule le score de conformité Zero Standing Privileges (ZSP) (0..100)
+    pub fn compute_zsp_compliance_score(&self) -> u8 {
+        if self.account_count == 0 {
+            return 100;
+        }
+        let mut score: i32 = 100;
+        for i in 0..self.account_count {
+            if let Some(ref acc) = self.accounts[i] {
+                if acc.standing_privileges {
+                    score -= 40; // Pénalité sévère si privilèges permanents accordés
+                }
+                if acc.status == AccountStatus::Locked {
+                    score -= 10; // Pénalité pour compte compromis/verrouillé
+                }
+            }
+        }
+        for i in 0..self.session_count {
+            if let Some(ref s) = self.sessions[i] {
+                if s.state == SessionState::KilledAnomalous {
+                    score -= 5;
+                }
+            }
+        }
+        if score < 10 {
+            10
+        } else if score > 100 {
+            100
+        } else {
+            score as u8
+        }
+    }
+
+    /// Calcule le condensat SHA-256 scellant un rapport d'audit PAM
+    pub fn compute_audit_report_hash(
+        report_id: u32,
+        timestamp: u64,
+        total_accounts: usize,
+        active_accounts: usize,
+        in_use_accounts: usize,
+        locked_accounts: usize,
+        total_jit_requests: usize,
+        approved_jit_requests: usize,
+        active_sessions: usize,
+        terminated_sessions: usize,
+        killed_sessions: usize,
+        expired_sessions: usize,
+        recorded_commands: usize,
+        secrets_rotated_count: usize,
+        zsp_compliance_score: u8,
+        ledger_entries_count: usize,
+    ) -> [u8; 32] {
+        let mut hasher = Sha256::new();
+        hasher.update(&report_id.to_be_bytes());
+        hasher.update(&timestamp.to_be_bytes());
+        hasher.update(&(total_accounts as u32).to_be_bytes());
+        hasher.update(&(active_accounts as u32).to_be_bytes());
+        hasher.update(&(in_use_accounts as u32).to_be_bytes());
+        hasher.update(&(locked_accounts as u32).to_be_bytes());
+        hasher.update(&(total_jit_requests as u32).to_be_bytes());
+        hasher.update(&(approved_jit_requests as u32).to_be_bytes());
+        hasher.update(&(active_sessions as u32).to_be_bytes());
+        hasher.update(&(terminated_sessions as u32).to_be_bytes());
+        hasher.update(&(killed_sessions as u32).to_be_bytes());
+        hasher.update(&(expired_sessions as u32).to_be_bytes());
+        hasher.update(&(recorded_commands as u32).to_be_bytes());
+        hasher.update(&(secrets_rotated_count as u32).to_be_bytes());
+        hasher.update(&[zsp_compliance_score]);
+        hasher.update(&(ledger_entries_count as u32).to_be_bytes());
+        hasher.finalize()
+    }
+
+    /// Vérifie la validité du sceau cryptographique SHA-256 d'un rapport d'audit PAM
+    pub fn verify_audit_report_hash(report: &PamAuditReport) -> bool {
+        let computed = Self::compute_audit_report_hash(
+            report.report_id,
+            report.timestamp,
+            report.total_accounts,
+            report.active_accounts,
+            report.in_use_accounts,
+            report.locked_accounts,
+            report.total_jit_requests,
+            report.approved_jit_requests,
+            report.active_sessions,
+            report.terminated_sessions,
+            report.killed_sessions,
+            report.expired_sessions,
+            report.recorded_commands,
+            report.secrets_rotated_count,
+            report.zsp_compliance_score,
+            report.ledger_entries_count,
+        );
+        computed == report.report_hash
+    }
+
+    /// Génère un rapport d'audit souverain complet scellé cryptographiquement par SHA-256
+    pub fn generate_audit_report(
+        &mut self,
+        cap: &PamCap,
+        timestamp: u64,
+    ) -> Result<PamAuditReport, PamError> {
+        if !cap.has_right(pam_rights::GENERATE_REPORT) && !cap.has_right(pam_rights::ADMIN) {
+            return Err(PamError::PermissionDenied);
+        }
+
+        let mut active_accounts = 0;
+        let mut in_use_accounts = 0;
+        let mut locked_accounts = 0;
+        for i in 0..self.account_count {
+            if let Some(ref a) = self.accounts[i] {
+                match a.status {
+                    AccountStatus::Active => active_accounts += 1,
+                    AccountStatus::InUse => in_use_accounts += 1,
+                    AccountStatus::Locked => locked_accounts += 1,
+                    AccountStatus::Suspended => {}
+                }
+            }
+        }
+
+        let mut approved_jit_requests = 0;
+        for i in 0..self.jit_count {
+            if let Some(ref j) = self.jit_requests[i] {
+                if j.status == JitStatus::Approved || j.status == JitStatus::Active {
+                    approved_jit_requests += 1;
+                }
+            }
+        }
+
+        let mut active_sessions = 0;
+        let mut terminated_sessions = 0;
+        let mut killed_sessions = 0;
+        let mut expired_sessions = 0;
+        for i in 0..self.session_count {
+            if let Some(ref s) = self.sessions[i] {
+                match s.state {
+                    SessionState::Active => active_sessions += 1,
+                    SessionState::Terminated => terminated_sessions += 1,
+                    SessionState::KilledAnomalous => killed_sessions += 1,
+                    SessionState::Expired => expired_sessions += 1,
+                }
+            }
+        }
+
+        let zsp_score = self.compute_zsp_compliance_score();
+        self.report_counter += 1;
+        let rid = self.report_counter;
+
+        let hash = Self::compute_audit_report_hash(
+            rid,
+            timestamp,
+            self.account_count,
+            active_accounts,
+            in_use_accounts,
+            locked_accounts,
+            self.jit_count,
+            approved_jit_requests,
+            active_sessions,
+            terminated_sessions,
+            killed_sessions,
+            expired_sessions,
+            self.command_count,
+            self.secrets_rotated_count,
+            zsp_score,
+            self.ledger_count,
+        );
+
+        let report = PamAuditReport {
+            report_id: rid,
+            timestamp,
+            total_accounts: self.account_count,
+            active_accounts,
+            in_use_accounts,
+            locked_accounts,
+            total_jit_requests: self.jit_count,
+            approved_jit_requests,
+            active_sessions,
+            terminated_sessions,
+            killed_sessions,
+            expired_sessions,
+            recorded_commands: self.command_count,
+            secrets_rotated_count: self.secrets_rotated_count,
+            zsp_compliance_score: zsp_score,
+            ledger_entries_count: self.ledger_count,
+            report_hash: hash,
+        };
+
+        self.append_audit_internal(
+            PamEventType::ReportGenerated,
+            "pam_audit_engine",
+            rid,
+            "Rapport scellé SHA-256 émis",
+            timestamp,
+        );
+
+        Ok(report)
+    }
+
+    /// Moissonne de manière autonome les sessions et baux JIT expirés
+    pub fn reap_expired_sessions(
+        &mut self,
+        cap: &PamCap,
+        timestamp: u64,
+    ) -> Result<usize, PamError> {
+        if !cap.has_right(pam_rights::REAP_SESSIONS) && !cap.has_right(pam_rights::ADMIN) {
+            return Err(PamError::PermissionDenied);
+        }
+
+        let mut reaped_count = 0;
+        for i in 0..self.session_count {
+            if let Some(ref mut s) = self.sessions[i] {
+                if s.state == SessionState::Active && timestamp > s.expires_at {
+                    s.state = SessionState::Expired;
+                    reaped_count += 1;
+                    let acc_id = s.account_id;
+                    let sid = s.session_id;
+
+                    // Décrémentation du compte
+                    for j in 0..self.account_count {
+                        if let Some(ref mut acc) = self.accounts[j] {
+                            if acc.id == acc_id {
+                                if acc.active_sessions_count > 0 {
+                                    acc.active_sessions_count -= 1;
+                                }
+                                if acc.active_sessions_count == 0
+                                    && acc.status == AccountStatus::InUse
+                                {
+                                    acc.status = AccountStatus::Active;
+                                }
+                                break;
+                            }
+                        }
+                    }
+
+                    self.append_audit_internal(
+                        PamEventType::SessionsReaped,
+                        "session_reaper",
+                        sid,
+                        "Session expirée moissonnée",
+                        timestamp,
+                    );
+
+                    // Rotation automatique du secret du compte
+                    let _ = self.rotate_secret_internal(acc_id, timestamp);
+                }
+            }
+        }
+
+        // Moissonnage également des baux JIT expirés
+        for i in 0..self.jit_count {
+            if let Some(ref mut r) = self.jit_requests[i] {
+                if (r.status == JitStatus::Approved || r.status == JitStatus::Pending)
+                    && r.expires_at > 0
+                    && timestamp > r.expires_at
+                {
+                    r.status = JitStatus::Expired;
+                }
+            }
+        }
+
+        Ok(reaped_count)
+    }
+
+    /// Rotation forcée ou planifiée de tous les secrets de comptes privilégiés
+    pub fn rotate_all_secrets(&mut self, cap: &PamCap, timestamp: u64) -> Result<usize, PamError> {
+        if !cap.has_right(pam_rights::ROTATE_SECRETS) && !cap.has_right(pam_rights::ADMIN) {
+            return Err(PamError::PermissionDenied);
+        }
+
+        let mut count = 0;
+        let total = self.account_count;
+        for i in 0..total {
+            if let Some(acc) = self.accounts[i] {
+                let aid = acc.id;
+                let _ = self.rotate_secret_internal(aid, timestamp)?;
+                count += 1;
+            }
+        }
+
+        self.append_audit_internal(
+            PamEventType::AllSecretsRotated,
+            "pam_key_rotator",
+            count as u32,
+            "Rotation autonome globale des secrets",
+            timestamp,
+        );
+
+        Ok(count)
+    }
+
+    /// Réconcilie la posture Zero-Standing-Privileges (ZSP) et renvoie le score de conformité
+    pub fn reconcile_zsp_posture(&mut self, cap: &PamCap, timestamp: u64) -> Result<u8, PamError> {
+        if !cap.has_right(pam_rights::VIEW_ACCOUNTS) && !cap.has_right(pam_rights::ADMIN) {
+            return Err(PamError::PermissionDenied);
+        }
+
+        // Moissonne d'abord les sessions expirées si cap dispose des droits adéquats
+        if cap.has_right(pam_rights::REAP_SESSIONS) || cap.has_right(pam_rights::ADMIN) {
+            let _ = self.reap_expired_sessions(cap, timestamp);
+        }
+
+        let score = self.compute_zsp_compliance_score();
+        self.append_audit_internal(
+            PamEventType::ZspPostureReconciled,
+            "zsp_orchestrator",
+            score as u32,
+            "Réconciliation posture Zero-Standing-Privileges",
+            timestamp,
+        );
+
+        Ok(score)
+    }
+
     /// Renvoie la synthèse globale de l'état PAM
     pub fn get_summary(&self, cap: &PamCap) -> Result<PamSummary, PamError> {
         if !cap.has_right(pam_rights::VIEW_ACCOUNTS) {
@@ -1283,6 +1647,8 @@ impl JamboPamDaemon {
             active_sessions_count: active_sessions,
             total_commands_recorded: self.command_count,
             ledger_valid: self.verify_ledger_integrity(),
+            zsp_compliance_score: self.compute_zsp_compliance_score(),
+            secrets_rotated_count: self.secrets_rotated_count,
         })
     }
 }
@@ -1493,5 +1859,106 @@ mod tests {
 
         // L'intégrité doit être invalidée
         assert!(!daemon.verify_ledger_integrity());
+    }
+
+    #[test]
+    fn test_audit_report_generation_and_verification() {
+        let mut daemon = create_test_daemon();
+        let cap = daemon.admin_cap;
+
+        let report = daemon
+            .generate_audit_report(&cap, 6000)
+            .expect("generate_audit_report failed");
+
+        assert_eq!(report.report_id, 1);
+        assert_eq!(report.timestamp, 6000);
+        assert_eq!(report.total_accounts, 5);
+        assert_eq!(report.active_accounts, 5);
+        assert_eq!(report.in_use_accounts, 0);
+        assert_eq!(report.locked_accounts, 0);
+        assert_eq!(report.zsp_compliance_score, 100);
+        assert!(JamboPamDaemon::verify_audit_report_hash(&report));
+        assert!(daemon.verify_ledger_integrity());
+    }
+
+    #[test]
+    fn test_tampered_audit_report_detection() {
+        let mut daemon = create_test_daemon();
+        let cap = daemon.admin_cap;
+
+        let report = daemon
+            .generate_audit_report(&cap, 6100)
+            .expect("generate_audit_report failed");
+
+        assert!(JamboPamDaemon::verify_audit_report_hash(&report));
+
+        // Corruption volontaire d'un champ
+        let mut tampered = report;
+        tampered.zsp_compliance_score ^= 0x55;
+        assert!(!JamboPamDaemon::verify_audit_report_hash(&tampered));
+
+        let mut tampered2 = report;
+        tampered2.total_accounts = 999;
+        assert!(!JamboPamDaemon::verify_audit_report_hash(&tampered2));
+    }
+
+    #[test]
+    fn test_autonomous_secret_rotation_and_zsp_posture() {
+        let mut daemon = create_test_daemon();
+        let cap = daemon.admin_cap;
+
+        let rotated = daemon
+            .rotate_all_secrets(&cap, 7000)
+            .expect("rotate_all_secrets failed");
+        assert_eq!(rotated, 5);
+
+        let score = daemon
+            .reconcile_zsp_posture(&cap, 7010)
+            .expect("reconcile_zsp_posture failed");
+        assert_eq!(score, 100);
+
+        let summary = daemon.get_summary(&cap).expect("get_summary failed");
+        assert_eq!(summary.secrets_rotated_count, 5);
+        assert_eq!(summary.zsp_compliance_score, 100);
+        assert!(daemon.verify_ledger_integrity());
+    }
+
+    #[test]
+    fn test_reap_expired_sessions_and_jit_ttl() {
+        let mut daemon = create_test_daemon();
+        let cap = daemon.admin_cap;
+
+        // Requête JIT durée 100 ticks (expire à 8100)
+        let req_id = daemon
+            .request_jit(&cap, "dev_bob", 3, "Maintenance VirtIO", 100, 8000)
+            .expect("request_jit failed");
+        daemon
+            .approve_jit(&cap, req_id, "approver", 8010)
+            .expect("approve_jit failed");
+        let _sid = daemon
+            .start_session(&cap, req_id, "dev_bob", 8020)
+            .expect("start_session failed");
+
+        let session = daemon.sessions[0].unwrap();
+        assert!(session.is_active_at(8050));
+        assert_eq!(session.ttl_remaining(8050), 70); // 8020 + 100 = 8120; 8120 - 8050 = 70
+        assert!(!session.is_active_at(8150));
+        assert_eq!(session.ttl_remaining(8150), 0);
+
+        // Moissonner à 8150 -> doit moissonner la session expirée
+        let reaped = daemon
+            .reap_expired_sessions(&cap, 8150)
+            .expect("reap_expired_sessions failed");
+        assert_eq!(reaped, 1);
+
+        let session_after = daemon.sessions[0].unwrap();
+        assert_eq!(session_after.state, SessionState::Expired);
+
+        // Le compte doit être redevenu Active
+        let acc = daemon.accounts[2].unwrap();
+        assert_eq!(acc.status, AccountStatus::Active);
+        assert_eq!(acc.active_sessions_count, 0);
+
+        assert!(daemon.verify_ledger_integrity());
     }
 }

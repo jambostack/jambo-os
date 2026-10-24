@@ -1287,7 +1287,7 @@ pub extern "C" fn _start() -> ! {
         "Échec du test de détection et réponse aux menaces sur l'identité jambo-itdr"
     );
 
-    // 19viciesquadragies. Validation de la Gestion des Accès Privilégiés PAM (Phase 134 - v0.3.1)
+    // 19viciesquadragies. Validation de la Gestion des Accès Privilégiés PAM (Phase 164 - v0.3.31)
     let pam_success = sched::pam_test::execute_pam_daemon_test();
     assert!(
         pam_success,
@@ -1808,14 +1808,17 @@ pub extern "C" fn _start() -> ! {
     kprintln!(
         "\x1b[1;32m[PASS] Phase 163 Sovereign Identity Threat Detection and Response ITDR & Autonomous Confinement (jambo-itdr) Complete\x1b[0m"
     );
+    kprintln!(
+        "\x1b[1;32m[PASS] Phase 164 Sovereign Privileged Access Management PAM, JIT Elevation & Session Broker (jambo-pam) Complete\x1b[0m"
+    );
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.3.30 (Sovereign Identity Threat Detection and Response ITDR jambo-itdr)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.3.31 (Sovereign Privileged Access Management PAM jambo-pam)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.3.29 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.3.30 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
