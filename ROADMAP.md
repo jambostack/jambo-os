@@ -129,22 +129,25 @@
 | **v0.3.7** | 140 | Sécurité Applicative Dynamique & RASP `jambo-appsec` | Plateforme souveraine RASP, surveillance microservices Ring 3, détection de détournement de flux de contrôle (CFI / Shadow Stack), neutralisation instantanée des injections de charge utile, blocage désérialisation non sécurisée, canaris mémoire, quarantaine O(1), AppSecCap & audit SHA-256 | ✅ Validé |
 | **v0.3.8** | 141 | Cyber-Résilience & Intégrité Noyau / Pilotes KDIR `jambo-kdir` | Surveillance continue d'intégrité des structures critiques du noyau (IDT, GDT, tables de pages CR3, dispatchers syscalls), détection d'altérations non autorisées et rootkits Ring 0/hyperviseur (DKOM, hooks IDT), validation signatures pilotes VMO, auto-restauration des tables système, confinement O(1), KdirCap & registre SHA-256 inaltérable | ✅ Validé |
 | **v0.3.9** | 142 | Résilience & Défense Matérielle et Firmware FDR `jambo-fdr` | Surveillance et attestation continue du firmware UEFI/BIOS SPI Flash, partitions Dual-BIOS, racine de confiance matérielle (RoT TPM 2.0 / DICE), banques PCR 0..23, intégrité des tables ACPI (MADT/DSDT) et SMBIOS, détection de bootkits et d'implants matériels Ring -2/-3, confinement O(1) des périphériques compromis, auto-restauration Dual-BIOS, FdrCap & registre SHA-256 inaltérable | ✅ Validé |
+| **v0.3.10** | 143 | Détection Réseau & Micro-segmentation Souveraine NDR `jambo-ndr` | Surveillance active des flux réseau inter-services (L2-L7), détection heuristique d'anomalies de trafic (C2 beaconing, exfiltration massive, DNS tunneling), micro-segmentation dynamique Zero-Trust, blocage immédiat et confinement O(1) des endpoints suspects, NdrCap & registre d'audit SHA-256 inaltérable | ✅ Validé |
 
 ---
 
 ## 3. Prochaines Étapes Prioritaires
 
-### 🎯 Prochaine Tâche Immédiate : Phase 143 — v0.3.10
-* **Composant** : `services/jambo-ndr`
-* **Versionnement** : Poursuite de la série `v0.3.*` (Jalon `v0.3.10`)
-* **Objectif** : Détection Réseau & Micro-segmentation Souveraine (Network Detection & Sovereign Microsegmentation Resilience - NDR) — Surveillance active des flux réseau inter-services et périphériques, détection d'anomalies de trafic L2-L7, micro-segmentation dynamique Zero-Trust, blocage immédiat des flux suspects O(1), NdrCap & registre d'audit SHA-256 inaltérable.
+### 🎯 Prochaine Tâche Immédiate : Phase 144 — v0.3.11
+* **Composant** : `services/jambo-cdr`
+* **Versionnement** : Poursuite de la série `v0.3.*` (Jalon `v0.3.11`)
+* **Objectif** : Désarmement & Reconstruction de Contenu Souverain (Content Disarm and Reconstruction - CDR) — Neutralisation proactive des menaces incorporées dans les flux de documents et artéfacts (binaires ELF, formats structurés, IPC streams), assainissement et déconstruction récursive sans exécutables cachés, CdrCap & registre d'audit SHA-256 inaltérable.
 * **Tâches précises** :
-  1. Moteur NDR souverain : analyse heuristique et détection d'exfiltration ou balisage C2.
-  2. Confinement réseau dynamique et validation formelle `cargo xtask test`.
+  1. Moteur CDR souverain : détection de macros/payloads cachés et reconstruction saine.
+  2. Confinement des fichiers altérés et validation formelle `cargo xtask test`.
 
 ---
 
 ## 4. Journal d'Exécution des Cycles
+
+* **2026-10-24 07:30 UTC** : Validation complète Phase 143 (`jambo-ndr`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-ndr`, 8/8). NDR — Surveillance active L2-L7, détection heuristique C2 beaconing / exfiltration / DNS tunneling, micro-segmentation Zero-Trust, confinement immédiat O(1), NdrCap & registre SHA-256 inaltérable. Tag `v0.3.10`.
 
 * **2026-10-24 07:20 UTC** : Validation complète Phase 142 (`jambo-fdr`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-fdr`, 7/7). FDR — Surveillance continue UEFI SPI Flash / Dual-BIOS / ACPI / SMBIOS, attestation RoT TPM 2.0 & DICE, extension PCR, détection bootkits & auto-restauration, confinement O(1) des périphériques PCI compromis, registre SHA-256 intègre. Tag `v0.3.9`.
 

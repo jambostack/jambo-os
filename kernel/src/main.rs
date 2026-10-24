@@ -1415,6 +1415,13 @@ pub extern "C" fn _start() -> ! {
         "Échec du test de défense matérielle et firmware jambo-fdr"
     );
 
+    // 28viciesquadragies. Validation Détection Réseau & Micro-segmentation Zero-Trust (Phase 143 - v0.3.10)
+    let ndr_success = sched::ndr_test::execute_ndr_daemon_test();
+    assert!(
+        ndr_success,
+        "Échec du test de détection réseau et micro-segmentation jambo-ndr"
+    );
+
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
 
     arch::init_iommu();
@@ -1693,14 +1700,15 @@ pub extern "C" fn _start() -> ! {
     kprintln!("\x1b[1;32m[PASS] Phase 140 Dynamic Application Security & RASP (jambo-appsec) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 141 Kernel & Driver Integrity Resilience (jambo-kdir) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 142 Firmware & Hardware Defense Resilience (jambo-fdr) Complete\x1b[0m");
+    kprintln!("\x1b[1;32m[PASS] Phase 143 Network Detection & Sovereign Microsegmentation Resilience (jambo-ndr) Complete\x1b[0m");
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.3.9 (Firmware & Hardware Defense Resilience jambo-fdr)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.3.10 (Network Detection & Sovereign Microsegmentation Resilience jambo-ndr)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.3.9 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.3.10 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );

@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.3.9-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.3.10-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.3.9 (Résilience & Défense Matérielle et Firmware jambo-fdr)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.3.9` introduit le sous-système souverain de résilience et de cyber-défense matérielle et firmware (FDR) en espace utilisateur (`services/jambo-fdr`) : surveillance et attestation continue du firmware UEFI/BIOS SPI Flash et des partitions de secours Dual-BIOS, racine de confiance matérielle (Hardware Root of Trust TPM 2.0 / DICE), gestion et extension cryptographique des banques de registres PCR (PCR 0..23), contrôle d'intégrité des tables ACPI (MADT, DSDT) et SMBIOS contre l'empoisonnement, détection proactive de bootkits et d'implants matériels Ring -2/-3 (SMM, Option ROMs altérées), confinement et isolation matérielle instantanée O(1) des périphériques PCI compromis (révocation DMA/MMIO BARs), auto-restauration des firmwares depuis le snapshot de référence Dual-BIOS, contrôle d'accès capabilaire strict `FdrCap` avec atténuation monotone et registre d'audit inviolable scellé par chaînage SHA-256.
+> **Statut du Projet : Version v0.3.10 (Détection Réseau & Micro-segmentation Souveraine jambo-ndr)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.3.10` introduit le sous-système souverain de détection réseau temps réel et de micro-segmentation dynamique Zero-Trust (NDR) en espace utilisateur (`services/jambo-ndr`) : surveillance active des flux réseau inter-services et périphériques (L2-L7), détection heuristique d'anomalies de trafic (balisage C2 périodique à faible gigue, exfiltration massive de données vers le WAN, tunneling DNS covert, mouvements latéraux et violations de politique Zero-Trust), micro-segmentation dynamique granulaire par zone de sécurité et port/protocole, confinement et coupure immédiate O(1) des flux suspects et des adresses IP compromises (`quarantine_endpoint`), contrôle d'accès capabilaire strict `NdrCap` avec atténuation monotone et registre d'audit inviolable scellé par chaînage SHA-256.
 
 ---
 

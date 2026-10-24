@@ -209,6 +209,7 @@ pub struct JamboShell {
     pub appsec: jambo_appsec::JamboAppSecDaemon,
     pub kdir: jambo_kdir::JamboKdirDaemon,
     pub fdr: jambo_fdr::JamboFdrDaemon,
+    pub ndr: jambo_ndr::JamboNdrDaemon,
 }
 
 impl Default for JamboShell {
@@ -820,6 +821,15 @@ impl JamboShell {
         );
         let mut fdr = jambo_fdr::JamboFdrDaemon::new(fdr_cap);
         fdr.init_defaults();
+
+        let ndr_cap = jambo_ndr::NdrCap::new(
+            libjambo::Handle::new(14301, 1),
+            jambo_ndr::ndr_rights::ALL,
+            5000,
+            100,
+        );
+        let mut ndr = jambo_ndr::JamboNdrDaemon::new(ndr_cap);
+        ndr.init_defaults();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -919,6 +929,7 @@ impl JamboShell {
             appsec,
             kdir,
             fdr,
+            ndr,
         }
     }
 
@@ -1135,10 +1146,11 @@ impl JamboShell {
                 emit("  appsec [cmd]    - Sécurité applicative dynamique (RASP), CFI, canaris mémoire & neutralisation O(1)\n");
                 emit("  kdir [cmd]      - Cyber-résilience & intégrité noyau/pilotes (KDIR), IDT/GDT/CR3 & auto-restauration O(1)\n");
                 emit("  fdr [cmd]       - Résilience firmware & matériel (FDR), SPI Flash, TPM 2.0 / DICE & isolation O(1)\n");
+                emit("  ndr [cmd]       - Détection réseau & micro-segmentation Zero-Trust (NDR), analyse L2-L7 & confinement O(1)\n");
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.3.9 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.3.10 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -14779,6 +14791,206 @@ impl JamboShell {
                     }
                     _ => {
                         emit("Usage: fdr [status | probes | pcrs | devices | threats | restore <probe_id> | isolate <device_id> | verify]\n");
+                        (ShellStatus::ExecutionFailed, write_pos)
+                    }
+                }
+            }
+            "ndr" => {
+                let subcmd = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    "status"
+                };
+
+                let mut b = [0u8; 20];
+
+                match subcmd {
+                    "status" => {
+                        let sum = self.ndr.get_summary();
+                        emit(
+                            "--- JAMBO DÉTECTION RÉSEAU & MICRO-SEGMENTATION NDR (PHASE 143) ---\n",
+                        );
+                        emit("Flux réseau supervisés: ");
+                        emit(format_u64(sum.flows_count as u64, &mut b));
+                        emit("\nFlux actifs: ");
+                        emit(format_u64(sum.active_flows_count as u64, &mut b));
+                        emit("\nFlux confinés O(1): ");
+                        emit(format_u64(sum.quarantined_flows_count as u64, &mut b));
+                        emit("\nRègles de micro-segmentation: ");
+                        emit(format_u64(sum.rules_count as u64, &mut b));
+                        emit("\nMenaces réseau détectées: ");
+                        emit(format_u64(sum.threats_detected as u64, &mut b));
+                        emit("\nMenaces bloquées / neutralisées: ");
+                        emit(format_u64(sum.threats_blocked as u64, &mut b));
+                        emit("\nEndpoints isolés en quarantaine: ");
+                        emit(format_u64(sum.quarantined_endpoints_count as u64, &mut b));
+                        emit("\nEntrées d'audit SHA-256: ");
+                        emit(format_u64(sum.audit_entries_count as u64, &mut b));
+                        emit("\nRegistre cryptographique: ");
+                        emit(if sum.ledger_valid {
+                            "INTÈGRE (OK)\n"
+                        } else {
+                            "ALTÉRÉ (FAIL)\n"
+                        });
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "flows" => {
+                        emit("--- FLUX RÉSEAU ET SESSIONS SOUS SURVEILLANCE ---\n");
+                        for flow in self.ndr.flows.iter().flatten() {
+                            emit("[#");
+                            emit(format_u64(flow.flow_id as u64, &mut b));
+                            emit("] ");
+                            if let Ok(name_str) =
+                                core::str::from_utf8(&flow.service_name[..flow.service_name_len])
+                            {
+                                emit(name_str);
+                            }
+                            emit(" | ");
+                            emit(format_u64(flow.src_ip[0] as u64, &mut b));
+                            emit(".");
+                            emit(format_u64(flow.src_ip[1] as u64, &mut b));
+                            emit(".");
+                            emit(format_u64(flow.src_ip[2] as u64, &mut b));
+                            emit(".");
+                            emit(format_u64(flow.src_ip[3] as u64, &mut b));
+                            emit(":");
+                            emit(format_u64(flow.src_port as u64, &mut b));
+                            emit(" -> ");
+                            emit(format_u64(flow.dst_ip[0] as u64, &mut b));
+                            emit(".");
+                            emit(format_u64(flow.dst_ip[1] as u64, &mut b));
+                            emit(".");
+                            emit(format_u64(flow.dst_ip[2] as u64, &mut b));
+                            emit(".");
+                            emit(format_u64(flow.dst_ip[3] as u64, &mut b));
+                            emit(":");
+                            emit(format_u64(flow.dst_port as u64, &mut b));
+                            emit(" | ");
+                            emit(flow.protocol.as_str());
+                            emit(" | Paquets: ");
+                            emit(format_u64(flow.packets_count, &mut b));
+                            emit(" | Statut: ");
+                            emit(flow.state.as_str());
+                            emit(" | Menace: ");
+                            emit(flow.threat_level.as_str());
+                            emit("\n");
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "rules" => {
+                        emit("--- POLITIQUES DE MICRO-SEGMENTATION ZERO-TRUST ---\n");
+                        for rule in self.ndr.rules.iter().flatten() {
+                            emit("[#");
+                            emit(format_u64(rule.rule_id as u64, &mut b));
+                            emit("] ");
+                            if let Ok(name_str) = core::str::from_utf8(&rule.name[..rule.name_len])
+                            {
+                                emit(name_str);
+                            }
+                            emit(" | ");
+                            emit(rule.src_zone.as_str());
+                            emit(" -> ");
+                            emit(rule.dst_zone.as_str());
+                            emit(" | ");
+                            emit(rule.protocol.as_str());
+                            emit(" | Action: ");
+                            emit(rule.action.as_str());
+                            emit(" | Priorité: ");
+                            emit(format_u64(rule.priority as u64, &mut b));
+                            emit(" | Hits: ");
+                            emit(format_u64(rule.hits, &mut b));
+                            emit("\n");
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "threats" => {
+                        emit("--- INCIDENTS ET ANOMALIES RÉSEAU DÉTECTÉES ---\n");
+                        for threat in self.ndr.threats.iter().flatten() {
+                            emit("[INCIDENT #");
+                            emit(format_u64(threat.incident_id as u64, &mut b));
+                            emit("] Flux #");
+                            emit(format_u64(threat.flow_id as u64, &mut b));
+                            emit(" | ");
+                            emit(threat.threat_type.as_str());
+                            emit(" | Sévérité: ");
+                            emit(threat.severity.as_str());
+                            emit(" | ");
+                            emit(format_u64(threat.src_ip[0] as u64, &mut b));
+                            emit(".");
+                            emit(format_u64(threat.src_ip[1] as u64, &mut b));
+                            emit(".");
+                            emit(format_u64(threat.src_ip[2] as u64, &mut b));
+                            emit(".");
+                            emit(format_u64(threat.src_ip[3] as u64, &mut b));
+                            emit(" -> ");
+                            emit(format_u64(threat.dst_ip[0] as u64, &mut b));
+                            emit(".");
+                            emit(format_u64(threat.dst_ip[1] as u64, &mut b));
+                            emit(".");
+                            emit(format_u64(threat.dst_ip[2] as u64, &mut b));
+                            emit(".");
+                            emit(format_u64(threat.dst_ip[3] as u64, &mut b));
+                            emit(" | Confiné O(1): ");
+                            emit(if threat.quarantined { "OUI\n" } else { "NON\n" });
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "quarantined" => {
+                        emit("--- ENDPOINTS CONFINÉS EN QUARANTINE O(1) ---\n");
+                        for ep in self.ndr.quarantined_endpoints.iter().flatten() {
+                            emit("[#");
+                            emit(format_u64(ep.endpoint_id as u64, &mut b));
+                            emit("] IP: ");
+                            emit(format_u64(ep.ip[0] as u64, &mut b));
+                            emit(".");
+                            emit(format_u64(ep.ip[1] as u64, &mut b));
+                            emit(".");
+                            emit(format_u64(ep.ip[2] as u64, &mut b));
+                            emit(".");
+                            emit(format_u64(ep.ip[3] as u64, &mut b));
+                            emit(" | Paquets bloqués: ");
+                            emit(format_u64(ep.packets_blocked, &mut b));
+                            emit(" | Motif: ");
+                            if let Ok(reason_str) =
+                                core::str::from_utf8(&ep.reason[..ep.reason_len])
+                            {
+                                emit(reason_str);
+                            }
+                            emit("\n");
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "quarantine" => {
+                        let ip = [10, 0, 0, 99];
+                        match self.ndr.quarantine_endpoint(
+                            ip,
+                            b"Manual operator quarantine via shell",
+                            1735003000,
+                        ) {
+                            Ok(id) => {
+                                emit("Endpoint #");
+                                emit(format_u64(id as u64, &mut b));
+                                emit(" (10.0.0.99) CONFINÉ avec succès en O(1)\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("Échec du confinement ou endpoint déjà isolé\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "verify" => {
+                        let valid = self.ndr.verify_ledger_integrity();
+                        emit("Registre d'audit cryptographique SHA-256 NDR: ");
+                        emit(if valid {
+                            "INTÈGRE (OK)\n"
+                        } else {
+                            "ALTÉRÉ (FAIL)\n"
+                        });
+                        (ShellStatus::Success, write_pos)
+                    }
+                    _ => {
+                        emit("Usage: ndr [status | flows | rules | threats | quarantined | quarantine | verify]\n");
                         (ShellStatus::ExecutionFailed, write_pos)
                     }
                 }
