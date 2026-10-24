@@ -1,6 +1,6 @@
 [package]
 name = "kernel"
-version = "0.3.10"
+version = "0.3.11"
 edition = "2021"
 [[bin]]
 name = "kernel"
@@ -26,6 +26,7 @@ jambo-appsec = { path = "../services/jambo-appsec" }
 jambo-kdir = { path = "../services/jambo-kdir" }
 jambo-fdr = { path = "../services/jambo-fdr" }
 jambo-ndr = { path = "../services/jambo-ndr" }
+jambo-cdr = { path = "../services/jambo-cdr" }
 jambo-auditd = { path = "../services/jambo-auditd" }
 jambo-authd = { path = "../services/jambo-authd" }
 jambo-bpfd = { path = "../services/jambo-bpfd" }

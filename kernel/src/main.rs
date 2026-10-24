@@ -1422,6 +1422,13 @@ pub extern "C" fn _start() -> ! {
         "Échec du test de détection réseau et micro-segmentation jambo-ndr"
     );
 
+    // 29viciesquadragies. Validation Désarmement & Reconstruction de Contenu Souverain CDR (Phase 144 - v0.3.11)
+    let cdr_success = sched::cdr_test::execute_cdr_daemon_test();
+    assert!(
+        cdr_success,
+        "Échec du test de désarmement et reconstruction de contenu jambo-cdr"
+    );
+
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
 
     arch::init_iommu();
@@ -1701,14 +1708,17 @@ pub extern "C" fn _start() -> ! {
     kprintln!("\x1b[1;32m[PASS] Phase 141 Kernel & Driver Integrity Resilience (jambo-kdir) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 142 Firmware & Hardware Defense Resilience (jambo-fdr) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 143 Network Detection & Sovereign Microsegmentation Resilience (jambo-ndr) Complete\x1b[0m");
+    kprintln!(
+        "\x1b[1;32m[PASS] Phase 144 Content Disarm and Reconstruction (jambo-cdr) Complete\x1b[0m"
+    );
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.3.10 (Network Detection & Sovereign Microsegmentation Resilience jambo-ndr)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.3.11 (Content Disarm and Reconstruction jambo-cdr)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.3.10 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.3.11 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );

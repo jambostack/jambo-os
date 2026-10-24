@@ -210,6 +210,7 @@ pub struct JamboShell {
     pub kdir: jambo_kdir::JamboKdirDaemon,
     pub fdr: jambo_fdr::JamboFdrDaemon,
     pub ndr: jambo_ndr::JamboNdrDaemon,
+    pub cdr: jambo_cdr::JamboCdrDaemon,
 }
 
 impl Default for JamboShell {
@@ -830,6 +831,15 @@ impl JamboShell {
         );
         let mut ndr = jambo_ndr::JamboNdrDaemon::new(ndr_cap);
         ndr.init_defaults();
+
+        let cdr_cap = jambo_cdr::CdrCap::new(
+            libjambo::Handle::new(14401, 1),
+            jambo_cdr::cdr_rights::ALL,
+            5000,
+            100,
+        );
+        let mut cdr = jambo_cdr::JamboCdrDaemon::new(cdr_cap);
+        cdr.init_defaults();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -930,6 +940,7 @@ impl JamboShell {
             kdir,
             fdr,
             ndr,
+            cdr,
         }
     }
 
@@ -1147,10 +1158,11 @@ impl JamboShell {
                 emit("  kdir [cmd]      - Cyber-résilience & intégrité noyau/pilotes (KDIR), IDT/GDT/CR3 & auto-restauration O(1)\n");
                 emit("  fdr [cmd]       - Résilience firmware & matériel (FDR), SPI Flash, TPM 2.0 / DICE & isolation O(1)\n");
                 emit("  ndr [cmd]       - Détection réseau & micro-segmentation Zero-Trust (NDR), analyse L2-L7 & confinement O(1)\n");
+                emit("  cdr [cmd]       - Désarmement et reconstruction de contenu (CDR), neutralisation macros/W+X & quarantaine O(1)\n");
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.3.10 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.3.11 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -14991,6 +15003,153 @@ impl JamboShell {
                     }
                     _ => {
                         emit("Usage: ndr [status | flows | rules | threats | quarantined | quarantine | verify]\n");
+                        (ShellStatus::ExecutionFailed, write_pos)
+                    }
+                }
+            }
+            "cdr" => {
+                let subcmd = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    "status"
+                };
+
+                match subcmd {
+                    "status" => {
+                        let sum = self.cdr.get_summary();
+                        emit("=== Moteur Souverain CDR (Désarmement & Reconstruction) ===\n");
+                        emit("  Fichiers analysés    : ");
+                        let mut b = [0u8; 20];
+                        emit(format_u64(sum.files_scanned as u64, &mut b));
+                        emit("\n  Fichiers sains       : ");
+                        emit(format_u64(sum.files_clean as u64, &mut b));
+                        emit("\n  Fichiers désarmés    : ");
+                        emit(format_u64(sum.files_disarmed as u64, &mut b));
+                        emit("\n  Fichiers en quarant. : ");
+                        emit(format_u64(sum.files_quarantined as u64, &mut b));
+                        emit("\n  Menaces détectées    : ");
+                        emit(format_u64(sum.threats_detected as u64, &mut b));
+                        emit("\n  Politiques actives   : ");
+                        emit(format_u64(sum.policies_count as u64, &mut b));
+                        emit("\n  Entrées d'audit      : ");
+                        emit(format_u64(sum.audit_entries_count as u64, &mut b));
+                        emit("\n  Registre d'audit     : ");
+                        emit(if sum.ledger_valid {
+                            "SCELLÉ & INTÈGRE (OK)\n"
+                        } else {
+                            "ALTÉRÉ (FAIL)\n"
+                        });
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "policies" => {
+                        emit("=== Politiques CDR Actives ===\n");
+                        for pol in self.cdr.policies.iter().flatten() {
+                            emit("  [P#");
+                            let mut b = [0u8; 20];
+                            emit(format_u64(pol.policy_id as u64, &mut b));
+                            emit("] ");
+                            if let Ok(name_str) = core::str::from_utf8(&pol.name[..pol.name_len]) {
+                                emit(name_str);
+                            }
+                            emit(" | Format: ");
+                            emit(pol.file_type.as_str());
+                            emit(" | W+X: ");
+                            emit(if pol.strip_wx_segments {
+                                "DÉSARMÉ"
+                            } else {
+                                "IGNORÉ"
+                            });
+                            emit(" | Macros: ");
+                            emit(if pol.strip_macros {
+                                "DÉSARMÉ"
+                            } else {
+                                "IGNORÉ"
+                            });
+                            emit(" | Traversée: ");
+                            emit(if pol.strip_traversal {
+                                "DÉSARMÉ"
+                            } else {
+                                "IGNORÉ"
+                            });
+                            emit("\n");
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "threats" => {
+                        emit("=== Menaces Détectées par CDR ===\n");
+                        for th in self.cdr.threats.iter().flatten() {
+                            emit("  [T#");
+                            let mut b = [0u8; 20];
+                            emit(format_u64(th.threat_id as u64, &mut b));
+                            emit("] Type: ");
+                            emit(th.threat_type.as_str());
+                            emit(" | Sévérité: ");
+                            emit(th.severity.as_str());
+                            emit(" | Quarantaine: ");
+                            emit(if th.quarantined { "OUI" } else { "NON" });
+                            emit(" | Assaini: ");
+                            emit(if th.sanitized { "OUI\n" } else { "NON\n" });
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "quarantine" => {
+                        emit("=== Artéfacts en Quarantaine Souveraine O(1) ===\n");
+                        for q in self.cdr.quarantine_store.iter().flatten() {
+                            emit("  [Q#");
+                            let mut b = [0u8; 20];
+                            emit(format_u64(q.file_id as u64, &mut b));
+                            emit("] ");
+                            if let Ok(fn_str) = core::str::from_utf8(&q.filename[..q.filename_len])
+                            {
+                                emit(fn_str);
+                            }
+                            emit(" | Format: ");
+                            emit(q.file_type.as_str());
+                            emit(" | Menace: ");
+                            emit(q.threat_type.as_str());
+                            emit(" | Sévérité: ");
+                            emit(q.severity.as_str());
+                            emit(" | Isolé: ");
+                            emit(if q.isolated { "OUI\n" } else { "NON\n" });
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "scan" => {
+                        let sample_doc = b"DEMO_DOC_CONTENT|vbaProject.bin|ACTIVE_SECTION";
+                        let mut output = [0u8; 64];
+                        match self.cdr.scan_and_reconstruct(
+                            "demo.docx",
+                            jambo_cdr::FileType::StructuredDoc,
+                            sample_doc,
+                            &mut output,
+                            1735109000,
+                        ) {
+                            Ok(res) => {
+                                emit("[CDR/SCAN] Fichier 'demo.docx' analysé avec succès : ");
+                                emit(res.action.as_str());
+                                emit(" (Menace: ");
+                                emit(res.threat_type.as_str());
+                                emit(")\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("[CDR/SCAN] Échec de l'analyse CDR\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "verify" => {
+                        let valid = self.cdr.verify_audit_integrity();
+                        emit("Registre d'audit cryptographique SHA-256 CDR: ");
+                        emit(if valid {
+                            "INTÈGRE (OK)\n"
+                        } else {
+                            "ALTÉRÉ (FAIL)\n"
+                        });
+                        (ShellStatus::Success, write_pos)
+                    }
+                    _ => {
+                        emit("Usage: cdr [status | policies | threats | quarantine | scan | verify]\n");
                         (ShellStatus::ExecutionFailed, write_pos)
                     }
                 }
