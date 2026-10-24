@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.3.7-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.3.8-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.3.7 (Sécurité Applicative Dynamique & RASP jambo-appsec)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.3.7` introduit la plateforme souveraine de sécurité applicative à l'exécution et protection active (RASP) en espace utilisateur (`services/jambo-appsec`) : surveillance continue des microservices Ring 3 (intégrité mémoire par canaris, Shadow Stack pour CFI), détection en temps réel des détournements de flux de contrôle (ROP/JOP), neutralisation instantanée des injections de charges utiles malveillantes sans interruption de service, blocage des désérialisations non sécurisées, confinement durci et mise en quarantaine sélective O(1) des cibles récidivistes, contrôle d'accès capabilaire strict `AppSecCap` avec atténuation monotone et registre d'audit inviolable scellé par chaînage SHA-256.
+> **Statut du Projet : Version v0.3.8 (Cyber-Résilience & Intégrité du Noyau et des Pilotes jambo-kdir)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.3.8` introduit le sous-système souverain de cyber-résilience et d'intégrité noyau/pilotes (KDIR) en espace utilisateur (`services/jambo-kdir`) : surveillance continue d'intégrité des structures critiques du micro-noyau (IDT, GDT, tables de pages CR3, dispatchers syscalls MSR LSTAR), détection proactive d'altérations non autorisées et de rootkits Ring 0/hyperviseur (DKOM, hooks IDT, remapping de tables de pages), auto-restauration instantanée des tables système à partir des empreintes de référence (golden snapshot), validation cryptographique des signatures de pilotes VMO et confinement/isolation immédiate O(1) des composants défaillants ou corrompus, contrôle d'accès capabilaire strict `KdirCap` avec atténuation monotone et registre d'audit inviolable scellé par chaînage SHA-256.
 
 ---
 

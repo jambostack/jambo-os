@@ -1401,6 +1401,13 @@ pub extern "C" fn _start() -> ! {
         "Échec du test de sécurité applicative dynamique & RASP jambo-appsec"
     );
 
+    // 26viciesquadragies. Validation Cyber-Résilience & Intégrité Noyau / Pilotes (Phase 141 - v0.3.8)
+    let kdir_success = sched::kdir_test::execute_kdir_daemon_test();
+    assert!(
+        kdir_success,
+        "Échec du test de cyber-résilience et intégrité noyau/pilotes jambo-kdir"
+    );
+
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
 
     arch::init_iommu();
@@ -1677,14 +1684,15 @@ pub extern "C" fn _start() -> ! {
     kprintln!("\x1b[1;32m[PASS] Phase 138 Pipeline Security & Sovereign DevSecOps Orchestration (jambo-devsecops) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 139 Third-Party Risk Management & Supplier Governance (jambo-tprm) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 140 Dynamic Application Security & RASP (jambo-appsec) Complete\x1b[0m");
+    kprintln!("\x1b[1;32m[PASS] Phase 141 Kernel & Driver Integrity Resilience (jambo-kdir) Complete\x1b[0m");
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.3.7 (Dynamic Application Security & RASP jambo-appsec)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.3.8 (Kernel & Driver Integrity Resilience jambo-kdir)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.3.7 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.3.8 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );

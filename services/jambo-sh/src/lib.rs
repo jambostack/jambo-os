@@ -207,6 +207,7 @@ pub struct JamboShell {
     pub devsecops: jambo_devsecops::JamboDevSecOpsDaemon,
     pub tprm: jambo_tprm::JamboTprmDaemon,
     pub appsec: jambo_appsec::JamboAppSecDaemon,
+    pub kdir: jambo_kdir::JamboKdirDaemon,
 }
 
 impl Default for JamboShell {
@@ -800,6 +801,15 @@ impl JamboShell {
         );
         let mut appsec = jambo_appsec::JamboAppSecDaemon::new(appsec_cap);
         appsec.init_defaults();
+
+        let kdir_cap = jambo_kdir::KdirCap::new(
+            libjambo::Handle::new(14101, 1),
+            jambo_kdir::kdir_rights::ALL,
+            5000,
+            100,
+        );
+        let mut kdir = jambo_kdir::JamboKdirDaemon::new(kdir_cap);
+        kdir.init_defaults();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -897,6 +907,7 @@ impl JamboShell {
             devsecops,
             tprm,
             appsec,
+            kdir,
         }
     }
 
@@ -1111,10 +1122,11 @@ impl JamboShell {
                 emit("  devsecops [cmd] - Sécurité pipelines DevSecOps, contrôle admission, attestations SLSA & signatures\n");
                 emit("  tprm [cmd]      - Gestion des risques fournisseurs (TPRM), dépendances & quarantaine\n");
                 emit("  appsec [cmd]    - Sécurité applicative dynamique (RASP), CFI, canaris mémoire & neutralisation O(1)\n");
+                emit("  kdir [cmd]      - Cyber-résilience & intégrité noyau/pilotes (KDIR), IDT/GDT/CR3 & auto-restauration O(1)\n");
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.3.7 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.3.8 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -14370,6 +14382,190 @@ impl JamboShell {
                     }
                     _ => {
                         emit("Usage: appsec [status | targets | threats | policies | neutralize <id> | quarantine <id> | verify]\n");
+                        (ShellStatus::ExecutionFailed, write_pos)
+                    }
+                }
+            }
+            "kdir" => {
+                let subcmd = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    "status"
+                };
+
+                let mut b = [0u8; 20];
+
+                match subcmd {
+                    "status" => {
+                        let sum = self.kdir.get_summary();
+                        emit(
+                            "--- JAMBO CYBER-RÉSILLIENCE & INTÉGRITÉ NOYAU KDIR (PHASE 141) ---\n",
+                        );
+                        emit("Sondes critiques déployées: ");
+                        emit(format_u64(sum.probes_count as u64, &mut b));
+                        emit("\nStructures intactes (Golden Hash): ");
+                        emit(format_u64(sum.intact_count as u64, &mut b));
+                        emit("\nStructures altérées / compromises: ");
+                        emit(format_u64(sum.tampered_count as u64, &mut b));
+                        emit("\nPilotes supervisés: ");
+                        emit(format_u64(sum.drivers_count as u64, &mut b));
+                        emit("\nPilotes isolés / confinés O(1): ");
+                        emit(format_u64(sum.isolated_drivers_count as u64, &mut b));
+                        emit("\nMenaces rootkit détectées: ");
+                        emit(format_u64(sum.threats_detected as u64, &mut b));
+                        emit("\nMenaces auto-restaurées / remédiées: ");
+                        emit(format_u64(sum.remediated_threats as u64, &mut b));
+                        emit("\nEntrées d'audit SHA-256: ");
+                        emit(format_u64(sum.ledger_entries as u64, &mut b));
+                        emit("\nRegistre cryptographique: ");
+                        emit(if sum.ledger_valid {
+                            "INTÈGRE (OK)\n"
+                        } else {
+                            "ALTÉRÉ (FAIL)\n"
+                        });
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "probes" => {
+                        emit("--- SONDES D'INTÉGRITÉ DES STRUCTURES NOYAU ---\n");
+                        for probe in self.kdir.probes.iter().flatten() {
+                            emit("[#");
+                            emit(format_u64(probe.probe_id as u64, &mut b));
+                            emit("] ");
+                            if let Ok(name_str) =
+                                core::str::from_utf8(&probe.name[..probe.name_len])
+                            {
+                                emit(name_str);
+                            }
+                            emit(" | ");
+                            emit(probe.structure.as_str());
+                            emit(" | Base: ");
+                            emit(format_hex_u64(probe.base_address, &mut b));
+                            emit(" | Statut: ");
+                            match probe.status {
+                                jambo_kdir::IntegrityStatus::Intact => emit("Intact"),
+                                jambo_kdir::IntegrityStatus::Tampered => emit("ALTÉRÉ/COMPROMIS"),
+                                jambo_kdir::IntegrityStatus::Restoring => emit("En Restauration"),
+                                jambo_kdir::IntegrityStatus::Quarantined => emit("Quarantaine"),
+                            }
+                            emit(" | Violations: ");
+                            emit(format_u64(probe.violation_count as u64, &mut b));
+                            emit("\n");
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "drivers" => {
+                        emit("--- PILOTES VMO SOUVERAINS SUPERVISÉS ---\n");
+                        for driver in self.kdir.drivers.iter().flatten() {
+                            emit("[#");
+                            emit(format_u64(driver.driver_id as u64, &mut b));
+                            emit("] ");
+                            if let Ok(name_str) =
+                                core::str::from_utf8(&driver.name[..driver.name_len])
+                            {
+                                emit(name_str);
+                            }
+                            emit(" | Base: ");
+                            emit(format_hex_u64(driver.load_address, &mut b));
+                            emit(" | Taille: ");
+                            emit(format_u64(driver.size_bytes as u64, &mut b));
+                            emit(" octets | Statut: ");
+                            match driver.status {
+                                jambo_kdir::DriverStatus::Trusted => emit("Approuvé/Actif"),
+                                jambo_kdir::DriverStatus::Compromised => emit("Compromis"),
+                                jambo_kdir::DriverStatus::Isolated => emit("ISOLÉ/CONFINÉ"),
+                                jambo_kdir::DriverStatus::Evicted => emit("Éjecté"),
+                            }
+                            emit(" | CapMask: ");
+                            emit(format_hex_u64(driver.capabilities_mask as u64, &mut b));
+                            emit("\n");
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "threats" => {
+                        emit("--- MENACES ROOTKIT & ALTÉRATIONS DÉTECTÉES ---\n");
+                        for threat in self.kdir.threats.iter().flatten() {
+                            emit("[#");
+                            emit(format_u64(threat.threat_id as u64, &mut b));
+                            emit("] Sonde #");
+                            emit(format_u64(threat.probe_id as u64, &mut b));
+                            emit(" | Vecteur: ");
+                            emit(threat.threat_type.as_str());
+                            emit(" | Sévérité: ");
+                            match threat.severity {
+                                jambo_kdir::ThreatSeverity::Low => emit("Faible"),
+                                jambo_kdir::ThreatSeverity::Medium => emit("Moyenne"),
+                                jambo_kdir::ThreatSeverity::High => emit("Élevée"),
+                                jambo_kdir::ThreatSeverity::Critical => emit("CRITIQUE"),
+                            }
+                            emit(" | Remédiée: ");
+                            emit(if threat.remediated { "OUI" } else { "NON" });
+                            emit(" | Auto-restaurée: ");
+                            emit(if threat.auto_restored {
+                                "OUI\n"
+                            } else {
+                                "NON\n"
+                            });
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "restore" => {
+                        if parsed.arg_count > 2 {
+                            let probe_id = parse_u64(parsed.args[2]).unwrap_or(0) as u32;
+                            let mut buf = [0u8; 128];
+                            match self
+                                .kdir
+                                .auto_restore_structure(probe_id, &mut buf, 1735002000)
+                            {
+                                Ok(bytes) => {
+                                    emit("Structure #");
+                                    emit(format_u64(probe_id as u64, &mut b));
+                                    emit(" auto-restaurée avec succès (");
+                                    emit(format_u64(bytes as u64, &mut b));
+                                    emit(" octets réécrits)\n");
+                                    (ShellStatus::Success, write_pos)
+                                }
+                                Err(_) => {
+                                    emit("Échec restauration structure\n");
+                                    (ShellStatus::ExecutionFailed, write_pos)
+                                }
+                            }
+                        } else {
+                            emit("Usage: kdir restore <probe_id>\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        }
+                    }
+                    "isolate" => {
+                        if parsed.arg_count > 2 {
+                            let driver_id = parse_u64(parsed.args[2]).unwrap_or(0) as u32;
+                            match self.kdir.isolate_driver(driver_id, 1735002100) {
+                                Ok(()) => {
+                                    emit("Pilote #");
+                                    emit(format_u64(driver_id as u64, &mut b));
+                                    emit(" CONFINÉ et ISOLÉ O(1) avec succès\n");
+                                    (ShellStatus::Success, write_pos)
+                                }
+                                Err(_) => {
+                                    emit("Échec confinement pilote\n");
+                                    (ShellStatus::ExecutionFailed, write_pos)
+                                }
+                            }
+                        } else {
+                            emit("Usage: kdir isolate <driver_id>\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        }
+                    }
+                    "verify" => {
+                        let valid = self.kdir.verify_ledger_integrity();
+                        emit("Registre d'audit cryptographique SHA-256 KDIR: ");
+                        emit(if valid {
+                            "INTÈGRE (OK)\n"
+                        } else {
+                            "ALTÉRÉ (FAIL)\n"
+                        });
+                        (ShellStatus::Success, write_pos)
+                    }
+                    _ => {
+                        emit("Usage: kdir [status | probes | drivers | threats | restore <probe_id> | isolate <driver_id> | verify]\n");
                         (ShellStatus::ExecutionFailed, write_pos)
                     }
                 }
