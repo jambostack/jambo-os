@@ -1259,7 +1259,7 @@ pub extern "C" fn _start() -> ! {
 
     // Note: La Posture de Sécurité Applicative ASPM, Sécurité de la Chaîne d'Approvisionnement Logicielle & Vérification d'Admission SBOM CycloneDX est validée en Phase 159 (v0.3.26).
 
-    // 18sexiesviciesquadragies. Validation de la Simulation de Brèches et d'Attaques BAS (Phase 130 - v0.2.128)
+    // 18sexiesviciesquadragies. Validation de la Simulation Continue de Brèches et d'Attaques BAS (Phase 160 - v0.3.27)
     let bas_success = sched::bas_test::execute_bas_daemon_test();
     assert!(
         bas_success,
@@ -1796,14 +1796,17 @@ pub extern "C" fn _start() -> ! {
     kprintln!(
         "\x1b[1;32m[PASS] Phase 159 Sovereign Application Security Posture Management & SBOM CycloneDX (jambo-aspm) Complete\x1b[0m"
     );
+    kprintln!(
+        "\x1b[1;32m[PASS] Phase 160 Sovereign Breach & Attack Simulation, Resilience Validation (jambo-bas) Complete\x1b[0m"
+    );
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.3.26 (Sovereign Application Security Posture Management jambo-aspm)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.3.27 (Sovereign Breach & Attack Simulation and Automated Resilience Evaluation jambo-bas)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.3.26 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.3.27 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );

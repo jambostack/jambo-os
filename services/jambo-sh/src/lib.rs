@@ -13058,7 +13058,11 @@ impl JamboShell {
                         emit(format_u64(self.bas.playbook_count as u64, &mut b));
                         emit("\n  Score de Résilience global     : ");
                         emit(format_u64(self.bas.resilience_score as u64, &mut b));
-                        emit("/100\n  Total simulations exécutées    : ");
+                        emit("/100\n  Score de Résistance de grappe  : ");
+                        emit(format_u64(self.bas.cluster_resistance_score as u64, &mut b));
+                        emit("/100\n  Latence moy. détection (MTTD)  : ");
+                        emit(format_u64(self.bas.mean_time_to_detect_ms as u64, &mut b));
+                        emit(" ms\n  Total simulations exécutées    : ");
                         emit(format_u64(self.bas.total_simulations, &mut b));
                         emit("\n  Attaques bloquées net          : ");
                         emit(format_u64(self.bas.total_blocked, &mut b));
@@ -13066,6 +13070,8 @@ impl JamboShell {
                         emit(format_u64(self.bas.total_detected, &mut b));
                         emit("\n  Attaques manquées (lacunes)    : ");
                         emit(format_u64(self.bas.total_missed, &mut b));
+                        emit("\n  Rapports d'évaluation générés  : ");
+                        emit(format_u64(self.bas.assessment_report_count as u64, &mut b));
                         let valid = self.bas.verify_ledger_integrity();
                         emit("\n  Registre d'audit SHA-256       : ");
                         emit(if valid {
@@ -13132,6 +13138,9 @@ impl JamboShell {
                                 "3" => 3,
                                 "4" => 4,
                                 "5" => 5,
+                                "6" => 6,
+                                "7" => 7,
+                                "8" => 8,
                                 _ => 1,
                             }
                         } else {
@@ -13157,6 +13166,8 @@ impl JamboShell {
                         let pid = if parsed.arg_count > 2 {
                             match parsed.args[2] {
                                 "102" => 102,
+                                "103" => 103,
+                                "104" => 104,
                                 _ => 101,
                             }
                         } else {
@@ -13185,21 +13196,67 @@ impl JamboShell {
                             Ok(g) => {
                                 emit("=== ANALYSE DES LACUNES DE COUVERTURE DÉFENSIVE ===\n");
                                 let mut b = [0u8; 20];
-                                emit("  Vecteurs testés     : ");
+                                emit("  Vecteurs testés       : ");
                                 emit(format_u64(g.total_vectors_tested as u64, &mut b));
-                                emit("\n  Bloqués net         : ");
+                                emit("\n  Bloqués net           : ");
                                 emit(format_u64(g.blocked_count as u64, &mut b));
-                                emit("\n  Détectés uniquement : ");
+                                emit("\n  Détectés uniquement   : ");
                                 emit(format_u64(g.detected_only_count as u64, &mut b));
-                                emit("\n  Non détectés        : ");
+                                emit("\n  Non détectés (brèches): ");
                                 emit(format_u64(g.undetected_count as u64, &mut b));
-                                emit("\n  Résilience          : ");
+                                emit("\n  Score de Résilience   : ");
                                 emit(format_u64(g.resilience_score as u64, &mut b));
+                                emit("/100\n  Résistance de Grappe  : ");
+                                emit(format_u64(g.cluster_resistance_score as u64, &mut b));
                                 emit("/100\n");
                                 (ShellStatus::Success, write_pos)
                             }
                             Err(_) => {
                                 emit("  [FAIL] Impossible d'analyser les lacunes\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "assess" => {
+                        let profile = if parsed.arg_count > 2 {
+                            match parsed.args[2] {
+                                "redteam" => {
+                                    jambo_bas::SimulationProfile::RedTeamAdversaryEmulation
+                                }
+                                "secnum" => {
+                                    jambo_bas::SimulationProfile::ComplianceSecNumCloudAudit
+                                }
+                                "zerotrust" => jambo_bas::SimulationProfile::ZeroTrustValidation,
+                                "ransomware" => {
+                                    jambo_bas::SimulationProfile::RansomwareContainmentExercise
+                                }
+                                _ => jambo_bas::SimulationProfile::ContinuousAssurance,
+                            }
+                        } else {
+                            jambo_bas::SimulationProfile::ContinuousAssurance
+                        };
+                        let cap = self.bas.admin_cap;
+                        match self.bas.run_continuous_assessment(&cap, profile, 3150) {
+                            Ok(rep) => {
+                                emit("=== ÉVALUATION CONTINUE AUTOMATISÉE DE RÉSILIENCE ===\n");
+                                let mut b = [0u8; 20];
+                                emit("  Rapport d'évaluation #");
+                                emit(format_u64(rep.report_id as u64, &mut b));
+                                emit(" scellé SHA-256\n  Vecteurs évalués     : ");
+                                emit(format_u64(rep.total_vectors_tested as u64, &mut b));
+                                emit("\n  Attaques bloquées    : ");
+                                emit(format_u64(rep.blocked_count as u64, &mut b));
+                                emit("\n  Score de Résilience  : ");
+                                emit(format_u64(rep.resilience_score as u64, &mut b));
+                                emit("/100\n  Résistance de Grappe : ");
+                                emit(format_u64(rep.cluster_resistance_score as u64, &mut b));
+                                emit("/100\n  MTTD moyen           : ");
+                                emit(format_u64(rep.mean_time_to_detect_ms as u64, &mut b));
+                                emit(" ms\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("  [FAIL] Échec de l'évaluation continue\n");
                                 (ShellStatus::ExecutionFailed, write_pos)
                             }
                         }
@@ -13211,6 +13268,9 @@ impl JamboShell {
                                 "3" => 3,
                                 "4" => 4,
                                 "5" => 5,
+                                "6" => 6,
+                                "7" => 7,
+                                "8" => 8,
                                 _ => 1,
                             }
                         } else {
@@ -13231,6 +13291,68 @@ impl JamboShell {
                             }
                         }
                     }
+                    "remediate-all" => {
+                        let cap = self.bas.admin_cap;
+                        match self.bas.remediate_all_gaps(&cap, 3250) {
+                            Ok(rep) => {
+                                emit("=== REMÉDIATION AUTONOME GLOBALE DES LACUNES ===\n");
+                                let mut b = [0u8; 20];
+                                emit("  Rapport de remédiation #");
+                                emit(format_u64(rep.report_id as u64, &mut b));
+                                emit(" scellé SHA-256\n  Lacunes remédiées     : ");
+                                emit(format_u64(rep.remediated_gaps as u64, &mut b));
+                                emit("\n  Résilience rétablie   : ");
+                                emit(format_u64(rep.new_score as u64, &mut b));
+                                emit("/100\n  Résistance de Grappe  : ");
+                                emit(format_u64(rep.new_cluster_resistance as u64, &mut b));
+                                emit("/100\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("  [FAIL] Échec de la remédiation globale\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "reports" => {
+                        emit("--- [JAMBO-BAS] RAPPORTS D'ÉVALUATION ET DE REMÉDIATION SCELLÉS SHA-256 ---\n");
+                        let mut b = [0u8; 20];
+                        emit("  Rapports d'évaluation de résilience : ");
+                        emit(format_u64(self.bas.assessment_report_count as u64, &mut b));
+                        emit("\n  Rapports de remédiation scellés     : ");
+                        emit(format_u64(self.bas.remediation_report_count as u64, &mut b));
+                        emit("\n  Rapports de simulation unitaire     : ");
+                        emit(format_u64(self.bas.simulation_report_count as u64, &mut b));
+                        emit("\n");
+                        for i in 0..self.bas.assessment_report_count {
+                            if let Some(ref rep) = self.bas.assessment_reports[i] {
+                                emit("  [ASSESSMENT #");
+                                emit(format_u64(rep.report_id as u64, &mut b));
+                                emit("] Résilience: ");
+                                emit(format_u64(rep.resilience_score as u64, &mut b));
+                                emit("/100 | Grappe: ");
+                                emit(format_u64(rep.cluster_resistance_score as u64, &mut b));
+                                emit("/100\n");
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "posture" => {
+                        emit("=== POSTURE DE RÉSILIENCE CYBER SOUVERAINE (BAS) ===\n");
+                        let mut b = [0u8; 20];
+                        emit("  Résilience globale    : ");
+                        emit(format_u64(self.bas.resilience_score as u64, &mut b));
+                        emit("/100\n  Résistance de grappe  : ");
+                        emit(format_u64(self.bas.cluster_resistance_score as u64, &mut b));
+                        emit("/100\n  MTTD moyen            : ");
+                        emit(format_u64(self.bas.mean_time_to_detect_ms as u64, &mut b));
+                        emit(" ms\n  Vecteurs actifs       : ");
+                        emit(format_u64(self.bas.vector_count as u64, &mut b));
+                        emit("\n  Playbooks simulés     : ");
+                        emit(format_u64(self.bas.playbook_count as u64, &mut b));
+                        emit("\n");
+                        (ShellStatus::Success, write_pos)
+                    }
                     "verify" => {
                         let valid = self.bas.verify_ledger_integrity();
                         emit("  Vérification intégrité registre BAS SHA-256 : ");
@@ -13242,7 +13364,7 @@ impl JamboShell {
                         (ShellStatus::Success, write_pos)
                     }
                     _ => {
-                        emit("Usage: bas [status | vectors | playbooks | run [vid] | run-playbook [pid] | gaps | remediate [vid] | verify]\n");
+                        emit("Usage: bas [status | vectors | playbooks | run [vid] | run-playbook [pid] | gaps | assess [profile] | remediate [vid] | remediate-all | reports | posture | verify]\n");
                         (ShellStatus::ExecutionFailed, write_pos)
                     }
                 }
@@ -20264,6 +20386,22 @@ mod tests {
                 let (st8, len8) = shell.execute_line("bas verify", &mut out);
                 assert_eq!(st8, ShellStatus::Success);
                 assert!(len8 > 0);
+
+                let (st9, len9) = shell.execute_line("bas assess secnum", &mut out);
+                assert_eq!(st9, ShellStatus::Success);
+                assert!(len9 > 0);
+
+                let (st10, len10) = shell.execute_line("bas remediate-all", &mut out);
+                assert_eq!(st10, ShellStatus::Success);
+                assert!(len10 > 0);
+
+                let (st11, len11) = shell.execute_line("bas reports", &mut out);
+                assert_eq!(st11, ShellStatus::Success);
+                assert!(len11 > 0);
+
+                let (st12, len12) = shell.execute_line("bas posture", &mut out);
+                assert_eq!(st12, ShellStatus::Success);
+                assert!(len12 > 0);
             })
             .unwrap();
         handle.join().unwrap();

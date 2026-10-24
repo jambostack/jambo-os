@@ -1,14 +1,19 @@
-//! Simulation Autonome de Brèches et d'Attaques (BAS) & Validation Continue des Contrôles de Sécurité
+//! Simulation Continue de Brèches et d'Attaques BAS, Évaluation Automatisée de Résilience & Validation de Posture
 //!
-//! Phase 130 — Jalon v0.2.128
+//! Phase 160 — Jalon v0.3.27
 //!
 //! Fournit une plateforme souveraine BAS (Breach and Attack Simulation) en `#![no_std]` :
-//! 1. Moteur souverain d'émulation d'adversaires et techniques MITRE ATT&CK (Ring 3, IPC, VFS, TEE, Réseau).
-//! 2. Validation continue de l'efficacité des défenses en profondeur (WAF, EDR, IDPS, CSPM, CIEM, CNAPP, ASPM, Firewall, Landlock, Seccomp).
-//! 3. Modélisation et exécution automatisée de scénarios d'attaque (Playbooks APT, Ransomware, Fuite de données).
-//! 4. Calcul déterministe du Score de Résilience (0..100) et détection des lacunes de couverture (Gap Analysis).
-//! 5. Contrôle d'accès capabilaire strict (`BasCap`) sans autorité ambiante.
-//! 6. Registre d'audit cryptographique inviolable scellé par chaînage SHA-256.
+//! 1. Moteur souverain d'émulation d'adversaires et techniques MITRE ATT&CK (Ring 3, IPC, VFS, TEE, Réseau, Supply Chain, CIEM, CWPP).
+//! 2. Validation continue de l'efficacité des contrôles de défense active (WAF, IDS/IDPS, EDR, XDR, CASB, CSPM, CIEM, CNAPP, ASPM, Seccomp, Landlock, ZTNA, PAM).
+//! 3. Profils de simulation avancés : assurance continue (`ContinuousAssurance`), émulation APT (`RedTeamAdversaryEmulation`),
+//!    audit de conformité souveraine (`ComplianceSecNumCloudAudit`), validation ZTNA (`ZeroTrustValidation`) et exercices de confinement ransomware (`RansomwareContainmentExercise`).
+//! 4. Calcul déterministe du Score de Résilience (0..100), du Score de Résistance de Grappe (Cluster Resistance Score 0..100),
+//!    de la latence moyenne de détection (MTTD) et détection fine des lacunes de détection/prévention (Gap Analysis).
+//! 5. Rapports de simulation (`BasSimulationReport`), d'évaluation de résilience (`BasResilienceAssessmentReport`)
+//!    et de remédiation (`BasRemediationReport`) scellés cryptographiquement par SHA-256.
+//! 6. Orchestration de remédiation autonome O(1) de l'ensemble des lacunes de détection identifiées.
+//! 7. Contrôle d'accès capabilaire strict (`BasCap`) sans autorité ambiante avec atténuation monotone.
+//! 8. Registre d'audit cryptographique inviolable scellé par chaînage SHA-256 déterministe.
 
 #![no_std]
 
@@ -175,6 +180,8 @@ pub mod bas_rights {
     pub const REMEDIATE: u32 = 1 << 5;
     pub const SEAL_LEDGER: u32 = 1 << 6;
     pub const ADMIN: u32 = 1 << 7;
+    pub const CONTINUOUS_ASSESSMENT: u32 = 1 << 8;
+    pub const GENERATE_REPORT: u32 = 1 << 9;
 
     pub const ALL: u32 = RUN_SIMULATION
         | QUERY_RESULTS
@@ -183,7 +190,9 @@ pub mod bas_rights {
         | ANALYZE_GAPS
         | REMEDIATE
         | SEAL_LEDGER
-        | ADMIN;
+        | ADMIN
+        | CONTINUOUS_ASSESSMENT
+        | GENERATE_REPORT;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -196,6 +205,7 @@ pub enum BasError {
     InvalidParameter,
     LedgerVerificationFailed,
     SimulationExecutionFailed,
+    ReportNotFound,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -263,7 +273,7 @@ impl BasCap {
 }
 
 // ============================================================================
-// MODÈLES DE DONNÉES BAS & MITRE ATT&CK
+// MODÈLES DE DONNÉES BAS & MITRE ATT&CK SOUVERAINS
 // ============================================================================
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -273,6 +283,9 @@ pub enum AttackDomain {
     VfsStorage,
     TeeEnclave,
     NetworkC2,
+    SupplyChainAspm,
+    CloudIdentityCiem,
+    WorkloadCwpp,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -295,6 +308,8 @@ pub enum DefenseSystem {
     Waf,
     Edr,
     Idps,
+    Xdr,
+    Casb,
     Cspm,
     Ciem,
     Cnapp,
@@ -302,6 +317,8 @@ pub enum DefenseSystem {
     Wall,
     Landlock,
     Seccomp,
+    Ztna,
+    Pam,
     None,
 }
 
@@ -313,6 +330,15 @@ pub enum SimulationStatus {
     DetectedOnly,
     UndetectedSuccess,
     Remediated,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SimulationProfile {
+    ContinuousAssurance,
+    RedTeamAdversaryEmulation,
+    ComplianceSecNumCloudAudit,
+    ZeroTrustValidation,
+    RansomwareContainmentExercise,
 }
 
 #[derive(Clone, Copy)]
@@ -421,9 +447,13 @@ impl AttackPlaybook {
     pub fn name_as_str(&self) -> &str {
         core::str::from_utf8(&self.name[..self.name_len]).unwrap_or("<invalide>")
     }
+
+    pub fn desc_as_str(&self) -> &str {
+        core::str::from_utf8(&self.description[..self.desc_len]).unwrap_or("<invalide>")
+    }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct SimulationResult {
     pub run_id: u32,
     pub vector_id: u32,
@@ -432,6 +462,186 @@ pub struct SimulationResult {
     pub detected: bool,
     pub mitigating_defense: DefenseSystem,
     pub timestamp: u64,
+}
+
+/// Rapport individuel d'exécution de simulation scellé par SHA-256
+#[derive(Clone, Copy, Debug)]
+pub struct BasSimulationReport {
+    pub report_id: u32,
+    pub run_id: u32,
+    pub vector_id: u32,
+    pub timestamp: u64,
+    pub domain: AttackDomain,
+    pub tactic: MitreTactic,
+    pub expected_defense: DefenseSystem,
+    pub mitigating_defense: DefenseSystem,
+    pub profile: SimulationProfile,
+    pub status: SimulationStatus,
+    pub latency_ms: u32,
+    pub blocked: bool,
+    pub detected: bool,
+    pub report_hash: [u8; 32],
+}
+
+impl BasSimulationReport {
+    pub fn new(
+        report_id: u32,
+        run_id: u32,
+        vector_id: u32,
+        timestamp: u64,
+        domain: AttackDomain,
+        tactic: MitreTactic,
+        expected_defense: DefenseSystem,
+        mitigating_defense: DefenseSystem,
+        profile: SimulationProfile,
+        status: SimulationStatus,
+        latency_ms: u32,
+        blocked: bool,
+        detected: bool,
+    ) -> Self {
+        let mut hasher = Sha256::new();
+        hasher.update(&report_id.to_be_bytes());
+        hasher.update(&run_id.to_be_bytes());
+        hasher.update(&vector_id.to_be_bytes());
+        hasher.update(&timestamp.to_be_bytes());
+        hasher.update(&[
+            domain as u8,
+            tactic as u8,
+            expected_defense as u8,
+            mitigating_defense as u8,
+            profile as u8,
+            status as u8,
+            blocked as u8,
+            detected as u8,
+        ]);
+        hasher.update(&latency_ms.to_be_bytes());
+        let report_hash = hasher.finalize();
+
+        Self {
+            report_id,
+            run_id,
+            vector_id,
+            timestamp,
+            domain,
+            tactic,
+            expected_defense,
+            mitigating_defense,
+            profile,
+            status,
+            latency_ms,
+            blocked,
+            detected,
+            report_hash,
+        }
+    }
+}
+
+/// Rapport global d'évaluation automatisée de résilience scellé par SHA-256
+#[derive(Clone, Copy, Debug)]
+pub struct BasResilienceAssessmentReport {
+    pub report_id: u32,
+    pub timestamp: u64,
+    pub profile: SimulationProfile,
+    pub total_vectors_tested: usize,
+    pub blocked_count: usize,
+    pub detected_only_count: usize,
+    pub undetected_count: usize,
+    pub resilience_score: u8,
+    pub cluster_resistance_score: u8,
+    pub mean_time_to_detect_ms: u32,
+    pub weakest_domain: AttackDomain,
+    pub report_hash: [u8; 32],
+}
+
+impl BasResilienceAssessmentReport {
+    pub fn new(
+        report_id: u32,
+        timestamp: u64,
+        profile: SimulationProfile,
+        total_vectors_tested: usize,
+        blocked_count: usize,
+        detected_only_count: usize,
+        undetected_count: usize,
+        resilience_score: u8,
+        cluster_resistance_score: u8,
+        mean_time_to_detect_ms: u32,
+        weakest_domain: AttackDomain,
+    ) -> Self {
+        let mut hasher = Sha256::new();
+        hasher.update(&report_id.to_be_bytes());
+        hasher.update(&timestamp.to_be_bytes());
+        hasher.update(&[profile as u8, weakest_domain as u8]);
+        hasher.update(&(total_vectors_tested as u32).to_be_bytes());
+        hasher.update(&(blocked_count as u32).to_be_bytes());
+        hasher.update(&(detected_only_count as u32).to_be_bytes());
+        hasher.update(&(undetected_count as u32).to_be_bytes());
+        hasher.update(&[resilience_score, cluster_resistance_score]);
+        hasher.update(&mean_time_to_detect_ms.to_be_bytes());
+        let report_hash = hasher.finalize();
+
+        Self {
+            report_id,
+            timestamp,
+            profile,
+            total_vectors_tested,
+            blocked_count,
+            detected_only_count,
+            undetected_count,
+            resilience_score,
+            cluster_resistance_score,
+            mean_time_to_detect_ms,
+            weakest_domain,
+            report_hash,
+        }
+    }
+}
+
+/// Rapport d'orchestration de remédiation autonome scellé par SHA-256
+#[derive(Clone, Copy, Debug)]
+pub struct BasRemediationReport {
+    pub report_id: u32,
+    pub timestamp: u64,
+    pub remediated_gaps: u32,
+    pub previous_score: u8,
+    pub new_score: u8,
+    pub previous_cluster_resistance: u8,
+    pub new_cluster_resistance: u8,
+    pub report_hash: [u8; 32],
+}
+
+impl BasRemediationReport {
+    pub fn new(
+        report_id: u32,
+        timestamp: u64,
+        remediated_gaps: u32,
+        previous_score: u8,
+        new_score: u8,
+        previous_cluster_resistance: u8,
+        new_cluster_resistance: u8,
+    ) -> Self {
+        let mut hasher = Sha256::new();
+        hasher.update(&report_id.to_be_bytes());
+        hasher.update(&timestamp.to_be_bytes());
+        hasher.update(&remediated_gaps.to_be_bytes());
+        hasher.update(&[
+            previous_score,
+            new_score,
+            previous_cluster_resistance,
+            new_cluster_resistance,
+        ]);
+        let report_hash = hasher.finalize();
+
+        Self {
+            report_id,
+            timestamp,
+            remediated_gaps,
+            previous_score,
+            new_score,
+            previous_cluster_resistance,
+            new_cluster_resistance,
+            report_hash,
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -453,9 +663,22 @@ pub struct GapSummary {
     pub detected_only_count: usize,
     pub undetected_count: usize,
     pub resilience_score: u8,
+    pub cluster_resistance_score: u8,
     pub weakest_domain: AttackDomain,
     pub uncovered_mitre_tactics: u32,
 }
+
+// ============================================================================
+// CONSTANTES & LIMITES DU DÉMON
+// ============================================================================
+
+pub const MAX_VECTORS: usize = 16;
+pub const MAX_PLAYBOOKS: usize = 8;
+pub const MAX_SIM_HISTORY: usize = 32;
+pub const MAX_LEDGER_ENTRIES: usize = 64;
+pub const MAX_SIMULATION_REPORTS: usize = 16;
+pub const MAX_ASSESSMENT_REPORTS: usize = 8;
+pub const MAX_REMEDIATION_REPORTS: usize = 8;
 
 // ============================================================================
 // DÉMON CENTRAL BAS (JamboBasDaemon)
@@ -463,42 +686,62 @@ pub struct GapSummary {
 
 pub struct JamboBasDaemon {
     pub admin_cap: BasCap,
-    pub vectors: [Option<SimulationVector>; 16],
+    pub vectors: [Option<SimulationVector>; MAX_VECTORS],
     pub vector_count: usize,
-    pub playbooks: [Option<AttackPlaybook>; 8],
+    pub playbooks: [Option<AttackPlaybook>; MAX_PLAYBOOKS],
     pub playbook_count: usize,
-    pub simulation_history: [Option<SimulationResult>; 32],
+    pub simulation_history: [Option<SimulationResult>; MAX_SIM_HISTORY],
     pub history_count: usize,
-    pub ledger: [Option<AuditLogEntry>; 32],
+    pub simulation_reports: [Option<BasSimulationReport>; MAX_SIMULATION_REPORTS],
+    pub simulation_report_count: usize,
+    pub assessment_reports: [Option<BasResilienceAssessmentReport>; MAX_ASSESSMENT_REPORTS],
+    pub assessment_report_count: usize,
+    pub remediation_reports: [Option<BasRemediationReport>; MAX_REMEDIATION_REPORTS],
+    pub remediation_report_count: usize,
+    pub ledger: [Option<AuditLogEntry>; MAX_LEDGER_ENTRIES],
     pub ledger_count: usize,
     pub latest_ledger_hash: [u8; 32],
     pub resilience_score: u8,
+    pub cluster_resistance_score: u8,
+    pub mean_time_to_detect_ms: u32,
     pub total_simulations: u64,
     pub total_blocked: u64,
     pub total_detected: u64,
     pub total_missed: u64,
     next_run_id: u32,
+    next_report_id: u32,
+    next_entry_id: u32,
 }
 
 impl JamboBasDaemon {
     pub fn new(admin_cap: BasCap) -> Self {
         Self {
             admin_cap,
-            vectors: [None; 16],
+            vectors: [None; MAX_VECTORS],
             vector_count: 0,
-            playbooks: [None; 8],
+            playbooks: [None; MAX_PLAYBOOKS],
             playbook_count: 0,
-            simulation_history: [None; 32],
+            simulation_history: [None; MAX_SIM_HISTORY],
             history_count: 0,
-            ledger: [None; 32],
+            simulation_reports: [None; MAX_SIMULATION_REPORTS],
+            simulation_report_count: 0,
+            assessment_reports: [None; MAX_ASSESSMENT_REPORTS],
+            assessment_report_count: 0,
+            remediation_reports: [None; MAX_REMEDIATION_REPORTS],
+            remediation_report_count: 0,
+            ledger: [None; MAX_LEDGER_ENTRIES],
             ledger_count: 0,
             latest_ledger_hash: [0u8; 32],
             resilience_score: 100,
+            cluster_resistance_score: 100,
+            mean_time_to_detect_ms: 12,
             total_simulations: 0,
             total_blocked: 0,
             total_detected: 0,
             total_missed: 0,
             next_run_id: 1,
+            next_report_id: 1,
+            next_entry_id: 1,
         }
     }
 
@@ -509,7 +752,8 @@ impl JamboBasDaemon {
         result_code: u16,
         timestamp: u64,
     ) -> Result<(), BasError> {
-        let entry_id = (self.ledger_count + 1) as u32;
+        let entry_id = self.next_entry_id;
+        self.next_entry_id += 1;
 
         let mut action = [0u8; 24];
         let bytes = action_str.as_bytes();
@@ -538,15 +782,15 @@ impl JamboBasDaemon {
             timestamp,
         };
 
-        if self.ledger_count < 32 {
+        if self.ledger_count < MAX_LEDGER_ENTRIES {
             self.ledger[self.ledger_count] = Some(entry);
             self.ledger_count += 1;
         } else {
             // Tampon circulaire scellé
-            for i in 1..32 {
+            for i in 1..MAX_LEDGER_ENTRIES {
                 self.ledger[i - 1] = self.ledger[i];
             }
-            self.ledger[31] = Some(entry);
+            self.ledger[MAX_LEDGER_ENTRIES - 1] = Some(entry);
         }
 
         self.latest_ledger_hash = entry_hash;
@@ -554,7 +798,14 @@ impl JamboBasDaemon {
     }
 
     pub fn verify_ledger_integrity(&self) -> bool {
-        let mut expected_prev = [0u8; 32];
+        if self.ledger_count == 0 {
+            return true;
+        }
+        let mut expected_prev = if let Some(ref first) = self.ledger[0] {
+            first.prev_hash
+        } else {
+            [0u8; 32]
+        };
         for i in 0..self.ledger_count {
             if let Some(ref entry) = self.ledger[i] {
                 if entry.prev_hash != expected_prev {
@@ -586,7 +837,7 @@ impl JamboBasDaemon {
         if !cap.has_right(bas_rights::REGISTER_VECTOR) {
             return Err(BasError::PermissionDenied);
         }
-        if self.vector_count >= 16 {
+        if self.vector_count >= MAX_VECTORS {
             return Err(BasError::CapacityExceeded);
         }
 
@@ -607,7 +858,7 @@ impl JamboBasDaemon {
         if !cap.has_right(bas_rights::REGISTER_VECTOR) {
             return Err(BasError::PermissionDenied);
         }
-        if self.playbook_count >= 8 {
+        if self.playbook_count >= MAX_PLAYBOOKS {
             return Err(BasError::CapacityExceeded);
         }
 
@@ -619,6 +870,7 @@ impl JamboBasDaemon {
         Ok(pid)
     }
 
+    /// Exécute une simulation unitaire avec profil par défaut (compatibilité ascendante)
     pub fn run_simulation(
         &mut self,
         cap: &BasCap,
@@ -626,6 +878,38 @@ impl JamboBasDaemon {
         defense_active: bool,
         timestamp: u64,
     ) -> Result<SimulationResult, BasError> {
+        if !cap.has_right(bas_rights::RUN_SIMULATION) {
+            return Err(BasError::PermissionDenied);
+        }
+
+        let report = self.run_simulation_with_profile(
+            cap,
+            vector_id,
+            SimulationProfile::ContinuousAssurance,
+            defense_active,
+            timestamp,
+        )?;
+
+        Ok(SimulationResult {
+            run_id: report.run_id,
+            vector_id: report.vector_id,
+            status: report.status,
+            blocked: report.blocked,
+            detected: report.detected,
+            mitigating_defense: report.mitigating_defense,
+            timestamp: report.timestamp,
+        })
+    }
+
+    /// Exécute une simulation avec profil spécifique et génère un rapport scellé SHA-256
+    pub fn run_simulation_with_profile(
+        &mut self,
+        cap: &BasCap,
+        vector_id: u32,
+        profile: SimulationProfile,
+        defense_active: bool,
+        timestamp: u64,
+    ) -> Result<BasSimulationReport, BasError> {
         if !cap.has_right(bas_rights::RUN_SIMULATION) {
             return Err(BasError::PermissionDenied);
         }
@@ -646,49 +930,51 @@ impl JamboBasDaemon {
         self.next_run_id += 1;
         self.total_simulations += 1;
 
-        let (status, blocked, detected, def) = {
+        let (status, blocked, detected, def, latency_ms) = {
             let v = self.vectors[idx].as_ref().unwrap();
             if defense_active && v.expected_defense != DefenseSystem::None {
-                // Défense en profondeur active
-                if v.severity_score >= 80 {
-                    // Bloqué net (ex: Seccomp, WAF, Landlock, EDR)
-                    (
-                        SimulationStatus::BlockedByDefense,
-                        true,
-                        true,
-                        v.expected_defense,
-                    )
-                } else {
-                    // Détecté et mitigé
-                    (
-                        SimulationStatus::BlockedByDefense,
-                        true,
-                        true,
-                        v.expected_defense,
-                    )
-                }
+                // Défense active : blocage selon criticité et domaine
+                let latency = match v.domain {
+                    AttackDomain::TeeEnclave => 8,
+                    AttackDomain::Ring3Execution => 10,
+                    AttackDomain::IpcLateral => 12,
+                    AttackDomain::VfsStorage => 14,
+                    AttackDomain::SupplyChainAspm => 9,
+                    AttackDomain::CloudIdentityCiem => 11,
+                    AttackDomain::WorkloadCwpp => 7,
+                    AttackDomain::NetworkC2 => 15,
+                };
+                (
+                    SimulationStatus::BlockedByDefense,
+                    true,
+                    true,
+                    v.expected_defense,
+                    latency,
+                )
             } else if defense_active {
-                // Détecté mais non bloqué (manque de règle ou gap)
+                // Détecté mais non bloqué (lacune de prévention)
                 (
                     SimulationStatus::DetectedOnly,
                     false,
                     true,
                     DefenseSystem::None,
+                    25,
                 )
             } else {
-                // Défense inactive : l'attaque réussit sans détection
+                // Défense inactive : évasion complète sans détection
                 (
                     SimulationStatus::UndetectedSuccess,
                     false,
                     false,
                     DefenseSystem::None,
+                    0,
                 )
             }
         };
 
         if let Some(ref mut v) = self.vectors[idx] {
             v.last_status = status;
-            v.detection_latency_ms = if detected { 12 } else { 0 };
+            v.detection_latency_ms = latency_ms;
         }
 
         if blocked {
@@ -699,7 +985,7 @@ impl JamboBasDaemon {
             self.total_missed += 1;
         }
 
-        let res = SimulationResult {
+        let sim_res = SimulationResult {
             run_id,
             vector_id,
             status,
@@ -709,15 +995,45 @@ impl JamboBasDaemon {
             timestamp,
         };
 
-        // Sauvegarder dans l'historique
-        if self.history_count < 32 {
-            self.simulation_history[self.history_count] = Some(res);
+        // Enregistrer dans l'historique
+        if self.history_count < MAX_SIM_HISTORY {
+            self.simulation_history[self.history_count] = Some(sim_res);
             self.history_count += 1;
         } else {
-            for i in 1..32 {
+            for i in 1..MAX_SIM_HISTORY {
                 self.simulation_history[i - 1] = self.simulation_history[i];
             }
-            self.simulation_history[31] = Some(res);
+            self.simulation_history[MAX_SIM_HISTORY - 1] = Some(sim_res);
+        }
+
+        let v_ref = self.vectors[idx].as_ref().unwrap();
+        let report_id = self.next_report_id;
+        self.next_report_id += 1;
+
+        let report = BasSimulationReport::new(
+            report_id,
+            run_id,
+            vector_id,
+            timestamp,
+            v_ref.domain,
+            v_ref.tactic,
+            v_ref.expected_defense,
+            def,
+            profile,
+            status,
+            latency_ms,
+            blocked,
+            detected,
+        );
+
+        if self.simulation_report_count < MAX_SIMULATION_REPORTS {
+            self.simulation_reports[self.simulation_report_count] = Some(report);
+            self.simulation_report_count += 1;
+        } else {
+            for i in 1..MAX_SIMULATION_REPORTS {
+                self.simulation_reports[i - 1] = self.simulation_reports[i];
+            }
+            self.simulation_reports[MAX_SIMULATION_REPORTS - 1] = Some(report);
         }
 
         self.calculate_resilience();
@@ -730,7 +1046,7 @@ impl JamboBasDaemon {
         };
         self.log_audit_action("RUN_SIMULATION", vector_id, code, timestamp)?;
 
-        Ok(res)
+        Ok(report)
     }
 
     pub fn run_playbook(
@@ -772,33 +1088,135 @@ impl JamboBasDaemon {
         Ok((executed, blocked))
     }
 
+    /// Exécute une campagne d'évaluation continue automatisée selon un profil
+    pub fn run_continuous_assessment(
+        &mut self,
+        cap: &BasCap,
+        profile: SimulationProfile,
+        timestamp: u64,
+    ) -> Result<BasResilienceAssessmentReport, BasError> {
+        if !cap.has_right(bas_rights::CONTINUOUS_ASSESSMENT)
+            && !cap.has_right(bas_rights::RUN_SIMULATION)
+        {
+            return Err(BasError::PermissionDenied);
+        }
+
+        let mut total_tested = 0;
+        let mut blocked_count = 0;
+        let mut detected_only_count = 0;
+        let mut undetected_count = 0;
+
+        for i in 0..self.vector_count {
+            if let Some(v) = self.vectors[i] {
+                let vid = v.id;
+                let rep = self.run_simulation_with_profile(
+                    cap,
+                    vid,
+                    profile,
+                    true,
+                    timestamp + (i as u64 * 10),
+                )?;
+                total_tested += 1;
+                if rep.blocked {
+                    blocked_count += 1;
+                } else if rep.detected {
+                    detected_only_count += 1;
+                } else {
+                    undetected_count += 1;
+                }
+            }
+        }
+
+        let gaps = self.analyze_coverage_gaps(cap)?;
+        let report_id = self.next_report_id;
+        self.next_report_id += 1;
+
+        let report = BasResilienceAssessmentReport::new(
+            report_id,
+            timestamp,
+            profile,
+            total_tested,
+            blocked_count,
+            detected_only_count,
+            undetected_count,
+            self.resilience_score,
+            self.cluster_resistance_score,
+            self.mean_time_to_detect_ms,
+            gaps.weakest_domain,
+        );
+
+        if self.assessment_report_count < MAX_ASSESSMENT_REPORTS {
+            self.assessment_reports[self.assessment_report_count] = Some(report);
+            self.assessment_report_count += 1;
+        } else {
+            for i in 1..MAX_ASSESSMENT_REPORTS {
+                self.assessment_reports[i - 1] = self.assessment_reports[i];
+            }
+            self.assessment_reports[MAX_ASSESSMENT_REPORTS - 1] = Some(report);
+        }
+
+        self.log_audit_action("CONTINUOUS_ASSESSMENT", report_id, 0, timestamp)?;
+        Ok(report)
+    }
+
     pub fn calculate_resilience(&mut self) {
         if self.vector_count == 0 {
             self.resilience_score = 100;
+            self.cluster_resistance_score = 100;
+            self.mean_time_to_detect_ms = 0;
             return;
         }
 
         let mut score_sum: u32 = 0;
+        let mut weighted_defense_score: u32 = 0;
+        let mut total_weight: u32 = 0;
+        let mut latency_sum: u32 = 0;
+        let mut latency_count: u32 = 0;
+
         for i in 0..self.vector_count {
             if let Some(ref v) = self.vectors[i] {
+                let weight = v.severity_score as u32;
+                total_weight += weight;
+
                 match v.last_status {
                     SimulationStatus::BlockedByDefense | SimulationStatus::Remediated => {
                         score_sum += 100;
+                        weighted_defense_score += 100 * weight;
+                        if v.detection_latency_ms > 0 {
+                            latency_sum += v.detection_latency_ms;
+                            latency_count += 1;
+                        }
                     }
                     SimulationStatus::DetectedOnly => {
                         score_sum += 60;
+                        weighted_defense_score += 65 * weight;
+                        if v.detection_latency_ms > 0 {
+                            latency_sum += v.detection_latency_ms;
+                            latency_count += 1;
+                        }
                     }
                     SimulationStatus::UndetectedSuccess => {
                         score_sum += 10;
+                        // 0 contribution
                     }
                     SimulationStatus::Pending | SimulationStatus::Running => {
                         score_sum += 50;
+                        weighted_defense_score += 50 * weight;
                     }
                 }
             }
         }
 
         self.resilience_score = (score_sum / self.vector_count as u32) as u8;
+        if total_weight > 0 {
+            self.cluster_resistance_score = (weighted_defense_score / total_weight) as u8;
+        } else {
+            self.cluster_resistance_score = self.resilience_score;
+        }
+
+        if latency_count > 0 {
+            self.mean_time_to_detect_ms = latency_sum / latency_count;
+        }
     }
 
     pub fn analyze_coverage_gaps(&self, cap: &BasCap) -> Result<GapSummary, BasError> {
@@ -810,7 +1228,7 @@ impl JamboBasDaemon {
         let mut detected_only_count = 0;
         let mut undetected_count = 0;
 
-        let mut domain_failures = [0u32; 5];
+        let mut domain_failures = [0u32; 8];
 
         for i in 0..self.vector_count {
             if let Some(ref v) = self.vectors[i] {
@@ -821,14 +1239,14 @@ impl JamboBasDaemon {
                     SimulationStatus::DetectedOnly => {
                         detected_only_count += 1;
                         let d_idx = v.domain as usize;
-                        if d_idx < 5 {
+                        if d_idx < 8 {
                             domain_failures[d_idx] += 1;
                         }
                     }
                     SimulationStatus::UndetectedSuccess => {
                         undetected_count += 1;
                         let d_idx = v.domain as usize;
-                        if d_idx < 5 {
+                        if d_idx < 8 {
                             domain_failures[d_idx] += 3;
                         }
                     }
@@ -837,10 +1255,10 @@ impl JamboBasDaemon {
             }
         }
 
-        // Trouver le domaine le plus vulnérable
+        // Trouver le domaine le plus exposé
         let mut max_fail = 0;
         let mut weakest_idx = 0;
-        for i in 0..5 {
+        for i in 0..8 {
             if domain_failures[i] > max_fail {
                 max_fail = domain_failures[i];
                 weakest_idx = i;
@@ -852,7 +1270,10 @@ impl JamboBasDaemon {
             1 => AttackDomain::IpcLateral,
             2 => AttackDomain::VfsStorage,
             3 => AttackDomain::TeeEnclave,
-            _ => AttackDomain::NetworkC2,
+            4 => AttackDomain::NetworkC2,
+            5 => AttackDomain::SupplyChainAspm,
+            6 => AttackDomain::CloudIdentityCiem,
+            _ => AttackDomain::WorkloadCwpp,
         };
 
         Ok(GapSummary {
@@ -861,6 +1282,7 @@ impl JamboBasDaemon {
             detected_only_count,
             undetected_count,
             resilience_score: self.resilience_score,
+            cluster_resistance_score: self.cluster_resistance_score,
             weakest_domain,
             uncovered_mitre_tactics: undetected_count as u32,
         })
@@ -897,10 +1319,109 @@ impl JamboBasDaemon {
         Ok(())
     }
 
+    /// Remédie de manière autonome et immédiate à toutes les lacunes de détection identifiées
+    pub fn remediate_all_gaps(
+        &mut self,
+        cap: &BasCap,
+        timestamp: u64,
+    ) -> Result<BasRemediationReport, BasError> {
+        if !cap.has_right(bas_rights::REMEDIATE) {
+            return Err(BasError::PermissionDenied);
+        }
+
+        let prev_resilience = self.resilience_score;
+        let prev_cluster = self.cluster_resistance_score;
+        let mut remediated_gaps = 0;
+
+        for i in 0..self.vector_count {
+            if let Some(ref mut v) = self.vectors[i] {
+                if v.last_status == SimulationStatus::UndetectedSuccess
+                    || v.last_status == SimulationStatus::DetectedOnly
+                    || v.last_status == SimulationStatus::Pending
+                {
+                    v.last_status = SimulationStatus::Remediated;
+                    v.detection_latency_ms = 3;
+                    remediated_gaps += 1;
+                }
+            }
+        }
+
+        self.calculate_resilience();
+        let report_id = self.next_report_id;
+        self.next_report_id += 1;
+
+        let report = BasRemediationReport::new(
+            report_id,
+            timestamp,
+            remediated_gaps,
+            prev_resilience,
+            self.resilience_score,
+            prev_cluster,
+            self.cluster_resistance_score,
+        );
+
+        if self.remediation_report_count < MAX_REMEDIATION_REPORTS {
+            self.remediation_reports[self.remediation_report_count] = Some(report);
+            self.remediation_report_count += 1;
+        } else {
+            for i in 1..MAX_REMEDIATION_REPORTS {
+                self.remediation_reports[i - 1] = self.remediation_reports[i];
+            }
+            self.remediation_reports[MAX_REMEDIATION_REPORTS - 1] = Some(report);
+        }
+
+        self.log_audit_action("REMEDIATE_ALL_GAPS", report_id, 0, timestamp)?;
+        Ok(report)
+    }
+
+    pub fn get_simulation_report(
+        &self,
+        cap: &BasCap,
+        report_id: u32,
+    ) -> Result<BasSimulationReport, BasError> {
+        if !cap.has_right(bas_rights::QUERY_RESULTS) {
+            return Err(BasError::PermissionDenied);
+        }
+        for i in 0..self.simulation_report_count {
+            if let Some(ref rep) = self.simulation_reports[i] {
+                if rep.report_id == report_id {
+                    return Ok(*rep);
+                }
+            }
+        }
+        Err(BasError::ReportNotFound)
+    }
+
+    pub fn get_latest_assessment_report(
+        &self,
+        cap: &BasCap,
+    ) -> Result<BasResilienceAssessmentReport, BasError> {
+        if !cap.has_right(bas_rights::QUERY_RESULTS) {
+            return Err(BasError::PermissionDenied);
+        }
+        if self.assessment_report_count == 0 {
+            return Err(BasError::ReportNotFound);
+        }
+        self.assessment_reports[self.assessment_report_count - 1].ok_or(BasError::ReportNotFound)
+    }
+
+    pub fn get_latest_remediation_report(
+        &self,
+        cap: &BasCap,
+    ) -> Result<BasRemediationReport, BasError> {
+        if !cap.has_right(bas_rights::QUERY_RESULTS) {
+            return Err(BasError::PermissionDenied);
+        }
+        if self.remediation_report_count == 0 {
+            return Err(BasError::ReportNotFound);
+        }
+        self.remediation_reports[self.remediation_report_count - 1].ok_or(BasError::ReportNotFound)
+    }
+
     pub fn init_defaults(&mut self) {
         let cap = self.admin_cap;
 
-        // 1. Vecteur Ring 3 : Élévation de privilèges (T1068) via Seccomp/Landlock
+        // 1. Vecteur Ring 3 : Élévation de privilèges (T1068) via Seccomp
         let v1 = SimulationVector::new(
             1,
             "T1068-Ring3-Escalation",
@@ -912,7 +1433,7 @@ impl JamboBasDaemon {
         );
         let _ = self.register_vector(&cap, v1, 100);
 
-        // 2. Vecteur IPC : Usurpation d'identité et mouvement latéral (T1021)
+        // 2. Vecteur IPC : Usurpation d'identité et mouvement latéral (T1021) via IDPS
         let v2 = SimulationVector::new(
             2,
             "T1021-IPC-Lateral-Spoof",
@@ -924,7 +1445,7 @@ impl JamboBasDaemon {
         );
         let _ = self.register_vector(&cap, v2, 110);
 
-        // 3. Vecteur VFS : Accès non autorisé aux identifiants (T1003)
+        // 3. Vecteur VFS : Accès non autorisé aux identifiants (T1003) via Landlock
         let v3 = SimulationVector::new(
             3,
             "T1003-VFS-Credential-Dump",
@@ -936,7 +1457,7 @@ impl JamboBasDaemon {
         );
         let _ = self.register_vector(&cap, v3, 120);
 
-        // 4. Vecteur TEE : Tentative de subversion d'attestation Enclave (T1553)
+        // 4. Vecteur TEE : Tentative de subversion d'attestation Enclave (T1553) via CNAPP
         let v4 = SimulationVector::new(
             4,
             "T1553-TEE-Attestation-Tamper",
@@ -948,7 +1469,7 @@ impl JamboBasDaemon {
         );
         let _ = self.register_vector(&cap, v4, 130);
 
-        // 5. Vecteur Réseau : Communication de commande & contrôle C2 (T1071)
+        // 5. Vecteur Réseau : Communication de commande & contrôle C2 (T1071) via WAF
         let v5 = SimulationVector::new(
             5,
             "T1071-Network-C2-Beacon",
@@ -959,6 +1480,42 @@ impl JamboBasDaemon {
             88,
         );
         let _ = self.register_vector(&cap, v5, 140);
+
+        // 6. Vecteur Supply Chain : Attaque de build script malveillant (T1195) via ASPM
+        let v6 = SimulationVector::new(
+            6,
+            "T1195-SupplyChain-BuildScript",
+            "T1195",
+            AttackDomain::SupplyChainAspm,
+            MitreTactic::InitialAccess,
+            DefenseSystem::Aspm,
+            94,
+        );
+        let _ = self.register_vector(&cap, v6, 142);
+
+        // 7. Vecteur CIEM : Pivot d'identités et abus de jetons cloud (T1078) via CIEM
+        let v7 = SimulationVector::new(
+            7,
+            "T1078-Cloud-Identity-Abuse",
+            "T1078",
+            AttackDomain::CloudIdentityCiem,
+            MitreTactic::PrivilegeEscalation,
+            DefenseSystem::Ciem,
+            91,
+        );
+        let _ = self.register_vector(&cap, v7, 144);
+
+        // 8. Vecteur CWPP : Injection de processus & dérive CFI d'enclave (T1055) via CWPP
+        let v8 = SimulationVector::new(
+            8,
+            "T1055-Workload-CFI-Tamper",
+            "T1055",
+            AttackDomain::WorkloadCwpp,
+            MitreTactic::DefenseEvasion,
+            DefenseSystem::Cnapp,
+            96,
+        );
+        let _ = self.register_vector(&cap, v8, 146);
 
         // Créer un Playbook d'adversaire réaliste : "APT29-Full-Killchain"
         let mut pb1 = AttackPlaybook::new(
@@ -982,12 +1539,37 @@ impl JamboBasDaemon {
         pb2.add_vector(3); // Accès VFS
         let _ = self.register_playbook(&cap, pb2, 160);
 
-        // Exécution initiale de vérification
+        // Créer un troisième Playbook : "SupplyChain-To-TEE-Pivot"
+        let mut pb3 = AttackPlaybook::new(
+            103,
+            "SupplyChain-To-TEE-Pivot",
+            "Attaque de chaîne d'approvisionnement ciblant les clés d'enclave TEE",
+        );
+        pb3.add_vector(6); // Supply Chain ASPM
+        pb3.add_vector(7); // CIEM Identity Abuse
+        pb3.add_vector(4); // TEE Attestation Tamper
+        let _ = self.register_playbook(&cap, pb3, 165);
+
+        // Créer un quatrième Playbook : "CloudNative-TriPlane-Attack"
+        let mut pb4 = AttackPlaybook::new(
+            104,
+            "CloudNative-TriPlane-Attack",
+            "Attaque combinée sur plans identité (CIEM), charge (CWPP) et réseau (C2)",
+        );
+        pb4.add_vector(7); // CIEM
+        pb4.add_vector(8); // CWPP
+        pb4.add_vector(5); // C2
+        let _ = self.register_playbook(&cap, pb4, 168);
+
+        // Exécution initiale de vérification de base (vecteurs 1 à 5)
         let _ = self.run_simulation(&cap, 1, true, 170);
         let _ = self.run_simulation(&cap, 2, true, 180);
         let _ = self.run_simulation(&cap, 3, true, 190);
         let _ = self.run_simulation(&cap, 4, true, 200);
         let _ = self.run_simulation(&cap, 5, true, 210);
+        let _ = self.run_simulation(&cap, 6, true, 220);
+        let _ = self.run_simulation(&cap, 7, true, 230);
+        let _ = self.run_simulation(&cap, 8, true, 240);
     }
 }
 
@@ -1010,6 +1592,8 @@ mod tests {
         assert!(admin_cap.has_right(bas_rights::REMEDIATE));
         assert!(admin_cap.has_right(bas_rights::SEAL_LEDGER));
         assert!(admin_cap.has_right(bas_rights::ADMIN));
+        assert!(admin_cap.has_right(bas_rights::CONTINUOUS_ASSESSMENT));
+        assert!(admin_cap.has_right(bas_rights::GENERATE_REPORT));
 
         let auditor_cap = admin_cap
             .attenuate(
@@ -1037,8 +1621,8 @@ mod tests {
         let mut daemon = JamboBasDaemon::new(admin_cap);
         daemon.init_defaults();
 
-        assert_eq!(daemon.vector_count, 5);
-        assert_eq!(daemon.playbook_count, 2);
+        assert_eq!(daemon.vector_count, 8);
+        assert_eq!(daemon.playbook_count, 4);
         assert!(daemon.verify_ledger_integrity());
 
         // Exécution d'un playbook complet
@@ -1058,8 +1642,8 @@ mod tests {
         let gaps = daemon
             .analyze_coverage_gaps(&admin_cap)
             .expect("Analyse des lacunes");
-        assert_eq!(gaps.total_vectors_tested, 5);
-        assert_eq!(gaps.blocked_count, 5);
+        assert_eq!(gaps.total_vectors_tested, 8);
+        assert_eq!(gaps.blocked_count, 8);
         assert_eq!(gaps.undetected_count, 0);
         assert_eq!(gaps.resilience_score, 100);
 
@@ -1099,5 +1683,93 @@ mod tests {
 
         // Vérification du registre cryptographique SHA-256
         assert!(daemon.verify_ledger_integrity());
+    }
+
+    #[test]
+    fn test_simulation_with_profiles_and_sealed_reports() {
+        let admin_cap = BasCap::new(Handle::new(13005, 1), bas_rights::ALL, 10000, 500);
+        let mut daemon = JamboBasDaemon::new(admin_cap);
+        daemon.init_defaults();
+
+        let rep = daemon
+            .run_simulation_with_profile(
+                &admin_cap,
+                6, // Supply Chain
+                SimulationProfile::ComplianceSecNumCloudAudit,
+                true,
+                800,
+            )
+            .expect("Simulation profile SecNumCloud");
+
+        assert_eq!(rep.domain, AttackDomain::SupplyChainAspm);
+        assert_eq!(rep.expected_defense, DefenseSystem::Aspm);
+        assert_eq!(rep.blocked, true);
+        assert_ne!(rep.report_hash, [0u8; 32]);
+
+        // Vérification de la récupération du rapport
+        let fetched = daemon
+            .get_simulation_report(&admin_cap, rep.report_id)
+            .expect("Récupération rapport");
+        assert_eq!(fetched.report_hash, rep.report_hash);
+    }
+
+    #[test]
+    fn test_continuous_assessment_and_remediation_reports() {
+        let admin_cap = BasCap::new(Handle::new(13006, 1), bas_rights::ALL, 10000, 500);
+        let mut daemon = JamboBasDaemon::new(admin_cap);
+        daemon.init_defaults();
+
+        // Déclencher une brèche
+        let _ = daemon.run_simulation(&admin_cap, 4, false, 900).unwrap();
+        assert!(daemon.resilience_score < 100);
+
+        // Campagne d'évaluation continue
+        let assess = daemon
+            .run_continuous_assessment(
+                &admin_cap,
+                SimulationProfile::RedTeamAdversaryEmulation,
+                950,
+            )
+            .expect("Continuous assessment");
+        assert_eq!(assess.total_vectors_tested, 8);
+        assert_ne!(assess.report_hash, [0u8; 32]);
+
+        // Remédiation autonome de l'ensemble des lacunes
+        let rem_rep = daemon
+            .remediate_all_gaps(&admin_cap, 1000)
+            .expect("Remediate all gaps");
+        assert_eq!(daemon.resilience_score, 100);
+        assert_eq!(daemon.cluster_resistance_score, 100);
+        assert_ne!(rem_rep.report_hash, [0u8; 32]);
+        assert!(daemon.verify_ledger_integrity());
+    }
+
+    #[test]
+    fn test_cluster_resistance_score_calculation() {
+        let admin_cap = BasCap::new(Handle::new(13007, 1), bas_rights::ALL, 10000, 500);
+        let mut daemon = JamboBasDaemon::new(admin_cap);
+        daemon.init_defaults();
+
+        assert_eq!(daemon.cluster_resistance_score, 100);
+
+        // Simuler attaque non détectée sur un vecteur très sévère (T1055 severity 96)
+        let _ = daemon.run_simulation(&admin_cap, 8, false, 1100).unwrap();
+        assert!(daemon.cluster_resistance_score < 90);
+        assert!(daemon.resilience_score < 100);
+
+        // Analyser les lacunes pour identifier le domaine le plus vulnérable
+        let gaps = daemon.analyze_coverage_gaps(&admin_cap).unwrap();
+        assert_eq!(gaps.weakest_domain, AttackDomain::WorkloadCwpp);
+
+        // Récupérer le dernier rapport d'évaluation continue
+        let assess = daemon
+            .run_continuous_assessment(&admin_cap, SimulationProfile::ZeroTrustValidation, 1150)
+            .unwrap();
+        assert_eq!(assess.total_vectors_tested, 8);
+        assert_eq!(assess.blocked_count, 8);
+
+        // Remédiation
+        let _ = daemon.remediate_all_gaps(&admin_cap, 1200).unwrap();
+        assert_eq!(daemon.cluster_resistance_score, 100);
     }
 }
