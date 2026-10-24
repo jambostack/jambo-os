@@ -15562,7 +15562,7 @@ impl JamboShell {
                 };
                 match subcmd {
                     "status" | "summary" => {
-                        emit("=== OPÉRATIONS IT PILOTÉES PAR L'IA (AIOPS v0.3.4) ===\n");
+                        emit("=== OPÉRATIONS IT PILOTÉES PAR L'IA (AIOPS v0.3.34) ===\n");
                         let mut b = [0u8; 20];
                         let cap = self.aiops.admin_cap;
                         if let Ok(sum) = self.aiops.get_summary(&cap) {
@@ -15572,6 +15572,8 @@ impl JamboShell {
                             emit(format_u64(sum.total_events as u64, &mut b));
                             emit("\n  Anomalies statistiques détectées  : ");
                             emit(format_u64(sum.total_anomalies as u64, &mut b));
+                            emit("\n  Alertes prédictives de défaillance: ");
+                            emit(format_u64(sum.total_predictive_alerts as u64, &mut b));
                             emit("\n  Incidents corrélés actifs         : ");
                             emit(format_u64(sum.active_incidents as u64, &mut b));
                             emit("\n  Incidents auto-remédiés           : ");
@@ -15580,6 +15582,8 @@ impl JamboShell {
                             emit(format_u64(sum.total_playbooks as u64, &mut b));
                             emit("\n  Score de santé global de la flotte: ");
                             emit(format_u64(sum.health_score as u64, &mut b));
+                            emit("/100\n  Résilience prédictive globale     : ");
+                            emit(format_u64(sum.predictive_resilience_score as u64, &mut b));
                             emit("/100\n");
                         }
                         (ShellStatus::Success, write_pos)
@@ -15617,6 +15621,8 @@ impl JamboShell {
                                     emit(format_u64(a.id as u64, &mut b));
                                     emit("] Svc:");
                                     emit(format_u64(a.service_id as u64, &mut b));
+                                    emit(" Metric: ");
+                                    emit(a.metric_name_str());
                                     emit(" Z-score:");
                                     emit(format_u64(a.z_score as u64, &mut b));
                                     emit("/100 (Obs: ");
@@ -15627,8 +15633,53 @@ impl JamboShell {
                         }
                         (ShellStatus::Success, write_pos)
                     }
+                    "alerts" => {
+                        emit("=== ALERTES PRÉDICTIVES DE DÉFAILLANCE (TIME-TO-FAILURE) ===\n");
+                        let mut b = [0u8; 20];
+                        if self.aiops.predictive_alert_count == 0 {
+                            emit("  Aucune alerte prédictive active.\n");
+                        } else {
+                            for i in 0..self.aiops.predictive_alert_count {
+                                if let Some(ref al) = self.aiops.predictive_alerts[i] {
+                                    emit("  [Alert ");
+                                    emit(format_u64(al.id as u64, &mut b));
+                                    emit("] Svc:");
+                                    emit(format_u64(al.service_id as u64, &mut b));
+                                    emit(" Metric: ");
+                                    emit(al.metric_name_str());
+                                    emit(" TTF:");
+                                    emit(format_u64(al.projected_ttf_ticks, &mut b));
+                                    emit(" ticks | Risque: ");
+                                    emit(format_u64(al.failure_risk_pct as u64, &mut b));
+                                    emit("% | État: ");
+                                    emit(if al.resolved {
+                                        "RÉSOLU\n"
+                                    } else {
+                                        "ACTIF (ATTENTION)\n"
+                                    });
+                                }
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "predict" => {
+                        let mut cap = self.aiops.admin_cap;
+                        match self.aiops.run_predictive_analysis(&mut cap, 9990) {
+                            Ok(count) => {
+                                let mut b = [0u8; 20];
+                                emit("  [OK] Analyse prédictive des tendances exécutée. Alertes détectées: ");
+                                emit(format_u64(count as u64, &mut b));
+                                emit("\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("  [FAIL] Échec de l'analyse prédictive\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
                     "incidents" => {
-                        emit("=== INCIDENTS CORRÉLÉS & ROOT CAUSE ANALYSIS ===\n");
+                        emit("=== INCIDENTS CORRÉLÉS & ROOT CAUSE ANALYSIS (RCA) ===\n");
                         let mut b = [0u8; 20];
                         if self.aiops.incident_count == 0 {
                             emit("  Aucun incident actif.\n");
@@ -15641,16 +15692,57 @@ impl JamboShell {
                                     emit(format_u64(inc.root_cause_service_id as u64, &mut b));
                                     emit(" Confiance: ");
                                     emit(format_u64(inc.confidence_score as u64, &mut b));
-                                    emit("%\n");
+                                    emit("% Statut: ");
+                                    emit(match inc.status {
+                                        jambo_aiops::IncidentStatus::Active => "ACTIF",
+                                        jambo_aiops::IncidentStatus::Investigating => "EN COURS",
+                                        jambo_aiops::IncidentStatus::Remediating => "REMÉDIATION",
+                                        jambo_aiops::IncidentStatus::Resolved => "RÉSOLU",
+                                    });
+                                    emit("\n");
                                 }
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "playbooks" => {
+                        emit("=== PLAYBOOKS D'AUTO-REMÉDIATION ARMÉS ===\n");
+                        let mut b = [0u8; 20];
+                        for i in 0..self.aiops.playbook_count {
+                            if let Some(ref pb) = self.aiops.playbooks[i] {
+                                emit("  [Playbook ");
+                                emit(format_u64(pb.id as u64, &mut b));
+                                emit("] ");
+                                emit(pb.name_str());
+                                emit(" -> Svc:");
+                                emit(format_u64(pb.target_service_id as u64, &mut b));
+                                emit(" Action: ");
+                                emit(match pb.action {
+                                    jambo_aiops::PlaybookAction::ScaleResource => "ScaleResource",
+                                    jambo_aiops::PlaybookAction::RestartWorker => "RestartWorker",
+                                    jambo_aiops::PlaybookAction::ThrottleIngress => {
+                                        "ThrottleIngress"
+                                    }
+                                    jambo_aiops::PlaybookAction::DrainFailover => "DrainFailover",
+                                    jambo_aiops::PlaybookAction::QuarantineNode => "QuarantineNode",
+                                    jambo_aiops::PlaybookAction::FlushCaches => "FlushCaches",
+                                });
+                                emit("\n");
                             }
                         }
                         (ShellStatus::Success, write_pos)
                     }
                     "remediate" => {
                         let mut cap = self.aiops.admin_cap;
-                        if self.aiops.incident_count > 0 {
-                            let inc_id = self.aiops.incidents[0].unwrap().id;
+                        let target_inc_id = if parsed.arg_count > 2 {
+                            parse_u64(parsed.args[2]).map(|v| v as u32)
+                        } else if self.aiops.incident_count > 0 {
+                            Some(self.aiops.incidents[0].unwrap().id)
+                        } else {
+                            None
+                        };
+
+                        if let Some(inc_id) = target_inc_id {
                             match self.aiops.trigger_remediation(&mut cap, inc_id, 9999) {
                                 Ok(action) => {
                                     emit(
@@ -15688,6 +15780,103 @@ impl JamboShell {
                             (ShellStatus::Success, write_pos)
                         }
                     }
+                    "remediate-all" => {
+                        let mut cap = self.aiops.admin_cap;
+                        match self.aiops.remediate_all_incidents(&mut cap, 9999) {
+                            Ok(resolved) => {
+                                let mut b = [0u8; 20];
+                                emit("  [OK] Réconciliation autonome globale O(1) exécutée. Incidents résolus: ");
+                                emit(format_u64(resolved as u64, &mut b));
+                                emit("\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("  [FAIL] Échec de la remédiation globale\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "report-health" => {
+                        let cap = self.aiops.admin_cap;
+                        match self.aiops.generate_health_report(&cap, 9999) {
+                            Ok(rep) => {
+                                emit("=== RAPPORT SOUVERAIN DE SANTÉ PRÉDICTIVE SCELLÉ SHA-256 ===\n");
+                                let mut b = [0u8; 20];
+                                emit("  Rapport ID                    : #");
+                                emit(format_u64(rep.report_id as u64, &mut b));
+                                emit("\n  Services totaux               : ");
+                                emit(format_u64(rep.total_services as u64, &mut b));
+                                emit("\n  Services sains                : ");
+                                emit(format_u64(rep.healthy_services as u64, &mut b));
+                                emit("\n  Services dégradés             : ");
+                                emit(format_u64(rep.degraded_services as u64, &mut b));
+                                emit("\n  Alertes prédictives           : ");
+                                emit(format_u64(rep.predictive_alerts_count as u64, &mut b));
+                                emit("\n  Score de santé de la flotte   : ");
+                                emit(format_u64(rep.health_score as u64, &mut b));
+                                emit(" %\n  Résilience prédictive globale : ");
+                                emit(format_u64(rep.predictive_resilience_score as u64, &mut b));
+                                emit(" %\n  Sceau SHA-256 scellé          : ");
+                                emit(if rep.verify_seal() {
+                                    "VALIDE (CONFORME)\n"
+                                } else {
+                                    "INVALIDE\n"
+                                });
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("  [FAIL] Impossible de générer le rapport de santé\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "report-remediation" => {
+                        let cap = self.aiops.admin_cap;
+                        match self.aiops.generate_remediation_report(&cap, 100, 1, 9999) {
+                            Ok(rep) => {
+                                emit(
+                                    "=== RAPPORT SOUVERAIN D'AUTO-REMÉDIATION SCELLÉ SHA-256 ===\n",
+                                );
+                                let mut b = [0u8; 20];
+                                emit("  Rapport ID                    : #");
+                                emit(format_u64(rep.report_id as u64, &mut b));
+                                emit("\n  Incidents résolus             : ");
+                                emit(format_u64(rep.remediated_incidents_count as u64, &mut b));
+                                emit("\n  Playbooks déclenchés          : ");
+                                emit(format_u64(rep.playbooks_triggered_count as u64, &mut b));
+                                emit("\n  Score avant remédiation       : ");
+                                emit(format_u64(rep.health_score_before as u64, &mut b));
+                                emit(" %\n  Score après remédiation       : ");
+                                emit(format_u64(rep.health_score_after as u64, &mut b));
+                                emit(" %\n  Sceau SHA-256 scellé          : ");
+                                emit(if rep.verify_seal() {
+                                    "VALIDE (CONFORME)\n"
+                                } else {
+                                    "INVALIDE\n"
+                                });
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("  [FAIL] Impossible de générer le rapport de remédiation\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "resilience" => {
+                        let r = self.aiops.calculate_predictive_resilience();
+                        let mut b = [0u8; 20];
+                        emit("  Indice de résilience prédictive globale de la flotte : ");
+                        emit(format_u64(r as u64, &mut b));
+                        emit(" %\n  Statut : ");
+                        if r >= 80 {
+                            emit("OPTIMAL (Haute disponibilité garantie)\n");
+                        } else if r >= 60 {
+                            emit("ACCEPTABLE (Surveillance accrue)\n");
+                        } else {
+                            emit("CRITIQUE (Auto-remédiation proactive requise)\n");
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
                     "verify" => {
                         let valid = self.aiops.verify_ledger_integrity();
                         emit("  Vérification intégrité registre AIOps SHA-256 : ");
@@ -15699,7 +15888,7 @@ impl JamboShell {
                         (ShellStatus::Success, write_pos)
                     }
                     _ => {
-                        emit("Usage: aiops [status | topology | anomalies | incidents | remediate | verify]\n");
+                        emit("Usage: aiops [status | topology | anomalies | alerts | predict | incidents | playbooks | remediate [id] | remediate-all | report-health | report-remediation | resilience | verify]\n");
                         (ShellStatus::ExecutionFailed, write_pos)
                     }
                 }
@@ -21718,17 +21907,45 @@ mod tests {
                 assert_eq!(st3, ShellStatus::Success);
                 assert!(len3 > 0);
 
-                let (st4, len4) = shell.execute_line("aiops incidents", &mut out);
+                let (st4, len4) = shell.execute_line("aiops alerts", &mut out);
                 assert_eq!(st4, ShellStatus::Success);
                 assert!(len4 > 0);
 
-                let (st5, len5) = shell.execute_line("aiops remediate", &mut out);
+                let (st5, len5) = shell.execute_line("aiops predict", &mut out);
                 assert_eq!(st5, ShellStatus::Success);
                 assert!(len5 > 0);
 
-                let (st6, len6) = shell.execute_line("aiops verify", &mut out);
+                let (st6, len6) = shell.execute_line("aiops incidents", &mut out);
                 assert_eq!(st6, ShellStatus::Success);
                 assert!(len6 > 0);
+
+                let (st7, len7) = shell.execute_line("aiops playbooks", &mut out);
+                assert_eq!(st7, ShellStatus::Success);
+                assert!(len7 > 0);
+
+                let (st8, len8) = shell.execute_line("aiops remediate", &mut out);
+                assert_eq!(st8, ShellStatus::Success);
+                assert!(len8 > 0);
+
+                let (st9, len9) = shell.execute_line("aiops remediate-all", &mut out);
+                assert_eq!(st9, ShellStatus::Success);
+                assert!(len9 > 0);
+
+                let (st10, len10) = shell.execute_line("aiops report-health", &mut out);
+                assert_eq!(st10, ShellStatus::Success);
+                assert!(len10 > 0);
+
+                let (st11, len11) = shell.execute_line("aiops report-remediation", &mut out);
+                assert_eq!(st11, ShellStatus::Success);
+                assert!(len11 > 0);
+
+                let (st12, len12) = shell.execute_line("aiops resilience", &mut out);
+                assert_eq!(st12, ShellStatus::Success);
+                assert!(len12 > 0);
+
+                let (st13, len13) = shell.execute_line("aiops verify", &mut out);
+                assert_eq!(st13, ShellStatus::Success);
+                assert!(len13 > 0);
             })
             .unwrap();
         handle.join().unwrap();

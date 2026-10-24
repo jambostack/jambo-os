@@ -1308,7 +1308,7 @@ pub extern "C" fn _start() -> ! {
         "Échec du test de posture des services & SaaS jambo-sspm"
     );
 
-    // 22viciesquadragies. Validation des Opérations IT Pilotées par l'IA AIOps (Phase 137 - v0.3.4)
+    // 22viciesquadragies. Validation des Opérations IT Pilotées par l'IA AIOps (Phase 167 - v0.3.34)
     let aiops_success = sched::aiops_test::execute_aiops_daemon_test();
     assert!(
         aiops_success,
@@ -1817,14 +1817,17 @@ pub extern "C" fn _start() -> ! {
     kprintln!(
         "\x1b[1;32m[PASS] Phase 166 Sovereign SaaS Security Posture Management SSPM & Autonomous Drift Remediation (jambo-sspm) Complete\x1b[0m"
     );
+    kprintln!(
+        "\x1b[1;32m[PASS] Phase 167 Sovereign Artificial Intelligence for IT Operations AIOps, Predictive Failure Detection & Topological RCA (jambo-aiops) Complete\x1b[0m"
+    );
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.3.33 (Sovereign SaaS Security Posture Management SSPM jambo-sspm)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.3.34 (Sovereign AIOps & Predictive Failure Detection jambo-aiops)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.3.32 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.3.33 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );

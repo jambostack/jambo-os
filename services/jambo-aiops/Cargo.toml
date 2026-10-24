@@ -1,6 +1,6 @@
 [package]
 name = "jambo-aiops"
-version = "0.3.4"
+version = "0.3.34"
 edition = "2021"
 
 [dependencies]
