@@ -13385,6 +13385,11 @@ impl JamboShell {
                         emit(format_u64(self.easm.finding_count as u64, &mut b));
                         emit("\n  Indice d'Exposition Externe  : ");
                         emit(format_u64(self.easm.exposure_index as u64, &mut b));
+                        emit("/100\n  Durcissement Périmétrique    : ");
+                        emit(format_u64(
+                            self.easm.perimeter_hardening_score as u64,
+                            &mut b,
+                        ));
                         emit("/100\n");
                         let cap = self.easm.admin_cap;
                         if let Ok(summary) = self.easm.get_summary(&cap) {
@@ -13392,12 +13397,22 @@ impl JamboShell {
                             emit(format_u64(summary.public_assets as u64, &mut b));
                             emit("\n  Actifs Shadow IT orphelins   : ");
                             emit(format_u64(summary.shadow_it_count as u64, &mut b));
+                            emit("\n  Menaces CTI corrélées        : ");
+                            emit(format_u64(summary.cti_threat_count as u64, &mut b));
                             emit("\n  Failles ouvertes             : ");
                             emit(format_u64(summary.open_findings_count as u64, &mut b));
                             emit("\n  Failles critiques ouvertes   : ");
                             emit(format_u64(summary.critical_findings_count as u64, &mut b));
                             emit("\n");
                         }
+                        emit("  Rapports périmètres scellés  : ");
+                        emit(format_u64(self.easm.perimeter_report_count as u64, &mut b));
+                        emit("\n  Rapports remédiation scellés : ");
+                        emit(format_u64(
+                            self.easm.remediation_report_count as u64,
+                            &mut b,
+                        ));
+                        emit("\n");
                         let valid = self.easm.verify_ledger_integrity();
                         emit("  Registre d'audit SHA-256     : ");
                         emit(if valid {
@@ -13441,6 +13456,9 @@ impl JamboShell {
                                     jambo_easm::ExposureLevel::InternalLeaked => {
                                         emit("InternalLeaked\n")
                                     }
+                                    jambo_easm::ExposureLevel::EnclaveExposed => {
+                                        emit("EnclaveExposed\n")
+                                    }
                                 }
                             }
                         }
@@ -13460,6 +13478,8 @@ impl JamboShell {
                                 emit(format_u64(summary.open_findings_count as u64, &mut b));
                                 emit(" | Indice d'exposition : ");
                                 emit(format_u64(summary.exposure_index as u64, &mut b));
+                                emit("/100 | Durcissement : ");
+                                emit(format_u64(summary.perimeter_hardening_score as u64, &mut b));
                                 emit("/100\n");
                                 (ShellStatus::Success, write_pos)
                             }
@@ -13507,6 +13527,7 @@ impl JamboShell {
                                 "2" => 2,
                                 "3" => 3,
                                 "4" => 4,
+                                "5" => 5,
                                 _ => 1,
                             }
                         } else {
@@ -13527,6 +13548,64 @@ impl JamboShell {
                             }
                         }
                     }
+                    "remediate-all" => {
+                        let cap = self.easm.admin_cap;
+                        match self.easm.remediate_all_findings(&cap, 4200) {
+                            Ok(rep) => {
+                                emit("=== REMÉDIATION AUTONOME GLOBALE DES RISQUES PÉRIMÉTRIQUES ===\n");
+                                let mut b = [0u8; 20];
+                                emit("  Rapport de remédiation #");
+                                emit(format_u64(rep.report_id as u64, &mut b));
+                                emit(" scellé SHA-256\n  Risques traités       : ");
+                                emit(format_u64(rep.remediated_count as u64, &mut b));
+                                emit("\n  Nouvel indice d'exp.  : ");
+                                emit(format_u64(rep.new_exposure_index as u64, &mut b));
+                                emit("/100\n  Durcissement atteint  : ");
+                                emit(format_u64(rep.perimeter_hardening_score as u64, &mut b));
+                                emit("/100\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("  [FAIL] Échec de la remédiation globale EASM\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "report" => {
+                        let cap = self.easm.admin_cap;
+                        match self.easm.generate_perimeter_report(
+                            &cap,
+                            jambo_easm::DiscoveryMode::SecNumCloudAudit,
+                            4300,
+                        ) {
+                            Ok(rep) => {
+                                emit(
+                                    "=== RAPPORT DE SURFACE D'ATTAQUE EXTERNE SCELLÉ SHA-256 ===\n",
+                                );
+                                let mut b = [0u8; 20];
+                                emit("  Rapport d'audit #");
+                                emit(format_u64(rep.report_id as u64, &mut b));
+                                emit("\n  Actifs audités        : ");
+                                emit(format_u64(rep.total_assets as u64, &mut b));
+                                emit("\n  Shadow IT détecté     : ");
+                                emit(format_u64(rep.shadow_it_count as u64, &mut b));
+                                emit("\n  Failles ouvertes      : ");
+                                emit(format_u64(rep.open_findings_count as u64, &mut b));
+                                emit("\n  Failles critiques     : ");
+                                emit(format_u64(rep.critical_findings_count as u64, &mut b));
+                                emit("\n  Indice d'exposition   : ");
+                                emit(format_u64(rep.exposure_index as u64, &mut b));
+                                emit("/100\n  Durcissement global   : ");
+                                emit(format_u64(rep.perimeter_hardening_score as u64, &mut b));
+                                emit("/100\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("  [FAIL] Impossible de générer le rapport EASM\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
                     "verify" => {
                         let valid = self.easm.verify_ledger_integrity();
                         emit("  Vérification intégrité registre EASM SHA-256 : ");
@@ -13538,7 +13617,7 @@ impl JamboShell {
                         (ShellStatus::Success, write_pos)
                     }
                     _ => {
-                        emit("Usage: easm [status | assets | scan | findings | remediate [fid] | verify]\n");
+                        emit("Usage: easm [status | assets | scan | findings | remediate [fid] | remediate-all | report | verify]\n");
                         (ShellStatus::ExecutionFailed, write_pos)
                     }
                 }
@@ -20435,6 +20514,14 @@ mod tests {
                 let (st5, len5) = shell.execute_line("easm remediate 1", &mut out);
                 assert_eq!(st5, ShellStatus::Success);
                 assert!(len5 > 0);
+
+                let (st5b, len5b) = shell.execute_line("easm remediate-all", &mut out);
+                assert_eq!(st5b, ShellStatus::Success);
+                assert!(len5b > 0);
+
+                let (st5c, len5c) = shell.execute_line("easm report", &mut out);
+                assert_eq!(st5c, ShellStatus::Success);
+                assert!(len5c > 0);
 
                 let (st6, len6) = shell.execute_line("easm verify", &mut out);
                 assert_eq!(st6, ShellStatus::Success);

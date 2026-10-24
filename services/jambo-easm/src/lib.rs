@@ -1,16 +1,19 @@
-//! Gestion de la Surface d'Attaque Externe (EASM - External Attack Surface Management)
-//! & Découverte Continue d'Actifs Numériques
+//! Gestion Souveraine de la Surface d'Attaque Externe (EASM - External Attack Surface Management),
+//! Découverte Continue d'Actifs Numériques & Cartographie des Risques d'Exposition
 //!
-//! Phase 131 — Jalon v0.2.129
+//! Phase 161 — Jalon v0.3.28
 //!
-//! Fournit une plateforme souveraine EASM (External Attack Surface Management) en `#![no_std]` :
-//! 1. Recensement dynamique des actifs numériques exposés (domaines DNS, adresses IP, ports, certificats TLS, buckets de stockage).
-//! 2. Découverte continue de Shadow IT, sous-domaines orphelins (Dangling DNS) et interfaces d'administration exposées.
-//! 3. Analyse proactive des configurations périmétriques défaillantes, expirations de certificats et fuites d'informations.
-//! 4. Calcul déterministe de l'Indice d'Exposition Externe (Exposure Index 0..100) et hiérarchisation des risques.
-//! 5. Remédiation automatisée des vulnérabilités périmétriques et durcissement Zero-Trust.
-//! 6. Contrôle d'accès capabilaire strict (`EasmCap`) sans autorité ambiante avec atténuation monotone.
-//! 7. Registre d'audit cryptographique inviolable scellé par chaînage SHA-256.
+//! Fournit une plateforme souveraine d'EASM en `#![no_std]` :
+//! 1. Recensement dynamique et continu des actifs numériques exposés (domaines DNS, adresses IP,
+//!    ports & services réseau, certificats TLS, buckets de stockage, endpoints API, passerelles TEE Enclaves).
+//! 2. Détection en temps réel du Shadow IT, sous-domaines orphelins (Subdomain/Dangling DNS Takeover)
+//!    et interfaces d'administration critiques exposées.
+//! 3. Corrélation avec les flux de Renseignement Cyber CTI (`jambo-intel`) et scoring de menace périmétrique.
+//! 4. Profils de cartographie avancés (Continuous, AdversaryReconnaissance, SecNumCloudAudit, ZeroTrustPerimeter).
+//! 5. Rapports scellés formellement par SHA-256 (`EasmPerimeterReport`, `EasmRemediationReport`).
+//! 6. Remédiation autonome O(1) de l'ensemble des expositions et durcissement du périmètre.
+//! 7. Contrôle d'accès capabilaire strict (`EasmCap`) sans autorité ambiante avec atténuation monotone.
+//! 8. Registre d'audit cryptographique inviolable scellé par chaînage SHA-256.
 
 #![no_std]
 
@@ -176,8 +179,10 @@ pub mod easm_rights {
     pub const REMEDIATE_EXPOSURE: u32 = 1 << 4;
     pub const EXPORT_INVENTORY: u32 = 1 << 5;
     pub const SEAL_LEDGER: u32 = 1 << 6;
-    pub const ADMIN: u32 = 1 << 7;
-    pub const ALL: u32 = 0xFF;
+    pub const CORRELATE_INTEL: u32 = 1 << 7;
+    pub const GENERATE_REPORT: u32 = 1 << 8;
+    pub const ADMIN: u32 = 1 << 9;
+    pub const ALL: u32 = 0x3FF;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -186,6 +191,7 @@ pub enum EasmError {
     AttenuationViolation,
     AssetNotFound,
     FindingNotFound,
+    ReportNotFound,
     CapacityExceeded,
     LedgerCorrupted,
     InvalidParameter,
@@ -266,6 +272,8 @@ pub enum AssetType {
     TlsCertificate,
     StorageBucket,
     ApiEndpoint,
+    TeeEnclaveGateway,
+    MicroService,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -275,6 +283,7 @@ pub enum ExposureLevel {
     RestrictedAccess,
     ShadowItOrphaned,
     InternalLeaked,
+    EnclaveExposed,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -294,6 +303,9 @@ pub enum FindingCategory {
     ExposedStorageBucket,
     InformationLeakage,
     OpenInsecurePort,
+    ShadowItUnauthorized,
+    TeeEnclaveExposed,
+    CtiKnownThreat,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -302,6 +314,14 @@ pub enum FindingStatus {
     Remediated,
     Suppressed,
     FalsePositive,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiscoveryMode {
+    Continuous,
+    AdversaryReconnaissance,
+    SecNumCloudAudit,
+    ZeroTrustPerimeter,
 }
 
 #[derive(Clone, Copy)]
@@ -317,6 +337,9 @@ pub struct DiscoveredAsset {
     pub risk_score: u8,
     pub is_shadow_it: bool,
     pub tls_valid_days: i16,
+    pub intel_reputation_score: u8,
+    pub is_flagged_by_cti: bool,
+    pub cve_count: u8,
     pub last_scanned: u64,
 }
 
@@ -345,6 +368,7 @@ impl DiscoveredAsset {
         let initial_risk = match exposure {
             ExposureLevel::ShadowItOrphaned => 90,
             ExposureLevel::InternalLeaked => 85,
+            ExposureLevel::EnclaveExposed => 80,
             ExposureLevel::PublicVulnerable => 75,
             ExposureLevel::PublicHardened => 20,
             ExposureLevel::RestrictedAccess => 5,
@@ -362,6 +386,9 @@ impl DiscoveredAsset {
             risk_score: initial_risk,
             is_shadow_it,
             tls_valid_days,
+            intel_reputation_score: 0,
+            is_flagged_by_cti: false,
+            cve_count: 0,
             last_scanned: timestamp,
         }
     }
@@ -379,12 +406,12 @@ impl DiscoveredAsset {
 pub struct PerimeterFinding {
     pub id: u32,
     pub asset_id: u32,
-    pub title: [u8; 48],
+    pub title: [u8; 56],
     pub title_len: usize,
     pub category: FindingCategory,
     pub severity: FindingSeverity,
     pub status: FindingStatus,
-    pub remediation_action: [u8; 48],
+    pub remediation_action: [u8; 64],
     pub remediation_action_len: usize,
     pub discovered_at: u64,
     pub remediated_at: u64,
@@ -400,14 +427,14 @@ impl PerimeterFinding {
         remediation_str: &str,
         discovered_at: u64,
     ) -> Self {
-        let mut title = [0u8; 48];
+        let mut title = [0u8; 56];
         let t_bytes = title_str.as_bytes();
-        let t_len = core::cmp::min(t_bytes.len(), 48);
+        let t_len = core::cmp::min(t_bytes.len(), 56);
         title[..t_len].copy_from_slice(&t_bytes[..t_len]);
 
-        let mut rem = [0u8; 48];
+        let mut rem = [0u8; 64];
         let r_bytes = remediation_str.as_bytes();
-        let r_len = core::cmp::min(r_bytes.len(), 48);
+        let r_len = core::cmp::min(r_bytes.len(), 64);
         rem[..r_len].copy_from_slice(&r_bytes[..r_len]);
 
         Self {
@@ -442,13 +469,41 @@ pub struct AttackSurfaceSummary {
     pub shadow_it_count: usize,
     pub open_findings_count: usize,
     pub critical_findings_count: usize,
+    pub cti_threat_count: usize,
     pub exposure_index: u8,
+    pub perimeter_hardening_score: u8,
+}
+
+#[derive(Clone, Copy)]
+pub struct EasmPerimeterReport {
+    pub report_id: u32,
+    pub mode: DiscoveryMode,
+    pub total_assets: usize,
+    pub shadow_it_count: usize,
+    pub open_findings_count: usize,
+    pub critical_findings_count: usize,
+    pub cti_threat_count: usize,
+    pub exposure_index: u8,
+    pub perimeter_hardening_score: u8,
+    pub timestamp: u64,
+    pub report_hash: [u8; 32],
+}
+
+#[derive(Clone, Copy)]
+pub struct EasmRemediationReport {
+    pub report_id: u32,
+    pub remediated_count: usize,
+    pub previous_exposure_index: u8,
+    pub new_exposure_index: u8,
+    pub perimeter_hardening_score: u8,
+    pub timestamp: u64,
+    pub report_hash: [u8; 32],
 }
 
 #[derive(Clone, Copy)]
 pub struct AuditLogEntry {
     pub entry_id: u32,
-    pub action: [u8; 24],
+    pub action: [u8; 28],
     pub action_len: usize,
     pub target_id: u32,
     pub result_code: u16,
@@ -463,32 +518,44 @@ pub struct AuditLogEntry {
 
 pub struct JamboEasmDaemon {
     pub admin_cap: EasmCap,
-    pub assets: [Option<DiscoveredAsset>; 16],
+    pub assets: [Option<DiscoveredAsset>; 24],
     pub asset_count: usize,
-    pub findings: [Option<PerimeterFinding>; 24],
+    pub findings: [Option<PerimeterFinding>; 32],
     pub finding_count: usize,
-    pub ledger: [Option<AuditLogEntry>; 32],
+    pub perimeter_reports: [Option<EasmPerimeterReport>; 8],
+    pub perimeter_report_count: usize,
+    pub remediation_reports: [Option<EasmRemediationReport>; 8],
+    pub remediation_report_count: usize,
+    pub ledger: [Option<AuditLogEntry>; 48],
     pub ledger_count: usize,
     pub latest_ledger_hash: [u8; 32],
     pub exposure_index: u8,
+    pub perimeter_hardening_score: u8,
     next_asset_id: u32,
     next_finding_id: u32,
+    next_report_id: u32,
 }
 
 impl JamboEasmDaemon {
     pub fn new(admin_cap: EasmCap) -> Self {
         Self {
             admin_cap,
-            assets: [None; 16],
+            assets: [None; 24],
             asset_count: 0,
-            findings: [None; 24],
+            findings: [None; 32],
             finding_count: 0,
-            ledger: [None; 32],
+            perimeter_reports: [None; 8],
+            perimeter_report_count: 0,
+            remediation_reports: [None; 8],
+            remediation_report_count: 0,
+            ledger: [None; 48],
             ledger_count: 0,
             latest_ledger_hash: [0u8; 32],
             exposure_index: 0,
+            perimeter_hardening_score: 100,
             next_asset_id: 1,
             next_finding_id: 1,
+            next_report_id: 1,
         }
     }
 
@@ -501,9 +568,9 @@ impl JamboEasmDaemon {
     ) -> Result<(), EasmError> {
         let entry_id = (self.ledger_count + 1) as u32;
 
-        let mut action = [0u8; 24];
+        let mut action = [0u8; 28];
         let bytes = action_str.as_bytes();
-        let len = core::cmp::min(bytes.len(), 24);
+        let len = core::cmp::min(bytes.len(), 28);
         action[..len].copy_from_slice(&bytes[..len]);
 
         let prev_hash = self.latest_ledger_hash;
@@ -532,7 +599,6 @@ impl JamboEasmDaemon {
             self.ledger[self.ledger_count] = Some(entry);
             self.ledger_count += 1;
         } else {
-            // Tampon annulaire
             for i in 1..self.ledger.len() {
                 self.ledger[i - 1] = self.ledger[i];
             }
@@ -570,13 +636,18 @@ impl JamboEasmDaemon {
     pub fn recalculate_exposure_index(&mut self) {
         if self.asset_count == 0 {
             self.exposure_index = 0;
+            self.perimeter_hardening_score = 100;
             return;
         }
 
         let mut total_risk: u32 = 0;
         for i in 0..self.asset_count {
             if let Some(asset) = &self.assets[i] {
-                total_risk += asset.risk_score as u32;
+                let mut risk = asset.risk_score as u32;
+                if asset.is_flagged_by_cti {
+                    risk = core::cmp::min(100, risk + (asset.intel_reputation_score as u32 / 2));
+                }
+                total_risk += risk;
             }
         }
 
@@ -599,6 +670,7 @@ impl JamboEasmDaemon {
         let base_score = total_risk / (self.asset_count as u32);
         let final_score = core::cmp::min(100, base_score + finding_penalties);
         self.exposure_index = final_score as u8;
+        self.perimeter_hardening_score = 100u8.saturating_sub(self.exposure_index);
     }
 
     pub fn register_asset(
@@ -660,7 +732,6 @@ impl JamboEasmDaemon {
             return Err(EasmError::CapacityExceeded);
         }
 
-        // Vérifier l'existence de l'actif
         let mut exists = false;
         for i in 0..self.asset_count {
             if let Some(a) = &self.assets[i] {
@@ -704,11 +775,9 @@ impl JamboEasmDaemon {
             return Err(EasmError::PermissionDenied);
         }
 
-        // Actualiser l'état des actifs
         for i in 0..self.asset_count {
             if let Some(asset) = &mut self.assets[i] {
                 asset.last_scanned = timestamp;
-                // Si Shadow IT ou certificat expiré, maintenir un risque élevé
                 if asset.is_shadow_it {
                     asset.risk_score = core::cmp::max(asset.risk_score, 85);
                 } else if asset.tls_valid_days < 0 {
@@ -725,6 +794,123 @@ impl JamboEasmDaemon {
             timestamp,
         )?;
         self.get_summary(cap)
+    }
+
+    pub fn scan_perimeter_with_mode(
+        &mut self,
+        cap: &EasmCap,
+        mode: DiscoveryMode,
+        timestamp: u64,
+    ) -> Result<EasmPerimeterReport, EasmError> {
+        let _ = self.scan_perimeter(cap, timestamp)?;
+        self.generate_perimeter_report(cap, mode, timestamp)
+    }
+
+    pub fn generate_perimeter_report(
+        &mut self,
+        cap: &EasmCap,
+        mode: DiscoveryMode,
+        timestamp: u64,
+    ) -> Result<EasmPerimeterReport, EasmError> {
+        if !cap.has_right(easm_rights::GENERATE_REPORT) {
+            return Err(EasmError::PermissionDenied);
+        }
+
+        let summary = self.get_summary(cap)?;
+        let report_id = self.next_report_id;
+        self.next_report_id += 1;
+
+        let mut hasher = Sha256::new();
+        hasher.update(&report_id.to_be_bytes());
+        hasher.update(&(mode as u8).to_be_bytes());
+        hasher.update(&(summary.total_assets as u64).to_be_bytes());
+        hasher.update(&(summary.shadow_it_count as u64).to_be_bytes());
+        hasher.update(&(summary.open_findings_count as u64).to_be_bytes());
+        hasher.update(&(summary.critical_findings_count as u64).to_be_bytes());
+        hasher.update(&(summary.cti_threat_count as u64).to_be_bytes());
+        hasher.update(&summary.exposure_index.to_be_bytes());
+        hasher.update(&summary.perimeter_hardening_score.to_be_bytes());
+        hasher.update(&timestamp.to_be_bytes());
+        hasher.update(&self.latest_ledger_hash);
+        let report_hash = hasher.finalize();
+
+        let report = EasmPerimeterReport {
+            report_id,
+            mode,
+            total_assets: summary.total_assets,
+            shadow_it_count: summary.shadow_it_count,
+            open_findings_count: summary.open_findings_count,
+            critical_findings_count: summary.critical_findings_count,
+            cti_threat_count: summary.cti_threat_count,
+            exposure_index: summary.exposure_index,
+            perimeter_hardening_score: summary.perimeter_hardening_score,
+            timestamp,
+            report_hash,
+        };
+
+        if self.perimeter_report_count < self.perimeter_reports.len() {
+            self.perimeter_reports[self.perimeter_report_count] = Some(report);
+            self.perimeter_report_count += 1;
+        } else {
+            for i in 1..self.perimeter_reports.len() {
+                self.perimeter_reports[i - 1] = self.perimeter_reports[i];
+            }
+            self.perimeter_reports[self.perimeter_reports.len() - 1] = Some(report);
+        }
+
+        self.log_audit_action("PERIMETER_REPORT_SEALED", report_id, 0, timestamp)?;
+        Ok(report)
+    }
+
+    pub fn correlate_cti(
+        &mut self,
+        cap: &EasmCap,
+        asset_id: u32,
+        threat_score: u8,
+        cve_count: u8,
+        timestamp: u64,
+    ) -> Result<u32, EasmError> {
+        if !cap.has_right(easm_rights::CORRELATE_INTEL) {
+            return Err(EasmError::PermissionDenied);
+        }
+
+        let mut found = false;
+        for i in 0..self.asset_count {
+            if let Some(asset) = &mut self.assets[i] {
+                if asset.id == asset_id {
+                    asset.intel_reputation_score = threat_score;
+                    asset.is_flagged_by_cti = threat_score >= 50;
+                    asset.cve_count = cve_count;
+                    if threat_score >= 50 {
+                        asset.risk_score = core::cmp::max(asset.risk_score, 85);
+                    }
+                    found = true;
+                    break;
+                }
+            }
+        }
+
+        if !found {
+            return Err(EasmError::AssetNotFound);
+        }
+
+        let fid = if threat_score >= 50 {
+            self.add_finding(
+                cap,
+                asset_id,
+                "CTI Malicious Threat Actor / IoC Correlation Detected",
+                FindingCategory::CtiKnownThreat,
+                FindingSeverity::High,
+                "Isoler le flux réseau et appliquer règle pare-feu jambo-walld",
+                timestamp,
+            )?
+        } else {
+            0
+        };
+
+        self.recalculate_exposure_index();
+        self.log_audit_action("CTI_CORRELATED", asset_id, threat_score as u16, timestamp)?;
+        Ok(fid)
     }
 
     pub fn remediate_finding(
@@ -756,7 +942,6 @@ impl JamboEasmDaemon {
             return Err(EasmError::FindingNotFound);
         }
 
-        // Durcir l'actif associé
         if let Some(aid) = target_asset_id {
             for i in 0..self.asset_count {
                 if let Some(asset) = &mut self.assets[i] {
@@ -768,6 +953,9 @@ impl JamboEasmDaemon {
                         } else if asset.exposure == ExposureLevel::PublicVulnerable {
                             asset.exposure = ExposureLevel::PublicHardened;
                             asset.risk_score = 20;
+                        } else if asset.exposure == ExposureLevel::EnclaveExposed {
+                            asset.exposure = ExposureLevel::RestrictedAccess;
+                            asset.risk_score = 15;
                         } else {
                             asset.risk_score = asset.risk_score.saturating_sub(25);
                         }
@@ -781,6 +969,91 @@ impl JamboEasmDaemon {
         Ok(())
     }
 
+    pub fn remediate_all_findings(
+        &mut self,
+        cap: &EasmCap,
+        timestamp: u64,
+    ) -> Result<EasmRemediationReport, EasmError> {
+        if !cap.has_right(easm_rights::REMEDIATE_EXPOSURE) {
+            return Err(EasmError::PermissionDenied);
+        }
+
+        let prev_index = self.exposure_index;
+        let mut remediated_count = 0;
+
+        for i in 0..self.finding_count {
+            if let Some(f) = &mut self.findings[i] {
+                if f.status == FindingStatus::Open {
+                    f.status = FindingStatus::Remediated;
+                    f.remediated_at = timestamp;
+                    remediated_count += 1;
+                }
+            }
+        }
+
+        for i in 0..self.asset_count {
+            if let Some(a) = &mut self.assets[i] {
+                a.is_shadow_it = false;
+                a.is_flagged_by_cti = false;
+                a.intel_reputation_score = 0;
+                a.exposure = match a.exposure {
+                    ExposureLevel::ShadowItOrphaned => ExposureLevel::RestrictedAccess,
+                    ExposureLevel::PublicVulnerable => ExposureLevel::PublicHardened,
+                    ExposureLevel::EnclaveExposed => ExposureLevel::RestrictedAccess,
+                    ExposureLevel::InternalLeaked => ExposureLevel::RestrictedAccess,
+                    other => other,
+                };
+                a.risk_score = 10;
+                if a.tls_valid_days < 0 {
+                    a.tls_valid_days = 365;
+                }
+            }
+        }
+
+        self.recalculate_exposure_index();
+
+        let report_id = self.next_report_id;
+        self.next_report_id += 1;
+
+        let mut hasher = Sha256::new();
+        hasher.update(&report_id.to_be_bytes());
+        hasher.update(&(remediated_count as u64).to_be_bytes());
+        hasher.update(&prev_index.to_be_bytes());
+        hasher.update(&self.exposure_index.to_be_bytes());
+        hasher.update(&self.perimeter_hardening_score.to_be_bytes());
+        hasher.update(&timestamp.to_be_bytes());
+        hasher.update(&self.latest_ledger_hash);
+        let report_hash = hasher.finalize();
+
+        let report = EasmRemediationReport {
+            report_id,
+            remediated_count,
+            previous_exposure_index: prev_index,
+            new_exposure_index: self.exposure_index,
+            perimeter_hardening_score: self.perimeter_hardening_score,
+            timestamp,
+            report_hash,
+        };
+
+        if self.remediation_report_count < self.remediation_reports.len() {
+            self.remediation_reports[self.remediation_report_count] = Some(report);
+            self.remediation_report_count += 1;
+        } else {
+            for i in 1..self.remediation_reports.len() {
+                self.remediation_reports[i - 1] = self.remediation_reports[i];
+            }
+            self.remediation_reports[self.remediation_reports.len() - 1] = Some(report);
+        }
+
+        self.log_audit_action(
+            "ALL_EXPOSURES_REMEDIATED",
+            report_id,
+            remediated_count as u16,
+            timestamp,
+        )?;
+        Ok(report)
+    }
+
     pub fn get_summary(&self, cap: &EasmCap) -> Result<AttackSurfaceSummary, EasmError> {
         if !cap.has_right(easm_rights::QUERY_SURFACE) {
             return Err(EasmError::PermissionDenied);
@@ -788,15 +1061,20 @@ impl JamboEasmDaemon {
 
         let mut public_count = 0;
         let mut shadow_count = 0;
+        let mut cti_threats = 0;
         for i in 0..self.asset_count {
             if let Some(a) = &self.assets[i] {
                 if a.exposure == ExposureLevel::PublicHardened
                     || a.exposure == ExposureLevel::PublicVulnerable
+                    || a.exposure == ExposureLevel::EnclaveExposed
                 {
                     public_count += 1;
                 }
                 if a.is_shadow_it {
                     shadow_count += 1;
+                }
+                if a.is_flagged_by_cti {
+                    cti_threats += 1;
                 }
             }
         }
@@ -820,15 +1098,37 @@ impl JamboEasmDaemon {
             shadow_it_count: shadow_count,
             open_findings_count: open_findings,
             critical_findings_count: critical_findings,
+            cti_threat_count: cti_threats,
             exposure_index: self.exposure_index,
+            perimeter_hardening_score: self.perimeter_hardening_score,
         })
+    }
+
+    pub fn get_perimeter_report(
+        &self,
+        cap: &EasmCap,
+        report_id: u32,
+    ) -> Result<EasmPerimeterReport, EasmError> {
+        if !cap.has_right(easm_rights::QUERY_SURFACE) {
+            return Err(EasmError::PermissionDenied);
+        }
+
+        for i in 0..self.perimeter_report_count {
+            if let Some(report) = &self.perimeter_reports[i] {
+                if report.report_id == report_id {
+                    return Ok(*report);
+                }
+            }
+        }
+
+        Err(EasmError::ReportNotFound)
     }
 
     pub fn init_defaults(&mut self) {
         let cap = self.admin_cap;
         let now = 1000;
 
-        // Actifs de référence
+        // Actifs de référence périmétriques
         let _ = self.register_asset(
             &cap,
             "api-gw",
@@ -893,6 +1193,20 @@ impl JamboEasmDaemon {
             now,
         );
 
+        let enclave_id = self
+            .register_asset(
+                &cap,
+                "tee-gateway",
+                "tee-sec.jambo.net",
+                AssetType::TeeEnclaveGateway,
+                ExposureLevel::PublicVulnerable,
+                8443,
+                false,
+                60,
+                now,
+            )
+            .unwrap_or(6);
+
         // Vulnérabilités & Expositions initiales
         let _ = self.add_finding(
             &cap,
@@ -934,6 +1248,16 @@ impl JamboEasmDaemon {
             now + 25,
         );
 
+        let _ = self.add_finding(
+            &cap,
+            enclave_id,
+            "TEE Enclave Insecure TLS Cipher & Perimeter Exposure",
+            FindingCategory::TeeEnclaveExposed,
+            FindingSeverity::Critical,
+            "Restreindre accès via ZTNA et forcer TLS 1.3 Ed25519",
+            now + 30,
+        );
+
         self.recalculate_exposure_index();
     }
 }
@@ -956,6 +1280,8 @@ mod tests {
         assert!(admin_cap.has_right(easm_rights::REMEDIATE_EXPOSURE));
         assert!(admin_cap.has_right(easm_rights::EXPORT_INVENTORY));
         assert!(admin_cap.has_right(easm_rights::SEAL_LEDGER));
+        assert!(admin_cap.has_right(easm_rights::CORRELATE_INTEL));
+        assert!(admin_cap.has_right(easm_rights::GENERATE_REPORT));
         assert!(admin_cap.has_right(easm_rights::ADMIN));
 
         let monitor_cap = admin_cap
@@ -969,6 +1295,7 @@ mod tests {
         assert!(monitor_cap.has_right(easm_rights::SCAN_PERIMETER));
         assert!(!monitor_cap.has_right(easm_rights::MANAGE_ASSETS));
         assert!(!monitor_cap.has_right(easm_rights::REMEDIATE_EXPOSURE));
+        assert!(!monitor_cap.has_right(easm_rights::CORRELATE_INTEL));
         assert!(!monitor_cap.has_right(easm_rights::ADMIN));
 
         // Escalade illégale
@@ -1009,47 +1336,85 @@ mod tests {
         let mut easm = JamboEasmDaemon::new(admin_cap);
         easm.init_defaults();
 
-        assert_eq!(easm.asset_count, 5);
-        assert_eq!(easm.finding_count, 4);
+        assert_eq!(easm.asset_count, 6);
+        assert_eq!(easm.finding_count, 5);
 
         let summary = easm.scan_perimeter(&admin_cap, 2000).expect("Scan");
-        assert_eq!(summary.total_assets, 5);
+        assert_eq!(summary.total_assets, 6);
         assert_eq!(summary.shadow_it_count, 1);
-        assert_eq!(summary.open_findings_count, 4);
-        assert_eq!(summary.critical_findings_count, 1);
-        assert!(summary.exposure_index > 50); // Risque élevé dû au Shadow IT & failles
+        assert_eq!(summary.open_findings_count, 5);
+        assert_eq!(summary.critical_findings_count, 2);
+        assert!(summary.exposure_index > 50);
+        assert!(summary.perimeter_hardening_score < 50);
     }
 
     #[test]
-    fn test_finding_remediation_and_score_update() {
+    fn test_cti_correlation_and_threat_scoring() {
         let admin_cap = EasmCap::new(Handle::new(13104, 1), easm_rights::ALL, 10000, 500);
         let mut easm = JamboEasmDaemon::new(admin_cap);
         easm.init_defaults();
 
+        let initial_findings = easm.finding_count;
+        let fid = easm
+            .correlate_cti(&admin_cap, 1, 95, 3, 2100)
+            .expect("Corrélation CTI");
+        assert!(fid > 0);
+        assert_eq!(easm.finding_count, initial_findings + 1);
+
+        let asset = easm.assets[0].unwrap();
+        assert!(asset.is_flagged_by_cti);
+        assert_eq!(asset.intel_reputation_score, 95);
+        assert_eq!(asset.cve_count, 3);
+    }
+
+    #[test]
+    fn test_perimeter_report_generation_and_sealing() {
+        let admin_cap = EasmCap::new(Handle::new(13105, 1), easm_rights::ALL, 10000, 500);
+        let mut easm = JamboEasmDaemon::new(admin_cap);
+        easm.init_defaults();
+
+        let report = easm
+            .generate_perimeter_report(&admin_cap, DiscoveryMode::SecNumCloudAudit, 2500)
+            .expect("Rapport périmètre");
+        assert_eq!(report.report_id, 1);
+        assert_eq!(report.mode, DiscoveryMode::SecNumCloudAudit);
+        assert_eq!(report.total_assets, 6);
+        assert_ne!(report.report_hash, [0u8; 32]);
+        assert_eq!(easm.perimeter_report_count, 1);
+
+        let fetched = easm
+            .get_perimeter_report(&admin_cap, 1)
+            .expect("Récupération rapport");
+        assert_eq!(fetched.report_hash, report.report_hash);
+    }
+
+    #[test]
+    fn test_remediate_all_findings_and_hardening() {
+        let admin_cap = EasmCap::new(Handle::new(13106, 1), easm_rights::ALL, 10000, 500);
+        let mut easm = JamboEasmDaemon::new(admin_cap);
+        easm.init_defaults();
+
         let initial_summary = easm.get_summary(&admin_cap).expect("Summary initial");
-        let initial_score = initial_summary.exposure_index;
+        assert_eq!(initial_summary.open_findings_count, 5);
+        assert!(initial_summary.exposure_index > 50);
 
-        // Remédier la faille critique (Finding #1 : Admin Portal)
-        assert!(easm.remediate_finding(&admin_cap, 1, 3000).is_ok());
-
-        // Remédier la faille TLS (Finding #2 : Expired cert)
-        assert!(easm.remediate_finding(&admin_cap, 2, 3005).is_ok());
-
-        // Remédier la faille de stockage (Finding #3 : Cloud Storage Bucket)
-        assert!(easm.remediate_finding(&admin_cap, 3, 3010).is_ok());
-
-        // Remédier la fuite de bannière (Finding #4 : Banner)
-        assert!(easm.remediate_finding(&admin_cap, 4, 3015).is_ok());
+        let rem_report = easm
+            .remediate_all_findings(&admin_cap, 3000)
+            .expect("Remédiation globale");
+        assert_eq!(rem_report.remediated_count, 5);
+        assert_ne!(rem_report.report_hash, [0u8; 32]);
 
         let post_summary = easm.get_summary(&admin_cap).expect("Summary post");
         assert_eq!(post_summary.open_findings_count, 0);
         assert_eq!(post_summary.critical_findings_count, 0);
-        assert!(post_summary.exposure_index < initial_score);
+        assert_eq!(post_summary.shadow_it_count, 0);
+        assert!(post_summary.exposure_index <= 20);
+        assert!(post_summary.perimeter_hardening_score >= 80);
     }
 
     #[test]
     fn test_audit_ledger_integrity_and_tampering() {
-        let admin_cap = EasmCap::new(Handle::new(13105, 1), easm_rights::ALL, 10000, 500);
+        let admin_cap = EasmCap::new(Handle::new(13107, 1), easm_rights::ALL, 10000, 500);
         let mut easm = JamboEasmDaemon::new(admin_cap);
         easm.init_defaults();
 

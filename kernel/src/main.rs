@@ -1266,11 +1266,11 @@ pub extern "C" fn _start() -> ! {
         "Échec du test de simulation de brèches et d'attaques jambo-bas"
     );
 
-    // 18septiesviciesquadragies. Validation de la Gestion de la Surface d'Attaque Externe EASM (Phase 131 - v0.2.129)
+    // 18septiesviciesquadragies. Validation de la Gestion Souveraine de la Surface d'Attaque Externe EASM, Découverte Continue d'Actifs & Cartographie des Risques d'Exposition (Phase 161 - v0.3.28)
     let easm_success = sched::easm_test::execute_easm_daemon_test();
     assert!(
         easm_success,
-        "Échec du test de gestion de la surface d'attaque externe jambo-easm"
+        "Échec du test de gestion souveraine de la surface d'attaque externe jambo-easm"
     );
 
     // 18octiesviciesquadragies. Validation du Programme Continu de Gestion de l'Exposition aux Menaces CTEM (Phase 132 - v0.2.130)
@@ -1799,12 +1799,15 @@ pub extern "C" fn _start() -> ! {
     kprintln!(
         "\x1b[1;32m[PASS] Phase 160 Sovereign Breach & Attack Simulation, Resilience Validation (jambo-bas) Complete\x1b[0m"
     );
+    kprintln!(
+        "\x1b[1;32m[PASS] Phase 161 Sovereign External Attack Surface Management & Exposure Risk Mapping (jambo-easm) Complete\x1b[0m"
+    );
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.3.27 (Sovereign Breach & Attack Simulation and Automated Resilience Evaluation jambo-bas)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.3.28 (Sovereign External Attack Surface Management & Exposure Risk Mapping jambo-easm)\x1b[0m"
     );
     kprintln!("\x1b[1;33m[STATUS] Jalons v0.3.27 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(

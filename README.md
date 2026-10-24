@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.3.27-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.3.28-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.3.27 (Simulation Continue de Brèches et d'Attaques BAS, Évaluation Automatisée de Résilience & Validation de Posture jambo-bas)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.3.27` introduit la modernisation et la souveraineté complète de la Simulation Continue de Brèches et d'Attaques (BAS — `services/jambo-bas`) : moteur souverain d'émulation d'adversaires et de simulations d'attaques cyber `#![no_std]` (MITRE ATT&CK Ring 3, IPC, VFS, TEE, Réseau, Supply Chain ASPM, Cloud Identity CIEM, Workload CWPP), validation continue des contrôles de défense active (WAF, IDS, EDR, XDR, CASB, CNAPP, ASPM, Seccomp, Landlock, ZTNA, PAM), profils avancés (ContinuousAssurance, RedTeamAdversaryEmulation, ComplianceSecNumCloudAudit, ZeroTrustValidation, RansomwareContainmentExercise), calcul déterministe des scores de résilience (0..100) et de résistance de grappe (Cluster Resistance Score 0..100), latence moyenne de détection (MTTD), détection fine des lacunes de détection (Detection Gaps) et génération de rapports de simulation (`BasSimulationReport`), d'évaluation (`BasResilienceAssessmentReport`) et de remédiation (`BasRemediationReport`) scellés SHA-256 avec contrôle capabilaire strict `BasCap` et registre d'audit cryptographique SHA-256 inaltérable.
+> **Statut du Projet : Version v0.3.28 (Gestion Souveraine de la Surface d'Attaque Externe EASM, Découverte Continue d'Actifs & Cartographie des Risques d'Exposition jambo-easm)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.3.28` introduit la modernisation et la souveraineté complète de la Gestion de la Surface d'Attaque Externe (EASM — `services/jambo-easm`) : moteur souverain de cartographie et découverte continue de la surface d'attaque externe `#![no_std]`, inventaire dynamique des actifs exposés (adresses IP, ports, certificats TLS, endpoints d'API, micro-services, TEE Enclave Gateways), détection en temps réel du Shadow IT et sous-domaines orphelins (Subdomain / Dangling DNS Takeover), calcul déterministe de l'indice d'exposition externe (0..100) et du score de durcissement périmétrique (0..100), corrélation proactive avec le renseignement sur les menaces cyber CTI (`jambo-intel`), profils de découverte avancés (Continuous, AdversaryReconnaissance, SecNumCloudAudit, ZeroTrustPerimeter), génération de rapports d'exposition (`EasmPerimeterReport`) et de remédiation (`EasmRemediationReport`) scellés SHA-256 avec contrôle capabilaire strict `EasmCap` et registre d'audit cryptographique SHA-256 inaltérable.
 
 ---
 
