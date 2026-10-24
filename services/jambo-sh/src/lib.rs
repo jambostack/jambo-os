@@ -212,6 +212,7 @@ pub struct JamboShell {
     pub ndr: jambo_ndr::JamboNdrDaemon,
     pub cdr: jambo_cdr::JamboCdrDaemon,
     pub dlp: jambo_dlp::JamboDlpDaemon,
+    pub ueba: jambo_ueba::JamboUebaDaemon,
 }
 
 impl Default for JamboShell {
@@ -850,6 +851,15 @@ impl JamboShell {
         );
         let mut dlp = jambo_dlp::JamboDlpDaemon::new(dlp_cap);
         dlp.init_defaults();
+
+        let ueba_cap = jambo_ueba::UebaCap::new(
+            libjambo::Handle::new(14601, 1),
+            jambo_ueba::ueba_rights::ALL,
+            5000,
+            100,
+        );
+        let mut ueba = jambo_ueba::JamboUebaDaemon::new(ueba_cap);
+        ueba.init_defaults();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -952,6 +962,7 @@ impl JamboShell {
             ndr,
             cdr,
             dlp,
+            ueba,
         }
     }
 
@@ -1171,10 +1182,11 @@ impl JamboShell {
                 emit("  ndr [cmd]       - Détection réseau & micro-segmentation Zero-Trust (NDR), analyse L2-L7 & confinement O(1)\n");
                 emit("  cdr [cmd]       - Désarmement et reconstruction de contenu (CDR), neutralisation macros/W+X & quarantaine O(1)\n");
                 emit("  dlp [cmd]       - Protection fuites de données (DLP), classification, masquage & quarantaine O(1)\n");
+                emit("  ueba [cmd]      - Analyse comportementale des utilisateurs et entités (UEBA), baselines & quarantaine O(1)\n");
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.3.12 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.3.13 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -15308,6 +15320,122 @@ impl JamboShell {
                     }
                     _ => {
                         emit("Usage: dlp [status | policies | violations | quarantine | scan | verify]\n");
+                        (ShellStatus::ExecutionFailed, write_pos)
+                    }
+                }
+            }
+            "ueba" => {
+                let subcmd = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    "status"
+                };
+
+                match subcmd {
+                    "status" => {
+                        let sum = self.ueba.get_summary();
+                        let mut b = [0u8; 20];
+                        emit("--- [UEBA] État Analyse Comportementale Souveraine ---\n");
+                        emit("Profils actifs     : ");
+                        emit(format_u64(sum.profiles_count as u64, &mut b));
+                        emit("\nÉvénements traités : ");
+                        emit(format_u64(sum.events_processed, &mut b));
+                        emit("\nAnomalies détectées: ");
+                        emit(format_u64(sum.anomalies_detected, &mut b));
+                        emit("\nEntités quarantaine: ");
+                        emit(format_u64(sum.quarantine_count as u64, &mut b));
+                        emit("\nFlux régulés (rate): ");
+                        emit(format_u64(sum.throttled_count, &mut b));
+                        emit("\nAlertes émises     : ");
+                        emit(format_u64(sum.alerts_raised, &mut b));
+                        emit("\nEntrées d'audit    : ");
+                        emit(format_u64(sum.audit_count as u64, &mut b));
+                        emit("\nRegistre intègre   : ");
+                        emit(if sum.ledger_valid {
+                            "OUI\n"
+                        } else {
+                            "NON (ALTÉRÉ)\n"
+                        });
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "profiles" => {
+                        let mut b = [0u8; 20];
+                        emit("--- [UEBA] Profils Comportementaux Enregistrés ---\n");
+                        for i in 0..self.ueba.profile_count {
+                            if let Some(ref p) = self.ueba.profiles[i] {
+                                emit(" - [");
+                                emit(p.entity_type.as_str());
+                                emit("] ID: ");
+                                emit(jambo_ueba::id_to_str(&p.entity_id));
+                                emit(" | Syscalls: ");
+                                emit(format_u64((p.mean_syscall_rate / 100) as u64, &mut b));
+                                emit("/s | Vol: ");
+                                emit(format_u64((p.mean_volume_bytes / 100) as u64, &mut b));
+                                emit(" octets | Pairs connus: ");
+                                emit(format_u64(p.known_peer_count as u64, &mut b));
+                                emit("\n");
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "quarantine" => {
+                        let mut b = [0u8; 20];
+                        emit("--- [UEBA] Table de Quarantaine Comportementale O(1) ---\n");
+                        for i in 0..self.ueba.quarantine_count {
+                            if let Some(ref q) = self.ueba.quarantine_store[i] {
+                                emit(" - ID: ");
+                                emit(jambo_ueba::id_to_str(&q.entity_id));
+                                emit(" | Raison: ");
+                                emit(q.reason.as_str());
+                                emit(" | Risque: ");
+                                emit(format_u64(q.risk_score as u64, &mut b));
+                                emit("/100 | Isolé: ");
+                                emit(if q.isolated { "OUI\n" } else { "NON\n" });
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "analyze" => {
+                        let event = jambo_ueba::ActivityEvent::new(
+                            999,
+                            "cli_demo",
+                            jambo_ueba::EntityType::ServiceDaemon,
+                            1735209999,
+                            14,
+                            25,
+                            1500,
+                            "backend_srv",
+                        );
+                        match self.ueba.ingest_and_analyze(&event) {
+                            Ok(res) => {
+                                emit("[UEBA/ANALYZE] Événement analysé avec succès : Action=");
+                                emit(res.action.as_str());
+                                emit(" | Risque=");
+                                emit(res.risk_level.as_str());
+                                emit(" (Score=");
+                                let mut b = [0u8; 20];
+                                emit(format_u64(res.risk_score as u64, &mut b));
+                                emit("/100)\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("[UEBA/ANALYZE] Échec de l'analyse UEBA\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "verify" => {
+                        let valid = self.ueba.verify_audit_integrity();
+                        emit("Registre d'audit cryptographique SHA-256 UEBA: ");
+                        emit(if valid {
+                            "INTÈGRE (OK)\n"
+                        } else {
+                            "ALTÉRÉ (FAIL)\n"
+                        });
+                        (ShellStatus::Success, write_pos)
+                    }
+                    _ => {
+                        emit("Usage: ueba [status | profiles | quarantine | analyze | verify]\n");
                         (ShellStatus::ExecutionFailed, write_pos)
                     }
                 }

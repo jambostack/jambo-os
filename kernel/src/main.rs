@@ -1436,6 +1436,13 @@ pub extern "C" fn _start() -> ! {
         "Échec du test de protection contre les fuites de données jambo-dlp"
     );
 
+    // 31viciesquadragies. Validation Analyse Comportementale Souveraine UEBA (Phase 146 - v0.3.13)
+    let ueba_success = sched::ueba_test::execute_ueba_daemon_test();
+    assert!(
+        ueba_success,
+        "Échec du test d'analyse comportementale des utilisateurs et entités jambo-ueba"
+    );
+
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
 
     arch::init_iommu();
@@ -1721,14 +1728,17 @@ pub extern "C" fn _start() -> ! {
     kprintln!(
         "\x1b[1;32m[PASS] Phase 145 Data Loss Prevention Resilience (jambo-dlp) Complete\x1b[0m"
     );
+    kprintln!(
+        "\x1b[1;32m[PASS] Phase 146 User and Entity Behavior Analytics Resilience (jambo-ueba) Complete\x1b[0m"
+    );
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.3.12 (Data Loss Prevention Resilience jambo-dlp)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.3.13 (User and Entity Behavior Analytics Resilience jambo-ueba)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.3.12 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.3.13 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
