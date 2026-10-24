@@ -1,6 +1,6 @@
 [package]
 name = "jambo-kdir"
-version = "0.3.8"
+version = "0.3.38"
 edition = "2021"
 
 [dependencies]

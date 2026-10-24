@@ -1336,7 +1336,7 @@ pub extern "C" fn _start() -> ! {
         "Échec du test de sécurité applicative dynamique & RASP jambo-appsec"
     );
 
-    // 26viciesquadragies. Validation Cyber-Résilience & Intégrité Noyau / Pilotes (Phase 141 - v0.3.8)
+    // 26viciesquadragies. Validation de la Cyber-Résilience & Intégrité Noyau / Pilotes KDIR Souverain (Phase 171 - v0.3.38)
     let kdir_success = sched::kdir_test::execute_kdir_daemon_test();
     assert!(
         kdir_success,
@@ -1745,7 +1745,7 @@ pub extern "C" fn _start() -> ! {
     kprintln!("\x1b[1;32m[PASS] Phase 138 Pipeline Security & Sovereign DevSecOps Orchestration (jambo-devsecops) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 139 Third-Party Risk Management & Supplier Governance (jambo-tprm) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 140 Dynamic Application Security & RASP (jambo-appsec) Complete\x1b[0m");
-    kprintln!("\x1b[1;32m[PASS] Phase 141 Kernel & Driver Integrity Resilience (jambo-kdir) Complete\x1b[0m");
+    kprintln!("\x1b[1;32m[PASS] Phase 171 Kernel & Driver Integrity Resilience (jambo-kdir) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 142 Firmware & Hardware Defense Resilience (jambo-fdr) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 143 Network Detection & Sovereign Microsegmentation Resilience (jambo-ndr) Complete\x1b[0m");
     kprintln!(
@@ -1828,9 +1828,9 @@ pub extern "C" fn _start() -> ! {
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.3.37 (Sovereign RASP Dynamic Application Security, CFI & O(1) Neutralization jambo-appsec)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.3.38 (Sovereign KDIR Kernel & Driver Integrity Resilience, Rootkit Detection & O(1) Auto-Restoration jambo-kdir)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.3.36 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.3.37 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );

@@ -17247,7 +17247,7 @@ impl JamboShell {
                     "status" => {
                         let sum = self.kdir.get_summary();
                         emit(
-                            "--- JAMBO CYBER-RÉSILLIENCE & INTÉGRITÉ NOYAU KDIR (PHASE 141) ---\n",
+                            "--- JAMBO CYBER-RÉSILLIENCE & INTÉGRITÉ NOYAU KDIR (PHASE 171) ---\n",
                         );
                         emit("Sondes critiques déployées: ");
                         emit(format_u64(sum.probes_count as u64, &mut b));
@@ -17263,7 +17263,9 @@ impl JamboShell {
                         emit(format_u64(sum.threats_detected as u64, &mut b));
                         emit("\nMenaces auto-restaurées / remédiées: ");
                         emit(format_u64(sum.remediated_threats as u64, &mut b));
-                        emit("\nEntrées d'audit SHA-256: ");
+                        emit("\nScore global de cyber-résilience: ");
+                        emit(format_u64(sum.global_resilience_score as u64, &mut b));
+                        emit("/100\nEntrées d'audit SHA-256: ");
                         emit(format_u64(sum.ledger_entries as u64, &mut b));
                         emit("\nRegistre cryptographique: ");
                         emit(if sum.ledger_valid {
@@ -17402,6 +17404,173 @@ impl JamboShell {
                             (ShellStatus::ExecutionFailed, write_pos)
                         }
                     }
+                    "remediate" => {
+                        let tid = if parsed.arg_count > 2 {
+                            parse_u64(parsed.args[2]).unwrap_or(0) as u32
+                        } else {
+                            0
+                        };
+                        if tid > 0 {
+                            match self.kdir.remediate_threat(tid, 1735003000) {
+                                Ok(()) => {
+                                    emit("Menace rootkit #");
+                                    emit(format_u64(tid as u64, &mut b));
+                                    emit(" auto-restaurée et remédiée O(1) avec succès\n");
+                                    (ShellStatus::Success, write_pos)
+                                }
+                                Err(_) => {
+                                    emit("Échec remédiation de la menace KDIR\n");
+                                    (ShellStatus::ExecutionFailed, write_pos)
+                                }
+                            }
+                        } else {
+                            match self.kdir.remediate_all_threats(1735003000) {
+                                Ok(cnt) => {
+                                    emit("=== REMÉDIATION AUTONOME PROACTIVE KDIR O(1) EXÉCUTÉE ===\n");
+                                    emit("Structures restaurées & pilotes confinés: ");
+                                    emit(format_u64(cnt as u64, &mut b));
+                                    emit("\nIntégrité du micro-noyau et des pilotes rétablie avec succès.\n");
+                                    (ShellStatus::Success, write_pos)
+                                }
+                                Err(_) => {
+                                    emit("Erreur lors de la remédiation globale KDIR\n");
+                                    (ShellStatus::ExecutionFailed, write_pos)
+                                }
+                            }
+                        }
+                    }
+                    "remediate-all" => match self.kdir.remediate_all_threats(1735003000) {
+                        Ok(cnt) => {
+                            emit("=== REMÉDIATION GLOBALE KDIR O(1) EXÉCUTÉE ===\n");
+                            emit("Structures restaurées & menaces neutralisées: ");
+                            emit(format_u64(cnt as u64, &mut b));
+                            emit("\nGolden snapshots appliqués sans délai.\n");
+                            (ShellStatus::Success, write_pos)
+                        }
+                        Err(_) => {
+                            emit("Erreur exécution remédiation globale KDIR\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        }
+                    },
+                    "report-posture" => match self.kdir.generate_posture_report(1735004000) {
+                        Ok(rep) => {
+                            emit("=== RAPPORT SCELLÉ DE POSTURE DE CYBER-RÉSILLIENCE KDIR (SHA-256) ===\n");
+                            emit("Identifiant rapport     : ");
+                            emit(format_u64(rep.report_id as u64, &mut b));
+                            emit("\nSondes critiques gérées : ");
+                            emit(format_u64(rep.probes_count as u64, &mut b));
+                            emit("\n  - Intactes (Golden)   : ");
+                            emit(format_u64(rep.intact_count as u64, &mut b));
+                            emit("\n  - Altérées/compromises: ");
+                            emit(format_u64(rep.tampered_count as u64, &mut b));
+                            emit("\nPilotes supervisés      : ");
+                            emit(format_u64(rep.drivers_count as u64, &mut b));
+                            emit("\n  - Approuvés (Trusted) : ");
+                            emit(format_u64(rep.trusted_drivers_count as u64, &mut b));
+                            emit("\n  - Isolés / confinés   : ");
+                            emit(format_u64(rep.isolated_drivers_count as u64, &mut b));
+                            emit("\nMenaces rootkit détectées: ");
+                            emit(format_u64(rep.threats_detected as u64, &mut b));
+                            emit("\nMenaces remédiées       : ");
+                            emit(format_u64(rep.remediated_threats as u64, &mut b));
+                            emit("\nStructures restaurées   : ");
+                            emit(format_u64(rep.auto_restored_structures as u64, &mut b));
+                            emit("\nScore global résilience : ");
+                            emit(format_u64(rep.global_resilience_score as u64, &mut b));
+                            emit("/100\nSceau SHA-256           : [VALIDÉ] ");
+                            emit(if rep.verify_seal() {
+                                "AUTHENTIQUE\n"
+                            } else {
+                                "ALTÉRÉ (FAIL)\n"
+                            });
+                            (ShellStatus::Success, write_pos)
+                        }
+                        Err(_) => {
+                            emit("Erreur génération rapport de posture KDIR\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        }
+                    },
+                    "report-probe" => {
+                        if parsed.arg_count > 2 {
+                            let pid = parse_u64(parsed.args[2]).unwrap_or(0) as u32;
+                            match self.kdir.generate_probe_report(pid, 1735005000) {
+                                Ok(rep) => {
+                                    emit("=== RAPPORT SCELLÉ DE SONDE NOYAU (SHA-256) ===\n");
+                                    emit("Identifiant rapport : ");
+                                    emit(format_u64(rep.report_id as u64, &mut b));
+                                    emit("\nIdentifiant sonde   : #");
+                                    emit(format_u64(rep.probe_id as u64, &mut b));
+                                    emit("\nNom structure       : ");
+                                    emit(rep.name_str());
+                                    emit("\nType de structure   : ");
+                                    emit(rep.structure.as_str());
+                                    emit("\nAdresse de base     : ");
+                                    emit(format_hex_u64(rep.base_address, &mut b));
+                                    emit("\nTaille (octets)     : ");
+                                    emit(format_u64(rep.size_bytes as u64, &mut b));
+                                    emit("\nStatut d'intégrité  : ");
+                                    match rep.status {
+                                        jambo_kdir::IntegrityStatus::Intact => {
+                                            emit("Intact (Golden)")
+                                        }
+                                        jambo_kdir::IntegrityStatus::Tampered => emit("ALTÉRÉ"),
+                                        jambo_kdir::IntegrityStatus::Restoring => {
+                                            emit("En Restauration")
+                                        }
+                                        jambo_kdir::IntegrityStatus::Quarantined => {
+                                            emit("Quarantaine")
+                                        }
+                                    }
+                                    emit("\nNombre de violations: ");
+                                    emit(format_u64(rep.violation_count as u64, &mut b));
+                                    emit("\nSceau SHA-256       : [VALIDÉ] ");
+                                    emit(if rep.verify_seal() {
+                                        "AUTHENTIQUE\n"
+                                    } else {
+                                        "ALTÉRÉ (FAIL)\n"
+                                    });
+                                    (ShellStatus::Success, write_pos)
+                                }
+                                Err(_) => {
+                                    emit("Erreur génération rapport de sonde KDIR\n");
+                                    (ShellStatus::ExecutionFailed, write_pos)
+                                }
+                            }
+                        } else {
+                            emit("Usage: kdir report-probe <probe_id>\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        }
+                    }
+                    "report-remediation" => {
+                        match self.kdir.generate_remediation_report(1735006000) {
+                            Ok(rep) => {
+                                emit("=== RAPPORT SCELLÉ DE REMÉDIATION AUTONOME KDIR (SHA-256) ===\n");
+                                emit("Identifiant rapport       : ");
+                                emit(format_u64(rep.report_id as u64, &mut b));
+                                emit("\nStructures auto-restaurées: ");
+                                emit(format_u64(rep.restored_probes_count as u64, &mut b));
+                                emit("\nPilotes confinés / isolés : ");
+                                emit(format_u64(rep.isolated_drivers_count as u64, &mut b));
+                                emit("\nMenaces rootkit remédiées : ");
+                                emit(format_u64(rep.remediated_threats_count as u64, &mut b));
+                                emit("\nScore résilience avant    : ");
+                                emit(format_u64(rep.resilience_score_before as u64, &mut b));
+                                emit("/100\nScore résilience après    : ");
+                                emit(format_u64(rep.resilience_score_after as u64, &mut b));
+                                emit("/100\nSceau SHA-256             : [VALIDÉ] ");
+                                emit(if rep.verify_seal() {
+                                    "AUTHENTIQUE\n"
+                                } else {
+                                    "ALTÉRÉ (FAIL)\n"
+                                });
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("Erreur génération rapport de remédiation KDIR\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
                     "verify" => {
                         let valid = self.kdir.verify_ledger_integrity();
                         emit("Registre d'audit cryptographique SHA-256 KDIR: ");
@@ -17413,7 +17582,7 @@ impl JamboShell {
                         (ShellStatus::Success, write_pos)
                     }
                     _ => {
-                        emit("Usage: kdir [status | probes | drivers | threats | restore <probe_id> | isolate <driver_id> | verify]\n");
+                        emit("Usage: kdir [status | probes | drivers | threats | restore <probe_id> | isolate <driver_id> | remediate [id] | remediate-all | report-posture | report-probe <id> | report-remediation | verify]\n");
                         (ShellStatus::ExecutionFailed, write_pos)
                     }
                 }

@@ -1,5 +1,5 @@
 //! Module de validation formelle de la Cyber-Résilience & Intégrité Noyau/Pilotes (`jambo-kdir`)
-//! Phase 141 — Jalon v0.3.8
+//! Phase 171 — Jalon v0.3.38
 #![allow(unused_imports, dead_code)]
 
 extern crate alloc;
@@ -8,13 +8,14 @@ use crate::kprintln;
 use jambo_abi::Handle;
 use jambo_kdir::{
     kdir_rights, DriverEntry, DriverStatus, IntegrityStatus, JamboKdirDaemon, KdirCap, KdirError,
-    KdirSummary, KernelProbe, RootkitThreatType, Sha256, StructureType, ThreatSeverity,
+    KdirPostureReport, KdirProbeReport, KdirRemediationReport, KdirSummary, KernelProbe,
+    RootkitThreatType, Sha256, StructureType, ThreatSeverity,
 };
 
-/// Exécute la suite complète de validation formelle du moteur KDIR souverain (Phase 141)
+/// Exécute la suite complète de validation formelle du moteur KDIR souverain (Phase 171)
 pub fn execute_kdir_daemon_test() -> bool {
     kprintln!(
-        "[KDIR/TEST] Démarrage de la validation formelle Cyber-Résilience & Intégrité Noyau (Phase 141)..."
+        "[KDIR/TEST] Démarrage de la validation formelle Cyber-Résilience, Intégrité Noyau & Auto-Restauration O(1) (Phase 171)..."
     );
 
     // 1. Contrôle d'accès capabilaire (KdirCap) et atténuation monotone
@@ -27,20 +28,24 @@ pub fn execute_kdir_daemon_test() -> bool {
     assert!(admin_cap.has_right(kdir_rights::CONFIGURE_POLICY));
     assert!(admin_cap.has_right(kdir_rights::QUERY_AUDIT));
     assert!(admin_cap.has_right(kdir_rights::ADMIN));
+    assert!(admin_cap.has_right(kdir_rights::GENERATE_REPORT));
+    assert!(admin_cap.has_right(kdir_rights::REMEDIATE));
 
     // Atténuation monotone
     let monitor_cap = admin_cap
         .attenuate(
-            kdir_rights::VERIFY_INTEGRITY | kdir_rights::QUERY_AUDIT,
+            kdir_rights::VERIFY_INTEGRITY | kdir_rights::QUERY_AUDIT | kdir_rights::GENERATE_REPORT,
             5000,
             250,
         )
         .expect("Atténuation monotone KdirCap");
     assert!(monitor_cap.has_right(kdir_rights::VERIFY_INTEGRITY));
     assert!(monitor_cap.has_right(kdir_rights::QUERY_AUDIT));
+    assert!(monitor_cap.has_right(kdir_rights::GENERATE_REPORT));
     assert!(!monitor_cap.has_right(kdir_rights::ADMIN));
     assert!(!monitor_cap.has_right(kdir_rights::RESTORE_TABLE));
     assert!(!monitor_cap.has_right(kdir_rights::ISOLATE_DRIVER));
+    assert!(!monitor_cap.has_right(kdir_rights::REMEDIATE));
     assert_eq!(monitor_cap.max_lifetime, 5000);
     assert_eq!(monitor_cap.invocations_left, 250);
 
@@ -64,11 +69,12 @@ pub fn execute_kdir_daemon_test() -> bool {
     assert_eq!(summary0.tampered_count, 0);
     assert_eq!(summary0.drivers_count, 3);
     assert_eq!(summary0.isolated_drivers_count, 0);
+    assert_eq!(summary0.global_resilience_score, 100);
     assert!(summary0.ledger_valid);
 
     // 3. Enregistrement dynamique d'une sonde de texte noyau (.text)
     let text_golden = b"JAMBO_KERNEL_TEXT_SECTION_IMMUTABLE_CODE_HASH_2026";
-    let _text_probe_id = kdir
+    let text_probe_id = kdir
         .register_probe(
             "kernel_text_section",
             StructureType::KernelText,
@@ -106,8 +112,21 @@ pub fn execute_kdir_daemon_test() -> bool {
         kdir.threats[0].as_ref().unwrap().severity,
         ThreatSeverity::Critical
     );
+    assert!(summary1.global_resilience_score < 100);
 
-    // 6. Auto-restauration de l'IDT depuis le snapshot de référence
+    // 6. Génération et validation du rapport individuel de sonde scellé SHA-256
+    let probe_rep = kdir
+        .generate_probe_report(text_probe_id, 1735001250)
+        .expect("Rapport sonde");
+    assert!(probe_rep.verify_seal());
+    assert_eq!(probe_rep.name_str(), "kernel_text_section");
+
+    // Détection d'altération sur le rapport de sonde
+    let mut tampered_probe_rep = probe_rep;
+    tampered_probe_rep.size_bytes += 4096;
+    assert!(!tampered_probe_rep.verify_seal());
+
+    // 7. Auto-restauration chirurgicale de l'IDT depuis le snapshot de référence
     let mut restored_idt = [0u8; 128];
     let bytes_restored = kdir
         .auto_restore_structure(idt_probe_id, &mut restored_idt, 1735001300)
@@ -121,7 +140,7 @@ pub fn execute_kdir_daemon_test() -> bool {
     assert_eq!(summary2.remediated_threats, 1);
     assert!(kdir.threats[0].as_ref().unwrap().auto_restored);
 
-    // 7. Enregistrement d'un pilote non conforme et confinement instantané O(1)
+    // 8. Enregistrement d'un pilote non conforme et confinement instantané O(1)
     let rogue_sig = Sha256::digest(b"MALICIOUS_DRIVER_VMO_BYTECODE");
     let rogue_id = kdir
         .register_driver(
@@ -156,15 +175,46 @@ pub fn execute_kdir_daemon_test() -> bool {
         Err(KdirError::DriverAlreadyIsolated)
     );
 
-    // 8. Vérification de l'intégrité de la chaîne cryptographique SHA-256
+    // 9. Simulation d'une altération supplémentaire pour tester le playbook de remédiation globale
+    let gdt_probe_id = kdir.probes[1].as_ref().unwrap().probe_id;
+    let gdt_tampered = b"JAMBO_GDT_MALICIOUS_DESCRIPTOR_ROOTKIT_INJECTION";
+    let _ = kdir.verify_structure_integrity(gdt_probe_id, gdt_tampered, 1735001700);
+    assert_eq!(kdir.get_summary().tampered_count, 1);
+
+    // 10. Génération et vérification du rapport de posture global scellé SHA-256
+    let posture_rep = kdir
+        .generate_posture_report(1735001800)
+        .expect("Génération posture report");
+    assert!(posture_rep.verify_seal());
+
+    // Détection d'altération sur le rapport de posture
+    let mut tampered_posture = posture_rep;
+    tampered_posture.probes_count += 10;
+    assert!(!tampered_posture.verify_seal());
+
+    // 11. Exécution du playbook autonome de remédiation O(1) et rapport de remédiation scellé
+    let rem_rep = kdir
+        .generate_remediation_report(1735001900)
+        .expect("Rapport de remédiation globale");
+    assert!(rem_rep.verify_seal());
+    assert_eq!(rem_rep.restored_probes_count, 1);
+    assert_eq!(rem_rep.resilience_score_after, 95); // 100 - 5 (un pilote isolé)
+    assert!(rem_rep.resilience_score_after > rem_rep.resilience_score_before);
+
+    let summary_final = kdir.get_summary();
+    assert_eq!(summary_final.tampered_count, 0);
+    assert_eq!(summary_final.intact_count, 5);
+    assert_eq!(summary_final.remediated_threats, 2);
+
+    // 12. Vérification de l'intégrité de la chaîne cryptographique SHA-256
     assert!(
         kdir.verify_ledger_integrity(),
         "Le registre d'audit cryptographique KDIR doit être inviolé"
     );
-    assert!(kdir.audit_count >= 6);
+    assert!(kdir.audit_count >= 8);
 
     kprintln!(
-        "[KDIR/TEST] \x1b[1;32m[PASS]\x1b[0m Intégrité IDT/GDT/CR3/Syscall, auto-restauration, confinement pilote O(1) et registre SHA-256 validés avec succès!"
+        "[KDIR/TEST] \x1b[1;32m[PASS]\x1b[0m Intégrité IDT/GDT/CR3/Syscall, auto-restauration O(1), rapports scellés SHA-256 et registre validés avec succès!"
     );
 
     true

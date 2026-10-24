@@ -1,15 +1,17 @@
 //! Cyber-Résilience & Intégrité du Noyau et des Pilotes (KDIR - Kernel & Driver Integrity Resilience)
 //!
-//! Phase 141 — Jalon v0.3.8
+//! Phase 171 — Jalon v0.3.38
 //!
 //! Fournit un sous-système souverain de cyber-résilience et de contrôle d'intégrité noyau en `#![no_std]` :
 //! 1. Surveillance continue d'intégrité des structures critiques du noyau (IDT, GDT, tables CR3, dispatchers syscalls).
 //! 2. Détection en temps réel des altérations non autorisées et rootkits Ring 0 / hyperviseur (DKOM, hooks IDT/MSR).
 //! 3. Validation de signature cryptographique des pilotes et contrôle de capabilités VMO.
 //! 4. Confinement et isolation instantanée O(1) des pilotes défaillants ou corrompus.
-//! 5. Auto-restauration des tables système à partir des empreintes de référence (golden snapshot).
-//! 6. Contrôle d'accès capabilaire (`KdirCap`) avec atténuation monotone stricte.
-//! 7. Registre d'audit SHA-256 inaltérable scellé par chaînage cryptographique.
+//! 5. Auto-restauration des tables système à partir des empreintes de référence (golden snapshot) O(1).
+//! 6. Playbooks de remédiation proactive globale O(1) et assainissement des structures compromises.
+//! 7. Rapports de cyber-résilience scellés SHA-256 (`KdirPostureReport`, `KdirProbeReport`, `KdirRemediationReport`).
+//! 8. Contrôle d'accès capabilaire (`KdirCap`) avec atténuation monotone stricte sans autorité ambiante.
+//! 9. Registre d'audit SHA-256 inaltérable scellé par chaînage cryptographique.
 
 #![no_std]
 
@@ -190,7 +192,9 @@ pub mod kdir_rights {
     pub const CONFIGURE_POLICY: u32 = 1 << 5;
     pub const QUERY_AUDIT: u32 = 1 << 6;
     pub const ADMIN: u32 = 1 << 7;
-    pub const ALL: u32 = 0xFF;
+    pub const GENERATE_REPORT: u32 = 1 << 8;
+    pub const REMEDIATE: u32 = 1 << 9;
+    pub const ALL: u32 = 0x3FF;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -361,6 +365,9 @@ pub enum AuditEventType {
     DriverRegistered,
     DriverIsolated,
     CapAttenuated,
+    ThreatRemediated,
+    RemediationPlaybookExecuted,
+    PostureReportGenerated,
 }
 
 // ============================================================================
@@ -385,6 +392,12 @@ pub struct KernelProbe {
     pub golden_backup_len: usize,
 }
 
+impl KernelProbe {
+    pub fn name_str(&self) -> &str {
+        core::str::from_utf8(&self.name[..self.name_len]).unwrap_or("<invalide>")
+    }
+}
+
 /// Métadonnées et statut d'un pilote supervisé
 #[derive(Debug, Clone, Copy)]
 pub struct DriverEntry {
@@ -398,6 +411,12 @@ pub struct DriverEntry {
     pub status: DriverStatus,
     pub capabilities_mask: u32,
     pub fault_count: u32,
+}
+
+impl DriverEntry {
+    pub fn name_str(&self) -> &str {
+        core::str::from_utf8(&self.name[..self.name_len]).unwrap_or("<invalide>")
+    }
 }
 
 /// Menace détectée sur les structures de bas niveau
@@ -437,6 +456,133 @@ pub struct KdirSummary {
     pub remediated_threats: usize,
     pub ledger_entries: usize,
     pub ledger_valid: bool,
+    pub global_resilience_score: u8,
+}
+
+// ============================================================================
+// RAPPORTS DE CYBER-RÉSILLIENCE SCELLÉS SHA-256
+// ============================================================================
+
+/// Rapport global de posture de cyber-résilience du noyau et des pilotes scellé SHA-256
+#[derive(Debug, Clone, Copy)]
+pub struct KdirPostureReport {
+    pub report_id: u32,
+    pub timestamp: u64,
+    pub probes_count: usize,
+    pub intact_count: usize,
+    pub tampered_count: usize,
+    pub drivers_count: usize,
+    pub trusted_drivers_count: usize,
+    pub isolated_drivers_count: usize,
+    pub threats_detected: usize,
+    pub remediated_threats: usize,
+    pub auto_restored_structures: usize,
+    pub global_resilience_score: u8,
+    pub ledger_entries: usize,
+    pub ledger_valid: bool,
+    pub seal_hash: [u8; 32],
+}
+
+impl KdirPostureReport {
+    pub fn compute_seal(&self) -> [u8; 32] {
+        let mut hasher = Sha256::new();
+        hasher.update(&self.report_id.to_be_bytes());
+        hasher.update(&self.timestamp.to_be_bytes());
+        hasher.update(&(self.probes_count as u64).to_be_bytes());
+        hasher.update(&(self.intact_count as u64).to_be_bytes());
+        hasher.update(&(self.tampered_count as u64).to_be_bytes());
+        hasher.update(&(self.drivers_count as u64).to_be_bytes());
+        hasher.update(&(self.trusted_drivers_count as u64).to_be_bytes());
+        hasher.update(&(self.isolated_drivers_count as u64).to_be_bytes());
+        hasher.update(&(self.threats_detected as u64).to_be_bytes());
+        hasher.update(&(self.remediated_threats as u64).to_be_bytes());
+        hasher.update(&(self.auto_restored_structures as u64).to_be_bytes());
+        hasher.update(&[self.global_resilience_score]);
+        hasher.update(&(self.ledger_entries as u64).to_be_bytes());
+        hasher.update(&[if self.ledger_valid { 1u8 } else { 0u8 }]);
+        hasher.finalize()
+    }
+
+    pub fn verify_seal(&self) -> bool {
+        self.seal_hash == self.compute_seal()
+    }
+}
+
+/// Rapport individuel d'intégrité sur une sonde spécifique scellé SHA-256
+#[derive(Debug, Clone, Copy)]
+pub struct KdirProbeReport {
+    pub report_id: u32,
+    pub timestamp: u64,
+    pub probe_id: u32,
+    pub name: [u8; 32],
+    pub name_len: usize,
+    pub structure: StructureType,
+    pub base_address: u64,
+    pub size_bytes: usize,
+    pub status: IntegrityStatus,
+    pub violation_count: u32,
+    pub last_checked_timestamp: u64,
+    pub golden_hash: [u8; 32],
+    pub current_hash: [u8; 32],
+    pub seal_hash: [u8; 32],
+}
+
+impl KdirProbeReport {
+    pub fn name_str(&self) -> &str {
+        core::str::from_utf8(&self.name[..self.name_len]).unwrap_or("<invalide>")
+    }
+
+    pub fn compute_seal(&self) -> [u8; 32] {
+        let mut hasher = Sha256::new();
+        hasher.update(&self.report_id.to_be_bytes());
+        hasher.update(&self.timestamp.to_be_bytes());
+        hasher.update(&self.probe_id.to_be_bytes());
+        hasher.update(&self.name[..self.name_len]);
+        hasher.update(&(self.structure as u32).to_be_bytes());
+        hasher.update(&self.base_address.to_be_bytes());
+        hasher.update(&(self.size_bytes as u64).to_be_bytes());
+        hasher.update(&(self.status as u32).to_be_bytes());
+        hasher.update(&self.violation_count.to_be_bytes());
+        hasher.update(&self.last_checked_timestamp.to_be_bytes());
+        hasher.update(&self.golden_hash);
+        hasher.update(&self.current_hash);
+        hasher.finalize()
+    }
+
+    pub fn verify_seal(&self) -> bool {
+        self.seal_hash == self.compute_seal()
+    }
+}
+
+/// Rapport scellé de remédiation et d'auto-restauration O(1) SHA-256
+#[derive(Debug, Clone, Copy)]
+pub struct KdirRemediationReport {
+    pub report_id: u32,
+    pub timestamp: u64,
+    pub restored_probes_count: usize,
+    pub isolated_drivers_count: usize,
+    pub remediated_threats_count: usize,
+    pub resilience_score_before: u8,
+    pub resilience_score_after: u8,
+    pub seal_hash: [u8; 32],
+}
+
+impl KdirRemediationReport {
+    pub fn compute_seal(&self) -> [u8; 32] {
+        let mut hasher = Sha256::new();
+        hasher.update(&self.report_id.to_be_bytes());
+        hasher.update(&self.timestamp.to_be_bytes());
+        hasher.update(&(self.restored_probes_count as u64).to_be_bytes());
+        hasher.update(&(self.isolated_drivers_count as u64).to_be_bytes());
+        hasher.update(&(self.remediated_threats_count as u64).to_be_bytes());
+        hasher.update(&[self.resilience_score_before]);
+        hasher.update(&[self.resilience_score_after]);
+        hasher.finalize()
+    }
+
+    pub fn verify_seal(&self) -> bool {
+        self.seal_hash == self.compute_seal()
+    }
 }
 
 // ============================================================================
@@ -745,7 +891,7 @@ impl JamboKdirDaemon {
         Ok(is_intact)
     }
 
-    /// Restaure automatiquement une structure altérée à partir de son snapshot de référence (golden backup)
+    /// Restaure automatiquement une structure altérée à partir de son snapshot de référence (golden backup) O(1)
     pub fn auto_restore_structure(
         &mut self,
         probe_id: u32,
@@ -821,6 +967,415 @@ impl JamboKdirDaemon {
         Ok(())
     }
 
+    /// Remédie chirurgicalement à une menace spécifique O(1)
+    pub fn remediate_threat(&mut self, threat_id: u32, timestamp: u64) -> Result<(), KdirError> {
+        if !self.cap.has_right(kdir_rights::REMEDIATE)
+            && !self.cap.has_right(kdir_rights::RESTORE_TABLE)
+            && !self.cap.has_right(kdir_rights::ADMIN)
+        {
+            return Err(KdirError::PermissionDenied);
+        }
+        self.cap.consume_invocation()?;
+
+        let threat_idx = self
+            .threats
+            .iter()
+            .position(|t| t.as_ref().map(|x| x.threat_id) == Some(threat_id))
+            .ok_or(KdirError::ProbeNotFound)?;
+
+        let (probe_id, remediated) = {
+            let t = self.threats[threat_idx].as_ref().unwrap();
+            (t.probe_id, t.remediated)
+        };
+
+        if !remediated {
+            // Auto-restauration de la structure liée
+            if let Some(probe) = self
+                .probes
+                .iter_mut()
+                .flatten()
+                .find(|p| p.probe_id == probe_id)
+            {
+                probe.current_hash = probe.golden_hash;
+                probe.status = IntegrityStatus::Intact;
+            }
+
+            if let Some(t) = self.threats[threat_idx].as_mut() {
+                t.remediated = true;
+                t.auto_restored = true;
+            }
+
+            self.append_audit_entry(
+                AuditEventType::ThreatRemediated,
+                "Threat neutralized and structure restored",
+                timestamp,
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Exécute le playbook souverain de remédiation autonome globale O(1)
+    pub fn remediate_all_threats(&mut self, timestamp: u64) -> Result<usize, KdirError> {
+        if !self.cap.has_right(kdir_rights::REMEDIATE)
+            && !self.cap.has_right(kdir_rights::RESTORE_TABLE)
+            && !self.cap.has_right(kdir_rights::ADMIN)
+        {
+            return Err(KdirError::PermissionDenied);
+        }
+        self.cap.consume_invocation()?;
+
+        let mut actions_count = 0usize;
+
+        // 1. Restaure automatiquement toutes les sondes altérées vers leur Golden Snapshot
+        for probe in self.probes.iter_mut().flatten() {
+            if probe.status == IntegrityStatus::Tampered {
+                probe.current_hash = probe.golden_hash;
+                probe.status = IntegrityStatus::Intact;
+                actions_count += 1;
+            }
+        }
+
+        // 2. Isole instantanément tous les pilotes compromis
+        for driver in self.drivers.iter_mut().flatten() {
+            if driver.status == DriverStatus::Compromised {
+                driver.status = DriverStatus::Isolated;
+                driver.capabilities_mask = 0;
+                actions_count += 1;
+            }
+        }
+
+        // 3. Clôture et auto-restaure toutes les menaces ouvertes
+        for threat in self.threats.iter_mut().flatten() {
+            if !threat.remediated {
+                threat.remediated = true;
+                threat.auto_restored = true;
+                actions_count += 1;
+            }
+        }
+
+        self.append_audit_entry(
+            AuditEventType::RemediationPlaybookExecuted,
+            "Global O(1) remediation playbook completed",
+            timestamp,
+        );
+
+        Ok(actions_count)
+    }
+
+    /// Génère un rapport global de posture de cyber-résilience scellé SHA-256
+    pub fn generate_posture_report(
+        &mut self,
+        timestamp: u64,
+    ) -> Result<KdirPostureReport, KdirError> {
+        if !self.cap.has_right(kdir_rights::GENERATE_REPORT)
+            && !self.cap.has_right(kdir_rights::QUERY_AUDIT)
+            && !self.cap.has_right(kdir_rights::ADMIN)
+        {
+            return Err(KdirError::PermissionDenied);
+        }
+        self.cap.consume_invocation()?;
+
+        let summary = self.get_summary();
+        let mut trusted_drivers = 0;
+        for d in self.drivers.iter().flatten() {
+            if d.status == DriverStatus::Trusted {
+                trusted_drivers += 1;
+            }
+        }
+
+        let mut restored_count = 0;
+        for t in self.threats.iter().flatten() {
+            if t.auto_restored {
+                restored_count += 1;
+            }
+        }
+
+        let report_id = ((timestamp ^ 0x4B44_4952) & 0xFFFF_FFFF) as u32;
+        let mut rep = KdirPostureReport {
+            report_id,
+            timestamp,
+            probes_count: summary.probes_count,
+            intact_count: summary.intact_count,
+            tampered_count: summary.tampered_count,
+            drivers_count: summary.drivers_count,
+            trusted_drivers_count: trusted_drivers,
+            isolated_drivers_count: summary.isolated_drivers_count,
+            threats_detected: summary.threats_detected,
+            remediated_threats: summary.remediated_threats,
+            auto_restored_structures: restored_count,
+            global_resilience_score: summary.global_resilience_score,
+            ledger_entries: summary.ledger_entries,
+            ledger_valid: summary.ledger_valid,
+            seal_hash: [0u8; 32],
+        };
+        rep.seal_hash = rep.compute_seal();
+
+        self.append_audit_entry(
+            AuditEventType::PostureReportGenerated,
+            "KDIR posture report generated and sealed",
+            timestamp,
+        );
+
+        Ok(rep)
+    }
+
+    /// Génère un rapport individuel d'intégrité de structure scellé SHA-256
+    pub fn generate_probe_report(
+        &mut self,
+        probe_id: u32,
+        timestamp: u64,
+    ) -> Result<KdirProbeReport, KdirError> {
+        if !self.cap.has_right(kdir_rights::GENERATE_REPORT)
+            && !self.cap.has_right(kdir_rights::QUERY_AUDIT)
+            && !self.cap.has_right(kdir_rights::ADMIN)
+        {
+            return Err(KdirError::PermissionDenied);
+        }
+        self.cap.consume_invocation()?;
+
+        let probe = self
+            .probes
+            .iter()
+            .flatten()
+            .find(|p| p.probe_id == probe_id)
+            .ok_or(KdirError::ProbeNotFound)?;
+
+        let report_id = (((timestamp ^ (probe_id as u64)) * 37) & 0xFFFF_FFFF) as u32;
+        let mut rep = KdirProbeReport {
+            report_id,
+            timestamp,
+            probe_id: probe.probe_id,
+            name: probe.name,
+            name_len: probe.name_len,
+            structure: probe.structure,
+            base_address: probe.base_address,
+            size_bytes: probe.size_bytes,
+            status: probe.status,
+            violation_count: probe.violation_count,
+            last_checked_timestamp: probe.last_checked_timestamp,
+            golden_hash: probe.golden_hash,
+            current_hash: probe.current_hash,
+            seal_hash: [0u8; 32],
+        };
+        rep.seal_hash = rep.compute_seal();
+        Ok(rep)
+    }
+
+    /// Exécute la remédiation globale et génère le rapport scellé SHA-256
+    pub fn generate_remediation_report(
+        &mut self,
+        timestamp: u64,
+    ) -> Result<KdirRemediationReport, KdirError> {
+        if !self.cap.has_right(kdir_rights::REMEDIATE)
+            && !self.cap.has_right(kdir_rights::RESTORE_TABLE)
+            && !self.cap.has_right(kdir_rights::ADMIN)
+        {
+            return Err(KdirError::PermissionDenied);
+        }
+
+        let score_before = self.calculate_resilience_score();
+
+        let mut tampered_count = 0;
+        for p in self.probes.iter().flatten() {
+            if p.status == IntegrityStatus::Tampered {
+                tampered_count += 1;
+            }
+        }
+
+        let _ = self.remediate_all_threats(timestamp)?;
+
+        let score_after = self.calculate_resilience_score();
+        let summary = self.get_summary();
+
+        let report_id = ((timestamp ^ 0xDEAD_BEEF) & 0xFFFF_FFFF) as u32;
+        let mut rep = KdirRemediationReport {
+            report_id,
+            timestamp,
+            restored_probes_count: tampered_count,
+            isolated_drivers_count: summary.isolated_drivers_count,
+            remediated_threats_count: summary.remediated_threats,
+            resilience_score_before: score_before,
+            resilience_score_after: score_after,
+            seal_hash: [0u8; 32],
+        };
+        rep.seal_hash = rep.compute_seal();
+        Ok(rep)
+    }
+
+    // Variantes avec capabilité transmise explicitement
+    pub fn generate_posture_report_with_cap(
+        &self,
+        cap: &KdirCap,
+        timestamp: u64,
+    ) -> Result<KdirPostureReport, KdirError> {
+        if !cap.has_right(kdir_rights::GENERATE_REPORT)
+            && !cap.has_right(kdir_rights::QUERY_AUDIT)
+            && !cap.has_right(kdir_rights::ADMIN)
+        {
+            return Err(KdirError::PermissionDenied);
+        }
+
+        let summary = self.get_summary();
+        let mut trusted_drivers = 0;
+        for d in self.drivers.iter().flatten() {
+            if d.status == DriverStatus::Trusted {
+                trusted_drivers += 1;
+            }
+        }
+
+        let mut restored_count = 0;
+        for t in self.threats.iter().flatten() {
+            if t.auto_restored {
+                restored_count += 1;
+            }
+        }
+
+        let report_id = ((timestamp ^ 0x4B44_4952) & 0xFFFF_FFFF) as u32;
+        let mut rep = KdirPostureReport {
+            report_id,
+            timestamp,
+            probes_count: summary.probes_count,
+            intact_count: summary.intact_count,
+            tampered_count: summary.tampered_count,
+            drivers_count: summary.drivers_count,
+            trusted_drivers_count: trusted_drivers,
+            isolated_drivers_count: summary.isolated_drivers_count,
+            threats_detected: summary.threats_detected,
+            remediated_threats: summary.remediated_threats,
+            auto_restored_structures: restored_count,
+            global_resilience_score: summary.global_resilience_score,
+            ledger_entries: summary.ledger_entries,
+            ledger_valid: summary.ledger_valid,
+            seal_hash: [0u8; 32],
+        };
+        rep.seal_hash = rep.compute_seal();
+        Ok(rep)
+    }
+
+    pub fn generate_probe_report_with_cap(
+        &self,
+        cap: &KdirCap,
+        probe_id: u32,
+        timestamp: u64,
+    ) -> Result<KdirProbeReport, KdirError> {
+        if !cap.has_right(kdir_rights::GENERATE_REPORT)
+            && !cap.has_right(kdir_rights::QUERY_AUDIT)
+            && !cap.has_right(kdir_rights::ADMIN)
+        {
+            return Err(KdirError::PermissionDenied);
+        }
+
+        let probe = self
+            .probes
+            .iter()
+            .flatten()
+            .find(|p| p.probe_id == probe_id)
+            .ok_or(KdirError::ProbeNotFound)?;
+
+        let report_id = (((timestamp ^ (probe_id as u64)) * 37) & 0xFFFF_FFFF) as u32;
+        let mut rep = KdirProbeReport {
+            report_id,
+            timestamp,
+            probe_id: probe.probe_id,
+            name: probe.name,
+            name_len: probe.name_len,
+            structure: probe.structure,
+            base_address: probe.base_address,
+            size_bytes: probe.size_bytes,
+            status: probe.status,
+            violation_count: probe.violation_count,
+            last_checked_timestamp: probe.last_checked_timestamp,
+            golden_hash: probe.golden_hash,
+            current_hash: probe.current_hash,
+            seal_hash: [0u8; 32],
+        };
+        rep.seal_hash = rep.compute_seal();
+        Ok(rep)
+    }
+
+    pub fn remediate_all_threats_with_cap(
+        &mut self,
+        cap: &mut KdirCap,
+        timestamp: u64,
+    ) -> Result<usize, KdirError> {
+        if !cap.has_right(kdir_rights::REMEDIATE)
+            && !cap.has_right(kdir_rights::RESTORE_TABLE)
+            && !cap.has_right(kdir_rights::ADMIN)
+        {
+            return Err(KdirError::PermissionDenied);
+        }
+        cap.consume_invocation()?;
+
+        let mut actions_count = 0usize;
+        for probe in self.probes.iter_mut().flatten() {
+            if probe.status == IntegrityStatus::Tampered {
+                probe.current_hash = probe.golden_hash;
+                probe.status = IntegrityStatus::Intact;
+                actions_count += 1;
+            }
+        }
+        for driver in self.drivers.iter_mut().flatten() {
+            if driver.status == DriverStatus::Compromised {
+                driver.status = DriverStatus::Isolated;
+                driver.capabilities_mask = 0;
+                actions_count += 1;
+            }
+        }
+        for threat in self.threats.iter_mut().flatten() {
+            if !threat.remediated {
+                threat.remediated = true;
+                threat.auto_restored = true;
+                actions_count += 1;
+            }
+        }
+        self.append_audit_entry(
+            AuditEventType::RemediationPlaybookExecuted,
+            "Global O(1) remediation playbook completed",
+            timestamp,
+        );
+        Ok(actions_count)
+    }
+
+    pub fn generate_remediation_report_with_cap(
+        &mut self,
+        cap: &mut KdirCap,
+        timestamp: u64,
+    ) -> Result<KdirRemediationReport, KdirError> {
+        if !cap.has_right(kdir_rights::REMEDIATE)
+            && !cap.has_right(kdir_rights::RESTORE_TABLE)
+            && !cap.has_right(kdir_rights::ADMIN)
+        {
+            return Err(KdirError::PermissionDenied);
+        }
+
+        let score_before = self.calculate_resilience_score();
+        let mut tampered_count = 0;
+        for p in self.probes.iter().flatten() {
+            if p.status == IntegrityStatus::Tampered {
+                tampered_count += 1;
+            }
+        }
+
+        let _ = self.remediate_all_threats_with_cap(cap, timestamp)?;
+        let score_after = self.calculate_resilience_score();
+        let summary = self.get_summary();
+
+        let report_id = ((timestamp ^ 0xDEAD_BEEF) & 0xFFFF_FFFF) as u32;
+        let mut rep = KdirRemediationReport {
+            report_id,
+            timestamp,
+            restored_probes_count: tampered_count,
+            isolated_drivers_count: summary.isolated_drivers_count,
+            remediated_threats_count: summary.remediated_threats,
+            resilience_score_before: score_before,
+            resilience_score_after: score_after,
+            seal_hash: [0u8; 32],
+        };
+        rep.seal_hash = rep.compute_seal();
+        Ok(rep)
+    }
+
     /// Enregistre une détection de menace / rootkit
     fn record_threat(
         &mut self,
@@ -855,6 +1410,45 @@ impl JamboKdirDaemon {
                 break;
             }
         }
+    }
+
+    /// Calcule déterministement le score de cyber-résilience globale (0..100)
+    pub fn calculate_resilience_score(&self) -> u8 {
+        let mut score: i32 = 100;
+
+        let mut tampered = 0;
+        for p in self.probes.iter().flatten() {
+            if p.status == IntegrityStatus::Tampered {
+                tampered += 1;
+            }
+        }
+        score -= (tampered as i32) * 20;
+
+        let mut isolated = 0;
+        let mut compromised = 0;
+        for d in self.drivers.iter().flatten() {
+            if d.status == DriverStatus::Isolated {
+                isolated += 1;
+            } else if d.status == DriverStatus::Compromised {
+                compromised += 1;
+            }
+        }
+        score -= (compromised as i32) * 15;
+        score -= (isolated as i32) * 5;
+
+        let mut pending_threats = 0;
+        for t in self.threats.iter().flatten() {
+            if !t.remediated {
+                pending_threats += 1;
+            }
+        }
+        score -= (pending_threats as i32) * 10;
+
+        if !self.verify_ledger_integrity() {
+            score -= 50;
+        }
+
+        score.clamp(0, 100) as u8
     }
 
     /// Ajoute une entrée dans le journal d'audit cryptographique scellé par SHA-256
@@ -970,6 +1564,7 @@ impl JamboKdirDaemon {
             remediated_threats: remediated,
             ledger_entries: self.audit_count,
             ledger_valid: self.verify_ledger_integrity(),
+            global_resilience_score: self.calculate_resilience_score(),
         }
     }
 }
@@ -988,11 +1583,15 @@ mod tests {
         assert!(admin_cap.has_right(kdir_rights::REGISTER_PROBE));
         assert!(admin_cap.has_right(kdir_rights::RESTORE_TABLE));
         assert!(admin_cap.has_right(kdir_rights::ISOLATE_DRIVER));
+        assert!(admin_cap.has_right(kdir_rights::GENERATE_REPORT));
+        assert!(admin_cap.has_right(kdir_rights::REMEDIATE));
 
         // Atténuation monotone
         let readonly_cap = admin_cap
             .attenuate(
-                kdir_rights::VERIFY_INTEGRITY | kdir_rights::QUERY_AUDIT,
+                kdir_rights::VERIFY_INTEGRITY
+                    | kdir_rights::QUERY_AUDIT
+                    | kdir_rights::GENERATE_REPORT,
                 5000,
                 100,
             )
@@ -1000,8 +1599,10 @@ mod tests {
 
         assert!(readonly_cap.has_right(kdir_rights::VERIFY_INTEGRITY));
         assert!(readonly_cap.has_right(kdir_rights::QUERY_AUDIT));
+        assert!(readonly_cap.has_right(kdir_rights::GENERATE_REPORT));
         assert!(!readonly_cap.has_right(kdir_rights::RESTORE_TABLE));
         assert!(!readonly_cap.has_right(kdir_rights::ISOLATE_DRIVER));
+        assert!(!readonly_cap.has_right(kdir_rights::REMEDIATE));
 
         // Rejet d'élévation de privilèges
         assert_eq!(
@@ -1025,6 +1626,7 @@ mod tests {
         assert_eq!(summary.intact_count, 4);
         assert_eq!(summary.tampered_count, 0);
         assert_eq!(summary.drivers_count, 3);
+        assert_eq!(summary.global_resilience_score, 100);
         assert!(summary.ledger_valid);
     }
 
@@ -1061,6 +1663,7 @@ mod tests {
             daemon.threats[0].as_ref().unwrap().severity,
             ThreatSeverity::Critical
         );
+        assert!(summary.global_resilience_score < 100);
     }
 
     #[test]
@@ -1096,6 +1699,7 @@ mod tests {
         assert_eq!(summary.tampered_count, 0);
         assert_eq!(summary.remediated_threats, 1);
         assert!(daemon.threats[0].as_ref().unwrap().auto_restored);
+        assert_eq!(summary.global_resilience_score, 100);
     }
 
     #[test]
@@ -1141,6 +1745,79 @@ mod tests {
             daemon.isolate_driver(rogue_id, 1735000700),
             Err(KdirError::DriverAlreadyIsolated)
         );
+    }
+
+    #[test]
+    fn test_posture_report_sealing_and_verification() {
+        let cap = KdirCap::new(Handle::new(141, 1), kdir_rights::ALL, 10000, 500);
+        let mut daemon = JamboKdirDaemon::new(cap);
+        daemon.init_defaults();
+
+        let report = daemon
+            .generate_posture_report(1735000800)
+            .expect("Génération posture report");
+        assert!(report.verify_seal());
+        assert_eq!(report.probes_count, 4);
+        assert_eq!(report.intact_count, 4);
+        assert_eq!(report.tampered_count, 0);
+
+        // Altération d'un champ -> brise le sceau
+        let mut tampered = report;
+        tampered.tampered_count = 99;
+        assert!(!tampered.verify_seal());
+    }
+
+    #[test]
+    fn test_probe_report_sealing_and_verification() {
+        let cap = KdirCap::new(Handle::new(141, 1), kdir_rights::ALL, 10000, 500);
+        let mut daemon = JamboKdirDaemon::new(cap);
+        daemon.init_defaults();
+
+        let idt_id = daemon.probes[0].as_ref().unwrap().probe_id;
+        let rep = daemon
+            .generate_probe_report(idt_id, 1735000900)
+            .expect("Rapport sonde IDT");
+        assert_eq!(rep.probe_id, idt_id);
+        assert_eq!(rep.name_str(), "kernel_idt_table");
+        assert!(rep.verify_seal());
+
+        let mut tampered = rep;
+        tampered.violation_count += 1;
+        assert!(!tampered.verify_seal());
+    }
+
+    #[test]
+    fn test_remediation_playbook_and_report() {
+        let cap = KdirCap::new(Handle::new(141, 1), kdir_rights::ALL, 10000, 500);
+        let mut daemon = JamboKdirDaemon::new(cap);
+        daemon.init_defaults();
+
+        let idt_id = daemon.probes[0].as_ref().unwrap().probe_id;
+        let idt_tampered = b"JAMBO_IDT_CORRUPTED_VECTOR_FOR_TEST";
+
+        // Détection de l'altération
+        let valid = daemon
+            .verify_structure_integrity(idt_id, idt_tampered, 1735001000)
+            .unwrap();
+        assert!(!valid);
+
+        let score_before = daemon.calculate_resilience_score();
+        assert!(score_before < 100);
+
+        // Exécution du playbook global de remédiation
+        let rem_rep = daemon
+            .generate_remediation_report(1735001100)
+            .expect("Rapport remédiation");
+        assert!(rem_rep.verify_seal());
+        assert_eq!(rem_rep.restored_probes_count, 1);
+        assert_eq!(rem_rep.remediated_threats_count, 1);
+        assert_eq!(rem_rep.resilience_score_after, 100);
+        assert!(rem_rep.resilience_score_after > rem_rep.resilience_score_before);
+
+        let summary = daemon.get_summary();
+        assert_eq!(summary.tampered_count, 0);
+        assert_eq!(summary.intact_count, 4);
+        assert_eq!(summary.remediated_threats, 1);
     }
 
     #[test]

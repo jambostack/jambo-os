@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.3.37-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.3.38-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.3.37 (Sécurité Applicative Dynamique RASP Souverain, Détection d'Attaques en Vol, CFI & Neutralisation O(1) jambo-appsec)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.3.37` introduit la modernisation et la souveraineté complète de la Sécurité Applicative Dynamique RASP (`services/jambo-appsec`) : moteur souverain RASP `#![no_std]` de surveillance continue des microservices Ring 3 (canaris mémoire, intégrité Shadow Stack), détection en temps réel des détournements de flux de contrôle (CFI, ROP/JOP), détection et neutralisation des injections de charges utiles malveillantes et désérialisations non sécurisées, playbooks d'atténuation proactive O(1) et neutralisation instantanée des menaces (`remediate_all_threats`), rapports de posture (`AppSecPostureReport`), de cible (`AppSecTargetReport`) et de remédiation (`AppSecRemediationReport`) scellés SHA-256 avec validation formelle et détection d'altération, intégration shell interactif `jsh` (`services/jambo-sh`), contrôle capabilaire strict `AppSecCap` sans autorité ambiante avec atténuation monotone et registre d'audit cryptographique SHA-256 inaltérable.
+> **Statut du Projet : Version v0.3.38 (Cyber-Résilience & Intégrité Noyau / Pilotes KDIR Souverain, Détection Rootkits & Auto-Restauration O(1) jambo-kdir)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.3.38` introduit la modernisation et la souveraineté complète de la Cyber-Résilience et Intégrité Noyau & Pilotes (`services/jambo-kdir`) : moteur souverain KDIR `#![no_std]` de surveillance continue des structures critiques du micro-noyau (IDT, GDT, tables de pages CR3, dispatchers MSR LSTAR, sections .text), détection en temps réel des altérations mémoires et rootkits Ring 0 (DKOM, hooks IDT, hijack syscalls), validation de signature cryptographique des pilotes VMO et confinement immédiat O(1), playbooks d'auto-restauration O(1) depuis les Golden Snapshots de référence (`remediate_all_threats`), calcul déterministe de l'indice de cyber-résilience globale (0..100), rapports de posture (`KdirPostureReport`), de sonde (`KdirProbeReport`) et de remédiation (`KdirRemediationReport`) scellés SHA-256 avec validation formelle et détection d'altération, intégration shell interactif `jsh` (`services/jambo-sh`), contrôle capabilaire strict `KdirCap` sans autorité ambiante avec atténuation monotone et registre d'audit cryptographique SHA-256 inaltérable.
 
 ---
 
