@@ -1301,7 +1301,7 @@ pub extern "C" fn _start() -> ! {
         "Échec du test de gestion de la posture des données jambo-dspm"
     );
 
-    // 21viciesquadragies. Validation de la Posture de Sécurité des Services & SaaS SSPM (Phase 136 - v0.3.3)
+    // 21viciesquadragies. Validation de la Posture de Sécurité des Services & SaaS SSPM (Phase 166 - v0.3.33)
     let sspm_success = sched::sspm_test::execute_sspm_daemon_test();
     assert!(
         sspm_success,
@@ -1814,14 +1814,17 @@ pub extern "C" fn _start() -> ! {
     kprintln!(
         "\x1b[1;32m[PASS] Phase 165 Sovereign Data Security Posture Management DSPM & Regulatory Compliance (jambo-dspm) Complete\x1b[0m"
     );
+    kprintln!(
+        "\x1b[1;32m[PASS] Phase 166 Sovereign SaaS Security Posture Management SSPM & Autonomous Drift Remediation (jambo-sspm) Complete\x1b[0m"
+    );
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.3.32 (Sovereign Data Security Posture Management DSPM jambo-dspm)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.3.33 (Sovereign SaaS Security Posture Management SSPM jambo-sspm)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.3.31 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.3.32 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );

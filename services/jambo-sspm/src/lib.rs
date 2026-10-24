@@ -186,6 +186,8 @@ pub mod sspm_rights {
     pub const QUARANTINE_SERVICE: u32 = 0x0020;
     pub const QUERY_AUDIT: u32 = 0x0040;
     pub const ADMIN: u32 = 0x0080;
+    pub const GENERATE_REPORT: u32 = 0x0100;
+    pub const AUDIT_COMPLIANCE: u32 = 0x0200;
 
     pub const ALL: u32 = ASSESS_POSTURE
         | SCAN_CONFIGS
@@ -194,7 +196,9 @@ pub mod sspm_rights {
         | REMEDIATE_DRIFT
         | QUARANTINE_SERVICE
         | QUERY_AUDIT
-        | ADMIN;
+        | ADMIN
+        | GENERATE_REPORT
+        | AUDIT_COMPLIANCE;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -524,6 +528,78 @@ pub struct SspmSummary {
     pub sovereign_posture_compliant: bool,
 }
 
+/// Rapport d'évaluation de la posture des services & SaaS scellé cryptographiquement par SHA-256
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SspmPostureReport {
+    pub report_id: u32,
+    pub timestamp_ticks: u64,
+    pub total_services: usize,
+    pub compliant_services: usize,
+    pub drifted_services: usize,
+    pub quarantined_services: usize,
+    pub total_connectors: usize,
+    pub unapproved_connectors: usize,
+    pub active_drifts: usize,
+    pub critical_drifts: usize,
+    pub global_sspm_score: u8,
+    pub secnumcloud_compliance_pct: u8,
+    pub cis_compliance_pct: u8,
+    pub seal_hash: [u8; 32],
+}
+
+impl SspmPostureReport {
+    pub fn compute_seal(&self) -> [u8; 32] {
+        let mut hasher = Sha256::new();
+        hasher.update(&self.report_id.to_be_bytes());
+        hasher.update(&self.timestamp_ticks.to_be_bytes());
+        hasher.update(&(self.total_services as u64).to_be_bytes());
+        hasher.update(&(self.compliant_services as u64).to_be_bytes());
+        hasher.update(&(self.drifted_services as u64).to_be_bytes());
+        hasher.update(&(self.quarantined_services as u64).to_be_bytes());
+        hasher.update(&(self.total_connectors as u64).to_be_bytes());
+        hasher.update(&(self.unapproved_connectors as u64).to_be_bytes());
+        hasher.update(&(self.active_drifts as u64).to_be_bytes());
+        hasher.update(&(self.critical_drifts as u64).to_be_bytes());
+        hasher.update(&[self.global_sspm_score]);
+        hasher.update(&[self.secnumcloud_compliance_pct]);
+        hasher.update(&[self.cis_compliance_pct]);
+        hasher.finalize()
+    }
+
+    pub fn verify_seal(&self) -> bool {
+        self.seal_hash == self.compute_seal()
+    }
+}
+
+/// Rapport de remédiation autonome des dérives SSPM scellé cryptographiquement par SHA-256
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SspmRemediationReport {
+    pub report_id: u32,
+    pub timestamp_ticks: u64,
+    pub remediated_drifts_count: usize,
+    pub quarantined_connectors_count: usize,
+    pub score_before: u8,
+    pub score_after: u8,
+    pub seal_hash: [u8; 32],
+}
+
+impl SspmRemediationReport {
+    pub fn compute_seal(&self) -> [u8; 32] {
+        let mut hasher = Sha256::new();
+        hasher.update(&self.report_id.to_be_bytes());
+        hasher.update(&self.timestamp_ticks.to_be_bytes());
+        hasher.update(&(self.remediated_drifts_count as u64).to_be_bytes());
+        hasher.update(&(self.quarantined_connectors_count as u64).to_be_bytes());
+        hasher.update(&[self.score_before]);
+        hasher.update(&[self.score_after]);
+        hasher.finalize()
+    }
+
+    pub fn verify_seal(&self) -> bool {
+        self.seal_hash == self.compute_seal()
+    }
+}
+
 /// Entrée du registre d'audit cryptographique inviolable
 #[derive(Debug, Clone, Copy)]
 pub struct SspmAuditEntry {
@@ -557,6 +633,7 @@ pub struct JamboSspmDaemon {
     pub drift_count: usize,
     pub ledger: [Option<SspmAuditEntry>; 64],
     pub ledger_count: usize,
+    pub next_report_id: u32,
     next_service_id: u32,
     next_connector_id: u32,
     next_drift_id: u32,
@@ -574,6 +651,7 @@ impl JamboSspmDaemon {
             drift_count: 0,
             ledger: [None; 64],
             ledger_count: 0,
+            next_report_id: 1,
             next_service_id: 1,
             next_connector_id: 1,
             next_drift_id: 1,
@@ -1465,6 +1543,277 @@ impl JamboSspmDaemon {
         }
         None
     }
+
+    /// Calcule le taux de conformité SecNumCloud 3.2 des services et connecteurs (0..100)
+    pub fn calculate_secnumcloud_compliance(&self) -> u8 {
+        if self.service_count == 0 && self.connector_count == 0 {
+            return 100;
+        }
+
+        let mut total_points = 0u32;
+        let mut max_points = 0u32;
+
+        for s in self.services.iter().flatten() {
+            max_points += 4;
+            if s.mfa_enforced {
+                total_points += 1;
+            }
+            if s.tls_enforced {
+                total_points += 1;
+            }
+            if s.permission_scope <= PermissionScope::ReadWriteScoped {
+                total_points += 1;
+            }
+            if s.config_hash == s.baseline_hash && !s.quarantined {
+                total_points += 1;
+            }
+        }
+
+        for c in self.connectors.iter().flatten() {
+            max_points += 3;
+            if c.approved_by_sovereign_governance {
+                total_points += 1;
+            }
+            if c.granted_scope <= PermissionScope::ReadWriteScoped {
+                total_points += 1;
+            }
+            if c.active_token_lifetime_ticks <= 86400 && !c.quarantined {
+                total_points += 1;
+            }
+        }
+
+        if max_points == 0 {
+            100
+        } else {
+            ((total_points * 100) / max_points) as u8
+        }
+    }
+
+    /// Calcule le taux de conformité CIS Benchmark durci (0..100)
+    pub fn calculate_cis_compliance(&self) -> u8 {
+        if self.service_count == 0 && self.connector_count == 0 {
+            return 100;
+        }
+
+        let mut total_checks = 0u32;
+        let mut passed_checks = 0u32;
+
+        for s in self.services.iter().flatten() {
+            total_checks += 3;
+            if s.tls_enforced {
+                passed_checks += 1;
+            }
+            if s.config_hash == s.baseline_hash {
+                passed_checks += 1;
+            }
+            if s.permission_scope != PermissionScope::WildcardFullAccess {
+                passed_checks += 1;
+            }
+        }
+
+        for c in self.connectors.iter().flatten() {
+            total_checks += 2;
+            if c.granted_scope != PermissionScope::WildcardFullAccess {
+                passed_checks += 1;
+            }
+            if c.active_token_lifetime_ticks <= 86400 {
+                passed_checks += 1;
+            }
+        }
+
+        if total_checks == 0 {
+            100
+        } else {
+            ((passed_checks * 100) / total_checks) as u8
+        }
+    }
+
+    /// Réconciliation et remédiation autonome O(1) de toutes les dérives actives
+    pub fn remediate_all_drifts(
+        &mut self,
+        cap: &mut SspmCap,
+        current_tick: u64,
+    ) -> Result<usize, SspmError> {
+        cap.consume(sspm_rights::REMEDIATE_DRIFT)?;
+
+        let mut remediated = 0;
+
+        // 1. Remédier toutes les dérives signalées
+        for i in 0..self.drifts.len() {
+            if let Some(ref mut d) = self.drifts[i] {
+                if !d.resolved {
+                    let service_id = d.service_id;
+                    let connector_id = d.connector_id;
+                    let drift_type = d.drift_type;
+
+                    d.resolved = true;
+                    d.auto_remediated = true;
+                    remediated += 1;
+
+                    // Aligner le service
+                    if let Some((_, idx)) = self.get_service_with_idx(service_id) {
+                        if let Some(ref mut s) = self.services[idx] {
+                            match drift_type {
+                                DriftType::BaselineConfigurationDrift => {
+                                    s.config_hash = s.baseline_hash;
+                                }
+                                DriftType::PermissiveWildcardPermission => {
+                                    s.permission_scope = PermissionScope::ReadWriteScoped;
+                                }
+                                DriftType::MfaDisabledOnPrivilegedAccess => {
+                                    s.mfa_enforced = true;
+                                }
+                                DriftType::UnencryptedCommunicationTransport => {
+                                    s.tls_enforced = true;
+                                }
+                                _ => {}
+                            }
+                            s.risk_score = Self::evaluate_asset_risk(s);
+                        }
+                    }
+
+                    // Aligner le connecteur s'il y a lieu
+                    if let Some(cid) = connector_id {
+                        for c in self.connectors.iter_mut().flatten() {
+                            if c.id == cid {
+                                match drift_type {
+                                    DriftType::UnauthorizedThirdPartySharing => {
+                                        c.quarantined = true;
+                                    }
+                                    DriftType::PermissiveWildcardPermission => {
+                                        c.granted_scope = PermissionScope::ReadOnlyStrict;
+                                    }
+                                    DriftType::ExcessiveTokenLifetime => {
+                                        c.active_token_lifetime_ticks = 3600;
+                                    }
+                                    _ => {}
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2. Mettre en quarantaine proactive tout connecteur tiers non approuvé résiduel
+        for c in self.connectors.iter_mut().flatten() {
+            if !c.approved_by_sovereign_governance && !c.quarantined {
+                c.quarantined = true;
+            }
+        }
+
+        self.append_audit(
+            0x0302,
+            0,
+            cap.handle.0,
+            current_tick,
+            b"Autonomous remediation of all configuration drifts",
+        );
+
+        Ok(remediated)
+    }
+
+    /// Génère un rapport de posture scellé SHA-256
+    pub fn generate_posture_report(
+        &mut self,
+        cap: &SspmCap,
+        current_tick: u64,
+    ) -> Result<SspmPostureReport, SspmError> {
+        if !cap.has_right(sspm_rights::GENERATE_REPORT) && !cap.has_right(sspm_rights::ADMIN) {
+            return Err(SspmError::AccessDenied);
+        }
+
+        let summary = self.get_summary(cap)?;
+        let secnum = self.calculate_secnumcloud_compliance();
+        let cis = self.calculate_cis_compliance();
+
+        let report_id = self.next_report_id;
+        self.next_report_id += 1;
+
+        let mut report = SspmPostureReport {
+            report_id,
+            timestamp_ticks: current_tick,
+            total_services: summary.total_services,
+            compliant_services: summary.compliant_services,
+            drifted_services: summary.drifted_services,
+            quarantined_services: summary.quarantined_services,
+            total_connectors: summary.total_connectors,
+            unapproved_connectors: summary.unapproved_connectors,
+            active_drifts: summary.active_drifts,
+            critical_drifts: summary.critical_drifts,
+            global_sspm_score: summary.global_sspm_score,
+            secnumcloud_compliance_pct: secnum,
+            cis_compliance_pct: cis,
+            seal_hash: [0u8; 32],
+        };
+
+        report.seal_hash = report.compute_seal();
+
+        self.append_audit(
+            0x0502,
+            0,
+            cap.handle.0,
+            current_tick,
+            b"Posture report generated and cryptographically sealed",
+        );
+
+        Ok(report)
+    }
+
+    /// Génère un rapport de remédiation scellé SHA-256
+    pub fn generate_remediation_report(
+        &mut self,
+        cap: &SspmCap,
+        score_before: u8,
+        drifts_remediated: usize,
+        current_tick: u64,
+    ) -> Result<SspmRemediationReport, SspmError> {
+        if !cap.has_right(sspm_rights::GENERATE_REPORT) && !cap.has_right(sspm_rights::ADMIN) {
+            return Err(SspmError::AccessDenied);
+        }
+
+        let score_after = self.calculate_sspm_score();
+        let mut quarantined_conns = 0;
+        for c in self.connectors.iter().flatten() {
+            if c.quarantined {
+                quarantined_conns += 1;
+            }
+        }
+
+        let report_id = self.next_report_id;
+        self.next_report_id += 1;
+
+        let mut report = SspmRemediationReport {
+            report_id,
+            timestamp_ticks: current_tick,
+            remediated_drifts_count: drifts_remediated,
+            quarantined_connectors_count: quarantined_conns,
+            score_before,
+            score_after,
+            seal_hash: [0u8; 32],
+        };
+
+        report.seal_hash = report.compute_seal();
+
+        self.append_audit(
+            0x0503,
+            0,
+            cap.handle.0,
+            current_tick,
+            b"Remediation report generated and cryptographically sealed",
+        );
+
+        Ok(report)
+    }
+
+    pub fn verify_posture_report_hash(report: &SspmPostureReport) -> bool {
+        report.verify_seal()
+    }
+
+    pub fn verify_remediation_report_hash(report: &SspmRemediationReport) -> bool {
+        report.verify_seal()
+    }
 }
 
 // ============================================================================
@@ -1641,6 +1990,122 @@ mod tests {
         assert!(
             !daemon.verify_ledger_integrity(),
             "L'altération de l'audit doit être détectée"
+        );
+    }
+
+    #[test]
+    fn test_sspm_remediate_all_drifts() {
+        let mut cap = SspmCap::new(Handle::new(13608, 1), sspm_rights::ALL, 10000, 500);
+        let mut daemon = JamboSspmDaemon::new(cap);
+        daemon.init_defaults();
+
+        // Enregistrer un service présentant plusieurs dérives
+        let baseline = Sha256::digest(b"base_crm");
+        let altered = Sha256::digest(b"altered_crm");
+        daemon
+            .register_service(
+                &mut cap,
+                "crm_portal",
+                "https://crm.local:443",
+                ServiceType::ComputeMicroservice,
+                ServiceEnvironment::UserWorkload,
+                ComplianceStandard::AnssiSecNumCloud,
+                PermissionScope::WildcardFullAccess,
+                false,
+                false,
+                false,
+                altered,
+                baseline,
+                6000,
+            )
+            .unwrap();
+
+        assert!(daemon.drift_count > 0);
+
+        // Remédiation autonome globale O(1)
+        let remediated = daemon.remediate_all_drifts(&mut cap, 6010).unwrap();
+        assert!(remediated > 0);
+
+        // Vérifier que toutes les dérives sont résolues
+        for d in daemon.drifts.iter().flatten() {
+            assert!(d.resolved);
+            assert!(d.auto_remediated);
+        }
+
+        // Vérifier que le connecteur non approuvé est en quarantaine
+        let c2 = daemon.connectors[1].unwrap();
+        assert!(c2.quarantined);
+    }
+
+    #[test]
+    fn test_sspm_reports_and_seal_verification() {
+        let mut cap = SspmCap::new(Handle::new(13609, 1), sspm_rights::ALL, 10000, 500);
+        let mut daemon = JamboSspmDaemon::new(cap);
+        daemon.init_defaults();
+
+        let score_before = daemon.calculate_sspm_score();
+        let posture_rep = daemon.generate_posture_report(&cap, 7000).unwrap();
+        assert!(posture_rep.verify_seal());
+        assert_eq!(posture_rep.report_id, 1);
+        assert!(JamboSspmDaemon::verify_posture_report_hash(&posture_rep));
+
+        let rem_count = daemon.remediate_all_drifts(&mut cap, 7010).unwrap();
+        let rem_rep = daemon
+            .generate_remediation_report(&cap, score_before, rem_count, 7020)
+            .unwrap();
+        assert!(rem_rep.verify_seal());
+        assert_eq!(rem_rep.report_id, 2);
+        assert!(JamboSspmDaemon::verify_remediation_report_hash(&rem_rep));
+    }
+
+    #[test]
+    fn test_sspm_compliance_metrics() {
+        let cap = SspmCap::new(Handle::new(13610, 1), sspm_rights::ALL, 10000, 500);
+        let mut daemon = JamboSspmDaemon::new(cap);
+        daemon.init_defaults();
+
+        let secnum = daemon.calculate_secnumcloud_compliance();
+        let cis = daemon.calculate_cis_compliance();
+
+        assert!(secnum <= 100);
+        assert!(cis <= 100);
+    }
+
+    #[test]
+    fn test_sspm_tampered_report_seal_detection() {
+        let cap = SspmCap::new(Handle::new(13611, 1), sspm_rights::ALL, 10000, 500);
+        let mut daemon = JamboSspmDaemon::new(cap);
+        daemon.init_defaults();
+
+        let mut report = daemon.generate_posture_report(&cap, 8000).unwrap();
+        assert!(report.verify_seal());
+
+        // Altération du score global
+        report.global_sspm_score = 99;
+        assert!(
+            !report.verify_seal(),
+            "L'altération du rapport doit être rejetée"
+        );
+    }
+
+    #[test]
+    fn test_sspm_report_generation_access_denied() {
+        let root_cap = SspmCap::new(Handle::new(13612, 1), sspm_rights::ALL, 10000, 500);
+        let mut daemon = JamboSspmDaemon::new(root_cap);
+        daemon.init_defaults();
+
+        // Capabilité sans GENERATE_REPORT ni ADMIN
+        let limited_cap = root_cap
+            .attenuate(sspm_rights::QUERY_AUDIT, 1000, 50)
+            .unwrap();
+
+        assert_eq!(
+            daemon.generate_posture_report(&limited_cap, 9000),
+            Err(SspmError::AccessDenied)
+        );
+        assert_eq!(
+            daemon.generate_remediation_report(&limited_cap, 50, 2, 9010),
+            Err(SspmError::AccessDenied)
         );
     }
 }

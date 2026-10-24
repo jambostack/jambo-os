@@ -203,6 +203,7 @@ pub struct JamboShell {
     pub itdr: jambo_itdr::JamboItdrDaemon,
     pub pam: jambo_pam::JamboPamDaemon,
     pub dspm: jambo_dspm::JamboDspmDaemon,
+    pub sspm: jambo_sspm::JamboSspmDaemon,
     pub aiops: jambo_aiops::JamboAiopsDaemon,
     pub devsecops: jambo_devsecops::JamboDevSecOpsDaemon,
     pub tprm: jambo_tprm::JamboTprmDaemon,
@@ -771,6 +772,15 @@ impl JamboShell {
         let mut dspm = jambo_dspm::JamboDspmDaemon::new(dspm_cap);
         dspm.init_defaults();
 
+        let sspm_cap = jambo_sspm::SspmCap::new(
+            libjambo::Handle::new(13601, 1),
+            jambo_sspm::sspm_rights::ALL,
+            5000,
+            100,
+        );
+        let mut sspm = jambo_sspm::JamboSspmDaemon::new(sspm_cap);
+        sspm.init_defaults();
+
         let aiops_cap = jambo_aiops::AiopsCap::new(
             libjambo::Handle::new(13701, 1),
             jambo_aiops::aiops_rights::ALL,
@@ -953,6 +963,7 @@ impl JamboShell {
             itdr,
             pam,
             dspm,
+            sspm,
             aiops,
             devsecops,
             tprm,
@@ -1173,6 +1184,7 @@ impl JamboShell {
                 emit("  itdr [cmd]      - Détection et réponse aux menaces sur l'identité (ITDR), analyse de posture & remédiation\n");
                 emit("  pam [cmd]       - Gestion des accès privilégiés (PAM), élévation JIT, sessions & rotation secrets\n");
                 emit("  dspm [cmd]      - Posture des données (DSPM), cartographie, flux transfrontaliers & quarantaine\n");
+                emit("  sspm [cmd]      - Posture services/SaaS (SSPM), dérive de configuration, connecteurs & remédiation\n");
                 emit("  aiops [cmd]     - Opérations IT pilotées par l'IA (AIOps), Z-score, corrélation topologique & remédiation\n");
                 emit("  devsecops [cmd] - Sécurité pipelines DevSecOps, contrôle admission, attestations SLSA & signatures\n");
                 emit("  tprm [cmd]      - Gestion des risques fournisseurs (TPRM), dépendances & quarantaine\n");
@@ -15178,6 +15190,370 @@ impl JamboShell {
                     }
                 }
             }
+            "sspm" => {
+                let subcmd = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    "status"
+                };
+                match subcmd {
+                    "status" | "summary" => {
+                        emit("=== GESTION DE LA POSTURE DE SÉCURITÉ DES SERVICES & SAAS (SSPM v0.3.33) ===\n");
+                        let mut b = [0u8; 20];
+                        let cap = self.sspm.admin_cap;
+                        if let Ok(summary) = self.sspm.get_summary(&cap) {
+                            emit("  Services managés totaux   : ");
+                            emit(format_u64(summary.total_services as u64, &mut b));
+                            emit("\n  Services conformes        : ");
+                            emit(format_u64(summary.compliant_services as u64, &mut b));
+                            emit("\n  Services en dérive        : ");
+                            emit(format_u64(summary.drifted_services as u64, &mut b));
+                            emit("\n  Services en quarantaine   : ");
+                            emit(format_u64(summary.quarantined_services as u64, &mut b));
+                            emit("\n  Connecteurs SaaS totaux   : ");
+                            emit(format_u64(summary.total_connectors as u64, &mut b));
+                            emit("\n  Connecteurs non approuvés : ");
+                            emit(format_u64(summary.unapproved_connectors as u64, &mut b));
+                            emit("\n  Dérives actives           : ");
+                            emit(format_u64(summary.active_drifts as u64, &mut b));
+                            emit("\n  Dérives critiques         : ");
+                            emit(format_u64(summary.critical_drifts as u64, &mut b));
+                            emit("\n  Indice global SSPM        : ");
+                            emit(format_u64(summary.global_sspm_score as u64, &mut b));
+                            emit(" / 100\n  Conformité souveraine     : ");
+                            emit(if summary.sovereign_posture_compliant {
+                                "CONFORME (OK)\n"
+                            } else {
+                                "NON-CONFORME (ATTENTION)\n"
+                            });
+                        } else {
+                            emit("  Erreur d'accès à la synthèse SSPM\n");
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "services" => {
+                        emit("=== SERVICES APPLICATIFS & MICRO-SERVICES MANAGÉS ===\n");
+                        let mut b = [0u8; 20];
+                        for i in 0..self.sspm.service_count {
+                            if let Some(ref s) = self.sspm.services[i] {
+                                emit("  [Svc #");
+                                emit(format_u64(s.id as u64, &mut b));
+                                emit("] ");
+                                emit(s.name_as_str());
+                                emit(" | Endpoint: ");
+                                emit(s.endpoint_as_str());
+                                emit(" | Type: ");
+                                emit(s.service_type.as_str());
+                                emit(" | Env: ");
+                                emit(s.environment.as_str());
+                                emit(" | Scope: ");
+                                emit(s.permission_scope.as_str());
+                                emit(" | MFA: ");
+                                emit(if s.mfa_enforced { "YES" } else { "NO" });
+                                emit(" | TLS: ");
+                                emit(if s.tls_enforced { "YES" } else { "NO" });
+                                emit(" | Quarantined: ");
+                                emit(if s.quarantined { "YES" } else { "NO" });
+                                emit(" | Risque: ");
+                                emit(format_u64(s.risk_score as u64, &mut b));
+                                emit("/100\n");
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "connectors" => {
+                        emit("=== CONNECTEURS TIERS & INTÉGRATIONS SAAS ===\n");
+                        let mut b = [0u8; 20];
+                        for i in 0..self.sspm.connector_count {
+                            if let Some(ref c) = self.sspm.connectors[i] {
+                                emit("  [Conn #");
+                                emit(format_u64(c.id as u64, &mut b));
+                                emit("] ");
+                                emit(c.name_as_str());
+                                emit(" | SvcID: ");
+                                emit(format_u64(c.service_id as u64, &mut b));
+                                emit(" | Fournisseur: ");
+                                emit(c.vendor_as_str());
+                                emit(" | Approuvé: ");
+                                emit(if c.approved_by_sovereign_governance {
+                                    "YES"
+                                } else {
+                                    "NO (SHADOW SAAS)"
+                                });
+                                emit(" | Scope: ");
+                                emit(c.granted_scope.as_str());
+                                emit(" | TTL Jeton: ");
+                                emit(format_u64(c.active_token_lifetime_ticks, &mut b));
+                                emit(" ticks | Quarantaine: ");
+                                emit(if c.quarantined { "YES" } else { "NO" });
+                                emit("\n");
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "drifts" => {
+                        emit("=== ÉVÉNEMENTS DE DÉRIVE DE CONFIGURATION SSPM ===\n");
+                        let mut b = [0u8; 20];
+                        if self.sspm.drift_count == 0 {
+                            emit("  Aucune dérive détectée. Configuration nominale alignée.\n");
+                        } else {
+                            for i in 0..self.sspm.drift_count {
+                                if let Some(ref d) = self.sspm.drifts[i] {
+                                    emit("  [Drift #");
+                                    emit(format_u64(d.id as u64, &mut b));
+                                    emit("] SvcID: ");
+                                    emit(format_u64(d.service_id as u64, &mut b));
+                                    if let Some(cid) = d.connector_id {
+                                        emit(" (Conn #");
+                                        emit(format_u64(cid as u64, &mut b));
+                                        emit(")");
+                                    }
+                                    emit(" | Type: ");
+                                    emit(d.drift_type.as_str());
+                                    emit(" | Sévérité: ");
+                                    emit(d.severity.as_str());
+                                    emit(" | Statut: ");
+                                    emit(if d.resolved {
+                                        "RÉSOLU (OK)"
+                                    } else {
+                                        "ACTIF (ATTENTION)"
+                                    });
+                                    emit("\n");
+                                }
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "scan" => {
+                        emit("=== BALAYAGE COMPLET DE POSTURE SSPM ===\n");
+                        let mut b = [0u8; 20];
+                        let mut cap = self.sspm.admin_cap;
+                        match self.sspm.run_full_posture_scan(&mut cap, 8000) {
+                            Ok(scanned) => {
+                                emit("  Services et connecteurs évalués : ");
+                                emit(format_u64(scanned as u64, &mut b));
+                                emit("\n  Dérives totales enregistrées    : ");
+                                emit(format_u64(self.sspm.drift_count as u64, &mut b));
+                                emit("\n  Statut : Terminé avec succès.\n");
+                            }
+                            Err(_) => {
+                                emit("  Échec du scan de posture SSPM (Droits insuffisants)\n");
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "quarantine" => {
+                        let svc_id = if parsed.arg_count > 2 {
+                            parse_u64(parsed.args[2]).unwrap_or(1) as u32
+                        } else {
+                            1
+                        };
+                        let mut cap = self.sspm.admin_cap;
+                        match self.sspm.quarantine_service(&mut cap, svc_id, 8010) {
+                            Ok(()) => {
+                                emit("  Service #");
+                                let mut b = [0u8; 20];
+                                emit(format_u64(svc_id as u64, &mut b));
+                                emit(" placé en quarantaine immédiate O(1).\n");
+                            }
+                            Err(_) => {
+                                emit("  Erreur lors de la mise en quarantaine du service.\n");
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "unquarantine" => {
+                        let svc_id = if parsed.arg_count > 2 {
+                            parse_u64(parsed.args[2]).unwrap_or(1) as u32
+                        } else {
+                            1
+                        };
+                        let mut cap = self.sspm.admin_cap;
+                        match self.sspm.unquarantine_service(&mut cap, svc_id, 8020) {
+                            Ok(()) => {
+                                emit("  Service #");
+                                let mut b = [0u8; 20];
+                                emit(format_u64(svc_id as u64, &mut b));
+                                emit(" rétabli (quarantaine levée).\n");
+                            }
+                            Err(_) => {
+                                emit("  Erreur lors de la levée de quarantaine du service.\n");
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "quarantine-conn" => {
+                        let conn_id = if parsed.arg_count > 2 {
+                            parse_u64(parsed.args[2]).unwrap_or(1) as u32
+                        } else {
+                            1
+                        };
+                        let mut cap = self.sspm.admin_cap;
+                        match self.sspm.quarantine_connector(&mut cap, conn_id, 8030) {
+                            Ok(()) => {
+                                emit("  Connecteur #");
+                                let mut b = [0u8; 20];
+                                emit(format_u64(conn_id as u64, &mut b));
+                                emit(" placé en quarantaine immédiate O(1).\n");
+                            }
+                            Err(_) => {
+                                emit("  Erreur lors de la mise en quarantaine du connecteur.\n");
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "remediate" => {
+                        let drift_id = if parsed.arg_count > 2 {
+                            parse_u64(parsed.args[2]).unwrap_or(1) as u32
+                        } else {
+                            1
+                        };
+                        let mut cap = self.sspm.admin_cap;
+                        match self.sspm.remediate_drift(&mut cap, drift_id, 8040) {
+                            Ok(()) => {
+                                emit("  Dérive #");
+                                let mut b = [0u8; 20];
+                                emit(format_u64(drift_id as u64, &mut b));
+                                emit(" remédiée et réconciliée avec succès.\n");
+                            }
+                            Err(_) => {
+                                emit("  Erreur lors de la remédiation de la dérive.\n");
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "remediate-all" => {
+                        emit("=== REMÉDIATION AUTONOME O(1) DE TOUTES LES DÉRIVES SSPM ===\n");
+                        let mut cap = self.sspm.admin_cap;
+                        match self.sspm.remediate_all_drifts(&mut cap, 8050) {
+                            Ok(count) => {
+                                let mut b = [0u8; 20];
+                                emit("  Dérives corrigées et réconciliées : ");
+                                emit(format_u64(count as u64, &mut b));
+                                emit("\n  Connecteurs Shadow SaaS confinés en quarantaine.\n");
+                            }
+                            Err(_) => {
+                                emit("  Erreur lors de la remédiation autonome globale.\n");
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "report-posture" => {
+                        emit("=== RAPPORT SOUVERAIN DE POSTURE SSPM SCELLÉ SHA-256 ===\n");
+                        let cap = self.sspm.admin_cap;
+                        match self.sspm.generate_posture_report(&cap, 8060) {
+                            Ok(rep) => {
+                                let mut b = [0u8; 20];
+                                emit("  Rapport ID                : #");
+                                emit(format_u64(rep.report_id as u64, &mut b));
+                                emit("\n  Timestamp                 : ");
+                                emit(format_u64(rep.timestamp_ticks, &mut b));
+                                emit("\n  Services (Tot/Conf/Drift) : ");
+                                emit(format_u64(rep.total_services as u64, &mut b));
+                                emit(" / ");
+                                emit(format_u64(rep.compliant_services as u64, &mut b));
+                                emit(" / ");
+                                emit(format_u64(rep.drifted_services as u64, &mut b));
+                                emit("\n  Connecteurs (Tot/Unappr)  : ");
+                                emit(format_u64(rep.total_connectors as u64, &mut b));
+                                emit(" / ");
+                                emit(format_u64(rep.unapproved_connectors as u64, &mut b));
+                                emit("\n  Score global SSPM         : ");
+                                emit(format_u64(rep.global_sspm_score as u64, &mut b));
+                                emit(" / 100\n  Conformité SecNumCloud    : ");
+                                emit(format_u64(rep.secnumcloud_compliance_pct as u64, &mut b));
+                                emit(" %\n  Conformité CIS Benchmark  : ");
+                                emit(format_u64(rep.cis_compliance_pct as u64, &mut b));
+                                emit(" %\n  Vérification Sceau SHA-256: ");
+                                if jambo_sspm::JamboSspmDaemon::verify_posture_report_hash(&rep) {
+                                    emit("VALIDÉ & INTÈGRE (OK)\n");
+                                } else {
+                                    emit("ALTÉRÉ (FAIL)\n");
+                                }
+                            }
+                            Err(_) => {
+                                emit("  Échec de génération du rapport de posture SSPM.\n");
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "report-remediation" => {
+                        emit("=== RAPPORT SOUVERAIN DE REMÉDIATION SSPM SCELLÉ SHA-256 ===\n");
+                        let cap = self.sspm.admin_cap;
+                        let score_before = self.sspm.calculate_sspm_score();
+                        let mut cap_mut = self.sspm.admin_cap;
+                        let rem_count = self
+                            .sspm
+                            .remediate_all_drifts(&mut cap_mut, 8070)
+                            .unwrap_or(0);
+                        match self.sspm.generate_remediation_report(
+                            &cap,
+                            score_before,
+                            rem_count,
+                            8080,
+                        ) {
+                            Ok(rep) => {
+                                let mut b = [0u8; 20];
+                                emit("  Rapport ID                : #");
+                                emit(format_u64(rep.report_id as u64, &mut b));
+                                emit("\n  Timestamp                 : ");
+                                emit(format_u64(rep.timestamp_ticks, &mut b));
+                                emit("\n  Dérives remédiées         : ");
+                                emit(format_u64(rep.remediated_drifts_count as u64, &mut b));
+                                emit("\n  Connecteurs en quarantaine: ");
+                                emit(format_u64(rep.quarantined_connectors_count as u64, &mut b));
+                                emit("\n  Score SSPM avant / après  : ");
+                                emit(format_u64(rep.score_before as u64, &mut b));
+                                emit(" -> ");
+                                emit(format_u64(rep.score_after as u64, &mut b));
+                                emit(" / 100\n  Vérification Sceau SHA-256: ");
+                                if jambo_sspm::JamboSspmDaemon::verify_remediation_report_hash(&rep)
+                                {
+                                    emit("VALIDÉ & INTÈGRE (OK)\n");
+                                } else {
+                                    emit("ALTÉRÉ (FAIL)\n");
+                                }
+                            }
+                            Err(_) => {
+                                emit("  Échec de génération du rapport de remédiation SSPM.\n");
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "compliance" => {
+                        emit("=== ANALYSE DE CONFORMITÉ RÉGLEMENTAIRE SOUVERAINE SSPM ===\n");
+                        let mut b = [0u8; 20];
+                        let secnum = self.sspm.calculate_secnumcloud_compliance();
+                        let cis = self.sspm.calculate_cis_compliance();
+
+                        emit("  Conformité ANSSI SecNumCloud 3.2 : ");
+                        emit(format_u64(secnum as u64, &mut b));
+                        emit(" %\n  Conformité CIS Benchmark Hardened: ");
+                        emit(format_u64(cis as u64, &mut b));
+                        emit(" %\n  Statut Global Réglementaire       : ");
+                        if secnum >= 80 && cis >= 80 {
+                            emit("CERTIFIÉ & DURCI (PASS)\n");
+                        } else {
+                            emit("RECOMMANDATIONS REQUISES (DRIFT DETECTED)\n");
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "verify" => {
+                        let valid = self.sspm.verify_ledger_integrity();
+                        emit("  Vérification intégrité registre SSPM SHA-256 : ");
+                        emit(if valid {
+                            "INTÈGRE (OK)\n"
+                        } else {
+                            "ALTÉRÉ (FAIL)\n"
+                        });
+                        (ShellStatus::Success, write_pos)
+                    }
+                    _ => {
+                        emit("Usage: sspm [status | services | connectors | drifts | scan | quarantine [id] | unquarantine [id] | quarantine-conn [id] | remediate [id] | remediate-all | report-posture | report-remediation | compliance | verify]\n");
+                        (ShellStatus::ExecutionFailed, write_pos)
+                    }
+                }
+            }
             "aiops" => {
                 let subcmd = if parsed.arg_count > 1 {
                     parsed.args[1]
@@ -21247,6 +21623,75 @@ mod tests {
                 let (st15, len15) = shell.execute_line("dspm topology", &mut out);
                 assert_eq!(st15, ShellStatus::Success);
                 assert!(len15 > 0);
+            })
+            .unwrap();
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn test_shell_sspm_commands() {
+        extern crate std;
+        let handle = std::thread::Builder::new()
+            .stack_size(8 * 1024 * 1024)
+            .spawn(|| {
+                let mut shell = JamboShell::new();
+                let mut out = [0u8; 1024];
+
+                let (st1, len1) = shell.execute_line("sspm status", &mut out);
+                assert_eq!(st1, ShellStatus::Success);
+                assert!(len1 > 0);
+
+                let (st2, len2) = shell.execute_line("sspm services", &mut out);
+                assert_eq!(st2, ShellStatus::Success);
+                assert!(len2 > 0);
+
+                let (st3, len3) = shell.execute_line("sspm connectors", &mut out);
+                assert_eq!(st3, ShellStatus::Success);
+                assert!(len3 > 0);
+
+                let (st4, len4) = shell.execute_line("sspm drifts", &mut out);
+                assert_eq!(st4, ShellStatus::Success);
+                assert!(len4 > 0);
+
+                let (st5, len5) = shell.execute_line("sspm scan", &mut out);
+                assert_eq!(st5, ShellStatus::Success);
+                assert!(len5 > 0);
+
+                let (st6, len6) = shell.execute_line("sspm quarantine 1", &mut out);
+                assert_eq!(st6, ShellStatus::Success);
+                assert!(len6 > 0);
+
+                let (st7, len7) = shell.execute_line("sspm unquarantine 1", &mut out);
+                assert_eq!(st7, ShellStatus::Success);
+                assert!(len7 > 0);
+
+                let (st8, len8) = shell.execute_line("sspm quarantine-conn 2", &mut out);
+                assert_eq!(st8, ShellStatus::Success);
+                assert!(len8 > 0);
+
+                let (st9, len9) = shell.execute_line("sspm remediate 1", &mut out);
+                assert_eq!(st9, ShellStatus::Success);
+                assert!(len9 > 0);
+
+                let (st10, len10) = shell.execute_line("sspm remediate-all", &mut out);
+                assert_eq!(st10, ShellStatus::Success);
+                assert!(len10 > 0);
+
+                let (st11, len11) = shell.execute_line("sspm report-posture", &mut out);
+                assert_eq!(st11, ShellStatus::Success);
+                assert!(len11 > 0);
+
+                let (st12, len12) = shell.execute_line("sspm report-remediation", &mut out);
+                assert_eq!(st12, ShellStatus::Success);
+                assert!(len12 > 0);
+
+                let (st13, len13) = shell.execute_line("sspm compliance", &mut out);
+                assert_eq!(st13, ShellStatus::Success);
+                assert!(len13 > 0);
+
+                let (st14, len14) = shell.execute_line("sspm verify", &mut out);
+                assert_eq!(st14, ShellStatus::Success);
+                assert!(len14 > 0);
             })
             .unwrap();
         handle.join().unwrap();
