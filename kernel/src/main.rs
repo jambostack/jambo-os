@@ -1322,7 +1322,7 @@ pub extern "C" fn _start() -> ! {
         "Échec du test de sécurité des pipelines & DevSecOps jambo-devsecops"
     );
 
-    // 24viciesquadragies. Validation de la Gestion des Risques Fournisseurs TPRM (Phase 139 - v0.3.6)
+    // 24viciesquadragies. Validation de la Gestion des Risques Fournisseurs TPRM (Phase 169 - v0.3.36)
     let tprm_success = sched::tprm_test::execute_tprm_daemon_test();
     assert!(
         tprm_success,
@@ -1828,9 +1828,9 @@ pub extern "C" fn _start() -> ! {
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.3.35 (Sovereign DevSecOps, Admission Control & SLSA jambo-devsecops)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.3.36 (Sovereign TPRM, Third-Party Supply-Chain Governance & O(1) Quarantine jambo-tprm)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.3.34 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.3.35 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );

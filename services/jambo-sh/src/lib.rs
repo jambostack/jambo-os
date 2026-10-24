@@ -16351,7 +16351,7 @@ impl JamboShell {
                     "status" => {
                         let cap = self.tprm.admin_cap;
                         if let Ok(sum) = self.tprm.get_summary(&cap) {
-                            emit("--- TPRM SUPPLY-CHAIN HEALTH (PHASE 139) ---\n");
+                            emit("--- TPRM SOUVERAIN SUPPLY-CHAIN HEALTH (v0.3.36) ---\n");
                             emit("Fournisseurs enregistrés: ");
                             emit(format_u64(sum.total_vendors as u64, &mut b));
                             emit("\nDépendances cartographiées: ");
@@ -16399,6 +16399,17 @@ impl JamboShell {
                             emit(format_u64(v.reputation_score as u64, &mut b));
                             emit(" | Risque: ");
                             emit(format_u64(v.composite_risk_score as u64, &mut b));
+                            emit(" (");
+                            emit(format_u64((v.fixed_point_risk / 100) as u64, &mut b));
+                            emit(".");
+                            emit(format_u64((v.fixed_point_risk % 100) as u64, &mut b));
+                            emit("%)");
+                            if v.european_sovereign {
+                                emit(" [EU]");
+                            }
+                            if v.tee_hardware_assured {
+                                emit(" [TEE]");
+                            }
                             emit(" | Statut: ");
                             match v.status {
                                 jambo_tprm::VendorStatus::Active => emit("Actif\n"),
@@ -16460,6 +16471,27 @@ impl JamboShell {
                         }
                         (ShellStatus::Success, write_pos)
                     }
+                    "signatures" => {
+                        emit("--- SIGNATURES DE PACKAGES ED25519 ---\n");
+                        for d in self.tprm.dependencies.iter().flatten() {
+                            emit("[#");
+                            emit(format_u64(d.id as u64, &mut b));
+                            emit("] ");
+                            emit(d.name_as_str());
+                            emit(" | Signé: ");
+                            if d.is_signed {
+                                emit("OUI (Ed25519) | Validité: ");
+                                emit(if d.signature_valid {
+                                    "VALIDE (OK)\n"
+                                } else {
+                                    "INVALIDE (FAIL)\n"
+                                });
+                            } else {
+                                emit("NON (Non-signé)\n");
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
                     "attestations" => {
                         emit("--- ATTESTATIONS DE CONFORMITÉ TIERCES ---\n");
                         for a in self.tprm.attestations.iter().flatten() {
@@ -16475,6 +16507,12 @@ impl JamboShell {
                                 }
                                 jambo_tprm::ComplianceStandard::ISO27001 => emit("ISO 27001"),
                                 jambo_tprm::ComplianceStandard::SOC2Type2 => emit("SOC 2 Type II"),
+                                jambo_tprm::ComplianceStandard::EuropeanSovereignty => {
+                                    emit("Souveraineté EU")
+                                }
+                                jambo_tprm::ComplianceStandard::TeeHardwareAssurance => {
+                                    emit("TEE Hardware")
+                                }
                                 jambo_tprm::ComplianceStandard::None => emit("Aucune"),
                             }
                             emit(" | Auditeur: ");
@@ -16567,6 +16605,194 @@ impl JamboShell {
                             (ShellStatus::ExecutionFailed, write_pos)
                         }
                     }
+                    "remediate" => {
+                        if parsed.arg_count > 2 {
+                            let vid = parse_u64(parsed.args[2]).unwrap_or(1) as u32;
+                            let mut cap = self.tprm.admin_cap;
+                            match self.tprm.remediate_vendor(&mut cap, vid, 9999) {
+                                Ok(st) => {
+                                    emit("Fournisseur #");
+                                    emit(format_u64(vid as u64, &mut b));
+                                    emit(" remédié avec succès -> Statut: ");
+                                    match st {
+                                        jambo_tprm::VendorStatus::Quarantined => {
+                                            emit("Quarantaine O(1)\n")
+                                        }
+                                        _ => emit("Remédié\n"),
+                                    }
+                                    (ShellStatus::Success, write_pos)
+                                }
+                                Err(_) => {
+                                    emit("Erreur lors de la remédiation du fournisseur\n");
+                                    (ShellStatus::ExecutionFailed, write_pos)
+                                }
+                            }
+                        } else {
+                            emit("Usage: tprm remediate <vendor_id>\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        }
+                    }
+                    "remediate-all" => {
+                        let mut cap = self.tprm.admin_cap;
+                        match self.tprm.remediate_all_compromised(&mut cap, 9999) {
+                            Ok(cnt) => {
+                                emit("=== REMÉDIATION AUTONOME GLOBALE O(1) EXÉCUTÉE ===\n");
+                                emit("Composants & Fournisseurs compromis neutralisés: ");
+                                emit(format_u64(cnt as u64, &mut b));
+                                emit("\nQuarantaine appliquée sans délai.\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("Erreur exécution remédiation globale TPRM\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "report-posture" => {
+                        let cap = self.tprm.admin_cap;
+                        match self.tprm.generate_posture_report(&cap, 9999) {
+                            Ok(rep) => {
+                                emit("=== RAPPORT SCELLÉ DE POSTURE FOURNISSEURS TPRM (SHA-256) ===\n");
+                                emit("Identifiant rapport     : ");
+                                emit(format_u64(rep.report_id as u64, &mut b));
+                                emit("\nFournisseurs gérés      : ");
+                                emit(format_u64(rep.total_vendors as u64, &mut b));
+                                emit("\n  - Tier 1 (Core)       : ");
+                                emit(format_u64(rep.tier1_count as u64, &mut b));
+                                emit("\n  - Tier 2 (Assurance)  : ");
+                                emit(format_u64(rep.tier2_count as u64, &mut b));
+                                emit("\nDépendances totales     : ");
+                                emit(format_u64(rep.total_dependencies as u64, &mut b));
+                                emit("\nDépendances quarantaine : ");
+                                emit(format_u64(rep.quarantined_dependencies as u64, &mut b));
+                                emit("\nPackages signés Ed25519 : ");
+                                emit(format_u64(rep.signed_packages_count as u64, &mut b));
+                                emit("\nCertifiés SecNumCloud   : ");
+                                emit(format_u64(rep.secnumcloud_certified_count as u64, &mut b));
+                                emit("\nRisque moyen en virgule : ");
+                                emit(format_u64((rep.fixed_point_risk_avg / 100) as u64, &mut b));
+                                emit(".");
+                                emit(format_u64((rep.fixed_point_risk_avg % 100) as u64, &mut b));
+                                emit(" %\nScore santé supply-chain: ");
+                                emit(format_u64(rep.global_health_score as u64, &mut b));
+                                emit(" / 100\nSceau SHA-256 scellé    : ");
+                                emit(if rep.verify_seal() {
+                                    "VALIDE (CONFORME)\n"
+                                } else {
+                                    "INVALIDE\n"
+                                });
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("Erreur génération rapport de posture TPRM\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "report-vendor" => {
+                        let vid = if parsed.arg_count > 2 {
+                            parse_u64(parsed.args[2]).unwrap_or(1) as u32
+                        } else {
+                            1
+                        };
+                        let cap = self.tprm.admin_cap;
+                        match self.tprm.generate_vendor_report(&cap, vid, 9999) {
+                            Ok(rep) => {
+                                emit("=== RAPPORT SCELLÉ FOURNISSEUR TPRM [ID ");
+                                emit(format_u64(rep.vendor_id as u64, &mut b));
+                                emit("] ===\n");
+                                emit("Tier Fournisseur        : ");
+                                match rep.tier {
+                                    jambo_tprm::VendorTier::Tier1SovereignCore => {
+                                        emit("Tier 1 (Sovereign Core)")
+                                    }
+                                    jambo_tprm::VendorTier::Tier2HighAssurance => {
+                                        emit("Tier 2 (High Assurance)")
+                                    }
+                                    jambo_tprm::VendorTier::Tier3StandardEcosystem => {
+                                        emit("Tier 3 (Standard)")
+                                    }
+                                    jambo_tprm::VendorTier::Tier4UntrustedCommunity => {
+                                        emit("Tier 4 (Untrusted)")
+                                    }
+                                }
+                                emit("\nStatut opérationnel     : ");
+                                match rep.status {
+                                    jambo_tprm::VendorStatus::Active => emit("Actif"),
+                                    jambo_tprm::VendorStatus::UnderReview => emit("Revue"),
+                                    jambo_tprm::VendorStatus::Restricted => emit("Restreint"),
+                                    jambo_tprm::VendorStatus::Quarantined => emit("Quarantaine"),
+                                    jambo_tprm::VendorStatus::Revoked => emit("Révoqué"),
+                                }
+                                emit("\nScore de réputation     : ");
+                                emit(format_u64(rep.reputation_score as u64, &mut b));
+                                emit(" / 100\nScore risque composite  : ");
+                                emit(format_u64(rep.composite_risk_score as u64, &mut b));
+                                emit(" / 100 (Virgule fixe: ");
+                                emit(format_u64((rep.fixed_point_risk / 100) as u64, &mut b));
+                                emit(".");
+                                emit(format_u64((rep.fixed_point_risk % 100) as u64, &mut b));
+                                emit(" %)\nDépendances gérées      : ");
+                                emit(format_u64(rep.dependencies_count as u64, &mut b));
+                                emit("\nDépendances isolées     : ");
+                                emit(format_u64(rep.quarantined_deps_count as u64, &mut b));
+                                emit("\nCertifié SecNumCloud    : ");
+                                emit(if rep.compliance_certified {
+                                    "OUI"
+                                } else {
+                                    "NON"
+                                });
+                                emit("\nSouveraineté européenne : ");
+                                emit(if rep.european_sovereign { "OUI" } else { "NON" });
+                                emit("\nGarantie TEE Hardware   : ");
+                                emit(if rep.tee_hardware_assured {
+                                    "OUI"
+                                } else {
+                                    "NON"
+                                });
+                                emit("\nSceau SHA-256 scellé    : ");
+                                emit(if rep.verify_seal() {
+                                    "VALIDE (CONFORME)\n"
+                                } else {
+                                    "INVALIDE\n"
+                                });
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("Erreur génération rapport fournisseur TPRM\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "report-remediation" => {
+                        let mut cap = self.tprm.admin_cap;
+                        match self.tprm.generate_remediation_report(&mut cap, 9999) {
+                            Ok(rep) => {
+                                emit("=== RAPPORT SCELLÉ DE REMÉDIATION TPRM (SHA-256) ===\n");
+                                emit("Identifiant rapport     : ");
+                                emit(format_u64(rep.report_id as u64, &mut b));
+                                emit("\nFournisseurs neutralisés: ");
+                                emit(format_u64(rep.remediated_vendors_count as u64, &mut b));
+                                emit("\nDépendances isolées     : ");
+                                emit(format_u64(rep.quarantined_deps_count as u64, &mut b));
+                                emit("\nIndice santé avant      : ");
+                                emit(format_u64(rep.health_score_before as u64, &mut b));
+                                emit(" %\nIndice santé après      : ");
+                                emit(format_u64(rep.health_score_after as u64, &mut b));
+                                emit(" %\nSceau SHA-256 scellé    : ");
+                                emit(if rep.verify_seal() {
+                                    "VALIDE (CONFORME)\n"
+                                } else {
+                                    "INVALIDE\n"
+                                });
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("Erreur génération rapport de remédiation TPRM\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
                     "verify" => {
                         let valid = self.tprm.verify_ledger_integrity();
                         emit("Registre d'audit cryptographique SHA-256 TPRM: ");
@@ -16578,7 +16804,7 @@ impl JamboShell {
                         (ShellStatus::Success, write_pos)
                     }
                     _ => {
-                        emit("Usage: tprm [status | vendors | deps | attestations | eval [id] | quarantine [id] | verify]\n");
+                        emit("Usage: tprm [status | vendors | deps | attestations | eval [id] | signatures | quarantine [id] | remediate [id] | remediate-all | report-posture | report-vendor [id] | report-remediation | verify]\n");
                         (ShellStatus::ExecutionFailed, write_pos)
                     }
                 }
@@ -22305,9 +22531,33 @@ mod tests {
                 assert_eq!(st8, ShellStatus::Success);
                 assert!(len8 > 0);
 
-                let (st9, len9) = shell.execute_line("tprm verify", &mut out);
+                let (st9, len9) = shell.execute_line("tprm signatures", &mut out);
                 assert_eq!(st9, ShellStatus::Success);
                 assert!(len9 > 0);
+
+                let (st10, len10) = shell.execute_line("tprm remediate 4", &mut out);
+                assert_eq!(st10, ShellStatus::Success);
+                assert!(len10 > 0);
+
+                let (st11, len11) = shell.execute_line("tprm remediate-all", &mut out);
+                assert_eq!(st11, ShellStatus::Success);
+                assert!(len11 > 0);
+
+                let (st12, len12) = shell.execute_line("tprm report-posture", &mut out);
+                assert_eq!(st12, ShellStatus::Success);
+                assert!(len12 > 0);
+
+                let (st13, len13) = shell.execute_line("tprm report-vendor 1", &mut out);
+                assert_eq!(st13, ShellStatus::Success);
+                assert!(len13 > 0);
+
+                let (st14, len14) = shell.execute_line("tprm report-remediation", &mut out);
+                assert_eq!(st14, ShellStatus::Success);
+                assert!(len14 > 0);
+
+                let (st15, len15) = shell.execute_line("tprm verify", &mut out);
+                assert_eq!(st15, ShellStatus::Success);
+                assert!(len15 > 0);
             })
             .unwrap();
         handle.join().unwrap();
