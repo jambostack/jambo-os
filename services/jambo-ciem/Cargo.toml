@@ -1,6 +1,6 @@
 [package]
 name = "jambo-ciem"
-version = "0.2.125"
+version = "0.3.24"
 edition = "2021"
 
 [dependencies]

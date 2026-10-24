@@ -1253,12 +1253,7 @@ pub extern "C" fn _start() -> ! {
 
     // Note: La Protection des Charges de Travail Cloud Souveraines CWPP, Intégrité d'Exécution & Confinement Autonome est validée en Phase 156 (v0.3.23).
 
-    // 18terviciesquadragies. Validation de la Gestion des Droits CIEM & Moindre Privilège (Phase 127 - v0.2.125)
-    let ciem_success = sched::ciem_test::execute_ciem_daemon_test();
-    assert!(
-        ciem_success,
-        "Échec du test de gestion des droits CIEM et moindre privilège jambo-ciem"
-    );
+    // Note: La Gestion des Droits sur l'Infrastructure Cloud Souveraine CIEM, Analyse des Droits Excessifs & Moindre Privilège est validée en Phase 157 (v0.3.24).
 
     // 18quaterviciesquadragies. Validation de la Protection CNAPP & Score de Risque Unifié (Phase 128 - v0.2.126)
     let cnapp_success = sched::cnapp_test::execute_cnapp_daemon_test();
@@ -1461,6 +1456,13 @@ pub extern "C" fn _start() -> ! {
     assert!(
         cwpp_success,
         "Échec du test de protection des charges de travail souveraines CWPP jambo-cwpp"
+    );
+
+    // 42viciesquadragies. Validation Gestion des Droits sur l'Infrastructure Cloud Souveraine CIEM, Analyse des Droits Excessifs & Principe du Moindre Privilège (Phase 157 - v0.3.24)
+    let ciem_success = sched::ciem_test::execute_ciem_daemon_test();
+    assert!(
+        ciem_success,
+        "Échec du test de gestion des droits CIEM et moindre privilège jambo-ciem"
     );
 
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
@@ -1781,14 +1783,17 @@ pub extern "C" fn _start() -> ! {
     kprintln!(
         "\x1b[1;32m[PASS] Phase 156 Sovereign Cloud Workload Protection Platform & Autonomous Containment (jambo-cwpp) Complete\x1b[0m"
     );
+    kprintln!(
+        "\x1b[1;32m[PASS] Phase 157 Sovereign Cloud Infrastructure Entitlement Management & Least Privilege (jambo-ciem) Complete\x1b[0m"
+    );
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.3.23 (Sovereign Cloud Workload Protection Platform jambo-cwpp)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.3.24 (Sovereign Cloud Infrastructure Entitlement Management jambo-ciem)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.3.23 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.3.24 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );

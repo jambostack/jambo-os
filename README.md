@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.3.23-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.3.24-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.3.23 (Protection des Charges de Travail Cloud Souveraines CWPP, Intégrité d'Exécution & Confinement Autonome jambo-cwpp)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.3.23` introduit la modernisation et la souveraineté complète de la Protection des Charges de Travail Cloud Souveraines (CWPP — `services/jambo-cwpp`) : moteur de protection continue à l'exécution (Runtime Workload Protection) pour micro-VMs et conteneurs d'enclaves souveraines, surveillance en temps réel de l'intégrité mémoire (W^X enforcement, CFI, intégrité des canaris de pile et signatures binaires SHA-256), détection des dérives comportementales des processus conteneurisés et violations d'enclaves TEE, confinement chirurgical O(1) (Freeze, StripCaps, IsolateNetwork, Quarantine, RollbackGoldenSnapshot, Terminate), rapports d'incidents scellés SHA-256 (`CwppIncidentReport`), contrôle d'accès capabilaire strict `CwppCap` sans autorité ambiante avec atténuation monotone et registre d'audit cryptographique SHA-256 inaltérable.
+> **Statut du Projet : Version v0.3.24 (Gestion des Droits sur l'Infrastructure Cloud Souveraine CIEM, Analyse des Droits Excessifs & Principe du Moindre Privilège jambo-ciem)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.3.24` introduit la modernisation et la souveraineté complète de la Gestion des Droits sur l'Infrastructure Cloud Souveraine (CIEM — `services/jambo-ciem`) : moteur d'analyse des identités machines, services et humaines, calcul des écarts d'autorisations (Entitlement Gap) entre privilèges accordés et réellement exercés, détection continue des privilèges dormants, des droits orphelins et des combinaisons toxiques (Toxic Combinations), réduction automatique et monotone O(1) vers le strict moindre privilège (Least-Privilege Monotonic Attenuation), génération de rapports de remédiation scellés SHA-256 (`CiemRemediationReport`), contrôle d'accès capabilaire strict `CiemCap` sans autorité ambiante avec atténuation monotone et registre d'audit cryptographique SHA-256 inaltérable.
 
 ---
 

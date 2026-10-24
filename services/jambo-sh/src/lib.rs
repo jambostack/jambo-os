@@ -1164,7 +1164,7 @@ impl JamboShell {
                 emit("  casb [cmd]      - Courtier d'accès cloud/grappe (CASB), multi-tenant & DLP avancé\n");
                 emit("  cspm [cmd]      - Posture de sécurité cloud/grappe (CSPM), dérive & remédiation\n");
                 emit("  cwpp [cmd]      - Protection charges de travail (CWPP), intégrité d'exécution & confinement\n");
-                emit("  ciem [cmd]      - Droits cloud/grappe (CIEM), détection droits excessifs & moindre privilège\n");
+                emit("  ciem [cmd]      - Droits cloud souverain (CIEM), analyse écarts (Gap) & moindre privilège\n");
                 emit("  cnapp [cmd]     - Protection unifiée (CNAPP), corrélation CSPM+CWPP+CIEM & risques\n");
                 emit("  aspm [cmd]      - Posture applicative (ASPM), supply chain, SBOM CycloneDX & admission\n");
                 emit("  bas [cmd]       - Simulation brèches/attaques (BAS), validation continue & gaps\n");
@@ -12286,6 +12286,14 @@ impl JamboShell {
                         emit(format_u64(self.ciem.total_anomalies_detected, &mut b));
                         emit("\n  Remédiations Moindre Priv: ");
                         emit(format_u64(self.ciem.total_remediations, &mut b));
+                        emit("\n  Rapports scellés SHA-256: ");
+                        emit(format_u64(self.ciem.report_count as u64, &mut b));
+                        emit("\n  Écart moyen (Gap %)     : ");
+                        emit(format_u64(
+                            self.ciem.average_gap_percentage() as u64,
+                            &mut b,
+                        ));
+                        emit("%");
                         emit("\n  Chaîne d'audit SHA-256  : ");
                         let valid = self.ciem.verify_ledger_integrity();
                         emit(if valid {
@@ -12362,7 +12370,9 @@ impl JamboShell {
                                 emit(format_u64(ent.granted_rights as u64, &mut b));
                                 emit(" | Exercés: 0x");
                                 emit(format_u64(ent.exercised_rights as u64, &mut b));
-                                emit("\n");
+                                emit(" | Écart (Gap): ");
+                                emit(format_u64(ent.gap_percentage() as u64, &mut b));
+                                emit("%\n");
                             }
                         }
                         (ShellStatus::Success, write_pos)
@@ -12421,6 +12431,43 @@ impl JamboShell {
                             }
                         }
                     }
+                    "reports" => {
+                        let mut b = [0u8; 20];
+                        emit("[CIEM/REPORTS] Rapports de Remédiation Moindre Privilège Scellés SHA-256 :\n");
+                        emit("  Total rapports générés : ");
+                        emit(format_u64(self.ciem.report_count as u64, &mut b));
+                        emit("\n");
+                        if let Some(rep) = self.ciem.latest_report() {
+                            emit("  Dernier rapport scellé : #");
+                            emit(format_u64(rep.report_id, &mut b));
+                            emit(" | Ident: #");
+                            emit(format_u64(rep.identity_id as u64, &mut b));
+                            emit(" | E#");
+                            emit(format_u64(rep.entitlement_id as u64, &mut b));
+                            emit(" | Action: ");
+                            match rep.action {
+                                jambo_ciem::CiemAction::LeastPrivilegeEnforced => {
+                                    emit("MoindrePrivilègeAppliqué")
+                                }
+                                jambo_ciem::CiemAction::DormantRevoked => emit("DormantRévoqué"),
+                                jambo_ciem::CiemAction::OrphanPurged => emit("OrphelinPurgé"),
+                                jambo_ciem::CiemAction::ToxicCombinationBroken => {
+                                    emit("CombinaisonToxiqueNeutralisée")
+                                }
+                            }
+                            emit(" | Droits: 0x");
+                            emit(format_u64(rep.initial_rights as u64, &mut b));
+                            emit(" -> 0x");
+                            emit(format_u64(rep.effective_rights as u64, &mut b));
+                            emit(" | Sceau: ");
+                            emit(if self.ciem.verify_ledger_integrity() {
+                                "VALIDE (SHA-256)\n"
+                            } else {
+                                "CORROMPU\n"
+                            });
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
                     "verify" => {
                         let valid = self.ciem.verify_ledger_integrity();
                         emit("  Vérification intégrité registre CIEM SHA-256 : ");
@@ -12432,7 +12479,7 @@ impl JamboShell {
                         (ShellStatus::Success, write_pos)
                     }
                     _ => {
-                        emit("Usage: ciem [status | identities | entitlements | scan | remediate [id] | verify]\n");
+                        emit("Usage: ciem [status | identities | entitlements | scan | remediate [id] | reports | verify]\n");
                         (ShellStatus::ExecutionFailed, write_pos)
                     }
                 }
@@ -19943,6 +19990,10 @@ mod tests {
                 let (st5, len5) = shell.execute_line("ciem remediate 202", &mut out);
                 assert_eq!(st5, ShellStatus::Success);
                 assert!(len5 > 0);
+
+                let (st_rep, len_rep) = shell.execute_line("ciem reports", &mut out);
+                assert_eq!(st_rep, ShellStatus::Success);
+                assert!(len_rep > 0);
 
                 let (st6, len6) = shell.execute_line("ciem verify", &mut out);
                 assert_eq!(st6, ShellStatus::Success);

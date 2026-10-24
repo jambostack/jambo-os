@@ -1,13 +1,15 @@
-//! Gestion des Droits et Privilèges Cloud/Grappe (CIEM), Détection des Droits Excessifs & Moindre Privilège Monotone
+//! Gestion des Droits sur l'Infrastructure Cloud Souveraine CIEM, Analyse des Droits Excessifs & Principe du Moindre Privilège
 //!
-//! Phase 127 — Jalon v0.2.125
+//! Phase 157 — Jalon v0.3.24
 //!
 //! Fournit un système souverain de Cloud Infrastructure Entitlement Management (CIEM) en environnement `#![no_std]` :
-//! 1. Cartographie continue des identités de grappe (utilisateurs, services, agents, tokens éphémères).
-//! 2. Détection en temps réel des privilèges dormants, des droits orphelins, des droits excessifs et des combinaisons toxiques.
-//! 3. Réduction monotone automatique vers le moindre privilège effectif (Least-Privilege Monotonic Attenuation).
-//! 4. Contrôle d'accès capabilaire (`CiemCap`) sans autorité ambiante et atténuation monotone stricte.
-//! 5. Registre d'audit cryptographique inviolable scellé par chaînage SHA-256.
+//! 1. Cartographie unifiée et continue des identités de grappe souveraine (utilisateurs humains, comptes de services, agents de charge micro-VM, tokens éphémères, rôles fédérés SecNumCloud).
+//! 2. Moteur d'analyse des écarts d'autorisations (Entitlement Gap) entre privilèges accordés et privilèges réellement exercés.
+//! 3. Détection en temps réel des privilèges dormants, des droits orphelins, des droits excessifs et des combinaisons toxiques (Toxic Combinations).
+//! 4. Réduction monotone automatique et chirurgicale O(1) vers le strict moindre privilège (Least-Privilege Monotonic Attenuation).
+//! 5. Génération de rapports d'analyse et de remédiation scellés par SHA-256 (`CiemRemediationReport`).
+//! 6. Contrôle d'accès capabilaire strict (`CiemCap`) sans autorité ambiante avec atténuation monotone.
+//! 7. Registre d'audit cryptographique inviolable scellé par chaînage SHA-256 déterministe.
 
 #![no_std]
 
@@ -132,7 +134,7 @@ impl Sha256 {
     }
 
     pub fn finalize(mut self) -> [u8; 32] {
-        let total_bits = self.total_bytes * 8;
+        let bit_len = self.total_bytes * 8;
         self.buffer[self.buffer_len] = 0x80;
         self.buffer_len += 1;
 
@@ -149,15 +151,15 @@ impl Sha256 {
             self.buffer[i] = 0;
         }
 
-        self.buffer[56..64].copy_from_slice(&total_bits.to_be_bytes());
+        self.buffer[56..64].copy_from_slice(&bit_len.to_be_bytes());
         let block = self.buffer;
         self.transform_block(&block);
 
-        let mut digest = [0u8; 32];
-        for i in 0..8 {
-            digest[i * 4..(i + 1) * 4].copy_from_slice(&self.state[i].to_be_bytes());
+        let mut out = [0u8; 32];
+        for (i, val) in self.state.iter().enumerate() {
+            out[i * 4..i * 4 + 4].copy_from_slice(&val.to_be_bytes());
         }
-        digest
+        out
     }
 
     pub fn hash(data: &[u8]) -> [u8; 32] {
@@ -168,7 +170,7 @@ impl Sha256 {
 }
 
 // ============================================================================
-// ERREURS & MODÈLE DE CAPABILITÉ (CiemCap)
+// ERREURS & CAPABILITÉS CIEM SANS AUTORITÉ AMBIANTE
 // ============================================================================
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -205,7 +207,7 @@ pub mod ciem_rights {
         | ADMIN;
 }
 
-/// Capabilité de contrôle CIEM sans autorité ambiante
+/// Capabilité de contrôle CIEM sans autorité ambiante avec atténuation monotone
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CiemCap {
     pub handle: Handle,
@@ -266,6 +268,27 @@ impl CiemCap {
 }
 
 // ============================================================================
+// CONSTANTES DE PRIVILÈGES SOUVERAINS & COMBINAISONS TOXIQUES
+// ============================================================================
+
+pub mod entitlement_bits {
+    pub const IAM_ADMIN: u32 = 1 << 0; // 0x0001 : Modification des rôles/politiques
+    pub const SECRETS_READ: u32 = 1 << 1; // 0x0002 : Lecture secrets & tokens KMS
+    pub const NETWORK_EGRESS: u32 = 1 << 2; // 0x0004 : Trafic réseau externe non filtré
+    pub const ENCLAVE_SIGN: u32 = 1 << 3; // 0x0008 : Signature d'enclave TEE
+    pub const KEY_EXPORT: u32 = 1 << 4; // 0x0010 : Exportation de clés privées
+    pub const VFS_ROOT_WRITE: u32 = 1 << 5; // 0x0020 : Écriture sur partition racine
+    pub const KERNEL_DEBUG: u32 = 1 << 6; // 0x0040 : Débogage noyau / ptrace
+    pub const AUDIT_PURGE: u32 = 1 << 7; // 0x0080 : Altération / purge de journal
+    pub const STORAGE_READ: u32 = 1 << 8; // 0x0100 : Lecture stockage persistant
+    pub const STORAGE_WRITE: u32 = 1 << 9; // 0x0200 : Écriture stockage persistant
+    pub const CLUSTER_CONTROL: u32 = 1 << 10; // 0x0400 : Orchestration des nœuds
+    pub const WORKLOAD_EXEC: u32 = 1 << 11; // 0x0800 : Lancement de micro-VMs
+    pub const LEGACY_TOXIC_A: u32 = 1 << 30; // 0x40000000 : Indicateur toxique haut A
+    pub const LEGACY_TOXIC_B: u32 = 1 << 31; // 0x80000000 : Indicateur toxique haut B
+}
+
+// ============================================================================
 // TYPES DE DONNÉES & ENTITLEMENTS CIEM
 // ============================================================================
 
@@ -315,6 +338,14 @@ pub enum CiemAnomalyType {
     OrphanEntitlement,
     PrivilegeCreep,
     ToxicCombination,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CiemAction {
+    LeastPrivilegeEnforced,
+    DormantRevoked,
+    OrphanPurged,
+    ToxicCombinationBroken,
 }
 
 /// Enregistrement d'une identité dans la cartographie de grappe
@@ -392,8 +423,24 @@ impl EntitlementRecord {
         rec
     }
 
+    /// Droits accordés mais jamais exercés (Entitlement Gap)
     pub fn excess_rights(&self) -> u32 {
         self.granted_rights & !self.exercised_rights
+    }
+
+    /// Alias explicite pour le calcul de l'écart d'entitlement
+    pub fn entitlement_gap(&self) -> u32 {
+        self.excess_rights()
+    }
+
+    /// Calcule le pourcentage de privilèges non utilisés (0..100%)
+    pub fn gap_percentage(&self) -> u8 {
+        let total = self.granted_rights.count_ones();
+        if total == 0 {
+            return 0;
+        }
+        let excess = self.excess_rights().count_ones();
+        ((excess * 100) / total) as u8
     }
 
     pub fn is_excessive(&self) -> bool {
@@ -404,11 +451,32 @@ impl EntitlementRecord {
         if self.status == EntitlementStatus::Revoked {
             return false;
         }
-        if self.exercised_rights == 0 {
-            current_tick.saturating_sub(self.last_used_tick) >= self.dormant_threshold_ticks
-        } else {
-            current_tick.saturating_sub(self.last_used_tick) >= self.dormant_threshold_ticks
+        current_tick.saturating_sub(self.last_used_tick) >= self.dormant_threshold_ticks
+    }
+
+    /// Vérifie si une combinaison toxique est présente
+    pub fn has_toxic_combination(&self) -> bool {
+        use entitlement_bits::*;
+        // Combinaison toxique legacy (bits hauts 30 et 31)
+        if (self.granted_rights & 0xC000_0000) == 0xC000_0000 {
+            return true;
         }
+        // Combinaison toxique 1 : IAM_ADMIN + SECRETS_READ + NETWORK_EGRESS (vol de secrets & exfiltration)
+        let comb1 = IAM_ADMIN | SECRETS_READ | NETWORK_EGRESS;
+        if (self.granted_rights & comb1) == comb1 {
+            return true;
+        }
+        // Combinaison toxique 2 : KEY_EXPORT + NETWORK_EGRESS (exfiltration directe de clés privées)
+        let comb2 = KEY_EXPORT | NETWORK_EGRESS;
+        if (self.granted_rights & comb2) == comb2 {
+            return true;
+        }
+        // Combinaison toxique 3 : KERNEL_DEBUG + AUDIT_PURGE (sabotage furtif sans traces)
+        let comb3 = KERNEL_DEBUG | AUDIT_PURGE;
+        if (self.granted_rights & comb3) == comb3 {
+            return true;
+        }
+        false
     }
 
     pub fn compute_hash(&self) -> [u8; 32] {
@@ -433,6 +501,88 @@ pub struct CiemAnomaly {
     pub risk: RiskLevel,
     pub detected_tick: u64,
     pub remediated: bool,
+}
+
+/// Rapport de remédiation et réduction de privilèges CIEM scellé SHA-256
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CiemRemediationReport {
+    pub report_id: u64,
+    pub identity_id: u32,
+    pub entitlement_id: u32,
+    pub timestamp: u64,
+    pub action: CiemAction,
+    pub initial_rights: u32,
+    pub effective_rights: u32,
+    pub gap_removed: u32,
+    pub risk_before: RiskLevel,
+    pub risk_after: RiskLevel,
+    pub report_hash: [u8; 32],
+}
+
+impl CiemRemediationReport {
+    pub fn compute_hash(
+        report_id: u64,
+        identity_id: u32,
+        entitlement_id: u32,
+        timestamp: u64,
+        action: CiemAction,
+        initial_rights: u32,
+        effective_rights: u32,
+        gap_removed: u32,
+        risk_before: RiskLevel,
+        risk_after: RiskLevel,
+    ) -> [u8; 32] {
+        let mut h = Sha256::new();
+        h.update(&report_id.to_be_bytes());
+        h.update(&identity_id.to_be_bytes());
+        h.update(&entitlement_id.to_be_bytes());
+        h.update(&timestamp.to_be_bytes());
+        h.update(&[action as u8]);
+        h.update(&initial_rights.to_be_bytes());
+        h.update(&effective_rights.to_be_bytes());
+        h.update(&gap_removed.to_be_bytes());
+        h.update(&[risk_before as u8, risk_after as u8]);
+        h.finalize()
+    }
+
+    pub fn new(
+        report_id: u64,
+        identity_id: u32,
+        entitlement_id: u32,
+        timestamp: u64,
+        action: CiemAction,
+        initial_rights: u32,
+        effective_rights: u32,
+        gap_removed: u32,
+        risk_before: RiskLevel,
+        risk_after: RiskLevel,
+    ) -> Self {
+        let report_hash = Self::compute_hash(
+            report_id,
+            identity_id,
+            entitlement_id,
+            timestamp,
+            action,
+            initial_rights,
+            effective_rights,
+            gap_removed,
+            risk_before,
+            risk_after,
+        );
+        Self {
+            report_id,
+            identity_id,
+            entitlement_id,
+            timestamp,
+            action,
+            initial_rights,
+            effective_rights,
+            gap_removed,
+            risk_before,
+            risk_after,
+            report_hash,
+        }
+    }
 }
 
 // ============================================================================
@@ -498,6 +648,8 @@ pub struct JamboCiemDaemon {
     pub entitlement_count: usize,
     pub anomalies: [Option<CiemAnomaly>; 32],
     pub anomaly_count: usize,
+    pub reports: [Option<CiemRemediationReport>; 32],
+    pub report_count: usize,
     pub audit_ledger: [Option<CiemAuditRecord>; 64],
     pub audit_count: usize,
     pub last_ledger_hash: [u8; 32],
@@ -506,10 +658,17 @@ pub struct JamboCiemDaemon {
     pub total_scans: u64,
     pub total_anomalies_detected: u64,
     pub total_remediations: u64,
+    pub total_reports: u64,
     pub active_identities: usize,
 }
 
 impl JamboCiemDaemon {
+    pub const GENESIS_HASH: [u8; 32] = [
+        0x50, 0x48, 0x31, 0x35, 0x37, 0x5f, 0x43, 0x49, 0x45, 0x4d, 0x5f, 0x47, 0x45, 0x4e, 0x45,
+        0x53, 0x49, 0x53, 0x5f, 0x4c, 0x45, 0x44, 0x47, 0x45, 0x52, 0x5f, 0x32, 0x30, 0x32, 0x36,
+        0x5f, 0x24,
+    ];
+
     pub fn new(admin_cap: CiemCap) -> Self {
         Self {
             admin_cap,
@@ -519,12 +678,15 @@ impl JamboCiemDaemon {
             entitlement_count: 0,
             anomalies: [None; 32],
             anomaly_count: 0,
+            reports: [None; 32],
+            report_count: 0,
             audit_ledger: [None; 64],
             audit_count: 0,
-            last_ledger_hash: [0u8; 32],
+            last_ledger_hash: Self::GENESIS_HASH,
             total_scans: 0,
             total_anomalies_detected: 0,
             total_remediations: 0,
+            total_reports: 0,
             active_identities: 0,
         }
     }
@@ -539,7 +701,6 @@ impl JamboCiemDaemon {
         details_hash: [u8; 32],
     ) {
         if self.audit_count >= self.audit_ledger.len() {
-            // Décalage pour journal tournant borné
             for i in 1..self.audit_ledger.len() {
                 self.audit_ledger[i - 1] = self.audit_ledger[i];
             }
@@ -574,7 +735,33 @@ impl JamboCiemDaemon {
         self.last_ledger_hash = record_hash;
     }
 
-    /// Enregistre une nouvelle identité dans la cartographie
+    /// Récupère le dernier rapport scellé généré
+    pub fn latest_report(&self) -> Option<&CiemRemediationReport> {
+        if self.report_count == 0 {
+            None
+        } else {
+            self.reports[self.report_count - 1].as_ref()
+        }
+    }
+
+    /// Calcule le pourcentage moyen d'écart d'entitlement sur l'infrastructure
+    pub fn average_gap_percentage(&self) -> u8 {
+        let mut total_gap = 0u64;
+        let mut count = 0u64;
+        for ent in self.entitlements.iter().flatten() {
+            if ent.status != EntitlementStatus::Revoked {
+                total_gap += ent.gap_percentage() as u64;
+                count += 1;
+            }
+        }
+        if count == 0 {
+            0
+        } else {
+            (total_gap / count) as u8
+        }
+    }
+
+    /// Enregistre une nouvelle identité dans la cartographie souveraine
     pub fn register_identity(
         &mut self,
         cap: &CiemCap,
@@ -583,7 +770,7 @@ impl JamboCiemDaemon {
         kind: IdentityKind,
         timestamp: u64,
     ) -> Result<u32, CiemError> {
-        if !cap.has_right(ciem_rights::REGISTER_IDENTITY) {
+        if !cap.has_right(ciem_rights::REGISTER_IDENTITY) && !cap.has_right(ciem_rights::ADMIN) {
             return Err(CiemError::PermissionDenied);
         }
         if self.identity_count >= self.identities.len() {
@@ -629,16 +816,14 @@ impl JamboCiemDaemon {
         if self.entitlement_count >= self.entitlements.len() {
             return Err(CiemError::CapacityExceeded);
         }
-        // Vérifier si l'identité existe
-        let mut found = false;
+
         for ident in self.identities.iter_mut().flatten() {
             if ident.id == identity_id {
                 ident.total_entitlements += 1;
-                found = true;
                 break;
             }
         }
-        // Même si non trouvée, l'entitlement peut être enregistré pour tester les orphelins si explicitement requis
+
         let entitlement = EntitlementRecord::new(
             id,
             identity_id,
@@ -659,7 +844,6 @@ impl JamboCiemDaemon {
             entitlement.hash,
         );
 
-        let _ = found;
         Ok(id)
     }
 
@@ -743,8 +927,8 @@ impl JamboCiemDaemon {
                     risk = RiskLevel::High;
                     ent.status = EntitlementStatus::Orphan;
                 } else if ent.status != EntitlementStatus::Revoked {
-                    // 2. Détection de combinaison toxique (bits réservés 30 et 31 tous deux actifs)
-                    if (ent.granted_rights & 0xC000_0000) == 0xC000_0000 {
+                    // 2. Détection de combinaison toxique (Toxic Combinations)
+                    if ent.has_toxic_combination() {
                         anomaly_detected = CiemAnomalyType::ToxicCombination;
                         risk = RiskLevel::Critical;
                         ent.status = EntitlementStatus::Excessive;
@@ -755,7 +939,7 @@ impl JamboCiemDaemon {
                         risk = RiskLevel::Medium;
                         ent.status = EntitlementStatus::Dormant;
                     }
-                    // 4. Détection des droits excessifs (Excessive Privileges)
+                    // 4. Détection des droits excessifs (Excessive Rights / Entitlement Gap)
                     else if ent.is_excessive() {
                         anomaly_detected = CiemAnomalyType::ExcessiveRights;
                         risk = RiskLevel::Medium;
@@ -807,7 +991,7 @@ impl JamboCiemDaemon {
         Ok((checked, anomalies_found))
     }
 
-    /// Réduction monotone vers le moindre privilège effectif (Least-Privilege Monotonic Attenuation)
+    /// Réduction monotone vers le moindre privilège effectif (Least-Privilege Monotonic Attenuation O(1))
     pub fn enforce_least_privilege(
         &mut self,
         cap: &CiemCap,
@@ -820,16 +1004,21 @@ impl JamboCiemDaemon {
 
         let mut found = false;
         let mut new_rights = 0;
+        let mut initial_rights = 0;
         let mut target_ident = 0;
+        let mut risk_before = RiskLevel::Low;
 
         for ent in self.entitlements.iter_mut().flatten() {
             if ent.id == entitlement_id {
                 target_ident = ent.identity_id;
+                initial_rights = ent.granted_rights;
+                risk_before = ent.risk;
+
                 // Moindre privilège : on réduit les droits accordés aux seuls droits effectivement exercés
                 let reduced = if ent.exercised_rights != 0 {
                     ent.granted_rights & ent.exercised_rights
                 } else {
-                    // Si aucun droit exercé mais forcé, réduit au masque minimal de survie 0x01
+                    // Si aucun droit exercé mais réduction demandée, réduit au masque minimal de survie 0x01
                     ent.granted_rights & 0x01
                 };
 
@@ -859,12 +1048,39 @@ impl JamboCiemDaemon {
             }
         }
 
+        // Créer et sceller le rapport de remédiation
+        let gap_removed = initial_rights.saturating_sub(new_rights);
+        self.total_reports += 1;
+        let rep_id = self.total_reports;
+        let report = CiemRemediationReport::new(
+            rep_id,
+            target_ident,
+            entitlement_id,
+            current_tick,
+            CiemAction::LeastPrivilegeEnforced,
+            initial_rights,
+            new_rights,
+            gap_removed,
+            risk_before,
+            RiskLevel::Low,
+        );
+
+        if self.report_count < self.reports.len() {
+            self.reports[self.report_count] = Some(report);
+            self.report_count += 1;
+        } else {
+            for i in 1..self.reports.len() {
+                self.reports[i - 1] = self.reports[i];
+            }
+            self.reports[self.reports.len() - 1] = Some(report);
+        }
+
         self.append_audit(
             current_tick,
             CiemAuditAction::LeastPrivilegeEnforced,
             target_ident,
             entitlement_id,
-            Sha256::hash(&new_rights.to_be_bytes()),
+            report.report_hash,
         );
 
         Ok(new_rights)
@@ -883,10 +1099,16 @@ impl JamboCiemDaemon {
 
         let mut found = false;
         let mut target_ident = 0;
+        let mut initial_rights = 0;
+        let mut risk_before = RiskLevel::Low;
+        let mut was_orphan = false;
 
         for ent in self.entitlements.iter_mut().flatten() {
             if ent.id == entitlement_id {
                 target_ident = ent.identity_id;
+                initial_rights = ent.granted_rights;
+                risk_before = ent.risk;
+                was_orphan = ent.status == EntitlementStatus::Orphan;
                 ent.granted_rights = 0;
                 ent.exercised_rights = 0;
                 ent.status = EntitlementStatus::Revoked;
@@ -909,12 +1131,48 @@ impl JamboCiemDaemon {
             }
         }
 
-        self.append_audit(
-            current_tick,
-            CiemAuditAction::DormantRevoked,
+        let action = if was_orphan {
+            CiemAction::OrphanPurged
+        } else {
+            CiemAction::DormantRevoked
+        };
+
+        // Création du rapport scellé SHA-256
+        self.total_reports += 1;
+        let rep_id = self.total_reports;
+        let report = CiemRemediationReport::new(
+            rep_id,
             target_ident,
             entitlement_id,
-            [0u8; 32],
+            current_tick,
+            action,
+            initial_rights,
+            0,
+            initial_rights,
+            risk_before,
+            RiskLevel::Info,
+        );
+
+        if self.report_count < self.reports.len() {
+            self.reports[self.report_count] = Some(report);
+            self.report_count += 1;
+        } else {
+            for i in 1..self.reports.len() {
+                self.reports[i - 1] = self.reports[i];
+            }
+            self.reports[self.reports.len() - 1] = Some(report);
+        }
+
+        self.append_audit(
+            current_tick,
+            if was_orphan {
+                CiemAuditAction::OrphanPurged
+            } else {
+                CiemAuditAction::DormantRevoked
+            },
+            target_ident,
+            entitlement_id,
+            report.report_hash,
         );
 
         Ok(true)
@@ -949,7 +1207,7 @@ impl JamboCiemDaemon {
 
     /// Vérification de l'intégrité cryptographique du registre d'audit scellé
     pub fn verify_ledger_integrity(&self) -> bool {
-        let mut prev_hash = [0u8; 32];
+        let mut prev_hash = Self::GENESIS_HASH;
         for i in 0..self.audit_count {
             if let Some(record) = self.audit_ledger[i] {
                 if record.prev_hash != prev_hash {
@@ -973,7 +1231,7 @@ impl JamboCiemDaemon {
         true
     }
 
-    /// Initialise un jeu de configurations et d'identités par défaut
+    /// Initialise un jeu de configurations et d'identités souveraines par défaut
     pub fn init_defaults(&mut self) {
         let cap = self.admin_cap;
 
@@ -990,7 +1248,7 @@ impl JamboCiemDaemon {
         );
         let _ = self.record_usage(&cap, 101, 201, 0x0F, 120);
 
-        // 2. Identité Service Ingress Gateway (ServiceAccount) avec droits excessifs
+        // 2. Identité Service Ingress Gateway (ServiceAccount) avec droits excessifs (Entitlement Gap)
         let _ = self.register_identity(
             &cap,
             102,
@@ -1003,7 +1261,7 @@ impl JamboCiemDaemon {
             202,
             102,
             EntitlementScope::NetworkMesh,
-            0xFF, // Tous les droits accordés
+            0xFF, // Tous les 8 bits accordés
             10000,
             100,
         );
@@ -1102,7 +1360,7 @@ mod tests {
     }
 
     #[test]
-    fn test_ciem_monotonic_least_privilege_remediation() {
+    fn test_ciem_monotonic_least_privilege_remediation_and_sealed_report() {
         let admin_cap = CiemCap::new(Handle::new(12703, 1), ciem_rights::ALL, 10000, 500);
         let mut daemon = JamboCiemDaemon::new(admin_cap);
         daemon.init_defaults();
@@ -1126,6 +1384,16 @@ mod tests {
         assert_eq!(ent.status, EntitlementStatus::Attenuated);
         assert_eq!(ent.granted_rights, 0x07);
         assert_eq!(ent.excess_rights(), 0);
+        assert_eq!(ent.gap_percentage(), 0);
+
+        // Vérifier le rapport scellé généré
+        let rep = daemon.latest_report().expect("Rapport scellé");
+        assert_eq!(rep.identity_id, 102);
+        assert_eq!(rep.entitlement_id, 202);
+        assert_eq!(rep.action, CiemAction::LeastPrivilegeEnforced);
+        assert_eq!(rep.initial_rights, 0xFF);
+        assert_eq!(rep.effective_rights, 0x07);
+        assert_eq!(rep.gap_removed, 0xF8);
 
         // Révocation du droit dormant 203
         let revoked = daemon.revoke_entitlement(&admin_cap, 203, 2610).unwrap();
@@ -1152,6 +1420,95 @@ mod tests {
         let _ = daemon.scan_all_entitlements(&admin_cap, 3000).unwrap();
         let remediated = daemon.remediate_all(&admin_cap, 3050).unwrap();
         assert!(remediated >= 3);
+        assert_eq!(daemon.report_count, remediated);
         assert!(daemon.verify_ledger_integrity());
+    }
+
+    #[test]
+    fn test_ciem_toxic_combination_detection_and_remediation() {
+        use entitlement_bits::*;
+        let admin_cap = CiemCap::new(Handle::new(12705, 1), ciem_rights::ALL, 10000, 500);
+        let mut daemon = JamboCiemDaemon::new(admin_cap);
+        daemon.init_defaults();
+
+        // Enregistrer une identité runner avec combinaison toxique (IAM_ADMIN + SECRETS_READ + NETWORK_EGRESS)
+        let id = daemon
+            .register_identity(
+                &admin_cap,
+                105,
+                "runner-compromised",
+                IdentityKind::WorkloadAgent,
+                3100,
+            )
+            .unwrap();
+        let toxic_bits = IAM_ADMIN | SECRETS_READ | NETWORK_EGRESS | STORAGE_READ;
+        let eid = daemon
+            .grant_entitlement(
+                &admin_cap,
+                205,
+                id,
+                EntitlementScope::SecurityServices,
+                toxic_bits,
+                5000,
+                3110,
+            )
+            .unwrap();
+
+        // Simuler que le runner n'utilise en fait que STORAGE_READ
+        daemon
+            .record_usage(&admin_cap, id, eid, STORAGE_READ, 3120)
+            .unwrap();
+
+        // Scan au tick 3150 -> doit détecter ToxicCombination
+        let (_, anom) = daemon.scan_all_entitlements(&admin_cap, 3150).unwrap();
+        assert!(anom > 0);
+
+        let ent205 = daemon
+            .entitlements
+            .iter()
+            .flatten()
+            .find(|e| e.id == 205)
+            .unwrap();
+        assert!(ent205.has_toxic_combination());
+        assert_eq!(ent205.risk, RiskLevel::Critical);
+
+        // Application de moindre privilège -> brise la combinaison toxique
+        let new_r = daemon
+            .enforce_least_privilege(&admin_cap, 205, 3160)
+            .unwrap();
+        assert_eq!(new_r, STORAGE_READ);
+
+        let ent205_fixed = daemon
+            .entitlements
+            .iter()
+            .flatten()
+            .find(|e| e.id == 205)
+            .unwrap();
+        assert!(!ent205_fixed.has_toxic_combination());
+        assert_eq!(ent205_fixed.risk, RiskLevel::Low);
+
+        assert!(daemon.verify_ledger_integrity());
+    }
+
+    #[test]
+    fn test_ciem_entitlement_gap_and_metrics() {
+        let admin_cap = CiemCap::new(Handle::new(12706, 1), ciem_rights::ALL, 10000, 500);
+        let mut daemon = JamboCiemDaemon::new(admin_cap);
+        daemon.init_defaults();
+
+        // Entitlement 202 a granted 0xFF (8 bits) et exercised 0x07 (3 bits)
+        let ent202 = daemon
+            .entitlements
+            .iter()
+            .flatten()
+            .find(|e| e.id == 202)
+            .unwrap();
+        assert_eq!(ent202.excess_rights(), 0xF8);
+        assert_eq!(ent202.entitlement_gap(), 0xF8);
+        // Gap % = (5 non-utilisés / 8 accordés) * 100 = 62%
+        assert_eq!(ent202.gap_percentage(), 62);
+
+        let avg_gap = daemon.average_gap_percentage();
+        assert!(avg_gap > 0);
     }
 }
