@@ -126,22 +126,25 @@
 | **v0.3.4** | 137 | Opérations IT Pilotées par l'IA AIOps `jambo-aiops` | Moteur souverain AIOps d'ingestion télémétrique, calcul de z-score glissant, détection d'anomalies statistiques, corrélation topologique multi-sources, RCA (Root Cause Analysis), déclenchement automatique de playbooks d'auto-remédiation, AiopsCap & registre d'audit SHA-256 inaltérable | ✅ Validé |
 | **v0.3.5** | 138 | Sécurité des Pipelines & Orchestration DevSecOps `jambo-devsecops` | Moteur souverain DevSecOps d'analyse statique et dynamique de manifests, contrôle d'admission strict (Gatekeeper / Policy Engine), attestation de provenance SLSA L1-L4 et in-toto, vérification continue de signature cryptographique souveraine des artéfacts, exécution de pipelines ordonnancés (SAST, SCA, attestation, admission), DevSecOpsCap & registre d'audit SHA-256 inaltérable | ✅ Validé |
 | **v0.3.6** | 139 | Gestion des Risques Fournisseurs & Dépendances TPRM `jambo-tprm` | Évaluation continue des risques fournisseurs & dépendances tierces (TPRM), cartographie des dépendances externes, scoring dynamique de réputation et de criticité, surveillance continue des flux d'ingestion, attestations tierces SecNumCloud/ISO27001, quarantaine O(1) des composants amont compromis, TprmCap & registre d'audit SHA-256 inaltérable | ✅ Validé |
+| **v0.3.7** | 140 | Sécurité Applicative Dynamique & RASP `jambo-appsec` | Plateforme souveraine RASP, surveillance microservices Ring 3, détection de détournement de flux de contrôle (CFI / Shadow Stack), neutralisation instantanée des injections de charge utile, blocage désérialisation non sécurisée, canaris mémoire, quarantaine O(1), AppSecCap & audit SHA-256 | ✅ Validé |
 
 ---
 
 ## 3. Prochaines Étapes Prioritaires
 
-### 🎯 Prochaine Tâche Immédiate : Phase 140 — v0.3.7
-* **Composant** : `services/jambo-appsec`
-* **Versionnement** : Poursuite de la série `v0.3.*` (Jalon `v0.3.7`)
-* **Objectif** : Sécurité Applicative Dynamique & RASP (Runtime Application Self-Protection) — Surveillance d'exécution des microservices Ring 3, détection en temps réel des détournements de flux de contrôle (CFI), injection de charge utile malveillante, désérialisation non sécurisée, atténuation proactive et neutralisation instantanée des menaces sans arrêt de service, AppSecCap & registre d'audit SHA-256 inaltérable.
+### 🎯 Prochaine Tâche Immédiate : Phase 141 — v0.3.8
+* **Composant** : `services/jambo-kdir`
+* **Versionnement** : Poursuite de la série `v0.3.*` (Jalon `v0.3.8`)
+* **Objectif** : Cyber-Résilience & Intégrité du Noyau et des Pilotes (Kernel & Driver Integrity Resilience) — Surveillance continue d'intégrité des structures critiques du noyau (IDT, GDT, tables de pages CR3, dispatchers syscalls), détection d'altérations non autorisées et de rootkits Ring 0/hyperviseur, validation des signatures des pilotes VMO, auto-restauration des tables système, KdirCap & registre d'audit SHA-256 inaltérable.
 * **Tâches précises** :
-  1. Moteur RASP souverain : agents de confinement intégrés, politiques de protection à l'exécution, télémétrie d'intégrité mémoire, neutralisation O(1).
+  1. Moteur KDIR souverain : sondes d'intégrité noyau, attestation de mémoire résidente, confinement des pilotes corrompus.
   2. Validation formelle et suite de tests `cargo xtask test`.
 
 ---
 
 ## 4. Journal d'Exécution des Cycles
+
+* **2026-10-24 07:00 UTC** : Validation complète Phase 140 (`jambo-appsec`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-appsec`, 4/4). RASP — 5 microservices Ring 3 surveillés, neutralisation CFI & injections O(1) opérationnelles, confinement et canaris de pile vérifiés, registre SHA-256 intègre. Tag `v0.3.7`.
 
 * **2026-10-19 12:47 UTC** : Validation complète Phase 69 (`jambo-policyd`), passage avec succès de la suite de tests QEMU (`cargo xtask test`). Commit `6a5738d` étiqueté `v0.2.67`.
 * **2026-10-19 12:51 UTC** : Enregistrement du cycle autonome de 10 minutes dans le Planificateur de Tâches & Crons d'Antigravity WebUI (`jambo-os-cycle`, `*/10 * * * *`, ticker actif).

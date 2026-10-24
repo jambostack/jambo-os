@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.3.6-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.3.7-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.3.6 (Gestion des Risques Fournisseurs & Dépendances Tierces jambo-tprm)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.3.6` introduit le moteur souverain de gestion des risques tiers et gouvernance des fournisseurs (TPRM) en espace utilisateur (`services/jambo-tprm`) : cartographie et inventaire exhaustif des dépendances externes (Crates, shared libs C, Wasm, firmwares), scoring dynamique multidimensionnel de réputation et de criticité des fournisseurs (Tiers 1 à 4), surveillance continue des flux d'ingestion et barrière d'admission stricte, vérification des attestations tierces de conformité (SecNumCloud, SovereignDefense, ISO 27001, SOC 2), détection proactive des facteurs de risques toxiques amont (scripts malveillants, typosquatting, CVE critiques, télémétrie occulte), politique de quarantaine et d'isolation automatique instantanée O(1) des composants amont compromis, contrôle d'accès capabilaire strict `TprmCap` avec atténuation monotone et registre d'audit inviolable scellé par chaînage SHA-256.
+> **Statut du Projet : Version v0.3.7 (Sécurité Applicative Dynamique & RASP jambo-appsec)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.3.7` introduit la plateforme souveraine de sécurité applicative à l'exécution et protection active (RASP) en espace utilisateur (`services/jambo-appsec`) : surveillance continue des microservices Ring 3 (intégrité mémoire par canaris, Shadow Stack pour CFI), détection en temps réel des détournements de flux de contrôle (ROP/JOP), neutralisation instantanée des injections de charges utiles malveillantes sans interruption de service, blocage des désérialisations non sécurisées, confinement durci et mise en quarantaine sélective O(1) des cibles récidivistes, contrôle d'accès capabilaire strict `AppSecCap` avec atténuation monotone et registre d'audit inviolable scellé par chaînage SHA-256.
 
 ---
 

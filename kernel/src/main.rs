@@ -1394,6 +1394,13 @@ pub extern "C" fn _start() -> ! {
         "Échec du test de gestion des risques fournisseurs TPRM jambo-tprm"
     );
 
+    // 25viciesquadragies. Validation de la Sécurité Applicative Dynamique RASP (Phase 140 - v0.3.7)
+    let appsec_success = sched::appsec_test::execute_appsec_daemon_test();
+    assert!(
+        appsec_success,
+        "Échec du test de sécurité applicative dynamique & RASP jambo-appsec"
+    );
+
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
 
     arch::init_iommu();
@@ -1669,14 +1676,15 @@ pub extern "C" fn _start() -> ! {
     kprintln!("\x1b[1;32m[PASS] Phase 137 Artificial Intelligence for IT Operations (AIOps), RCA & Auto-Remediation (jambo-aiops) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 138 Pipeline Security & Sovereign DevSecOps Orchestration (jambo-devsecops) Complete\x1b[0m");
     kprintln!("\x1b[1;32m[PASS] Phase 139 Third-Party Risk Management & Supplier Governance (jambo-tprm) Complete\x1b[0m");
+    kprintln!("\x1b[1;32m[PASS] Phase 140 Dynamic Application Security & RASP (jambo-appsec) Complete\x1b[0m");
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.3.6 (Third-Party Risk Management jambo-tprm)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.3.7 (Dynamic Application Security & RASP jambo-appsec)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.3.6 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.3.7 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );

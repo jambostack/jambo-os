@@ -206,6 +206,7 @@ pub struct JamboShell {
     pub aiops: jambo_aiops::JamboAiopsDaemon,
     pub devsecops: jambo_devsecops::JamboDevSecOpsDaemon,
     pub tprm: jambo_tprm::JamboTprmDaemon,
+    pub appsec: jambo_appsec::JamboAppSecDaemon,
 }
 
 impl Default for JamboShell {
@@ -790,6 +791,15 @@ impl JamboShell {
         );
         let mut tprm = jambo_tprm::JamboTprmDaemon::new(tprm_cap);
         tprm.init_defaults();
+
+        let appsec_cap = jambo_appsec::AppSecCap::new(
+            libjambo::Handle::new(14001, 1),
+            jambo_appsec::appsec_rights::ALL,
+            5000,
+            100,
+        );
+        let mut appsec = jambo_appsec::JamboAppSecDaemon::new(appsec_cap);
+        appsec.init_defaults();
         Self {
             prompt_user: "jambo:/# ",
             commands_executed: 0,
@@ -886,6 +896,7 @@ impl JamboShell {
             aiops,
             devsecops,
             tprm,
+            appsec,
         }
     }
 
@@ -1099,10 +1110,11 @@ impl JamboShell {
                 emit("  aiops [cmd]     - Opérations IT pilotées par l'IA (AIOps), Z-score, corrélation topologique & remédiation\n");
                 emit("  devsecops [cmd] - Sécurité pipelines DevSecOps, contrôle admission, attestations SLSA & signatures\n");
                 emit("  tprm [cmd]      - Gestion des risques fournisseurs (TPRM), dépendances & quarantaine\n");
+                emit("  appsec [cmd]    - Sécurité applicative dynamique (RASP), CFI, canaris mémoire & neutralisation O(1)\n");
                 (ShellStatus::Success, write_pos)
             }
             "version" => {
-                emit("JamboOS v0.3.6 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
+                emit("JamboOS v0.3.7 (x86_64-unknown-none) - Micro-noyau Zero-Ambient\n");
                 (ShellStatus::Success, write_pos)
             }
             "echo" => {
@@ -14123,6 +14135,241 @@ impl JamboShell {
                     }
                     _ => {
                         emit("Usage: tprm [status | vendors | deps | attestations | eval [id] | quarantine [id] | verify]\n");
+                        (ShellStatus::ExecutionFailed, write_pos)
+                    }
+                }
+            }
+            "appsec" => {
+                let subcmd = if parsed.arg_count > 1 {
+                    parsed.args[1]
+                } else {
+                    "status"
+                };
+
+                let mut b = [0u8; 20];
+
+                match subcmd {
+                    "status" => {
+                        let cap = self.appsec.admin_cap;
+                        if let Ok(sum) = self.appsec.get_summary(&cap) {
+                            emit("--- JAMBO RASP APPSEC STATUS (PHASE 140) ---\n");
+                            emit("Microservices surveillés: ");
+                            emit(format_u64(sum.total_targets as u64, &mut b));
+                            emit("\nMicroservices actifs: ");
+                            emit(format_u64(sum.active_targets as u64, &mut b));
+                            emit("\nMicroservices en quarantaine: ");
+                            emit(format_u64(sum.quarantined_targets as u64, &mut b));
+                            emit("\nInspections d'exécution totales: ");
+                            emit(format_u64(sum.total_inspections, &mut b));
+                            emit("\nMenaces détectées: ");
+                            emit(format_u64(sum.total_threats_detected as u64, &mut b));
+                            emit("\nMenaces neutralisées (O(1)): ");
+                            emit(format_u64(sum.total_threats_neutralized as u64, &mut b));
+                            emit("\nDétournements CFI bloqués: ");
+                            emit(format_u64(sum.cfi_violations_blocked as u64, &mut b));
+                            emit("\nInjections de payload neutralisées: ");
+                            emit(format_u64(sum.injection_attempts_blocked as u64, &mut b));
+                            emit("\nDésérialisations malveillantes bloquées: ");
+                            emit(format_u64(
+                                sum.deserialization_attacks_blocked as u64,
+                                &mut b,
+                            ));
+                            emit("\nCorruptions mémoire contenues: ");
+                            emit(format_u64(sum.memory_corruptions_contained as u64, &mut b));
+                            emit("\nScore de santé RASP: ");
+                            emit(format_u64(sum.global_appsec_health_score as u64, &mut b));
+                            emit("/100\n");
+                            (ShellStatus::Success, write_pos)
+                        } else {
+                            emit("Erreur récupération résumé AppSec RASP\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        }
+                    }
+                    "targets" => {
+                        emit("--- MICROSERVICES RING 3 SOUS PROTECTION RASP ---\n");
+                        for target in self.appsec.targets.iter().flatten() {
+                            emit("[#");
+                            emit(format_u64(target.target_id as u64, &mut b));
+                            emit("] ");
+                            emit(target.name_str());
+                            emit(" (PID: ");
+                            emit(format_u64(target.pid as u64, &mut b));
+                            emit(") Profil: ");
+                            match target.profile {
+                                jambo_appsec::AppSecProfile::Standard => emit("Standard"),
+                                jambo_appsec::AppSecProfile::Hardened => emit("Hardened"),
+                                jambo_appsec::AppSecProfile::MilitarySovereign => {
+                                    emit("MilitarySovereign")
+                                }
+                                jambo_appsec::AppSecProfile::AirGappedCritical => {
+                                    emit("AirGappedCritical")
+                                }
+                            }
+                            emit(" | Statut: ");
+                            match target.status {
+                                jambo_appsec::TargetStatus::Active => emit("Actif"),
+                                jambo_appsec::TargetStatus::Hardened => emit("Confiné/Durci"),
+                                jambo_appsec::TargetStatus::Degraded => emit("Dégradé"),
+                                jambo_appsec::TargetStatus::Quarantined => emit("QUARANTAINE"),
+                                jambo_appsec::TargetStatus::Terminated => emit("Terminé"),
+                            }
+                            emit(" | Insp: ");
+                            emit(format_u64(target.inspections_count, &mut b));
+                            emit(" | Viol: ");
+                            emit(format_u64(target.violations_count as u64, &mut b));
+                            emit(" | Neutr: ");
+                            emit(format_u64(target.threats_neutralized as u64, &mut b));
+                            emit("\n");
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "threats" => {
+                        emit("--- MENACES APPLICATIVES INTERCEPTÉES RASP ---\n");
+                        for threat in self.appsec.threats.iter().flatten() {
+                            emit("[Menace #");
+                            emit(format_u64(threat.threat_id as u64, &mut b));
+                            emit("] Cible #");
+                            emit(format_u64(threat.target_id as u64, &mut b));
+                            emit(" | Vecteur: ");
+                            match threat.category {
+                                jambo_appsec::ThreatCategory::ControlFlowHijack => {
+                                    emit("ControlFlowHijack (CFI)")
+                                }
+                                jambo_appsec::ThreatCategory::PayloadInjection => {
+                                    emit("PayloadInjection")
+                                }
+                                jambo_appsec::ThreatCategory::InsecureDeserialization => {
+                                    emit("InsecureDeserialization")
+                                }
+                                jambo_appsec::ThreatCategory::MemoryCorruption => {
+                                    emit("MemoryCorruption")
+                                }
+                                jambo_appsec::ThreatCategory::PrivilegeEscalation => {
+                                    emit("PrivilegeEscalation")
+                                }
+                                jambo_appsec::ThreatCategory::SideChannelLeak => {
+                                    emit("SideChannelLeak")
+                                }
+                            }
+                            emit(" | Sévérité: ");
+                            match threat.severity {
+                                jambo_appsec::ThreatSeverity::Low => emit("Faible"),
+                                jambo_appsec::ThreatSeverity::Medium => emit("Moyenne"),
+                                jambo_appsec::ThreatSeverity::High => emit("Élevée"),
+                                jambo_appsec::ThreatSeverity::Critical => emit("CRITIQUE"),
+                            }
+                            emit(" | Action: ");
+                            match threat.action_taken {
+                                jambo_appsec::RaspAction::PassThrough => emit("PassThrough"),
+                                jambo_appsec::RaspAction::BlockAndAlert => emit("BlockAndAlert"),
+                                jambo_appsec::RaspAction::NeutralizePayload => {
+                                    emit("NeutralizePayload")
+                                }
+                                jambo_appsec::RaspAction::TerminateThread => {
+                                    emit("TerminateThread")
+                                }
+                                jambo_appsec::RaspAction::HardenContext => emit("HardenContext"),
+                                jambo_appsec::RaspAction::QuarantineTarget => {
+                                    emit("QuarantineTarget")
+                                }
+                            }
+                            emit(" | Neutralisée: ");
+                            emit(if threat.is_neutralized { "OUI" } else { "NON" });
+                            emit("\n  Détails: ");
+                            emit(threat.details_str());
+                            emit("\n");
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "policies" => {
+                        emit("--- POLITIQUES RASP DE CONFINEMENT ---\n");
+                        for policy in self.appsec.policies.iter().flatten() {
+                            emit("[Cible #");
+                            emit(format_u64(policy.target_id as u64, &mut b));
+                            emit("] CFI: ");
+                            emit(if policy.enforce_cfi {
+                                "Actif"
+                            } else {
+                                "Inactif"
+                            });
+                            emit(" | ShadowStack: ");
+                            emit(if policy.shadow_stack_enabled {
+                                "Actif"
+                            } else {
+                                "Inactif"
+                            });
+                            emit(" | Canari: ");
+                            emit(if policy.memory_canary_enabled {
+                                "Actif"
+                            } else {
+                                "Inactif"
+                            });
+                            emit(" | Désérialisation: ");
+                            emit(if policy.inspect_deserialization {
+                                "Actif"
+                            } else {
+                                "Inactif"
+                            });
+                            emit(" | MaxViol: ");
+                            emit(format_u64(policy.max_allowed_violations as u64, &mut b));
+                            emit("\n");
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "neutralize" => {
+                        if parsed.arg_count > 2 {
+                            let tid = parse_u64(parsed.args[2]).unwrap_or(0) as u32;
+                            let mut cap = self.appsec.admin_cap;
+                            match self.appsec.neutralize_threat(&mut cap, tid, 5000) {
+                                Ok(()) => {
+                                    emit("Menace RASP #");
+                                    emit(format_u64(tid as u64, &mut b));
+                                    emit(" NEUTRALISÉE avec succès\n");
+                                    (ShellStatus::Success, write_pos)
+                                }
+                                Err(_) => {
+                                    emit("Échec neutralisation menace\n");
+                                    (ShellStatus::ExecutionFailed, write_pos)
+                                }
+                            }
+                        } else {
+                            emit("Usage: appsec neutralize <threat_id>\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        }
+                    }
+                    "quarantine" => {
+                        if parsed.arg_count > 2 {
+                            let target_id = parse_u64(parsed.args[2]).unwrap_or(0) as u32;
+                            let mut cap = self.appsec.admin_cap;
+                            match self.appsec.quarantine_target(&mut cap, target_id, 5010) {
+                                Ok(()) => {
+                                    emit("Microservice #");
+                                    emit(format_u64(target_id as u64, &mut b));
+                                    emit(" placé en QUARANTAINE RASP avec succès\n");
+                                    (ShellStatus::Success, write_pos)
+                                }
+                                Err(_) => {
+                                    emit("Échec mise en quarantaine\n");
+                                    (ShellStatus::ExecutionFailed, write_pos)
+                                }
+                            }
+                        } else {
+                            emit("Usage: appsec quarantine <target_id>\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        }
+                    }
+                    "verify" => {
+                        let valid = self.appsec.verify_ledger_integrity();
+                        emit("Registre d'audit cryptographique SHA-256 RASP: ");
+                        emit(if valid {
+                            "INTÈGRE (OK)\n"
+                        } else {
+                            "ALTÉRÉ (FAIL)\n"
+                        });
+                        (ShellStatus::Success, write_pos)
+                    }
+                    _ => {
+                        emit("Usage: appsec [status | targets | threats | policies | neutralize <id> | quarantine <id> | verify]\n");
                         (ShellStatus::ExecutionFailed, write_pos)
                     }
                 }

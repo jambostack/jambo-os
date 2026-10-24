@@ -104,6 +104,7 @@ members = [
     "services/jambo-aiops",
     "services/jambo-devsecops",
     "services/jambo-tprm",
+    "services/jambo-appsec",
     "libs/jambo-ui",
     "libs/jambo-sdk",
     "drivers/virtio",

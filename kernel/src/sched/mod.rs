@@ -1,6 +1,7 @@
 pub mod ai_sec_test;
 pub mod ai_test;
 pub mod aiops_test;
+pub mod appsec_test;
 pub mod aspm_test;
 pub mod attest2_test;
 pub mod attest_test;
@@ -105,6 +106,7 @@ pub mod ztna_test;
 
 pub use ai_sec_test::execute_ai_sec_daemon_test;
 pub use ai_test::execute_local_ai_test;
+pub use appsec_test::execute_appsec_daemon_test;
 pub use attest2_test::execute_attest2_daemon_test;
 pub use attest_test::execute_attest_daemon_test;
 pub use audit_test::execute_cryptographic_audit_test;
