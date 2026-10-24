@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.3.19-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.3.20-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.3.19 (Cyber-Déception, Honeypots Souverains & Pièges Évasion Enclaves jambo-deception)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.3.19` introduit la modernisation et la souveraineté complète de la Cyber-Déception et Contre-Ingérence (`services/jambo-deception`) : déploiement dynamique de leurres de haute fidélité (HoneyCaps avec jetons piégés, objets de mémoire VMO délibérément vulnérables avec faux secrets déchiffrés, fausses clés privées Ring 3 Ed25519/AES-XTS), détection en temps constant O(1) de mouvements latéraux (`LateralMovementDecoy`), pièges d'évasion d'enclaves matérielles TEE (AMD SEV-SNP VMSA poisoning, Intel TDX #VE handler tamper, SGX EPC breaches), notification O(1) vers XDR/SOAR avec corrélation MITRE ATT&CK et recommandations de confinement coordonnées (IsolateEnclave, RevokeHoneyCap, BlockLateralSubnet), profilage comportemental adaptatif d'attaquants avec classification APT et mise en quarantaine automatique O(1), contrôle d'accès capabilaire strict `DeceptionCap` sans autorité ambiante et registre d'audit SHA-256 scellé et inaltérable.
+> **Statut du Projet : Version v0.3.20 (Architecture Zero Trust Souveraine, Micro-Périmètres Continus & Posture Dynamique jambo-ztna)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.3.20` introduit la modernisation et la souveraineté complète de l'Architecture Zero Trust Network Access (ZTNA souverain — `services/jambo-ztna`) : courtage de confiance continu sans périmètre implicite ("Never Trust, Always Verify"), évaluation dynamique et continue de posture de terminal (santé noyau KDIR/FDR, intégrité mémoire W^X/ASLR, attestation matérielle TPM 2.0 / TEE multi-plateformes Intel SGX, AMD SEV-SNP, ARM CCA et Sovereign JamboEnclave), micro-périmètres applicatifs stricts avec validation unitaire par transaction (IPC, VFS, TEE, réseau), baux éphémères ré-évalués dynamiquement selon la dérive de posture et limites transactionnelles, remédiation de posture et Step-Up challenges, mise en quarantaine immédiate O(1) avec propagation instantanée, notification d'incidents vers XDR/SOAR, contrôle d'accès capabilaire strict `ZtnaCap` sans autorité ambiante avec atténuation monotone et registre d'audit SHA-256 scellé et inaltérable.
 
 ---
 

@@ -1,7 +1,7 @@
 # ROADMAP DU DÉVELOPPEMENT AUTONOME — JamboOS
 
-> **Dernière mise à jour** : 2026-10-24 09:20 UTC  
-> **Version actuelle** : `v0.3.19`  
+> **Dernière mise à jour** : 2026-10-24 09:30 UTC  
+> **Version actuelle** : `v0.3.20`  
 > **Statut global** : Pré-Alpha active — Micro-noyau de 3e génération orienté capacités (`#![no_std]`)  
 > **Cycle de développement autonome** : 10 minutes via le Planificateur de Tâches & Crons d'Antigravity WebUI  
 
@@ -139,22 +139,25 @@
 | **v0.3.17** | 150 | Détection et Réponse Étendue Souveraine XDR `jambo-xdr` | Corrélation unifiée multi-vecteurs (Endpoint EDR, Réseau NDR/VPN, WAF, Identités Auth2, Cloud, Enclaves TEE protégées), traçage d'attaques persistantes avancées (APT) via un graphe de propagation de menaces déterministe (`ThreatPropagationGraph`), détection heuristique de campagnes distribuées avec synergie trans-vectorielle, orchestration de remédiation globale O(1) coordonnée (isolement EDR, coupure VPN, blocage WAF, révocation Auth2, confinement TEE) avec rapport de remédiation déterministe scellé SHA-256 (`XdrRemediationReport`), XdrCap & registre d'audit SHA-256 inaltérable | ✅ Validé |
 | **v0.3.18** | 151 | Renseignement Cyber & Partage de Flux d'IoC Souverain CTI `jambo-intel` | Ingestion et normalisation multi-formats d'IoC (STIX 2.1, TAXII 2.1, Bogons RFC 5737 et formats souverains), recherche ultra-rapide O(1) à double étage (filtre de Bloom cryptographique 2048 bits & table de hachage compacte indexée par buckets O(1)), métadonnées STIX 2.1 (TLP 2.0, Lockheed Martin Cyber Kill Chain, attribution d'acteurs étatiques/APT et fenêtres de validité temporelle), fédération souveraine TAXII 2.1 (collections partagées, synchronisation chiffrée entre nœuds partenaires et enveloppes déterministes), évaluation de menace et scoring de réputation adaptatif (0..100) avec recommandations d'actions de remédiation pour SOAR/XDR/EDR, purge adaptative par TTL dynamique, IntelCap & registre d'audit SHA-256 inaltérable | ✅ Validé |
 | **v0.3.19** | 152 | Cyber-Déception, Honeypots Souverains & Pièges Évasion Enclaves `jambo-deception` | Déploiement dynamique de leurres de haute fidélité (HoneyCaps, faux VMOs, fausses clés privées et faux secrets Ring 3 Ed25519/AES-XTS), canaris système et mémoires pour la détection instantanée de mouvements latéraux (LateralMovementDecoy), pièges d'évasion d'enclaves matérielles TEE (SEV-SNP VMSA poisoning, Intel TDX #VE handler tamper, SGX EPC breaches), notification O(1) vers XDR/SOAR avec corrélation MITRE ATT&CK et recommandations de confinement coordonnées, profilage adaptatif d'attaquants et auto-quarantaine, DeceptionCap & registre d'audit SHA-256 inaltérable | ✅ Validé |
+| **v0.3.20** | 153 | Architecture Zero Trust Souveraine, Micro-Périmètres Continus & Posture Dynamique `jambo-ztna` | Courtage de confiance continu sans périmètre implicite ("Never Trust, Always Verify"), calcul de score de posture de terminal (santé noyau KDIR/FDR, intégrité mémoire W^X/ASLR, attestation matérielle TPM 2.0 / TEE multi-plateformes Intel SGX, AMD SEV-SNP, ARM CCA, Sovereign JamboEnclave), micro-périmètres applicatifs stricts à validation unitaire par transaction (IPC, VFS, TEE, réseau), baux éphémères ré-évalués dynamiquement selon dérive de posture et limites transactionnelles, Step-Up & remédiation de posture, mise en quarantaine immédiate O(1), signalement d'incidents vers XDR/SOAR, ZtnaCap & registre d'audit SHA-256 inaltérable | ✅ Validé |
 
 ---
 
 ## 3. Prochaines Étapes Prioritaires
 
-### 🎯 Prochaine Tâche Immédiate : Phase 153 — v0.3.20
-* **Composant** : `services/jambo-ztna`
-* **Versionnement** : Poursuite de la série `v0.3.*` (Jalon `v0.3.20`)
-* **Objectif** : Architecture Zero Trust Souveraine, Micro-Périmètres Continus & Posture Dynamique (`jambo-ztna`) — Courtage de confiance continu sans périmètre implicite, calcul de score de posture de terminal (santé noyau, intégrité mémoire, attestation TPM/TEE), micro-périmètres applicatifs à validation unitaire par transaction (IPC, VFS, TEE, réseau), baux éphémères ré-évalués, ZtnaCap & registre d'audit SHA-256 inaltérable.
+### 🎯 Prochaine Tâche Immédiate : Phase 154 — v0.3.21
+* **Composant** : `services/jambo-casb`
+* **Versionnement** : Poursuite de la série `v0.3.*` (Jalon `v0.3.21`)
+* **Objectif** : Courtier d'Accès Sécurisé Cloud Souverain CASB & Passerelle DLP d'Enclave (`jambo-casb`) — Inspection profonde L7 sans rupture de chiffrement souverain, interception des flux d'enclave, contrôle de conformité des politiques de sécurité cloud/hybride, prévention des fuites de données (DLP hybride), filtrage capabilaire strict `CasbCap` et registre d'audit SHA-256 inaltérable.
 * **Tâches précises** :
-  1. Moteur souverain ZTNA de validation unitaire par transaction et ré-évaluation dynamique de posture `#![no_std]`.
-  2. Intégration capabilaire ZtnaCap, micro-périmètres VFS/IPC/TEE et validation formelle `cargo xtask test`.
+  1. Moteur souverain CASB d'interception et de courtage de sécurité d'enclaves `#![no_std]`.
+  2. Intégration capabilaire CasbCap, passerelle de politiques de confiance et validation formelle `cargo xtask test`.
 
 ---
 
 ## 4. Journal d'Exécution des Cycles
+
+* **2026-10-24 09:30 UTC** : Validation complète Phase 153 (`jambo-ztna`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-ztna`, 9/9). Architecture Zero Trust Souveraine, Micro-Périmètres Continus & Posture Dynamique (`jambo-ztna`) — Courtage de confiance continu sans périmètre implicite ("Never Trust, Always Verify"), calcul de score de posture de terminal (santé noyau KDIR/FDR, intégrité mémoire W^X/ASLR, attestation matérielle TPM 2.0 / TEE multi-plateformes Intel SGX, AMD SEV-SNP, ARM CCA, Sovereign JamboEnclave), micro-périmètres applicatifs stricts avec validation unitaire par transaction (IPC, VFS, TEE, réseau), baux éphémères ré-évalués dynamiquement selon la dérive de posture et quotas transactionnels, remédiation de posture et Step-Up challenges, mise en quarantaine immédiate O(1) avec propagation automatique, notification d'incidents vers XDR/SOAR, contrôle d'accès capabilaire strict `ZtnaCap` sans autorité ambiante avec atténuation monotone et registre d'audit SHA-256 scellé et inaltérable. Tag `v0.3.20`.
 
 * **2026-10-24 09:20 UTC** : Validation complète Phase 152 (`jambo-deception`), passage avec succès de la suite de tests QEMU (`cargo xtask test`, code 0) et des tests unitaires (`cargo test -p jambo-deception`, 8/8). Cyber-Déception, Honeypots Souverains & Pièges Évasion Enclaves (`jambo-deception`) — Déploiement dynamique de leurres de haute fidélité (HoneyCaps, faux VMOs, fausses clés privées et faux secrets Ring 3 Ed25519/AES-XTS), canaris système et mémoires pour la détection instantanée de mouvements latéraux (LateralMovementDecoy), pièges d'évasion d'enclaves matérielles TEE (AMD SEV-SNP VMSA poisoning, Intel TDX #VE handler tamper, SGX EPC breaches), notification O(1) vers XDR/SOAR avec corrélation MITRE ATT&CK et recommandations de confinement coordonnées (IsolateEnclave, RevokeHoneyCap, BlockLateralSubnet), profilage adaptatif d'attaquants et mise en quarantaine automatique O(1), contrôle d'accès capabilaire strict `DeceptionCap` sans autorité ambiante et registre d'audit SHA-256 scellé et inaltérable. Tag `v0.3.19`.
 

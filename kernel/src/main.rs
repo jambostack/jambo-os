@@ -1245,12 +1245,7 @@ pub extern "C" fn _start() -> ! {
 
     // Note: La Cyber-Déception, Honeypots Souverains & Pièges Évasion Enclaves est validée en Phase 152 (v0.3.19).
 
-    // 16semelviciesquadragies. Validation de l'Architecture Zero Trust & Micro-Périmètres (Phase 123 - v0.2.121)
-    let ztna_success = sched::ztna_test::execute_ztna_daemon_test();
-    assert!(
-        ztna_success,
-        "Échec du test de l'architecture zero trust jambo-ztna"
-    );
+    // Note: L'Architecture Zero Trust Souveraine & Micro-Périmètres Continus est validée en Phase 153 (v0.3.20).
 
     // 17semelviciesquadragies. Validation du Courtier CASB & DLP Avancé (Phase 124 - v0.2.122)
     let casb_success = sched::casb_test::execute_casb_daemon_test();
@@ -1453,6 +1448,13 @@ pub extern "C" fn _start() -> ! {
     assert!(
         deception_success,
         "Échec du test de la cyber-déception et pièges d'évasion jambo-deception"
+    );
+
+    // 38viciesquadragies. Validation Architecture Zero Trust Souveraine, Micro-Périmètres Continus & Posture Dynamique (Phase 153 - v0.3.20)
+    let ztna_success = sched::ztna_test::execute_ztna_daemon_test();
+    assert!(
+        ztna_success,
+        "Échec du test de l'architecture zero trust souveraine jambo-ztna"
     );
 
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
@@ -1761,14 +1763,17 @@ pub extern "C" fn _start() -> ! {
     kprintln!(
         "\x1b[1;32m[PASS] Phase 152 Sovereign Cyber Deception, Honeypots & Enclave Escape Traps (jambo-deception) Complete\x1b[0m"
     );
+    kprintln!(
+        "\x1b[1;32m[PASS] Phase 153 Sovereign Zero Trust Architecture, Continuous Micro-Perimeters & Dynamic Posture (jambo-ztna) Complete\x1b[0m"
+    );
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.3.19 (Sovereign Cyber Deception & Enclave Traps jambo-deception)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.3.20 (Sovereign Zero Trust Architecture & Continuous Micro-Perimeters jambo-ztna)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.3.19 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.3.20 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );

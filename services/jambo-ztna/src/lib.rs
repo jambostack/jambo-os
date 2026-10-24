@@ -1,14 +1,17 @@
-//! Architecture Zero Trust (ZTNA), Micro-Périmètres Continus & Ré-évaluation Dynamique de Posture
+//! Architecture Zero Trust Souveraine (ZTNA), Micro-Périmètres Continus & Posture Dynamique
 //!
-//! Phase 123 — Jalon v0.2.121
+//! Phase 153 — Jalon v0.3.20
 //!
 //! Fournit un système souverain Zero Trust Network Access (ZTNA) en environnement `#![no_std]` :
 //! 1. Courtage de confiance continu sans périmètre implicite ("Never Trust, Always Verify").
 //! 2. Évaluation dynamique et continue de posture de terminal (santé noyau, intégrité mémoire, attestation TPM/TEE).
-//! 3. Micro-périmètres applicatifs stricts avec validation unitaire par transaction IPC / réseau / VFS / TEE.
-//! 4. Révocation instantanée O(1) de confiance avec propagation automatique aux baux de sessions.
-//! 5. Contrôle d'accès capabilaire (`ZtnaCap`) sans autorité ambiante et atténuation monotone.
-//! 6. Registre d'audit cryptographique inviolable scellé par chaînage SHA-256.
+//! 3. Support des attestations matérielles TEE (Intel SGX, AMD SEV-SNP, ARM CCA, Souverain JamboEnclave).
+//! 4. Micro-périmètres applicatifs stricts avec validation unitaire par transaction IPC / réseau / VFS / TEE.
+//! 5. Baux de session éphémères ré-évalués dynamiquement selon la dérive de posture et limites transactionnelles.
+//! 6. Remédiation de posture, Step-Up challenges et mise en quarantaine immédiate O(1).
+//! 7. Notification d'incidents et de violations de micro-périmètre vers XDR / SOAR.
+//! 8. Contrôle d'accès capabilaire (`ZtnaCap`) sans autorité ambiante avec atténuation monotone stricte.
+//! 9. Registre d'audit cryptographique inviolable scellé par chaînage SHA-256 déterministe.
 
 #![no_std]
 
@@ -118,21 +121,23 @@ impl Sha256 {
         let mut offset = 0;
         while offset < data.len() {
             let space = 64 - self.buffer_len;
-            let chunk = (data.len() - offset).min(space);
-            self.buffer[self.buffer_len..self.buffer_len + chunk]
-                .copy_from_slice(&data[offset..offset + chunk]);
-            self.buffer_len += chunk;
-            offset += chunk;
+            let to_copy = space.min(data.len() - offset);
+            self.buffer[self.buffer_len..self.buffer_len + to_copy]
+                .copy_from_slice(&data[offset..offset + to_copy]);
+            self.buffer_len += to_copy;
+            offset += to_copy;
+
             if self.buffer_len == 64 {
-                let block = self.buffer;
-                self.transform_block(&block);
+                let mut blk = [0u8; 64];
+                blk.copy_from_slice(&self.buffer);
+                self.transform_block(&blk);
                 self.buffer_len = 0;
             }
         }
     }
 
     pub fn finalize(mut self) -> [u8; 32] {
-        let bit_len = self.total_bytes * 8;
+        let total_bits = self.total_bytes * 8;
         self.buffer[self.buffer_len] = 0x80;
         self.buffer_len += 1;
 
@@ -140,18 +145,19 @@ impl Sha256 {
             for i in self.buffer_len..64 {
                 self.buffer[i] = 0;
             }
-            let block = self.buffer;
-            self.transform_block(&block);
+            let mut blk = [0u8; 64];
+            blk.copy_from_slice(&self.buffer);
+            self.transform_block(&blk);
             self.buffer_len = 0;
         }
 
         for i in self.buffer_len..56 {
             self.buffer[i] = 0;
         }
-
-        self.buffer[56..64].copy_from_slice(&bit_len.to_be_bytes());
-        let block = self.buffer;
-        self.transform_block(&block);
+        self.buffer[56..64].copy_from_slice(&total_bits.to_be_bytes());
+        let mut blk = [0u8; 64];
+        blk.copy_from_slice(&self.buffer);
+        self.transform_block(&blk);
 
         let mut out = [0u8; 32];
         for i in 0..8 {
@@ -172,6 +178,7 @@ pub mod ztna_rights {
     pub const REVOKE_TRUST: u32 = 0x08;
     pub const AUDIT_READ: u32 = 0x10;
     pub const SEAL_LEDGER: u32 = 0x20;
+    pub const REMEDIATE: u32 = 0x40;
     pub const ADMIN: u32 = 0x80;
     pub const ALL: u32 = 0xFF;
 }
@@ -184,11 +191,15 @@ pub enum ZtnaError {
     DeviceTableFull,
     SessionTableFull,
     AuditLogFull,
+    IncidentLogFull,
     AccessDenied,
     DeviceNotFound,
     PolicyNotFound,
+    SessionNotFound,
     TrustRevoked,
     InvalidParameter,
+    ReplayDetected,
+    StepUpRequired,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -241,8 +252,40 @@ impl ZtnaCap {
 }
 
 // ============================================================================
-// ÉVALUATION CONTINUE DE POSTURE DE TERMINAL
+// ÉVALUATION CONTINUE DE POSTURE DE TERMINAL & TEE
 // ============================================================================
+
+/// Type d'attestation matérielle TEE
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TeeAttestationType {
+    None,
+    IntelSgx,
+    AmdSevSnp,
+    ArmCca,
+    SovereignJamboEnclave,
+}
+
+impl TeeAttestationType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::None => "NONE",
+            Self::IntelSgx => "INTEL_SGX",
+            Self::AmdSevSnp => "AMD_SEV_SNP",
+            Self::ArmCca => "ARM_CCA",
+            Self::SovereignJamboEnclave => "SOVEREIGN_JAMBO_ENCLAVE",
+        }
+    }
+
+    pub fn trust_weight(&self) -> u32 {
+        match self {
+            Self::None => 0,
+            Self::IntelSgx => 25,
+            Self::AmdSevSnp => 30,
+            Self::ArmCca => 28,
+            Self::SovereignJamboEnclave => 35,
+        }
+    }
+}
 
 /// Statut de conformité de posture du terminal / nœud
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -268,11 +311,12 @@ impl PostureStatus {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DevicePosture {
     pub device_id: u64,
-    pub kernel_integrity_score: u8, // 0..100 (protection cr0/cr4/wp, modules signés)
-    pub memory_safety_score: u8,    // 0..100 (W^X, ASLR, canaris de pile)
+    pub kernel_integrity_score: u8, // 0..100 (protection cr0/cr4/wp, modules signés, KDIR)
+    pub memory_safety_score: u8,    // 0..100 (W^X, ASLR, canaris de pile, EDR)
     pub tpm_tee_attested: bool,     // Attestation matérielle TPM 2.0 / TEE en cours
-    pub anomaly_level: u8,          // 0..100 (détecté par EDR/IDS)
-    pub composite_trust_score: u8,  // Score calculé pondéré (0..100)
+    pub tee_type: TeeAttestationType,
+    pub anomaly_level: u8,         // 0..100 (détecté par EDR/NDR/UEBA)
+    pub composite_trust_score: u8, // Score calculé pondéré (0..100)
     pub posture_status: PostureStatus,
     pub last_evaluated_tick: u64,
     pub active: bool,
@@ -286,10 +330,32 @@ impl DevicePosture {
         tpm_tee: bool,
         anomaly: u8,
     ) -> (u8, PostureStatus) {
+        Self::compute_composite_trust_with_tee(
+            kernel_score,
+            memory_score,
+            tpm_tee,
+            TeeAttestationType::None,
+            anomaly,
+        )
+    }
+
+    /// Calcule le score de confiance composite en intégrant le type de TEE
+    pub fn compute_composite_trust_with_tee(
+        kernel_score: u8,
+        memory_score: u8,
+        tpm_tee: bool,
+        tee_type: TeeAttestationType,
+        anomaly: u8,
+    ) -> (u8, PostureStatus) {
         // Pondération : 40% intégrité noyau, 35% intégrité mémoire, 25% attestation matérielle
-        let tpm_points = if tpm_tee { 25u32 } else { 0u32 };
+        let tee_weight = if tpm_tee {
+            tee_type.trust_weight().max(25)
+        } else {
+            0u32
+        };
+
         let base_weighted =
-            ((kernel_score as u32 * 40) + (memory_score as u32 * 35) + (tpm_points * 100)) / 100;
+            ((kernel_score as u32 * 40) + (memory_score as u32 * 35) + (tee_weight * 100)) / 100;
 
         // Déduction proportionnelle aux anomalies comportementales
         let score = (base_weighted.saturating_sub(anomaly as u32)).min(100) as u8;
@@ -307,7 +373,7 @@ impl DevicePosture {
 }
 
 // ============================================================================
-// MICRO-PÉRIMÈTRES APPLICATIFS & POLITIQUES
+// MICRO-PÉRIMÈTRES APPLICATIFS & TRANSACTIONS
 // ============================================================================
 
 /// Catégorie de ressource protégée par un micro-périmètre Zero Trust
@@ -332,6 +398,55 @@ impl ResourceKind {
     }
 }
 
+/// Type d'opération sur un micro-périmètre
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OperationKind {
+    Read,
+    Write,
+    Execute,
+    Attest,
+    Transact,
+    Admin,
+}
+
+impl OperationKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Read => "READ",
+            Self::Write => "WRITE",
+            Self::Execute => "EXECUTE",
+            Self::Attest => "ATTEST",
+            Self::Transact => "TRANSACT",
+            Self::Admin => "ADMIN",
+        }
+    }
+}
+
+/// Contexte d'une transaction unitaire soumise au courtier ZTNA
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TransactionContext {
+    pub operation: OperationKind,
+    pub transaction_digest: [u8; 32],
+    pub nonce: u64,
+    pub tick: u64,
+}
+
+impl TransactionContext {
+    pub const fn new(
+        operation: OperationKind,
+        transaction_digest: [u8; 32],
+        nonce: u64,
+        tick: u64,
+    ) -> Self {
+        Self {
+            operation,
+            transaction_digest,
+            nonce,
+            tick,
+        }
+    }
+}
+
 /// Règle de micro-périmètre exigeant des conditions strictes de confiance
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MicroPerimeterPolicy {
@@ -341,7 +456,9 @@ pub struct MicroPerimeterPolicy {
     pub resource_kind: ResourceKind,
     pub min_trust_score: u8,
     pub require_tpm_tee: bool,
+    pub required_tee: TeeAttestationType,
     pub max_session_ttl: u64,
+    pub max_transactions_per_session: u32,
     pub active: bool,
 }
 
@@ -352,10 +469,10 @@ impl MicroPerimeterPolicy {
 }
 
 // ============================================================================
-// SESSIONS ÉPHÉMÈRES & VALIDATION UNITAIRE
+// SESSIONS ÉPHÉMÈRES & DÉCISIONS ZTNA
 // ============================================================================
 
-/// Session de confiance éphémère à validation unitaire
+/// Session de confiance éphémère à validation unitaire continue
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ZtnaSession {
     pub session_id: u64,
@@ -366,6 +483,7 @@ pub struct ZtnaSession {
     pub expires_tick: u64,
     pub transaction_count: u32,
     pub last_access_tick: u64,
+    pub last_nonce: u64,
     pub revoked: bool,
 }
 
@@ -387,6 +505,47 @@ pub enum AccessDecision {
 }
 
 // ============================================================================
+// ALERTES & INCIDENTS ZTNA VERS XDR / SOAR
+// ============================================================================
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ZtnaIncidentSeverity {
+    Low,
+    Medium,
+    High,
+    Critical,
+}
+
+impl ZtnaIncidentSeverity {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Low => "LOW",
+            Self::Medium => "MEDIUM",
+            Self::High => "HIGH",
+            Self::Critical => "CRITICAL",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ZtnaIncident {
+    pub incident_id: u64,
+    pub device_id: u64,
+    pub subject_id: u64,
+    pub policy_id: u32,
+    pub severity: ZtnaIncidentSeverity,
+    pub reason: [u8; 32],
+    pub reason_len: usize,
+    pub timestamp: u64,
+}
+
+impl ZtnaIncident {
+    pub fn reason_as_str(&self) -> &str {
+        core::str::from_utf8(&self.reason[..self.reason_len]).unwrap_or("unknown")
+    }
+}
+
+// ============================================================================
 // AUDIT CRYPTOGRAPHIQUE SHA-256 SCELLEMENT INVIOLABLE
 // ============================================================================
 
@@ -398,6 +557,8 @@ pub enum AuditAction {
     AccessDenied,
     TrustRevoked,
     SessionReevaluated,
+    PostureRemediated,
+    IncidentDispatched,
     LedgerSealed,
 }
 
@@ -410,6 +571,8 @@ impl AuditAction {
             Self::AccessDenied => "AccessDenied",
             Self::TrustRevoked => "TrustRevoked",
             Self::SessionReevaluated => "SessionReevaluated",
+            Self::PostureRemediated => "PostureRemediated",
+            Self::IncidentDispatched => "IncidentDispatched",
             Self::LedgerSealed => "LedgerSealed",
         }
     }
@@ -443,10 +606,15 @@ pub struct JamboZtnaDaemon {
     pub audit_log: [Option<AuditEntry>; 64],
     pub audit_count: usize,
     pub ledger_hash: [u8; 32],
+    pub incidents: [Option<ZtnaIncident>; 16],
+    pub incident_count: usize,
+    pub next_incident_id: u64,
     pub total_evaluations: u64,
     pub total_grants: u64,
     pub total_denials: u64,
     pub total_revocations: u64,
+    pub total_step_ups: u64,
+    pub total_incidents: u64,
 }
 
 impl JamboZtnaDaemon {
@@ -466,10 +634,15 @@ impl JamboZtnaDaemon {
             audit_log: [None; 64],
             audit_count: 0,
             ledger_hash: Self::GENESIS_HASH,
+            incidents: [None; 16],
+            incident_count: 0,
+            next_incident_id: 1,
             total_evaluations: 0,
             total_grants: 0,
             total_denials: 0,
             total_revocations: 0,
+            total_step_ups: 0,
+            total_incidents: 0,
         }
     }
 
@@ -513,6 +686,71 @@ impl JamboZtnaDaemon {
         self.ledger_hash = entry_hash;
     }
 
+    /// Déclenche un incident Zero Trust et le consigne pour dispatch vers XDR/SOAR
+    pub fn report_incident(
+        &mut self,
+        device_id: u64,
+        subject_id: u64,
+        policy_id: u32,
+        severity: ZtnaIncidentSeverity,
+        reason_str: &str,
+        timestamp: u64,
+    ) {
+        if self.incident_count >= self.incidents.len() {
+            return;
+        }
+
+        let mut r = [0u8; 32];
+        let bytes = reason_str.as_bytes();
+        let len = bytes.len().min(32);
+        r[..len].copy_from_slice(&bytes[..len]);
+
+        let inc = ZtnaIncident {
+            incident_id: self.next_incident_id,
+            device_id,
+            subject_id,
+            policy_id,
+            severity,
+            reason: r,
+            reason_len: len,
+            timestamp,
+        };
+        self.next_incident_id = self.next_incident_id.saturating_add(1);
+
+        self.incidents[self.incident_count] = Some(inc);
+        self.incident_count += 1;
+        self.total_incidents = self.total_incidents.saturating_add(1);
+
+        self.append_audit(
+            timestamp,
+            AuditAction::IncidentDispatched,
+            device_id,
+            reason_str,
+        );
+    }
+
+    /// Récupère et dépile le plus ancien incident pour XDR/SOAR
+    pub fn pop_pending_incident(
+        &mut self,
+        cap: &ZtnaCap,
+    ) -> Result<Option<ZtnaIncident>, ZtnaError> {
+        if !cap.has_right(ztna_rights::AUDIT_READ) {
+            return Err(ZtnaError::PermissionDenied);
+        }
+        if self.incident_count == 0 {
+            return Ok(None);
+        }
+
+        let inc = self.incidents[0];
+        for i in 0..self.incident_count - 1 {
+            self.incidents[i] = self.incidents[i + 1];
+        }
+        self.incidents[self.incident_count - 1] = None;
+        self.incident_count -= 1;
+
+        Ok(inc)
+    }
+
     /// Vérifie l'intégrité formelle de bout en bout de la chaîne d'audit SHA-256
     pub fn verify_ledger_integrity(&self) -> bool {
         let mut expected_prev = Self::GENESIS_HASH;
@@ -548,6 +786,32 @@ impl JamboZtnaDaemon {
         max_session_ttl: u64,
         current_tick: u64,
     ) -> Result<u32, ZtnaError> {
+        self.register_policy_advanced(
+            cap,
+            resource_name,
+            resource_kind,
+            min_trust_score,
+            require_tpm_tee,
+            TeeAttestationType::None,
+            max_session_ttl,
+            50, // 50 transactions max par session par défaut
+            current_tick,
+        )
+    }
+
+    /// Enregistre une politique avancée avec type de TEE et limite de transactions
+    pub fn register_policy_advanced(
+        &mut self,
+        cap: &ZtnaCap,
+        resource_name: &str,
+        resource_kind: ResourceKind,
+        min_trust_score: u8,
+        require_tpm_tee: bool,
+        required_tee: TeeAttestationType,
+        max_session_ttl: u64,
+        max_transactions_per_session: u32,
+        current_tick: u64,
+    ) -> Result<u32, ZtnaError> {
         if !cap.has_right(ztna_rights::CREATE_POLICY) {
             return Err(ZtnaError::PermissionDenied);
         }
@@ -570,7 +834,9 @@ impl JamboZtnaDaemon {
             resource_kind,
             min_trust_score,
             require_tpm_tee,
+            required_tee,
             max_session_ttl,
+            max_transactions_per_session,
             active: true,
         };
 
@@ -598,14 +864,39 @@ impl JamboZtnaDaemon {
         anomaly_level: u8,
         current_tick: u64,
     ) -> Result<DevicePosture, ZtnaError> {
+        self.update_device_posture_with_tee(
+            cap,
+            device_id,
+            kernel_score,
+            memory_score,
+            tpm_tee_attested,
+            TeeAttestationType::None,
+            anomaly_level,
+            current_tick,
+        )
+    }
+
+    /// Met à jour la posture en spécifiant le type TEE
+    pub fn update_device_posture_with_tee(
+        &mut self,
+        cap: &ZtnaCap,
+        device_id: u64,
+        kernel_score: u8,
+        memory_score: u8,
+        tpm_tee_attested: bool,
+        tee_type: TeeAttestationType,
+        anomaly_level: u8,
+        current_tick: u64,
+    ) -> Result<DevicePosture, ZtnaError> {
         if !cap.has_right(ztna_rights::UPDATE_POSTURE) {
             return Err(ZtnaError::PermissionDenied);
         }
 
-        let (composite_score, status) = DevicePosture::compute_composite_trust(
+        let (composite_score, status) = DevicePosture::compute_composite_trust_with_tee(
             kernel_score,
             memory_score,
             tpm_tee_attested,
+            tee_type,
             anomaly_level,
         );
 
@@ -625,10 +916,12 @@ impl JamboZtnaDaemon {
             d.kernel_integrity_score = kernel_score;
             d.memory_safety_score = memory_score;
             d.tpm_tee_attested = tpm_tee_attested;
+            d.tee_type = tee_type;
             d.anomaly_level = anomaly_level;
             d.composite_trust_score = composite_score;
             d.posture_status = status;
             d.last_evaluated_tick = current_tick;
+            d.active = true;
             *d
         } else {
             if self.device_count >= self.devices.len() {
@@ -639,6 +932,7 @@ impl JamboZtnaDaemon {
                 kernel_integrity_score: kernel_score,
                 memory_safety_score: memory_score,
                 tpm_tee_attested,
+                tee_type,
                 anomaly_level,
                 composite_trust_score: composite_score,
                 posture_status: status,
@@ -661,6 +955,65 @@ impl JamboZtnaDaemon {
         );
 
         Ok(posture)
+    }
+
+    /// Remédie à une posture dégradée (par exemple après attestation réussie ou correction de vulnérabilité)
+    pub fn remediate_device_posture(
+        &mut self,
+        cap: &ZtnaCap,
+        device_id: u64,
+        tpm_tee_attested: bool,
+        tee_type: TeeAttestationType,
+        current_tick: u64,
+    ) -> Result<DevicePosture, ZtnaError> {
+        if !cap.has_right(ztna_rights::REMEDIATE) && !cap.has_right(ztna_rights::ADMIN) {
+            return Err(ZtnaError::PermissionDenied);
+        }
+
+        let mut found_idx = None;
+        for i in 0..self.device_count {
+            if let Some(ref d) = self.devices[i] {
+                if d.device_id == device_id {
+                    found_idx = Some(i);
+                    break;
+                }
+            }
+        }
+
+        let idx = match found_idx {
+            Some(i) => i,
+            None => return Err(ZtnaError::DeviceNotFound),
+        };
+
+        let dev = self.devices[idx].as_mut().unwrap();
+        dev.kernel_integrity_score = dev.kernel_integrity_score.max(95);
+        dev.memory_safety_score = dev.memory_safety_score.max(95);
+        dev.tpm_tee_attested = tpm_tee_attested;
+        dev.tee_type = tee_type;
+        dev.anomaly_level = 0;
+        dev.active = true;
+
+        let (new_score, new_status) = DevicePosture::compute_composite_trust_with_tee(
+            dev.kernel_integrity_score,
+            dev.memory_safety_score,
+            dev.tpm_tee_attested,
+            dev.tee_type,
+            dev.anomaly_level,
+        );
+
+        dev.composite_trust_score = new_score;
+        dev.posture_status = new_status;
+        dev.last_evaluated_tick = current_tick;
+        let res = *dev;
+
+        self.append_audit(
+            current_tick,
+            AuditAction::PostureRemediated,
+            device_id,
+            new_status.as_str(),
+        );
+
+        Ok(res)
     }
 
     /// Ré-évalue dynamiquement les sessions associées à un device après variation de posture
@@ -752,10 +1105,20 @@ impl JamboZtnaDaemon {
             "REVOKE_TRUST_QUARANTINE",
         );
 
+        // Alerte XDR
+        self.report_incident(
+            device_id,
+            0,
+            0,
+            ZtnaIncidentSeverity::Critical,
+            "QUARANTINE_DEVICE_O1",
+            current_tick,
+        );
+
         Ok(())
     }
 
-    /// Évalue une transaction d'accès unitaire contre le micro-périmètre Zero Trust
+    /// Évalue une transaction d'accès unitaire contre le micro-périmètre Zero Trust (signature compatible)
     pub fn evaluate_access(
         &mut self,
         cap: &ZtnaCap,
@@ -763,6 +1126,25 @@ impl JamboZtnaDaemon {
         device_id: u64,
         resource_name: &str,
         current_tick: u64,
+    ) -> Result<AccessDecision, ZtnaError> {
+        let dummy_digest = [0u8; 32];
+        let context = TransactionContext::new(
+            OperationKind::Transact,
+            dummy_digest,
+            current_tick,
+            current_tick,
+        );
+        self.evaluate_transaction(cap, subject_id, device_id, resource_name, &context)
+    }
+
+    /// Évalue une transaction d'accès avec contexte complet et validation continue
+    pub fn evaluate_transaction(
+        &mut self,
+        cap: &ZtnaCap,
+        subject_id: u64,
+        device_id: u64,
+        resource_name: &str,
+        context: &TransactionContext,
     ) -> Result<AccessDecision, ZtnaError> {
         if !cap.has_right(ztna_rights::EVALUATE_ACCESS) {
             return Err(ZtnaError::PermissionDenied);
@@ -787,7 +1169,7 @@ impl JamboZtnaDaemon {
             None => {
                 self.total_denials = self.total_denials.saturating_add(1);
                 self.append_audit(
-                    current_tick,
+                    context.tick,
                     AuditAction::AccessDenied,
                     subject_id,
                     "POLICY_NOT_FOUND",
@@ -815,7 +1197,7 @@ impl JamboZtnaDaemon {
             None => {
                 self.total_denials = self.total_denials.saturating_add(1);
                 self.append_audit(
-                    current_tick,
+                    context.tick,
                     AuditAction::AccessDenied,
                     subject_id,
                     "DEVICE_UNREGISTERED",
@@ -831,10 +1213,18 @@ impl JamboZtnaDaemon {
         if device.posture_status == PostureStatus::Quarantined || !device.active {
             self.total_denials = self.total_denials.saturating_add(1);
             self.append_audit(
-                current_tick,
+                context.tick,
                 AuditAction::AccessDenied,
                 subject_id,
                 "DEVICE_QUARANTINED",
+            );
+            self.report_incident(
+                device_id,
+                subject_id,
+                policy.policy_id,
+                ZtnaIncidentSeverity::Critical,
+                "QUARANTINED_ATTEMPT",
+                context.tick,
             );
             return Ok(AccessDecision::Denied {
                 reason_code: 3, // TrustRevokedOrQuarantined
@@ -842,10 +1232,11 @@ impl JamboZtnaDaemon {
             });
         }
 
+        // Vérification TPM/TEE requis
         if policy.require_tpm_tee && !device.tpm_tee_attested {
             self.total_denials = self.total_denials.saturating_add(1);
             self.append_audit(
-                current_tick,
+                context.tick,
                 AuditAction::AccessDenied,
                 subject_id,
                 "TPM_ATTEST_REQUIRED",
@@ -856,15 +1247,33 @@ impl JamboZtnaDaemon {
             });
         }
 
+        // Vérification type spécifique de TEE requis
+        if policy.required_tee != TeeAttestationType::None && device.tee_type != policy.required_tee
+        {
+            self.total_denials = self.total_denials.saturating_add(1);
+            self.append_audit(
+                context.tick,
+                AuditAction::AccessDenied,
+                subject_id,
+                "SPECIFIC_TEE_REQUIRED",
+            );
+            return Ok(AccessDecision::Denied {
+                reason_code: 4, // SpecificTeeMissing
+                trust_score: device.composite_trust_score,
+            });
+        }
+
+        // Vérification score de posture
         if device.composite_trust_score < policy.min_trust_score {
             self.total_denials = self.total_denials.saturating_add(1);
             self.append_audit(
-                current_tick,
+                context.tick,
                 AuditAction::AccessDenied,
                 subject_id,
                 "INSUFFICIENT_TRUST",
             );
             if device.composite_trust_score >= policy.min_trust_score.saturating_sub(15) {
+                self.total_step_ups = self.total_step_ups.saturating_add(1);
                 return Ok(AccessDecision::StepUpRequired {
                     required_score: policy.min_trust_score,
                     current_score: device.composite_trust_score,
@@ -887,10 +1296,23 @@ impl JamboZtnaDaemon {
                     && s.device_id == device_id
                     && s.policy_id == policy.policy_id
                     && !s.revoked
-                    && current_tick < s.expires_tick
+                    && context.tick < s.expires_tick
                 {
+                    // Vérification anti-rejeu du nonce
+                    if context.nonce > 0 && context.nonce <= s.last_nonce {
+                        return Err(ZtnaError::ReplayDetected);
+                    }
+
+                    // Limite transactionnelle par bail
+                    if s.transaction_count >= policy.max_transactions_per_session {
+                        // Bail épuisé -> force l'émission d'un nouveau bail
+                        s.revoked = true;
+                        break;
+                    }
+
                     s.transaction_count = s.transaction_count.saturating_add(1);
-                    s.last_access_tick = current_tick;
+                    s.last_access_tick = context.tick;
+                    s.last_nonce = context.nonce;
                     session_id = s.session_id;
                     found_session = true;
                     break;
@@ -910,10 +1332,11 @@ impl JamboZtnaDaemon {
                 subject_id,
                 device_id,
                 policy_id: policy.policy_id,
-                granted_tick: current_tick,
-                expires_tick: current_tick.saturating_add(policy.max_session_ttl),
+                granted_tick: context.tick,
+                expires_tick: context.tick.saturating_add(policy.max_session_ttl),
                 transaction_count: 1,
-                last_access_tick: current_tick,
+                last_access_tick: context.tick,
+                last_nonce: context.nonce,
                 revoked: false,
             };
 
@@ -923,7 +1346,7 @@ impl JamboZtnaDaemon {
 
         self.total_grants = self.total_grants.saturating_add(1);
         self.append_audit(
-            current_tick,
+            context.tick,
             AuditAction::AccessGranted,
             subject_id,
             policy.resource_as_str(),
@@ -941,6 +1364,18 @@ impl JamboZtnaDaemon {
             if let Some(ref d) = self.devices[i] {
                 if d.device_id == device_id {
                     return Some(d);
+                }
+            }
+        }
+        None
+    }
+
+    /// Récupère une politique par ID
+    pub fn get_policy(&self, policy_id: u32) -> Option<&MicroPerimeterPolicy> {
+        for i in 0..self.policy_count {
+            if let Some(ref p) = self.policies[i] {
+                if p.policy_id == policy_id {
+                    return Some(p);
                 }
             }
         }
@@ -974,13 +1409,15 @@ impl JamboZtnaDaemon {
         );
 
         // 3. Politique Micro-Périmètre : Pont Enclave TEE (enclave://sgx/vault, 90/100, TPM requis)
-        let _ = self.register_policy(
+        let _ = self.register_policy_advanced(
             &cap,
             "enclave://sgx/vault",
             ResourceKind::EnclaveBridge,
             90,
             true,
+            TeeAttestationType::IntelSgx,
             200,
+            20,
             120,
         );
 
@@ -996,16 +1433,34 @@ impl JamboZtnaDaemon {
         );
 
         // 5. Initialisation de 2 terminaux de référence :
-        // Device 1001 : Terminal Souverain Ultra-Sûr (Noyau 98, Mémoire 95, TPM Oui, Anomaly 0) -> Compliant (Score 96)
-        let _ = self.update_device_posture(&cap, 1001, 98, 95, true, 0, 150);
+        // Device 1001 : Terminal Souverain Ultra-Sûr (Noyau 98, Mémoire 95, TPM Oui, SGX, Anomaly 0) -> Compliant (Score 96)
+        let _ = self.update_device_posture_with_tee(
+            &cap,
+            1001,
+            98,
+            95,
+            true,
+            TeeAttestationType::IntelSgx,
+            0,
+            150,
+        );
 
         // Device 1002 : Terminal Dégradé / Non Attesté (Noyau 65, Mémoire 60, TPM Non, Anomaly 25) -> NonCompliant
-        let _ = self.update_device_posture(&cap, 1002, 65, 60, false, 25, 160);
+        let _ = self.update_device_posture_with_tee(
+            &cap,
+            1002,
+            65,
+            60,
+            false,
+            TeeAttestationType::None,
+            25,
+            160,
+        );
     }
 }
 
 // ============================================================================
-// TESTS UNITAIRES
+// TESTS UNITAIRES (#![no_std])
 // ============================================================================
 
 #[cfg(test)]
@@ -1013,34 +1468,34 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_ztna_cap_attenuation() {
-        let admin = ZtnaCap::new(Handle::new(12301, 1), ztna_rights::ALL, 5000, 100);
-        assert!(admin.has_right(ztna_rights::CREATE_POLICY));
-        assert!(admin.has_right(ztna_rights::EVALUATE_ACCESS));
-        assert!(admin.has_right(ztna_rights::UPDATE_POSTURE));
-        assert!(admin.has_right(ztna_rights::REVOKE_TRUST));
-        assert!(admin.has_right(ztna_rights::ADMIN));
+    fn test_ztna_cap_attenuation_and_permissions() {
+        let master = ZtnaCap::new(Handle::new(12301, 1), ztna_rights::ALL, 10000, 500);
+        assert!(master.has_right(ztna_rights::CREATE_POLICY));
+        assert!(master.has_right(ztna_rights::EVALUATE_ACCESS));
+        assert!(master.has_right(ztna_rights::UPDATE_POSTURE));
+        assert!(master.has_right(ztna_rights::REVOKE_TRUST));
+        assert!(master.has_right(ztna_rights::AUDIT_READ));
+        assert!(master.has_right(ztna_rights::SEAL_LEDGER));
+        assert!(master.has_right(ztna_rights::REMEDIATE));
+        assert!(master.has_right(ztna_rights::ADMIN));
 
         // Atténuation monotone
-        let eval_cap = admin
-            .attenuate(
-                ztna_rights::EVALUATE_ACCESS | ztna_rights::AUDIT_READ,
-                2000,
-                50,
-            )
-            .expect("Atténuation");
-        assert!(eval_cap.has_right(ztna_rights::EVALUATE_ACCESS));
-        assert!(eval_cap.has_right(ztna_rights::AUDIT_READ));
-        assert!(!eval_cap.has_right(ztna_rights::CREATE_POLICY));
-        assert!(!eval_cap.has_right(ztna_rights::ADMIN));
+        let eval_only = master
+            .attenuate(ztna_rights::EVALUATE_ACCESS, 5000, 200)
+            .expect("Attenuate to EVALUATE_ACCESS");
+        assert!(eval_only.has_right(ztna_rights::EVALUATE_ACCESS));
+        assert!(!eval_only.has_right(ztna_rights::CREATE_POLICY));
+        assert!(!eval_only.has_right(ztna_rights::ADMIN));
+        assert_eq!(eval_only.max_lifetime, 5000);
+        assert_eq!(eval_only.invocations_left, 200);
 
-        // Rejet d'escalade
-        let esc = eval_cap.attenuate(ztna_rights::ALL, 2000, 50);
-        assert_eq!(esc, Err(ZtnaError::AttenuationViolation));
+        // Tentative d'escalade interdite
+        let escalate = eval_only.attenuate(ztna_rights::ADMIN, 5000, 200);
+        assert_eq!(escalate, Err(ZtnaError::AttenuationViolation));
     }
 
     #[test]
-    fn test_device_posture_computation_and_evaluation() {
+    fn test_daemon_defaults_and_access_evaluation() {
         let admin = ZtnaCap::new(Handle::new(12302, 1), ztna_rights::ALL, 5000, 100);
         let mut daemon = JamboZtnaDaemon::new(admin);
         daemon.init_defaults();
@@ -1160,5 +1615,222 @@ mod tests {
         }
 
         assert!(daemon.verify_ledger_integrity());
+    }
+
+    #[test]
+    fn test_unit_transaction_validation_and_session_lifecycle() {
+        let admin = ZtnaCap::new(Handle::new(12305, 1), ztna_rights::ALL, 5000, 100);
+        let mut daemon = JamboZtnaDaemon::new(admin);
+        daemon.init_defaults();
+
+        // Enregistrer une politique avec limite de 3 transactions par session
+        let pol_id = daemon
+            .register_policy_advanced(
+                &admin,
+                "ipc://sys.bank.transfer",
+                ResourceKind::IpcService,
+                80,
+                true,
+                TeeAttestationType::None,
+                1000,
+                3, // max 3 transactions
+                500,
+            )
+            .expect("Register transfer policy");
+        assert_eq!(pol_id, 5);
+
+        // Transaction 1
+        let ctx1 = TransactionContext::new(OperationKind::Transact, [0xAA; 32], 1, 505);
+        let dec1 = daemon
+            .evaluate_transaction(&admin, 900, 1001, "ipc://sys.bank.transfer", &ctx1)
+            .expect("Tx 1");
+        assert!(matches!(dec1, AccessDecision::Granted { .. }));
+        assert_eq!(
+            daemon.sessions[daemon.session_count - 1]
+                .unwrap()
+                .transaction_count,
+            1
+        );
+
+        // Transaction 2
+        let ctx2 = TransactionContext::new(OperationKind::Transact, [0xBB; 32], 2, 510);
+        let dec2 = daemon
+            .evaluate_transaction(&admin, 900, 1001, "ipc://sys.bank.transfer", &ctx2)
+            .expect("Tx 2");
+        assert!(matches!(dec2, AccessDecision::Granted { .. }));
+        assert_eq!(
+            daemon.sessions[daemon.session_count - 1]
+                .unwrap()
+                .transaction_count,
+            2
+        );
+
+        // Transaction 3
+        let ctx3 = TransactionContext::new(OperationKind::Transact, [0xCC; 32], 3, 515);
+        let dec3 = daemon
+            .evaluate_transaction(&admin, 900, 1001, "ipc://sys.bank.transfer", &ctx3)
+            .expect("Tx 3");
+        assert!(matches!(dec3, AccessDecision::Granted { .. }));
+        assert_eq!(
+            daemon.sessions[daemon.session_count - 1]
+                .unwrap()
+                .transaction_count,
+            3
+        );
+
+        // Transaction 4 : Le quota de 3 est atteint -> émission automatique d'une nouvelle session
+        let ctx4 = TransactionContext::new(OperationKind::Transact, [0xDD; 32], 4, 520);
+        let dec4 = daemon
+            .evaluate_transaction(&admin, 900, 1001, "ipc://sys.bank.transfer", &ctx4)
+            .expect("Tx 4");
+        match dec4 {
+            AccessDecision::Granted { session_id, .. } => {
+                assert_eq!(session_id, 2);
+            }
+            _ => panic!("Tx 4 aurait dû ouvrir une nouvelle session"),
+        }
+
+        assert!(daemon.verify_ledger_integrity());
+    }
+
+    #[test]
+    fn test_posture_remediation_and_step_up_evaluation() {
+        let admin = ZtnaCap::new(Handle::new(12306, 1), ztna_rights::ALL, 5000, 100);
+        let mut daemon = JamboZtnaDaemon::new(admin);
+        daemon.init_defaults();
+
+        // Device 1003 créé avec TPM attesté mais scores sous-jacents modestes (K=60, M=60, TPM=Oui, Anomaly=0) -> Score ~70 (Degraded car < 80)
+        let _ = daemon.update_device_posture(&admin, 1003, 60, 60, true, 0, 600);
+        let p = daemon.get_device_posture(1003).unwrap();
+        assert_eq!(p.posture_status, PostureStatus::Degraded);
+        assert!(p.composite_trust_score >= 65 && p.composite_trust_score < 80);
+
+        // Requête vers vfs:///etc/certs (min_trust=80) -> StepUpRequired car score est dans [65..80]
+        let dec = daemon
+            .evaluate_access(&admin, 111, 1003, "vfs:///etc/certs", 620)
+            .expect("Eval step up");
+        match dec {
+            AccessDecision::StepUpRequired {
+                required_score,
+                current_score,
+            } => {
+                assert_eq!(required_score, 80);
+                assert!(current_score >= 65 && current_score < 80);
+            }
+            _ => panic!("Step-Up aurait dû être requis"),
+        }
+
+        // Remédiation : Attestation matérielle AMD SEV-SNP fournie et TPM activé
+        let remediated = daemon
+            .remediate_device_posture(&admin, 1003, true, TeeAttestationType::AmdSevSnp, 630)
+            .expect("Remediation");
+        assert_eq!(remediated.posture_status, PostureStatus::Compliant);
+        assert!(remediated.composite_trust_score >= 80);
+
+        // Nouvelle tentative vers vfs:///etc/certs -> Accordée immédiatement !
+        let dec_after = daemon
+            .evaluate_access(&admin, 111, 1003, "vfs:///etc/certs", 640)
+            .expect("Eval after remediation");
+        assert!(matches!(dec_after, AccessDecision::Granted { .. }));
+
+        assert!(daemon.verify_ledger_integrity());
+    }
+
+    #[test]
+    fn test_tee_enclave_attestation_types_and_enforcement() {
+        let admin = ZtnaCap::new(Handle::new(12307, 1), ztna_rights::ALL, 5000, 100);
+        let mut daemon = JamboZtnaDaemon::new(admin);
+        daemon.init_defaults();
+
+        // Enregistrer une politique exigeant strictement une SovereignJamboEnclave
+        daemon
+            .register_policy_advanced(
+                &admin,
+                "enclave://sovereign/core",
+                ResourceKind::EnclaveBridge,
+                90,
+                true,
+                TeeAttestationType::SovereignJamboEnclave,
+                300,
+                100,
+                700,
+            )
+            .expect("Register sovereign policy");
+
+        // Device 1001 a une attestation IntelSgx (conforme pour SGX mais pas Sovereign)
+        let dec_sgx = daemon
+            .evaluate_access(&admin, 222, 1001, "enclave://sovereign/core", 710)
+            .expect("Eval SGX on sovereign");
+        match dec_sgx {
+            AccessDecision::Denied { reason_code, .. } => {
+                assert_eq!(reason_code, 4); // SpecificTeeMissing
+            }
+            _ => panic!("Accès aurait dû être refusé car SGX != Sovereign"),
+        }
+
+        // Device 1004 avec SovereignJamboEnclave
+        let _ = daemon.update_device_posture_with_tee(
+            &admin,
+            1004,
+            95,
+            95,
+            true,
+            TeeAttestationType::SovereignJamboEnclave,
+            0,
+            720,
+        );
+
+        let dec_sov = daemon
+            .evaluate_access(&admin, 222, 1004, "enclave://sovereign/core", 730)
+            .expect("Eval sovereign on sovereign");
+        assert!(matches!(dec_sov, AccessDecision::Granted { .. }));
+
+        assert!(daemon.verify_ledger_integrity());
+    }
+
+    #[test]
+    fn test_incident_reporting_and_xdr_dispatch() {
+        let admin = ZtnaCap::new(Handle::new(12308, 1), ztna_rights::ALL, 5000, 100);
+        let mut daemon = JamboZtnaDaemon::new(admin);
+        daemon.init_defaults();
+
+        daemon.report_incident(
+            9999,
+            888,
+            1,
+            ZtnaIncidentSeverity::High,
+            "LATERAL_PROBE_BLOCKED",
+            800,
+        );
+        assert_eq!(daemon.incident_count, 1);
+        assert_eq!(daemon.total_incidents, 1);
+
+        let inc = daemon
+            .pop_pending_incident(&admin)
+            .expect("Pop incident")
+            .expect("Incident exists");
+        assert_eq!(inc.device_id, 9999);
+        assert_eq!(inc.severity, ZtnaIncidentSeverity::High);
+        assert_eq!(inc.reason_as_str(), "LATERAL_PROBE_BLOCKED");
+        assert_eq!(daemon.incident_count, 0);
+
+        assert!(daemon.verify_ledger_integrity());
+    }
+
+    #[test]
+    fn test_cryptographic_ledger_tamper_detection() {
+        let admin = ZtnaCap::new(Handle::new(12309, 1), ztna_rights::ALL, 5000, 100);
+        let mut daemon = JamboZtnaDaemon::new(admin);
+        daemon.init_defaults();
+
+        assert!(daemon.verify_ledger_integrity());
+
+        // Altération intentionnelle d'une entrée de log
+        if let Some(ref mut entry) = daemon.audit_log[1] {
+            entry.detail[0] ^= 0xFF;
+        }
+
+        // L'intégrité doit échouer
+        assert!(!daemon.verify_ledger_integrity());
     }
 }

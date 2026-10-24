@@ -11525,8 +11525,68 @@ impl JamboShell {
                         });
                         (ShellStatus::Success, write_pos)
                     }
+                    "incidents" => {
+                        let mut b = [0u8; 20];
+                        emit(
+                            "[ZTNA/INCIDENTS] Incidents & Violations de Micro-Périmètres ZTNA :\n",
+                        );
+                        emit("  Total incidents consignés : ");
+                        emit(format_u64(self.ztna.total_incidents, &mut b));
+                        emit("\n");
+                        for i in 0..self.ztna.incident_count {
+                            if let Some(ref inc) = self.ztna.incidents[i] {
+                                emit("  * [#");
+                                emit(format_u64(inc.incident_id, &mut b));
+                                emit("] Device #");
+                                emit(format_u64(inc.device_id, &mut b));
+                                emit(" | Sévérité: ");
+                                emit(inc.severity.as_str());
+                                emit(" | Motif: ");
+                                emit(inc.reason_as_str());
+                                emit("\n");
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "quarantine" => {
+                        let cap = self.ztna.admin_cap;
+                        match self.ztna.revoke_trust(&cap, 1002, 900) {
+                            Ok(()) => {
+                                emit("[ZTNA/QUARANTINE] Device #1002 placé en quarantaine immédiate O(1)\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("[ZTNA/QUARANTINE] Erreur lors de la mise en quarantaine\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "remediate" => {
+                        let cap = self.ztna.admin_cap;
+                        match self.ztna.remediate_device_posture(
+                            &cap,
+                            1002,
+                            true,
+                            jambo_ztna::TeeAttestationType::AmdSevSnp,
+                            910,
+                        ) {
+                            Ok(posture) => {
+                                let mut b = [0u8; 20];
+                                emit("[ZTNA/REMEDIATE] Posture remédiée pour Device #1002 -> Nouveau Score: ");
+                                emit(format_u64(posture.composite_trust_score as u64, &mut b));
+                                emit(" (");
+                                emit(posture.posture_status.as_str());
+                                emit(")\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("[ZTNA/REMEDIATE] Erreur lors de la remédiation de posture\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
                     _ => {
-                        emit("Usage: ztna [status | policies | devices | sessions | eval | verify]\n");
+                        emit("Usage: ztna [status | policies | devices | sessions | eval | incidents | quarantine | remediate | verify]\n");
                         (ShellStatus::ExecutionFailed, write_pos)
                     }
                 }
@@ -19469,6 +19529,18 @@ mod tests {
                 let (st6, len6) = shell.execute_line("ztna verify", &mut out);
                 assert_eq!(st6, ShellStatus::Success);
                 assert!(len6 > 0);
+
+                let (st7, len7) = shell.execute_line("ztna incidents", &mut out);
+                assert_eq!(st7, ShellStatus::Success);
+                assert!(len7 > 0);
+
+                let (st8, len8) = shell.execute_line("ztna quarantine", &mut out);
+                assert_eq!(st8, ShellStatus::Success);
+                assert!(len8 > 0);
+
+                let (st9, len9) = shell.execute_line("ztna remediate", &mut out);
+                assert_eq!(st9, ShellStatus::Success);
+                assert!(len9 > 0);
             })
             .unwrap();
         handle.join().unwrap();
