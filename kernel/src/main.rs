@@ -1257,12 +1257,7 @@ pub extern "C" fn _start() -> ! {
 
     // Note: La Plateforme Unifiée de Protection des Applications Cloud-Natives CNAPP, Corrélation Multi-Signaux CSPM+CWPP+CIEM & Calcul de Graphe de Risque Holistique est validée en Phase 158 (v0.3.25).
 
-    // 18quinquiesviciesquadragies. Validation de la Posture ASPM & SBOM CycloneDX (Phase 129 - v0.2.127)
-    let aspm_success = sched::aspm_test::execute_aspm_daemon_test();
-    assert!(
-        aspm_success,
-        "Échec du test de posture de sécurité applicative et supply chain jambo-aspm"
-    );
+    // Note: La Posture de Sécurité Applicative ASPM, Sécurité de la Chaîne d'Approvisionnement Logicielle & Vérification d'Admission SBOM CycloneDX est validée en Phase 159 (v0.3.26).
 
     // 18sexiesviciesquadragies. Validation de la Simulation de Brèches et d'Attaques BAS (Phase 130 - v0.2.128)
     let bas_success = sched::bas_test::execute_bas_daemon_test();
@@ -1465,6 +1460,13 @@ pub extern "C" fn _start() -> ! {
     assert!(
         cnapp_success,
         "Échec du test de protection applicative cloud-native CNAPP jambo-cnapp"
+    );
+
+    // 44viciesquadragies. Validation Posture de Sécurité Applicative ASPM, Sécurité de la Chaîne d'Approvisionnement Logicielle & Vérification d'Admission SBOM CycloneDX (Phase 159 - v0.3.26)
+    let aspm_success = sched::aspm_test::execute_aspm_daemon_test();
+    assert!(
+        aspm_success,
+        "Échec du test de posture de sécurité applicative ASPM et supply chain jambo-aspm"
     );
 
     // 11. Initialisation IOMMU & Isolation matérielle (Phase 8)
@@ -1791,14 +1793,17 @@ pub extern "C" fn _start() -> ! {
     kprintln!(
         "\x1b[1;32m[PASS] Phase 158 Sovereign Cloud-Native Application Protection Platform & Unified Risk (jambo-cnapp) Complete\x1b[0m"
     );
+    kprintln!(
+        "\x1b[1;32m[PASS] Phase 159 Sovereign Application Security Posture Management & SBOM CycloneDX (jambo-aspm) Complete\x1b[0m"
+    );
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.3.25 (Sovereign Cloud-Native Application Protection Platform jambo-cnapp)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.3.26 (Sovereign Application Security Posture Management jambo-aspm)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.3.25 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.3.26 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );

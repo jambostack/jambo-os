@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.3.25-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.3.26-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.3.25 (Plateforme Unifiée de Protection des Applications Cloud-Natives CNAPP, Corrélation Multi-Signaux CSPM+CWPP+CIEM & Calcul de Graphe de Risque Holistique jambo-cnapp)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.3.25` introduit la modernisation et la souveraineté complète de la Plateforme Unifiée de Protection des Applications Cloud-Natives (CNAPP — `services/jambo-cnapp`) : moteur unifié d'ingestion et corrélation contextuelle multi-plans fusionnant la posture d'infrastructure (CSPM), la sécurité d'exécution des charges de travail (CWPP) et la gouvernance des droits et accès (CIEM), identification en temps réel des combinaisons toxiques multi-plans (Tri-Plane Sovereign Breach, Enclave Data Exfiltration, Privilege Escalation Pivot), modélisation de chemins d'attaque combinés (Combined Attack Paths) avec calcul d'indice de risque holistique (0..100) tenant compte de l'exposition Internet et des géo-zones souveraines, orchestration autonome de confinement global O(1) avec rapports scellés SHA-256 (`CnappAssessmentReport`), contrôle capabilaire strict `CnappCap` sans autorité ambiante avec atténuation monotone et registre d'audit cryptographique SHA-256 inaltérable.
+> **Statut du Projet : Version v0.3.26 (Gestion de la Posture de Sécurité Applicative ASPM, Sécurité de la Chaîne d'Approvisionnement Logicielle & Vérification d'Admission SBOM CycloneDX jambo-aspm)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.3.26` introduit la modernisation et la souveraineté complète de la Gestion de la Posture de Sécurité Applicative et Supply Chain (ASPM — `services/jambo-aspm`) : moteur souverain de gouvernance de la chaîne de compilation et distribution logicielle `#![no_std]`, validation cryptographique de SBOMs normalisés CycloneDX 1.5 & 1.6, calcul du score de posture de supply chain holistique (0..100), détection continue des vulnérabilités amont (CVE avec CVSS v3/v4 et EPSS) et menaces de chaîne d'approvisionnement (scripts de build suspects `build.rs`, typosquatting, substitution de paquets, hachages altérés), validation de signatures de packages souverains et attestations de provenance SLSA L1..L4, contrôle d'admission strict à l'exécution sous politiques durcies (SecNumCloud, HardenedEnclave) avec rapports d'admission scellés SHA-256 (`AspmAdmissionReport`), remédiation autonome O(1) avec rapports scellés SHA-256 (`AspmRemediationReport`), contrôle capabilaire strict `AspmCap` sans autorité ambiante avec atténuation monotone et registre d'audit cryptographique SHA-256 inaltérable.
 
 ---
 

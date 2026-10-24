@@ -12830,6 +12830,12 @@ impl JamboShell {
                                     jambo_aspm::SupplyChainThreat::UntrustedSource => {
                                         emit("Source inconnue  | ")
                                     }
+                                    jambo_aspm::SupplyChainThreat::DependencyConfusion => {
+                                        emit("Confusion dép.   | ")
+                                    }
+                                    jambo_aspm::SupplyChainThreat::ObsoleteUnmaintained => {
+                                        emit("Obsolète/Aband.  | ")
+                                    }
                                 }
                                 emit(if comp.is_blocked {
                                     "OUI (BLOQUÉ)\n"
@@ -12949,6 +12955,77 @@ impl JamboShell {
                             }
                         }
                     }
+                    "admission" => {
+                        let cap = self.aspm.admin_cap;
+                        let cid = if parsed.arg_count > 2 {
+                            parse_u64(parsed.args[2]).unwrap_or(1) as u32
+                        } else {
+                            1
+                        };
+                        match self.aspm.evaluate_admission_with_policy(
+                            &cap,
+                            cid,
+                            jambo_aspm::AdmissionPolicyProfile::StrictSecNumCloud,
+                            3000,
+                        ) {
+                            Ok(decision) => {
+                                emit("  Évaluation admission SecNumCloud pour composant ");
+                                emit(format_u64(cid as u64, &mut b));
+                                emit(" : ");
+                                match decision {
+                                    jambo_aspm::AdmissionDecision::Allowed => {
+                                        emit("AUTORISÉ (ALLOWED)\n")
+                                    }
+                                    jambo_aspm::AdmissionDecision::Warned => {
+                                        emit("AVERTISSEMENT (WARNED)\n")
+                                    }
+                                    jambo_aspm::AdmissionDecision::Quarantined => {
+                                        emit("QUARANTAINE (QUARANTINED)\n")
+                                    }
+                                    jambo_aspm::AdmissionDecision::Blocked => {
+                                        emit("BLOQUÉ (BLOCKED)\n")
+                                    }
+                                }
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("  [FAIL] Échec de l'évaluation d'admission (composant introuvable)\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "reports" => {
+                        emit("--- [JAMBO-ASPM] RAPPORTS D'ADMISSION & DE REMÉDIATION SCELLÉS SHA-256 ---\n");
+                        emit("  Rapports d'admission générés   : ");
+                        emit(format_u64(self.aspm.admission_report_count as u64, &mut b));
+                        emit("\n  Rapports de remédiation scellés : ");
+                        emit(format_u64(
+                            self.aspm.remediation_report_count as u64,
+                            &mut b,
+                        ));
+                        emit("\n");
+                        for i in 0..self.aspm.admission_report_count {
+                            if let Some(ref rep) = self.aspm.admission_reports[i] {
+                                emit("  [ADMISSION #");
+                                emit(format_u64(rep.report_id as u64, &mut b));
+                                emit("] Comp: ");
+                                emit(format_u64(rep.component_id as u64, &mut b));
+                                emit(" | Décision: ");
+                                match rep.decision {
+                                    jambo_aspm::AdmissionDecision::Allowed => emit("ALLOWED"),
+                                    jambo_aspm::AdmissionDecision::Warned => emit("WARNED"),
+                                    jambo_aspm::AdmissionDecision::Quarantined => {
+                                        emit("QUARANTINED")
+                                    }
+                                    jambo_aspm::AdmissionDecision::Blocked => emit("BLOCKED"),
+                                }
+                                emit(" | Motif: ");
+                                emit(rep.reason_as_str());
+                                emit("\n");
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
                     "verify" => {
                         let valid = self.aspm.verify_ledger_integrity();
                         emit("  Vérification intégrité registre ASPM SHA-256 : ");
@@ -12960,7 +13037,7 @@ impl JamboShell {
                         (ShellStatus::Success, write_pos)
                     }
                     _ => {
-                        emit("Usage: aspm [status | components | vulns | scan | remediate [vid] | export-cyclonedx | verify]\n");
+                        emit("Usage: aspm [status | components | vulns | scan | admission [cid] | remediate [vid] | reports | export-cyclonedx | verify]\n");
                         (ShellStatus::ExecutionFailed, write_pos)
                     }
                 }
@@ -20130,6 +20207,14 @@ mod tests {
                 let (st6, len6) = shell.execute_line("aspm remediate", &mut out);
                 assert_eq!(st6, ShellStatus::Success);
                 assert!(len6 > 0);
+
+                let (st6b, len6b) = shell.execute_line("aspm admission 1", &mut out);
+                assert_eq!(st6b, ShellStatus::Success);
+                assert!(len6b > 0);
+
+                let (st6c, len6c) = shell.execute_line("aspm reports", &mut out);
+                assert_eq!(st6c, ShellStatus::Success);
+                assert!(len6c > 0);
 
                 let (st7, len7) = shell.execute_line("aspm verify", &mut out);
                 assert_eq!(st7, ShellStatus::Success);

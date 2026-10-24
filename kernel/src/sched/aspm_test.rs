@@ -1,5 +1,5 @@
 //! Module de validation formelle de la Posture de Sécurité Applicative (ASPM) & SBOM CycloneDX (`jambo-aspm`)
-//! Phase 129 — Jalon v0.2.127
+//! Phase 159 — Jalon v0.3.26
 #![allow(unused_imports, dead_code)]
 
 extern crate alloc;
@@ -7,14 +7,15 @@ extern crate alloc;
 use crate::kprintln;
 use jambo_abi::Handle;
 use jambo_aspm::{
-    aspm_rights, AdmissionDecision, AspmCap, AspmError, ComponentType, JamboAspmDaemon,
-    SbomComponent, SupplyChainThreat, VulnerabilityFinding, VulnerabilitySeverity,
+    aspm_rights, AdmissionDecision, AdmissionPolicyProfile, AspmAdmissionReport, AspmCap,
+    AspmError, AspmRemediationReport, ComponentType, JamboAspmDaemon, PackageSignatureStatus,
+    SbomComponent, SlsaLevel, SupplyChainThreat, VulnerabilityFinding, VulnerabilitySeverity,
 };
 
-/// Exécute la suite complète de validation formelle du démon ASPM (Phase 129)
+/// Exécute la suite complète de validation formelle du démon ASPM (Phase 159 - v0.3.26)
 pub fn execute_aspm_daemon_test() -> bool {
     kprintln!(
-        "[ASPM/TEST] Démarrage de la validation formelle de la posture de sécurité applicative et supply chain ASPM (Phase 129)..."
+        "[ASPM/TEST] Démarrage de la validation formelle de la posture de sécurité applicative et supply chain ASPM (Phase 159 - v0.3.26)..."
     );
 
     // 1. Contrôle d'accès capabilaire (AspmCap) et atténuation monotone
@@ -28,6 +29,7 @@ pub fn execute_aspm_daemon_test() -> bool {
     assert!(admin_cap.has_right(aspm_rights::REMEDIATE));
     assert!(admin_cap.has_right(aspm_rights::SEAL_LEDGER));
     assert!(admin_cap.has_right(aspm_rights::ADMIN));
+    assert!(admin_cap.has_right(aspm_rights::VERIFY_SIGNATURES));
 
     // Atténuation monotone
     let monitor_cap = admin_cap
@@ -57,7 +59,18 @@ pub fn execute_aspm_daemon_test() -> bool {
     assert_eq!(aspm.vulnerability_count, 2);
     assert!(aspm.verify_ledger_integrity());
 
-    // 3. Génération SBOM CycloneDX 1.5
+    // 3. Vérification des signatures souveraines et attestations SLSA
+    let sig1 = aspm
+        .verify_package_signature(&admin_cap, 1, 1500)
+        .expect("Vérification signature libjambo");
+    assert_eq!(sig1, PackageSignatureStatus::ValidSovereignSigned);
+
+    let sig4 = aspm
+        .verify_package_signature(&admin_cap, 4, 1510)
+        .expect("Vérification signature untrusted");
+    assert_eq!(sig4, PackageSignatureStatus::UntrustedKey);
+
+    // 4. Génération SBOM CycloneDX 1.5
     let mut sbom_buf = [0u8; 1024];
     let sbom_len = aspm
         .generate_cyclonedx_sbom(&admin_cap, &mut sbom_buf)
@@ -74,46 +87,79 @@ pub fn execute_aspm_daemon_test() -> bool {
         Err(AspmError::PermissionDenied)
     );
 
-    // 4. Contrôle d'admission et barrière de sécurité de déploiement
-    let adm1 = aspm
-        .evaluate_admission(&admin_cap, 1, 2000)
-        .expect("Admission composant 1");
-    assert_eq!(adm1, AdmissionDecision::Allowed);
+    // 5. Contrôle d'admission multi-politiques (SecNumCloud & Enclave) avec rapports scellés
+    let adm1_secnum = aspm
+        .evaluate_admission_with_policy(
+            &admin_cap,
+            1,
+            AdmissionPolicyProfile::StrictSecNumCloud,
+            2000,
+        )
+        .expect("Admission composant 1 SecNumCloud");
+    assert_eq!(adm1_secnum, AdmissionDecision::Allowed);
 
-    // Composant 4 est bloqué en admission
-    let adm4 = aspm
-        .evaluate_admission(&admin_cap, 4, 2100)
-        .expect("Admission composant 4");
-    assert_eq!(adm4, AdmissionDecision::Blocked);
+    // Composant 4 est bloqué sous SecNumCloud et HardenedEnclave (build.rs suspect + SLSA L1 + UntrustedKey)
+    let adm4_secnum = aspm
+        .evaluate_admission_with_policy(
+            &admin_cap,
+            4,
+            AdmissionPolicyProfile::StrictSecNumCloud,
+            2100,
+        )
+        .expect("Admission composant 4 SecNumCloud");
+    assert_eq!(adm4_secnum, AdmissionDecision::Blocked);
 
-    // 5. Analyse continue des dépendances
+    let adm4_enclave = aspm
+        .evaluate_admission_with_policy(
+            &admin_cap,
+            4,
+            AdmissionPolicyProfile::HardenedEnclave,
+            2150,
+        )
+        .expect("Admission composant 4 HardenedEnclave");
+    assert_eq!(adm4_enclave, AdmissionDecision::Blocked);
+
+    assert!(aspm.admission_report_count >= 3);
+
+    // 6. Analyse continue des dépendances et menaces amont
     let (total_comps, threats) = aspm
         .scan_dependencies(&admin_cap, 2200)
         .expect("Scan dépendances");
     assert_eq!(total_comps, 5);
     assert!(threats >= 2);
 
-    // 6. Remédiation globale et rétablissement de posture
+    // 7. Remédiation globale et rétablissement de posture
     let initial_posture = aspm.global_posture_score;
     assert!(initial_posture <= 50);
+
+    let neut_threats = aspm
+        .remediate_supply_chain_threats(&admin_cap, 2250)
+        .expect("Remédiation supply chain");
+    assert!(neut_threats >= 1);
 
     let rem_count = aspm
         .remediate_all_critical(&admin_cap, 2300)
         .expect("Remédiation critique");
     assert!(rem_count >= 1);
     assert!(aspm.global_posture_score > initial_posture);
+    assert!(aspm.remediation_report_count >= 2);
 
     // Vérifier réévaluation post-remédiation
     let adm4_post = aspm
-        .evaluate_admission(&admin_cap, 4, 2400)
+        .evaluate_admission_with_policy(
+            &admin_cap,
+            4,
+            AdmissionPolicyProfile::HardenedEnclave,
+            2400,
+        )
         .expect("Admission composant 4 post-remédiation");
     assert_ne!(adm4_post, AdmissionDecision::Blocked);
 
-    // 7. Vérification de l'intégrité cryptographique absolue du registre d'audit SHA-256
+    // 8. Vérification de l'intégrité cryptographique absolue du registre d'audit SHA-256
     assert!(aspm.verify_ledger_integrity());
 
     kprintln!(
-        "[ASPM/TEST] \x1b[1;32mSuccès de la validation formelle ASPM : {} composants SBOM, {} vulnérabilités tracées, conformité CycloneDX 1.5, contrôle d'admission et scellement SHA-256 validés\x1b[0m",
+        "[ASPM/TEST] \x1b[1;32mSuccès de la validation formelle ASPM (Phase 159 - v0.3.26) : {} composants SBOM, {} vulnérabilités, conformité CycloneDX 1.5/1.6, signatures souveraines, politiques d'admission SecNumCloud et scellement SHA-256 validés\x1b[0m",
         aspm.component_count,
         aspm.vulnerability_count
     );
