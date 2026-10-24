@@ -1,6 +1,6 @@
 [package]
 name = "jambo-devsecops"
-version = "0.3.5"
+version = "0.3.35"
 edition = "2021"
 
 [dependencies]

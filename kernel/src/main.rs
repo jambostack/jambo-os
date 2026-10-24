@@ -1315,7 +1315,7 @@ pub extern "C" fn _start() -> ! {
         "Échec du test des opérations IT pilotées par l'IA jambo-aiops"
     );
 
-    // 23viciesquadragies. Validation de la Sécurité des Pipelines & DevSecOps Souverain (Phase 138 - v0.3.5)
+    // 23viciesquadragies. Validation de la Sécurité des Pipelines CI/CD & DevSecOps Souverain (Phase 168 - v0.3.35)
     let devsecops_success = sched::devsecops_test::execute_devsecops_daemon_test();
     assert!(
         devsecops_success,
@@ -1820,14 +1820,17 @@ pub extern "C" fn _start() -> ! {
     kprintln!(
         "\x1b[1;32m[PASS] Phase 167 Sovereign Artificial Intelligence for IT Operations AIOps, Predictive Failure Detection & Topological RCA (jambo-aiops) Complete\x1b[0m"
     );
+    kprintln!(
+        "\x1b[1;32m[PASS] Phase 168 Pipeline Security & Sovereign DevSecOps, Admission Control & SLSA Attestations (jambo-devsecops) Complete\x1b[0m"
+    );
     kprintln!();
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );
     kprintln!(
-        "\x1b[1;36m[JAMBOKERNEL] Version v0.3.34 (Sovereign AIOps & Predictive Failure Detection jambo-aiops)\x1b[0m"
+        "\x1b[1;36m[JAMBOKERNEL] Version v0.3.35 (Sovereign DevSecOps, Admission Control & SLSA jambo-devsecops)\x1b[0m"
     );
-    kprintln!("\x1b[1;33m[STATUS] Jalons v0.3.33 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
+    kprintln!("\x1b[1;33m[STATUS] Jalons v0.3.34 validés sous QEMU (x86-64 / AArch64)\x1b[0m");
     kprintln!(
         "\x1b[1;34m====================================================================\x1b[0m"
     );

@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.3.34-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.3.35-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.3.34 (AIOps Souverain, Détection Prédictive des Pannes & Corrélation Causale Topologique RCA jambo-aiops)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.3.34` introduit la modernisation et la souveraineté complète des Opérations IT Pilotées par l'IA (AIOps — `services/jambo-aiops`) : moteur souverain AIOps `#![no_std]` d'ingestion télémétrique continue et fenêtrée, détection d'anomalies en temps réel par fenêtres glissantes et Z-score déterministe en virgule fixe, analyse prédictive des tendances et projection de défaillance (Time-to-Failure TTF et indice de risque prédictif), modélisation causale topologique inter-services et analyse de cause racine (Root Cause Analysis - RCA), playbooks d'auto-remédiation proactive et réconciliation autonome globale O(1) (`remediate_all_incidents`), rapports souverains de santé prédictive (`AiopsHealthReport`) et de remédiation (`AiopsRemediationReport`) scellés SHA-256 avec validation formelle et détection d'altération, intégration shell interactif `jsh` (`services/jambo-sh`), contrôle capabilaire strict `AiopsCap` sans autorité ambiante avec atténuation monotone et registre d'audit cryptographique SHA-256 inaltérable.
+> **Statut du Projet : Version v0.3.35 (Sécurité des Pipelines CI/CD & DevSecOps Souverain, Contrôle d'Admission & Attestations SLSA jambo-devsecops)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.3.35` introduit la modernisation et la souveraineté complète de la Sécurité des Pipelines CI/CD & de l'Orchestration DevSecOps (`services/jambo-devsecops`) : moteur souverain DevSecOps `#![no_std]` de vérification continue des manifests de micro-services et conteneurs, validation d'admission cryptographique stricte (Gatekeeper / Policy-as-Code), vérification des attestations de provenance SLSA L3/L4 (compilation hermétique reproductible, revue bipartite), contrôle de nomenclature logicielle souveraine SBOM (Software Bill of Materials) avec vérification de dépendances et licences conformes SecNumCloud, remédiation autonome O(1) des manifests et conteneurs non conformes (mise en quarantaine immédiate, durcissement seccomp/TEE), rapports d'admission (`DevSecOpsAdmissionReport`), de conformité (`DevSecOpsComplianceReport`) et de remédiation (`DevSecOpsRemediationReport`) scellés SHA-256 avec validation formelle et détection d'altération, intégration shell interactif `jsh` (`services/jambo-sh`), contrôle capabilaire strict `DevSecOpsCap` sans autorité ambiante avec atténuation monotone et registre d'audit cryptographique SHA-256 inaltérable.
 
 ---
 

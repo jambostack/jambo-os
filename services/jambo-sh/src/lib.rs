@@ -15901,7 +15901,7 @@ impl JamboShell {
                 };
                 match subcmd {
                     "status" | "summary" => {
-                        emit("=== SÉCURITÉ DES PIPELINES & DEVSECOPS SOUVERAIN (v0.3.5) ===\n");
+                        emit("=== SÉCURITÉ DES PIPELINES & DEVSECOPS SOUVERAIN (v0.3.35) ===\n");
                         let mut b = [0u8; 20];
                         let cap = self.devsecops.admin_cap;
                         if let Ok(sum) = self.devsecops.get_summary(&cap) {
@@ -15911,10 +15911,14 @@ impl JamboShell {
                             emit(format_u64(sum.total_attestations as u64, &mut b));
                             emit("\n  Micro-services admis (Gatekeeper) : ");
                             emit(format_u64(sum.admitted_count as u64, &mut b));
+                            emit("\n  Micro-services en quarantaine     : ");
+                            emit(format_u64(sum.quarantined_count as u64, &mut b));
                             emit("\n  Micro-services rejetés / bloqués  : ");
                             emit(format_u64(sum.rejected_count as u64, &mut b));
-                            emit("\n  Attestations SLSA L3+ vérifiées   : ");
+                            emit("\n  Attestations SLSA L3/L4 vérifiées : ");
                             emit(format_u64(sum.slsa_l3_or_higher_count as u64, &mut b));
+                            emit("\n  Nomenclatures SBOM vérifiées      : ");
+                            emit(format_u64(sum.sbom_verified_count as u64, &mut b));
                             emit("\n  Étapes de pipelines exécutées     : ");
                             emit(format_u64(sum.pipelines_executed as u64, &mut b));
                             emit("\n  Score de conformité DevSecOps     : ");
@@ -15982,6 +15986,12 @@ impl JamboShell {
                                 jambo_devsecops::SlsaLevel::L3 => emit("L3"),
                                 jambo_devsecops::SlsaLevel::L4 => emit("L4"),
                             }
+                            if att.hermetic_build {
+                                emit(" [Hermétique]");
+                            }
+                            if att.bipartite_review {
+                                emit(" [Bipartite]");
+                            }
                             emit(" | Signature: ");
                             emit(if att.is_verified {
                                 "VÉRIFIÉE (OK)\n"
@@ -15990,6 +16000,70 @@ impl JamboShell {
                             });
                         }
                         (ShellStatus::Success, write_pos)
+                    }
+                    "sbom" => {
+                        let mut b = [0u8; 20];
+                        let target_id = if parsed.arg_count > 2 {
+                            parse_u64(parsed.args[2]).map(|v| v as u32)
+                        } else {
+                            None
+                        };
+
+                        if let Some(mid) = target_id {
+                            emit("=== NOMENCLATURE LOGICIELLE SOUVERAINE (SBOM) [Manifest ");
+                            emit(format_u64(mid as u64, &mut b));
+                            emit("] ===\n");
+                            if let Some(s) = self
+                                .devsecops
+                                .sboms
+                                .iter()
+                                .flatten()
+                                .find(|s| s.manifest_id == mid)
+                            {
+                                emit("  Nombre de composants : ");
+                                emit(format_u64(s.component_count as u64, &mut b));
+                                emit("\n  Statut de sécurité   : ");
+                                emit(if s.verified_clean {
+                                    "SAIN (Conforme SecNumCloud)\n"
+                                } else {
+                                    "NON CONFORME (Vulnérabilité ou licence interdite)\n"
+                                });
+                                for comp in s.components.iter().flatten() {
+                                    emit("    - ");
+                                    emit(comp.name_as_str());
+                                    emit(" @ ");
+                                    emit(comp.version_as_str());
+                                    emit(" [Licence: ");
+                                    emit(comp.license_as_str());
+                                    emit("] ");
+                                    if comp.has_known_cve {
+                                        emit("(!CVE DÉTECTÉE!)");
+                                    } else {
+                                        emit("(0-CVE)");
+                                    }
+                                    emit("\n");
+                                }
+                                (ShellStatus::Success, write_pos)
+                            } else {
+                                emit("  [FAIL] Aucun SBOM enregistré pour ce manifest\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        } else {
+                            emit("=== NOMENCLATURES LOGICIELLES SOUVERAINES (SBOM) ===\n");
+                            for s in self.devsecops.sboms.iter().flatten() {
+                                emit("  [Manifest ");
+                                emit(format_u64(s.manifest_id as u64, &mut b));
+                                emit("] Composants: ");
+                                emit(format_u64(s.component_count as u64, &mut b));
+                                emit(" | Statut: ");
+                                emit(if s.verified_clean {
+                                    "SAIN (OK)\n"
+                                } else {
+                                    "VULNÉRABLE / NON CONFORME\n"
+                                });
+                            }
+                            (ShellStatus::Success, write_pos)
+                        }
                     }
                     "admit" => {
                         let mut b = [0u8; 20];
@@ -16018,6 +16092,9 @@ impl JamboShell {
                                             ));
                                             emit(")\n");
                                         }
+                                        jambo_devsecops::AdmissionStatus::Quarantined => {
+                                            emit("EN QUARANTAINE\n")
+                                        }
                                         _ => emit("EN ATTENTE\n"),
                                     }
                                     (ShellStatus::Success, write_pos)
@@ -16042,10 +16119,170 @@ impl JamboShell {
                                         emit(format_u64(adm.rejection_reason_code as u64, &mut b));
                                         emit("\n");
                                     }
+                                    jambo_devsecops::AdmissionStatus::Quarantined => {
+                                        emit("QUARANTAINE (Confiné)\n")
+                                    }
                                     _ => emit("EN ATTENTE\n"),
                                 }
                             }
                             (ShellStatus::Success, write_pos)
+                        }
+                    }
+                    "remediate" => {
+                        let mut b = [0u8; 20];
+                        let mut cap = self.devsecops.admin_cap;
+                        let target_id = if parsed.arg_count > 2 {
+                            parse_u64(parsed.args[2]).map(|v| v as u32)
+                        } else {
+                            None
+                        };
+
+                        if let Some(mid) = target_id {
+                            match self.devsecops.remediate_manifest(&mut cap, mid, 10000) {
+                                Ok(st) => {
+                                    emit("  [REMÉDIATION O(1)] Manifest ");
+                                    emit(format_u64(mid as u64, &mut b));
+                                    emit(" : ");
+                                    match st {
+                                        jambo_devsecops::AdmissionStatus::Quarantined => {
+                                            emit("MIS EN QUARANTAINE & SECCOMP DURCI (OK)\n")
+                                        }
+                                        _ => emit("TRAITÉ\n"),
+                                    }
+                                    (ShellStatus::Success, write_pos)
+                                }
+                                Err(_) => {
+                                    emit("  [FAIL] Impossible de remédier le manifest\n");
+                                    (ShellStatus::ExecutionFailed, write_pos)
+                                }
+                            }
+                        } else {
+                            emit("Usage: devsecops remediate <manifest_id>\n");
+                            (ShellStatus::ExecutionFailed, write_pos)
+                        }
+                    }
+                    "remediate-all" => {
+                        let mut b = [0u8; 20];
+                        let mut cap = self.devsecops.admin_cap;
+                        match self.devsecops.remediate_all_non_compliant(&mut cap, 10000) {
+                            Ok(cnt) => {
+                                emit("  [REMÉDIATION GLOBALE O(1)] Manifests non conformes confinés : ");
+                                emit(format_u64(cnt as u64, &mut b));
+                                emit("\n  Tous les micro-services compromis sont isolés en quarantaine stricte.\n");
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("  [FAIL] Échec de la remédiation globale\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "report-admission" => {
+                        let mut b = [0u8; 20];
+                        let cap = self.devsecops.admin_cap;
+                        let mid = if parsed.arg_count > 2 {
+                            parse_u64(parsed.args[2]).map(|v| v as u32).unwrap_or(1)
+                        } else {
+                            1
+                        };
+
+                        match self.devsecops.generate_admission_report(&cap, mid, 10005) {
+                            Ok(rep) => {
+                                emit("=== RAPPORT D'ADMISSION SCELLÉ SHA-256 [Manifest ");
+                                emit(format_u64(rep.manifest_id as u64, &mut b));
+                                emit("] ===\n  ID Rapport                    : #");
+                                emit(format_u64(rep.report_id as u64, &mut b));
+                                emit("\n  Statut d'admission            : ");
+                                match rep.admission_status {
+                                    jambo_devsecops::AdmissionStatus::Admitted => {
+                                        emit("ADMIS (CONFORME)\n")
+                                    }
+                                    jambo_devsecops::AdmissionStatus::Rejected => {
+                                        emit("REJETÉ (VIOLATION)\n")
+                                    }
+                                    jambo_devsecops::AdmissionStatus::Quarantined => {
+                                        emit("QUARANTAINE (CONFINÉ)\n")
+                                    }
+                                    _ => emit("EN ATTENTE\n"),
+                                }
+                                emit("  Score de conformité           : ");
+                                emit(format_u64(rep.compliance_score as u64, &mut b));
+                                emit(" %\n  Sceau SHA-256 scellé          : ");
+                                emit(if rep.verify_seal() {
+                                    "VALIDE (CONFORME)\n"
+                                } else {
+                                    "INVALIDE\n"
+                                });
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("  [FAIL] Impossible de générer le rapport d'admission\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "report-compliance" => {
+                        let mut b = [0u8; 20];
+                        let cap = self.devsecops.admin_cap;
+                        match self.devsecops.generate_compliance_report(&cap, 10010) {
+                            Ok(rep) => {
+                                emit("=== RAPPORT DE CONFORMITÉ DEVSECOPS SCELLÉ SHA-256 ===\n");
+                                emit("  ID Rapport                    : #");
+                                emit(format_u64(rep.report_id as u64, &mut b));
+                                emit("\n  Manifests totaux              : ");
+                                emit(format_u64(rep.total_manifests as u64, &mut b));
+                                emit("\n  Micro-services admis          : ");
+                                emit(format_u64(rep.admitted_count as u64, &mut b));
+                                emit("\n  Micro-services en quarantaine : ");
+                                emit(format_u64(rep.quarantined_count as u64, &mut b));
+                                emit("\n  Attestations SLSA L3/L4       : ");
+                                emit(format_u64(rep.slsa_l3_or_higher_count as u64, &mut b));
+                                emit("\n  Nomenclatures SBOM vérifiées  : ");
+                                emit(format_u64(rep.sbom_verified_count as u64, &mut b));
+                                emit("\n  Score global de conformité    : ");
+                                emit(format_u64(rep.global_compliance_score as u64, &mut b));
+                                emit(" %\n  Sceau SHA-256 scellé          : ");
+                                emit(if rep.verify_seal() {
+                                    "VALIDE (CONFORME)\n"
+                                } else {
+                                    "INVALIDE\n"
+                                });
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("  [FAIL] Impossible de générer le rapport de conformité\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
+                        }
+                    }
+                    "report-remediation" => {
+                        let mut b = [0u8; 20];
+                        let mut cap = self.devsecops.admin_cap;
+                        match self.devsecops.generate_remediation_report(&mut cap, 10015) {
+                            Ok(rep) => {
+                                emit("=== RAPPORT DE REMÉDIATION AUTONOME DEVSECOPS SCELLÉ SHA-256 ===\n");
+                                emit("  ID Rapport                    : #");
+                                emit(format_u64(rep.report_id as u64, &mut b));
+                                emit("\n  Manifests remédiés en O(1)    : ");
+                                emit(format_u64(rep.remediated_count as u64, &mut b));
+                                emit("\n  Micro-services en quarantaine : ");
+                                emit(format_u64(rep.quarantined_count as u64, &mut b));
+                                emit("\n  Score conformité avant        : ");
+                                emit(format_u64(rep.compliance_score_before as u64, &mut b));
+                                emit(" %\n  Score conformité après        : ");
+                                emit(format_u64(rep.compliance_score_after as u64, &mut b));
+                                emit(" %\n  Sceau SHA-256 scellé          : ");
+                                emit(if rep.verify_seal() {
+                                    "VALIDE (CONFORME)\n"
+                                } else {
+                                    "INVALIDE\n"
+                                });
+                                (ShellStatus::Success, write_pos)
+                            }
+                            Err(_) => {
+                                emit("  [FAIL] Impossible de générer le rapport de remédiation\n");
+                                (ShellStatus::ExecutionFailed, write_pos)
+                            }
                         }
                     }
                     "pipelines" => {
@@ -16073,6 +16310,9 @@ impl JamboShell {
                                 jambo_devsecops::PipelineStage::AdmissionControlGate => {
                                     emit("Admission-Gate")
                                 }
+                                jambo_devsecops::PipelineStage::SbomVulnerabilityScan => {
+                                    emit("SBOM-Scan")
+                                }
                             }
                             emit(" | Statut: ");
                             emit(if ex.passed { "PASS" } else { "FAIL" });
@@ -16093,7 +16333,7 @@ impl JamboShell {
                         (ShellStatus::Success, write_pos)
                     }
                     _ => {
-                        emit("Usage: devsecops [status | manifests | attestations | admit [id] | pipelines | verify]\n");
+                        emit("Usage: devsecops [status | manifests | attestations | sbom [id] | admit [id] | pipelines | remediate [id] | remediate-all | report-admission [id] | report-compliance | report-remediation | verify]\n");
                         (ShellStatus::ExecutionFailed, write_pos)
                     }
                 }
@@ -21984,13 +22224,41 @@ mod tests {
                 assert_eq!(st6, ShellStatus::Success);
                 assert!(len6 > 0);
 
-                let (st7, len7) = shell.execute_line("devsecops pipelines", &mut out);
+                let (st7, len7) = shell.execute_line("devsecops sbom", &mut out);
                 assert_eq!(st7, ShellStatus::Success);
                 assert!(len7 > 0);
 
-                let (st8, len8) = shell.execute_line("devsecops verify", &mut out);
+                let (st8, len8) = shell.execute_line("devsecops sbom 1", &mut out);
                 assert_eq!(st8, ShellStatus::Success);
                 assert!(len8 > 0);
+
+                let (st9, len9) = shell.execute_line("devsecops pipelines", &mut out);
+                assert_eq!(st9, ShellStatus::Success);
+                assert!(len9 > 0);
+
+                let (st10, len10) = shell.execute_line("devsecops remediate 4", &mut out);
+                assert_eq!(st10, ShellStatus::Success);
+                assert!(len10 > 0);
+
+                let (st11, len11) = shell.execute_line("devsecops remediate-all", &mut out);
+                assert_eq!(st11, ShellStatus::Success);
+                assert!(len11 > 0);
+
+                let (st12, len12) = shell.execute_line("devsecops report-admission 1", &mut out);
+                assert_eq!(st12, ShellStatus::Success);
+                assert!(len12 > 0);
+
+                let (st13, len13) = shell.execute_line("devsecops report-compliance", &mut out);
+                assert_eq!(st13, ShellStatus::Success);
+                assert!(len13 > 0);
+
+                let (st14, len14) = shell.execute_line("devsecops report-remediation", &mut out);
+                assert_eq!(st14, ShellStatus::Success);
+                assert!(len14 > 0);
+
+                let (st15, len15) = shell.execute_line("devsecops verify", &mut out);
+                assert_eq!(st15, ShellStatus::Success);
+                assert!(len15 > 0);
             })
             .unwrap();
         handle.join().unwrap();
