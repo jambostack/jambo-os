@@ -1,13 +1,15 @@
-//! Protection des Charges de Travail Cloud/Grappe (CWPP), Surveillance d'Intégrité en Exécution & Confinement
+//! Protection des Charges de Travail Cloud Souveraines CWPP, Intégrité d'Exécution & Confinement Autonome
 //!
-//! Phase 126 — Jalon v0.2.124
+//! Phase 156 — Jalon v0.3.23
 //!
 //! Fournit un système souverain de Cloud Workload Protection Platform (CWPP) en environnement `#![no_std]` :
-//! 1. Surveillance en temps réel des charges de travail Ring 3 et détection d'anomalies d'exécution.
-//! 2. Détection d'injections de mémoire anonyme (W+X), dérivations de pointeurs d'instructions (RIP Divergence), appels système non autorisés et évasions de conteneur.
-//! 3. Confinement instantané O(1) (Freeze, StripCaps, IsolateNetwork, Quarantine, Terminate).
-//! 4. Contrôle d'accès capabilaire (`CwppCap`) sans autorité ambiante et atténuation monotone.
-//! 5. Registre d'audit cryptographique inviolable scellé par chaînage SHA-256.
+//! 1. Moteur de protection continue à l'exécution (Runtime Workload Protection) pour micro-VMs et conteneurs d'enclaves souveraines.
+//! 2. Surveillance de l'intégrité mémoire temps réel : W^X enforcement, Control Flow Integrity (CFI), intégrité des canaris de pile (Stack Canaries) et contrôle d'empreintes binaires SHA-256.
+//! 3. Détection des dérives comportementales des processus et conteneurs (appels système non autorisés, injections mémoire, dérivation RIP/ROP, franchissement de namespaces, violations d'enclaves TEE).
+//! 4. Confinement chirurgical instantané O(1) : Freeze, StripCaps, IsolateNetwork, Quarantine, RollbackGoldenSnapshot, Terminate.
+//! 5. Rapports d'incidents et de confinement autonomes scellés par SHA-256 (`CwppIncidentReport`).
+//! 6. Contrôle d'accès capabilaire strict (`CwppCap`) sans autorité ambiante avec atténuation monotone.
+//! 7. Registre d'audit cryptographique inviolable scellé par chaînage SHA-256 déterministe.
 
 #![no_std]
 
@@ -177,15 +179,17 @@ pub mod cwpp_rights {
     pub const DETECT_ANOMALY: u32 = 1 << 2;
     pub const CONTAIN_WORKLOAD: u32 = 1 << 3;
     pub const MANAGE_PROFILES: u32 = 1 << 4;
-    pub const READ_METRICS: u32 = 1 << 5;
-    pub const SEAL_LEDGER: u32 = 1 << 6;
-    pub const ADMIN: u32 = 1 << 7;
+    pub const VERIFY_INTEGRITY: u32 = 1 << 5;
+    pub const READ_METRICS: u32 = 1 << 6;
+    pub const SEAL_LEDGER: u32 = 1 << 7;
+    pub const ADMIN: u32 = 1 << 8;
 
     pub const ALL: u32 = REGISTER_WORKLOAD
         | INSPECT_WORKLOAD
         | DETECT_ANOMALY
         | CONTAIN_WORKLOAD
         | MANAGE_PROFILES
+        | VERIFY_INTEGRITY
         | READ_METRICS
         | SEAL_LEDGER
         | ADMIN;
@@ -268,8 +272,27 @@ pub enum CwppError {
 }
 
 // ============================================================================
-// MODÈLES DE CHARGE DE TRAVAIL & PROFILES
+// MODÈLES DE CHARGE DE TRAVAIL & ENVIRONNEMENT D'EXÉCUTION
 // ============================================================================
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RuntimeIsolation {
+    MicroVmEnclave,
+    ContainerNamespace,
+    BareMetalProcess,
+    WasmLinearMemory,
+}
+
+impl RuntimeIsolation {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            RuntimeIsolation::MicroVmEnclave => "MicroVmEnclave",
+            RuntimeIsolation::ContainerNamespace => "ContainerNamespace",
+            RuntimeIsolation::BareMetalProcess => "BareMetalProcess",
+            RuntimeIsolation::WasmLinearMemory => "WasmLinearMemory",
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WorkloadType {
@@ -278,6 +301,24 @@ pub enum WorkloadType {
     AiWorker,
     IngressGateway,
     SystemDaemon,
+    SovereignEnclaveMicroVm,
+    SovereignContainer,
+    SovereignWasmSandbox,
+}
+
+impl WorkloadType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            WorkloadType::Microservice => "Microservice",
+            WorkloadType::Database => "Database",
+            WorkloadType::AiWorker => "AiWorker",
+            WorkloadType::IngressGateway => "IngressGateway",
+            WorkloadType::SystemDaemon => "SystemDaemon",
+            WorkloadType::SovereignEnclaveMicroVm => "SovereignEnclaveMicroVm",
+            WorkloadType::SovereignContainer => "SovereignContainer",
+            WorkloadType::SovereignWasmSandbox => "SovereignWasmSandbox",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -287,6 +328,20 @@ pub enum WorkloadState {
     Anomalous,
     Contained,
     Terminated,
+    Restored,
+}
+
+impl WorkloadState {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            WorkloadState::Healthy => "Healthy",
+            WorkloadState::Suspicious => "Suspicious",
+            WorkloadState::Anomalous => "Anomalous",
+            WorkloadState::Contained => "Contained",
+            WorkloadState::Terminated => "Terminated",
+            WorkloadState::Restored => "Restored",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -297,6 +352,39 @@ pub enum AnomalyType {
     RipDivergence,
     ContainerEscapeAttempt,
     ResourceExhaustion,
+    StackCanaryCorruption,
+    EnclaveBoundaryViolation,
+    BinaryTampering,
+}
+
+impl AnomalyType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            AnomalyType::None => "None",
+            AnomalyType::UnauthorizedSyscall => "UnauthorizedSyscall",
+            AnomalyType::MemoryInjection => "MemoryInjection(W+X)",
+            AnomalyType::RipDivergence => "RipDivergence(CFI)",
+            AnomalyType::ContainerEscapeAttempt => "ContainerEscapeAttempt",
+            AnomalyType::ResourceExhaustion => "ResourceExhaustion",
+            AnomalyType::StackCanaryCorruption => "StackCanaryCorruption",
+            AnomalyType::EnclaveBoundaryViolation => "EnclaveBoundaryViolation",
+            AnomalyType::BinaryTampering => "BinaryTampering",
+        }
+    }
+
+    pub fn severity_score(&self) -> u8 {
+        match self {
+            AnomalyType::None => 0,
+            AnomalyType::ResourceExhaustion => 35,
+            AnomalyType::UnauthorizedSyscall => 65,
+            AnomalyType::MemoryInjection => 85,
+            AnomalyType::StackCanaryCorruption => 90,
+            AnomalyType::RipDivergence => 92,
+            AnomalyType::ContainerEscapeAttempt => 95,
+            AnomalyType::EnclaveBoundaryViolation => 98,
+            AnomalyType::BinaryTampering => 100,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -306,7 +394,48 @@ pub enum ContainmentAction {
     StripCaps,
     IsolateNetwork,
     Quarantine,
+    RollbackGoldenSnapshot,
     Terminate,
+}
+
+impl ContainmentAction {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ContainmentAction::None => "None",
+            ContainmentAction::Freeze => "Freeze",
+            ContainmentAction::StripCaps => "StripCaps",
+            ContainmentAction::IsolateNetwork => "IsolateNetwork",
+            ContainmentAction::Quarantine => "Quarantine",
+            ContainmentAction::RollbackGoldenSnapshot => "RollbackGoldenSnapshot",
+            ContainmentAction::Terminate => "Terminate",
+        }
+    }
+}
+
+/// État de l'intégrité d'exécution d'une charge de travail souveraine
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ExecutionIntegrity {
+    pub wx_enforced: bool,
+    pub cfi_valid: bool,
+    pub stack_canary_intact: bool,
+    pub hash_verified: bool,
+    pub anomaly_score: u8,
+}
+
+impl ExecutionIntegrity {
+    pub const fn default_healthy() -> Self {
+        Self {
+            wx_enforced: true,
+            cfi_valid: true,
+            stack_canary_intact: true,
+            hash_verified: true,
+            anomaly_score: 0,
+        }
+    }
+
+    pub fn is_fully_integral(&self) -> bool {
+        self.wx_enforced && self.cfi_valid && self.stack_canary_intact && self.hash_verified
+    }
 }
 
 /// Profil d'exécution d'une charge de travail définissant les invariants nominaux
@@ -316,11 +445,13 @@ pub struct WorkloadProfile {
     pub name: [u8; 32],
     pub name_len: usize,
     pub workload_type: WorkloadType,
+    pub isolation: RuntimeIsolation,
     pub allowed_syscall_mask: u64,
     pub max_memory_bytes: u64,
     pub max_threads: u32,
     pub allow_network: bool,
     pub allow_raw_sockets: bool,
+    pub golden_hash: [u8; 32],
 }
 
 impl WorkloadProfile {
@@ -334,6 +465,32 @@ impl WorkloadProfile {
         allow_network: bool,
         allow_raw_sockets: bool,
     ) -> Self {
+        Self::new_full(
+            profile_id,
+            name_str,
+            workload_type,
+            RuntimeIsolation::ContainerNamespace,
+            allowed_syscall_mask,
+            max_memory_bytes,
+            max_threads,
+            allow_network,
+            allow_raw_sockets,
+            [0u8; 32],
+        )
+    }
+
+    pub fn new_full(
+        profile_id: u32,
+        name_str: &str,
+        workload_type: WorkloadType,
+        isolation: RuntimeIsolation,
+        allowed_syscall_mask: u64,
+        max_memory_bytes: u64,
+        max_threads: u32,
+        allow_network: bool,
+        allow_raw_sockets: bool,
+        golden_hash: [u8; 32],
+    ) -> Self {
         let mut name = [0u8; 32];
         let bytes = name_str.as_bytes();
         let len = core::cmp::min(bytes.len(), 32);
@@ -344,16 +501,18 @@ impl WorkloadProfile {
             name,
             name_len: len,
             workload_type,
+            isolation,
             allowed_syscall_mask,
             max_memory_bytes,
             max_threads,
             allow_network,
             allow_raw_sockets,
+            golden_hash,
         }
     }
 }
 
-/// Descripteur de charge de travail surveillée en Ring 3
+/// Descripteur de charge de travail surveillée en Ring 3 / Micro-VM / Sandbox
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Workload {
     pub id: u32,
@@ -361,7 +520,9 @@ pub struct Workload {
     pub name: [u8; 32],
     pub name_len: usize,
     pub profile_id: u32,
+    pub isolation: RuntimeIsolation,
     pub state: WorkloadState,
+    pub integrity: ExecutionIntegrity,
     pub allocated_memory: u64,
     pub thread_count: u32,
     pub anomaly_count: u32,
@@ -379,6 +540,24 @@ impl Workload {
         profile_id: u32,
         integrity_hash: [u8; 32],
     ) -> Self {
+        Self::new_full(
+            id,
+            pid,
+            name_str,
+            profile_id,
+            RuntimeIsolation::ContainerNamespace,
+            integrity_hash,
+        )
+    }
+
+    pub fn new_full(
+        id: u32,
+        pid: u32,
+        name_str: &str,
+        profile_id: u32,
+        isolation: RuntimeIsolation,
+        integrity_hash: [u8; 32],
+    ) -> Self {
         let mut name = [0u8; 32];
         let bytes = name_str.as_bytes();
         let len = core::cmp::min(bytes.len(), 32);
@@ -390,7 +569,9 @@ impl Workload {
             name,
             name_len: len,
             profile_id,
+            isolation,
             state: WorkloadState::Healthy,
+            integrity: ExecutionIntegrity::default_healthy(),
             allocated_memory: 0,
             thread_count: 1,
             anomaly_count: 0,
@@ -398,6 +579,75 @@ impl Workload {
             applied_containment: ContainmentAction::None,
             last_seen_ts: 0,
             integrity_hash,
+        }
+    }
+}
+
+// ============================================================================
+// RAPPORTS D'INCIDENTS ET DE CONFINEMENT SCELLÉS (SHA-256)
+// ============================================================================
+
+/// Rapport d'incident et d'intervention de confinement autonome scellé cryptographiquement
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CwppIncidentReport {
+    pub report_id: u64,
+    pub workload_id: u32,
+    pub timestamp: u64,
+    pub anomaly: AnomalyType,
+    pub action: ContainmentAction,
+    pub isolation_env: RuntimeIsolation,
+    pub threat_score: u8,
+    pub report_hash: [u8; 32],
+}
+
+impl CwppIncidentReport {
+    pub fn compute_hash(
+        report_id: u64,
+        workload_id: u32,
+        timestamp: u64,
+        anomaly: AnomalyType,
+        action: ContainmentAction,
+        isolation_env: RuntimeIsolation,
+        threat_score: u8,
+    ) -> [u8; 32] {
+        let mut hasher = Sha256::new();
+        hasher.update(&report_id.to_be_bytes());
+        hasher.update(&workload_id.to_be_bytes());
+        hasher.update(&timestamp.to_be_bytes());
+        hasher.update(&[anomaly as u8]);
+        hasher.update(&[action as u8]);
+        hasher.update(&[isolation_env as u8]);
+        hasher.update(&[threat_score]);
+        hasher.finalize()
+    }
+
+    pub fn new(
+        report_id: u64,
+        workload_id: u32,
+        timestamp: u64,
+        anomaly: AnomalyType,
+        action: ContainmentAction,
+        isolation_env: RuntimeIsolation,
+        threat_score: u8,
+    ) -> Self {
+        let report_hash = Self::compute_hash(
+            report_id,
+            workload_id,
+            timestamp,
+            anomaly,
+            action,
+            isolation_env,
+            threat_score,
+        );
+        Self {
+            report_id,
+            workload_id,
+            timestamp,
+            anomaly,
+            action,
+            isolation_env,
+            threat_score,
+            report_hash,
         }
     }
 }
@@ -413,6 +663,7 @@ pub enum CwppAuditAction {
     ScanExecuted,
     AnomalyDetected,
     ContainmentEnforced,
+    RollbackExecuted,
     WorkloadReleased,
     LedgerSealed,
 }
@@ -458,6 +709,9 @@ pub struct JamboCwppDaemon {
     pub workload_count: usize,
     pub profiles: [Option<WorkloadProfile>; 8],
     pub profile_count: usize,
+    pub incident_reports: [Option<CwppIncidentReport>; 32],
+    pub report_count: usize,
+    pub next_report_id: u64,
     pub audit_log: [Option<CwppAuditRecord>; 64],
     pub audit_count: usize,
     pub ledger_hash: [u8; 32],
@@ -466,6 +720,7 @@ pub struct JamboCwppDaemon {
     pub total_scans: u64,
     pub total_anomalies_detected: u64,
     pub total_containments: u64,
+    pub total_rollbacks: u64,
     pub active_workloads: u32,
 }
 
@@ -483,95 +738,211 @@ impl JamboCwppDaemon {
             workload_count: 0,
             profiles: [None; 8],
             profile_count: 0,
+            incident_reports: [None; 32],
+            report_count: 0,
+            next_report_id: 1,
             audit_log: [None; 64],
             audit_count: 0,
             ledger_hash: Self::GENESIS_HASH,
             total_scans: 0,
             total_anomalies_detected: 0,
             total_containments: 0,
+            total_rollbacks: 0,
             active_workloads: 0,
+        }
+    }
+
+    /// Enregistre un événement dans le registre d'audit cryptographique inviolable
+    fn append_audit_entry(
+        &mut self,
+        action: CwppAuditAction,
+        workload_id: u32,
+        details: &[u8],
+        timestamp: u64,
+    ) {
+        if self.audit_count >= self.audit_log.len() {
+            // Rotation circulaire FIFO
+            for i in 1..self.audit_log.len() {
+                self.audit_log[i - 1] = self.audit_log[i];
+            }
+            self.audit_count = self.audit_log.len() - 1;
+        }
+
+        let details_hash = Sha256::hash(details);
+        let index = self.audit_count as u64;
+        let record_hash = CwppAuditRecord::compute_hash(
+            index,
+            timestamp,
+            action,
+            workload_id,
+            &details_hash,
+            &self.ledger_hash,
+        );
+
+        let record = CwppAuditRecord {
+            index,
+            timestamp,
+            action,
+            workload_id,
+            details_hash,
+            prev_hash: self.ledger_hash,
+            record_hash,
+        };
+
+        self.ledger_hash = record_hash;
+        self.audit_log[self.audit_count] = Some(record);
+        self.audit_count += 1;
+    }
+
+    /// Ajoute un rapport d'incident scellé dans le journal borné
+    fn append_incident_report(
+        &mut self,
+        workload_id: u32,
+        anomaly: AnomalyType,
+        action: ContainmentAction,
+        isolation_env: RuntimeIsolation,
+        threat_score: u8,
+        timestamp: u64,
+    ) {
+        let rep_id = self.next_report_id;
+        self.next_report_id += 1;
+
+        let report = CwppIncidentReport::new(
+            rep_id,
+            workload_id,
+            timestamp,
+            anomaly,
+            action,
+            isolation_env,
+            threat_score,
+        );
+
+        let slot = ((rep_id - 1) % 32) as usize;
+        self.incident_reports[slot] = Some(report);
+        if self.report_count < 32 {
+            self.report_count += 1;
         }
     }
 
     /// Initialise les profils souverains par défaut et les charges de travail critiques
     pub fn init_defaults(&mut self) {
-        // 1. Profil Ingress Gateway
-        let p_gw = WorkloadProfile::new(
+        // 1. Profil Ingress Gateway (Micro-VM Enclave TEE)
+        let hash_gw = Sha256::hash(b"golden-bin-ingress-gw-v0.3.23");
+        let p_gw = WorkloadProfile::new_full(
             1,
-            "ingress-gw",
+            "jambo-ingress-gw",
             WorkloadType::IngressGateway,
-            0x0000_0000_0000_003F, // syscalls réseau et lecture/écriture de base
-            64 * 1024 * 1024,      // 64 MiB
+            RuntimeIsolation::MicroVmEnclave,
+            0x00FF_FFFF, // Syscalls 0..23 autorisés
+            32 * 1024 * 1024,
             8,
             true,
             false,
+            hash_gw,
         );
+        self.profiles[0] = Some(p_gw);
 
-        // 2. Profil Base de Données Souveraine
-        let p_db = WorkloadProfile::new(
+        // 2. Profil Base de Données Souveraine (Conteneur Durci)
+        let hash_db = Sha256::hash(b"golden-bin-kvd-db-v0.3.23");
+        let p_db = WorkloadProfile::new_full(
             2,
-            "sovereign-db",
+            "jambo-kvd-db",
             WorkloadType::Database,
-            0x0000_0000_0000_00FF, // VFS, synchro mémoire, sockets locaux
-            512 * 1024 * 1024,     // 512 MiB
+            RuntimeIsolation::ContainerNamespace,
+            0x000F_FFFF, // Syscalls 0..19 autorisés
+            128 * 1024 * 1024,
             16,
             true,
             false,
+            hash_db,
         );
+        self.profiles[1] = Some(p_db);
 
-        // 3. Profil Moteur d'Inférence IA Isolée
-        let p_ai = WorkloadProfile::new(
+        // 3. Profil Worker IA Inférence Souverain (Micro-VM Enclave TEE accélérée)
+        let hash_ai = Sha256::hash(b"golden-bin-ai-infer-v0.3.23");
+        let p_ai = WorkloadProfile::new_full(
             3,
-            "ai-worker",
+            "jambo-ai-infer",
             WorkloadType::AiWorker,
-            0x0000_0000_0000_001F, // calcul intensif, VMO shm, 0 réseau
-            1024 * 1024 * 1024,    // 1 GiB
+            RuntimeIsolation::MicroVmEnclave,
+            0x0000_001F, // Syscalls 0..4 autorisés (très restreint)
+            256 * 1024 * 1024,
             4,
             false,
             false,
+            hash_ai,
         );
+        self.profiles[2] = Some(p_ai);
 
-        // 4. Profil Démon Système Durci
-        let p_sys = WorkloadProfile::new(
+        // 4. Profil Démon d'Audit Système (Processus Ring 3 Natif)
+        let hash_audit = Sha256::hash(b"golden-bin-log-audit-v0.3.23");
+        let p_audit = WorkloadProfile::new_full(
             4,
-            "sys-daemon",
+            "jambo-log-audit",
             WorkloadType::SystemDaemon,
-            0x0000_0000_0000_03FF, // VFS, IPC, IPC caps
-            128 * 1024 * 1024,     // 128 MiB
-            12,
+            RuntimeIsolation::BareMetalProcess,
+            0x0000_03FF, // Syscalls 0..9 autorisés
+            16 * 1024 * 1024,
+            2,
             false,
             false,
+            hash_audit,
         );
+        self.profiles[3] = Some(p_audit);
 
-        let cap = self.admin_cap;
-        let _ = self.register_profile(&cap, p_gw, 100);
-        let _ = self.register_profile(&cap, p_db, 110);
-        let _ = self.register_profile(&cap, p_ai, 120);
-        let _ = self.register_profile(&cap, p_sys, 130);
+        self.profile_count = 4;
 
-        // Enregistrement des 4 charges de travail initiales
-        let hash_gw = Sha256::hash(b"elf64:jambo-gwd:v0.2.124");
-        let hash_db = Sha256::hash(b"elf64:jambo-kvd:v0.2.124");
-        let hash_ai = Sha256::hash(b"elf64:jambo-aid:v0.2.124");
-        let hash_sys = Sha256::hash(b"elf64:jambo-logd:v0.2.124");
+        // Charges de travail surveillées associées
+        self.workloads[0] = Some(Workload::new_full(
+            101,
+            201,
+            "jambo-ingress-instance",
+            1,
+            RuntimeIsolation::MicroVmEnclave,
+            hash_gw,
+        ));
+        self.workloads[1] = Some(Workload::new_full(
+            102,
+            202,
+            "jambo-kvd-instance",
+            2,
+            RuntimeIsolation::ContainerNamespace,
+            hash_db,
+        ));
+        self.workloads[2] = Some(Workload::new_full(
+            103,
+            203,
+            "jambo-ai-worker-0",
+            3,
+            RuntimeIsolation::MicroVmEnclave,
+            hash_ai,
+        ));
+        self.workloads[3] = Some(Workload::new_full(
+            104,
+            204,
+            "jambo-log-daemon",
+            4,
+            RuntimeIsolation::BareMetalProcess,
+            hash_audit,
+        ));
 
-        let wl_gw = Workload::new(101, 1001, "jambo-ingress", 1, hash_gw);
-        let wl_db = Workload::new(102, 1002, "jambo-kvd-db", 2, hash_db);
-        let wl_ai = Workload::new(103, 1003, "jambo-ai-infer", 3, hash_ai);
-        let wl_sys = Workload::new(104, 1004, "jambo-log-audit", 4, hash_sys);
+        self.workload_count = 4;
+        self.active_workloads = 4;
 
-        let _ = self.register_workload(&cap, wl_gw, 200);
-        let _ = self.register_workload(&cap, wl_db, 210);
-        let _ = self.register_workload(&cap, wl_ai, 220);
-        let _ = self.register_workload(&cap, wl_sys, 230);
+        self.append_audit_entry(
+            CwppAuditAction::LedgerSealed,
+            0,
+            b"cwpp-defaults-initialized-v0.3.23",
+            100,
+        );
     }
 
-    /// Enregistre un nouveau profil de charge de travail
+    /// Enregistre un nouveau profil d'exécution
     pub fn register_profile(
         &mut self,
         cap: &CwppCap,
         profile: WorkloadProfile,
-        ts: u64,
+        timestamp: u64,
     ) -> Result<u32, CwppError> {
         if !cap.has_right(cwpp_rights::MANAGE_PROFILES) {
             return Err(CwppError::PermissionDenied);
@@ -584,18 +955,21 @@ impl JamboCwppDaemon {
         self.profiles[self.profile_count] = Some(profile);
         self.profile_count += 1;
 
-        let details = Sha256::hash(&pid.to_be_bytes());
-        self.append_audit(ts, CwppAuditAction::ProfileAdded, pid, details);
-
+        self.append_audit_entry(
+            CwppAuditAction::ProfileAdded,
+            pid,
+            b"register-workload-profile",
+            timestamp,
+        );
         Ok(pid)
     }
 
-    /// Enregistre une nouvelle charge de travail surveillée
+    /// Enregistre une charge de travail pour surveillance d'exécution continue
     pub fn register_workload(
         &mut self,
         cap: &CwppCap,
-        wl: Workload,
-        ts: u64,
+        workload: Workload,
+        timestamp: u64,
     ) -> Result<u32, CwppError> {
         if !cap.has_right(cwpp_rights::REGISTER_WORKLOAD) {
             return Err(CwppError::PermissionDenied);
@@ -604,191 +978,324 @@ impl JamboCwppDaemon {
             return Err(CwppError::BufferOverflow);
         }
 
-        // Vérification de l'existence du profil associé
-        let mut profile_found = false;
-        for i in 0..self.profile_count {
-            if let Some(ref p) = self.profiles[i] {
-                if p.profile_id == wl.profile_id {
-                    profile_found = true;
-                    break;
-                }
-            }
-        }
-        if !profile_found {
-            return Err(CwppError::ProfileNotFound);
-        }
-
-        let wid = wl.id;
-        self.workloads[self.workload_count] = Some(wl);
+        let wid = workload.id;
+        self.workloads[self.workload_count] = Some(workload);
         self.workload_count += 1;
         self.active_workloads += 1;
 
-        self.append_audit(
-            ts,
+        self.append_audit_entry(
             CwppAuditAction::WorkloadRegistered,
             wid,
-            wl.integrity_hash,
+            b"register-workload",
+            timestamp,
         );
-
         Ok(wid)
     }
 
-    /// Récupère l'état d'une charge de travail
-    pub fn inspect_workload(&self, cap: &CwppCap, workload_id: u32) -> Result<Workload, CwppError> {
-        if !cap.has_right(cwpp_rights::INSPECT_WORKLOAD) {
-            return Err(CwppError::PermissionDenied);
-        }
-
-        for i in 0..self.workload_count {
-            if let Some(ref wl) = self.workloads[i] {
-                if wl.id == workload_id {
-                    return Ok(*wl);
-                }
-            }
-        }
-        Err(CwppError::WorkloadNotFound)
-    }
-
-    /// Signale un événement d'exécution Ring 3 et analyse les anomalies
-    pub fn report_execution_event(
+    /// Télémétrie d'exécution complète avec surveillance W^X, CFI, Stack Canaries, Enclave Boundary et Hash binaire
+    pub fn report_execution_telemetry(
         &mut self,
         cap: &CwppCap,
         workload_id: u32,
         syscall_nr: u32,
         memory_bytes: u64,
-        thread_cnt: u32,
-        is_wx_mapping: bool,
-        is_rip_valid: bool,
-        ts: u64,
+        thread_count: u32,
+        wx_violation: bool,
+        cfi_violation: bool,
+        canary_violation: bool,
+        boundary_violation: bool,
+        current_hash: [u8; 32],
+        timestamp: u64,
     ) -> Result<Option<AnomalyType>, CwppError> {
         if !cap.has_right(cwpp_rights::DETECT_ANOMALY) {
             return Err(CwppError::PermissionDenied);
         }
 
         let mut wl_idx = None;
-        let mut profile_opt = None;
-
         for i in 0..self.workload_count {
             if let Some(ref wl) = self.workloads[i] {
                 if wl.id == workload_id {
                     wl_idx = Some(i);
-                    // Retrouve le profil
-                    for j in 0..self.profile_count {
-                        if let Some(ref p) = self.profiles[j] {
-                            if p.profile_id == wl.profile_id {
-                                profile_opt = Some(*p);
-                                break;
-                            }
-                        }
-                    }
                     break;
                 }
             }
         }
 
-        let idx = wl_idx.ok_or(CwppError::WorkloadNotFound)?;
-        let profile = profile_opt.ok_or(CwppError::ProfileNotFound)?;
+        let idx = match wl_idx {
+            Some(i) => i,
+            None => return Err(CwppError::WorkloadNotFound),
+        };
 
-        // Détection d'anomalies par ordre de criticité
+        let profile_id = self.workloads[idx].as_ref().unwrap().profile_id;
+        let mut prof = None;
+        for i in 0..self.profile_count {
+            if let Some(ref p) = self.profiles[i] {
+                if p.profile_id == profile_id {
+                    prof = Some(*p);
+                    break;
+                }
+            }
+        }
+        let profile = match prof {
+            Some(p) => p,
+            None => return Err(CwppError::ProfileNotFound),
+        };
+
         let mut detected_anomaly = AnomalyType::None;
 
-        if !is_rip_valid {
-            detected_anomaly = AnomalyType::RipDivergence;
-        } else if is_wx_mapping {
+        // 1. Détection W+X (Injection de mémoire)
+        if wx_violation {
             detected_anomaly = AnomalyType::MemoryInjection;
-        } else if syscall_nr < 64 && ((profile.allowed_syscall_mask & (1 << syscall_nr)) == 0) {
+        }
+        // 2. Détection CFI / Divergence RIP
+        else if cfi_violation {
+            detected_anomaly = AnomalyType::RipDivergence;
+        }
+        // 3. Détection altération Canari de Pile
+        else if canary_violation {
+            detected_anomaly = AnomalyType::StackCanaryCorruption;
+        }
+        // 4. Détection violation de frontières d'enclave / évasion conteneur
+        else if boundary_violation {
+            if profile.isolation == RuntimeIsolation::MicroVmEnclave {
+                detected_anomaly = AnomalyType::EnclaveBoundaryViolation;
+            } else {
+                detected_anomaly = AnomalyType::ContainerEscapeAttempt;
+            }
+        }
+        // 5. Détection altération d'empreinte binaire (Binary Tampering)
+        else if profile.golden_hash != [0u8; 32] && current_hash != profile.golden_hash {
+            detected_anomaly = AnomalyType::BinaryTampering;
+        }
+        // 6. Détection Syscall non autorisé
+        else if syscall_nr < 64 {
+            let mask = 1u64 << syscall_nr;
+            if (profile.allowed_syscall_mask & mask) == 0 {
+                detected_anomaly = AnomalyType::UnauthorizedSyscall;
+            }
+        } else {
             detected_anomaly = AnomalyType::UnauthorizedSyscall;
-        } else if memory_bytes > profile.max_memory_bytes || thread_cnt > profile.max_threads {
-            detected_anomaly = AnomalyType::ResourceExhaustion;
         }
 
-        if let Some(ref mut wl) = self.workloads[idx] {
+        // 7. Détection dépassement de quota de mémoire ou threads
+        if detected_anomaly == AnomalyType::None {
+            if memory_bytes > profile.max_memory_bytes || thread_count > profile.max_threads {
+                detected_anomaly = AnomalyType::ResourceExhaustion;
+            }
+        }
+
+        // Mise à jour de la charge
+        let (iso, score) = {
+            let wl = self.workloads[idx].as_mut().unwrap();
             wl.allocated_memory = memory_bytes;
-            wl.thread_count = thread_cnt;
-            wl.last_seen_ts = ts;
+            wl.thread_count = thread_count;
+            wl.last_seen_ts = timestamp;
+            wl.integrity_hash = current_hash;
+
+            // Mise à jour de l'intégrité
+            wl.integrity.wx_enforced = !wx_violation;
+            wl.integrity.cfi_valid = !cfi_violation;
+            wl.integrity.stack_canary_intact = !canary_violation;
+            wl.integrity.hash_verified =
+                profile.golden_hash == [0u8; 32] || current_hash == profile.golden_hash;
+            wl.integrity.anomaly_score = detected_anomaly.severity_score();
 
             if detected_anomaly != AnomalyType::None {
                 wl.anomaly_count += 1;
                 wl.last_anomaly = detected_anomaly;
                 wl.state = WorkloadState::Anomalous;
-                self.total_anomalies_detected += 1;
-
-                let mut hash_input = [0u8; 16];
-                hash_input[..8].copy_from_slice(&ts.to_be_bytes());
-                hash_input[8..12].copy_from_slice(&workload_id.to_be_bytes());
-                hash_input[12] = detected_anomaly as u8;
-                let details = Sha256::hash(&hash_input);
-
-                self.append_audit(ts, CwppAuditAction::AnomalyDetected, workload_id, details);
-                return Ok(Some(detected_anomaly));
+            } else if wl.state == WorkloadState::Suspicious {
+                wl.state = WorkloadState::Healthy;
             }
-        }
+            (wl.isolation, detected_anomaly.severity_score())
+        };
 
-        Ok(None)
+        if detected_anomaly != AnomalyType::None {
+            self.total_anomalies_detected += 1;
+
+            self.append_audit_entry(
+                CwppAuditAction::AnomalyDetected,
+                workload_id,
+                detected_anomaly.as_str().as_bytes(),
+                timestamp,
+            );
+
+            // Génération automatique d'un rapport préliminaire
+            self.append_incident_report(
+                workload_id,
+                detected_anomaly,
+                ContainmentAction::None,
+                iso,
+                score,
+                timestamp,
+            );
+
+            Ok(Some(detected_anomaly))
+        } else {
+            Ok(None)
+        }
     }
 
-    /// Applique une mesure de confinement instantanée O(1) sur la charge déviante
+    /// Rétro-compatibilité : Rapport d'événement simplifié (Phase 126 compatible)
+    pub fn report_execution_event(
+        &mut self,
+        cap: &CwppCap,
+        workload_id: u32,
+        syscall_nr: u32,
+        memory_bytes: u64,
+        thread_count: u32,
+        wx_violation: bool,
+        rip_valid: bool,
+        timestamp: u64,
+    ) -> Result<Option<AnomalyType>, CwppError> {
+        let golden_hash = {
+            let mut h = [0u8; 32];
+            for i in 0..self.workload_count {
+                if let Some(ref w) = self.workloads[i] {
+                    if w.id == workload_id {
+                        h = w.integrity_hash;
+                        break;
+                    }
+                }
+            }
+            h
+        };
+
+        self.report_execution_telemetry(
+            cap,
+            workload_id,
+            syscall_nr,
+            memory_bytes,
+            thread_count,
+            wx_violation,
+            !rip_valid,
+            false,
+            false,
+            golden_hash,
+            timestamp,
+        )
+    }
+
+    /// Applique une action de confinement autonome O(1) sur une charge compromise
     pub fn contain_workload(
         &mut self,
         cap: &CwppCap,
         workload_id: u32,
         action: ContainmentAction,
-        ts: u64,
+        timestamp: u64,
     ) -> Result<bool, CwppError> {
         if !cap.has_right(cwpp_rights::CONTAIN_WORKLOAD) {
             return Err(CwppError::PermissionDenied);
         }
 
+        let mut wl_idx = None;
         for i in 0..self.workload_count {
-            if let Some(ref mut wl) = self.workloads[i] {
+            if let Some(ref wl) = self.workloads[i] {
                 if wl.id == workload_id {
-                    if wl.state == WorkloadState::Terminated {
-                        return Err(CwppError::InvalidState);
-                    }
-
-                    wl.applied_containment = action;
-                    match action {
-                        ContainmentAction::Terminate => {
-                            wl.state = WorkloadState::Terminated;
-                            if self.active_workloads > 0 {
-                                self.active_workloads -= 1;
-                            }
-                        }
-                        ContainmentAction::None => {
-                            wl.state = WorkloadState::Healthy;
-                        }
-                        _ => {
-                            wl.state = WorkloadState::Contained;
-                        }
-                    }
-
-                    self.total_containments += 1;
-
-                    let mut hash_buf = [0u8; 16];
-                    hash_buf[..8].copy_from_slice(&ts.to_be_bytes());
-                    hash_buf[8..12].copy_from_slice(&workload_id.to_be_bytes());
-                    hash_buf[12] = action as u8;
-                    let details = Sha256::hash(&hash_buf);
-
-                    self.append_audit(
-                        ts,
-                        CwppAuditAction::ContainmentEnforced,
-                        workload_id,
-                        details,
-                    );
-                    return Ok(true);
+                    wl_idx = Some(i);
+                    break;
                 }
             }
         }
 
-        Err(CwppError::WorkloadNotFound)
+        let idx = match wl_idx {
+            Some(i) => i,
+            None => return Err(CwppError::WorkloadNotFound),
+        };
+
+        let (last_anom, iso_env, score) = {
+            let wl = self.workloads[idx].as_mut().unwrap();
+
+            if wl.state == WorkloadState::Terminated && action != ContainmentAction::None {
+                return Err(CwppError::InvalidState);
+            }
+
+            wl.applied_containment = action;
+
+            match action {
+                ContainmentAction::None => {
+                    wl.state = WorkloadState::Healthy;
+                }
+                ContainmentAction::Freeze
+                | ContainmentAction::StripCaps
+                | ContainmentAction::IsolateNetwork
+                | ContainmentAction::Quarantine => {
+                    wl.state = WorkloadState::Contained;
+                }
+                ContainmentAction::RollbackGoldenSnapshot => {
+                    wl.state = WorkloadState::Restored;
+                    wl.anomaly_count = 0;
+                    wl.last_anomaly = AnomalyType::None;
+                    wl.integrity = ExecutionIntegrity::default_healthy();
+                }
+                ContainmentAction::Terminate => {
+                    wl.state = WorkloadState::Terminated;
+                }
+            }
+            (
+                wl.last_anomaly,
+                wl.isolation,
+                wl.last_anomaly.severity_score(),
+            )
+        };
+
+        match action {
+            ContainmentAction::None => {}
+            ContainmentAction::Freeze
+            | ContainmentAction::StripCaps
+            | ContainmentAction::IsolateNetwork
+            | ContainmentAction::Quarantine => {
+                self.total_containments += 1;
+            }
+            ContainmentAction::RollbackGoldenSnapshot => {
+                self.total_rollbacks += 1;
+                self.total_containments += 1;
+            }
+            ContainmentAction::Terminate => {
+                if self.active_workloads > 0 {
+                    self.active_workloads -= 1;
+                }
+                self.total_containments += 1;
+            }
+        }
+
+        self.append_audit_entry(
+            if action == ContainmentAction::RollbackGoldenSnapshot {
+                CwppAuditAction::RollbackExecuted
+            } else {
+                CwppAuditAction::ContainmentEnforced
+            },
+            workload_id,
+            action.as_str().as_bytes(),
+            timestamp,
+        );
+
+        // Sceller le rapport d'incident complet
+        self.append_incident_report(workload_id, last_anom, action, iso_env, score, timestamp);
+
+        Ok(true)
     }
 
-    /// Scanne l'ensemble des charges de travail actives et renvoie (total_verifié, anomalies_trouvées)
+    /// Restauration autonome vers le snapshot doré vérifié (Rollback O(1))
+    pub fn rollback_workload(
+        &mut self,
+        cap: &CwppCap,
+        workload_id: u32,
+        timestamp: u64,
+    ) -> Result<bool, CwppError> {
+        self.contain_workload(
+            cap,
+            workload_id,
+            ContainmentAction::RollbackGoldenSnapshot,
+            timestamp,
+        )
+    }
+
+    /// Exécute un scan d'intégrité global de toutes les charges de travail enregistrées
     pub fn scan_all_workloads(
         &mut self,
         cap: &CwppCap,
-        ts: u64,
+        timestamp: u64,
     ) -> Result<(usize, usize), CwppError> {
         if !cap.has_right(cwpp_rights::INSPECT_WORKLOAD) {
             return Err(CwppError::PermissionDenied);
@@ -807,89 +1314,77 @@ impl JamboCwppDaemon {
             }
         }
 
-        let mut hash_buf = [0u8; 16];
-        hash_buf[..8].copy_from_slice(&ts.to_be_bytes());
-        hash_buf[8..12].copy_from_slice(&(checked as u32).to_be_bytes());
-        hash_buf[12..16].copy_from_slice(&(anomalies as u32).to_be_bytes());
-        let details = Sha256::hash(&hash_buf);
-
-        self.append_audit(ts, CwppAuditAction::ScanExecuted, 0, details);
+        self.append_audit_entry(
+            CwppAuditAction::ScanExecuted,
+            0,
+            b"scan-all-workloads",
+            timestamp,
+        );
 
         Ok((checked, anomalies))
     }
 
-    /// Ajoute une entrée immuable au registre d'audit et recalcule le chaînage cryptographique
-    fn append_audit(
-        &mut self,
-        timestamp: u64,
-        action: CwppAuditAction,
-        workload_id: u32,
-        details_hash: [u8; 32],
-    ) {
-        if self.audit_count >= self.audit_log.len() {
-            // Décalage FIFO pour conserver les entrées les plus récentes
-            for i in 1..self.audit_log.len() {
-                self.audit_log[i - 1] = self.audit_log[i];
-            }
-            self.audit_count = self.audit_log.len() - 1;
+    /// Inspecte les détails d'une charge de travail avec vérification capabilaire
+    pub fn inspect_workload(&self, cap: &CwppCap, workload_id: u32) -> Result<Workload, CwppError> {
+        if !cap.has_right(cwpp_rights::INSPECT_WORKLOAD) {
+            return Err(CwppError::PermissionDenied);
         }
 
-        let index = self.audit_count as u64;
-        let prev_hash = self.ledger_hash;
-        let record_hash = CwppAuditRecord::compute_hash(
-            index,
-            timestamp,
-            action,
-            workload_id,
-            &details_hash,
-            &prev_hash,
-        );
+        for i in 0..self.workload_count {
+            if let Some(ref wl) = self.workloads[i] {
+                if wl.id == workload_id {
+                    return Ok(*wl);
+                }
+            }
+        }
 
-        let record = CwppAuditRecord {
-            index,
-            timestamp,
-            action,
-            workload_id,
-            details_hash,
-            prev_hash,
-            record_hash,
-        };
-
-        self.audit_log[self.audit_count] = Some(record);
-        self.audit_count += 1;
-        self.ledger_hash = record_hash;
+        Err(CwppError::WorkloadNotFound)
     }
 
-    /// Vérifie l'intégrité cryptographique complète du registre d'audit
+    /// Vérifie l'intégrité cryptographique complète du registre d'audit SHA-256
     pub fn verify_ledger_integrity(&self) -> bool {
         let mut expected_prev = Self::GENESIS_HASH;
+
         for i in 0..self.audit_count {
-            if let Some(ref record) = self.audit_log[i] {
-                if record.prev_hash != expected_prev {
+            if let Some(ref rec) = self.audit_log[i] {
+                if rec.prev_hash != expected_prev {
                     return false;
                 }
-                let computed = CwppAuditRecord::compute_hash(
-                    record.index,
-                    record.timestamp,
-                    record.action,
-                    record.workload_id,
-                    &record.details_hash,
-                    &record.prev_hash,
+
+                let recomputed = CwppAuditRecord::compute_hash(
+                    rec.index,
+                    rec.timestamp,
+                    rec.action,
+                    rec.workload_id,
+                    &rec.details_hash,
+                    &rec.prev_hash,
                 );
-                if computed != record.record_hash {
+
+                if rec.record_hash != recomputed {
                     return false;
                 }
-                expected_prev = record.record_hash;
+
+                expected_prev = rec.record_hash;
             } else {
                 return false;
             }
         }
-        self.ledger_hash == expected_prev
+
+        expected_prev == self.ledger_hash
+    }
+
+    /// Retourne le dernier rapport d'incident / confinement scellé
+    pub fn latest_report(&self) -> Option<CwppIncidentReport> {
+        if self.report_count == 0 {
+            return None;
+        }
+        let slot = ((self.next_report_id - 2) % 32) as usize;
+        self.incident_reports[slot]
     }
 }
 
 // ============================================================================
-// TESTS UNITAIRES FORMELS (#![no_std])
+// TESTS UNITAIRES (#![no_std])
 // ============================================================================
 
 #[cfg(test)]
@@ -897,13 +1392,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_cwpp_cap_attenuation() {
-        let admin_cap = CwppCap::new(Handle::new(12601, 1), cwpp_rights::ALL, 10000, 500);
-        assert!(admin_cap.has_right(cwpp_rights::REGISTER_WORKLOAD));
-        assert!(admin_cap.has_right(cwpp_rights::DETECT_ANOMALY));
-        assert!(admin_cap.has_right(cwpp_rights::CONTAIN_WORKLOAD));
+    fn test_sha256_hash_deterministic() {
+        let mut hasher = Sha256::new();
+        hasher.update(b"jambo-cwpp-souverain-workload-protection");
+        let hash = hasher.finalize();
+        assert_ne!(hash, [0u8; 32]);
+    }
 
-        let monitor_cap = admin_cap
+    #[test]
+    fn test_cap_rights_and_monotonic_attenuation() {
+        let root_cap = CwppCap::new(Handle::new(12601, 1), cwpp_rights::ALL, 10000, 500);
+        assert!(root_cap.has_right(cwpp_rights::REGISTER_WORKLOAD));
+        assert!(root_cap.has_right(cwpp_rights::INSPECT_WORKLOAD));
+        assert!(root_cap.has_right(cwpp_rights::DETECT_ANOMALY));
+        assert!(root_cap.has_right(cwpp_rights::CONTAIN_WORKLOAD));
+        assert!(root_cap.has_right(cwpp_rights::MANAGE_PROFILES));
+        assert!(root_cap.has_right(cwpp_rights::VERIFY_INTEGRITY));
+        assert!(root_cap.has_right(cwpp_rights::READ_METRICS));
+        assert!(root_cap.has_right(cwpp_rights::ADMIN));
+
+        let monitor_cap = root_cap
             .attenuate(
                 cwpp_rights::INSPECT_WORKLOAD | cwpp_rights::READ_METRICS,
                 5000,
@@ -1007,21 +1515,109 @@ mod tests {
     }
 
     #[test]
-    fn test_cwpp_scan_and_unauthorized_syscall() {
+    fn test_cwpp_telemetry_advanced_invariants() {
         let admin_cap = CwppCap::new(Handle::new(12604, 1), cwpp_rights::ALL, 10000, 500);
         let mut daemon = JamboCwppDaemon::new(admin_cap);
         daemon.init_defaults();
 
-        // Syscall interdit (syscall nr 40 non autorisé pour profile 3 mask 0x1F)
-        let ev = daemon
-            .report_execution_event(&admin_cap, 103, 40, 10 * 1024 * 1024, 1, false, true, 3000)
-            .unwrap();
-        assert_eq!(ev, Some(AnomalyType::UnauthorizedSyscall));
+        let golden_hash_ai = daemon.profiles[2].unwrap().golden_hash;
 
-        // Scan global
-        let (checked, anomalies) = daemon.scan_all_workloads(&admin_cap, 3010).unwrap();
-        assert_eq!(checked, 4);
-        assert_eq!(anomalies, 1);
+        // 1. Violation de canari de pile sur ID 101
+        let ev1 = daemon
+            .report_execution_telemetry(
+                &admin_cap,
+                101,
+                1,
+                10 * 1024 * 1024,
+                2,
+                false,
+                false,
+                true, // Canary écrasé
+                false,
+                daemon.profiles[0].unwrap().golden_hash,
+                3000,
+            )
+            .unwrap();
+        assert_eq!(ev1, Some(AnomalyType::StackCanaryCorruption));
+
+        // 2. Violation d'enclave TEE sur ID 103
+        let ev2 = daemon
+            .report_execution_telemetry(
+                &admin_cap,
+                103,
+                1,
+                20 * 1024 * 1024,
+                2,
+                false,
+                false,
+                false,
+                true, // Boundary violation !
+                golden_hash_ai,
+                3100,
+            )
+            .unwrap();
+        assert_eq!(ev2, Some(AnomalyType::EnclaveBoundaryViolation));
+
+        // 3. Rollback vers snapshot doré O(1)
+        let roll = daemon.rollback_workload(&admin_cap, 103, 3200).unwrap();
+        assert!(roll);
+        let wl103 = daemon.inspect_workload(&admin_cap, 103).unwrap();
+        assert_eq!(wl103.state, WorkloadState::Restored);
+        assert_eq!(wl103.integrity.anomaly_score, 0);
+        assert_eq!(daemon.total_rollbacks, 1);
+
+        // 4. Vérification de la présence de rapports scellés
+        assert!(daemon.report_count > 0);
+        let rep = daemon.latest_report().unwrap();
+        assert_eq!(rep.workload_id, 103);
+        assert_eq!(rep.action, ContainmentAction::RollbackGoldenSnapshot);
+        assert!(daemon.verify_ledger_integrity());
+    }
+
+    #[test]
+    fn test_cwpp_container_escape_and_actions() {
+        let admin_cap = CwppCap::new(Handle::new(12605, 1), cwpp_rights::ALL, 10000, 500);
+        let mut daemon = JamboCwppDaemon::new(admin_cap);
+        daemon.init_defaults();
+
+        // Tentative d'évasion conteneur sur jambo-kvd-db (ID 102, isolation ContainerNamespace)
+        let ev = daemon
+            .report_execution_telemetry(
+                &admin_cap,
+                102,
+                1,
+                40 * 1024 * 1024,
+                4,
+                false,
+                false,
+                false,
+                true, // Boundary violation sur conteneur = ContainerEscapeAttempt
+                daemon.profiles[1].unwrap().golden_hash,
+                4000,
+            )
+            .unwrap();
+        assert_eq!(ev, Some(AnomalyType::ContainerEscapeAttempt));
+
+        // Confinement IsolateNetwork
+        let ok_net = daemon
+            .contain_workload(&admin_cap, 102, ContainmentAction::IsolateNetwork, 4010)
+            .unwrap();
+        assert!(ok_net);
+        let wl102 = daemon.inspect_workload(&admin_cap, 102).unwrap();
+        assert_eq!(wl102.state, WorkloadState::Contained);
+        assert_eq!(wl102.applied_containment, ContainmentAction::IsolateNetwork);
+
+        // Confinement StripCaps
+        let ok_strip = daemon
+            .contain_workload(&admin_cap, 102, ContainmentAction::StripCaps, 4020)
+            .unwrap();
+        assert!(ok_strip);
+        let wl102_strip = daemon.inspect_workload(&admin_cap, 102).unwrap();
+        assert_eq!(
+            wl102_strip.applied_containment,
+            ContainmentAction::StripCaps
+        );
+
         assert!(daemon.verify_ledger_integrity());
     }
 }

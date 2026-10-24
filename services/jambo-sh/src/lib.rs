@@ -12057,7 +12057,7 @@ impl JamboShell {
                     "status" => {
                         let mut b = [0u8; 20];
                         emit(
-                            "[CWPP/STATUS] Protection des Charges de Travail Cloud/Grappe (CWPP)\n",
+                            "[CWPP/STATUS] Protection des Charges de Travail Cloud Souveraines (CWPP - Phase 156)\n",
                         );
                         emit("  Profils enregistrés     : ");
                         emit(format_u64(self.cwpp.profile_count as u64, &mut b));
@@ -12071,6 +12071,8 @@ impl JamboShell {
                         emit(format_u64(self.cwpp.total_anomalies_detected, &mut b));
                         emit("\n  Confinements exécutés   : ");
                         emit(format_u64(self.cwpp.total_containments, &mut b));
+                        emit("\n  Restaurations (Rollback): ");
+                        emit(format_u64(self.cwpp.total_rollbacks, &mut b));
                         emit("\n  Chaîne d'audit SHA-256  : ");
                         let valid = self.cwpp.verify_ledger_integrity();
                         emit(if valid {
@@ -12089,9 +12091,11 @@ impl JamboShell {
                                 emit(format_u64(p.profile_id as u64, &mut b));
                                 emit("] ");
                                 emit(core::str::from_utf8(&p.name[..p.name_len]).unwrap_or(""));
+                                emit(" | Isolation: ");
+                                emit(p.isolation.as_str());
                                 emit(" | MaxMem: ");
                                 emit(format_u64(p.max_memory_bytes / 1024 / 1024, &mut b));
-                                emit(" MiB | MaxThreads: ");
+                                emit(" MiB | Threads: ");
                                 emit(format_u64(p.max_threads as u64, &mut b));
                                 emit(" | Réseau: ");
                                 emit(if p.allow_network { "OUI\n" } else { "NON\n" });
@@ -12100,7 +12104,7 @@ impl JamboShell {
                         (ShellStatus::Success, write_pos)
                     }
                     "workloads" => {
-                        emit("[CWPP/WORKLOADS] Charges de Travail Ring 3 Sous Surveillance :\n");
+                        emit("[CWPP/WORKLOADS] Charges de Travail Ring 3 & Micro-VMs Sous Surveillance :\n");
                         for i in 0..self.cwpp.workload_count {
                             if let Some(ref wl) = self.cwpp.workloads[i] {
                                 let mut b = [0u8; 20];
@@ -12110,8 +12114,8 @@ impl JamboShell {
                                 emit(format_u64(wl.pid as u64, &mut b));
                                 emit("] ");
                                 emit(core::str::from_utf8(&wl.name[..wl.name_len]).unwrap_or(""));
-                                emit(" | Profil #");
-                                emit(format_u64(wl.profile_id as u64, &mut b));
+                                emit(" | Env: ");
+                                emit(wl.isolation.as_str());
                                 emit(" | Statut: ");
                                 match wl.state {
                                     jambo_cwpp::WorkloadState::Healthy => emit("Sain"),
@@ -12119,11 +12123,70 @@ impl JamboShell {
                                     jambo_cwpp::WorkloadState::Anomalous => emit("Anormal"),
                                     jambo_cwpp::WorkloadState::Contained => emit("Confiné"),
                                     jambo_cwpp::WorkloadState::Terminated => emit("Terminé"),
+                                    jambo_cwpp::WorkloadState::Restored => emit("Restauré"),
                                 }
-                                emit(" | Anomalies: ");
-                                emit(format_u64(wl.anomaly_count as u64, &mut b));
+                                emit(" | W^X:");
+                                emit(if wl.integrity.wx_enforced {
+                                    "OK"
+                                } else {
+                                    "VIOLATION"
+                                });
+                                emit(" CFI:");
+                                emit(if wl.integrity.cfi_valid {
+                                    "OK"
+                                } else {
+                                    "VIOLATION"
+                                });
+                                emit(" Canary:");
+                                emit(if wl.integrity.stack_canary_intact {
+                                    "OK"
+                                } else {
+                                    "CORROMPU"
+                                });
                                 emit("\n");
                             }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "runtime" => {
+                        emit("[CWPP/RUNTIME] Télémétrie d'Intégrité d'Exécution en Temps Réel :\n");
+                        for i in 0..self.cwpp.workload_count {
+                            if let Some(ref wl) = self.cwpp.workloads[i] {
+                                let mut b = [0u8; 20];
+                                emit("  * W#");
+                                emit(format_u64(wl.id as u64, &mut b));
+                                emit(" ");
+                                emit(core::str::from_utf8(&wl.name[..wl.name_len]).unwrap_or(""));
+                                emit(" | Score anomalie: ");
+                                emit(format_u64(wl.integrity.anomaly_score as u64, &mut b));
+                                emit(" / 100 | Intégrité: ");
+                                emit(if wl.integrity.is_fully_integral() {
+                                    "INTÈGRE\n"
+                                } else {
+                                    "DÉGRADÉE\n"
+                                });
+                            }
+                        }
+                        (ShellStatus::Success, write_pos)
+                    }
+                    "reports" => {
+                        emit("[CWPP/REPORTS] Rapports d'Incidents et Confinements Scellés SHA-256 :\n");
+                        let mut b = [0u8; 20];
+                        emit("  Total rapports générés : ");
+                        emit(format_u64(self.cwpp.report_count as u64, &mut b));
+                        emit("\n");
+                        if let Some(rep) = self.cwpp.latest_report() {
+                            emit("  Dernier rapport [#");
+                            emit(format_u64(rep.report_id, &mut b));
+                            emit("] Charge #");
+                            emit(format_u64(rep.workload_id as u64, &mut b));
+                            emit(" | Anomalie: ");
+                            emit(rep.anomaly.as_str());
+                            emit(" | Action: ");
+                            emit(rep.action.as_str());
+                            emit("\n  Score menace: ");
+                            emit(format_u64(rep.threat_score as u64, &mut b));
+                            emit(" / 100\n");
                         }
                         (ShellStatus::Success, write_pos)
                     }
@@ -12152,8 +12215,15 @@ impl JamboShell {
                         } else {
                             101
                         };
-                        let action = if parsed.arg_count > 3 && parsed.args[3] == "kill" {
-                            jambo_cwpp::ContainmentAction::Terminate
+                        let action = if parsed.arg_count > 3 {
+                            match parsed.args[3] {
+                                "kill" => jambo_cwpp::ContainmentAction::Terminate,
+                                "freeze" => jambo_cwpp::ContainmentAction::Freeze,
+                                "strip" => jambo_cwpp::ContainmentAction::StripCaps,
+                                "isolate" => jambo_cwpp::ContainmentAction::IsolateNetwork,
+                                "rollback" => jambo_cwpp::ContainmentAction::RollbackGoldenSnapshot,
+                                _ => jambo_cwpp::ContainmentAction::Quarantine,
+                            }
                         } else {
                             jambo_cwpp::ContainmentAction::Quarantine
                         };
@@ -12165,7 +12235,9 @@ impl JamboShell {
                                     "[CWPP/CONTAIN] Confinement appliqué avec succès sur charge #",
                                 );
                                 emit(format_u64(wid as u64, &mut b));
-                                emit("\n");
+                                emit(" (Action: ");
+                                emit(action.as_str());
+                                emit(")\n");
                                 (ShellStatus::Success, write_pos)
                             }
                             Ok(false) | Err(_) => {
@@ -12185,7 +12257,7 @@ impl JamboShell {
                         (ShellStatus::Success, write_pos)
                     }
                     _ => {
-                        emit("Usage: cwpp [status | profiles | workloads | scan | contain <id> [quarantine|kill] | verify]\n");
+                        emit("Usage: cwpp [status | profiles | workloads | runtime | reports | scan | contain <id> [quarantine|kill|freeze|strip|isolate|rollback] | verify]\n");
                         (ShellStatus::ExecutionFailed, write_pos)
                     }
                 }
@@ -19815,6 +19887,14 @@ mod tests {
                 assert_eq!(st3, ShellStatus::Success);
                 assert!(len3 > 0);
 
+                let (st_rt, len_rt) = shell.execute_line("cwpp runtime", &mut out);
+                assert_eq!(st_rt, ShellStatus::Success);
+                assert!(len_rt > 0);
+
+                let (st_rp, len_rp) = shell.execute_line("cwpp reports", &mut out);
+                assert_eq!(st_rp, ShellStatus::Success);
+                assert!(len_rp > 0);
+
                 let (st4, len4) = shell.execute_line("cwpp scan", &mut out);
                 assert_eq!(st4, ShellStatus::Success);
                 assert!(len4 > 0);
@@ -19822,6 +19902,10 @@ mod tests {
                 let (st5, len5) = shell.execute_line("cwpp contain 101 quarantine", &mut out);
                 assert_eq!(st5, ShellStatus::Success);
                 assert!(len5 > 0);
+
+                let (st_roll, len_roll) = shell.execute_line("cwpp contain 102 rollback", &mut out);
+                assert_eq!(st_roll, ShellStatus::Success);
+                assert!(len_roll > 0);
 
                 let (st6, len6) = shell.execute_line("cwpp verify", &mut out);
                 assert_eq!(st6, ShellStatus::Success);

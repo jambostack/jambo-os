@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.3.22-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.3.23-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,8 +27,8 @@
 ---
 
 > [!IMPORTANT]
-> **Statut du Projet : Version v0.3.22 (Gestion de Posture de Sécurité Cloud Souverain CSPM & Remédiation Autonome jambo-cspm)**  
-> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.3.22` introduit la modernisation et la souveraineté complète de la Gestion de Posture de Sécurité Cloud Souverain (CSPM & remédiation autonome — `services/jambo-cspm`) : moteur d'audit continu de conformité multi-cloud souverain (SecNumCloud, CIS Microkernel, DISA STIG, NIST SP 800-53), détection de dérive (drift detection) en temps réel par rapport aux baselines durcies, analyse d'exposition multi-vecteurs et calcul d'indice de risque de grappe souveraine avec rayon d'impact (Blast Radius 0..100), moteur de remédiation autonome O(1) avec rapports scellés SHA-256 (`CspmRemediationReport`), topologie multi-cloud souverain (SovereignBareMetal, SecNumCloudEnclave, EuropeanSovereignMesh, PrivateAirGappedEdge) et géo-zones souveraines, capacité d'isolement chirurgical O(1) de nœuds défaillants ou compromis, filtrage capabilaire strict `CspmCap` sans autorité ambiante avec atténuation monotone et registre d'audit SHA-256 scellé et inaltérable.
+> **Statut du Projet : Version v0.3.23 (Protection des Charges de Travail Cloud Souveraines CWPP, Intégrité d'Exécution & Confinement Autonome jambo-cwpp)**  
+> Le projet JamboOS progresse méthodiquement dans son cycle pré-alpha `v0.*.*`. La version `v0.3.23` introduit la modernisation et la souveraineté complète de la Protection des Charges de Travail Cloud Souveraines (CWPP — `services/jambo-cwpp`) : moteur de protection continue à l'exécution (Runtime Workload Protection) pour micro-VMs et conteneurs d'enclaves souveraines, surveillance en temps réel de l'intégrité mémoire (W^X enforcement, CFI, intégrité des canaris de pile et signatures binaires SHA-256), détection des dérives comportementales des processus conteneurisés et violations d'enclaves TEE, confinement chirurgical O(1) (Freeze, StripCaps, IsolateNetwork, Quarantine, RollbackGoldenSnapshot, Terminate), rapports d'incidents scellés SHA-256 (`CwppIncidentReport`), contrôle d'accès capabilaire strict `CwppCap` sans autorité ambiante avec atténuation monotone et registre d'audit cryptographique SHA-256 inaltérable.
 
 ---
 
