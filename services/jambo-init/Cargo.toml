@@ -1,7 +1,8 @@
 [package]
 name = "jambo-init"
-version = "0.2.110"
+version = "0.3.41"
 edition = "2021"
+
 [lib]
 name = "jambo_init"
 path = "src/lib.rs"
@@ -9,43 +10,6 @@ path = "src/lib.rs"
 [[bin]]
 name = "jambo-init"
 path = "src/main.rs"
+
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }
-pcie-bus-mgr = { path = "../pcie-bus-mgr" }
-nvme = { path = "../../drivers/nvme" }
-xhci = { path = "../../drivers/xhci" }
-jambo-netd = { path = "../jambo-netd" }
-jambo-coreutils = { path = "../jambo-coreutils" }
-jambo-comp = { path = "../jambo-comp" }
-jambo-ui = { path = "../../libs/jambo-ui" }
-jambo-pkgd = { path = "../jambo-pkgd" }
-jambo-sdk = { path = "../../libs/jambo-sdk" }
-jambo-linux = { path = "../jambo-linux" }
-jambo-wasm = { path = "../jambo-wasm" }
-jambo-aid = { path = "../jambo-aid" }
-jambo-fuzz = { path = "../jambo-fuzz" }
-jambo-rpc = { path = "../jambo-rpc" }
-jambo-auditd = { path = "../jambo-auditd" }
-jambo-powerd = { path = "../jambo-powerd" }
-jambo-cryptod = { path = "../jambo-cryptod" }
-jambo-authd = { path = "../jambo-authd" }
-jambo-vmm = { path = "../jambo-vmm" }
-jambo-vhostd = { path = "../jambo-vhostd" }
-jambo-timed = { path = "../jambo-timed" }
-jambo-raft = { path = "../jambo-raft" }
-jambo-kvd = { path = "../jambo-kvd" }
-jambo-schedd = { path = "../jambo-schedd" }
-jambo-eventd = { path = "../jambo-eventd" }
-jambo-meshd = { path = "../jambo-meshd" }
-jambo-dfsd = { path = "../jambo-dfsd" }
-jambo-gwd = { path = "../jambo-gwd" }
-jambo-vaultd = { path = "../jambo-vaultd" }
-jambo-metricsd = { path = "../jambo-metricsd" }
-jambo-serviced = { path = "../jambo-serviced" }
-jambo-policyd = { path = "../jambo-policyd" }
-jambo-traced = { path = "../jambo-traced" }
-jambo-certd = { path = "../jambo-certd" }
-jambo-fs = { path = "../jambo-fs" }
-virtio-drv = { path = "../../drivers/virtio" }
-
-
