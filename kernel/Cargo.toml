@@ -14,7 +14,7 @@ jambo-abi = { path = "../abi/jambo-abi" }
 limine = "0.6.5"
 spin = "0.9.9"
 lock_api = "0.4.14"
-scopeguard = "1.2.0"
+scopeguard = { version = "1.2.0", default-features = false }
 
 [features]
 default = []
