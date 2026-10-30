@@ -2,7 +2,7 @@
 #![no_main]
 
 use jambo_sh::JamboShell;
-use libjambo::{console_read, console_write, print, println, SyscallNumber};
+use libjambo::{console_read, console_write, print, println, syscall6, SyscallNumber};
 
 #[cfg(not(test))]
 #[panic_handler]
@@ -15,9 +15,9 @@ fn panic(_info: &core::panic::PanicInfo) -> ! {
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     println("\x1b[1;36m========================================\x1b[0m");
-    println("\x1b[1;32m  JamboOS Object Shell (jsh) v0.2.69    \x1b[0m");
+    println("\x1b[1;32m  JamboOS Object Shell (jsh) v0.3.41    \x1b[0m");
     println("\x1b[1;36m========================================\x1b[0m");
-    print("jambo:/# ");
+    print("\x1b[1;32mjambo:/# \x1b[0m");
 
     let mut shell = JamboShell::new();
     let mut line_buf = [0u8; 256];
@@ -40,9 +40,9 @@ pub extern "C" fn _start() -> ! {
                         }
                         line_pos = 0;
                     }
-                    print("jambo:/# ");
+                    print("\x1b[1;32mjambo:/# \x1b[0m");
                 } else if b == 0x08 || b == 0x7F {
-                    // Backspace
+                    // Touche Retour Arrière (Backspace)
                     if line_pos > 0 {
                         line_pos -= 1;
                         print("\x08 \x08");
@@ -55,7 +55,7 @@ pub extern "C" fn _start() -> ! {
             }
         }
         unsafe {
-            libjambo::syscall6(SyscallNumber::ThreadYield, 0, 0, 0, 0, 0, 0);
+            syscall6(SyscallNumber::ThreadYield, 0, 0, 0, 0, 0, 0);
         }
     }
 }

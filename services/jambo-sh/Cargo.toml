@@ -1,6 +1,6 @@
 [package]
 name = "jambo-sh"
-version = "0.3.33"
+version = "0.3.41"
 edition = "2021"
 
 [lib]
@@ -12,109 +12,4 @@ name = "jsh"
 path = "src/main.rs"
 
 [dependencies]
-jambo-aid = { path = "../jambo-aid" }
-jambo-aspm = { path = "../jambo-aspm" }
-jambo-bas = { path = "../jambo-bas" }
-jambo-easm = { path = "../jambo-easm" }
-jambo-ctem = { path = "../jambo-ctem" }
-jambo-itdr = { path = "../jambo-itdr" }
-jambo-pam = { path = "../jambo-pam" }
-jambo-dspm = { path = "../jambo-dspm" }
-jambo-sspm = { path = "../jambo-sspm" }
-jambo-aiops = { path = "../jambo-aiops" }
-jambo-devsecops = { path = "../jambo-devsecops" }
-jambo-tprm = { path = "../jambo-tprm" }
-jambo-appsec = { path = "../jambo-appsec" }
-jambo-kdir = { path = "../jambo-kdir" }
-jambo-fdr = { path = "../jambo-fdr" }
-jambo-ndr = { path = "../jambo-ndr" }
-jambo-cdr = { path = "../jambo-cdr" }
-jambo-dlp = { path = "../jambo-dlp" }
-jambo-ueba = { path = "../jambo-ueba" }
-jambo-auditd = { path = "../jambo-auditd" }
-jambo-authd = { path = "../jambo-authd" }
-jambo-bpfd = { path = "../jambo-bpfd" }
-jambo-certd = { path = "../jambo-certd" }
-jambo-comp = { path = "../jambo-comp" }
-jambo-coreutils = { path = "../jambo-coreutils" }
-jambo-cored = { path = "../jambo-cored" }
-jambo-dbg = { path = "../jambo-dbg" }
-jambo-dynlinkd = { path = "../jambo-dynlinkd" }
-jambo-seccomp = { path = "../jambo-seccomp" }
-jambo-mac = { path = "../jambo-mac" }
-jambo-landlock = { path = "../jambo-landlock" }
-jambo-capspec = { path = "../jambo-capspec" }
-jambo-tee = { path = "../jambo-tee" }
-jambo-attest = { path = "../jambo-attest" }
-jambo-hsm = { path = "../jambo-hsm" }
-jambo-mpc = { path = "../jambo-mpc" }
-jambo-pqc = { path = "../jambo-pqc" }
-jambo-zksnark = { path = "../jambo-zksnark" }
-jambo-fhe = { path = "../jambo-fhe" }
-jambo-mixnet = { path = "../jambo-mixnet" }
-jambo-secboot = { path = "../jambo-secboot" }
-jambo-idps = { path = "../jambo-idps" }
-jambo-hsm2 = { path = "../jambo-hsm2" }
-jambo-ai-sec = { path = "../jambo-ai-sec" }
-jambo-wasm2 = { path = "../jambo-wasm2" }
-jambo-attest2 = { path = "../jambo-attest2" }
-jambo-crypto2 = { path = "../jambo-crypto2" }
-jambo-tee2 = { path = "../jambo-tee2" }
-jambo-kms = { path = "../jambo-kms" }
-jambo-pki2 = { path = "../jambo-pki2" }
-jambo-auth2 = { path = "../jambo-auth2" }
-jambo-secroute = { path = "../jambo-secroute" }
-jambo-ids = { path = "../jambo-ids" }
-jambo-vpn = { path = "../jambo-vpn" }
-jambo-waf = { path = "../jambo-waf" }
-jambo-ddos = { path = "../jambo-ddos" }
-jambo-soar = { path = "../jambo-soar" }
-jambo-forensics = { path = "../jambo-forensics" }
-jambo-edr = { path = "../jambo-edr" }
-jambo-xdr = { path = "../jambo-xdr" }
-jambo-intel = { path = "../jambo-intel" }
-jambo-deception = { path = "../jambo-deception" }
-jambo-ztna = { path = "../jambo-ztna" }
-jambo-casb = { path = "../jambo-casb" }
-jambo-cspm = { path = "../jambo-cspm" }
-jambo-cwpp = { path = "../jambo-cwpp" }
-jambo-ciem = { path = "../jambo-ciem" }
-jambo-cnapp = { path = "../jambo-cnapp" }
-jambo-cryptod = { path = "../jambo-cryptod" }
-jambo-dfsd = { path = "../jambo-dfsd" }
-jambo-diagd = { path = "../jambo-diagd" }
-jambo-dnsd = { path = "../jambo-dnsd" }
-jambo-eventd = { path = "../jambo-eventd" }
-jambo-fs = { path = "../jambo-fs" }
-jambo-fuzz = { path = "../jambo-fuzz" }
-jambo-gwd = { path = "../jambo-gwd" }
-jambo-init = { path = "../jambo-init" }
-jambo-ipcd = { path = "../jambo-ipcd" }
-jambo-kvd = { path = "../jambo-kvd" }
-jambo-linux = { path = "../jambo-linux" }
-jambo-logd = { path = "../jambo-logd" }
-jambo-meshd = { path = "../jambo-meshd" }
-jambo-metricsd = { path = "../jambo-metricsd" }
-jambo-netd = { path = "../jambo-netd" }
-jambo-pkgd = { path = "../jambo-pkgd" }
-jambo-patchd = { path = "../jambo-patchd" }
-jambo-profilerd = { path = "../jambo-profilerd" }
-jambo-policyd = { path = "../jambo-policyd" }
-jambo-powerd = { path = "../jambo-powerd" }
-jambo-raft = { path = "../jambo-raft" }
-jambo-rpc = { path = "../jambo-rpc" }
-jambo-schedd = { path = "../jambo-schedd" }
-jambo-sandd = { path = "../jambo-sandd" }
-jambo-sdk = { path = "../../libs/jambo-sdk" }
-jambo-secpolicyd = { path = "../jambo-secpolicyd" }
-jambo-walld = { path = "../jambo-walld" }
-jambo-watchdogd = { path = "../jambo-watchdogd" }
-jambo-serviced = { path = "../jambo-serviced" }
-jambo-timed = { path = "../jambo-timed" }
-jambo-traced = { path = "../jambo-traced" }
-jambo-ui = { path = "../../libs/jambo-ui" }
-jambo-vaultd = { path = "../jambo-vaultd" }
-jambo-vhostd = { path = "../jambo-vhostd" }
-jambo-vmm = { path = "../jambo-vmm" }
-jambo-wasm = { path = "../jambo-wasm" }
 libjambo = { path = "../../libs/libjambo" }
