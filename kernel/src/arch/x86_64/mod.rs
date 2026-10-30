@@ -13,7 +13,7 @@ pub use apic::{
     X2Apic, IA32_APIC_BASE_MSR, LOCAL_APIC,
 };
 pub use cpu::{current_cpu, init_per_cpu, set_current_kernel_stack, PerCpuData, MAX_CPUS};
-pub use gdt::{init_gdt, set_kernel_stack};
+pub use gdt::{init_gdt, init_gdt_ap, set_kernel_stack};
 pub use idt::init_idt;
 pub use io::*;
 pub use ioapic::{init_ioapic, ioapic_route_irq, IoApic, IOAPIC};

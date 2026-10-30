@@ -179,7 +179,7 @@ fn create_iso(release: bool, test_mode: bool) -> anyhow::Result<PathBuf> {
 
     // Configuration Limine avec module Initrd
     let limine_conf_content = if test_mode {
-        "timeout: 0\n\n/JamboOS (Test CI)\n    protocol: limine\n    kernel_path: boot():/boot/jambo-kernel.elf\n    module_path: boot():/boot/initrd.tar\n    cmdline: test\n"
+        "timeout: 0\n\n/JamboOS (Test CI)\n    protocol: limine\n    kernel_path: boot():/boot/jambo-kernel.elf\n    module_path: boot():/boot/initrd.tar\n    cmdline: test\n    kernel_cmdline: test\n"
     } else {
         "timeout: 1\n\n/JamboOS\n    protocol: limine\n    kernel_path: boot():/boot/jambo-kernel.elf\n    module_path: boot():/boot/initrd.tar\n"
     };
@@ -304,7 +304,7 @@ fn run_test(release: bool) -> anyhow::Result<()> {
         "/usr/share/OVMF/OVMF_CODE.fd"
     };
 
-    println!("[TEST] Démarrage du test de validation automatisé QEMU (Phase 2)...");
+    println!("[TEST] Démarrage du test de validation automatisé QEMU (Iron Core)...");
     let mut cmd = Command::new("qemu-system-x86_64");
     cmd.current_dir(&root);
     cmd.args([
@@ -333,11 +333,11 @@ fn run_test(release: bool) -> anyhow::Result<()> {
 
     // QEMU isa-debug-exit sort avec (val << 1) | 1. Pour Success (0x10=16), le code de retour est 33.
     let code = output.status.code().unwrap_or(-1);
-    let success = code == 33 || combined.contains("[PASS] Phase 2 Bootstrap Complete");
+    let success = code == 33 || combined.contains("[PASS] JamboKernel Iron Core");
 
     if success {
         println!("{}", stdout);
-        println!("\x1b[1;32m[TEST PASSÉ AVEC SUCCÈS] Validation complète de la Phase 2.\x1b[0m");
+        println!("\x1b[1;32m[TEST PASSÉ AVEC SUCCÈS] Validation complète de JamboKernel Iron Core.\x1b[0m");
         Ok(())
     } else {
         eprintln!("{}", combined);

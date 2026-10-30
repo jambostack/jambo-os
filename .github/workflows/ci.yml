@@ -45,5 +45,5 @@ jobs:
       - name: Generate bootable ISO
         run: cargo xtask iso
 
-      - name: Execute automated QEMU boot test (Phase 2)
+      - name: Execute automated QEMU boot test (Iron Core)
         run: cargo xtask test

@@ -67,7 +67,7 @@ static _END_MARKER: RequestsEndMarker = RequestsEndMarker::new();
 
 #[cfg(target_arch = "x86_64")]
 unsafe extern "C" fn ap_start(info: &limine::mp::MpInfo) -> ! {
-    arch::init_gdt();
+    arch::init_gdt_ap();
     arch::init_idt();
     arch::init_per_cpu(info.processor_id, info.lapic_id, false);
     ACTIVE_CPUS.fetch_add(1, Ordering::SeqCst);

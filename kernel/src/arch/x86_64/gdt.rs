@@ -129,6 +129,35 @@ pub fn init_gdt() {
     }
 }
 
+/// Initialise la GDT pour un coeur secondaire AP (sans recharger le TSS partage)
+pub fn init_gdt_ap() {
+    unsafe {
+        let descriptor = GdtDescriptor {
+            size: (size_of::<Gdt>() - 1) as u16,
+            offset: core::ptr::addr_of!(GDT) as u64,
+        };
+
+        core::arch::asm!(
+            "lgdt [{0}]",
+            "push {code_sel}",
+            "lea rax, [rip + 2f]",
+            "push rax",
+            "retfq",
+            "2:",
+            "mov ds, {data_sel:x}",
+            "mov es, {data_sel:x}",
+            "mov ss, {data_sel:x}",
+            "mov fs, {data_sel:x}",
+            "mov gs, {data_sel:x}",
+            in(reg) &descriptor,
+            code_sel = const KERNEL_CODE_SEL as u64,
+            data_sel = in(reg) KERNEL_DATA_SEL,
+            out("rax") _,
+            options(preserves_flags)
+        );
+    }
+}
+
 /// Met à jour le pointeur de pile superviseur (RSP0) dans le TSS pour le thread actif
 pub fn set_kernel_stack(stack_top: u64) {
     unsafe {
