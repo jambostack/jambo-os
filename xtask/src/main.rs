@@ -25,8 +25,9 @@ enum Commands {
         #[arg(long)]
         test: bool,
     },
-    /// Lance l'image ISO sous QEMU en mode graphique avec console série
-    Qemu {
+    /// Lance l'image ISO sous QEMU en mode interactif avec console série
+    #[command(alias = "qemu")]
+    Run {
         #[arg(long)]
         release: bool,
         #[arg(long, default_value = "4")]
@@ -349,15 +350,17 @@ fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Commands::Build { release } => {
-            let path = build_kernel(release, false)?;
-            println!("Noyau compilé : {}", path.display());
+            let kernel = build_kernel(release, false)?;
+            println!("Noyau compilé : {}", kernel.display());
+            let initrd = create_initrd(release)?;
+            println!("Initrd archivé : {}", initrd.display());
             Ok(())
         }
         Commands::Iso { release, test } => {
             create_iso(release, test)?;
             Ok(())
         }
-        Commands::Qemu {
+        Commands::Run {
             release,
             smp,
             memory,

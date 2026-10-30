@@ -329,6 +329,7 @@ pub extern "C" fn _start() -> ! {
 
     // Détection et extraction des modules Limine (Initrd Userspace)
     let mut initrd_elf_bytes: Option<&'static [u8]> = None;
+    let mut jsh_elf_bytes: Option<&'static [u8]> = None;
     if let Some(modules_resp) = MODULES_REQUEST.response() {
         let modules = modules_resp.modules();
         kprintln!(
@@ -349,10 +350,17 @@ pub extern "C" fn _start() -> ! {
                 let tar = mm::TarArchive::new(data);
                 if let Some(init_data) = tar.find("init") {
                     kprintln!(
-                        "[INITRD/TAR] Exécutable '/bin/init' extrait de l'archive ({:#x} octets)",
+                        "[INITRD/TAR] Superviseur '/bin/init' extrait ({:#x} octets)",
                         init_data.len()
                     );
                     initrd_elf_bytes = Some(init_data);
+                }
+                if let Some(jsh_data) = tar.find("jsh") {
+                    kprintln!(
+                        "[INITRD/TAR] Shell interactif '/bin/jsh' extrait ({:#x} octets)",
+                        jsh_data.len()
+                    );
+                    jsh_elf_bytes = Some(jsh_data);
                 }
             }
             if initrd_elf_bytes.is_none() && data.len() >= 4 && data[0..4] == mm::elf::ELF_MAGIC {
@@ -414,6 +422,25 @@ pub extern "C" fn _start() -> ! {
         "[PROCESS] Processus utilisateur init (PID 1) initialisé avec pile System V ABI (RSP: {:#018x})",
         user_sp
     );
+
+    // Initialisation du shell interactif utilisateur Ring 3 si présent dans l'Initrd
+    if let Some(jsh_binary) = jsh_elf_bytes {
+        if let Ok((_jsh_process, jsh_thread)) = sched::Process::create_user_process(
+            2,
+            "jsh",
+            jsh_binary,
+            &["jsh"],
+            &["PATH=/bin:/usr/bin", "TERM=xterm-256color"],
+        ) {
+            jsh_thread.lock().deadline = 1000;
+            sched::SCHEDULER.lock().enqueue(jsh_thread);
+            kprintln!(
+                "[PROCESS] Shell utilisateur interactif jsh (PID 2) initialisé avec pile System V ABI et enfilé"
+            );
+        } else {
+            kprintln!("[WARN] Échec de la création du processus jsh");
+        }
+    }
 
     // 11. Initialisation CSpace, table SYSCALL et IPC hybride
     cap::init_cspace();
@@ -692,7 +719,7 @@ pub extern "C" fn _start() -> ! {
     );
     kprintln!();
 
-    // 13. Vérifier si un arrêt immédiat de test CI est requis
+    // 13. Support Double-Mode : Test CI vs Session Interactive
     let cmdline_test = if let Some(cmdline_resp) = CMDLINE_REQUEST.response() {
         cmdline_resp.cmdline().contains("test")
     } else {
@@ -705,7 +732,37 @@ pub extern "C" fn _start() -> ! {
         exit_qemu(QemuExitCode::Success);
     }
 
-    kprintln!("[SYSTEM] JamboKernel Iron Core en attente d'interruptions...");
+    kprintln!("[SYSTEM] Démarrage de la session interactive Ring 3 (Shell jsh)...");
+
+    #[cfg(target_arch = "x86_64")]
+    {
+        arch::init_ioapic();
+        arch::ioapic_route_irq(4, 36, 0);
+        arch::apic_start_timer(32, 0x10000);
+        unsafe {
+            core::arch::asm!("sti", options(nomem, nostack));
+        }
+    }
+
+    let supervisor_thread = alloc::sync::Arc::new(spin::Mutex::new(sched::Thread {
+        id: 0,
+        process_id: 0,
+        state: sched::ThreadState::Running,
+        rsp: 0,
+        stack_base: 0,
+        stack_top: 0,
+        vruntime: 0,
+        deadline: 10_000,
+        weight: 1024,
+        is_user: false,
+        user_entry: 0,
+        user_rsp: 0,
+        aspace: None,
+    }));
+    sched::SCHEDULER.lock().current = Some(supervisor_thread);
+    sched::EevdfScheduler::reschedule();
+
+    kprintln!("[SYSTEM] JamboKernel Iron Core en attente d'interruptions (Boucle Idle)...");
     loop {
         #[cfg(target_arch = "x86_64")]
         unsafe {
