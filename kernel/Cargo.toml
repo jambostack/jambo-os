@@ -2,6 +2,7 @@
 name = "kernel"
 version = "0.3.39"
 edition = "2021"
+
 [[bin]]
 name = "kernel"
 path = "src/main.rs"
@@ -10,113 +11,10 @@ bench = false
 
 [dependencies]
 jambo-abi = { path = "../abi/jambo-abi" }
-jambo-aid = { path = "../services/jambo-aid" }
-jambo-aspm = { path = "../services/jambo-aspm" }
-jambo-bas = { path = "../services/jambo-bas" }
-jambo-easm = { path = "../services/jambo-easm" }
-jambo-ctem = { path = "../services/jambo-ctem" }
-jambo-itdr = { path = "../services/jambo-itdr" }
-jambo-pam = { path = "../services/jambo-pam" }
-jambo-dspm = { path = "../services/jambo-dspm" }
-jambo-sspm = { path = "../services/jambo-sspm" }
-jambo-aiops = { path = "../services/jambo-aiops" }
-jambo-devsecops = { path = "../services/jambo-devsecops" }
-jambo-tprm = { path = "../services/jambo-tprm" }
-jambo-appsec = { path = "../services/jambo-appsec" }
-jambo-kdir = { path = "../services/jambo-kdir" }
-jambo-fdr = { path = "../services/jambo-fdr" }
-jambo-ndr = { path = "../services/jambo-ndr" }
-jambo-cdr = { path = "../services/jambo-cdr" }
-jambo-dlp = { path = "../services/jambo-dlp" }
-jambo-ueba = { path = "../services/jambo-ueba" }
-jambo-auditd = { path = "../services/jambo-auditd" }
-jambo-authd = { path = "../services/jambo-authd" }
-jambo-bpfd = { path = "../services/jambo-bpfd" }
-jambo-certd = { path = "../services/jambo-certd" }
-jambo-comp = { path = "../services/jambo-comp" }
-jambo-cored = { path = "../services/jambo-cored" }
-jambo-dbg = { path = "../services/jambo-dbg" }
-jambo-dynlinkd = { path = "../services/jambo-dynlinkd" }
-jambo-seccomp = { path = "../services/jambo-seccomp" }
-jambo-mac = { path = "../services/jambo-mac" }
-jambo-landlock = { path = "../services/jambo-landlock" }
-jambo-capspec = { path = "../services/jambo-capspec" }
-jambo-tee = { path = "../services/jambo-tee" }
-jambo-attest = { path = "../services/jambo-attest" }
-jambo-hsm = { path = "../services/jambo-hsm" }
-jambo-mpc = { path = "../services/jambo-mpc" }
-jambo-pqc = { path = "../services/jambo-pqc" }
-jambo-zksnark = { path = "../services/jambo-zksnark" }
-jambo-fhe = { path = "../services/jambo-fhe" }
-jambo-mixnet = { path = "../services/jambo-mixnet" }
-jambo-secboot = { path = "../services/jambo-secboot" }
-jambo-idps = { path = "../services/jambo-idps" }
-jambo-hsm2 = { path = "../services/jambo-hsm2" }
-jambo-ai-sec = { path = "../services/jambo-ai-sec" }
-jambo-wasm2 = { path = "../services/jambo-wasm2" }
-jambo-attest2 = { path = "../services/jambo-attest2" }
-jambo-crypto2 = { path = "../services/jambo-crypto2" }
-jambo-tee2 = { path = "../services/jambo-tee2" }
-jambo-kms = { path = "../services/jambo-kms" }
-jambo-pki2 = { path = "../services/jambo-pki2" }
-jambo-auth2 = { path = "../services/jambo-auth2" }
-jambo-secroute = { path = "../services/jambo-secroute" }
-jambo-ids = { path = "../services/jambo-ids" }
-jambo-vpn = { path = "../services/jambo-vpn" }
-jambo-waf = { path = "../services/jambo-waf" }
-jambo-ddos = { path = "../services/jambo-ddos" }
-jambo-soar = { path = "../services/jambo-soar" }
-jambo-forensics = { path = "../services/jambo-forensics" }
-jambo-edr = { path = "../services/jambo-edr" }
-jambo-xdr = { path = "../services/jambo-xdr" }
-jambo-intel = { path = "../services/jambo-intel" }
-jambo-deception = { path = "../services/jambo-deception" }
-jambo-ztna = { path = "../services/jambo-ztna" }
-jambo-casb = { path = "../services/jambo-casb" }
-jambo-cspm = { path = "../services/jambo-cspm" }
-jambo-cwpp = { path = "../services/jambo-cwpp" }
-jambo-ciem = { path = "../services/jambo-ciem" }
-jambo-cnapp = { path = "../services/jambo-cnapp" }
-jambo-cryptod = { path = "../services/jambo-cryptod" }
-jambo-dfsd = { path = "../services/jambo-dfsd" }
-jambo-diagd = { path = "../services/jambo-diagd" }
-jambo-dnsd = { path = "../services/jambo-dnsd" }
-jambo-eventd = { path = "../services/jambo-eventd" }
-jambo-fs = { path = "../services/jambo-fs" }
-jambo-fuzz = { path = "../services/jambo-fuzz" }
-jambo-gwd = { path = "../services/jambo-gwd" }
-jambo-init = { path = "../services/jambo-init" }
-jambo-ipcd = { path = "../services/jambo-ipcd" }
-jambo-kvd = { path = "../services/jambo-kvd" }
-jambo-linux = { path = "../services/jambo-linux" }
-jambo-logd = { path = "../services/jambo-logd" }
-jambo-meshd = { path = "../services/jambo-meshd" }
-jambo-metricsd = { path = "../services/jambo-metricsd" }
-jambo-netd = { path = "../services/jambo-netd" }
-jambo-pkgd = { path = "../services/jambo-pkgd" }
-jambo-patchd = { path = "../services/jambo-patchd" }
-jambo-profilerd = { path = "../services/jambo-profilerd" }
-jambo-policyd = { path = "../services/jambo-policyd" }
-jambo-powerd = { path = "../services/jambo-powerd" }
-jambo-raft = { path = "../services/jambo-raft" }
-jambo-rpc = { path = "../services/jambo-rpc" }
-jambo-schedd = { path = "../services/jambo-schedd" }
-jambo-sandd = { path = "../services/jambo-sandd" }
-jambo-sdk = { path = "../libs/jambo-sdk" }
-jambo-secpolicyd = { path = "../services/jambo-secpolicyd" }
-jambo-walld = { path = "../services/jambo-walld" }
-jambo-watchdogd = { path = "../services/jambo-watchdogd" }
-jambo-serviced = { path = "../services/jambo-serviced" }
-jambo-sh = { path = "../services/jambo-sh" }
-jambo-timed = { path = "../services/jambo-timed" }
-jambo-traced = { path = "../services/jambo-traced" }
-jambo-ui = { path = "../libs/jambo-ui" }
-jambo-vaultd = { path = "../services/jambo-vaultd" }
-jambo-vhostd = { path = "../services/jambo-vhostd" }
-jambo-vmm = { path = "../services/jambo-vmm" }
-jambo-wasm = { path = "../services/jambo-wasm" }
 limine = "0.6.5"
-spin = "0.9"
+spin = "0.9.9"
+lock_api = "0.4.14"
+scopeguard = "1.2.0"
 
 [features]
 default = []
