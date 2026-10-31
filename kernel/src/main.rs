@@ -22,8 +22,8 @@ use arch::{exit_qemu, init_serial, QemuExitCode};
 use core::sync::atomic::{AtomicU32, Ordering};
 use drivers::init_framebuffer;
 use limine::request::{
-    ExecutableCmdlineRequest, FramebufferRequest, HhdmRequest, MemmapRequest, ModulesRequest,
-    MpRequest,
+    ExecutableCmdlineRequest, ExecutableFileRequest, FramebufferRequest, HhdmRequest,
+    MemmapRequest, ModulesRequest, MpRequest,
 };
 use limine::{memmap, BaseRevision, RequestsEndMarker, RequestsStartMarker};
 
@@ -60,6 +60,10 @@ static MODULES_REQUEST: ModulesRequest = ModulesRequest::new();
 #[used]
 #[link_section = ".limine_requests"]
 static CMDLINE_REQUEST: ExecutableCmdlineRequest = ExecutableCmdlineRequest::new();
+
+#[used]
+#[link_section = ".limine_requests"]
+static KERNEL_FILE_REQUEST: ExecutableFileRequest = ExecutableFileRequest::new();
 
 #[used]
 #[link_section = ".limine_requests_end"]
@@ -576,7 +580,7 @@ pub extern "C" fn _start() -> ! {
             jambo_abi::Handle(thread_handle),
             jambo_abi::cap_rights::MANAGE,
         ) {
-            t.lock().deadline = 1000;
+            t.lock().state = sched::ThreadState::Exited;
         }
     }
 
@@ -782,10 +786,20 @@ pub extern "C" fn _start() -> ! {
     // 13. Support Double-Mode : Test CI vs Session Interactive
     let cmdline_test = if let Some(cmdline_resp) = CMDLINE_REQUEST.response() {
         cmdline_resp.cmdline().contains("test")
+    } else if let Some(kf_resp) = KERNEL_FILE_REQUEST.response() {
+        kf_resp.executable_file().cmdline().contains("test")
     } else {
         false
     };
-    let is_test_mode = cfg!(feature = "qemu-test") || cmdline_test;
+    let module_test = if let Some(mod_resp) = MODULES_REQUEST.response() {
+        mod_resp
+            .modules()
+            .iter()
+            .any(|m| m.cmdline().contains("test") || m.path().contains("test"))
+    } else {
+        false
+    };
+    let is_test_mode = cfg!(feature = "qemu-test") || cmdline_test || module_test;
 
     if is_test_mode {
         kprintln!("[TEST] Validation de l'initialisation des 4 processus Ring 3 (init, jsh, blockd, fs)...");
