@@ -1,7 +1,0 @@
-[package]
-name = "jambo-ddos"
-version = "0.2.113"
-edition = "2021"
-
-[dependencies]
-libjambo = { path = "../../libs/libjambo" }

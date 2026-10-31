@@ -1,8 +1,0 @@
-[package]
-name = "nvme"
-version = "0.2.110"
-edition = "2021"
-
-[dependencies]
-libjambo = { path = "../../libs/libjambo" }
-pcie-bus-mgr = { path = "../../services/pcie-bus-mgr" }

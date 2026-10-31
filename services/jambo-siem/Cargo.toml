@@ -1,7 +1,0 @@
-[package]
-name = "jambo-siem"
-version = "0.2.114"
-edition = "2021"
-
-[dependencies]
-libjambo = { path = "../../libs/libjambo" }

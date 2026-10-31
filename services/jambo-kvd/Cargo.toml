@@ -1,7 +1,0 @@
-[package]
-name = "jambo-kvd"
-version = "0.2.110"
-edition = "2021"
-
-[dependencies]
-libjambo = { path = "../../libs/libjambo" }

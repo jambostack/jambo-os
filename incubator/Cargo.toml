@@ -1,0 +1,16 @@
+[workspace]
+resolver = "2"
+members = [
+    "services/*",
+    "drivers/*",
+    "libs/*",
+]
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+lto = true
+opt-level = 3
+codegen-units = 1
