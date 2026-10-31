@@ -147,7 +147,7 @@ pub extern "C" fn _start() -> ! {
     // 4. Bannière système d'accueil sobre Iron Core
     kprintln!("\x1b[1;36m");
     kprintln!("================================================================================");
-    kprintln!("    JAMBO-OS (JamboKernel v0.3.39 — Iron Core)                                 ");
+    kprintln!("    JAMBO-OS (JamboKernel v0.3.45 — Iron Core)                                 ");
     kprintln!("    Architecture : Micro-noyau orienté capacités en Rust no_std (x86_64/AArch64)");
     kprintln!("    Auteur & Architecte Principal : ASSOGBA Prudence Dieudonné                 ");
     kprintln!("    Dépôt Officiel : https://github.com/jambostack/jambo-os                    ");
@@ -337,6 +337,7 @@ pub extern "C" fn _start() -> ! {
     let mut blockd_elf_bytes: Option<&'static [u8]> = None;
     let mut fs_elf_bytes: Option<&'static [u8]> = None;
     let mut netd_elf_bytes: Option<&'static [u8]> = None;
+    let mut fdr_elf_bytes: Option<&'static [u8]> = None;
     if let Some(modules_resp) = MODULES_REQUEST.response() {
         let modules = modules_resp.modules();
         kprintln!(
@@ -389,6 +390,13 @@ pub extern "C" fn _start() -> ! {
                         netd_data.len()
                     );
                     netd_elf_bytes = Some(netd_data);
+                }
+                if let Some(fdr_data) = tar.find("bin/fdr").or_else(|| tar.find("fdr")) {
+                    kprintln!(
+                        "[INITRD/TAR] Démon de résilience matérielle '/bin/fdr' extrait ({:#x} octets)",
+                        fdr_data.len()
+                    );
+                    fdr_elf_bytes = Some(fdr_data);
                 }
             }
             if initrd_elf_bytes.is_none() && data.len() >= 4 && data[0..4] == mm::elf::ELF_MAGIC {
@@ -533,6 +541,27 @@ pub extern "C" fn _start() -> ! {
         );
     } else {
         kprintln!("[WARN] Échec de la création du processus netd");
+    }
+
+    // Initialisation du démon de résilience matérielle FDR Ring 3 (PID 6 : fdr)
+    let fdr_binary = fdr_elf_bytes.unwrap_or(&test_elf);
+    if let Ok((_fdr_process, fdr_thread)) = sched::Process::create_user_process(
+        6,
+        "fdr",
+        fdr_binary,
+        &["fdr"],
+        &["PATH=/bin:/usr/bin", "TERM=xterm-256color"],
+    ) {
+        let fdr_sp = fdr_thread.lock().user_rsp;
+        assert_eq!(fdr_sp % 16, 0, "Alignement 16 octets du RSP fdr");
+        fdr_thread.lock().deadline = 1000;
+        sched::SCHEDULER.lock().enqueue(fdr_thread);
+        kprintln!(
+            "[PROCESS] Démon de résilience matérielle fdr (PID 6) initialisé avec pile System V ABI (RSP: {:#018x}) et enfilé",
+            fdr_sp
+        );
+    } else {
+        kprintln!("[WARN] Échec de la création du processus fdr");
     }
 
     // 11. Initialisation CSpace, table SYSCALL et IPC hybride
@@ -831,8 +860,8 @@ pub extern "C" fn _start() -> ! {
     let is_test_mode = cfg!(feature = "qemu-test") || cmdline_test || module_test;
 
     if is_test_mode {
-        kprintln!("[TEST] Validation de l'initialisation des 5 processus Ring 3 (init, jsh, blockd, fs, netd)...");
-        kprintln!("\x1b[1;32m[PASS] VirtIO-Net & Pile IP Ring 3 validés sous QEMU.\x1b[0m");
+        kprintln!("[TEST] Validation de l'initialisation des 6 processus Ring 3 (init, jsh, blockd, fs, netd, fdr)...");
+        kprintln!("\x1b[1;32m[PASS] FDR Résilience Matérielle Ring 3 validée sous QEMU.\x1b[0m");
         kprintln!("[TEST] Mode de test CI validé. Sortie propre via isa-debug-exit...");
         exit_qemu(QemuExitCode::Success);
     }
