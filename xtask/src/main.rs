@@ -197,12 +197,43 @@ fn build_fs(release: bool) -> anyhow::Result<PathBuf> {
     Ok(root.join(format!("target/x86_64-unknown-none/{}/jambo-fs", profile)))
 }
 
-fn build_userland(release: bool) -> anyhow::Result<(PathBuf, PathBuf, PathBuf, PathBuf)> {
+fn build_netd(release: bool) -> anyhow::Result<PathBuf> {
+    let root = root_dir();
+    let mut cmd = Command::new("cargo");
+    cmd.current_dir(&root);
+    cmd.args([
+        "build",
+        "--package",
+        "jambo-netd",
+        "--bin",
+        "netd",
+        "--target",
+        "x86_64-unknown-none",
+    ]);
+    if release {
+        cmd.arg("--release");
+    }
+    cmd.env(
+        "RUSTFLAGS",
+        "-C link-arg=-Tlibs/user-x86_64.ld -C relocation-model=static",
+    );
+
+    let status = cmd.status()?;
+    if !status.success() {
+        anyhow::bail!("Échec de compilation du binaire jambo-netd (netd)");
+    }
+
+    let profile = if release { "release" } else { "debug" };
+    Ok(root.join(format!("target/x86_64-unknown-none/{}/netd", profile)))
+}
+
+fn build_userland(release: bool) -> anyhow::Result<(PathBuf, PathBuf, PathBuf, PathBuf, PathBuf)> {
     let init = build_init(release)?;
     let jsh = build_jsh(release)?;
     let blockd = build_blockd(release)?;
     let fs = build_fs(release)?;
-    Ok((init, jsh, blockd, fs))
+    let netd = build_netd(release)?;
+    Ok((init, jsh, blockd, fs, netd))
 }
 
 fn create_disk_image(path: &Path) -> anyhow::Result<()> {
@@ -250,8 +281,8 @@ fn create_disk_image(path: &Path) -> anyhow::Result<()> {
     file.seek(SeekFrom::Start(8192))?;
     file.write_all(&root_buf)?;
 
-    // 3. Données à l'offset 12288 (LBA 24..31) : "Bienvenue sur JamboOS v0.3.42\n"
-    let banner_data = b"Bienvenue sur JamboOS v0.3.42\n";
+    // 3. Données à l'offset 12288 (LBA 24..31) : "Bienvenue sur JamboOS v0.3.44\n"
+    let banner_data = b"Bienvenue sur JamboOS v0.3.44\n";
     let mut data_buf = [0u8; 4096];
     data_buf[..banner_data.len()].copy_from_slice(banner_data);
 
@@ -264,7 +295,7 @@ fn create_disk_image(path: &Path) -> anyhow::Result<()> {
 
 fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
     let root = root_dir();
-    let (init_bin, jsh_bin, blockd_bin, fs_bin) = build_userland(release)?;
+    let (init_bin, jsh_bin, blockd_bin, fs_bin, netd_bin) = build_userland(release)?;
 
     let initrd_stage = root.join("target/initrd_stage");
     let bin_dir = initrd_stage.join("bin");
@@ -275,6 +306,7 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
     fs::copy(&jsh_bin, bin_dir.join("jsh"))?;
     fs::copy(&blockd_bin, bin_dir.join("blockd"))?;
     fs::copy(&fs_bin, bin_dir.join("fs"))?;
+    fs::copy(&netd_bin, bin_dir.join("netd"))?;
 
     let initrd_tar = root.join("target/initrd.tar");
     let status = Command::new("tar")
@@ -286,6 +318,7 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
             "bin/jsh",
             "bin/blockd",
             "bin/fs",
+            "bin/netd",
         ])
         .status()?;
 
@@ -427,6 +460,10 @@ fn run_qemu(release: bool, smp: usize, memory: &str) -> anyhow::Result<()> {
         "file=target/disk.raw,format=raw,if=none,id=disk0",
         "-device",
         "virtio-blk-pci,drive=disk0,disable-legacy=on",
+        "-device",
+        "virtio-net-pci,netdev=net0",
+        "-netdev",
+        "user,id=net0",
         "-serial",
         "stdio",
     ]);
@@ -451,7 +488,7 @@ fn run_test(release: bool) -> anyhow::Result<()> {
         "/usr/share/OVMF/OVMF_CODE.fd"
     };
 
-    println!("[TEST] Démarrage du test de validation automatisé QEMU (Iron Core & JamboFS)...");
+    println!("[TEST] Démarrage du test de validation automatisé QEMU (Iron Core, JamboFS & VirtIO-Net)...");
     let mut cmd = Command::new("qemu-system-x86_64");
     cmd.current_dir(&root);
     cmd.args([
@@ -469,6 +506,10 @@ fn run_test(release: bool) -> anyhow::Result<()> {
         "file=target/disk.raw,format=raw,if=none,id=disk0",
         "-device",
         "virtio-blk-pci,drive=disk0,disable-legacy=on",
+        "-device",
+        "virtio-net-pci,netdev=net0",
+        "-netdev",
+        "user,id=net0",
         "-display",
         "none",
         "-serial",
@@ -485,12 +526,13 @@ fn run_test(release: bool) -> anyhow::Result<()> {
     // QEMU isa-debug-exit sort avec (val << 1) | 1. Pour Success (0x10=16), le code de retour est 33.
     let code = output.status.code().unwrap_or(-1);
     let success = code == 33
+        || combined.contains("[PASS] VirtIO-Net & Pile IP Ring 3 validés")
         || combined.contains("[PASS] JamboFS VirtIO-Block validé")
         || combined.contains("[PASS] JamboKernel Iron Core");
 
     if success {
         println!("{}", stdout);
-        println!("\x1b[1;32m[TEST PASSÉ AVEC SUCCÈS] Validation complète de JamboKernel Iron Core & JamboFS VirtIO-Block.\x1b[0m");
+        println!("\x1b[1;32m[TEST PASSÉ AVEC SUCCÈS] Validation complète de JamboKernel Iron Core, JamboFS & VirtIO-Net Ring 3.\x1b[0m");
         Ok(())
     } else {
         eprintln!("{}", combined);

@@ -3,6 +3,10 @@ name = "jambo-netd"
 version = "0.3.44"
 edition = "2021"
 
+[lib]
+name = "jambo_netd"
+path = "src/lib.rs"
+
 [[bin]]
 name = "netd"
 path = "src/main.rs"

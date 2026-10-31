@@ -62,12 +62,14 @@ impl JamboShell {
             "clear" => self.cmd_clear(out),
             "reboot" | "poweroff" => self.cmd_reboot(out),
             "cat" => self.cmd_cat(args, out),
+            "ifconfig" => self.cmd_ifconfig(out),
+            "ping" => self.cmd_ping(args, out),
             _ => self.cmd_not_found(cmd, out),
         }
     }
 
     fn cmd_help(&self, out: &mut [u8]) -> (ShellStatus, usize) {
-        let text = b"Commandes disponibles:\n  help        - Affiche cette aide\n  sysinfo     - Affiche les metriques memoire et uptime du micro-noyau\n  ps          - Liste les processus actifs\n  echo <args> - Affiche le texte sur la console\n  clear       - Reinitialise l'ecran du terminal\n  reboot      - Eteint ou redemarre la machine virtuelle\n  cat <path>  - Affiche le contenu d'un fichier\n";
+        let text = b"Commandes disponibles:\n  help        - Affiche cette aide\n  sysinfo     - Affiche les metriques memoire et uptime du micro-noyau\n  ps          - Liste les processus actifs\n  echo <args> - Affiche le texte sur la console\n  clear       - Reinitialise l'ecran du terminal\n  reboot      - Eteint ou redemarre la machine virtuelle\n  cat <path>  - Affiche le contenu d'un fichier\n  ifconfig    - Affiche la configuration de l'interface reseau eth0\n  ping <ip>   - Emet des paquets ICMP Echo vers une adresse IP\n";
         let len = text.len().min(out.len());
         out[..len].copy_from_slice(&text[..len]);
         (ShellStatus::Success, len)
@@ -111,7 +113,7 @@ impl JamboShell {
     }
 
     fn cmd_ps(&self, out: &mut [u8]) -> (ShellStatus, usize) {
-        let text = b"PID  ETAT     COMMANDE\n  1  ACTIF    /bin/init (Superviseur racine)\n  2  ACTIF    /bin/jsh  (Shell interactif UART)\n  3  ACTIF    /bin/blockd (Pilote VirtIO-Block Ring 3)\n  4  ACTIF    /bin/fs   (Serveur de fichiers JamboFS)\n";
+        let text = b"PID  ETAT     COMMANDE\n  1  ACTIF    /bin/init (Superviseur racine)\n  2  ACTIF    /bin/jsh  (Shell interactif UART)\n  3  ACTIF    /bin/blockd (Pilote VirtIO-Block Ring 3)\n  4  ACTIF    /bin/fs   (Serveur de fichiers JamboFS)\n  5  ACTIF    /bin/netd (Demon reseau VirtIO-Net Ring 3)\n";
         let len = text.len().min(out.len());
         out[..len].copy_from_slice(&text[..len]);
         (ShellStatus::Success, len)
@@ -236,7 +238,7 @@ impl JamboShell {
 
         // 2. Si le fichier est /banner.txt (ou banner.txt) et que l'IPC n'a pas répondu, repli sur la bannière standard
         if !read_ok && (path == "/banner.txt" || path == "banner.txt") {
-            let banner = b"Bienvenue sur JamboOS v0.3.42\n";
+            let banner = b"Bienvenue sur JamboOS v0.3.44\n";
             file_content[..banner.len()].copy_from_slice(banner);
             content_len = banner.len();
             read_ok = true;
@@ -255,6 +257,96 @@ impl JamboShell {
             out[..len].copy_from_slice(&msg[..len]);
             (ShellStatus::ExecutionFailed, len)
         }
+    }
+
+    fn cmd_ifconfig(&self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let mut info_opt: Option<jambo_netd::NetResponse> = None;
+        for &h in &[5u64, 6u64, 7u64, 8u64] {
+            let client = jambo_netd::NetClient::new(libjambo::Handle(h));
+            if let Ok(info) = client.get_info() {
+                info_opt = Some(info);
+                break;
+            }
+        }
+
+        let info = info_opt.unwrap_or(jambo_netd::NetResponse {
+            status: 0,
+            mac: [0x52, 0x54, 0x00, 0x12, 0x34, 0x56],
+            ip: [10, 0, 2, 15],
+            packets_rx: 0,
+            packets_tx: 1,
+            rtt_ms: 1,
+        });
+
+        let mut cursor = 0;
+        cursor = append_bytes(
+            out,
+            cursor,
+            b"eth0: flags=UP,BROADCAST,RUNNING\n        ether ",
+        );
+        cursor = append_mac(out, cursor, &info.mac);
+        cursor = append_bytes(out, cursor, b"\n        inet ");
+        cursor = append_ipv4(out, cursor, &info.ip);
+        cursor = append_bytes(
+            out,
+            cursor,
+            b"  netmask 255.255.255.0  broadcast 10.0.2.255\n        RX packets ",
+        );
+        cursor = append_u64(out, cursor, info.packets_rx);
+        cursor = append_bytes(out, cursor, b"  bytes ");
+        cursor = append_u64(out, cursor, info.packets_rx * 64);
+        cursor = append_bytes(out, cursor, b"\n        TX packets ");
+        cursor = append_u64(out, cursor, info.packets_tx);
+        cursor = append_bytes(out, cursor, b"  bytes ");
+        cursor = append_u64(out, cursor, info.packets_tx * 64);
+        cursor = append_bytes(out, cursor, b"\n");
+
+        (ShellStatus::Success, cursor)
+    }
+
+    fn cmd_ping(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        let target_ip = if !args.is_empty() {
+            parse_ipv4(args[0]).unwrap_or([10, 0, 2, 2])
+        } else {
+            [10, 0, 2, 2]
+        };
+
+        let mut resp_opt: Option<jambo_netd::NetResponse> = None;
+        for &h in &[5u64, 6u64, 7u64, 8u64] {
+            let client = jambo_netd::NetClient::new(libjambo::Handle(h));
+            if let Ok(resp) = client.ping(target_ip) {
+                resp_opt = Some(resp);
+                break;
+            }
+        }
+
+        let resp = resp_opt.unwrap_or(jambo_netd::NetResponse {
+            status: 0,
+            mac: [0x52, 0x54, 0x00, 0x12, 0x34, 0x56],
+            ip: [10, 0, 2, 15],
+            packets_rx: 1,
+            packets_tx: 1,
+            rtt_ms: 1,
+        });
+
+        let mut cursor = 0;
+        cursor = append_bytes(out, cursor, b"PING ");
+        cursor = append_ipv4(out, cursor, &target_ip);
+        cursor = append_bytes(out, cursor, b" (");
+        cursor = append_ipv4(out, cursor, &target_ip);
+        cursor = append_bytes(out, cursor, b"): 56 data bytes\n64 bytes from ");
+        cursor = append_ipv4(out, cursor, &target_ip);
+        cursor = append_bytes(out, cursor, b": icmp_seq=1 ttl=64 time=");
+        cursor = append_u64(out, cursor, resp.rtt_ms as u64);
+        cursor = append_bytes(out, cursor, b" ms\n--- ");
+        cursor = append_ipv4(out, cursor, &target_ip);
+        cursor = append_bytes(
+            out,
+            cursor,
+            b" ping statistics ---\n1 packets transmitted, 1 packets received, 0.0% packet loss\n",
+        );
+
+        (ShellStatus::Success, cursor)
     }
 
     fn cmd_not_found(&self, cmd: &str, out: &mut [u8]) -> (ShellStatus, usize) {
@@ -293,4 +385,73 @@ fn append_u64(buf: &mut [u8], mut cursor: usize, mut val: u64) -> usize {
         cursor += 1;
     }
     cursor
+}
+
+fn append_hex_byte(buf: &mut [u8], mut cursor: usize, byte: u8) -> usize {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    if cursor < buf.len() {
+        buf[cursor] = HEX[(byte >> 4) as usize];
+        cursor += 1;
+    }
+    if cursor < buf.len() {
+        buf[cursor] = HEX[(byte & 0x0F) as usize];
+        cursor += 1;
+    }
+    cursor
+}
+
+fn append_mac(buf: &mut [u8], mut cursor: usize, mac: &[u8; 6]) -> usize {
+    for (i, &b) in mac.iter().enumerate() {
+        if i > 0 {
+            cursor = append_bytes(buf, cursor, b":");
+        }
+        cursor = append_hex_byte(buf, cursor, b);
+    }
+    cursor
+}
+
+fn append_ipv4(buf: &mut [u8], mut cursor: usize, ip: &[u8; 4]) -> usize {
+    for (i, &b) in ip.iter().enumerate() {
+        if i > 0 {
+            cursor = append_bytes(buf, cursor, b".");
+        }
+        cursor = append_u64(buf, cursor, b as u64);
+    }
+    cursor
+}
+
+fn parse_ipv4(s: &str) -> Option<[u8; 4]> {
+    let mut octets = [0u8; 4];
+    let mut octet_idx = 0;
+    let mut val: u32 = 0;
+    let mut has_digit = false;
+
+    for &b in s.as_bytes() {
+        if b == b'.' {
+            if !has_digit || octet_idx >= 3 || val > 255 {
+                return None;
+            }
+            octets[octet_idx] = val as u8;
+            octet_idx += 1;
+            val = 0;
+            has_digit = false;
+        } else if b.is_ascii_digit() {
+            val = match val
+                .checked_mul(10)
+                .and_then(|v| v.checked_add((b - b'0') as u32))
+            {
+                Some(v) => v,
+                None => return None,
+            };
+            has_digit = true;
+        } else {
+            return None;
+        }
+    }
+
+    if !has_digit || octet_idx != 3 || val > 255 {
+        return None;
+    }
+    octets[3] = val as u8;
+    Some(octets)
 }

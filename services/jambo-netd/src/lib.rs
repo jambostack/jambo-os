@@ -669,24 +669,49 @@ impl NetClient {
         tx_msg.bytes[..copy_len].copy_from_slice(&req_bytes[..copy_len]);
         tx_msg.byte_count = copy_len;
 
-        let mut rx_msg = ChannelMessage::default();
-        let (ret, _) = unsafe {
+        // 1. Émission de la requête sur le canal IPC
+        let (ret_send, _) = unsafe {
             libjambo::syscall6(
                 libjambo::SyscallNumber::ChannelCall,
                 self.endpoint.0,
                 &tx_msg as *const ChannelMessage as u64,
-                &mut rx_msg as *mut ChannelMessage as u64,
+                0,
                 0,
                 0,
                 0,
             )
         };
 
-        if ret != 0 {
-            return Err(SysError::TimedOut);
+        if ret_send != 0 {
+            return Err(SysError::InvalidHandle);
         }
 
-        NetResponse::from_bytes(&rx_msg.bytes[..rx_msg.byte_count]).ok_or(SysError::InvalidArgument)
+        // 2. Attente active coopérative de la réponse
+        let mut rx_msg = ChannelMessage::default();
+        let mut attempts = 0;
+        while attempts < 100 {
+            let (ret_recv, _) = unsafe {
+                libjambo::syscall6(
+                    libjambo::SyscallNumber::ChannelCall,
+                    self.endpoint.0,
+                    0,
+                    &mut rx_msg as *mut ChannelMessage as u64,
+                    0,
+                    0,
+                    0,
+                )
+            };
+
+            if ret_recv == 0 && rx_msg.byte_count >= core::mem::size_of::<NetResponse>() {
+                return NetResponse::from_bytes(&rx_msg.bytes[..rx_msg.byte_count])
+                    .ok_or(SysError::InvalidArgument);
+            }
+
+            attempts += 1;
+            syscall_thread_yield();
+        }
+
+        Err(SysError::TimedOut)
     }
 }
 
