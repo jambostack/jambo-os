@@ -12,6 +12,7 @@ members = [
     "services/jambo-netd",
     "services/jambo-fdr",
     "services/jambo-wasmd",
+    "services/jambo-pqc",
     "xtask",
 ]
 

@@ -1,0 +1,16 @@
+[package]
+name = "jambo-pqc"
+version = "0.3.47"
+edition = "2021"
+
+[lib]
+name = "jambo_pqc"
+path = "src/lib.rs"
+
+[[bin]]
+name = "pqc"
+path = "src/main.rs"
+
+[dependencies]
+jambo-abi = { path = "../../abi/jambo-abi" }
+libjambo = { path = "../../libs/libjambo" }
