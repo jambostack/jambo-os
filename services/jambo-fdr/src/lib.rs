@@ -17,7 +17,7 @@
 
 #![no_std]
 
-use libjambo::Handle;
+use jambo_abi::{Handle, SysError};
 
 // ============================================================================
 // HACHEUR CRYPTOGRAPHIQUE SHA-256 (#![no_std])
@@ -1567,6 +1567,239 @@ impl JamboFdrDaemon {
 }
 
 // ============================================================================
+// PROTOCOLE IPC FDR (FdrOpcode, FdrRequest, FdrResponse, FdrClient)
+// ============================================================================
+
+pub const MAX_FASTPATH_BYTES: usize = 64;
+pub const MAX_HANDLES: usize = 4;
+
+/// Message IPC hybride échangé sur les canaux de communication
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct ChannelMessage {
+    pub bytes: [u8; MAX_FASTPATH_BYTES],
+    pub byte_count: usize,
+    pub handles: [Handle; MAX_HANDLES],
+    pub handle_count: usize,
+}
+
+impl Default for ChannelMessage {
+    fn default() -> Self {
+        Self {
+            bytes: [0u8; MAX_FASTPATH_BYTES],
+            byte_count: 0,
+            handles: [Handle::NULL; MAX_HANDLES],
+            handle_count: 0,
+        }
+    }
+}
+
+/// Cède volontairement le temps processeur au scheduler
+#[inline(always)]
+pub fn syscall_thread_yield() {
+    unsafe {
+        libjambo::syscall6(libjambo::SyscallNumber::ThreadYield, 0, 0, 0, 0, 0, 0);
+    }
+}
+
+/// Opcodes pour le protocole IPC FDR
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FdrOpcode {
+    GetStatus = 1,
+    VerifyIntegrity = 2,
+    GetPcr = 3,
+}
+
+/// Constantes de statut et posture FDR
+pub const FDR_STATUS_OK: u32 = 1;
+pub const FDR_STATUS_ERROR: u32 = 0;
+
+pub const FDR_POSTURE_SECURED: u32 = 1;
+pub const FDR_POSTURE_DEGRADED: u32 = 2;
+
+pub const FDR_DUAL_BIOS_PRIMARY_VALID: u32 = 1;
+pub const FDR_DUAL_BIOS_BACKUP_ACTIVE: u32 = 2;
+
+/// Requête IPC transmise au service jambo-fdr
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FdrRequest {
+    pub opcode: u32,
+    pub pcr_index: u32,
+    pub reserved: [u8; 56],
+}
+
+const _: () = assert!(core::mem::size_of::<FdrRequest>() == 64);
+
+impl FdrRequest {
+    pub const fn new(opcode: FdrOpcode) -> Self {
+        Self {
+            opcode: opcode as u32,
+            pcr_index: 0,
+            reserved: [0u8; 56],
+        }
+    }
+
+    pub const fn new_pcr(pcr_index: u32) -> Self {
+        Self {
+            opcode: FdrOpcode::GetPcr as u32,
+            pcr_index,
+            reserved: [0u8; 56],
+        }
+    }
+
+    pub fn to_bytes(&self) -> [u8; 64] {
+        let mut bytes = [0u8; 64];
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                self as *const Self as *const u8,
+                bytes.as_mut_ptr(),
+                64,
+            );
+        }
+        bytes
+    }
+
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        if bytes.len() < 8 {
+            return None;
+        }
+        let opcode = u32::from_ne_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+        let pcr_index = u32::from_ne_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
+        let mut reserved = [0u8; 56];
+        if bytes.len() > 8 {
+            let copy_len = (bytes.len() - 8).min(56);
+            reserved[..copy_len].copy_from_slice(&bytes[8..8 + copy_len]);
+        }
+        Some(Self {
+            opcode,
+            pcr_index,
+            reserved,
+        })
+    }
+}
+
+/// Réponse IPC retournée par le service jambo-fdr (52 octets)
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FdrResponse {
+    pub status: u32,           // 1 = OK, 0 = Erreur
+    pub posture: u32,          // 1 = SECURED, 2 = DEGRADED
+    pub dual_bios_status: u32, // 1 = PRIMARY_VALID
+    pub alerts_count: u32,
+    pub isolated_devices_count: u32,
+    pub digest: [u8; 32], // Empreinte SHA-256 ou valeur PCR
+}
+
+const _: () = assert!(core::mem::size_of::<FdrResponse>() == 52);
+
+impl FdrResponse {
+    pub fn to_bytes(&self) -> [u8; 52] {
+        let mut bytes = [0u8; 52];
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                self as *const Self as *const u8,
+                bytes.as_mut_ptr(),
+                52,
+            );
+        }
+        bytes
+    }
+
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        if bytes.len() < 52 {
+            return None;
+        }
+        unsafe {
+            let ptr = bytes.as_ptr() as *const Self;
+            Some(ptr.read_unaligned())
+        }
+    }
+}
+
+/// Client IPC pour interagir avec le démon FDR (jambo-fdr, PID 6)
+pub struct FdrClient {
+    pub endpoint: Handle,
+}
+
+impl FdrClient {
+    pub const fn new(endpoint: Handle) -> Self {
+        Self { endpoint }
+    }
+
+    /// Récupère l'état global de résilience et de posture matérielle
+    pub fn get_status(&self) -> Result<FdrResponse, SysError> {
+        let req = FdrRequest::new(FdrOpcode::GetStatus);
+        self.call(&req)
+    }
+
+    /// Déclenche la vérification d'intégrité cryptographique firmware et matériel
+    pub fn verify_integrity(&self) -> Result<FdrResponse, SysError> {
+        let req = FdrRequest::new(FdrOpcode::VerifyIntegrity);
+        self.call(&req)
+    }
+
+    /// Interroge la valeur d'une banque PCR spécifique (index 0..23)
+    pub fn get_pcr(&self, index: u32) -> Result<FdrResponse, SysError> {
+        let req = FdrRequest::new_pcr(index);
+        self.call(&req)
+    }
+
+    fn call(&self, req: &FdrRequest) -> Result<FdrResponse, SysError> {
+        let mut tx_msg = ChannelMessage::default();
+        let req_bytes = req.to_bytes();
+        let copy_len = req_bytes.len().min(MAX_FASTPATH_BYTES);
+        tx_msg.bytes[..copy_len].copy_from_slice(&req_bytes[..copy_len]);
+        tx_msg.byte_count = copy_len;
+
+        // 1. Émission de la requête sur le canal IPC
+        let (ret_send, _) = unsafe {
+            libjambo::syscall6(
+                libjambo::SyscallNumber::ChannelCall,
+                self.endpoint.0,
+                &tx_msg as *const ChannelMessage as u64,
+                0,
+                0,
+                0,
+                0,
+            )
+        };
+
+        if ret_send != 0 {
+            return Err(SysError::InvalidHandle);
+        }
+
+        // 2. Attente active coopérative de la réponse
+        let mut rx_msg = ChannelMessage::default();
+        let mut attempts = 0;
+        while attempts < 100 {
+            let (ret_recv, _) = unsafe {
+                libjambo::syscall6(
+                    libjambo::SyscallNumber::ChannelCall,
+                    self.endpoint.0,
+                    0,
+                    &mut rx_msg as *mut ChannelMessage as u64,
+                    0,
+                    0,
+                    0,
+                )
+            };
+
+            if ret_recv == 0 && rx_msg.byte_count >= core::mem::size_of::<FdrResponse>() {
+                return FdrResponse::from_bytes(&rx_msg.bytes[..rx_msg.byte_count])
+                    .ok_or(SysError::InvalidArgument);
+            }
+
+            attempts += 1;
+            syscall_thread_yield();
+        }
+
+        Err(SysError::TimedOut)
+    }
+}
+
+// ============================================================================
 // TESTS UNITAIRES
 // ============================================================================
 
@@ -1859,5 +2092,31 @@ mod tests {
             FirmwareIntegrityStatus::Restored
         );
         assert_eq!(daemon.compute_resilience_score(), 100);
+    }
+
+    #[test]
+    fn test_fdr_ipc_serialization() {
+        let req = FdrRequest::new_pcr(5);
+        let req_bytes = req.to_bytes();
+        assert_eq!(req_bytes.len(), 64);
+        let req_dec = FdrRequest::from_bytes(&req_bytes).expect("fdr request decode");
+        assert_eq!(req_dec.opcode, FdrOpcode::GetPcr as u32);
+        assert_eq!(req_dec.pcr_index, 5);
+
+        let resp = FdrResponse {
+            status: FDR_STATUS_OK,
+            posture: FDR_POSTURE_SECURED,
+            dual_bios_status: FDR_DUAL_BIOS_PRIMARY_VALID,
+            alerts_count: 0,
+            isolated_devices_count: 0,
+            digest: [0x42; 32],
+        };
+        let resp_bytes = resp.to_bytes();
+        assert_eq!(resp_bytes.len(), 52);
+        let resp_dec = FdrResponse::from_bytes(&resp_bytes).expect("fdr response decode");
+        assert_eq!(resp_dec.status, FDR_STATUS_OK);
+        assert_eq!(resp_dec.posture, FDR_POSTURE_SECURED);
+        assert_eq!(resp_dec.dual_bios_status, FDR_DUAL_BIOS_PRIMARY_VALID);
+        assert_eq!(resp_dec.digest, [0x42; 32]);
     }
 }

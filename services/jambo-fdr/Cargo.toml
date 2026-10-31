@@ -1,0 +1,16 @@
+[package]
+name = "jambo-fdr"
+version = "0.3.45"
+edition = "2021"
+
+[lib]
+name = "jambo_fdr"
+path = "src/lib.rs"
+
+[[bin]]
+name = "fdr"
+path = "src/main.rs"
+
+[dependencies]
+jambo-abi = { path = "../../abi/jambo-abi" }
+libjambo = { path = "../../libs/libjambo" }
