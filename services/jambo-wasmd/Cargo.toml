@@ -1,0 +1,16 @@
+[package]
+name = "jambo-wasmd"
+version = "0.3.46"
+edition = "2021"
+
+[lib]
+name = "jambo_wasmd"
+path = "src/lib.rs"
+
+[[bin]]
+name = "wasmd"
+path = "src/main.rs"
+
+[dependencies]
+jambo-abi = { path = "../../abi/jambo-abi" }
+libjambo = { path = "../../libs/libjambo" }
