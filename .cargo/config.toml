@@ -6,6 +6,11 @@ rustflags = [
     "-C", "relocation-model=static",
 ]
 
+[target.x86_64-pc-windows-gnu]
+rustflags = [
+    "-C", "linker=rust-lld",
+    "-C", "link-self-contained=yes",
+]
+
 [alias]
 xtask = "run --package xtask --"
-
