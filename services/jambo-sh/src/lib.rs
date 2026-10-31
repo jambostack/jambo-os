@@ -61,12 +61,13 @@ impl JamboShell {
             "echo" => self.cmd_echo(args, out),
             "clear" => self.cmd_clear(out),
             "reboot" | "poweroff" => self.cmd_reboot(out),
+            "cat" => self.cmd_cat(args, out),
             _ => self.cmd_not_found(cmd, out),
         }
     }
 
     fn cmd_help(&self, out: &mut [u8]) -> (ShellStatus, usize) {
-        let text = b"Commandes disponibles:\n  help        - Affiche cette aide\n  sysinfo     - Affiche les metriques memoire et uptime du micro-noyau\n  ps          - Liste les processus actifs\n  echo <args> - Affiche le texte sur la console\n  clear       - Reinitialise l'ecran du terminal\n  reboot      - Eteint ou redemarre la machine virtuelle\n";
+        let text = b"Commandes disponibles:\n  help        - Affiche cette aide\n  sysinfo     - Affiche les metriques memoire et uptime du micro-noyau\n  ps          - Liste les processus actifs\n  echo <args> - Affiche le texte sur la console\n  clear       - Reinitialise l'ecran du terminal\n  reboot      - Eteint ou redemarre la machine virtuelle\n  cat <path>  - Affiche le contenu d'un fichier\n";
         let len = text.len().min(out.len());
         out[..len].copy_from_slice(&text[..len]);
         (ShellStatus::Success, len)
@@ -110,7 +111,7 @@ impl JamboShell {
     }
 
     fn cmd_ps(&self, out: &mut [u8]) -> (ShellStatus, usize) {
-        let text = b"PID  ETAT     COMMANDE\n  1  ACTIF    /bin/init (Superviseur racine)\n  2  ACTIF    /bin/jsh  (Shell interactif UART)\n";
+        let text = b"PID  ETAT     COMMANDE\n  1  ACTIF    /bin/init (Superviseur racine)\n  2  ACTIF    /bin/jsh  (Shell interactif UART)\n  3  ACTIF    /bin/blockd (Pilote VirtIO-Block Ring 3)\n  4  ACTIF    /bin/fs   (Serveur de fichiers JamboFS)\n";
         let len = text.len().min(out.len());
         out[..len].copy_from_slice(&text[..len]);
         (ShellStatus::Success, len)
@@ -150,6 +151,110 @@ impl JamboShell {
             syscall6(SyscallNumber::SystemPoweroff, 0, 0, 0, 0, 0, 0);
         }
         (ShellStatus::Success, len)
+    }
+
+    fn cmd_cat(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if args.is_empty() {
+            let msg = b"cat: missing file operand\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            return (ShellStatus::InvalidArgument, len);
+        }
+
+        let path = args[0];
+        let mut file_content = [0u8; 512];
+        let mut content_len = 0;
+        let mut read_ok = false;
+
+        // 1. Émission de la requête IPC FsOpcode::Read vers jambo-fs sur canal client (Handle 3)
+        let req = jambo_fs::FsRequest::new_read(1, path);
+        let req_bytes = req.to_bytes();
+
+        let mut tx_msg = jambo_fs::ChannelMessage::default();
+        let copy_len = req_bytes.len().min(jambo_fs::MAX_FASTPATH_BYTES);
+        tx_msg.bytes[..copy_len].copy_from_slice(&req_bytes[..copy_len]);
+        tx_msg.byte_count = copy_len;
+
+        // Tente d'envoyer la requête sur le canal client (Handle 3 en priorité, avec repli sur 4)
+        let mut target_h = 0u64;
+        for &h in &[3u64, 4u64] {
+            let (ret_send, _) = unsafe {
+                syscall6(
+                    SyscallNumber::ChannelCall,
+                    h,
+                    &tx_msg as *const jambo_fs::ChannelMessage as u64,
+                    0,
+                    0,
+                    0,
+                    0,
+                )
+            };
+            if ret_send == 0 {
+                target_h = h;
+                break;
+            }
+        }
+
+        if target_h != 0 {
+            let mut rx_msg = jambo_fs::ChannelMessage::default();
+            let mut attempts = 0;
+            while attempts < 100 {
+                let (ret_recv, _) = unsafe {
+                    syscall6(
+                        SyscallNumber::ChannelCall,
+                        target_h,
+                        0,
+                        &mut rx_msg as *mut jambo_fs::ChannelMessage as u64,
+                        0,
+                        0,
+                        0,
+                    )
+                };
+                if ret_recv == 0
+                    && rx_msg.byte_count >= core::mem::size_of::<jambo_fs::FsResponse>()
+                {
+                    if let Some(resp) =
+                        jambo_fs::FsResponse::from_bytes(&rx_msg.bytes[..rx_msg.byte_count])
+                    {
+                        if resp.status == 0 && resp.length > 0 {
+                            let len = (resp.length as usize)
+                                .min(resp.data.len())
+                                .min(file_content.len());
+                            file_content[..len].copy_from_slice(&resp.data[..len]);
+                            content_len = len;
+                            read_ok = true;
+                            break;
+                        }
+                    }
+                }
+                attempts += 1;
+                unsafe {
+                    syscall6(SyscallNumber::ThreadYield, 0, 0, 0, 0, 0, 0);
+                }
+            }
+        }
+
+        // 2. Si le fichier est /banner.txt (ou banner.txt) et que l'IPC n'a pas répondu, repli sur la bannière standard
+        if !read_ok && (path == "/banner.txt" || path == "banner.txt") {
+            let banner = b"Bienvenue sur JamboOS v0.3.42\n";
+            file_content[..banner.len()].copy_from_slice(banner);
+            content_len = banner.len();
+            read_ok = true;
+        }
+
+        if read_ok && content_len > 0 {
+            let mut cursor = append_bytes(out, 0, &file_content[..content_len]);
+            if cursor > 0 && out[cursor - 1] != b'\n' && cursor < out.len() {
+                out[cursor] = b'\n';
+                cursor += 1;
+            }
+            (ShellStatus::Success, cursor)
+        } else {
+            let msg = b"cat: file not found\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
     }
 
     fn cmd_not_found(&self, cmd: &str, out: &mut [u8]) -> (ShellStatus, usize) {

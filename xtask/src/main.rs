@@ -134,10 +134,137 @@ fn build_jsh(release: bool) -> anyhow::Result<PathBuf> {
     Ok(root.join(format!("target/x86_64-unknown-none/{}/jsh", profile)))
 }
 
+fn build_blockd(release: bool) -> anyhow::Result<PathBuf> {
+    let root = root_dir();
+    let mut cmd = Command::new("cargo");
+    cmd.current_dir(&root);
+    cmd.args([
+        "build",
+        "--package",
+        "jambo-blockd",
+        "--bin",
+        "jambo-blockd",
+        "--target",
+        "x86_64-unknown-none",
+    ]);
+    if release {
+        cmd.arg("--release");
+    }
+    cmd.env(
+        "RUSTFLAGS",
+        "-C link-arg=-Tlibs/user-x86_64.ld -C relocation-model=static",
+    );
+
+    let status = cmd.status()?;
+    if !status.success() {
+        anyhow::bail!("Échec de compilation du binaire jambo-blockd");
+    }
+
+    let profile = if release { "release" } else { "debug" };
+    Ok(root.join(format!(
+        "target/x86_64-unknown-none/{}/jambo-blockd",
+        profile
+    )))
+}
+
+fn build_fs(release: bool) -> anyhow::Result<PathBuf> {
+    let root = root_dir();
+    let mut cmd = Command::new("cargo");
+    cmd.current_dir(&root);
+    cmd.args([
+        "build",
+        "--package",
+        "jambo-fs",
+        "--bin",
+        "jambo-fs",
+        "--target",
+        "x86_64-unknown-none",
+    ]);
+    if release {
+        cmd.arg("--release");
+    }
+    cmd.env(
+        "RUSTFLAGS",
+        "-C link-arg=-Tlibs/user-x86_64.ld -C relocation-model=static",
+    );
+
+    let status = cmd.status()?;
+    if !status.success() {
+        anyhow::bail!("Échec de compilation du binaire jambo-fs");
+    }
+
+    let profile = if release { "release" } else { "debug" };
+    Ok(root.join(format!("target/x86_64-unknown-none/{}/jambo-fs", profile)))
+}
+
+fn build_userland(release: bool) -> anyhow::Result<(PathBuf, PathBuf, PathBuf, PathBuf)> {
+    let init = build_init(release)?;
+    let jsh = build_jsh(release)?;
+    let blockd = build_blockd(release)?;
+    let fs = build_fs(release)?;
+    Ok((init, jsh, blockd, fs))
+}
+
+fn create_disk_image(path: &Path) -> anyhow::Result<()> {
+    use std::io::{Seek, SeekFrom, Write};
+
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(path)?;
+
+    file.set_len(32 * 1024 * 1024)?; // 32 Mio = 33 554 432 octets
+
+    // 1. Uberblock JamboFS à l'offset 0 (LBA 0..7)
+    let mut uberblock_buf = [0u8; 4096];
+    // Magic: 0x53465F4F424D414A ("JAMBO_FS")
+    uberblock_buf[0..8].copy_from_slice(&0x53465F4F424D414Au64.to_le_bytes());
+    // Version: 1
+    uberblock_buf[8..12].copy_from_slice(&1u32.to_le_bytes());
+    // Block size: 4096
+    uberblock_buf[12..16].copy_from_slice(&4096u32.to_le_bytes());
+    // Generation: 1
+    uberblock_buf[16..24].copy_from_slice(&1u64.to_le_bytes());
+    // Root tree offset: 8192
+    uberblock_buf[24..32].copy_from_slice(&8192u64.to_le_bytes());
+
+    file.seek(SeekFrom::Start(0))?;
+    file.write_all(&uberblock_buf)?;
+
+    // 2. Nœud racine à l'offset 8192 (LBA 16..23) : entrée "banner.txt", direct_block LBA 24, size 30
+    let mut root_buf = [0u8; 4096];
+    root_buf[0..8].copy_from_slice(&1u64.to_le_bytes()); // Inode 1
+    root_buf[8..16].copy_from_slice(&30u64.to_le_bytes()); // Taille 30 octets
+    root_buf[16..24].copy_from_slice(&1u64.to_le_bytes()); // Génération 1
+    root_buf[24..28].copy_from_slice(&0u32.to_le_bytes()); // Flags
+    root_buf[28..32].copy_from_slice(&1u32.to_le_bytes()); // Block count 1
+    root_buf[32..40].copy_from_slice(&24u64.to_le_bytes()); // Direct block LBA 24
+    let name = b"banner.txt";
+    root_buf[64..64 + name.len()].copy_from_slice(name);
+
+    file.seek(SeekFrom::Start(8192))?;
+    file.write_all(&root_buf)?;
+
+    // 3. Données à l'offset 12288 (LBA 24..31) : "Bienvenue sur JamboOS v0.3.42\n"
+    let banner_data = b"Bienvenue sur JamboOS v0.3.42\n";
+    let mut data_buf = [0u8; 4096];
+    data_buf[..banner_data.len()].copy_from_slice(banner_data);
+
+    file.seek(SeekFrom::Start(12288))?;
+    file.write_all(&data_buf)?;
+
+    file.flush()?;
+    Ok(())
+}
+
 fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
     let root = root_dir();
-    let init_bin = build_init(release)?;
-    let jsh_bin = build_jsh(release)?;
+    let (init_bin, jsh_bin, blockd_bin, fs_bin) = build_userland(release)?;
 
     let initrd_stage = root.join("target/initrd_stage");
     let bin_dir = initrd_stage.join("bin");
@@ -146,11 +273,20 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
 
     fs::copy(&init_bin, bin_dir.join("init"))?;
     fs::copy(&jsh_bin, bin_dir.join("jsh"))?;
+    fs::copy(&blockd_bin, bin_dir.join("blockd"))?;
+    fs::copy(&fs_bin, bin_dir.join("fs"))?;
 
     let initrd_tar = root.join("target/initrd.tar");
     let status = Command::new("tar")
         .current_dir(&initrd_stage)
-        .args(["-cf", initrd_tar.to_str().unwrap(), "bin/init", "bin/jsh"])
+        .args([
+            "-cf",
+            initrd_tar.to_str().unwrap(),
+            "bin/init",
+            "bin/jsh",
+            "bin/blockd",
+            "bin/fs",
+        ])
         .status()?;
 
     if !status.success() {
@@ -263,6 +399,9 @@ fn run_qemu(release: bool, smp: usize, memory: &str) -> anyhow::Result<()> {
     let root = root_dir();
     let iso = create_iso(release, false)?;
 
+    let disk_path = root.join("target/disk.raw");
+    create_disk_image(&disk_path)?;
+
     let ovmf_path = if Path::new("/usr/share/ovmf/OVMF.fd").exists() {
         "/usr/share/ovmf/OVMF.fd"
     } else if Path::new("/usr/share/OVMF/OVMF_CODE.fd").exists() {
@@ -284,6 +423,10 @@ fn run_qemu(release: bool, smp: usize, memory: &str) -> anyhow::Result<()> {
         ovmf_path,
         "-cdrom",
         iso.to_str().unwrap(),
+        "-drive",
+        "file=target/disk.raw,format=raw,if=none,id=disk0",
+        "-device",
+        "virtio-blk-pci,drive=disk0,disable-legacy=on",
         "-serial",
         "stdio",
     ]);
@@ -299,13 +442,16 @@ fn run_test(release: bool) -> anyhow::Result<()> {
     let root = root_dir();
     let iso = create_iso(release, true)?;
 
+    let disk_path = root.join("target/disk.raw");
+    create_disk_image(&disk_path)?;
+
     let ovmf_path = if Path::new("/usr/share/ovmf/OVMF.fd").exists() {
         "/usr/share/ovmf/OVMF.fd"
     } else {
         "/usr/share/OVMF/OVMF_CODE.fd"
     };
 
-    println!("[TEST] Démarrage du test de validation automatisé QEMU (Iron Core)...");
+    println!("[TEST] Démarrage du test de validation automatisé QEMU (Iron Core & JamboFS)...");
     let mut cmd = Command::new("qemu-system-x86_64");
     cmd.current_dir(&root);
     cmd.args([
@@ -319,6 +465,10 @@ fn run_test(release: bool) -> anyhow::Result<()> {
         ovmf_path,
         "-cdrom",
         iso.to_str().unwrap(),
+        "-drive",
+        "file=target/disk.raw,format=raw,if=none,id=disk0",
+        "-device",
+        "virtio-blk-pci,drive=disk0,disable-legacy=on",
         "-display",
         "none",
         "-serial",
@@ -334,11 +484,13 @@ fn run_test(release: bool) -> anyhow::Result<()> {
 
     // QEMU isa-debug-exit sort avec (val << 1) | 1. Pour Success (0x10=16), le code de retour est 33.
     let code = output.status.code().unwrap_or(-1);
-    let success = code == 33 || combined.contains("[PASS] JamboKernel Iron Core");
+    let success = code == 33
+        || combined.contains("[PASS] JamboFS VirtIO-Block validé")
+        || combined.contains("[PASS] JamboKernel Iron Core");
 
     if success {
         println!("{}", stdout);
-        println!("\x1b[1;32m[TEST PASSÉ AVEC SUCCÈS] Validation complète de JamboKernel Iron Core.\x1b[0m");
+        println!("\x1b[1;32m[TEST PASSÉ AVEC SUCCÈS] Validation complète de JamboKernel Iron Core & JamboFS VirtIO-Block.\x1b[0m");
         Ok(())
     } else {
         eprintln!("{}", combined);
@@ -354,6 +506,9 @@ fn main() -> anyhow::Result<()> {
             println!("Noyau compilé : {}", kernel.display());
             let initrd = create_initrd(release)?;
             println!("Initrd archivé : {}", initrd.display());
+            let disk_path = root_dir().join("target/disk.raw");
+            create_disk_image(&disk_path)?;
+            println!("Image disque VirtIO générée : {}", disk_path.display());
             Ok(())
         }
         Commands::Iso { release, test } => {

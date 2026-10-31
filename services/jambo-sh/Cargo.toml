@@ -1,6 +1,6 @@
 [package]
 name = "jambo-sh"
-version = "0.3.41"
+version = "0.3.42"
 edition = "2021"
 
 [lib]
@@ -13,3 +13,4 @@ path = "src/main.rs"
 
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }
+jambo-fs = { path = "../jambo-fs" }

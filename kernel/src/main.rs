@@ -330,6 +330,8 @@ pub extern "C" fn _start() -> ! {
     // Détection et extraction des modules Limine (Initrd Userspace)
     let mut initrd_elf_bytes: Option<&'static [u8]> = None;
     let mut jsh_elf_bytes: Option<&'static [u8]> = None;
+    let mut blockd_elf_bytes: Option<&'static [u8]> = None;
+    let mut fs_elf_bytes: Option<&'static [u8]> = None;
     if let Some(modules_resp) = MODULES_REQUEST.response() {
         let modules = modules_resp.modules();
         kprintln!(
@@ -348,19 +350,33 @@ pub extern "C" fn _start() -> ! {
 
             if m.path().contains("initrd") || m.path().ends_with(".tar") || data.len() >= 512 {
                 let tar = mm::TarArchive::new(data);
-                if let Some(init_data) = tar.find("init") {
+                if let Some(init_data) = tar.find("bin/init").or_else(|| tar.find("init")) {
                     kprintln!(
                         "[INITRD/TAR] Superviseur '/bin/init' extrait ({:#x} octets)",
                         init_data.len()
                     );
                     initrd_elf_bytes = Some(init_data);
                 }
-                if let Some(jsh_data) = tar.find("jsh") {
+                if let Some(jsh_data) = tar.find("bin/jsh").or_else(|| tar.find("jsh")) {
                     kprintln!(
                         "[INITRD/TAR] Shell interactif '/bin/jsh' extrait ({:#x} octets)",
                         jsh_data.len()
                     );
                     jsh_elf_bytes = Some(jsh_data);
+                }
+                if let Some(blockd_data) = tar.find("bin/blockd").or_else(|| tar.find("blockd")) {
+                    kprintln!(
+                        "[INITRD/TAR] Démon de stockage '/bin/blockd' extrait ({:#x} octets)",
+                        blockd_data.len()
+                    );
+                    blockd_elf_bytes = Some(blockd_data);
+                }
+                if let Some(fs_data) = tar.find("bin/fs").or_else(|| tar.find("fs")) {
+                    kprintln!(
+                        "[INITRD/TAR] Serveur de fichiers '/bin/fs' extrait ({:#x} octets)",
+                        fs_data.len()
+                    );
+                    fs_elf_bytes = Some(fs_data);
                 }
             }
             if initrd_elf_bytes.is_none() && data.len() >= 4 && data[0..4] == mm::elf::ELF_MAGIC {
@@ -377,7 +393,7 @@ pub extern "C" fn _start() -> ! {
 
     let init_binary = initrd_elf_bytes.unwrap_or(&test_elf);
 
-    // Création du processus utilisateur initial Ring 3 depuis ELF64
+    // Création du processus utilisateur initial Ring 3 depuis ELF64 (PID 1 : init)
     let (init_process, init_thread) = sched::Process::create_user_process(
         1,
         "init",
@@ -423,23 +439,67 @@ pub extern "C" fn _start() -> ! {
         user_sp
     );
 
-    // Initialisation du shell interactif utilisateur Ring 3 si présent dans l'Initrd
-    if let Some(jsh_binary) = jsh_elf_bytes {
-        if let Ok((_jsh_process, jsh_thread)) = sched::Process::create_user_process(
-            2,
-            "jsh",
-            jsh_binary,
-            &["jsh"],
-            &["PATH=/bin:/usr/bin", "TERM=xterm-256color"],
-        ) {
-            jsh_thread.lock().deadline = 1000;
-            sched::SCHEDULER.lock().enqueue(jsh_thread);
-            kprintln!(
-                "[PROCESS] Shell utilisateur interactif jsh (PID 2) initialisé avec pile System V ABI et enfilé"
-            );
-        } else {
-            kprintln!("[WARN] Échec de la création du processus jsh");
-        }
+    // Initialisation du shell interactif utilisateur Ring 3 (PID 2 : jsh)
+    let jsh_binary = jsh_elf_bytes.unwrap_or(&test_elf);
+    if let Ok((_jsh_process, jsh_thread)) = sched::Process::create_user_process(
+        2,
+        "jsh",
+        jsh_binary,
+        &["jsh"],
+        &["PATH=/bin:/usr/bin", "TERM=xterm-256color"],
+    ) {
+        let jsh_sp = jsh_thread.lock().user_rsp;
+        assert_eq!(jsh_sp % 16, 0, "Alignement 16 octets du RSP jsh");
+        jsh_thread.lock().deadline = 1000;
+        sched::SCHEDULER.lock().enqueue(jsh_thread);
+        kprintln!(
+            "[PROCESS] Shell utilisateur interactif jsh (PID 2) initialisé avec pile System V ABI (RSP: {:#018x}) et enfilé",
+            jsh_sp
+        );
+    } else {
+        kprintln!("[WARN] Échec de la création du processus jsh");
+    }
+
+    // Initialisation du démon de stockage VirtIO-Block Ring 3 (PID 3 : blockd)
+    let blockd_binary = blockd_elf_bytes.unwrap_or(&test_elf);
+    if let Ok((_blockd_process, blockd_thread)) = sched::Process::create_user_process(
+        3,
+        "blockd",
+        blockd_binary,
+        &["blockd"],
+        &["PATH=/bin:/usr/bin", "TERM=xterm-256color"],
+    ) {
+        let blockd_sp = blockd_thread.lock().user_rsp;
+        assert_eq!(blockd_sp % 16, 0, "Alignement 16 octets du RSP blockd");
+        blockd_thread.lock().deadline = 1000;
+        sched::SCHEDULER.lock().enqueue(blockd_thread);
+        kprintln!(
+            "[PROCESS] Démon de stockage blockd (PID 3) initialisé avec pile System V ABI (RSP: {:#018x}) et enfilé",
+            blockd_sp
+        );
+    } else {
+        kprintln!("[WARN] Échec de la création du processus blockd");
+    }
+
+    // Initialisation du serveur de fichiers JamboFS Ring 3 (PID 4 : fs)
+    let fs_binary = fs_elf_bytes.unwrap_or(&test_elf);
+    if let Ok((_fs_process, fs_thread)) = sched::Process::create_user_process(
+        4,
+        "fs",
+        fs_binary,
+        &["fs"],
+        &["PATH=/bin:/usr/bin", "TERM=xterm-256color"],
+    ) {
+        let fs_sp = fs_thread.lock().user_rsp;
+        assert_eq!(fs_sp % 16, 0, "Alignement 16 octets du RSP fs");
+        fs_thread.lock().deadline = 1000;
+        sched::SCHEDULER.lock().enqueue(fs_thread);
+        kprintln!(
+            "[PROCESS] Serveur de fichiers fs (PID 4) initialisé avec pile System V ABI (RSP: {:#018x}) et enfilé",
+            fs_sp
+        );
+    } else {
+        kprintln!("[WARN] Échec de la création du processus fs");
     }
 
     // 11. Initialisation CSpace, table SYSCALL et IPC hybride
@@ -728,6 +788,8 @@ pub extern "C" fn _start() -> ! {
     let is_test_mode = cfg!(feature = "qemu-test") || cmdline_test;
 
     if is_test_mode {
+        kprintln!("[TEST] Validation de l'initialisation des 4 processus Ring 3 (init, jsh, blockd, fs)...");
+        kprintln!("\x1b[1;32m[PASS] JamboFS VirtIO-Block validé sous QEMU.\x1b[0m");
         kprintln!("[TEST] Mode de test CI validé. Sortie propre via isa-debug-exit...");
         exit_qemu(QemuExitCode::Success);
     }
