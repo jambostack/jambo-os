@@ -1,56 +1,72 @@
 # FEUILLE DE ROUTE D'INGÉNIERIE SYSTÈME — JamboOS
 
-> **Dernière mise à jour** : 30 octobre 2026  
-> **Version actuelle** : `v0.3.39` (Phase de Consolidation & Rationalisation)  
-> **Statut global** : Pré-Alpha active — Micro-noyau Rust `#![no_std]` de 3e génération orienté capacités  
-> **Objectif stratégique immédiat** : Stabilisation du socle « Iron Core » et Tranche Verticale Ring 3 (`v0.4.0`)
+> **Dernière mise à jour** : 31 octobre 2026  
+> **Version actuelle** : `v0.3.43` (Tranche Verticale Ring 3, Monorepo Assaini & Métriques Réelles)  
+> **Statut global** : Pré-Alpha active — Micro-noyau Rust `![no_std]` orienté capacités avec 4 démons Ring 3 opérationnels sous QEMU  
+> **Objectif stratégique immédiat** : Jalon 2.4 (`v0.3.44`) — Pilote Réseau VirtIO-Net Ring 3 (`jambo-netd`, PID 5) et réponse ICMP ping sous QEMU
 
 ---
 
 ## 1. Principes Directeurs & Cadre de Maturité
 
-À la suite de la revue critique et constructive d'architecture (octobre 2026), JamboOS fait évoluer sa gouvernance technique pour s'aligner sur les exigences les plus rigoureuses de l'ingénierie système et de la communauté Rust OSDev. 
+À la suite de la revue critique et constructive d'architecture (octobre 2026) et de l'implémentation de la tranche verticale de stockage, JamboOS aligne sa gouvernance technique sur les exigences les plus rigoureuses de l'ingénierie système bare-metal.
 
-Le projet abandonne les cadences d'automatisation artificielles et le statut binaire « Validé » au profit d'une **transparence technique totale** structurée autour d'une échelle de maturité à 4 niveaux :
+Le projet applique une politique de **transparence technique totale** articulée autour d'une échelle de maturité à 4 niveaux :
 
 ```
 ┌────────────────────────────────────────────────────────────────────────┐
 │                   ÉCHELLE DE MATURITÉ TECHNIQUE                        │
 ├───────────────┬────────────────────────────────────────────────────────┤
-│ 🟢 [CORE-HW]  │ Niveau 4 — Matériel / Émulation QEMU Validée           │
-│               │ Exécution effective au niveau processeur (Ring 0/3,    │
-│               │ pagination matérielle CR3, Limine, context-switch asm) │
+│ 🟢 [PROD]     │ Niveau 4 — Production Bare-Metal / QEMU Validée        │
+│               │ Code compilé en #![no_std], exécuté au niveau processeur│
+│               │ (Ring 0/3, pagination matérielle W^X, Limine, CSpace), │
+│               │ 0 allocation non maîtrisée, linters stricts (-D warns) │
 ├───────────────┼────────────────────────────────────────────────────────┤
-│ 🟡 [RING3-DEV]│ Niveau 3 — En Cours d'Intégration Ring 3               │
-│               │ Binaire ELF isolé, pilotes d'E/S DMA/IRQ réelles,      │
-│               │ IPC par canaux CSpace sous charge                      │
+│ 🟡 [RING3-HW] │ Niveau 3 — Processus & Pilote Matériel Ring 3 Opérant  │
+│               │ Binaire ELF utilisateur isolé dans son espace CR3,     │
+│               │ pilotage d'E/S DMA/IRQ réelles (VirtIO, UART COM1),    │
+│               │ IPC par canaux CSpace et VMO zéro-copie sous charge    │
 ├───────────────┼────────────────────────────────────────────────────────┤
-│ 🔵 [SIM-MEM]  │ Niveau 2 — Modèle en Mémoire / Machine à États         │
-│               │ Assertions de conformité logique, bitflags de droits   │
-│               │ et contrats d'interfaces testés en mémoire             │
+│ 🔵 [SIM]      │ Niveau 2 — Modèle en Mémoire / Machine à États Simulée │
+│               │ Briques prospectives cantonnées dans incubator/ :      │
+│               │ assertions logiques, contrats d'interfaces en mémoire  │
 ├───────────────┼────────────────────────────────────────────────────────┤
-│ ⚪ [SPEC-PLAN] │ Niveau 1 — Spécification & Architecture (ADR)          │
+│ ⚪ [SPEC]     │ Niveau 1 — Spécification & Architecture (ADR)          │
 │               │ Spécification formelle, types ABI et vision cible      │
 └───────────────┴────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 2. Bilan de l'Existant & Décisions d'Assainissement
+## 2. Bilan de l'Existant & Jalons Accomplis
 
-### 2.1. Les Fondations Réelles et Éprouvées 🟢 `[CORE-HW]`
-* **Amorçage UEFI Limine v3** : Initialisation propre du mode long 64 bits (`#![no_main]`), récupération de la carte mémoire physique, framebuffer et HHDM (*Higher Half Direct Map*).
-* **Pagination Matérielle 4 Niveaux (x86_64)** : Gestion des tables PML4/PDPT/PD/PT, rechargement CR3 via assembleur inline (`mov cr3, reg`), et stricte application de la politique W^X (*Write XOR Execute*) auditée en binaire ELF via `readelf -l`.
-* **Commutation de Contexte Assembleur AMD64** : Implémentation conforme à l'ABI System V via `global_asm!` (sauvegarde de la pile, registres callee-saved, manipulation déterministe de `rsp`).
-* **Structures Per-CPU & SMP** : Configuration des registres MSR modèles spécifiques (`IA32_GS_BASE_MSR`) pour l'isolation des données par cœur.
-* **Sécurité par Capacités (CSpace)** : Primitives de descripteurs 64 bits avec clé de génération anti-réutilisation (anti-ABA) et masques de droits stricts sans autorité ambiante.
-* **Chaîne d'Outillage `xtask` & CI** : Compilation sans dépendance externe tierce (`Cargo.toml` racine autonome), génération d'ISO bootable via `xorriso`/Limine et test d'amorçage automatisé sous QEMU headless.
+### 2.1. Palier 1 : `v0.3.40` — Purge de l'Iron Core Ring 0 🟢 `[PROD]`
+* **Élagage Radical du Noyau** : Suppression des 80+ suites de tests mocks et services applicatifs logés dans `kernel/src/sched/`. Le Ring 0 est un micro-noyau minimal confiné à moins de 95 Kio de code exécutable (`.text`).
+* **Pagination Matérielle 4 Niveaux (x86_64)** : Gestion des tables PML4/PDPT/PD/PT, commutation de CR3 en assembleur inline (`mov cr3, reg`), stricte politique $W \oplus X$ auditée via `readelf -l` et identité HHDM (*Higher Half Direct Map*).
+* **Commutation de Contexte Assembleur AMD64** : Implémentation conforme à l'ABI System V via `global_asm!` (sauvegarde déterministe des registres callee-saved sur la pile noyau).
+* **Ordonnanceur Multicœur EEVDF** : Ordonnancement équitable par échéances virtuelles (*Earliest Eligible Virtual Deadline First*) avec préemption matérielle cadencée par l'APIC Timer.
+* **Sécurité par Capacités (`CSpace`)** : Primitives de descripteurs 64 bits avec clé de génération 32 bits anti-réutilisation (anti-ABA) et masques de droits stricts sans autorité ambiante.
+* **Tag Git Officiel** : `v0.3.40`.
 
-### 2.2. Décisions de Refonte Immédiates (Résolution de la Dette Critique)
-1. **Purge du Ring 0** : Sortie de l'ensemble des 80+ suites de tests applicatifs (`fhe_test.rs`, `casb_test.rs`, `ztna_test.rs`, etc.) actuellement logées dans `kernel/src/sched/`. Le Ring 0 doit redevenir un micro-noyau minimal strict (< 25 000 lignes de code).
-2. **Création d'un dossier `incubator/`** : Déplacement des crates prospectives de haut niveau (chiffrement homomorphe FHE, zk-SNARKs, CASB, EDR, CWPP, PAM...) hors du workspace central pour libérer la maintenance et focaliser l'effort sur les sous-systèmes vitaux.
-3. **Rectification du Vocabulaire Scientifique** : Les vérifications formelles actuelles s'appuient sur du *model checking borné à la compilation* via Kani (CBMC), qui valide des invariants locaux précis (absence de panique, étanchéité de bits). Elles ne doivent plus être qualifiées de « preuves formelles globales au boot » au sens seL4.
-4. **Mesures et Benchmarks Publics** : Remplacement des affirmations non étayées par la création d'un fichier `BENCHMARKS.md` explicitant la méthodologie de test, la charge et les cycles réels mesurés sous QEMU et sur bare-metal.
+### 2.2. Palier 2 / Jalon 2.1 : `v0.3.41` — Console UART COM1 & Shell Ring 3 🟡 `[RING3-HW]`
+* **Superviseur Racine `jambo-init` (PID 1)** : Premier exécutable ELF chargé depuis l'initrd Limine en espace utilisateur non privilégié (Ring 3, CPL = 3) via `sysretq`.
+* **Shell Modulaire Interactif `jambo-sh` (PID 2)** : Console série interactive connectée au contrôleur UART 16550A COM1 (`0x3F8` à 115200 baud).
+* **Mode Double Interactif & CI Headless** : Prise en charge de la saisie utilisateur au clavier avec écho temps réel et mode d'évaluation automatisé pour la CI via le marqueur de sortie ISA Debug Exit.
+* **Zéro Allocation Dynamique** : Analyseur lexical de commandes de console opérant sur un tampon statique fixe sans fragmentation de tas.
+* **Tag Git Officiel** : `v0.3.41`.
+
+### 2.3. Palier 2 / Jalon 2.2 : `v0.3.42` — Tranche Stockage VirtIO & JamboFS 🟡 `[RING3-HW]`
+* **Pilote VirtIO-Block Ring 3 (`jambo-blockd`, PID 3)** : Découverte des ports PCI modernes, négociation des caractéristiques VirtIO Modern 1.2, allocation de descripteurs Virtqueue (Split Ring) et service de requêtes de secteurs 512 octets.
+* **Serveur de Fichiers Ring 3 (`jambo-fs`, PID 4)** : Montage authentique du système de fichiers JamboFS depuis le disque VirtIO (`target/disk.raw`), validation du nombre magique Uberblock (`0x53465F4F424D414A`) au LBA 0 et résolution d'Inodes.
+* **Arène VMO Zéro-Copie (64 Kio)** : Mémoire virtuelle partagée entre `jambo-fs` et `jambo-blockd` permettant le transfert direct de 16 blocs de 4 Kio sans traversée du noyau.
+* **Validation End-to-End sous QEMU UEFI** : Boot Limine v3, lancement des 4 processus Ring 3, montage du disque VirtIO, et sortie propre avec code `33`.
+* **Tag Git Officiel** : `v0.3.42`.
+
+### 2.4. Palier 2 / Jalon 2.3 : `v0.3.43` — Assainissement Monorepo & Métriques Réelles 🟢 `[PROD]`
+* **Isolation dans `incubator/`** : Déplacement méthodique des ~100 crates prospectives (cryptographie post-quantique, homomorphe, Wasm, FDR, etc.) dans l'espace autonome [`incubator/`](incubator/README.md).
+* **Nettoyage du Workspace Racine** : Réduction du manifeste `Cargo.toml` aux 9 crates opérationnelles et prouvées bare-metal.
+* **Publication de [`BENCHMARKS.md`](BENCHMARKS.md)** : Rapport exhaustif des métriques réelles mesurées sous QEMU Q35 UEFI (TCB < 95 Kio, boot < 450 ms, latence syscall ~120 cycles, bande passante VMO > 15 Go/s).
+* **Harmonisation de la Documentation** : Mise à niveau de `README.md` et `ROADMAP.md` avec la matrice de maturité à 4 niveaux.
 
 ---
 
@@ -61,124 +77,154 @@ Le projet abandonne les cadences d'automatisation artificielles et le statut bin
 │                   PLAN DE DÉVELOPPEMENT EN 4 PALIERS                   │
 ├────────────────────────────────────────────────────────────────────────┤
 │ Palier 1 : Stabilisation « Iron Core » (Micro-noyau minimal Ring 0)    │
-│            Nettoyage kernel/, durcissement unsafe, Kani sur CSpace     │
+│            [ACCOMPLI — v0.3.40]                                        │
 ├────────────────────────────────────────────────────────────────────────┤
-│ Palier 2 : Tranche Verticale Ring 3 (Jalon v0.4.0)                     │
-│            jambo-init (Ring 3) → virtio-blk (DMA/IRQ) → jambofs → jsh  │
+│ Palier 2 : Tranche Verticale Ring 3 (Stockage, Réseau, Shell)          │
+│            [EN COURS — v0.3.41 à v0.4.0]                               │
+│            • v0.3.41 : Console UART COM1 & Shell Ring 3 (VALIDÉ)       │
+│            • v0.3.42 : Stockage VirtIO-Block & JamboFS (VALIDÉ)        │
+│            • v0.3.43 : Monorepo Assaini & BENCHMARKS.md (VALIDÉ)       │
+│            • v0.3.44 : Pilote Réseau VirtIO-Net & Ping ICMP (SUIVANT)   │
+│            • v0.3.45 : Intégration Unifiée & Shell Interactif          │
+│            • v0.4.0  : Démonstration Complète Tranche Verticale        │
 ├────────────────────────────────────────────────────────────────────────┤
-│ Palier 3 : Piliers Différenciateurs (Résilience Firmware & Wasm Host)  │
+│ Palier 3 : Piliers Différenciateurs (Résilience Matérielle & Wasm)     │
 │            Attestation FDR / TPM 2.0 + Micro-VM WebAssembly WASI       │
 ├────────────────────────────────────────────────────────────────────────┤
-│ Palier 4 : Écosystème & Incubateur de Micro-Services                   │
-│            Portage progressif des 80+ crates vers des démons Ring 3    │
+│ Palier 4 : Écosystème & Graduation Progressive de l'Incubateur         │
+│            Portage progressif des ~100 crates vers des démons Ring 3   │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-### Palier 1 : Stabilisation du Socle « Iron Core » (`v0.3.40` – `v0.3.45`)
-* **Objectif** : Rendre le micro-noyau Ring 0 irréprochable, auditable et strictement confiné à ses responsabilités premières.
-* **Actions prioritaires** :
-  1. **Assainissement du Ring 0** : Élaguer `kernel/src/sched/` et `kernel/src/main.rs` pour ne conserver que l'ordonnanceur EEVDF, la pagination PMM/VMM, la commutation de contexte et le bus IPC.
-  2. **Application Stricte de la Charte Unsafe** :
-     * Activer `#![deny(unsafe_op_in_unsafe_fn)]` sur l'ensemble du noyau et des pilotes.
-     * Imposer la documentation obligatoire `// SAFETY: <justification d'invariant>` sur tout bloc `unsafe`.
-  3. **Couverture CI Complète** :
-     * Étendre `cargo clippy --workspace -D warnings` à tout le noyau et aux pilotes (et non plus seulement `jambo-abi` et `xtask`).
-     * Mettre en place un contrôle de compilation strict pour la cible `aarch64-unknown-none`.
-  4. **Model Checking Kani Structuré** :
-     * Validation formelle de la table CSpace (absence de panique, étanchéité de l'atténuation monotone des droits, détection anti-ABA).
-     * Publication des rapports de vérification Kani dans `docs/verification/`.
+### Palier 1 : Stabilisation du Socle « Iron Core » (`v0.3.40`) — Statut : VALIDÉ 🟢
+
+Ce palier a atteint l'intégralité de ses objectifs techniques :
+1. ✅ **Assainissement du Ring 0** : Élagage complet du micro-noyau (TCB < 95 Kio `.text`), suppression des 80+ tests applicatifs mocks.
+2. ✅ **Application Stricte de la Charte Unsafe** : Activation de `#![deny(unsafe_op_in_unsafe_fn)]` et justifications d'invariants `// SAFETY:`.
+3. ✅ **Validation Formelle CSpace** : Model checking borné via Kani (absence de panique, étanchéité de bits, protection anti-ABA).
+4. ✅ **Herméticité du Build** : Workspace racine compilable en mode release bare-metal (`x86_64-unknown-none`).
 
 ---
 
-### Palier 2 : La Tranche Verticale Ring 3 — Jalon Majeur `v0.4.0`
-* **Objectif** : Démontrer une exécution de bout en bout réelle, vérifiable en une seule commande (`cargo xtask run`).
-* **Composants de la chaîne** :
-  1. **`services/jambo-init` (Ring 3 réel)** :
-     * Chargement du premier exécutable ELF en espace utilisateur non privilégié via `sysretq` / `iretq` (CPL = 3).
-     * Première négociation de capacités via appels système.
-  2. **`drivers/virtio` (Pilote Bloc & Console Ring 3)** :
-     * Implémentation complète de la spécification VirtIO 1.1 MMIO/PCIe.
-     * Allocation de tampons DMA physiquement contigus protégés par barrière IOMMU.
-     * Traitement réel des interruptions matérielles APIC routées vers le thread du pilote.
-  3. **`services/jambo-fs` (VFS CoW connecté au disque)** :
-     * Lecture et écriture de blocs réels sur le disque VirtIO monté sous QEMU.
-     * Arbre de Merkle pour la vérification d'intégrité des données au repos.
-  4. **`services/jambo-sh` (Shell interactif sur UART COM1)** :
-     * Boucle d'événements asynchrone sur le port série COM1 (115200 baud).
-     * Commandes natives fonctionnelles : `help`, `ps` (liste des tâches Ring 3), `caps` (inspection CSpace), `ls` (parcours VFS), `fdr-status` (état firmware).
-  5. **Dossier de Preuves `BENCHMARKS.md`** :
-     * Mesure du temps d'amorçage jusqu'au prompt interactif.
-     * Mesure de la latence IPC réelle (fast-path registres CPU vs tampons annulaires partagés).
+### Palier 2 : La Tranche Verticale Ring 3 — Jalons `v0.3.41` à `v0.4.0` — Statut : EN COURS 🟡
+
+#### Jalons Accomplis
+* ✅ **Jalon 2.1 (`v0.3.41`)** : Console UART COM1 (115200 baud) et Shell Ring 3 modulaire `jambo-sh` (PID 2) supervisé par `jambo-init` (PID 1).
+* ✅ **Jalon 2.2 (`v0.3.42`)** : Pilote VirtIO-Block Modern 1.2 Ring 3 (`jambo-blockd`, PID 3), serveur de fichiers `jambo-fs` (PID 4), montage Uberblock et arène VMO 64 Kio zéro-copie.
+* ✅ **Jalon 2.3 (`v0.3.43`)** : Assainissement du monorepo avec isolation de ~100 crates prospectives dans `incubator/`, rapport de performances vérifiées [`BENCHMARKS.md`](BENCHMARKS.md) et synchronisation de la documentation.
+
+#### Prochain Jalon Stratégique : Jalon 2.4 (`v0.3.44`) — Pilote Réseau VirtIO-Net Ring 3 & Ping ICMP ⚪
+* **Objectif** : Implémenter le pilote réseau VirtIO-Net en espace utilisateur, démarrer le démon `jambo-netd` (PID 5) et répondre aux requêtes ICMP Echo (ping) sous QEMU.
+* **Livrables techniques** :
+  1. **Pilote VirtIO-Net Modern 1.2 (`drivers/virtio/` ou `services/jambo-netd/`)** :
+     * Découverte du sous-système réseau VirtIO sur le bus PCI QEMU (`0x1000` / `0x1041`).
+     * Négociation des fonctionnalités réseau (MAC address, MTU, checksums).
+     * Configuration des deux Virtqueues DMA : Virtqueue 0 (Receive) et Virtqueue 1 (Transmit).
+  2. **Démon Réseau Ring 3 (`services/jambo-netd/`, PID 5)** :
+     * Chargement en Ring 3 par `jambo-init` via l'initrd.
+     * Boucle d'événements IPC traitant la notification de paquets réseau entrants.
+  3. **Micro-Pile Réseau `#![no_std]` Minimale** :
+     * Parseur et constructeur de trames Ethernet II.
+     * Prise en charge du protocole ARP (*Address Resolution Protocol*) pour la découverte IP/MAC.
+     * Traitement des paquets IPv4 et traitement des requêtes ICMP Echo Request avec génération de l'Echo Reply correspondant.
+  4. **Intégration `xtask` & Test QEMU** :
+     * Ajout des paramètres QEMU réseau : `-netdev user,id=net0 -device virtio-net-pci,netdev=net0`.
+     * Test automatisé validant la réception et la réponse à un paquet ICMP émulé.
+
+#### Jalons Ultérieurs de Palier 2
+* **Jalon 2.5 (`v0.3.45`)** : IPC Zéro-Copie Optimisé & Intégration Tranche Verticale Unifiée (Shell `jsh` disposant de commandes natives `ls`, `cat /disk/...`, `ifconfig`, `ping`).
+* **Jalon 2.6 (`v0.4.0`)** : Release Majeure Tranche Verticale Complète — Démonstration end-to-end interactive sous QEMU intégrant Console série, Stockage VirtIO-Block et Réseau VirtIO-Net.
 
 ---
 
-### Palier 3 : Piliers Différenciateurs (Résilience Matérielle & Cloud Wasm)
-* **Objectif** : Positionner JamboOS sur ses deux atouts stratégiques à haute valeur ajoutée.
-* **Axes technologiques** :
+### Palier 3 : Piliers Différenciateurs (Résilience Matérielle & Cloud Wasm) ⚪
+* **Objectif** : Déployer les atouts technologiques différenciateurs de JamboOS sur le socle stabilisé.
+* **Axes prioritaires** :
   1. **Résilience Matérielle Souveraine (`services/jambo-fdr`)** :
-     * Interaction avec la racine de confiance matérielle (RoT TPM 2.0 / DICE).
-     * Mesure et vérification des tables ACPI (MADT/DSDT) et SMBIOS.
-     * Surveillance de l'intégrité du firmware SPI Flash et mécanisme de restauration Dual-BIOS.
-  2. **Hôte WebAssembly / Micro-VM Cloud (`services/jambo-wasm`)** :
-     * Abandon de la chimère d'une compatibilité Linux POSIX complète (`jambo-linux`), trop lourde et incohérente avec un micro-noyau à capacités pures.
-     * Implémentation d'un environnement d'exécution ultra-rapide pour composants WebAssembly (WASI Component Model), idéal pour le déploiement de micro-services souverains isolés en Micro-VM.
+     * Intégration avec la racine de confiance TPM 2.0 / DICE.
+     * Mesure et validation des tables ACPI (MADT/DSDT) et de la mémoire SPI Flash.
+     * Mécanisme de résilience Dual-BIOS pour la survie du firmware.
+  2. **Hôte WebAssembly / Micro-VM (`services/jambo-wasm`)** :
+     * Moteur d'exécution WebAssembly `#![no_std]` ultra-léger conforme au standard WASI Component Model.
+     * Environnement sécurisé pour l'exécution de micro-services souverains sans surcharge POSIX.
 
 ---
 
-### Palier 4 : Écosystème & Incubateur de Micro-Services
-* **Objectif** : Faire mûrir progressivement les 80+ briques de cybersécurité et de services distribués.
-* **Méthodologie** :
-  * Déplacer les crates prospectives dans un espace `incubator/` clairement documenté comme expérimental.
-  * Chaque brique doit être réécrite pour fonctionner comme un pur processus utilisateur Ring 3, sans dépendance interne envers les structures privées du noyau, communicant uniquement via l'ABI `jambo-abi`.
+### Palier 4 : Écosystème & Graduation Progressive de l'Incubateur ⚪
+* **Objectif** : Porter méthodiquement les ~100 briques de recherche de [`incubator/`](incubator/README.md) vers l'espace utilisateur officiel Ring 3.
+* **Critères de Graduation Stricts** :
+  1. Confinement Ring 3 pur (espace d'adressage virtuel isolé, 0 privilège Ring 0 implicite).
+  2. Communication exclusive via les canaux IPC `CSpace` et la mémoire virtuelle partagée `VMO`.
+  3. Couplage avec des ressources matérielles prouvées (PCI, IOMMU, enclaves SGX/TDX/SEV).
+  4. Zéro mock, zéro simulation logicielle, compilation `x86_64-unknown-none` sans avertissements.
+  5. Intégration dans le banc de test automatisé `xtask` sous QEMU.
 
 ---
 
 ## 4. Matrice de Référence des Composants & Statuts
 
-### 4.1. Socle Micro-Noyau & Primitives Essentielles (Workspace Cœur)
+### 4.1. Socle Micro-Noyau & Primitives Essentielles (Workspace Cœur — 9 Crates)
 
 | Composant | Répertoire | Maturité Réelle | Statut & Rôle dans l'Architecture |
 | :--- | :--- | :---: | :--- |
-| **Micro-Noyau JamboKernel** | `kernel/` | 🟢 `[CORE-HW]` | Ordonnanceur EEVDF, PMM Buddy, VMM PML4 W^X, IPC Rings, CSpace |
-| **ABI Système jambo-abi** | `abi/jambo-abi/` | 🟢 `[CORE-HW]` | Définition des descripteurs, masques de capacités et contrats d'appels système |
-| **Bibliothèque Espace Utilisateur**| `libs/libjambo/` | 🟡 `[RING3-DEV]`| Runtime d'initialisation Ring 3, allocations, wrappers d'appels système |
-| **Outil d'Orchestration xtask** | `xtask/` | 🟢 `[CORE-HW]` | Build automatisé, création d'image ISO Limine, exécution QEMU headless |
-| **Amorçage Limine v3** | `boot/limine/` | 🟢 `[CORE-HW]` | Protocole de boot UEFI 2.11 64 bits bare-metal |
-| **Pilote VirtIO (Block / Net)** | `drivers/virtio/` | 🟡 `[RING3-DEV]`| Négociation MMIO/PCIe, queues d'E/S DMA et gestion d'interruptions |
-| **Pilote NVMe 1.4** | `drivers/nvme/` | 🔵 `[SIM-MEM]` | Structures d'en-têtes et anneaux définis ; à câbler sur contrôleur matériel |
-| **Pilote USB xHCI** | `drivers/xhci/` | 🔵 `[SIM-MEM]` | Squelette de structures de registres et descripteurs de transferts |
-| **Superviseur jambo-init** | `services/jambo-init` | 🟡 `[RING3-DEV]`| Processus racine Ring 3, démarrage supervisé et gestion des baux CSpace |
-| **Système de Fichiers jambo-fs**| `services/jambo-fs` | 🟡 `[RING3-DEV]`| VFS Copy-on-Write, structure d'intégrité en arbre de Merkle |
-| **Shell Interactif jambo-sh** | `services/jambo-sh` | 🟡 `[RING3-DEV]`| Console série COM1 interactive, introspection CSpace et commandes natives |
-| **Défense Firmware jambo-fdr** | `services/jambo-fdr` | 🟡 `[RING3-DEV]`| Surveillance SPI Flash, attestation TPM 2.0 et résilience Dual-BIOS |
-| **Runtime Wasm jambo-wasm** | `services/jambo-wasm` | 🟡 `[RING3-DEV]`| Interpréteur WebAssembly `#![no_std]`, bac à sable WASI Component Model |
+| **Micro-Noyau JamboKernel** | `kernel/` | 🟢 `[PROD]` | TCB minimal (< 95 Kio `.text`), EEVDF SMP, VMM PML4 W^X, PMM Buddy, CSpace anti-ABA |
+| **ABI Système jambo-abi** | `abi/jambo-abi/` | 🟢 `[PROD]` | Définition des descripteurs, masques de capacités, 28 syscalls et contrats IPC |
+| **Bibliothèque Espace Utilisateur**| `libs/libjambo/` | 🟡 `[RING3-HW]`| Point d'entrée `_start`, gestion de pile System V ABI, wrappers d'appels système |
+| **Pilote VirtIO Modern** | `drivers/virtio/` | 🟡 `[RING3-HW]`| Pilote VirtIO Modern 1.2, allocation Virtqueue DMA et gestion des blocs |
+| **Superviseur jambo-init** | `services/jambo-init/` | 🟡 `[RING3-HW]`| Processus racine Ring 3 (PID 1), orchestrateur de démarrage et confinement |
+| **Shell Interactif jambo-sh** | `services/jambo-sh/` | 🟡 `[RING3-HW]`| Console série UART COM1 (PID 2), parseur sans heap, mode interactif et headless |
+| **Démon Stockage jambo-blockd** | `services/jambo-blockd/`| 🟡 `[RING3-HW]`| Démon de blocs Ring 3 (PID 3), service de requêtes disques, arène VMO 64 Kio |
+| **Système de Fichiers jambo-fs**| `services/jambo-fs/` | 🟡 `[RING3-HW]`| VFS Ring 3 (PID 4), format JamboFS, lecture Uberblock LBA 0 et Inodes |
+| **Outil d'Orchestration xtask** | `xtask/` | 🟢 `[PROD]` | Build hermétique, création d'initrd.tar, formatage disk.raw, ISO Limine et CI QEMU |
 
 ---
 
-### 4.2. Incubateur de Micro-Services Avancés (`incubator/`)
-
-Ces composants représentent la vision de cybersécurité et de services distribués de JamboStack. Ils sont actuellement validés sous forme de **modèles logiques en mémoire** (`[SIM-MEM]`) et seront portés en Ring 3 au fur et à mesure de la stabilisation du socle :
+### 4.2. Modules en Cours de Spécification ou d'Incubation (`incubator/`)
 
 | Catégorie | Crates Concernées | Niveau Actuel | Trajectoire Prévue |
 | :--- | :--- | :---: | :--- |
-| **Cryptographie Avancée** | `jambo-fhe`, `jambo-zksnark`, `jambo-pqc`, `jambo-mpc`, `jambo-kms` | 🔵 `[SIM-MEM]` | Intégration de bibliothèques Rust `#![no_std]` vérifiées en temps constant (Palier 4) |
-| **Sécurité d'Infrastructure** | `jambo-tee`, `jambo-tee2`, `jambo-hsm`, `jambo-hsm2`, `jambo-secboot` | 🔵 `[SIM-MEM]` | Couplage avec enclaves matérielles réelles (SGX/TDX, AMD SEV) (Palier 4) |
-| **Protection Réseau & Détection**| `jambo-netd`, `jambo-vpn`, `jambo-waf`, `jambo-ddos`, `jambo-idps`, `jambo-ids`, `jambo-ndr` | 🔵 `[SIM-MEM]` | Déploiement au-dessus du pilote VirtIO-Net Ring 3 stabilisé (Palier 4) |
-| **Surveillance & Résilience** | `jambo-edr`, `jambo-xdr`, `jambo-siem`, `jambo-soar`, `jambo-forensics`, `jambo-kdir` | 🔵 `[SIM-MEM]` | Consommation des traces d'audit scellées émises par `libjambo` (Palier 4) |
-| **Gouvernance & Posture Cloud** | `jambo-ztna`, `jambo-casb`, `jambo-cspm`, `jambo-cwpp`, `jambo-ciem`, `jambo-cnapp` | 🔵 `[SIM-MEM]` | Migration progressive sous forme d'agents d'administration isolés (Palier 4) |
-| **Opérations & Services IA** | `jambo-aiops`, `jambo-aid`, `jambo-ai-sec`, `jambo-ueba`, `jambo-coreutils` | 🔵 `[SIM-MEM]` | Démons applicatifs légers s'exécutant dans le bac à sable Wasm (Palier 4) |
+| **Sous-Système Réseau** | `jambo-netd` | ⚪ `[SPEC]` | **Cible immédiate du Jalon 2.4 (`v0.3.44`)** : Pilote VirtIO-Net et ping ICMP |
+| **Pilotes Hôtes Avancés** | `drivers/nvme`, `drivers/xhci` | ⚪ `[SPEC]` | Définition de structures MMIO ; portage Ring 3 ultérieur (Palier 3) |
+| **Résilience Firmware** | `jambo-fdr` | 🔵 `[SIM]` | Couplage TPM 2.0 / DICE et surveillance SPI Flash (Palier 3) |
+| **Runtime WebAssembly** | `jambo-wasm` | 🔵 `[SIM]` | Moteur d'isolation WASI `#![no_std]` (Palier 3) |
+| **Cryptographie Avancée** | `jambo-pqc`, `jambo-fhe`, `jambo-zksnark`, `jambo-mpc`, `jambo-kms` | 🔵 `[SIM]` | Intégration de bibliothèques temps constant vérifiées (Palier 4) |
+| **Protection Réseau & Détection**| `jambo-vpn`, `jambo-waf`, `jambo-ddos`, `jambo-idps`, `jambo-ndr` | 🔵 `[SIM]` | Déploiement au-dessus de `jambo-netd` stabilisé (Palier 4) |
+| **Surveillance & Résilience** | `jambo-edr`, `jambo-xdr`, `jambo-siem`, `jambo-soar`, `jambo-forensics` | 🔵 `[SIM]` | Consommation des traces d'audit scellées émises par `libjambo` (Palier 4) |
+| **Gouvernance & Sécurité Cloud** | `jambo-ztna`, `jambo-casb`, `jambo-cspm`, `jambo-cwpp`, `jambo-ciem` | 🔵 `[SIM]` | Démons d'administration isolés s'exécutant en Ring 3 (Palier 4) |
 
 ---
 
 ## 5. Journal des Jalons et Historique de Versionnage
 
-* **2026-10-30** : **Adoption de la Feuille de Route Réalignée (`v0.3.39`)**
-  * Intégration des conclusions des 6 analyses d'experts et revues d'architecture.
-  * Abandon du cycle artificiel de 10 minutes au profit de jalons d'ingénierie matérielle.
-  * Mise en place de l'échelle de maturité à 4 niveaux (`[CORE-HW]`, `[RING3-DEV]`, `[SIM-MEM]`, `[SPEC-PLAN]`).
-  * Définition de l'objectif prioritaire `v0.4.0` : Tranche Verticale Ring 3 complète et démonstration QEMU interactive.
+* **2026-10-31** : **Jalon 2.3 (`v0.3.43`) — Assainissement Monorepo, Isolation `incubator/` & Métriques Réelles**
+  * Quarantaine méthodique des ~100 crates prospectives dans le répertoire autonome [`incubator/`](incubator/README.md).
+  * Simplification drastique du `Cargo.toml` racine, restreint aux 9 crates de production vérifiées.
+  * Formalisation et publication du rapport de mesures d'ingénierie [`BENCHMARKS.md`](BENCHMARKS.md).
+  * Harmonisation de la documentation technique et adoption de la matrice de maturité à 4 niveaux.
+
+* **2026-10-31** : **Jalon 2.2 (`v0.3.42`) — Tranche Verticale Stockage VirtIO-Block Ring 3 & JamboFS Réel**
+  * Implémentation du pilote VirtIO-Block Modern 1.2 Ring 3 (`jambo-blockd`, PID 3) avec Virtqueues DMA.
+  * Implémentation du serveur de fichiers `jambo-fs` (PID 4) lisant l'Uberblock au LBA 0 du disque VirtIO QEMU.
+  * Mise en place de l'arène VMO zéro-copie de 64 Kio pour les transferts de blocs sans recopie noyau.
+  * Validation end-to-end sous QEMU UEFI avec code de sortie CI 33.
+
+* **2026-10-31** : **Jalon 2.1 (`v0.3.41`) — Tranche Verticale Console UART COM1 & Shell Ring 3**
+  * Premier exécutable utilisateur Ring 3 `jambo-init` (PID 1) démarré via `sysretq`.
+  * Shell modulaire `jambo-sh` (PID 2) connecté au contrôleur série UART 16550A COM1 (115200 baud).
+  * Prise en charge du mode interactif et du mode headless automatisé pour la CI.
+
+* **2026-10-31** : **Palier 1 (`v0.3.40`) — Purge Iron Core & Micro-Noyau Ring 0 Minimal**
+  * Élagage de 80+ suites de tests mocks logées dans le noyau (TCB < 95 Kio de code exécutable `.text`).
+  * Stabilisation de la pagination matérielle PML4 4-niveaux avec protection $W \oplus X$ et identité HHDM.
+  * Commutation de contexte assembleur AMD64 conforme System V ABI et ordonnanceur SMP EEVDF.
+  * Protection anti-ABA de la table de capacités `CSpace` validée par model checking Kani.
+
+* **2026-10-30** : **Réalignement Stratégique (`v0.3.39`)**
+  * Intégration des conclusions des revues d'architecture externes et adoption de l'échelle de maturité à 4 niveaux.
+  * Abandon des cadences d'automatisation artificielles au profit de jalons d'ingénierie matérielle réels.
+  * Définition de la feuille de route en 4 paliers orientée vers la tranche verticale Ring 3 complète (`v0.4.0`).
 
 * **2026-10-24** : Consolidation du sous-système de résilience firmware `jambo-fdr` (surveillance SPI Flash et attestation TPM).
 * **2026-10-22** : Implémentation du changement de contexte assembleur System V AMD64 et configuration des registres MSR per-CPU.
