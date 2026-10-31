@@ -287,9 +287,40 @@ fn build_wasmd(release: bool) -> anyhow::Result<PathBuf> {
     Ok(root.join(format!("target/x86_64-unknown-none/{}/wasmd", profile)))
 }
 
+fn build_pqc(release: bool) -> anyhow::Result<PathBuf> {
+    let root = root_dir();
+    let mut cmd = Command::new("cargo");
+    cmd.current_dir(&root);
+    cmd.args([
+        "build",
+        "--package",
+        "jambo-pqc",
+        "--bin",
+        "pqc",
+        "--target",
+        "x86_64-unknown-none",
+    ]);
+    if release {
+        cmd.arg("--release");
+    }
+    cmd.env(
+        "RUSTFLAGS",
+        "-C link-arg=-Tlibs/user-x86_64.ld -C relocation-model=static",
+    );
+
+    let status = cmd.status()?;
+    if !status.success() {
+        anyhow::bail!("Échec de compilation du binaire jambo-pqc (pqc)");
+    }
+
+    let profile = if release { "release" } else { "debug" };
+    Ok(root.join(format!("target/x86_64-unknown-none/{}/pqc", profile)))
+}
+
 fn build_userland(
     release: bool,
 ) -> anyhow::Result<(
+    PathBuf,
     PathBuf,
     PathBuf,
     PathBuf,
@@ -305,7 +336,8 @@ fn build_userland(
     let netd = build_netd(release)?;
     let fdr = build_fdr(release)?;
     let wasmd = build_wasmd(release)?;
-    Ok((init, jsh, blockd, fs, netd, fdr, wasmd))
+    let pqc = build_pqc(release)?;
+    Ok((init, jsh, blockd, fs, netd, fdr, wasmd, pqc))
 }
 
 fn create_disk_image(path: &Path) -> anyhow::Result<()> {
@@ -353,8 +385,8 @@ fn create_disk_image(path: &Path) -> anyhow::Result<()> {
     file.seek(SeekFrom::Start(8192))?;
     file.write_all(&root_buf)?;
 
-    // 3. Données à l'offset 12288 (LBA 24..31) : "Bienvenue sur JamboOS v0.3.46\n"
-    let banner_data = b"Bienvenue sur JamboOS v0.3.46\n";
+    // 3. Données à l'offset 12288 (LBA 24..31) : "Bienvenue sur JamboOS v0.3.47\n"
+    let banner_data = b"Bienvenue sur JamboOS v0.3.47\n";
     let mut data_buf = [0u8; 4096];
     data_buf[..banner_data.len()].copy_from_slice(banner_data);
 
@@ -367,7 +399,7 @@ fn create_disk_image(path: &Path) -> anyhow::Result<()> {
 
 fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
     let root = root_dir();
-    let (init_bin, jsh_bin, blockd_bin, fs_bin, netd_bin, fdr_bin, wasmd_bin) =
+    let (init_bin, jsh_bin, blockd_bin, fs_bin, netd_bin, fdr_bin, wasmd_bin, pqc_bin) =
         build_userland(release)?;
 
     let initrd_stage = root.join("target/initrd_stage");
@@ -382,6 +414,7 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
     fs::copy(&netd_bin, bin_dir.join("netd"))?;
     fs::copy(&fdr_bin, bin_dir.join("fdr"))?;
     fs::copy(&wasmd_bin, bin_dir.join("wasmd"))?;
+    fs::copy(&pqc_bin, bin_dir.join("pqc"))?;
 
     let initrd_tar = root.join("target/initrd.tar");
     let status = Command::new("tar")
@@ -396,6 +429,7 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
             "bin/netd",
             "bin/fdr",
             "bin/wasmd",
+            "bin/pqc",
         ])
         .status()?;
 
@@ -565,7 +599,7 @@ fn run_test(release: bool) -> anyhow::Result<()> {
         "/usr/share/OVMF/OVMF_CODE.fd"
     };
 
-    println!("[TEST] Démarrage du test de validation automatisé QEMU (Iron Core, JamboFS, VirtIO-Net, FDR & Wasm)...");
+    println!("[TEST] Démarrage du test de validation automatisé QEMU (Iron Core, JamboFS, VirtIO-Net, FDR, Wasm & PQC)...");
     let mut cmd = Command::new("qemu-system-x86_64");
     cmd.current_dir(&root);
     cmd.args([
@@ -603,6 +637,8 @@ fn run_test(release: bool) -> anyhow::Result<()> {
     // QEMU isa-debug-exit sort avec (val << 1) | 1. Pour Success (0x10=16), le code de retour est 33.
     let code = output.status.code().unwrap_or(-1);
     let success = code == 33
+        || combined
+            .contains("[PASS] Cryptographie Post-Quantique Ring 3 (jambo-pqc PID 8) validée")
         || combined.contains("[PASS] Wasm Microservices Runtime (jambo-wasmd PID 7) validé")
         || combined.contains("[PASS] FDR Résilience Matérielle Ring 3 validée")
         || combined.contains("[PASS] VirtIO-Net & Pile IP Ring 3 validés")
@@ -611,7 +647,7 @@ fn run_test(release: bool) -> anyhow::Result<()> {
 
     if success {
         println!("{}", stdout);
-        println!("\x1b[1;32m[TEST PASSÉ AVEC SUCCÈS] Validation complète de JamboKernel Iron Core, JamboFS, VirtIO-Net, FDR & Wasm Ring 3.\x1b[0m");
+        println!("\x1b[1;32m[TEST PASSÉ AVEC SUCCÈS] Validation complète de JamboKernel Iron Core, JamboFS, VirtIO-Net, FDR, Wasm & PQC Ring 3.\x1b[0m");
         Ok(())
     } else {
         eprintln!("{}", combined);
