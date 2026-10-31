@@ -466,4 +466,6 @@ impl VirtioBlockDriver {
 pub mod gpu;
 pub mod net;
 pub use gpu::{VirtioGpuDriver, VirtioGpuRect};
-pub use net::{VirtioNetDriver, VirtioNetHdr};
+pub use net::{
+    VirtioNetDriver, VirtioNetHdr, VIRTIO_NET_F_CSUM, VIRTIO_NET_F_MAC, VIRTIO_NET_F_STATUS,
+};
