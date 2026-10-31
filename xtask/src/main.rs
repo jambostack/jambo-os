@@ -449,6 +449,16 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
     fs::copy(&pqc_bin, bin_dir.join("pqc"))?;
     fs::copy(&kdir_bin, bin_dir.join("kdir"))?;
 
+    fs::copy(&init_bin, initrd_stage.join("init"))?;
+    fs::copy(&jsh_bin, initrd_stage.join("jsh"))?;
+    fs::copy(&blockd_bin, initrd_stage.join("blockd"))?;
+    fs::copy(&fs_bin, initrd_stage.join("fs"))?;
+    fs::copy(&netd_bin, initrd_stage.join("netd"))?;
+    fs::copy(&fdr_bin, initrd_stage.join("fdr"))?;
+    fs::copy(&wasmd_bin, initrd_stage.join("wasmd"))?;
+    fs::copy(&pqc_bin, initrd_stage.join("pqc"))?;
+    fs::copy(&kdir_bin, initrd_stage.join("kdir"))?;
+
     let initrd_tar = root.join("target/initrd.tar");
     let status = Command::new("tar")
         .current_dir(&initrd_stage)
@@ -464,6 +474,15 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
             "bin/wasmd",
             "bin/pqc",
             "bin/kdir",
+            "init",
+            "jsh",
+            "blockd",
+            "fs",
+            "netd",
+            "fdr",
+            "wasmd",
+            "pqc",
+            "kdir",
         ])
         .status()?;
 
