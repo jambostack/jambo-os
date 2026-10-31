@@ -1,0 +1,16 @@
+[package]
+name = "jambo-kdir"
+version = "0.3.48"
+edition = "2021"
+
+[lib]
+name = "jambo_kdir"
+path = "src/lib.rs"
+
+[[bin]]
+name = "kdir"
+path = "src/main.rs"
+
+[dependencies]
+jambo-abi = { path = "../../abi/jambo-abi" }
+libjambo = { path = "../../libs/libjambo" }
