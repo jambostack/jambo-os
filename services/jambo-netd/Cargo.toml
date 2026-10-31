@@ -1,0 +1,13 @@
+[package]
+name = "jambo-netd"
+version = "0.3.44"
+edition = "2021"
+
+[[bin]]
+name = "netd"
+path = "src/main.rs"
+
+[dependencies]
+jambo-abi = { path = "../../abi/jambo-abi" }
+libjambo = { path = "../../libs/libjambo" }
+virtio-drv = { path = "../../drivers/virtio" }

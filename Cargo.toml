@@ -9,6 +9,7 @@ members = [
     "services/jambo-sh",
     "services/jambo-blockd",
     "services/jambo-fs",
+    "services/jambo-netd",
     "xtask",
 ]
 
