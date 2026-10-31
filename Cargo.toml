@@ -6,6 +6,7 @@ members = [
     "libs/libjambo",
     "xtask",
     "services/jambo-init",
+    "services/jambo-blockd",
     "services/jambo-fs",
     "services/pcie-bus-mgr",
     "services/jambo-netd",

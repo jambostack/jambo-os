@@ -1,0 +1,12 @@
+[package]
+name = "jambo-blockd"
+version = "0.3.42"
+edition = "2021"
+
+[[bin]]
+name = "jambo-blockd"
+path = "src/main.rs"
+
+[dependencies]
+libjambo = { path = "../../libs/libjambo" }
+virtio-drv = { path = "../../drivers/virtio" }
