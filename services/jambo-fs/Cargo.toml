@@ -1,8 +1,15 @@
 [package]
 name = "jambo-fs"
-version = "0.2.110"
+version = "0.3.42"
 edition = "2021"
+
+[lib]
+name = "jambo_fs"
+path = "src/lib.rs"
+
+[[bin]]
+name = "jambo-fs"
+path = "src/main.rs"
 
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }
-virtio-drv = { path = "../../drivers/virtio" }

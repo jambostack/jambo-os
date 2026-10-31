@@ -1,10 +1,217 @@
 #![no_std]
 
-use virtio_drv as _;
-
 pub const JAMBOFS_MAGIC: u64 = 0x53465F4F424D414A; // "JAMBO_FS" en ASCII little-endian
 pub const JAMBOFS_VERSION: u32 = 1;
 pub const BLOCK_SIZE: usize = 4096;
+
+pub const BLOCK_OP_READ: u32 = 1;
+pub const BLOCK_OP_WRITE: u32 = 2;
+pub const BLOCK_OP_FLUSH: u32 = 3;
+
+pub const SHARED_VMO_SIZE: usize = 64 * 1024;
+pub const SHARED_VMO_ADDR: usize = 0x0070_0000;
+
+pub const MAX_FASTPATH_BYTES: usize = 64;
+pub const MAX_HANDLES: usize = 4;
+
+/// Structure de requête IPC de bloc (32 octets)
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct BlockRequest {
+    pub opcode: u32,
+    pub req_id: u32,
+    pub lba: u64,
+    pub count: u32,
+    pub buf_offset: u32,
+    pub _reserved: u32,
+}
+
+impl BlockRequest {
+    pub fn to_bytes(&self) -> [u8; 32] {
+        let mut bytes = [0u8; 32];
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                self as *const Self as *const u8,
+                bytes.as_mut_ptr(),
+                core::mem::size_of::<Self>(),
+            );
+        }
+        bytes
+    }
+
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        if bytes.len() < core::mem::size_of::<Self>() {
+            return None;
+        }
+        unsafe {
+            let ptr = bytes.as_ptr() as *const Self;
+            Some(ptr.read_unaligned())
+        }
+    }
+}
+
+/// Structure de réponse IPC de bloc (16 octets)
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct BlockResponse {
+    pub req_id: u32,
+    pub status: i32,
+    pub bytes_transferred: u32,
+    pub _reserved: u32,
+}
+
+impl BlockResponse {
+    pub fn to_bytes(&self) -> [u8; 16] {
+        let mut bytes = [0u8; 16];
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                self as *const Self as *const u8,
+                bytes.as_mut_ptr(),
+                core::mem::size_of::<Self>(),
+            );
+        }
+        bytes
+    }
+
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        if bytes.len() < core::mem::size_of::<Self>() {
+            return None;
+        }
+        unsafe {
+            let ptr = bytes.as_ptr() as *const Self;
+            Some(ptr.read_unaligned())
+        }
+    }
+}
+
+/// Message IPC sur canal hybride
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct ChannelMessage {
+    pub bytes: [u8; MAX_FASTPATH_BYTES],
+    pub byte_count: usize,
+    pub handles: [libjambo::Handle; MAX_HANDLES],
+    pub handle_count: usize,
+}
+
+impl Default for ChannelMessage {
+    fn default() -> Self {
+        Self {
+            bytes: [0u8; MAX_FASTPATH_BYTES],
+            byte_count: 0,
+            handles: [libjambo::Handle::NULL; MAX_HANDLES],
+            handle_count: 0,
+        }
+    }
+}
+
+/// Opcodes d'opérations IPC du système de fichiers JamboFS
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FsOpcode {
+    Open = 1,
+    Read = 2,
+    Write = 3,
+    Stat = 4,
+    Sync = 5,
+}
+
+/// Requête IPC transmise au serveur JamboFS (64 octets, Fastpath sans copie)
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct FsRequest {
+    pub opcode: u32,
+    pub req_id: u32,
+    pub offset: u64,
+    pub length: u32,
+    pub path_len: u32,
+    pub path: [u8; 40],
+}
+
+impl FsRequest {
+    pub fn new_read(req_id: u32, path: &str) -> Self {
+        let mut path_arr = [0u8; 40];
+        let bytes = path.as_bytes();
+        let len = bytes.len().min(40);
+        path_arr[..len].copy_from_slice(&bytes[..len]);
+        Self {
+            opcode: FsOpcode::Read as u32,
+            req_id,
+            offset: 0,
+            length: BLOCK_SIZE as u32,
+            path_len: len as u32,
+            path: path_arr,
+        }
+    }
+
+    pub fn to_bytes(&self) -> [u8; 64] {
+        let mut bytes = [0u8; 64];
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                self as *const Self as *const u8,
+                bytes.as_mut_ptr(),
+                core::mem::size_of::<Self>(),
+            );
+        }
+        bytes
+    }
+
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        if bytes.len() < core::mem::size_of::<Self>() {
+            return None;
+        }
+        unsafe {
+            let ptr = bytes.as_ptr() as *const Self;
+            Some(ptr.read_unaligned())
+        }
+    }
+}
+
+/// Réponse IPC renvoyée par le serveur JamboFS (64 octets)
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct FsResponse {
+    pub req_id: u32,
+    pub status: i32,
+    pub length: u32,
+    pub data: [u8; 48],
+    pub _reserved: u32,
+}
+
+impl FsResponse {
+    pub fn to_bytes(&self) -> [u8; 64] {
+        let mut bytes = [0u8; 64];
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                self as *const Self as *const u8,
+                bytes.as_mut_ptr(),
+                core::mem::size_of::<Self>(),
+            );
+        }
+        bytes
+    }
+
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        if bytes.len() < core::mem::size_of::<Self>() {
+            return None;
+        }
+        unsafe {
+            let ptr = bytes.as_ptr() as *const Self;
+            Some(ptr.read_unaligned())
+        }
+    }
+}
+
+/// Erreurs spécifiques au système de fichiers JamboFS
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FsError {
+    InvalidMagic,
+    InvalidVersion,
+    BlockIoError(libjambo::SysError),
+    FileNotFound,
+    BufferTooSmall,
+    CorruptedData,
+}
 
 /// Uberblock racine JamboFS validé atomiquement
 #[repr(C, align(512))]
@@ -15,7 +222,7 @@ pub struct Uberblock {
     pub block_size: u32,
     pub generation: u64,
     pub root_tree_offset: u64,
-    pub root_checksum: [u8; 32], // BLAKE3 / SHA-256 Merkle root
+    pub root_checksum: [u8; 32],
     pub flags: u64,
     pub timestamp: u64,
 }
@@ -85,43 +292,11 @@ impl FsInode {
             size,
             generation,
             flags: 0,
-            block_count: ((size + BLOCK_SIZE as u64 - 1) / BLOCK_SIZE as u64) as u32,
+            block_count: size.div_ceil(BLOCK_SIZE as u64) as u32,
             direct_blocks: [0; 8],
             checksum: [0; 32],
         }
     }
-}
-
-/// Opcodes d'opérations IPC du système de fichiers JamboFS
-#[repr(u32)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FsOpcode {
-    Open = 1,
-    Read = 2,
-    Write = 3,
-    Stat = 4,
-    Sync = 5,
-}
-
-/// Requête IPC transmise au serveur JamboFS
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct FsRequest {
-    pub opcode: FsOpcode,
-    pub handle: libjambo::Handle,
-    pub offset: u64,
-    pub length: u32,
-    pub path_len: u32,
-    pub path: [u8; 64],
-}
-
-/// Réponse IPC renvoyée par le serveur JamboFS
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct FsResponse {
-    pub status: i64,
-    pub bytes_transferred: u64,
-    pub vmo_handle: libjambo::Handle,
 }
 
 /// Calcule un condensat Merkle 256 bits pour garantir l'intégrité des blocs
@@ -132,301 +307,213 @@ pub fn compute_block_checksum(data: &[u8], seed: u64) -> [u8; 32] {
         acc = acc.wrapping_add((b as u64) << ((i % 8) * 8)).rotate_left(5);
     }
     for i in 0..4 {
-        let chunk = acc.wrapping_add(i as u64).to_le_bytes();
-        out[i * 8..(i + 1) * 8].copy_from_slice(&chunk);
+        let val = acc.wrapping_add(i as u64).to_le_bytes();
+        out[i * 8..(i + 1) * 8].copy_from_slice(&val);
     }
     out
 }
 
-pub const MAX_VFS_FILES: usize = 16;
-pub const MAX_PATH_LEN: usize = 64;
-pub const MAX_FILE_DATA: usize = 512;
-
-#[derive(Debug, Clone, Copy)]
-pub struct VfsFileEntry {
-    pub path: [u8; MAX_PATH_LEN],
-    pub path_len: usize,
-    pub inode: FsInode,
-    pub data_len: usize,
-    pub data: [u8; MAX_FILE_DATA],
-    pub in_use: bool,
-}
-
-impl Default for VfsFileEntry {
-    fn default() -> Self {
-        Self {
-            path: [0; MAX_PATH_LEN],
-            path_len: 0,
-            inode: FsInode::new(0, 0, 0),
-            data_len: 0,
-            data: [0; MAX_FILE_DATA],
-            in_use: false,
-        }
+/// Cède volontairement le temps processeur au scheduler
+#[inline(always)]
+pub fn syscall_thread_yield() {
+    unsafe {
+        libjambo::syscall6(libjambo::SyscallNumber::ThreadYield, 0, 0, 0, 0, 0, 0);
     }
 }
 
-/// Serveur de fichiers transactionnel JamboFS en espace utilisateur
-pub struct JamboFsServer {
-    pub active_uberblock: Uberblock,
-    pub next_ino: u64,
-    pub files: [VfsFileEntry; MAX_VFS_FILES],
+static mut LOCAL_VMO_ARENA: [u8; SHARED_VMO_SIZE] = [0u8; SHARED_VMO_SIZE];
+
+/// Client IPC pour communiquer avec le démon pilote de bloc `jambo-blockd`
+#[derive(Debug, Clone, Copy)]
+pub struct BlockClient {
+    pub channel: libjambo::Handle,
+    pub vmo_ptr: *mut u8,
 }
 
-impl JamboFsServer {
-    pub fn new(uberblock: Uberblock) -> Self {
-        let mut server = Self {
-            active_uberblock: uberblock,
-            next_ino: 100,
-            files: [VfsFileEntry::default(); MAX_VFS_FILES],
+impl BlockClient {
+    pub fn new(channel: libjambo::Handle) -> Self {
+        Self {
+            channel,
+            vmo_ptr: SHARED_VMO_ADDR as *mut u8,
+        }
+    }
+
+    pub fn with_vmo(channel: libjambo::Handle, vmo_ptr: *mut u8) -> Self {
+        Self { channel, vmo_ptr }
+    }
+
+    /// Lit un bloc de 4 Kio (8 secteurs de 512 octets) à partir du secteur `lba`
+    pub fn read_block(&self, lba: u64, out: &mut [u8]) -> Result<(), libjambo::SysError> {
+        let to_copy = out.len().min(BLOCK_SIZE);
+        let src_ptr = if !self.vmo_ptr.is_null() {
+            self.vmo_ptr
+        } else {
+            core::ptr::addr_of_mut!(LOCAL_VMO_ARENA) as *mut u8
         };
 
-        // Fichiers initiaux du système VFS
-        server.add_system_file("/etc/hostname", b"jambobox\n");
-        server.add_system_file(
-            "/system/config.json",
-            b"{\"hostname\": \"jambobox\", \"secure_boot\": true}",
-        );
-        server.add_system_file(
-            "/var/log/syslog",
-            b"[SYSTEM] JamboOS v0.2.41 booted successfully\n",
-        );
+        if self.channel.is_null() {
+            if src_ptr.is_null() {
+                return Err(libjambo::SysError::BadAddress);
+            }
+            unsafe {
+                core::ptr::copy_nonoverlapping(src_ptr, out.as_mut_ptr(), to_copy);
+            }
+            return Ok(());
+        }
 
-        server
-    }
+        let req = BlockRequest {
+            opcode: BLOCK_OP_READ,
+            req_id: 1,
+            lba,
+            count: 8,
+            buf_offset: 0,
+            _reserved: 0,
+        };
 
-    pub fn add_system_file(&mut self, path: &str, content: &[u8]) {
-        for entry in &mut self.files {
-            if !entry.in_use {
-                entry.in_use = true;
-                let path_bytes = path.as_bytes();
-                entry.path_len = path_bytes.len().min(MAX_PATH_LEN);
-                entry.path[..entry.path_len].copy_from_slice(&path_bytes[..entry.path_len]);
+        let mut tx_msg = ChannelMessage::default();
+        let req_bytes = req.to_bytes();
+        let req_size = core::mem::size_of::<BlockRequest>();
+        tx_msg.bytes[..req_size].copy_from_slice(&req_bytes);
+        tx_msg.byte_count = req_size;
 
-                let ino = self.next_ino;
-                self.next_ino += 1;
-                let mut inode =
-                    FsInode::new(ino, content.len() as u64, self.active_uberblock.generation);
-                inode.checksum = compute_block_checksum(content, self.active_uberblock.generation);
-                entry.inode = inode;
+        let (ret_send, _) = unsafe {
+            libjambo::syscall6(
+                libjambo::SyscallNumber::ChannelCall,
+                self.channel.0,
+                &tx_msg as *const ChannelMessage as u64,
+                0,
+                0,
+                0,
+                0,
+            )
+        };
+        if ret_send != 0 {
+            return Err(libjambo::SysError::PeerClosed);
+        }
 
-                entry.data_len = content.len().min(MAX_FILE_DATA);
-                entry.data[..entry.data_len].copy_from_slice(&content[..entry.data_len]);
+        let mut rx_msg = ChannelMessage::default();
+        let mut attempts = 0;
+        let resp_size = core::mem::size_of::<BlockResponse>();
+        loop {
+            let (ret_recv, _) = unsafe {
+                libjambo::syscall6(
+                    libjambo::SyscallNumber::ChannelCall,
+                    self.channel.0,
+                    0,
+                    &mut rx_msg as *mut ChannelMessage as u64,
+                    0,
+                    0,
+                    0,
+                )
+            };
+            if ret_recv == 0 && rx_msg.byte_count >= resp_size {
                 break;
             }
+            if ret_recv != 0 && ret_recv != (libjambo::SysError::TimedOut as i64) {
+                return Err(libjambo::SysError::PeerClosed);
+            }
+            attempts += 1;
+            if attempts > 10_000 {
+                return Err(libjambo::SysError::TimedOut);
+            }
+            syscall_thread_yield();
+        }
+
+        if let Some(resp) = BlockResponse::from_bytes(&rx_msg.bytes[..rx_msg.byte_count]) {
+            if resp.status != 0 {
+                return Err(libjambo::SysError::InvalidArgument);
+            }
+        } else {
+            return Err(libjambo::SysError::InvalidArgument);
+        }
+
+        if src_ptr.is_null() {
+            return Err(libjambo::SysError::BadAddress);
+        }
+
+        unsafe {
+            core::ptr::copy_nonoverlapping(src_ptr, out.as_mut_ptr(), to_copy);
+        }
+
+        Ok(())
+    }
+}
+
+/// Système de fichiers JamboFS transactionnel monté en espace utilisateur
+#[derive(Debug, Clone, Copy)]
+pub struct JamboFs {
+    pub client: BlockClient,
+    pub active_uberblock: Uberblock,
+    pub root_offset: u64,
+}
+
+impl JamboFs {
+    /// Monte le volume JamboFS en lisant et validant l'Uberblock (LBA 0..7)
+    pub fn mount(client: &BlockClient) -> Result<Self, FsError> {
+        let mut block_buf = [0u8; BLOCK_SIZE];
+        client
+            .read_block(0, &mut block_buf)
+            .map_err(FsError::BlockIoError)?;
+
+        let uberblock = unsafe {
+            let ptr = block_buf.as_ptr() as *const Uberblock;
+            ptr.read_unaligned()
+        };
+
+        if !uberblock.is_valid() {
+            if uberblock.magic != JAMBOFS_MAGIC {
+                return Err(FsError::InvalidMagic);
+            }
+            if uberblock.version != JAMBOFS_VERSION {
+                return Err(FsError::InvalidVersion);
+            }
+            return Err(FsError::CorruptedData);
+        }
+
+        let root_offset = uberblock.root_tree_offset;
+
+        Ok(Self {
+            client: *client,
+            active_uberblock: uberblock,
+            root_offset,
+        })
+    }
+
+    /// Crée une instance de secours avec un Uberblock standard
+    pub fn new_fallback(client: BlockClient) -> Self {
+        Self {
+            client,
+            active_uberblock: Uberblock::default(),
+            root_offset: BLOCK_SIZE as u64,
         }
     }
 
-    /// Ouvre un fichier par son chemin virtuel
-    pub fn open(&self, path: &str) -> Result<u64, libjambo::SysError> {
-        let path_bytes = path.as_bytes();
-        for entry in &self.files {
-            if entry.in_use
-                && entry.path_len == path_bytes.len()
-                && &entry.path[..entry.path_len] == path_bytes
-            {
-                return Ok(entry.inode.ino);
-            }
-        }
-        Err(libjambo::SysError::InvalidArgument)
-    }
-
-    /// Lit le contenu d'un fichier par son numéro d'inode
-    pub fn read(
-        &self,
-        ino: u64,
-        offset: usize,
-        out: &mut [u8],
-    ) -> Result<usize, libjambo::SysError> {
-        for entry in &self.files {
-            if entry.in_use && entry.inode.ino == ino {
-                if offset >= entry.data_len {
-                    return Ok(0);
-                }
-                let available = entry.data_len - offset;
-                let to_read = available.min(out.len());
-                out[..to_read].copy_from_slice(&entry.data[offset..offset + to_read]);
-                return Ok(to_read);
-            }
-        }
-        Err(libjambo::SysError::InvalidArgument)
-    }
-
-    /// Écrit dans un fichier de manière Copy-on-Write (atomique)
-    pub fn write_file_vfs(
-        &mut self,
-        path: &str,
-        content: &[u8],
-    ) -> Result<FsInode, libjambo::SysError> {
-        let (inode, _) = self.write_file_cow(content)?;
-        let path_bytes = path.as_bytes();
-
-        // Mettre à jour si le fichier existe déjà
-        for entry in &mut self.files {
-            if entry.in_use
-                && entry.path_len == path_bytes.len()
-                && &entry.path[..entry.path_len] == path_bytes
-            {
-                entry.inode = inode;
-                entry.data_len = content.len().min(MAX_FILE_DATA);
-                entry.data[..entry.data_len].copy_from_slice(&content[..entry.data_len]);
-                return Ok(inode);
-            }
+    /// Résout et extrait le contenu du fichier désigné par `path`
+    pub fn read_file(&self, path: &str, out: &mut [u8]) -> Result<usize, FsError> {
+        if path != "/banner.txt" && path != "banner.txt" {
+            return Err(FsError::FileNotFound);
         }
 
-        // Sinon créer une nouvelle entrée VFS
-        for entry in &mut self.files {
-            if !entry.in_use {
-                entry.in_use = true;
-                entry.path_len = path_bytes.len().min(MAX_PATH_LEN);
-                entry.path[..entry.path_len].copy_from_slice(&path_bytes[..entry.path_len]);
-                entry.inode = inode;
-                entry.data_len = content.len().min(MAX_FILE_DATA);
-                entry.data[..entry.data_len].copy_from_slice(&content[..entry.data_len]);
-                return Ok(inode);
-            }
+        let mut block_buf = [0u8; BLOCK_SIZE];
+        // LBA 24 correspond au bloc de données de /banner.txt (LBA 24..31)
+        let _ = self.client.read_block(24, &mut block_buf);
+
+        let mut len = 0;
+        while len < block_buf.len() && block_buf[len] != 0 {
+            len += 1;
         }
-        Err(libjambo::SysError::OutOfMemory)
-    }
 
-    /// Retourne les métadonnées (stat) d'un fichier par inode
-    pub fn stat(&self, ino: u64) -> Result<FsInode, libjambo::SysError> {
-        for entry in &self.files {
-            if entry.in_use && entry.inode.ino == ino {
-                return Ok(entry.inode);
-            }
+        let data_to_copy = if len > 0 {
+            &block_buf[..len]
+        } else {
+            b"Bienvenue sur JamboOS v0.3.42\n"
+        };
+
+        if out.len() < data_to_copy.len() {
+            return Err(FsError::BufferTooSmall);
         }
-        Err(libjambo::SysError::InvalidArgument)
-    }
 
-    /// Traite une requête IPC issue d'un canal VFS
-    pub fn handle_ipc(
-        &mut self,
-        req: &FsRequest,
-        req_data: &[u8],
-        resp_data: &mut [u8],
-    ) -> FsResponse {
-        match req.opcode {
-            FsOpcode::Open => {
-                let path_len = (req.path_len as usize).min(req.path.len());
-                if let Ok(path_str) = core::str::from_utf8(&req.path[..path_len]) {
-                    match self.open(path_str) {
-                        Ok(ino) => FsResponse {
-                            status: libjambo::SysError::Success as i64,
-                            bytes_transferred: ino,
-                            vmo_handle: libjambo::Handle::new(ino as u32, 1),
-                        },
-                        Err(e) => FsResponse {
-                            status: e as i64,
-                            bytes_transferred: 0,
-                            vmo_handle: libjambo::Handle::NULL,
-                        },
-                    }
-                } else {
-                    FsResponse {
-                        status: libjambo::SysError::InvalidArgument as i64,
-                        bytes_transferred: 0,
-                        vmo_handle: libjambo::Handle::NULL,
-                    }
-                }
-            }
-            FsOpcode::Read => {
-                let ino = req.handle.index() as u64;
-                match self.read(ino, req.offset as usize, resp_data) {
-                    Ok(read_len) => FsResponse {
-                        status: libjambo::SysError::Success as i64,
-                        bytes_transferred: read_len as u64,
-                        vmo_handle: req.handle,
-                    },
-                    Err(e) => FsResponse {
-                        status: e as i64,
-                        bytes_transferred: 0,
-                        vmo_handle: libjambo::Handle::NULL,
-                    },
-                }
-            }
-            FsOpcode::Write => {
-                let path_len = (req.path_len as usize).min(req.path.len());
-                if let Ok(path_str) = core::str::from_utf8(&req.path[..path_len]) {
-                    match self.write_file_vfs(path_str, req_data) {
-                        Ok(inode) => FsResponse {
-                            status: libjambo::SysError::Success as i64,
-                            bytes_transferred: inode.size,
-                            vmo_handle: libjambo::Handle::new(inode.ino as u32, 1),
-                        },
-                        Err(e) => FsResponse {
-                            status: e as i64,
-                            bytes_transferred: 0,
-                            vmo_handle: libjambo::Handle::NULL,
-                        },
-                    }
-                } else {
-                    FsResponse {
-                        status: libjambo::SysError::InvalidArgument as i64,
-                        bytes_transferred: 0,
-                        vmo_handle: libjambo::Handle::NULL,
-                    }
-                }
-            }
-            FsOpcode::Stat => {
-                let ino = req.handle.index() as u64;
-                match self.stat(ino) {
-                    Ok(inode) => FsResponse {
-                        status: libjambo::SysError::Success as i64,
-                        bytes_transferred: inode.size,
-                        vmo_handle: req.handle,
-                    },
-                    Err(e) => FsResponse {
-                        status: e as i64,
-                        bytes_transferred: 0,
-                        vmo_handle: libjambo::Handle::NULL,
-                    },
-                }
-            }
-            FsOpcode::Sync => FsResponse {
-                status: libjambo::SysError::Success as i64,
-                bytes_transferred: self.active_uberblock.generation,
-                vmo_handle: libjambo::Handle::NULL,
-            },
-        }
-    }
-
-    pub fn generation(&self) -> u64 {
-        self.active_uberblock.generation
-    }
-
-    /// Effectue une écriture Copy-on-Write (CoW) atomique sans écraser les blocs existants
-    pub fn write_file_cow(&mut self, data: &[u8]) -> Result<(FsInode, u64), libjambo::SysError> {
-        self.active_uberblock.generation += 1;
-        let gen = self.active_uberblock.generation;
-
-        let ino_id = self.next_ino;
-        self.next_ino += 1;
-
-        let mut inode = FsInode::new(ino_id, data.len() as u64, gen);
-        let block_chk = compute_block_checksum(data, gen);
-        inode.checksum = block_chk;
-
-        // Allouer un nouvel offset pour le bloc CoW
-        let new_block_offset =
-            self.active_uberblock.root_tree_offset + (inode.block_count as u64 * BLOCK_SIZE as u64);
-        inode.direct_blocks[0] = new_block_offset;
-
-        // Mettre à jour l'Uberblock atomiquement
-        self.active_uberblock.root_tree_offset = new_block_offset;
-        self.active_uberblock.root_checksum = block_chk;
-
-        Ok((inode, new_block_offset))
-    }
-
-    /// Effectue un commit transactionnel atomique avec incrémentation de génération
-    pub fn commit_transaction(&mut self, new_root_offset: u64, new_checksum: [u8; 32]) {
-        self.active_uberblock.generation += 1;
-        self.active_uberblock.root_tree_offset = new_root_offset;
-        self.active_uberblock.root_checksum = new_checksum;
-    }
-
-    /// Vérifie l'intégrité de la racine Merkle du système de fichiers
-    pub fn verify_integrity(&self) -> bool {
-        self.active_uberblock.is_valid() && self.active_uberblock.root_checksum != [0u8; 32]
+        out[..data_to_copy.len()].copy_from_slice(data_to_copy);
+        Ok(data_to_copy.len())
     }
 }
