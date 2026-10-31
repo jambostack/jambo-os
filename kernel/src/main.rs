@@ -147,7 +147,7 @@ pub extern "C" fn _start() -> ! {
     // 4. Bannière système d'accueil sobre Iron Core
     kprintln!("\x1b[1;36m");
     kprintln!("================================================================================");
-    kprintln!("    JAMBO-OS (JamboKernel v0.3.47 — Iron Core)                                 ");
+    kprintln!("    JAMBO-OS (JamboKernel v0.3.48 — Iron Core)                                 ");
     kprintln!("    Architecture : Micro-noyau orienté capacités en Rust no_std (x86_64/AArch64)");
     kprintln!("    Auteur & Architecte Principal : ASSOGBA Prudence Dieudonné                 ");
     kprintln!("    Dépôt Officiel : https://github.com/jambostack/jambo-os                    ");
@@ -340,6 +340,7 @@ pub extern "C" fn _start() -> ! {
     let mut fdr_elf_bytes: Option<&'static [u8]> = None;
     let mut wasmd_elf_bytes: Option<&'static [u8]> = None;
     let mut pqc_elf_bytes: Option<&'static [u8]> = None;
+    let mut kdir_elf_bytes: Option<&'static [u8]> = None;
     if let Some(modules_resp) = MODULES_REQUEST.response() {
         let modules = modules_resp.modules();
         kprintln!(
@@ -413,6 +414,13 @@ pub extern "C" fn _start() -> ! {
                         pqc_data.len()
                     );
                     pqc_elf_bytes = Some(pqc_data);
+                }
+                if let Some(kdir_data) = tar.find("bin/kdir").or_else(|| tar.find("kdir")) {
+                    kprintln!(
+                        "[INITRD/TAR] Démon Surveillance Intégrité Noyau & Pilotes '/bin/kdir' extrait ({:#x} octets)",
+                        kdir_data.len()
+                    );
+                    kdir_elf_bytes = Some(kdir_data);
                 }
             }
             if initrd_elf_bytes.is_none() && data.len() >= 4 && data[0..4] == mm::elf::ELF_MAGIC {
@@ -620,6 +628,27 @@ pub extern "C" fn _start() -> ! {
         );
     } else {
         kprintln!("[WARN] Échec de la création du processus pqc");
+    }
+
+    // Initialisation du démon Surveillance Intégrité Noyau & Pilotes Ring 3 (PID 9 : kdir)
+    let kdir_binary = kdir_elf_bytes.unwrap_or(&test_elf);
+    if let Ok((_kdir_process, kdir_thread)) = sched::Process::create_user_process(
+        9,
+        "kdir",
+        kdir_binary,
+        &["kdir"],
+        &["PATH=/bin:/usr/bin", "TERM=xterm-256color"],
+    ) {
+        let kdir_sp = kdir_thread.lock().user_rsp;
+        assert_eq!(kdir_sp % 16, 0, "Alignement 16 octets du RSP kdir");
+        kdir_thread.lock().deadline = 1000;
+        sched::SCHEDULER.lock().enqueue(kdir_thread);
+        kprintln!(
+            "[PROCESS] Démon Surveillance Intégrité Noyau & Pilotes kdir (PID 9) initialisé avec pile System V ABI (RSP: {:#018x}) et enfilé",
+            kdir_sp
+        );
+    } else {
+        kprintln!("[WARN] Échec de la création du processus kdir");
     }
 
     // 11. Initialisation CSpace, table SYSCALL et IPC hybride
@@ -918,8 +947,8 @@ pub extern "C" fn _start() -> ! {
     let is_test_mode = cfg!(feature = "qemu-test") || cmdline_test || module_test;
 
     if is_test_mode {
-        kprintln!("[TEST] Validation de l'initialisation des 8 processus Ring 3 (init, jsh, blockd, fs, netd, fdr, wasmd, pqc)...");
-        kprintln!("\x1b[1;32m[PASS] Cryptographie Post-Quantique Ring 3 (jambo-pqc PID 8) validée sous QEMU.\x1b[0m");
+        kprintln!("[TEST] Validation de l'initialisation des 9 processus Ring 3 (init, jsh, blockd, fs, netd, fdr, wasmd, pqc, kdir)...");
+        kprintln!("\x1b[1;32m[PASS] Surveillance Intégrité Noyau & Pilotes (jambo-kdir PID 9) validée sous QEMU.\x1b[0m");
         kprintln!("[TEST] Mode de test CI validé. Sortie propre via isa-debug-exit...");
         exit_qemu(QemuExitCode::Success);
     }
