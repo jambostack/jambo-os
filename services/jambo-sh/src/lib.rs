@@ -20,6 +20,10 @@ use jambo_bpfd::{
     BpfOpcode, BpfProgramType, BpfRequest, BpfResponse, JamboBpfDaemon, BPF_STATUS_OK,
 };
 #[allow(unused_imports)]
+use jambo_cored::{
+    core_rights, CoreCap, CoreClient, CoreOpcode, CoreRequest, CoreResponse, JamboCoreDaemon,
+};
+#[allow(unused_imports)]
 use jambo_dnsd::{
     dns_rights, DnsCap, DnsClient, DnsOpcode, DnsRecordData, DnsRequest, DnsResponse, DnsType,
     JamboDnsDaemon, DNS_STATUS_ERROR, DNS_STATUS_NXDOMAIN, DNS_STATUS_OK, DNS_STATUS_REFUSED,
@@ -90,6 +94,7 @@ pub struct JamboShell {
     pub wall_daemon: JamboFirewall,
     pub vault_daemon: JamboVaultDaemon,
     pub watchdog_daemon: JamboWatchdogDaemon,
+    pub core_daemon: JamboCoreDaemon,
 }
 
 impl Default for JamboShell {
@@ -114,6 +119,8 @@ impl JamboShell {
         vault_daemon.init_defaults();
         let mut watchdog_daemon = JamboWatchdogDaemon::new();
         watchdog_daemon.init_defaults();
+        let mut core_daemon = JamboCoreDaemon::new();
+        core_daemon.init_defaults();
         Self {
             prompt_user: "jambo",
             commands_executed: 0,
@@ -124,6 +131,7 @@ impl JamboShell {
             wall_daemon,
             vault_daemon,
             watchdog_daemon,
+            core_daemon,
         }
     }
 
@@ -175,6 +183,7 @@ impl JamboShell {
             "wall" => self.cmd_wall(args, out),
             "vault" => self.cmd_vault(args, out),
             "wdog" => self.cmd_wdog(args, out),
+            "core" => self.cmd_core(args, out),
             _ => self.cmd_not_found(cmd, out),
         }
     }
@@ -183,7 +192,7 @@ impl JamboShell {
         let text = b"Commandes disponibles:\n\
   help        - Affiche cette aide\n\
   sysinfo     - Metriques memoire et uptime du micro-noyau\n\
-  ps          - Liste les 21 processus actifs\n\
+  ps          - Liste les 22 processus actifs\n\
   echo <args> - Affiche le texte sur la console\n\
   clear       - Reinitialise l'ecran du terminal\n\
   reboot      - Eteint ou redemarre la machine virtuelle\n\
@@ -205,7 +214,8 @@ impl JamboShell {
   audit [status|record|verify|tail|scan] - Grand livre d'audit cryptographique et observabilite\n\
   wall [status|conntrack|rule|blocked|flush] - Pare-feu d'etat Zero-Trust et table Conntrack\n\
   vault [status|unseal|seal|store|get|revoke] - Coffre-fort cryptographique de secrets distribue\n\
-  wdog [status|ping|register|targets|trigger|log] - Surveillance vivacite et chien de garde\n";
+  wdog [status|ping|register|targets|trigger|log] - Surveillance vivacite et chien de garde\n\
+  core [status|dump|list|verify|quarantine|purge] - Capture crash dumps ELF64 et forensique\n";
         let len = text.len().min(out.len());
         out[..len].copy_from_slice(&text[..len]);
         (ShellStatus::Success, len)
@@ -270,7 +280,8 @@ impl JamboShell {
  18  ACTIF    /bin/auditd (Grand Livre d'Audit Cryptographique Ring 3)\n\
  19  ACTIF    /bin/walld (Pare-Feu d'Etat & Synchronisation Conntrack Ring 3)\n\
  20  ACTIF    /bin/vaultd (Coffre-Fort de Secrets Distribue Ring 3)\n\
- 21  ACTIF    /bin/watchdogd (Surveillance Vivacite & Chien de Garde Ring 3)\n";
+ 21  ACTIF    /bin/watchdogd (Surveillance Vivacite & Chien de Garde Ring 3)\n\
+ 22  ACTIF    /bin/cored (Capture Crash Dumps ELF64 & Forensique Ring 3)\n";
         let len = text.len().min(out.len());
         out[..len].copy_from_slice(&text[..len]);
         (ShellStatus::Success, len)
@@ -4704,6 +4715,280 @@ impl JamboShell {
         c = append_bytes(out, c, b"\n");
         (ShellStatus::Success, c)
     }
+
+    fn send_core_request(&mut self, req: &CoreRequest) -> CoreResponse {
+        let current_time = sys_info().map(|s| s.uptime_seconds).unwrap_or(1_000_000);
+        let mut resp_opt: Option<CoreResponse> = None;
+        for &h in &[
+            22u64, 21u64, 20u64, 19u64, 18u64, 17u64, 16u64, 15u64, 14u64, 13u64, 12u64, 11u64,
+            10u64, 9u64, 8u64, 7u64, 6u64, 5u64, 4u64, 3u64,
+        ] {
+            let client = CoreClient::new(libjambo::Handle(h));
+            if let Ok(resp) = client.call(req) {
+                if resp.magic == jambo_cored::CORE_MAGIC_RESP {
+                    resp_opt = Some(resp);
+                    break;
+                }
+            }
+        }
+        let local_resp = self.core_daemon.handle_ipc_request(req, current_time);
+        resp_opt.unwrap_or(local_resp)
+    }
+
+    fn cmd_core(&mut self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        let subcmd = if args.is_empty() { "status" } else { args[0] };
+        match subcmd {
+            "status" => self.cmd_core_status(out),
+            "dump" => self.cmd_core_dump(&args[1..], out),
+            "list" => self.cmd_core_list(out),
+            "verify" => self.cmd_core_verify(&args[1..], out),
+            "quarantine" => self.cmd_core_quarantine(&args[1..], out),
+            "purge" => self.cmd_core_purge(out),
+            _ => {
+                let msg = b"Usage: core [status|dump|list|verify|quarantine|purge]\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                (ShellStatus::InvalidArgument, len)
+            }
+        }
+    }
+
+    fn cmd_core_status(&mut self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let req = CoreRequest::new_status();
+        let resp = self.send_core_request(&req);
+
+        let mut c = 0;
+        c = append_bytes(
+            out,
+            c,
+            b"Capture Crash Dumps ELF64 & Forensique (jambo-cored PID 22):\n  Total Rapports          : ",
+        );
+        c = append_u64(out, c, resp.total_reports as u64);
+        c = append_bytes(out, c, b"\n  Regions en Quarantaine  : ");
+        c = append_u64(out, c, resp.quarantined_regions as u64);
+        c = append_bytes(out, c, b"\n  Dernier Crash Capture   : PID ");
+        c = append_u64(out, c, resp.last_crash_pid);
+        c = append_bytes(out, c, b", RIP=0x");
+        for &b in resp.last_rip.to_be_bytes().iter() {
+            c = append_hex_byte(out, c, b);
+        }
+        c = append_bytes(out, c, b", Faute=0x");
+        for &b in resp.last_fault_addr.to_be_bytes().iter() {
+            c = append_hex_byte(out, c, b);
+        }
+        c = append_bytes(out, c, b", Raison=");
+        c = append_bytes(out, c, resp.reason_as_str().as_bytes());
+        c = append_bytes(out, c, b"\n  Sceau SHA-256           : 0x");
+        for &b in &resp.sha256_seal {
+            c = append_hex_byte(out, c, b);
+        }
+        c = append_bytes(out, c, b"\n");
+        (ShellStatus::Success, c)
+    }
+
+    fn cmd_core_dump(&mut self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if args.is_empty() {
+            let msg = b"Usage: core dump <pid> [reason]\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            return (ShellStatus::InvalidArgument, len);
+        }
+
+        let pid = match parse_u64(args[0]) {
+            Some(p) => p,
+            None => {
+                let msg = b"core dump: invalid pid\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                return (ShellStatus::InvalidArgument, len);
+            }
+        };
+
+        let reason = if args.len() > 1 {
+            parse_u32(args[1]).unwrap_or(2)
+        } else {
+            2
+        };
+
+        let req = CoreRequest::new_trigger_dump(pid, reason, 0x00000000deadbeef, "user-app");
+        let resp = self.send_core_request(&req);
+        if resp.status != 0 {
+            let mut c = 0;
+            c = append_bytes(out, c, b"core dump: failed with error code ");
+            c = append_i64(out, c, resp.status as i64);
+            c = append_bytes(out, c, b"\n");
+            return (ShellStatus::ExecutionFailed, c);
+        }
+
+        let mut c = 0;
+        c = append_bytes(out, c, b"core dump: crash dump capture avec succes (PID: ");
+        c = append_u64(out, c, resp.last_crash_pid);
+        c = append_bytes(out, c, b", rapport #");
+        c = append_u64(out, c, resp.total_reports as u64);
+        c = append_bytes(out, c, b", sceau: 0x");
+        for &b in &resp.sha256_seal {
+            c = append_hex_byte(out, c, b);
+        }
+        c = append_bytes(out, c, b")\n");
+        (ShellStatus::Success, c)
+    }
+
+    fn cmd_core_list(&mut self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let req_status = CoreRequest::new_status();
+        let status_resp = self.send_core_request(&req_status);
+
+        let mut c = 0;
+        c = append_bytes(out, c, b"Rapports de Crash ELF64 (jambo-cored PID 22):\n");
+        if status_resp.total_reports == 0 {
+            c = append_bytes(out, c, b"  (Aucun rapport de crash enregistre)\n");
+            return (ShellStatus::Success, c);
+        }
+
+        for id in 1..=status_resp.total_reports {
+            let req_q = CoreRequest::new_query_report(id);
+            let resp = self.send_core_request(&req_q);
+            if resp.status == 0 {
+                c = append_bytes(out, c, b"  #");
+                c = append_u64(out, c, id as u64);
+                if let Some(rep) = self.core_daemon.get_report(id as u64) {
+                    c = append_bytes(out, c, b" [");
+                    c = append_bytes(out, c, rep.process_name_str().as_bytes());
+                    c = append_bytes(out, c, b"]");
+                }
+                c = append_bytes(out, c, b" PID=");
+                c = append_u64(out, c, resp.last_crash_pid);
+                c = append_bytes(out, c, b", RIP=0x");
+                for &b in resp.last_rip.to_be_bytes().iter() {
+                    c = append_hex_byte(out, c, b);
+                }
+                c = append_bytes(out, c, b", Faute=0x");
+                for &b in resp.last_fault_addr.to_be_bytes().iter() {
+                    c = append_hex_byte(out, c, b);
+                }
+                c = append_bytes(out, c, b", Raison=");
+                let reason_str = if let Some(rep) = self.core_daemon.get_report(id as u64) {
+                    rep.reason.as_str()
+                } else {
+                    resp.reason_as_str()
+                };
+                c = append_bytes(out, c, reason_str.as_bytes());
+                c = append_bytes(out, c, b"\n");
+            }
+        }
+        (ShellStatus::Success, c)
+    }
+
+    fn cmd_core_verify(&mut self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if args.is_empty() {
+            let msg = b"Usage: core verify <id>\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            return (ShellStatus::InvalidArgument, len);
+        }
+
+        let report_id = match parse_u32(args[0]) {
+            Some(id) if id > 0 => id,
+            _ => {
+                let msg = b"core verify: invalid report id\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                return (ShellStatus::InvalidArgument, len);
+            }
+        };
+
+        let req = CoreRequest::new_verify_report(report_id);
+        let resp = self.send_core_request(&req);
+        if resp.status != 0 {
+            let mut c = 0;
+            c = append_bytes(out, c, b"core verify: verification echouee pour rapport #");
+            c = append_u64(out, c, report_id as u64);
+            c = append_bytes(out, c, b" (code erreur: ");
+            c = append_i64(out, c, resp.status as i64);
+            c = append_bytes(out, c, b")\n");
+            return (ShellStatus::ExecutionFailed, c);
+        }
+
+        let mut c = 0;
+        c = append_bytes(
+            out,
+            c,
+            b"core verify: sceau cryptographique SHA-256 valide pour rapport #",
+        );
+        c = append_u64(out, c, report_id as u64);
+        c = append_bytes(out, c, b" (statut: ");
+        c = append_bytes(out, c, resp.reason_as_str().as_bytes());
+        c = append_bytes(out, c, b", empreinte: 0x");
+        for &b in &resp.sha256_seal {
+            c = append_hex_byte(out, c, b);
+        }
+        c = append_bytes(out, c, b")\n");
+        (ShellStatus::Success, c)
+    }
+
+    fn cmd_core_quarantine(&mut self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if !args.is_empty() {
+            if let Some(id) = parse_u32(args[0]) {
+                let req = CoreRequest::new_quarantine(id);
+                let _resp = self.send_core_request(&req);
+            }
+        }
+
+        let mut c = 0;
+        c = append_bytes(
+            out,
+            c,
+            b"Regions Memoire VMO en Quarantaine (jambo-cored PID 22):\n",
+        );
+        let mut count = 0;
+        for rep in self.core_daemon.reports.iter().flatten() {
+            if rep.quarantined {
+                for (idx, reg) in rep.regions[..rep.region_count].iter().enumerate() {
+                    if reg.quarantined {
+                        count += 1;
+                        c = append_bytes(out, c, b"  [VMO-QUAR] Rapport #");
+                        c = append_u64(out, c, rep.report_id);
+                        c = append_bytes(out, c, b" PID=");
+                        c = append_u64(out, c, rep.pid as u64);
+                        c = append_bytes(out, c, b" Reg #");
+                        c = append_u64(out, c, idx as u64);
+                        c = append_bytes(out, c, b" (");
+                        c = append_bytes(out, c, reg.tag_str().as_bytes());
+                        c = append_bytes(out, c, b") VAddr=0x");
+                        for &b in reg.vaddr.to_be_bytes().iter() {
+                            c = append_hex_byte(out, c, b);
+                        }
+                        c = append_bytes(out, c, b" Taille=");
+                        c = append_u64(out, c, reg.size);
+                        c = append_bytes(out, c, b" octets [PROT_NONE]\n");
+                    }
+                }
+            }
+        }
+        if count == 0 {
+            c = append_bytes(out, c, b"  (Aucune region memoire VMO en quarantaine)\n");
+        }
+        (ShellStatus::Success, c)
+    }
+
+    fn cmd_core_purge(&mut self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let req = CoreRequest::new_purge();
+        let resp = self.send_core_request(&req);
+        if resp.status != 0 {
+            let mut c = 0;
+            c = append_bytes(out, c, b"core purge: failed with error code ");
+            c = append_i64(out, c, resp.status as i64);
+            c = append_bytes(out, c, b"\n");
+            return (ShellStatus::ExecutionFailed, c);
+        }
+
+        let mut c = 0;
+        c = append_bytes(
+            out,
+            c,
+            b"core purge: rapports de crash purges et reinitialises avec succes (0 rapport actif)\n",
+        );
+        (ShellStatus::Success, c)
+    }
 }
 
 fn append_bytes(buf: &mut [u8], cursor: usize, data: &[u8]) -> usize {
@@ -5057,7 +5342,7 @@ mod tests {
     }
 
     #[test]
-    fn test_ps_contains_21_processes() {
+    fn test_ps_contains_22_processes() {
         let mut shell = JamboShell::new();
         let mut out = [0u8; 4096];
 
@@ -5099,6 +5384,9 @@ mod tests {
         assert!(s.contains(
             "21  ACTIF    /bin/watchdogd (Surveillance Vivacite & Chien de Garde Ring 3)"
         ));
+        assert!(
+            s.contains("22  ACTIF    /bin/cored (Capture Crash Dumps ELF64 & Forensique Ring 3)")
+        );
     }
 
     #[test]
@@ -5109,7 +5397,7 @@ mod tests {
         let (st, len) = shell.execute_line("help", &mut out);
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
-        assert!(s.contains("21 processus actifs"));
+        assert!(s.contains("22 processus actifs"));
         assert!(s.contains("fdr [status|verify|pcr]"));
         assert!(s.contains("wasm [status|run|info]"));
         assert!(s.contains("pqc [status|kex|sign|audit]"));
@@ -5126,6 +5414,7 @@ mod tests {
         assert!(s.contains("wall [status|conntrack|rule|blocked|flush]"));
         assert!(s.contains("vault [status|unseal|seal|store|get|revoke]"));
         assert!(s.contains("wdog [status|ping|register|targets|trigger|log]"));
+        assert!(s.contains("core [status|dump|list|verify|quarantine|purge]"));
     }
 
     #[test]
@@ -6940,5 +7229,156 @@ mod tests {
         assert_eq!(st5, ShellStatus::InvalidArgument);
         let s5 = core::str::from_utf8(&out[..len5]).unwrap();
         assert!(s5.contains("wdog register: invalid timeout_ms (must be > 0)"));
+    }
+
+    #[test]
+    fn test_core_status() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 1024];
+
+        let (st, len) = shell.execute_line("core status", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("Capture Crash Dumps ELF64 & Forensique (jambo-cored PID 22):"));
+        assert!(s.contains("Total Rapports          : 2"));
+        assert!(s.contains("Regions en Quarantaine  : 0"));
+        assert!(s.contains("Dernier Crash Capture   : PID 12"));
+        assert!(s.contains("Sceau SHA-256           : 0x"));
+
+        // Défaut sur status sans arguments
+        let (st2, len2) = shell.execute_line("core", &mut out);
+        assert_eq!(st2, ShellStatus::Success);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("Total Rapports          : 2"));
+    }
+
+    #[test]
+    fn test_core_dump_and_list() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 2048];
+
+        // 1. Déclencher un crash dump synthétique
+        let (st1, len1) = shell.execute_line("core dump 99 2", &mut out);
+        assert_eq!(st1, ShellStatus::Success);
+        let s1 = core::str::from_utf8(&out[..len1]).unwrap();
+        assert!(s1.contains("core dump: crash dump capture avec succes (PID: 99, rapport #3"));
+
+        // 2. Lister les rapports
+        let (st2, len2) = shell.execute_line("core list", &mut out);
+        assert_eq!(st2, ShellStatus::Success);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("Rapports de Crash ELF64 (jambo-cored PID 22):"));
+        assert!(s2.contains("#1"));
+        assert!(s2.contains("PID=42"));
+        assert!(s2.contains("#2"));
+        assert!(s2.contains("PID=12"));
+        assert!(s2.contains("#3"));
+        assert!(s2.contains("PID=99"));
+    }
+
+    #[test]
+    fn test_core_verify() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 1024];
+
+        // 1. Vérification nominale du rapport #1
+        let (st1, len1) = shell.execute_line("core verify 1", &mut out);
+        assert_eq!(st1, ShellStatus::Success);
+        let s1 = core::str::from_utf8(&out[..len1]).unwrap();
+        assert!(s1.contains("core verify: sceau cryptographique SHA-256 valide pour rapport #1"));
+        assert!(s1.contains("statut: VALID"));
+
+        // 2. Rapport inexistant
+        let (st2, len2) = shell.execute_line("core verify 999", &mut out);
+        assert_eq!(st2, ShellStatus::ExecutionFailed);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("core verify: verification echouee pour rapport #999"));
+    }
+
+    #[test]
+    fn test_core_quarantine() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 2048];
+
+        // 1. Initialement aucune région en quarantaine
+        let (st1, len1) = shell.execute_line("core quarantine", &mut out);
+        assert_eq!(st1, ShellStatus::Success);
+        let s1 = core::str::from_utf8(&out[..len1]).unwrap();
+        assert!(s1.contains("(Aucune region memoire VMO en quarantaine)"));
+
+        // 2. Mise en quarantaine du rapport #1
+        let (st2, len2) = shell.execute_line("core quarantine 1", &mut out);
+        assert_eq!(st2, ShellStatus::Success);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("[VMO-QUAR] Rapport #1"));
+        assert!(s2.contains("[text]"));
+        assert!(s2.contains("[stack]"));
+        assert!(s2.contains("[PROT_NONE]"));
+
+        // 3. Vérification via core status
+        let (st3, len3) = shell.execute_line("core status", &mut out);
+        assert_eq!(st3, ShellStatus::Success);
+        let s3 = core::str::from_utf8(&out[..len3]).unwrap();
+        assert!(s3.contains("Regions en Quarantaine  : 2"));
+    }
+
+    #[test]
+    fn test_core_purge() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 1024];
+
+        // 1. Purge
+        let (st1, len1) = shell.execute_line("core purge", &mut out);
+        assert_eq!(st1, ShellStatus::Success);
+        let s1 = core::str::from_utf8(&out[..len1]).unwrap();
+        assert!(s1.contains("core purge: rapports de crash purges et reinitialises avec succes"));
+
+        // 2. Vérification status
+        let (st2, len2) = shell.execute_line("core status", &mut out);
+        assert_eq!(st2, ShellStatus::Success);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("Total Rapports          : 0"));
+
+        // 3. Vérification list
+        let (st3, len3) = shell.execute_line("core list", &mut out);
+        assert_eq!(st3, ShellStatus::Success);
+        let s3 = core::str::from_utf8(&out[..len3]).unwrap();
+        assert!(s3.contains("(Aucun rapport de crash enregistre)"));
+    }
+
+    #[test]
+    fn test_core_invalid() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 1024];
+
+        // 1. Sous-commande invalide
+        let (st1, len1) = shell.execute_line("core invalid_cmd", &mut out);
+        assert_eq!(st1, ShellStatus::InvalidArgument);
+        let s1 = core::str::from_utf8(&out[..len1]).unwrap();
+        assert!(s1.contains("Usage: core [status|dump|list|verify|quarantine|purge]"));
+
+        // 2. core dump sans arguments
+        let (st2, len2) = shell.execute_line("core dump", &mut out);
+        assert_eq!(st2, ShellStatus::InvalidArgument);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("Usage: core dump <pid> [reason]"));
+
+        // 3. core dump pid invalide
+        let (st3, len3) = shell.execute_line("core dump abc", &mut out);
+        assert_eq!(st3, ShellStatus::InvalidArgument);
+        let s3 = core::str::from_utf8(&out[..len3]).unwrap();
+        assert!(s3.contains("core dump: invalid pid"));
+
+        // 4. core verify sans arguments
+        let (st4, len4) = shell.execute_line("core verify", &mut out);
+        assert_eq!(st4, ShellStatus::InvalidArgument);
+        let s4 = core::str::from_utf8(&out[..len4]).unwrap();
+        assert!(s4.contains("Usage: core verify <id>"));
+
+        // 5. core verify id invalide
+        let (st5, len5) = shell.execute_line("core verify abc", &mut out);
+        assert_eq!(st5, ShellStatus::InvalidArgument);
+        let s5 = core::str::from_utf8(&out[..len5]).unwrap();
+        assert!(s5.contains("core verify: invalid report id"));
     }
 }
