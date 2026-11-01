@@ -36,6 +36,7 @@ enum Commands {
         memory: String,
     },
     /// Exécute les tests automatisés de démarrage sous QEMU pour la CI
+    #[command(alias = "test-qemu")]
     Test {
         #[arg(long)]
         release: bool,
@@ -869,7 +870,7 @@ fn run_test(release: bool) -> anyhow::Result<()> {
         "/usr/share/OVMF/OVMF_CODE.fd"
     };
 
-    println!("[TEST] Démarrage du test de validation automatisé QEMU (Iron Core, JamboFS, VirtIO-Net, FDR, Wasm, PQC, KDIR, Forensics, Powerd, Metrics & BPF)...");
+    println!("[TEST] Démarrage du test de validation automatisé QEMU (Iron Core, JamboFS, VirtIO-Net, FDR, Wasm, PQC, KDIR, Forensics, Powerd, Metrics, BPF & VPN)...");
     let mut cmd = Command::new("qemu-system-x86_64");
     cmd.current_dir(&root);
     cmd.args([
@@ -903,6 +904,8 @@ fn run_test(release: bool) -> anyhow::Result<()> {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     let combined = format!("{}\n{}", stdout, stderr);
+    let log_path = root.join("target/qemu_output.log");
+    let _ = fs::write(&log_path, &combined);
 
     // QEMU isa-debug-exit sort avec (val << 1) | 1. Pour Success (0x10=16), le code de retour est 33.
     let code = output.status.code().unwrap_or(-1);

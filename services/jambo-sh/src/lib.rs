@@ -2442,7 +2442,8 @@ impl JamboShell {
     fn cmd_vpn_status(&self, out: &mut [u8]) -> (ShellStatus, usize) {
         let mut resp_opt: Option<VpnResponse> = None;
         for &h in &[
-            14u64, 15u64, 16u64, 13u64, 12u64, 11u64, 10u64, 9u64, 8u64, 7u64, 6u64, 5u64, 4u64, 3u64,
+            14u64, 15u64, 16u64, 13u64, 12u64, 11u64, 10u64, 9u64, 8u64, 7u64, 6u64, 5u64, 4u64,
+            3u64,
         ] {
             let client = VpnClient::new(libjambo::Handle(h));
             if let Ok(resp) = client.get_status() {
@@ -2466,7 +2467,11 @@ impl JamboShell {
             b"Post-Quantum WireGuard VPN Gateway (jambo-vpn PID 14):\n  Operational State : ",
         );
         if resp.status == VPN_STATUS_OK {
-            cursor = append_bytes(out, cursor, b"ACTIVE (Dual-Defense Curve25519 + ML-KEM-768)\n");
+            cursor = append_bytes(
+                out,
+                cursor,
+                b"ACTIVE (Dual-Defense Curve25519 + ML-KEM-768)\n",
+            );
         } else {
             cursor = append_bytes(out, cursor, b"DEGRADED (Gateway Error)\n");
         }
@@ -2500,7 +2505,8 @@ impl JamboShell {
 
         let mut resp_opt: Option<VpnResponse> = None;
         for &h in &[
-            14u64, 15u64, 16u64, 13u64, 12u64, 11u64, 10u64, 9u64, 8u64, 7u64, 6u64, 5u64, 4u64, 3u64,
+            14u64, 15u64, 16u64, 13u64, 12u64, 11u64, 10u64, 9u64, 8u64, 7u64, 6u64, 5u64, 4u64,
+            3u64,
         ] {
             let client = VpnClient::new(libjambo::Handle(h));
             if let Ok(resp) = client.initiate_handshake(peer_id) {
@@ -2570,7 +2576,8 @@ impl JamboShell {
 
         let mut resp_opt: Option<VpnResponse> = None;
         for &h in &[
-            14u64, 15u64, 16u64, 13u64, 12u64, 11u64, 10u64, 9u64, 8u64, 7u64, 6u64, 5u64, 4u64, 3u64,
+            14u64, 15u64, 16u64, 13u64, 12u64, 11u64, 10u64, 9u64, 8u64, 7u64, 6u64, 5u64, 4u64,
+            3u64,
         ] {
             let client = VpnClient::new(libjambo::Handle(h));
             if let Ok(resp) = client.get_peer_info(peer_id) {
@@ -2642,7 +2649,8 @@ impl JamboShell {
     fn cmd_vpn_audit(&self, out: &mut [u8]) -> (ShellStatus, usize) {
         let mut resp_opt: Option<VpnResponse> = None;
         for &h in &[
-            14u64, 15u64, 16u64, 13u64, 12u64, 11u64, 10u64, 9u64, 8u64, 7u64, 6u64, 5u64, 4u64, 3u64,
+            14u64, 15u64, 16u64, 13u64, 12u64, 11u64, 10u64, 9u64, 8u64, 7u64, 6u64, 5u64, 4u64,
+            3u64,
         ] {
             let client = VpnClient::new(libjambo::Handle(h));
             if let Ok(resp) = client.get_audit_hash() {
@@ -2923,7 +2931,9 @@ mod tests {
         assert!(s.contains("11  ACTIF    /bin/powerd (Demon Gestion Energie & ACPI Ring 3)"));
         assert!(s.contains("12  ACTIF    /bin/metricsd (Demon Metrologie & Observabilite Ring 3)"));
         assert!(s.contains("13  ACTIF    /bin/bpfd (Demon eBPF, Verificateur Formel & XDP Ring 3)"));
-        assert!(s.contains("14  ACTIF    /bin/vpn (Passerelle VPN WireGuard Post-Quantique Ring 3)"));
+        assert!(
+            s.contains("14  ACTIF    /bin/vpn (Passerelle VPN WireGuard Post-Quantique Ring 3)")
+        );
     }
 
     #[test]
@@ -3713,7 +3723,9 @@ mod tests {
         assert!(s.contains("Session State          : Established (1-RTT Completed)"));
         assert!(s.contains("Handshake Counter      : 1"));
         assert!(s.contains("Audit Chain Head       :"));
-        assert!(s.contains("Result                 : SUCCESS (Quantum-Resistant WireGuard Tunnel Active)"));
+        assert!(s.contains(
+            "Result                 : SUCCESS (Quantum-Resistant WireGuard Tunnel Active)"
+        ));
 
         // 2. Explicit peer 2
         let (st2, len2) = shell.execute_line("vpn connect 2", &mut out);

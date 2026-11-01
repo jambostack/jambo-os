@@ -221,8 +221,8 @@ impl VirtioNetDriver {
         if self.device_cfg != 0 {
             let mut mac = [0u8; 6];
             unsafe {
-                for i in 0..6 {
-                    mac[i] = core::ptr::read_volatile((self.device_cfg + i as u64) as *const u8);
+                for (i, byte) in mac.iter_mut().enumerate() {
+                    *byte = core::ptr::read_volatile((self.device_cfg + i as u64) as *const u8);
                 }
             }
             if mac != [0, 0, 0, 0, 0, 0] {
@@ -470,11 +470,7 @@ impl VirtioNetDriver {
         let total_len = used_elem.len as usize;
         let hdr_len = core::mem::size_of::<VirtioNetHdr>();
 
-        let payload_len = if total_len > hdr_len {
-            total_len - hdr_len
-        } else {
-            0
-        };
+        let payload_len = total_len.saturating_sub(hdr_len);
 
         if out_buf.len() < payload_len {
             self.requeue_rx_desc(desc_idx);

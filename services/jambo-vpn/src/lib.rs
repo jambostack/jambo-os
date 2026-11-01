@@ -20,6 +20,7 @@
 //! 5. Zéroïsation en mémoire volatile et registre d'audit inaltérable scellé par chaîne SHA-256.
 
 #![no_std]
+#![allow(clippy::needless_range_loop)]
 
 use libjambo::{Handle, SysError};
 
@@ -599,7 +600,7 @@ impl Fe25519 {
         }
 
         if carry_extra > 0 {
-            let mut c = (carry_extra as u128) * 38;
+            let mut c = carry_extra * 38;
             for i in 0..4 {
                 let s = (out[i] as u128) + c;
                 out[i] = s as u64;
@@ -1095,6 +1096,12 @@ impl AntiReplayWindow {
     }
 }
 
+impl Default for AntiReplayWindow {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 // ============================================================================
 // SOUS-RÉSEAUX AUTORISÉS & ROUTAGE CRYPTOGRAPHIQUE (CRYPTOKEY ROUTING)
 // ============================================================================
@@ -1401,6 +1408,7 @@ impl JamboVpnDaemon {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn add_peer(
         &mut self,
         cap: &VpnCap,
@@ -1418,11 +1426,9 @@ impl JamboVpnDaemon {
         if self.peer_count >= (cap.max_peers as usize).min(MAX_PEERS) {
             return Err(VpnError::PeerCapacityExceeded);
         }
-        for opt in self.peers.iter() {
-            if let Some(p) = opt {
-                if p.peer_id == peer_id {
-                    return Err(VpnError::PeerAlreadyExists);
-                }
+        for p in self.peers.iter().flatten() {
+            if p.peer_id == peer_id {
+                return Err(VpnError::PeerAlreadyExists);
             }
         }
 
@@ -1847,12 +1853,14 @@ impl JamboVpnDaemon {
 
     /// Traite une requête IPC souveraine et génère la réponse à 64 octets
     pub fn handle_ipc_request(&mut self, req: &VpnRequest) -> VpnResponse {
-        let mut resp = VpnResponse::default();
-        resp.peer_count = self.peer_count as u16;
-        resp.handshakes = self.total_handshakes_completed as u16;
-        resp.packets_routed = self.total_packets_routed as u32;
-        resp.bytes_encrypted = self.total_bytes_encrypted;
-        resp.audit_hash = self.audit_chain;
+        let mut resp = VpnResponse {
+            peer_count: self.peer_count as u16,
+            handshakes: self.total_handshakes_completed as u16,
+            packets_routed: self.total_packets_routed as u32,
+            bytes_encrypted: self.total_bytes_encrypted,
+            audit_hash: self.audit_chain,
+            ..Default::default()
+        };
 
         match req.opcode {
             x if x == VpnOpcode::GetStatus as u32 => {
@@ -1935,7 +1943,12 @@ impl JamboVpnDaemon {
                     auth_tag: [0u8; 16],
                 };
                 let admin_cap = self.admin_cap;
-                match self.route_and_encrypt_packet(&admin_cap, &req.dest_ip, &dummy_payload[..len], &mut pkt) {
+                match self.route_and_encrypt_packet(
+                    &admin_cap,
+                    &req.dest_ip,
+                    &dummy_payload[..len],
+                    &mut pkt,
+                ) {
                     Ok(peer_id) => {
                         resp.status = VPN_STATUS_OK;
                         resp.packets_routed = self.total_packets_routed as u32;
@@ -2119,7 +2132,7 @@ impl VpnRequest {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub struct VpnResponse {
     pub status: u32,            // 4 octets (0 = OK)
     pub peer_count: u16,        // 2 octets
@@ -2133,22 +2146,6 @@ pub struct VpnResponse {
 }
 // 4 + 2 + 2 + 8 + 4 + 4 + 4 + 4 + 32 = 64 octets
 const _: () = assert!(core::mem::size_of::<VpnResponse>() == 64);
-
-impl Default for VpnResponse {
-    fn default() -> Self {
-        Self {
-            status: 0,
-            peer_count: 0,
-            handshakes: 0,
-            packets_routed: 0,
-            bytes_encrypted: 0,
-            peer_state: 0,
-            peer_endpoint: [0u8; 4],
-            audit_hash: [0u8; 32],
-            _reserved: [0u8; 4],
-        }
-    }
-}
 
 impl VpnResponse {
     pub fn to_bytes(&self) -> [u8; 64] {
@@ -2208,7 +2205,11 @@ impl VpnClient {
     }
 
     /// Tente de router un paquet chiffré vers une adresse IP de destination
-    pub fn route_packet(&self, dest_ip: [u8; 4], payload_len: u16) -> Result<VpnResponse, SysError> {
+    pub fn route_packet(
+        &self,
+        dest_ip: [u8; 4],
+        payload_len: u16,
+    ) -> Result<VpnResponse, SysError> {
         let req = VpnRequest::new_route(dest_ip, payload_len);
         self.call(&req)
     }
