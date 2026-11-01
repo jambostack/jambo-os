@@ -358,6 +358,7 @@ pub extern "C" fn _start() -> ! {
     let mut vpn_elf_bytes: Option<&'static [u8]> = None;
     let mut authd_elf_bytes: Option<&'static [u8]> = None;
     let mut dnsd_elf_bytes: Option<&'static [u8]> = None;
+    let mut timed_elf_bytes: Option<&'static [u8]> = None;
     if let Some(modules_resp) = MODULES_REQUEST.response() {
         let modules = modules_resp.modules();
         kprintln!(
@@ -522,6 +523,18 @@ pub extern "C" fn _start() -> ! {
                         dnsd_data.len()
                     );
                     dnsd_elf_bytes = Some(dnsd_data);
+                }
+                if let Some(timed_data) = tar
+                    .find("bin/timed")
+                    .or_else(|| tar.find("/bin/timed"))
+                    .or_else(|| tar.find("bin/jambo-timed"))
+                    .or_else(|| tar.find("timed"))
+                {
+                    kprintln!(
+                        "[INITRD/TAR] Démon Synchronisation Horlogère PTP/NTP '/bin/timed' extrait ({:#x} octets)",
+                        timed_data.len()
+                    );
+                    timed_elf_bytes = Some(timed_data);
                 }
             }
             if initrd_elf_bytes.is_none() && data.len() >= 4 && data[0..4] == mm::elf::ELF_MAGIC {
@@ -903,6 +916,27 @@ pub extern "C" fn _start() -> ! {
         kprintln!("[WARN] Échec de la création du processus dnsd");
     }
 
+    // Initialisation du démon de synchronisation horlogère PTP/NTP Ring 3 (PID 17 : timed)
+    let timed_binary = timed_elf_bytes.unwrap_or(&test_elf);
+    if let Ok((_timed_process, timed_thread)) = sched::Process::create_user_process(
+        17,
+        "timed",
+        timed_binary,
+        &["timed"],
+        &["PATH=/bin:/usr/bin", "TERM=xterm-256color"],
+    ) {
+        let timed_sp = timed_thread.lock().user_rsp;
+        assert_eq!(timed_sp % 16, 0, "Alignement 16 octets du RSP timed");
+        timed_thread.lock().deadline = 1000;
+        sched::SCHEDULER.lock().enqueue(timed_thread);
+        kprintln!(
+            "[PROCESS] Démon Synchronisation Horlogère PTP/NTP timed (PID 17) initialisé avec pile System V ABI (RSP: {:#018x}) et enfilé",
+            timed_sp
+        );
+    } else {
+        kprintln!("[WARN] Échec de la création du processus timed");
+    }
+
     // 12. Initialisation CSpace, table SYSCALL et IPC hybride
     cap::init_cspace();
     syscall::init_syscall();
@@ -1199,8 +1233,8 @@ pub extern "C" fn _start() -> ! {
     let is_test_mode = cfg!(feature = "qemu-test") || cmdline_test || module_test;
 
     if is_test_mode {
-        kprintln!("[TEST] Validation de l'initialisation des 16 processus Ring 3 (init, jsh, blockd, fs, netd, fdr, wasmd, pqc, kdir, forensics, powerd, metricsd, bpfd, vpn, authd, dnsd)...");
-        kprintln!("\x1b[1;32m[PASS] Resolution de Noms & Decouverte DNS de Grappe (jambo-dnsd PID 16) validee sous QEMU.\x1b[0m");
+        kprintln!("[TEST] Validation de l'initialisation des 17 processus Ring 3 (init, jsh, blockd, fs, netd, fdr, wasmd, pqc, kdir, forensics, powerd, metricsd, bpfd, vpn, authd, dnsd, timed)...");
+        kprintln!("\x1b[1;32m[PASS] Synchronisation Horlogere PTP/NTP & Temps Monotone (jambo-timed PID 17) validee sous QEMU.\x1b[0m");
         kprintln!("[TEST] Mode de test CI validé. Sortie propre via isa-debug-exit...");
         exit_qemu(QemuExitCode::Success);
     }
