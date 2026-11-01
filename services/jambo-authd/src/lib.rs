@@ -331,6 +331,12 @@ impl SessionManager {
     }
 }
 
+impl Default for SessionManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Calcule une empreinte de jeton de session capabilaire
 pub fn compute_token_hash(session_id: u64, user_id: u32, role: u32, handle: u64) -> [u8; 24] {
     let mut out = [0u8; 24];
@@ -398,7 +404,7 @@ impl JamboAuthDaemon {
         let signature = CryptoAuthEngine::sign_challenge(&op_key, &challenge);
         if let Ok(token) =
             self.manager
-                .authenticate("operator", &challenge, &signature, 1000, 3600_000_000_000)
+                .authenticate("operator", &challenge, &signature, 1000, 3_600_000_000_000)
         {
             self.active_token = Some(token);
         }
@@ -465,7 +471,7 @@ impl JamboAuthDaemon {
                         &challenge,
                         &sig,
                         1000,
-                        3600_000_000_000,
+                        3_600_000_000_000,
                     ) {
                         Ok(token) => {
                             self.active_token = Some(token);
@@ -506,12 +512,8 @@ impl JamboAuthDaemon {
                     resp.role = s.role as u32;
                     resp.session_handle = s.root_handle.0;
                     resp.expires_in_sec = 3600;
-                    resp.token_hash = compute_token_hash(
-                        s.session_id,
-                        s.user_id,
-                        s.role as u32,
-                        s.root_handle.0,
-                    );
+                    resp.token_hash =
+                        compute_token_hash(s.session_id, s.user_id, s.role as u32, s.root_handle.0);
                 } else {
                     resp.status = AUTH_STATUS_NOT_FOUND;
                 }
@@ -582,30 +584,17 @@ pub enum AuthOpcode {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub struct AuthRequest {
-    pub opcode: u32,             // 4 octets (offset 0)
-    pub user_id: u32,            // 4 octets (offset 4)
-    pub session_id: u64,         // 8 octets (offset 8)
-    pub username: [u8; 16],      // 16 octets (offset 16)
-    pub challenge_seed: u64,     // 8 octets (offset 32)
-    pub _reserved: [u8; 24],     // 24 octets (offset 40)
+    pub opcode: u32,         // 4 octets (offset 0)
+    pub user_id: u32,        // 4 octets (offset 4)
+    pub session_id: u64,     // 8 octets (offset 8)
+    pub username: [u8; 16],  // 16 octets (offset 16)
+    pub challenge_seed: u64, // 8 octets (offset 32)
+    pub _reserved: [u8; 24], // 24 octets (offset 40)
 }
 // 4 + 4 + 8 + 16 + 8 + 24 = 64 octets
 const _: () = assert!(core::mem::size_of::<AuthRequest>() == 64);
-
-impl Default for AuthRequest {
-    fn default() -> Self {
-        Self {
-            opcode: 0,
-            user_id: 0,
-            session_id: 0,
-            username: [0u8; 16],
-            challenge_seed: 0,
-            _reserved: [0u8; 24],
-        }
-    }
-}
 
 impl AuthRequest {
     pub const fn new(opcode: AuthOpcode) -> Self {
@@ -712,36 +701,20 @@ impl AuthRequest {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub struct AuthResponse {
-    pub status: u32,             // 4 octets (offset 0, 0 = OK)
-    pub user_id: u32,            // 4 octets (offset 4)
-    pub session_id: u64,         // 8 octets (offset 8)
-    pub role: u32,               // 4 octets (offset 16)
-    pub active_sessions: u16,    // 2 octets (offset 20)
-    pub registered_users: u16,   // 2 octets (offset 22)
-    pub expires_in_sec: u32,     // 4 octets (offset 24)
-    pub session_handle: u64,     // 8 octets (offset 28..32 alignment -> offset 32)
-    pub token_hash: [u8; 24],    // 24 octets (offset 40)
+    pub status: u32,           // 4 octets (offset 0, 0 = OK)
+    pub user_id: u32,          // 4 octets (offset 4)
+    pub session_id: u64,       // 8 octets (offset 8)
+    pub role: u32,             // 4 octets (offset 16)
+    pub active_sessions: u16,  // 2 octets (offset 20)
+    pub registered_users: u16, // 2 octets (offset 22)
+    pub expires_in_sec: u32,   // 4 octets (offset 24)
+    pub session_handle: u64,   // 8 octets (offset 28..32 alignment -> offset 32)
+    pub token_hash: [u8; 24],  // 24 octets (offset 40)
 }
 // 4 + 4 + 8 + 4 + 2 + 2 + 4 + 8 + 24 = 64 octets
 const _: () = assert!(core::mem::size_of::<AuthResponse>() == 64);
-
-impl Default for AuthResponse {
-    fn default() -> Self {
-        Self {
-            status: 0,
-            user_id: 0,
-            session_id: 0,
-            role: 0,
-            active_sessions: 0,
-            registered_users: 0,
-            expires_in_sec: 0,
-            session_handle: 0,
-            token_hash: [0u8; 24],
-        }
-    }
-}
 
 impl AuthResponse {
     pub fn to_bytes(&self) -> [u8; 64] {
@@ -817,7 +790,11 @@ impl AuthClient {
     }
 
     /// Tente une authentification pour un nom d'utilisateur avec défi
-    pub fn authenticate(&self, username: &str, challenge_seed: u64) -> Result<AuthResponse, SysError> {
+    pub fn authenticate(
+        &self,
+        username: &str,
+        challenge_seed: u64,
+    ) -> Result<AuthResponse, SysError> {
         let req = AuthRequest::new_authenticate(username, challenge_seed);
         self.call(&req)
     }

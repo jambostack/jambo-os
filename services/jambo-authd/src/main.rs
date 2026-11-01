@@ -12,8 +12,8 @@
 #![no_main]
 
 use jambo_authd::{
-    syscall_thread_yield, AuthRequest, ChannelMessage, CryptoAuthEngine, JamboAuthDaemon,
-    UserRole, MAX_FASTPATH_BYTES,
+    syscall_thread_yield, AuthRequest, ChannelMessage, CryptoAuthEngine, JamboAuthDaemon, UserRole,
+    MAX_FASTPATH_BYTES,
 };
 use libjambo::println;
 
@@ -55,10 +55,13 @@ pub extern "C" fn _start() -> ! {
                 &challenge,
                 &signature,
                 2000,
-                3600_000_000_000,
+                3_600_000_000_000,
             ) {
                 // c. Vérification du jeton de session capabilaire
-                let token_valid = daemon.manager.validate_session(&auditor_token, 3000).is_ok()
+                let token_valid = daemon
+                    .manager
+                    .validate_session(&auditor_token, 3000)
+                    .is_ok()
                     && auditor_token.user_id == 2
                     && auditor_token.role == UserRole::SecurityAuditor;
 
