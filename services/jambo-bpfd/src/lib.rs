@@ -655,10 +655,10 @@ impl BpfVerifier {
                 bpf_class::BPF_ALU
                 | bpf_class::BPF_ALU64
                 | bpf_class::BPF_LD
-                | bpf_class::BPF_LDX => {
-                    if ins.dst_reg == 10 {
-                        return Err(VerificationError::WriteToReadOnlyRegister);
-                    }
+                | bpf_class::BPF_LDX
+                    if ins.dst_reg == 10 =>
+                {
+                    return Err(VerificationError::WriteToReadOnlyRegister);
                 }
                 _ => {}
             }
@@ -700,10 +700,8 @@ impl BpfVerifier {
                     }
                 }
             } else if class == bpf_class::BPF_LDX {
-                if ins.src_reg == 10 {
-                    if ins.off >= 0 || ins.off < -(STACK_SIZE as i16) {
-                        return Err(VerificationError::StackOutOfBounds(ins.off));
-                    }
+                if ins.src_reg == 10 && (ins.off >= 0 || ins.off < -(STACK_SIZE as i16)) {
+                    return Err(VerificationError::StackOutOfBounds(ins.off));
                 }
                 reg_initialized[ins.dst_reg as usize] = true;
             } else if class == bpf_class::BPF_ALU || class == bpf_class::BPF_ALU64 {
@@ -932,22 +930,20 @@ impl BpfVm {
             bpf_helpers::MAP_LOOKUP_ELEM => {
                 let map_id = self.regs[1] as u32;
                 let key_val = (self.regs[2] as u32).to_ne_bytes();
-                for m in maps.iter() {
-                    if let Some(map) = m {
-                        if map.id == map_id {
-                            if let Some(val) = map.lookup(&key_val[..map.key_size]) {
-                                let mut num = 0u64;
-                                let mut i = 0;
-                                while i < 8 && i < val.len() {
-                                    num |= (val[i] as u64) << (i * 8);
-                                    i += 1;
-                                }
-                                self.regs[0] = num;
-                                return Ok(());
-                            } else {
-                                self.regs[0] = 0;
-                                return Ok(());
+                for map in maps.iter().flatten() {
+                    if map.id == map_id {
+                        if let Some(val) = map.lookup(&key_val[..map.key_size]) {
+                            let mut num = 0u64;
+                            let mut i = 0;
+                            while i < 8 && i < val.len() {
+                                num |= (val[i] as u64) << (i * 8);
+                                i += 1;
                             }
+                            self.regs[0] = num;
+                            return Ok(());
+                        } else {
+                            self.regs[0] = 0;
+                            return Ok(());
                         }
                     }
                 }
@@ -958,14 +954,12 @@ impl BpfVm {
                 let map_id = self.regs[1] as u32;
                 let key_bytes = (self.regs[2] as u32).to_ne_bytes();
                 let val_bytes = self.regs[3].to_ne_bytes();
-                for m in maps.iter_mut() {
-                    if let Some(map) = m {
-                        if map.id == map_id {
-                            let _ =
-                                map.update(&key_bytes[..map.key_size], &val_bytes[..map.val_size]);
-                            self.regs[0] = 0;
-                            return Ok(());
-                        }
+                for map in maps.iter_mut().flatten() {
+                    if map.id == map_id {
+                        let _ =
+                            map.update(&key_bytes[..map.key_size], &val_bytes[..map.val_size]);
+                        self.regs[0] = 0;
+                        return Ok(());
                     }
                 }
                 self.regs[0] = u64::MAX;
@@ -1008,6 +1002,12 @@ impl BpfVm {
             }
             _ => Err(BpfError::InvalidHelper(helper_id)),
         }
+    }
+}
+
+impl Default for BpfVm {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -1195,12 +1195,10 @@ impl JamboBpfDaemon {
 
         // Vérifie l'existence du programme
         let mut found = false;
-        for p in self.programs.iter() {
-            if let Some(prog) = p {
-                if prog.id == prog_id {
-                    found = true;
-                    break;
-                }
+        for prog in self.programs.iter().flatten() {
+            if prog.id == prog_id {
+                found = true;
+                break;
             }
         }
         if !found {
@@ -1327,6 +1325,409 @@ impl JamboBpfDaemon {
         }
         Ok(self.stats)
     }
+
+    /// Initialise le démon avec une capabilité racine
+    pub fn new_with_cap(cap: BpfCap) -> Self {
+        Self::new(cap)
+    }
+
+    /// Traite une requête IPC souveraine et génère la réponse à 64 octets
+    pub fn handle_ipc_request(&mut self, req: &BpfRequest) -> BpfResponse {
+        let mut resp = BpfResponse::default();
+
+        match req.opcode {
+            x if x == BpfOpcode::GetStatus as u32 || x == BpfOpcode::GetStats as u32 => {
+                resp.status = BPF_STATUS_OK;
+                resp.programs_loaded = self.stats.programs_loaded;
+                resp.programs_verified = self.stats.programs_verified;
+                resp.maps_count = self.stats.maps_created;
+                resp.packets_inspected = self.stats.packets_inspected;
+                resp.packets_dropped = self.stats.packets_dropped;
+                resp.packets_passed = self.stats.packets_passed;
+                resp.cycles_consumed = self.stats.total_cycles;
+            }
+            x if x == BpfOpcode::VerifyProgram as u32 => {
+                if req.prog_id != 0 {
+                    let mut found = false;
+                    for prog in self.programs.iter().flatten() {
+                        if prog.id == req.prog_id {
+                            resp.status = BPF_STATUS_OK;
+                            resp.prog_id = prog.id;
+                            resp.instruction_count = prog.instruction_count as u32;
+                            resp.programs_verified = self.stats.programs_verified;
+                            found = true;
+                            break;
+                        }
+                    }
+                    if !found {
+                        resp.status = BPF_STATUS_ERROR;
+                    }
+                } else {
+                    resp.status = BPF_STATUS_ERROR;
+                }
+            }
+            x if x == BpfOpcode::RunProgram as u32 => {
+                let dummy_pkt = [0u8; 16];
+                let mut ctx = BpfContext::new_packet(&dummy_pkt, 1, 0x0800, req.timestamp_ns);
+                let cap = self.cap;
+                match self.run_program(&cap, req.prog_id, &mut ctx) {
+                    Ok(verdict) => {
+                        resp.status = BPF_STATUS_OK;
+                        resp.verdict = verdict as u32;
+                        resp.prog_id = req.prog_id;
+                        resp.cycles_consumed = self.vm.cycles;
+                    }
+                    Err(_) => {
+                        resp.status = BPF_STATUS_ERROR;
+                    }
+                }
+            }
+            x if x == BpfOpcode::FilterPacket as u32 => {
+                let hook_len = req
+                    .hook_name
+                    .iter()
+                    .position(|&b| b == 0)
+                    .unwrap_or(req.hook_name.len());
+                let hook_str = if hook_len > 0 {
+                    core::str::from_utf8(&req.hook_name[..hook_len]).unwrap_or("eth0_xdp")
+                } else {
+                    "eth0_xdp"
+                };
+                let pkt_len = if req.data_len > 0 && (req.data_len as usize) <= req.packet_data.len()
+                {
+                    req.data_len as usize
+                } else {
+                    req.packet_data.len()
+                };
+                let packet = &req.packet_data[..pkt_len];
+
+                let cap = self.cap;
+                match self.filter_packet(&cap, hook_str, packet, req.timestamp_ns) {
+                    Ok(verdict) => {
+                        resp.status = BPF_STATUS_OK;
+                        resp.verdict = verdict as u32;
+                        resp.cycles_consumed = self.vm.cycles;
+                        resp.packets_inspected = self.stats.packets_inspected;
+                        resp.packets_dropped = self.stats.packets_dropped;
+                        resp.packets_passed = self.stats.packets_passed;
+                    }
+                    Err(_) => {
+                        resp.status = BPF_STATUS_ERROR;
+                    }
+                }
+            }
+            _ => {
+                resp.status = BPF_STATUS_ERROR;
+            }
+        }
+
+        resp
+    }
+}
+
+// ============================================================================
+// PROTOCOLE IPC BPFD (BpfOpcode, BpfRequest, BpfResponse, BpfClient)
+// ============================================================================
+
+pub const MAX_FASTPATH_BYTES: usize = 64;
+pub const MAX_HANDLES: usize = 4;
+
+pub const BPF_STATUS_OK: u32 = 1;
+pub const BPF_STATUS_ERROR: u32 = 0;
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct ChannelMessage {
+    pub bytes: [u8; MAX_FASTPATH_BYTES],
+    pub byte_count: usize,
+    pub handles: [Handle; MAX_HANDLES],
+    pub handle_count: usize,
+}
+
+impl Default for ChannelMessage {
+    fn default() -> Self {
+        Self {
+            bytes: [0u8; MAX_FASTPATH_BYTES],
+            byte_count: 0,
+            handles: [Handle::NULL; MAX_HANDLES],
+            handle_count: 0,
+        }
+    }
+}
+
+/// Cède volontairement le temps processeur au scheduler EEVDF
+#[inline(always)]
+pub fn syscall_thread_yield() {
+    unsafe {
+        libjambo::syscall6(libjambo::SyscallNumber::ThreadYield, 0, 0, 0, 0, 0, 0);
+    }
+}
+
+/// Opcodes du protocole IPC eBPF souverain (BPFD)
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BpfOpcode {
+    GetStatus = 1,
+    VerifyProgram = 2,
+    RunProgram = 3,
+    FilterPacket = 4,
+    GetStats = 5,
+}
+
+/// Requête IPC transmise au démon `bpfd` (exactement 64 octets)
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct BpfRequest {
+    pub opcode: u32,           // BpfOpcode
+    pub prog_id: u32,          // Identifiant de programme eBPF
+    pub data_len: u32,         // Longueur des données utiles / paquet
+    pub reserved_pad: u32,     // Alignement interne
+    pub timestamp_ns: u64,     // Horodatage nanosecondes
+    pub hook_name: [u8; 16],   // Nom du crochet réseau (ex: "eth0_xdp")
+    pub packet_data: [u8; 24], // Échantillon de trame réseau
+}
+
+const _: () = assert!(core::mem::size_of::<BpfRequest>() == 64);
+
+impl BpfRequest {
+    pub const fn new(opcode: BpfOpcode) -> Self {
+        Self {
+            opcode: opcode as u32,
+            prog_id: 0,
+            data_len: 0,
+            reserved_pad: 0,
+            timestamp_ns: 0,
+            hook_name: [0u8; 16],
+            packet_data: [0u8; 24],
+        }
+    }
+
+    pub const fn new_run(prog_id: u32) -> Self {
+        Self {
+            opcode: BpfOpcode::RunProgram as u32,
+            prog_id,
+            data_len: 0,
+            reserved_pad: 0,
+            timestamp_ns: 0,
+            hook_name: [0u8; 16],
+            packet_data: [0u8; 24],
+        }
+    }
+
+    pub const fn new_verify(prog_id: u32) -> Self {
+        Self {
+            opcode: BpfOpcode::VerifyProgram as u32,
+            prog_id,
+            data_len: 0,
+            reserved_pad: 0,
+            timestamp_ns: 0,
+            hook_name: [0u8; 16],
+            packet_data: [0u8; 24],
+        }
+    }
+
+    pub fn new_filter(hook: &[u8], packet: &[u8], timestamp_ns: u64) -> Self {
+        let mut req = Self {
+            opcode: BpfOpcode::FilterPacket as u32,
+            prog_id: 0,
+            data_len: packet.len() as u32,
+            reserved_pad: 0,
+            timestamp_ns,
+            hook_name: [0u8; 16],
+            packet_data: [0u8; 24],
+        };
+        let hlen = hook.len().min(16);
+        let mut i = 0;
+        while i < hlen {
+            req.hook_name[i] = hook[i];
+            i += 1;
+        }
+        let plen = packet.len().min(24);
+        let mut j = 0;
+        while j < plen {
+            req.packet_data[j] = packet[j];
+            j += 1;
+        }
+        req
+    }
+
+    pub const fn new_stats() -> Self {
+        Self::new(BpfOpcode::GetStats)
+    }
+
+    pub fn to_bytes(&self) -> [u8; 64] {
+        let mut bytes = [0u8; 64];
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                self as *const Self as *const u8,
+                bytes.as_mut_ptr(),
+                64,
+            );
+        }
+        bytes
+    }
+
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        if bytes.len() < core::mem::size_of::<Self>() {
+            return None;
+        }
+        let mut req = Self::default();
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                bytes.as_ptr(),
+                &mut req as *mut Self as *mut u8,
+                core::mem::size_of::<Self>(),
+            );
+        }
+        Some(req)
+    }
+}
+
+/// Réponse IPC retournée par le démon `bpfd` (exactement 64 octets)
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct BpfResponse {
+    pub status: u32,            // 1 = OK, 0 = Erreur (BPF_STATUS_OK / ERROR)
+    pub verdict: u32,           // Verdict d'exécution XDP (0 = PASS, 1 = DROP, etc.)
+    pub cycles_consumed: u64,   // Cycles d'instructions consommés
+    pub packets_inspected: u64, // Nombre cumulé de paquets inspectés
+    pub packets_dropped: u64,   // Nombre cumulé de paquets rejetés
+    pub packets_passed: u64,    // Nombre cumulé de paquets acceptés
+    pub prog_id: u32,           // Identifiant de programme concerné
+    pub instruction_count: u32, // Nombre d'instructions vérifiées / exécutées
+    pub programs_loaded: u32,   // Nombre de programmes eBPF chargés
+    pub programs_verified: u32, // Nombre de programmes vérifiés formellement
+    pub maps_count: u32,        // Nombre de tables eBPF actives
+    pub reserved: [u8; 4],      // Alignement et extension future
+}
+
+const _: () = assert!(core::mem::size_of::<BpfResponse>() == 64);
+
+impl BpfResponse {
+    pub fn to_bytes(&self) -> [u8; 64] {
+        let mut bytes = [0u8; 64];
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                self as *const Self as *const u8,
+                bytes.as_mut_ptr(),
+                64,
+            );
+        }
+        bytes
+    }
+
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        if bytes.len() < core::mem::size_of::<Self>() {
+            return None;
+        }
+        let mut resp = Self::default();
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                bytes.as_ptr(),
+                &mut resp as *mut Self as *mut u8,
+                core::mem::size_of::<Self>(),
+            );
+        }
+        Some(resp)
+    }
+}
+
+/// Client IPC pour interagir avec le démon eBPF (jambo-bpfd, Ring 3, PID 13)
+pub struct BpfClient {
+    pub endpoint: Handle,
+}
+
+impl BpfClient {
+    pub const fn new(endpoint: Handle) -> Self {
+        Self { endpoint }
+    }
+
+    /// Récupère l'état global du sous-système eBPF
+    pub fn get_status(&self) -> Result<BpfResponse, SysError> {
+        let req = BpfRequest::new(BpfOpcode::GetStatus);
+        self.call(&req)
+    }
+
+    /// Récupère les métriques et compteurs du moteur eBPF
+    pub fn get_stats(&self) -> Result<BpfResponse, SysError> {
+        let req = BpfRequest::new(BpfOpcode::GetStats);
+        self.call(&req)
+    }
+
+    /// Vérifie formellement ou inspecte un programme eBPF par son identifiant
+    pub fn verify_program(&self, prog_id: u32) -> Result<BpfResponse, SysError> {
+        let req = BpfRequest::new_verify(prog_id);
+        self.call(&req)
+    }
+
+    /// Exécute un programme eBPF par son identifiant
+    pub fn run_program(&self, prog_id: u32) -> Result<BpfResponse, SysError> {
+        let req = BpfRequest::new_run(prog_id);
+        self.call(&req)
+    }
+
+    /// Filtre un paquet réseau sur un crochet (ex: "eth0_xdp")
+    pub fn filter_packet(
+        &self,
+        hook: &[u8],
+        packet: &[u8],
+        timestamp_ns: u64,
+    ) -> Result<BpfResponse, SysError> {
+        let req = BpfRequest::new_filter(hook, packet, timestamp_ns);
+        self.call(&req)
+    }
+
+    fn call(&self, req: &BpfRequest) -> Result<BpfResponse, SysError> {
+        let mut tx_msg = ChannelMessage::default();
+        let req_bytes = req.to_bytes();
+        let copy_len = req_bytes.len().min(MAX_FASTPATH_BYTES);
+        tx_msg.bytes[..copy_len].copy_from_slice(&req_bytes[..copy_len]);
+        tx_msg.byte_count = copy_len;
+
+        // 1. Émission de la requête sur le canal IPC
+        let (ret_send, _) = unsafe {
+            libjambo::syscall6(
+                libjambo::SyscallNumber::ChannelCall,
+                self.endpoint.0,
+                &tx_msg as *const ChannelMessage as u64,
+                0,
+                0,
+                0,
+                0,
+            )
+        };
+
+        if ret_send != 0 {
+            return Err(SysError::InvalidHandle);
+        }
+
+        // 2. Réception de la réponse avec repli coopératif
+        let mut rx_msg = ChannelMessage::default();
+        let mut attempts = 0;
+        while attempts < 100 {
+            let (ret_recv, _) = unsafe {
+                libjambo::syscall6(
+                    libjambo::SyscallNumber::ChannelCall,
+                    self.endpoint.0,
+                    0,
+                    &mut rx_msg as *mut ChannelMessage as u64,
+                    0,
+                    0,
+                    0,
+                )
+            };
+
+            if ret_recv == 0 && rx_msg.byte_count >= core::mem::size_of::<BpfResponse>() {
+                return BpfResponse::from_bytes(&rx_msg.bytes[..rx_msg.byte_count])
+                    .ok_or(SysError::InvalidArgument);
+            }
+
+            attempts += 1;
+            syscall_thread_yield();
+        }
+
+        Err(SysError::TimedOut)
+    }
 }
 
 #[cfg(test)]
@@ -1443,5 +1844,92 @@ mod tests {
         assert_eq!(stats.packets_inspected, 2);
         assert_eq!(stats.packets_passed, 1);
         assert_eq!(stats.packets_dropped, 1);
+    }
+
+    #[test]
+    fn test_ipc_request_response_size_and_serialization() {
+        assert_eq!(core::mem::size_of::<BpfRequest>(), 64);
+        assert_eq!(core::mem::size_of::<BpfResponse>(), 64);
+
+        let req = BpfRequest::new_filter(b"eth0_xdp", &[0x12, 0x34, 0x56], 123456789);
+        let bytes = req.to_bytes();
+        assert_eq!(bytes.len(), 64);
+
+        let decoded = BpfRequest::from_bytes(&bytes).expect("decode BpfRequest");
+        assert_eq!(decoded.opcode, BpfOpcode::FilterPacket as u32);
+        assert_eq!(decoded.timestamp_ns, 123456789);
+        assert_eq!(decoded.data_len, 3);
+        assert_eq!(&decoded.hook_name[..8], b"eth0_xdp");
+        assert_eq!(&decoded.packet_data[..3], &[0x12, 0x34, 0x56]);
+
+        let mut resp = BpfResponse::default();
+        resp.status = BPF_STATUS_OK;
+        resp.verdict = xdp_action::XDP_PASS as u32;
+        resp.programs_loaded = 3;
+        resp.cycles_consumed = 42;
+        let resp_bytes = resp.to_bytes();
+        assert_eq!(resp_bytes.len(), 64);
+
+        let decoded_resp = BpfResponse::from_bytes(&resp_bytes).expect("decode BpfResponse");
+        assert_eq!(decoded_resp.status, BPF_STATUS_OK);
+        assert_eq!(decoded_resp.verdict, xdp_action::XDP_PASS as u32);
+        assert_eq!(decoded_resp.programs_loaded, 3);
+        assert_eq!(decoded_resp.cycles_consumed, 42);
+    }
+
+    #[test]
+    fn test_ipc_handle_request() {
+        let admin = BpfCap::new(Handle::new(13, 1), bpf_rights::ALL);
+        let mut daemon = JamboBpfDaemon::new_with_cap(admin);
+
+        // 1. GetStatus
+        let req_status = BpfRequest::new(BpfOpcode::GetStatus);
+        let resp_status = daemon.handle_ipc_request(&req_status);
+        assert_eq!(resp_status.status, BPF_STATUS_OK);
+        assert_eq!(resp_status.programs_loaded, 0);
+
+        // 2. Load program & attach
+        let filter_prog = [
+            BpfInstruction::mov64_imm(1, 0),
+            BpfInstruction::call(bpf_helpers::PACKET_READ_BYTE),
+            BpfInstruction::jmp_imm(bpf_jmp::BPF_JEQ, 0, 0x42, 2),
+            BpfInstruction::mov64_imm(0, xdp_action::XDP_PASS as i32),
+            BpfInstruction::exit(),
+            BpfInstruction::mov64_imm(0, xdp_action::XDP_DROP as i32),
+            BpfInstruction::exit(),
+        ];
+        let prog_id = daemon
+            .load_and_verify(&admin, BpfProgramType::Xdp, "xdp_ipc", &filter_prog)
+            .expect("load");
+        daemon.attach(&admin, prog_id, "eth0_xdp").expect("attach");
+
+        // 3. VerifyProgram via IPC
+        let req_verify = BpfRequest::new_verify(prog_id);
+        let resp_verify = daemon.handle_ipc_request(&req_verify);
+        assert_eq!(resp_verify.status, BPF_STATUS_OK);
+        assert_eq!(resp_verify.prog_id, prog_id);
+        assert_eq!(resp_verify.instruction_count, 7);
+
+        // 4. FilterPacket (PASS)
+        let req_filter_pass = BpfRequest::new_filter(b"eth0_xdp", &[0xAA, 0xBB], 1000);
+        let resp_pass = daemon.handle_ipc_request(&req_filter_pass);
+        assert_eq!(resp_pass.status, BPF_STATUS_OK);
+        assert_eq!(resp_pass.verdict, xdp_action::XDP_PASS as u32);
+
+        // 5. FilterPacket (DROP)
+        let req_filter_drop = BpfRequest::new_filter(b"eth0_xdp", &[0x42, 0x00], 1001);
+        let resp_drop = daemon.handle_ipc_request(&req_filter_drop);
+        assert_eq!(resp_drop.status, BPF_STATUS_OK);
+        assert_eq!(resp_drop.verdict, xdp_action::XDP_DROP as u32);
+
+        // 6. GetStats via IPC
+        let req_stats = BpfRequest::new(BpfOpcode::GetStats);
+        let resp_stats = daemon.handle_ipc_request(&req_stats);
+        assert_eq!(resp_stats.status, BPF_STATUS_OK);
+        assert_eq!(resp_stats.programs_loaded, 1);
+        assert_eq!(resp_stats.packets_inspected, 2);
+        assert_eq!(resp_stats.packets_passed, 1);
+        assert_eq!(resp_stats.packets_dropped, 1);
+        assert!(resp_stats.cycles_consumed > 0);
     }
 }

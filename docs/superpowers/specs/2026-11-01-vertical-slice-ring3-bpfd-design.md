@@ -88,3 +88,4 @@ L'objectif du **Jalon 3.8 (`v0.3.52`)** est d'établir le démon **`jambo-bpfd` 
 - Journal UART : `[PASS] Sandboxing eBPF & Filtrage Réseau XDP (jambo-bpfd PID 13) validée sous QEMU.`
 - `xtask` : Compilation de `jambo-bpfd` avec `libs/user-x86_64.ld` à `0x00400000`, empaquetage dans `target/initrd.tar`, bannière de disque `"Bienvenue sur JamboOS v0.3.52\n"`.
 - Test QEMU automatisé avec code de sortie 33 (`isa-debug-exit`).
+

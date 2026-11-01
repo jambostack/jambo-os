@@ -1,0 +1,16 @@
+[package]
+name = "jambo-bpfd"
+version = "0.3.52"
+edition = "2021"
+
+[lib]
+name = "jambo_bpfd"
+path = "src/lib.rs"
+
+[[bin]]
+name = "bpfd"
+path = "src/main.rs"
+
+[dependencies]
+jambo-abi = { path = "../../abi/jambo-abi" }
+libjambo = { path = "../../libs/libjambo" }
