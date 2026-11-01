@@ -1,5 +1,15 @@
 #![no_std]
 #![no_main]
+#![allow(
+    clippy::missing_safety_doc,
+    clippy::new_without_default,
+    clippy::for_kv_map,
+    clippy::identity_op,
+    clippy::not_unsafe_ptr_arg_deref,
+    clippy::unwrap_or_default,
+    clippy::manual_div_ceil,
+    clippy::manual_range_contains
+)]
 
 extern crate alloc;
 
@@ -147,7 +157,7 @@ pub extern "C" fn _start() -> ! {
     // 4. Bannière système d'accueil sobre Iron Core
     kprintln!("\x1b[1;36m");
     kprintln!("================================================================================");
-    kprintln!("    JAMBO-OS (JamboKernel v0.3.48 — Iron Core)                                 ");
+    kprintln!("    JAMBO-OS (JamboKernel v0.3.49 — Iron Core)                                 ");
     kprintln!("    Architecture : Micro-noyau orienté capacités en Rust no_std (x86_64/AArch64)");
     kprintln!("    Auteur & Architecte Principal : ASSOGBA Prudence Dieudonné                 ");
     kprintln!("    Dépôt Officiel : https://github.com/jambostack/jambo-os                    ");
