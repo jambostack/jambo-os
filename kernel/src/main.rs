@@ -157,7 +157,7 @@ pub extern "C" fn _start() -> ! {
     // 4. Bannière système d'accueil sobre Iron Core
     kprintln!("\x1b[1;36m");
     kprintln!("================================================================================");
-    kprintln!("    JAMBO-OS (JamboKernel v0.3.50 — Iron Core)                                 ");
+    kprintln!("    JAMBO-OS (JamboKernel v0.3.51 — Iron Core)                                 ");
     kprintln!("    Architecture : Micro-noyau orienté capacités en Rust no_std (x86_64/AArch64)");
     kprintln!("    Auteur & Architecte Principal : ASSOGBA Prudence Dieudonné                 ");
     kprintln!("    Dépôt Officiel : https://github.com/jambostack/jambo-os                    ");
@@ -353,6 +353,7 @@ pub extern "C" fn _start() -> ! {
     let mut kdir_elf_bytes: Option<&'static [u8]> = None;
     let mut forensics_elf_bytes: Option<&'static [u8]> = None;
     let mut powerd_elf_bytes: Option<&'static [u8]> = None;
+    let mut metricsd_elf_bytes: Option<&'static [u8]> = None;
     if let Some(modules_resp) = MODULES_REQUEST.response() {
         let modules = modules_resp.modules();
         kprintln!(
@@ -457,6 +458,18 @@ pub extern "C" fn _start() -> ! {
                         powerd_data.len()
                     );
                     powerd_elf_bytes = Some(powerd_data);
+                }
+                if let Some(metricsd_data) = tar
+                    .find("bin/metricsd")
+                    .or_else(|| tar.find("/bin/metricsd"))
+                    .or_else(|| tar.find("bin/jambo-metricsd"))
+                    .or_else(|| tar.find("metricsd"))
+                {
+                    kprintln!(
+                        "[INITRD/TAR] Démon Métrologie Système & Télémétrie '/bin/metricsd' extrait ({:#x} octets)",
+                        metricsd_data.len()
+                    );
+                    metricsd_elf_bytes = Some(metricsd_data);
                 }
             }
             if initrd_elf_bytes.is_none() && data.len() >= 4 && data[0..4] == mm::elf::ELF_MAGIC {
@@ -731,6 +744,27 @@ pub extern "C" fn _start() -> ! {
         );
     } else {
         kprintln!("[WARN] Échec de la création du processus powerd");
+    }
+
+    // Initialisation du démon Métrologie Système & Télémétrie Haute Précision Ring 3 (PID 12 : metricsd)
+    let metricsd_binary = metricsd_elf_bytes.unwrap_or(&test_elf);
+    if let Ok((_metricsd_process, metricsd_thread)) = sched::Process::create_user_process(
+        12,
+        "metricsd",
+        metricsd_binary,
+        &["metricsd"],
+        &["PATH=/bin:/usr/bin", "TERM=xterm-256color"],
+    ) {
+        let metricsd_sp = metricsd_thread.lock().user_rsp;
+        assert_eq!(metricsd_sp % 16, 0, "Alignement 16 octets du RSP metricsd");
+        metricsd_thread.lock().deadline = 1000;
+        sched::SCHEDULER.lock().enqueue(metricsd_thread);
+        kprintln!(
+            "[PROCESS] Démon Métrologie Système & Télémétrie metricsd (PID 12) initialisé avec pile System V ABI (RSP: {:#018x}) et enfilé",
+            metricsd_sp
+        );
+    } else {
+        kprintln!("[WARN] Échec de la création du processus metricsd");
     }
 
     // 12. Initialisation CSpace, table SYSCALL et IPC hybride
@@ -1029,8 +1063,8 @@ pub extern "C" fn _start() -> ! {
     let is_test_mode = cfg!(feature = "qemu-test") || cmdline_test || module_test;
 
     if is_test_mode {
-        kprintln!("[TEST] Validation de l'initialisation des 11 processus Ring 3 (init, jsh, blockd, fs, netd, fdr, wasmd, pqc, kdir, forensics, powerd)...");
-        kprintln!("\x1b[1;32m[PASS] Gestion Énergie & Fréquence CPU (jambo-powerd PID 11) validée sous QEMU.\x1b[0m");
+        kprintln!("[TEST] Validation de l'initialisation des 12 processus Ring 3 (init, jsh, blockd, fs, netd, fdr, wasmd, pqc, kdir, forensics, powerd, metricsd)...");
+        kprintln!("\x1b[1;32m[PASS] Métrologie Système & Télémétrie Haute Précision (jambo-metrics PID 12) validée sous QEMU.\x1b[0m");
         kprintln!("[TEST] Mode de test CI validé. Sortie propre via isa-debug-exit...");
         exit_qemu(QemuExitCode::Success);
     }

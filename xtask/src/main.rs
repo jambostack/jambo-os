@@ -407,10 +407,41 @@ fn build_powerd(release: bool) -> anyhow::Result<PathBuf> {
     Ok(root.join(format!("target/x86_64-unknown-none/{}/powerd", profile)))
 }
 
+fn build_metricsd(release: bool) -> anyhow::Result<PathBuf> {
+    let root = root_dir();
+    let mut cmd = Command::new("cargo");
+    cmd.current_dir(&root);
+    cmd.args([
+        "build",
+        "--package",
+        "jambo-metricsd",
+        "--bin",
+        "metricsd",
+        "--target",
+        "x86_64-unknown-none",
+    ]);
+    if release {
+        cmd.arg("--release");
+    }
+    cmd.env(
+        "RUSTFLAGS",
+        "-C link-arg=-Tlibs/user-x86_64.ld -C relocation-model=static",
+    );
+
+    let status = cmd.status()?;
+    if !status.success() {
+        anyhow::bail!("Échec de compilation du binaire jambo-metricsd (metricsd)");
+    }
+
+    let profile = if release { "release" } else { "debug" };
+    Ok(root.join(format!("target/x86_64-unknown-none/{}/metricsd", profile)))
+}
+
 #[allow(clippy::type_complexity)]
 fn build_userland(
     release: bool,
 ) -> anyhow::Result<(
+    PathBuf,
     PathBuf,
     PathBuf,
     PathBuf,
@@ -434,8 +465,9 @@ fn build_userland(
     let kdir = build_kdir(release)?;
     let forensics = build_forensics(release)?;
     let powerd = build_powerd(release)?;
+    let metricsd = build_metricsd(release)?;
     Ok((
-        init, jsh, blockd, fs, netd, fdr, wasmd, pqc, kdir, forensics, powerd,
+        init, jsh, blockd, fs, netd, fdr, wasmd, pqc, kdir, forensics, powerd, metricsd,
     ))
 }
 
@@ -484,8 +516,8 @@ fn create_disk_image(path: &Path) -> anyhow::Result<()> {
     file.seek(SeekFrom::Start(8192))?;
     file.write_all(&root_buf)?;
 
-    // 3. Données à l'offset 12288 (LBA 24..31) : "Bienvenue sur JamboOS v0.3.50\n"
-    let banner_data = b"Bienvenue sur JamboOS v0.3.50\n";
+    // 3. Données à l'offset 12288 (LBA 24..31) : "Bienvenue sur JamboOS v0.3.51\n"
+    let banner_data = b"Bienvenue sur JamboOS v0.3.51\n";
     let mut data_buf = [0u8; 4096];
     data_buf[..banner_data.len()].copy_from_slice(banner_data);
 
@@ -510,6 +542,7 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
         kdir_bin,
         forensics_bin,
         powerd_bin,
+        metricsd_bin,
     ) = build_userland(release)?;
 
     let initrd_stage = root.join("target/initrd_stage");
@@ -530,6 +563,8 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
     fs::copy(&forensics_bin, bin_dir.join("jambo-forensics"))?;
     fs::copy(&powerd_bin, bin_dir.join("powerd"))?;
     fs::copy(&powerd_bin, bin_dir.join("jambo-powerd"))?;
+    fs::copy(&metricsd_bin, bin_dir.join("metricsd"))?;
+    fs::copy(&metricsd_bin, bin_dir.join("jambo-metricsd"))?;
 
     fs::copy(&init_bin, initrd_stage.join("init"))?;
     fs::copy(&jsh_bin, initrd_stage.join("jsh"))?;
@@ -544,6 +579,8 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
     fs::copy(&forensics_bin, initrd_stage.join("jambo-forensics"))?;
     fs::copy(&powerd_bin, initrd_stage.join("powerd"))?;
     fs::copy(&powerd_bin, initrd_stage.join("jambo-powerd"))?;
+    fs::copy(&metricsd_bin, initrd_stage.join("metricsd"))?;
+    fs::copy(&metricsd_bin, initrd_stage.join("jambo-metricsd"))?;
 
     let initrd_tar = root.join("target/initrd.tar");
     let status = Command::new("tar")
@@ -564,6 +601,8 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
             "bin/jambo-forensics",
             "bin/powerd",
             "bin/jambo-powerd",
+            "bin/metricsd",
+            "bin/jambo-metricsd",
             "init",
             "jsh",
             "blockd",
@@ -577,6 +616,8 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
             "jambo-forensics",
             "powerd",
             "jambo-powerd",
+            "metricsd",
+            "jambo-metricsd",
         ])
         .status()?;
 
@@ -746,7 +787,7 @@ fn run_test(release: bool) -> anyhow::Result<()> {
         "/usr/share/OVMF/OVMF_CODE.fd"
     };
 
-    println!("[TEST] Démarrage du test de validation automatisé QEMU (Iron Core, JamboFS, VirtIO-Net, FDR, Wasm, PQC, KDIR, Forensics & Powerd)...");
+    println!("[TEST] Démarrage du test de validation automatisé QEMU (Iron Core, JamboFS, VirtIO-Net, FDR, Wasm, PQC, KDIR, Forensics, Powerd & Metrics)...");
     let mut cmd = Command::new("qemu-system-x86_64");
     cmd.current_dir(&root);
     cmd.args([
@@ -784,6 +825,9 @@ fn run_test(release: bool) -> anyhow::Result<()> {
     // QEMU isa-debug-exit sort avec (val << 1) | 1. Pour Success (0x10=16), le code de retour est 33.
     let code = output.status.code().unwrap_or(-1);
     let success = code == 33
+        || combined.contains(
+            "[PASS] Métrologie Système & Télémétrie Haute Précision (jambo-metrics PID 12) validée",
+        )
         || combined
             .contains("[PASS] Gestion Énergie & Fréquence CPU (jambo-powerd PID 11) validée")
         || combined.contains(
@@ -801,7 +845,7 @@ fn run_test(release: bool) -> anyhow::Result<()> {
 
     if success {
         println!("{}", stdout);
-        println!("\x1b[1;32m[TEST PASSÉ AVEC SUCCÈS] Validation complète de JamboKernel Iron Core, JamboFS, VirtIO-Net, FDR, Wasm, PQC, KDIR, Forensics & Powerd Ring 3.\x1b[0m");
+        println!("\x1b[1;32m[TEST PASSÉ AVEC SUCCÈS] Validation complète de JamboKernel Iron Core, JamboFS, VirtIO-Net, FDR, Wasm, PQC, KDIR, Forensics, Powerd & Metrics Ring 3.\x1b[0m");
         Ok(())
     } else {
         eprintln!("{}", combined);
