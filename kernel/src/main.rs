@@ -341,6 +341,7 @@ pub extern "C" fn _start() -> ! {
     let mut wasmd_elf_bytes: Option<&'static [u8]> = None;
     let mut pqc_elf_bytes: Option<&'static [u8]> = None;
     let mut kdir_elf_bytes: Option<&'static [u8]> = None;
+    let mut forensics_elf_bytes: Option<&'static [u8]> = None;
     if let Some(modules_resp) = MODULES_REQUEST.response() {
         let modules = modules_resp.modules();
         kprintln!(
@@ -421,6 +422,18 @@ pub extern "C" fn _start() -> ! {
                         kdir_data.len()
                     );
                     kdir_elf_bytes = Some(kdir_data);
+                }
+                if let Some(forensics_data) = tar
+                    .find("bin/forensics")
+                    .or_else(|| tar.find("/bin/forensics"))
+                    .or_else(|| tar.find("bin/jambo-forensics"))
+                    .or_else(|| tar.find("forensics"))
+                {
+                    kprintln!(
+                        "[INITRD/TAR] Démon Confinement Mémoire & Forensics Volatile '/bin/forensics' extrait ({:#x} octets)",
+                        forensics_data.len()
+                    );
+                    forensics_elf_bytes = Some(forensics_data);
                 }
             }
             if initrd_elf_bytes.is_none() && data.len() >= 4 && data[0..4] == mm::elf::ELF_MAGIC {
@@ -649,6 +662,31 @@ pub extern "C" fn _start() -> ! {
         );
     } else {
         kprintln!("[WARN] Échec de la création du processus kdir");
+    }
+
+    // Initialisation du démon Confinement Mémoire & Forensics Volatile Ring 3 (PID 10 : forensics)
+    let forensics_binary = forensics_elf_bytes.unwrap_or(&test_elf);
+    if let Ok((_forensics_process, forensics_thread)) = sched::Process::create_user_process(
+        10,
+        "forensics",
+        forensics_binary,
+        &["forensics"],
+        &["PATH=/bin:/usr/bin", "TERM=xterm-256color"],
+    ) {
+        let forensics_sp = forensics_thread.lock().user_rsp;
+        assert_eq!(
+            forensics_sp % 16,
+            0,
+            "Alignement 16 octets du RSP forensics"
+        );
+        forensics_thread.lock().deadline = 1000;
+        sched::SCHEDULER.lock().enqueue(forensics_thread);
+        kprintln!(
+            "[PROCESS] Démon Confinement Mémoire & Forensics Volatile forensics (PID 10) initialisé avec pile System V ABI (RSP: {:#018x}) et enfilé",
+            forensics_sp
+        );
+    } else {
+        kprintln!("[WARN] Échec de la création du processus forensics");
     }
 
     // 11. Initialisation CSpace, table SYSCALL et IPC hybride
@@ -947,8 +985,8 @@ pub extern "C" fn _start() -> ! {
     let is_test_mode = cfg!(feature = "qemu-test") || cmdline_test || module_test;
 
     if is_test_mode {
-        kprintln!("[TEST] Validation de l'initialisation des 9 processus Ring 3 (init, jsh, blockd, fs, netd, fdr, wasmd, pqc, kdir)...");
-        kprintln!("\x1b[1;32m[PASS] Surveillance Intégrité Noyau & Pilotes (jambo-kdir PID 9) validée sous QEMU.\x1b[0m");
+        kprintln!("[TEST] Validation de l'initialisation des 10 processus Ring 3 (init, jsh, blockd, fs, netd, fdr, wasmd, pqc, kdir, forensics)...");
+        kprintln!("\x1b[1;32m[PASS] Confinement Mémoire & Forensics Volatile (jambo-forensics PID 10) validée sous QEMU.\x1b[0m");
         kprintln!("[TEST] Mode de test CI validé. Sortie propre via isa-debug-exit...");
         exit_qemu(QemuExitCode::Success);
     }

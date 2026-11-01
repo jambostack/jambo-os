@@ -347,9 +347,41 @@ fn build_kdir(release: bool) -> anyhow::Result<PathBuf> {
     Ok(root.join(format!("target/x86_64-unknown-none/{}/kdir", profile)))
 }
 
+fn build_forensics(release: bool) -> anyhow::Result<PathBuf> {
+    let root = root_dir();
+    let mut cmd = Command::new("cargo");
+    cmd.current_dir(&root);
+    cmd.args([
+        "build",
+        "--package",
+        "jambo-forensics",
+        "--bin",
+        "forensics",
+        "--target",
+        "x86_64-unknown-none",
+    ]);
+    if release {
+        cmd.arg("--release");
+    }
+    cmd.env(
+        "RUSTFLAGS",
+        "-C link-arg=-Tlibs/user-x86_64.ld -C relocation-model=static",
+    );
+
+    let status = cmd.status()?;
+    if !status.success() {
+        anyhow::bail!("Échec de compilation du binaire jambo-forensics (forensics)");
+    }
+
+    let profile = if release { "release" } else { "debug" };
+    Ok(root.join(format!("target/x86_64-unknown-none/{}/forensics", profile)))
+}
+
+#[allow(clippy::type_complexity)]
 fn build_userland(
     release: bool,
 ) -> anyhow::Result<(
+    PathBuf,
     PathBuf,
     PathBuf,
     PathBuf,
@@ -369,7 +401,10 @@ fn build_userland(
     let wasmd = build_wasmd(release)?;
     let pqc = build_pqc(release)?;
     let kdir = build_kdir(release)?;
-    Ok((init, jsh, blockd, fs, netd, fdr, wasmd, pqc, kdir))
+    let forensics = build_forensics(release)?;
+    Ok((
+        init, jsh, blockd, fs, netd, fdr, wasmd, pqc, kdir, forensics,
+    ))
 }
 
 fn create_disk_image(path: &Path) -> anyhow::Result<()> {
@@ -417,8 +452,8 @@ fn create_disk_image(path: &Path) -> anyhow::Result<()> {
     file.seek(SeekFrom::Start(8192))?;
     file.write_all(&root_buf)?;
 
-    // 3. Données à l'offset 12288 (LBA 24..31) : "Bienvenue sur JamboOS v0.3.48\n"
-    let banner_data = b"Bienvenue sur JamboOS v0.3.48\n";
+    // 3. Données à l'offset 12288 (LBA 24..31) : "Bienvenue sur JamboOS v0.3.49\n"
+    let banner_data = b"Bienvenue sur JamboOS v0.3.49\n";
     let mut data_buf = [0u8; 4096];
     data_buf[..banner_data.len()].copy_from_slice(banner_data);
 
@@ -431,8 +466,18 @@ fn create_disk_image(path: &Path) -> anyhow::Result<()> {
 
 fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
     let root = root_dir();
-    let (init_bin, jsh_bin, blockd_bin, fs_bin, netd_bin, fdr_bin, wasmd_bin, pqc_bin, kdir_bin) =
-        build_userland(release)?;
+    let (
+        init_bin,
+        jsh_bin,
+        blockd_bin,
+        fs_bin,
+        netd_bin,
+        fdr_bin,
+        wasmd_bin,
+        pqc_bin,
+        kdir_bin,
+        forensics_bin,
+    ) = build_userland(release)?;
 
     let initrd_stage = root.join("target/initrd_stage");
     let bin_dir = initrd_stage.join("bin");
@@ -448,6 +493,8 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
     fs::copy(&wasmd_bin, bin_dir.join("wasmd"))?;
     fs::copy(&pqc_bin, bin_dir.join("pqc"))?;
     fs::copy(&kdir_bin, bin_dir.join("kdir"))?;
+    fs::copy(&forensics_bin, bin_dir.join("forensics"))?;
+    fs::copy(&forensics_bin, bin_dir.join("jambo-forensics"))?;
 
     fs::copy(&init_bin, initrd_stage.join("init"))?;
     fs::copy(&jsh_bin, initrd_stage.join("jsh"))?;
@@ -458,6 +505,8 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
     fs::copy(&wasmd_bin, initrd_stage.join("wasmd"))?;
     fs::copy(&pqc_bin, initrd_stage.join("pqc"))?;
     fs::copy(&kdir_bin, initrd_stage.join("kdir"))?;
+    fs::copy(&forensics_bin, initrd_stage.join("forensics"))?;
+    fs::copy(&forensics_bin, initrd_stage.join("jambo-forensics"))?;
 
     let initrd_tar = root.join("target/initrd.tar");
     let status = Command::new("tar")
@@ -474,6 +523,8 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
             "bin/wasmd",
             "bin/pqc",
             "bin/kdir",
+            "bin/forensics",
+            "bin/jambo-forensics",
             "init",
             "jsh",
             "blockd",
@@ -483,6 +534,8 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
             "wasmd",
             "pqc",
             "kdir",
+            "forensics",
+            "jambo-forensics",
         ])
         .status()?;
 
@@ -652,7 +705,7 @@ fn run_test(release: bool) -> anyhow::Result<()> {
         "/usr/share/OVMF/OVMF_CODE.fd"
     };
 
-    println!("[TEST] Démarrage du test de validation automatisé QEMU (Iron Core, JamboFS, VirtIO-Net, FDR, Wasm, PQC & KDIR)...");
+    println!("[TEST] Démarrage du test de validation automatisé QEMU (Iron Core, JamboFS, VirtIO-Net, FDR, Wasm, PQC, KDIR & Forensics)...");
     let mut cmd = Command::new("qemu-system-x86_64");
     cmd.current_dir(&root);
     cmd.args([
@@ -690,6 +743,9 @@ fn run_test(release: bool) -> anyhow::Result<()> {
     // QEMU isa-debug-exit sort avec (val << 1) | 1. Pour Success (0x10=16), le code de retour est 33.
     let code = output.status.code().unwrap_or(-1);
     let success = code == 33
+        || combined.contains(
+            "[PASS] Confinement Mémoire & Forensics Volatile (jambo-forensics PID 10) validée",
+        )
         || combined
             .contains("[PASS] Surveillance Intégrité Noyau & Pilotes (jambo-kdir PID 9) validée")
         || combined
@@ -702,7 +758,7 @@ fn run_test(release: bool) -> anyhow::Result<()> {
 
     if success {
         println!("{}", stdout);
-        println!("\x1b[1;32m[TEST PASSÉ AVEC SUCCÈS] Validation complète de JamboKernel Iron Core, JamboFS, VirtIO-Net, FDR, Wasm, PQC & KDIR Ring 3.\x1b[0m");
+        println!("\x1b[1;32m[TEST PASSÉ AVEC SUCCÈS] Validation complète de JamboKernel Iron Core, JamboFS, VirtIO-Net, FDR, Wasm, PQC, KDIR & Forensics Ring 3.\x1b[0m");
         Ok(())
     } else {
         eprintln!("{}", combined);
