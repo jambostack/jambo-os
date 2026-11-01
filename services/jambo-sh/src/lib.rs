@@ -47,6 +47,11 @@ use jambo_timed::{
     TimeOpcode, TimeRequest, TimeResponse, TimeSyncCap,
 };
 #[allow(unused_imports)]
+use jambo_vaultd::{
+    vault_rights, JamboVaultDaemon, VaultCap, VaultClient, VaultOpcode, VaultRequest,
+    VaultResponse, VaultState,
+};
+#[allow(unused_imports)]
 use jambo_vpn::{
     vpn_rights, JamboVpnDaemon, VpnCap, VpnClient, VpnOpcode, VpnPeerState, VpnRequest,
     VpnResponse, VPN_STATUS_HANDSHAKE_FAILED, VPN_STATUS_NO_ROUTE, VPN_STATUS_OK,
@@ -58,7 +63,7 @@ use jambo_walld::{
     WallClient, WallOpcode, WallRequest, WallResponse,
 };
 use jambo_wasmd::{wasm_rights, WasmdClient, WasmdResponse, WASMD_STATUS_OK};
-use libjambo::{sys_info, syscall6, SyscallNumber};
+use libjambo::{sys_info, syscall6, SysError, SyscallNumber};
 
 /// Statut d'exécution d'une commande
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -78,6 +83,7 @@ pub struct JamboShell {
     pub time_daemon: JamboTimeDaemon,
     pub audit_daemon: JamboAuditDaemon,
     pub wall_daemon: JamboFirewall,
+    pub vault_daemon: JamboVaultDaemon,
 }
 
 impl Default for JamboShell {
@@ -98,6 +104,8 @@ impl JamboShell {
         audit_daemon.init_defaults();
         let mut wall_daemon = JamboFirewall::new();
         wall_daemon.init_defaults();
+        let mut vault_daemon = JamboVaultDaemon::new();
+        vault_daemon.init_defaults();
         Self {
             prompt_user: "jambo",
             commands_executed: 0,
@@ -106,6 +114,7 @@ impl JamboShell {
             time_daemon,
             audit_daemon,
             wall_daemon,
+            vault_daemon,
         }
     }
 
@@ -155,6 +164,7 @@ impl JamboShell {
             "time" => self.cmd_time(args, out),
             "audit" => self.cmd_audit(args, out),
             "wall" => self.cmd_wall(args, out),
+            "vault" => self.cmd_vault(args, out),
             _ => self.cmd_not_found(cmd, out),
         }
     }
@@ -163,7 +173,7 @@ impl JamboShell {
         let text = b"Commandes disponibles:\n\
   help        - Affiche cette aide\n\
   sysinfo     - Metriques memoire et uptime du micro-noyau\n\
-  ps          - Liste les 19 processus actifs\n\
+  ps          - Liste les 20 processus actifs\n\
   echo <args> - Affiche le texte sur la console\n\
   clear       - Reinitialise l'ecran du terminal\n\
   reboot      - Eteint ou redemarre la machine virtuelle\n\
@@ -183,7 +193,8 @@ impl JamboShell {
   dns [status|resolve|register|cache|flush] - Resolution DNS souveraine et decouverte de services\n\
   time [status|now|sync|adjust|step] - Synchronisation horlogere PTP/NTP et temps monotone\n\
   audit [status|record|verify|tail|scan] - Grand livre d'audit cryptographique et observabilite\n\
-  wall [status|conntrack|rule|blocked|flush] - Pare-feu d'etat Zero-Trust et table Conntrack\n";
+  wall [status|conntrack|rule|blocked|flush] - Pare-feu d'etat Zero-Trust et table Conntrack\n\
+  vault [status|unseal|seal|store|get|revoke] - Coffre-fort cryptographique de secrets distribue\n";
         let len = text.len().min(out.len());
         out[..len].copy_from_slice(&text[..len]);
         (ShellStatus::Success, len)
@@ -227,7 +238,27 @@ impl JamboShell {
     }
 
     fn cmd_ps(&self, out: &mut [u8]) -> (ShellStatus, usize) {
-        let text = b"PID  ETAT     COMMANDE\n  1  ACTIF    /bin/init (Superviseur racine)\n  2  ACTIF    /bin/jsh  (Shell interactif UART)\n  3  ACTIF    /bin/blockd (Pilote VirtIO-Block Ring 3)\n  4  ACTIF    /bin/fs   (Serveur de fichiers JamboFS)\n  5  ACTIF    /bin/netd (Demon reseau VirtIO-Net Ring 3)\n  6  ACTIF    /bin/fdr  (Demon FDR Cyber-Resilience Ring 3)\n  7  ACTIF    /bin/wasmd (Moteur WebAssembly/WASI Ring 3)\n  8  ACTIF    /bin/pqc  (Demon Cryptographie Post-Quantique Ring 3)\n  9  ACTIF    /bin/kdir (Demon Integrite Noyau & Pilotes KDIR Ring 3)\n 10  ACTIF    /bin/forensics (Demon Forensique & Acquisition Memoire Ring 3)\n 11  ACTIF    /bin/powerd (Demon Gestion Energie & ACPI Ring 3)\n 12  ACTIF    /bin/metricsd (Demon Metrologie & Observabilite Ring 3)\n 13  ACTIF    /bin/bpfd (Demon eBPF, Verificateur Formel & XDP Ring 3)\n 14  ACTIF    /bin/vpn (Passerelle VPN WireGuard Post-Quantique Ring 3)\n 15  ACTIF    /bin/authd (Demon Identite & Jetons de Session Capabilitaires Ring 3)\n 16  ACTIF    /bin/dnsd (Serveur DNS Souverain & Decouverte de Services Ring 3)\n 17  ACTIF    /bin/timed (Demon Synchronisation Horlogere PTP/NTP Ring 3)\n 18  ACTIF    /bin/auditd (Grand Livre d'Audit Cryptographique Ring 3)\n 19  ACTIF    /bin/walld (Pare-Feu d'Etat & Synchronisation Conntrack Ring 3)\n";
+        let text = b"PID  ETAT     COMMANDE\n\
+  1  ACTIF    /bin/init (Superviseur racine)\n\
+  2  ACTIF    /bin/jsh  (Shell interactif UART)\n\
+  3  ACTIF    /bin/blockd (Pilote VirtIO-Block Ring 3)\n\
+  4  ACTIF    /bin/fs   (Serveur de fichiers JamboFS)\n\
+  5  ACTIF    /bin/netd (Demon reseau VirtIO-Net Ring 3)\n\
+  6  ACTIF    /bin/fdr  (Demon FDR Cyber-Resilience Ring 3)\n\
+  7  ACTIF    /bin/wasmd (Moteur WebAssembly/WASI Ring 3)\n\
+  8  ACTIF    /bin/pqc  (Demon Cryptographie Post-Quantique Ring 3)\n\
+  9  ACTIF    /bin/kdir (Demon Integrite Noyau & Pilotes KDIR Ring 3)\n\
+ 10  ACTIF    /bin/forensics (Demon Forensique & Acquisition Memoire Ring 3)\n\
+ 11  ACTIF    /bin/powerd (Demon Gestion Energie & ACPI Ring 3)\n\
+ 12  ACTIF    /bin/metricsd (Demon Metrologie & Observabilite Ring 3)\n\
+ 13  ACTIF    /bin/bpfd (Demon eBPF, Verificateur Formel & XDP Ring 3)\n\
+ 14  ACTIF    /bin/vpn (Passerelle VPN WireGuard Post-Quantique Ring 3)\n\
+ 15  ACTIF    /bin/authd (Demon Identite & Jetons de Session Capabilitaires Ring 3)\n\
+ 16  ACTIF    /bin/dnsd (Serveur DNS Souverain & Decouverte de Services Ring 3)\n\
+ 17  ACTIF    /bin/timed (Demon Synchronisation Horlogere PTP/NTP Ring 3)\n\
+ 18  ACTIF    /bin/auditd (Grand Livre d'Audit Cryptographique Ring 3)\n\
+ 19  ACTIF    /bin/walld (Pare-Feu d'Etat & Synchronisation Conntrack Ring 3)\n\
+ 20  ACTIF    /bin/vaultd (Coffre-Fort de Secrets Distribue Ring 3)\n";
         let len = text.len().min(out.len());
         out[..len].copy_from_slice(&text[..len]);
         (ShellStatus::Success, len)
@@ -4129,6 +4160,303 @@ impl JamboShell {
             (ShellStatus::ExecutionFailed, c)
         }
     }
+
+    fn send_vault_request(&mut self, req: &VaultRequest) -> VaultResponse {
+        let current_time = sys_info().map(|s| s.uptime_seconds).unwrap_or(1_000_000);
+        let mut resp_opt: Option<VaultResponse> = None;
+        for &h in &[
+            20u64, 19u64, 18u64, 17u64, 16u64, 15u64, 14u64, 13u64, 12u64, 11u64, 10u64, 9u64,
+            8u64, 7u64, 6u64, 5u64, 4u64, 3u64,
+        ] {
+            let client = VaultClient::new(libjambo::Handle(h));
+            if let Ok(resp) = client.call(req) {
+                if resp.magic == jambo_vaultd::VAULT_MAGIC_RESP {
+                    resp_opt = Some(resp);
+                    break;
+                }
+            }
+        }
+        resp_opt.unwrap_or_else(|| self.vault_daemon.handle_ipc_request(req, current_time))
+    }
+
+    fn cmd_vault(&mut self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        let subcmd = if args.is_empty() { "status" } else { args[0] };
+        match subcmd {
+            "status" => self.cmd_vault_status(out),
+            "unseal" => self.cmd_vault_unseal(&args[1..], out),
+            "seal" => self.cmd_vault_seal(out),
+            "store" => self.cmd_vault_store(&args[1..], out),
+            "get" => self.cmd_vault_get(&args[1..], out),
+            "revoke" => self.cmd_vault_revoke(&args[1..], out),
+            _ => {
+                let msg = b"Usage: vault [status|unseal|seal|store|get|revoke]\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                (ShellStatus::InvalidArgument, len)
+            }
+        }
+    }
+
+    fn cmd_vault_status(&mut self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let req = VaultRequest::new_status();
+        let resp = self.send_vault_request(&req);
+
+        let state_str = match resp.state {
+            0 => "SEALED",
+            1 => "UNSEALING",
+            2 => "UNSEALED",
+            _ => "UNKNOWN",
+        };
+
+        let mut c = 0;
+        c = append_bytes(
+            out,
+            c,
+            b"Coffre-Fort Cryptographique Distribue (jambo-vaultd PID 20):\n  Operational State : ",
+        );
+        c = append_bytes(out, c, state_str.as_bytes());
+        c = append_bytes(out, c, b"\n  Quorum (Shares)   : ");
+        c = append_u64(out, c, resp.submitted_count as u64);
+        c = append_bytes(out, c, b"/");
+        c = append_u64(out, c, resp.threshold as u64);
+        c = append_bytes(out, c, b" (Total: ");
+        c = append_u64(out, c, resp.total_shares as u64);
+        c = append_bytes(out, c, b")\n  Total Secrets     : ");
+        c = append_u64(out, c, resp.total_secrets as u64);
+        c = append_bytes(out, c, b"\n");
+        (ShellStatus::Success, c)
+    }
+
+    fn cmd_vault_unseal(&mut self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if args.is_empty() {
+            let msg = b"Usage: vault unseal <share_id>\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            return (ShellStatus::InvalidArgument, len);
+        }
+
+        let share_id = match parse_u32(args[0]) {
+            Some(id) if id < 8 => id as u8,
+            _ => {
+                let msg = b"vault unseal: invalid share ID (expected 0..N-1)\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                return (ShellStatus::InvalidArgument, len);
+            }
+        };
+
+        let req = VaultRequest::new_submit_share(share_id);
+        let resp = self.send_vault_request(&req);
+
+        if resp.status != 0 {
+            let mut c = 0;
+            c = append_bytes(out, c, b"vault unseal: failed with error code ");
+            c = append_i64(out, c, resp.status as i64);
+            c = append_bytes(out, c, b"\n");
+            return (ShellStatus::ExecutionFailed, c);
+        }
+
+        let state_str = match resp.state {
+            0 => "SEALED",
+            1 => "UNSEALING",
+            2 => "UNSEALED",
+            _ => "UNKNOWN",
+        };
+
+        let mut c = 0;
+        c = append_bytes(out, c, b"vault unseal: share #");
+        c = append_u64(out, c, share_id as u64);
+        c = append_bytes(out, c, b" submitted, vault state is now ");
+        c = append_bytes(out, c, state_str.as_bytes());
+        c = append_bytes(out, c, b" (");
+        c = append_u64(out, c, resp.submitted_count as u64);
+        c = append_bytes(out, c, b"/");
+        c = append_u64(out, c, resp.threshold as u64);
+        c = append_bytes(out, c, b" shares)\n");
+        (ShellStatus::Success, c)
+    }
+
+    fn cmd_vault_seal(&mut self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let req = VaultRequest::new_reseal();
+        let resp = self.send_vault_request(&req);
+
+        if resp.status != 0 {
+            let mut c = 0;
+            c = append_bytes(out, c, b"vault seal: failed with error code ");
+            c = append_i64(out, c, resp.status as i64);
+            c = append_bytes(out, c, b"\n");
+            return (ShellStatus::ExecutionFailed, c);
+        }
+
+        let msg = b"vault seal: vault has been resealed and active shares purged (state: SEALED)\n";
+        let len = msg.len().min(out.len());
+        out[..len].copy_from_slice(&msg[..len]);
+        (ShellStatus::Success, len)
+    }
+
+    fn cmd_vault_store(&mut self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if args.len() < 2 {
+            let msg = b"Usage: vault store <path> <val> [lease_sec]\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            return (ShellStatus::InvalidArgument, len);
+        }
+
+        let path = args[0];
+        let val = args[1];
+        let lease_sec = if args.len() >= 3 {
+            match parse_u64(args[2]) {
+                Some(v) => v,
+                None => {
+                    let msg = b"vault store: invalid lease duration\n";
+                    let len = msg.len().min(out.len());
+                    out[..len].copy_from_slice(&msg[..len]);
+                    return (ShellStatus::InvalidArgument, len);
+                }
+            }
+        } else {
+            3600
+        };
+
+        if path.is_empty() || path.len() > 16 {
+            let msg = b"vault store: path length must be between 1 and 16 bytes\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            return (ShellStatus::InvalidArgument, len);
+        }
+
+        if val.len() > 20 {
+            let msg = b"vault store: secret payload length must be <= 20 bytes\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            return (ShellStatus::InvalidArgument, len);
+        }
+
+        let req = VaultRequest::new_put_secret(path, val.as_bytes(), lease_sec);
+        let resp = self.send_vault_request(&req);
+
+        if resp.status != 0 {
+            if resp.status == SysError::ResourceBusy as i32 {
+                let msg =
+                    b"vault store: vault is sealed (unseal required before storing secrets)\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                return (ShellStatus::ExecutionFailed, len);
+            }
+            let mut c = 0;
+            c = append_bytes(out, c, b"vault store: failed with error code ");
+            c = append_i64(out, c, resp.status as i64);
+            c = append_bytes(out, c, b"\n");
+            return (ShellStatus::ExecutionFailed, c);
+        }
+
+        let mut c = 0;
+        c = append_bytes(out, c, b"vault store: secret '");
+        c = append_bytes(out, c, path.as_bytes());
+        c = append_bytes(out, c, b"' stored successfully (version: ");
+        c = append_u64(out, c, resp.version as u64);
+        c = append_bytes(out, c, b", lease: ");
+        c = append_u64(out, c, lease_sec);
+        c = append_bytes(out, c, b"s)\n");
+        (ShellStatus::Success, c)
+    }
+
+    fn cmd_vault_get(&mut self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if args.is_empty() {
+            let msg = b"Usage: vault get <path>\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            return (ShellStatus::InvalidArgument, len);
+        }
+
+        let path = args[0];
+        if path.is_empty() || path.len() > 16 {
+            let msg = b"vault get: invalid path (length must be 1..16)\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            return (ShellStatus::InvalidArgument, len);
+        }
+
+        let req = VaultRequest::new_get_secret(path);
+        let resp = self.send_vault_request(&req);
+
+        if resp.status != 0 {
+            if resp.status == SysError::ResourceBusy as i32 {
+                let msg = b"vault get: vault is sealed (unseal required before reading secrets)\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                return (ShellStatus::ExecutionFailed, len);
+            } else if resp.status == SysError::TimedOut as i32 {
+                let msg = b"vault get: secret lease has expired\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                return (ShellStatus::ExecutionFailed, len);
+            } else if resp.status == SysError::InvalidHandle as i32 {
+                let msg = b"vault get: secret not found\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                return (ShellStatus::ExecutionFailed, len);
+            }
+            let mut c = 0;
+            c = append_bytes(out, c, b"vault get: failed with error code ");
+            c = append_i64(out, c, resp.status as i64);
+            c = append_bytes(out, c, b"\n");
+            return (ShellStatus::ExecutionFailed, c);
+        }
+
+        let val_str = resp.payload_as_str();
+        let mut c = 0;
+        c = append_bytes(out, c, b"vault get: secret '");
+        c = append_bytes(out, c, path.as_bytes());
+        c = append_bytes(out, c, b"' = '");
+        c = append_bytes(out, c, val_str.as_bytes());
+        c = append_bytes(out, c, b"' (version: ");
+        c = append_u64(out, c, resp.version as u64);
+        c = append_bytes(out, c, b", lease_expires_at: ");
+        c = append_u64(out, c, resp.lease_expires_at);
+        c = append_bytes(out, c, b")\n");
+        (ShellStatus::Success, c)
+    }
+
+    fn cmd_vault_revoke(&mut self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if args.is_empty() {
+            let msg = b"Usage: vault revoke <path>\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            return (ShellStatus::InvalidArgument, len);
+        }
+
+        let path = args[0];
+        if path.is_empty() || path.len() > 16 {
+            let msg = b"vault revoke: invalid path (length must be 1..16)\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            return (ShellStatus::InvalidArgument, len);
+        }
+
+        let req = VaultRequest::new_revoke_secret(path);
+        let resp = self.send_vault_request(&req);
+
+        if resp.status != 0 {
+            if resp.status == SysError::InvalidHandle as i32 {
+                let msg = b"vault revoke: secret not found\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                return (ShellStatus::ExecutionFailed, len);
+            }
+            let mut c = 0;
+            c = append_bytes(out, c, b"vault revoke: failed with error code ");
+            c = append_i64(out, c, resp.status as i64);
+            c = append_bytes(out, c, b"\n");
+            return (ShellStatus::ExecutionFailed, c);
+        }
+
+        let mut c = 0;
+        c = append_bytes(out, c, b"vault revoke: secret '");
+        c = append_bytes(out, c, path.as_bytes());
+        c = append_bytes(out, c, b"' revoked and zeroized successfully\n");
+        (ShellStatus::Success, c)
+    }
 }
 
 fn append_bytes(buf: &mut [u8], cursor: usize, data: &[u8]) -> usize {
@@ -4482,9 +4810,9 @@ mod tests {
     }
 
     #[test]
-    fn test_ps_contains_19_processes() {
+    fn test_ps_contains_20_processes() {
         let mut shell = JamboShell::new();
-        let mut out = [0u8; 2048];
+        let mut out = [0u8; 4096];
 
         let (st, len) = shell.execute_line("ps", &mut out);
         assert_eq!(st, ShellStatus::Success);
@@ -4520,6 +4848,7 @@ mod tests {
         assert!(s.contains(
             "19  ACTIF    /bin/walld (Pare-Feu d'Etat & Synchronisation Conntrack Ring 3)"
         ));
+        assert!(s.contains("20  ACTIF    /bin/vaultd (Coffre-Fort de Secrets Distribue Ring 3)"));
     }
 
     #[test]
@@ -4530,7 +4859,7 @@ mod tests {
         let (st, len) = shell.execute_line("help", &mut out);
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
-        assert!(s.contains("19 processus actifs"));
+        assert!(s.contains("20 processus actifs"));
         assert!(s.contains("fdr [status|verify|pcr]"));
         assert!(s.contains("wasm [status|run|info]"));
         assert!(s.contains("pqc [status|kex|sign|audit]"));
@@ -4545,6 +4874,7 @@ mod tests {
         assert!(s.contains("time [status|now|sync|adjust|step]"));
         assert!(s.contains("audit [status|record|verify|tail|scan]"));
         assert!(s.contains("wall [status|conntrack|rule|blocked|flush]"));
+        assert!(s.contains("vault [status|unseal|seal|store|get|revoke]"));
     }
 
     #[test]
@@ -6029,5 +6359,199 @@ mod tests {
         assert_eq!(st6, ShellStatus::InvalidArgument);
         let s6 = core::str::from_utf8(&out[..len6]).unwrap();
         assert!(s6.contains("wall rule: invalid destination port"));
+    }
+
+    #[test]
+    fn test_vault_status() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 1024];
+
+        let (st, len) = shell.execute_line("vault status", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("Coffre-Fort Cryptographique Distribue (jambo-vaultd PID 20):"));
+        assert!(s.contains("SEALED"));
+        assert!(s.contains("0/2"));
+        assert!(s.contains("Total Secrets     : 0"));
+
+        // Default to status without arguments
+        let (st2, len2) = shell.execute_line("vault", &mut out);
+        assert_eq!(st2, ShellStatus::Success);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("SEALED"));
+    }
+
+    #[test]
+    fn test_vault_unseal_and_seal() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 1024];
+
+        // 1. Initialement scellé : rejet d'écriture
+        let (st_err, len_err) = shell.execute_line("vault store secret/test val123", &mut out);
+        assert_eq!(st_err, ShellStatus::ExecutionFailed);
+        let s_err = core::str::from_utf8(&out[..len_err]).unwrap();
+        assert!(s_err.contains("vault is sealed"));
+
+        // 2. Soumission part 0 (1/2 -> UNSEALING)
+        let (st1, len1) = shell.execute_line("vault unseal 0", &mut out);
+        assert_eq!(st1, ShellStatus::Success);
+        let s1 = core::str::from_utf8(&out[..len1]).unwrap();
+        assert!(s1.contains(
+            "vault unseal: share #0 submitted, vault state is now UNSEALING (1/2 shares)"
+        ));
+
+        // 3. Soumission part 1 (2/2 -> UNSEALED)
+        let (st2, len2) = shell.execute_line("vault unseal 1", &mut out);
+        assert_eq!(st2, ShellStatus::Success);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains(
+            "vault unseal: share #1 submitted, vault state is now UNSEALED (2/2 shares)"
+        ));
+
+        // 4. Statut UNSEALED
+        let (st_st, len_st) = shell.execute_line("vault status", &mut out);
+        assert_eq!(st_st, ShellStatus::Success);
+        let s_st = core::str::from_utf8(&out[..len_st]).unwrap();
+        assert!(s_st.contains("UNSEALED"));
+        assert!(s_st.contains("2/2"));
+
+        // 5. Rescellement (SEALED)
+        let (st3, len3) = shell.execute_line("vault seal", &mut out);
+        assert_eq!(st3, ShellStatus::Success);
+        let s3 = core::str::from_utf8(&out[..len3]).unwrap();
+        assert!(s3.contains(
+            "vault seal: vault has been resealed and active shares purged (state: SEALED)"
+        ));
+
+        // 6. Vérifier statut redevenu SEALED
+        let (st4, len4) = shell.execute_line("vault status", &mut out);
+        assert_eq!(st4, ShellStatus::Success);
+        let s4 = core::str::from_utf8(&out[..len4]).unwrap();
+        assert!(s4.contains("SEALED"));
+        assert!(s4.contains("0/2"));
+    }
+
+    #[test]
+    fn test_vault_store_and_get() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 1024];
+
+        // Déverrouillage (seuil 2/3)
+        let (st_u0, _) = shell.execute_line("vault unseal 0", &mut out);
+        assert_eq!(st_u0, ShellStatus::Success);
+        let (st_u1, _) = shell.execute_line("vault unseal 1", &mut out);
+        assert_eq!(st_u1, ShellStatus::Success);
+
+        // 1. Stockage initial
+        let (st1, len1) = shell.execute_line("vault store db/key secret123 3600", &mut out);
+        assert_eq!(st1, ShellStatus::Success);
+        let s1 = core::str::from_utf8(&out[..len1]).unwrap();
+        assert!(s1.contains(
+            "vault store: secret 'db/key' stored successfully (version: 1, lease: 3600s)"
+        ));
+
+        // 2. Lecture du secret
+        let (st2, len2) = shell.execute_line("vault get db/key", &mut out);
+        assert_eq!(st2, ShellStatus::Success);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(
+            s2.contains("vault get: secret 'db/key' = 'secret123' (version: 1, lease_expires_at: ")
+        );
+
+        // 3. Mise à jour (version 2)
+        let (st3, len3) = shell.execute_line("vault store db/key newsecret456", &mut out);
+        assert_eq!(st3, ShellStatus::Success);
+        let s3 = core::str::from_utf8(&out[..len3]).unwrap();
+        assert!(s3.contains(
+            "vault store: secret 'db/key' stored successfully (version: 2, lease: 3600s)"
+        ));
+
+        // 4. Lecture mise à jour
+        let (st4, len4) = shell.execute_line("vault get db/key", &mut out);
+        assert_eq!(st4, ShellStatus::Success);
+        let s4 = core::str::from_utf8(&out[..len4]).unwrap();
+        assert!(s4.contains(
+            "vault get: secret 'db/key' = 'newsecret456' (version: 2, lease_expires_at: "
+        ));
+    }
+
+    #[test]
+    fn test_vault_revoke() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 1024];
+
+        // Déverrouillage
+        let _ = shell.execute_line("vault unseal 0", &mut out);
+        let _ = shell.execute_line("vault unseal 1", &mut out);
+
+        // Stocker
+        let (st_s, _) = shell.execute_line("vault store keys/tls privkey_pem 1800", &mut out);
+        assert_eq!(st_s, ShellStatus::Success);
+
+        // Vérifier présence
+        let (st_g, len_g) = shell.execute_line("vault get keys/tls", &mut out);
+        assert_eq!(st_g, ShellStatus::Success);
+        let s_g = core::str::from_utf8(&out[..len_g]).unwrap();
+        assert!(s_g.contains("privkey_pem"));
+
+        // Révoquer
+        let (st_r, len_r) = shell.execute_line("vault revoke keys/tls", &mut out);
+        assert_eq!(st_r, ShellStatus::Success);
+        let s_r = core::str::from_utf8(&out[..len_r]).unwrap();
+        assert!(s_r.contains("vault revoke: secret 'keys/tls' revoked and zeroized successfully"));
+
+        // Vérifier absence
+        let (st_g2, len_g2) = shell.execute_line("vault get keys/tls", &mut out);
+        assert_eq!(st_g2, ShellStatus::ExecutionFailed);
+        let s_g2 = core::str::from_utf8(&out[..len_g2]).unwrap();
+        assert!(s_g2.contains("secret not found"));
+    }
+
+    #[test]
+    fn test_vault_invalid() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 1024];
+
+        // 1. Sous-commande inconnue
+        let (st, len) = shell.execute_line("vault invalid_subcmd", &mut out);
+        assert_eq!(st, ShellStatus::InvalidArgument);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("Usage: vault [status|unseal|seal|store|get|revoke]"));
+
+        // 2. "vault unseal" sans share_id
+        let (st2, len2) = shell.execute_line("vault unseal", &mut out);
+        assert_eq!(st2, ShellStatus::InvalidArgument);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("Usage: vault unseal <share_id>"));
+
+        // 3. "vault unseal" avec share_id invalide
+        let (st3, len3) = shell.execute_line("vault unseal notanumber", &mut out);
+        assert_eq!(st3, ShellStatus::InvalidArgument);
+        let s3 = core::str::from_utf8(&out[..len3]).unwrap();
+        assert!(s3.contains("vault unseal: invalid share ID (expected 0..N-1)"));
+
+        // 4. "vault store" sans arguments
+        let (st4, len4) = shell.execute_line("vault store", &mut out);
+        assert_eq!(st4, ShellStatus::InvalidArgument);
+        let s4 = core::str::from_utf8(&out[..len4]).unwrap();
+        assert!(s4.contains("Usage: vault store <path> <val> [lease_sec]"));
+
+        // 5. "vault store" sans valeur
+        let (st5, len5) = shell.execute_line("vault store path_only", &mut out);
+        assert_eq!(st5, ShellStatus::InvalidArgument);
+        let s5 = core::str::from_utf8(&out[..len5]).unwrap();
+        assert!(s5.contains("Usage: vault store <path> <val> [lease_sec]"));
+
+        // 6. "vault get" sans chemin
+        let (st6, len6) = shell.execute_line("vault get", &mut out);
+        assert_eq!(st6, ShellStatus::InvalidArgument);
+        let s6 = core::str::from_utf8(&out[..len6]).unwrap();
+        assert!(s6.contains("Usage: vault get <path>"));
+
+        // 7. "vault revoke" sans chemin
+        let (st7, len7) = shell.execute_line("vault revoke", &mut out);
+        assert_eq!(st7, ShellStatus::InvalidArgument);
+        let s7 = core::str::from_utf8(&out[..len7]).unwrap();
+        assert!(s7.contains("Usage: vault revoke <path>"));
     }
 }
