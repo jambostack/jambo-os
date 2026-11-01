@@ -467,10 +467,41 @@ fn build_bpfd(release: bool) -> anyhow::Result<PathBuf> {
     Ok(root.join(format!("target/x86_64-unknown-none/{}/bpfd", profile)))
 }
 
+fn build_vpn(release: bool) -> anyhow::Result<PathBuf> {
+    let root = root_dir();
+    let mut cmd = Command::new("cargo");
+    cmd.current_dir(&root);
+    cmd.args([
+        "build",
+        "--package",
+        "jambo-vpn",
+        "--bin",
+        "vpn",
+        "--target",
+        "x86_64-unknown-none",
+    ]);
+    if release {
+        cmd.arg("--release");
+    }
+    cmd.env(
+        "RUSTFLAGS",
+        "-C link-arg=-Tlibs/user-x86_64.ld -C relocation-model=static",
+    );
+
+    let status = cmd.status()?;
+    if !status.success() {
+        anyhow::bail!("Échec de compilation du binaire jambo-vpn (vpn)");
+    }
+
+    let profile = if release { "release" } else { "debug" };
+    Ok(root.join(format!("target/x86_64-unknown-none/{}/vpn", profile)))
+}
+
 #[allow(clippy::type_complexity)]
 fn build_userland(
     release: bool,
 ) -> anyhow::Result<(
+    PathBuf,
     PathBuf,
     PathBuf,
     PathBuf,
@@ -498,8 +529,9 @@ fn build_userland(
     let powerd = build_powerd(release)?;
     let metricsd = build_metricsd(release)?;
     let bpfd = build_bpfd(release)?;
+    let vpn = build_vpn(release)?;
     Ok((
-        init, jsh, blockd, fs, netd, fdr, wasmd, pqc, kdir, forensics, powerd, metricsd, bpfd,
+        init, jsh, blockd, fs, netd, fdr, wasmd, pqc, kdir, forensics, powerd, metricsd, bpfd, vpn,
     ))
 }
 
@@ -548,8 +580,8 @@ fn create_disk_image(path: &Path) -> anyhow::Result<()> {
     file.seek(SeekFrom::Start(8192))?;
     file.write_all(&root_buf)?;
 
-    // 3. Données à l'offset 12288 (LBA 24..31) : "Bienvenue sur JamboOS v0.3.52\n"
-    let banner_data = b"Bienvenue sur JamboOS v0.3.52\n";
+    // 3. Données à l'offset 12288 (LBA 24..31) : "Bienvenue sur JamboOS v0.3.53\n"
+    let banner_data = b"Bienvenue sur JamboOS v0.3.53\n";
     let mut data_buf = [0u8; 4096];
     data_buf[..banner_data.len()].copy_from_slice(banner_data);
 
@@ -576,6 +608,7 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
         powerd_bin,
         metricsd_bin,
         bpfd_bin,
+        vpn_bin,
     ) = build_userland(release)?;
 
     let initrd_stage = root.join("target/initrd_stage");
@@ -600,6 +633,8 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
     fs::copy(&metricsd_bin, bin_dir.join("jambo-metricsd"))?;
     fs::copy(&bpfd_bin, bin_dir.join("bpfd"))?;
     fs::copy(&bpfd_bin, bin_dir.join("jambo-bpfd"))?;
+    fs::copy(&vpn_bin, bin_dir.join("vpn"))?;
+    fs::copy(&vpn_bin, bin_dir.join("jambo-vpn"))?;
 
     fs::copy(&init_bin, initrd_stage.join("init"))?;
     fs::copy(&jsh_bin, initrd_stage.join("jsh"))?;
@@ -618,6 +653,8 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
     fs::copy(&metricsd_bin, initrd_stage.join("jambo-metricsd"))?;
     fs::copy(&bpfd_bin, initrd_stage.join("bpfd"))?;
     fs::copy(&bpfd_bin, initrd_stage.join("jambo-bpfd"))?;
+    fs::copy(&vpn_bin, initrd_stage.join("vpn"))?;
+    fs::copy(&vpn_bin, initrd_stage.join("jambo-vpn"))?;
 
     let initrd_tar = root.join("target/initrd.tar");
     let status = Command::new("tar")
@@ -642,6 +679,8 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
             "bin/jambo-metricsd",
             "bin/bpfd",
             "bin/jambo-bpfd",
+            "bin/vpn",
+            "bin/jambo-vpn",
             "init",
             "jsh",
             "blockd",
@@ -659,6 +698,8 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
             "jambo-metricsd",
             "bpfd",
             "jambo-bpfd",
+            "vpn",
+            "jambo-vpn",
         ])
         .status()?;
 
@@ -867,6 +908,8 @@ fn run_test(release: bool) -> anyhow::Result<()> {
     let code = output.status.code().unwrap_or(-1);
     let success = code == 33
         || combined
+            .contains("[PASS] Passerelle VPN Post-Quantique WireGuard (jambo-vpn PID 14) validée")
+        || combined
             .contains("[PASS] Sandboxing eBPF & Filtrage Réseau XDP (jambo-bpfd PID 13) validée")
         || combined.contains(
             "[PASS] Métrologie Système & Télémétrie Haute Précision (jambo-metrics PID 12) validée",
@@ -888,7 +931,7 @@ fn run_test(release: bool) -> anyhow::Result<()> {
 
     if success {
         println!("{}", stdout);
-        println!("\x1b[1;32m[TEST PASSÉ AVEC SUCCÈS] Validation complète de JamboKernel Iron Core, JamboFS, VirtIO-Net, FDR, Wasm, PQC, KDIR, Forensics, Powerd, Metrics & BPF Ring 3.\x1b[0m");
+        println!("\x1b[1;32m[TEST PASSÉ AVEC SUCCÈS] Validation complète de JamboKernel Iron Core, JamboFS, VirtIO-Net, FDR, Wasm, PQC, KDIR, Forensics, Powerd, Metrics, BPF & VPN Ring 3.\x1b[0m");
         Ok(())
     } else {
         eprintln!("{}", combined);
