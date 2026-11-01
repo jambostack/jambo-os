@@ -78,7 +78,9 @@ pub extern "C" fn _start() -> ! {
     } else {
         11 // Endpoint standard PID 11
     });
-    println("[POWERD] Canal IPC de gestion energetique et ACPI operationnel (endpoint PID 11 pret).");
+    println(
+        "[POWERD] Canal IPC de gestion energetique et ACPI operationnel (endpoint PID 11 pret).",
+    );
 
     // 4. Boucle de service IPC Ring 3
     loop {
@@ -105,10 +107,17 @@ pub extern "C" fn _start() -> ! {
                         resp.current_state = daemon.manager.current_state.as_u32();
                         resp.current_profile = daemon.manager.current_profile as u32;
                         resp.battery_percentage = daemon.manager.battery.percentage;
-                        resp.battery_charging = if daemon.manager.battery.is_charging { 1 } else { 0 };
+                        resp.battery_charging = if daemon.manager.battery.is_charging {
+                            1
+                        } else {
+                            0
+                        };
                         resp.battery_health = daemon.manager.battery.health_percentage;
-                        resp.power_saver_active =
-                            if daemon.manager.power_saver_active { 1 } else { 0 };
+                        resp.power_saver_active = if daemon.manager.power_saver_active {
+                            1
+                        } else {
+                            0
+                        };
                         resp.temperature_celsius = daemon.manager.battery.temperature_celsius;
                         for i in 0..MAX_SUPPORTED_CORES {
                             resp.cpu_cstates[i] = daemon.manager.cpu_cstates[i].as_u8();
@@ -125,8 +134,11 @@ pub extern "C" fn _start() -> ! {
                                     resp.status = POWER_STATUS_OK;
                                     resp.current_profile = new_prof as u32;
                                     resp.current_state = daemon.manager.current_state.as_u32();
-                                    resp.power_saver_active =
-                                        if daemon.manager.power_saver_active { 1 } else { 0 };
+                                    resp.power_saver_active = if daemon.manager.power_saver_active {
+                                        1
+                                    } else {
+                                        0
+                                    };
                                     resp.result_code = new_prof as i32;
                                 }
                                 Err(_) => {
@@ -166,11 +178,18 @@ pub extern "C" fn _start() -> ! {
                     x if x == PowerOpcode::GetBattery as u32 => {
                         resp.status = POWER_STATUS_OK;
                         resp.battery_percentage = daemon.manager.battery.percentage;
-                        resp.battery_charging = if daemon.manager.battery.is_charging { 1 } else { 0 };
+                        resp.battery_charging = if daemon.manager.battery.is_charging {
+                            1
+                        } else {
+                            0
+                        };
                         resp.battery_health = daemon.manager.battery.health_percentage;
                         resp.temperature_celsius = daemon.manager.battery.temperature_celsius;
-                        resp.power_saver_active =
-                            if daemon.manager.power_saver_active { 1 } else { 0 };
+                        resp.power_saver_active = if daemon.manager.power_saver_active {
+                            1
+                        } else {
+                            0
+                        };
                         resp.result_code = daemon.manager.battery.percentage as i32;
                     }
                     x if x == PowerOpcode::Shutdown as u32 => {

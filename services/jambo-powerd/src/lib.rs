@@ -604,7 +604,11 @@ impl PowerClient {
     }
 
     /// Règle le C-State d'un cœur CPU logique
-    pub fn set_cstate(&self, core_id: u32, state: CpuPowerState) -> Result<PowerResponse, SysError> {
+    pub fn set_cstate(
+        &self,
+        core_id: u32,
+        state: CpuPowerState,
+    ) -> Result<PowerResponse, SysError> {
         let req = PowerRequest::new_set_cstate(core_id, state);
         self.call(&req)
     }
