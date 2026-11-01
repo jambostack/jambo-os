@@ -1,0 +1,12 @@
+[package]
+name = "jambo-vaultd"
+version = "0.3.59"
+edition = "2021"
+
+[[bin]]
+name = "vaultd"
+path = "src/main.rs"
+test = false
+
+[dependencies]
+libjambo = { path = "../../libs/libjambo" }
