@@ -157,7 +157,7 @@ pub extern "C" fn _start() -> ! {
     // 4. Bannière système d'accueil sobre Iron Core
     kprintln!("\x1b[1;36m");
     kprintln!("================================================================================");
-    kprintln!("    JAMBO-OS (JamboKernel v0.3.49 — Iron Core)                                 ");
+    kprintln!("    JAMBO-OS (JamboKernel v0.3.50 — Iron Core)                                 ");
     kprintln!("    Architecture : Micro-noyau orienté capacités en Rust no_std (x86_64/AArch64)");
     kprintln!("    Auteur & Architecte Principal : ASSOGBA Prudence Dieudonné                 ");
     kprintln!("    Dépôt Officiel : https://github.com/jambostack/jambo-os                    ");
@@ -352,6 +352,7 @@ pub extern "C" fn _start() -> ! {
     let mut pqc_elf_bytes: Option<&'static [u8]> = None;
     let mut kdir_elf_bytes: Option<&'static [u8]> = None;
     let mut forensics_elf_bytes: Option<&'static [u8]> = None;
+    let mut powerd_elf_bytes: Option<&'static [u8]> = None;
     if let Some(modules_resp) = MODULES_REQUEST.response() {
         let modules = modules_resp.modules();
         kprintln!(
@@ -444,6 +445,18 @@ pub extern "C" fn _start() -> ! {
                         forensics_data.len()
                     );
                     forensics_elf_bytes = Some(forensics_data);
+                }
+                if let Some(powerd_data) = tar
+                    .find("bin/powerd")
+                    .or_else(|| tar.find("/bin/powerd"))
+                    .or_else(|| tar.find("bin/jambo-powerd"))
+                    .or_else(|| tar.find("powerd"))
+                {
+                    kprintln!(
+                        "[INITRD/TAR] Démon Gestion Énergie & Fréquence CPU '/bin/powerd' extrait ({:#x} octets)",
+                        powerd_data.len()
+                    );
+                    powerd_elf_bytes = Some(powerd_data);
                 }
             }
             if initrd_elf_bytes.is_none() && data.len() >= 4 && data[0..4] == mm::elf::ELF_MAGIC {
@@ -699,7 +712,28 @@ pub extern "C" fn _start() -> ! {
         kprintln!("[WARN] Échec de la création du processus forensics");
     }
 
-    // 11. Initialisation CSpace, table SYSCALL et IPC hybride
+    // Initialisation du démon Gestion Énergie & Fréquence CPU Ring 3 (PID 11 : powerd)
+    let powerd_binary = powerd_elf_bytes.unwrap_or(&test_elf);
+    if let Ok((_powerd_process, powerd_thread)) = sched::Process::create_user_process(
+        11,
+        "powerd",
+        powerd_binary,
+        &["powerd"],
+        &["PATH=/bin:/usr/bin", "TERM=xterm-256color"],
+    ) {
+        let powerd_sp = powerd_thread.lock().user_rsp;
+        assert_eq!(powerd_sp % 16, 0, "Alignement 16 octets du RSP powerd");
+        powerd_thread.lock().deadline = 1000;
+        sched::SCHEDULER.lock().enqueue(powerd_thread);
+        kprintln!(
+            "[PROCESS] Démon Gestion Énergie & Fréquence CPU powerd (PID 11) initialisé avec pile System V ABI (RSP: {:#018x}) et enfilé",
+            powerd_sp
+        );
+    } else {
+        kprintln!("[WARN] Échec de la création du processus powerd");
+    }
+
+    // 12. Initialisation CSpace, table SYSCALL et IPC hybride
     cap::init_cspace();
     syscall::init_syscall();
 
@@ -995,8 +1029,8 @@ pub extern "C" fn _start() -> ! {
     let is_test_mode = cfg!(feature = "qemu-test") || cmdline_test || module_test;
 
     if is_test_mode {
-        kprintln!("[TEST] Validation de l'initialisation des 10 processus Ring 3 (init, jsh, blockd, fs, netd, fdr, wasmd, pqc, kdir, forensics)...");
-        kprintln!("\x1b[1;32m[PASS] Confinement Mémoire & Forensics Volatile (jambo-forensics PID 10) validée sous QEMU.\x1b[0m");
+        kprintln!("[TEST] Validation de l'initialisation des 11 processus Ring 3 (init, jsh, blockd, fs, netd, fdr, wasmd, pqc, kdir, forensics, powerd)...");
+        kprintln!("\x1b[1;32m[PASS] Gestion Énergie & Fréquence CPU (jambo-powerd PID 11) validée sous QEMU.\x1b[0m");
         kprintln!("[TEST] Mode de test CI validé. Sortie propre via isa-debug-exit...");
         exit_qemu(QemuExitCode::Success);
     }
