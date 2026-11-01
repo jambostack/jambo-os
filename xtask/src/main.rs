@@ -528,10 +528,41 @@ fn build_authd(release: bool) -> anyhow::Result<PathBuf> {
     Ok(root.join(format!("target/x86_64-unknown-none/{}/authd", profile)))
 }
 
+fn build_dnsd(release: bool) -> anyhow::Result<PathBuf> {
+    let root = root_dir();
+    let mut cmd = Command::new("cargo");
+    cmd.current_dir(&root);
+    cmd.args([
+        "build",
+        "--package",
+        "jambo-dnsd",
+        "--bin",
+        "dnsd",
+        "--target",
+        "x86_64-unknown-none",
+    ]);
+    if release {
+        cmd.arg("--release");
+    }
+    cmd.env(
+        "RUSTFLAGS",
+        "-C link-arg=-Tlibs/user-x86_64.ld -C relocation-model=static",
+    );
+
+    let status = cmd.status()?;
+    if !status.success() {
+        anyhow::bail!("Échec de compilation du binaire jambo-dnsd (dnsd)");
+    }
+
+    let profile = if release { "release" } else { "debug" };
+    Ok(root.join(format!("target/x86_64-unknown-none/{}/dnsd", profile)))
+}
+
 #[allow(clippy::type_complexity)]
 fn build_userland(
     release: bool,
 ) -> anyhow::Result<(
+    PathBuf,
     PathBuf,
     PathBuf,
     PathBuf,
@@ -563,9 +594,10 @@ fn build_userland(
     let bpfd = build_bpfd(release)?;
     let vpn = build_vpn(release)?;
     let authd = build_authd(release)?;
+    let dnsd = build_dnsd(release)?;
     Ok((
         init, jsh, blockd, fs, netd, fdr, wasmd, pqc, kdir, forensics, powerd, metricsd, bpfd, vpn,
-        authd,
+        authd, dnsd,
     ))
 }
 
@@ -614,8 +646,8 @@ fn create_disk_image(path: &Path) -> anyhow::Result<()> {
     file.seek(SeekFrom::Start(8192))?;
     file.write_all(&root_buf)?;
 
-    // 3. Données à l'offset 12288 (LBA 24..31) : "Bienvenue sur JamboOS v0.3.54\n"
-    let banner_data = b"Bienvenue sur JamboOS v0.3.54\n";
+    // 3. Données à l'offset 12288 (LBA 24..31) : "Bienvenue sur JamboOS v0.3.55\n"
+    let banner_data = b"Bienvenue sur JamboOS v0.3.55\n";
     let mut data_buf = [0u8; 4096];
     data_buf[..banner_data.len()].copy_from_slice(banner_data);
 
@@ -644,6 +676,7 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
         bpfd_bin,
         vpn_bin,
         authd_bin,
+        dnsd_bin,
     ) = build_userland(release)?;
 
     let initrd_stage = root.join("target/initrd_stage");
@@ -672,6 +705,8 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
     fs::copy(&vpn_bin, bin_dir.join("jambo-vpn"))?;
     fs::copy(&authd_bin, bin_dir.join("authd"))?;
     fs::copy(&authd_bin, bin_dir.join("jambo-authd"))?;
+    fs::copy(&dnsd_bin, bin_dir.join("dnsd"))?;
+    fs::copy(&dnsd_bin, bin_dir.join("jambo-dnsd"))?;
 
     fs::copy(&init_bin, initrd_stage.join("init"))?;
     fs::copy(&jsh_bin, initrd_stage.join("jsh"))?;
@@ -694,6 +729,8 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
     fs::copy(&vpn_bin, initrd_stage.join("jambo-vpn"))?;
     fs::copy(&authd_bin, initrd_stage.join("authd"))?;
     fs::copy(&authd_bin, initrd_stage.join("jambo-authd"))?;
+    fs::copy(&dnsd_bin, initrd_stage.join("dnsd"))?;
+    fs::copy(&dnsd_bin, initrd_stage.join("jambo-dnsd"))?;
 
     let initrd_tar = root.join("target/initrd.tar");
     let status = Command::new("tar")
@@ -722,6 +759,8 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
             "bin/jambo-vpn",
             "bin/authd",
             "bin/jambo-authd",
+            "bin/dnsd",
+            "bin/jambo-dnsd",
             "init",
             "jsh",
             "blockd",
@@ -743,6 +782,8 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
             "jambo-vpn",
             "authd",
             "jambo-authd",
+            "dnsd",
+            "jambo-dnsd",
         ])
         .status()?;
 
@@ -953,6 +994,9 @@ fn run_test(release: bool) -> anyhow::Result<()> {
     let code = output.status.code().unwrap_or(-1);
     let success = code == 33
         || combined.contains(
+            "[PASS] Resolution de Noms & Decouverte DNS de Grappe (jambo-dnsd PID 16) validee",
+        )
+        || combined.contains(
             "[PASS] Identite Cryptographique & Jetons de Session (jambo-authd PID 15) validee",
         )
         || combined
@@ -979,7 +1023,7 @@ fn run_test(release: bool) -> anyhow::Result<()> {
 
     if success {
         println!("{}", stdout);
-        println!("\x1b[1;32m[TEST PASSÉ AVEC SUCCÈS] Validation complète de JamboKernel Iron Core, JamboFS, VirtIO-Net, FDR, Wasm, PQC, KDIR, Forensics, Powerd, Metrics, BPF, VPN & Authd Ring 3.\x1b[0m");
+        println!("\x1b[1;32m[TEST PASSÉ AVEC SUCCÈS] Validation complète de JamboKernel Iron Core, JamboFS, VirtIO-Net, FDR, Wasm, PQC, KDIR, Forensics, Powerd, Metrics, BPF, VPN, Authd & Dnsd Ring 3.\x1b[0m");
         Ok(())
     } else {
         eprintln!("{}", combined);

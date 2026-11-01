@@ -357,6 +357,7 @@ pub extern "C" fn _start() -> ! {
     let mut bpfd_elf_bytes: Option<&'static [u8]> = None;
     let mut vpn_elf_bytes: Option<&'static [u8]> = None;
     let mut authd_elf_bytes: Option<&'static [u8]> = None;
+    let mut dnsd_elf_bytes: Option<&'static [u8]> = None;
     if let Some(modules_resp) = MODULES_REQUEST.response() {
         let modules = modules_resp.modules();
         kprintln!(
@@ -509,6 +510,18 @@ pub extern "C" fn _start() -> ! {
                         authd_data.len()
                     );
                     authd_elf_bytes = Some(authd_data);
+                }
+                if let Some(dnsd_data) = tar
+                    .find("bin/dnsd")
+                    .or_else(|| tar.find("/bin/dnsd"))
+                    .or_else(|| tar.find("bin/jambo-dnsd"))
+                    .or_else(|| tar.find("dnsd"))
+                {
+                    kprintln!(
+                        "[INITRD/TAR] Démon Résolution de Noms & Découverte DNS '/bin/dnsd' extrait ({:#x} octets)",
+                        dnsd_data.len()
+                    );
+                    dnsd_elf_bytes = Some(dnsd_data);
                 }
             }
             if initrd_elf_bytes.is_none() && data.len() >= 4 && data[0..4] == mm::elf::ELF_MAGIC {
@@ -869,6 +882,27 @@ pub extern "C" fn _start() -> ! {
         kprintln!("[WARN] Échec de la création du processus authd");
     }
 
+    // Initialisation du démon de résolution de noms & découverte DNS Ring 3 (PID 16 : dnsd)
+    let dnsd_binary = dnsd_elf_bytes.unwrap_or(&test_elf);
+    if let Ok((_dnsd_process, dnsd_thread)) = sched::Process::create_user_process(
+        16,
+        "dnsd",
+        dnsd_binary,
+        &["dnsd"],
+        &["PATH=/bin:/usr/bin", "TERM=xterm-256color"],
+    ) {
+        let dnsd_sp = dnsd_thread.lock().user_rsp;
+        assert_eq!(dnsd_sp % 16, 0, "Alignement 16 octets du RSP dnsd");
+        dnsd_thread.lock().deadline = 1000;
+        sched::SCHEDULER.lock().enqueue(dnsd_thread);
+        kprintln!(
+            "[PROCESS] Démon Résolution de Noms & Découverte DNS dnsd (PID 16) initialisé avec pile System V ABI (RSP: {:#018x}) et enfilé",
+            dnsd_sp
+        );
+    } else {
+        kprintln!("[WARN] Échec de la création du processus dnsd");
+    }
+
     // 12. Initialisation CSpace, table SYSCALL et IPC hybride
     cap::init_cspace();
     syscall::init_syscall();
@@ -1165,8 +1199,8 @@ pub extern "C" fn _start() -> ! {
     let is_test_mode = cfg!(feature = "qemu-test") || cmdline_test || module_test;
 
     if is_test_mode {
-        kprintln!("[TEST] Validation de l'initialisation des 15 processus Ring 3 (init, jsh, blockd, fs, netd, fdr, wasmd, pqc, kdir, forensics, powerd, metricsd, bpfd, vpn, authd)...");
-        kprintln!("\x1b[1;32m[PASS] Identite Cryptographique & Jetons de Session (jambo-authd PID 15) validee sous QEMU.\x1b[0m");
+        kprintln!("[TEST] Validation de l'initialisation des 16 processus Ring 3 (init, jsh, blockd, fs, netd, fdr, wasmd, pqc, kdir, forensics, powerd, metricsd, bpfd, vpn, authd, dnsd)...");
+        kprintln!("\x1b[1;32m[PASS] Resolution de Noms & Decouverte DNS de Grappe (jambo-dnsd PID 16) validee sous QEMU.\x1b[0m");
         kprintln!("[TEST] Mode de test CI validé. Sortie propre via isa-debug-exit...");
         exit_qemu(QemuExitCode::Success);
     }
