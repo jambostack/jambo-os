@@ -1,0 +1,140 @@
+[2J[01;01H[=3h[2J[01;01H[2J[01;01H[=3h[2J[01;01H[2J[01;01H[=3h[2J[01;01HBdsDxe: loading Boot0002 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x1F,0x2)/Sata(0x0,0xFFFF,0x0)
+BdsDxe: starting Boot0002 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x1F,0x2)/Sata(0x0,0xFFFF,0x0)
+[2J[01;01H[01;01H[2J[01;01H[01;01H[BOOT] Protocole Limine actif (révision détectée : 3)
+[1;36m
+================================================================================
+    JAMBO-OS (JamboKernel v0.3.58 — Iron Core)                                 
+    Architecture : Micro-noyau orienté capacités en Rust no_std (x86_64/AArch64)
+    Auteur & Architecte Principal : ASSOGBA Prudence Dieudonné                 
+    Dépôt Officiel : https://github.com/jambostack/jambo-os                    
+================================================================================
+[0m
+[BOOT/HHDM] Projection mémoire physique directe à : 0xffff800000000000
+[BOOT/MMAP] Détection de 44 plages de mémoire physique :
+  [00] 0x0000000000000000 - 0x0000000000001000 |        4 Kio | Utilisable (RAM)
+  [01] 0x0000000000001000 - 0x0000000000002000 |        4 Kio | Chargeur Récupérable
+  [02] 0x0000000000002000 - 0x00000000000a0000 |      632 Kio | Utilisable (RAM)
+  [03] 0x0000000000100000 - 0x0000000000800000 |     7168 Kio | Utilisable (RAM)
+  [04] 0x0000000000800000 - 0x0000000000808000 |       32 Kio | ACPI NVS
+  [05] 0x0000000000808000 - 0x000000000080b000 |       12 Kio | Utilisable (RAM)
+  [06] 0x000000000080b000 - 0x000000000080c000 |        4 Kio | ACPI NVS
+  [07] 0x000000000080c000 - 0x0000000000811000 |       20 Kio | Utilisable (RAM)
+  [08] 0x0000000000811000 - 0x0000000000900000 |      956 Kio | ACPI NVS
+  [09] 0x0000000000900000 - 0x00000000798fd000 |  1982452 Kio | Utilisable (RAM)
+  [10] 0x00000000798fd000 - 0x0000000079925000 |      160 Kio | Chargeur Récupérable
+  [11] 0x0000000079925000 - 0x0000000079bae000 |     2596 Kio | Noyau & Modules
+  [12] 0x0000000079bae000 - 0x0000000079bdd000 |      188 Kio | Noyau & Modules
+  [13] 0x0000000079bdd000 - 0x0000000079c04000 |      156 Kio | Chargeur Récupérable
+  [14] 0x0000000079c04000 - 0x0000000079c05000 |        4 Kio | Utilisable (RAM)
+  [15] 0x0000000079c05000 - 0x0000000079c3c000 |      220 Kio | Chargeur Récupérable
+  [16] 0x0000000079c3c000 - 0x000000007bb5c000 |    31872 Kio | Utilisable (RAM)
+  [17] 0x000000007bb5c000 - 0x000000007bbae000 |      328 Kio | Chargeur Récupérable
+  [18] 0x000000007bbae000 - 0x000000007dc97000 |    33700 Kio | Utilisable (RAM)
+  [19] 0x000000007dc97000 - 0x000000007dc9c000 |       20 Kio | Réservé Matériel
+  [20] 0x000000007dc9c000 - 0x000000007dcae000 |       72 Kio | Utilisable (RAM)
+  [21] 0x000000007dcae000 - 0x000000007dd1e000 |      448 Kio | Chargeur Récupérable
+  [22] 0x000000007dd1e000 - 0x000000007dd29000 |       44 Kio | Réservé Matériel
+  [23] 0x000000007dd29000 - 0x000000007de1e000 |      980 Kio | Utilisable (RAM)
+  [24] 0x000000007de1e000 - 0x000000007de20000 |        8 Kio | Chargeur Récupérable
+  [25] 0x000000007de20000 - 0x000000007ea2e000 |    12344 Kio | Utilisable (RAM)
+  [26] 0x000000007ea2e000 - 0x000000007eaef000 |      772 Kio | Réservé Matériel
+  [27] 0x000000007eaef000 - 0x000000007f4ed000 |    10232 Kio | Utilisable (RAM)
+  [28] 0x000000007f4ed000 - 0x000000007f5ed000 |     1024 Kio | Réservé Matériel
+  [29] 0x000000007f5ed000 - 0x000000007f6ed000 |     1024 Kio | Réservé Matériel
+  [30] 0x000000007f6ed000 - 0x000000007f76d000 |      512 Kio | Réservé Matériel
+  [31] 0x000000007f76d000 - 0x000000007f77f000 |       72 Kio | ACPI Récupérable
+  [32] 0x000000007f77f000 - 0x000000007f7ff000 |      512 Kio | ACPI NVS
+  [33] 0x000000007f7ff000 - 0x000000007fe00000 |     6148 Kio | Utilisable (RAM)
+  [34] 0x000000007fe00000 - 0x000000007fe16000 |       88 Kio | Chargeur Récupérable
+  [35] 0x000000007fe16000 - 0x000000007fe80000 |      424 Kio | Utilisable (RAM)
+  [36] 0x000000007fe80000 - 0x000000007fe84000 |       16 Kio | Réservé Matériel
+  [37] 0x000000007fe84000 - 0x000000007fe86000 |        8 Kio | ACPI NVS
+  [38] 0x000000007fe86000 - 0x000000007fedc000 |      344 Kio | Utilisable (RAM)
+  [39] 0x000000007fedc000 - 0x000000007ff60000 |      528 Kio | Réservé Matériel
+  [40] 0x000000007ff60000 - 0x0000000080000000 |      640 Kio | ACPI NVS
+  [41] 0x0000000080000000 - 0x00000000803e8000 |     4000 Kio | Framebuffer GOP
+  [42] 0x00000000e0000000 - 0x00000000f0000000 |   262144 Kio | Réservé Matériel
+  [43] 0x000000fd00000000 - 0x0000010000000000 | 12582912 Kio | Réservé Matériel
+[BOOT/MMAP] Mémoire totale : 14595 Mio | RAM utilisable : 2037 Mio
+[BOOT/PMM] Buddy Allocator initialisé (521602 pages physiques / 2037 Mio gérées)
+[HEAP/SLUB] Tas noyau actif, allocation dynamique validée (4 éléments)
+[VMM/VMO] VMO Copy-on-Write projeté avec succès dans le nouvel espace d'adressage
+[MMU/PAGING] Défaut de page (Demand Paging) intercepté et résolu avec succès
+[ELF64] Chargeur binaire opérationnel (Point d'entrée: 0x00400000, Pile: 0x00007fffffff0000)
+[CPU/GDT] GDT et TSS initialisés (Pile IST1 dédiée aux Double Faults)
+[CPU/IDT] IDT chargée (256 vecteurs, gestionnaires d'exceptions actifs)
+[CPU/PIC] Contrôleur hérité PIC 8259 masqué
+[CPU/APIC] Contrôleur Local APIC (xAPIC MMIO) initialisé
+[SMP] Détection de 4 cœurs logiques
+[SMP] Cœur AP #1 démarré (LAPIC ID: 1)
+[SMP] Cœur AP #2 démarré (LAPIC ID: 2)
+[SMP] Multicœur SMP opérationnel (4 cœurs actifs sur 4)
+[SMP] Cœur AP #3 démarré (LAPIC ID: 3)
+[SCHED/EEVDF] Ordonnanceur EEVDF opérationnel avec 2 threads de test en file
+[BOOT/MODULES] Détection de 1 module(s) d'amorçage Limine :
+  [00] Module '/boot/initrd.tar' | 2655232 octets (cmdline: '')
+[INITRD/TAR] Superviseur '/bin/init' extrait (0x23e0 octets)
+[INITRD/TAR] Shell interactif '/bin/jsh' extrait (0x2d478 octets)
+[INITRD/TAR] Démon de stockage '/bin/blockd' extrait (0x134e8 octets)
+[INITRD/TAR] Serveur de fichiers '/bin/fs' extrait (0x145c0 octets)
+[INITRD/TAR] Démon réseau '/bin/netd' extrait (0x5540 octets)
+[INITRD/TAR] Démon de résilience matérielle '/bin/fdr' extrait (0x8898 octets)
+[INITRD/TAR] Démon WebAssembly & WASI '/bin/wasmd' extrait (0x6620 octets)
+[INITRD/TAR] Démon Cryptographie Post-Quantique '/bin/pqc' extrait (0x108d0 octets)
+[INITRD/TAR] Démon Surveillance Intégrité Noyau & Pilotes '/bin/kdir' extrait (0x69a8 octets)
+[INITRD/TAR] Démon Confinement Mémoire & Forensics Volatile '/bin/forensics' extrait (0xda60 octets)
+[INITRD/TAR] Démon Gestion Énergie & Fréquence CPU '/bin/powerd' extrait (0x25b0 octets)
+[INITRD/TAR] Démon Métrologie Système & Télémétrie '/bin/metricsd' extrait (0x77c8 octets)
+[INITRD/TAR] Démon Sandboxing eBPF & Filtrage Réseau XDP '/bin/bpfd' extrait (0x5850 octets)
+[INITRD/TAR] Démon Passerelle VPN WireGuard Post-Quantique '/bin/vpn' extrait (0xf920 octets)
+[INITRD/TAR] Démon Identité & Jetons de Session '/bin/authd' extrait (0x5628 octets)
+[INITRD/TAR] Démon Résolution de Noms & Découverte DNS '/bin/dnsd' extrait (0x7668 octets)
+[INITRD/TAR] Démon Synchronisation Horlogère PTP/NTP '/bin/timed' extrait (0x5460 octets)
+[INITRD/TAR] Demon Audit Cryptographique Inalterable '/bin/auditd' extrait (0x95c0 octets)
+[INITRD/TAR] Demon Pare-Feu d'Etat & Conntrack '/bin/walld' extrait (0x7840 octets)
+[PROCESS] Processus utilisateur init (PID 1) initialisé avec pile System V ABI (RSP: 0x00007ffffffeff10)
+[PROCESS] Shell utilisateur interactif jsh (PID 2) initialisé avec pile System V ABI (RSP: 0x00007ffffffeff20) et enfilé
+[PROCESS] Démon de stockage blockd (PID 3) initialisé avec pile System V ABI (RSP: 0x00007ffffffeff20) et enfilé
+[PROCESS] Serveur de fichiers fs (PID 4) initialisé avec pile System V ABI (RSP: 0x00007ffffffeff20) et enfilé
+[PROCESS] Démon réseau netd (PID 5) initialisé avec pile System V ABI (RSP: 0x00007ffffffeff20) et enfilé
+[PROCESS] Démon de résilience matérielle fdr (PID 6) initialisé avec pile System V ABI (RSP: 0x00007ffffffeff20) et enfilé
+[PROCESS] Démon WebAssembly & WASI wasmd (PID 7) initialisé avec pile System V ABI (RSP: 0x00007ffffffeff20) et enfilé
+[PROCESS] Démon Cryptographie Post-Quantique pqc (PID 8) initialisé avec pile System V ABI (RSP: 0x00007ffffffeff20) et enfilé
+[PROCESS] Démon Surveillance Intégrité Noyau & Pilotes kdir (PID 9) initialisé avec pile System V ABI (RSP: 0x00007ffffffeff20) et enfilé
+[PROCESS] Démon Confinement Mémoire & Forensics Volatile forensics (PID 10) initialisé avec pile System V ABI (RSP: 0x00007ffffffeff10) et enfilé
+[PROCESS] Démon Gestion Énergie & Fréquence CPU powerd (PID 11) initialisé avec pile System V ABI (RSP: 0x00007ffffffeff20) et enfilé
+[PROCESS] Démon Métrologie Système & Télémétrie metricsd (PID 12) initialisé avec pile System V ABI (RSP: 0x00007ffffffeff20) et enfilé
+[PROCESS] Démon Sandboxing eBPF & Filtrage Réseau XDP bpfd (PID 13) initialisé avec pile System V ABI (RSP: 0x00007ffffffeff20) et enfilé
+[PROCESS] Démon Passerelle VPN WireGuard Post-Quantique vpn (PID 14) initialisé avec pile System V ABI (RSP: 0x00007ffffffeff20) et enfilé
+[PROCESS] Démon Identité & Jetons de Session authd (PID 15) initialisé avec pile System V ABI (RSP: 0x00007ffffffeff20) et enfilé
+[PROCESS] Démon Résolution de Noms & Découverte DNS dnsd (PID 16) initialisé avec pile System V ABI (RSP: 0x00007ffffffeff20) et enfilé
+[PROCESS] Démon Synchronisation Horlogère PTP/NTP timed (PID 17) initialisé avec pile System V ABI (RSP: 0x00007ffffffeff20) et enfilé
+[PROCESS] Demon Audit Cryptographique Inalterable auditd (PID 18) initialise avec pile System V ABI (RSP: 0x00007ffffffeff20) et enfile
+[PROCESS] Demon Pare-Feu d'Etat & Conntrack walld (PID 19) initialise avec pile System V ABI (RSP: 0x00007ffffffeff20) et enfile
+[CAP/CSPACE] Table de capacités active. Handle initial: 0x100000001, Handle atténué: 0x100000002
+[SYSCALL] Appel système vmo_create validé (Code retour: 0, Nouveau Handle: 0x100000003)
+[SYSCALL] Cycle de vie validé : process_create (0x100000004), thread_create (0x100000005), vmo_map & thread_start
+[IPC/FUTEX] Canaux bidirectionnels (0x100000006 <-> 0x100000007), Futex et Anneaux partagés validés
+[ASYNC/IRQ] Port asynchrone (0x100000009), IRQ #48 liée (0x10000000a) et acquittement EOI validés
+[TIME/CLOCK] Horloges validées : REALTIME = 1793537875s, MONOTONIC = 1s 974957194ns
+[RING3/TEST] Initialisation du test de transition matérielle vers Ring 3 (Phase 39)...
+[RING3/TEST] Thread Ring 3 créé avec succès (Entry: 0x00400000, RSP: 0x00007ffffffefff0)
+[RING3/TRANSITION] Saut vers Ring 3 via enter_user_mode (IRETQ avec CS=0x23, SS=0x1B)...
+[RING3/SYSCALL] Interception matérielle du Syscall 12 (ThreadYield) depuis Ring 3 réussie !
+[RING3/SYSRET] Reprise du thread superviseur après aller-retour Ring 3 <-> Ring 0.
+[RING3/EXIT] Thread utilisateur terminé avec l'état : Exited
+[PREEMPT/TEST] Démarrage du test de préemption matérielle par Timer APIC (Phase 40)...
+[PREEMPT/TIMER] Timer APIC armé (vecteur 32). Activation des interruptions CPU (STI)...
+[PREEMPT/SWITCH] Bascule vers le thread de calcul non coopératif (boucle sans yield)...
+[PREEMPT/SUCCESS] Préemption matérielle réussie ! Le superviseur a repris la main après 232848 cycles de calcul du travailleur.
+[PREEMPT/DONE] Ordonnancement préemptif EEVDF validé avec succès.
+[CONSOLE/TEST] Initialisation du test d'E/S console interactif (Phase 41)...
+[IOAPIC/IRQ4] Routage de l'IRQ 4 (COM1 UART) vers le vecteur IDT 36 configuré
+[CONSOLE/RX] Payload interactif capturé dans le ring buffer (11/11 octets) : "help --all\n"
+[CONSOLE/PASS] Primitives d'E/S console interactive et ring buffer validés.
+
+[1;32m[PASS] JamboKernel Iron Core (Ring 0 & Ring 3 transition) validé sous QEMU.[0m
+
+[TEST] Validation de l'initialisation des 19 processus Ring 3 (init, jsh, blockd, fs, netd, fdr, wasmd, pqc, kdir, forensics, powerd, metricsd, bpfd, vpn, authd, dnsd, timed, auditd, walld)...
+[1;32m[PASS] Pare-Feu d'Etat & Synchronisation Conntrack (jambo-walld PID 19) validee sous QEMU.[0m
+[TEST] Mode de test CI validé. Sortie propre via isa-debug-exit...
