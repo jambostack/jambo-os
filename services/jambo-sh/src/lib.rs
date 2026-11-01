@@ -3,6 +3,11 @@
 #![allow(clippy::field_reassign_with_default)]
 
 #[allow(unused_imports)]
+use jambo_auditd::{
+    AnomalyType, AuditCap, AuditCategory, AuditClient, AuditEntry, AuditOpcode, AuditRequest,
+    AuditResponse, AuditSeverity, JamboAuditDaemon,
+};
+#[allow(unused_imports)]
 use jambo_authd::{
     compute_token_hash, extract_username, ActiveSession, AuthClient, AuthOpcode, AuthRequest,
     AuthResponse, CryptoAuthEngine, JamboAuthDaemon, SessionManager, SessionTokenCap, UserIdentity,
@@ -66,6 +71,7 @@ pub struct JamboShell {
     pub auth_daemon: JamboAuthDaemon,
     pub dns_daemon: JamboDnsDaemon,
     pub time_daemon: JamboTimeDaemon,
+    pub audit_daemon: JamboAuditDaemon,
 }
 
 impl Default for JamboShell {
@@ -82,12 +88,15 @@ impl JamboShell {
         let dns_daemon = JamboDnsDaemon::new(dns_cap);
         let mut time_daemon = JamboTimeDaemon::new();
         time_daemon.init_defaults();
+        let mut audit_daemon = JamboAuditDaemon::new();
+        audit_daemon.init_defaults();
         Self {
             prompt_user: "jambo",
             commands_executed: 0,
             auth_daemon,
             dns_daemon,
             time_daemon,
+            audit_daemon,
         }
     }
 
@@ -135,6 +144,7 @@ impl JamboShell {
             "auth" => self.cmd_auth(args, out),
             "dns" => self.cmd_dns(args, out),
             "time" => self.cmd_time(args, out),
+            "audit" => self.cmd_audit(args, out),
             _ => self.cmd_not_found(cmd, out),
         }
     }
@@ -143,7 +153,7 @@ impl JamboShell {
         let text = b"Commandes disponibles:\n\
   help        - Affiche cette aide\n\
   sysinfo     - Metriques memoire et uptime du micro-noyau\n\
-  ps          - Liste les 17 processus actifs\n\
+  ps          - Liste les 18 processus actifs\n\
   echo <args> - Affiche le texte sur la console\n\
   clear       - Reinitialise l'ecran du terminal\n\
   reboot      - Eteint ou redemarre la machine virtuelle\n\
@@ -161,7 +171,8 @@ impl JamboShell {
   vpn [status|connect|peer|audit] - Passerelle VPN WireGuard Post-Quantique Ring 3\n\
   auth [status|login|token|revoke] - Identite cryptographique et sessions Ring 3\n\
   dns [status|resolve|register|cache|flush] - Resolution DNS souveraine et decouverte de services\n\
-  time [status|now|sync|adjust|step] - Synchronisation horlogere PTP/NTP et temps monotone\n";
+  time [status|now|sync|adjust|step] - Synchronisation horlogere PTP/NTP et temps monotone\n\
+  audit [status|record|verify|tail|scan] - Grand livre d'audit cryptographique et observabilite\n";
         let len = text.len().min(out.len());
         out[..len].copy_from_slice(&text[..len]);
         (ShellStatus::Success, len)
@@ -205,7 +216,7 @@ impl JamboShell {
     }
 
     fn cmd_ps(&self, out: &mut [u8]) -> (ShellStatus, usize) {
-        let text = b"PID  ETAT     COMMANDE\n  1  ACTIF    /bin/init (Superviseur racine)\n  2  ACTIF    /bin/jsh  (Shell interactif UART)\n  3  ACTIF    /bin/blockd (Pilote VirtIO-Block Ring 3)\n  4  ACTIF    /bin/fs   (Serveur de fichiers JamboFS)\n  5  ACTIF    /bin/netd (Demon reseau VirtIO-Net Ring 3)\n  6  ACTIF    /bin/fdr  (Demon FDR Cyber-Resilience Ring 3)\n  7  ACTIF    /bin/wasmd (Moteur WebAssembly/WASI Ring 3)\n  8  ACTIF    /bin/pqc  (Demon Cryptographie Post-Quantique Ring 3)\n  9  ACTIF    /bin/kdir (Demon Integrite Noyau & Pilotes KDIR Ring 3)\n 10  ACTIF    /bin/forensics (Demon Forensique & Acquisition Memoire Ring 3)\n 11  ACTIF    /bin/powerd (Demon Gestion Energie & ACPI Ring 3)\n 12  ACTIF    /bin/metricsd (Demon Metrologie & Observabilite Ring 3)\n 13  ACTIF    /bin/bpfd (Demon eBPF, Verificateur Formel & XDP Ring 3)\n 14  ACTIF    /bin/vpn (Passerelle VPN WireGuard Post-Quantique Ring 3)\n 15  ACTIF    /bin/authd (Demon Identite & Jetons de Session Capabilitaires Ring 3)\n 16  ACTIF    /bin/dnsd (Serveur DNS Souverain & Decouverte de Services Ring 3)\n 17  ACTIF    /bin/timed (Demon Synchronisation Horlogere PTP/NTP Ring 3)\n";
+        let text = b"PID  ETAT     COMMANDE\n  1  ACTIF    /bin/init (Superviseur racine)\n  2  ACTIF    /bin/jsh  (Shell interactif UART)\n  3  ACTIF    /bin/blockd (Pilote VirtIO-Block Ring 3)\n  4  ACTIF    /bin/fs   (Serveur de fichiers JamboFS)\n  5  ACTIF    /bin/netd (Demon reseau VirtIO-Net Ring 3)\n  6  ACTIF    /bin/fdr  (Demon FDR Cyber-Resilience Ring 3)\n  7  ACTIF    /bin/wasmd (Moteur WebAssembly/WASI Ring 3)\n  8  ACTIF    /bin/pqc  (Demon Cryptographie Post-Quantique Ring 3)\n  9  ACTIF    /bin/kdir (Demon Integrite Noyau & Pilotes KDIR Ring 3)\n 10  ACTIF    /bin/forensics (Demon Forensique & Acquisition Memoire Ring 3)\n 11  ACTIF    /bin/powerd (Demon Gestion Energie & ACPI Ring 3)\n 12  ACTIF    /bin/metricsd (Demon Metrologie & Observabilite Ring 3)\n 13  ACTIF    /bin/bpfd (Demon eBPF, Verificateur Formel & XDP Ring 3)\n 14  ACTIF    /bin/vpn (Passerelle VPN WireGuard Post-Quantique Ring 3)\n 15  ACTIF    /bin/authd (Demon Identite & Jetons de Session Capabilitaires Ring 3)\n 16  ACTIF    /bin/dnsd (Serveur DNS Souverain & Decouverte de Services Ring 3)\n 17  ACTIF    /bin/timed (Demon Synchronisation Horlogere PTP/NTP Ring 3)\n 18  ACTIF    /bin/auditd (Grand Livre d'Audit Cryptographique Ring 3)\n";
         let len = text.len().min(out.len());
         out[..len].copy_from_slice(&text[..len]);
         (ShellStatus::Success, len)
@@ -3498,6 +3509,308 @@ impl JamboShell {
         (ShellStatus::Success, c)
     }
 
+    fn cmd_audit(&mut self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        let subcmd = if args.is_empty() { "status" } else { args[0] };
+        match subcmd {
+            "status" => self.cmd_audit_status(out),
+            "record" => self.cmd_audit_record(&args[1..], out),
+            "verify" => self.cmd_audit_verify(out),
+            "tail" => self.cmd_audit_tail(out),
+            "scan" => self.cmd_audit_scan(out),
+            _ => {
+                let msg = b"Usage: audit [status|record|verify|tail|scan]\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                (ShellStatus::InvalidArgument, len)
+            }
+        }
+    }
+
+    fn cmd_audit_status(&mut self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let cap = self.audit_daemon.admin_cap;
+        let req = AuditRequest::new(AuditOpcode::GetStatus, &cap);
+        let mut resp_opt: Option<AuditResponse> = None;
+        for &h in &[
+            18u64, 17u64, 16u64, 15u64, 14u64, 13u64, 12u64, 11u64, 10u64, 9u64, 8u64, 7u64,
+            6u64, 5u64, 4u64, 3u64,
+        ] {
+            let client = AuditClient::new(libjambo::Handle(h));
+            if let Ok(resp) = client.call(&req) {
+                if resp.status == 0 {
+                    resp_opt = Some(resp);
+                    break;
+                }
+            }
+        }
+
+        let resp = resp_opt.unwrap_or_else(|| {
+            self.audit_daemon.handle_ipc_request(&req, 1_000_000)
+        });
+
+        let mut c = 0;
+        c = append_bytes(
+            out,
+            c,
+            b"Grand Livre d'Audit Cryptographique & Observabilite (jambo-auditd PID 18):\n  Operational State : ACTIVE (Tamper-Evident Ledger Ring 3)\n  Total Recorded    : ",
+        );
+        c = append_u64(out, c, resp.total_recorded);
+        c = append_bytes(out, c, b" events\n  Last Sealed Seq   : #");
+        c = append_u64(out, c, resp.last_seq);
+        c = append_bytes(out, c, b"\n  Last Sealed Hash  : ");
+        for &b in resp.last_hash.iter() {
+            c = append_hex_byte(out, c, b);
+        }
+        c = append_bytes(out, c, b"\n  Chain Integrity   : ");
+        if resp.integrity_ok != 0 {
+            c = append_bytes(out, c, b"VERIFIED (100% Intact)\n");
+        } else {
+            c = append_bytes(out, c, b"COMPROMISED (Tampering Detected)\n");
+        }
+        c = append_bytes(out, c, b"  Anomaly Alert     : ");
+        let anomaly_type = AnomalyType::from_u8(resp.anomaly_type);
+        if anomaly_type == AnomalyType::None {
+            c = append_bytes(out, c, b"None (Clean)\n");
+        } else {
+            c = append_bytes(out, c, anomaly_type.as_str().as_bytes());
+            c = append_bytes(out, c, b" (Suspect PID: ");
+            c = append_u64(out, c, resp.suspect_pid as u64);
+            c = append_bytes(out, c, b", Incidents: ");
+            c = append_u64(out, c, resp.alert_incident_count as u64);
+            c = append_bytes(out, c, b")\n");
+        }
+
+        (ShellStatus::Success, c)
+    }
+
+    fn cmd_audit_record(&mut self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if args.len() < 3 {
+            let msg = b"audit record: missing category, severity or details\nUsage: audit record <cat> <sev> <details>\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            return (ShellStatus::InvalidArgument, len);
+        }
+
+        let cat = match parse_audit_category(args[0]) {
+            Some(c) => c,
+            None => {
+                let msg = b"audit record: invalid category (expected cspace|memory|iommu|network|rpc|auth)\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                return (ShellStatus::InvalidArgument, len);
+            }
+        };
+
+        let sev = match parse_audit_severity(args[1]) {
+            Some(s) => s,
+            None => {
+                let msg = b"audit record: invalid severity (expected debug|info|warn|violation|critical)\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                return (ShellStatus::InvalidArgument, len);
+            }
+        };
+
+        let mut details_buf = [0u8; 32];
+        let mut details_len = 0;
+        for (i, &w) in args[2..].iter().enumerate() {
+            if i > 0 && details_len < 32 {
+                details_buf[details_len] = b' ';
+                details_len += 1;
+            }
+            let b = w.as_bytes();
+            let to_copy = b.len().min(32 - details_len);
+            details_buf[details_len..details_len + to_copy].copy_from_slice(&b[..to_copy]);
+            details_len += to_copy;
+        }
+
+        let cap = self.audit_daemon.admin_cap;
+        let mut req = AuditRequest::new(AuditOpcode::RecordEvent, &cap);
+        req.source_pid = 2; // PID de jsh
+        req.category = cat as u8;
+        req.severity = sev as u8;
+        req.event_code = 100;
+        req.details_len = details_len as u8;
+        req.details[..details_len].copy_from_slice(&details_buf[..details_len]);
+
+        let mut resp_opt: Option<AuditResponse> = None;
+        for &h in &[
+            18u64, 17u64, 16u64, 15u64, 14u64, 13u64, 12u64, 11u64, 10u64, 9u64, 8u64, 7u64,
+            6u64, 5u64, 4u64, 3u64,
+        ] {
+            let client = AuditClient::new(libjambo::Handle(h));
+            if let Ok(resp) = client.call(&req) {
+                if resp.status == 0 {
+                    resp_opt = Some(resp);
+                    break;
+                }
+            }
+        }
+
+        let resp = resp_opt.unwrap_or_else(|| {
+            self.audit_daemon.handle_ipc_request(&req, 1_000_000)
+        });
+
+        let mut c = 0;
+        if resp.status == 0 {
+            c = append_bytes(out, c, b"audit: recorded event #");
+            c = append_u64(out, c, resp.last_seq);
+            c = append_bytes(out, c, b" [");
+            c = append_bytes(out, c, cat.as_str().as_bytes());
+            c = append_bytes(out, c, b":");
+            c = append_bytes(out, c, sev.as_str().as_bytes());
+            c = append_bytes(out, c, b"] hash=");
+            for &b in resp.last_hash.iter() {
+                c = append_hex_byte(out, c, b);
+            }
+            c = append_bytes(out, c, b"\n");
+            (ShellStatus::Success, c)
+        } else {
+            c = append_bytes(out, c, b"audit: failed to record event (error ");
+            c = append_i64(out, c, resp.status as i64);
+            c = append_bytes(out, c, b")\n");
+            (ShellStatus::ExecutionFailed, c)
+        }
+    }
+
+    fn cmd_audit_verify(&mut self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let cap = self.audit_daemon.admin_cap;
+        let req = AuditRequest::new(AuditOpcode::VerifyIntegrity, &cap);
+        let mut resp_opt: Option<AuditResponse> = None;
+        for &h in &[
+            18u64, 17u64, 16u64, 15u64, 14u64, 13u64, 12u64, 11u64, 10u64, 9u64, 8u64, 7u64,
+            6u64, 5u64, 4u64, 3u64,
+        ] {
+            let client = AuditClient::new(libjambo::Handle(h));
+            if let Ok(resp) = client.call(&req) {
+                if resp.status == 0 {
+                    resp_opt = Some(resp);
+                    break;
+                }
+            }
+        }
+
+        let resp = resp_opt.unwrap_or_else(|| {
+            self.audit_daemon.handle_ipc_request(&req, 1_000_000)
+        });
+
+        let mut c = 0;
+        c = append_bytes(
+            out,
+            c,
+            b"[AUDIT] Verifying cryptographic hash chain integrity...\n  Scanned Events   : ",
+        );
+        c = append_u64(out, c, resp.total_recorded);
+        c = append_bytes(out, c, b"\n  Latest Hash Head : ");
+        for &b in resp.last_hash.iter() {
+            c = append_hex_byte(out, c, b);
+        }
+        c = append_bytes(out, c, b"\n  Verification     : ");
+        if resp.integrity_ok != 0 && resp.status == 0 {
+            c = append_bytes(out, c, b"OK (100% Intact - Chain Unbroken & Sealed)\n");
+            (ShellStatus::Success, c)
+        } else {
+            c = append_bytes(out, c, b"FAILED (Cryptographic Mismatch Detected!)\n");
+            (ShellStatus::ExecutionFailed, c)
+        }
+    }
+
+    fn cmd_audit_tail(&mut self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let cap = self.audit_daemon.admin_cap;
+        let req = AuditRequest::new(AuditOpcode::QueryLatest, &cap);
+        let mut resp_opt: Option<AuditResponse> = None;
+        for &h in &[
+            18u64, 17u64, 16u64, 15u64, 14u64, 13u64, 12u64, 11u64, 10u64, 9u64, 8u64, 7u64,
+            6u64, 5u64, 4u64, 3u64,
+        ] {
+            let client = AuditClient::new(libjambo::Handle(h));
+            if let Ok(resp) = client.call(&req) {
+                if resp.status == 0 {
+                    resp_opt = Some(resp);
+                    break;
+                }
+            }
+        }
+
+        let resp = resp_opt.unwrap_or_else(|| {
+            self.audit_daemon.handle_ipc_request(&req, 1_000_000)
+        });
+
+        if resp.total_recorded == 0 {
+            let msg = b"audit tail: ledger is empty\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            return (ShellStatus::Success, len);
+        }
+
+        let mut c = 0;
+        c = append_bytes(out, c, b"Derniere entree scellee (audit tail):\n  Seq ID  : #");
+        c = append_u64(out, c, resp.last_seq);
+        c = append_bytes(out, c, b"\n  Hash    : ");
+        for &b in resp.last_hash.iter() {
+            c = append_hex_byte(out, c, b);
+        }
+        c = append_bytes(out, c, b"\n  Details : ");
+        let mut text_len = 0;
+        while text_len < resp.details.len() && resp.details[text_len] != 0 {
+            text_len += 1;
+        }
+        if text_len > 0 {
+            c = append_bytes(out, c, &resp.details[..text_len]);
+        } else {
+            c = append_bytes(out, c, b"<empty>");
+        }
+        c = append_bytes(out, c, b"\n");
+
+        (ShellStatus::Success, c)
+    }
+
+    fn cmd_audit_scan(&mut self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let cap = self.audit_daemon.admin_cap;
+        let req = AuditRequest::new(AuditOpcode::ScanAnomalies, &cap);
+        let mut resp_opt: Option<AuditResponse> = None;
+        for &h in &[
+            18u64, 17u64, 16u64, 15u64, 14u64, 13u64, 12u64, 11u64, 10u64, 9u64, 8u64, 7u64,
+            6u64, 5u64, 4u64, 3u64,
+        ] {
+            let client = AuditClient::new(libjambo::Handle(h));
+            if let Ok(resp) = client.call(&req) {
+                if resp.status == 0 {
+                    resp_opt = Some(resp);
+                    break;
+                }
+            }
+        }
+
+        let resp = resp_opt.unwrap_or_else(|| {
+            self.audit_daemon.handle_ipc_request(&req, 1_000_000)
+        });
+
+        let mut c = 0;
+        c = append_bytes(out, c, b"[AUDIT] Heuristic security anomaly scan:\n");
+        let anomaly_type = AnomalyType::from_u8(resp.anomaly_type);
+        if anomaly_type == AnomalyType::None {
+            c = append_bytes(
+                out,
+                c,
+                b"  Status       : OK - 0 anomalies detected\n  Threat Level : NONE\n",
+            );
+            (ShellStatus::Success, c)
+        } else {
+            c = append_bytes(
+                out,
+                c,
+                b"  Status       : ALERT - Security anomaly detected!\n  Anomaly Type : ",
+            );
+            c = append_bytes(out, c, anomaly_type.as_str().as_bytes());
+            c = append_bytes(out, c, b"\n  Suspect PID  : ");
+            c = append_u64(out, c, resp.suspect_pid as u64);
+            c = append_bytes(out, c, b"\n  Violations   : ");
+            c = append_u64(out, c, resp.alert_incident_count as u64);
+            c = append_bytes(out, c, b"\n");
+            (ShellStatus::Success, c)
+        }
+    }
+
     fn cmd_not_found(&self, cmd: &str, out: &mut [u8]) -> (ShellStatus, usize) {
         let mut cursor = 0;
         let pfx = b"jsh: command not found: ";
@@ -3690,6 +4003,64 @@ fn parse_i32(s: &str) -> Option<i32> {
     })
 }
 
+fn parse_audit_category(s: &str) -> Option<AuditCategory> {
+    if let Some(num) = parse_u32(s) {
+        return AuditCategory::from_u8(num as u8);
+    }
+    match s {
+        s if s.eq_ignore_ascii_case("cspace") => Some(AuditCategory::CSpace),
+        s if s.eq_ignore_ascii_case("memory")
+            || s.eq_ignore_ascii_case("mmu")
+            || s.eq_ignore_ascii_case("memorymmu") =>
+        {
+            Some(AuditCategory::MemoryMMU)
+        }
+        s if s.eq_ignore_ascii_case("iommu")
+            || s.eq_ignore_ascii_case("dma")
+            || s.eq_ignore_ascii_case("iommudma") =>
+        {
+            Some(AuditCategory::IommuDma)
+        }
+        s if s.eq_ignore_ascii_case("network")
+            || s.eq_ignore_ascii_case("ipc")
+            || s.eq_ignore_ascii_case("networkipc") =>
+        {
+            Some(AuditCategory::NetworkIpc)
+        }
+        s if s.eq_ignore_ascii_case("rpc") || s.eq_ignore_ascii_case("distributedrpc") => {
+            Some(AuditCategory::DistributedRpc)
+        }
+        s if s.eq_ignore_ascii_case("auth") || s.eq_ignore_ascii_case("authentication") => {
+            Some(AuditCategory::Authentication)
+        }
+        _ => None,
+    }
+}
+
+fn parse_audit_severity(s: &str) -> Option<AuditSeverity> {
+    if let Some(num) = parse_u32(s) {
+        return AuditSeverity::from_u8(num as u8);
+    }
+    match s {
+        s if s.eq_ignore_ascii_case("debug") => Some(AuditSeverity::Debug),
+        s if s.eq_ignore_ascii_case("info") => Some(AuditSeverity::Info),
+        s if s.eq_ignore_ascii_case("warn") || s.eq_ignore_ascii_case("warning") => {
+            Some(AuditSeverity::Warning)
+        }
+        s if s.eq_ignore_ascii_case("violation")
+            || s.eq_ignore_ascii_case("securityviolation") =>
+        {
+            Some(AuditSeverity::SecurityViolation)
+        }
+        s if s.eq_ignore_ascii_case("critical")
+            || s.eq_ignore_ascii_case("criticalalert") =>
+        {
+            Some(AuditSeverity::CriticalAlert)
+        }
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3761,7 +4132,7 @@ mod tests {
     }
 
     #[test]
-    fn test_ps_contains_17_processes() {
+    fn test_ps_contains_18_processes() {
         let mut shell = JamboShell::new();
         let mut out = [0u8; 2048];
 
@@ -3795,6 +4166,9 @@ mod tests {
         assert!(
             s.contains("17  ACTIF    /bin/timed (Demon Synchronisation Horlogere PTP/NTP Ring 3)")
         );
+        assert!(s.contains(
+            "18  ACTIF    /bin/auditd (Grand Livre d'Audit Cryptographique Ring 3)"
+        ));
     }
 
     #[test]
@@ -3805,7 +4179,7 @@ mod tests {
         let (st, len) = shell.execute_line("help", &mut out);
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
-        assert!(s.contains("17 processus actifs"));
+        assert!(s.contains("18 processus actifs"));
         assert!(s.contains("fdr [status|verify|pcr]"));
         assert!(s.contains("wasm [status|run|info]"));
         assert!(s.contains("pqc [status|kex|sign|audit]"));
@@ -3818,6 +4192,7 @@ mod tests {
         assert!(s.contains("auth [status|login|token|revoke]"));
         assert!(s.contains("dns [status|resolve|register|cache|flush]"));
         assert!(s.contains("time [status|now|sync|adjust|step]"));
+        assert!(s.contains("audit [status|record|verify|tail|scan]"));
     }
 
     #[test]
@@ -4980,5 +5355,148 @@ mod tests {
         assert_eq!(st3, ShellStatus::InvalidArgument);
         let s3 = core::str::from_utf8(&out[..len3]).unwrap();
         assert!(s3.contains("time step: missing offset in nanoseconds"));
+    }
+
+    #[test]
+    fn test_audit_status() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 1024];
+
+        let (st, len) = shell.execute_line("audit status", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("Grand Livre d'Audit Cryptographique & Observabilite (jambo-auditd PID 18):"));
+        assert!(s.contains("Total Recorded    : 3 events"));
+        assert!(s.contains("Last Sealed Seq   : #3"));
+        assert!(s.contains("Chain Integrity   : VERIFIED (100% Intact)"));
+        assert!(s.contains("Anomaly Alert     : None (Clean)"));
+
+        // 'audit' sans argument utilise 'status' par defaut
+        let (st2, len2) = shell.execute_line("audit", &mut out);
+        assert_eq!(st2, ShellStatus::Success);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("Total Recorded    : 3 events"));
+    }
+
+    #[test]
+    fn test_audit_record() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 1024];
+
+        let (st, len) = shell.execute_line("audit record cspace info Kernel page tables synced", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("audit: recorded event #4 [CSpace:INFO] hash="));
+
+        // Verifier que le grand livre a maintenant 4 entrees
+        let (st_st, len_st) = shell.execute_line("audit status", &mut out);
+        assert_eq!(st_st, ShellStatus::Success);
+        let s_st = core::str::from_utf8(&out[..len_st]).unwrap();
+        assert!(s_st.contains("Total Recorded    : 4 events"));
+        assert!(s_st.contains("Last Sealed Seq   : #4"));
+
+        // Enregistrer avec des categories et severites numeriques
+        let (st2, len2) = shell.execute_line("audit record 6 3 Auth token refreshed", &mut out);
+        assert_eq!(st2, ShellStatus::Success);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("audit: recorded event #5 [Authentication:WARN] hash="));
+    }
+
+    #[test]
+    fn test_audit_verify() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 1024];
+
+        let (st, len) = shell.execute_line("audit verify", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("[AUDIT] Verifying cryptographic hash chain integrity..."));
+        assert!(s.contains("Scanned Events   : 3"));
+        assert!(s.contains("OK (100% Intact - Chain Unbroken & Sealed)"));
+    }
+
+    #[test]
+    fn test_audit_tail() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 1024];
+
+        let (st, len) = shell.execute_line("audit tail", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("Derniere entree scellee (audit tail):"));
+        assert!(s.contains("Seq ID  : #3"));
+        assert!(s.contains("Details : IOMMU DMA protec"));
+
+        // Apres avoir enregistre une entree
+        let _ = shell.execute_line("audit record rpc violation InvalidRPCSeqID", &mut out);
+        let (st2, len2) = shell.execute_line("audit tail", &mut out);
+        assert_eq!(st2, ShellStatus::Success);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("Seq ID  : #4"));
+        assert!(s2.contains("Details : InvalidRPCSeqID"));
+    }
+
+    #[test]
+    fn test_audit_scan() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 1024];
+
+        // 1. Scan initial sans anomalies
+        let (st, len) = shell.execute_line("audit scan", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("[AUDIT] Heuristic security anomaly scan:"));
+        assert!(s.contains("Status       : OK - 0 anomalies detected"));
+        assert!(s.contains("Threat Level : NONE"));
+
+        // 2. Provoquer une anomalie en injectant des violations de securite pour un PID
+        // Dans JamboAuditDaemon::detector, le seuil par defaut est de 3 violations
+        for _ in 0..3 {
+            let cap = shell.audit_daemon.admin_cap;
+            let mut req = AuditRequest::new(AuditOpcode::RecordEvent, &cap);
+            req.source_pid = 42;
+            req.category = AuditCategory::DistributedRpc as u8;
+            req.severity = AuditSeverity::SecurityViolation as u8;
+            req.event_code = 999;
+            shell.audit_daemon.handle_ipc_request(&req, 2_000_000);
+        }
+
+        let (st2, len2) = shell.execute_line("audit scan", &mut out);
+        assert_eq!(st2, ShellStatus::Success);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("Status       : ALERT - Security anomaly detected!"));
+        assert!(s2.contains("Anomaly Type : PotentialRpcReplayAttack"));
+        assert!(s2.contains("Suspect PID  : 42"));
+        assert!(s2.contains("Violations   : 3"));
+    }
+
+    #[test]
+    fn test_audit_invalid() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 1024];
+
+        // 1. Sous-commande inconnue
+        let (st, len) = shell.execute_line("audit unknown", &mut out);
+        assert_eq!(st, ShellStatus::InvalidArgument);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("Usage: audit [status|record|verify|tail|scan]"));
+
+        // 2. Record sans arguments
+        let (st2, len2) = shell.execute_line("audit record", &mut out);
+        assert_eq!(st2, ShellStatus::InvalidArgument);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("audit record: missing category, severity or details"));
+
+        // 3. Record categorie invalide
+        let (st3, len3) = shell.execute_line("audit record badcat info test", &mut out);
+        assert_eq!(st3, ShellStatus::InvalidArgument);
+        let s3 = core::str::from_utf8(&out[..len3]).unwrap();
+        assert!(s3.contains("audit record: invalid category"));
+
+        // 4. Record severite invalide
+        let (st4, len4) = shell.execute_line("audit record cspace badsev test", &mut out);
+        assert_eq!(st4, ShellStatus::InvalidArgument);
+        let s4 = core::str::from_utf8(&out[..len4]).unwrap();
+        assert!(s4.contains("audit record: invalid severity"));
     }
 }
