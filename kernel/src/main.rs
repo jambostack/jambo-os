@@ -157,7 +157,7 @@ pub extern "C" fn _start() -> ! {
     // 4. Bannière système d'accueil sobre Iron Core
     kprintln!("\x1b[1;36m");
     kprintln!("================================================================================");
-    kprintln!("    JAMBO-OS (JamboKernel v0.3.57 — Iron Core)                                 ");
+    kprintln!("    JAMBO-OS (JamboKernel v0.3.58 — Iron Core)                                 ");
     kprintln!("    Architecture : Micro-noyau orienté capacités en Rust no_std (x86_64/AArch64)");
     kprintln!("    Auteur & Architecte Principal : ASSOGBA Prudence Dieudonné                 ");
     kprintln!("    Dépôt Officiel : https://github.com/jambostack/jambo-os                    ");
@@ -360,6 +360,7 @@ pub extern "C" fn _start() -> ! {
     let mut dnsd_elf_bytes: Option<&'static [u8]> = None;
     let mut timed_elf_bytes: Option<&'static [u8]> = None;
     let mut auditd_elf_bytes: Option<&'static [u8]> = None;
+    let mut walld_elf_bytes: Option<&'static [u8]> = None;
     if let Some(modules_resp) = MODULES_REQUEST.response() {
         let modules = modules_resp.modules();
         kprintln!(
@@ -548,6 +549,18 @@ pub extern "C" fn _start() -> ! {
                         auditd_data.len()
                     );
                     auditd_elf_bytes = Some(auditd_data);
+                }
+                if let Some(walld_data) = tar
+                    .find("bin/walld")
+                    .or_else(|| tar.find("/bin/walld"))
+                    .or_else(|| tar.find("bin/jambo-walld"))
+                    .or_else(|| tar.find("walld"))
+                {
+                    kprintln!(
+                        "[INITRD/TAR] Demon Pare-Feu d'Etat & Conntrack '/bin/walld' extrait ({:#x} octets)",
+                        walld_data.len()
+                    );
+                    walld_elf_bytes = Some(walld_data);
                 }
             }
             if initrd_elf_bytes.is_none() && data.len() >= 4 && data[0..4] == mm::elf::ELF_MAGIC {
@@ -971,6 +984,27 @@ pub extern "C" fn _start() -> ! {
         kprintln!("[WARN] Echec de la creation du processus auditd");
     }
 
+    // Initialisation du démon pare-feu d'état et conntrack Ring 3 (PID 19 : walld)
+    let walld_binary = walld_elf_bytes.unwrap_or(&test_elf);
+    if let Ok((_walld_process, walld_thread)) = sched::Process::create_user_process(
+        19,
+        "walld",
+        walld_binary,
+        &["walld"],
+        &["PATH=/bin:/usr/bin", "TERM=xterm-256color"],
+    ) {
+        let walld_sp = walld_thread.lock().user_rsp;
+        assert_eq!(walld_sp % 16, 0, "Alignement 16 octets du RSP walld");
+        walld_thread.lock().deadline = 1000;
+        sched::SCHEDULER.lock().enqueue(walld_thread);
+        kprintln!(
+            "[PROCESS] Demon Pare-Feu d'Etat & Conntrack walld (PID 19) initialise avec pile System V ABI (RSP: {:#018x}) et enfile",
+            walld_sp
+        );
+    } else {
+        kprintln!("[WARN] Echec de la creation du processus walld");
+    }
+
     // 12. Initialisation CSpace, table SYSCALL et IPC hybride
     cap::init_cspace();
     syscall::init_syscall();
@@ -1267,8 +1301,8 @@ pub extern "C" fn _start() -> ! {
     let is_test_mode = cfg!(feature = "qemu-test") || cmdline_test || module_test;
 
     if is_test_mode {
-        kprintln!("[TEST] Validation de l'initialisation des 18 processus Ring 3 (init, jsh, blockd, fs, netd, fdr, wasmd, pqc, kdir, forensics, powerd, metricsd, bpfd, vpn, authd, dnsd, timed, auditd)...");
-        kprintln!("\x1b[1;32m[PASS] Audit Cryptographique Inalterable & Registre Inviolable (jambo-auditd PID 18) validee sous QEMU.\x1b[0m");
+        kprintln!("[TEST] Validation de l'initialisation des 19 processus Ring 3 (init, jsh, blockd, fs, netd, fdr, wasmd, pqc, kdir, forensics, powerd, metricsd, bpfd, vpn, authd, dnsd, timed, auditd, walld)...");
+        kprintln!("\x1b[1;32m[PASS] Pare-Feu d'Etat & Synchronisation Conntrack (jambo-walld PID 19) validee sous QEMU.\x1b[0m");
         kprintln!("[TEST] Mode de test CI validé. Sortie propre via isa-debug-exit...");
         exit_qemu(QemuExitCode::Success);
     }
