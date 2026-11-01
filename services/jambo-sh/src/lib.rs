@@ -2378,7 +2378,11 @@ impl JamboShell {
         cursor = append_u64(out, cursor, resp.cycles_consumed);
         cursor = append_bytes(out, cursor, b"\n[BPF] XDP Action Verdict        : ");
         if resp.verdict == xdp_action::XDP_DROP as u32 {
-            cursor = append_bytes(out, cursor, b"DROP (Packet rejected at network driver layer)\n");
+            cursor = append_bytes(
+                out,
+                cursor,
+                b"DROP (Packet rejected at network driver layer)\n",
+            );
         } else {
             cursor = append_bytes(out, cursor, b"PASS (Packet forwarded to network stack)\n");
         }
@@ -3304,12 +3308,18 @@ mod tests {
         let (st, len) = shell.execute_line("bpf verify 1", &mut out);
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
-        assert!(s.contains("[BPF] Running formal safety & termination verification for program 1..."));
-        assert!(s.contains("Control Flow Analysis     : Acyclic DAG Verified (Zero backward jumps, loop-free)"));
+        assert!(
+            s.contains("[BPF] Running formal safety & termination verification for program 1...")
+        );
+        assert!(s.contains(
+            "Control Flow Analysis     : Acyclic DAG Verified (Zero backward jumps, loop-free)"
+        ));
         assert!(s.contains("Memory Safety Check       : Stack bounds [-512, 0) strictly respected"));
         assert!(s.contains("Register Integrity        : R10 Frame Pointer read-only verified"));
         assert!(s.contains("Instruction Count         : 7 instructions"));
-        assert!(s.contains("Formal Proof Verdict      : VERIFIED (Safe for Ring 0/Ring 3 execution)"));
+        assert!(
+            s.contains("Formal Proof Verdict      : VERIFIED (Safe for Ring 0/Ring 3 execution)")
+        );
 
         // 'bpf verify' defaults to prog_id 1
         let (st_def, len_def) = shell.execute_line("bpf verify", &mut out);
@@ -3335,7 +3345,9 @@ mod tests {
         assert!(s.contains("[BPF] Executing eBPF bytecode program 1 in bounded sandbox..."));
         assert!(s.contains("Register R0 (Return Code) : 0"));
         assert!(s.contains("Instruction Cycles        : "));
-        assert!(s.contains("Termination Status        : SUCCESS (Program exited deterministically)"));
+        assert!(
+            s.contains("Termination Status        : SUCCESS (Program exited deterministically)")
+        );
 
         // 'bpf run' defaults to prog_id 1
         let (st_def, len_def) = shell.execute_line("bpf run", &mut out);
@@ -3363,13 +3375,17 @@ mod tests {
         let (st_drop, len_drop) = shell.execute_line("bpf filter 64 drop", &mut out);
         assert_eq!(st_drop, ShellStatus::Success);
         let s_drop = core::str::from_utf8(&out[..len_drop]).unwrap();
-        assert!(s_drop.contains("XDP Action Verdict        : DROP (Packet rejected at network driver layer)"));
+        assert!(s_drop.contains(
+            "XDP Action Verdict        : DROP (Packet rejected at network driver layer)"
+        ));
 
         // 3. Drop packet shorthand
         let (st_d2, len_d2) = shell.execute_line("bpf filter drop", &mut out);
         assert_eq!(st_d2, ShellStatus::Success);
         let s_d2 = core::str::from_utf8(&out[..len_d2]).unwrap();
-        assert!(s_d2.contains("XDP Action Verdict        : DROP (Packet rejected at network driver layer)"));
+        assert!(s_d2.contains(
+            "XDP Action Verdict        : DROP (Packet rejected at network driver layer)"
+        ));
     }
 
     #[test]

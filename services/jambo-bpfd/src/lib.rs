@@ -956,8 +956,7 @@ impl BpfVm {
                 let val_bytes = self.regs[3].to_ne_bytes();
                 for map in maps.iter_mut().flatten() {
                     if map.id == map_id {
-                        let _ =
-                            map.update(&key_bytes[..map.key_size], &val_bytes[..map.val_size]);
+                        let _ = map.update(&key_bytes[..map.key_size], &val_bytes[..map.val_size]);
                         self.regs[0] = 0;
                         return Ok(());
                     }
@@ -1393,12 +1392,12 @@ impl JamboBpfDaemon {
                 } else {
                     "eth0_xdp"
                 };
-                let pkt_len = if req.data_len > 0 && (req.data_len as usize) <= req.packet_data.len()
-                {
-                    req.data_len as usize
-                } else {
-                    req.packet_data.len()
-                };
+                let pkt_len =
+                    if req.data_len > 0 && (req.data_len as usize) <= req.packet_data.len() {
+                        req.data_len as usize
+                    } else {
+                        req.packet_data.len()
+                    };
                 let packet = &req.packet_data[..pkt_len];
 
                 let cap = self.cap;

@@ -866,9 +866,8 @@ fn run_test(release: bool) -> anyhow::Result<()> {
     // QEMU isa-debug-exit sort avec (val << 1) | 1. Pour Success (0x10=16), le code de retour est 33.
     let code = output.status.code().unwrap_or(-1);
     let success = code == 33
-        || combined.contains(
-            "[PASS] Sandboxing eBPF & Filtrage Réseau XDP (jambo-bpfd PID 13) validée",
-        )
+        || combined
+            .contains("[PASS] Sandboxing eBPF & Filtrage Réseau XDP (jambo-bpfd PID 13) validée")
         || combined.contains(
             "[PASS] Métrologie Système & Télémétrie Haute Précision (jambo-metrics PID 12) validée",
         )
