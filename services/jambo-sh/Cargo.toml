@@ -1,6 +1,6 @@
 [package]
 name = "jambo-sh"
-version = "0.3.55"
+version = "0.3.56"
 edition = "2021"
 
 [lib]
@@ -27,3 +27,4 @@ jambo-bpfd = { path = "../jambo-bpfd" }
 jambo-vpn = { path = "../jambo-vpn" }
 jambo-authd = { path = "../jambo-authd" }
 jambo-dnsd = { path = "../jambo-dnsd" }
+jambo-timed = { path = "../jambo-timed" }

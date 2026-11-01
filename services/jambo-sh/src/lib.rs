@@ -21,6 +21,11 @@ use jambo_dnsd::{
     DNS_STATUS_SERVFAIL,
 };
 #[allow(unused_imports)]
+use jambo_timed::{
+    time_rights, ClockServo, JamboTimeDaemon, PreciseTime, PtpSample, ServoMode, TimeClient,
+    TimeOpcode, TimeRequest, TimeResponse, TimeSyncCap,
+};
+#[allow(unused_imports)]
 use jambo_forensics::{ForensicsClient, ForensicsOpcode, ForensicsResponse, FORENSICS_STATUS_OK};
 use jambo_kdir::{KdirClient, KdirResponse, KDIR_PROTECTION_SECURED, KDIR_STATUS_OK};
 #[allow(unused_imports)]
@@ -60,6 +65,7 @@ pub struct JamboShell {
     pub commands_executed: u64,
     pub auth_daemon: JamboAuthDaemon,
     pub dns_daemon: JamboDnsDaemon,
+    pub time_daemon: JamboTimeDaemon,
 }
 
 impl Default for JamboShell {
@@ -74,11 +80,14 @@ impl JamboShell {
         auth_daemon.init_defaults();
         let dns_cap = DnsCap::new(libjambo::Handle(74), dns_rights::ALL);
         let dns_daemon = JamboDnsDaemon::new(dns_cap);
+        let mut time_daemon = JamboTimeDaemon::new();
+        time_daemon.init_defaults();
         Self {
             prompt_user: "jambo",
             commands_executed: 0,
             auth_daemon,
             dns_daemon,
+            time_daemon,
         }
     }
 
@@ -125,6 +134,7 @@ impl JamboShell {
             "vpn" => self.cmd_vpn(args, out),
             "auth" => self.cmd_auth(args, out),
             "dns" => self.cmd_dns(args, out),
+            "time" => self.cmd_time(args, out),
             _ => self.cmd_not_found(cmd, out),
         }
     }
@@ -133,7 +143,7 @@ impl JamboShell {
         let text = b"Commandes disponibles:\n\
   help        - Affiche cette aide\n\
   sysinfo     - Metriques memoire et uptime du micro-noyau\n\
-  ps          - Liste les 16 processus actifs\n\
+  ps          - Liste les 17 processus actifs\n\
   echo <args> - Affiche le texte sur la console\n\
   clear       - Reinitialise l'ecran du terminal\n\
   reboot      - Eteint ou redemarre la machine virtuelle\n\
@@ -150,7 +160,8 @@ impl JamboShell {
   bpf [status|verify|run|filter] - Moteur eBPF, verificateur formel et XDP\n\
   vpn [status|connect|peer|audit] - Passerelle VPN WireGuard Post-Quantique Ring 3\n\
   auth [status|login|token|revoke] - Identite cryptographique et sessions Ring 3\n\
-  dns [status|resolve|register|cache|flush] - Resolution DNS souveraine et decouverte de services\n";
+  dns [status|resolve|register|cache|flush] - Resolution DNS souveraine et decouverte de services\n\
+  time [status|now|sync|adjust|step] - Synchronisation horlogere PTP/NTP et temps monotone\n";
         let len = text.len().min(out.len());
         out[..len].copy_from_slice(&text[..len]);
         (ShellStatus::Success, len)
@@ -194,7 +205,7 @@ impl JamboShell {
     }
 
     fn cmd_ps(&self, out: &mut [u8]) -> (ShellStatus, usize) {
-        let text = b"PID  ETAT     COMMANDE\n  1  ACTIF    /bin/init (Superviseur racine)\n  2  ACTIF    /bin/jsh  (Shell interactif UART)\n  3  ACTIF    /bin/blockd (Pilote VirtIO-Block Ring 3)\n  4  ACTIF    /bin/fs   (Serveur de fichiers JamboFS)\n  5  ACTIF    /bin/netd (Demon reseau VirtIO-Net Ring 3)\n  6  ACTIF    /bin/fdr  (Demon FDR Cyber-Resilience Ring 3)\n  7  ACTIF    /bin/wasmd (Moteur WebAssembly/WASI Ring 3)\n  8  ACTIF    /bin/pqc  (Demon Cryptographie Post-Quantique Ring 3)\n  9  ACTIF    /bin/kdir (Demon Integrite Noyau & Pilotes KDIR Ring 3)\n 10  ACTIF    /bin/forensics (Demon Forensique & Acquisition Memoire Ring 3)\n 11  ACTIF    /bin/powerd (Demon Gestion Energie & ACPI Ring 3)\n 12  ACTIF    /bin/metricsd (Demon Metrologie & Observabilite Ring 3)\n 13  ACTIF    /bin/bpfd (Demon eBPF, Verificateur Formel & XDP Ring 3)\n 14  ACTIF    /bin/vpn (Passerelle VPN WireGuard Post-Quantique Ring 3)\n 15  ACTIF    /bin/authd (Demon Identite & Jetons de Session Capabilitaires Ring 3)\n 16  ACTIF    /bin/dnsd (Serveur DNS Souverain & Decouverte de Services Ring 3)\n";
+        let text = b"PID  ETAT     COMMANDE\n  1  ACTIF    /bin/init (Superviseur racine)\n  2  ACTIF    /bin/jsh  (Shell interactif UART)\n  3  ACTIF    /bin/blockd (Pilote VirtIO-Block Ring 3)\n  4  ACTIF    /bin/fs   (Serveur de fichiers JamboFS)\n  5  ACTIF    /bin/netd (Demon reseau VirtIO-Net Ring 3)\n  6  ACTIF    /bin/fdr  (Demon FDR Cyber-Resilience Ring 3)\n  7  ACTIF    /bin/wasmd (Moteur WebAssembly/WASI Ring 3)\n  8  ACTIF    /bin/pqc  (Demon Cryptographie Post-Quantique Ring 3)\n  9  ACTIF    /bin/kdir (Demon Integrite Noyau & Pilotes KDIR Ring 3)\n 10  ACTIF    /bin/forensics (Demon Forensique & Acquisition Memoire Ring 3)\n 11  ACTIF    /bin/powerd (Demon Gestion Energie & ACPI Ring 3)\n 12  ACTIF    /bin/metricsd (Demon Metrologie & Observabilite Ring 3)\n 13  ACTIF    /bin/bpfd (Demon eBPF, Verificateur Formel & XDP Ring 3)\n 14  ACTIF    /bin/vpn (Passerelle VPN WireGuard Post-Quantique Ring 3)\n 15  ACTIF    /bin/authd (Demon Identite & Jetons de Session Capabilitaires Ring 3)\n 16  ACTIF    /bin/dnsd (Serveur DNS Souverain & Decouverte de Services Ring 3)\n 17  ACTIF    /bin/timed (Demon Synchronisation Horlogere PTP/NTP Ring 3)\n";
         let len = text.len().min(out.len());
         out[..len].copy_from_slice(&text[..len]);
         (ShellStatus::Success, len)
@@ -3285,6 +3296,208 @@ impl JamboShell {
         (ShellStatus::Success, cursor)
     }
 
+    fn cmd_time(&mut self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        let subcmd = if args.is_empty() { "status" } else { args[0] };
+        match subcmd {
+            "status" => self.cmd_time_status(out),
+            "now" => self.cmd_time_now(out),
+            "sync" => self.cmd_time_sync(out),
+            "adjust" => self.cmd_time_adjust(&args[1..], out),
+            "step" => self.cmd_time_step(&args[1..], out),
+            _ => {
+                let msg = b"Usage: time [status|now|sync|adjust|step]\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                (ShellStatus::InvalidArgument, len)
+            }
+        }
+    }
+
+    fn cmd_time_status(&mut self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let cap = self.time_daemon.admin_cap;
+        let mut resp_opt: Option<TimeResponse> = None;
+        for &h in &[
+            17u64, 16u64, 15u64, 14u64, 13u64, 12u64, 11u64, 10u64, 9u64, 8u64, 7u64, 6u64, 5u64,
+            4u64, 3u64,
+        ] {
+            let client = TimeClient::new(libjambo::Handle(h));
+            if let Ok(resp) = client.get_status(cap) {
+                if resp.status == 0 {
+                    resp_opt = Some(resp);
+                    break;
+                }
+            }
+        }
+
+        let resp = resp_opt.unwrap_or_else(|| {
+            let req = TimeRequest::new(TimeOpcode::GetStatus, cap);
+            self.time_daemon.handle_ipc_request(&req)
+        });
+
+        let mode_str = match resp.mode {
+            0 => "Locked",
+            1 => "Slewing",
+            2 => "Stepping",
+            _ => "Unknown",
+        };
+
+        let mut c = 0;
+        c = append_bytes(
+            out,
+            c,
+            b"Synchronisation Horlogere PTP/NTP & Temps Monotone (jambo-timed PID 17):\n",
+        );
+        c = append_bytes(out, c, b"  Operational State : ACTIVE\n");
+        c = append_bytes(out, c, b"  Servo Mode        : ");
+        c = append_bytes(out, c, mode_str.as_bytes());
+        c = append_bytes(out, c, b"\n  Frequency PPM     : ");
+        if resp.freq_ppm >= 0 {
+            c = append_bytes(out, c, b"+");
+        }
+        c = append_i64(out, c, resp.freq_ppm as i64);
+        c = append_bytes(out, c, b" ppm\n  Last Offset Nanos : ");
+        c = append_i64(out, c, resp.offset_nanos);
+        c = append_bytes(out, c, b" ns\n  Round-Trip Delay  : ");
+        c = append_i64(out, c, resp.delay_nanos);
+        c = append_bytes(out, c, b" ns\n  Sync Count        : ");
+        c = append_u64(out, c, resp.sync_count);
+        c = append_bytes(out, c, b"\n  Current Seconds   : ");
+        c = append_u64(out, c, resp.seconds);
+        c = append_bytes(out, c, b" s\n  Current Nanos     : ");
+        c = append_u64(out, c, resp.nanoseconds as u64);
+        c = append_bytes(out, c, b" ns\n  Monotonic Clock   : ");
+        c = append_u64(out, c, resp.monotonic_nanos);
+        c = append_bytes(out, c, b" ns\n");
+
+        (ShellStatus::Success, c)
+    }
+
+    fn cmd_time_now(&mut self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let cap = self.time_daemon.read_cap;
+        let mut time_opt: Option<PreciseTime> = None;
+        for &h in &[
+            17u64, 16u64, 15u64, 14u64, 13u64, 12u64, 11u64, 10u64, 9u64, 8u64, 7u64, 6u64, 5u64,
+            4u64, 3u64,
+        ] {
+            let client = TimeClient::new(libjambo::Handle(h));
+            if let Ok(t) = client.get_time(cap) {
+                time_opt = Some(t);
+                break;
+            }
+        }
+
+        let time = time_opt.unwrap_or_else(|| self.time_daemon.get_time().unwrap_or_default());
+
+        let mut c = 0;
+        c = append_bytes(out, c, b"time: ");
+        c = append_u64(out, c, time.seconds);
+        c = append_bytes(out, c, b"s ");
+        c = append_u64(out, c, time.nanoseconds as u64);
+        c = append_bytes(out, c, b"ns\n");
+        (ShellStatus::Success, c)
+    }
+
+    fn cmd_time_sync(&mut self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let sample = PtpSample {
+            t1_master_tx: PreciseTime::new(1792340000, 0),
+            t2_slave_rx: PreciseTime::new(1792340000, 10_000_000),
+            t3_slave_tx: PreciseTime::new(1792340000, 20_000_000),
+            t4_master_rx: PreciseTime::new(1792340000, 26_000_000),
+        };
+
+        match self.time_daemon.sync_ptp(&sample) {
+            Ok((offset, delay)) => {
+                let mut c = 0;
+                c = append_bytes(out, c, b"time: PTP sync successful (offset: ");
+                c = append_i64(out, c, offset);
+                c = append_bytes(out, c, b" ns, delay: ");
+                c = append_i64(out, c, delay);
+                c = append_bytes(out, c, b" ns)\n");
+                (ShellStatus::Success, c)
+            }
+            Err(_) => {
+                let msg = b"time sync: failed to apply PTP sync\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                (ShellStatus::ExecutionFailed, len)
+            }
+        }
+    }
+
+    fn cmd_time_adjust(&mut self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if args.is_empty() {
+            let msg = b"time adjust: missing ppm adjustment\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            return (ShellStatus::InvalidArgument, len);
+        }
+
+        let ppm = match parse_i32(args[0]) {
+            Some(v) => v,
+            None => {
+                let msg = b"time adjust: invalid integer for ppm\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                return (ShellStatus::InvalidArgument, len);
+            }
+        };
+
+        let cap = self.time_daemon.admin_cap;
+        let mut req = TimeRequest::new(TimeOpcode::AdjustSlew, cap);
+        req.param_i64 = ppm as i64 * 10_000;
+        let resp = self.time_daemon.handle_ipc_request(&req);
+
+        let mut c = 0;
+        c = append_bytes(out, c, b"time: frequency slew adjusted (status: ");
+        c = append_i64(out, c, resp.status as i64);
+        c = append_bytes(out, c, b", mode: ");
+        let mode_str = match resp.mode {
+            0 => "Locked",
+            1 => "Slewing",
+            2 => "Stepping",
+            _ => "Unknown",
+        };
+        c = append_bytes(out, c, mode_str.as_bytes());
+        c = append_bytes(out, c, b", freq: ");
+        c = append_i64(out, c, resp.freq_ppm as i64);
+        c = append_bytes(out, c, b" ppm)\n");
+        (ShellStatus::Success, c)
+    }
+
+    fn cmd_time_step(&mut self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if args.is_empty() {
+            let msg = b"time step: missing offset in nanoseconds\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            return (ShellStatus::InvalidArgument, len);
+        }
+
+        let nanos = match parse_i64(args[0]) {
+            Some(v) => v,
+            None => {
+                let msg = b"time step: invalid integer for nanoseconds\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                return (ShellStatus::InvalidArgument, len);
+            }
+        };
+
+        let cap = self.time_daemon.admin_cap;
+        let mut req = TimeRequest::new(TimeOpcode::StepTime, cap);
+        req.param_i64 = nanos;
+        let resp = self.time_daemon.handle_ipc_request(&req);
+
+        let mut c = 0;
+        c = append_bytes(out, c, b"time: clock stepped by ");
+        c = append_i64(out, c, nanos);
+        c = append_bytes(out, c, b" ns (new time: ");
+        c = append_u64(out, c, resp.seconds);
+        c = append_bytes(out, c, b"s ");
+        c = append_u64(out, c, resp.nanoseconds as u64);
+        c = append_bytes(out, c, b"ns)\n");
+        (ShellStatus::Success, c)
+    }
+
     fn cmd_not_found(&self, cmd: &str, out: &mut [u8]) -> (ShellStatus, usize) {
         let mut cursor = 0;
         let pfx = b"jsh: command not found: ";
@@ -3321,6 +3534,15 @@ fn append_u64(buf: &mut [u8], mut cursor: usize, mut val: u64) -> usize {
         cursor += 1;
     }
     cursor
+}
+
+fn append_i64(buf: &mut [u8], mut cursor: usize, val: i64) -> usize {
+    if val < 0 {
+        cursor = append_bytes(buf, cursor, b"-");
+        append_u64(buf, cursor, val.unsigned_abs())
+    } else {
+        append_u64(buf, cursor, val as u64)
+    }
 }
 
 fn append_hex_byte(buf: &mut [u8], mut cursor: usize, byte: u8) -> usize {
@@ -3428,6 +3650,46 @@ fn parse_u64(s: &str) -> Option<u64> {
     }
 }
 
+fn parse_i64(s: &str) -> Option<i64> {
+    let bytes = s.as_bytes();
+    if bytes.is_empty() {
+        return None;
+    }
+    let (is_neg, start) = if bytes[0] == b'-' {
+        (true, 1)
+    } else if bytes[0] == b'+' {
+        (false, 1)
+    } else {
+        (false, 0)
+    };
+    if start >= bytes.len() {
+        return None;
+    }
+    let mut val: i64 = 0;
+    for &b in &bytes[start..] {
+        if b.is_ascii_digit() {
+            val = val.checked_mul(10)?.checked_add((b - b'0') as i64)?;
+        } else {
+            return None;
+        }
+    }
+    if is_neg {
+        Some(-val)
+    } else {
+        Some(val)
+    }
+}
+
+fn parse_i32(s: &str) -> Option<i32> {
+    parse_i64(s).and_then(|v| {
+        if v >= i32::MIN as i64 && v <= i32::MAX as i64 {
+            Some(v as i32)
+        } else {
+            None
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3499,7 +3761,7 @@ mod tests {
     }
 
     #[test]
-    fn test_ps_contains_16_processes() {
+    fn test_ps_contains_17_processes() {
         let mut shell = JamboShell::new();
         let mut out = [0u8; 2048];
 
@@ -3530,6 +3792,9 @@ mod tests {
         assert!(s.contains(
             "16  ACTIF    /bin/dnsd (Serveur DNS Souverain & Decouverte de Services Ring 3)"
         ));
+        assert!(s.contains(
+            "17  ACTIF    /bin/timed (Demon Synchronisation Horlogere PTP/NTP Ring 3)"
+        ));
     }
 
     #[test]
@@ -3540,7 +3805,7 @@ mod tests {
         let (st, len) = shell.execute_line("help", &mut out);
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
-        assert!(s.contains("16 processus actifs"));
+        assert!(s.contains("17 processus actifs"));
         assert!(s.contains("fdr [status|verify|pcr]"));
         assert!(s.contains("wasm [status|run|info]"));
         assert!(s.contains("pqc [status|kex|sign|audit]"));
@@ -3552,6 +3817,7 @@ mod tests {
         assert!(s.contains("vpn [status|connect|peer|audit]"));
         assert!(s.contains("auth [status|login|token|revoke]"));
         assert!(s.contains("dns [status|resolve|register|cache|flush]"));
+        assert!(s.contains("time [status|now|sync|adjust|step]"));
     }
 
     #[test]
@@ -4622,5 +4888,93 @@ mod tests {
         assert_eq!(st3, ShellStatus::InvalidArgument);
         let s3 = core::str::from_utf8(&out[..len3]).unwrap();
         assert!(s3.contains("dns register: invalid IPv4 address"));
+    }
+
+    #[test]
+    fn test_time_status() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 1024];
+
+        let (st, len) = shell.execute_line("time status", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("Synchronisation Horlogere PTP/NTP & Temps Monotone (jambo-timed PID 17):"));
+        assert!(s.contains("Operational State : ACTIVE"));
+        assert!(s.contains("Servo Mode        : Slewing"));
+        assert!(s.contains("Frequency PPM     : +500 ppm"));
+
+        // 'time' sans argument utilise 'status' par défaut
+        let (st2, len2) = shell.execute_line("time", &mut out);
+        assert_eq!(st2, ShellStatus::Success);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("Synchronisation Horlogere PTP/NTP & Temps Monotone (jambo-timed PID 17):"));
+    }
+
+    #[test]
+    fn test_time_now() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 1024];
+
+        let (st, len) = shell.execute_line("time now", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("time: 1792340000s"));
+    }
+
+    #[test]
+    fn test_time_sync() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 1024];
+
+        let (st, len) = shell.execute_line("time sync", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("time: PTP sync successful"));
+        assert!(s.contains("offset: 2000000 ns"));
+        assert!(s.contains("delay: 8000000 ns"));
+    }
+
+    #[test]
+    fn test_time_adjust_and_step() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 1024];
+
+        // 1. Adjust slew
+        let (st, len) = shell.execute_line("time adjust 300", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("time: frequency slew adjusted"));
+        assert!(s.contains("mode: Slewing"));
+
+        // 2. Step time
+        let (st2, len2) = shell.execute_line("time step 1000000000", &mut out);
+        assert_eq!(st2, ShellStatus::Success);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("time: clock stepped by 1000000000 ns"));
+        assert!(s2.contains("1792340001s"));
+    }
+
+    #[test]
+    fn test_time_invalid() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 1024];
+
+        // 1. Sous-commande inconnue
+        let (st, len) = shell.execute_line("time unknown", &mut out);
+        assert_eq!(st, ShellStatus::InvalidArgument);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("Usage: time [status|now|sync|adjust|step]"));
+
+        // 2. Adjust sans paramètre
+        let (st2, len2) = shell.execute_line("time adjust", &mut out);
+        assert_eq!(st2, ShellStatus::InvalidArgument);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("time adjust: missing ppm adjustment"));
+
+        // 3. Step sans paramètre
+        let (st3, len3) = shell.execute_line("time step", &mut out);
+        assert_eq!(st3, ShellStatus::InvalidArgument);
+        let s3 = core::str::from_utf8(&out[..len3]).unwrap();
+        assert!(s3.contains("time step: missing offset in nanoseconds"));
     }
 }
