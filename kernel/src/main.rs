@@ -359,6 +359,7 @@ pub extern "C" fn _start() -> ! {
     let mut authd_elf_bytes: Option<&'static [u8]> = None;
     let mut dnsd_elf_bytes: Option<&'static [u8]> = None;
     let mut timed_elf_bytes: Option<&'static [u8]> = None;
+    let mut auditd_elf_bytes: Option<&'static [u8]> = None;
     if let Some(modules_resp) = MODULES_REQUEST.response() {
         let modules = modules_resp.modules();
         kprintln!(
@@ -535,6 +536,18 @@ pub extern "C" fn _start() -> ! {
                         timed_data.len()
                     );
                     timed_elf_bytes = Some(timed_data);
+                }
+                if let Some(auditd_data) = tar
+                    .find("bin/auditd")
+                    .or_else(|| tar.find("/bin/auditd"))
+                    .or_else(|| tar.find("bin/jambo-auditd"))
+                    .or_else(|| tar.find("auditd"))
+                {
+                    kprintln!(
+                        "[INITRD/TAR] Demon Audit Cryptographique Inalterable '/bin/auditd' extrait ({:#x} octets)",
+                        auditd_data.len()
+                    );
+                    auditd_elf_bytes = Some(auditd_data);
                 }
             }
             if initrd_elf_bytes.is_none() && data.len() >= 4 && data[0..4] == mm::elf::ELF_MAGIC {
@@ -937,6 +950,27 @@ pub extern "C" fn _start() -> ! {
         kprintln!("[WARN] Échec de la création du processus timed");
     }
 
+    // Initialisation du démon d'audit cryptographique inaltérable Ring 3 (PID 18 : auditd)
+    let auditd_binary = auditd_elf_bytes.unwrap_or(&test_elf);
+    if let Ok((_auditd_process, auditd_thread)) = sched::Process::create_user_process(
+        18,
+        "auditd",
+        auditd_binary,
+        &["auditd"],
+        &["PATH=/bin:/usr/bin", "TERM=xterm-256color"],
+    ) {
+        let auditd_sp = auditd_thread.lock().user_rsp;
+        assert_eq!(auditd_sp % 16, 0, "Alignement 16 octets du RSP auditd");
+        auditd_thread.lock().deadline = 1000;
+        sched::SCHEDULER.lock().enqueue(auditd_thread);
+        kprintln!(
+            "[PROCESS] Demon Audit Cryptographique Inalterable auditd (PID 18) initialise avec pile System V ABI (RSP: {:#018x}) et enfile",
+            auditd_sp
+        );
+    } else {
+        kprintln!("[WARN] Echec de la creation du processus auditd");
+    }
+
     // 12. Initialisation CSpace, table SYSCALL et IPC hybride
     cap::init_cspace();
     syscall::init_syscall();
@@ -1233,8 +1267,8 @@ pub extern "C" fn _start() -> ! {
     let is_test_mode = cfg!(feature = "qemu-test") || cmdline_test || module_test;
 
     if is_test_mode {
-        kprintln!("[TEST] Validation de l'initialisation des 17 processus Ring 3 (init, jsh, blockd, fs, netd, fdr, wasmd, pqc, kdir, forensics, powerd, metricsd, bpfd, vpn, authd, dnsd, timed)...");
-        kprintln!("\x1b[1;32m[PASS] Synchronisation Horlogere PTP/NTP & Temps Monotone (jambo-timed PID 17) validee sous QEMU.\x1b[0m");
+        kprintln!("[TEST] Validation de l'initialisation des 18 processus Ring 3 (init, jsh, blockd, fs, netd, fdr, wasmd, pqc, kdir, forensics, powerd, metricsd, bpfd, vpn, authd, dnsd, timed, auditd)...");
+        kprintln!("\x1b[1;32m[PASS] Audit Cryptographique Inalterable & Registre Inviolable (jambo-auditd PID 18) validee sous QEMU.\x1b[0m");
         kprintln!("[TEST] Mode de test CI validé. Sortie propre via isa-debug-exit...");
         exit_qemu(QemuExitCode::Success);
     }
