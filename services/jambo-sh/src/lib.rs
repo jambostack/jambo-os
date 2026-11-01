@@ -21,11 +21,6 @@ use jambo_dnsd::{
     DNS_STATUS_SERVFAIL,
 };
 #[allow(unused_imports)]
-use jambo_timed::{
-    time_rights, ClockServo, JamboTimeDaemon, PreciseTime, PtpSample, ServoMode, TimeClient,
-    TimeOpcode, TimeRequest, TimeResponse, TimeSyncCap,
-};
-#[allow(unused_imports)]
 use jambo_forensics::{ForensicsClient, ForensicsOpcode, ForensicsResponse, FORENSICS_STATUS_OK};
 use jambo_kdir::{KdirClient, KdirResponse, KDIR_PROTECTION_SECURED, KDIR_STATUS_OK};
 #[allow(unused_imports)]
@@ -40,6 +35,11 @@ use jambo_powerd::{
 };
 use jambo_pqc::{
     PqcClient, PqcResponse, PqcTransitionState, Sha256, DSA_SIGNATURE_LEN, PQC_STATUS_OK,
+};
+#[allow(unused_imports)]
+use jambo_timed::{
+    time_rights, ClockServo, JamboTimeDaemon, PreciseTime, PtpSample, ServoMode, TimeClient,
+    TimeOpcode, TimeRequest, TimeResponse, TimeSyncCap,
 };
 #[allow(unused_imports)]
 use jambo_vpn::{
@@ -3792,9 +3792,9 @@ mod tests {
         assert!(s.contains(
             "16  ACTIF    /bin/dnsd (Serveur DNS Souverain & Decouverte de Services Ring 3)"
         ));
-        assert!(s.contains(
-            "17  ACTIF    /bin/timed (Demon Synchronisation Horlogere PTP/NTP Ring 3)"
-        ));
+        assert!(
+            s.contains("17  ACTIF    /bin/timed (Demon Synchronisation Horlogere PTP/NTP Ring 3)")
+        );
     }
 
     #[test]
@@ -4898,7 +4898,9 @@ mod tests {
         let (st, len) = shell.execute_line("time status", &mut out);
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
-        assert!(s.contains("Synchronisation Horlogere PTP/NTP & Temps Monotone (jambo-timed PID 17):"));
+        assert!(
+            s.contains("Synchronisation Horlogere PTP/NTP & Temps Monotone (jambo-timed PID 17):")
+        );
         assert!(s.contains("Operational State : ACTIVE"));
         assert!(s.contains("Servo Mode        : Slewing"));
         assert!(s.contains("Frequency PPM     : +500 ppm"));
@@ -4907,7 +4909,9 @@ mod tests {
         let (st2, len2) = shell.execute_line("time", &mut out);
         assert_eq!(st2, ShellStatus::Success);
         let s2 = core::str::from_utf8(&out[..len2]).unwrap();
-        assert!(s2.contains("Synchronisation Horlogere PTP/NTP & Temps Monotone (jambo-timed PID 17):"));
+        assert!(
+            s2.contains("Synchronisation Horlogere PTP/NTP & Temps Monotone (jambo-timed PID 17):")
+        );
     }
 
     #[test]

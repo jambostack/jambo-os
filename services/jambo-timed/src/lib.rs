@@ -257,7 +257,11 @@ impl TimeClient {
         self.call(&req)
     }
 
-    pub fn adjust_slew(&self, cap: TimeSyncCap, offset_nanos: i64) -> Result<TimeResponse, SysError> {
+    pub fn adjust_slew(
+        &self,
+        cap: TimeSyncCap,
+        offset_nanos: i64,
+    ) -> Result<TimeResponse, SysError> {
         let mut req = TimeRequest::new(TimeOpcode::AdjustSlew, cap);
         req.param_i64 = offset_nanos;
         self.call(&req)

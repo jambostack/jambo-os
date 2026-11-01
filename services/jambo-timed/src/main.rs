@@ -41,7 +41,10 @@ pub extern "C" fn _start() -> ! {
 
     // Test 1 : Lecture du temps étalon initial
     let t0 = daemon.get_time().expect("auto-test: get_time failed");
-    assert!(t0.seconds == 1792340000, "auto-test: unexpected initial seconds");
+    assert!(
+        t0.seconds == 1792340000,
+        "auto-test: unexpected initial seconds"
+    );
 
     // Test 2 : Calibration PTP quadri-points
     let sample = PtpSample {
@@ -50,13 +53,18 @@ pub extern "C" fn _start() -> ! {
         t3_slave_tx: PreciseTime::new(1792340000, 20_000_000),
         t4_master_rx: PreciseTime::new(1792340000, 26_000_000), // delay 8ms - offset 2ms
     };
-    let (offset, delay) = daemon.sync_ptp(&sample).expect("auto-test: sync_ptp failed");
+    let (offset, delay) = daemon
+        .sync_ptp(&sample)
+        .expect("auto-test: sync_ptp failed");
     assert!(offset == 2_000_000, "auto-test: offset mismatch");
     assert!(delay == 8_000_000, "auto-test: delay mismatch");
 
     // Test 3 : État du servo (mode Slewing avec dérive 500 PPM)
     let (mode, ppm, off, del, syncs) = daemon.status();
-    assert!(mode == ServoMode::Slewing, "auto-test: servo not in slewing mode");
+    assert!(
+        mode == ServoMode::Slewing,
+        "auto-test: servo not in slewing mode"
+    );
     assert!(ppm == 500, "auto-test: ppm mismatch");
     assert!(off == 2_000_000, "auto-test: last offset mismatch");
     assert!(del == 8_000_000, "auto-test: last delay mismatch");
@@ -64,12 +72,18 @@ pub extern "C" fn _start() -> ! {
 
     // Test 4 : Avancement temporel avec correction slewing
     let t1 = daemon.advance_nanos(1_000_000_000);
-    assert!(t1.as_nanos() > t0.as_nanos(), "auto-test: monotonicity violated");
+    assert!(
+        t1.as_nanos() > t0.as_nanos(),
+        "auto-test: monotonicity violated"
+    );
 
     // Test 5 : Saut temporel et invariance de non-régression
     daemon.server.servo.step_offset(-500_000_000); // Tentative de retour en arrière
     let t2 = daemon.advance_nanos(1_000);
-    assert!(t2.as_nanos() > t1.as_nanos(), "auto-test: strict monotonicity violated");
+    assert!(
+        t2.as_nanos() > t1.as_nanos(),
+        "auto-test: strict monotonicity violated"
+    );
 
     println("[TIMED] Auto-test reussi : lecture etalon, calibration quadri-points PTP, asservissement PLL et monotonicite valides.");
     println("[TIMED] Demon de synchronisation horlogere (jambo-timed PID 17) pret.");
