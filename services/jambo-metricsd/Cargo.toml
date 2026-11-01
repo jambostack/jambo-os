@@ -1,0 +1,16 @@
+[package]
+name = "jambo-metricsd"
+version = "0.3.51"
+edition = "2021"
+
+[lib]
+name = "jambo_metricsd"
+path = "src/lib.rs"
+
+[[bin]]
+name = "metricsd"
+path = "src/main.rs"
+
+[dependencies]
+jambo-abi = { path = "../../abi/jambo-abi" }
+libjambo = { path = "../../libs/libjambo" }

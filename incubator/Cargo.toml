@@ -8,6 +8,7 @@ members = [
 exclude = [
     "services/jambo-forensics",
     "services/jambo-powerd",
+    "services/jambo-metricsd",
 ]
 
 [profile.dev]

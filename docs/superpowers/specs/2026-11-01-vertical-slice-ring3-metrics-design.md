@@ -86,3 +86,4 @@ L'objectif du **Jalon 3.7 (`v0.3.51`)** est d'établir le démon **`jambo-metric
 - Journal UART : `[PASS] Métrologie Système & Télémétrie Haute Précision (jambo-metrics PID 12) validée sous QEMU.`
 - `xtask` : Compilation de `jambo-metricsd` avec `libs/user-x86_64.ld` à `0x00400000`, empaquetage dans `target/initrd.tar`, bannière de disque `"Bienvenue sur JamboOS v0.3.51\n"`.
 - Test QEMU automatisé avec code de sortie 33 (`isa-debug-exit`).
+
