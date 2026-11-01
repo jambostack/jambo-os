@@ -1,0 +1,12 @@
+[package]
+name = "jambo-watchdogd"
+version = "0.3.60"
+edition = "2021"
+
+[[bin]]
+name = "watchdogd"
+path = "src/main.rs"
+test = false
+
+[dependencies]
+libjambo = { path = "../../libs/libjambo" }

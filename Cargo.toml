@@ -26,6 +26,7 @@ members = [
     "services/jambo-auditd",
     "services/jambo-walld",
     "services/jambo-vaultd",
+    "services/jambo-watchdogd",
     "xtask",
 ]
 
