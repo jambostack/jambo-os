@@ -1,0 +1,12 @@
+[package]
+name = "jambo-cored"
+version = "0.3.61"
+edition = "2021"
+
+[[bin]]
+name = "cored"
+path = "src/main.rs"
+test = false
+
+[dependencies]
+libjambo = { path = "../../libs/libjambo" }
