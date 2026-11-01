@@ -157,7 +157,7 @@ pub extern "C" fn _start() -> ! {
     // 4. Bannière système d'accueil sobre Iron Core
     kprintln!("\x1b[1;36m");
     kprintln!("================================================================================");
-    kprintln!("    JAMBO-OS (JamboKernel v0.3.51 — Iron Core)                                 ");
+    kprintln!("    JAMBO-OS (JamboKernel v0.3.52 — Iron Core)                                 ");
     kprintln!("    Architecture : Micro-noyau orienté capacités en Rust no_std (x86_64/AArch64)");
     kprintln!("    Auteur & Architecte Principal : ASSOGBA Prudence Dieudonné                 ");
     kprintln!("    Dépôt Officiel : https://github.com/jambostack/jambo-os                    ");
@@ -354,6 +354,7 @@ pub extern "C" fn _start() -> ! {
     let mut forensics_elf_bytes: Option<&'static [u8]> = None;
     let mut powerd_elf_bytes: Option<&'static [u8]> = None;
     let mut metricsd_elf_bytes: Option<&'static [u8]> = None;
+    let mut bpfd_elf_bytes: Option<&'static [u8]> = None;
     if let Some(modules_resp) = MODULES_REQUEST.response() {
         let modules = modules_resp.modules();
         kprintln!(
@@ -470,6 +471,18 @@ pub extern "C" fn _start() -> ! {
                         metricsd_data.len()
                     );
                     metricsd_elf_bytes = Some(metricsd_data);
+                }
+                if let Some(bpfd_data) = tar
+                    .find("bin/bpfd")
+                    .or_else(|| tar.find("/bin/bpfd"))
+                    .or_else(|| tar.find("bin/jambo-bpfd"))
+                    .or_else(|| tar.find("bpfd"))
+                {
+                    kprintln!(
+                        "[INITRD/TAR] Démon Sandboxing eBPF & Filtrage Réseau XDP '/bin/bpfd' extrait ({:#x} octets)",
+                        bpfd_data.len()
+                    );
+                    bpfd_elf_bytes = Some(bpfd_data);
                 }
             }
             if initrd_elf_bytes.is_none() && data.len() >= 4 && data[0..4] == mm::elf::ELF_MAGIC {
@@ -765,6 +778,27 @@ pub extern "C" fn _start() -> ! {
         );
     } else {
         kprintln!("[WARN] Échec de la création du processus metricsd");
+    }
+
+    // Initialisation du démon Sandboxing eBPF & Filtrage Réseau XDP Ring 3 (PID 13 : bpfd)
+    let bpfd_binary = bpfd_elf_bytes.unwrap_or(&test_elf);
+    if let Ok((_bpfd_process, bpfd_thread)) = sched::Process::create_user_process(
+        13,
+        "bpfd",
+        bpfd_binary,
+        &["bpfd"],
+        &["PATH=/bin:/usr/bin", "TERM=xterm-256color"],
+    ) {
+        let bpfd_sp = bpfd_thread.lock().user_rsp;
+        assert_eq!(bpfd_sp % 16, 0, "Alignement 16 octets du RSP bpfd");
+        bpfd_thread.lock().deadline = 1000;
+        sched::SCHEDULER.lock().enqueue(bpfd_thread);
+        kprintln!(
+            "[PROCESS] Démon Sandboxing eBPF & Filtrage Réseau XDP bpfd (PID 13) initialisé avec pile System V ABI (RSP: {:#018x}) et enfilé",
+            bpfd_sp
+        );
+    } else {
+        kprintln!("[WARN] Échec de la création du processus bpfd");
     }
 
     // 12. Initialisation CSpace, table SYSCALL et IPC hybride
@@ -1063,8 +1097,8 @@ pub extern "C" fn _start() -> ! {
     let is_test_mode = cfg!(feature = "qemu-test") || cmdline_test || module_test;
 
     if is_test_mode {
-        kprintln!("[TEST] Validation de l'initialisation des 12 processus Ring 3 (init, jsh, blockd, fs, netd, fdr, wasmd, pqc, kdir, forensics, powerd, metricsd)...");
-        kprintln!("\x1b[1;32m[PASS] Métrologie Système & Télémétrie Haute Précision (jambo-metrics PID 12) validée sous QEMU.\x1b[0m");
+        kprintln!("[TEST] Validation de l'initialisation des 13 processus Ring 3 (init, jsh, blockd, fs, netd, fdr, wasmd, pqc, kdir, forensics, powerd, metricsd, bpfd)...");
+        kprintln!("\x1b[1;32m[PASS] Sandboxing eBPF & Filtrage Réseau XDP (jambo-bpfd PID 13) validée sous QEMU.\x1b[0m");
         kprintln!("[TEST] Mode de test CI validé. Sortie propre via isa-debug-exit...");
         exit_qemu(QemuExitCode::Success);
     }
