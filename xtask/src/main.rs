@@ -708,10 +708,41 @@ fn build_watchdogd(release: bool) -> anyhow::Result<PathBuf> {
     Ok(root.join(format!("target/x86_64-unknown-none/{}/watchdogd", profile)))
 }
 
+fn build_cored(release: bool) -> anyhow::Result<PathBuf> {
+    let root = root_dir();
+    let mut cmd = Command::new("cargo");
+    cmd.current_dir(&root);
+    cmd.args([
+        "build",
+        "--package",
+        "jambo-cored",
+        "--bin",
+        "cored",
+        "--target",
+        "x86_64-unknown-none",
+    ]);
+    if release {
+        cmd.arg("--release");
+    }
+    cmd.env(
+        "RUSTFLAGS",
+        "-C link-arg=-Tlibs/user-x86_64.ld -C relocation-model=static",
+    );
+
+    let status = cmd.status()?;
+    if !status.success() {
+        anyhow::bail!("Échec de compilation du binaire jambo-cored (cored)");
+    }
+
+    let profile = if release { "release" } else { "debug" };
+    Ok(root.join(format!("target/x86_64-unknown-none/{}/cored", profile)))
+}
+
 #[allow(clippy::type_complexity)]
 fn build_userland(
     release: bool,
 ) -> anyhow::Result<(
+    PathBuf,
     PathBuf,
     PathBuf,
     PathBuf,
@@ -755,9 +786,10 @@ fn build_userland(
     let walld = build_walld(release)?;
     let vaultd = build_vaultd(release)?;
     let watchdogd = build_watchdogd(release)?;
+    let cored = build_cored(release)?;
     Ok((
         init, jsh, blockd, fs, netd, fdr, wasmd, pqc, kdir, forensics, powerd, metricsd, bpfd, vpn,
-        authd, dnsd, timed, auditd, walld, vaultd, watchdogd,
+        authd, dnsd, timed, auditd, walld, vaultd, watchdogd, cored,
     ))
 }
 
@@ -806,8 +838,8 @@ fn create_disk_image(path: &Path) -> anyhow::Result<()> {
     file.seek(SeekFrom::Start(8192))?;
     file.write_all(&root_buf)?;
 
-    // 3. Données à l'offset 12288 (LBA 24..31) : "Bienvenue sur JamboOS v0.3.60\n"
-    let banner_data = b"Bienvenue sur JamboOS v0.3.60\n";
+    // 3. Données à l'offset 12288 (LBA 24..31) : "Bienvenue sur JamboOS v0.3.61\n"
+    let banner_data = b"Bienvenue sur JamboOS v0.3.61\n";
     let mut data_buf = [0u8; 4096];
     data_buf[..banner_data.len()].copy_from_slice(banner_data);
 
@@ -842,6 +874,7 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
         walld_bin,
         vaultd_bin,
         watchdogd_bin,
+        cored_bin,
     ) = build_userland(release)?;
 
     let initrd_stage = root.join("target/initrd_stage");
@@ -882,6 +915,8 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
     fs::copy(&vaultd_bin, bin_dir.join("jambo-vaultd"))?;
     fs::copy(&watchdogd_bin, bin_dir.join("watchdogd"))?;
     fs::copy(&watchdogd_bin, bin_dir.join("jambo-watchdogd"))?;
+    fs::copy(&cored_bin, bin_dir.join("cored"))?;
+    fs::copy(&cored_bin, bin_dir.join("jambo-cored"))?;
 
     fs::copy(&init_bin, initrd_stage.join("init"))?;
     fs::copy(&jsh_bin, initrd_stage.join("jsh"))?;
@@ -916,6 +951,8 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
     fs::copy(&vaultd_bin, initrd_stage.join("jambo-vaultd"))?;
     fs::copy(&watchdogd_bin, initrd_stage.join("watchdogd"))?;
     fs::copy(&watchdogd_bin, initrd_stage.join("jambo-watchdogd"))?;
+    fs::copy(&cored_bin, initrd_stage.join("cored"))?;
+    fs::copy(&cored_bin, initrd_stage.join("jambo-cored"))?;
 
     let initrd_tar = root.join("target/initrd.tar");
     let status = Command::new("tar")
@@ -956,6 +993,8 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
             "bin/jambo-vaultd",
             "bin/watchdogd",
             "bin/jambo-watchdogd",
+            "bin/cored",
+            "bin/jambo-cored",
             "init",
             "jsh",
             "blockd",
@@ -989,6 +1028,8 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
             "jambo-vaultd",
             "watchdogd",
             "jambo-watchdogd",
+            "cored",
+            "jambo-cored",
         ])
         .status()?;
 
@@ -1199,6 +1240,9 @@ fn run_test(release: bool) -> anyhow::Result<()> {
     let code = output.status.code().unwrap_or(-1);
     let success = code == 33
         || combined.contains(
+            "[PASS] Capture Crash Dumps ELF64 & Forensique (jambo-cored PID 22) validee",
+        )
+        || combined.contains(
             "[PASS] Surveillance Vivacite & Chien de Garde (jambo-watchdogd PID 21) validee",
         )
         || combined.contains(
@@ -1243,7 +1287,7 @@ fn run_test(release: bool) -> anyhow::Result<()> {
 
     if success {
         println!("{}", stdout);
-        println!("\x1b[1;32m[TEST PASSÉ AVEC SUCCÈS] Validation complète de JamboKernel Iron Core, JamboFS, VirtIO-Net, FDR, Wasm, PQC, KDIR, Forensics, Powerd, Metrics, BPF, VPN, Authd, Dnsd, Timed, Auditd, Walld, Vaultd & Watchdogd Ring 3.\x1b[0m");
+        println!("\x1b[1;32m[TEST PASSÉ AVEC SUCCÈS] Validation complète de JamboKernel Iron Core, JamboFS, VirtIO-Net, FDR, Wasm, PQC, KDIR, Forensics, Powerd, Metrics, BPF, VPN, Authd, Dnsd, Timed, Auditd, Walld, Vaultd, Watchdogd & Cored Ring 3.\x1b[0m");
         Ok(())
     } else {
         eprintln!("{}", combined);
