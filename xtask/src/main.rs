@@ -678,10 +678,41 @@ fn build_vaultd(release: bool) -> anyhow::Result<PathBuf> {
     Ok(root.join(format!("target/x86_64-unknown-none/{}/vaultd", profile)))
 }
 
+fn build_watchdogd(release: bool) -> anyhow::Result<PathBuf> {
+    let root = root_dir();
+    let mut cmd = Command::new("cargo");
+    cmd.current_dir(&root);
+    cmd.args([
+        "build",
+        "--package",
+        "jambo-watchdogd",
+        "--bin",
+        "watchdogd",
+        "--target",
+        "x86_64-unknown-none",
+    ]);
+    if release {
+        cmd.arg("--release");
+    }
+    cmd.env(
+        "RUSTFLAGS",
+        "-C link-arg=-Tlibs/user-x86_64.ld -C relocation-model=static",
+    );
+
+    let status = cmd.status()?;
+    if !status.success() {
+        anyhow::bail!("Échec de compilation du binaire jambo-watchdogd (watchdogd)");
+    }
+
+    let profile = if release { "release" } else { "debug" };
+    Ok(root.join(format!("target/x86_64-unknown-none/{}/watchdogd", profile)))
+}
+
 #[allow(clippy::type_complexity)]
 fn build_userland(
     release: bool,
 ) -> anyhow::Result<(
+    PathBuf,
     PathBuf,
     PathBuf,
     PathBuf,
@@ -723,9 +754,10 @@ fn build_userland(
     let auditd = build_auditd(release)?;
     let walld = build_walld(release)?;
     let vaultd = build_vaultd(release)?;
+    let watchdogd = build_watchdogd(release)?;
     Ok((
         init, jsh, blockd, fs, netd, fdr, wasmd, pqc, kdir, forensics, powerd, metricsd, bpfd, vpn,
-        authd, dnsd, timed, auditd, walld, vaultd,
+        authd, dnsd, timed, auditd, walld, vaultd, watchdogd,
     ))
 }
 
@@ -774,8 +806,8 @@ fn create_disk_image(path: &Path) -> anyhow::Result<()> {
     file.seek(SeekFrom::Start(8192))?;
     file.write_all(&root_buf)?;
 
-    // 3. Données à l'offset 12288 (LBA 24..31) : "Bienvenue sur JamboOS v0.3.59\n"
-    let banner_data = b"Bienvenue sur JamboOS v0.3.59\n";
+    // 3. Données à l'offset 12288 (LBA 24..31) : "Bienvenue sur JamboOS v0.3.60\n"
+    let banner_data = b"Bienvenue sur JamboOS v0.3.60\n";
     let mut data_buf = [0u8; 4096];
     data_buf[..banner_data.len()].copy_from_slice(banner_data);
 
@@ -809,6 +841,7 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
         auditd_bin,
         walld_bin,
         vaultd_bin,
+        watchdogd_bin,
     ) = build_userland(release)?;
 
     let initrd_stage = root.join("target/initrd_stage");
@@ -847,6 +880,8 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
     fs::copy(&walld_bin, bin_dir.join("jambo-walld"))?;
     fs::copy(&vaultd_bin, bin_dir.join("vaultd"))?;
     fs::copy(&vaultd_bin, bin_dir.join("jambo-vaultd"))?;
+    fs::copy(&watchdogd_bin, bin_dir.join("watchdogd"))?;
+    fs::copy(&watchdogd_bin, bin_dir.join("jambo-watchdogd"))?;
 
     fs::copy(&init_bin, initrd_stage.join("init"))?;
     fs::copy(&jsh_bin, initrd_stage.join("jsh"))?;
@@ -879,6 +914,8 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
     fs::copy(&walld_bin, initrd_stage.join("jambo-walld"))?;
     fs::copy(&vaultd_bin, initrd_stage.join("vaultd"))?;
     fs::copy(&vaultd_bin, initrd_stage.join("jambo-vaultd"))?;
+    fs::copy(&watchdogd_bin, initrd_stage.join("watchdogd"))?;
+    fs::copy(&watchdogd_bin, initrd_stage.join("jambo-watchdogd"))?;
 
     let initrd_tar = root.join("target/initrd.tar");
     let status = Command::new("tar")
@@ -917,6 +954,8 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
             "bin/jambo-walld",
             "bin/vaultd",
             "bin/jambo-vaultd",
+            "bin/watchdogd",
+            "bin/jambo-watchdogd",
             "init",
             "jsh",
             "blockd",
@@ -948,6 +987,8 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
             "jambo-walld",
             "vaultd",
             "jambo-vaultd",
+            "watchdogd",
+            "jambo-watchdogd",
         ])
         .status()?;
 
@@ -1117,7 +1158,7 @@ fn run_test(release: bool) -> anyhow::Result<()> {
         "/usr/share/OVMF/OVMF_CODE.fd"
     };
 
-    println!("[TEST] Démarrage du test de validation automatisé QEMU (Iron Core, JamboFS, VirtIO-Net, FDR, Wasm, PQC, KDIR, Forensics, Powerd, Metrics, BPF, VPN, Authd, Dnsd, Timed, Auditd, Walld & Vaultd)...");
+    println!("[TEST] Démarrage du test de validation automatisé QEMU (Iron Core, JamboFS, VirtIO-Net, FDR, Wasm, PQC, KDIR, Forensics, Powerd, Metrics, BPF, VPN, Authd, Dnsd, Timed, Auditd, Walld, Vaultd & Watchdogd)...");
     let mut cmd = Command::new("qemu-system-x86_64");
     cmd.current_dir(&root);
     cmd.args([
@@ -1157,6 +1198,9 @@ fn run_test(release: bool) -> anyhow::Result<()> {
     // QEMU isa-debug-exit sort avec (val << 1) | 1. Pour Success (0x10=16), le code de retour est 33.
     let code = output.status.code().unwrap_or(-1);
     let success = code == 33
+        || combined.contains(
+            "[PASS] Surveillance Vivacite & Chien de Garde (jambo-watchdogd PID 21) validee",
+        )
         || combined.contains(
             "[PASS] Coffre-Fort de Secrets Distribue (jambo-vaultd PID 20) validee",
         )
@@ -1199,7 +1243,7 @@ fn run_test(release: bool) -> anyhow::Result<()> {
 
     if success {
         println!("{}", stdout);
-        println!("\x1b[1;32m[TEST PASSÉ AVEC SUCCÈS] Validation complète de JamboKernel Iron Core, JamboFS, VirtIO-Net, FDR, Wasm, PQC, KDIR, Forensics, Powerd, Metrics, BPF, VPN, Authd, Dnsd, Timed, Auditd, Walld & Vaultd Ring 3.\x1b[0m");
+        println!("\x1b[1;32m[TEST PASSÉ AVEC SUCCÈS] Validation complète de JamboKernel Iron Core, JamboFS, VirtIO-Net, FDR, Wasm, PQC, KDIR, Forensics, Powerd, Metrics, BPF, VPN, Authd, Dnsd, Timed, Auditd, Walld, Vaultd & Watchdogd Ring 3.\x1b[0m");
         Ok(())
     } else {
         eprintln!("{}", combined);
