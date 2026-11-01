@@ -3,7 +3,7 @@ BdsDxe: starting Boot0002 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x
 [2J[01;01H[01;01H[2J[01;01H[01;01H[BOOT] Protocole Limine actif (révision détectée : 3)
 [1;36m
 ================================================================================
-    JAMBO-OS (JamboKernel v0.3.58 — Iron Core)                                 
+    JAMBO-OS (JamboKernel v0.3.59 — Iron Core)                                 
     Architecture : Micro-noyau orienté capacités en Rust no_std (x86_64/AArch64)
     Auteur & Architecte Principal : ASSOGBA Prudence Dieudonné                 
     Dépôt Officiel : https://github.com/jambostack/jambo-os                    
@@ -92,6 +92,7 @@ BdsDxe: starting Boot0002 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x
 [INITRD/TAR] Démon Synchronisation Horlogère PTP/NTP '/bin/timed' extrait (0x5460 octets)
 [INITRD/TAR] Demon Audit Cryptographique Inalterable '/bin/auditd' extrait (0x95c0 octets)
 [INITRD/TAR] Demon Pare-Feu d'Etat & Conntrack '/bin/walld' extrait (0x7840 octets)
+[INITRD/TAR] Demon Coffre-Fort de Secrets Distribue '/bin/vaultd' extrait (0x8b28 octets)
 [PROCESS] Processus utilisateur init (PID 1) initialisé avec pile System V ABI (RSP: 0x00007ffffffeff10)
 [PROCESS] Shell utilisateur interactif jsh (PID 2) initialisé avec pile System V ABI (RSP: 0x00007ffffffeff20) et enfilé
 [PROCESS] Démon de stockage blockd (PID 3) initialisé avec pile System V ABI (RSP: 0x00007ffffffeff20) et enfilé
@@ -111,6 +112,7 @@ BdsDxe: starting Boot0002 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x
 [PROCESS] Démon Synchronisation Horlogère PTP/NTP timed (PID 17) initialisé avec pile System V ABI (RSP: 0x00007ffffffeff20) et enfilé
 [PROCESS] Demon Audit Cryptographique Inalterable auditd (PID 18) initialise avec pile System V ABI (RSP: 0x00007ffffffeff20) et enfile
 [PROCESS] Demon Pare-Feu d'Etat & Conntrack walld (PID 19) initialise avec pile System V ABI (RSP: 0x00007ffffffeff20) et enfile
+[PROCESS] Demon Coffre-Fort de Secrets Distribue vaultd (PID 20) initialise avec pile System V ABI (RSP: 0x00007ffffffeff20) et enfile
 [CAP/CSPACE] Table de capacités active. Handle initial: 0x100000001, Handle atténué: 0x100000002
 [SYSCALL] Appel système vmo_create validé (Code retour: 0, Nouveau Handle: 0x100000003)
 [SYSCALL] Cycle de vie validé : process_create (0x100000004), thread_create (0x100000005), vmo_map & thread_start
@@ -135,6 +137,6 @@ BdsDxe: starting Boot0002 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x
 
 [1;32m[PASS] JamboKernel Iron Core (Ring 0 & Ring 3 transition) validé sous QEMU.[0m
 
-[TEST] Validation de l'initialisation des 19 processus Ring 3 (init, jsh, blockd, fs, netd, fdr, wasmd, pqc, kdir, forensics, powerd, metricsd, bpfd, vpn, authd, dnsd, timed, auditd, walld)...
-[1;32m[PASS] Pare-Feu d'Etat & Synchronisation Conntrack (jambo-walld PID 19) validee sous QEMU.[0m
+[TEST] Validation de l'initialisation des 20 processus Ring 3 (init, jsh, blockd, fs, netd, fdr, wasmd, pqc, kdir, forensics, powerd, metricsd, bpfd, vpn, authd, dnsd, timed, auditd, walld, vaultd)...
+[1;32m[PASS] Coffre-Fort de Secrets Distribue (jambo-vaultd PID 20) validee sous QEMU.[0m
 [TEST] Mode de test CI validé. Sortie propre via isa-debug-exit...
