@@ -124,3 +124,4 @@ const _: () = assert!(core::mem::size_of::<VpnResponse>() == 64);
    - Les 14 processus sont démarrés avec leur pile alignée à 16 octets.
    - Le message UART `[PASS] Passerelle VPN Post-Quantique WireGuard (jambo-vpn PID 14) validée sous QEMU.` est émis.
    - Sortie propre avec code `33` (`QemuExitCode::Success`).
+

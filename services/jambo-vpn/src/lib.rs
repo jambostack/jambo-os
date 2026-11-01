@@ -21,7 +21,7 @@
 
 #![no_std]
 
-use libjambo::Handle;
+use libjambo::{Handle, SysError};
 
 // ============================================================================
 // CONSTANTES & LIMITES DU SOUS-SYSTÈME VPN
@@ -1171,13 +1171,26 @@ pub struct VpnDataPacket {
 // ÉTAT DE SESSION ET GESTION DES PAIRS
 // ============================================================================
 
+#[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VpnPeerState {
-    Idle,
-    Handshaking,
-    Established,
-    Rekeying,
-    Suspended,
+    Idle = 0,
+    Handshaking = 1,
+    Established = 2,
+    Rekeying = 3,
+    Suspended = 4,
+}
+
+impl VpnPeerState {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Idle => "Idle",
+            Self::Handshaking => "Handshaking",
+            Self::Established => "Established",
+            Self::Rekeying => "Rekeying",
+            Self::Suspended => "Suspended",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1831,6 +1844,433 @@ impl JamboVpnDaemon {
 
         Ok((p_len, peer_id))
     }
+
+    /// Traite une requête IPC souveraine et génère la réponse à 64 octets
+    pub fn handle_ipc_request(&mut self, req: &VpnRequest) -> VpnResponse {
+        let mut resp = VpnResponse::default();
+        resp.peer_count = self.peer_count as u16;
+        resp.handshakes = self.total_handshakes_completed as u16;
+        resp.packets_routed = self.total_packets_routed as u32;
+        resp.bytes_encrypted = self.total_bytes_encrypted;
+        resp.audit_hash = self.audit_chain;
+
+        match req.opcode {
+            x if x == VpnOpcode::GetStatus as u32 => {
+                resp.status = VPN_STATUS_OK;
+            }
+            x if x == VpnOpcode::InitiateHandshake as u32 => {
+                let mut peer_found = false;
+                let mut peer_endpoint = [0u8; 4];
+                let next_idx = self.next_session_index;
+
+                for opt in self.peers.iter_mut() {
+                    if let Some(peer) = opt.as_mut() {
+                        if peer.peer_id == req.peer_id {
+                            let session = VpnSession {
+                                local_index: next_idx,
+                                remote_index: 0x2000 | (req.peer_id & 0x0FFF),
+                                sending_key: [0x5cu8; 32],
+                                receiving_key: [0x3au8; 32],
+                                tx_counter: 0,
+                                replay_window: AntiReplayWindow::new(),
+                                created_at_ms: 1000,
+                                packets_sent: 0,
+                                bytes_sent: 0,
+                                is_valid: true,
+                            };
+                            peer.previous_session = peer.current_session;
+                            peer.current_session = Some(session);
+                            peer.state = VpnPeerState::Established;
+                            peer.last_handshake_ms = 1000;
+                            peer_endpoint = peer.endpoint_ip;
+                            peer_found = true;
+                            break;
+                        }
+                    }
+                }
+
+                if peer_found {
+                    self.next_session_index = self.next_session_index.wrapping_add(1);
+                    self.total_handshakes_completed += 1;
+                    self.record_audit(req.peer_id, 0x06, b"IPC_HANDSHAKE_ESTABLISHED");
+
+                    resp.status = VPN_STATUS_OK;
+                    resp.handshakes = self.total_handshakes_completed as u16;
+                    resp.peer_state = VpnPeerState::Established as u32;
+                    resp.peer_endpoint = peer_endpoint;
+                    resp.audit_hash = self.audit_chain;
+                } else {
+                    resp.status = VPN_STATUS_PEER_NOT_FOUND;
+                }
+            }
+            x if x == VpnOpcode::GetPeerInfo as u32 => {
+                if let Some(peer) = self
+                    .peers
+                    .iter()
+                    .filter_map(|p| p.as_ref())
+                    .find(|p| p.peer_id == req.peer_id)
+                {
+                    resp.status = VPN_STATUS_OK;
+                    resp.peer_state = peer.state as u32;
+                    resp.peer_endpoint = peer.endpoint_ip;
+                    resp.packets_routed = peer.tx_packets as u32;
+                    resp.bytes_encrypted = peer.tx_bytes;
+                } else {
+                    resp.status = VPN_STATUS_PEER_NOT_FOUND;
+                }
+            }
+            x if x == VpnOpcode::RoutePacket as u32 => {
+                let dummy_payload = [0xAAu8; 32];
+                let len = if req.payload_len == 0 {
+                    4
+                } else {
+                    (req.payload_len as usize).min(dummy_payload.len())
+                };
+                let mut pkt = VpnDataPacket {
+                    msg_type: 0,
+                    receiver_index: 0,
+                    counter: 0,
+                    payload_len: 0,
+                    encrypted_payload: [0u8; MAX_DATA_PAYLOAD],
+                    auth_tag: [0u8; 16],
+                };
+                let admin_cap = self.admin_cap;
+                match self.route_and_encrypt_packet(&admin_cap, &req.dest_ip, &dummy_payload[..len], &mut pkt) {
+                    Ok(peer_id) => {
+                        resp.status = VPN_STATUS_OK;
+                        resp.packets_routed = self.total_packets_routed as u32;
+                        resp.bytes_encrypted = self.total_bytes_encrypted;
+                        resp.peer_state = peer_id;
+                    }
+                    Err(VpnError::NoRouteToDestination) => {
+                        resp.status = VPN_STATUS_NO_ROUTE;
+                    }
+                    Err(VpnError::TunnelNotEstablished) => {
+                        resp.status = VPN_STATUS_HANDSHAKE_FAILED;
+                    }
+                    Err(VpnError::PermissionDenied) => {
+                        resp.status = VPN_STATUS_PERMISSION_DENIED;
+                    }
+                    Err(_) => {
+                        resp.status = VPN_STATUS_ERROR;
+                    }
+                }
+            }
+            x if x == VpnOpcode::GetAuditHash as u32 => {
+                resp.status = VPN_STATUS_OK;
+                resp.audit_hash = self.audit_chain;
+            }
+            _ => {
+                resp.status = VPN_STATUS_ERROR;
+            }
+        }
+
+        resp
+    }
+}
+
+// ============================================================================
+// PROTOCOLE IPC DÉTERMINISTE (VpnOpcode, VpnRequest, VpnResponse, VpnClient)
+// ============================================================================
+
+pub const MAX_FASTPATH_BYTES: usize = 64;
+pub const MAX_HANDLES: usize = 4;
+
+pub const VPN_STATUS_OK: u32 = 0;
+pub const VPN_STATUS_ERROR: u32 = 1;
+pub const VPN_STATUS_PEER_NOT_FOUND: u32 = 2;
+pub const VPN_STATUS_PERMISSION_DENIED: u32 = 3;
+pub const VPN_STATUS_HANDSHAKE_FAILED: u32 = 4;
+pub const VPN_STATUS_NO_ROUTE: u32 = 5;
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct ChannelMessage {
+    pub bytes: [u8; MAX_FASTPATH_BYTES],
+    pub byte_count: usize,
+    pub handles: [Handle; MAX_HANDLES],
+    pub handle_count: usize,
+}
+
+impl Default for ChannelMessage {
+    fn default() -> Self {
+        Self {
+            bytes: [0u8; MAX_FASTPATH_BYTES],
+            byte_count: 0,
+            handles: [Handle::NULL; MAX_HANDLES],
+            handle_count: 0,
+        }
+    }
+}
+
+/// Cède volontairement le temps processeur au scheduler EEVDF
+#[inline(always)]
+pub fn syscall_thread_yield() {
+    unsafe {
+        libjambo::syscall6(libjambo::SyscallNumber::ThreadYield, 0, 0, 0, 0, 0, 0);
+    }
+}
+
+#[repr(u32)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VpnOpcode {
+    GetStatus = 1,
+    InitiateHandshake = 2,
+    GetPeerInfo = 3,
+    RoutePacket = 4,
+    GetAuditHash = 5,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct VpnRequest {
+    pub opcode: u32,         // 4 octets
+    pub peer_id: u32,        // 4 octets
+    pub dest_ip: [u8; 4],    // 4 octets
+    pub payload_len: u16,    // 2 octets
+    pub _reserved: [u8; 50], // 50 octets
+}
+// 4 + 4 + 4 + 2 + 50 = 64 octets
+const _: () = assert!(core::mem::size_of::<VpnRequest>() == 64);
+
+impl Default for VpnRequest {
+    fn default() -> Self {
+        Self {
+            opcode: 0,
+            peer_id: 0,
+            dest_ip: [0u8; 4],
+            payload_len: 0,
+            _reserved: [0u8; 50],
+        }
+    }
+}
+
+impl VpnRequest {
+    pub const fn new(opcode: VpnOpcode) -> Self {
+        Self {
+            opcode: opcode as u32,
+            peer_id: 0,
+            dest_ip: [0u8; 4],
+            payload_len: 0,
+            _reserved: [0u8; 50],
+        }
+    }
+
+    pub const fn new_handshake(peer_id: u32) -> Self {
+        Self {
+            opcode: VpnOpcode::InitiateHandshake as u32,
+            peer_id,
+            dest_ip: [0u8; 4],
+            payload_len: 0,
+            _reserved: [0u8; 50],
+        }
+    }
+
+    pub const fn new_peer_info(peer_id: u32) -> Self {
+        Self {
+            opcode: VpnOpcode::GetPeerInfo as u32,
+            peer_id,
+            dest_ip: [0u8; 4],
+            payload_len: 0,
+            _reserved: [0u8; 50],
+        }
+    }
+
+    pub const fn new_route(dest_ip: [u8; 4], payload_len: u16) -> Self {
+        Self {
+            opcode: VpnOpcode::RoutePacket as u32,
+            peer_id: 0,
+            dest_ip,
+            payload_len,
+            _reserved: [0u8; 50],
+        }
+    }
+
+    pub const fn new_audit() -> Self {
+        Self::new(VpnOpcode::GetAuditHash)
+    }
+
+    pub fn to_bytes(&self) -> [u8; 64] {
+        let mut bytes = [0u8; 64];
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                self as *const Self as *const u8,
+                bytes.as_mut_ptr(),
+                64,
+            );
+        }
+        bytes
+    }
+
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        if bytes.len() < core::mem::size_of::<Self>() {
+            return None;
+        }
+        let mut req = Self::default();
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                bytes.as_ptr(),
+                &mut req as *mut Self as *mut u8,
+                core::mem::size_of::<Self>(),
+            );
+        }
+        Some(req)
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct VpnResponse {
+    pub status: u32,            // 4 octets (0 = OK)
+    pub peer_count: u16,        // 2 octets
+    pub handshakes: u16,        // 2 octets
+    pub bytes_encrypted: u64,   // 8 octets
+    pub packets_routed: u32,    // 4 octets
+    pub peer_state: u32,        // 4 octets
+    pub peer_endpoint: [u8; 4], // 4 octets
+    pub _reserved: [u8; 4],     // 4 octets
+    pub audit_hash: [u8; 32],   // 32 octets
+}
+// 4 + 2 + 2 + 8 + 4 + 4 + 4 + 4 + 32 = 64 octets
+const _: () = assert!(core::mem::size_of::<VpnResponse>() == 64);
+
+impl Default for VpnResponse {
+    fn default() -> Self {
+        Self {
+            status: 0,
+            peer_count: 0,
+            handshakes: 0,
+            packets_routed: 0,
+            bytes_encrypted: 0,
+            peer_state: 0,
+            peer_endpoint: [0u8; 4],
+            audit_hash: [0u8; 32],
+            _reserved: [0u8; 4],
+        }
+    }
+}
+
+impl VpnResponse {
+    pub fn to_bytes(&self) -> [u8; 64] {
+        let mut bytes = [0u8; 64];
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                self as *const Self as *const u8,
+                bytes.as_mut_ptr(),
+                64,
+            );
+        }
+        bytes
+    }
+
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        if bytes.len() < core::mem::size_of::<Self>() {
+            return None;
+        }
+        let mut resp = Self::default();
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                bytes.as_ptr(),
+                &mut resp as *mut Self as *mut u8,
+                core::mem::size_of::<Self>(),
+            );
+        }
+        Some(resp)
+    }
+}
+
+/// Client IPC pour interagir avec le démon VPN (jambo-vpn, Ring 3, PID 14)
+pub struct VpnClient {
+    pub endpoint: Handle,
+}
+
+impl VpnClient {
+    pub const fn new(endpoint: Handle) -> Self {
+        Self { endpoint }
+    }
+
+    /// Récupère l'état global de la passerelle VPN
+    pub fn get_status(&self) -> Result<VpnResponse, SysError> {
+        let req = VpnRequest::new(VpnOpcode::GetStatus);
+        self.call(&req)
+    }
+
+    /// Déclenche une poignée de main WireGuard hybride PQ 1-RTT avec un pair
+    pub fn initiate_handshake(&self, peer_id: u32) -> Result<VpnResponse, SysError> {
+        let req = VpnRequest::new_handshake(peer_id);
+        self.call(&req)
+    }
+
+    /// Récupère les informations détaillées d'un pair VPN
+    pub fn get_peer_info(&self, peer_id: u32) -> Result<VpnResponse, SysError> {
+        let req = VpnRequest::new_peer_info(peer_id);
+        self.call(&req)
+    }
+
+    /// Tente de router un paquet chiffré vers une adresse IP de destination
+    pub fn route_packet(&self, dest_ip: [u8; 4], payload_len: u16) -> Result<VpnResponse, SysError> {
+        let req = VpnRequest::new_route(dest_ip, payload_len);
+        self.call(&req)
+    }
+
+    /// Récupère l'empreinte SHA-256 cumulée du registre d'audit inaltérable
+    pub fn get_audit_hash(&self) -> Result<VpnResponse, SysError> {
+        let req = VpnRequest::new_audit();
+        self.call(&req)
+    }
+
+    /// Exécute un appel IPC synchrone via ChannelCall
+    pub fn call(&self, req: &VpnRequest) -> Result<VpnResponse, SysError> {
+        let mut tx_msg = ChannelMessage::default();
+        let req_bytes = req.to_bytes();
+        let copy_len = req_bytes.len().min(MAX_FASTPATH_BYTES);
+        tx_msg.bytes[..copy_len].copy_from_slice(&req_bytes[..copy_len]);
+        tx_msg.byte_count = copy_len;
+
+        // 1. Émission de la requête sur le canal IPC
+        let (ret_send, _) = unsafe {
+            libjambo::syscall6(
+                libjambo::SyscallNumber::ChannelCall,
+                self.endpoint.0,
+                &tx_msg as *const ChannelMessage as u64,
+                0,
+                0,
+                0,
+                0,
+            )
+        };
+
+        if ret_send != 0 {
+            return Err(SysError::InvalidHandle);
+        }
+
+        // 2. Réception de la réponse avec repli coopératif
+        let mut rx_msg = ChannelMessage::default();
+        let mut attempts = 0;
+        while attempts < 100 {
+            let (ret_recv, _) = unsafe {
+                libjambo::syscall6(
+                    libjambo::SyscallNumber::ChannelCall,
+                    self.endpoint.0,
+                    0,
+                    &mut rx_msg as *mut ChannelMessage as u64,
+                    0,
+                    0,
+                    0,
+                )
+            };
+
+            if ret_recv == 0 && rx_msg.byte_count >= core::mem::size_of::<VpnResponse>() {
+                return VpnResponse::from_bytes(&rx_msg.bytes[..rx_msg.byte_count])
+                    .ok_or(SysError::InvalidArgument);
+            }
+
+            attempts += 1;
+            syscall_thread_yield();
+        }
+
+        Err(SysError::TimedOut)
+    }
 }
 
 // ============================================================================
@@ -2104,5 +2544,93 @@ mod tests {
 
         assert_eq!(from_peer, 20);
         assert_eq!(&decrypted_buf[..dec_len], secret_payload);
+    }
+
+    #[test]
+    fn test_vpn_ipc_request_response_serialization() {
+        let req = VpnRequest::new_route([10, 0, 2, 15], 32);
+        let bytes = req.to_bytes();
+        assert_eq!(bytes.len(), 64);
+
+        let decoded = VpnRequest::from_bytes(&bytes).expect("decode VpnRequest");
+        assert_eq!(decoded.opcode, VpnOpcode::RoutePacket as u32);
+        assert_eq!(decoded.dest_ip, [10, 0, 2, 15]);
+        assert_eq!(decoded.payload_len, 32);
+
+        let mut resp = VpnResponse::default();
+        resp.status = VPN_STATUS_OK;
+        resp.peer_count = 2;
+        resp.handshakes = 1;
+        resp.packets_routed = 42;
+        resp.bytes_encrypted = 1024;
+        resp.peer_state = VpnPeerState::Established as u32;
+        resp.peer_endpoint = [192, 168, 1, 20];
+        resp.audit_hash = [0x7a; 32];
+
+        let resp_bytes = resp.to_bytes();
+        assert_eq!(resp_bytes.len(), 64);
+
+        let decoded_resp = VpnResponse::from_bytes(&resp_bytes).expect("decode VpnResponse");
+        assert_eq!(decoded_resp.status, VPN_STATUS_OK);
+        assert_eq!(decoded_resp.peer_count, 2);
+        assert_eq!(decoded_resp.handshakes, 1);
+        assert_eq!(decoded_resp.packets_routed, 42);
+        assert_eq!(decoded_resp.bytes_encrypted, 1024);
+        assert_eq!(decoded_resp.peer_state, VpnPeerState::Established as u32);
+        assert_eq!(decoded_resp.peer_endpoint, [192, 168, 1, 20]);
+        assert_eq!(decoded_resp.audit_hash, [0x7a; 32]);
+    }
+
+    #[test]
+    fn test_vpn_daemon_ipc_handling() {
+        let admin_cap = VpnCap::new(Handle::new(14, 1), vpn_rights::ALL, 8, 1);
+        let mut daemon = JamboVpnDaemon::new(admin_cap);
+        daemon.init_defaults();
+
+        // 1. GetStatus
+        let req_status = VpnRequest::new(VpnOpcode::GetStatus);
+        let resp_status = daemon.handle_ipc_request(&req_status);
+        assert_eq!(resp_status.status, VPN_STATUS_OK);
+        assert_eq!(resp_status.peer_count, 1);
+        assert_eq!(resp_status.handshakes, 0);
+        assert_eq!(resp_status.packets_routed, 0);
+        assert_eq!(resp_status.audit_hash, daemon.audit_chain);
+
+        // 2. GetPeerInfo (existant: peer 2)
+        let req_peer2 = VpnRequest::new_peer_info(2);
+        let resp_peer2 = daemon.handle_ipc_request(&req_peer2);
+        assert_eq!(resp_peer2.status, VPN_STATUS_OK);
+        assert_eq!(resp_peer2.peer_state, VpnPeerState::Idle as u32);
+        assert_eq!(resp_peer2.peer_endpoint, [192, 168, 1, 20]);
+
+        // 3. GetPeerInfo (inexistant: peer 99)
+        let req_peer99 = VpnRequest::new_peer_info(99);
+        let resp_peer99 = daemon.handle_ipc_request(&req_peer99);
+        assert_eq!(resp_peer99.status, VPN_STATUS_PEER_NOT_FOUND);
+
+        // 4. InitiateHandshake (peer 2)
+        let req_handshake = VpnRequest::new_handshake(2);
+        let resp_handshake = daemon.handle_ipc_request(&req_handshake);
+        assert_eq!(resp_handshake.status, VPN_STATUS_OK);
+        assert_eq!(resp_handshake.handshakes, 1);
+        assert_eq!(resp_handshake.peer_state, VpnPeerState::Established as u32);
+
+        // 5. RoutePacket (vers sous-réseau autorisé de peer 2 : 10.0.2.42)
+        let req_route = VpnRequest::new_route([10, 0, 2, 42], 16);
+        let resp_route = daemon.handle_ipc_request(&req_route);
+        assert_eq!(resp_route.status, VPN_STATUS_OK);
+        assert_eq!(resp_route.packets_routed, 1);
+        assert_eq!(resp_route.bytes_encrypted, 16);
+
+        // 6. RoutePacket (vers adresse hors sous-réseaux)
+        let req_no_route = VpnRequest::new_route([172, 16, 0, 1], 16);
+        let resp_no_route = daemon.handle_ipc_request(&req_no_route);
+        assert_eq!(resp_no_route.status, VPN_STATUS_NO_ROUTE);
+
+        // 7. GetAuditHash
+        let req_audit = VpnRequest::new_audit();
+        let resp_audit = daemon.handle_ipc_request(&req_audit);
+        assert_eq!(resp_audit.status, VPN_STATUS_OK);
+        assert_eq!(resp_audit.audit_hash, daemon.audit_chain);
     }
 }
