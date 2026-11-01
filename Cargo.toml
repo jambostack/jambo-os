@@ -15,6 +15,7 @@ members = [
     "services/jambo-pqc",
     "services/jambo-kdir",
     "services/jambo-forensics",
+    "services/jambo-powerd",
     "xtask",
 ]
 
