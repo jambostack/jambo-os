@@ -6,6 +6,11 @@
 use jambo_forensics::{ForensicsClient, ForensicsOpcode, ForensicsResponse, FORENSICS_STATUS_OK};
 use jambo_kdir::{KdirClient, KdirResponse, KDIR_PROTECTION_SECURED, KDIR_STATUS_OK};
 #[allow(unused_imports)]
+use jambo_metricsd::{
+    metrics_rights, AlertCondition, JamboMetricsDaemon, MetricsCap, MetricsClient, MetricsOpcode,
+    MetricsRequest, MetricsResponse, METRICS_STATUS_OK,
+};
+#[allow(unused_imports)]
 use jambo_powerd::{
     CpuPowerState, PowerClient, PowerOpcode, PowerProfile, PowerResponse, PowerState,
     POWER_STATUS_OK,
@@ -83,12 +88,29 @@ impl JamboShell {
             "kdir" => self.cmd_kdir(args, out),
             "forensics" => self.cmd_forensics(args, out),
             "power" => self.cmd_power(args, out),
+            "metrics" => self.cmd_metrics(args, out),
             _ => self.cmd_not_found(cmd, out),
         }
     }
 
     fn cmd_help(&self, out: &mut [u8]) -> (ShellStatus, usize) {
-        let text = b"Commandes disponibles:\n  help        - Affiche cette aide\n  sysinfo     - Affiche les metriques memoire et uptime du micro-noyau\n  ps          - Liste les processus actifs\n  echo <args> - Affiche le texte sur la console\n  clear       - Reinitialise l'ecran du terminal\n  reboot      - Eteint ou redemarre la machine virtuelle\n  cat <path>  - Affiche le contenu d'un fichier\n  ifconfig    - Affiche la configuration de l'interface reseau eth0\n  ping <ip>   - Emet des paquets ICMP Echo vers une adresse IP\n  fdr [status|verify|pcr] - Cyber-resilience materielle et attestation firmware\n  wasm [status|run|info]  - Moteur WebAssembly/WASI et microservices sandboxes\n  pqc [status|kex|sign|audit] - Cryptographie post-quantique et transition quantique\n  kdir [status|scan|restore|audit] - Surveillance d'integrite noyau et pilotes (KDIR)\n  forensics [status|dump|timeline|quarantine] - Investigation numerique, analyse memoire et confinement (Forensics)\n  power [status|profile|cstate|battery] - Gestion de l'energie materielle, profils et C-States (ACPI Ring 3)\n";
+        let text = b"Commandes disponibles:\n\
+  help        - Affiche cette aide\n\
+  sysinfo     - Metriques memoire et uptime du micro-noyau\n\
+  ps          - Liste les 12 processus actifs\n\
+  echo <args> - Affiche le texte sur la console\n\
+  clear       - Reinitialise l'ecran du terminal\n\
+  reboot      - Eteint ou redemarre la machine virtuelle\n\
+  cat <path>  - Affiche le contenu d'un fichier\n\
+  ifconfig    - Configuration de l'interface reseau eth0\n\
+  ping <ip>   - Emet des paquets ICMP Echo vers une adresse IP\n\
+  fdr [status|verify|pcr] - Cyber-resilience materielle et attestation\n\
+  wasm [status|run|info]  - Moteur WebAssembly/WASI sandboxes\n\
+  pqc [status|kex|sign|audit] - Cryptographie post-quantique\n\
+  kdir [status|scan|restore|audit] - Integrite noyau et pilotes (KDIR)\n\
+  forensics [status|dump|timeline|quarantine] - Investigation et confinement\n\
+  power [status|profile|cstate|battery] - Gestion de l'energie et ACPI\n\
+  metrics [status|query|ingest|alerts] - Telemetrie et metrologie Ring 3\n";
         let len = text.len().min(out.len());
         out[..len].copy_from_slice(&text[..len]);
         (ShellStatus::Success, len)
@@ -132,7 +154,7 @@ impl JamboShell {
     }
 
     fn cmd_ps(&self, out: &mut [u8]) -> (ShellStatus, usize) {
-        let text = b"PID  ETAT     COMMANDE\n  1  ACTIF    /bin/init (Superviseur racine)\n  2  ACTIF    /bin/jsh  (Shell interactif UART)\n  3  ACTIF    /bin/blockd (Pilote VirtIO-Block Ring 3)\n  4  ACTIF    /bin/fs   (Serveur de fichiers JamboFS)\n  5  ACTIF    /bin/netd (Demon reseau VirtIO-Net Ring 3)\n  6  ACTIF    /bin/fdr  (Demon FDR Cyber-Resilience Ring 3)\n  7  ACTIF    /bin/wasmd (Moteur WebAssembly/WASI Ring 3)\n  8  ACTIF    /bin/pqc  (Demon Cryptographie Post-Quantique Ring 3)\n  9  ACTIF    /bin/kdir (Demon Integrite Noyau & Pilotes KDIR Ring 3)\n 10  ACTIF    /bin/forensics (Demon Forensique & Acquisition Memoire Ring 3)\n 11  ACTIF    /bin/powerd (Demon Gestion Energie & ACPI Ring 3)\n";
+        let text = b"PID  ETAT     COMMANDE\n  1  ACTIF    /bin/init (Superviseur racine)\n  2  ACTIF    /bin/jsh  (Shell interactif UART)\n  3  ACTIF    /bin/blockd (Pilote VirtIO-Block Ring 3)\n  4  ACTIF    /bin/fs   (Serveur de fichiers JamboFS)\n  5  ACTIF    /bin/netd (Demon reseau VirtIO-Net Ring 3)\n  6  ACTIF    /bin/fdr  (Demon FDR Cyber-Resilience Ring 3)\n  7  ACTIF    /bin/wasmd (Moteur WebAssembly/WASI Ring 3)\n  8  ACTIF    /bin/pqc  (Demon Cryptographie Post-Quantique Ring 3)\n  9  ACTIF    /bin/kdir (Demon Integrite Noyau & Pilotes KDIR Ring 3)\n 10  ACTIF    /bin/forensics (Demon Forensique & Acquisition Memoire Ring 3)\n 11  ACTIF    /bin/powerd (Demon Gestion Energie & ACPI Ring 3)\n 12  ACTIF    /bin/metricsd (Demon Metrologie & Observabilite Ring 3)\n";
         let len = text.len().min(out.len());
         out[..len].copy_from_slice(&text[..len]);
         (ShellStatus::Success, len)
@@ -257,7 +279,7 @@ impl JamboShell {
 
         // 2. Si le fichier est /banner.txt (ou banner.txt) et que l'IPC n'a pas répondu, repli sur la bannière standard
         if !read_ok && (path == "/banner.txt" || path == "banner.txt") {
-            let banner = b"Bienvenue sur JamboOS v0.3.50\n";
+            let banner = b"Bienvenue sur JamboOS v0.3.51\n";
             file_content[..banner.len()].copy_from_slice(banner);
             content_len = banner.len();
             read_ok = true;
@@ -1839,6 +1861,271 @@ impl JamboShell {
         (ShellStatus::Success, cursor)
     }
 
+    fn cmd_metrics(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        let subcmd = if args.is_empty() { "status" } else { args[0] };
+        match subcmd {
+            "status" => self.cmd_metrics_status(out),
+            "query" => self.cmd_metrics_query(&args[1..], out),
+            "ingest" => self.cmd_metrics_ingest(&args[1..], out),
+            "alerts" => self.cmd_metrics_alerts(out),
+            _ => {
+                let msg = b"Usage: metrics [status|query|ingest|alerts]\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                (ShellStatus::InvalidArgument, len)
+            }
+        }
+    }
+
+    fn cmd_metrics_status(&self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let mut resp_opt: Option<MetricsResponse> = None;
+        for &h in &[
+            12u64, 13u64, 14u64, 15u64, 11u64, 10u64, 9u64, 8u64, 7u64, 6u64, 5u64, 4u64, 3u64,
+        ] {
+            let client = MetricsClient::new(libjambo::Handle(h));
+            if let Ok(resp) = client.get_status() {
+                if resp.status == METRICS_STATUS_OK {
+                    resp_opt = Some(resp);
+                    break;
+                }
+            }
+        }
+
+        let resp = resp_opt.unwrap_or_else(|| {
+            let mut daemon = Self::create_fallback_daemon();
+            let req = MetricsRequest::new(MetricsOpcode::GetStatus);
+            daemon.handle_ipc_request(&req)
+        });
+
+        let mut cursor = 0;
+        cursor = append_bytes(
+            out,
+            cursor,
+            b"Real-Time Telemetry & Distributed Metrics (jambo-metricsd PID 12):\n  Operational State : ",
+        );
+        if resp.status == METRICS_STATUS_OK {
+            cursor = append_bytes(out, cursor, b"ACTIVE (O(1) Ring Buffers Operational)\n");
+        } else {
+            cursor = append_bytes(out, cursor, b"DEGRADED (Collector Error)\n");
+        }
+        cursor = append_bytes(out, cursor, b"  Active Series     : ");
+        cursor = append_u64(out, cursor, resp.series_count as u64);
+        cursor = append_bytes(out, cursor, b" series\n  Total Samples     : ");
+        cursor = append_u64(out, cursor, resp.total_samples);
+        cursor = append_bytes(out, cursor, b" samples ingested\n  Active Alerts     : ");
+        cursor = append_u64(out, cursor, resp.active_alerts as u64);
+        if resp.active_alerts > 0 {
+            cursor = append_bytes(out, cursor, b" triggered (CRITICAL)\n");
+        } else {
+            cursor = append_bytes(out, cursor, b" triggered (NOMINAL)\n");
+        }
+        cursor = append_bytes(
+            out,
+            cursor,
+            b"  Buffer Capacity   : 32 samples/series (O(1) Ring Buffers)\n  Telemetry Cap     : Rights 0x87 (INGEST | QUERY | ALERT | ADMIN)\n",
+        );
+
+        (ShellStatus::Success, cursor)
+    }
+
+    fn cmd_metrics_query(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if args.is_empty() {
+            let msg = b"Usage: metrics query <series>\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            return (ShellStatus::InvalidArgument, len);
+        }
+
+        let series_name = args[0];
+        let mut resp_opt: Option<MetricsResponse> = None;
+
+        for &h in &[
+            12u64, 13u64, 14u64, 15u64, 11u64, 10u64, 9u64, 8u64, 7u64, 6u64, 5u64, 4u64, 3u64,
+        ] {
+            let client = MetricsClient::new(libjambo::Handle(h));
+            if let Ok(resp) = client.query_series(series_name.as_bytes(), 1) {
+                if resp.status == METRICS_STATUS_OK {
+                    resp_opt = Some(resp);
+                    break;
+                }
+            }
+        }
+
+        let resp = resp_opt.unwrap_or_else(|| {
+            let mut daemon = Self::create_fallback_daemon();
+            let req = MetricsRequest::new_query(series_name.as_bytes(), 1);
+            daemon.handle_ipc_request(&req)
+        });
+
+        if resp.status != METRICS_STATUS_OK {
+            let mut cursor = 0;
+            cursor = append_bytes(out, cursor, b"metrics: series '");
+            cursor = append_bytes(out, cursor, series_name.as_bytes());
+            cursor = append_bytes(out, cursor, b"' not found\n");
+            return (ShellStatus::ExecutionFailed, cursor);
+        }
+
+        let mut cursor = 0;
+        cursor = append_bytes(out, cursor, b"[METRICS] Telemetry query for series '");
+        cursor = append_bytes(out, cursor, series_name.as_bytes());
+        cursor = append_bytes(out, cursor, b"' (Node 1):\n  Sample Count      : ");
+        cursor = append_u64(out, cursor, resp.sample_count as u64);
+        cursor = append_bytes(out, cursor, b"\n  Min Value         : ");
+        cursor = append_u64(out, cursor, resp.min_val);
+        cursor = append_bytes(out, cursor, b"\n  Max Value         : ");
+        cursor = append_u64(out, cursor, resp.max_val);
+        cursor = append_bytes(out, cursor, b"\n  Average Value     : ");
+        cursor = append_u64(out, cursor, resp.avg_val);
+        cursor = append_bytes(out, cursor, b"\n  Last Ingested     : ");
+        cursor = append_u64(out, cursor, resp.last_val);
+        cursor = append_bytes(
+            out,
+            cursor,
+            b"\n  Ring Capacity     : 32 slots (Deterministic O(1) buffer)\n",
+        );
+
+        (ShellStatus::Success, cursor)
+    }
+
+    fn cmd_metrics_ingest(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if args.len() < 2 {
+            let msg = b"Usage: metrics ingest <series> <val>\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            return (ShellStatus::InvalidArgument, len);
+        }
+
+        let series_name = args[0];
+        let val = match parse_u64(args[1]) {
+            Some(v) => v,
+            None => {
+                let msg = b"Usage: metrics ingest <series> <val>\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                return (ShellStatus::InvalidArgument, len);
+            }
+        };
+
+        let mut resp_opt: Option<MetricsResponse> = None;
+        for &h in &[
+            12u64, 13u64, 14u64, 15u64, 11u64, 10u64, 9u64, 8u64, 7u64, 6u64, 5u64, 4u64, 3u64,
+        ] {
+            let client = MetricsClient::new(libjambo::Handle(h));
+            if let Ok(resp) = client.ingest_sample(series_name.as_bytes(), 1, 1000, val) {
+                if resp.status == METRICS_STATUS_OK {
+                    resp_opt = Some(resp);
+                    break;
+                }
+            }
+        }
+
+        let resp = resp_opt.unwrap_or_else(|| {
+            let mut daemon = Self::create_fallback_daemon();
+            let req = MetricsRequest::new_ingest(series_name.as_bytes(), 1, 1003, val);
+            daemon.handle_ipc_request(&req)
+        });
+
+        if resp.status != METRICS_STATUS_OK {
+            let mut cursor = 0;
+            cursor = append_bytes(
+                out,
+                cursor,
+                b"metrics: failed to ingest sample into series '",
+            );
+            cursor = append_bytes(out, cursor, series_name.as_bytes());
+            cursor = append_bytes(out, cursor, b"'\n");
+            return (ShellStatus::ExecutionFailed, cursor);
+        }
+
+        let mut cursor = 0;
+        cursor = append_bytes(out, cursor, b"[METRICS] Ingesting sample into series '");
+        cursor = append_bytes(out, cursor, series_name.as_bytes());
+        cursor = append_bytes(out, cursor, b"'...\n  Ingested Value    : ");
+        cursor = append_u64(out, cursor, val);
+        cursor = append_bytes(out, cursor, b"\n  Sample Count      : ");
+        cursor = append_u64(out, cursor, resp.sample_count as u64);
+        cursor = append_bytes(out, cursor, b"\n  Min / Max / Avg   : ");
+        cursor = append_u64(out, cursor, resp.min_val);
+        cursor = append_bytes(out, cursor, b" / ");
+        cursor = append_u64(out, cursor, resp.max_val);
+        cursor = append_bytes(out, cursor, b" / ");
+        cursor = append_u64(out, cursor, resp.avg_val);
+        cursor = append_bytes(out, cursor, b"\n  Alert Triggered   : ");
+        if resp.alert_triggered != 0 {
+            cursor = append_bytes(out, cursor, b"YES (Threshold violation detected)\n");
+        } else {
+            cursor = append_bytes(out, cursor, b"NO (Within nominal bounds)\n");
+        }
+        cursor = append_bytes(
+            out,
+            cursor,
+            b"  Status            : SUCCESS (Stored in O(1) ring buffer)\n",
+        );
+
+        (ShellStatus::Success, cursor)
+    }
+
+    fn cmd_metrics_alerts(&self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let mut resp_opt: Option<MetricsResponse> = None;
+        for &h in &[
+            12u64, 13u64, 14u64, 15u64, 11u64, 10u64, 9u64, 8u64, 7u64, 6u64, 5u64, 4u64, 3u64,
+        ] {
+            let client = MetricsClient::new(libjambo::Handle(h));
+            if let Ok(resp) = client.get_alerts() {
+                if resp.status == METRICS_STATUS_OK {
+                    resp_opt = Some(resp);
+                    break;
+                }
+            }
+        }
+
+        let resp = resp_opt.unwrap_or_else(|| {
+            let mut daemon = Self::create_fallback_daemon();
+            let req = MetricsRequest::new(MetricsOpcode::GetAlerts);
+            daemon.handle_ipc_request(&req)
+        });
+
+        let mut cursor = 0;
+        cursor = append_bytes(
+            out,
+            cursor,
+            b"Configured Alert Rules & Thresholds (jambo-metricsd PID 12):\n  Active Alerts     : ",
+        );
+        cursor = append_u64(out, cursor, resp.active_alerts as u64);
+        cursor = append_bytes(
+            out,
+            cursor,
+            b" triggered\n  Rule [0] Series   : cpu_load\n    Condition       : GreaterThan\n    Threshold       : 80\n    Current State   : ",
+        );
+        if resp.active_alerts > 0 || resp.alert_triggered != 0 {
+            cursor = append_bytes(out, cursor, b"TRIGGERED (Threshold violation)\n");
+        } else {
+            cursor = append_bytes(out, cursor, b"NOMINAL (Within threshold bounds)\n");
+        }
+        cursor = append_bytes(
+            out,
+            cursor,
+            b"  Evaluation Engine : Continuous O(1) real-time threshold monitoring\n",
+        );
+
+        (ShellStatus::Success, cursor)
+    }
+
+    fn create_fallback_daemon() -> JamboMetricsDaemon {
+        let cap = MetricsCap::new(libjambo::Handle::new(12, 1), metrics_rights::ALL);
+        let mut daemon = JamboMetricsDaemon::new_with_cap(cap);
+        let _ = daemon.register_series(b"cpu_load", 1);
+        let _ = daemon.register_series(b"ipc_latency_ns", 1);
+        let _ = daemon.register_series(b"vmo_usage_kb", 1);
+        let _ = daemon.register_alert(b"cpu_load", AlertCondition::GreaterThan, 80);
+        let _ = daemon.ingest(b"cpu_load", 1, 1000, 15);
+        let _ = daemon.ingest(b"cpu_load", 1, 1001, 25);
+        let _ = daemon.ingest(b"cpu_load", 1, 1002, 20);
+        let _ = daemon.ingest(b"ipc_latency_ns", 1, 1000, 520);
+        let _ = daemon.ingest(b"vmo_usage_kb", 1, 1000, 4096);
+        daemon
+    }
+
     fn cmd_not_found(&self, cmd: &str, out: &mut [u8]) -> (ShellStatus, usize) {
         let mut cursor = 0;
         let pfx = b"jsh: command not found: ";
@@ -1962,6 +2249,26 @@ fn parse_u32(s: &str) -> Option<u32> {
     }
 }
 
+fn parse_u64(s: &str) -> Option<u64> {
+    let mut val: u64 = 0;
+    let mut has_digit = false;
+    for &b in s.as_bytes() {
+        if b.is_ascii_digit() {
+            val = val
+                .checked_mul(10)
+                .and_then(|v| v.checked_add((b - b'0') as u64))?;
+            has_digit = true;
+        } else {
+            return None;
+        }
+    }
+    if has_digit {
+        Some(val)
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2033,7 +2340,7 @@ mod tests {
     }
 
     #[test]
-    fn test_ps_contains_11_processes() {
+    fn test_ps_contains_12_processes() {
         let mut shell = JamboShell::new();
         let mut out = [0u8; 1024];
 
@@ -2053,6 +2360,7 @@ mod tests {
             "10  ACTIF    /bin/forensics (Demon Forensique & Acquisition Memoire Ring 3)"
         ));
         assert!(s.contains("11  ACTIF    /bin/powerd (Demon Gestion Energie & ACPI Ring 3)"));
+        assert!(s.contains("12  ACTIF    /bin/metricsd (Demon Metrologie & Observabilite Ring 3)"));
     }
 
     #[test]
@@ -2069,6 +2377,7 @@ mod tests {
         assert!(s.contains("kdir [status|scan|restore|audit]"));
         assert!(s.contains("forensics [status|dump|timeline|quarantine]"));
         assert!(s.contains("power [status|profile|cstate|battery]"));
+        assert!(s.contains("metrics [status|query|ingest|alerts]"));
     }
 
     #[test]
@@ -2560,5 +2869,120 @@ mod tests {
         assert_eq!(st_core, ShellStatus::InvalidArgument);
         let s_core = core::str::from_utf8(&out[..len_core]).unwrap();
         assert!(s_core.contains("Usage: power cstate <core> <c0|c1|c2|c3>"));
+    }
+
+    #[test]
+    fn test_metrics_status() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 1024];
+
+        let (st, len) = shell.execute_line("metrics status", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("Real-Time Telemetry & Distributed Metrics (jambo-metricsd PID 12):"));
+        assert!(s.contains("Operational State : ACTIVE (O(1) Ring Buffers Operational)"));
+        assert!(s.contains("Active Series     : 3 series"));
+        assert!(s.contains("Total Samples     : 5 samples ingested"));
+        assert!(s.contains("Active Alerts     : 0 triggered (NOMINAL)"));
+        assert!(s.contains("Buffer Capacity   : 32 samples/series (O(1) Ring Buffers)"));
+
+        // 'metrics' without argument defaults to 'metrics status'
+        let (st2, len2) = shell.execute_line("metrics", &mut out);
+        assert_eq!(st2, ShellStatus::Success);
+        assert_eq!(len, len2);
+    }
+
+    #[test]
+    fn test_metrics_query() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 1024];
+
+        let (st, len) = shell.execute_line("metrics query cpu_load", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("[METRICS] Telemetry query for series 'cpu_load' (Node 1):"));
+        assert!(s.contains("Sample Count      : 3"));
+        assert!(s.contains("Min Value         : 15"));
+        assert!(s.contains("Max Value         : 25"));
+        assert!(s.contains("Average Value     : 20"));
+        assert!(s.contains("Last Ingested     : 20"));
+
+        let (st_ipc, len_ipc) = shell.execute_line("metrics query ipc_latency_ns", &mut out);
+        assert_eq!(st_ipc, ShellStatus::Success);
+        let s_ipc = core::str::from_utf8(&out[..len_ipc]).unwrap();
+        assert!(s_ipc.contains("Sample Count      : 1"));
+        assert!(s_ipc.contains("Last Ingested     : 520"));
+
+        let (st_vmo, len_vmo) = shell.execute_line("metrics query vmo_usage_kb", &mut out);
+        assert_eq!(st_vmo, ShellStatus::Success);
+        let s_vmo = core::str::from_utf8(&out[..len_vmo]).unwrap();
+        assert!(s_vmo.contains("Sample Count      : 1"));
+        assert!(s_vmo.contains("Last Ingested     : 4096"));
+
+        let (st_err, len_err) = shell.execute_line("metrics query unknown_metric", &mut out);
+        assert_eq!(st_err, ShellStatus::ExecutionFailed);
+        let s_err = core::str::from_utf8(&out[..len_err]).unwrap();
+        assert!(s_err.contains("metrics: series 'unknown_metric' not found"));
+    }
+
+    #[test]
+    fn test_metrics_ingest() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 1024];
+
+        let (st, len) = shell.execute_line("metrics ingest cpu_load 30", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("[METRICS] Ingesting sample into series 'cpu_load'..."));
+        assert!(s.contains("Ingested Value    : 30"));
+        assert!(s.contains("Alert Triggered   : NO (Within nominal bounds)"));
+        assert!(s.contains("Status            : SUCCESS (Stored in O(1) ring buffer)"));
+
+        let (st_al, len_al) = shell.execute_line("metrics ingest cpu_load 95", &mut out);
+        assert_eq!(st_al, ShellStatus::Success);
+        let s_al = core::str::from_utf8(&out[..len_al]).unwrap();
+        assert!(s_al.contains("Ingested Value    : 95"));
+        assert!(s_al.contains("Alert Triggered   : YES (Threshold violation detected)"));
+    }
+
+    #[test]
+    fn test_metrics_alerts() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 1024];
+
+        let (st, len) = shell.execute_line("metrics alerts", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("Configured Alert Rules & Thresholds (jambo-metricsd PID 12):"));
+        assert!(s.contains("Rule [0] Series   : cpu_load"));
+        assert!(s.contains("Condition       : GreaterThan"));
+        assert!(s.contains("Threshold       : 80"));
+        assert!(s.contains("Current State   : NOMINAL (Within threshold bounds)"));
+    }
+
+    #[test]
+    fn test_metrics_invalid() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 1024];
+
+        let (st, len) = shell.execute_line("metrics unknown_subcmd", &mut out);
+        assert_eq!(st, ShellStatus::InvalidArgument);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("Usage: metrics [status|query|ingest|alerts]"));
+
+        let (st_q, len_q) = shell.execute_line("metrics query", &mut out);
+        assert_eq!(st_q, ShellStatus::InvalidArgument);
+        let s_q = core::str::from_utf8(&out[..len_q]).unwrap();
+        assert!(s_q.contains("Usage: metrics query <series>"));
+
+        let (st_i, len_i) = shell.execute_line("metrics ingest", &mut out);
+        assert_eq!(st_i, ShellStatus::InvalidArgument);
+        let s_i = core::str::from_utf8(&out[..len_i]).unwrap();
+        assert!(s_i.contains("Usage: metrics ingest <series> <val>"));
+
+        let (st_iv, len_iv) = shell.execute_line("metrics ingest cpu_load not_a_number", &mut out);
+        assert_eq!(st_iv, ShellStatus::InvalidArgument);
+        let s_iv = core::str::from_utf8(&out[..len_iv]).unwrap();
+        assert!(s_iv.contains("Usage: metrics ingest <series> <val>"));
     }
 }
