@@ -120,3 +120,4 @@ const _: () = assert!(core::mem::size_of::<AuthResponse>() == 64);
    - Les 15 processus sont démarrés avec leur pile alignée à 16 octets.
    - Le message UART certifié est émis.
    - Sortie propre avec code `33` (`QemuExitCode::Success`).
+

@@ -1,0 +1,17 @@
+[package]
+name = "jambo-authd"
+version = "0.3.54"
+edition = "2021"
+
+[lib]
+name = "jambo_authd"
+path = "src/lib.rs"
+
+[[bin]]
+name = "authd"
+path = "src/main.rs"
+test = false
+
+[dependencies]
+jambo-abi = { path = "../../abi/jambo-abi" }
+libjambo = { path = "../../libs/libjambo" }

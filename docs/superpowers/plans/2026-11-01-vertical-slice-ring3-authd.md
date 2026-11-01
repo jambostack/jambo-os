@@ -75,3 +75,4 @@ Ce plan découpe la mise en œuvre du **Jalon 3.10 (`v0.3.54`)** en 4 tâches s�
 6. Réaliser la Whole-Branch Review complète (`35e897f..HEAD`).
 7. Créer le tag git annoté `v0.3.54` et pousser vers `origin/main` avec les tags.
 8. Mettre à jour l'artefact de feuille de route `synthese_avis_et_feuille_de_route_jamboos.md`.
+

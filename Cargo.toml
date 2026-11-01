@@ -19,6 +19,7 @@ members = [
     "services/jambo-metricsd",
     "services/jambo-bpfd",
     "services/jambo-vpn",
+    "services/jambo-authd",
     "xtask",
 ]
 
