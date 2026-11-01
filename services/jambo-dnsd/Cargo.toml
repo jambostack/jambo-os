@@ -1,0 +1,18 @@
+[package]
+name = "jambo-dnsd"
+version = "0.3.55"
+edition = "2021"
+
+[lib]
+name = "jambo_dnsd"
+path = "src/lib.rs"
+
+[[bin]]
+name = "dnsd"
+path = "src/main.rs"
+test = false
+
+[dependencies]
+jambo-abi = { path = "../../abi/jambo-abi" }
+libjambo = { path = "../../libs/libjambo" }
+jambo-serviced = { path = "../jambo-serviced" }
