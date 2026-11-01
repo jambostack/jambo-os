@@ -1,0 +1,12 @@
+[package]
+name = "jambo-auditd"
+version = "0.3.57"
+edition = "2021"
+
+[[bin]]
+name = "auditd"
+path = "src/main.rs"
+test = false
+
+[dependencies]
+libjambo = { path = "../../libs/libjambo" }
