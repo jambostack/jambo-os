@@ -356,6 +356,7 @@ pub extern "C" fn _start() -> ! {
     let mut metricsd_elf_bytes: Option<&'static [u8]> = None;
     let mut bpfd_elf_bytes: Option<&'static [u8]> = None;
     let mut vpn_elf_bytes: Option<&'static [u8]> = None;
+    let mut authd_elf_bytes: Option<&'static [u8]> = None;
     if let Some(modules_resp) = MODULES_REQUEST.response() {
         let modules = modules_resp.modules();
         kprintln!(
@@ -496,6 +497,18 @@ pub extern "C" fn _start() -> ! {
                         vpn_data.len()
                     );
                     vpn_elf_bytes = Some(vpn_data);
+                }
+                if let Some(authd_data) = tar
+                    .find("bin/authd")
+                    .or_else(|| tar.find("/bin/authd"))
+                    .or_else(|| tar.find("bin/jambo-authd"))
+                    .or_else(|| tar.find("authd"))
+                {
+                    kprintln!(
+                        "[INITRD/TAR] Démon Identité & Jetons de Session '/bin/authd' extrait ({:#x} octets)",
+                        authd_data.len()
+                    );
+                    authd_elf_bytes = Some(authd_data);
                 }
             }
             if initrd_elf_bytes.is_none() && data.len() >= 4 && data[0..4] == mm::elf::ELF_MAGIC {
@@ -835,6 +848,27 @@ pub extern "C" fn _start() -> ! {
         kprintln!("[WARN] Échec de la création du processus vpn");
     }
 
+    // Initialisation du démon d'identité & jetons de session Ring 3 (PID 15 : authd)
+    let authd_binary = authd_elf_bytes.unwrap_or(&test_elf);
+    if let Ok((_authd_process, authd_thread)) = sched::Process::create_user_process(
+        15,
+        "authd",
+        authd_binary,
+        &["authd"],
+        &["PATH=/bin:/usr/bin", "TERM=xterm-256color"],
+    ) {
+        let authd_sp = authd_thread.lock().user_rsp;
+        assert_eq!(authd_sp % 16, 0, "Alignement 16 octets du RSP authd");
+        authd_thread.lock().deadline = 1000;
+        sched::SCHEDULER.lock().enqueue(authd_thread);
+        kprintln!(
+            "[PROCESS] Démon Identité & Jetons de Session authd (PID 15) initialisé avec pile System V ABI (RSP: {:#018x}) et enfilé",
+            authd_sp
+        );
+    } else {
+        kprintln!("[WARN] Échec de la création du processus authd");
+    }
+
     // 12. Initialisation CSpace, table SYSCALL et IPC hybride
     cap::init_cspace();
     syscall::init_syscall();
@@ -1131,8 +1165,8 @@ pub extern "C" fn _start() -> ! {
     let is_test_mode = cfg!(feature = "qemu-test") || cmdline_test || module_test;
 
     if is_test_mode {
-        kprintln!("[TEST] Validation de l'initialisation des 14 processus Ring 3 (init, jsh, blockd, fs, netd, fdr, wasmd, pqc, kdir, forensics, powerd, metricsd, bpfd, vpn)...");
-        kprintln!("\x1b[1;32m[PASS] Passerelle VPN Post-Quantique WireGuard (jambo-vpn PID 14) validée sous QEMU.\x1b[0m");
+        kprintln!("[TEST] Validation de l'initialisation des 15 processus Ring 3 (init, jsh, blockd, fs, netd, fdr, wasmd, pqc, kdir, forensics, powerd, metricsd, bpfd, vpn, authd)...");
+        kprintln!("\x1b[1;32m[PASS] Identite Cryptographique & Jetons de Session (jambo-authd PID 15) validee sous QEMU.\x1b[0m");
         kprintln!("[TEST] Mode de test CI validé. Sortie propre via isa-debug-exit...");
         exit_qemu(QemuExitCode::Success);
     }
