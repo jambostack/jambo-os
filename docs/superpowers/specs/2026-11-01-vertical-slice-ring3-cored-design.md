@@ -126,3 +126,4 @@ Le listing `ps` est porté à **22 processus actifs** :
    - Empaquetage de `/bin/cored` et `/bin/jambo-cored` dans `initrd.tar`.
    - Mise à jour de la bannière vers `v0.3.61`.
    - Harnais `run_test` configuré pour valider le message `[PASS] Capture Crash Dumps ELF64 & Forensique`.
+
