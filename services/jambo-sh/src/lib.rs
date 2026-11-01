@@ -15,6 +15,12 @@ use jambo_bpfd::{
     BpfOpcode, BpfProgramType, BpfRequest, BpfResponse, JamboBpfDaemon, BPF_STATUS_OK,
 };
 #[allow(unused_imports)]
+use jambo_dnsd::{
+    dns_rights, DnsCap, DnsClient, DnsOpcode, DnsRecordData, DnsRequest, DnsResponse, DnsType,
+    JamboDnsDaemon, DNS_STATUS_ERROR, DNS_STATUS_NXDOMAIN, DNS_STATUS_OK, DNS_STATUS_REFUSED,
+    DNS_STATUS_SERVFAIL,
+};
+#[allow(unused_imports)]
 use jambo_forensics::{ForensicsClient, ForensicsOpcode, ForensicsResponse, FORENSICS_STATUS_OK};
 use jambo_kdir::{KdirClient, KdirResponse, KDIR_PROTECTION_SECURED, KDIR_STATUS_OK};
 #[allow(unused_imports)]
@@ -53,6 +59,7 @@ pub struct JamboShell {
     pub prompt_user: &'static str,
     pub commands_executed: u64,
     pub auth_daemon: JamboAuthDaemon,
+    pub dns_daemon: JamboDnsDaemon,
 }
 
 impl Default for JamboShell {
@@ -65,10 +72,13 @@ impl JamboShell {
     pub fn new() -> Self {
         let mut auth_daemon = JamboAuthDaemon::new();
         auth_daemon.init_defaults();
+        let dns_cap = DnsCap::new(libjambo::Handle(74), dns_rights::ALL);
+        let dns_daemon = JamboDnsDaemon::new(dns_cap);
         Self {
             prompt_user: "jambo",
             commands_executed: 0,
             auth_daemon,
+            dns_daemon,
         }
     }
 
@@ -114,6 +124,7 @@ impl JamboShell {
             "bpf" => self.cmd_bpf(args, out),
             "vpn" => self.cmd_vpn(args, out),
             "auth" => self.cmd_auth(args, out),
+            "dns" => self.cmd_dns(args, out),
             _ => self.cmd_not_found(cmd, out),
         }
     }
@@ -122,7 +133,7 @@ impl JamboShell {
         let text = b"Commandes disponibles:\n\
   help        - Affiche cette aide\n\
   sysinfo     - Metriques memoire et uptime du micro-noyau\n\
-  ps          - Liste les 15 processus actifs\n\
+  ps          - Liste les 16 processus actifs\n\
   echo <args> - Affiche le texte sur la console\n\
   clear       - Reinitialise l'ecran du terminal\n\
   reboot      - Eteint ou redemarre la machine virtuelle\n\
@@ -138,7 +149,8 @@ impl JamboShell {
   metrics [status|query|ingest|alerts] - Telemetrie et metrologie Ring 3\n\
   bpf [status|verify|run|filter] - Moteur eBPF, verificateur formel et XDP\n\
   vpn [status|connect|peer|audit] - Passerelle VPN WireGuard Post-Quantique Ring 3\n\
-  auth [status|login|token|revoke] - Identite cryptographique et sessions Ring 3\n";
+  auth [status|login|token|revoke] - Identite cryptographique et sessions Ring 3\n\
+  dns [status|resolve|register|cache|flush] - Resolution DNS souveraine et decouverte de services\n";
         let len = text.len().min(out.len());
         out[..len].copy_from_slice(&text[..len]);
         (ShellStatus::Success, len)
@@ -182,7 +194,7 @@ impl JamboShell {
     }
 
     fn cmd_ps(&self, out: &mut [u8]) -> (ShellStatus, usize) {
-        let text = b"PID  ETAT     COMMANDE\n  1  ACTIF    /bin/init (Superviseur racine)\n  2  ACTIF    /bin/jsh  (Shell interactif UART)\n  3  ACTIF    /bin/blockd (Pilote VirtIO-Block Ring 3)\n  4  ACTIF    /bin/fs   (Serveur de fichiers JamboFS)\n  5  ACTIF    /bin/netd (Demon reseau VirtIO-Net Ring 3)\n  6  ACTIF    /bin/fdr  (Demon FDR Cyber-Resilience Ring 3)\n  7  ACTIF    /bin/wasmd (Moteur WebAssembly/WASI Ring 3)\n  8  ACTIF    /bin/pqc  (Demon Cryptographie Post-Quantique Ring 3)\n  9  ACTIF    /bin/kdir (Demon Integrite Noyau & Pilotes KDIR Ring 3)\n 10  ACTIF    /bin/forensics (Demon Forensique & Acquisition Memoire Ring 3)\n 11  ACTIF    /bin/powerd (Demon Gestion Energie & ACPI Ring 3)\n 12  ACTIF    /bin/metricsd (Demon Metrologie & Observabilite Ring 3)\n 13  ACTIF    /bin/bpfd (Demon eBPF, Verificateur Formel & XDP Ring 3)\n 14  ACTIF    /bin/vpn (Passerelle VPN WireGuard Post-Quantique Ring 3)\n 15  ACTIF    /bin/authd (Demon Identite & Jetons de Session Capabilitaires Ring 3)\n";
+        let text = b"PID  ETAT     COMMANDE\n  1  ACTIF    /bin/init (Superviseur racine)\n  2  ACTIF    /bin/jsh  (Shell interactif UART)\n  3  ACTIF    /bin/blockd (Pilote VirtIO-Block Ring 3)\n  4  ACTIF    /bin/fs   (Serveur de fichiers JamboFS)\n  5  ACTIF    /bin/netd (Demon reseau VirtIO-Net Ring 3)\n  6  ACTIF    /bin/fdr  (Demon FDR Cyber-Resilience Ring 3)\n  7  ACTIF    /bin/wasmd (Moteur WebAssembly/WASI Ring 3)\n  8  ACTIF    /bin/pqc  (Demon Cryptographie Post-Quantique Ring 3)\n  9  ACTIF    /bin/kdir (Demon Integrite Noyau & Pilotes KDIR Ring 3)\n 10  ACTIF    /bin/forensics (Demon Forensique & Acquisition Memoire Ring 3)\n 11  ACTIF    /bin/powerd (Demon Gestion Energie & ACPI Ring 3)\n 12  ACTIF    /bin/metricsd (Demon Metrologie & Observabilite Ring 3)\n 13  ACTIF    /bin/bpfd (Demon eBPF, Verificateur Formel & XDP Ring 3)\n 14  ACTIF    /bin/vpn (Passerelle VPN WireGuard Post-Quantique Ring 3)\n 15  ACTIF    /bin/authd (Demon Identite & Jetons de Session Capabilitaires Ring 3)\n 16  ACTIF    /bin/dnsd (Serveur DNS Souverain & Decouverte de Services Ring 3)\n";
         let len = text.len().min(out.len());
         out[..len].copy_from_slice(&text[..len]);
         (ShellStatus::Success, len)
@@ -2987,6 +2999,292 @@ impl JamboShell {
         (ShellStatus::Success, cursor)
     }
 
+    fn cmd_dns(&mut self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        let subcmd = if args.is_empty() { "status" } else { args[0] };
+        match subcmd {
+            "status" => self.cmd_dns_status(out),
+            "resolve" => self.cmd_dns_resolve(&args[1..], out),
+            "register" => self.cmd_dns_register(&args[1..], out),
+            "cache" => self.cmd_dns_cache(out),
+            "flush" => self.cmd_dns_flush(out),
+            _ => {
+                let msg = b"Usage: dns [status|resolve|register|cache|flush]\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                (ShellStatus::InvalidArgument, len)
+            }
+        }
+    }
+
+    fn cmd_dns_status(&mut self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let mut resp_opt: Option<DnsResponse> = None;
+        for &h in &[
+            16u64, 15u64, 14u64, 13u64, 12u64, 11u64, 10u64, 9u64, 8u64, 7u64, 6u64, 5u64, 4u64,
+            3u64,
+        ] {
+            let client = DnsClient::new(libjambo::Handle(h));
+            if let Ok(resp) = client.get_status() {
+                if resp.status == DNS_STATUS_OK {
+                    resp_opt = Some(resp);
+                    break;
+                }
+            }
+        }
+
+        let resp = resp_opt.unwrap_or_else(|| {
+            let req = DnsRequest::new_status();
+            self.dns_daemon.handle_ipc_request(&req, 0)
+        });
+
+        let queries_total =
+            u32::from_le_bytes([resp.data[0], resp.data[1], resp.data[2], resp.data[3]]);
+        let queries_resolved =
+            u32::from_le_bytes([resp.data[4], resp.data[5], resp.data[6], resp.data[7]]);
+        let nxdomain =
+            u32::from_le_bytes([resp.data[8], resp.data[9], resp.data[10], resp.data[11]]);
+        let refused =
+            u32::from_le_bytes([resp.data[12], resp.data[13], resp.data[14], resp.data[15]]);
+        let active_records =
+            u32::from_le_bytes([resp.data[16], resp.data[17], resp.data[18], resp.data[19]]);
+        let cache_count =
+            u32::from_le_bytes([resp.data[20], resp.data[21], resp.data[22], resp.data[23]]);
+
+        let mut cursor = 0;
+        cursor = append_bytes(
+            out,
+            cursor,
+            b"Resolution de Noms & Decouverte DNS de Grappe (jambo-dnsd PID 16):\n\
+  Operational State : ACTIVE (Sovereign Authority .jambo & Service Discovery)\n\
+  Active Zone Records: ",
+        );
+        cursor = append_u64(out, cursor, active_records as u64);
+        cursor = append_bytes(out, cursor, b"\n  Cached Entries    : ");
+        cursor = append_u64(out, cursor, cache_count as u64);
+        cursor = append_bytes(out, cursor, b"\n  Total Queries     : ");
+        cursor = append_u64(out, cursor, queries_total as u64);
+        cursor = append_bytes(out, cursor, b"\n  Resolved Queries  : ");
+        cursor = append_u64(out, cursor, queries_resolved as u64);
+        cursor = append_bytes(out, cursor, b"\n  NXDomain Responses: ");
+        cursor = append_u64(out, cursor, nxdomain as u64);
+        cursor = append_bytes(out, cursor, b"\n  Refused Queries   : ");
+        cursor = append_u64(out, cursor, refused as u64);
+        cursor = append_bytes(out, cursor, b"\n");
+
+        (ShellStatus::Success, cursor)
+    }
+
+    fn cmd_dns_resolve(&mut self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if args.is_empty() {
+            let msg = b"dns resolve: missing domain name\nUsage: dns resolve <domain> [type]\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            return (ShellStatus::InvalidArgument, len);
+        }
+
+        let domain = args[0];
+        let rtype: u32 = if args.len() > 1 {
+            match args[1] {
+                "a" | "A" => 1,
+                "cname" | "CNAME" => 5,
+                "srv" | "SRV" => 33,
+                "aaaa" | "AAAA" => 28,
+                "txt" | "TXT" => 16,
+                _ => 1,
+            }
+        } else {
+            1
+        };
+
+        let mut resp_opt: Option<DnsResponse> = None;
+        for &h in &[
+            16u64, 15u64, 14u64, 13u64, 12u64, 11u64, 10u64, 9u64, 8u64, 7u64, 6u64, 5u64, 4u64,
+            3u64,
+        ] {
+            let client = DnsClient::new(libjambo::Handle(h));
+            if let Ok(resp) = client.resolve(domain, rtype) {
+                if resp.status == DNS_STATUS_OK || resp.status == DNS_STATUS_NXDOMAIN {
+                    resp_opt = Some(resp);
+                    break;
+                }
+            }
+        }
+
+        let resp = resp_opt.unwrap_or_else(|| {
+            let req = DnsRequest::new_resolve(domain, rtype);
+            self.dns_daemon.handle_ipc_request(&req, 0)
+        });
+
+        let mut cursor = 0;
+        if resp.status == DNS_STATUS_OK {
+            cursor = append_bytes(out, cursor, b"dns: resolved '");
+            cursor = append_bytes(out, cursor, domain.as_bytes());
+            cursor = append_bytes(out, cursor, b"' -> ");
+            if resp.rec_type == 1 {
+                let ip = [resp.data[0], resp.data[1], resp.data[2], resp.data[3]];
+                cursor = append_ipv4(out, cursor, &ip);
+            } else if resp.rec_type == 33 {
+                let priority = u16::from_le_bytes([resp.data[0], resp.data[1]]);
+                let weight = u16::from_le_bytes([resp.data[2], resp.data[3]]);
+                let port = u16::from_le_bytes([resp.data[4], resp.data[5]]);
+                cursor = append_bytes(out, cursor, b"port ");
+                cursor = append_u64(out, cursor, port as u64);
+                cursor = append_bytes(out, cursor, b" (prio ");
+                cursor = append_u64(out, cursor, priority as u64);
+                cursor = append_bytes(out, cursor, b", weight ");
+                cursor = append_u64(out, cursor, weight as u64);
+                cursor = append_bytes(out, cursor, b") target ");
+                let len = resp.data[6..].iter().position(|&b| b == 0).unwrap_or(42);
+                cursor = append_bytes(out, cursor, &resp.data[6..6 + len]);
+            } else {
+                let len = resp.data.iter().position(|&b| b == 0).unwrap_or(48);
+                cursor = append_bytes(out, cursor, &resp.data[..len]);
+            }
+            cursor = append_bytes(out, cursor, b" (TTL ");
+            cursor = append_u64(out, cursor, resp.ttl as u64);
+            cursor = append_bytes(out, cursor, b"s)\n");
+            (ShellStatus::Success, cursor)
+        } else if resp.status == DNS_STATUS_NXDOMAIN {
+            cursor = append_bytes(out, cursor, b"dns: domain '");
+            cursor = append_bytes(out, cursor, domain.as_bytes());
+            cursor = append_bytes(out, cursor, b"' not found (NXDOMAIN)\n");
+            (ShellStatus::Success, cursor)
+        } else {
+            cursor = append_bytes(out, cursor, b"dns: resolution failed for '");
+            cursor = append_bytes(out, cursor, domain.as_bytes());
+            cursor = append_bytes(out, cursor, b"'\n");
+            (ShellStatus::ExecutionFailed, cursor)
+        }
+    }
+
+    fn cmd_dns_register(&mut self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if args.len() < 2 {
+            let msg = b"dns register: missing domain and/or ip\nUsage: dns register <domain> <ip> [ttl]\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            return (ShellStatus::InvalidArgument, len);
+        }
+
+        let domain = args[0];
+        let ip = match parse_ipv4(args[1]) {
+            Some(parsed) => parsed,
+            None => {
+                let mut cursor = 0;
+                cursor = append_bytes(out, cursor, b"dns register: invalid IPv4 address '");
+                cursor = append_bytes(out, cursor, args[1].as_bytes());
+                cursor = append_bytes(out, cursor, b"'\n");
+                return (ShellStatus::InvalidArgument, cursor);
+            }
+        };
+
+        let ttl = if args.len() > 2 {
+            let mut val: u32 = 0;
+            for &b in args[2].as_bytes() {
+                if b.is_ascii_digit() {
+                    val = val.saturating_mul(10).saturating_add((b - b'0') as u32);
+                }
+            }
+            if val == 0 {
+                300
+            } else {
+                val
+            }
+        } else {
+            300
+        };
+
+        let mut resp_opt: Option<DnsResponse> = None;
+        for &h in &[
+            16u64, 15u64, 14u64, 13u64, 12u64, 11u64, 10u64, 9u64, 8u64, 7u64, 6u64, 5u64, 4u64,
+            3u64,
+        ] {
+            let client = DnsClient::new(libjambo::Handle(h));
+            if let Ok(resp) = client.register(domain, ip, ttl) {
+                if resp.status == DNS_STATUS_OK {
+                    resp_opt = Some(resp);
+                    break;
+                }
+            }
+        }
+
+        let resp = resp_opt.unwrap_or_else(|| {
+            let req = DnsRequest::new_register(domain, ip, ttl);
+            self.dns_daemon.handle_ipc_request(&req, 0)
+        });
+
+        let mut cursor = 0;
+        if resp.status == DNS_STATUS_OK {
+            cursor = append_bytes(out, cursor, b"dns: successfully registered '");
+            cursor = append_bytes(out, cursor, domain.as_bytes());
+            cursor = append_bytes(out, cursor, b"' -> ");
+            cursor = append_ipv4(out, cursor, &ip);
+            cursor = append_bytes(out, cursor, b" (TTL ");
+            cursor = append_u64(out, cursor, resp.ttl as u64);
+            cursor = append_bytes(out, cursor, b"s)\n");
+            (ShellStatus::Success, cursor)
+        } else {
+            cursor = append_bytes(out, cursor, b"dns: failed to register '");
+            cursor = append_bytes(out, cursor, domain.as_bytes());
+            cursor = append_bytes(out, cursor, b"'\n");
+            (ShellStatus::ExecutionFailed, cursor)
+        }
+    }
+
+    fn cmd_dns_cache(&mut self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let mut resp_opt: Option<DnsResponse> = None;
+        for &h in &[
+            16u64, 15u64, 14u64, 13u64, 12u64, 11u64, 10u64, 9u64, 8u64, 7u64, 6u64, 5u64, 4u64,
+            3u64,
+        ] {
+            let client = DnsClient::new(libjambo::Handle(h));
+            if let Ok(resp) = client.get_cache() {
+                if resp.status == DNS_STATUS_OK {
+                    resp_opt = Some(resp);
+                    break;
+                }
+            }
+        }
+
+        let resp = resp_opt.unwrap_or_else(|| {
+            let req = DnsRequest::new_get_cache();
+            self.dns_daemon.handle_ipc_request(&req, 0)
+        });
+
+        let count = u32::from_le_bytes([resp.data[0], resp.data[1], resp.data[2], resp.data[3]]);
+        let mut cursor = 0;
+        cursor = append_bytes(out, cursor, b"dns cache: ");
+        cursor = append_u64(out, cursor, count as u64);
+        cursor = append_bytes(out, cursor, b" active cached entries\n");
+        (ShellStatus::Success, cursor)
+    }
+
+    fn cmd_dns_flush(&mut self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let mut resp_opt: Option<DnsResponse> = None;
+        for &h in &[
+            16u64, 15u64, 14u64, 13u64, 12u64, 11u64, 10u64, 9u64, 8u64, 7u64, 6u64, 5u64, 4u64,
+            3u64,
+        ] {
+            let client = DnsClient::new(libjambo::Handle(h));
+            if let Ok(resp) = client.flush() {
+                if resp.status == DNS_STATUS_OK {
+                    resp_opt = Some(resp);
+                    break;
+                }
+            }
+        }
+
+        let resp = resp_opt.unwrap_or_else(|| {
+            let req = DnsRequest::new_flush();
+            self.dns_daemon.handle_ipc_request(&req, 0)
+        });
+
+        let flushed = u32::from_le_bytes([resp.data[0], resp.data[1], resp.data[2], resp.data[3]]);
+        let mut cursor = 0;
+        cursor = append_bytes(out, cursor, b"dns cache: flushed ");
+        cursor = append_u64(out, cursor, flushed as u64);
+        cursor = append_bytes(out, cursor, b" entries\n");
+        (ShellStatus::Success, cursor)
+    }
+
     fn cmd_not_found(&self, cmd: &str, out: &mut [u8]) -> (ShellStatus, usize) {
         let mut cursor = 0;
         let pfx = b"jsh: command not found: ";
@@ -3201,9 +3499,9 @@ mod tests {
     }
 
     #[test]
-    fn test_ps_contains_15_processes() {
+    fn test_ps_contains_16_processes() {
         let mut shell = JamboShell::new();
-        let mut out = [0u8; 1024];
+        let mut out = [0u8; 2048];
 
         let (st, len) = shell.execute_line("ps", &mut out);
         assert_eq!(st, ShellStatus::Success);
@@ -3229,6 +3527,9 @@ mod tests {
         assert!(s.contains(
             "15  ACTIF    /bin/authd (Demon Identite & Jetons de Session Capabilitaires Ring 3)"
         ));
+        assert!(s.contains(
+            "16  ACTIF    /bin/dnsd (Serveur DNS Souverain & Decouverte de Services Ring 3)"
+        ));
     }
 
     #[test]
@@ -3239,7 +3540,7 @@ mod tests {
         let (st, len) = shell.execute_line("help", &mut out);
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
-        assert!(s.contains("15 processus actifs"));
+        assert!(s.contains("16 processus actifs"));
         assert!(s.contains("fdr [status|verify|pcr]"));
         assert!(s.contains("wasm [status|run|info]"));
         assert!(s.contains("pqc [status|kex|sign|audit]"));
@@ -3250,6 +3551,7 @@ mod tests {
         assert!(s.contains("bpf [status|verify|run|filter]"));
         assert!(s.contains("vpn [status|connect|peer|audit]"));
         assert!(s.contains("auth [status|login|token|revoke]"));
+        assert!(s.contains("dns [status|resolve|register|cache|flush]"));
     }
 
     #[test]
@@ -4217,5 +4519,108 @@ mod tests {
         assert_eq!(st_rev, ShellStatus::InvalidArgument);
         let s_rev = core::str::from_utf8(&out[..len_rev]).unwrap();
         assert!(s_rev.contains("auth: invalid session id 'bad_id'"));
+    }
+
+    #[test]
+    fn test_dns_status() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 1024];
+
+        let (st, len) = shell.execute_line("dns status", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("Resolution de Noms & Decouverte DNS de Grappe (jambo-dnsd PID 16):"));
+        assert!(s.contains("Operational State : ACTIVE"));
+        assert!(s.contains("Active Zone Records:"));
+
+        // 'dns' sans argument utilise 'status' par defaut
+        let (st2, len2) = shell.execute_line("dns", &mut out);
+        assert_eq!(st2, ShellStatus::Success);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("Resolution de Noms & Decouverte DNS de Grappe (jambo-dnsd PID 16):"));
+    }
+
+    #[test]
+    fn test_dns_resolve() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 1024];
+
+        // 1. Resolution dns.jambo -> 10.0.0.53
+        let (st, len) = shell.execute_line("dns resolve dns.jambo", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("dns: resolved 'dns.jambo' -> 10.0.0.53"));
+
+        // 2. Resolution gateway.jambo -> 10.0.0.1
+        let (st2, len2) = shell.execute_line("dns resolve gateway.jambo", &mut out);
+        assert_eq!(st2, ShellStatus::Success);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("dns: resolved 'gateway.jambo' -> 10.0.0.1"));
+
+        // 3. Resolution domaine inconnu -> NXDOMAIN
+        let (st3, len3) = shell.execute_line("dns resolve unknown.jambo", &mut out);
+        assert_eq!(st3, ShellStatus::Success);
+        let s3 = core::str::from_utf8(&out[..len3]).unwrap();
+        assert!(s3.contains("dns: domain 'unknown.jambo' not found (NXDOMAIN)"));
+    }
+
+    #[test]
+    fn test_dns_register() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 1024];
+
+        // 1. Enregistrement d'un nouvel hote
+        let (st, len) = shell.execute_line("dns register myhost.jambo 10.0.2.15 600", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("dns: successfully registered 'myhost.jambo' -> 10.0.2.15 (TTL 600s)"));
+
+        // 2. Resolution immediate du nouvel hote
+        let (st2, len2) = shell.execute_line("dns resolve myhost.jambo", &mut out);
+        assert_eq!(st2, ShellStatus::Success);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("dns: resolved 'myhost.jambo' -> 10.0.2.15"));
+    }
+
+    #[test]
+    fn test_dns_cache_and_flush() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 1024];
+
+        // 1. Consultation cache
+        let (st, len) = shell.execute_line("dns cache", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("dns cache:"));
+
+        // 2. Purge cache
+        let (st2, len2) = shell.execute_line("dns flush", &mut out);
+        assert_eq!(st2, ShellStatus::Success);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("dns cache: flushed"));
+    }
+
+    #[test]
+    fn test_dns_invalid() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 1024];
+
+        // 1. Sous-commande inconnue
+        let (st, len) = shell.execute_line("dns unknown", &mut out);
+        assert_eq!(st, ShellStatus::InvalidArgument);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("Usage: dns [status|resolve|register|cache|flush]"));
+
+        // 2. Resolve sans domaine
+        let (st2, len2) = shell.execute_line("dns resolve", &mut out);
+        assert_eq!(st2, ShellStatus::InvalidArgument);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("dns resolve: missing domain name"));
+
+        // 3. Register avec IP invalide
+        let (st3, len3) = shell.execute_line("dns register bad.jambo 999.999.999.999", &mut out);
+        assert_eq!(st3, ShellStatus::InvalidArgument);
+        let s3 = core::str::from_utf8(&out[..len3]).unwrap();
+        assert!(s3.contains("dns register: invalid IPv4 address"));
     }
 }
