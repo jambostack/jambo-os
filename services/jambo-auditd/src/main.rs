@@ -86,10 +86,7 @@ pub extern "C" fn _start() -> ! {
         "auto-test: wrong anomaly type"
     );
     assert!(alert.suspect_pid == 42, "auto-test: wrong suspect PID");
-    assert!(
-        alert.incident_count == 3,
-        "auto-test: wrong incident count"
-    );
+    assert!(alert.incident_count == 3, "auto-test: wrong incident count");
 
     println("[AUDITD] Auto-test reussi : chaine cryptographique scellee, detection de falsification et heuristique d'anomalies validees.");
     println("[AUDITD] Demon d'audit de securite (jambo-auditd PID 18) pret.");

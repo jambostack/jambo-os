@@ -3531,8 +3531,8 @@ impl JamboShell {
         let req = AuditRequest::new(AuditOpcode::GetStatus, &cap);
         let mut resp_opt: Option<AuditResponse> = None;
         for &h in &[
-            18u64, 17u64, 16u64, 15u64, 14u64, 13u64, 12u64, 11u64, 10u64, 9u64, 8u64, 7u64,
-            6u64, 5u64, 4u64, 3u64,
+            18u64, 17u64, 16u64, 15u64, 14u64, 13u64, 12u64, 11u64, 10u64, 9u64, 8u64, 7u64, 6u64,
+            5u64, 4u64, 3u64,
         ] {
             let client = AuditClient::new(libjambo::Handle(h));
             if let Ok(resp) = client.call(&req) {
@@ -3543,9 +3543,8 @@ impl JamboShell {
             }
         }
 
-        let resp = resp_opt.unwrap_or_else(|| {
-            self.audit_daemon.handle_ipc_request(&req, 1_000_000)
-        });
+        let resp =
+            resp_opt.unwrap_or_else(|| self.audit_daemon.handle_ipc_request(&req, 1_000_000));
 
         let mut c = 0;
         c = append_bytes(
@@ -3634,8 +3633,8 @@ impl JamboShell {
 
         let mut resp_opt: Option<AuditResponse> = None;
         for &h in &[
-            18u64, 17u64, 16u64, 15u64, 14u64, 13u64, 12u64, 11u64, 10u64, 9u64, 8u64, 7u64,
-            6u64, 5u64, 4u64, 3u64,
+            18u64, 17u64, 16u64, 15u64, 14u64, 13u64, 12u64, 11u64, 10u64, 9u64, 8u64, 7u64, 6u64,
+            5u64, 4u64, 3u64,
         ] {
             let client = AuditClient::new(libjambo::Handle(h));
             if let Ok(resp) = client.call(&req) {
@@ -3646,9 +3645,8 @@ impl JamboShell {
             }
         }
 
-        let resp = resp_opt.unwrap_or_else(|| {
-            self.audit_daemon.handle_ipc_request(&req, 1_000_000)
-        });
+        let resp =
+            resp_opt.unwrap_or_else(|| self.audit_daemon.handle_ipc_request(&req, 1_000_000));
 
         let mut c = 0;
         if resp.status == 0 {
@@ -3677,8 +3675,8 @@ impl JamboShell {
         let req = AuditRequest::new(AuditOpcode::VerifyIntegrity, &cap);
         let mut resp_opt: Option<AuditResponse> = None;
         for &h in &[
-            18u64, 17u64, 16u64, 15u64, 14u64, 13u64, 12u64, 11u64, 10u64, 9u64, 8u64, 7u64,
-            6u64, 5u64, 4u64, 3u64,
+            18u64, 17u64, 16u64, 15u64, 14u64, 13u64, 12u64, 11u64, 10u64, 9u64, 8u64, 7u64, 6u64,
+            5u64, 4u64, 3u64,
         ] {
             let client = AuditClient::new(libjambo::Handle(h));
             if let Ok(resp) = client.call(&req) {
@@ -3689,9 +3687,8 @@ impl JamboShell {
             }
         }
 
-        let resp = resp_opt.unwrap_or_else(|| {
-            self.audit_daemon.handle_ipc_request(&req, 1_000_000)
-        });
+        let resp =
+            resp_opt.unwrap_or_else(|| self.audit_daemon.handle_ipc_request(&req, 1_000_000));
 
         let mut c = 0;
         c = append_bytes(
@@ -3719,8 +3716,8 @@ impl JamboShell {
         let req = AuditRequest::new(AuditOpcode::QueryLatest, &cap);
         let mut resp_opt: Option<AuditResponse> = None;
         for &h in &[
-            18u64, 17u64, 16u64, 15u64, 14u64, 13u64, 12u64, 11u64, 10u64, 9u64, 8u64, 7u64,
-            6u64, 5u64, 4u64, 3u64,
+            18u64, 17u64, 16u64, 15u64, 14u64, 13u64, 12u64, 11u64, 10u64, 9u64, 8u64, 7u64, 6u64,
+            5u64, 4u64, 3u64,
         ] {
             let client = AuditClient::new(libjambo::Handle(h));
             if let Ok(resp) = client.call(&req) {
@@ -3731,9 +3728,8 @@ impl JamboShell {
             }
         }
 
-        let resp = resp_opt.unwrap_or_else(|| {
-            self.audit_daemon.handle_ipc_request(&req, 1_000_000)
-        });
+        let resp =
+            resp_opt.unwrap_or_else(|| self.audit_daemon.handle_ipc_request(&req, 1_000_000));
 
         if resp.total_recorded == 0 {
             let msg = b"audit tail: ledger is empty\n";
@@ -3743,7 +3739,11 @@ impl JamboShell {
         }
 
         let mut c = 0;
-        c = append_bytes(out, c, b"Derniere entree scellee (audit tail):\n  Seq ID  : #");
+        c = append_bytes(
+            out,
+            c,
+            b"Derniere entree scellee (audit tail):\n  Seq ID  : #",
+        );
         c = append_u64(out, c, resp.last_seq);
         c = append_bytes(out, c, b"\n  Hash    : ");
         for &b in resp.last_hash.iter() {
@@ -3769,8 +3769,8 @@ impl JamboShell {
         let req = AuditRequest::new(AuditOpcode::ScanAnomalies, &cap);
         let mut resp_opt: Option<AuditResponse> = None;
         for &h in &[
-            18u64, 17u64, 16u64, 15u64, 14u64, 13u64, 12u64, 11u64, 10u64, 9u64, 8u64, 7u64,
-            6u64, 5u64, 4u64, 3u64,
+            18u64, 17u64, 16u64, 15u64, 14u64, 13u64, 12u64, 11u64, 10u64, 9u64, 8u64, 7u64, 6u64,
+            5u64, 4u64, 3u64,
         ] {
             let client = AuditClient::new(libjambo::Handle(h));
             if let Ok(resp) = client.call(&req) {
@@ -3781,9 +3781,8 @@ impl JamboShell {
             }
         }
 
-        let resp = resp_opt.unwrap_or_else(|| {
-            self.audit_daemon.handle_ipc_request(&req, 1_000_000)
-        });
+        let resp =
+            resp_opt.unwrap_or_else(|| self.audit_daemon.handle_ipc_request(&req, 1_000_000));
 
         let mut c = 0;
         c = append_bytes(out, c, b"[AUDIT] Heuristic security anomaly scan:\n");
@@ -4047,14 +4046,10 @@ fn parse_audit_severity(s: &str) -> Option<AuditSeverity> {
         s if s.eq_ignore_ascii_case("warn") || s.eq_ignore_ascii_case("warning") => {
             Some(AuditSeverity::Warning)
         }
-        s if s.eq_ignore_ascii_case("violation")
-            || s.eq_ignore_ascii_case("securityviolation") =>
-        {
+        s if s.eq_ignore_ascii_case("violation") || s.eq_ignore_ascii_case("securityviolation") => {
             Some(AuditSeverity::SecurityViolation)
         }
-        s if s.eq_ignore_ascii_case("critical")
-            || s.eq_ignore_ascii_case("criticalalert") =>
-        {
+        s if s.eq_ignore_ascii_case("critical") || s.eq_ignore_ascii_case("criticalalert") => {
             Some(AuditSeverity::CriticalAlert)
         }
         _ => None,
@@ -4166,9 +4161,7 @@ mod tests {
         assert!(
             s.contains("17  ACTIF    /bin/timed (Demon Synchronisation Horlogere PTP/NTP Ring 3)")
         );
-        assert!(s.contains(
-            "18  ACTIF    /bin/auditd (Grand Livre d'Audit Cryptographique Ring 3)"
-        ));
+        assert!(s.contains("18  ACTIF    /bin/auditd (Grand Livre d'Audit Cryptographique Ring 3)"));
     }
 
     #[test]
@@ -5365,7 +5358,9 @@ mod tests {
         let (st, len) = shell.execute_line("audit status", &mut out);
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
-        assert!(s.contains("Grand Livre d'Audit Cryptographique & Observabilite (jambo-auditd PID 18):"));
+        assert!(s.contains(
+            "Grand Livre d'Audit Cryptographique & Observabilite (jambo-auditd PID 18):"
+        ));
         assert!(s.contains("Total Recorded    : 3 events"));
         assert!(s.contains("Last Sealed Seq   : #3"));
         assert!(s.contains("Chain Integrity   : VERIFIED (100% Intact)"));
@@ -5383,7 +5378,10 @@ mod tests {
         let mut shell = JamboShell::new();
         let mut out = [0u8; 1024];
 
-        let (st, len) = shell.execute_line("audit record cspace info Kernel page tables synced", &mut out);
+        let (st, len) = shell.execute_line(
+            "audit record cspace info Kernel page tables synced",
+            &mut out,
+        );
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains("audit: recorded event #4 [CSpace:INFO] hash="));
