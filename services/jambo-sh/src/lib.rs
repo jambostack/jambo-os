@@ -52,6 +52,11 @@ use jambo_vpn::{
     VpnResponse, VPN_STATUS_HANDSHAKE_FAILED, VPN_STATUS_NO_ROUTE, VPN_STATUS_OK,
     VPN_STATUS_PEER_NOT_FOUND, VPN_STATUS_PERMISSION_DENIED,
 };
+#[allow(unused_imports)]
+use jambo_walld::{
+    ip_proto, wall_rights, ConntrackState, JamboFirewall, SecurityZone, WallAction, WallCap,
+    WallClient, WallOpcode, WallRequest, WallResponse,
+};
 use jambo_wasmd::{wasm_rights, WasmdClient, WasmdResponse, WASMD_STATUS_OK};
 use libjambo::{sys_info, syscall6, SyscallNumber};
 
@@ -72,6 +77,7 @@ pub struct JamboShell {
     pub dns_daemon: JamboDnsDaemon,
     pub time_daemon: JamboTimeDaemon,
     pub audit_daemon: JamboAuditDaemon,
+    pub wall_daemon: JamboFirewall,
 }
 
 impl Default for JamboShell {
@@ -90,6 +96,8 @@ impl JamboShell {
         time_daemon.init_defaults();
         let mut audit_daemon = JamboAuditDaemon::new();
         audit_daemon.init_defaults();
+        let mut wall_daemon = JamboFirewall::new();
+        wall_daemon.init_defaults();
         Self {
             prompt_user: "jambo",
             commands_executed: 0,
@@ -97,6 +105,7 @@ impl JamboShell {
             dns_daemon,
             time_daemon,
             audit_daemon,
+            wall_daemon,
         }
     }
 
@@ -145,6 +154,7 @@ impl JamboShell {
             "dns" => self.cmd_dns(args, out),
             "time" => self.cmd_time(args, out),
             "audit" => self.cmd_audit(args, out),
+            "wall" => self.cmd_wall(args, out),
             _ => self.cmd_not_found(cmd, out),
         }
     }
@@ -153,7 +163,7 @@ impl JamboShell {
         let text = b"Commandes disponibles:\n\
   help        - Affiche cette aide\n\
   sysinfo     - Metriques memoire et uptime du micro-noyau\n\
-  ps          - Liste les 18 processus actifs\n\
+  ps          - Liste les 19 processus actifs\n\
   echo <args> - Affiche le texte sur la console\n\
   clear       - Reinitialise l'ecran du terminal\n\
   reboot      - Eteint ou redemarre la machine virtuelle\n\
@@ -172,7 +182,8 @@ impl JamboShell {
   auth [status|login|token|revoke] - Identite cryptographique et sessions Ring 3\n\
   dns [status|resolve|register|cache|flush] - Resolution DNS souveraine et decouverte de services\n\
   time [status|now|sync|adjust|step] - Synchronisation horlogere PTP/NTP et temps monotone\n\
-  audit [status|record|verify|tail|scan] - Grand livre d'audit cryptographique et observabilite\n";
+  audit [status|record|verify|tail|scan] - Grand livre d'audit cryptographique et observabilite\n\
+  wall [status|conntrack|rule|blocked|flush] - Pare-feu d'etat Zero-Trust et table Conntrack\n";
         let len = text.len().min(out.len());
         out[..len].copy_from_slice(&text[..len]);
         (ShellStatus::Success, len)
@@ -216,7 +227,7 @@ impl JamboShell {
     }
 
     fn cmd_ps(&self, out: &mut [u8]) -> (ShellStatus, usize) {
-        let text = b"PID  ETAT     COMMANDE\n  1  ACTIF    /bin/init (Superviseur racine)\n  2  ACTIF    /bin/jsh  (Shell interactif UART)\n  3  ACTIF    /bin/blockd (Pilote VirtIO-Block Ring 3)\n  4  ACTIF    /bin/fs   (Serveur de fichiers JamboFS)\n  5  ACTIF    /bin/netd (Demon reseau VirtIO-Net Ring 3)\n  6  ACTIF    /bin/fdr  (Demon FDR Cyber-Resilience Ring 3)\n  7  ACTIF    /bin/wasmd (Moteur WebAssembly/WASI Ring 3)\n  8  ACTIF    /bin/pqc  (Demon Cryptographie Post-Quantique Ring 3)\n  9  ACTIF    /bin/kdir (Demon Integrite Noyau & Pilotes KDIR Ring 3)\n 10  ACTIF    /bin/forensics (Demon Forensique & Acquisition Memoire Ring 3)\n 11  ACTIF    /bin/powerd (Demon Gestion Energie & ACPI Ring 3)\n 12  ACTIF    /bin/metricsd (Demon Metrologie & Observabilite Ring 3)\n 13  ACTIF    /bin/bpfd (Demon eBPF, Verificateur Formel & XDP Ring 3)\n 14  ACTIF    /bin/vpn (Passerelle VPN WireGuard Post-Quantique Ring 3)\n 15  ACTIF    /bin/authd (Demon Identite & Jetons de Session Capabilitaires Ring 3)\n 16  ACTIF    /bin/dnsd (Serveur DNS Souverain & Decouverte de Services Ring 3)\n 17  ACTIF    /bin/timed (Demon Synchronisation Horlogere PTP/NTP Ring 3)\n 18  ACTIF    /bin/auditd (Grand Livre d'Audit Cryptographique Ring 3)\n";
+        let text = b"PID  ETAT     COMMANDE\n  1  ACTIF    /bin/init (Superviseur racine)\n  2  ACTIF    /bin/jsh  (Shell interactif UART)\n  3  ACTIF    /bin/blockd (Pilote VirtIO-Block Ring 3)\n  4  ACTIF    /bin/fs   (Serveur de fichiers JamboFS)\n  5  ACTIF    /bin/netd (Demon reseau VirtIO-Net Ring 3)\n  6  ACTIF    /bin/fdr  (Demon FDR Cyber-Resilience Ring 3)\n  7  ACTIF    /bin/wasmd (Moteur WebAssembly/WASI Ring 3)\n  8  ACTIF    /bin/pqc  (Demon Cryptographie Post-Quantique Ring 3)\n  9  ACTIF    /bin/kdir (Demon Integrite Noyau & Pilotes KDIR Ring 3)\n 10  ACTIF    /bin/forensics (Demon Forensique & Acquisition Memoire Ring 3)\n 11  ACTIF    /bin/powerd (Demon Gestion Energie & ACPI Ring 3)\n 12  ACTIF    /bin/metricsd (Demon Metrologie & Observabilite Ring 3)\n 13  ACTIF    /bin/bpfd (Demon eBPF, Verificateur Formel & XDP Ring 3)\n 14  ACTIF    /bin/vpn (Passerelle VPN WireGuard Post-Quantique Ring 3)\n 15  ACTIF    /bin/authd (Demon Identite & Jetons de Session Capabilitaires Ring 3)\n 16  ACTIF    /bin/dnsd (Serveur DNS Souverain & Decouverte de Services Ring 3)\n 17  ACTIF    /bin/timed (Demon Synchronisation Horlogere PTP/NTP Ring 3)\n 18  ACTIF    /bin/auditd (Grand Livre d'Audit Cryptographique Ring 3)\n 19  ACTIF    /bin/walld (Pare-Feu d'Etat & Synchronisation Conntrack Ring 3)\n";
         let len = text.len().min(out.len());
         out[..len].copy_from_slice(&text[..len]);
         (ShellStatus::Success, len)
@@ -3818,6 +3829,306 @@ impl JamboShell {
         cursor = append_bytes(out, cursor, b"\n");
         (ShellStatus::CommandNotFound, cursor)
     }
+
+    fn cmd_wall(&mut self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        let subcmd = if args.is_empty() { "status" } else { args[0] };
+        match subcmd {
+            "status" => self.cmd_wall_status(out),
+            "conntrack" => self.cmd_wall_conntrack(out),
+            "rule" => self.cmd_wall_rule(&args[1..], out),
+            "blocked" => self.cmd_wall_blocked(out),
+            "flush" => self.cmd_wall_flush(out),
+            _ => {
+                let msg = b"Usage: wall [status|conntrack|rule|blocked|flush]\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                (ShellStatus::InvalidArgument, len)
+            }
+        }
+    }
+
+    fn cmd_wall_status(&mut self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let req = WallRequest::new_status();
+        let mut resp_opt: Option<WallResponse> = None;
+        for &h in &[
+            19u64, 18u64, 17u64, 16u64, 15u64, 14u64, 13u64, 12u64, 11u64, 10u64, 9u64, 8u64, 7u64,
+            6u64, 5u64, 4u64, 3u64,
+        ] {
+            let client = WallClient::new(libjambo::Handle(h));
+            if let Ok(resp) = client.call(&req) {
+                if resp.status == 0 {
+                    resp_opt = Some(resp);
+                    break;
+                }
+            }
+        }
+
+        let resp = resp_opt.unwrap_or_else(|| self.wall_daemon.handle_ipc_request(&req, 1_000_000));
+
+        let mut c = 0;
+        c = append_bytes(
+            out,
+            c,
+            b"Pare-Feu d'Etat & Synchronisation Conntrack (jambo-walld PID 19):\n  Operational State : ACTIVE (Stateful Inspection & Zero-Trust Ring 3)\n  Total Rules       : ",
+        );
+        c = append_u64(out, c, resp.total_rules as u64);
+        c = append_bytes(out, c, b"\n  Active Conntrack  : ");
+        c = append_u64(out, c, resp.active_conntrack as u64);
+        c = append_bytes(out, c, b"\n  Packets Inspected : ");
+        c = append_u64(out, c, resp.packets_inspected);
+        c = append_bytes(out, c, b"\n  Packets Dropped   : ");
+        c = append_u64(out, c, resp.packets_dropped);
+        c = append_bytes(out, c, b"\n  Dynamic Blocks    : ");
+        c = append_u64(out, c, resp.dynamic_blocks as u64);
+        c = append_bytes(out, c, b"\n");
+        (ShellStatus::Success, c)
+    }
+
+    fn cmd_wall_conntrack(&self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let count = self.wall_daemon.conntrack.active_count();
+        if count == 0 {
+            let msg = b"Table conntrack: 0 session active\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            return (ShellStatus::Success, len);
+        }
+
+        let mut c = 0;
+        c = append_bytes(out, c, b"Table Conntrack (sessions actives):\n");
+        for entry in self.wall_daemon.conntrack.entries.iter() {
+            if !entry.is_active {
+                continue;
+            }
+            c = append_bytes(out, c, b"  proto=");
+            match entry.tuple.proto {
+                ip_proto::TCP => c = append_bytes(out, c, b"TCP"),
+                ip_proto::UDP => c = append_bytes(out, c, b"UDP"),
+                ip_proto::ICMP => c = append_bytes(out, c, b"ICMP"),
+                other => c = append_u64(out, c, other as u64),
+            }
+            c = append_bytes(out, c, b" src=");
+            c = append_ipv4(out, c, &entry.tuple.src_ip);
+            c = append_bytes(out, c, b":");
+            c = append_u64(out, c, entry.tuple.src_port as u64);
+            c = append_bytes(out, c, b" dst=");
+            c = append_ipv4(out, c, &entry.tuple.dst_ip);
+            c = append_bytes(out, c, b":");
+            c = append_u64(out, c, entry.tuple.dst_port as u64);
+            c = append_bytes(out, c, b" state=");
+            c = append_bytes(out, c, entry.state.as_str().as_bytes());
+            c = append_bytes(out, c, b" ttl=");
+            c = append_u64(out, c, entry.timeout_ticks);
+            c = append_bytes(out, c, b"s\n");
+        }
+        (ShellStatus::Success, c)
+    }
+
+    fn cmd_wall_rule(&mut self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if args.is_empty() {
+            let msg = b"Usage: wall rule [list|add <name> <action> <proto> <dport>]\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            return (ShellStatus::InvalidArgument, len);
+        }
+
+        match args[0] {
+            "list" => self.cmd_wall_rule_list(out),
+            "add" => self.cmd_wall_rule_add(&args[1..], out),
+            _ => {
+                let msg = b"Usage: wall rule [list|add <name> <action> <proto> <dport>]\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                (ShellStatus::InvalidArgument, len)
+            }
+        }
+    }
+
+    fn cmd_wall_rule_list(&self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let mut c = 0;
+        c = append_bytes(out, c, b"Regles du Pare-Feu (jambo-walld):\n");
+        let mut displayed = 0;
+        for rule in self.wall_daemon.rules.iter() {
+            if !rule.is_active {
+                continue;
+            }
+            displayed += 1;
+            c = append_bytes(out, c, b"  #");
+            c = append_u64(out, c, rule.id as u64);
+            c = append_bytes(out, c, b" [");
+            c = append_bytes(out, c, rule.name_as_str().as_bytes());
+            c = append_bytes(out, c, b"] action=");
+            c = append_bytes(out, c, rule.action.as_str().as_bytes());
+            c = append_bytes(out, c, b" proto=");
+            match rule.proto {
+                Some(ip_proto::TCP) => c = append_bytes(out, c, b"TCP"),
+                Some(ip_proto::UDP) => c = append_bytes(out, c, b"UDP"),
+                Some(ip_proto::ICMP) => c = append_bytes(out, c, b"ICMP"),
+                Some(p) => c = append_u64(out, c, p as u64),
+                None => c = append_bytes(out, c, b"ANY"),
+            }
+            c = append_bytes(out, c, b" dport=");
+            if let Some((low, high)) = rule.dst_port_range {
+                if low == high {
+                    c = append_u64(out, c, low as u64);
+                } else {
+                    c = append_u64(out, c, low as u64);
+                    c = append_bytes(out, c, b"-");
+                    c = append_u64(out, c, high as u64);
+                }
+            } else {
+                c = append_bytes(out, c, b"ANY");
+            }
+            c = append_bytes(out, c, b" hits=");
+            c = append_u64(out, c, rule.hit_count);
+            c = append_bytes(out, c, b"\n");
+        }
+        if displayed == 0 {
+            c = append_bytes(out, c, b"  (Aucune regle active)\n");
+        }
+        (ShellStatus::Success, c)
+    }
+
+    fn cmd_wall_rule_add(&mut self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if args.len() < 4 {
+            let msg = b"Usage: wall rule add <name> <action> <proto> <dport>\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            return (ShellStatus::InvalidArgument, len);
+        }
+
+        let name = args[0];
+        let action = match parse_wall_action(args[1]) {
+            Some(a) => a,
+            None => {
+                let msg = b"wall rule: invalid action (expected allow|drop|reject|ratelimit)\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                return (ShellStatus::InvalidArgument, len);
+            }
+        };
+
+        let proto = match parse_wall_proto(args[2]) {
+            Some(p) => p,
+            None => {
+                let msg = b"wall rule: invalid protocol (expected tcp|udp|icmp|any)\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                return (ShellStatus::InvalidArgument, len);
+            }
+        };
+
+        let dport = match parse_wall_u16(args[3]) {
+            Some(d) => d,
+            None => {
+                let msg = b"wall rule: invalid destination port\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                return (ShellStatus::InvalidArgument, len);
+            }
+        };
+
+        let req = WallRequest::new_add_rule(name, action as u8, proto, dport);
+        let mut resp_opt: Option<WallResponse> = None;
+        for &h in &[
+            19u64, 18u64, 17u64, 16u64, 15u64, 14u64, 13u64, 12u64, 11u64, 10u64, 9u64, 8u64, 7u64,
+            6u64, 5u64, 4u64, 3u64,
+        ] {
+            let client = WallClient::new(libjambo::Handle(h));
+            if let Ok(resp) = client.add_rule(&req) {
+                if resp.status == 0 {
+                    resp_opt = Some(resp);
+                    break;
+                }
+            }
+        }
+
+        let resp = resp_opt.unwrap_or_else(|| self.wall_daemon.handle_ipc_request(&req, 1_000_000));
+        let mut c = 0;
+        if resp.status == 0 {
+            c = append_bytes(out, c, b"wall: added rule #");
+            c = append_u64(out, c, resp.matched_rule_id as u64);
+            c = append_bytes(out, c, b" [");
+            c = append_bytes(out, c, name.as_bytes());
+            c = append_bytes(out, c, b"]\n");
+            (ShellStatus::Success, c)
+        } else {
+            c = append_bytes(out, c, b"wall: failed to add rule\n");
+            (ShellStatus::ExecutionFailed, c)
+        }
+    }
+
+    fn cmd_wall_blocked(&self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let mut c = 0;
+        let mut count = 0;
+        c = append_bytes(
+            out,
+            c,
+            b"Adresses IP bloquees dynamiquement (Zero-Trust Auto-Defense):\n",
+        );
+        let current_tick = 1_000_000u64;
+        for rule in self.wall_daemon.rules.iter() {
+            if !rule.is_active || !rule.is_dynamic_block {
+                continue;
+            }
+            count += 1;
+            c = append_bytes(out, c, b"  IP: ");
+            if let Some((ip, _)) = rule.src_ip_prefix {
+                c = append_ipv4(out, c, &ip);
+            } else {
+                c = append_bytes(out, c, b"0.0.0.0");
+            }
+            c = append_bytes(out, c, b" reason=");
+            c = append_bytes(out, c, rule.name_as_str().as_bytes());
+            c = append_bytes(out, c, b" ttl=");
+            if let Some(exp) = rule.expires_at_tick {
+                let ttl = if exp >= current_tick {
+                    exp - current_tick
+                } else {
+                    exp
+                };
+                c = append_u64(out, c, ttl);
+                c = append_bytes(out, c, b"s");
+            } else {
+                c = append_bytes(out, c, b"indefinite");
+            }
+            c = append_bytes(out, c, b" hits=");
+            c = append_u64(out, c, rule.hit_count);
+            c = append_bytes(out, c, b"\n");
+        }
+        if count == 0 {
+            c = append_bytes(out, c, b"  (Aucune adresse IP actuellement bloquee)\n");
+        }
+        (ShellStatus::Success, c)
+    }
+
+    fn cmd_wall_flush(&mut self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let req = WallRequest::new_flush();
+        let mut resp_opt: Option<WallResponse> = None;
+        for &h in &[
+            19u64, 18u64, 17u64, 16u64, 15u64, 14u64, 13u64, 12u64, 11u64, 10u64, 9u64, 8u64, 7u64,
+            6u64, 5u64, 4u64, 3u64,
+        ] {
+            let client = WallClient::new(libjambo::Handle(h));
+            if let Ok(resp) = client.flush() {
+                if resp.status == 0 {
+                    resp_opt = Some(resp);
+                    break;
+                }
+            }
+        }
+        let resp = resp_opt.unwrap_or_else(|| self.wall_daemon.handle_ipc_request(&req, 1_000_000));
+        let purged = u32::from_le_bytes(resp.details);
+        let mut c = 0;
+        if resp.status == 0 {
+            c = append_bytes(out, c, b"wall: flushed ");
+            c = append_u64(out, c, purged as u64);
+            c = append_bytes(out, c, b" dynamic block(s)\n");
+            (ShellStatus::Success, c)
+        } else {
+            c = append_bytes(out, c, b"wall: failed to flush dynamic blocks\n");
+            (ShellStatus::ExecutionFailed, c)
+        }
+    }
 }
 
 fn append_bytes(buf: &mut [u8], cursor: usize, data: &[u8]) -> usize {
@@ -4056,6 +4367,50 @@ fn parse_audit_severity(s: &str) -> Option<AuditSeverity> {
     }
 }
 
+fn parse_wall_action(s: &str) -> Option<WallAction> {
+    if let Some(num) = parse_u32(s) {
+        return match num {
+            0 => Some(WallAction::Allow),
+            1 => Some(WallAction::Drop),
+            2 => Some(WallAction::Reject),
+            3 => Some(WallAction::RateLimit),
+            _ => None,
+        };
+    }
+    match s {
+        s if s.eq_ignore_ascii_case("allow") => Some(WallAction::Allow),
+        s if s.eq_ignore_ascii_case("drop") => Some(WallAction::Drop),
+        s if s.eq_ignore_ascii_case("reject") => Some(WallAction::Reject),
+        s if s.eq_ignore_ascii_case("limit") || s.eq_ignore_ascii_case("ratelimit") => {
+            Some(WallAction::RateLimit)
+        }
+        _ => None,
+    }
+}
+
+fn parse_wall_proto(s: &str) -> Option<u8> {
+    if let Some(num) = parse_u32(s) {
+        if num <= 255 {
+            return Some(num as u8);
+        }
+    }
+    match s {
+        s if s.eq_ignore_ascii_case("tcp") => Some(ip_proto::TCP),
+        s if s.eq_ignore_ascii_case("udp") => Some(ip_proto::UDP),
+        s if s.eq_ignore_ascii_case("icmp") => Some(ip_proto::ICMP),
+        s if s.eq_ignore_ascii_case("any") => Some(ip_proto::ANY),
+        _ => None,
+    }
+}
+
+fn parse_wall_u16(s: &str) -> Option<u16> {
+    if s.eq_ignore_ascii_case("any") {
+        Some(0)
+    } else {
+        parse_u32(s).and_then(|v| if v <= 65535 { Some(v as u16) } else { None })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4127,7 +4482,7 @@ mod tests {
     }
 
     #[test]
-    fn test_ps_contains_18_processes() {
+    fn test_ps_contains_19_processes() {
         let mut shell = JamboShell::new();
         let mut out = [0u8; 2048];
 
@@ -4162,6 +4517,9 @@ mod tests {
             s.contains("17  ACTIF    /bin/timed (Demon Synchronisation Horlogere PTP/NTP Ring 3)")
         );
         assert!(s.contains("18  ACTIF    /bin/auditd (Grand Livre d'Audit Cryptographique Ring 3)"));
+        assert!(s.contains(
+            "19  ACTIF    /bin/walld (Pare-Feu d'Etat & Synchronisation Conntrack Ring 3)"
+        ));
     }
 
     #[test]
@@ -4172,7 +4530,7 @@ mod tests {
         let (st, len) = shell.execute_line("help", &mut out);
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
-        assert!(s.contains("18 processus actifs"));
+        assert!(s.contains("19 processus actifs"));
         assert!(s.contains("fdr [status|verify|pcr]"));
         assert!(s.contains("wasm [status|run|info]"));
         assert!(s.contains("pqc [status|kex|sign|audit]"));
@@ -4186,6 +4544,7 @@ mod tests {
         assert!(s.contains("dns [status|resolve|register|cache|flush]"));
         assert!(s.contains("time [status|now|sync|adjust|step]"));
         assert!(s.contains("audit [status|record|verify|tail|scan]"));
+        assert!(s.contains("wall [status|conntrack|rule|blocked|flush]"));
     }
 
     #[test]
@@ -5496,5 +5855,179 @@ mod tests {
         assert_eq!(st4, ShellStatus::InvalidArgument);
         let s4 = core::str::from_utf8(&out[..len4]).unwrap();
         assert!(s4.contains("audit record: invalid severity"));
+    }
+
+    #[test]
+    fn test_wall_status() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 1024];
+
+        // 1. "wall status"
+        let (st, len) = shell.execute_line("wall status", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("Pare-Feu d'Etat & Synchronisation Conntrack (jambo-walld PID 19):"));
+        assert!(s.contains("Operational State : ACTIVE (Stateful Inspection & Zero-Trust Ring 3)"));
+        assert!(s.contains("Total Rules       :"));
+        assert!(s.contains("Active Conntrack  :"));
+        assert!(s.contains("Packets Inspected :"));
+        assert!(s.contains("Packets Dropped   :"));
+        assert!(s.contains("Dynamic Blocks    :"));
+
+        // 2. 'wall' without argument defaults to 'wall status'
+        let (st2, len2) = shell.execute_line("wall", &mut out);
+        assert_eq!(st2, ShellStatus::Success);
+        assert_eq!(len, len2);
+    }
+
+    #[test]
+    fn test_wall_conntrack() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 1024];
+
+        // Table conntrack initiale vide
+        let (st, len) = shell.execute_line("wall conntrack", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("0 session active"));
+
+        // Enregistrer une session conntrack
+        let tuple = jambo_walld::ConntrackTuple::new(
+            ip_proto::TCP,
+            [192, 168, 1, 5],
+            [10, 0, 0, 80],
+            50000,
+            80,
+        );
+        let (state, _, _) = shell.wall_daemon.conntrack.process_packet(
+            &tuple,
+            SecurityZone::WorkloadEdge,
+            SecurityZone::ClusterInternal,
+            jambo_walld::tcp_flags::SYN,
+            0,
+            100,
+            1,
+        );
+        assert_eq!(state, ConntrackState::New);
+
+        let (st2, len2) = shell.execute_line("wall conntrack", &mut out);
+        assert_eq!(st2, ShellStatus::Success);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("Table Conntrack (sessions actives):"));
+        assert!(s2.contains("TCP"));
+        assert!(s2.contains("192.168.1.5:50000"));
+        assert!(s2.contains("10.0.0.80:80"));
+        assert!(s2.contains("NEW"));
+        assert!(s2.contains("ttl="));
+    }
+
+    #[test]
+    fn test_wall_rule_list_and_add() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 2048];
+
+        // 1. Lister les règles par défaut
+        let (st, len) = shell.execute_line("wall rule list", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("Regles du Pare-Feu (jambo-walld):"));
+        assert!(s.contains("state_established_fastpath"));
+        assert!(s.contains("allow_cluster_internal"));
+
+        // 2. Ajouter une nouvelle règle
+        let (st2, len2) = shell.execute_line("wall rule add web_server allow tcp 80", &mut out);
+        assert_eq!(st2, ShellStatus::Success);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("wall: added rule #"));
+        assert!(s2.contains("[web_server]"));
+
+        // 3. Vérifier que la règle apparaît dans la liste
+        let (st3, len3) = shell.execute_line("wall rule list", &mut out);
+        assert_eq!(st3, ShellStatus::Success);
+        let s3 = core::str::from_utf8(&out[..len3]).unwrap();
+        assert!(s3.contains("web_server"));
+        assert!(s3.contains("ALLOW"));
+        assert!(s3.contains("TCP"));
+        assert!(s3.contains("80"));
+    }
+
+    #[test]
+    fn test_wall_blocked_and_flush() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 1024];
+
+        // 1. Aucun blocage initialement
+        let (st, len) = shell.execute_line("wall blocked", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("Aucune adresse IP actuellement bloquee"));
+
+        // 2. Injecter un blocage dynamique suite à un scan anormal
+        let _ = shell.wall_daemon.trigger_dynamic_block(
+            [10, 99, 1, 2],
+            "threat_invalid_tcp_flags",
+            1_000_000,
+        );
+
+        let (st2, len2) = shell.execute_line("wall blocked", &mut out);
+        assert_eq!(st2, ShellStatus::Success);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("10.99.1.2"));
+        assert!(s2.contains("threat_invalid_tcp_flags"));
+        assert!(s2.contains("600s"));
+
+        // 3. Purger les blocages dynamiques
+        let (st3, len3) = shell.execute_line("wall flush", &mut out);
+        assert_eq!(st3, ShellStatus::Success);
+        let s3 = core::str::from_utf8(&out[..len3]).unwrap();
+        assert!(s3.contains("wall: flushed 1 dynamic block(s)"));
+
+        // 4. Vérifier que la liste des bloqués est à nouveau vide
+        let (st4, len4) = shell.execute_line("wall blocked", &mut out);
+        assert_eq!(st4, ShellStatus::Success);
+        let s4 = core::str::from_utf8(&out[..len4]).unwrap();
+        assert!(s4.contains("Aucune adresse IP actuellement bloquee"));
+    }
+
+    #[test]
+    fn test_wall_invalid() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 1024];
+
+        // 1. Sous-commande inconnue
+        let (st, len) = shell.execute_line("wall unknown", &mut out);
+        assert_eq!(st, ShellStatus::InvalidArgument);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("Usage: wall [status|conntrack|rule|blocked|flush]"));
+
+        // 2. "wall rule" sans sous-commande
+        let (st2, len2) = shell.execute_line("wall rule", &mut out);
+        assert_eq!(st2, ShellStatus::InvalidArgument);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("Usage: wall rule [list|add <name> <action> <proto> <dport>]"));
+
+        // 3. "wall rule add" sans arguments
+        let (st3, len3) = shell.execute_line("wall rule add", &mut out);
+        assert_eq!(st3, ShellStatus::InvalidArgument);
+        let s3 = core::str::from_utf8(&out[..len3]).unwrap();
+        assert!(s3.contains("Usage: wall rule add <name> <action> <proto> <dport>"));
+
+        // 4. Action invalide
+        let (st4, len4) = shell.execute_line("wall rule add bad_rule badact tcp 80", &mut out);
+        assert_eq!(st4, ShellStatus::InvalidArgument);
+        let s4 = core::str::from_utf8(&out[..len4]).unwrap();
+        assert!(s4.contains("wall rule: invalid action"));
+
+        // 5. Protocole invalide
+        let (st5, len5) = shell.execute_line("wall rule add bad_rule allow badproto 80", &mut out);
+        assert_eq!(st5, ShellStatus::InvalidArgument);
+        let s5 = core::str::from_utf8(&out[..len5]).unwrap();
+        assert!(s5.contains("wall rule: invalid protocol"));
+
+        // 6. Port invalide
+        let (st6, len6) = shell.execute_line("wall rule add bad_rule allow tcp badport", &mut out);
+        assert_eq!(st6, ShellStatus::InvalidArgument);
+        let s6 = core::str::from_utf8(&out[..len6]).unwrap();
+        assert!(s6.contains("wall rule: invalid destination port"));
     }
 }
