@@ -118,3 +118,4 @@ Commandes shell ajoutées :
 libjambo = { path = "../../libs/libjambo" }
 jambo-serviced = { path = "../jambo-serviced" }
 ```
+
