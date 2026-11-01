@@ -63,6 +63,11 @@ use jambo_walld::{
     WallClient, WallOpcode, WallRequest, WallResponse,
 };
 use jambo_wasmd::{wasm_rights, WasmdClient, WasmdResponse, WASMD_STATUS_OK};
+#[allow(unused_imports)]
+use jambo_watchdogd::{
+    watchdog_rights, JamboWatchdogDaemon, WatchdogAction, WatchdogCap, WatchdogClient,
+    WatchdogOpcode, WatchdogRequest, WatchdogResponse,
+};
 use libjambo::{sys_info, syscall6, SysError, SyscallNumber};
 
 /// Statut d'exécution d'une commande
@@ -84,6 +89,7 @@ pub struct JamboShell {
     pub audit_daemon: JamboAuditDaemon,
     pub wall_daemon: JamboFirewall,
     pub vault_daemon: JamboVaultDaemon,
+    pub watchdog_daemon: JamboWatchdogDaemon,
 }
 
 impl Default for JamboShell {
@@ -106,6 +112,8 @@ impl JamboShell {
         wall_daemon.init_defaults();
         let mut vault_daemon = JamboVaultDaemon::new();
         vault_daemon.init_defaults();
+        let mut watchdog_daemon = JamboWatchdogDaemon::new();
+        watchdog_daemon.init_defaults();
         Self {
             prompt_user: "jambo",
             commands_executed: 0,
@@ -115,6 +123,7 @@ impl JamboShell {
             audit_daemon,
             wall_daemon,
             vault_daemon,
+            watchdog_daemon,
         }
     }
 
@@ -165,6 +174,7 @@ impl JamboShell {
             "audit" => self.cmd_audit(args, out),
             "wall" => self.cmd_wall(args, out),
             "vault" => self.cmd_vault(args, out),
+            "wdog" => self.cmd_wdog(args, out),
             _ => self.cmd_not_found(cmd, out),
         }
     }
@@ -173,7 +183,7 @@ impl JamboShell {
         let text = b"Commandes disponibles:\n\
   help        - Affiche cette aide\n\
   sysinfo     - Metriques memoire et uptime du micro-noyau\n\
-  ps          - Liste les 20 processus actifs\n\
+  ps          - Liste les 21 processus actifs\n\
   echo <args> - Affiche le texte sur la console\n\
   clear       - Reinitialise l'ecran du terminal\n\
   reboot      - Eteint ou redemarre la machine virtuelle\n\
@@ -194,7 +204,8 @@ impl JamboShell {
   time [status|now|sync|adjust|step] - Synchronisation horlogere PTP/NTP et temps monotone\n\
   audit [status|record|verify|tail|scan] - Grand livre d'audit cryptographique et observabilite\n\
   wall [status|conntrack|rule|blocked|flush] - Pare-feu d'etat Zero-Trust et table Conntrack\n\
-  vault [status|unseal|seal|store|get|revoke] - Coffre-fort cryptographique de secrets distribue\n";
+  vault [status|unseal|seal|store|get|revoke] - Coffre-fort cryptographique de secrets distribue\n\
+  wdog [status|ping|register|targets|trigger|log] - Surveillance vivacite et chien de garde\n";
         let len = text.len().min(out.len());
         out[..len].copy_from_slice(&text[..len]);
         (ShellStatus::Success, len)
@@ -258,7 +269,8 @@ impl JamboShell {
  17  ACTIF    /bin/timed (Demon Synchronisation Horlogere PTP/NTP Ring 3)\n\
  18  ACTIF    /bin/auditd (Grand Livre d'Audit Cryptographique Ring 3)\n\
  19  ACTIF    /bin/walld (Pare-Feu d'Etat & Synchronisation Conntrack Ring 3)\n\
- 20  ACTIF    /bin/vaultd (Coffre-Fort de Secrets Distribue Ring 3)\n";
+ 20  ACTIF    /bin/vaultd (Coffre-Fort de Secrets Distribue Ring 3)\n\
+ 21  ACTIF    /bin/watchdogd (Surveillance Vivacite & Chien de Garde Ring 3)\n";
         let len = text.len().min(out.len());
         out[..len].copy_from_slice(&text[..len]);
         (ShellStatus::Success, len)
@@ -4457,6 +4469,241 @@ impl JamboShell {
         c = append_bytes(out, c, b"' revoked and zeroized successfully\n");
         (ShellStatus::Success, c)
     }
+
+    fn send_watchdog_request(&mut self, req: &WatchdogRequest) -> WatchdogResponse {
+        let current_time = sys_info().map(|s| s.uptime_seconds).unwrap_or(1_000_000);
+        let mut resp_opt: Option<WatchdogResponse> = None;
+        for &h in &[
+            21u64, 20u64, 19u64, 18u64, 17u64, 16u64, 15u64, 14u64, 13u64, 12u64, 11u64, 10u64,
+            9u64, 8u64, 7u64, 6u64, 5u64, 4u64, 3u64,
+        ] {
+            let client = WatchdogClient::new(libjambo::Handle(h));
+            if let Ok(resp) = client.call(req) {
+                if resp.magic == jambo_watchdogd::WDOG_MAGIC_RESP {
+                    resp_opt = Some(resp);
+                    break;
+                }
+            }
+        }
+        let local_resp = self.watchdog_daemon.handle_ipc_request(req, current_time);
+        resp_opt.unwrap_or(local_resp)
+    }
+
+    fn cmd_wdog(&mut self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        let subcmd = if args.is_empty() { "status" } else { args[0] };
+        match subcmd {
+            "status" => self.cmd_wdog_status(out),
+            "ping" => self.cmd_wdog_ping(&args[1..], out),
+            "register" => self.cmd_wdog_register(&args[1..], out),
+            "targets" => self.cmd_wdog_targets(out),
+            "trigger" => self.cmd_wdog_trigger(&args[1..], out),
+            "log" => self.cmd_wdog_log(out),
+            _ => {
+                let msg = b"Usage: wdog [status|ping|register|targets|trigger|log]\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                (ShellStatus::InvalidArgument, len)
+            }
+        }
+    }
+
+    fn cmd_wdog_status(&mut self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let req = WatchdogRequest::new_status();
+        let resp = self.send_watchdog_request(&req);
+
+        let hw_str = if resp.hw_enabled != 0 {
+            "ACTIVE"
+        } else {
+            "DISABLED"
+        };
+
+        let mut c = 0;
+        c = append_bytes(
+            out,
+            c,
+            b"Surveillance Vivacite & Chien de Garde (jambo-watchdogd PID 21):\n  Chien de Garde Materiel : ",
+        );
+        c = append_bytes(out, c, hw_str.as_bytes());
+        c = append_bytes(out, c, b"\n  Cibles Actives          : ");
+        c = append_u64(out, c, resp.active_targets as u64);
+        c = append_bytes(out, c, b"\n  Alertes NMI / Derives   : ");
+        c = append_u64(out, c, resp.alert_count as u64);
+        c = append_bytes(out, c, b"\n  Total Pings Recus       : ");
+        c = append_u64(out, c, resp.total_pings);
+        c = append_bytes(out, c, b"\n  Dernier Ping (ms)       : ");
+        c = append_u64(out, c, resp.last_ping_timestamp);
+        c = append_bytes(out, c, b"\n");
+        (ShellStatus::Success, c)
+    }
+
+    fn cmd_wdog_ping(&mut self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        let target_id = if args.is_empty() {
+            0
+        } else {
+            match parse_u32(args[0]) {
+                Some(id) if id <= 32 => id,
+                _ => {
+                    let msg = b"Usage: wdog ping [target_id (0..32)]\n";
+                    let len = msg.len().min(out.len());
+                    out[..len].copy_from_slice(&msg[..len]);
+                    return (ShellStatus::InvalidArgument, len);
+                }
+            }
+        };
+
+        let req = WatchdogRequest::new_ping(target_id);
+        let resp = self.send_watchdog_request(&req);
+
+        if resp.status != 0 {
+            let mut c = 0;
+            c = append_bytes(out, c, b"wdog ping: failed with error code ");
+            c = append_i64(out, c, resp.status as i64);
+            c = append_bytes(out, c, b"\n");
+            return (ShellStatus::ExecutionFailed, c);
+        }
+
+        let mut c = 0;
+        c = append_bytes(out, c, b"wdog ping: vivacite signalee avec succes (cible #");
+        c = append_u64(out, c, target_id as u64);
+        c = append_bytes(out, c, b", total pings: ");
+        c = append_u64(out, c, resp.total_pings);
+        c = append_bytes(out, c, b")\n");
+        (ShellStatus::Success, c)
+    }
+
+    fn cmd_wdog_register(&mut self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if args.len() < 2 {
+            let msg = b"Usage: wdog register <name> <timeout_ms>\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            return (ShellStatus::InvalidArgument, len);
+        }
+
+        let name = args[0];
+        if name.is_empty() || name.len() > 32 {
+            let msg = b"wdog register: invalid name (length must be 1..32)\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            return (ShellStatus::InvalidArgument, len);
+        }
+
+        let timeout_ms = match parse_u32(args[1]) {
+            Some(t) if t > 0 => t,
+            _ => {
+                let msg = b"wdog register: invalid timeout_ms (must be > 0)\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                return (ShellStatus::InvalidArgument, len);
+            }
+        };
+
+        let assigned_id = (self.watchdog_daemon.target_count as u32) + 1;
+        let mut req = WatchdogRequest::new_register(name, timeout_ms, 0);
+        req.target_id = assigned_id;
+        let resp = self.send_watchdog_request(&req);
+
+        if resp.status != 0 {
+            let mut c = 0;
+            c = append_bytes(out, c, b"wdog register: failed with error code ");
+            c = append_i64(out, c, resp.status as i64);
+            c = append_bytes(out, c, b"\n");
+            return (ShellStatus::ExecutionFailed, c);
+        }
+
+        let mut c = 0;
+        c = append_bytes(out, c, b"wdog register: cible '");
+        c = append_bytes(out, c, name.as_bytes());
+        c = append_bytes(out, c, b"' enregistree avec succes (ID: ");
+        c = append_u64(out, c, assigned_id as u64);
+        c = append_bytes(out, c, b", timeout: ");
+        c = append_u64(out, c, timeout_ms as u64);
+        c = append_bytes(out, c, b"ms)\n");
+        (ShellStatus::Success, c)
+    }
+
+    fn cmd_wdog_targets(&self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let mut c = 0;
+        c = append_bytes(out, c, b"Cibles Surveillees (jambo-watchdogd PID 21):\n");
+        let mut count = 0;
+        for target in self.watchdog_daemon.targets.iter().flatten() {
+            count += 1;
+            c = append_bytes(out, c, b"  #");
+            c = append_u64(out, c, target.id as u64);
+            c = append_bytes(out, c, b" [");
+            c = append_bytes(out, c, target.name_str().as_bytes());
+            c = append_bytes(out, c, b"] timeout=");
+            c = append_u64(out, c, target.timeout_ms);
+            c = append_bytes(out, c, b"ms statut=");
+            c = append_bytes(out, c, target.state.as_str().as_bytes());
+            c = append_bytes(out, c, b"\n");
+        }
+        if count == 0 {
+            c = append_bytes(out, c, b"  (Aucune cible enregistree)\n");
+        }
+        (ShellStatus::Success, c)
+    }
+
+    fn cmd_wdog_trigger(&mut self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if args.is_empty() {
+            let msg = b"Usage: wdog trigger <log|nmi|reset|failover>\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            return (ShellStatus::InvalidArgument, len);
+        }
+
+        let action_code = match args[0] {
+            "log" => 0u8,
+            "nmi" => 1u8,
+            "reset" => 2u8,
+            "failover" => 3u8,
+            _ => {
+                let msg = b"Usage: wdog trigger <log|nmi|reset|failover>\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                return (ShellStatus::InvalidArgument, len);
+            }
+        };
+
+        let req = WatchdogRequest::new_trigger_action(action_code, 0);
+        let resp = self.send_watchdog_request(&req);
+
+        if resp.status != 0 {
+            let mut c = 0;
+            c = append_bytes(out, c, b"wdog trigger: failed with error code ");
+            c = append_i64(out, c, resp.status as i64);
+            c = append_bytes(out, c, b"\n");
+            return (ShellStatus::ExecutionFailed, c);
+        }
+
+        let mut c = 0;
+        c = append_bytes(out, c, b"wdog trigger: action '");
+        c = append_bytes(out, c, args[0].as_bytes());
+        c = append_bytes(out, c, b"' declenchee avec succes (alertes: ");
+        c = append_u64(out, c, resp.alert_count as u64);
+        c = append_bytes(out, c, b")\n");
+        (ShellStatus::Success, c)
+    }
+
+    fn cmd_wdog_log(&mut self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let req = WatchdogRequest::new_audit_log();
+        let resp = self.send_watchdog_request(&req);
+
+        let mut c = 0;
+        c = append_bytes(
+            out,
+            c,
+            b"Journal d'Audit Vivacite (jambo-watchdogd PID 21):\n  Empreinte SHA-256 : 0x",
+        );
+        for &b in &resp.sha256_hash {
+            c = append_hex_byte(out, c, b);
+        }
+        c = append_bytes(out, c, b"\n  Total Pings Recus : ");
+        c = append_u64(out, c, resp.total_pings);
+        c = append_bytes(out, c, b"\n  Alertes Actives   : ");
+        c = append_u64(out, c, resp.alert_count as u64);
+        c = append_bytes(out, c, b"\n");
+        (ShellStatus::Success, c)
+    }
 }
 
 fn append_bytes(buf: &mut [u8], cursor: usize, data: &[u8]) -> usize {
@@ -4810,7 +5057,7 @@ mod tests {
     }
 
     #[test]
-    fn test_ps_contains_20_processes() {
+    fn test_ps_contains_21_processes() {
         let mut shell = JamboShell::new();
         let mut out = [0u8; 4096];
 
@@ -4849,6 +5096,9 @@ mod tests {
             "19  ACTIF    /bin/walld (Pare-Feu d'Etat & Synchronisation Conntrack Ring 3)"
         ));
         assert!(s.contains("20  ACTIF    /bin/vaultd (Coffre-Fort de Secrets Distribue Ring 3)"));
+        assert!(s.contains(
+            "21  ACTIF    /bin/watchdogd (Surveillance Vivacite & Chien de Garde Ring 3)"
+        ));
     }
 
     #[test]
@@ -4859,7 +5109,7 @@ mod tests {
         let (st, len) = shell.execute_line("help", &mut out);
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
-        assert!(s.contains("20 processus actifs"));
+        assert!(s.contains("21 processus actifs"));
         assert!(s.contains("fdr [status|verify|pcr]"));
         assert!(s.contains("wasm [status|run|info]"));
         assert!(s.contains("pqc [status|kex|sign|audit]"));
@@ -4875,6 +5125,7 @@ mod tests {
         assert!(s.contains("audit [status|record|verify|tail|scan]"));
         assert!(s.contains("wall [status|conntrack|rule|blocked|flush]"));
         assert!(s.contains("vault [status|unseal|seal|store|get|revoke]"));
+        assert!(s.contains("wdog [status|ping|register|targets|trigger|log]"));
     }
 
     #[test]
@@ -6553,5 +6804,141 @@ mod tests {
         assert_eq!(st7, ShellStatus::InvalidArgument);
         let s7 = core::str::from_utf8(&out[..len7]).unwrap();
         assert!(s7.contains("Usage: vault revoke <path>"));
+    }
+
+    #[test]
+    fn test_wdog_status() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 1024];
+
+        let (st, len) = shell.execute_line("wdog status", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("Surveillance Vivacite & Chien de Garde (jambo-watchdogd PID 21):"));
+        assert!(s.contains("Chien de Garde Materiel : ACTIVE"));
+        assert!(s.contains("Cibles Actives          : 4"));
+        assert!(s.contains("Total Pings Recus       : 0"));
+
+        // Défaut sur status sans arguments
+        let (st2, len2) = shell.execute_line("wdog", &mut out);
+        assert_eq!(st2, ShellStatus::Success);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("ACTIVE"));
+    }
+
+    #[test]
+    fn test_wdog_ping() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 1024];
+
+        // 1. Ping global (cible #0)
+        let (st1, len1) = shell.execute_line("wdog ping", &mut out);
+        assert_eq!(st1, ShellStatus::Success);
+        let s1 = core::str::from_utf8(&out[..len1]).unwrap();
+        assert!(s1.contains("wdog ping: vivacite signalee avec succes (cible #0"));
+        assert!(s1.contains("total pings: 1"));
+
+        // 2. Ping cible spécifique #1
+        let (st2, len2) = shell.execute_line("wdog ping 1", &mut out);
+        assert_eq!(st2, ShellStatus::Success);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("wdog ping: vivacite signalee avec succes (cible #1"));
+        assert!(s2.contains("total pings: 2"));
+    }
+
+    #[test]
+    fn test_wdog_register_and_targets() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 2048];
+
+        // 1. Cibles initiales
+        let (st1, len1) = shell.execute_line("wdog targets", &mut out);
+        assert_eq!(st1, ShellStatus::Success);
+        let s1 = core::str::from_utf8(&out[..len1]).unwrap();
+        assert!(s1.contains("Cibles Surveillees (jambo-watchdogd PID 21):"));
+        assert!(s1.contains("#1 [kernel-sched] timeout=1000ms statut=ACTIVE"));
+        assert!(s1.contains("#2 [jambo-init] timeout=2000ms statut=ACTIVE"));
+        assert!(s1.contains("#3 [jambo-netd] timeout=3000ms statut=ACTIVE"));
+        assert!(s1.contains("#4 [jambo-ipcd] timeout=2500ms statut=ACTIVE"));
+
+        // 2. Enregistrer une nouvelle cible (ID 5)
+        let (st2, len2) = shell.execute_line("wdog register worker-service 5000", &mut out);
+        assert_eq!(st2, ShellStatus::Success);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("wdog register: cible 'worker-service' enregistree avec succes (ID: 5, timeout: 5000ms)"));
+
+        // 3. Vérifier présence dans targets
+        let (st3, len3) = shell.execute_line("wdog targets", &mut out);
+        assert_eq!(st3, ShellStatus::Success);
+        let s3 = core::str::from_utf8(&out[..len3]).unwrap();
+        assert!(s3.contains("#5 [worker-service] timeout=5000ms statut=ACTIVE"));
+    }
+
+    #[test]
+    fn test_wdog_trigger() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 1024];
+
+        // Déclencher une action NMI
+        let (st, len) = shell.execute_line("wdog trigger nmi", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("wdog trigger: action 'nmi' declenchee avec succes (alertes: 1)"));
+
+        // Déclencher une action Log
+        let (st2, len2) = shell.execute_line("wdog trigger log", &mut out);
+        assert_eq!(st2, ShellStatus::Success);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("wdog trigger: action 'log' declenchee avec succes (alertes: 2)"));
+    }
+
+    #[test]
+    fn test_wdog_log() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 1024];
+
+        let (st, len) = shell.execute_line("wdog log", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("Journal d'Audit Vivacite (jambo-watchdogd PID 21):"));
+        assert!(s.contains("Empreinte SHA-256 : 0x"));
+        assert!(s.contains("Total Pings Recus : 0"));
+        assert!(s.contains("Alertes Actives   : 0"));
+    }
+
+    #[test]
+    fn test_wdog_invalid() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 1024];
+
+        // 1. Sous-commande invalide
+        let (st1, len1) = shell.execute_line("wdog invalid_cmd", &mut out);
+        assert_eq!(st1, ShellStatus::InvalidArgument);
+        let s1 = core::str::from_utf8(&out[..len1]).unwrap();
+        assert!(s1.contains("Usage: wdog [status|ping|register|targets|trigger|log]"));
+
+        // 2. wdog trigger sans argument
+        let (st2, len2) = shell.execute_line("wdog trigger", &mut out);
+        assert_eq!(st2, ShellStatus::InvalidArgument);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("Usage: wdog trigger <log|nmi|reset|failover>"));
+
+        // 3. wdog trigger action inconnue
+        let (st3, len3) = shell.execute_line("wdog trigger explode", &mut out);
+        assert_eq!(st3, ShellStatus::InvalidArgument);
+        let s3 = core::str::from_utf8(&out[..len3]).unwrap();
+        assert!(s3.contains("Usage: wdog trigger <log|nmi|reset|failover>"));
+
+        // 4. wdog register sans arguments
+        let (st4, len4) = shell.execute_line("wdog register", &mut out);
+        assert_eq!(st4, ShellStatus::InvalidArgument);
+        let s4 = core::str::from_utf8(&out[..len4]).unwrap();
+        assert!(s4.contains("Usage: wdog register <name> <timeout_ms>"));
+
+        // 5. wdog register timeout invalide
+        let (st5, len5) = shell.execute_line("wdog register worker abc", &mut out);
+        assert_eq!(st5, ShellStatus::InvalidArgument);
+        let s5 = core::str::from_utf8(&out[..len5]).unwrap();
+        assert!(s5.contains("wdog register: invalid timeout_ms (must be > 0)"));
     }
 }
