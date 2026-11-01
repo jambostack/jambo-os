@@ -90,3 +90,4 @@ L'objectif du **Jalon 3.5 (`v0.3.49`)** est d'établir le démon **`jambo-forens
 - Journal UART : `[PASS] Confinement Memoire & Forensics Volatile (jambo-forensics PID 10) validee sous QEMU.`
 - `xtask` : Compilation de `jambo-forensics` avec `libs/user-x86_64.ld` à `0x00400000`, empaquetage dans `target/initrd.tar`, bannière de disque `"Bienvenue sur JamboOS v0.3.49\n"`.
 - Test QEMU automatisé avec code de sortie 33 (`isa-debug-exit`).
+

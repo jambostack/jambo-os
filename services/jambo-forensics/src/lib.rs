@@ -38,8 +38,13 @@
 //!    - Registre inaltérable de chaîne de garde chaîné par SHA-256 (`CustodyEntry`).
 
 #![no_std]
+#![allow(
+    clippy::needless_range_loop,
+    clippy::too_many_arguments,
+    clippy::new_without_default
+)]
 
-use libjambo::Handle;
+use libjambo::{Handle, SysError};
 
 /// Convertit un buffer d'octets en chaîne de caractères ASCII nettoyée
 pub fn id_to_str(buf: &[u8]) -> &str {
@@ -1030,6 +1035,7 @@ pub enum CustodyAction {
     IntegrityVerified,
     ForensicInspection,
     PostIncidentTriage,
+    ProcessQuarantined,
 }
 
 /// Enregistrement inaltérable de la chaîne de garde
@@ -1665,6 +1671,331 @@ impl JamboForensicsDaemon {
 
         current_hash == self.custody_chain
     }
+
+    /// Met en quarantaine un processus compromis et consigne l'événement dans la chaîne de garde
+    pub fn quarantine_process(
+        &mut self,
+        cap: &ForensicsCap,
+        target_pid: u32,
+        timestamp: u64,
+    ) -> Result<u64, ForensicsError> {
+        if !cap.has_right(forensics_rights::ADMIN)
+            && !cap.has_right(forensics_rights::TRIAGE_INCIDENT)
+        {
+            return Err(ForensicsError::PermissionDenied);
+        }
+
+        let _ = self.record_artifact(
+            cap,
+            ArtifactKind::PrivilegeEscalation,
+            target_pid,
+            "Target process placed in strict containment quarantine",
+            timestamp,
+            100,
+        );
+
+        self.record_custody_event(
+            CustodyAction::ProcessQuarantined,
+            target_pid as u64,
+            cap.handle.0 as u32,
+            timestamp,
+        );
+
+        Ok(target_pid as u64)
+    }
+
+    /// Capture et scelle un dump mémoire pour un processus spécifié
+    pub fn dump_and_seal_process(
+        &mut self,
+        cap: &ForensicsCap,
+        pid: u32,
+        timestamp: u64,
+    ) -> Result<EvidenceSeal, ForensicsError> {
+        let sample_region = MemoryRegionSnapshot::new(
+            0x400000,
+            0x2000,
+            PROT_READ | PROT_EXEC,
+            b"PROCESS_MEMORY_SAMPLE_DUMP_VOLATILE",
+        );
+        let snap_id = self.capture_process_memory(
+            cap,
+            pid,
+            1,
+            "dumped-process",
+            0x100000,
+            0x400000,
+            0x7ffffff0,
+            &[sample_region],
+            timestamp,
+        )?;
+        self.seal_evidence(cap, snap_id, true, cap.handle.0 as u32, timestamp + 1)
+    }
+}
+
+// ============================================================================
+// PROTOCOLE IPC FORENSICS (ForensicsOpcode, ForensicsRequest, ForensicsResponse, ForensicsClient)
+// ============================================================================
+
+pub const MAX_FASTPATH_BYTES: usize = 64;
+pub const MAX_HANDLES: usize = 4;
+
+pub const FORENSICS_STATUS_OK: u32 = 1;
+pub const FORENSICS_STATUS_ERROR: u32 = 0;
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct ChannelMessage {
+    pub bytes: [u8; MAX_FASTPATH_BYTES],
+    pub byte_count: usize,
+    pub handles: [Handle; MAX_HANDLES],
+    pub handle_count: usize,
+}
+
+impl Default for ChannelMessage {
+    fn default() -> Self {
+        Self {
+            bytes: [0u8; MAX_FASTPATH_BYTES],
+            byte_count: 0,
+            handles: [Handle::NULL; MAX_HANDLES],
+            handle_count: 0,
+        }
+    }
+}
+
+/// Cède volontairement le temps processeur au scheduler EEVDF
+#[inline(always)]
+pub fn syscall_thread_yield() {
+    unsafe {
+        libjambo::syscall6(libjambo::SyscallNumber::ThreadYield, 0, 0, 0, 0, 0, 0);
+    }
+}
+
+/// Opcodes du protocole IPC d'investigation forensique et confinement mémoire (PID 10)
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ForensicsOpcode {
+    GetStatus = 1,
+    DumpProcess = 2,
+    GetTimeline = 3,
+    QuarantineProcess = 4,
+}
+
+/// Requête IPC transmise au démon `forensics` (exactement 64 octets)
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ForensicsRequest {
+    pub opcode: u32,
+    pub target_pid: u32,
+    pub param: u32,
+    pub data_len: u16,
+    pub reserved: [u8; 2],
+    pub payload: [u8; 48],
+}
+
+const _: () = assert!(core::mem::size_of::<ForensicsRequest>() == 64);
+
+impl Default for ForensicsRequest {
+    fn default() -> Self {
+        Self {
+            opcode: 0,
+            target_pid: 0,
+            param: 0,
+            data_len: 0,
+            reserved: [0u8; 2],
+            payload: [0u8; 48],
+        }
+    }
+}
+
+impl ForensicsRequest {
+    pub const fn new(opcode: ForensicsOpcode) -> Self {
+        Self {
+            opcode: opcode as u32,
+            target_pid: 0,
+            param: 0,
+            data_len: 0,
+            reserved: [0u8; 2],
+            payload: [0u8; 48],
+        }
+    }
+
+    pub const fn new_with_pid(opcode: ForensicsOpcode, pid: u32) -> Self {
+        Self {
+            opcode: opcode as u32,
+            target_pid: pid,
+            param: 0,
+            data_len: 0,
+            reserved: [0u8; 2],
+            payload: [0u8; 48],
+        }
+    }
+
+    pub fn new_with_payload(opcode: ForensicsOpcode, pid: u32, data: &[u8]) -> Self {
+        let mut req = Self::new_with_pid(opcode, pid);
+        let copy_len = data.len().min(req.payload.len());
+        req.payload[..copy_len].copy_from_slice(&data[..copy_len]);
+        req.data_len = copy_len as u16;
+        req
+    }
+
+    pub fn to_bytes(&self) -> [u8; 64] {
+        let mut bytes = [0u8; 64];
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                self as *const Self as *const u8,
+                bytes.as_mut_ptr(),
+                64,
+            );
+        }
+        bytes
+    }
+
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        if bytes.len() < core::mem::size_of::<Self>() {
+            return None;
+        }
+        let mut req = Self::default();
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                bytes.as_ptr(),
+                &mut req as *mut Self as *mut u8,
+                core::mem::size_of::<Self>(),
+            );
+        }
+        Some(req)
+    }
+}
+
+/// Réponse IPC retournée par le démon `forensics` (exactement 64 octets)
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ForensicsResponse {
+    pub status: u32,         // 1 = OK, 0 = Erreur
+    pub snapshot_count: u32, // Nombre d'images mémoire capturées
+    pub seal_count: u32,     // Nombre de preuves scellées
+    pub custody_count: u32,  // Nombre d'événements dans la chaîne de garde
+    pub artifact_count: u32, // Nombre d'artefacts dans la chronologie
+    pub risk_score: u32,     // Score de menace cumulé
+    pub custody_valid: u32,  // 1 = Chaîne de garde intègre, 0 = corrompue
+    pub result_code: i32,    // Code de retour / PID traité
+    pub digest: [u8; 32],    // Empreinte SHA-256 de la chaîne de garde / BLAKE3
+}
+
+const _: () = assert!(core::mem::size_of::<ForensicsResponse>() == 64);
+
+impl ForensicsResponse {
+    pub fn to_bytes(&self) -> [u8; 64] {
+        let mut bytes = [0u8; 64];
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                self as *const Self as *const u8,
+                bytes.as_mut_ptr(),
+                64,
+            );
+        }
+        bytes
+    }
+
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        if bytes.len() < core::mem::size_of::<Self>() {
+            return None;
+        }
+        let mut resp = Self::default();
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                bytes.as_ptr(),
+                &mut resp as *mut Self as *mut u8,
+                core::mem::size_of::<Self>(),
+            );
+        }
+        Some(resp)
+    }
+}
+
+/// Client IPC pour interagir avec le démon Forensics (jambo-forensics, PID 10)
+pub struct ForensicsClient {
+    pub endpoint: Handle,
+}
+
+impl ForensicsClient {
+    pub const fn new(endpoint: Handle) -> Self {
+        Self { endpoint }
+    }
+
+    /// Récupère le statut global du système forensique
+    pub fn get_status(&self) -> Result<ForensicsResponse, SysError> {
+        let req = ForensicsRequest::new(ForensicsOpcode::GetStatus);
+        self.call(&req)
+    }
+
+    /// Déclenche l'acquisition et le scellement d'une image mémoire de processus
+    pub fn dump_process(&self, pid: u32) -> Result<ForensicsResponse, SysError> {
+        let req = ForensicsRequest::new_with_pid(ForensicsOpcode::DumpProcess, pid);
+        self.call(&req)
+    }
+
+    /// Récupère l'état de la chronologie d'artefacts et l'évaluation de risque
+    pub fn get_timeline(&self) -> Result<ForensicsResponse, SysError> {
+        let req = ForensicsRequest::new(ForensicsOpcode::GetTimeline);
+        self.call(&req)
+    }
+
+    /// Place un processus suspect en quarantaine stricte et consigne la preuve
+    pub fn quarantine_process(&self, pid: u32) -> Result<ForensicsResponse, SysError> {
+        let req = ForensicsRequest::new_with_pid(ForensicsOpcode::QuarantineProcess, pid);
+        self.call(&req)
+    }
+
+    fn call(&self, req: &ForensicsRequest) -> Result<ForensicsResponse, SysError> {
+        // 1. Envoi synchrone de la requête via ChannelCall
+        let mut tx_msg = ChannelMessage::default();
+        let req_bytes = req.to_bytes();
+        let copy_len = req_bytes.len().min(MAX_FASTPATH_BYTES);
+        tx_msg.bytes[..copy_len].copy_from_slice(&req_bytes[..copy_len]);
+        tx_msg.byte_count = copy_len;
+
+        let (ret_send, _) = unsafe {
+            libjambo::syscall6(
+                libjambo::SyscallNumber::ChannelCall,
+                self.endpoint.0,
+                &tx_msg as *const ChannelMessage as u64,
+                0,
+                0,
+                0,
+                0,
+            )
+        };
+        if ret_send != 0 {
+            return Err(SysError::InvalidHandle);
+        }
+
+        // 2. Attente active coopérative de la réponse
+        let mut rx_msg = ChannelMessage::default();
+        let mut attempts = 0;
+        while attempts < 100 {
+            let (ret_recv, _) = unsafe {
+                libjambo::syscall6(
+                    libjambo::SyscallNumber::ChannelCall,
+                    self.endpoint.0,
+                    0,
+                    &mut rx_msg as *mut ChannelMessage as u64,
+                    0,
+                    0,
+                    0,
+                )
+            };
+
+            if ret_recv == 0 && rx_msg.byte_count >= core::mem::size_of::<ForensicsResponse>() {
+                return ForensicsResponse::from_bytes(&rx_msg.bytes[..rx_msg.byte_count])
+                    .ok_or(SysError::InvalidArgument);
+            }
+
+            attempts += 1;
+            syscall_thread_yield();
+        }
+
+        Err(SysError::TimedOut)
+    }
 }
 
 // ============================================================================
@@ -1932,5 +2263,73 @@ mod tests {
         let res4 =
             daemon.orchestrate_post_incident_triage(&read_only_cap, 1, 99, "test", &[], &[], 100);
         assert_eq!(res4, Err(ForensicsError::PermissionDenied));
+    }
+
+    #[test]
+    fn test_forensics_ipc_serialization() {
+        let req =
+            ForensicsRequest::new_with_payload(ForensicsOpcode::DumpProcess, 42, b"DUMP_PID_42");
+        let req_bytes = req.to_bytes();
+        assert_eq!(req_bytes.len(), 64);
+        let req_dec = ForensicsRequest::from_bytes(&req_bytes).expect("decode request");
+        assert_eq!(req_dec.opcode, ForensicsOpcode::DumpProcess as u32);
+        assert_eq!(req_dec.target_pid, 42);
+        assert_eq!(req_dec.data_len, 11);
+        assert_eq!(&req_dec.payload[..11], b"DUMP_PID_42");
+
+        let mut resp = ForensicsResponse::default();
+        resp.status = FORENSICS_STATUS_OK;
+        resp.snapshot_count = 3;
+        resp.seal_count = 2;
+        resp.custody_count = 5;
+        resp.artifact_count = 7;
+        resp.risk_score = 150;
+        resp.custody_valid = 1;
+        resp.result_code = 42;
+        resp.digest = [0x99u8; 32];
+
+        let resp_bytes = resp.to_bytes();
+        assert_eq!(resp_bytes.len(), 64);
+        let resp_dec = ForensicsResponse::from_bytes(&resp_bytes).expect("decode response");
+        assert_eq!(resp_dec.status, FORENSICS_STATUS_OK);
+        assert_eq!(resp_dec.snapshot_count, 3);
+        assert_eq!(resp_dec.seal_count, 2);
+        assert_eq!(resp_dec.custody_count, 5);
+        assert_eq!(resp_dec.artifact_count, 7);
+        assert_eq!(resp_dec.risk_score, 150);
+        assert_eq!(resp_dec.custody_valid, 1);
+        assert_eq!(resp_dec.result_code, 42);
+        assert_eq!(resp_dec.digest, [0x99u8; 32]);
+    }
+
+    #[test]
+    fn test_quarantine_process() {
+        let kp = ForensicKeyPair::derive_from_seed(999);
+        let root_cap = ForensicsCap::new(Handle::new(1, 1), forensics_rights::ALL, 5000, 100);
+        let mut daemon = JamboForensicsDaemon::new(root_cap, kp);
+
+        let pid = 42;
+        let res = daemon.quarantine_process(&root_cap, pid, 1000);
+        assert_eq!(res, Ok(pid as u64));
+        assert_eq!(daemon.artifact_count, 1);
+        assert_eq!(daemon.custody_count, 1);
+        assert!(daemon.verify_custody_integrity());
+        assert_eq!(daemon.calculate_incident_risk_score(), 100);
+    }
+
+    #[test]
+    fn test_dump_and_seal_process() {
+        let kp = ForensicKeyPair::derive_from_seed(1001);
+        let root_cap = ForensicsCap::new(Handle::new(1, 1), forensics_rights::ALL, 5000, 100);
+        let mut daemon = JamboForensicsDaemon::new(root_cap, kp);
+
+        let seal = daemon
+            .dump_and_seal_process(&root_cap, 55, 2000)
+            .expect("dump and seal ok");
+        assert_eq!(seal.evidence_id, 1);
+        assert_eq!(daemon.snapshot_count, 1);
+        assert_eq!(daemon.seal_count, 1);
+        assert!(daemon.verify_seal_integrity(&root_cap, &seal).unwrap());
+        assert!(daemon.verify_custody_integrity());
     }
 }

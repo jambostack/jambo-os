@@ -5,6 +5,9 @@ members = [
     "drivers/*",
     "libs/*",
 ]
+exclude = [
+    "services/jambo-forensics",
+]
 
 [profile.dev]
 panic = "abort"
