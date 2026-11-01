@@ -22,6 +22,7 @@ members = [
     "services/jambo-authd",
     "services/jambo-serviced",
     "services/jambo-dnsd",
+    "services/jambo-timed",
     "xtask",
 ]
 
