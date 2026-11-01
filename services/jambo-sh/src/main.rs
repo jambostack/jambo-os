@@ -15,7 +15,7 @@ fn panic(_info: &core::panic::PanicInfo) -> ! {
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     println("\x1b[1;36m========================================\x1b[0m");
-    println("\x1b[1;32m  JamboOS Object Shell (jsh) v0.3.49    \x1b[0m");
+    println("\x1b[1;32m  JamboOS Object Shell (jsh) v0.3.50    \x1b[0m");
     println("\x1b[1;36m========================================\x1b[0m");
     print("\x1b[1;32mjambo:/# \x1b[0m");
 

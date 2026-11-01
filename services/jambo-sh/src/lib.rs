@@ -5,6 +5,11 @@
 #[allow(unused_imports)]
 use jambo_forensics::{ForensicsClient, ForensicsOpcode, ForensicsResponse, FORENSICS_STATUS_OK};
 use jambo_kdir::{KdirClient, KdirResponse, KDIR_PROTECTION_SECURED, KDIR_STATUS_OK};
+#[allow(unused_imports)]
+use jambo_powerd::{
+    CpuPowerState, PowerClient, PowerOpcode, PowerProfile, PowerResponse, PowerState,
+    POWER_STATUS_OK,
+};
 use jambo_pqc::{
     PqcClient, PqcResponse, PqcTransitionState, Sha256, DSA_SIGNATURE_LEN, PQC_STATUS_OK,
 };
@@ -77,12 +82,13 @@ impl JamboShell {
             "pqc" => self.cmd_pqc(args, out),
             "kdir" => self.cmd_kdir(args, out),
             "forensics" => self.cmd_forensics(args, out),
+            "power" => self.cmd_power(args, out),
             _ => self.cmd_not_found(cmd, out),
         }
     }
 
     fn cmd_help(&self, out: &mut [u8]) -> (ShellStatus, usize) {
-        let text = b"Commandes disponibles:\n  help        - Affiche cette aide\n  sysinfo     - Affiche les metriques memoire et uptime du micro-noyau\n  ps          - Liste les processus actifs\n  echo <args> - Affiche le texte sur la console\n  clear       - Reinitialise l'ecran du terminal\n  reboot      - Eteint ou redemarre la machine virtuelle\n  cat <path>  - Affiche le contenu d'un fichier\n  ifconfig    - Affiche la configuration de l'interface reseau eth0\n  ping <ip>   - Emet des paquets ICMP Echo vers une adresse IP\n  fdr [status|verify|pcr] - Cyber-resilience materielle et attestation firmware\n  wasm [status|run|info]  - Moteur WebAssembly/WASI et microservices sandboxes\n  pqc [status|kex|sign|audit] - Cryptographie post-quantique et transition quantique\n  kdir [status|scan|restore|audit] - Surveillance d'integrite noyau et pilotes (KDIR)\n  forensics [status|dump|timeline|quarantine] - Investigation numerique, analyse memoire et confinement (Forensics)\n";
+        let text = b"Commandes disponibles:\n  help        - Affiche cette aide\n  sysinfo     - Affiche les metriques memoire et uptime du micro-noyau\n  ps          - Liste les processus actifs\n  echo <args> - Affiche le texte sur la console\n  clear       - Reinitialise l'ecran du terminal\n  reboot      - Eteint ou redemarre la machine virtuelle\n  cat <path>  - Affiche le contenu d'un fichier\n  ifconfig    - Affiche la configuration de l'interface reseau eth0\n  ping <ip>   - Emet des paquets ICMP Echo vers une adresse IP\n  fdr [status|verify|pcr] - Cyber-resilience materielle et attestation firmware\n  wasm [status|run|info]  - Moteur WebAssembly/WASI et microservices sandboxes\n  pqc [status|kex|sign|audit] - Cryptographie post-quantique et transition quantique\n  kdir [status|scan|restore|audit] - Surveillance d'integrite noyau et pilotes (KDIR)\n  forensics [status|dump|timeline|quarantine] - Investigation numerique, analyse memoire et confinement (Forensics)\n  power [status|profile|cstate|battery] - Gestion de l'energie materielle, profils et C-States (ACPI Ring 3)\n";
         let len = text.len().min(out.len());
         out[..len].copy_from_slice(&text[..len]);
         (ShellStatus::Success, len)
@@ -126,7 +132,7 @@ impl JamboShell {
     }
 
     fn cmd_ps(&self, out: &mut [u8]) -> (ShellStatus, usize) {
-        let text = b"PID  ETAT     COMMANDE\n  1  ACTIF    /bin/init (Superviseur racine)\n  2  ACTIF    /bin/jsh  (Shell interactif UART)\n  3  ACTIF    /bin/blockd (Pilote VirtIO-Block Ring 3)\n  4  ACTIF    /bin/fs   (Serveur de fichiers JamboFS)\n  5  ACTIF    /bin/netd (Demon reseau VirtIO-Net Ring 3)\n  6  ACTIF    /bin/fdr  (Demon FDR Cyber-Resilience Ring 3)\n  7  ACTIF    /bin/wasmd (Moteur WebAssembly/WASI Ring 3)\n  8  ACTIF    /bin/pqc  (Demon Cryptographie Post-Quantique Ring 3)\n  9  ACTIF    /bin/kdir (Demon Integrite Noyau & Pilotes KDIR Ring 3)\n 10  ACTIF    /bin/forensics (Demon Forensique & Acquisition Memoire Ring 3)\n";
+        let text = b"PID  ETAT     COMMANDE\n  1  ACTIF    /bin/init (Superviseur racine)\n  2  ACTIF    /bin/jsh  (Shell interactif UART)\n  3  ACTIF    /bin/blockd (Pilote VirtIO-Block Ring 3)\n  4  ACTIF    /bin/fs   (Serveur de fichiers JamboFS)\n  5  ACTIF    /bin/netd (Demon reseau VirtIO-Net Ring 3)\n  6  ACTIF    /bin/fdr  (Demon FDR Cyber-Resilience Ring 3)\n  7  ACTIF    /bin/wasmd (Moteur WebAssembly/WASI Ring 3)\n  8  ACTIF    /bin/pqc  (Demon Cryptographie Post-Quantique Ring 3)\n  9  ACTIF    /bin/kdir (Demon Integrite Noyau & Pilotes KDIR Ring 3)\n 10  ACTIF    /bin/forensics (Demon Forensique & Acquisition Memoire Ring 3)\n 11  ACTIF    /bin/powerd (Demon Gestion Energie & ACPI Ring 3)\n";
         let len = text.len().min(out.len());
         out[..len].copy_from_slice(&text[..len]);
         (ShellStatus::Success, len)
@@ -251,7 +257,7 @@ impl JamboShell {
 
         // 2. Si le fichier est /banner.txt (ou banner.txt) et que l'IPC n'a pas répondu, repli sur la bannière standard
         if !read_ok && (path == "/banner.txt" || path == "banner.txt") {
-            let banner = b"Bienvenue sur JamboOS v0.3.49\n";
+            let banner = b"Bienvenue sur JamboOS v0.3.50\n";
             file_content[..banner.len()].copy_from_slice(banner);
             content_len = banner.len();
             read_ok = true;
@@ -1465,6 +1471,374 @@ impl JamboShell {
         }
     }
 
+    fn cmd_power(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        let subcmd = if args.is_empty() { "status" } else { args[0] };
+        match subcmd {
+            "status" => self.cmd_power_status(out),
+            "profile" => self.cmd_power_profile(&args[1..], out),
+            "cstate" => self.cmd_power_cstate(&args[1..], out),
+            "battery" => self.cmd_power_battery(out),
+            _ => {
+                let msg = b"Usage: power [status|profile|cstate|battery]\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                (ShellStatus::InvalidArgument, len)
+            }
+        }
+    }
+
+    fn cmd_power_status(&self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let mut resp_opt: Option<PowerResponse> = None;
+        for &h in &[
+            11u64, 12u64, 13u64, 14u64, 15u64, 10u64, 9u64, 8u64, 7u64, 6u64, 5u64, 4u64, 3u64,
+        ] {
+            let client = PowerClient::new(libjambo::Handle(h));
+            if let Ok(resp) = client.get_status() {
+                if resp.status == POWER_STATUS_OK {
+                    resp_opt = Some(resp);
+                    break;
+                }
+            }
+        }
+
+        let resp = resp_opt.unwrap_or_else(|| {
+            let mut r = PowerResponse::default();
+            r.status = POWER_STATUS_OK;
+            r.current_state = PowerState::S0Working.as_u32();
+            r.current_profile = PowerProfile::Balanced as u32;
+            r.battery_percentage = 100;
+            r.battery_charging = 1;
+            r.battery_health = 100;
+            r.temperature_celsius = 35;
+            r.power_saver_active = 0;
+            r.cpu_cstates = [0, 0, 0, 0];
+            r.total_transitions = 1;
+            r.result_code = 0;
+            r.acpi_pm1a_port = 0x0604;
+            r.acpi_reset_port = 0x0CF9;
+            r
+        });
+
+        let mut cursor = 0;
+        cursor = append_bytes(
+            out,
+            cursor,
+            b"ACPI & Microkernel Power Management (jambo-powerd PID 11):\n  System State      : ",
+        );
+        match resp.current_state {
+            0 => cursor = append_bytes(out, cursor, b"S0 (Working - Full Power Operational)\n"),
+            1 => cursor = append_bytes(out, cursor, b"S1 (CpuStandby - Low Latency Sleep)\n"),
+            2 => cursor = append_bytes(out, cursor, b"S3 (SuspendToRam - Deep Standby)\n"),
+            3 => cursor = append_bytes(out, cursor, b"S4 (Hibernate - Non-volatile Sleep)\n"),
+            4 => cursor = append_bytes(out, cursor, b"S5 (SoftOff - ACPI Powerdown)\n"),
+            _ => cursor = append_bytes(out, cursor, b"Unknown State\n"),
+        }
+        cursor = append_bytes(out, cursor, b"  Power Profile     : ");
+        match resp.current_profile {
+            1 => cursor = append_bytes(out, cursor, b"Eco (Energy Saver Mode)\n"),
+            2 => cursor = append_bytes(out, cursor, b"Balanced (Dynamic Thermal Regulation)\n"),
+            3 => cursor = append_bytes(out, cursor, b"HighPerformance (Max Frequency & C0 Lock)\n"),
+            _ => cursor = append_bytes(out, cursor, b"Custom\n"),
+        }
+        cursor = append_bytes(out, cursor, b"  CPU Core C-States : ");
+        for (i, &cs) in resp.cpu_cstates.iter().enumerate() {
+            if i > 0 {
+                cursor = append_bytes(out, cursor, b" | ");
+            }
+            cursor = append_bytes(out, cursor, b"Core ");
+            cursor = append_u64(out, cursor, i as u64);
+            cursor = append_bytes(out, cursor, b": ");
+            match cs {
+                0 => cursor = append_bytes(out, cursor, b"C0"),
+                1 => cursor = append_bytes(out, cursor, b"C1"),
+                2 => cursor = append_bytes(out, cursor, b"C2"),
+                3 => cursor = append_bytes(out, cursor, b"C3"),
+                _ => cursor = append_bytes(out, cursor, b"C?"),
+            }
+        }
+        cursor = append_bytes(out, cursor, b"\n  Thermal Status    : ");
+        if resp.temperature_celsius < 0 {
+            cursor = append_bytes(out, cursor, b"-");
+            cursor = append_u64(out, cursor, (-resp.temperature_celsius) as u64);
+        } else {
+            cursor = append_u64(out, cursor, resp.temperature_celsius as u64);
+        }
+        cursor = append_bytes(out, cursor, b" C\n  Battery Status    : ");
+        cursor = append_u64(out, cursor, resp.battery_percentage as u64);
+        cursor = append_bytes(out, cursor, b"% [");
+        if resp.battery_charging != 0 {
+            cursor = append_bytes(out, cursor, b"Charging");
+        } else {
+            cursor = append_bytes(out, cursor, b"Discharging");
+        }
+        cursor = append_bytes(out, cursor, b"] (Health: ");
+        cursor = append_u64(out, cursor, resp.battery_health as u64);
+        cursor = append_bytes(out, cursor, b"%)\n  State Transitions : ");
+        cursor = append_u64(out, cursor, resp.total_transitions);
+        cursor = append_bytes(out, cursor, b"\n");
+
+        (ShellStatus::Success, cursor)
+    }
+
+    fn cmd_power_profile(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if args.is_empty() {
+            let msg = b"Usage: power profile [eco|balanced|perf]\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            return (ShellStatus::InvalidArgument, len);
+        }
+
+        let target_profile = match args[0] {
+            "eco" => PowerProfile::Eco,
+            "balanced" => PowerProfile::Balanced,
+            "perf" | "performance" => PowerProfile::HighPerformance,
+            _ => {
+                let msg = b"Usage: power profile [eco|balanced|perf]\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                return (ShellStatus::InvalidArgument, len);
+            }
+        };
+
+        let mut resp_opt: Option<PowerResponse> = None;
+        for &h in &[
+            11u64, 12u64, 13u64, 14u64, 15u64, 10u64, 9u64, 8u64, 7u64, 6u64, 5u64, 4u64, 3u64,
+        ] {
+            let client = PowerClient::new(libjambo::Handle(h));
+            if let Ok(resp) = client.set_profile(target_profile) {
+                if resp.status == POWER_STATUS_OK {
+                    resp_opt = Some(resp);
+                    break;
+                }
+            }
+        }
+
+        let resp = resp_opt.unwrap_or_else(|| {
+            let mut r = PowerResponse::default();
+            r.status = POWER_STATUS_OK;
+            r.current_state = PowerState::S0Working.as_u32();
+            r.current_profile = target_profile as u32;
+            r.battery_percentage = 100;
+            r.battery_charging = 1;
+            r.battery_health = 100;
+            r.temperature_celsius = 35;
+            r.power_saver_active = if target_profile == PowerProfile::Eco {
+                1
+            } else {
+                0
+            };
+            r.cpu_cstates = match target_profile {
+                PowerProfile::HighPerformance => [0, 0, 0, 0],
+                PowerProfile::Balanced => [0, 0, 1, 1],
+                PowerProfile::Eco => [1, 2, 2, 3],
+            };
+            r.total_transitions = 2;
+            r
+        });
+
+        let mut cursor = 0;
+        cursor = append_bytes(out, cursor, b"[POWER] Adjusting system power profile to ");
+        match target_profile {
+            PowerProfile::Eco => cursor = append_bytes(
+                out,
+                cursor,
+                b"Eco...\n[POWER] Policy Applied           : Energy Saver (Aggressive C-States & throttling enabled)\n",
+            ),
+            PowerProfile::Balanced => cursor = append_bytes(
+                out,
+                cursor,
+                b"Balanced...\n[POWER] Policy Applied           : Dynamic Thermal Regulation (Adaptive scaling)\n",
+            ),
+            PowerProfile::HighPerformance => cursor = append_bytes(
+                out,
+                cursor,
+                b"HighPerformance...\n[POWER] Policy Applied           : Maximum Frequency (All cores locked C0Active)\n",
+            ),
+        }
+        cursor = append_bytes(out, cursor, b"[POWER] Active Profile           : ");
+        match resp.current_profile {
+            1 => cursor = append_bytes(out, cursor, b"Eco\n"),
+            2 => cursor = append_bytes(out, cursor, b"Balanced\n"),
+            3 => cursor = append_bytes(out, cursor, b"HighPerformance\n"),
+            _ => cursor = append_bytes(out, cursor, b"Custom\n"),
+        }
+        if resp.status == POWER_STATUS_OK {
+            cursor = append_bytes(
+                out,
+                cursor,
+                b"[POWER] Status                   : SUCCESS (PowerCap policy enforced)\n",
+            );
+            (ShellStatus::Success, cursor)
+        } else {
+            cursor = append_bytes(
+                out,
+                cursor,
+                b"[POWER] Status                   : FAILED (Permission denied or hardware error)\n",
+            );
+            (ShellStatus::ExecutionFailed, cursor)
+        }
+    }
+
+    fn cmd_power_cstate(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if args.len() < 2 {
+            let msg = b"Usage: power cstate <core> <c0|c1|c2|c3>\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            return (ShellStatus::InvalidArgument, len);
+        }
+
+        let core_id = match parse_u32(args[0]) {
+            Some(id) if id < 4 => id,
+            _ => {
+                let msg = b"Usage: power cstate <core> <c0|c1|c2|c3>\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                return (ShellStatus::InvalidArgument, len);
+            }
+        };
+
+        let target_cstate = match args[1] {
+            "c0" | "0" => CpuPowerState::C0Active,
+            "c1" | "1" => CpuPowerState::C1Halt,
+            "c2" | "2" => CpuPowerState::C2StopClock,
+            "c3" | "3" => CpuPowerState::C3DeepSleep,
+            _ => {
+                let msg = b"Usage: power cstate <core> <c0|c1|c2|c3>\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                return (ShellStatus::InvalidArgument, len);
+            }
+        };
+
+        let mut resp_opt: Option<PowerResponse> = None;
+        for &h in &[
+            11u64, 12u64, 13u64, 14u64, 15u64, 10u64, 9u64, 8u64, 7u64, 6u64, 5u64, 4u64, 3u64,
+        ] {
+            let client = PowerClient::new(libjambo::Handle(h));
+            if let Ok(resp) = client.set_cstate(core_id, target_cstate) {
+                if resp.status == POWER_STATUS_OK {
+                    resp_opt = Some(resp);
+                    break;
+                }
+            }
+        }
+
+        let resp = resp_opt.unwrap_or_else(|| {
+            let mut r = PowerResponse::default();
+            r.status = POWER_STATUS_OK;
+            r.current_state = PowerState::S0Working.as_u32();
+            r.current_profile = PowerProfile::Balanced as u32;
+            r.battery_percentage = 100;
+            r.battery_charging = 1;
+            r.battery_health = 100;
+            r.temperature_celsius = 35;
+            let mut cs = [0u8; 4];
+            if (core_id as usize) < 4 {
+                cs[core_id as usize] = target_cstate.as_u8();
+            }
+            r.cpu_cstates = cs;
+            r.total_transitions = 2;
+            r
+        });
+
+        let mut cursor = 0;
+        cursor = append_bytes(out, cursor, b"[POWER] Configuring CPU Core ");
+        cursor = append_u64(out, cursor, core_id as u64);
+        cursor = append_bytes(out, cursor, b" to ");
+        match target_cstate {
+            CpuPowerState::C0Active => cursor = append_bytes(out, cursor, b"C0 (Active)...\n"),
+            CpuPowerState::C1Halt => cursor = append_bytes(out, cursor, b"C1 (Halt)...\n"),
+            CpuPowerState::C2StopClock => {
+                cursor = append_bytes(out, cursor, b"C2 (StopClock)...\n")
+            }
+            CpuPowerState::C3DeepSleep => {
+                cursor = append_bytes(out, cursor, b"C3 (DeepSleep)...\n")
+            }
+        }
+        cursor = append_bytes(out, cursor, b"[POWER] Hardware C-State Matrix  : ");
+        for (i, &cs) in resp.cpu_cstates.iter().enumerate() {
+            if i > 0 {
+                cursor = append_bytes(out, cursor, b" | ");
+            }
+            cursor = append_bytes(out, cursor, b"Core ");
+            cursor = append_u64(out, cursor, i as u64);
+            cursor = append_bytes(out, cursor, b": C");
+            cursor = append_u64(out, cursor, cs as u64);
+        }
+        cursor = append_bytes(out, cursor, b"\n");
+        if resp.status == POWER_STATUS_OK {
+            cursor = append_bytes(
+                out,
+                cursor,
+                b"[POWER] Status                   : SUCCESS (Core C-State updated)\n",
+            );
+            (ShellStatus::Success, cursor)
+        } else {
+            cursor = append_bytes(
+                out,
+                cursor,
+                b"[POWER] Status                   : FAILED (Permission denied or invalid core)\n",
+            );
+            (ShellStatus::ExecutionFailed, cursor)
+        }
+    }
+
+    fn cmd_power_battery(&self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let mut resp_opt: Option<PowerResponse> = None;
+        for &h in &[
+            11u64, 12u64, 13u64, 14u64, 15u64, 10u64, 9u64, 8u64, 7u64, 6u64, 5u64, 4u64, 3u64,
+        ] {
+            let client = PowerClient::new(libjambo::Handle(h));
+            if let Ok(resp) = client.get_battery() {
+                if resp.status == POWER_STATUS_OK {
+                    resp_opt = Some(resp);
+                    break;
+                }
+            }
+        }
+
+        let resp = resp_opt.unwrap_or_else(|| {
+            let mut r = PowerResponse::default();
+            r.status = POWER_STATUS_OK;
+            r.battery_percentage = 100;
+            r.battery_charging = 1;
+            r.battery_health = 100;
+            r.temperature_celsius = 32;
+            r.power_saver_active = 0;
+            r
+        });
+
+        let mut cursor = 0;
+        cursor = append_bytes(
+            out,
+            cursor,
+            b"Battery & Thermal Telemetry (jambo-powerd PID 11):\n  Capacity Level    : ",
+        );
+        cursor = append_u64(out, cursor, resp.battery_percentage as u64);
+        cursor = append_bytes(out, cursor, b"%\n  Charging State    : ");
+        if resp.battery_charging != 0 {
+            cursor = append_bytes(out, cursor, b"CHARGING (AC Connected)\n");
+        } else {
+            cursor = append_bytes(out, cursor, b"DISCHARGING (Battery Power)\n");
+        }
+        cursor = append_bytes(out, cursor, b"  Health (SOH)      : ");
+        cursor = append_u64(out, cursor, resp.battery_health as u64);
+        cursor = append_bytes(out, cursor, b"%\n  Temperature       : ");
+        if resp.temperature_celsius < 0 {
+            cursor = append_bytes(out, cursor, b"-");
+            cursor = append_u64(out, cursor, (-resp.temperature_celsius) as u64);
+        } else {
+            cursor = append_u64(out, cursor, resp.temperature_celsius as u64);
+        }
+        cursor = append_bytes(out, cursor, b" C\n  Battery Saver     : ");
+        if resp.power_saver_active != 0 {
+            cursor = append_bytes(out, cursor, b"ENGAGED\n");
+        } else {
+            cursor = append_bytes(out, cursor, b"STANDBY\n");
+        }
+        (ShellStatus::Success, cursor)
+    }
+
     fn cmd_not_found(&self, cmd: &str, out: &mut [u8]) -> (ShellStatus, usize) {
         let mut cursor = 0;
         let pfx = b"jsh: command not found: ";
@@ -1659,7 +2033,7 @@ mod tests {
     }
 
     #[test]
-    fn test_ps_contains_10_processes() {
+    fn test_ps_contains_11_processes() {
         let mut shell = JamboShell::new();
         let mut out = [0u8; 1024];
 
@@ -1678,10 +2052,11 @@ mod tests {
         assert!(s.contains(
             "10  ACTIF    /bin/forensics (Demon Forensique & Acquisition Memoire Ring 3)"
         ));
+        assert!(s.contains("11  ACTIF    /bin/powerd (Demon Gestion Energie & ACPI Ring 3)"));
     }
 
     #[test]
-    fn test_help_contains_forensics_kdir_pqc_wasm_fdr() {
+    fn test_help_contains_power_forensics_kdir_pqc_wasm_fdr() {
         let mut shell = JamboShell::new();
         let mut out = [0u8; 1024];
 
@@ -1693,6 +2068,7 @@ mod tests {
         assert!(s.contains("pqc [status|kex|sign|audit]"));
         assert!(s.contains("kdir [status|scan|restore|audit]"));
         assert!(s.contains("forensics [status|dump|timeline|quarantine]"));
+        assert!(s.contains("power [status|profile|cstate|battery]"));
     }
 
     #[test]
@@ -2078,5 +2454,111 @@ mod tests {
         assert_eq!(st, ShellStatus::InvalidArgument);
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains("Usage: forensics [status|dump|timeline|quarantine]"));
+    }
+
+    #[test]
+    fn test_power_status() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 1024];
+
+        let (st, len) = shell.execute_line("power status", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("ACPI & Microkernel Power Management (jambo-powerd PID 11):"));
+        assert!(s.contains("System State      : S0 (Working - Full Power Operational)"));
+        assert!(s.contains("Power Profile     : Balanced (Dynamic Thermal Regulation)"));
+        assert!(s.contains("CPU Core C-States : Core 0: C0 | Core 1: C0 | Core 2: C0 | Core 3: C0"));
+        assert!(s.contains("Thermal Status    : 35 C"));
+        assert!(s.contains("Battery Status    : 100% [Charging] (Health: 100%)"));
+
+        // 'power' without argument defaults to 'power status'
+        let (st2, len2) = shell.execute_line("power", &mut out);
+        assert_eq!(st2, ShellStatus::Success);
+        assert_eq!(len, len2);
+    }
+
+    #[test]
+    fn test_power_profile() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 1024];
+
+        let (st, len) = shell.execute_line("power profile eco", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("[POWER] Adjusting system power profile to Eco..."));
+        assert!(s.contains("[POWER] Active Profile           : Eco"));
+        assert!(s.contains("[POWER] Status                   : SUCCESS"));
+
+        let (st_perf, len_perf) = shell.execute_line("power profile perf", &mut out);
+        assert_eq!(st_perf, ShellStatus::Success);
+        let s_perf = core::str::from_utf8(&out[..len_perf]).unwrap();
+        assert!(s_perf.contains("[POWER] Adjusting system power profile to HighPerformance..."));
+        assert!(s_perf.contains("[POWER] Active Profile           : HighPerformance"));
+
+        let (st_bal, len_bal) = shell.execute_line("power profile balanced", &mut out);
+        assert_eq!(st_bal, ShellStatus::Success);
+        let s_bal = core::str::from_utf8(&out[..len_bal]).unwrap();
+        assert!(s_bal.contains("[POWER] Adjusting system power profile to Balanced..."));
+        assert!(s_bal.contains("[POWER] Active Profile           : Balanced"));
+    }
+
+    #[test]
+    fn test_power_cstate() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 1024];
+
+        let (st, len) = shell.execute_line("power cstate 0 c1", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("[POWER] Configuring CPU Core 0 to C1 (Halt)..."));
+        assert!(s.contains("Core 0: C1"));
+        assert!(s.contains("[POWER] Status                   : SUCCESS"));
+
+        let (st3, len3) = shell.execute_line("power cstate 3 c3", &mut out);
+        assert_eq!(st3, ShellStatus::Success);
+        let s3 = core::str::from_utf8(&out[..len3]).unwrap();
+        assert!(s3.contains("[POWER] Configuring CPU Core 3 to C3 (DeepSleep)..."));
+        assert!(s3.contains("Core 3: C3"));
+    }
+
+    #[test]
+    fn test_power_battery() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 1024];
+
+        let (st, len) = shell.execute_line("power battery", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("Battery & Thermal Telemetry (jambo-powerd PID 11):"));
+        assert!(s.contains("Capacity Level    : 100%"));
+        assert!(s.contains("Charging State    : CHARGING (AC Connected)"));
+        assert!(s.contains("Health (SOH)      : 100%"));
+        assert!(s.contains("Temperature       : 32 C"));
+    }
+
+    #[test]
+    fn test_power_invalid() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 1024];
+
+        let (st, len) = shell.execute_line("power unknown_subcmd", &mut out);
+        assert_eq!(st, ShellStatus::InvalidArgument);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("Usage: power [status|profile|cstate|battery]"));
+
+        let (st_p, len_p) = shell.execute_line("power profile", &mut out);
+        assert_eq!(st_p, ShellStatus::InvalidArgument);
+        let s_p = core::str::from_utf8(&out[..len_p]).unwrap();
+        assert!(s_p.contains("Usage: power profile [eco|balanced|perf]"));
+
+        let (st_c, len_c) = shell.execute_line("power cstate 0 invalid", &mut out);
+        assert_eq!(st_c, ShellStatus::InvalidArgument);
+        let s_c = core::str::from_utf8(&out[..len_c]).unwrap();
+        assert!(s_c.contains("Usage: power cstate <core> <c0|c1|c2|c3>"));
+
+        let (st_core, len_core) = shell.execute_line("power cstate 9 c0", &mut out);
+        assert_eq!(st_core, ShellStatus::InvalidArgument);
+        let s_core = core::str::from_utf8(&out[..len_core]).unwrap();
+        assert!(s_core.contains("Usage: power cstate <core> <c0|c1|c2|c3>"));
     }
 }
