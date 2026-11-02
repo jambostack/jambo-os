@@ -67,6 +67,13 @@ use jambo_metricsd::{
     MetricsRequest, MetricsResponse, METRICS_STATUS_OK,
 };
 #[allow(unused_imports)]
+use jambo_ndr::{
+    ndr_rights, FlowState, JamboNdrDaemon, NdrAuditEntry, NdrCap, NdrClient, NdrError, NdrOpcode,
+    NdrRequest, NdrResponse, NdrSummary, NdrThreat, NdrThreatType, NetworkFlow, ProtocolType,
+    QuarantinedEndpoint, RuleAction as NdrRuleAction, SecurityZone as NdrSecurityZone,
+    ThreatSeverity, TrafficRule, NDR_ENDPOINT_ID, NDR_MAGIC_REQ, NDR_MAGIC_RESP,
+};
+#[allow(unused_imports)]
 use jambo_pkgd::{
     pkg_rights, AbSlot, JamboPkgDaemon, JpkgManifest, PkgCap, PkgClient, PkgOpcode, PkgRequest,
     PkgResponse,
@@ -159,6 +166,7 @@ pub struct JamboShell {
     pub waf_daemon: JamboWafDaemon,
     pub siem_daemon: SiemEngine,
     pub edr_daemon: JamboEdrDaemon,
+    pub ndr_daemon: JamboNdrDaemon,
 }
 
 impl Default for JamboShell {
@@ -232,6 +240,14 @@ impl JamboShell {
         );
         let mut edr_daemon = JamboEdrDaemon::new(edr_cap);
         edr_daemon.init_defaults();
+        let ndr_cap = NdrCap::new(
+            libjambo::Handle::new(33, 1),
+            ndr_rights::ALL,
+            100_000,
+            10_000,
+        );
+        let mut ndr_daemon = JamboNdrDaemon::new(ndr_cap);
+        ndr_daemon.init_defaults();
         Self {
             prompt_user: "jambo",
             commands_executed: 0,
@@ -253,6 +269,7 @@ impl JamboShell {
             waf_daemon,
             siem_daemon,
             edr_daemon,
+            ndr_daemon,
         }
     }
 
@@ -315,6 +332,7 @@ impl JamboShell {
             "waf" => self.cmd_waf(args, out),
             "siem" => self.cmd_siem(args, out),
             "edr" => self.cmd_edr(args, out),
+            "ndr" => self.cmd_ndr(args, out),
             _ => self.cmd_not_found(cmd, out),
         }
     }
@@ -323,7 +341,7 @@ impl JamboShell {
         let text = b"Commandes disponibles:\n\
   help        - Affiche cette aide\n\
   sysinfo     - Metriques memoire et uptime du micro-noyau\n\
-  ps          - Liste les 32 processus actifs\n\
+  ps          - Liste les 33 processus actifs\n\
   echo <args> - Affiche le texte sur la console\n\
   clear       - Reinitialise l'ecran du terminal\n\
   reboot      - Eteint ou redemarre la machine virtuelle\n\
@@ -356,7 +374,8 @@ impl JamboShell {
   attest [status|list|claim|verify|zkp|confine|audit] - Attestation cryptographique a distance & ZKP\n\
   waf [status|inspect|quarantine|unquarantine|rules|audit] - Pare-feu applicatif L7 et filtrage d'injections\n\
   siem [status|ingest|alerts|correlate|rules|audit] - Moteur SIEM et correlation d'evenements temps reel Ring 3\n\
-  edr [status|scan|isolate|tree|alerts|audit] - Detection et reponse sur les terminaux souveraine EDR Ring 3\n";
+  edr [status|scan|isolate|tree|alerts|audit] - Detection et reponse sur les terminaux souveraine EDR Ring 3\n\
+  ndr [status|flows|inspect|isolate|alerts|audit] - Detection et reponse reseau souveraine NDR Ring 3\n";
         let len = text.len().min(out.len());
         out[..len].copy_from_slice(&text[..len]);
         (ShellStatus::Success, len)
@@ -432,7 +451,8 @@ impl JamboShell {
  29  ACTIF    /bin/attest (Remote Attestation & ZKP Daemon Ring 3)\n  29 | attest          | Ring 3 | Ready   | 1000   | Remote Attestation & Zero-Knowledge Proofs\n\
  30  ACTIF    /bin/waf (L7 Web Application Firewall Ring 3)\n  30 | waf             | Ring 3 | Ready   | 1000   | L7 Web Application Firewall & Injection Filter\n\
  31  ACTIF    /bin/siem (Security Information & Event Management Ring 3)\n  31 | siem            | Ring 3 | Ready   | 1000   | Security Information & Event Management\n\
- 32  ACTIF    /bin/edr (Endpoint Detection & Response Ring 3)\n  32 | edr             | Ring 3 | Ready   | 1000   | Endpoint Detection & Response Daemon\nTotal: 32 processes\n";
+ 32  ACTIF    /bin/edr (Endpoint Detection & Response Ring 3)\n  32 | edr             | Ring 3 | Ready   | 1000   | Endpoint Detection & Response Daemon\n\
+ 33  ACTIF    /bin/ndr (Network Detection & Response Ring 3)\n  33 | ndr             | Ring 3 | Ready   | 1000   | Network Detection & Response Daemon\nTotal: 33 processes\n";
         let len = text.len().min(out.len());
         out[..len].copy_from_slice(&text[..len]);
         (ShellStatus::Success, len)
@@ -8097,6 +8117,414 @@ ID  | Nom             | Racine de Confiance      | Statut             | Confinem
         }
         (ShellStatus::Success, c)
     }
+
+    fn send_ndr_request(&mut self, req: &NdrRequest) -> NdrResponse {
+        let mut resp_opt: Option<NdrResponse> = None;
+        for &h in &[
+            33u64, 32u64, 31u64, 30u64, 29u64, 28u64, 27u64, 26u64, 25u64, 24u64, 23u64, 22u64,
+            21u64, 20u64, 19u64, 18u64, 17u64, 16u64, 15u64, 14u64, 13u64, 12u64, 11u64, 10u64,
+            9u64, 8u64, 7u64, 6u64, 5u64, 4u64, 3u64,
+        ] {
+            let client = NdrClient::new(libjambo::Handle(h));
+            if let Ok(resp) = client.call(req) {
+                if resp.magic == NDR_MAGIC_RESP {
+                    resp_opt = Some(resp);
+                    break;
+                }
+            }
+        }
+        let local_resp = self.ndr_daemon.dispatch_ipc(req);
+        resp_opt.unwrap_or(local_resp)
+    }
+
+    pub fn cmd_ndr(&mut self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        let subcmd = if args.is_empty() { "status" } else { args[0] };
+        match subcmd {
+            "status" => self.cmd_ndr_status(out),
+            "flows" => self.cmd_ndr_flows(out),
+            "inspect" => self.cmd_ndr_inspect(&args[1..], out),
+            "isolate" => self.cmd_ndr_isolate(&args[1..], out),
+            "alerts" => self.cmd_ndr_alerts(out),
+            "audit" => self.cmd_ndr_audit(out),
+            _ => {
+                let msg = b"Usage: ndr <status|flows|inspect <id>|isolate <ip>|alerts|audit>\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                (ShellStatus::InvalidArgument, len)
+            }
+        }
+    }
+
+    fn cmd_ndr_status(&mut self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let req = NdrRequest::new_status(NDR_ENDPOINT_ID, ndr_rights::ALL);
+        let _resp = self.send_ndr_request(&req);
+        let summary = self.ndr_daemon.summary();
+
+        let mut c = 0;
+        c = append_bytes(
+            out,
+            c,
+            b"Bilan Global NDR & Surveillance Reseau Souveraine (jambo-ndr PID 33):\n  Statut Operationnel     : ACTIF (Surveillance Reseau & Zero-Trust Ring 3)\n  Flux Actifs             : ",
+        );
+        c = append_u64(out, c, summary.active_flows as u64);
+        c = append_bytes(out, c, b"\n  Flux Totaux Surveilles  : ");
+        c = append_u64(out, c, summary.total_flows_tracked);
+        c = append_bytes(out, c, b"\n  Endpoints en Quarantaine: ");
+        c = append_u64(out, c, summary.quarantined_endpoints as u64);
+        c = append_bytes(out, c, b"\n  Total Menaces Detectees : ");
+        c = append_u64(out, c, summary.threats_detected as u64);
+        c = append_bytes(out, c, b"\n  Balises C2 Detectees    : ");
+        c = append_u64(out, c, summary.c2_beacons_detected as u64);
+        c = append_bytes(out, c, b"\n  Exfiltrations Bloquees  : ");
+        c = append_u64(out, c, summary.exfiltrations_detected as u64);
+        c = append_bytes(out, c, b"\n  Tunnels DNS Detectes    : ");
+        c = append_u64(out, c, summary.dns_tunnels_detected as u64);
+        c = append_bytes(out, c, b"\n  Violations Microseg     : ");
+        c = append_u64(out, c, summary.microseg_violations as u64);
+        c = append_bytes(out, c, b"\n  Integrite Registre      : ");
+        if summary.ledger_valid {
+            c = append_bytes(out, c, b"VALIDE (Chaine SHA-256 inalterable)\n");
+        } else {
+            c = append_bytes(out, c, b"CORROMPU\n");
+        }
+        c = append_bytes(out, c, b"  Empreinte d'Audit SHA-256: ");
+        for &b in self.ndr_daemon.ledger_hash.iter() {
+            c = append_hex_byte(out, c, b);
+        }
+        c = append_bytes(out, c, b"\n");
+        (ShellStatus::Success, c)
+    }
+
+    fn cmd_ndr_flows(&self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let mut c = 0;
+        c = append_bytes(
+            out,
+            c,
+            b"Table des Flux Reseau Actifs NDR (PID 33):\nID    | Source                 | Destination            | Proto | Zone         | Statut\n----------------------------------------------------------------------------------------\n",
+        );
+        let mut count = 0;
+        for flow in self
+            .ndr_daemon
+            .flows
+            .iter()
+            .take(self.ndr_daemon.flow_count)
+            .flatten()
+        {
+            count += 1;
+            c = append_bytes(out, c, b" ");
+            c = append_u64(out, c, flow.flow_id as u64);
+            if flow.flow_id < 10 {
+                c = append_bytes(out, c, b"   | ");
+            } else if flow.flow_id < 100 {
+                c = append_bytes(out, c, b"  | ");
+            } else {
+                c = append_bytes(out, c, b" | ");
+            }
+            let start_src = c;
+            c = append_ipv4(out, c, &flow.src_ip);
+            c = append_bytes(out, c, b":");
+            c = append_u64(out, c, flow.src_port as u64);
+            let written_src = c - start_src;
+            for _ in written_src..22 {
+                c = append_bytes(out, c, b" ");
+            }
+            c = append_bytes(out, c, b" | ");
+
+            let start_dst = c;
+            c = append_ipv4(out, c, &flow.dst_ip);
+            c = append_bytes(out, c, b":");
+            c = append_u64(out, c, flow.dst_port as u64);
+            let written_dst = c - start_dst;
+            for _ in written_dst..22 {
+                c = append_bytes(out, c, b" ");
+            }
+            c = append_bytes(out, c, b" | ");
+
+            let proto = flow.protocol.as_str();
+            c = append_bytes(out, c, proto.as_bytes());
+            for _ in proto.len()..5 {
+                c = append_bytes(out, c, b" ");
+            }
+            c = append_bytes(out, c, b" | ");
+
+            let zone = flow.src_zone.as_str();
+            c = append_bytes(out, c, zone.as_bytes());
+            for _ in zone.len()..12 {
+                c = append_bytes(out, c, b" ");
+            }
+            c = append_bytes(out, c, b" | ");
+
+            let st = flow_state_str(flow.state);
+            c = append_bytes(out, c, st.as_bytes());
+            c = append_bytes(out, c, b"\n");
+        }
+        if count == 0 {
+            c = append_bytes(out, c, b"  (Aucun flux reseau actif enregistre)\n");
+        }
+        c = append_bytes(out, c, b"Total: ");
+        c = append_u64(out, c, count as u64);
+        c = append_bytes(out, c, b" flux actifs\n");
+        (ShellStatus::Success, c)
+    }
+
+    fn cmd_ndr_inspect(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if args.is_empty() {
+            let msg = b"Usage: ndr inspect <id>\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            return (ShellStatus::InvalidArgument, len);
+        }
+
+        let flow_id = match parse_u32(args[0]) {
+            Some(id) => id,
+            None => {
+                let msg = b"Usage: ndr inspect <id>\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                return (ShellStatus::InvalidArgument, len);
+            }
+        };
+
+        let flow = match self.ndr_daemon.get_flow(flow_id) {
+            Some(f) => f,
+            None => {
+                let mut c = 0;
+                c = append_bytes(out, c, b"NDR: Flux ID ");
+                c = append_u64(out, c, flow_id as u64);
+                c = append_bytes(out, c, b" non trouve\n");
+                return (ShellStatus::ExecutionFailed, c);
+            }
+        };
+
+        let jitter_ms = if flow.timestamp_count >= 3 {
+            let mut sum_diff = 0u64;
+            let n = flow.timestamp_count - 1;
+            for i in 0..(n - 1) {
+                let int1 = flow.packet_timestamps[i + 1].saturating_sub(flow.packet_timestamps[i]);
+                let int2 =
+                    flow.packet_timestamps[i + 2].saturating_sub(flow.packet_timestamps[i + 1]);
+                sum_diff += int1.abs_diff(int2);
+            }
+            sum_diff / ((n - 1) as u64)
+        } else {
+            0u64
+        };
+
+        let threat_level = if let Some(t) = self
+            .ndr_daemon
+            .threats
+            .iter()
+            .take(self.ndr_daemon.threat_count)
+            .flatten()
+            .find(|t| t.flow_id == flow.flow_id)
+        {
+            t.severity.as_str()
+        } else if flow.is_massive_exfiltration() {
+            "CRITICAL"
+        } else if flow.is_c2_beaconing() {
+            "HIGH"
+        } else {
+            "LOW"
+        };
+
+        let mut c = 0;
+        c = append_bytes(out, c, b"Rapport d'Inspection NDR - Flux ID ");
+        c = append_u64(out, c, flow_id as u64);
+        c = append_bytes(out, c, b":\n  Adresse Source          : ");
+        c = append_ipv4(out, c, &flow.src_ip);
+        c = append_bytes(out, c, b":");
+        c = append_u64(out, c, flow.src_port as u64);
+        c = append_bytes(out, c, b"\n  Adresse Destination     : ");
+        c = append_ipv4(out, c, &flow.dst_ip);
+        c = append_bytes(out, c, b":");
+        c = append_u64(out, c, flow.dst_port as u64);
+        c = append_bytes(out, c, b"\n  Protocole               : ");
+        c = append_bytes(out, c, flow.protocol.as_str().as_bytes());
+        c = append_bytes(out, c, b"\n  Zone Source             : ");
+        c = append_bytes(out, c, flow.src_zone.as_str().as_bytes());
+        c = append_bytes(out, c, b"\n  Zone Destination        : ");
+        c = append_bytes(out, c, flow.dst_zone.as_str().as_bytes());
+        c = append_bytes(out, c, b"\n  Statut du Flux          : ");
+        c = append_bytes(out, c, flow_state_str(flow.state).as_bytes());
+        c = append_bytes(out, c, b"\n  Octets Transferes       : ");
+        c = append_u64(out, c, flow.byte_count);
+        c = append_bytes(out, c, b" octets\n  Paquets Transferes      : ");
+        c = append_u64(out, c, flow.packet_count as u64);
+        c = append_bytes(out, c, b" paquets\n  Gigue Temporelle        : ");
+        c = append_u64(out, c, jitter_ms);
+        c = append_bytes(out, c, b" ms\n  Niveau de Menace        : ");
+        c = append_bytes(out, c, threat_level.as_bytes());
+        c = append_bytes(out, c, b"\n");
+        (ShellStatus::Success, c)
+    }
+
+    fn cmd_ndr_isolate(&mut self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if args.is_empty() {
+            let msg = b"Usage: ndr isolate <ip>\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            return (ShellStatus::InvalidArgument, len);
+        }
+
+        let ip = match parse_ipv4(args[0]) {
+            Some(parsed) => parsed,
+            None => {
+                let msg = b"NDR: Erreur: adresse IPv4 invalide\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                return (ShellStatus::InvalidArgument, len);
+            }
+        };
+
+        let cap = self.ndr_daemon.cap;
+        match self
+            .ndr_daemon
+            .quarantine_endpoint(&cap, ip, "Manual quarantine via jsh", 1000)
+        {
+            Ok(_) => {
+                let mut c = 0;
+                c = append_bytes(out, c, b"Confirmation d'Isolement NDR - Hote IPv4 ");
+                c = append_ipv4(out, c, &ip);
+                c = append_bytes(
+                    out,
+                    c,
+                    b":\n  Statut                  : Isole en Quarantaine O(1)\n  Motif                   : Manual quarantine via jsh\n  Endpoints en Quarantaine: ",
+                );
+                c = append_u64(out, c, self.ndr_daemon.quarantined_active_count() as u64);
+                c = append_bytes(out, c, b"\n  Empreinte d'Audit SHA-256: ");
+                for &b in self.ndr_daemon.ledger_hash.iter() {
+                    c = append_hex_byte(out, c, b);
+                }
+                c = append_bytes(out, c, b"\n");
+                (ShellStatus::Success, c)
+            }
+            Err(_) => {
+                let msg = b"NDR: Echec de l'isolement de l'hote\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                (ShellStatus::ExecutionFailed, len)
+            }
+        }
+    }
+
+    fn cmd_ndr_alerts(&self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let mut c = 0;
+        c = append_bytes(
+            out,
+            c,
+            b"Alertes de Securite & Anomalies Reseau NDR (PID 33):\nID    | Flux  | Hote IP         | Severite | Type             | Description\n----------------------------------------------------------------------------------------\n",
+        );
+        let count = self.ndr_daemon.threat_count;
+        if count == 0 {
+            c = append_bytes(out, c, b"  (Aucune menace reseau detectee)\n");
+        } else {
+            for threat in self.ndr_daemon.threats.iter().take(count).flatten() {
+                c = append_bytes(out, c, b" ");
+                c = append_u64(out, c, threat.threat_id as u64);
+                if threat.threat_id < 10 {
+                    c = append_bytes(out, c, b"   | ");
+                } else if threat.threat_id < 100 {
+                    c = append_bytes(out, c, b"  | ");
+                } else {
+                    c = append_bytes(out, c, b" | ");
+                }
+                c = append_u64(out, c, threat.flow_id as u64);
+                if threat.flow_id < 10 {
+                    c = append_bytes(out, c, b"    | ");
+                } else if threat.flow_id < 100 {
+                    c = append_bytes(out, c, b"   | ");
+                } else {
+                    c = append_bytes(out, c, b"  | ");
+                }
+                let start_ip = c;
+                c = append_ipv4(out, c, &threat.endpoint_ip);
+                let written_ip = c - start_ip;
+                for _ in written_ip..15 {
+                    c = append_bytes(out, c, b" ");
+                }
+                c = append_bytes(out, c, b" | ");
+                let sev = threat.severity.as_str();
+                c = append_bytes(out, c, sev.as_bytes());
+                for _ in sev.len()..8 {
+                    c = append_bytes(out, c, b" ");
+                }
+                c = append_bytes(out, c, b" | ");
+                let ttype = threat.threat_type.as_str();
+                c = append_bytes(out, c, ttype.as_bytes());
+                for _ in ttype.len()..16 {
+                    c = append_bytes(out, c, b" ");
+                }
+                c = append_bytes(out, c, b" | ");
+                c = append_bytes(out, c, threat.desc_as_str().as_bytes());
+                c = append_bytes(out, c, b"\n");
+            }
+        }
+        c = append_bytes(out, c, b"Total: ");
+        c = append_u64(out, c, count as u64);
+        c = append_bytes(out, c, b" menaces enregistrees\n");
+        (ShellStatus::Success, c)
+    }
+
+    fn cmd_ndr_audit(&self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let is_valid = self.ndr_daemon.verify_ledger_integrity();
+        let mut c = 0;
+        c = append_bytes(
+            out,
+            c,
+            b"Grand Livre d'Audit Cryptographique NDR (PID 33):\n  Integrite Registre      : ",
+        );
+        if is_valid {
+            c = append_bytes(out, c, b"VALIDE (Chaine SHA-256 inalterable)\n");
+        } else {
+            c = append_bytes(out, c, b"CORROMPU (Rupture d'integrite)\n");
+        }
+        c = append_bytes(out, c, b"  Total Entrees Scellees  : ");
+        c = append_u64(out, c, self.ndr_daemon.audit_count as u64);
+        c = append_bytes(out, c, b"\n  Empreinte Racine SHA-256: ");
+        for &b in self.ndr_daemon.ledger_hash.iter() {
+            c = append_hex_byte(out, c, b);
+        }
+        c = append_bytes(out, c, b"\nJournal recent des entrees scellees:\n");
+        let count = self.ndr_daemon.audit_count;
+        if count == 0 {
+            c = append_bytes(out, c, b"  (Aucune entree d'audit scellee)\n");
+        } else {
+            let start = count.saturating_sub(10);
+            for entry in self
+                .ndr_daemon
+                .audit_ledger
+                .iter()
+                .take(count)
+                .skip(start)
+                .flatten()
+            {
+                c = append_bytes(out, c, b"  [#");
+                c = append_u64(out, c, entry.index as u64);
+                c = append_bytes(out, c, b"] Tag: ");
+                let tag_str =
+                    core::str::from_utf8(&entry.action_tag[..entry.tag_len]).unwrap_or("");
+                c = append_bytes(out, c, tag_str.as_bytes());
+                c = append_bytes(out, c, b" Hash: ");
+                for &b in entry.entry_hash[..8].iter() {
+                    c = append_hex_byte(out, c, b);
+                }
+                c = append_bytes(out, c, b"...\n");
+            }
+        }
+        (ShellStatus::Success, c)
+    }
+}
+
+fn flow_state_str(state: FlowState) -> &'static str {
+    match state {
+        FlowState::New => "New",
+        FlowState::Active => "Active",
+        FlowState::Established => "Established",
+        FlowState::Closing => "Closing",
+        FlowState::Closed => "Closed",
+        FlowState::Quarantined => "Quarantined",
+        FlowState::Blocked => "Blocked",
+    }
 }
 
 fn event_source_str(src: EventSource) -> &'static str {
@@ -8835,7 +9263,7 @@ mod tests {
         assert!(
             s.contains("  30 | waf             | Ring 3 | Ready   | 1000   | L7 Web Application Firewall & Injection Filter")
         );
-        assert!(s.contains("Total: 32 processes"));
+        assert!(s.contains("Total: 33 processes"));
     }
 
     #[test]
@@ -8847,7 +9275,7 @@ mod tests {
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains("  23 | pkgd           | Ring 3 | Ready   | 1000   | Declarative Package Manager & CAS Store"));
-        assert!(s.contains("Total: 32 processes"));
+        assert!(s.contains("Total: 33 processes"));
     }
 
     #[test]
@@ -8859,7 +9287,7 @@ mod tests {
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains("  24 | certd          | Ring 3 | Ready   | 1000   | Ephemeral PKI & Cluster mTLS Daemon"));
-        assert!(s.contains("Total: 32 processes"));
+        assert!(s.contains("Total: 33 processes"));
     }
 
     #[test]
@@ -8871,7 +9299,7 @@ mod tests {
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains("  25 | policyd        | Ring 3 | Ready   | 1000   | Security Policy Engine & Admission Control"));
-        assert!(s.contains("Total: 32 processes"));
+        assert!(s.contains("Total: 33 processes"));
     }
 
     #[test]
@@ -8883,7 +9311,7 @@ mod tests {
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains("  26 | secboot        | Ring 3 | Ready   | 1000   | TPM 2.0 Measured Boot & Secure Trust Chain"));
-        assert!(s.contains("Total: 32 processes"));
+        assert!(s.contains("Total: 33 processes"));
     }
 
     #[test]
@@ -8895,7 +9323,7 @@ mod tests {
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains("  27 | logd           | Ring 3 | Ready   | 1000   | Structured Logging & Tamper-Evident Hash Chain"));
-        assert!(s.contains("Total: 32 processes"));
+        assert!(s.contains("Total: 33 processes"));
     }
 
     #[test]
@@ -8907,7 +9335,7 @@ mod tests {
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains("28 | kms | Running | Key Management Service & HKDF Derivation"));
-        assert!(s.contains("Total: 32 processes"));
+        assert!(s.contains("Total: 33 processes"));
     }
 
     #[test]
@@ -8922,7 +9350,7 @@ mod tests {
         assert!(s.contains(
             "  29 | attest          | Ring 3 | Ready   | 1000   | Remote Attestation & Zero-Knowledge Proofs"
         ));
-        assert!(s.contains("Total: 32 processes"));
+        assert!(s.contains("Total: 33 processes"));
     }
 
     #[test]
@@ -8937,7 +9365,7 @@ mod tests {
         assert!(s.contains(
             "  30 | waf             | Ring 3 | Ready   | 1000   | L7 Web Application Firewall & Injection Filter"
         ));
-        assert!(s.contains("Total: 32 processes"));
+        assert!(s.contains("Total: 33 processes"));
     }
 
     #[test]
@@ -8954,7 +9382,7 @@ mod tests {
         assert!(s.contains(
             "  31 | siem            | Ring 3 | Ready   | 1000   | Security Information & Event Management"
         ));
-        assert!(s.contains("Total: 32 processes"));
+        assert!(s.contains("Total: 33 processes"));
     }
 
     #[test]
@@ -8969,7 +9397,22 @@ mod tests {
         assert!(s.contains(
             "  32 | edr             | Ring 3 | Ready   | 1000   | Endpoint Detection & Response Daemon"
         ));
-        assert!(s.contains("Total: 32 processes"));
+        assert!(s.contains("Total: 33 processes"));
+    }
+
+    #[test]
+    fn test_ps_contains_33_processes() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        let (st, len) = shell.execute_line("ps", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("33  ACTIF    /bin/ndr (Network Detection & Response Ring 3)"));
+        assert!(s.contains(
+            "  33 | ndr             | Ring 3 | Ready   | 1000   | Network Detection & Response Daemon"
+        ));
+        assert!(s.contains("Total: 33 processes"));
     }
 
     #[test]
@@ -8980,7 +9423,7 @@ mod tests {
         let (st, len) = shell.execute_line("help", &mut out);
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
-        assert!(s.contains("32 processus actifs"));
+        assert!(s.contains("33 processus actifs"));
         assert!(s.contains("fdr [status|verify|pcr]"));
         assert!(s.contains("wasm [status|run|info]"));
         assert!(s.contains("pqc [status|kex|sign|audit]"));
@@ -9008,6 +9451,7 @@ mod tests {
         assert!(s.contains("waf [status|inspect|quarantine|unquarantine|rules|audit]"));
         assert!(s.contains("siem [status|ingest|alerts|correlate|rules|audit]"));
         assert!(s.contains("edr [status|scan|isolate|tree|alerts|audit]"));
+        assert!(s.contains("ndr [status|flows|inspect|isolate|alerts|audit]"));
     }
 
     #[test]
@@ -12606,5 +13050,216 @@ mod tests {
         assert_eq!(st2, ShellStatus::InvalidArgument);
         let s2 = core::str::from_utf8(&out[..len2]).unwrap();
         assert!(s2.contains("Usage: edr <status|scan <pid>|isolate <pid>|tree|alerts|audit>"));
+    }
+
+    #[test]
+    fn test_ndr_status() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        // 1. ndr status
+        let (st, len) = shell.execute_line("ndr status", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("Bilan Global NDR & Surveillance Reseau Souveraine (jambo-ndr PID 33):"));
+        assert!(s.contains("Statut Operationnel     : ACTIF"));
+        assert!(s.contains("Flux Actifs             : 0"));
+        assert!(s.contains("Endpoints en Quarantaine: 0"));
+        assert!(s.contains("Total Menaces Detectees : 0"));
+        assert!(s.contains("Empreinte d'Audit SHA-256:"));
+
+        // 2. bare ndr defaults to status
+        let (st2, len2) = shell.execute_line("ndr", &mut out);
+        assert_eq!(st2, ShellStatus::Success);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(
+            s2.contains("Bilan Global NDR & Surveillance Reseau Souveraine (jambo-ndr PID 33):")
+        );
+        assert!(s2.contains("Statut Operationnel     : ACTIF"));
+    }
+
+    #[test]
+    fn test_ndr_flows() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        // 1. Initialement aucun flux
+        let (st1, len1) = shell.execute_line("ndr flows", &mut out);
+        assert_eq!(st1, ShellStatus::Success);
+        let s1 = core::str::from_utf8(&out[..len1]).unwrap();
+        assert!(s1.contains("Table des Flux Reseau Actifs NDR (PID 33):"));
+        assert!(s1.contains("Aucun flux reseau actif enregistre"));
+        assert!(s1.contains("Total: 0 flux actifs"));
+
+        // 2. Ingestion d'un paquet pour créer un flux
+        let cap = shell.ndr_daemon.cap;
+        let _ = shell.ndr_daemon.ingest_packet(
+            &cap,
+            1,
+            [192, 168, 1, 10],
+            [10, 0, 0, 1],
+            4433,
+            80,
+            ProtocolType::Tcp,
+            NdrSecurityZone::ZoneUserApps,
+            NdrSecurityZone::ZoneCoreServices,
+            b"GET / HTTP/1.1\r\n\r\n",
+            100,
+        );
+
+        // 3. Consultation des flux
+        let (st2, len2) = shell.execute_line("ndr flows", &mut out);
+        assert_eq!(st2, ShellStatus::Success);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("192.168.1.10:4433"));
+        assert!(s2.contains("10.0.0.1:80"));
+        assert!(s2.contains("TCP"));
+        assert!(s2.contains("Total: 1 flux actifs"));
+    }
+
+    #[test]
+    fn test_ndr_inspect() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        // 1. Manque d'arguments
+        let (st1, len1) = shell.execute_line("ndr inspect", &mut out);
+        assert_eq!(st1, ShellStatus::InvalidArgument);
+        let s1 = core::str::from_utf8(&out[..len1]).unwrap();
+        assert!(s1.contains("Usage: ndr inspect <id>"));
+
+        // 2. ID non numérique
+        let (st2, _len2) = shell.execute_line("ndr inspect abc", &mut out);
+        assert_eq!(st2, ShellStatus::InvalidArgument);
+
+        // 3. ID inexistant
+        let (st3, len3) = shell.execute_line("ndr inspect 99", &mut out);
+        assert_eq!(st3, ShellStatus::ExecutionFailed);
+        let s3 = core::str::from_utf8(&out[..len3]).unwrap();
+        assert!(s3.contains("NDR: Flux ID 99 non trouve"));
+
+        // 4. Flux existant après ingestion
+        let cap = shell.ndr_daemon.cap;
+        let _ = shell.ndr_daemon.ingest_packet(
+            &cap,
+            42,
+            [172, 16, 0, 5],
+            [10, 0, 0, 2],
+            5000,
+            8080,
+            ProtocolType::Tcp,
+            NdrSecurityZone::ZoneUserApps,
+            NdrSecurityZone::ZoneCoreServices,
+            b"ping data",
+            200,
+        );
+
+        let (st4, len4) = shell.execute_line("ndr inspect 42", &mut out);
+        assert_eq!(st4, ShellStatus::Success);
+        let s4 = core::str::from_utf8(&out[..len4]).unwrap();
+        assert!(s4.contains("Rapport d'Inspection NDR - Flux ID 42:"));
+        assert!(s4.contains("Adresse Source          : 172.16.0.5:5000"));
+        assert!(s4.contains("Adresse Destination     : 10.0.0.2:8080"));
+        assert!(s4.contains("Protocole               : TCP"));
+        assert!(s4.contains("Octets Transferes       : 9 octets"));
+        assert!(s4.contains("Paquets Transferes      : 1 paquets"));
+        assert!(s4.contains("Gigue Temporelle        : 0 ms"));
+        assert!(s4.contains("Niveau de Menace        : LOW"));
+    }
+
+    #[test]
+    fn test_ndr_isolate() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        // 1. Manque d'arguments
+        let (st1, len1) = shell.execute_line("ndr isolate", &mut out);
+        assert_eq!(st1, ShellStatus::InvalidArgument);
+        let s1 = core::str::from_utf8(&out[..len1]).unwrap();
+        assert!(s1.contains("Usage: ndr isolate <ip>"));
+
+        // 2. IP invalide
+        let (st2, len2) = shell.execute_line("ndr isolate not.an.ip", &mut out);
+        assert_eq!(st2, ShellStatus::InvalidArgument);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("NDR: Erreur: adresse IPv4 invalide"));
+
+        // 3. Isolement réussi
+        let (st3, len3) = shell.execute_line("ndr isolate 10.0.5.99", &mut out);
+        assert_eq!(st3, ShellStatus::Success);
+        let s3 = core::str::from_utf8(&out[..len3]).unwrap();
+        assert!(s3.contains("Confirmation d'Isolement NDR - Hote IPv4 10.0.5.99:"));
+        assert!(s3.contains("Statut                  : Isole en Quarantaine O(1)"));
+        assert!(s3.contains("Endpoints en Quarantaine: 1"));
+
+        // Vérification que le statut NDR reflète la quarantaine
+        assert!(shell.ndr_daemon.is_endpoint_quarantined(&[10, 0, 5, 99]));
+    }
+
+    #[test]
+    fn test_ndr_alerts() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        // 1. Initialement vide
+        let (st1, len1) = shell.execute_line("ndr alerts", &mut out);
+        assert_eq!(st1, ShellStatus::Success);
+        let s1 = core::str::from_utf8(&out[..len1]).unwrap();
+        assert!(s1.contains("Alertes de Securite & Anomalies Reseau NDR (PID 33):"));
+        assert!(s1.contains("Aucune menace reseau detectee"));
+        assert!(s1.contains("Total: 0 menaces enregistrees"));
+
+        // 2. Enregistrement d'une menace C2 Beaconing
+        shell.ndr_daemon.record_threat(
+            101,
+            [192, 168, 1, 50],
+            NdrThreatType::C2Beaconing,
+            ThreatSeverity::High,
+            500,
+            "C2 Beaconing detected",
+        );
+
+        // 3. Consultation des alertes
+        let (st2, len2) = shell.execute_line("ndr alerts", &mut out);
+        assert_eq!(st2, ShellStatus::Success);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("192.168.1.50"));
+        assert!(s2.contains("HIGH"));
+        assert!(s2.contains("C2_BEACONING"));
+        assert!(s2.contains("C2 Beaconing detected"));
+        assert!(s2.contains("Total: 1 menaces enregistrees"));
+    }
+
+    #[test]
+    fn test_ndr_audit() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        let (st, len) = shell.execute_line("ndr audit", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("Grand Livre d'Audit Cryptographique NDR (PID 33):"));
+        assert!(s.contains("Integrite Registre      : VALIDE (Chaine SHA-256 inalterable)"));
+        assert!(s.contains("Total Entrees Scellees  : 1"));
+        assert!(s.contains("Empreinte Racine SHA-256:"));
+        assert!(s.contains("Tag: NDR_INIT"));
+    }
+
+    #[test]
+    fn test_ndr_invalid() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        // Commande inconnue
+        let (st1, len1) = shell.execute_line("ndr unknown_cmd", &mut out);
+        assert_eq!(st1, ShellStatus::InvalidArgument);
+        let s1 = core::str::from_utf8(&out[..len1]).unwrap();
+        assert!(s1.contains("Usage: ndr <status|flows|inspect <id>|isolate <ip>|alerts|audit>"));
+
+        // Help explicite
+        let (st2, len2) = shell.execute_line("ndr help", &mut out);
+        assert_eq!(st2, ShellStatus::InvalidArgument);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("Usage: ndr <status|flows|inspect <id>|isolate <ip>|alerts|audit>"));
     }
 }
