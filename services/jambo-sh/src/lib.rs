@@ -80,6 +80,12 @@ use jambo_secboot::{
     SecBootResponse, SecureBootManager, Sha256, PCR_COUNT,
 };
 #[allow(unused_imports)]
+use jambo_siem::{
+    siem_rights, AlertState, EventCategory, EventRing, EventSource, RuleKind, SecurityEvent,
+    Severity, SiemAlert, SiemCap, SiemClient, SiemEngine, SiemError, SiemOp, SiemOpcode,
+    SiemRequest, SiemResponse, SIEM_ENDPOINT_ID, SIEM_MAGIC_REQ, SIEM_MAGIC_RESP,
+};
+#[allow(unused_imports)]
 use jambo_timed::{
     time_rights, ClockServo, JamboTimeDaemon, PreciseTime, PtpSample, ServoMode, TimeClient,
     TimeOpcode, TimeRequest, TimeResponse, TimeSyncCap,
@@ -143,6 +149,7 @@ pub struct JamboShell {
     pub kms_daemon: KmsManager,
     pub attest_daemon: JamboAttestDaemon,
     pub waf_daemon: JamboWafDaemon,
+    pub siem_daemon: SiemEngine,
 }
 
 impl Default for JamboShell {
@@ -205,6 +212,9 @@ impl JamboShell {
         let waf_cap = WafCap::new(libjambo::Handle::new(30, 1), waf_rights::ALL, 100_000, 1);
         let mut waf_daemon = JamboWafDaemon::new(waf_cap);
         waf_daemon.init_defaults();
+        let siem_cap = SiemCap::new(siem_rights::ALL);
+        let mut siem_daemon = SiemEngine::new(libjambo::Handle::new(31, 1), siem_cap);
+        siem_daemon.init_defaults();
         Self {
             prompt_user: "jambo",
             commands_executed: 0,
@@ -224,6 +234,7 @@ impl JamboShell {
             kms_daemon,
             attest_daemon,
             waf_daemon,
+            siem_daemon,
         }
     }
 
@@ -284,6 +295,7 @@ impl JamboShell {
             "kms" => self.cmd_kms(args, out),
             "attest" => self.cmd_attest(args, out),
             "waf" => self.cmd_waf(args, out),
+            "siem" => self.cmd_siem(args, out),
             _ => self.cmd_not_found(cmd, out),
         }
     }
@@ -292,7 +304,7 @@ impl JamboShell {
         let text = b"Commandes disponibles:\n\
   help        - Affiche cette aide\n\
   sysinfo     - Metriques memoire et uptime du micro-noyau\n\
-  ps          - Liste les 30 processus actifs\n\
+  ps          - Liste les 31 processus actifs\n\
   echo <args> - Affiche le texte sur la console\n\
   clear       - Reinitialise l'ecran du terminal\n\
   reboot      - Eteint ou redemarre la machine virtuelle\n\
@@ -323,7 +335,8 @@ impl JamboShell {
   log [status|append|tail|verify|clear] - Journalisation structuree et chainage cryptographique Ring 3\n\
   kms [status|list|create|derive|lease|rotate|revoke] - Gestionnaire de cles souveraines & HKDF\n\
   attest [status|list|claim|verify|zkp|confine|audit] - Attestation cryptographique a distance & ZKP\n\
-  waf [status|inspect|quarantine|unquarantine|rules|audit] - Pare-feu applicatif L7 et filtrage d'injections\n";
+  waf [status|inspect|quarantine|unquarantine|rules|audit] - Pare-feu applicatif L7 et filtrage d'injections\n\
+  siem [status|ingest|alerts|correlate|rules|audit] - Moteur SIEM et correlation d'evenements temps reel Ring 3\n";
         let len = text.len().min(out.len());
         out[..len].copy_from_slice(&text[..len]);
         (ShellStatus::Success, len)
@@ -397,7 +410,8 @@ impl JamboShell {
  27  ACTIF    /bin/logd (Demon Journalisation & Chaine Inviolable Ring 3)\n  27 | logd           | Ring 3 | Ready   | 1000   | Structured Logging & Tamper-Evident Hash Chain\n\
  28  ACTIF    /bin/kms (Key Management Service & HKDF Derivation Ring 3)\n  28 | kms            | Ring 3 | Ready   | 1000   | Key Management Service & HKDF Derivation\n  28 | kms | Running | Key Management Service & HKDF Derivation\n\
  29  ACTIF    /bin/attest (Remote Attestation & ZKP Daemon Ring 3)\n  29 | attest          | Ring 3 | Ready   | 1000   | Remote Attestation & Zero-Knowledge Proofs\n\
- 30  ACTIF    /bin/waf (L7 Web Application Firewall Ring 3)\n  30 | waf             | Ring 3 | Ready   | 1000   | L7 Web Application Firewall & Injection Filter\nTotal: 30 processes\n";
+ 30  ACTIF    /bin/waf (L7 Web Application Firewall Ring 3)\n  30 | waf             | Ring 3 | Ready   | 1000   | L7 Web Application Firewall & Injection Filter\n\
+ 31  ACTIF    /bin/siem (Security Information & Event Management Ring 3)\n  31 | siem            | Ring 3 | Ready   | 1000   | Security Information & Event Management\nTotal: 31 processes\n";
         let len = text.len().min(out.len());
         out[..len].copy_from_slice(&text[..len]);
         (ShellStatus::Success, len)
@@ -7316,6 +7330,423 @@ ID  | Nom             | Racine de Confiance      | Statut             | Confinem
         c = append_bytes(out, c, b" evenements scelles\n");
         (ShellStatus::Success, c)
     }
+
+    fn send_siem_request(&mut self, req: &SiemRequest) -> SiemResponse {
+        let mut resp_opt: Option<SiemResponse> = None;
+        for &h in &[
+            31u64, 30u64, 29u64, 28u64, 27u64, 26u64, 25u64, 24u64, 23u64, 22u64, 21u64, 20u64,
+            19u64, 18u64, 17u64, 16u64, 15u64, 14u64, 13u64, 12u64, 11u64, 10u64, 9u64, 8u64, 7u64,
+            6u64, 5u64, 4u64, 3u64,
+        ] {
+            let client = SiemClient::new(libjambo::Handle(h));
+            if let Ok(resp) = client.call(req) {
+                if resp.magic == SIEM_MAGIC_RESP {
+                    resp_opt = Some(resp);
+                    break;
+                }
+            }
+        }
+        let local_resp = self.siem_daemon.dispatch_ipc(req);
+        resp_opt.unwrap_or(local_resp)
+    }
+
+    pub fn cmd_siem(&mut self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        let subcmd = if args.is_empty() { "status" } else { args[0] };
+        match subcmd {
+            "status" => self.cmd_siem_status(out),
+            "ingest" => self.cmd_siem_ingest(&args[1..], out),
+            "alerts" => self.cmd_siem_alerts(out),
+            "correlate" => self.cmd_siem_correlate(out),
+            "rules" => self.cmd_siem_rules(out),
+            "audit" => self.cmd_siem_audit(out),
+            _ => {
+                let msg = b"Usage: siem [status|ingest <source> <category> <severity> <message>|alerts|correlate|rules|audit]\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                (ShellStatus::InvalidArgument, len)
+            }
+        }
+    }
+
+    fn cmd_siem_status(&mut self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let req = SiemRequest::new_status(31, siem_rights::ALL);
+        let resp = self.send_siem_request(&req);
+
+        let active_rules = self.siem_daemon.rules.iter().filter(|r| r.enabled).count();
+
+        let mut max_sev = Severity::Informational;
+        for i in 0..self.siem_daemon.alerts.len() {
+            if let Some(a) = self.siem_daemon.alerts.get(i) {
+                if a.severity > max_sev {
+                    max_sev = a.severity;
+                }
+            }
+        }
+
+        let mut c = 0;
+        c = append_bytes(
+            out,
+            c,
+            b"Bilan Global SIEM & Correlation de Securite (jambo-siem PID 31):\n  Statut Operationnel     : ACTIF (Correlation Temps Reel & Zero-Alloc Ring 3)\n  Regles Actives          : ",
+        );
+        c = append_u64(out, c, active_rules as u64);
+        c = append_bytes(out, c, b"\n  Total Evenements        : ");
+        c = append_u64(out, c, resp.events_count as u64);
+        c = append_bytes(out, c, b"\n  Total Alertes           : ");
+        c = append_u64(out, c, resp.alerts_count as u64);
+        c = append_bytes(out, c, b"\n  Score de Menace         : ");
+        c = append_u64(out, c, resp.threat_score as u64);
+        c = append_bytes(out, c, b"/100\n  Severite Maximale       : ");
+        c = append_bytes(out, c, severity_str(max_sev).as_bytes());
+        c = append_bytes(out, c, b"\n  Empreinte d'Audit SHA-256: ");
+        for &b in self.siem_daemon.audit_chain.iter() {
+            c = append_hex_byte(out, c, b);
+        }
+        c = append_bytes(out, c, b"\n");
+        (ShellStatus::Success, c)
+    }
+
+    fn cmd_siem_ingest(&mut self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if args.len() < 4 {
+            let msg = b"Usage: siem ingest <source> <category> <severity> <message>\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            return (ShellStatus::InvalidArgument, len);
+        }
+
+        let source = match args[0] {
+            s if s.eq_ignore_ascii_case("walld") || s.eq_ignore_ascii_case("jambo-walld") => {
+                EventSource::JamboWalld
+            }
+            s if s.eq_ignore_ascii_case("idps") || s.eq_ignore_ascii_case("jambo-idps") => {
+                EventSource::JamboIdps
+            }
+            s if s.eq_ignore_ascii_case("ids") || s.eq_ignore_ascii_case("jambo-ids") => {
+                EventSource::JamboIds
+            }
+            s if s.eq_ignore_ascii_case("auditd") || s.eq_ignore_ascii_case("jambo-auditd") => {
+                EventSource::JamboAuditd
+            }
+            s if s.eq_ignore_ascii_case("waf") || s.eq_ignore_ascii_case("jambo-waf") => {
+                EventSource::JamboWaf
+            }
+            s if s.eq_ignore_ascii_case("ddos") || s.eq_ignore_ascii_case("jambo-ddos") => {
+                EventSource::JamboDdos
+            }
+            s if s.eq_ignore_ascii_case("authd") || s.eq_ignore_ascii_case("jambo-authd") => {
+                EventSource::JamboAuthd
+            }
+            s if s.eq_ignore_ascii_case("syslog") || s.eq_ignore_ascii_case("jambo-syslog") => {
+                EventSource::JamboSyslog
+            }
+            s => match parse_u32(s) {
+                Some(v) => EventSource::from_u8(v as u8),
+                None => EventSource::Unknown,
+            },
+        };
+
+        let category = match args[1] {
+            s if s.eq_ignore_ascii_case("auth") || s.eq_ignore_ascii_case("authentication") => {
+                EventCategory::Authentication
+            }
+            s if s.eq_ignore_ascii_case("net") || s.eq_ignore_ascii_case("network") => {
+                EventCategory::Network
+            }
+            s if s.eq_ignore_ascii_case("proc") || s.eq_ignore_ascii_case("process") => {
+                EventCategory::Process
+            }
+            s if s.eq_ignore_ascii_case("file") => EventCategory::File,
+            s if s.eq_ignore_ascii_case("vuln") || s.eq_ignore_ascii_case("vulnerability") => {
+                EventCategory::Vulnerability
+            }
+            s if s.eq_ignore_ascii_case("sys") || s.eq_ignore_ascii_case("system") => {
+                EventCategory::System
+            }
+            s => match parse_u32(s) {
+                Some(v) => EventCategory::from_u8(v as u8),
+                None => EventCategory::Other,
+            },
+        };
+
+        let severity = match args[2] {
+            s if s.eq_ignore_ascii_case("info") || s.eq_ignore_ascii_case("informational") => {
+                Severity::Informational
+            }
+            s if s.eq_ignore_ascii_case("low") => Severity::Low,
+            s if s.eq_ignore_ascii_case("med") || s.eq_ignore_ascii_case("medium") => {
+                Severity::Medium
+            }
+            s if s.eq_ignore_ascii_case("high") => Severity::High,
+            s if s.eq_ignore_ascii_case("crit") || s.eq_ignore_ascii_case("critical") => {
+                Severity::Critical
+            }
+            s => match parse_u32(s) {
+                Some(v) => Severity::from_u8(v as u8),
+                None => Severity::Informational,
+            },
+        };
+
+        let mut msg_buf = [0u8; 64];
+        let mut msg_len = 0;
+        for (idx, &part) in args[3..].iter().enumerate() {
+            if idx > 0 && msg_len < msg_buf.len() {
+                msg_buf[msg_len] = b' ';
+                msg_len += 1;
+            }
+            let p_bytes = part.as_bytes();
+            let to_copy = p_bytes.len().min(msg_buf.len().saturating_sub(msg_len));
+            msg_buf[msg_len..msg_len + to_copy].copy_from_slice(&p_bytes[..to_copy]);
+            msg_len += to_copy;
+        }
+        let msg_str = core::str::from_utf8(&msg_buf[..msg_len]).unwrap_or("");
+        let raw_risk = (severity as u8).saturating_mul(25);
+
+        let req = SiemRequest::new_ingest(
+            31,
+            siem_rights::ALL,
+            source,
+            category,
+            severity,
+            raw_risk,
+            1,
+            msg_str,
+        );
+        let resp = self.send_siem_request(&req);
+
+        let mut c = 0;
+        c = append_bytes(
+            out,
+            c,
+            b"[SIEM] Evenement ingere avec succes:\n  Identifiant             : ",
+        );
+        c = append_u64(out, c, resp.events_count as u64);
+        c = append_bytes(out, c, b"\n  Source                  : ");
+        c = append_bytes(out, c, event_source_str(source).as_bytes());
+        c = append_bytes(out, c, b"\n  Categorie               : ");
+        c = append_bytes(out, c, event_category_str(category).as_bytes());
+        c = append_bytes(out, c, b"\n  Severite                : ");
+        c = append_bytes(out, c, severity_str(severity).as_bytes());
+        c = append_bytes(out, c, b"\n  Score de Menace         : ");
+        c = append_u64(out, c, resp.threat_score as u64);
+        c = append_bytes(out, c, b"/100\n  Nouvelles Alertes       : ");
+        c = append_u64(out, c, resp.rule_id as u64);
+        c = append_bytes(out, c, b"\n");
+        (ShellStatus::Success, c)
+    }
+
+    fn cmd_siem_alerts(&self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let mut c = 0;
+        c = append_bytes(
+            out,
+            c,
+            b"Alertes de securite (jambo-siem PID 31):\nID    | Regle Declenchee         | Severite | Menace | Statut\n--------------------------------------------------------------------------------\n",
+        );
+        let count = self.siem_daemon.alerts.len();
+        if count == 0 {
+            c = append_bytes(out, c, b"  (Aucune alerte de securite dans la file)\n");
+        } else {
+            for i in 0..count {
+                if let Some(alert) = self.siem_daemon.alerts.get(i) {
+                    c = append_bytes(out, c, b" ");
+                    c = append_u64(out, c, alert.alert_id);
+                    if alert.alert_id < 10 {
+                        c = append_bytes(out, c, b"   | ");
+                    } else if alert.alert_id < 100 {
+                        c = append_bytes(out, c, b"  | ");
+                    } else {
+                        c = append_bytes(out, c, b" | ");
+                    }
+                    let rname = rule_kind_str(alert.rule_kind);
+                    c = append_bytes(out, c, rname.as_bytes());
+                    for _ in rname.len()..24 {
+                        c = append_bytes(out, c, b" ");
+                    }
+                    c = append_bytes(out, c, b" | ");
+                    let sev = severity_str(alert.severity);
+                    c = append_bytes(out, c, sev.as_bytes());
+                    for _ in sev.len()..8 {
+                        c = append_bytes(out, c, b" ");
+                    }
+                    c = append_bytes(out, c, b" | ");
+                    c = append_u64(out, c, alert.threat_score as u64);
+                    if alert.threat_score < 10 {
+                        c = append_bytes(out, c, b"      | ");
+                    } else if alert.threat_score < 100 {
+                        c = append_bytes(out, c, b"     | ");
+                    } else {
+                        c = append_bytes(out, c, b"    | ");
+                    }
+                    c = append_bytes(out, c, alert_state_str(alert.state).as_bytes());
+                    c = append_bytes(out, c, b"\n");
+                }
+            }
+        }
+        c = append_bytes(out, c, b"Total: ");
+        c = append_u64(out, c, count as u64);
+        c = append_bytes(out, c, b" alertes enregistrees\n");
+        (ShellStatus::Success, c)
+    }
+
+    fn cmd_siem_correlate(&mut self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let req = SiemRequest::new_run_correlation(31, siem_rights::ALL, 1);
+        let resp = self.send_siem_request(&req);
+
+        let mut c = 0;
+        c = append_bytes(
+            out,
+            c,
+            b"Cycle de correlation execute (jambo-siem PID 31):\n  Score de Menace         : ",
+        );
+        c = append_u64(out, c, resp.threat_score as u64);
+        c = append_bytes(out, c, b"/100\n  Nouvelles Alertes       : ");
+        c = append_u64(out, c, resp.rule_id as u64);
+        c = append_bytes(out, c, b"\n  Total Alertes           : ");
+        c = append_u64(out, c, resp.alerts_count as u64);
+        c = append_bytes(out, c, b"\n");
+        (ShellStatus::Success, c)
+    }
+
+    fn cmd_siem_rules(&self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let mut c = 0;
+        c = append_bytes(
+            out,
+            c,
+            b"Regles de correlation SIEM configurees (jambo-siem PID 31):\nID  | Nom                      | Severite | Seuil | Menace | Etat\n--------------------------------------------------------------------------------\n",
+        );
+        let mut count = 0;
+        for rule in self.siem_daemon.rules.iter() {
+            if !rule.enabled {
+                continue;
+            }
+            count += 1;
+            c = append_bytes(out, c, b" ");
+            c = append_u64(out, c, rule.id as u64);
+            c = append_bytes(out, c, b"  | ");
+            let name = rule_kind_str(rule.kind);
+            c = append_bytes(out, c, name.as_bytes());
+            for _ in name.len()..24 {
+                c = append_bytes(out, c, b" ");
+            }
+            c = append_bytes(out, c, b" | ");
+            let sev = severity_str(rule.alert_severity);
+            c = append_bytes(out, c, sev.as_bytes());
+            for _ in sev.len()..8 {
+                c = append_bytes(out, c, b" ");
+            }
+            c = append_bytes(out, c, b" | ");
+            c = append_u64(out, c, rule.threshold as u64);
+            if rule.threshold < 10 {
+                c = append_bytes(out, c, b"    | ");
+            } else {
+                c = append_bytes(out, c, b"   | ");
+            }
+            c = append_u64(out, c, rule.threat_score as u64);
+            c = append_bytes(out, c, b"     | Active\n");
+        }
+        c = append_bytes(out, c, b"Total: ");
+        c = append_u64(out, c, count as u64);
+        c = append_bytes(out, c, b" regles actives\n");
+        (ShellStatus::Success, c)
+    }
+
+    fn cmd_siem_audit(&self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let mut c = 0;
+        c = append_bytes(
+            out,
+            c,
+            b"Registre d'Audit Cryptographique Scelle (jambo-siem PID 31):\n  Empreinte d'Audit SHA-256: ",
+        );
+        for &b in self.siem_daemon.audit_chain.iter() {
+            c = append_hex_byte(out, c, b);
+        }
+        c = append_bytes(out, c, b"\nEvenements recents scelles:\n");
+
+        let count = self.siem_daemon.ring.len();
+        if count == 0 {
+            c = append_bytes(out, c, b"  (Aucun evenement d'audit enregistre)\n");
+        } else {
+            let start = count.saturating_sub(10);
+            for i in start..count {
+                if let Some(ev) = self.siem_daemon.ring.get(i) {
+                    c = append_bytes(out, c, b"  [#");
+                    c = append_u64(out, c, ev.id);
+                    c = append_bytes(out, c, b"] Source: ");
+                    c = append_bytes(out, c, event_source_str(ev.source).as_bytes());
+                    c = append_bytes(out, c, b" | Cat: ");
+                    c = append_bytes(out, c, event_category_str(ev.category).as_bytes());
+                    c = append_bytes(out, c, b" | Sev: ");
+                    c = append_bytes(out, c, severity_str(ev.severity).as_bytes());
+                    c = append_bytes(out, c, b" | Hash: ");
+                    for &b in ev.sha256[..8].iter() {
+                        c = append_hex_byte(out, c, b);
+                    }
+                    c = append_bytes(out, c, b"...\n");
+                }
+            }
+        }
+        c = append_bytes(out, c, b"Total: ");
+        c = append_u64(out, c, self.siem_daemon.event_count());
+        c = append_bytes(out, c, b" evenements scelles\n");
+        (ShellStatus::Success, c)
+    }
+}
+
+fn event_source_str(src: EventSource) -> &'static str {
+    match src {
+        EventSource::JamboWalld => "jambo-walld",
+        EventSource::JamboIdps => "jambo-idps",
+        EventSource::JamboIds => "jambo-ids",
+        EventSource::JamboAuditd => "jambo-auditd",
+        EventSource::JamboWaf => "jambo-waf",
+        EventSource::JamboDdos => "jambo-ddos",
+        EventSource::JamboAuthd => "jambo-authd",
+        EventSource::JamboSyslog => "jambo-syslog",
+        EventSource::Unknown => "unknown",
+    }
+}
+
+fn event_category_str(cat: EventCategory) -> &'static str {
+    match cat {
+        EventCategory::Authentication => "Authentication",
+        EventCategory::Network => "Network",
+        EventCategory::Process => "Process",
+        EventCategory::File => "File",
+        EventCategory::Vulnerability => "Vulnerability",
+        EventCategory::System => "System",
+        EventCategory::Other => "Other",
+    }
+}
+
+fn severity_str(sev: Severity) -> &'static str {
+    match sev {
+        Severity::Informational => "Informational",
+        Severity::Low => "Low",
+        Severity::Medium => "Medium",
+        Severity::High => "High",
+        Severity::Critical => "Critical",
+    }
+}
+
+fn rule_kind_str(kind: RuleKind) -> &'static str {
+    match kind {
+        RuleKind::BruteForce => "Brute Force",
+        RuleKind::LateralMovement => "Lateral Movement",
+        RuleKind::PrivilegeEscalation => "Privilege Escalation",
+        RuleKind::DataExfiltration => "Data Exfiltration",
+        RuleKind::C2Beacon => "C2 Beacon",
+        RuleKind::AptMultiStage => "APT Multi-Stage",
+        RuleKind::AnomalousBehavior => "Anomalous Behavior",
+    }
+}
+
+fn alert_state_str(state: AlertState) -> &'static str {
+    match state {
+        AlertState::New => "New",
+        AlertState::Acknowledged => "Acknowledged",
+        AlertState::InvestigationInProgress => "InProgress",
+        AlertState::Resolved => "Resolved",
+        AlertState::FalsePositive => "FalsePositive",
+    }
 }
 
 fn format_policy_action(mask: u32, out: &mut [u8], mut c: usize) -> usize {
@@ -7940,7 +8371,7 @@ mod tests {
         assert!(
             s.contains("  30 | waf             | Ring 3 | Ready   | 1000   | L7 Web Application Firewall & Injection Filter")
         );
-        assert!(s.contains("Total: 30 processes"));
+        assert!(s.contains("Total: 31 processes"));
     }
 
     #[test]
@@ -7952,7 +8383,7 @@ mod tests {
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains("  23 | pkgd           | Ring 3 | Ready   | 1000   | Declarative Package Manager & CAS Store"));
-        assert!(s.contains("Total: 30 processes"));
+        assert!(s.contains("Total: 31 processes"));
     }
 
     #[test]
@@ -7964,7 +8395,7 @@ mod tests {
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains("  24 | certd          | Ring 3 | Ready   | 1000   | Ephemeral PKI & Cluster mTLS Daemon"));
-        assert!(s.contains("Total: 30 processes"));
+        assert!(s.contains("Total: 31 processes"));
     }
 
     #[test]
@@ -7976,7 +8407,7 @@ mod tests {
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains("  25 | policyd        | Ring 3 | Ready   | 1000   | Security Policy Engine & Admission Control"));
-        assert!(s.contains("Total: 30 processes"));
+        assert!(s.contains("Total: 31 processes"));
     }
 
     #[test]
@@ -7988,7 +8419,7 @@ mod tests {
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains("  26 | secboot        | Ring 3 | Ready   | 1000   | TPM 2.0 Measured Boot & Secure Trust Chain"));
-        assert!(s.contains("Total: 30 processes"));
+        assert!(s.contains("Total: 31 processes"));
     }
 
     #[test]
@@ -8000,7 +8431,7 @@ mod tests {
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains("  27 | logd           | Ring 3 | Ready   | 1000   | Structured Logging & Tamper-Evident Hash Chain"));
-        assert!(s.contains("Total: 30 processes"));
+        assert!(s.contains("Total: 31 processes"));
     }
 
     #[test]
@@ -8012,7 +8443,7 @@ mod tests {
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains("28 | kms | Running | Key Management Service & HKDF Derivation"));
-        assert!(s.contains("Total: 30 processes"));
+        assert!(s.contains("Total: 31 processes"));
     }
 
     #[test]
@@ -8027,7 +8458,7 @@ mod tests {
         assert!(s.contains(
             "  29 | attest          | Ring 3 | Ready   | 1000   | Remote Attestation & Zero-Knowledge Proofs"
         ));
-        assert!(s.contains("Total: 30 processes"));
+        assert!(s.contains("Total: 31 processes"));
     }
 
     #[test]
@@ -8042,7 +8473,24 @@ mod tests {
         assert!(s.contains(
             "  30 | waf             | Ring 3 | Ready   | 1000   | L7 Web Application Firewall & Injection Filter"
         ));
-        assert!(s.contains("Total: 30 processes"));
+        assert!(s.contains("Total: 31 processes"));
+    }
+
+    #[test]
+    fn test_ps_contains_31_processes() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        let (st, len) = shell.execute_line("ps", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(
+            s.contains("31  ACTIF    /bin/siem (Security Information & Event Management Ring 3)")
+        );
+        assert!(s.contains(
+            "  31 | siem            | Ring 3 | Ready   | 1000   | Security Information & Event Management"
+        ));
+        assert!(s.contains("Total: 31 processes"));
     }
 
     #[test]
@@ -8053,7 +8501,7 @@ mod tests {
         let (st, len) = shell.execute_line("help", &mut out);
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
-        assert!(s.contains("30 processus actifs"));
+        assert!(s.contains("31 processus actifs"));
         assert!(s.contains("fdr [status|verify|pcr]"));
         assert!(s.contains("wasm [status|run|info]"));
         assert!(s.contains("pqc [status|kex|sign|audit]"));
@@ -8079,6 +8527,7 @@ mod tests {
         assert!(s.contains("kms [status|list|create|derive|lease|rotate|revoke]"));
         assert!(s.contains("attest [status|list|claim|verify|zkp|confine|audit]"));
         assert!(s.contains("waf [status|inspect|quarantine|unquarantine|rules|audit]"));
+        assert!(s.contains("siem [status|ingest|alerts|correlate|rules|audit]"));
     }
 
     #[test]
@@ -11361,5 +11810,142 @@ mod tests {
         assert_eq!(st2, ShellStatus::InvalidArgument);
         let s2 = core::str::from_utf8(&out[..len2]).unwrap();
         assert!(s2.contains("Usage: waf [status|inspect <uri> [body]|quarantine <ip>|unquarantine <ip>|rules|audit]"));
+    }
+
+    #[test]
+    fn test_siem_status() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        let (st, len) = shell.execute_line("siem status", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("Bilan Global SIEM & Correlation de Securite (jambo-siem PID 31)"));
+        assert!(s.contains("Regles Actives          : 6"));
+        assert!(s.contains("Total Evenements        : 0"));
+        assert!(s.contains("Total Alertes           : 0"));
+        assert!(s.contains("Score de Menace         : 0/100"));
+        assert!(s.contains("Severite Maximale       : Informational"));
+        assert!(s.contains("Empreinte d'Audit SHA-256"));
+
+        // Default 'siem' command executes 'status'
+        let (st2, len2) = shell.execute_line("siem", &mut out);
+        assert_eq!(st2, ShellStatus::Success);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("Bilan Global SIEM & Correlation de Securite"));
+    }
+
+    #[test]
+    fn test_siem_ingest() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        let (st, len) = shell.execute_line(
+            "siem ingest walld net high unauthorized_connection_attempt",
+            &mut out,
+        );
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("[SIEM] Evenement ingere avec succes:"));
+        assert!(s.contains("Identifiant             : 1"));
+        assert!(s.contains("Source                  : jambo-walld"));
+        assert!(s.contains("Categorie               : Network"));
+        assert!(s.contains("Severite                : High"));
+        assert!(s.contains("Score de Menace"));
+
+        // Erreur d'arguments manquants
+        let (st2, len2) = shell.execute_line("siem ingest walld net", &mut out);
+        assert_eq!(st2, ShellStatus::InvalidArgument);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("Usage: siem ingest <source> <category> <severity> <message>"));
+    }
+
+    #[test]
+    fn test_siem_alerts() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        // 1. Initialement vide
+        let (st1, len1) = shell.execute_line("siem alerts", &mut out);
+        assert_eq!(st1, ShellStatus::Success);
+        let s1 = core::str::from_utf8(&out[..len1]).unwrap();
+        assert!(s1.contains("Alertes de securite (jambo-siem PID 31)"));
+        assert!(s1.contains("Aucune alerte de securite dans la file"));
+
+        // 2. Déclenchement d'une règle (Privilege Escalation : seuil 1 sur catégorie Process)
+        let (st2, len2) = shell.execute_line(
+            "siem ingest auditd proc crit privilege_escalation_attempt",
+            &mut out,
+        );
+        assert_eq!(st2, ShellStatus::Success);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("Nouvelles Alertes       : 1"));
+
+        // 3. Consultation des alertes
+        let (st3, len3) = shell.execute_line("siem alerts", &mut out);
+        assert_eq!(st3, ShellStatus::Success);
+        let s3 = core::str::from_utf8(&out[..len3]).unwrap();
+        assert!(s3.contains("Privilege Escalation"));
+        assert!(s3.contains("Critical"));
+        assert!(s3.contains("95"));
+        assert!(s3.contains("New"));
+        assert!(s3.contains("Total: 1 alertes enregistrees"));
+    }
+
+    #[test]
+    fn test_siem_correlate() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        let (st, len) = shell.execute_line("siem correlate", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("Cycle de correlation execute (jambo-siem PID 31)"));
+        assert!(s.contains("Score de Menace"));
+        assert!(s.contains("Nouvelles Alertes"));
+        assert!(s.contains("Total Alertes"));
+    }
+
+    #[test]
+    fn test_siem_rules() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        let (st, len) = shell.execute_line("siem rules", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("Regles de correlation SIEM configurees (jambo-siem PID 31)"));
+        assert!(s.contains("Brute Force"));
+        assert!(s.contains("Lateral Movement"));
+        assert!(s.contains("Privilege Escalation"));
+        assert!(s.contains("Data Exfiltration"));
+        assert!(s.contains("C2 Beacon"));
+        assert!(s.contains("APT Multi-Stage"));
+        assert!(s.contains("Total: 6 regles actives"));
+    }
+
+    #[test]
+    fn test_siem_audit() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        // Ingestion d'un événement pour peupler le journal d'audit
+        let _ = shell.execute_line("siem ingest walld net low ping_probe", &mut out);
+
+        let (st, len) = shell.execute_line("siem audit", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("Registre d'Audit Cryptographique Scelle (jambo-siem PID 31)"));
+        assert!(s.contains("Empreinte d'Audit SHA-256"));
+        assert!(s.contains("jambo-walld"));
+        assert!(s.contains("Network"));
+        assert!(s.contains("Low"));
+        assert!(s.contains("Total: 1 evenements scelles"));
+
+        // Commande invalide
+        let (st2, len2) = shell.execute_line("siem invalid_cmd", &mut out);
+        assert_eq!(st2, ShellStatus::InvalidArgument);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("Usage: siem [status|ingest <source> <category> <severity> <message>|alerts|correlate|rules|audit]"));
     }
 }

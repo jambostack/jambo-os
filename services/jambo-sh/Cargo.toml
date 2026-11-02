@@ -1,6 +1,6 @@
 [package]
 name = "jambo-sh"
-version = "0.3.69"
+version = "0.3.70"
 edition = "2021"
 
 [lib]
@@ -41,4 +41,5 @@ jambo-logd = { path = "../jambo-logd" }
 jambo-kms = { path = "../jambo-kms" }
 jambo-attest = { path = "../jambo-attest" }
 jambo-waf = { path = "../jambo-waf" }
+jambo-siem = { path = "../jambo-siem" }
 
