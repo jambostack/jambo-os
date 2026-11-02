@@ -3,7 +3,7 @@ BdsDxe: starting Boot0002 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x
 [2J[01;01H[01;01H[2J[01;01H[01;01H[BOOT] Protocole Limine actif (révision détectée : 3)
 [1;36m
 ================================================================================
-    JAMBO-OS (JamboKernel v0.3.66 — Iron Core)                                 
+    JAMBO-OS (JamboKernel v0.3.67 — Iron Core)                                 
     Architecture : Micro-noyau orienté capacités en Rust no_std (x86_64/AArch64)
     Auteur & Architecte Principal : ASSOGBA Prudence Dieudonné                 
     Dépôt Officiel : https://github.com/jambostack/jambo-os                    
@@ -72,7 +72,7 @@ BdsDxe: starting Boot0002 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x
 [SMP] Cœur AP #3 démarré (LAPIC ID: 3)
 [SCHED/EEVDF] Ordonnanceur EEVDF opérationnel avec 2 threads de test en file
 [BOOT/MODULES] Détection de 1 module(s) d'amorçage Limine :
-  [00] Module '/boot/initrd.tar' | 4192256 octets (cmdline: '')
+  [00] Module '/boot/initrd.tar' | 4384768 octets (cmdline: '')
 [INITRD/TAR] Superviseur '/bin/init' extrait (0x23e0 octets)
 [INITRD/TAR] Shell interactif '/bin/jsh' extrait (0x2d478 octets)
 [INITRD/TAR] Démon de stockage '/bin/blockd' extrait (0x134e8 octets)
@@ -100,6 +100,7 @@ BdsDxe: starting Boot0002 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x
 [INITRD/TAR] Demon Moteur Politiques Securite '/bin/policyd' extrait (0x6920 octets)
 [INITRD/TAR] Demon Démarrage Mesuré TPM 2.0 '/bin/secboot' extrait (0x6988 octets)
 [INITRD/TAR] Demon Journalisation Structuree '/bin/logd' extrait (0x5808 octets)
+[INITRD/TAR] Demon Gestion Cles & HKDF '/bin/kms' extrait (0x8ea8 octets)
 [PROCESS] Processus utilisateur init (PID 1) initialisé avec pile System V ABI (RSP: 0x00007ffffffeff10)
 [PROCESS] Shell utilisateur interactif jsh (PID 2) initialisé avec pile System V ABI (RSP: 0x00007ffffffeff20) et enfilé
 [PROCESS] Démon de stockage blockd (PID 3) initialisé avec pile System V ABI (RSP: 0x00007ffffffeff20) et enfilé
@@ -127,6 +128,7 @@ BdsDxe: starting Boot0002 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x
 [PROCESS] Demon Moteur Politiques Securite policyd (PID 25) initialise avec pile System V ABI (RSP: 0x00007ffffffeff20) et enfile
 [PROCESS] Demon Demarrage Mesure TPM 2.0 secboot (PID 26) initialise avec pile System V ABI (RSP: 0x00007ffffffeff20) et enfile
 [PROCESS] Demon Journalisation Structuree logd (PID 27) initialise avec pile System V ABI (RSP: 0x00007ffffffeff20) et enfile
+[PROCESS] Demon Gestion Cles & HKDF kms (PID 28) initialise avec pile System V ABI (RSP: 0x00007ffffffeff20) et enfile
 [CAP/CSPACE] Table de capacités active. Handle initial: 0x100000001, Handle atténué: 0x100000002
 [SYSCALL] Appel système vmo_create validé (Code retour: 0, Nouveau Handle: 0x100000003)
 [SYSCALL] Cycle de vie validé : process_create (0x100000004), thread_create (0x100000005), vmo_map & thread_start
@@ -151,6 +153,15 @@ BdsDxe: starting Boot0002 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x
 
 [1;32m[PASS] JamboKernel Iron Core (Ring 0 & Ring 3 transition) validé sous QEMU.[0m
 
-[TEST] Validation de l'initialisation des 27 processus Ring 3 (init, jsh, blockd, fs, netd, fdr, wasmd, pqc, kdir, forensics, powerd, metricsd, bpfd, vpn, authd, dnsd, timed, auditd, walld, vaultd, watchdogd, cored, pkgd, certd, policyd, secboot, logd)...
-[1;32m[PASS] Journalisation Structuree & Chainage Hash (jambo-logd PID 27) validee sous QEMU.[0m
+[KMS] Magasin de cles cryptographiques initialise (PID 28).
+[KMS] Demarrage de l'auto-test du service KMS...
+[KMS] Auto-test: Cle maitresse 'cluster-root-kek' verifiee : OK.
+[KMS] Auto-test: Derivation HKDF RFC 5869 d'une cle enfant reussie.
+[KMS] Auto-test: Attribution et consommation de bail validees.
+[KMS] Auto-test: Revocation et zeroisation volatile validee.
+[KMS] Auto-test reussi : cycle de vie, HKDF et zeroisation valides.
+[KMS] Serveur KMS (jambo-kms PID 28) pret.
+[KMS] Canal IPC KMS operationnel (endpoint PID 28 pret).
+[TEST] Validation de l'initialisation des 28 processus Ring 3 (init, jsh, blockd, fs, netd, fdr, wasmd, pqc, kdir, forensics, powerd, metricsd, bpfd, vpn, authd, dnsd, timed, auditd, walld, vaultd, watchdogd, cored, pkgd, certd, policyd, secboot, logd, kms)...
+[1;32m[PASS] Gestionnaire Cles KMS & Derivation HKDF (jambo-kms PID 28) validee sous QEMU.[0m
 [TEST] Mode de test CI validé. Sortie propre via isa-debug-exit...
