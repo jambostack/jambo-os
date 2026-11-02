@@ -3,7 +3,7 @@ BdsDxe: starting Boot0002 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x
 [2J[01;01H[01;01H[2J[01;01H[01;01H[BOOT] Protocole Limine actif (révision détectée : 3)
 [1;36m
 ================================================================================
-    JAMBO-OS (JamboKernel v0.3.74 — Iron Core)                                 
+    JAMBO-OS (JamboKernel v0.3.75 — Iron Core)                                 
     Architecture : Micro-noyau orienté capacités en Rust no_std (x86_64/AArch64)
     Auteur & Architecte Principal : ASSOGBA Prudence Dieudonné                 
     Dépôt Officiel : https://github.com/jambostack/jambo-os                    
@@ -72,7 +72,7 @@ BdsDxe: starting Boot0002 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x
 [SMP] Cœur AP #3 démarré (LAPIC ID: 3)
 [SCHED/EEVDF] Ordonnanceur EEVDF opérationnel avec 2 threads de test en file
 [BOOT/MODULES] Détection de 1 module(s) d'amorçage Limine :
-  [00] Module '/boot/initrd.tar' | 6377472 octets (cmdline: '')
+  [00] Module '/boot/initrd.tar' | 6576128 octets (cmdline: '')
 [INITRD/TAR] Superviseur '/bin/init' extrait (0x23e0 octets)
 [INITRD/TAR] Shell interactif '/bin/jsh' extrait (0x2d478 octets)
 [INITRD/TAR] Démon de stockage '/bin/blockd' extrait (0x134e8 octets)
@@ -108,6 +108,7 @@ BdsDxe: starting Boot0002 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x
 [INITRD/TAR] Demon Surveillance & Reponse NDR '/bin/ndr' extrait (0x7e40 octets)
 [INITRD/TAR] Demon Surveillance & Reponse XDR '/bin/xdr' extrait (0x9b30 octets)
 [INITRD/TAR] Demon Surveillance & Reponse SOAR '/bin/soar' extrait (0xdc98 octets)
+[INITRD/TAR] Demon Analyse Comportementale UEBA '/bin/ueba' extrait (0x7c30 octets)
 [PROCESS] Processus utilisateur init (PID 1) initialisé avec pile System V ABI (RSP: 0x00007ffffffeff10)
 [PROCESS] Shell utilisateur interactif jsh (PID 2) initialisé avec pile System V ABI (RSP: 0x00007ffffffeff20) et enfilé
 [PROCESS] Démon de stockage blockd (PID 3) initialisé avec pile System V ABI (RSP: 0x00007ffffffeff20) et enfilé
@@ -143,6 +144,7 @@ BdsDxe: starting Boot0002 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x
 [PROCESS] Demon Surveillance & Reponse NDR ndr (PID 33) initialise avec pile System V ABI (RSP: 0x00007ffffffeff20) et enfile
 [PROCESS] Demon Surveillance & Reponse XDR xdr (PID 34) initialise avec pile System V ABI (RSP: 0x00007ffffffeff20) et enfile
 [PROCESS] Demon Surveillance & Reponse SOAR soar (PID 35) initialise avec pile System V ABI (RSP: 0x00007ffffffeff20) et enfile
+[PROCESS] Demon Analyse Comportementale UEBA ueba (PID 36) initialise avec pile System V ABI (RSP: 0x00007ffffffeff20) et enfile
 [CAP/CSPACE] Table de capacités active. Handle initial: 0x100000001, Handle atténué: 0x100000002
 [SYSCALL] Appel système vmo_create validé (Code retour: 0, Nouveau Handle: 0x100000003)
 [SYSCALL] Cycle de vie validé : process_create (0x100000004), thread_create (0x100000005), vmo_map & thread_start
@@ -167,15 +169,15 @@ BdsDxe: starting Boot0002 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x
 
 [1;32m[PASS] JamboKernel Iron Core (Ring 0 & Ring 3 transition) validé sous QEMU.[0m
 
-[SOAR] Daemon SOAR souverain et playbooks DAG initialises (PID 35).
-[SOAR] Demarrage de l'auto-test du service SOAR...
-[SOAR] Auto-test 1: Enregistrement des playbooks DAG par defaut : OK (6 playbooks).
-[SOAR] Auto-test 2: Ordonnancement topologique Kahn et verification anti-cycles : OK.
-[SOAR] Auto-test 3: Declenchement incident et execution automatisee de playbook : OK.
-[SOAR] Auto-test 4: Scellement cryptographique d'audit SHA-256 : OK.
-[SOAR] Auto-test reussi : moteur DAG, playbooks et registre d'audit valides.
-[SOAR] Serveur SOAR (jambo-soar PID 35) pret.
-[SOAR] Canal IPC SOAR operationnel (endpoint PID 35 pret).
-[TEST] Validation de l'initialisation des 35 processus Ring 3 (init, jsh, blockd, fs, netd, fdr, wasmd, pqc, kdir, forensics, powerd, metricsd, bpfd, vpn, authd, dnsd, timed, auditd, walld, vaultd, watchdogd, cored, pkgd, certd, policyd, secboot, logd, kms, attest, waf, siem, edr, ndr, xdr, soar)...
-[1;32m[PASS] Orchestration & Reponse aux Incidents SOAR (jambo-soar PID 35) validee sous QEMU.[0m
+[UEBA] Daemon UEBA souverain et profils comportementaux initialises (PID 36).
+[UEBA] Demarrage de l'auto-test du service UEBA...
+[UEBA] Auto-test 1: Profils comportementaux par defaut : OK (3 profils).
+[UEBA] Auto-test 2: Ingestion d'activite nominale et score faible : OK.
+[UEBA] Auto-test 3: Detection d'anomalie critique et mise en quarantaine O(1) : OK.
+[UEBA] Auto-test 4: Scellement cryptographique d'audit SHA-256 : OK.
+[UEBA] Auto-test reussi : moteur d'analyse, baselines et quarantaine valides.
+[UEBA] Serveur UEBA (jambo-ueba PID 36) pret.
+[UEBA] Canal IPC UEBA operationnel (endpoint PID 36 pret).
+[TEST] Validation de l'initialisation des 36 processus Ring 3 (init, jsh, blockd, fs, netd, fdr, wasmd, pqc, kdir, forensics, powerd, metricsd, bpfd, vpn, authd, dnsd, timed, auditd, walld, vaultd, watchdogd, cored, pkgd, certd, policyd, secboot, logd, kms, attest, waf, siem, edr, ndr, xdr, soar, ueba)...
+[1;32m[PASS] Analyse Comportementale UEBA (jambo-ueba PID 36) validee sous QEMU.[0m
 [TEST] Mode de test CI validé. Sortie propre via isa-debug-exit...

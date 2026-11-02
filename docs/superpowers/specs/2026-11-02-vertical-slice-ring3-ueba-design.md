@@ -117,3 +117,4 @@ pub struct UebaResponse {
 - Compilation bare-metal `services/jambo-ueba` avec cible `x86_64-unknown-none` et script de liaison `libs/user-x86_64.ld`.
 - Empaquetage de `bin/ueba` et `ueba` dans `initrd.tar`.
 - Mise à jour des bannières disque et des vérifications CI QEMU.
+
