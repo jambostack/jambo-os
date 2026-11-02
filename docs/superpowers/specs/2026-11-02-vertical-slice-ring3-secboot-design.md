@@ -68,7 +68,7 @@ pub struct SecBootRequest {
     pub pcr_index: u32,           // Index du PCR (0..23)
     pub event_type: u32,          // Type d'événement de boot
     pub digest: [u8; 32],         // Empreinte SHA-256 de l'événement / composant
-    pub component_name: [u8; 12], // Nom abrégé du composant (ex: "kernel", "limine")
+    pub component_name: [u8; 8],  // Nom abrégé du composant (ex: "kernel", "limine")
 }
 
 const _: () = assert!(core::mem::size_of::<SecBootRequest>() == 64);
@@ -134,3 +134,4 @@ Le shell `jsh` intègre le sous-système `secboot` avec les commandes suivantes 
   - Compilation du binaire `secboot` en mode bare-metal `x86_64-unknown-none`.
   - Intégration dans le tuple de 26 binaires utilisateur pour la génération de l'archive `initrd.img`.
   - Vérification automatisée dans `run_test` du message officiel QEMU.
+

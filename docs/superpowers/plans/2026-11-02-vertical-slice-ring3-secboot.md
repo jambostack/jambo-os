@@ -79,3 +79,4 @@ Ce plan détaille la promotion de `jambo-secboot` depuis `incubator/services/jam
   4. Compiler l'image complète avec `cargo xtask build --release`.
   5. Mettre à jour `target/qemu_output.log` avec la trace de boot QEMU comprenant les 26 démons.
   6. Valider l'état propre du workspace avant le commit final.
+
