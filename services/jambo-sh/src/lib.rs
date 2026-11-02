@@ -3,6 +3,13 @@
 #![allow(clippy::field_reassign_with_default)]
 
 #[allow(unused_imports)]
+use jambo_attest::{
+    attest_rights, zkp, AttestAction, AttestAuditEntry, AttestCap, AttestClient, AttestOpcode,
+    AttestRequest, AttestResponse, ConfinementLevel, HardwareTrustRoot, JamboAttestDaemon,
+    NodeIntegrityClaim, NodeRecord, NodeStatus, ATTEST_ENDPOINT_ID, ATTEST_MAGIC_REQ,
+    ATTEST_MAGIC_RESP, MAX_AUDIT_LOGS, MAX_NODES,
+};
+#[allow(unused_imports)]
 use jambo_auditd::{
     AnomalyType, AuditCap, AuditCategory, AuditClient, AuditEntry, AuditOpcode, AuditRequest,
     AuditResponse, AuditSeverity, JamboAuditDaemon,
@@ -128,6 +135,7 @@ pub struct JamboShell {
     pub secboot_daemon: SecureBootManager,
     pub log_daemon: LogDaemon,
     pub kms_daemon: KmsManager,
+    pub attest_daemon: JamboAttestDaemon,
 }
 
 impl Default for JamboShell {
@@ -184,6 +192,9 @@ impl JamboShell {
         log_daemon.init_defaults();
         let mut kms_daemon = KmsManager::new();
         kms_daemon.init_defaults();
+        let attest_cap = AttestCap::new(libjambo::Handle::new(29, 1), attest_rights::ALL);
+        let mut attest_daemon = JamboAttestDaemon::new(attest_cap);
+        attest_daemon.init_defaults();
         Self {
             prompt_user: "jambo",
             commands_executed: 0,
@@ -201,6 +212,7 @@ impl JamboShell {
             secboot_daemon,
             log_daemon,
             kms_daemon,
+            attest_daemon,
         }
     }
 
@@ -259,6 +271,7 @@ impl JamboShell {
             "secboot" => self.cmd_secboot(args, out),
             "log" => self.cmd_log(args, out),
             "kms" => self.cmd_kms(args, out),
+            "attest" => self.cmd_attest(args, out),
             _ => self.cmd_not_found(cmd, out),
         }
     }
@@ -267,7 +280,7 @@ impl JamboShell {
         let text = b"Commandes disponibles:\n\
   help        - Affiche cette aide\n\
   sysinfo     - Metriques memoire et uptime du micro-noyau\n\
-  ps          - Liste les 28 processus actifs\n\
+  ps          - Liste les 29 processus actifs\n\
   echo <args> - Affiche le texte sur la console\n\
   clear       - Reinitialise l'ecran du terminal\n\
   reboot      - Eteint ou redemarre la machine virtuelle\n\
@@ -296,7 +309,8 @@ impl JamboShell {
   policy [status|eval|rule|list] - Moteur de politiques declaratives et controle d'admission ABAC/RBAC\n\
   secboot [status|pcr|measure|events|verify] - Chaine de confiance TPM 2.0 et demarrage mesure Ring 3\n\
   log [status|append|tail|verify|clear] - Journalisation structuree et chainage cryptographique Ring 3\n\
-  kms [status|list|create|derive|lease|rotate|revoke] - Gestionnaire de cles souveraines & HKDF\n";
+  kms [status|list|create|derive|lease|rotate|revoke] - Gestionnaire de cles souveraines & HKDF\n\
+  attest [status|list|claim|verify|zkp|confine|audit] - Attestation cryptographique a distance & ZKP\n";
         let len = text.len().min(out.len());
         out[..len].copy_from_slice(&text[..len]);
         (ShellStatus::Success, len)
@@ -368,7 +382,8 @@ impl JamboShell {
  25  ACTIF    /bin/policyd (Moteur Politiques Securite Ring 3)\n  25 | policyd        | Ring 3 | Ready   | 1000   | Security Policy Engine & Admission Control\n\
  26  ACTIF    /bin/secboot (Demon TPM 2.0 Measured Boot Ring 3)\n  26 | secboot        | Ring 3 | Ready   | 1000   | TPM 2.0 Measured Boot & Secure Trust Chain\n\
  27  ACTIF    /bin/logd (Demon Journalisation & Chaine Inviolable Ring 3)\n  27 | logd           | Ring 3 | Ready   | 1000   | Structured Logging & Tamper-Evident Hash Chain\n\
- 28  ACTIF    /bin/kms (Key Management Service & HKDF Derivation Ring 3)\n  28 | kms            | Ring 3 | Ready   | 1000   | Key Management Service & HKDF Derivation\n  28 | kms | Running | Key Management Service & HKDF Derivation\nTotal: 28 processes\n";
+ 28  ACTIF    /bin/kms (Key Management Service & HKDF Derivation Ring 3)\n  28 | kms            | Ring 3 | Ready   | 1000   | Key Management Service & HKDF Derivation\n  28 | kms | Running | Key Management Service & HKDF Derivation\n\
+ 29  ACTIF    /bin/attest (Remote Attestation & ZKP Daemon Ring 3)\n  29 | attest          | Ring 3 | Ready   | 1000   | Remote Attestation & Zero-Knowledge Proofs\nTotal: 29 processes\n";
         let len = text.len().min(out.len());
         out[..len].copy_from_slice(&text[..len]);
         (ShellStatus::Success, len)
@@ -6560,6 +6575,360 @@ impl JamboShell {
             }
         }
     }
+
+    fn send_attest_request(&mut self, req: &AttestRequest) -> AttestResponse {
+        let mut resp_opt: Option<AttestResponse> = None;
+        for &h in &[
+            29u64, 28u64, 27u64, 26u64, 25u64, 24u64, 23u64, 22u64, 21u64, 20u64, 19u64, 18u64,
+            17u64, 16u64, 15u64, 14u64, 13u64, 12u64, 11u64, 10u64, 9u64, 8u64, 7u64, 6u64, 5u64,
+            4u64, 3u64,
+        ] {
+            let client = AttestClient::new(libjambo::Handle(h));
+            if let Ok(resp) = client.call(req) {
+                if resp.magic == ATTEST_MAGIC_RESP {
+                    resp_opt = Some(resp);
+                    break;
+                }
+            }
+        }
+        let local_resp = self.attest_daemon.dispatch_ipc(req);
+        resp_opt.unwrap_or(local_resp)
+    }
+
+    pub fn cmd_attest(&mut self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        let subcmd = if args.is_empty() { "status" } else { args[0] };
+        match subcmd {
+            "status" => self.cmd_attest_status(out),
+            "list" => self.cmd_attest_list(out),
+            "claim" => self.cmd_attest_claim(&args[1..], out),
+            "verify" => self.cmd_attest_verify(&args[1..], out),
+            "zkp" => self.cmd_attest_zkp(&args[1..], out),
+            "confine" => self.cmd_attest_confine(&args[1..], out),
+            "audit" => self.cmd_attest_audit(out),
+            _ => {
+                let msg = b"Usage: attest [status|list|claim <node_id>|verify <node_id>|zkp <node_id> [secret]|confine <node_id> <level>|audit]\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                (ShellStatus::InvalidArgument, len)
+            }
+        }
+    }
+
+    fn cmd_attest_status(&mut self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let req = AttestRequest::new_status(29, attest_rights::ALL, 0);
+        let resp = self.send_attest_request(&req);
+
+        let total_nodes = self.attest_daemon.nodes.iter().flatten().count();
+        let mut c = 0;
+        c = append_bytes(
+            out,
+            c,
+            b"Demon d'Attestation Distante & Confinement ZKP (jambo-attest PID 29):\n  Cluster Epoch           : ",
+        );
+        c = append_u64(out, c, resp.epoch);
+        c = append_bytes(out, c, b"\n  Total Noeuds            : ");
+        c = append_u64(out, c, total_nodes as u64);
+        c = append_bytes(out, c, b"\n  Noeuds Actifs & Confiance: ");
+        c = append_u64(out, c, resp.active_trusted as u64);
+        c = append_bytes(out, c, b"\n  Noeuds En Quarantaine   : ");
+        c = append_u64(out, c, resp.quarantined as u64);
+        c = append_bytes(out, c, b"\n  Revendications Emises   : ");
+        c = append_u64(out, c, self.attest_daemon.total_claims_generated);
+        c = append_bytes(out, c, b"\n  Revendications Verifiees: ");
+        c = append_u64(out, c, self.attest_daemon.total_claims_verified);
+        c = append_bytes(out, c, b"\n  Preuves ZKP Generees    : ");
+        c = append_u64(out, c, self.attest_daemon.total_zkp_generated);
+        c = append_bytes(out, c, b"\n  Preuves ZKP Verifiees   : ");
+        c = append_u64(out, c, self.attest_daemon.total_zkp_verified);
+        c = append_bytes(out, c, b"\n  Violations Detectees    : ");
+        c = append_u64(out, c, resp.violations as u64);
+        c = append_bytes(out, c, b"\n  Confinements Appliques  : ");
+        c = append_u64(out, c, self.attest_daemon.total_confinements);
+        c = append_bytes(out, c, b"\n  Chaine d'Audit (Hash)   : ");
+        for &b in self.attest_daemon.audit_chain.iter() {
+            c = append_hex_byte(out, c, b);
+        }
+        c = append_bytes(out, c, b"\n  Statut Daemon           : OPERATIONNEL\n");
+        (ShellStatus::Success, c)
+    }
+
+    fn cmd_attest_list(&mut self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let mut c = 0;
+        c = append_bytes(
+            out,
+            c,
+            b"Noeuds de la grappe d'attestation (jambo-attest PID 29):\n\
+ID  | Nom             | Racine de Confiance      | Statut             | Confinement\n\
+----------------------------------------------------------------------------------------------------\n",
+        );
+        let mut count = 0;
+        for node in self.attest_daemon.nodes.iter().flatten() {
+            count += 1;
+            c = append_bytes(out, c, b" ");
+            c = append_u64(out, c, node.node_id as u64);
+            c = append_bytes(out, c, b"  | ");
+            c = append_bytes(out, c, node.name_as_str().as_bytes());
+            c = append_bytes(out, c, b" | ");
+            c = append_bytes(out, c, node.trust_root.as_str().as_bytes());
+            c = append_bytes(out, c, b" | ");
+            c = append_bytes(out, c, node.status.as_str().as_bytes());
+            c = append_bytes(out, c, b" | ");
+            c = append_bytes(out, c, node.confinement.as_str().as_bytes());
+            c = append_bytes(out, c, b"\n");
+        }
+        c = append_bytes(out, c, b"Total: ");
+        c = append_u64(out, c, count as u64);
+        c = append_bytes(out, c, b" noeuds\n");
+        (ShellStatus::Success, c)
+    }
+
+    fn cmd_attest_claim(&mut self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if args.is_empty() {
+            let msg = b"Usage: attest claim <node_id>\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            return (ShellStatus::InvalidArgument, len);
+        }
+
+        let node_id = match parse_u32(args[0]) {
+            Some(id) => id,
+            None => {
+                let msg = b"[ATTEST] Erreur: node_id invalide (entier attendu)\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                return (ShellStatus::InvalidArgument, len);
+            }
+        };
+
+        let req = AttestRequest::new_claim(29, attest_rights::GENERATE_CLAIM, node_id);
+        let resp = self.send_attest_request(&req);
+
+        let mut c = 0;
+        if resp.status == 0 {
+            c = append_bytes(
+                out,
+                c,
+                b"[ATTEST] Revendication d'integrite signee generee avec succes pour le noeud ",
+            );
+            c = append_u64(out, c, node_id as u64);
+            c = append_bytes(out, c, b"\n  Signature Preuve (HMAC) : ");
+            for &b in resp.evidence_preview.iter() {
+                c = append_hex_byte(out, c, b);
+            }
+            c = append_bytes(
+                out,
+                c,
+                b"...\n  Statut Revendication    : VALID / EMITTED\n",
+            );
+            (ShellStatus::Success, c)
+        } else {
+            let msg = b"[ATTEST] Erreur: echec de la generation de revendication (noeud introuvable ou droits insuffisants)\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
+    }
+
+    fn cmd_attest_verify(&mut self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if args.is_empty() {
+            let msg = b"Usage: attest verify <node_id>\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            return (ShellStatus::InvalidArgument, len);
+        }
+
+        let node_id = match parse_u32(args[0]) {
+            Some(id) => id,
+            None => {
+                let msg = b"[ATTEST] Erreur: node_id invalide (entier attendu)\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                return (ShellStatus::InvalidArgument, len);
+            }
+        };
+
+        let req =
+            AttestRequest::new_verify_claim(29, attest_rights::VERIFY_CLAIM, node_id, [0u8; 32]);
+        let resp = self.send_attest_request(&req);
+
+        let mut c = 0;
+        if resp.status == 0 {
+            c = append_bytes(
+                out,
+                c,
+                b"[ATTEST] Revendication d'integrite verifiee avec succes pour le noeud ",
+            );
+            c = append_u64(out, c, node_id as u64);
+            c = append_bytes(
+                out,
+                c,
+                b"\n  Statut Noeud           : Pending ZKP\n  Signature Verification : VALID\n  Mesure Materielle      : CONFORME\n",
+            );
+            (ShellStatus::Success, c)
+        } else {
+            let msg = b"[ATTEST] Erreur: echec de la verification de revendication (signature invalide ou mesure corrompue)\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
+    }
+
+    fn cmd_attest_zkp(&mut self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if args.is_empty() {
+            let msg = b"Usage: attest zkp <node_id> [secret]\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            return (ShellStatus::InvalidArgument, len);
+        }
+
+        let node_id = match parse_u32(args[0]) {
+            Some(id) => id,
+            None => {
+                let msg = b"[ATTEST] Erreur: node_id invalide (entier attendu)\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                return (ShellStatus::InvalidArgument, len);
+            }
+        };
+
+        let secret = if args.len() >= 2 {
+            match parse_u64_auto(args[1]) {
+                Some(s) => s,
+                None => {
+                    let msg = b"[ATTEST] Erreur: secret invalide (entier ou hex attendu)\n";
+                    let len = msg.len().min(out.len());
+                    out[..len].copy_from_slice(&msg[..len]);
+                    return (ShellStatus::InvalidArgument, len);
+                }
+            }
+        } else {
+            match get_node_secret(node_id) {
+                Some(s) => s,
+                None => {
+                    let msg = b"[ATTEST] Erreur: secret ZKP manquant pour ce noeud (non reference par defaut)\n";
+                    let len = msg.len().min(out.len());
+                    out[..len].copy_from_slice(&msg[..len]);
+                    return (ShellStatus::InvalidArgument, len);
+                }
+            }
+        };
+
+        let req = AttestRequest::new_verify_zkp(
+            29,
+            attest_rights::VERIFY_ZKP | attest_rights::GENERATE_ZKP,
+            node_id,
+            secret,
+        );
+        let resp = self.send_attest_request(&req);
+
+        let mut c = 0;
+        if resp.status == 0 {
+            c = append_bytes(
+                out,
+                c,
+                b"[ATTEST] Preuve ZKP Fiat-Shamir generee et validee avec succes pour le noeud ",
+            );
+            c = append_u64(out, c, node_id as u64);
+            c = append_bytes(
+                out,
+                c,
+                b"\n  Statut Promu           : Verified & Trusted\n  Confinement Applique   : Unrestricted (Full Cluster Access)\n  Protocole ZKP          : Schnorr / Fiat-Shamir (g^r == t * y^c mod p)\n  Divulgation Secret     : 0 bit revele (divulgation nulle)\n",
+            );
+            (ShellStatus::Success, c)
+        } else {
+            let msg =
+                b"[ATTEST] Erreur: echec de la verification ZKP (secret invalide ou defi expire)\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
+    }
+
+    fn cmd_attest_confine(&mut self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if args.len() < 2 {
+            let msg =
+                b"Usage: attest confine <node_id> <unrestricted|sandboxed|isolated|ejected>\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            return (ShellStatus::InvalidArgument, len);
+        }
+
+        let node_id = match parse_u32(args[0]) {
+            Some(id) => id,
+            None => {
+                let msg = b"[ATTEST] Erreur: node_id invalide (entier attendu)\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                return (ShellStatus::InvalidArgument, len);
+            }
+        };
+
+        let level = match args[1] {
+            s if s.eq_ignore_ascii_case("unrestricted") => ConfinementLevel::Unrestricted,
+            s if s.eq_ignore_ascii_case("sandboxed") => ConfinementLevel::Sandboxed,
+            s if s.eq_ignore_ascii_case("isolated") => ConfinementLevel::Isolated,
+            s if s.eq_ignore_ascii_case("ejected") => ConfinementLevel::Ejected,
+            _ => {
+                let msg = b"[ATTEST] Erreur: niveau de confinement invalide (attendu: unrestricted|sandboxed|isolated|ejected)\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                return (ShellStatus::InvalidArgument, len);
+            }
+        };
+
+        let req = AttestRequest::new_confine(29, attest_rights::CONFINE_NODE, node_id, level);
+        let resp = self.send_attest_request(&req);
+
+        let mut c = 0;
+        if resp.status == 0 {
+            c = append_bytes(out, c, b"[ATTEST] Confinement mis a jour pour le noeud ");
+            c = append_u64(out, c, node_id as u64);
+            c = append_bytes(out, c, b": ");
+            c = append_bytes(out, c, level.as_str().as_bytes());
+            c = append_bytes(out, c, b"\n");
+            (ShellStatus::Success, c)
+        } else {
+            let msg = b"[ATTEST] Erreur: echec du confinement (noeud introuvable)\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
+    }
+
+    fn cmd_attest_audit(&mut self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let mut c = 0;
+        c = append_bytes(
+            out,
+            c,
+            b"Registre d'Audit Cryptographique Scelle (jambo-attest PID 29):\n  Chaine d'Audit (Hash)   : ",
+        );
+        for &b in self.attest_daemon.audit_chain.iter() {
+            c = append_hex_byte(out, c, b);
+        }
+        c = append_bytes(out, c, b"\nEvenements recents scelles:\n");
+
+        let mut count = 0;
+        for entry in self.attest_daemon.audit_logs.iter().flatten() {
+            count += 1;
+            c = append_bytes(out, c, b"  [Epoch ");
+            c = append_u64(out, c, entry.epoch);
+            c = append_bytes(out, c, b"] ");
+            c = append_bytes(out, c, entry.action.as_str().as_bytes());
+            c = append_bytes(out, c, b" | Noeud ");
+            c = append_u64(out, c, entry.node_id as u64);
+            c = append_bytes(out, c, b" | Motif: ");
+            c = append_bytes(out, c, entry.reason_as_str().as_bytes());
+            c = append_bytes(out, c, b" | Hash: ");
+            for &b in entry.block_hash[..8].iter() {
+                c = append_hex_byte(out, c, b);
+            }
+            c = append_bytes(out, c, b"...\n");
+        }
+        if count == 0 {
+            c = append_bytes(out, c, b"  (Aucun evenement d'audit enregistre)\n");
+        }
+        (ShellStatus::Success, c)
+    }
 }
 
 fn format_policy_action(mask: u32, out: &mut [u8], mut c: usize) -> usize {
@@ -6832,6 +7201,41 @@ fn parse_u64(s: &str) -> Option<u64> {
         Some(val)
     } else {
         None
+    }
+}
+
+fn parse_u64_auto(s: &str) -> Option<u64> {
+    let s = s.trim();
+    if let Some(stripped) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
+        let mut val = 0u64;
+        let mut has_digit = false;
+        for &b in stripped.as_bytes() {
+            let digit = match b {
+                b'0'..=b'9' => (b - b'0') as u64,
+                b'a'..=b'f' => (b - b'a' + 10) as u64,
+                b'A'..=b'F' => (b - b'A' + 10) as u64,
+                _ => return None,
+            };
+            val = val.checked_shl(4)?.checked_add(digit)?;
+            has_digit = true;
+        }
+        if has_digit {
+            Some(val)
+        } else {
+            None
+        }
+    } else {
+        parse_u64(s)
+    }
+}
+
+fn get_node_secret(node_id: u32) -> Option<u64> {
+    match node_id {
+        1 => Some(0x1337_4242),
+        2 => Some(0x8899_AABB),
+        3 => Some(0x5566_7788),
+        4 => Some(0xDEAD_BEEF),
+        _ => None,
     }
 }
 
@@ -7138,7 +7542,14 @@ mod tests {
         assert!(
             s.contains("  27 | logd           | Ring 3 | Ready   | 1000   | Structured Logging & Tamper-Evident Hash Chain")
         );
-        assert!(s.contains("Total: 28 processes"));
+        assert!(
+            s.contains("28  ACTIF    /bin/kms (Key Management Service & HKDF Derivation Ring 3)")
+        );
+        assert!(s.contains("29  ACTIF    /bin/attest (Remote Attestation & ZKP Daemon Ring 3)"));
+        assert!(
+            s.contains("  29 | attest          | Ring 3 | Ready   | 1000   | Remote Attestation & Zero-Knowledge Proofs")
+        );
+        assert!(s.contains("Total: 29 processes"));
     }
 
     #[test]
@@ -7150,7 +7561,7 @@ mod tests {
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains("  23 | pkgd           | Ring 3 | Ready   | 1000   | Declarative Package Manager & CAS Store"));
-        assert!(s.contains("Total: 28 processes"));
+        assert!(s.contains("Total: 29 processes"));
     }
 
     #[test]
@@ -7162,7 +7573,7 @@ mod tests {
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains("  24 | certd          | Ring 3 | Ready   | 1000   | Ephemeral PKI & Cluster mTLS Daemon"));
-        assert!(s.contains("Total: 28 processes"));
+        assert!(s.contains("Total: 29 processes"));
     }
 
     #[test]
@@ -7174,7 +7585,7 @@ mod tests {
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains("  25 | policyd        | Ring 3 | Ready   | 1000   | Security Policy Engine & Admission Control"));
-        assert!(s.contains("Total: 28 processes"));
+        assert!(s.contains("Total: 29 processes"));
     }
 
     #[test]
@@ -7186,7 +7597,7 @@ mod tests {
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains("  26 | secboot        | Ring 3 | Ready   | 1000   | TPM 2.0 Measured Boot & Secure Trust Chain"));
-        assert!(s.contains("Total: 28 processes"));
+        assert!(s.contains("Total: 29 processes"));
     }
 
     #[test]
@@ -7198,7 +7609,7 @@ mod tests {
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains("  27 | logd           | Ring 3 | Ready   | 1000   | Structured Logging & Tamper-Evident Hash Chain"));
-        assert!(s.contains("Total: 28 processes"));
+        assert!(s.contains("Total: 29 processes"));
     }
 
     #[test]
@@ -7210,7 +7621,22 @@ mod tests {
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains("28 | kms | Running | Key Management Service & HKDF Derivation"));
-        assert!(s.contains("Total: 28 processes"));
+        assert!(s.contains("Total: 29 processes"));
+    }
+
+    #[test]
+    fn test_ps_contains_29_processes() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        let (st, len) = shell.execute_line("ps", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("29  ACTIF    /bin/attest (Remote Attestation & ZKP Daemon Ring 3)"));
+        assert!(s.contains(
+            "  29 | attest          | Ring 3 | Ready   | 1000   | Remote Attestation & Zero-Knowledge Proofs"
+        ));
+        assert!(s.contains("Total: 29 processes"));
     }
 
     #[test]
@@ -7221,7 +7647,7 @@ mod tests {
         let (st, len) = shell.execute_line("help", &mut out);
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
-        assert!(s.contains("28 processus actifs"));
+        assert!(s.contains("29 processus actifs"));
         assert!(s.contains("fdr [status|verify|pcr]"));
         assert!(s.contains("wasm [status|run|info]"));
         assert!(s.contains("pqc [status|kex|sign|audit]"));
@@ -7245,6 +7671,7 @@ mod tests {
         assert!(s.contains("secboot [status|pcr|measure|events|verify]"));
         assert!(s.contains("log [status|append|tail|verify|clear]"));
         assert!(s.contains("kms [status|list|create|derive|lease|rotate|revoke]"));
+        assert!(s.contains("attest [status|list|claim|verify|zkp|confine|audit]"));
     }
 
     #[test]
@@ -10186,5 +10613,206 @@ mod tests {
         assert_eq!(st10, ShellStatus::ExecutionFailed);
         let s10 = core::str::from_utf8(&out[..len10]).unwrap();
         assert!(s10.contains("[KMS] Erreur: echec de la rotation"));
+    }
+
+    #[test]
+    fn test_attest_status() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 2048];
+
+        let (st, len) = shell.execute_line("attest status", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("Demon d'Attestation Distante & Confinement ZKP (jambo-attest PID 29):"));
+        assert!(s.contains("Cluster Epoch"));
+        assert!(s.contains("Total Noeuds            : 4"));
+        assert!(s.contains("Revendications Emises"));
+        assert!(s.contains("Preuves ZKP Generees"));
+        assert!(s.contains("Chaine d'Audit (Hash)"));
+        assert!(s.contains("Statut Daemon           : OPERATIONNEL"));
+
+        // Default command without args invokes status
+        let (st2, len2) = shell.execute_line("attest", &mut out);
+        assert_eq!(st2, ShellStatus::Success);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("Total Noeuds            : 4"));
+        assert!(s2.contains("OPERATIONNEL"));
+    }
+
+    #[test]
+    fn test_attest_list() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 2048];
+
+        let (st, len) = shell.execute_line("attest list", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("Noeuds de la grappe d'attestation (jambo-attest PID 29):"));
+        assert!(s.contains("jambo-ctrl-01"));
+        assert!(s.contains("Intel TDX (Trust Domain)"));
+        assert!(s.contains("jambo-worker-02"));
+        assert!(s.contains("AMD SEV-SNP"));
+        assert!(s.contains("jambo-edge-03"));
+        assert!(s.contains("ARM CCA (Realm RME)"));
+        assert!(s.contains("jambo-store-04"));
+        assert!(s.contains("TPM 2.0 (PCR)"));
+        assert!(s.contains("Sandboxed (Restricted IPC)"));
+        assert!(s.contains("Total: 4 noeuds"));
+    }
+
+    #[test]
+    fn test_attest_claim_and_verify() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 2048];
+
+        // 1. Generation de revendication pour noeud 1
+        let (st, len) = shell.execute_line("attest claim 1", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains(
+            "[ATTEST] Revendication d'integrite signee generee avec succes pour le noeud 1"
+        ));
+        assert!(s.contains("Signature Preuve (HMAC)"));
+        assert!(s.contains("Statut Revendication    : VALID / EMITTED"));
+
+        // 2. Verification de revendication pour noeud 1
+        let (st2, len2) = shell.execute_line("attest verify 1", &mut out);
+        assert_eq!(st2, ShellStatus::Success);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(
+            s2.contains("[ATTEST] Revendication d'integrite verifiee avec succes pour le noeud 1")
+        );
+        assert!(s2.contains("Statut Noeud           : Pending ZKP"));
+        assert!(s2.contains("Signature Verification : VALID"));
+        assert!(s2.contains("Mesure Materielle      : CONFORME"));
+
+        // 3. Verification d'erreurs
+        let (st3, len3) = shell.execute_line("attest claim 999", &mut out);
+        assert_eq!(st3, ShellStatus::ExecutionFailed);
+        let s3 = core::str::from_utf8(&out[..len3]).unwrap();
+        assert!(s3.contains("[ATTEST] Erreur: echec de la generation de revendication"));
+
+        let (st4, len4) = shell.execute_line("attest claim", &mut out);
+        assert_eq!(st4, ShellStatus::InvalidArgument);
+        let s4 = core::str::from_utf8(&out[..len4]).unwrap();
+        assert!(s4.contains("Usage: attest claim <node_id>"));
+
+        let (st5, len5) = shell.execute_line("attest verify", &mut out);
+        assert_eq!(st5, ShellStatus::InvalidArgument);
+        let s5 = core::str::from_utf8(&out[..len5]).unwrap();
+        assert!(s5.contains("Usage: attest verify <node_id>"));
+    }
+
+    #[test]
+    fn test_attest_zkp() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 2048];
+
+        // Generation et validation ZKP Fiat-Shamir avec secret par defaut
+        let (st, len) = shell.execute_line("attest zkp 1", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains(
+            "[ATTEST] Preuve ZKP Fiat-Shamir generee et validee avec succes pour le noeud 1"
+        ));
+        assert!(s.contains("Statut Promu           : Verified & Trusted"));
+        assert!(s.contains("Confinement Applique   : Unrestricted (Full Cluster Access)"));
+        assert!(s.contains("Schnorr / Fiat-Shamir"));
+
+        // Verification dans attest list que noeud 1 est Unrestricted et VerifiedTrusted
+        let (st_list, len_list) = shell.execute_line("attest list", &mut out);
+        assert_eq!(st_list, ShellStatus::Success);
+        let s_list = core::str::from_utf8(&out[..len_list]).unwrap();
+        assert!(s_list.contains(" 1  | jambo-ctrl-01 | Intel TDX (Trust Domain) | Verified & Trusted | Unrestricted (Full Cluster Access)"));
+
+        // Validation ZKP avec secret explicite pour noeud 2 (0x8899AABB)
+        let (st2, len2) = shell.execute_line("attest zkp 2 0x8899AABB", &mut out);
+        assert_eq!(st2, ShellStatus::Success);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(
+            s2.contains("Preuve ZKP Fiat-Shamir generee et validee avec succes pour le noeud 2")
+        );
+        assert!(s2.contains("Verified & Trusted"));
+
+        // Erreur avec secret invalide pour noeud 3
+        let (st3, len3) = shell.execute_line("attest zkp 3 0x12345678", &mut out);
+        assert_eq!(st3, ShellStatus::ExecutionFailed);
+        let s3 = core::str::from_utf8(&out[..len3]).unwrap();
+        assert!(s3.contains("[ATTEST] Erreur: echec de la verification ZKP"));
+
+        // Erreur sans arguments
+        let (st4, len4) = shell.execute_line("attest zkp", &mut out);
+        assert_eq!(st4, ShellStatus::InvalidArgument);
+        let s4 = core::str::from_utf8(&out[..len4]).unwrap();
+        assert!(s4.contains("Usage: attest zkp <node_id> [secret]"));
+    }
+
+    #[test]
+    fn test_attest_confine() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 2048];
+
+        // Confinement adaptatif vers Isolated
+        let (st, len) = shell.execute_line("attest confine 1 isolated", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("[ATTEST] Confinement mis a jour pour le noeud 1: Isolated (No Network/IPC, Quarantined)"));
+
+        // Verification dans attest list
+        let (st2, len2) = shell.execute_line("attest list", &mut out);
+        assert_eq!(st2, ShellStatus::Success);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("Isolated (No Network/IPC, Quarantined)"));
+        assert!(s2.contains("Quarantined"));
+
+        // Confinement adaptatif vers Sandboxed
+        let (st3, len3) = shell.execute_line("attest confine 1 sandboxed", &mut out);
+        assert_eq!(st3, ShellStatus::Success);
+        let s3 = core::str::from_utf8(&out[..len3]).unwrap();
+        assert!(s3.contains("Confinement mis a jour pour le noeud 1: Sandboxed (Restricted IPC)"));
+
+        // Confinement adaptatif vers Unrestricted
+        let (st4, len4) = shell.execute_line("attest confine 1 unrestricted", &mut out);
+        assert_eq!(st4, ShellStatus::Success);
+        let s4 = core::str::from_utf8(&out[..len4]).unwrap();
+        assert!(s4.contains(
+            "Confinement mis a jour pour le noeud 1: Unrestricted (Full Cluster Access)"
+        ));
+
+        // Niveau invalide
+        let (st5, len5) = shell.execute_line("attest confine 1 bad_level", &mut out);
+        assert_eq!(st5, ShellStatus::InvalidArgument);
+        let s5 = core::str::from_utf8(&out[..len5]).unwrap();
+        assert!(s5.contains("[ATTEST] Erreur: niveau de confinement invalide"));
+
+        // Arguments manquants
+        let (st6, len6) = shell.execute_line("attest confine 1", &mut out);
+        assert_eq!(st6, ShellStatus::InvalidArgument);
+        let s6 = core::str::from_utf8(&out[..len6]).unwrap();
+        assert!(s6
+            .contains("Usage: attest confine <node_id> <unrestricted|sandboxed|isolated|ejected>"));
+    }
+
+    #[test]
+    fn test_attest_audit() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        let (st, len) = shell.execute_line("attest audit", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("Registre d'Audit Cryptographique Scelle (jambo-attest PID 29):"));
+        assert!(s.contains("Chaine d'Audit (Hash)"));
+        assert!(s.contains("REGISTER_NODE"));
+        assert!(s.contains("jambo-ctrl-01"));
+        assert!(s.contains("jambo-worker-02"));
+        assert!(s.contains("jambo-edge-03"));
+        assert!(s.contains("jambo-store-04"));
+
+        // Test commande invalide
+        let (st2, len2) = shell.execute_line("attest unknown_subcmd", &mut out);
+        assert_eq!(st2, ShellStatus::InvalidArgument);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("Usage: attest [status|list|claim <node_id>|verify <node_id>|zkp <node_id> [secret]|confine <node_id> <level>|audit]"));
     }
 }
