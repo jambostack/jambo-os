@@ -147,3 +147,4 @@ La commande `ps` liste les **32 processus actifs** incluant :
   - Extension de `build_userland()` au 32-uplet.
   - Empaquettage de `bin/edr` dans `initrd.tar`.
   - Validation de la chaîne PASS sous QEMU.
+
