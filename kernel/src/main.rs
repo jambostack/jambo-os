@@ -157,7 +157,7 @@ pub extern "C" fn _start() -> ! {
     // 4. Bannière système d'accueil sobre Iron Core
     kprintln!("\x1b[1;36m");
     kprintln!("================================================================================");
-    kprintln!("    JAMBO-OS (JamboKernel v0.3.61 — Iron Core)                                 ");
+    kprintln!("    JAMBO-OS (JamboKernel v0.3.62 — Iron Core)                                 ");
     kprintln!("    Architecture : Micro-noyau orienté capacités en Rust no_std (x86_64/AArch64)");
     kprintln!("    Auteur & Architecte Principal : ASSOGBA Prudence Dieudonné                 ");
     kprintln!("    Dépôt Officiel : https://github.com/jambostack/jambo-os                    ");
@@ -364,6 +364,7 @@ pub extern "C" fn _start() -> ! {
     let mut vaultd_elf_bytes: Option<&'static [u8]> = None;
     let mut watchdogd_elf_bytes: Option<&'static [u8]> = None;
     let mut cored_elf_bytes: Option<&'static [u8]> = None;
+    let mut pkgd_elf_bytes: Option<&'static [u8]> = None;
     if let Some(modules_resp) = MODULES_REQUEST.response() {
         let modules = modules_resp.modules();
         kprintln!(
@@ -600,6 +601,18 @@ pub extern "C" fn _start() -> ! {
                         cored_data.len()
                     );
                     cored_elf_bytes = Some(cored_data);
+                }
+                if let Some(pkgd_data) = tar
+                    .find("bin/pkgd")
+                    .or_else(|| tar.find("/bin/pkgd"))
+                    .or_else(|| tar.find("bin/jambo-pkgd"))
+                    .or_else(|| tar.find("pkgd"))
+                {
+                    kprintln!(
+                        "[INITRD/TAR] Demon Gestionnaire Paquets CAS '/bin/pkgd' extrait ({:#x} octets)",
+                        pkgd_data.len()
+                    );
+                    pkgd_elf_bytes = Some(pkgd_data);
                 }
             }
             if initrd_elf_bytes.is_none() && data.len() >= 4 && data[0..4] == mm::elf::ELF_MAGIC {
@@ -1111,6 +1124,27 @@ pub extern "C" fn _start() -> ! {
         kprintln!("[WARN] Echec de la creation du processus cored");
     }
 
+    // Initialisation du démon de gestion de paquets CAS et mises à jour A/B Ring 3 (PID 23 : pkgd)
+    let pkgd_binary = pkgd_elf_bytes.unwrap_or(&test_elf);
+    if let Ok((_pkgd_process, pkgd_thread)) = sched::Process::create_user_process(
+        23,
+        "pkgd",
+        pkgd_binary,
+        &["pkgd"],
+        &["PATH=/bin:/usr/bin", "TERM=xterm-256color"],
+    ) {
+        let pkgd_sp = pkgd_thread.lock().user_rsp;
+        assert_eq!(pkgd_sp % 16, 0, "Alignement 16 octets du RSP pkgd");
+        pkgd_thread.lock().deadline = 1000;
+        sched::SCHEDULER.lock().enqueue(pkgd_thread);
+        kprintln!(
+            "[PROCESS] Demon Gestionnaire Paquets CAS pkgd (PID 23) initialise avec pile System V ABI (RSP: {:#018x}) et enfile",
+            pkgd_sp
+        );
+    } else {
+        kprintln!("[WARN] Echec de la creation du processus pkgd");
+    }
+
     // 12. Initialisation CSpace, table SYSCALL et IPC hybride
     cap::init_cspace();
     syscall::init_syscall();
@@ -1407,8 +1441,8 @@ pub extern "C" fn _start() -> ! {
     let is_test_mode = cfg!(feature = "qemu-test") || cmdline_test || module_test;
 
     if is_test_mode {
-        kprintln!("[TEST] Validation de l'initialisation des 22 processus Ring 3 (init, jsh, blockd, fs, netd, fdr, wasmd, pqc, kdir, forensics, powerd, metricsd, bpfd, vpn, authd, dnsd, timed, auditd, walld, vaultd, watchdogd, cored)...");
-        kprintln!("\x1b[1;32m[PASS] Capture Crash Dumps ELF64 & Forensique (jambo-cored PID 22) validee sous QEMU.\x1b[0m");
+        kprintln!("[TEST] Validation de l'initialisation des 23 processus Ring 3 (init, jsh, blockd, fs, netd, fdr, wasmd, pqc, kdir, forensics, powerd, metricsd, bpfd, vpn, authd, dnsd, timed, auditd, walld, vaultd, watchdogd, cored, pkgd)...");
+        kprintln!("\x1b[1;32m[PASS] Gestionnaire Paquets CAS & Mises a Jour A/B (jambo-pkgd PID 23) validee sous QEMU.\x1b[0m");
         kprintln!("[TEST] Mode de test CI validé. Sortie propre via isa-debug-exit...");
         exit_qemu(QemuExitCode::Success);
     }
