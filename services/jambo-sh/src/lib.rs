@@ -48,6 +48,11 @@ use jambo_pkgd::{
     PkgResponse,
 };
 #[allow(unused_imports)]
+use jambo_policyd::{
+    actions, policy_rights, roles, AdmissionDecision, AdmissionRequest, PolicyCap, PolicyClient,
+    PolicyEffect, PolicyEngine, PolicyOpcode, PolicyRequest, PolicyResponse, PolicyRule,
+};
+#[allow(unused_imports)]
 use jambo_powerd::{
     CpuPowerState, PowerClient, PowerOpcode, PowerProfile, PowerResponse, PowerState,
     POWER_STATUS_OK,
@@ -107,6 +112,7 @@ pub struct JamboShell {
     pub core_daemon: JamboCoreDaemon,
     pub pkg_daemon: JamboPkgDaemon,
     pub cert_daemon: ClusterCa,
+    pub policy_daemon: PolicyEngine,
 }
 
 impl Default for JamboShell {
@@ -155,6 +161,8 @@ impl JamboShell {
         ));
         let mut cert_daemon = ClusterCa::new();
         cert_daemon.init_defaults();
+        let mut policy_daemon = PolicyEngine::new();
+        policy_daemon.init_defaults();
         Self {
             prompt_user: "jambo",
             commands_executed: 0,
@@ -168,6 +176,7 @@ impl JamboShell {
             core_daemon,
             pkg_daemon,
             cert_daemon,
+            policy_daemon,
         }
     }
 
@@ -181,7 +190,7 @@ impl JamboShell {
         self.commands_executed += 1;
 
         // Découpage des arguments sans allocation dynamique
-        let mut words = [""; 8];
+        let mut words = [""; 12];
         let mut word_count = 0;
         for part in trimmed.split_ascii_whitespace() {
             if word_count < words.len() {
@@ -222,6 +231,7 @@ impl JamboShell {
             "core" => self.cmd_core(args, out),
             "pkg" => self.cmd_pkg(args, out),
             "cert" => self.cmd_cert(args, out),
+            "policy" => self.cmd_policy(args, out),
             _ => self.cmd_not_found(cmd, out),
         }
     }
@@ -230,7 +240,7 @@ impl JamboShell {
         let text = b"Commandes disponibles:\n\
   help        - Affiche cette aide\n\
   sysinfo     - Metriques memoire et uptime du micro-noyau\n\
-  ps          - Liste les 24 processus actifs\n\
+  ps          - Liste les 25 processus actifs\n\
   echo <args> - Affiche le texte sur la console\n\
   clear       - Reinitialise l'ecran du terminal\n\
   reboot      - Eteint ou redemarre la machine virtuelle\n\
@@ -255,7 +265,8 @@ impl JamboShell {
   wdog [status|ping|register|targets|trigger|log] - Surveillance vivacite et chien de garde\n\
   core [status|dump|list|verify|quarantine|purge] - Capture crash dumps ELF64 et forensique\n\
   pkg [status|list|install|stage|commit|rollback] - Gestion declarative de paquets et mises a jour A/B\n\
-  cert [status|list|issue|verify|revoke] - Infrastructure PKI ephemere et mTLS de grappe\n";
+  cert [status|list|issue|verify|revoke] - Infrastructure PKI ephemere et mTLS de grappe\n\
+  policy [status|eval|rule|list] - Moteur de politiques declaratives et controle d'admission ABAC/RBAC\n";
         let len = text.len().min(out.len());
         out[..len].copy_from_slice(&text[..len]);
         (ShellStatus::Success, len)
@@ -323,7 +334,8 @@ impl JamboShell {
  21  ACTIF    /bin/watchdogd (Surveillance Vivacite & Chien de Garde Ring 3)\n\
  22  ACTIF    /bin/cored (Capture Crash Dumps ELF64 & Forensique Ring 3)\n\
  23  ACTIF    /bin/pkgd (Declarative Package Manager & CAS Store Ring 3)\n  23 | pkgd           | Ring 3 | Ready   | 1000   | Declarative Package Manager & CAS Store\n\
- 24  ACTIF    /bin/certd (Demon PKI Ephemere & mTLS de Grappe Ring 3)\n  24 | certd          | Ring 3 | Ready   | 1000   | Ephemeral PKI & Cluster mTLS Daemon\nTotal: 24 processes\n";
+ 24  ACTIF    /bin/certd (Demon PKI Ephemere & mTLS de Grappe Ring 3)\n  24 | certd          | Ring 3 | Ready   | 1000   | Ephemeral PKI & Cluster mTLS Daemon\n\
+ 25  ACTIF    /bin/policyd (Moteur Politiques Securite Ring 3)\n  25 | policyd        | Ring 3 | Ready   | 1000   | Security Policy Engine & Admission Control\nTotal: 25 processes\n";
         let len = text.len().min(out.len());
         out[..len].copy_from_slice(&text[..len]);
         (ShellStatus::Success, len)
@@ -5467,6 +5479,373 @@ impl JamboShell {
         c = append_bytes(out, c, b" revoque avec succes (REVOKED)\n");
         (ShellStatus::Success, c)
     }
+
+    fn send_policy_request(&mut self, req: &PolicyRequest) -> PolicyResponse {
+        let mut resp_opt: Option<PolicyResponse> = None;
+        for &h in &[
+            25u64, 24u64, 23u64, 22u64, 21u64, 20u64, 19u64, 18u64, 17u64, 16u64, 15u64, 14u64,
+            13u64, 12u64, 11u64, 10u64, 9u64, 8u64, 7u64, 6u64, 5u64, 4u64, 3u64,
+        ] {
+            let client = PolicyClient::new(libjambo::Handle(h));
+            if let Ok(resp) = client.call(req) {
+                if resp.magic == jambo_policyd::POLICY_MAGIC_RESP {
+                    resp_opt = Some(resp);
+                    break;
+                }
+            }
+        }
+        let local_resp = self.policy_daemon.dispatch_ipc(req);
+        resp_opt.unwrap_or(local_resp)
+    }
+
+    fn cmd_policy(&mut self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        let subcmd = if args.is_empty() { "status" } else { args[0] };
+        match subcmd {
+            "status" => self.cmd_policy_status(out),
+            "eval" => self.cmd_policy_eval(&args[1..], out),
+            "rule" => self.cmd_policy_rule(&args[1..], out),
+            "list" => self.cmd_policy_list(out),
+            _ => {
+                let msg = b"Usage: policy [status|eval <role> <action> <resource>|rule add <id> <role> <action> <resource> <allow|deny> [priority]|rule del <id>|list]\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                (ShellStatus::InvalidArgument, len)
+            }
+        }
+    }
+
+    fn cmd_policy_status(&mut self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let req = PolicyRequest::new_status(25, policy_rights::ALL);
+        let resp = self.send_policy_request(&req);
+
+        let mut c = 0;
+        c = append_bytes(
+            out,
+            c,
+            b"Moteur de Politiques de Securite Declaratives (jambo-policyd PID 25):\n  Total Evaluations       : ",
+        );
+        c = append_u64(out, c, resp.eval_count);
+        c = append_bytes(out, c, b"\n  Decisions Autorisees    : ");
+        c = append_u64(out, c, resp.allow_count);
+        c = append_bytes(out, c, b"\n  Decisions Refusees      : ");
+        c = append_u64(out, c, resp.deny_count);
+        c = append_bytes(out, c, b"\n  Regles Actives          : ");
+        c = append_u64(out, c, resp.active_rules as u64);
+        c = append_bytes(out, c, b"\n");
+        (ShellStatus::Success, c)
+    }
+
+    fn cmd_policy_eval(&mut self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if args.len() < 3 {
+            let msg = b"Usage: policy eval <role> <action> <resource>\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            return (ShellStatus::InvalidArgument, len);
+        }
+
+        let role = match parse_policy_role(args[0]) {
+            Some(r) => r,
+            None => {
+                let msg = b"policy eval: role invalide\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                return (ShellStatus::InvalidArgument, len);
+            }
+        };
+
+        let action = match parse_policy_action(args[1]) {
+            Some(a) => a,
+            None => {
+                let msg = b"policy eval: action invalide\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                return (ShellStatus::InvalidArgument, len);
+            }
+        };
+
+        let resource = args[2];
+        if resource.is_empty() || resource.len() > 32 {
+            let msg = b"policy eval: resource invalide (taille attendue 1..32)\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            return (ShellStatus::InvalidArgument, len);
+        }
+
+        let req =
+            PolicyRequest::new_eval(25, policy_rights::ALL, role, action, resource.as_bytes(), 0);
+        let resp = self.send_policy_request(&req);
+
+        let mut c = 0;
+        if resp.decision == 0 {
+            c = append_bytes(out, c, b"policy eval: ALLOWED (role: ");
+            c = append_bytes(out, c, roles::as_str(role).as_bytes());
+            c = append_bytes(out, c, b", action: ");
+            c = format_policy_action(action, out, c);
+            c = append_bytes(out, c, b", resource: ");
+            c = append_bytes(out, c, resource.as_bytes());
+            c = append_bytes(out, c, b")\n");
+            (ShellStatus::Success, c)
+        } else {
+            c = append_bytes(out, c, b"policy eval: DENIED");
+            if resp.matching_rule_id > 0 {
+                c = append_bytes(out, c, b" (matching rule ID #");
+                c = append_u64(out, c, resp.matching_rule_id as u64);
+                c = append_bytes(out, c, b")\n");
+            } else {
+                c = append_bytes(out, c, b" (reason: Default Deny: no matching allow rule)\n");
+            }
+            (ShellStatus::Success, c)
+        }
+    }
+
+    fn cmd_policy_rule(&mut self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if args.is_empty() {
+            let msg = b"Usage: policy rule [add <id> <role> <action> <resource> <allow|deny> [priority]|del <id>]\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            return (ShellStatus::InvalidArgument, len);
+        }
+
+        match args[0] {
+            "add" => self.cmd_policy_rule_add(&args[1..], out),
+            "del" | "delete" => self.cmd_policy_rule_del(&args[1..], out),
+            _ => {
+                let msg = b"Usage: policy rule [add <id> <role> <action> <resource> <allow|deny> [priority]|del <id>]\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                (ShellStatus::InvalidArgument, len)
+            }
+        }
+    }
+
+    fn cmd_policy_rule_add(&mut self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if args.len() < 5 {
+            let msg =
+                b"Usage: policy rule add <id> <role> <action> <resource> <allow|deny> [priority]\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            return (ShellStatus::InvalidArgument, len);
+        }
+
+        let rule_id = match parse_u32(args[0]) {
+            Some(id) if id > 0 => id,
+            _ => {
+                let msg = b"policy rule add: identifiant de regle invalide\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                return (ShellStatus::InvalidArgument, len);
+            }
+        };
+
+        let role = match parse_policy_role(args[1]) {
+            Some(r) => r,
+            None => {
+                let msg = b"policy rule add: role invalide\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                return (ShellStatus::InvalidArgument, len);
+            }
+        };
+
+        let action = match parse_policy_action(args[2]) {
+            Some(a) => a,
+            None => {
+                let msg = b"policy rule add: action invalide\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                return (ShellStatus::InvalidArgument, len);
+            }
+        };
+
+        let resource = args[3];
+        if resource.is_empty() || resource.len() > 32 {
+            let msg = b"policy rule add: resource invalide (taille attendue 1..32)\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            return (ShellStatus::InvalidArgument, len);
+        }
+
+        let effect = match PolicyEffect::from_str(args[4]) {
+            Some(eff) => eff,
+            None => {
+                let msg = b"policy rule add: effet invalide (attendu 'allow' ou 'deny')\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                return (ShellStatus::InvalidArgument, len);
+            }
+        };
+
+        let priority = if args.len() > 5 {
+            parse_u32(args[5]).unwrap_or(0) as u8
+        } else {
+            0
+        };
+
+        let req = PolicyRequest::new_add_rule(
+            25,
+            policy_rights::ALL,
+            rule_id,
+            role,
+            action,
+            resource.as_bytes(),
+            effect as u8,
+            priority,
+            0,
+        );
+        let resp = self.send_policy_request(&req);
+
+        if resp.status != 0 {
+            let mut c = 0;
+            c = append_bytes(out, c, b"policy rule add: echec de l'ajout de la regle #");
+            c = append_u64(out, c, rule_id as u64);
+            c = append_bytes(out, c, b" (code: ");
+            c = append_i64(out, c, resp.status as i64);
+            c = append_bytes(out, c, b")\n");
+            return (ShellStatus::ExecutionFailed, c);
+        }
+
+        let mut c = 0;
+        c = append_bytes(out, c, b"policy rule add: regle #");
+        c = append_u64(out, c, rule_id as u64);
+        c = append_bytes(out, c, b" ajoutee avec succes (");
+        c = append_bytes(out, c, effect.as_str().as_bytes());
+        c = append_bytes(out, c, b")\n");
+        (ShellStatus::Success, c)
+    }
+
+    fn cmd_policy_rule_del(&mut self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if args.is_empty() {
+            let msg = b"Usage: policy rule del <id>\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            return (ShellStatus::InvalidArgument, len);
+        }
+
+        let rule_id = match parse_u32(args[0]) {
+            Some(id) if id > 0 => id,
+            _ => {
+                let msg = b"policy rule del: identifiant de regle invalide\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                return (ShellStatus::InvalidArgument, len);
+            }
+        };
+
+        let req = PolicyRequest::new_delete_rule(25, policy_rights::ALL, rule_id);
+        let resp = self.send_policy_request(&req);
+
+        if resp.status != 0 {
+            let mut c = 0;
+            c = append_bytes(out, c, b"policy rule del: regle #");
+            c = append_u64(out, c, rule_id as u64);
+            c = append_bytes(out, c, b" introuvable ou echec de suppression\n");
+            return (ShellStatus::ExecutionFailed, c);
+        }
+
+        let mut c = 0;
+        c = append_bytes(out, c, b"policy rule del: regle #");
+        c = append_u64(out, c, rule_id as u64);
+        c = append_bytes(out, c, b" supprimee avec succes\n");
+        (ShellStatus::Success, c)
+    }
+
+    fn cmd_policy_list(&mut self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let req = PolicyRequest::new_list(25, policy_rights::ALL);
+        let _ = self.send_policy_request(&req);
+
+        let mut c = 0;
+        c = append_bytes(
+            out,
+            c,
+            b"Regles de Politiques de Securite Actives (jambo-policyd PID 25):\n",
+        );
+        let mut count = 0;
+        for rule in self.policy_daemon.rules.iter().flatten() {
+            count += 1;
+            c = append_bytes(out, c, b"  - ID #");
+            c = append_u64(out, c, rule.rule_id as u64);
+            c = append_bytes(out, c, b" | Role: ");
+            c = append_bytes(out, c, roles::as_str(rule.subject_role).as_bytes());
+            c = append_bytes(out, c, b" | Action: ");
+            c = format_policy_action(rule.action_mask, out, c);
+            c = append_bytes(out, c, b" | Resource: ");
+            c = append_bytes(out, c, rule.resource_str().as_bytes());
+            c = append_bytes(out, c, b" | Effect: ");
+            c = append_bytes(out, c, rule.effect.as_str().as_bytes());
+            c = append_bytes(out, c, b" | Priority: ");
+            c = append_u64(out, c, rule.priority as u64);
+            c = append_bytes(out, c, b"\n");
+        }
+        if count == 0 {
+            c = append_bytes(out, c, b"  (Aucune regle active)\n");
+        }
+        (ShellStatus::Success, c)
+    }
+}
+
+fn format_policy_action(mask: u32, out: &mut [u8], mut c: usize) -> usize {
+    match mask {
+        actions::ACTION_ADMIN => append_bytes(out, c, b"admin"),
+        actions::ACTION_SPAWN_WORKLOAD => append_bytes(out, c, b"spawn"),
+        actions::ACTION_ACCESS_SECRET => append_bytes(out, c, b"secret"),
+        actions::ACTION_REGISTER_SERVICE => append_bytes(out, c, b"register"),
+        actions::ACTION_ROUTE_TRAFFIC => append_bytes(out, c, b"route"),
+        actions::ACTION_STORAGE_MOUNT => append_bytes(out, c, b"mount"),
+        _ => {
+            let mut first = true;
+            if (mask & actions::ACTION_ADMIN) != 0 {
+                c = append_bytes(out, c, b"admin");
+                first = false;
+            }
+            if (mask & actions::ACTION_SPAWN_WORKLOAD) != 0 {
+                if !first {
+                    c = append_bytes(out, c, b"|");
+                }
+                c = append_bytes(out, c, b"spawn");
+                first = false;
+            }
+            if (mask & actions::ACTION_ACCESS_SECRET) != 0 {
+                if !first {
+                    c = append_bytes(out, c, b"|");
+                }
+                c = append_bytes(out, c, b"secret");
+                first = false;
+            }
+            if (mask & actions::ACTION_REGISTER_SERVICE) != 0 {
+                if !first {
+                    c = append_bytes(out, c, b"|");
+                }
+                c = append_bytes(out, c, b"register");
+                first = false;
+            }
+            if (mask & actions::ACTION_ROUTE_TRAFFIC) != 0 {
+                if !first {
+                    c = append_bytes(out, c, b"|");
+                }
+                c = append_bytes(out, c, b"route");
+                first = false;
+            }
+            if (mask & actions::ACTION_STORAGE_MOUNT) != 0 {
+                if !first {
+                    c = append_bytes(out, c, b"|");
+                }
+                c = append_bytes(out, c, b"mount");
+                first = false;
+            }
+            if first {
+                c = append_bytes(out, c, b"none");
+            }
+            c
+        }
+    }
+}
+
+fn parse_policy_role(s: &str) -> Option<u16> {
+    roles::from_str(s).or_else(|| parse_u32(s).map(|v| v as u16))
+}
+
+fn parse_policy_action(s: &str) -> Option<u32> {
+    actions::from_str(s).or_else(|| parse_u32(s))
 }
 
 fn format_key_usage(usage: u32, out: &mut [u8], mut c: usize) -> usize {
@@ -5941,7 +6320,11 @@ mod tests {
         assert!(
             s.contains("  24 | certd          | Ring 3 | Ready   | 1000   | Ephemeral PKI & Cluster mTLS Daemon")
         );
-        assert!(s.contains("Total: 24 processes"));
+        assert!(s.contains("25  ACTIF    /bin/policyd (Moteur Politiques Securite Ring 3)"));
+        assert!(
+            s.contains("  25 | policyd        | Ring 3 | Ready   | 1000   | Security Policy Engine & Admission Control")
+        );
+        assert!(s.contains("Total: 25 processes"));
     }
 
     #[test]
@@ -5953,7 +6336,7 @@ mod tests {
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains("  23 | pkgd           | Ring 3 | Ready   | 1000   | Declarative Package Manager & CAS Store"));
-        assert!(s.contains("Total: 24 processes"));
+        assert!(s.contains("Total: 25 processes"));
     }
 
     #[test]
@@ -5965,7 +6348,19 @@ mod tests {
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains("  24 | certd          | Ring 3 | Ready   | 1000   | Ephemeral PKI & Cluster mTLS Daemon"));
-        assert!(s.contains("Total: 24 processes"));
+        assert!(s.contains("Total: 25 processes"));
+    }
+
+    #[test]
+    fn test_ps_contains_25_processes() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        let (st, len) = shell.execute_line("ps", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("  25 | policyd        | Ring 3 | Ready   | 1000   | Security Policy Engine & Admission Control"));
+        assert!(s.contains("Total: 25 processes"));
     }
 
     #[test]
@@ -5976,7 +6371,7 @@ mod tests {
         let (st, len) = shell.execute_line("help", &mut out);
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
-        assert!(s.contains("24 processus actifs"));
+        assert!(s.contains("25 processus actifs"));
         assert!(s.contains("fdr [status|verify|pcr]"));
         assert!(s.contains("wasm [status|run|info]"));
         assert!(s.contains("pqc [status|kex|sign|audit]"));
@@ -5996,6 +6391,7 @@ mod tests {
         assert!(s.contains("core [status|dump|list|verify|quarantine|purge]"));
         assert!(s.contains("pkg [status|list|install|stage|commit|rollback]"));
         assert!(s.contains("cert [status|list|issue|verify|revoke]"));
+        assert!(s.contains("policy [status|eval|rule|list]"));
     }
 
     #[test]
@@ -8285,5 +8681,201 @@ mod tests {
         assert_eq!(st5, ShellStatus::InvalidArgument);
         let s5 = core::str::from_utf8(&out[..len5]).unwrap();
         assert!(s5.contains("Usage: cert revoke <serial>"));
+    }
+
+    #[test]
+    fn test_policy_status() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 1024];
+
+        let (st, len) = shell.execute_line("policy status", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("Moteur de Politiques de Securite Declaratives (jambo-policyd PID 25):"));
+        assert!(s.contains("Total Evaluations       : 0"));
+        assert!(s.contains("Decisions Autorisees    : 0"));
+        assert!(s.contains("Decisions Refusees      : 0"));
+        assert!(s.contains("Regles Actives          : 3"));
+
+        // 'policy' without arguments defaults to 'policy status'
+        let (st2, len2) = shell.execute_line("policy", &mut out);
+        assert_eq!(st2, ShellStatus::Success);
+        assert_eq!(len, len2);
+    }
+
+    #[test]
+    fn test_policy_eval() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 1024];
+
+        // 1. SYSTEM a les droits admin sur system/ -> ALLOWED
+        let (st1, len1) = shell.execute_line("policy eval system admin system/", &mut out);
+        assert_eq!(st1, ShellStatus::Success);
+        let s1 = core::str::from_utf8(&out[..len1]).unwrap();
+        assert!(
+            s1.contains("policy eval: ALLOWED (role: system, action: admin, resource: system/)")
+        );
+
+        // 2. OPERATOR a le droit spawn sur workload/ -> ALLOWED
+        let (st2, len2) = shell.execute_line("policy eval operator spawn workload/", &mut out);
+        assert_eq!(st2, ShellStatus::Success);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2
+            .contains("policy eval: ALLOWED (role: operator, action: spawn, resource: workload/)"));
+
+        // 3. WORKLOAD a le droit secret sur vault/ -> ALLOWED
+        let (st3, len3) = shell.execute_line("policy eval workload secret vault/", &mut out);
+        assert_eq!(st3, ShellStatus::Success);
+        let s3 = core::str::from_utf8(&out[..len3]).unwrap();
+        assert!(
+            s3.contains("policy eval: ALLOWED (role: workload, action: secret, resource: vault/)")
+        );
+
+        // 4. GUEST tentant admin sur system/ -> DENIED (Default Deny)
+        let (st4, len4) = shell.execute_line("policy eval guest admin system/", &mut out);
+        assert_eq!(st4, ShellStatus::Success);
+        let s4 = core::str::from_utf8(&out[..len4]).unwrap();
+        assert!(s4.contains("policy eval: DENIED (reason: Default Deny: no matching allow rule)"));
+
+        // 5. Statut mis a jour : 4 evaluations, 3 allow, 1 deny
+        let (st5, len5) = shell.execute_line("policy status", &mut out);
+        assert_eq!(st5, ShellStatus::Success);
+        let s5 = core::str::from_utf8(&out[..len5]).unwrap();
+        assert!(s5.contains("Total Evaluations       : 4"));
+        assert!(s5.contains("Decisions Autorisees    : 3"));
+        assert!(s5.contains("Decisions Refusees      : 1"));
+    }
+
+    #[test]
+    fn test_policy_rule_add_and_del() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 1024];
+
+        // 1. Initialement, GUEST n'a pas accès à workload/
+        let (st0, len0) = shell.execute_line("policy eval guest spawn workload/", &mut out);
+        assert_eq!(st0, ShellStatus::Success);
+        let s0 = core::str::from_utf8(&out[..len0]).unwrap();
+        assert!(s0.contains("policy eval: DENIED"));
+
+        // 2. Ajout de la règle #10 : GUEST spawn workload/ allow 50
+        let (st1, len1) = shell.execute_line(
+            "policy rule add 10 guest spawn workload/ allow 50",
+            &mut out,
+        );
+        assert_eq!(st1, ShellStatus::Success);
+        let s1 = core::str::from_utf8(&out[..len1]).unwrap();
+        assert!(s1.contains("policy rule add: regle #10 ajoutee avec succes (ALLOW)"));
+
+        // 3. Évaluation après ajout -> ALLOWED
+        let (st2, len2) = shell.execute_line("policy eval guest spawn workload/", &mut out);
+        assert_eq!(st2, ShellStatus::Success);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("policy eval: ALLOWED"));
+
+        // 4. Ajout d'une règle d'interdiction explicite #11 : GUEST spawn workload/ deny 100
+        let (st3, len3) = shell.execute_line(
+            "policy rule add 11 guest spawn workload/ deny 100",
+            &mut out,
+        );
+        assert_eq!(st3, ShellStatus::Success);
+        let s3 = core::str::from_utf8(&out[..len3]).unwrap();
+        assert!(s3.contains("policy rule add: regle #11 ajoutee avec succes (DENY)"));
+
+        // 5. Évaluation -> DENIED (préséance de la règle Deny #11)
+        let (st4, len4) = shell.execute_line("policy eval guest spawn workload/", &mut out);
+        assert_eq!(st4, ShellStatus::Success);
+        let s4 = core::str::from_utf8(&out[..len4]).unwrap();
+        assert!(s4.contains("policy eval: DENIED (matching rule ID #11)"));
+
+        // 6. Suppression de la règle #11
+        let (st5, len5) = shell.execute_line("policy rule del 11", &mut out);
+        assert_eq!(st5, ShellStatus::Success);
+        let s5 = core::str::from_utf8(&out[..len5]).unwrap();
+        assert!(s5.contains("policy rule del: regle #11 supprimee avec succes"));
+
+        // 7. Évaluation après suppression du Deny -> de nouveau ALLOWED via #10
+        let (st6, len6) = shell.execute_line("policy eval guest spawn workload/", &mut out);
+        assert_eq!(st6, ShellStatus::Success);
+        let s6 = core::str::from_utf8(&out[..len6]).unwrap();
+        assert!(s6.contains("policy eval: ALLOWED"));
+
+        // 8. Suppression de la règle #10
+        let (st7, len7) = shell.execute_line("policy rule del 10", &mut out);
+        assert_eq!(st7, ShellStatus::Success);
+        let s7 = core::str::from_utf8(&out[..len7]).unwrap();
+        assert!(s7.contains("policy rule del: regle #10 supprimee avec succes"));
+
+        // 9. Évaluation finale -> DENIED
+        let (st8, len8) = shell.execute_line("policy eval guest spawn workload/", &mut out);
+        assert_eq!(st8, ShellStatus::Success);
+        let s8 = core::str::from_utf8(&out[..len8]).unwrap();
+        assert!(s8.contains("policy eval: DENIED"));
+    }
+
+    #[test]
+    fn test_policy_list() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 2048];
+
+        let (st, len) = shell.execute_line("policy list", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("Regles de Politiques de Securite Actives (jambo-policyd PID 25):"));
+        assert!(s.contains("ID #1 | Role: system"));
+        assert!(s.contains("Resource: system/ | Effect: ALLOW | Priority: 100"));
+        assert!(s.contains("ID #2 | Role: operator"));
+        assert!(s.contains("Resource: workload/ | Effect: ALLOW | Priority: 50"));
+        assert!(s.contains("ID #3 | Role: workload"));
+        assert!(s.contains("Resource: vault/ | Effect: ALLOW | Priority: 10"));
+    }
+
+    #[test]
+    fn test_policy_invalid() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 1024];
+
+        // 1. Sous-commande invalide
+        let (st1, len1) = shell.execute_line("policy invalid_subcmd", &mut out);
+        assert_eq!(st1, ShellStatus::InvalidArgument);
+        let s1 = core::str::from_utf8(&out[..len1]).unwrap();
+        assert!(s1.contains("Usage: policy [status|eval <role> <action> <resource>|rule add <id> <role> <action> <resource> <allow|deny> [priority]|rule del <id>|list]"));
+
+        // 2. policy eval sans arguments suffisants
+        let (st2, len2) = shell.execute_line("policy eval system admin", &mut out);
+        assert_eq!(st2, ShellStatus::InvalidArgument);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("Usage: policy eval <role> <action> <resource>"));
+
+        // 3. policy eval avec rôle invalide
+        let (st3, len3) = shell.execute_line("policy eval invalid_role admin system/", &mut out);
+        assert_eq!(st3, ShellStatus::InvalidArgument);
+        let s3 = core::str::from_utf8(&out[..len3]).unwrap();
+        assert!(s3.contains("policy eval: role invalide"));
+
+        // 4. policy eval avec action invalide
+        let (st4, len4) = shell.execute_line("policy eval system invalid_action system/", &mut out);
+        assert_eq!(st4, ShellStatus::InvalidArgument);
+        let s4 = core::str::from_utf8(&out[..len4]).unwrap();
+        assert!(s4.contains("policy eval: action invalide"));
+
+        // 5. policy rule add sans arguments
+        let (st5, len5) = shell.execute_line("policy rule add", &mut out);
+        assert_eq!(st5, ShellStatus::InvalidArgument);
+        let s5 = core::str::from_utf8(&out[..len5]).unwrap();
+        assert!(s5.contains(
+            "Usage: policy rule add <id> <role> <action> <resource> <allow|deny> [priority]"
+        ));
+
+        // 6. policy rule del sans argument
+        let (st6, len6) = shell.execute_line("policy rule del", &mut out);
+        assert_eq!(st6, ShellStatus::InvalidArgument);
+        let s6 = core::str::from_utf8(&out[..len6]).unwrap();
+        assert!(s6.contains("Usage: policy rule del <id>"));
+
+        // 7. policy rule del avec ID inexistant -> ExecutionFailed
+        let (st7, len7) = shell.execute_line("policy rule del 9999", &mut out);
+        assert_eq!(st7, ShellStatus::ExecutionFailed);
+        let s7 = core::str::from_utf8(&out[..len7]).unwrap();
+        assert!(s7.contains("policy rule del: regle #9999 introuvable"));
     }
 }
