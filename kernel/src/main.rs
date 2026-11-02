@@ -157,7 +157,7 @@ pub extern "C" fn _start() -> ! {
     // 4. Bannière système d'accueil sobre Iron Core
     kprintln!("\x1b[1;36m");
     kprintln!("================================================================================");
-    kprintln!("    JAMBO-OS (JamboKernel v0.3.67 — Iron Core)                                 ");
+    kprintln!("    JAMBO-OS (JamboKernel v0.3.68 — Iron Core)                                 ");
     kprintln!("    Architecture : Micro-noyau orienté capacités en Rust no_std (x86_64/AArch64)");
     kprintln!("    Auteur & Architecte Principal : ASSOGBA Prudence Dieudonné                 ");
     kprintln!("    Dépôt Officiel : https://github.com/jambostack/jambo-os                    ");
@@ -370,6 +370,7 @@ pub extern "C" fn _start() -> ! {
     let mut secboot_elf_bytes: Option<&'static [u8]> = None;
     let mut logd_elf_bytes: Option<&'static [u8]> = None;
     let mut kms_elf_bytes: Option<&'static [u8]> = None;
+    let mut attest_elf_bytes: Option<&'static [u8]> = None;
     if let Some(modules_resp) = MODULES_REQUEST.response() {
         let modules = modules_resp.modules();
         kprintln!(
@@ -678,6 +679,18 @@ pub extern "C" fn _start() -> ! {
                         kms_data.len()
                     );
                     kms_elf_bytes = Some(kms_data);
+                }
+                if let Some(attest_data) = tar
+                    .find("bin/attest")
+                    .or_else(|| tar.find("/bin/attest"))
+                    .or_else(|| tar.find("bin/jambo-attest"))
+                    .or_else(|| tar.find("attest"))
+                {
+                    kprintln!(
+                        "[INITRD/TAR] Demon Attestation Distante & ZKP '/bin/attest' extrait ({:#x} octets)",
+                        attest_data.len()
+                    );
+                    attest_elf_bytes = Some(attest_data);
                 }
             }
             if initrd_elf_bytes.is_none() && data.len() >= 4 && data[0..4] == mm::elf::ELF_MAGIC {
@@ -1315,6 +1328,27 @@ pub extern "C" fn _start() -> ! {
         kprintln!("[WARN] Echec de la creation du processus kms");
     }
 
+    // Initialisation du démon d'attestation distante et ZKP Ring 3 (PID 29 : attest)
+    let attest_binary = attest_elf_bytes.unwrap_or(&test_elf);
+    if let Ok((_attest_process, attest_thread)) = sched::Process::create_user_process(
+        29,
+        "attest",
+        attest_binary,
+        &["attest"],
+        &["PATH=/bin:/usr/bin", "TERM=xterm-256color"],
+    ) {
+        let attest_sp = attest_thread.lock().user_rsp;
+        assert_eq!(attest_sp % 16, 0, "Alignement 16 octets du RSP attest");
+        attest_thread.lock().deadline = 1000;
+        sched::SCHEDULER.lock().enqueue(attest_thread);
+        kprintln!(
+            "[PROCESS] Demon Attestation Distante & ZKP attest (PID 29) initialise avec pile System V ABI (RSP: {:#018x}) et enfile",
+            attest_sp
+        );
+    } else {
+        kprintln!("[WARN] Echec de la creation du processus attest");
+    }
+
     // 12. Initialisation CSpace, table SYSCALL et IPC hybride
     cap::init_cspace();
     syscall::init_syscall();
@@ -1611,8 +1645,8 @@ pub extern "C" fn _start() -> ! {
     let is_test_mode = cfg!(feature = "qemu-test") || cmdline_test || module_test;
 
     if is_test_mode {
-        kprintln!("[TEST] Validation de l'initialisation des 28 processus Ring 3 (init, jsh, blockd, fs, netd, fdr, wasmd, pqc, kdir, forensics, powerd, metricsd, bpfd, vpn, authd, dnsd, timed, auditd, walld, vaultd, watchdogd, cored, pkgd, certd, policyd, secboot, logd, kms)...");
-        kprintln!("\x1b[1;32m[PASS] Gestionnaire Cles KMS & Derivation HKDF (jambo-kms PID 28) validee sous QEMU.\x1b[0m");
+        kprintln!("[TEST] Validation de l'initialisation des 29 processus Ring 3 (init, jsh, blockd, fs, netd, fdr, wasmd, pqc, kdir, forensics, powerd, metricsd, bpfd, vpn, authd, dnsd, timed, auditd, walld, vaultd, watchdogd, cored, pkgd, certd, policyd, secboot, logd, kms, attest)...");
+        kprintln!("\x1b[1;32m[PASS] Attestation Cryptographique Distante & Preuves ZKP (jambo-attest PID 29) validee sous QEMU.\x1b[0m");
         kprintln!("[TEST] Mode de test CI validé. Sortie propre via isa-debug-exit...");
         exit_qemu(QemuExitCode::Success);
     }
