@@ -34,6 +34,7 @@ members = [
     "services/jambo-secboot",
     "services/jambo-logd",
     "services/jambo-kms",
+    "services/jambo-attest",
     "xtask",
 ]
 

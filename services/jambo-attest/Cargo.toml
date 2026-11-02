@@ -1,0 +1,15 @@
+[package]
+name = "jambo-attest"
+version = "0.3.68"
+edition = "2021"
+authors = ["ASSOGBA Prudence Dieudonné <jprud67@gmail.com>"]
+description = "Attestation Cryptographique à Distance, Preuves Zero-Knowledge et Confinement Matériel de Grappe pour JamboOS"
+license = "MIT OR Apache-2.0"
+
+[[bin]]
+name = "attest"
+path = "src/main.rs"
+test = false
+
+[dependencies]
+libjambo = { path = "../../libs/libjambo" }
