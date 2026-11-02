@@ -132,3 +132,4 @@ Le shell `jsh` intègre le sous-système `policy` avec les commandes suivantes :
   - Compilation du binaire `policyd` en mode bare-metal `x86_64-unknown-none`.
   - Intégration dans le tuple de 25 binaires utilisateur pour la génération de l'archive `initrd.img`.
   - Vérification automatisée dans `run_test` du message officiel QEMU.
+
