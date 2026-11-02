@@ -133,6 +133,13 @@ use jambo_watchdogd::{
     watchdog_rights, JamboWatchdogDaemon, WatchdogAction, WatchdogCap, WatchdogClient,
     WatchdogOpcode, WatchdogRequest, WatchdogResponse,
 };
+#[allow(unused_imports)]
+use jambo_xdr::{
+    xdr_rights, AptCampaign, CampaignStage, CampaignStatus, JamboXdrDaemon, MitreTactic,
+    PropagationStep, TelemetryVector, XdrAuditEntry, XdrCap, XdrClient, XdrError, XdrOpcode,
+    XdrRemediationReport, XdrRequest, XdrResponse, XdrResponseType, XdrSummary, XDR_ENDPOINT_ID,
+    XDR_MAGIC_REQ, XDR_MAGIC_RESP,
+};
 use libjambo::{sys_info, syscall6, SysError, SyscallNumber};
 
 /// Statut d'exécution d'une commande
@@ -167,6 +174,7 @@ pub struct JamboShell {
     pub siem_daemon: SiemEngine,
     pub edr_daemon: JamboEdrDaemon,
     pub ndr_daemon: JamboNdrDaemon,
+    pub xdr_daemon: JamboXdrDaemon,
 }
 
 impl Default for JamboShell {
@@ -248,6 +256,14 @@ impl JamboShell {
         );
         let mut ndr_daemon = JamboNdrDaemon::new(ndr_cap);
         ndr_daemon.init_defaults();
+        let xdr_cap = XdrCap::new(
+            libjambo::Handle::new(34, 1),
+            xdr_rights::ALL,
+            100_000,
+            10_000,
+        );
+        let mut xdr_daemon = JamboXdrDaemon::new(xdr_cap);
+        xdr_daemon.init_defaults();
         Self {
             prompt_user: "jambo",
             commands_executed: 0,
@@ -270,6 +286,7 @@ impl JamboShell {
             siem_daemon,
             edr_daemon,
             ndr_daemon,
+            xdr_daemon,
         }
     }
 
@@ -333,6 +350,7 @@ impl JamboShell {
             "siem" => self.cmd_siem(args, out),
             "edr" => self.cmd_edr(args, out),
             "ndr" => self.cmd_ndr(args, out),
+            "xdr" => self.cmd_xdr(args, out),
             _ => self.cmd_not_found(cmd, out),
         }
     }
@@ -341,7 +359,7 @@ impl JamboShell {
         let text = b"Commandes disponibles:\n\
   help        - Affiche cette aide\n\
   sysinfo     - Metriques memoire et uptime du micro-noyau\n\
-  ps          - Liste les 33 processus actifs\n\
+  ps          - Liste les 34 processus actifs\n\
   echo <args> - Affiche le texte sur la console\n\
   clear       - Reinitialise l'ecran du terminal\n\
   reboot      - Eteint ou redemarre la machine virtuelle\n\
@@ -375,7 +393,8 @@ impl JamboShell {
   waf [status|inspect|quarantine|unquarantine|rules|audit] - Pare-feu applicatif L7 et filtrage d'injections\n\
   siem [status|ingest|alerts|correlate|rules|audit] - Moteur SIEM et correlation d'evenements temps reel Ring 3\n\
   edr [status|scan|isolate|tree|alerts|audit] - Detection et reponse sur les terminaux souveraine EDR Ring 3\n\
-  ndr [status|flows|inspect|isolate|alerts|audit] - Detection et reponse reseau souveraine NDR Ring 3\n";
+  ndr [status|flows|inspect|isolate|alerts|audit] - Detection et reponse reseau souveraine NDR Ring 3\n\
+  xdr [status|campaigns|correlate|remediate|graph|audit] - Detection et reponse etendue souveraine XDR Ring 3\n";
         let len = text.len().min(out.len());
         out[..len].copy_from_slice(&text[..len]);
         (ShellStatus::Success, len)
@@ -452,7 +471,7 @@ impl JamboShell {
  30  ACTIF    /bin/waf (L7 Web Application Firewall Ring 3)\n  30 | waf             | Ring 3 | Ready   | 1000   | L7 Web Application Firewall & Injection Filter\n\
  31  ACTIF    /bin/siem (Security Information & Event Management Ring 3)\n  31 | siem            | Ring 3 | Ready   | 1000   | Security Information & Event Management\n\
  32  ACTIF    /bin/edr (Endpoint Detection & Response Ring 3)\n  32 | edr             | Ring 3 | Ready   | 1000   | Endpoint Detection & Response Daemon\n\
- 33  ACTIF    /bin/ndr (Network Detection & Response Ring 3)\n  33 | ndr             | Ring 3 | Ready   | 1000   | Network Detection & Response Daemon\nTotal: 33 processes\n";
+ 33  ACTIF    /bin/ndr (Network Detection & Response Ring 3)\n  33 | ndr             | Ring 3 | Ready   | 1000   | Network Detection & Response Daemon\n  34  ACTIF    /bin/xdr (Extended Detection & Response Ring 3)\n  34 | xdr             | Ring 3 | Ready   | 1000   | Extended Detection & Response Daemon\nTotal: 34 processes\n";
         let len = text.len().min(out.len());
         out[..len].copy_from_slice(&text[..len]);
         (ShellStatus::Success, len)
@@ -8513,6 +8532,404 @@ ID  | Nom             | Racine de Confiance      | Statut             | Confinem
         }
         (ShellStatus::Success, c)
     }
+
+    fn send_xdr_request(&mut self, req: &XdrRequest) -> XdrResponse {
+        let mut resp_opt: Option<XdrResponse> = None;
+        for &h in &[
+            34u64, 33u64, 32u64, 31u64, 30u64, 29u64, 28u64, 27u64, 26u64, 25u64, 24u64, 23u64,
+            22u64, 21u64, 20u64, 19u64, 18u64, 17u64, 16u64, 15u64, 14u64, 13u64, 12u64, 11u64,
+            10u64, 9u64, 8u64, 7u64, 6u64, 5u64, 4u64, 3u64,
+        ] {
+            let client = XdrClient::new(libjambo::Handle(h));
+            if let Ok(resp) = client.call(req) {
+                if resp.magic == XDR_MAGIC_RESP {
+                    resp_opt = Some(resp);
+                    break;
+                }
+            }
+        }
+        let local_resp = self.xdr_daemon.dispatch_ipc(req);
+        resp_opt.unwrap_or(local_resp)
+    }
+
+    pub fn cmd_xdr(&mut self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        let subcmd = if args.is_empty() { "status" } else { args[0] };
+        match subcmd {
+            "status" => self.cmd_xdr_status(out),
+            "campaigns" => self.cmd_xdr_campaigns(out),
+            "correlate" => self.cmd_xdr_correlate(out),
+            "remediate" => self.cmd_xdr_remediate(&args[1..], out),
+            "graph" => self.cmd_xdr_graph(&args[1..], out),
+            "audit" => self.cmd_xdr_audit(out),
+            _ => {
+                let msg =
+                    b"Usage: xdr <status|campaigns|correlate|remediate <id>|graph [id]|audit>\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                (ShellStatus::InvalidArgument, len)
+            }
+        }
+    }
+
+    fn cmd_xdr_status(&mut self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let req = XdrRequest::new_status(XDR_ENDPOINT_ID, xdr_rights::ALL);
+        let _resp = self.send_xdr_request(&req);
+        let summary = self.xdr_daemon.summary();
+
+        let mut c = 0;
+        c = append_bytes(
+            out,
+            c,
+            b"Bilan Global XDR & Detection/Reponse Etendue (jambo-xdr PID 34):\n  Statut Operationnel     : ACTIF (Correlation Multi-Vecteurs & Reponse O(1) Ring 3)\n  Evenements Telemetrie   : ",
+        );
+        c = append_u64(out, c, summary.total_events as u64);
+        c = append_bytes(out, c, b"\n  Campagnes APT Actives   : ");
+        c = append_u64(out, c, summary.active_campaigns as u64);
+        c = append_bytes(out, c, b"\n  Campagnes Confinees     : ");
+        c = append_u64(out, c, summary.contained_campaigns as u64);
+        c = append_bytes(out, c, b"\n  Entites en Quarantaine  : ");
+        c = append_u64(out, c, summary.quarantined_entities as u64);
+        c = append_bytes(out, c, b"\n  Anomalies TEE Correlees : ");
+        c = append_u64(out, c, summary.tee_anomalies_correlated as u64);
+        c = append_bytes(out, c, b"\n  Integrite Registre      : ");
+        if summary.ledger_valid {
+            c = append_bytes(out, c, b"VALIDE (Chaine SHA-256 inalterable)\n");
+        } else {
+            c = append_bytes(out, c, b"CORROMPU (Rupture d'integrite)\n");
+        }
+        c = append_bytes(out, c, b"  Empreinte d'Audit SHA-256: ");
+        for &b in self.xdr_daemon.ledger_hash.iter() {
+            c = append_hex_byte(out, c, b);
+        }
+        c = append_bytes(out, c, b"\n");
+        (ShellStatus::Success, c)
+    }
+
+    fn cmd_xdr_campaigns(&mut self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let req = XdrRequest::new_campaigns(XDR_ENDPOINT_ID, xdr_rights::ALL);
+        let _resp = self.send_xdr_request(&req);
+
+        let mut c = 0;
+        c = append_bytes(
+            out,
+            c,
+            b"Table des Campagnes APT Correlees XDR (PID 34):\nID    | Nom                   | Cible          | Vecteurs | Phase               | Risque | Statut\n--------------------------------------------------------------------------------------------------------\n",
+        );
+        let mut count = 0;
+        for camp in self
+            .xdr_daemon
+            .campaigns
+            .iter()
+            .take(self.xdr_daemon.campaign_count)
+            .flatten()
+        {
+            count += 1;
+            c = append_bytes(out, c, b" ");
+            c = append_u64(out, c, camp.id);
+            if camp.id < 10 {
+                c = append_bytes(out, c, b"   | ");
+            } else if camp.id < 100 {
+                c = append_bytes(out, c, b"  | ");
+            } else {
+                c = append_bytes(out, c, b" | ");
+            }
+            let name = camp.name_as_str();
+            let start_n = c;
+            c = append_bytes(out, c, name.as_bytes());
+            let written_n = c - start_n;
+            for _ in written_n..21 {
+                c = append_bytes(out, c, b" ");
+            }
+            c = append_bytes(out, c, b" | ");
+
+            let target = camp.primary_entity_as_str();
+            let start_t = c;
+            c = append_bytes(out, c, target.as_bytes());
+            let written_t = c - start_t;
+            for _ in written_t..14 {
+                c = append_bytes(out, c, b" ");
+            }
+            c = append_bytes(out, c, b" | ");
+
+            let v_cnt = camp.vector_count();
+            c = append_u64(out, c, v_cnt as u64);
+            c = append_bytes(out, c, b"/6      | ");
+
+            let stage = camp.stage.as_str();
+            let start_s = c;
+            c = append_bytes(out, c, stage.as_bytes());
+            let written_s = c - start_s;
+            for _ in written_s..19 {
+                c = append_bytes(out, c, b" ");
+            }
+            c = append_bytes(out, c, b" | ");
+
+            c = append_u64(out, c, camp.risk_score as u64);
+            if camp.risk_score < 10 {
+                c = append_bytes(out, c, b"      | ");
+            } else if camp.risk_score < 100 {
+                c = append_bytes(out, c, b"     | ");
+            } else if camp.risk_score < 1000 {
+                c = append_bytes(out, c, b"    | ");
+            } else {
+                c = append_bytes(out, c, b"   | ");
+            }
+
+            c = append_bytes(out, c, camp.status.as_str().as_bytes());
+            c = append_bytes(out, c, b"\n");
+        }
+        if count == 0 {
+            c = append_bytes(out, c, b"  (Aucune campagne APT detectee)\n");
+        }
+        c = append_bytes(out, c, b"Total: ");
+        c = append_u64(out, c, count as u64);
+        c = append_bytes(out, c, b" campagnes APT correlees\n");
+        (ShellStatus::Success, c)
+    }
+
+    fn cmd_xdr_correlate(&mut self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let req = XdrRequest::new_correlate(XDR_ENDPOINT_ID, xdr_rights::ALL, 1500);
+        let _resp = self.send_xdr_request(&req);
+        let summary = self.xdr_daemon.summary();
+
+        let mut c = 0;
+        c = append_bytes(
+            out,
+            c,
+            b"Cycle de Correlation Multi-Vecteurs XDR (PID 34):\n  Statut                  : Succes (Correlation Heuristique Multi-Vecteurs O(1))\n  Campagnes APT Detectees : ",
+        );
+        c = append_u64(out, c, self.xdr_daemon.apt_campaigns_detected as u64);
+        c = append_bytes(out, c, b"\n  Campagnes Actives       : ");
+        c = append_u64(out, c, summary.active_campaigns as u64);
+        c = append_bytes(out, c, b"\n  Campagnes Confinees     : ");
+        c = append_u64(out, c, summary.contained_campaigns as u64);
+        c = append_bytes(out, c, b"\n  Total Evenements Ingeres: ");
+        c = append_u64(out, c, summary.total_events as u64);
+        c = append_bytes(out, c, b"\n  Etapes de Propagation   : ");
+        c = append_u64(out, c, summary.propagation_steps as u64);
+        c = append_bytes(out, c, b"\n  Anomalies TEE Evaluees  : ");
+        c = append_u64(out, c, summary.tee_anomalies_correlated as u64);
+        c = append_bytes(out, c, b"\n  Integrite Registre      : ");
+        if summary.ledger_valid {
+            c = append_bytes(out, c, b"VALIDE (Chaine SHA-256 inalterable)\n");
+        } else {
+            c = append_bytes(out, c, b"CORROMPU (Rupture d'integrite)\n");
+        }
+        c = append_bytes(out, c, b"  Empreinte d'Audit SHA-256: ");
+        for &b in self.xdr_daemon.ledger_hash.iter() {
+            c = append_hex_byte(out, c, b);
+        }
+        c = append_bytes(out, c, b"\n");
+        (ShellStatus::Success, c)
+    }
+
+    fn cmd_xdr_remediate(&mut self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if args.is_empty() {
+            let msg = b"Usage: xdr remediate <id>\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            return (ShellStatus::InvalidArgument, len);
+        }
+
+        let campaign_id = match parse_u64(args[0]) {
+            Some(id) => id,
+            None => {
+                let msg = b"Usage: xdr remediate <id>\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                return (ShellStatus::InvalidArgument, len);
+            }
+        };
+
+        let cap = self.xdr_daemon.admin_cap;
+        match self
+            .xdr_daemon
+            .remediate_campaign_o1(&cap, campaign_id, 1600)
+        {
+            Ok(report) => {
+                let mut c = 0;
+                c = append_bytes(out, c, b"Rapport de Remediation O(1) XDR - Campagne ID ");
+                c = append_u64(out, c, campaign_id);
+                c = append_bytes(out, c, b":\n  Cible Principale        : ");
+                c = append_bytes(out, c, report.target_as_str().as_bytes());
+                c = append_bytes(out, c, b"\n  Confinement Endpoint    : ");
+                if report.endpoint_isolated {
+                    c = append_bytes(out, c, b"ISOLE (EDR)\n");
+                } else {
+                    c = append_bytes(out, c, b"NON CONFINE\n");
+                }
+                c = append_bytes(out, c, b"  Coupure Reseau          : ");
+                if report.network_severed {
+                    c = append_bytes(out, c, b"COUPE (NDR/VPN)\n");
+                } else {
+                    c = append_bytes(out, c, b"ACTIF\n");
+                }
+                c = append_bytes(out, c, b"  Filtrage Applicatif WAF : ");
+                if report.waf_route_blocked {
+                    c = append_bytes(out, c, b"BLOQUE (WAF L7)\n");
+                } else {
+                    c = append_bytes(out, c, b"NON BLOQUE\n");
+                }
+                c = append_bytes(out, c, b"  Revocation Identite     : ");
+                if report.identity_revoked {
+                    c = append_bytes(out, c, b"REVOCATION IMMEDIATE (Authd)\n");
+                } else {
+                    c = append_bytes(out, c, b"NON REVOQUE\n");
+                }
+                c = append_bytes(out, c, b"  Verrouillage Enclave TEE: ");
+                if report.tee_locked_down {
+                    c = append_bytes(out, c, b"VERROUILLE (Secrets purges)\n");
+                } else {
+                    c = append_bytes(out, c, b"NON VERROUILLE\n");
+                }
+                c = append_bytes(out, c, b"  Temps d'Execution       : ");
+                c = append_u64(out, c, report.execution_time_us as u64);
+                c = append_bytes(out, c, b" us (O(1))\n  Empreinte Scellee SHA-256: ");
+                for &b in report.report_hash.iter() {
+                    c = append_hex_byte(out, c, b);
+                }
+                c = append_bytes(out, c, b"\n");
+                (ShellStatus::Success, c)
+            }
+            Err(_) => {
+                let mut c = 0;
+                c = append_bytes(out, c, b"XDR: Campagne APT ID ");
+                c = append_u64(out, c, campaign_id);
+                c = append_bytes(out, c, b" non trouvee ou remediation echouee\n");
+                (ShellStatus::ExecutionFailed, c)
+            }
+        }
+    }
+
+    fn cmd_xdr_graph(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        let campaign_id = if !args.is_empty() {
+            match parse_u64(args[0]) {
+                Some(id) => id,
+                None => {
+                    let msg = b"Usage: xdr graph [id]\n";
+                    let len = msg.len().min(out.len());
+                    out[..len].copy_from_slice(&msg[..len]);
+                    return (ShellStatus::InvalidArgument, len);
+                }
+            }
+        } else {
+            1
+        };
+
+        let steps = self.xdr_daemon.trace_propagation(campaign_id);
+        let mut c = 0;
+        c = append_bytes(
+            out,
+            c,
+            b"Graphe de Propagation de Menaces APT - Campagne ID ",
+        );
+        c = append_u64(out, c, campaign_id);
+        c = append_bytes(
+            out,
+            c,
+            b":\nEtape | Vecteur Origine | Vecteur Cible   | Tactique ATT&CK     | Confiance | Horodatage\n----------------------------------------------------------------------------------------\n",
+        );
+        let mut step_count = 0;
+        for step in steps.iter().flatten() {
+            step_count += 1;
+            c = append_bytes(out, c, b" ");
+            c = append_u64(out, c, step_count as u64);
+            c = append_bytes(out, c, b"     | ");
+
+            let from = step.from_vector.as_str();
+            let start_f = c;
+            c = append_bytes(out, c, from.as_bytes());
+            let written_f = c - start_f;
+            for _ in written_f..15 {
+                c = append_bytes(out, c, b" ");
+            }
+            c = append_bytes(out, c, b" | ");
+
+            let to = step.to_vector.as_str();
+            let start_t = c;
+            c = append_bytes(out, c, to.as_bytes());
+            let written_t = c - start_t;
+            for _ in written_t..15 {
+                c = append_bytes(out, c, b" ");
+            }
+            c = append_bytes(out, c, b" | ");
+
+            let tac = step.tactic.as_str();
+            let start_tac = c;
+            c = append_bytes(out, c, tac.as_bytes());
+            let written_tac = c - start_tac;
+            for _ in written_tac..19 {
+                c = append_bytes(out, c, b" ");
+            }
+            c = append_bytes(out, c, b" | ");
+
+            c = append_u64(out, c, step.confidence as u64);
+            c = append_bytes(out, c, b"%       | ");
+            c = append_u64(out, c, step.timestamp);
+            c = append_bytes(out, c, b"\n");
+        }
+        if step_count == 0 {
+            c = append_bytes(
+                out,
+                c,
+                b"  (Aucune etape de propagation enregistree pour cette campagne)\n",
+            );
+        }
+        c = append_bytes(out, c, b"Total: ");
+        c = append_u64(out, c, step_count as u64);
+        c = append_bytes(out, c, b" etapes correlees\n");
+        (ShellStatus::Success, c)
+    }
+
+    fn cmd_xdr_audit(&self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let is_valid = self.xdr_daemon.verify_ledger_integrity();
+        let mut c = 0;
+        c = append_bytes(
+            out,
+            c,
+            b"Grand Livre d'Audit Cryptographique XDR (PID 34):\n  Integrite Registre      : ",
+        );
+        if is_valid {
+            c = append_bytes(out, c, b"VALIDE (Chaine SHA-256 inalterable)\n");
+        } else {
+            c = append_bytes(out, c, b"CORROMPU (Rupture d'integrite)\n");
+        }
+        c = append_bytes(out, c, b"  Total Entrees Scellees  : ");
+        c = append_u64(out, c, self.xdr_daemon.audit_count as u64);
+        c = append_bytes(out, c, b"\n  Empreinte Racine SHA-256: ");
+        for &b in self.xdr_daemon.ledger_hash.iter() {
+            c = append_hex_byte(out, c, b);
+        }
+        c = append_bytes(out, c, b"\nJournal recent des entrees scellees:\n");
+        let count = self.xdr_daemon.audit_count;
+        if count == 0 {
+            c = append_bytes(out, c, b"  (Aucune entree d'audit scellee)\n");
+        } else {
+            let start = count.saturating_sub(10);
+            for entry in self
+                .xdr_daemon
+                .audit_entries
+                .iter()
+                .take(count)
+                .skip(start)
+                .flatten()
+            {
+                c = append_bytes(out, c, b"  [#");
+                c = append_u64(out, c, entry.index);
+                c = append_bytes(out, c, b"] Action: ");
+                let act_str = entry.action_as_str();
+                c = append_bytes(out, c, act_str.as_bytes());
+                c = append_bytes(out, c, b" | Campagne: ");
+                c = append_u64(out, c, entry.campaign_id);
+                c = append_bytes(out, c, b" | Hash: ");
+                for &b in entry.entry_hash[..8].iter() {
+                    c = append_hex_byte(out, c, b);
+                }
+                c = append_bytes(out, c, b"...\n");
+            }
+        }
+        (ShellStatus::Success, c)
+    }
 }
 
 fn flow_state_str(state: FlowState) -> &'static str {
@@ -9263,7 +9680,7 @@ mod tests {
         assert!(
             s.contains("  30 | waf             | Ring 3 | Ready   | 1000   | L7 Web Application Firewall & Injection Filter")
         );
-        assert!(s.contains("Total: 33 processes"));
+        assert!(s.contains("Total: 34 processes"));
     }
 
     #[test]
@@ -9275,7 +9692,7 @@ mod tests {
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains("  23 | pkgd           | Ring 3 | Ready   | 1000   | Declarative Package Manager & CAS Store"));
-        assert!(s.contains("Total: 33 processes"));
+        assert!(s.contains("Total: 34 processes"));
     }
 
     #[test]
@@ -9287,7 +9704,7 @@ mod tests {
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains("  24 | certd          | Ring 3 | Ready   | 1000   | Ephemeral PKI & Cluster mTLS Daemon"));
-        assert!(s.contains("Total: 33 processes"));
+        assert!(s.contains("Total: 34 processes"));
     }
 
     #[test]
@@ -9299,7 +9716,7 @@ mod tests {
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains("  25 | policyd        | Ring 3 | Ready   | 1000   | Security Policy Engine & Admission Control"));
-        assert!(s.contains("Total: 33 processes"));
+        assert!(s.contains("Total: 34 processes"));
     }
 
     #[test]
@@ -9311,7 +9728,7 @@ mod tests {
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains("  26 | secboot        | Ring 3 | Ready   | 1000   | TPM 2.0 Measured Boot & Secure Trust Chain"));
-        assert!(s.contains("Total: 33 processes"));
+        assert!(s.contains("Total: 34 processes"));
     }
 
     #[test]
@@ -9323,7 +9740,7 @@ mod tests {
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains("  27 | logd           | Ring 3 | Ready   | 1000   | Structured Logging & Tamper-Evident Hash Chain"));
-        assert!(s.contains("Total: 33 processes"));
+        assert!(s.contains("Total: 34 processes"));
     }
 
     #[test]
@@ -9335,7 +9752,7 @@ mod tests {
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains("28 | kms | Running | Key Management Service & HKDF Derivation"));
-        assert!(s.contains("Total: 33 processes"));
+        assert!(s.contains("Total: 34 processes"));
     }
 
     #[test]
@@ -9350,7 +9767,7 @@ mod tests {
         assert!(s.contains(
             "  29 | attest          | Ring 3 | Ready   | 1000   | Remote Attestation & Zero-Knowledge Proofs"
         ));
-        assert!(s.contains("Total: 33 processes"));
+        assert!(s.contains("Total: 34 processes"));
     }
 
     #[test]
@@ -9365,7 +9782,7 @@ mod tests {
         assert!(s.contains(
             "  30 | waf             | Ring 3 | Ready   | 1000   | L7 Web Application Firewall & Injection Filter"
         ));
-        assert!(s.contains("Total: 33 processes"));
+        assert!(s.contains("Total: 34 processes"));
     }
 
     #[test]
@@ -9382,7 +9799,7 @@ mod tests {
         assert!(s.contains(
             "  31 | siem            | Ring 3 | Ready   | 1000   | Security Information & Event Management"
         ));
-        assert!(s.contains("Total: 33 processes"));
+        assert!(s.contains("Total: 34 processes"));
     }
 
     #[test]
@@ -9397,7 +9814,7 @@ mod tests {
         assert!(s.contains(
             "  32 | edr             | Ring 3 | Ready   | 1000   | Endpoint Detection & Response Daemon"
         ));
-        assert!(s.contains("Total: 33 processes"));
+        assert!(s.contains("Total: 34 processes"));
     }
 
     #[test]
@@ -9412,7 +9829,22 @@ mod tests {
         assert!(s.contains(
             "  33 | ndr             | Ring 3 | Ready   | 1000   | Network Detection & Response Daemon"
         ));
-        assert!(s.contains("Total: 33 processes"));
+        assert!(s.contains("Total: 34 processes"));
+    }
+
+    #[test]
+    fn test_ps_contains_34_processes() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        let (st, len) = shell.execute_line("ps", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("34  ACTIF    /bin/xdr (Extended Detection & Response Ring 3)"));
+        assert!(s.contains(
+            "  34 | xdr             | Ring 3 | Ready   | 1000   | Extended Detection & Response Daemon"
+        ));
+        assert!(s.contains("Total: 34 processes"));
     }
 
     #[test]
@@ -9423,7 +9855,7 @@ mod tests {
         let (st, len) = shell.execute_line("help", &mut out);
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
-        assert!(s.contains("33 processus actifs"));
+        assert!(s.contains("34 processus actifs"));
         assert!(s.contains("fdr [status|verify|pcr]"));
         assert!(s.contains("wasm [status|run|info]"));
         assert!(s.contains("pqc [status|kex|sign|audit]"));
@@ -9452,6 +9884,7 @@ mod tests {
         assert!(s.contains("siem [status|ingest|alerts|correlate|rules|audit]"));
         assert!(s.contains("edr [status|scan|isolate|tree|alerts|audit]"));
         assert!(s.contains("ndr [status|flows|inspect|isolate|alerts|audit]"));
+        assert!(s.contains("xdr [status|campaigns|correlate|remediate|graph|audit]"));
     }
 
     #[test]
@@ -13261,5 +13694,186 @@ mod tests {
         assert_eq!(st2, ShellStatus::InvalidArgument);
         let s2 = core::str::from_utf8(&out[..len2]).unwrap();
         assert!(s2.contains("Usage: ndr <status|flows|inspect <id>|isolate <ip>|alerts|audit>"));
+    }
+
+    #[test]
+    fn test_xdr_status() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        // 1. "xdr status"
+        let (st1, len1) = shell.execute_line("xdr status", &mut out);
+        assert_eq!(st1, ShellStatus::Success);
+        let s1 = core::str::from_utf8(&out[..len1]).unwrap();
+        assert!(s1.contains("Bilan Global XDR & Detection/Reponse Etendue (jambo-xdr PID 34):"));
+        assert!(s1.contains(
+            "Statut Operationnel     : ACTIF (Correlation Multi-Vecteurs & Reponse O(1) Ring 3)"
+        ));
+        assert!(s1.contains("Evenements Telemetrie   : 6"));
+        assert!(s1.contains("Campagnes APT Actives   : 1"));
+        assert!(s1.contains("Campagnes Confinees     : 0"));
+        assert!(s1.contains("Entites en Quarantaine  : 0"));
+        assert!(s1.contains("Anomalies TEE Correlees : 1"));
+        assert!(s1.contains("Integrite Registre      : VALIDE (Chaine SHA-256 inalterable)"));
+        assert!(s1.contains("Empreinte d'Audit SHA-256:"));
+
+        // 2. Default "xdr" without arguments defaults to status
+        let (st2, len2) = shell.execute_line("xdr", &mut out);
+        assert_eq!(st2, ShellStatus::Success);
+        assert_eq!(len1, len2);
+    }
+
+    #[test]
+    fn test_xdr_campaigns() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        let (st, len) = shell.execute_line("xdr campaigns", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("Table des Campagnes APT Correlees XDR (PID 34):"));
+        assert!(s.contains("APT-CAMP-admin-svc"));
+        assert!(s.contains("admin-svc"));
+        assert!(s.contains("5/6"));
+        assert!(s.contains("Enclave-Breach"));
+        assert!(s.contains("ACTIVE"));
+        assert!(s.contains("Total: 1 campagnes APT correlees"));
+    }
+
+    #[test]
+    fn test_xdr_correlate() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        let (st, len) = shell.execute_line("xdr correlate", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("Cycle de Correlation Multi-Vecteurs XDR (PID 34):"));
+        assert!(s.contains(
+            "Statut                  : Succes (Correlation Heuristique Multi-Vecteurs O(1))"
+        ));
+        assert!(s.contains("Campagnes APT Detectees : 1"));
+        assert!(s.contains("Campagnes Actives       : 1"));
+        assert!(s.contains("Total Evenements Ingeres: 6"));
+        assert!(s.contains("Integrite Registre      : VALIDE (Chaine SHA-256 inalterable)"));
+    }
+
+    #[test]
+    fn test_xdr_remediate() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        // 1. Missing argument
+        let (st1, len1) = shell.execute_line("xdr remediate", &mut out);
+        assert_eq!(st1, ShellStatus::InvalidArgument);
+        let s1 = core::str::from_utf8(&out[..len1]).unwrap();
+        assert!(s1.contains("Usage: xdr remediate <id>"));
+
+        // 2. Invalid argument
+        let (st2, len2) = shell.execute_line("xdr remediate invalid_id", &mut out);
+        assert_eq!(st2, ShellStatus::InvalidArgument);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("Usage: xdr remediate <id>"));
+
+        // 3. Campaign not found
+        let (st3, len3) = shell.execute_line("xdr remediate 999", &mut out);
+        assert_eq!(st3, ShellStatus::ExecutionFailed);
+        let s3 = core::str::from_utf8(&out[..len3]).unwrap();
+        assert!(s3.contains("XDR: Campagne APT ID 999 non trouvee"));
+
+        // 4. Successful remediation of campaign 1
+        let (st4, len4) = shell.execute_line("xdr remediate 1", &mut out);
+        assert_eq!(st4, ShellStatus::Success);
+        let s4 = core::str::from_utf8(&out[..len4]).unwrap();
+        assert!(s4.contains("Rapport de Remediation O(1) XDR - Campagne ID 1:"));
+        assert!(s4.contains("Cible Principale        : admin-svc"));
+        assert!(s4.contains("Confinement Endpoint    : ISOLE (EDR)"));
+        assert!(s4.contains("Coupure Reseau          : COUPE (NDR/VPN)"));
+        assert!(s4.contains("Filtrage Applicatif WAF : BLOQUE (WAF L7)"));
+        assert!(s4.contains("Revocation Identite     : REVOCATION IMMEDIATE (Authd)"));
+        assert!(s4.contains("Verrouillage Enclave TEE: VERROUILLE (Secrets purges)"));
+        assert!(s4.contains("Temps d'Execution       : 12 us (O(1))"));
+        assert!(s4.contains("Empreinte Scellee SHA-256:"));
+
+        // Verify daemon state
+        let camp = shell.xdr_daemon.get_campaign(1).unwrap();
+        assert_eq!(camp.status, CampaignStatus::Contained);
+        assert_eq!(camp.stage, CampaignStage::Contained);
+        assert_eq!(shell.xdr_daemon.quarantined_entities_count, 1);
+    }
+
+    #[test]
+    fn test_xdr_graph() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        // 1. Explicit ID: "xdr graph 1"
+        let (st1, len1) = shell.execute_line("xdr graph 1", &mut out);
+        assert_eq!(st1, ShellStatus::Success);
+        let s1 = core::str::from_utf8(&out[..len1]).unwrap();
+        assert!(s1.contains("Graphe de Propagation de Menaces APT - Campagne ID 1:"));
+        assert!(s1.contains("Etape | Vecteur Origine | Vecteur Cible   | Tactique ATT&CK     | Confiance | Horodatage"));
+        assert!(s1.contains("AUTH"));
+        assert!(s1.contains("VPN/NDR"));
+        assert!(s1.contains("WAF"));
+        assert!(s1.contains("EDR"));
+        assert!(s1.contains("TEE"));
+        assert!(s1.contains("Total: 4 etapes correlees"));
+
+        // 2. Default ID: "xdr graph"
+        let (st2, len2) = shell.execute_line("xdr graph", &mut out);
+        assert_eq!(st2, ShellStatus::Success);
+        assert_eq!(len1, len2);
+
+        // 3. Invalid ID
+        let (st3, len3) = shell.execute_line("xdr graph abc", &mut out);
+        assert_eq!(st3, ShellStatus::InvalidArgument);
+        let s3 = core::str::from_utf8(&out[..len3]).unwrap();
+        assert!(s3.contains("Usage: xdr graph [id]"));
+
+        // 4. Non-existent campaign
+        let (st4, len4) = shell.execute_line("xdr graph 999", &mut out);
+        assert_eq!(st4, ShellStatus::Success);
+        let s4 = core::str::from_utf8(&out[..len4]).unwrap();
+        assert!(s4.contains("Aucune etape de propagation enregistree"));
+        assert!(s4.contains("Total: 0 etapes correlees"));
+    }
+
+    #[test]
+    fn test_xdr_audit() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        let (st, len) = shell.execute_line("xdr audit", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("Grand Livre d'Audit Cryptographique XDR (PID 34):"));
+        assert!(s.contains("Integrite Registre      : VALIDE (Chaine SHA-256 inalterable)"));
+        assert!(s.contains("Total Entrees Scellees  : 7"));
+        assert!(s.contains("Empreinte Racine SHA-256:"));
+        assert!(s.contains("Action: INGEST_TELEMETRY"));
+        assert!(s.contains("Action: APT_CAMPAIGN_DETECTED"));
+    }
+
+    #[test]
+    fn test_xdr_invalid() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        // 1. Unknown subcommand
+        let (st1, len1) = shell.execute_line("xdr foobar", &mut out);
+        assert_eq!(st1, ShellStatus::InvalidArgument);
+        let s1 = core::str::from_utf8(&out[..len1]).unwrap();
+        assert!(
+            s1.contains("Usage: xdr <status|campaigns|correlate|remediate <id>|graph [id]|audit>")
+        );
+
+        // 2. Help subcommand
+        let (st2, len2) = shell.execute_line("xdr help", &mut out);
+        assert_eq!(st2, ShellStatus::InvalidArgument);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(
+            s2.contains("Usage: xdr <status|campaigns|correlate|remediate <id>|graph [id]|audit>")
+        );
     }
 }
