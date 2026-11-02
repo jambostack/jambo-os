@@ -1,0 +1,12 @@
+[package]
+name = "jambo-pkgd"
+version = "0.3.62"
+edition = "2021"
+
+[[bin]]
+name = "pkgd"
+path = "src/main.rs"
+test = false
+
+[dependencies]
+libjambo = { path = "../../libs/libjambo" }

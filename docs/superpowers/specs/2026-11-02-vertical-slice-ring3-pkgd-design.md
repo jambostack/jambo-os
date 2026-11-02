@@ -135,3 +135,4 @@ Le shell `jsh` intègre le sous-système `pkg` avec les commandes suivantes :
   - Compilation du binaire `pkgd` en mode bare-metal `x86_64-unknown-none`.
   - Intégration dans le tuple de 23 binaires utilisateur pour la génération de l'archive `initrd.img`.
   - Vérification automatisée dans `run_test` du message officiel QEMU.
+

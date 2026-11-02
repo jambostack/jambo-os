@@ -143,3 +143,29 @@ pub fn println(s: &str) {
     print(s);
     print("\n");
 }
+
+/// Cède le temps processeur au planificateur (Syscall 12)
+#[inline(always)]
+pub fn syscall_thread_yield() {
+    unsafe {
+        syscall6(SyscallNumber::ThreadYield, 0, 0, 0, 0, 0, 0);
+    }
+}
+
+/// Enregistre un endpoint IPC standard (Syscall 13 ChannelCreate ou handle fixé)
+pub fn syscall_ipc_register_endpoint(endpoint: u64) -> Handle {
+    let mut srv_h: u64 = 0;
+    let mut cli_h: u64 = 0;
+    unsafe {
+        syscall6(
+            SyscallNumber::ChannelCreate,
+            0,
+            &mut srv_h as *mut u64 as u64,
+            &mut cli_h as *mut u64 as u64,
+            0,
+            0,
+            0,
+        );
+    }
+    Handle(if srv_h != 0 { srv_h } else { endpoint })
+}
