@@ -114,3 +114,4 @@ pub struct SoarResponse {
 - Compilation bare-metal `services/jambo-soar` avec cible `x86_64-unknown-none` et script de liaison `libs/user-x86_64.ld`.
 - Empaquetage de `bin/soar` et `soar` dans `initrd.tar`.
 - Mise à jour des bannières disque et des vérifications CI QEMU.
+

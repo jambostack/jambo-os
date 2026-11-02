@@ -30,15 +30,15 @@
 **Interfaces:**
 - Produces: `JamboSoarDaemon`, `SoarCap`, `SoarRequest`, `SoarResponse`, `SoarClient`, `soar_rights`, `IncidentCategory`, `IncidentSeverity`, `IncidentStatus`, `Incident`, `PlaybookTrigger`, `PlaybookStep`, `Playbook`, `SoarAction`, `ActionResult`, `SoarAuditEntry`, `SoarSummary`.
 
-- [ ] **Step 1: Create `services/jambo-soar/Cargo.toml`**
+- [x] **Step 1: Create `services/jambo-soar/Cargo.toml`**
   - Set package name to `jambo-soar`, version `0.3.74`, edition `2021`.
   - Add dependency `libjambo = { path = "../../libs/libjambo" }`.
   - Define `[[bin]]` with `name = "soar"`, `path = "src/main.rs"`, and `test = false`.
 
-- [ ] **Step 2: Register in root `Cargo.toml`**
+- [x] **Step 2: Register in root `Cargo.toml`**
   - Add `"services/jambo-soar"` to `workspace.members`.
 
-- [ ] **Step 3: Implement `services/jambo-soar/src/lib.rs`**
+- [x] **Step 3: Implement `services/jambo-soar/src/lib.rs`**
   - Migrate and refine core SOAR logic from `incubator/services/jambo-soar/src/lib.rs`:
     - Pure `#![no_std]`, zero heap allocations.
     - Autonomous `Sha256` hasher.
@@ -60,20 +60,20 @@
     - `SoarClient` helper.
   - Unit tests covering all domain models, capabilities, DAG execution, Kahn sort, cycle rejection, audit ledger, and 64-byte IPC serialization/dispatch.
 
-- [ ] **Step 4: Implement `services/jambo-soar/src/main.rs`**
+- [x] **Step 4: Implement `services/jambo-soar/src/main.rs`**
   - `#![no_std]`, `#![no_main]`.
   - `_start()` entry point with System V ABI stack alignment.
   - Banner: `[SOAR] JamboOS Security Orchestration, Automation & Response Daemon (PID 35) v0.3.74`.
   - Self-tests (playbook registration, DAG topological ordering, incident triggering, automated execution, audit sealing).
   - IPC endpoint registration (PID 35) and cooperative event loop with `syscall_thread_yield()`.
 
-- [ ] **Step 5: Run unit tests and static analysis**
+- [x] **Step 5: Run unit tests and static analysis**
   - `cargo test --package jambo-soar`
   - `cargo clippy --package jambo-soar -- -D warnings`
   - `cargo fmt --package jambo-soar -- --check`
   - `cargo check --package jambo-soar --target x86_64-unknown-none`
 
-- [ ] **Step 6: Review & Commit Task 1**
+- [x] **Step 6: Review & Commit Task 1**
   - Reviewer subagent review.
   - `git add Cargo.toml docs/ services/jambo-soar ; git commit -m "feat(services/soar): implement Ring 3 security orchestration automation and response daemon (v0.3.74)"`
 
@@ -197,3 +197,4 @@
   - Tag: `git tag -a v0.3.74 -m "release: v0.3.74 - Sovereign Security Orchestration, Automation & Response, DAG Playbooks & Kahn Scheduler (jambo-soar PID 35)"`
   - Push: `git push origin main --tags`
   - Update roadmap artifact `synthese_avis_et_feuille_de_route_jamboos.md` to mark Jalon 3.30 as `✅ TERMINÉ (v0.3.74)`.
+

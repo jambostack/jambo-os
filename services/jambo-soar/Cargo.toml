@@ -1,0 +1,15 @@
+[package]
+name = "jambo-soar"
+version = "0.3.74"
+edition = "2021"
+authors = ["ASSOGBA Prudence Dieudonné <jprud67@gmail.com>"]
+description = "Security Orchestration, Automation & Response (SOAR) Démon Ring 3 pour JamboOS"
+license = "MIT OR Apache-2.0"
+
+[[bin]]
+name = "soar"
+path = "src/main.rs"
+test = false
+
+[dependencies]
+libjambo = { path = "../../libs/libjambo" }
