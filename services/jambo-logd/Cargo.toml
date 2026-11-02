@@ -1,0 +1,16 @@
+[package]
+name = "jambo-logd"
+version = "0.3.66"
+edition = "2021"
+authors = ["ASSOGBA Prudence Dieudonné <jprud67@gmail.com>"]
+description = "Journalisation Structurée, Chaînage Cryptographique Inviolable & Observabilité Haute Précision pour JamboOS"
+license = "MIT OR Apache-2.0"
+
+[[bin]]
+name = "logd"
+path = "src/main.rs"
+test = false
+
+[dependencies]
+libjambo = { path = "../../libs/libjambo" }
+
