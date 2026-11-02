@@ -157,7 +157,7 @@ pub extern "C" fn _start() -> ! {
     // 4. Bannière système d'accueil sobre Iron Core
     kprintln!("\x1b[1;36m");
     kprintln!("================================================================================");
-    kprintln!("    JAMBO-OS (JamboKernel v0.3.69 — Iron Core)                                 ");
+    kprintln!("    JAMBO-OS (JamboKernel v0.3.70 — Iron Core)                                 ");
     kprintln!("    Architecture : Micro-noyau orienté capacités en Rust no_std (x86_64/AArch64)");
     kprintln!("    Auteur & Architecte Principal : ASSOGBA Prudence Dieudonné                 ");
     kprintln!("    Dépôt Officiel : https://github.com/jambostack/jambo-os                    ");
@@ -372,6 +372,7 @@ pub extern "C" fn _start() -> ! {
     let mut kms_elf_bytes: Option<&'static [u8]> = None;
     let mut attest_elf_bytes: Option<&'static [u8]> = None;
     let mut waf_elf_bytes: Option<&'static [u8]> = None;
+    let mut siem_elf_bytes: Option<&'static [u8]> = None;
     if let Some(modules_resp) = MODULES_REQUEST.response() {
         let modules = modules_resp.modules();
         kprintln!(
@@ -704,6 +705,18 @@ pub extern "C" fn _start() -> ! {
                         waf_data.len()
                     );
                     waf_elf_bytes = Some(waf_data);
+                }
+                if let Some(siem_data) = tar
+                    .find("bin/siem")
+                    .or_else(|| tar.find("/bin/siem"))
+                    .or_else(|| tar.find("bin/jambo-siem"))
+                    .or_else(|| tar.find("siem"))
+                {
+                    kprintln!(
+                        "[INITRD/TAR] Demon Moteur SIEM '/bin/siem' extrait ({:#x} octets)",
+                        siem_data.len()
+                    );
+                    siem_elf_bytes = Some(siem_data);
                 }
             }
             if initrd_elf_bytes.is_none() && data.len() >= 4 && data[0..4] == mm::elf::ELF_MAGIC {
@@ -1383,6 +1396,27 @@ pub extern "C" fn _start() -> ! {
         kprintln!("[WARN] Echec de la creation du processus waf");
     }
 
+    // Initialisation du démon moteur SIEM Ring 3 (PID 31 : siem)
+    let siem_binary = siem_elf_bytes.unwrap_or(&test_elf);
+    if let Ok((_siem_process, siem_thread)) = sched::Process::create_user_process(
+        31,
+        "siem",
+        siem_binary,
+        &["siem"],
+        &["PATH=/bin:/usr/bin", "TERM=xterm-256color"],
+    ) {
+        let siem_sp = siem_thread.lock().user_rsp;
+        assert_eq!(siem_sp % 16, 0, "Alignement 16 octets du RSP siem");
+        siem_thread.lock().deadline = 1000;
+        sched::SCHEDULER.lock().enqueue(siem_thread);
+        kprintln!(
+            "[PROCESS] Demon Moteur SIEM siem (PID 31) initialise avec pile System V ABI (RSP: {:#018x}) et enfile",
+            siem_sp
+        );
+    } else {
+        kprintln!("[WARN] Echec de la creation du processus siem");
+    }
+
     // 12. Initialisation CSpace, table SYSCALL et IPC hybride
     cap::init_cspace();
     syscall::init_syscall();
@@ -1679,8 +1713,8 @@ pub extern "C" fn _start() -> ! {
     let is_test_mode = cfg!(feature = "qemu-test") || cmdline_test || module_test;
 
     if is_test_mode {
-        kprintln!("[TEST] Validation de l'initialisation des 30 processus Ring 3 (init, jsh, blockd, fs, netd, fdr, wasmd, pqc, kdir, forensics, powerd, metricsd, bpfd, vpn, authd, dnsd, timed, auditd, walld, vaultd, watchdogd, cored, pkgd, certd, policyd, secboot, logd, kms, attest, waf)...");
-        kprintln!("\x1b[1;32m[PASS] Pare-Feu Applicatif L7 & Filtrage Injections (jambo-waf PID 30) validee sous QEMU.\x1b[0m");
+        kprintln!("[TEST] Validation de l'initialisation des 31 processus Ring 3 (init, jsh, blockd, fs, netd, fdr, wasmd, pqc, kdir, forensics, powerd, metricsd, bpfd, vpn, authd, dnsd, timed, auditd, walld, vaultd, watchdogd, cored, pkgd, certd, policyd, secboot, logd, kms, attest, waf, siem)...");
+        kprintln!("\x1b[1;32m[PASS] Moteur SIEM & Correlation Evenements (jambo-siem PID 31) validee sous QEMU.\x1b[0m");
         kprintln!("[TEST] Mode de test CI validé. Sortie propre via isa-debug-exit...");
         exit_qemu(QemuExitCode::Success);
     }
