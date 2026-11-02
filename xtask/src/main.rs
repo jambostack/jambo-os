@@ -828,10 +828,41 @@ fn build_policyd(release: bool) -> anyhow::Result<PathBuf> {
     Ok(root.join(format!("target/x86_64-unknown-none/{}/policyd", profile)))
 }
 
+fn build_secboot(release: bool) -> anyhow::Result<PathBuf> {
+    let root = root_dir();
+    let mut cmd = Command::new("cargo");
+    cmd.current_dir(&root);
+    cmd.args([
+        "build",
+        "--package",
+        "jambo-secboot",
+        "--bin",
+        "secboot",
+        "--target",
+        "x86_64-unknown-none",
+    ]);
+    if release {
+        cmd.arg("--release");
+    }
+    cmd.env(
+        "RUSTFLAGS",
+        "-C link-arg=-Tlibs/user-x86_64.ld -C relocation-model=static",
+    );
+
+    let status = cmd.status()?;
+    if !status.success() {
+        anyhow::bail!("Échec de compilation du binaire jambo-secboot (secboot)");
+    }
+
+    let profile = if release { "release" } else { "debug" };
+    Ok(root.join(format!("target/x86_64-unknown-none/{}/secboot", profile)))
+}
+
 #[allow(clippy::type_complexity)]
 fn build_userland(
     release: bool,
 ) -> anyhow::Result<(
+    PathBuf,
     PathBuf,
     PathBuf,
     PathBuf,
@@ -883,9 +914,10 @@ fn build_userland(
     let pkgd = build_pkgd(release)?;
     let certd = build_certd(release)?;
     let policyd = build_policyd(release)?;
+    let secboot = build_secboot(release)?;
     Ok((
         init, jsh, blockd, fs, netd, fdr, wasmd, pqc, kdir, forensics, powerd, metricsd, bpfd, vpn,
-        authd, dnsd, timed, auditd, walld, vaultd, watchdogd, cored, pkgd, certd, policyd,
+        authd, dnsd, timed, auditd, walld, vaultd, watchdogd, cored, pkgd, certd, policyd, secboot,
     ))
 }
 
@@ -934,8 +966,8 @@ fn create_disk_image(path: &Path) -> anyhow::Result<()> {
     file.seek(SeekFrom::Start(8192))?;
     file.write_all(&root_buf)?;
 
-    // 3. Données à l'offset 12288 (LBA 24..31) : "Bienvenue sur JamboOS v0.3.64\n"
-    let banner_data = b"Bienvenue sur JamboOS v0.3.64\n";
+    // 3. Données à l'offset 12288 (LBA 24..31) : "Bienvenue sur JamboOS v0.3.65\n"
+    let banner_data = b"Bienvenue sur JamboOS v0.3.65\n";
     let mut data_buf = [0u8; 4096];
     data_buf[..banner_data.len()].copy_from_slice(banner_data);
 
@@ -974,6 +1006,7 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
         pkgd_bin,
         certd_bin,
         policyd_bin,
+        secboot_bin,
     ) = build_userland(release)?;
 
     let initrd_stage = root.join("target/initrd_stage");
@@ -1022,6 +1055,8 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
     fs::copy(&certd_bin, bin_dir.join("jambo-certd"))?;
     fs::copy(&policyd_bin, bin_dir.join("policyd"))?;
     fs::copy(&policyd_bin, bin_dir.join("jambo-policyd"))?;
+    fs::copy(&secboot_bin, bin_dir.join("secboot"))?;
+    fs::copy(&secboot_bin, bin_dir.join("jambo-secboot"))?;
 
     fs::copy(&init_bin, initrd_stage.join("init"))?;
     fs::copy(&jsh_bin, initrd_stage.join("jsh"))?;
@@ -1064,6 +1099,8 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
     fs::copy(&certd_bin, initrd_stage.join("jambo-certd"))?;
     fs::copy(&policyd_bin, initrd_stage.join("policyd"))?;
     fs::copy(&policyd_bin, initrd_stage.join("jambo-policyd"))?;
+    fs::copy(&secboot_bin, initrd_stage.join("secboot"))?;
+    fs::copy(&secboot_bin, initrd_stage.join("jambo-secboot"))?;
 
     let initrd_tar = root.join("target/initrd.tar");
     let status = Command::new("tar")
@@ -1112,6 +1149,8 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
             "bin/jambo-certd",
             "bin/policyd",
             "bin/jambo-policyd",
+            "bin/secboot",
+            "bin/jambo-secboot",
             "init",
             "jsh",
             "blockd",
@@ -1153,6 +1192,8 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
             "jambo-certd",
             "policyd",
             "jambo-policyd",
+            "secboot",
+            "jambo-secboot",
         ])
         .status()?;
 
@@ -1363,6 +1404,9 @@ fn run_test(release: bool) -> anyhow::Result<()> {
     let code = output.status.code().unwrap_or(-1);
     let success = code == 33
         || combined.contains(
+            "[PASS] Demarrage Mesure TPM 2.0 & Chaine Confiance (jambo-secboot PID 26) validee",
+        )
+        || combined.contains(
             "[PASS] Moteur Politiques Securite & Admission (jambo-policyd PID 25) validee",
         )
         || combined.contains(
@@ -1419,7 +1463,7 @@ fn run_test(release: bool) -> anyhow::Result<()> {
 
     if success {
         println!("{}", stdout);
-        println!("\x1b[1;32m[TEST PASSÉ AVEC SUCCÈS] Validation complète de JamboKernel Iron Core, JamboFS, VirtIO-Net, FDR, Wasm, PQC, KDIR, Forensics, Powerd, Metrics, BPF, VPN, Authd, Dnsd, Timed, Auditd, Walld, Vaultd, Watchdogd, Cored, Pkgd, Certd & Policyd Ring 3.\x1b[0m");
+        println!("\x1b[1;32m[TEST PASSÉ AVEC SUCCÈS] Validation complète de JamboKernel Iron Core, JamboFS, VirtIO-Net, FDR, Wasm, PQC, KDIR, Forensics, Powerd, Metrics, BPF, VPN, Authd, Dnsd, Timed, Auditd, Walld, Vaultd, Watchdogd, Cored, Pkgd, Certd, Policyd & Secboot Ring 3.\x1b[0m");
         Ok(())
     } else {
         eprintln!("{}", combined);

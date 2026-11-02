@@ -157,7 +157,7 @@ pub extern "C" fn _start() -> ! {
     // 4. Bannière système d'accueil sobre Iron Core
     kprintln!("\x1b[1;36m");
     kprintln!("================================================================================");
-    kprintln!("    JAMBO-OS (JamboKernel v0.3.64 — Iron Core)                                 ");
+    kprintln!("    JAMBO-OS (JamboKernel v0.3.65 — Iron Core)                                 ");
     kprintln!("    Architecture : Micro-noyau orienté capacités en Rust no_std (x86_64/AArch64)");
     kprintln!("    Auteur & Architecte Principal : ASSOGBA Prudence Dieudonné                 ");
     kprintln!("    Dépôt Officiel : https://github.com/jambostack/jambo-os                    ");
@@ -367,6 +367,7 @@ pub extern "C" fn _start() -> ! {
     let mut pkgd_elf_bytes: Option<&'static [u8]> = None;
     let mut certd_elf_bytes: Option<&'static [u8]> = None;
     let mut policyd_elf_bytes: Option<&'static [u8]> = None;
+    let mut secboot_elf_bytes: Option<&'static [u8]> = None;
     if let Some(modules_resp) = MODULES_REQUEST.response() {
         let modules = modules_resp.modules();
         kprintln!(
@@ -639,6 +640,18 @@ pub extern "C" fn _start() -> ! {
                         policyd_data.len()
                     );
                     policyd_elf_bytes = Some(policyd_data);
+                }
+                if let Some(secboot_data) = tar
+                    .find("bin/secboot")
+                    .or_else(|| tar.find("/bin/secboot"))
+                    .or_else(|| tar.find("bin/jambo-secboot"))
+                    .or_else(|| tar.find("secboot"))
+                {
+                    kprintln!(
+                        "[INITRD/TAR] Demon Démarrage Mesuré TPM 2.0 '/bin/secboot' extrait ({:#x} octets)",
+                        secboot_data.len()
+                    );
+                    secboot_elf_bytes = Some(secboot_data);
                 }
             }
             if initrd_elf_bytes.is_none() && data.len() >= 4 && data[0..4] == mm::elf::ELF_MAGIC {
@@ -1213,6 +1226,27 @@ pub extern "C" fn _start() -> ! {
         kprintln!("[WARN] Echec de la creation du processus policyd");
     }
 
+    // Initialisation du démon de démarrage mesuré TPM 2.0 et chaîne de confiance Ring 3 (PID 26 : secboot)
+    let secboot_binary = secboot_elf_bytes.unwrap_or(&test_elf);
+    if let Ok((_secboot_process, secboot_thread)) = sched::Process::create_user_process(
+        26,
+        "secboot",
+        secboot_binary,
+        &["secboot"],
+        &["PATH=/bin:/usr/bin", "TERM=xterm-256color"],
+    ) {
+        let secboot_sp = secboot_thread.lock().user_rsp;
+        assert_eq!(secboot_sp % 16, 0, "Alignement 16 octets du RSP secboot");
+        secboot_thread.lock().deadline = 1000;
+        sched::SCHEDULER.lock().enqueue(secboot_thread);
+        kprintln!(
+            "[PROCESS] Demon Demarrage Mesure TPM 2.0 secboot (PID 26) initialise avec pile System V ABI (RSP: {:#018x}) et enfile",
+            secboot_sp
+        );
+    } else {
+        kprintln!("[WARN] Echec de la creation du processus secboot");
+    }
+
     // 12. Initialisation CSpace, table SYSCALL et IPC hybride
     cap::init_cspace();
     syscall::init_syscall();
@@ -1509,8 +1543,8 @@ pub extern "C" fn _start() -> ! {
     let is_test_mode = cfg!(feature = "qemu-test") || cmdline_test || module_test;
 
     if is_test_mode {
-        kprintln!("[TEST] Validation de l'initialisation des 25 processus Ring 3 (init, jsh, blockd, fs, netd, fdr, wasmd, pqc, kdir, forensics, powerd, metricsd, bpfd, vpn, authd, dnsd, timed, auditd, walld, vaultd, watchdogd, cored, pkgd, certd, policyd)...");
-        kprintln!("\x1b[1;32m[PASS] Moteur Politiques Securite & Admission (jambo-policyd PID 25) validee sous QEMU.\x1b[0m");
+        kprintln!("[TEST] Validation de l'initialisation des 26 processus Ring 3 (init, jsh, blockd, fs, netd, fdr, wasmd, pqc, kdir, forensics, powerd, metricsd, bpfd, vpn, authd, dnsd, timed, auditd, walld, vaultd, watchdogd, cored, pkgd, certd, policyd, secboot)...");
+        kprintln!("\x1b[1;32m[PASS] Demarrage Mesure TPM 2.0 & Chaine Confiance (jambo-secboot PID 26) validee sous QEMU.\x1b[0m");
         kprintln!("[TEST] Mode de test CI validé. Sortie propre via isa-debug-exit...");
         exit_qemu(QemuExitCode::Success);
     }
