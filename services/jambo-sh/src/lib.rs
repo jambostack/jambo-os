@@ -38,6 +38,10 @@ use jambo_dnsd::{
 use jambo_forensics::{ForensicsClient, ForensicsOpcode, ForensicsResponse, FORENSICS_STATUS_OK};
 use jambo_kdir::{KdirClient, KdirResponse, KDIR_PROTECTION_SECURED, KDIR_STATUS_OK};
 #[allow(unused_imports)]
+use jambo_kms::{
+    kms_rights, lease_ops, KeyLifecycleState, KeyType, KmsCap, KmsManager, KmsRequest, KmsResponse,
+};
+#[allow(unused_imports)]
 use jambo_logd::{
     log_rights, LogCap, LogClient, LogDaemon, LogLevel, LogOpcode, LogRecord, LogRequest,
     LogResponse, RING_BUFFER_CAPACITY,
@@ -123,6 +127,7 @@ pub struct JamboShell {
     pub policy_daemon: PolicyEngine,
     pub secboot_daemon: SecureBootManager,
     pub log_daemon: LogDaemon,
+    pub kms_daemon: KmsManager,
 }
 
 impl Default for JamboShell {
@@ -177,6 +182,8 @@ impl JamboShell {
         secboot_daemon.init_defaults();
         let mut log_daemon = LogDaemon::new();
         log_daemon.init_defaults();
+        let mut kms_daemon = KmsManager::new();
+        kms_daemon.init_defaults();
         Self {
             prompt_user: "jambo",
             commands_executed: 0,
@@ -193,6 +200,7 @@ impl JamboShell {
             policy_daemon,
             secboot_daemon,
             log_daemon,
+            kms_daemon,
         }
     }
 
@@ -250,6 +258,7 @@ impl JamboShell {
             "policy" => self.cmd_policy(args, out),
             "secboot" => self.cmd_secboot(args, out),
             "log" => self.cmd_log(args, out),
+            "kms" => self.cmd_kms(args, out),
             _ => self.cmd_not_found(cmd, out),
         }
     }
@@ -258,7 +267,7 @@ impl JamboShell {
         let text = b"Commandes disponibles:\n\
   help        - Affiche cette aide\n\
   sysinfo     - Metriques memoire et uptime du micro-noyau\n\
-  ps          - Liste les 27 processus actifs\n\
+  ps          - Liste les 28 processus actifs\n\
   echo <args> - Affiche le texte sur la console\n\
   clear       - Reinitialise l'ecran du terminal\n\
   reboot      - Eteint ou redemarre la machine virtuelle\n\
@@ -286,7 +295,8 @@ impl JamboShell {
   cert [status|list|issue|verify|revoke] - Infrastructure PKI ephemere et mTLS de grappe\n\
   policy [status|eval|rule|list] - Moteur de politiques declaratives et controle d'admission ABAC/RBAC\n\
   secboot [status|pcr|measure|events|verify] - Chaine de confiance TPM 2.0 et demarrage mesure Ring 3\n\
-  log [status|append|tail|verify|clear] - Journalisation structuree et chainage cryptographique Ring 3\n";
+  log [status|append|tail|verify|clear] - Journalisation structuree et chainage cryptographique Ring 3\n\
+  kms [status|list|create|derive|lease|rotate|revoke] - Gestionnaire de cles souveraines & HKDF\n";
         let len = text.len().min(out.len());
         out[..len].copy_from_slice(&text[..len]);
         (ShellStatus::Success, len)
@@ -357,7 +367,8 @@ impl JamboShell {
  24  ACTIF    /bin/certd (Demon PKI Ephemere & mTLS de Grappe Ring 3)\n  24 | certd          | Ring 3 | Ready   | 1000   | Ephemeral PKI & Cluster mTLS Daemon\n\
  25  ACTIF    /bin/policyd (Moteur Politiques Securite Ring 3)\n  25 | policyd        | Ring 3 | Ready   | 1000   | Security Policy Engine & Admission Control\n\
  26  ACTIF    /bin/secboot (Demon TPM 2.0 Measured Boot Ring 3)\n  26 | secboot        | Ring 3 | Ready   | 1000   | TPM 2.0 Measured Boot & Secure Trust Chain\n\
- 27  ACTIF    /bin/logd (Demon Journalisation & Chaine Inviolable Ring 3)\n  27 | logd           | Ring 3 | Ready   | 1000   | Structured Logging & Tamper-Evident Hash Chain\nTotal: 27 processes\n";
+ 27  ACTIF    /bin/logd (Demon Journalisation & Chaine Inviolable Ring 3)\n  27 | logd           | Ring 3 | Ready   | 1000   | Structured Logging & Tamper-Evident Hash Chain\n\
+ 28  ACTIF    /bin/kms (Key Management Service & HKDF Derivation Ring 3)\n  28 | kms            | Ring 3 | Ready   | 1000   | Key Management Service & HKDF Derivation\n  28 | kms | Running | Key Management Service & HKDF Derivation\nTotal: 28 processes\n";
         let len = text.len().min(out.len());
         out[..len].copy_from_slice(&text[..len]);
         (ShellStatus::Success, len)
@@ -6263,6 +6274,292 @@ impl JamboShell {
             (ShellStatus::ExecutionFailed, c)
         }
     }
+
+    pub fn cmd_kms(&mut self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        let subcmd = if args.is_empty() { "status" } else { args[0] };
+        match subcmd {
+            "status" => self.cmd_kms_status(out),
+            "list" => self.cmd_kms_list(out),
+            "create" => self.cmd_kms_create(&args[1..], out),
+            "derive" => self.cmd_kms_derive(&args[1..], out),
+            "lease" => self.cmd_kms_lease(&args[1..], out),
+            "rotate" => self.cmd_kms_rotate(&args[1..], out),
+            "revoke" => self.cmd_kms_revoke(&args[1..], out),
+            _ => {
+                let msg = b"Usage: kms [status|list|create <type> <name>|derive <parent_id> <name>|lease <key_id> <ops>|rotate <key_id>|revoke <key_id>]\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                (ShellStatus::InvalidArgument, len)
+            }
+        }
+    }
+
+    fn cmd_kms_status(&mut self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let total_keys = self.kms_daemon.key_count();
+        let active_leases = self.kms_daemon.lease_count();
+
+        let mut c = 0;
+        c = append_bytes(
+            out,
+            c,
+            b"Demon Gestionnaire de Cles Cryptographiques Ring 3 (jambo-kms PID 28):\n  Total keys            : ",
+        );
+        c = append_u64(out, c, total_keys as u64);
+        c = append_bytes(out, c, b"\n  Active leases         : ");
+        c = append_u64(out, c, active_leases as u64);
+        c = append_bytes(out, c, b"\n  Total cles            : ");
+        c = append_u64(out, c, total_keys as u64);
+        c = append_bytes(out, c, b"\n  Baux actifs           : ");
+        c = append_u64(out, c, active_leases as u64);
+        c = append_bytes(out, c, b"\n  Statut Daemon         : OPERATIONNEL\n");
+        (ShellStatus::Success, c)
+    }
+
+    fn cmd_kms_list(&mut self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let mut c = 0;
+        c = append_bytes(
+            out,
+            c,
+            b"Cles cryptographiques enregistrees (jambo-kms PID 28):\n",
+        );
+        c = append_bytes(out, c, b"ID  | Type    | State    | Version | Name\n");
+        for key in self.kms_daemon.keys.iter().flatten() {
+            c = append_bytes(out, c, b"ID ");
+            c = append_u64(out, c, key.id as u64);
+            c = append_bytes(out, c, b" | Type: ");
+            c = append_bytes(out, c, key.key_type.as_str().as_bytes());
+            c = append_bytes(out, c, b" | State: ");
+            c = append_bytes(out, c, key.state.as_str().as_bytes());
+            c = append_bytes(out, c, b" | Version: ");
+            c = append_u64(out, c, key.version as u64);
+            c = append_bytes(out, c, b" | Name: ");
+            c = append_bytes(out, c, key.name_as_str().as_bytes());
+            c = append_bytes(out, c, b"\n");
+        }
+        (ShellStatus::Success, c)
+    }
+
+    fn cmd_kms_create(&mut self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if args.len() < 2 {
+            let msg = b"Usage: kms create <type> <name>\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            return (ShellStatus::InvalidArgument, len);
+        }
+
+        let key_type = match KeyType::from_str(args[0]) {
+            Some(t) => t,
+            None => {
+                let msg =
+                    b"[KMS] Erreur: type de cle invalide (master|domain|data|session|escrow)\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                return (ShellStatus::InvalidArgument, len);
+            }
+        };
+
+        let cap = KmsCap::new(libjambo::Handle::new(1, 1), kms_rights::ALL, 0, 32);
+        match self
+            .kms_daemon
+            .create_key(&cap, key_type, args[1].as_bytes(), None, 1)
+        {
+            Ok(id) => {
+                let mut c = 0;
+                c = append_bytes(out, c, b"[KMS] Cle creee: ID ");
+                c = append_u64(out, c, id as u64);
+                c = append_bytes(out, c, b", Type ");
+                c = append_bytes(out, c, key_type.as_str().as_bytes());
+                c = append_bytes(out, c, b", Nom ");
+                c = append_bytes(out, c, args[1].as_bytes());
+                c = append_bytes(out, c, b"\n");
+                (ShellStatus::Success, c)
+            }
+            Err(_) => {
+                let msg =
+                    b"[KMS] Erreur: echec de creation de cle (limite atteinte ou nom invalide)\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                (ShellStatus::ExecutionFailed, len)
+            }
+        }
+    }
+
+    fn cmd_kms_derive(&mut self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if args.len() < 2 {
+            let msg = b"Usage: kms derive <parent_id> <name>\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            return (ShellStatus::InvalidArgument, len);
+        }
+
+        let parent_id = match parse_u32(args[0]) {
+            Some(pid) => pid,
+            None => {
+                let msg = b"[KMS] Erreur: parent_id invalide (entier attendu)\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                return (ShellStatus::InvalidArgument, len);
+            }
+        };
+
+        let cap = KmsCap::new(libjambo::Handle::new(1, 1), kms_rights::ALL, 0, 32);
+        match self
+            .kms_daemon
+            .derive_key(&cap, parent_id, args[1].as_bytes(), KeyType::Data, 1)
+        {
+            Ok(id) => {
+                let mut c = 0;
+                c = append_bytes(out, c, b"[KMS] Cle derivee: ID ");
+                c = append_u64(out, c, id as u64);
+                c = append_bytes(out, c, b", Parent ");
+                c = append_u64(out, c, parent_id as u64);
+                c = append_bytes(out, c, b", Nom ");
+                c = append_bytes(out, c, args[1].as_bytes());
+                c = append_bytes(out, c, b"\n");
+                (ShellStatus::Success, c)
+            }
+            Err(_) => {
+                let msg =
+                    b"[KMS] Erreur: echec de derivation (cle parente introuvable ou inactive)\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                (ShellStatus::ExecutionFailed, len)
+            }
+        }
+    }
+
+    fn cmd_kms_lease(&mut self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if args.len() < 2 {
+            let msg = b"Usage: kms lease <key_id> <ops>\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            return (ShellStatus::InvalidArgument, len);
+        }
+
+        let key_id = match parse_u32(args[0]) {
+            Some(kid) => kid,
+            None => {
+                let msg = b"[KMS] Erreur: key_id invalide (entier attendu)\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                return (ShellStatus::InvalidArgument, len);
+            }
+        };
+
+        let ops_mask = if args[1].eq_ignore_ascii_case("encrypt") {
+            lease_ops::OP_ENCRYPT
+        } else if args[1].eq_ignore_ascii_case("decrypt") {
+            lease_ops::OP_DECRYPT
+        } else if args[1].eq_ignore_ascii_case("sign") {
+            lease_ops::OP_SIGN
+        } else if args[1].eq_ignore_ascii_case("derive") {
+            lease_ops::OP_DERIVE
+        } else if args[1].eq_ignore_ascii_case("all") {
+            lease_ops::OP_ALL
+        } else {
+            let msg = b"[KMS] Erreur: operation invalide (encrypt|decrypt|sign|derive|all)\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            return (ShellStatus::InvalidArgument, len);
+        };
+
+        let cap = KmsCap::new(libjambo::Handle::new(1, 1), kms_rights::ALL, 0, 32);
+        match self
+            .kms_daemon
+            .grant_lease(&cap, key_id, ops_mask, 100, 1000, 1)
+        {
+            Ok(lease_id) => {
+                let mut c = 0;
+                c = append_bytes(out, c, b"[KMS] Bail attribue: ID ");
+                c = append_u64(out, c, lease_id as u64);
+                c = append_bytes(out, c, b" sur cle ");
+                c = append_u64(out, c, key_id as u64);
+                c = append_bytes(out, c, b"\n");
+                (ShellStatus::Success, c)
+            }
+            Err(_) => {
+                let msg =
+                    b"[KMS] Erreur: echec d'attribution du bail (cle introuvable ou inactive)\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                (ShellStatus::ExecutionFailed, len)
+            }
+        }
+    }
+
+    fn cmd_kms_rotate(&mut self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if args.is_empty() {
+            let msg = b"Usage: kms rotate <key_id>\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            return (ShellStatus::InvalidArgument, len);
+        }
+
+        let key_id = match parse_u32(args[0]) {
+            Some(kid) => kid,
+            None => {
+                let msg = b"[KMS] Erreur: key_id invalide (entier attendu)\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                return (ShellStatus::InvalidArgument, len);
+            }
+        };
+
+        let cap = KmsCap::new(libjambo::Handle::new(1, 1), kms_rights::ALL, 0, 32);
+        match self.kms_daemon.rotate_key(&cap, key_id, 1) {
+            Ok(new_ver) => {
+                let mut c = 0;
+                c = append_bytes(out, c, b"[KMS] Rotation effectuee: Cle ");
+                c = append_u64(out, c, key_id as u64);
+                c = append_bytes(out, c, b" -> Nouvelle version ");
+                c = append_u64(out, c, new_ver as u64);
+                c = append_bytes(out, c, b"\n");
+                (ShellStatus::Success, c)
+            }
+            Err(_) => {
+                let msg = b"[KMS] Erreur: echec de la rotation (cle introuvable ou inactive)\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                (ShellStatus::ExecutionFailed, len)
+            }
+        }
+    }
+
+    fn cmd_kms_revoke(&mut self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if args.is_empty() {
+            let msg = b"Usage: kms revoke <key_id>\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            return (ShellStatus::InvalidArgument, len);
+        }
+
+        let key_id = match parse_u32(args[0]) {
+            Some(kid) => kid,
+            None => {
+                let msg = b"[KMS] Erreur: key_id invalide (entier attendu)\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                return (ShellStatus::InvalidArgument, len);
+            }
+        };
+
+        let cap = KmsCap::new(libjambo::Handle::new(1, 1), kms_rights::ALL, 0, 32);
+        match self.kms_daemon.revoke_key(&cap, key_id) {
+            Ok(()) => {
+                let mut c = 0;
+                c = append_bytes(out, c, b"[KMS] Cle ");
+                c = append_u64(out, c, key_id as u64);
+                c = append_bytes(out, c, b" revoquee et zeroisee.\n");
+                (ShellStatus::Success, c)
+            }
+            Err(_) => {
+                let msg = b"[KMS] Erreur: echec de la revocation (cle introuvable)\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                (ShellStatus::ExecutionFailed, len)
+            }
+        }
+    }
 }
 
 fn format_policy_action(mask: u32, out: &mut [u8], mut c: usize) -> usize {
@@ -6841,7 +7138,7 @@ mod tests {
         assert!(
             s.contains("  27 | logd           | Ring 3 | Ready   | 1000   | Structured Logging & Tamper-Evident Hash Chain")
         );
-        assert!(s.contains("Total: 27 processes"));
+        assert!(s.contains("Total: 28 processes"));
     }
 
     #[test]
@@ -6853,7 +7150,7 @@ mod tests {
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains("  23 | pkgd           | Ring 3 | Ready   | 1000   | Declarative Package Manager & CAS Store"));
-        assert!(s.contains("Total: 27 processes"));
+        assert!(s.contains("Total: 28 processes"));
     }
 
     #[test]
@@ -6865,7 +7162,7 @@ mod tests {
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains("  24 | certd          | Ring 3 | Ready   | 1000   | Ephemeral PKI & Cluster mTLS Daemon"));
-        assert!(s.contains("Total: 27 processes"));
+        assert!(s.contains("Total: 28 processes"));
     }
 
     #[test]
@@ -6877,7 +7174,7 @@ mod tests {
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains("  25 | policyd        | Ring 3 | Ready   | 1000   | Security Policy Engine & Admission Control"));
-        assert!(s.contains("Total: 27 processes"));
+        assert!(s.contains("Total: 28 processes"));
     }
 
     #[test]
@@ -6889,7 +7186,7 @@ mod tests {
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains("  26 | secboot        | Ring 3 | Ready   | 1000   | TPM 2.0 Measured Boot & Secure Trust Chain"));
-        assert!(s.contains("Total: 27 processes"));
+        assert!(s.contains("Total: 28 processes"));
     }
 
     #[test]
@@ -6901,7 +7198,19 @@ mod tests {
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains("  27 | logd           | Ring 3 | Ready   | 1000   | Structured Logging & Tamper-Evident Hash Chain"));
-        assert!(s.contains("Total: 27 processes"));
+        assert!(s.contains("Total: 28 processes"));
+    }
+
+    #[test]
+    fn test_ps_contains_28_processes() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        let (st, len) = shell.execute_line("ps", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("28 | kms | Running | Key Management Service & HKDF Derivation"));
+        assert!(s.contains("Total: 28 processes"));
     }
 
     #[test]
@@ -6912,7 +7221,7 @@ mod tests {
         let (st, len) = shell.execute_line("help", &mut out);
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
-        assert!(s.contains("27 processus actifs"));
+        assert!(s.contains("28 processus actifs"));
         assert!(s.contains("fdr [status|verify|pcr]"));
         assert!(s.contains("wasm [status|run|info]"));
         assert!(s.contains("pqc [status|kex|sign|audit]"));
@@ -6935,6 +7244,7 @@ mod tests {
         assert!(s.contains("policy [status|eval|rule|list]"));
         assert!(s.contains("secboot [status|pcr|measure|events|verify]"));
         assert!(s.contains("log [status|append|tail|verify|clear]"));
+        assert!(s.contains("kms [status|list|create|derive|lease|rotate|revoke]"));
     }
 
     #[test]
@@ -9696,5 +10006,185 @@ mod tests {
         assert!(
             s.contains("Usage: log [status|append <level> <subsys> <msg>|tail [n]|verify|clear]")
         );
+    }
+
+    #[test]
+    fn test_kms_status() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 2048];
+
+        let (st, len) = shell.execute_line("kms status", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(
+            s.contains("Demon Gestionnaire de Cles Cryptographiques Ring 3 (jambo-kms PID 28):")
+        );
+        assert!(s.contains("Total keys"));
+        assert!(s.contains("Active leases"));
+
+        // Default command without arguments invokes status
+        let (st2, len2) = shell.execute_line("kms", &mut out);
+        assert_eq!(st2, ShellStatus::Success);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("Total keys"));
+    }
+
+    #[test]
+    fn test_kms_list() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 2048];
+
+        let (st, len) = shell.execute_line("kms list", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("Cles cryptographiques enregistrees (jambo-kms PID 28):"));
+        assert!(s.contains("cluster-root-kek"));
+        assert!(s.contains("storage-domain-kek"));
+        assert!(s.contains("net-session-key"));
+        assert!(s.contains("Master"));
+        assert!(s.contains("Domain"));
+        assert!(s.contains("Session"));
+        assert!(s.contains("Active"));
+    }
+
+    #[test]
+    fn test_kms_create_and_derive() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 2048];
+
+        // Create key
+        let (st, len) = shell.execute_line("kms create data my_dek", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("[KMS] Cle creee: ID 4, Type Data, Nom my_dek"));
+
+        // Derive key from key 4
+        let (st2, len2) = shell.execute_line("kms derive 4 derived_dek", &mut out);
+        assert_eq!(st2, ShellStatus::Success);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("[KMS] Cle derivee: ID 5, Parent 4, Nom derived_dek"));
+
+        // List should now contain both
+        let (st3, len3) = shell.execute_line("kms list", &mut out);
+        assert_eq!(st3, ShellStatus::Success);
+        let s3 = core::str::from_utf8(&out[..len3]).unwrap();
+        assert!(s3.contains("my_dek"));
+        assert!(s3.contains("derived_dek"));
+    }
+
+    #[test]
+    fn test_kms_lease() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 2048];
+
+        // Lease on root key
+        let (st, len) = shell.execute_line("kms lease 1 encrypt", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("[KMS] Bail attribue: ID 1 sur cle 1"));
+
+        // Status shows active lease
+        let (st2, len2) = shell.execute_line("kms status", &mut out);
+        assert_eq!(st2, ShellStatus::Success);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("Active leases         : 1"));
+
+        // Another lease with all
+        let (st3, len3) = shell.execute_line("kms lease 2 all", &mut out);
+        assert_eq!(st3, ShellStatus::Success);
+        let s3 = core::str::from_utf8(&out[..len3]).unwrap();
+        assert!(s3.contains("[KMS] Bail attribue: ID 2 sur cle 2"));
+    }
+
+    #[test]
+    fn test_kms_rotate_and_revoke() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 2048];
+
+        // Rotate key 1
+        let (st, len) = shell.execute_line("kms rotate 1", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("[KMS] Rotation effectuee: Cle 1 -> Nouvelle version 2"));
+
+        // Revoke key 2
+        let (st2, len2) = shell.execute_line("kms revoke 2", &mut out);
+        assert_eq!(st2, ShellStatus::Success);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("[KMS] Cle 2 revoquee et zeroisee."));
+
+        // Verify state is Revoked in list
+        let (st3, len3) = shell.execute_line("kms list", &mut out);
+        assert_eq!(st3, ShellStatus::Success);
+        let s3 = core::str::from_utf8(&out[..len3]).unwrap();
+        assert!(s3.contains(
+            "ID 2 | Type: Domain | State: Revoked | Version: 1 | Name: storage-domain-kek"
+        ));
+    }
+
+    #[test]
+    fn test_kms_invalid() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 1024];
+
+        // Unknown subcommand
+        let (st, len) = shell.execute_line("kms invalid_subcmd", &mut out);
+        assert_eq!(st, ShellStatus::InvalidArgument);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("Usage: kms [status|list|create <type> <name>|derive <parent_id> <name>|lease <key_id> <ops>|rotate <key_id>|revoke <key_id>]"));
+
+        // create without args
+        let (st2, len2) = shell.execute_line("kms create", &mut out);
+        assert_eq!(st2, ShellStatus::InvalidArgument);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("Usage: kms create <type> <name>"));
+
+        // create with invalid type
+        let (st3, len3) = shell.execute_line("kms create bad_type my_name", &mut out);
+        assert_eq!(st3, ShellStatus::InvalidArgument);
+        let s3 = core::str::from_utf8(&out[..len3]).unwrap();
+        assert!(s3.contains("[KMS] Erreur: type de cle invalide"));
+
+        // derive without args
+        let (st4, len4) = shell.execute_line("kms derive", &mut out);
+        assert_eq!(st4, ShellStatus::InvalidArgument);
+        let s4 = core::str::from_utf8(&out[..len4]).unwrap();
+        assert!(s4.contains("Usage: kms derive <parent_id> <name>"));
+
+        // derive with invalid parent_id
+        let (st5, len5) = shell.execute_line("kms derive not_a_num child_name", &mut out);
+        assert_eq!(st5, ShellStatus::InvalidArgument);
+        let s5 = core::str::from_utf8(&out[..len5]).unwrap();
+        assert!(s5.contains("[KMS] Erreur: parent_id invalide"));
+
+        // lease without args
+        let (st6, len6) = shell.execute_line("kms lease", &mut out);
+        assert_eq!(st6, ShellStatus::InvalidArgument);
+        let s6 = core::str::from_utf8(&out[..len6]).unwrap();
+        assert!(s6.contains("Usage: kms lease <key_id> <ops>"));
+
+        // lease with invalid ops
+        let (st7, len7) = shell.execute_line("kms lease 1 bad_ops", &mut out);
+        assert_eq!(st7, ShellStatus::InvalidArgument);
+        let s7 = core::str::from_utf8(&out[..len7]).unwrap();
+        assert!(s7.contains("[KMS] Erreur: operation invalide"));
+
+        // rotate without args
+        let (st8, len8) = shell.execute_line("kms rotate", &mut out);
+        assert_eq!(st8, ShellStatus::InvalidArgument);
+        let s8 = core::str::from_utf8(&out[..len8]).unwrap();
+        assert!(s8.contains("Usage: kms rotate <key_id>"));
+
+        // revoke without args
+        let (st9, len9) = shell.execute_line("kms revoke", &mut out);
+        assert_eq!(st9, ShellStatus::InvalidArgument);
+        let s9 = core::str::from_utf8(&out[..len9]).unwrap();
+        assert!(s9.contains("Usage: kms revoke <key_id>"));
+
+        // rotate non-existent key -> ExecutionFailed
+        let (st10, len10) = shell.execute_line("kms rotate 999", &mut out);
+        assert_eq!(st10, ShellStatus::ExecutionFailed);
+        let s10 = core::str::from_utf8(&out[..len10]).unwrap();
+        assert!(s10.contains("[KMS] Erreur: echec de la rotation"));
     }
 }

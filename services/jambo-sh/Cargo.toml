@@ -1,6 +1,6 @@
 [package]
 name = "jambo-sh"
-version = "0.3.66"
+version = "0.3.67"
 edition = "2021"
 
 [lib]
@@ -38,4 +38,5 @@ jambo-certd = { path = "../jambo-certd" }
 jambo-policyd = { path = "../jambo-policyd" }
 jambo-secboot = { path = "../jambo-secboot" }
 jambo-logd = { path = "../jambo-logd" }
+jambo-kms = { path = "../jambo-kms" }
 
