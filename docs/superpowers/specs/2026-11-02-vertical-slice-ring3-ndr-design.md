@@ -112,3 +112,4 @@ pub struct NdrResponse {
 - Compilation bare-metal `services/jambo-ndr` avec cible `x86_64-unknown-none` et script de liaison `libs/user-x86_64.ld`.
 - Empaquetage de `bin/ndr` et `ndr` dans `initrd.tar`.
 - Mise à jour des bannières disque et des vérifications CI QEMU.
+

@@ -38,6 +38,7 @@ members = [
     "services/jambo-waf",
     "services/jambo-siem",
     "services/jambo-edr",
+    "services/jambo-ndr",
     "xtask",
 ]
 

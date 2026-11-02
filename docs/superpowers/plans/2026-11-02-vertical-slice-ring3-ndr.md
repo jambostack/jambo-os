@@ -197,3 +197,4 @@
   - Tag: `git tag -a v0.3.72 -m "release: v0.3.72 - Sovereign Network Detection & Response, Micro-segmentation & Instant Isolation (jambo-ndr PID 33)"`
   - Push: `git push origin main --tags`
   - Update roadmap artifact `synthese_avis_et_feuille_de_route_jamboos.md` to mark Jalon 3.28 as `✅ TERMINÉ (v0.3.72)`.
+
