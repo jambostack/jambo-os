@@ -38,6 +38,11 @@ use jambo_metricsd::{
     MetricsRequest, MetricsResponse, METRICS_STATUS_OK,
 };
 #[allow(unused_imports)]
+use jambo_pkgd::{
+    pkg_rights, AbSlot, JamboPkgDaemon, JpkgManifest, PkgCap, PkgClient, PkgOpcode, PkgRequest,
+    PkgResponse,
+};
+#[allow(unused_imports)]
 use jambo_powerd::{
     CpuPowerState, PowerClient, PowerOpcode, PowerProfile, PowerResponse, PowerState,
     POWER_STATUS_OK,
@@ -95,6 +100,7 @@ pub struct JamboShell {
     pub vault_daemon: JamboVaultDaemon,
     pub watchdog_daemon: JamboWatchdogDaemon,
     pub core_daemon: JamboCoreDaemon,
+    pub pkg_daemon: JamboPkgDaemon,
 }
 
 impl Default for JamboShell {
@@ -121,6 +127,26 @@ impl JamboShell {
         watchdog_daemon.init_defaults();
         let mut core_daemon = JamboCoreDaemon::new();
         core_daemon.init_defaults();
+        let mut pkg_daemon = JamboPkgDaemon::new();
+        pkg_daemon.init_defaults();
+        let _ = pkg_daemon.install_package(JpkgManifest::new(
+            "core-system",
+            (0, 3, 62),
+            [0x11u8; 32],
+            pkg_rights::PKG_ADMIN,
+        ));
+        let _ = pkg_daemon.install_package(JpkgManifest::new(
+            "jsh-suite",
+            (0, 3, 62),
+            [0x22u8; 32],
+            pkg_rights::PKG_ADMIN,
+        ));
+        let _ = pkg_daemon.install_package(JpkgManifest::new(
+            "net-stack",
+            (0, 3, 62),
+            [0x33u8; 32],
+            pkg_rights::PKG_ADMIN,
+        ));
         Self {
             prompt_user: "jambo",
             commands_executed: 0,
@@ -132,6 +158,7 @@ impl JamboShell {
             vault_daemon,
             watchdog_daemon,
             core_daemon,
+            pkg_daemon,
         }
     }
 
@@ -184,6 +211,7 @@ impl JamboShell {
             "vault" => self.cmd_vault(args, out),
             "wdog" => self.cmd_wdog(args, out),
             "core" => self.cmd_core(args, out),
+            "pkg" => self.cmd_pkg(args, out),
             _ => self.cmd_not_found(cmd, out),
         }
     }
@@ -192,7 +220,7 @@ impl JamboShell {
         let text = b"Commandes disponibles:\n\
   help        - Affiche cette aide\n\
   sysinfo     - Metriques memoire et uptime du micro-noyau\n\
-  ps          - Liste les 22 processus actifs\n\
+  ps          - Liste les 23 processus actifs\n\
   echo <args> - Affiche le texte sur la console\n\
   clear       - Reinitialise l'ecran du terminal\n\
   reboot      - Eteint ou redemarre la machine virtuelle\n\
@@ -215,7 +243,8 @@ impl JamboShell {
   wall [status|conntrack|rule|blocked|flush] - Pare-feu d'etat Zero-Trust et table Conntrack\n\
   vault [status|unseal|seal|store|get|revoke] - Coffre-fort cryptographique de secrets distribue\n\
   wdog [status|ping|register|targets|trigger|log] - Surveillance vivacite et chien de garde\n\
-  core [status|dump|list|verify|quarantine|purge] - Capture crash dumps ELF64 et forensique\n";
+  core [status|dump|list|verify|quarantine|purge] - Capture crash dumps ELF64 et forensique\n\
+  pkg [status|list|install|stage|commit|rollback] - Gestion declarative de paquets et mises a jour A/B\n";
         let len = text.len().min(out.len());
         out[..len].copy_from_slice(&text[..len]);
         (ShellStatus::Success, len)
@@ -281,7 +310,8 @@ impl JamboShell {
  19  ACTIF    /bin/walld (Pare-Feu d'Etat & Synchronisation Conntrack Ring 3)\n\
  20  ACTIF    /bin/vaultd (Coffre-Fort de Secrets Distribue Ring 3)\n\
  21  ACTIF    /bin/watchdogd (Surveillance Vivacite & Chien de Garde Ring 3)\n\
- 22  ACTIF    /bin/cored (Capture Crash Dumps ELF64 & Forensique Ring 3)\n";
+ 22  ACTIF    /bin/cored (Capture Crash Dumps ELF64 & Forensique Ring 3)\n\
+ 23  ACTIF    /bin/pkgd (Declarative Package Manager & CAS Store Ring 3)\n  23 | pkgd           | Ring 3 | Ready   | 1000   | Declarative Package Manager & CAS Store\nTotal: 23 processes\n";
         let len = text.len().min(out.len());
         out[..len].copy_from_slice(&text[..len]);
         (ShellStatus::Success, len)
@@ -4989,6 +5019,234 @@ impl JamboShell {
         );
         (ShellStatus::Success, c)
     }
+
+    fn send_pkg_request(&mut self, req: &PkgRequest) -> PkgResponse {
+        let mut resp_opt: Option<PkgResponse> = None;
+        for &h in &[
+            23u64, 22u64, 21u64, 20u64, 19u64, 18u64, 17u64, 16u64, 15u64, 14u64, 13u64, 12u64,
+            11u64, 10u64, 9u64, 8u64, 7u64, 6u64, 5u64, 4u64, 3u64,
+        ] {
+            let client = PkgClient::new(libjambo::Handle(h));
+            if let Ok(resp) = client.call(req) {
+                if resp.magic == jambo_pkgd::PKG_MAGIC_RESP {
+                    resp_opt = Some(resp);
+                    break;
+                }
+            }
+        }
+        let local_resp = self.pkg_daemon.dispatch_ipc(req);
+        resp_opt.unwrap_or(local_resp)
+    }
+
+    fn cmd_pkg(&mut self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        let subcmd = if args.is_empty() { "status" } else { args[0] };
+        match subcmd {
+            "status" => self.cmd_pkg_status(out),
+            "list" => self.cmd_pkg_list(out),
+            "install" => self.cmd_pkg_install(&args[1..], out),
+            "stage" => self.cmd_pkg_stage(out),
+            "commit" => self.cmd_pkg_commit(out),
+            "rollback" => self.cmd_pkg_rollback(out),
+            _ => {
+                let msg = b"Usage: pkg [status|list|install <name>|stage|commit|rollback]\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                (ShellStatus::InvalidArgument, len)
+            }
+        }
+    }
+
+    fn cmd_pkg_status(&mut self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let req = PkgRequest::new_status(23, pkg_rights::PKG_INSPECT);
+        let resp = self.send_pkg_request(&req);
+
+        let mut c = 0;
+        c = append_bytes(
+            out,
+            c,
+            b"Gestionnaire Declaratif de Paquets & CAS Store (jambo-pkgd PID 23):\n  Generation Actuelle     : Gen #",
+        );
+        c = append_u64(out, c, resp.current_generation);
+        c = append_bytes(out, c, b"\n  Fente Active (A/B)      : ");
+        c = append_bytes(out, c, resp.slot_as_str().as_bytes());
+        c = append_bytes(out, c, b"\n  Total Paquets en CAS    : ");
+        c = append_u64(out, c, resp.package_count as u64);
+        c = append_bytes(out, c, b"\n  Sante Generation        : ");
+        if resp.healthy != 0 {
+            c = append_bytes(out, c, b"HEALTHY (Validee)");
+        } else {
+            c = append_bytes(out, c, b"DEGRADED (En attente de validation)");
+        }
+        c = append_bytes(out, c, b"\n  Statut d'Engagement     : ");
+        if resp.committed != 0 {
+            c = append_bytes(out, c, b"COMMITTED");
+        } else {
+            c = append_bytes(out, c, b"UNCOMMITTED (Staging)");
+        }
+        c = append_bytes(out, c, b"\n  Tentatives de Boot      : ");
+        c = append_u64(out, c, resp.boot_attempts as u64);
+        c = append_bytes(out, c, b" / ");
+        c = append_u64(out, c, resp.max_boot_attempts as u64);
+        c = append_bytes(out, c, b"\n");
+        (ShellStatus::Success, c)
+    }
+
+    fn cmd_pkg_list(&mut self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let mut c = 0;
+        c = append_bytes(
+            out,
+            c,
+            b"Paquets Logiciels Installes en Magasin CAS (jambo-pkgd PID 23):\n",
+        );
+        let mut count = 0;
+        for pkg in self.pkg_daemon.store.iter().flatten() {
+            if pkg.installed {
+                count += 1;
+                c = append_bytes(out, c, b"  - ");
+                c = append_bytes(out, c, pkg.name_as_str().as_bytes());
+                c = append_bytes(out, c, b" v");
+                c = append_u64(out, c, pkg.version.0 as u64);
+                c = append_bytes(out, c, b".");
+                c = append_u64(out, c, pkg.version.1 as u64);
+                c = append_bytes(out, c, b".");
+                c = append_u64(out, c, pkg.version.2 as u64);
+                c = append_bytes(out, c, b" (hash: 0x");
+                for &b in &pkg.content_hash {
+                    c = append_hex_byte(out, c, b);
+                }
+                c = append_bytes(out, c, b")\n");
+            }
+        }
+        if count == 0 {
+            c = append_bytes(out, c, b"  (Aucun paquet installe dans le magasin CAS)\n");
+        }
+        (ShellStatus::Success, c)
+    }
+
+    fn cmd_pkg_install(&mut self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if args.is_empty() {
+            let msg = b"Usage: pkg install <name>\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            return (ShellStatus::InvalidArgument, len);
+        }
+
+        let name = args[0];
+        if name.is_empty() || name.len() > 24 {
+            let msg = b"pkg install: invalid package name\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            return (ShellStatus::InvalidArgument, len);
+        }
+
+        let mut hash16 = [0x5Au8; 16];
+        for (i, &b) in name.as_bytes().iter().enumerate() {
+            hash16[i % 16] ^= b;
+        }
+        if hash16.iter().all(|&b| b == 0) {
+            hash16[0] = 0xAA;
+        }
+
+        let req = PkgRequest::new_install(23, pkg_rights::PKG_INSTALL, name, (1, 0, 0), hash16);
+        let resp = self.send_pkg_request(&req);
+
+        let mut hash32 = [0u8; 32];
+        hash32[..16].copy_from_slice(&hash16);
+        hash32[16..].copy_from_slice(&hash16);
+        let manifest = JpkgManifest::new(name, (1, 0, 0), hash32, pkg_rights::PKG_INSTALL);
+        let _ = self.pkg_daemon.install_package(manifest);
+
+        if resp.status != 0 {
+            let mut c = 0;
+            c = append_bytes(out, c, b"pkg install: failed with error code ");
+            c = append_i64(out, c, resp.status as i64);
+            c = append_bytes(out, c, b"\n");
+            return (ShellStatus::ExecutionFailed, c);
+        }
+
+        let mut c = 0;
+        c = append_bytes(out, c, b"pkg install: paquet '");
+        c = append_bytes(out, c, name.as_bytes());
+        c = append_bytes(
+            out,
+            c,
+            b"' v1.0.0 installe avec succes dans le magasin CAS (hash: 0x",
+        );
+        for &b in &hash32 {
+            c = append_hex_byte(out, c, b);
+        }
+        c = append_bytes(out, c, b")\n");
+        (ShellStatus::Success, c)
+    }
+
+    fn cmd_pkg_stage(&mut self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let req = PkgRequest::new_stage(23, pkg_rights::PKG_STAGE);
+        let resp = self.send_pkg_request(&req);
+
+        if resp.status != 0 {
+            let mut c = 0;
+            c = append_bytes(out, c, b"pkg stage: failed with error code ");
+            c = append_i64(out, c, resp.status as i64);
+            c = append_bytes(out, c, b"\n");
+            return (ShellStatus::ExecutionFailed, c);
+        }
+
+        let mut c = 0;
+        c = append_bytes(out, c, b"pkg stage: nouvelle generation #");
+        c = append_u64(out, c, resp.current_generation);
+        c = append_bytes(out, c, b" preparee sur ");
+        c = append_bytes(out, c, resp.slot_as_str().as_bytes());
+        c = append_bytes(out, c, b" (statut: UNCOMMITTED, DEGRADED)\n");
+        (ShellStatus::Success, c)
+    }
+
+    fn cmd_pkg_commit(&mut self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let req = PkgRequest::new_commit(23, pkg_rights::PKG_COMMIT);
+        let resp = self.send_pkg_request(&req);
+
+        if resp.status != 0 {
+            let mut c = 0;
+            c = append_bytes(out, c, b"pkg commit: failed with error code ");
+            c = append_i64(out, c, resp.status as i64);
+            c = append_bytes(out, c, b"\n");
+            return (ShellStatus::ExecutionFailed, c);
+        }
+
+        let mut c = 0;
+        c = append_bytes(out, c, b"pkg commit: generation #");
+        c = append_u64(out, c, resp.current_generation);
+        c = append_bytes(out, c, b" validee avec succes sur ");
+        c = append_bytes(out, c, resp.slot_as_str().as_bytes());
+        c = append_bytes(out, c, b" (HEALTHY, COMMITTED)\n");
+        (ShellStatus::Success, c)
+    }
+
+    fn cmd_pkg_rollback(&mut self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let req = PkgRequest::new_rollback(23, pkg_rights::PKG_ROLLBACK);
+        let resp = self.send_pkg_request(&req);
+
+        if resp.status != 0 {
+            let mut c = 0;
+            c = append_bytes(
+                out,
+                c,
+                b"pkg rollback: aucun retour en arriere possible (pas de generation de secours)\n",
+            );
+            return (ShellStatus::ExecutionFailed, c);
+        }
+
+        let mut c = 0;
+        c = append_bytes(
+            out,
+            c,
+            b"pkg rollback: retour instantane effectue vers la generation #",
+        );
+        c = append_u64(out, c, resp.current_generation);
+        c = append_bytes(out, c, b" sur ");
+        c = append_bytes(out, c, resp.slot_as_str().as_bytes());
+        c = append_bytes(out, c, b" (HEALTHY, COMMITTED)\n");
+        (ShellStatus::Success, c)
+    }
 }
 
 fn append_bytes(buf: &mut [u8], cursor: usize, data: &[u8]) -> usize {
@@ -5387,6 +5645,25 @@ mod tests {
         assert!(
             s.contains("22  ACTIF    /bin/cored (Capture Crash Dumps ELF64 & Forensique Ring 3)")
         );
+        assert!(
+            s.contains("23  ACTIF    /bin/pkgd (Declarative Package Manager & CAS Store Ring 3)")
+        );
+        assert!(
+            s.contains("  23 | pkgd           | Ring 3 | Ready   | 1000   | Declarative Package Manager & CAS Store")
+        );
+        assert!(s.contains("Total: 23 processes"));
+    }
+
+    #[test]
+    fn test_ps_contains_23_processes() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        let (st, len) = shell.execute_line("ps", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("  23 | pkgd           | Ring 3 | Ready   | 1000   | Declarative Package Manager & CAS Store"));
+        assert!(s.contains("Total: 23 processes"));
     }
 
     #[test]
@@ -5397,7 +5674,7 @@ mod tests {
         let (st, len) = shell.execute_line("help", &mut out);
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
-        assert!(s.contains("22 processus actifs"));
+        assert!(s.contains("23 processus actifs"));
         assert!(s.contains("fdr [status|verify|pcr]"));
         assert!(s.contains("wasm [status|run|info]"));
         assert!(s.contains("pqc [status|kex|sign|audit]"));
@@ -5415,6 +5692,7 @@ mod tests {
         assert!(s.contains("vault [status|unseal|seal|store|get|revoke]"));
         assert!(s.contains("wdog [status|ping|register|targets|trigger|log]"));
         assert!(s.contains("core [status|dump|list|verify|quarantine|purge]"));
+        assert!(s.contains("pkg [status|list|install|stage|commit|rollback]"));
     }
 
     #[test]
@@ -7380,5 +7658,169 @@ mod tests {
         assert_eq!(st5, ShellStatus::InvalidArgument);
         let s5 = core::str::from_utf8(&out[..len5]).unwrap();
         assert!(s5.contains("core verify: invalid report id"));
+    }
+
+    #[test]
+    fn test_pkg_status() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 1024];
+
+        let (st, len) = shell.execute_line("pkg status", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("Gestionnaire Declaratif de Paquets & CAS Store (jambo-pkgd PID 23):"));
+        assert!(s.contains("Generation Actuelle     : Gen #1"));
+        assert!(s.contains("Fente Active (A/B)      : SlotA"));
+        assert!(s.contains("Total Paquets en CAS    : 4"));
+        assert!(s.contains("Sante Generation        : HEALTHY (Validee)"));
+        assert!(s.contains("Statut d'Engagement     : COMMITTED"));
+        assert!(s.contains("Tentatives de Boot      : 0 / 3"));
+
+        // 'pkg' sans argument équivaut à 'pkg status'
+        let (st2, len2) = shell.execute_line("pkg", &mut out);
+        assert_eq!(st2, ShellStatus::Success);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("Generation Actuelle     : Gen #1"));
+        assert!(s2.contains("Fente Active (A/B)      : SlotA"));
+    }
+
+    #[test]
+    fn test_pkg_list() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 2048];
+
+        let (st, len) = shell.execute_line("pkg list", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("Paquets Logiciels Installes en Magasin CAS (jambo-pkgd PID 23):"));
+        assert!(s.contains("base-system v0.3.62"));
+        assert!(s.contains("core-system v0.3.62"));
+        assert!(s.contains("jsh-suite v0.3.62"));
+        assert!(s.contains("net-stack v0.3.62"));
+        assert!(s.contains("(hash: 0x"));
+    }
+
+    #[test]
+    fn test_pkg_install() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 2048];
+
+        let (st, len) = shell.execute_line("pkg install sec-agent", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains(
+            "pkg install: paquet 'sec-agent' v1.0.0 installe avec succes dans le magasin CAS"
+        ));
+        assert!(s.contains("(hash: 0x"));
+
+        // Vérification dans pkg list
+        let (st2, len2) = shell.execute_line("pkg list", &mut out);
+        assert_eq!(st2, ShellStatus::Success);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("sec-agent v1.0.0"));
+
+        // Vérification de l'incrémentation dans pkg status (4 -> 5)
+        let (st3, len3) = shell.execute_line("pkg status", &mut out);
+        assert_eq!(st3, ShellStatus::Success);
+        let s3 = core::str::from_utf8(&out[..len3]).unwrap();
+        assert!(s3.contains("Total Paquets en CAS    : 5"));
+    }
+
+    #[test]
+    fn test_pkg_stage() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 1024];
+
+        let (st, len) = shell.execute_line("pkg stage", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains(
+            "pkg stage: nouvelle generation #2 preparee sur SlotB (statut: UNCOMMITTED, DEGRADED)"
+        ));
+
+        // Vérification de l'état dans pkg status
+        let (st2, len2) = shell.execute_line("pkg status", &mut out);
+        assert_eq!(st2, ShellStatus::Success);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("Generation Actuelle     : Gen #2"));
+        assert!(s2.contains("Fente Active (A/B)      : SlotB"));
+        assert!(s2.contains("Sante Generation        : DEGRADED (En attente de validation)"));
+        assert!(s2.contains("Statut d'Engagement     : UNCOMMITTED (Staging)"));
+    }
+
+    #[test]
+    fn test_pkg_commit() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 1024];
+
+        // 1. Stage vers Gen #2
+        let (st1, _) = shell.execute_line("pkg stage", &mut out);
+        assert_eq!(st1, ShellStatus::Success);
+
+        // 2. Commit
+        let (st2, len2) = shell.execute_line("pkg commit", &mut out);
+        assert_eq!(st2, ShellStatus::Success);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains(
+            "pkg commit: generation #2 validee avec succes sur SlotB (HEALTHY, COMMITTED)"
+        ));
+
+        // 3. Vérification de l'état dans pkg status
+        let (st3, len3) = shell.execute_line("pkg status", &mut out);
+        assert_eq!(st3, ShellStatus::Success);
+        let s3 = core::str::from_utf8(&out[..len3]).unwrap();
+        assert!(s3.contains("Generation Actuelle     : Gen #2"));
+        assert!(s3.contains("Fente Active (A/B)      : SlotB"));
+        assert!(s3.contains("Sante Generation        : HEALTHY (Validee)"));
+        assert!(s3.contains("Statut d'Engagement     : COMMITTED"));
+    }
+
+    #[test]
+    fn test_pkg_rollback() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 1024];
+
+        // 1. Stage vers Gen #2 sur SlotB
+        let (st1, _) = shell.execute_line("pkg stage", &mut out);
+        assert_eq!(st1, ShellStatus::Success);
+
+        // 2. Rollback instantané vers Gen #1 sur SlotA
+        let (st2, len2) = shell.execute_line("pkg rollback", &mut out);
+        assert_eq!(st2, ShellStatus::Success);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("pkg rollback: retour instantane effectue vers la generation #1 sur SlotA (HEALTHY, COMMITTED)"));
+
+        // 3. Vérification de l'état restauré dans pkg status
+        let (st3, len3) = shell.execute_line("pkg status", &mut out);
+        assert_eq!(st3, ShellStatus::Success);
+        let s3 = core::str::from_utf8(&out[..len3]).unwrap();
+        assert!(s3.contains("Generation Actuelle     : Gen #1"));
+        assert!(s3.contains("Fente Active (A/B)      : SlotA"));
+        assert!(s3.contains("Sante Generation        : HEALTHY (Validee)"));
+        assert!(s3.contains("Statut d'Engagement     : COMMITTED"));
+    }
+
+    #[test]
+    fn test_pkg_invalid() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 1024];
+
+        // 1. Sous-commande invalide
+        let (st1, len1) = shell.execute_line("pkg invalid_subcmd", &mut out);
+        assert_eq!(st1, ShellStatus::InvalidArgument);
+        let s1 = core::str::from_utf8(&out[..len1]).unwrap();
+        assert!(s1.contains("Usage: pkg [status|list|install <name>|stage|commit|rollback]"));
+
+        // 2. pkg install sans nom de paquet
+        let (st2, len2) = shell.execute_line("pkg install", &mut out);
+        assert_eq!(st2, ShellStatus::InvalidArgument);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("Usage: pkg install <name>"));
+
+        // 3. pkg rollback sans préparation préalable
+        let (st3, len3) = shell.execute_line("pkg rollback", &mut out);
+        assert_eq!(st3, ShellStatus::ExecutionFailed);
+        let s3 = core::str::from_utf8(&out[..len3]).unwrap();
+        assert!(s3.contains("pkg rollback: aucun retour en arriere possible"));
     }
 }
