@@ -113,6 +113,13 @@ use jambo_timed::{
     TimeOpcode, TimeRequest, TimeResponse, TimeSyncCap,
 };
 #[allow(unused_imports)]
+use jambo_ueba::{
+    id_to_str as ueba_id_to_str, to_fixed_24, ueba_rights, ActivityEvent, BehaviorBaseline,
+    EntityType, JamboUebaDaemon, RiskLevel, UebaAction, UebaAnomalyType, UebaAuditEntry, UebaCap,
+    UebaClient, UebaError, UebaOpcode, UebaQuarantineEntry, UebaRequest, UebaResponse, UebaSummary,
+    UEBA_ENDPOINT_ID, UEBA_MAGIC_REQ, UEBA_MAGIC_RESP,
+};
+#[allow(unused_imports)]
 use jambo_vaultd::{
     vault_rights, JamboVaultDaemon, VaultCap, VaultClient, VaultOpcode, VaultRequest,
     VaultResponse, VaultState,
@@ -183,6 +190,7 @@ pub struct JamboShell {
     pub ndr_daemon: JamboNdrDaemon,
     pub xdr_daemon: JamboXdrDaemon,
     pub soar_daemon: JamboSoarDaemon,
+    pub ueba_daemon: JamboUebaDaemon,
 }
 
 impl Default for JamboShell {
@@ -280,6 +288,14 @@ impl JamboShell {
         );
         let mut soar_daemon = JamboSoarDaemon::new(soar_cap);
         soar_daemon.init_defaults();
+        let ueba_cap = UebaCap::new(
+            libjambo::Handle::new(36, 1),
+            ueba_rights::ALL,
+            100_000,
+            10_000,
+        );
+        let mut ueba_daemon = JamboUebaDaemon::new(ueba_cap);
+        ueba_daemon.init_defaults();
         Self {
             prompt_user: "jambo",
             commands_executed: 0,
@@ -304,6 +320,7 @@ impl JamboShell {
             ndr_daemon,
             xdr_daemon,
             soar_daemon,
+            ueba_daemon,
         }
     }
 
@@ -369,6 +386,7 @@ impl JamboShell {
             "ndr" => self.cmd_ndr(args, out),
             "xdr" => self.cmd_xdr(args, out),
             "soar" => self.cmd_soar(args, out),
+            "ueba" => self.cmd_ueba(args, out),
             _ => self.cmd_not_found(cmd, out),
         }
     }
@@ -377,7 +395,7 @@ impl JamboShell {
         let text = b"Commandes disponibles:\n\
   help        - Affiche cette aide\n\
   sysinfo     - Metriques memoire et uptime du micro-noyau\n\
-  ps          - Liste les 35 processus actifs\n\
+  ps          - Liste les 36 processus actifs\n\
   echo <args> - Affiche le texte sur la console\n\
   clear       - Reinitialise l'ecran du terminal\n\
   reboot      - Eteint ou redemarre la machine virtuelle\n\
@@ -413,7 +431,8 @@ impl JamboShell {
   edr [status|scan|isolate|tree|alerts|audit] - Detection et reponse sur les terminaux souveraine EDR Ring 3\n\
   ndr [status|flows|inspect|isolate|alerts|audit] - Detection et reponse reseau souveraine NDR Ring 3\n\
   xdr [status|campaigns|correlate|remediate|graph|audit] - Detection et reponse etendue souveraine XDR Ring 3\n\
-  soar [status|playbooks|trigger|incidents|audit] - Orchestration, automatisation et reponse aux incidents SOAR Ring 3\n";
+  soar [status|playbooks|trigger|incidents|audit] - Orchestration, automatisation et reponse aux incidents SOAR Ring 3\n\
+  ueba [status|profile|anomalies|score|quarantine|audit] - Analyse comportementale des utilisateurs et entites UEBA Ring 3\n";
         let len = text.len().min(out.len());
         out[..len].copy_from_slice(&text[..len]);
         (ShellStatus::Success, len)
@@ -490,7 +509,7 @@ impl JamboShell {
  30  ACTIF    /bin/waf (L7 Web Application Firewall Ring 3)\n  30 | waf             | Ring 3 | Ready   | 1000   | L7 Web Application Firewall & Injection Filter\n\
  31  ACTIF    /bin/siem (Security Information & Event Management Ring 3)\n  31 | siem            | Ring 3 | Ready   | 1000   | Security Information & Event Management\n\
  32  ACTIF    /bin/edr (Endpoint Detection & Response Ring 3)\n  32 | edr             | Ring 3 | Ready   | 1000   | Endpoint Detection & Response Daemon\n\
- 33  ACTIF    /bin/ndr (Network Detection & Response Ring 3)\n  33 | ndr             | Ring 3 | Ready   | 1000   | Network Detection & Response Daemon\n  34  ACTIF    /bin/xdr (Extended Detection & Response Ring 3)\n  34 | xdr             | Ring 3 | Ready   | 1000   | Extended Detection & Response Daemon\n  35  ACTIF    /bin/soar (Security Orchestration, Automation & Response Ring 3)\n  35 | soar            | Ring 3 | Ready   | 1000   | Security Orchestration, Automation & Response Daemon\nTotal: 35 processes\n";
+ 33  ACTIF    /bin/ndr (Network Detection & Response Ring 3)\n  33 | ndr             | Ring 3 | Ready   | 1000   | Network Detection & Response Daemon\n  34  ACTIF    /bin/xdr (Extended Detection & Response Ring 3)\n  34 | xdr             | Ring 3 | Ready   | 1000   | Extended Detection & Response Daemon\n  35  ACTIF    /bin/soar (Security Orchestration, Automation & Response Ring 3)\n  35 | soar            | Ring 3 | Ready   | 1000   | Security Orchestration, Automation & Response Daemon\n  36  ACTIF    /bin/ueba (User & Entity Behavior Analytics Ring 3)\n  36 | ueba            | Ring 3 | Ready   | 1000   | User & Entity Behavior Analytics Daemon\nTotal: 36 processes\n";
         let len = text.len().min(out.len());
         out[..len].copy_from_slice(&text[..len]);
         (ShellStatus::Success, len)
@@ -9337,6 +9356,267 @@ ID  | Nom             | Racine de Confiance      | Statut             | Confinem
         }
         (ShellStatus::Success, c)
     }
+
+    fn send_ueba_request(&mut self, req: &UebaRequest) -> UebaResponse {
+        let mut resp_opt: Option<UebaResponse> = None;
+        for &h in &[
+            36u64, 35u64, 34u64, 33u64, 32u64, 31u64, 30u64, 29u64, 28u64, 27u64, 26u64, 25u64,
+            24u64, 23u64, 22u64, 21u64, 20u64, 19u64, 18u64, 17u64, 16u64, 15u64, 14u64, 13u64,
+        ] {
+            let client = UebaClient::new(libjambo::Handle(h));
+            if let Ok(resp) = client.call(req) {
+                if resp.magic == UEBA_MAGIC_RESP {
+                    resp_opt = Some(resp);
+                    break;
+                }
+            }
+        }
+        let local_resp = self.ueba_daemon.dispatch_ipc(req);
+        resp_opt.unwrap_or(local_resp)
+    }
+
+    pub fn cmd_ueba(&mut self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        let subcmd = if args.is_empty() { "status" } else { args[0] };
+        match subcmd {
+            "status" => self.cmd_ueba_status(out),
+            "profile" => self.cmd_ueba_profile(&args[1..], out),
+            "anomalies" => self.cmd_ueba_anomalies(out),
+            "score" => self.cmd_ueba_score(&args[1..], out),
+            "quarantine" => self.cmd_ueba_quarantine(&args[1..], out),
+            "audit" => self.cmd_ueba_audit(out),
+            _ => {
+                let msg = b"Usage: ueba <status|profile <name>|anomalies|score <name>|quarantine <name>|audit>\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                (ShellStatus::InvalidArgument, len)
+            }
+        }
+    }
+
+    fn cmd_ueba_status(&mut self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let req = UebaRequest {
+            magic: UEBA_MAGIC_REQ,
+            opcode: UebaOpcode::GetStatus as u32,
+            handle_id: UEBA_ENDPOINT_ID,
+            rights: ueba_rights::ALL,
+            ..Default::default()
+        };
+        let _resp = self.send_ueba_request(&req);
+        let summary = self.ueba_daemon.get_summary();
+
+        let mut c = 0;
+        c = append_bytes(
+            out,
+            c,
+            b"Bilan Global UEBA & Analyse Comportementale (jambo-ueba PID 36):\n  Statut Operationnel     : ACTIF (Profilage Continu & Risque Bayesien Ring 3)\n  Entites Profilees       : ",
+        );
+        c = append_u64(out, c, summary.profiles_count as u64);
+        c = append_bytes(out, c, b"\n  Evenements Traites      : ");
+        c = append_u64(out, c, summary.events_processed);
+        c = append_bytes(out, c, b"\n  Anomalies Detectees     : ");
+        c = append_u64(out, c, summary.anomalies_detected);
+        c = append_bytes(out, c, b"\n  Entites en Quarantaine  : ");
+        c = append_u64(out, c, summary.quarantine_count as u64);
+        c = append_bytes(out, c, b"\n  Activites Restreintes   : ");
+        c = append_u64(out, c, summary.throttled_count);
+        c = append_bytes(out, c, b"\n  Alertes Declenchees     : ");
+        c = append_u64(out, c, summary.alerts_raised);
+        c = append_bytes(out, c, b"\n  Grand Livre d'Audit     : ");
+        if summary.ledger_valid {
+            c = append_bytes(
+                out,
+                c,
+                b"VALIDE (Chaine SHA-256 inalterable)\n  Empreinte Racine SHA-256: ",
+            );
+        } else {
+            c = append_bytes(out, c, b"CORROMPU\n  Empreinte Racine SHA-256: ");
+        }
+        for &b in self.ueba_daemon.last_audit_hash[..16].iter() {
+            c = append_hex_byte(out, c, b);
+        }
+        c = append_bytes(out, c, b"...\n");
+        (ShellStatus::Success, c)
+    }
+
+    fn cmd_ueba_profile(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if args.is_empty() {
+            let msg = b"Usage: ueba profile <name>\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            return (ShellStatus::InvalidArgument, len);
+        }
+        let target = args[0];
+        let mut c = 0;
+        if let Some(baseline) = self.ueba_daemon.find_baseline_by_name(target) {
+            c = append_bytes(out, c, b"Profil de Reference Comportementale (PID 36) - ");
+            c = append_bytes(out, c, target.as_bytes());
+            c = append_bytes(out, c, b":\n  Type d'Entite           : ");
+            c = append_bytes(out, c, baseline.entity_type.as_str().as_bytes());
+            c = append_bytes(out, c, b"\n  Taux Syscalls Moyen     : ");
+            c = append_u64(out, c, (baseline.mean_syscall_rate / 100) as u64);
+            c = append_bytes(out, c, b" calls/s (stddev: ");
+            c = append_u64(out, c, (baseline.stddev_syscall_rate / 100) as u64);
+            c = append_bytes(out, c, b")\n  Volume Moyen Transfert  : ");
+            c = append_u64(out, c, (baseline.mean_volume_bytes / 100) as u64);
+            c = append_bytes(out, c, b" octets\n  Masque Heures Autoris   : 0x");
+            for &b in baseline.allowed_hours_mask.to_be_bytes().iter() {
+                c = append_hex_byte(out, c, b);
+            }
+            c = append_bytes(out, c, b"\n  Pairs de Confiance      : ");
+            c = append_u64(out, c, baseline.known_peer_count as u64);
+            c = append_bytes(out, c, b"\n");
+            for peer in baseline.known_peers.iter().take(baseline.known_peer_count) {
+                c = append_bytes(out, c, b"    - ");
+                c = append_bytes(out, c, ueba_id_to_str(peer).as_bytes());
+                c = append_bytes(out, c, b"\n");
+            }
+            (ShellStatus::Success, c)
+        } else {
+            c = append_bytes(out, c, b"UEBA: Entite '");
+            c = append_bytes(out, c, target.as_bytes());
+            c = append_bytes(out, c, b"' non trouvee dans les profils de reference.\n");
+            (ShellStatus::ExecutionFailed, c)
+        }
+    }
+
+    fn cmd_ueba_anomalies(&self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let mut c = 0;
+        c = append_bytes(
+            out,
+            c,
+            b"Table des Anomalies Comportementales Detectees (PID 36):\n",
+        );
+        let summary = self.ueba_daemon.get_summary();
+        if summary.anomalies_detected == 0 {
+            c = append_bytes(out, c, b"  (Aucune anomalie comportementale detectee)\n");
+        } else {
+            c = append_bytes(out, c, b"  Total Anomalies         : ");
+            c = append_u64(out, c, summary.anomalies_detected);
+            c = append_bytes(out, c, b"\n  Activites Restreintes   : ");
+            c = append_u64(out, c, summary.throttled_count);
+            c = append_bytes(out, c, b"\n  Entites Isolees         : ");
+            c = append_u64(out, c, summary.quarantine_count as u64);
+            c = append_bytes(out, c, b"\n");
+        }
+        (ShellStatus::Success, c)
+    }
+
+    fn cmd_ueba_score(&mut self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if args.is_empty() {
+            let msg = b"Usage: ueba score <name>\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            return (ShellStatus::InvalidArgument, len);
+        }
+        let target = args[0];
+        let mut req = UebaRequest {
+            magic: UEBA_MAGIC_REQ,
+            opcode: UebaOpcode::GetRiskScore as u32,
+            handle_id: UEBA_ENDPOINT_ID,
+            rights: ueba_rights::ALL,
+            ..Default::default()
+        };
+        req.entity_name = to_fixed_24(target);
+        let resp = self.send_ueba_request(&req);
+
+        let mut c = 0;
+        if resp.status == 0 {
+            c = append_bytes(
+                out,
+                c,
+                b"Evaluation du Score de Risque Dynamique (PID 36) - ",
+            );
+            c = append_bytes(out, c, target.as_bytes());
+            c = append_bytes(out, c, b":\n  Score de Risque         : ");
+            c = append_u64(out, c, resp.risk_score as u64);
+            c = append_bytes(out, c, b" / 100\n  Niveau de Risque        : ");
+            c = append_bytes(
+                out,
+                c,
+                RiskLevel::from_u8(resp.risk_level).as_str().as_bytes(),
+            );
+            c = append_bytes(out, c, b"\n  Action Recommandee      : ");
+            c = append_bytes(
+                out,
+                c,
+                UebaAction::from_u8(resp.recommended_action)
+                    .as_str()
+                    .as_bytes(),
+            );
+            c = append_bytes(out, c, b"\n  En Quarantaine O(1)     : ");
+            if resp.is_quarantined == 1 {
+                c = append_bytes(out, c, b"OUI (ISOLE)\n");
+            } else {
+                c = append_bytes(out, c, b"NON\n");
+            }
+            (ShellStatus::Success, c)
+        } else {
+            c = append_bytes(out, c, b"UEBA: Entite '");
+            c = append_bytes(out, c, target.as_bytes());
+            c = append_bytes(out, c, b"' introuvable ou erreur\n");
+            (ShellStatus::ExecutionFailed, c)
+        }
+    }
+
+    fn cmd_ueba_quarantine(&mut self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if args.is_empty() {
+            let msg = b"Usage: ueba quarantine <name>\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            return (ShellStatus::InvalidArgument, len);
+        }
+        let target = args[0];
+        let mut req = UebaRequest {
+            magic: UEBA_MAGIC_REQ,
+            opcode: UebaOpcode::QuarantineEntity as u32,
+            handle_id: UEBA_ENDPOINT_ID,
+            rights: ueba_rights::ALL,
+            epoch: 1000,
+            ..Default::default()
+        };
+        req.entity_name = to_fixed_24(target);
+        let resp = self.send_ueba_request(&req);
+
+        let mut c = 0;
+        if resp.status == 0 {
+            c = append_bytes(
+                out,
+                c,
+                b"Quarantaine Atomique O(1) Appliquee (PID 36):\n  Entite Isolee           : ",
+            );
+            c = append_bytes(out, c, target.as_bytes());
+            c = append_bytes(out, c, b"\n  Statut                  : QUARANTINE_ACTIVE\n  Score de Risque         : 100 / 100 (CRITIQUE)\n");
+            (ShellStatus::Success, c)
+        } else {
+            c = append_bytes(out, c, b"UEBA: Echec de mise en quarantaine de '");
+            c = append_bytes(out, c, target.as_bytes());
+            c = append_bytes(out, c, b"'\n");
+            (ShellStatus::ExecutionFailed, c)
+        }
+    }
+
+    fn cmd_ueba_audit(&self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let is_valid = self.ueba_daemon.verify_audit_integrity();
+        let mut c = 0;
+        c = append_bytes(
+            out,
+            c,
+            b"Grand Livre d'Audit Cryptographique UEBA (PID 36):\n  Integrite Registre      : ",
+        );
+        if is_valid {
+            c = append_bytes(out, c, b"VALIDE (Chaine SHA-256 inalterable)\n");
+        } else {
+            c = append_bytes(out, c, b"CORROMPU (Rupture d'integrite)\n");
+        }
+        c = append_bytes(out, c, b"  Total Entrees Scellees  : ");
+        c = append_u64(out, c, self.ueba_daemon.audit_count as u64);
+        c = append_bytes(out, c, b"\n  Empreinte Racine SHA-256: ");
+        for &b in self.ueba_daemon.last_audit_hash.iter() {
+            c = append_hex_byte(out, c, b);
+        }
+        c = append_bytes(out, c, b"\n");
+        (ShellStatus::Success, c)
+    }
 }
 
 fn step_status_str(status: StepStatus) -> &'static str {
@@ -10112,7 +10392,7 @@ mod tests {
         assert!(
             s.contains("  30 | waf             | Ring 3 | Ready   | 1000   | L7 Web Application Firewall & Injection Filter")
         );
-        assert!(s.contains("Total: 35 processes"));
+        assert!(s.contains("Total: 36 processes"));
     }
 
     #[test]
@@ -10124,7 +10404,7 @@ mod tests {
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains("  23 | pkgd           | Ring 3 | Ready   | 1000   | Declarative Package Manager & CAS Store"));
-        assert!(s.contains("Total: 35 processes"));
+        assert!(s.contains("Total: 36 processes"));
     }
 
     #[test]
@@ -10136,7 +10416,7 @@ mod tests {
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains("  24 | certd          | Ring 3 | Ready   | 1000   | Ephemeral PKI & Cluster mTLS Daemon"));
-        assert!(s.contains("Total: 35 processes"));
+        assert!(s.contains("Total: 36 processes"));
     }
 
     #[test]
@@ -10148,7 +10428,7 @@ mod tests {
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains("  25 | policyd        | Ring 3 | Ready   | 1000   | Security Policy Engine & Admission Control"));
-        assert!(s.contains("Total: 35 processes"));
+        assert!(s.contains("Total: 36 processes"));
     }
 
     #[test]
@@ -10160,7 +10440,7 @@ mod tests {
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains("  26 | secboot        | Ring 3 | Ready   | 1000   | TPM 2.0 Measured Boot & Secure Trust Chain"));
-        assert!(s.contains("Total: 35 processes"));
+        assert!(s.contains("Total: 36 processes"));
     }
 
     #[test]
@@ -10172,7 +10452,7 @@ mod tests {
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains("  27 | logd           | Ring 3 | Ready   | 1000   | Structured Logging & Tamper-Evident Hash Chain"));
-        assert!(s.contains("Total: 35 processes"));
+        assert!(s.contains("Total: 36 processes"));
     }
 
     #[test]
@@ -10184,7 +10464,7 @@ mod tests {
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains("28 | kms | Running | Key Management Service & HKDF Derivation"));
-        assert!(s.contains("Total: 35 processes"));
+        assert!(s.contains("Total: 36 processes"));
     }
 
     #[test]
@@ -10199,7 +10479,7 @@ mod tests {
         assert!(s.contains(
             "  29 | attest          | Ring 3 | Ready   | 1000   | Remote Attestation & Zero-Knowledge Proofs"
         ));
-        assert!(s.contains("Total: 35 processes"));
+        assert!(s.contains("Total: 36 processes"));
     }
 
     #[test]
@@ -10214,7 +10494,7 @@ mod tests {
         assert!(s.contains(
             "  30 | waf             | Ring 3 | Ready   | 1000   | L7 Web Application Firewall & Injection Filter"
         ));
-        assert!(s.contains("Total: 35 processes"));
+        assert!(s.contains("Total: 36 processes"));
     }
 
     #[test]
@@ -10231,7 +10511,7 @@ mod tests {
         assert!(s.contains(
             "  31 | siem            | Ring 3 | Ready   | 1000   | Security Information & Event Management"
         ));
-        assert!(s.contains("Total: 35 processes"));
+        assert!(s.contains("Total: 36 processes"));
     }
 
     #[test]
@@ -10246,7 +10526,7 @@ mod tests {
         assert!(s.contains(
             "  32 | edr             | Ring 3 | Ready   | 1000   | Endpoint Detection & Response Daemon"
         ));
-        assert!(s.contains("Total: 35 processes"));
+        assert!(s.contains("Total: 36 processes"));
     }
 
     #[test]
@@ -10261,7 +10541,7 @@ mod tests {
         assert!(s.contains(
             "  33 | ndr             | Ring 3 | Ready   | 1000   | Network Detection & Response Daemon"
         ));
-        assert!(s.contains("Total: 35 processes"));
+        assert!(s.contains("Total: 36 processes"));
     }
 
     #[test]
@@ -10276,7 +10556,7 @@ mod tests {
         assert!(s.contains(
             "  34 | xdr             | Ring 3 | Ready   | 1000   | Extended Detection & Response Daemon"
         ));
-        assert!(s.contains("Total: 35 processes"));
+        assert!(s.contains("Total: 36 processes"));
     }
 
     #[test]
@@ -10293,7 +10573,22 @@ mod tests {
         assert!(s.contains(
             "  35 | soar            | Ring 3 | Ready   | 1000   | Security Orchestration, Automation & Response Daemon"
         ));
-        assert!(s.contains("Total: 35 processes"));
+        assert!(s.contains("Total: 36 processes"));
+    }
+
+    #[test]
+    fn test_ps_contains_36_processes() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        let (st, len) = shell.execute_line("ps", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("36  ACTIF    /bin/ueba (User & Entity Behavior Analytics Ring 3)"));
+        assert!(s.contains(
+            "  36 | ueba            | Ring 3 | Ready   | 1000   | User & Entity Behavior Analytics Daemon"
+        ));
+        assert!(s.contains("Total: 36 processes"));
     }
 
     #[test]
@@ -10304,7 +10599,7 @@ mod tests {
         let (st, len) = shell.execute_line("help", &mut out);
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
-        assert!(s.contains("35 processus actifs"));
+        assert!(s.contains("36 processus actifs"));
         assert!(s.contains("fdr [status|verify|pcr]"));
         assert!(s.contains("wasm [status|run|info]"));
         assert!(s.contains("pqc [status|kex|sign|audit]"));
@@ -10334,6 +10629,8 @@ mod tests {
         assert!(s.contains("edr [status|scan|isolate|tree|alerts|audit]"));
         assert!(s.contains("ndr [status|flows|inspect|isolate|alerts|audit]"));
         assert!(s.contains("xdr [status|campaigns|correlate|remediate|graph|audit]"));
+        assert!(s.contains("soar [status|playbooks|trigger|incidents|audit]"));
+        assert!(s.contains("ueba [status|profile|anomalies|score|quarantine|audit]"));
     }
 
     #[test]
@@ -14471,5 +14768,119 @@ mod tests {
         assert_eq!(st2, ShellStatus::InvalidArgument);
         let s2 = core::str::from_utf8(&out[..len2]).unwrap();
         assert!(s2.contains("Usage: soar <status|playbooks|trigger <id>|incidents|audit>"));
+    }
+
+    #[test]
+    fn test_ueba_status() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        let (st, len) = shell.execute_line("ueba status", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("Bilan Global UEBA & Analyse Comportementale (jambo-ueba PID 36):"));
+        assert!(s.contains(
+            "Statut Operationnel     : ACTIF (Profilage Continu & Risque Bayesien Ring 3)"
+        ));
+        assert!(s.contains("Entites Profilees       : 3"));
+        assert!(s.contains("Grand Livre d'Audit     : VALIDE (Chaine SHA-256 inalterable)"));
+    }
+
+    #[test]
+    fn test_ueba_profile() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        // 1. Missing argument
+        let (st1, _len1) = shell.execute_line("ueba profile", &mut out);
+        assert_eq!(st1, ShellStatus::InvalidArgument);
+
+        // 2. Profile found
+        let (st2, len2) = shell.execute_line("ueba profile frontend_srv", &mut out);
+        assert_eq!(st2, ShellStatus::Success);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("Profil de Reference Comportementale (PID 36) - frontend_srv:"));
+        assert!(s2.contains("ServiceDaemon"));
+        assert!(s2.contains("backend_srv"));
+
+        // 3. Profile not found
+        let (st3, len3) = shell.execute_line("ueba profile unknown_entity", &mut out);
+        assert_eq!(st3, ShellStatus::ExecutionFailed);
+        let s3 = core::str::from_utf8(&out[..len3]).unwrap();
+        assert!(s3.contains("UEBA: Entite 'unknown_entity' non trouvee"));
+    }
+
+    #[test]
+    fn test_ueba_anomalies() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        let (st, len) = shell.execute_line("ueba anomalies", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("Table des Anomalies Comportementales Detectees (PID 36):"));
+        assert!(s.contains("Aucune anomalie comportementale detectee"));
+    }
+
+    #[test]
+    fn test_ueba_score() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        // 1. Missing argument
+        let (st1, _len1) = shell.execute_line("ueba score", &mut out);
+        assert_eq!(st1, ShellStatus::InvalidArgument);
+
+        // 2. Score for existing profile
+        let (st2, len2) = shell.execute_line("ueba score frontend_srv", &mut out);
+        assert_eq!(st2, ShellStatus::Success);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("Evaluation du Score de Risque Dynamique (PID 36) - frontend_srv:"));
+        assert!(s2.contains("Score de Risque"));
+        assert!(s2.contains("Niveau de Risque"));
+    }
+
+    #[test]
+    fn test_ueba_quarantine() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        // 1. Missing argument
+        let (st1, _len1) = shell.execute_line("ueba quarantine", &mut out);
+        assert_eq!(st1, ShellStatus::InvalidArgument);
+
+        // 2. Quarantine an entity
+        let (st2, len2) = shell.execute_line("ueba quarantine sys_admin", &mut out);
+        assert_eq!(st2, ShellStatus::Success);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("Quarantaine Atomique O(1) Appliquee (PID 36):"));
+        assert!(s2.contains("sys_admin"));
+        assert!(s2.contains("QUARANTINE_ACTIVE"));
+        assert!(shell.ueba_daemon.is_quarantined("sys_admin"));
+    }
+
+    #[test]
+    fn test_ueba_audit() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        let (st, len) = shell.execute_line("ueba audit", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("Grand Livre d'Audit Cryptographique UEBA (PID 36):"));
+        assert!(s.contains("Integrite Registre      : VALIDE (Chaine SHA-256 inalterable)"));
+    }
+
+    #[test]
+    fn test_ueba_invalid() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        let (st, len) = shell.execute_line("ueba invalid_subcommand", &mut out);
+        assert_eq!(st, ShellStatus::InvalidArgument);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains(
+            "Usage: ueba <status|profile <name>|anomalies|score <name>|quarantine <name>|audit>"
+        ));
     }
 }
