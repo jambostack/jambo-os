@@ -3,7 +3,7 @@ BdsDxe: starting Boot0002 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x
 [2J[01;01H[01;01H[2J[01;01H[01;01H[BOOT] Protocole Limine actif (révision détectée : 3)
 [1;36m
 ================================================================================
-    JAMBO-OS (JamboKernel v0.3.72 — Iron Core)                                 
+    JAMBO-OS (JamboKernel v0.3.73 — Iron Core)                                 
     Architecture : Micro-noyau orienté capacités en Rust no_std (x86_64/AArch64)
     Auteur & Architecte Principal : ASSOGBA Prudence Dieudonné                 
     Dépôt Officiel : https://github.com/jambostack/jambo-os                    
@@ -72,7 +72,7 @@ BdsDxe: starting Boot0002 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x
 [SMP] Cœur AP #3 démarré (LAPIC ID: 3)
 [SCHED/EEVDF] Ordonnanceur EEVDF opérationnel avec 2 threads de test en file
 [BOOT/MODULES] Détection de 1 module(s) d'amorçage Limine :
-  [00] Module '/boot/initrd.tar' | 5776384 octets (cmdline: '')
+  [00] Module '/boot/initrd.tar' | 6030336 octets (cmdline: '')
 [INITRD/TAR] Superviseur '/bin/init' extrait (0x23e0 octets)
 [INITRD/TAR] Shell interactif '/bin/jsh' extrait (0x2d478 octets)
 [INITRD/TAR] Démon de stockage '/bin/blockd' extrait (0x134e8 octets)
@@ -106,6 +106,7 @@ BdsDxe: starting Boot0002 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x
 [INITRD/TAR] Demon Moteur SIEM '/bin/siem' extrait (0x7968 octets)
 [INITRD/TAR] Demon Surveillance & Reponse EDR '/bin/edr' extrait (0xbec0 octets)
 [INITRD/TAR] Demon Surveillance & Reponse NDR '/bin/ndr' extrait (0x7e40 octets)
+[INITRD/TAR] Demon Surveillance & Reponse XDR '/bin/xdr' extrait (0x9b30 octets)
 [PROCESS] Processus utilisateur init (PID 1) initialisé avec pile System V ABI (RSP: 0x00007ffffffeff10)
 [PROCESS] Shell utilisateur interactif jsh (PID 2) initialisé avec pile System V ABI (RSP: 0x00007ffffffeff20) et enfilé
 [PROCESS] Démon de stockage blockd (PID 3) initialisé avec pile System V ABI (RSP: 0x00007ffffffeff20) et enfilé
@@ -139,6 +140,7 @@ BdsDxe: starting Boot0002 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x
 [PROCESS] Demon Moteur SIEM siem (PID 31) initialise avec pile System V ABI (RSP: 0x00007ffffffeff20) et enfile
 [PROCESS] Demon Surveillance & Reponse EDR edr (PID 32) initialise avec pile System V ABI (RSP: 0x00007ffffffeff20) et enfile
 [PROCESS] Demon Surveillance & Reponse NDR ndr (PID 33) initialise avec pile System V ABI (RSP: 0x00007ffffffeff20) et enfile
+[PROCESS] Demon Surveillance & Reponse XDR xdr (PID 34) initialise avec pile System V ABI (RSP: 0x00007ffffffeff20) et enfile
 [CAP/CSPACE] Table de capacités active. Handle initial: 0x100000001, Handle atténué: 0x100000002
 [SYSCALL] Appel système vmo_create validé (Code retour: 0, Nouveau Handle: 0x100000003)
 [SYSCALL] Cycle de vie validé : process_create (0x100000004), thread_create (0x100000005), vmo_map & thread_start
@@ -163,16 +165,15 @@ BdsDxe: starting Boot0002 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x
 
 [1;32m[PASS] JamboKernel Iron Core (Ring 0 & Ring 3 transition) validé sous QEMU.[0m
 
-[NDR] Daemon NDR souverain et politiques Zero-Trust initialises (PID 33).
-[NDR] Demarrage de l'auto-test du service NDR...
-[NDR] Auto-test 1: Suivi de flux de reference : OK.
-[NDR] Auto-test 2: Detection de balisage C2 a faible gigue : OK.
-[NDR] Auto-test 3: Detection de tunneling DNS haute entropie : OK.
-[NDR] Auto-test 4: Isolation O(1) immediate : OK.
-[NDR] Auto-test 5: Scellement cryptographique d'audit SHA-256 : OK.
-[NDR] Auto-test reussi : surveillance, moteurs de detection et isolation valides.
-[NDR] Serveur NDR (jambo-ndr PID 33) pret.
-[NDR] Canal IPC NDR operationnel (endpoint PID 33 pret).
-[TEST] Validation de l'initialisation des 33 processus Ring 3 (init, jsh, blockd, fs, netd, fdr, wasmd, pqc, kdir, forensics, powerd, metricsd, bpfd, vpn, authd, dnsd, timed, auditd, walld, vaultd, watchdogd, cored, pkgd, certd, policyd, secboot, logd, kms, attest, waf, siem, edr, ndr)...
-[1;32m[PASS] Detection & Reponse Reseau NDR (jambo-ndr PID 33) validee sous QEMU.[0m
+[XDR] Daemon XDR souverain et correlation APT initialises (PID 34).
+[XDR] Demarrage de l'auto-test du service XDR...
+[XDR] Auto-test 1: Ingestion telemetrie multi-vecteurs : OK.
+[XDR] Auto-test 2: Correlation croisee et detection APT : OK.
+[XDR] Auto-test 3: Remediation instantanee O(1) tous vecteurs : OK.
+[XDR] Auto-test 4: Scellement cryptographique d'audit SHA-256 : OK.
+[XDR] Auto-test reussi : surveillance, moteurs de detection et isolation valides.
+[XDR] Serveur XDR (jambo-xdr PID 34) pret.
+[XDR] Canal IPC XDR operationnel (endpoint PID 34 pret).
+[TEST] Validation de l'initialisation des 34 processus Ring 3 (init, jsh, blockd, fs, netd, fdr, wasmd, pqc, kdir, forensics, powerd, metricsd, bpfd, vpn, authd, dnsd, timed, auditd, walld, vaultd, watchdogd, cored, pkgd, certd, policyd, secboot, logd, kms, attest, waf, siem, edr, ndr, xdr)...
+[1;32m[PASS] Detection & Reponse Etendue XDR (jambo-xdr PID 34) validee sous QEMU.[0m
 [TEST] Mode de test CI validé. Sortie propre via isa-debug-exit...
