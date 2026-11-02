@@ -1128,10 +1128,41 @@ fn build_soar(release: bool) -> anyhow::Result<PathBuf> {
     Ok(root.join(format!("target/x86_64-unknown-none/{}/soar", profile)))
 }
 
+fn build_ueba(release: bool) -> anyhow::Result<PathBuf> {
+    let root = root_dir();
+    let mut cmd = Command::new("cargo");
+    cmd.current_dir(&root);
+    cmd.args([
+        "build",
+        "--package",
+        "jambo-ueba",
+        "--bin",
+        "ueba",
+        "--target",
+        "x86_64-unknown-none",
+    ]);
+    if release {
+        cmd.arg("--release");
+    }
+    cmd.env(
+        "RUSTFLAGS",
+        "-C link-arg=-Tlibs/user-x86_64.ld -C relocation-model=static",
+    );
+
+    let status = cmd.status()?;
+    if !status.success() {
+        anyhow::bail!("Échec de compilation du binaire jambo-ueba (ueba)");
+    }
+
+    let profile = if release { "release" } else { "debug" };
+    Ok(root.join(format!("target/x86_64-unknown-none/{}/ueba", profile)))
+}
+
 #[allow(clippy::type_complexity)]
 fn build_userland(
     release: bool,
 ) -> anyhow::Result<(
+    PathBuf,
     PathBuf,
     PathBuf,
     PathBuf,
@@ -1203,10 +1234,11 @@ fn build_userland(
     let ndr = build_ndr(release)?;
     let xdr = build_xdr(release)?;
     let soar = build_soar(release)?;
+    let ueba = build_ueba(release)?;
     Ok((
         init, jsh, blockd, fs, netd, fdr, wasmd, pqc, kdir, forensics, powerd, metricsd, bpfd, vpn,
         authd, dnsd, timed, auditd, walld, vaultd, watchdogd, cored, pkgd, certd, policyd, secboot,
-        logd, kms, attest, waf, siem, edr, ndr, xdr, soar,
+        logd, kms, attest, waf, siem, edr, ndr, xdr, soar, ueba,
     ))
 }
 
@@ -1255,8 +1287,8 @@ fn create_disk_image(path: &Path) -> anyhow::Result<()> {
     file.seek(SeekFrom::Start(8192))?;
     file.write_all(&root_buf)?;
 
-    // 3. Données à l'offset 12288 (LBA 24..31) : "Bienvenue sur JamboOS v0.3.74\n"
-    let banner_data = b"Bienvenue sur JamboOS v0.3.74\n";
+    // 3. Données à l'offset 12288 (LBA 24..31) : "Bienvenue sur JamboOS v0.3.75\n"
+    let banner_data = b"Bienvenue sur JamboOS v0.3.75\n";
     let mut data_buf = [0u8; 4096];
     data_buf[..banner_data.len()].copy_from_slice(banner_data);
 
@@ -1305,6 +1337,7 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
         ndr_bin,
         xdr_bin,
         soar_bin,
+        ueba_bin,
     ) = build_userland(release)?;
 
     let initrd_stage = root.join("target/initrd_stage");
@@ -1373,6 +1406,8 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
     fs::copy(&xdr_bin, bin_dir.join("jambo-xdr"))?;
     fs::copy(&soar_bin, bin_dir.join("soar"))?;
     fs::copy(&soar_bin, bin_dir.join("jambo-soar"))?;
+    fs::copy(&ueba_bin, bin_dir.join("ueba"))?;
+    fs::copy(&ueba_bin, bin_dir.join("jambo-ueba"))?;
 
     fs::copy(&init_bin, initrd_stage.join("init"))?;
     fs::copy(&jsh_bin, initrd_stage.join("jsh"))?;
@@ -1435,6 +1470,8 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
     fs::copy(&xdr_bin, initrd_stage.join("jambo-xdr"))?;
     fs::copy(&soar_bin, initrd_stage.join("soar"))?;
     fs::copy(&soar_bin, initrd_stage.join("jambo-soar"))?;
+    fs::copy(&ueba_bin, initrd_stage.join("ueba"))?;
+    fs::copy(&ueba_bin, initrd_stage.join("jambo-ueba"))?;
 
     let initrd_tar = root.join("target/initrd.tar");
     let status = Command::new("tar")
@@ -1503,6 +1540,8 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
             "bin/jambo-xdr",
             "bin/soar",
             "bin/jambo-soar",
+            "bin/ueba",
+            "bin/jambo-ueba",
             "init",
             "jsh",
             "blockd",
@@ -1564,6 +1603,8 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
             "jambo-xdr",
             "soar",
             "jambo-soar",
+            "ueba",
+            "jambo-ueba",
         ])
         .status()?;
 
@@ -1774,6 +1815,9 @@ fn run_test(release: bool) -> anyhow::Result<()> {
     let code = output.status.code().unwrap_or(-1);
     let success = code == 33
         || combined.contains(
+            "[PASS] Analyse Comportementale UEBA (jambo-ueba PID 36) validee",
+        )
+        || combined.contains(
             "[PASS] Orchestration & Reponse aux Incidents SOAR (jambo-soar PID 35) validee",
         )
         || combined.contains(
@@ -1860,7 +1904,7 @@ fn run_test(release: bool) -> anyhow::Result<()> {
 
     if success {
         println!("{}", stdout);
-        println!("\x1b[1;32m[TEST PASSÉ AVEC SUCCÈS] Validation complète de JamboKernel Iron Core, JamboFS, VirtIO-Net, FDR, Wasm, PQC, KDIR, Forensics, Powerd, Metrics, BPF, VPN, Authd, Dnsd, Timed, Auditd, Walld, Vaultd, Watchdogd, Cored, Pkgd, Certd, Policyd, Secboot, Logd, Kms, Attest, Waf, Siem, Edr, Ndr, Xdr & SOAR Ring 3.\x1b[0m");
+        println!("\x1b[1;32m[TEST PASSÉ AVEC SUCCÈS] Validation complète de JamboKernel Iron Core, JamboFS, VirtIO-Net, FDR, Wasm, PQC, KDIR, Forensics, Powerd, Metrics, BPF, VPN, Authd, Dnsd, Timed, Auditd, Walld, Vaultd, Watchdogd, Cored, Pkgd, Certd, Policyd, Secboot, Logd, Kms, Attest, Waf, Siem, Edr, Ndr, Xdr, SOAR & UEBA Ring 3.\x1b[0m");
         Ok(())
     } else {
         eprintln!("{}", combined);
