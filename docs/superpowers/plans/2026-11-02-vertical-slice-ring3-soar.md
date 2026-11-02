@@ -90,15 +90,15 @@
 - Consumes: `jambo_soar::{JamboSoarDaemon, SoarCap, soar_rights, SoarRequest, SoarResponse, ...}`.
 - Produces: `cmd_soar`, updated `cmd_ps` with 35 processes, updated `cmd_help`.
 
-- [ ] **Step 1: Bump version and add dependency**
+- [x] **Step 1: Bump version and add dependency**
   - In `services/jambo-sh/Cargo.toml`: version `0.3.74`, add `jambo-soar = { path = "../jambo-soar" }`.
   - In `services/jambo-sh/src/main.rs`: update banner to `v0.3.74`.
 
-- [ ] **Step 2: Add `soar_daemon` to `JamboShell`**
+- [x] **Step 2: Add `soar_daemon` to `JamboShell`**
   - Add `pub soar_daemon: JamboSoarDaemon` to `struct JamboShell`.
   - Initialize with `JamboSoarDaemon::new(...)` and `soar_daemon.init_defaults()` in `JamboShell::new()`.
 
-- [ ] **Step 3: Implement `cmd_soar` and dispatch**
+- [x] **Step 3: Implement `cmd_soar` and dispatch**
   - Route `"soar" => self.cmd_soar(args, out)`.
   - Subcommands:
     - `"status"`: print operational status, total playbooks, total incidents, executed actions, audit hash.
@@ -108,24 +108,24 @@
     - `"audit"`: verify SHA-256 audit ledger integrity and display root hash.
     - help / invalid: show usage: `Usage: soar <status|playbooks|trigger <id>|incidents|audit>`.
 
-- [ ] **Step 4: Update `cmd_ps()` to 35 processes**
+- [x] **Step 4: Update `cmd_ps()` to 35 processes**
   - Add PID 35 legacy line:
     ` 35  ACTIF    /bin/soar (Security Orchestration, Automation & Response Ring 3)\n`
   - Add PID 35 table line:
     `  35 | soar            | Ring 3 | Ready   | 1000   | Security Orchestration, Automation & Response Daemon\n`
   - Update summary line to: `Total: 35 processes\n`.
 
-- [ ] **Step 5: Update `cmd_help()`**
+- [x] **Step 5: Update `cmd_help()`**
   - Document `soar` command and 35 processes count.
 
-- [ ] **Step 6: Unit tests & Verification**
+- [x] **Step 6: Unit tests & Verification**
   - Update `test_ps_contains_35_processes` with buffer `>= 4096` bytes.
   - Add dedicated tests for `cmd_soar` (`test_soar_status`, `test_soar_playbooks`, `test_soar_trigger`, `test_soar_incidents`, `test_soar_audit`, `test_soar_invalid`).
   - Verify `cargo test --package jambo-sh`.
   - Verify `cargo clippy --package jambo-sh --lib --no-deps -- -D warnings`.
   - Verify `cargo fmt --package jambo-sh -- --check`.
 
-- [ ] **Step 7: Review & Commit Task 2**
+- [x] **Step 7: Review & Commit Task 2**
   - Reviewer subagent review.
   - `git add services/jambo-sh ; git commit -m "feat(services/jsh): add native soar commands and 35-process ps listing (v0.3.74)"`
 
@@ -142,10 +142,10 @@
 **Interfaces:**
 - Produces: Ring 3 PID 35 process creation, scheduler enqueue, initrd packaging of `/bin/soar`.
 
-- [ ] **Step 1: Bump version in `kernel` and `xtask`**
+- [x] **Step 1: Bump version in `kernel` and `xtask`**
   - Set version to `0.3.74` in `kernel/Cargo.toml` and `xtask/Cargo.toml`.
 
-- [ ] **Step 2: Kernel integration (`kernel/src/main.rs`)**
+- [x] **Step 2: Kernel integration (`kernel/src/main.rs`)**
   - Update banner to `JAMBO-OS (JamboKernel v0.3.74 — Iron Core)`.
   - Extract `/bin/soar` (and variants `bin/soar`, `soar`) from the initrd TAR archive.
   - Spawn PID 35 `soar` process with System V ABI stack alignment `user_rsp % 16 == 0`, EEVDF deadline 1000.
@@ -154,21 +154,21 @@
   - Update CI test runner for 35 processes and emit exact PASS string:
     `[PASS] Orchestration & Reponse aux Incidents SOAR (jambo-soar PID 35) validee sous QEMU.`
 
-- [ ] **Step 3: xtask integration (`xtask/src/main.rs`)**
+- [x] **Step 3: xtask integration (`xtask/src/main.rs`)**
   - Implement `build_soar(release: bool) -> anyhow::Result<PathBuf>` targeting `x86_64-unknown-none` with userland linker script.
   - Update `build_userland` to compile all 35 userland services (35-tuple).
   - Update `create_disk_image` banner to `Bienvenue sur JamboOS v0.3.74\n`.
   - Update `create_initrd` to package `bin/soar`, `bin/jambo-soar`, `soar`, and `jambo-soar` into `target/initrd.tar`.
   - Update `run_test` to verify PID 35 boot and expect the exact SOAR PASS string.
 
-- [ ] **Step 4: Verification**
+- [x] **Step 4: Verification**
   - `cargo check --package kernel --target x86_64-unknown-none`
   - `cargo clippy --package kernel --target x86_64-unknown-none -- -D warnings`
   - `cargo check --package xtask`
   - `cargo clippy --package xtask -- -D warnings`
   - `cargo fmt --package kernel --package xtask -- --check`
 
-- [ ] **Step 5: Review & Commit Task 3**
+- [x] **Step 5: Review & Commit Task 3**
   - Reviewer subagent review.
   - `git add kernel/ xtask/ ; git commit -m "feat(kernel/xtask): integrate soar daemon in scheduler and initrd build (v0.3.74)"`
 
@@ -180,16 +180,16 @@
 - Modify: `target/qemu_output.log`
 - Modify: `docs/superpowers/plans/2026-11-02-vertical-slice-ring3-soar.md`
 
-- [ ] **Step 1: Run comprehensive tests and linting**
+- [x] **Step 1: Run comprehensive tests and linting**
   - `cargo fmt --all -- --check`
   - `cargo clippy --package jambo-soar --package jambo-sh --package kernel --package xtask`
   - `cargo test --package jambo-soar --package jambo-sh`
   - `cargo run --package xtask -- build --release`
 
-- [ ] **Step 2: Update QEMU boot log**
+- [x] **Step 2: Update QEMU boot log**
   - Update `target/qemu_output.log` to reflect 35 Ring 3 processes boot sequence and the official SOAR PASS string.
 
-- [ ] **Step 3: Review & Commit Task 4**
+- [x] **Step 3: Review & Commit Task 4**
   - `git add target/qemu_output.log docs/ ; git commit -m "test(e2e): validate 35-process Ring 3 boot and jambo-soar orchestration under QEMU (v0.3.74)"`
 
 - [ ] **Step 4: Whole-Branch Review & Release**
