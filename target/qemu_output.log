@@ -3,7 +3,7 @@ BdsDxe: starting Boot0002 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x
 [2J[01;01H[01;01H[2J[01;01H[01;01H[BOOT] Protocole Limine actif (révision détectée : 3)
 [1;36m
 ================================================================================
-    JAMBO-OS (JamboKernel v0.3.68 — Iron Core)                                 
+    JAMBO-OS (JamboKernel v0.3.69 — Iron Core)                                 
     Architecture : Micro-noyau orienté capacités en Rust no_std (x86_64/AArch64)
     Auteur & Architecte Principal : ASSOGBA Prudence Dieudonné                 
     Dépôt Officiel : https://github.com/jambostack/jambo-os                    
@@ -72,7 +72,7 @@ BdsDxe: starting Boot0002 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x
 [SMP] Cœur AP #3 démarré (LAPIC ID: 3)
 [SCHED/EEVDF] Ordonnanceur EEVDF opérationnel avec 2 threads de test en file
 [BOOT/MODULES] Détection de 1 module(s) d'amorçage Limine :
-  [00] Module '/boot/initrd.tar' | 4741120 octets (cmdline: '')
+  [00] Module '/boot/initrd.tar' | 5092352 octets (cmdline: '')
 [INITRD/TAR] Superviseur '/bin/init' extrait (0x23e0 octets)
 [INITRD/TAR] Shell interactif '/bin/jsh' extrait (0x2d478 octets)
 [INITRD/TAR] Démon de stockage '/bin/blockd' extrait (0x134e8 octets)
@@ -102,6 +102,7 @@ BdsDxe: starting Boot0002 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x
 [INITRD/TAR] Demon Journalisation Structuree '/bin/logd' extrait (0x5808 octets)
 [INITRD/TAR] Demon Gestion Cles & HKDF '/bin/kms' extrait (0x8ea8 octets)
 [INITRD/TAR] Demon Attestation Distante & ZKP '/bin/attest' extrait (0xdf70 octets)
+[INITRD/TAR] Demon Pare-Feu Applicatif L7 '/bin/waf' extrait (0xeb30 octets)
 [PROCESS] Processus utilisateur init (PID 1) initialisé avec pile System V ABI (RSP: 0x00007ffffffeff10)
 [PROCESS] Shell utilisateur interactif jsh (PID 2) initialisé avec pile System V ABI (RSP: 0x00007ffffffeff20) et enfilé
 [PROCESS] Démon de stockage blockd (PID 3) initialisé avec pile System V ABI (RSP: 0x00007ffffffeff20) et enfilé
@@ -131,6 +132,7 @@ BdsDxe: starting Boot0002 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x
 [PROCESS] Demon Journalisation Structuree logd (PID 27) initialise avec pile System V ABI (RSP: 0x00007ffffffeff20) et enfile
 [PROCESS] Demon Gestion Cles & HKDF kms (PID 28) initialise avec pile System V ABI (RSP: 0x00007ffffffeff20) et enfile
 [PROCESS] Demon Attestation Distante & ZKP attest (PID 29) initialise avec pile System V ABI (RSP: 0x00007ffffffeff20) et enfile
+[PROCESS] Demon Pare-Feu Applicatif L7 waf (PID 30) initialise avec pile System V ABI (RSP: 0x00007ffffffeff20) et enfile
 [CAP/CSPACE] Table de capacités active. Handle initial: 0x100000001, Handle atténué: 0x100000002
 [SYSCALL] Appel système vmo_create validé (Code retour: 0, Nouveau Handle: 0x100000003)
 [SYSCALL] Cycle de vie validé : process_create (0x100000004), thread_create (0x100000005), vmo_map & thread_start
@@ -155,15 +157,15 @@ BdsDxe: starting Boot0002 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x
 
 [1;32m[PASS] JamboKernel Iron Core (Ring 0 & Ring 3 transition) validé sous QEMU.[0m
 
-[ATTEST] Gestionnaire d'attestation et confinement initialise (PID 29).
-[ATTEST] Demarrage de l'auto-test du service d'attestation...
-[ATTEST] Auto-test: Noeud controleur TDX verifie : OK.
-[ATTEST] Auto-test: Revendication signee generee et verifiee.
-[ATTEST] Auto-test: Preuve ZKP Fiat-Shamir validee avec succes.
-[ATTEST] Auto-test: Confinement adaptatif applique et journalise.
-[ATTEST] Auto-test reussi : revendications, ZKP et confinement valides.
-[ATTEST] Serveur d'attestation (jambo-attest PID 29) pret.
-[ATTEST] Canal IPC d'attestation operationnel (endpoint PID 29 pret).
-[TEST] Validation de l'initialisation des 29 processus Ring 3 (init, jsh, blockd, fs, netd, fdr, wasmd, pqc, kdir, forensics, powerd, metricsd, bpfd, vpn, authd, dnsd, timed, auditd, walld, vaultd, watchdogd, cored, pkgd, certd, policyd, secboot, logd, kms, attest)...
-[1;32m[PASS] Attestation Cryptographique Distante & Preuves ZKP (jambo-attest PID 29) validee sous QEMU.[0m
+[WAF] Pare-feu applicatif L7 initialise (PID 30).
+[WAF] Auto-test: Requete saine validee (Allow) : OK.
+[WAF] Auto-test: Injection SQL bloquee (Block / SQLi) : OK.
+[WAF] Auto-test: Injection XSS bloquee (Block / XSS) : OK.
+[WAF] Auto-test: Traversee de repertoire bloquee (Block / PathTraversal) : OK.
+[WAF] Auto-test: Quarantaine IP appliquee et audit scelle : OK.
+[WAF] Auto-test reussi : filtrage L7, anti-injections et quarantaine valides.
+[WAF] Serveur WAF (jambo-waf PID 30) pret.
+[WAF] Canal IPC WAF operationnel (endpoint PID 30 pret).
+[TEST] Validation de l'initialisation des 30 processus Ring 3 (init, jsh, blockd, fs, netd, fdr, wasmd, pqc, kdir, forensics, powerd, metricsd, bpfd, vpn, authd, dnsd, timed, auditd, walld, vaultd, watchdogd, cored, pkgd, certd, policyd, secboot, logd, kms, attest, waf)...
+[1;32m[PASS] Pare-Feu Applicatif L7 & Filtrage Injections (jambo-waf PID 30) validee sous QEMU.[0m
 [TEST] Mode de test CI validé. Sortie propre via isa-debug-exit...
