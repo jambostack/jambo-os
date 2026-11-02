@@ -30,15 +30,15 @@
 **Interfaces:**
 - Produces: `JamboXdrDaemon`, `XdrCap`, `XdrRequest`, `XdrResponse`, `XdrClient`, `xdr_rights`, `TelemetryVector`, `MitreTactic`, `EventSeverity`, `CampaignStage`, `CampaignStatus`, `XdrResponseType`, `XdrRemediationReport`.
 
-- [ ] **Step 1: Create `services/jambo-xdr/Cargo.toml`**
+- [x] **Step 1: Create `services/jambo-xdr/Cargo.toml`**
   - Set package name to `jambo-xdr`, version `0.3.73`, edition `2021`.
   - Add dependency `libjambo = { path = "../../libs/libjambo" }`.
   - Define `[[bin]]` with `name = "xdr"`, `path = "src/main.rs"`, and `test = false`.
 
-- [ ] **Step 2: Register in root `Cargo.toml`**
+- [x] **Step 2: Register in root `Cargo.toml`**
   - Add `"services/jambo-xdr"` to `workspace.members`.
 
-- [ ] **Step 3: Implement `services/jambo-xdr/src/lib.rs`**
+- [x] **Step 3: Implement `services/jambo-xdr/src/lib.rs`**
   - Migrate and refine core XDR logic from `incubator/services/jambo-xdr/src/lib.rs`:
     - Pure `#![no_std]`, zero heap allocations.
     - Autonomous `Sha256` hasher.
@@ -60,20 +60,20 @@
     - `XdrClient` helper.
   - Unit tests covering capabilities, multi-vector correlation, APT progression, instant remediation, audit ledger, and 64-byte IPC serialization/dispatch.
 
-- [ ] **Step 4: Implement `services/jambo-xdr/src/main.rs`**
+- [x] **Step 4: Implement `services/jambo-xdr/src/main.rs`**
   - `#![no_std]`, `#![no_main]`.
   - `_start()` entry point with System V ABI stack alignment.
   - Banner: `[XDR] JamboOS Extended Detection & Response Daemon (PID 34) v0.3.73`.
   - Self-tests (multi-vector event ingestion, cross-vector APT correlation, instant remediation, audit sealing).
   - IPC endpoint registration (PID 34) and cooperative event loop with `syscall_thread_yield()`.
 
-- [ ] **Step 5: Run unit tests and static analysis**
+- [x] **Step 5: Run unit tests and static analysis**
   - `cargo test --package jambo-xdr`
   - `cargo clippy --package jambo-xdr -- -D warnings`
   - `cargo fmt --package jambo-xdr -- --check`
   - `cargo check --package jambo-xdr --target x86_64-unknown-none`
 
-- [ ] **Step 6: Review & Commit Task 1**
+- [x] **Step 6: Review & Commit Task 1**
   - Reviewer subagent review.
   - `git add Cargo.toml docs/ services/jambo-xdr ; git commit -m "feat(services/xdr): implement Ring 3 extended detection and response daemon (v0.3.73)"`
 
@@ -198,3 +198,4 @@
   - Tag: `git tag -a v0.3.73 -m "release: v0.3.73 - Sovereign Extended Detection & Response, Threat Propagation Graph & Unified Quarantine (jambo-xdr PID 34)"`
   - Push: `git push origin main --tags`
   - Update roadmap artifact `synthese_avis_et_feuille_de_route_jamboos.md` to mark Jalon 3.29 as `✅ TERMINÉ (v0.3.73)`.
+

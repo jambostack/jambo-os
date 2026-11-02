@@ -1,0 +1,15 @@
+[package]
+name = "jambo-xdr"
+version = "0.3.73"
+edition = "2021"
+authors = ["ASSOGBA Prudence Dieudonné <jprud67@gmail.com>"]
+description = "Extended Detection & Response (XDR) Démon Ring 3 pour JamboOS"
+license = "MIT OR Apache-2.0"
+
+[[bin]]
+name = "xdr"
+path = "src/main.rs"
+test = false
+
+[dependencies]
+libjambo = { path = "../../libs/libjambo" }
