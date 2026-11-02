@@ -20,6 +20,11 @@ use jambo_bpfd::{
     BpfOpcode, BpfProgramType, BpfRequest, BpfResponse, JamboBpfDaemon, BPF_STATUS_OK,
 };
 #[allow(unused_imports)]
+use jambo_certd::{
+    cert_rights, key_usages, CertCap, CertClient, CertOpcode, CertRequest, CertResponse,
+    CertStatus, ClusterCa, EphemeralCert,
+};
+#[allow(unused_imports)]
 use jambo_cored::{
     core_rights, CoreCap, CoreClient, CoreOpcode, CoreRequest, CoreResponse, JamboCoreDaemon,
 };
@@ -101,6 +106,7 @@ pub struct JamboShell {
     pub watchdog_daemon: JamboWatchdogDaemon,
     pub core_daemon: JamboCoreDaemon,
     pub pkg_daemon: JamboPkgDaemon,
+    pub cert_daemon: ClusterCa,
 }
 
 impl Default for JamboShell {
@@ -147,6 +153,8 @@ impl JamboShell {
             [0x33u8; 32],
             pkg_rights::PKG_ADMIN,
         ));
+        let mut cert_daemon = ClusterCa::new();
+        cert_daemon.init_defaults();
         Self {
             prompt_user: "jambo",
             commands_executed: 0,
@@ -159,6 +167,7 @@ impl JamboShell {
             watchdog_daemon,
             core_daemon,
             pkg_daemon,
+            cert_daemon,
         }
     }
 
@@ -212,6 +221,7 @@ impl JamboShell {
             "wdog" => self.cmd_wdog(args, out),
             "core" => self.cmd_core(args, out),
             "pkg" => self.cmd_pkg(args, out),
+            "cert" => self.cmd_cert(args, out),
             _ => self.cmd_not_found(cmd, out),
         }
     }
@@ -220,7 +230,7 @@ impl JamboShell {
         let text = b"Commandes disponibles:\n\
   help        - Affiche cette aide\n\
   sysinfo     - Metriques memoire et uptime du micro-noyau\n\
-  ps          - Liste les 23 processus actifs\n\
+  ps          - Liste les 24 processus actifs\n\
   echo <args> - Affiche le texte sur la console\n\
   clear       - Reinitialise l'ecran du terminal\n\
   reboot      - Eteint ou redemarre la machine virtuelle\n\
@@ -244,7 +254,8 @@ impl JamboShell {
   vault [status|unseal|seal|store|get|revoke] - Coffre-fort cryptographique de secrets distribue\n\
   wdog [status|ping|register|targets|trigger|log] - Surveillance vivacite et chien de garde\n\
   core [status|dump|list|verify|quarantine|purge] - Capture crash dumps ELF64 et forensique\n\
-  pkg [status|list|install|stage|commit|rollback] - Gestion declarative de paquets et mises a jour A/B\n";
+  pkg [status|list|install|stage|commit|rollback] - Gestion declarative de paquets et mises a jour A/B\n\
+  cert [status|list|issue|verify|revoke] - Infrastructure PKI ephemere et mTLS de grappe\n";
         let len = text.len().min(out.len());
         out[..len].copy_from_slice(&text[..len]);
         (ShellStatus::Success, len)
@@ -311,7 +322,8 @@ impl JamboShell {
  20  ACTIF    /bin/vaultd (Coffre-Fort de Secrets Distribue Ring 3)\n\
  21  ACTIF    /bin/watchdogd (Surveillance Vivacite & Chien de Garde Ring 3)\n\
  22  ACTIF    /bin/cored (Capture Crash Dumps ELF64 & Forensique Ring 3)\n\
- 23  ACTIF    /bin/pkgd (Declarative Package Manager & CAS Store Ring 3)\n  23 | pkgd           | Ring 3 | Ready   | 1000   | Declarative Package Manager & CAS Store\nTotal: 23 processes\n";
+ 23  ACTIF    /bin/pkgd (Declarative Package Manager & CAS Store Ring 3)\n  23 | pkgd           | Ring 3 | Ready   | 1000   | Declarative Package Manager & CAS Store\n\
+ 24  ACTIF    /bin/certd (Demon PKI Ephemere & mTLS de Grappe Ring 3)\n  24 | certd          | Ring 3 | Ready   | 1000   | Ephemeral PKI & Cluster mTLS Daemon\nTotal: 24 processes\n";
         let len = text.len().min(out.len());
         out[..len].copy_from_slice(&text[..len]);
         (ShellStatus::Success, len)
@@ -5247,6 +5259,280 @@ impl JamboShell {
         c = append_bytes(out, c, b" (HEALTHY, COMMITTED)\n");
         (ShellStatus::Success, c)
     }
+
+    fn send_cert_request(&mut self, req: &CertRequest) -> CertResponse {
+        let mut resp_opt: Option<CertResponse> = None;
+        for &h in &[
+            24u64, 23u64, 22u64, 21u64, 20u64, 19u64, 18u64, 17u64, 16u64, 15u64, 14u64, 13u64,
+            12u64, 11u64, 10u64, 9u64, 8u64, 7u64, 6u64, 5u64, 4u64, 3u64,
+        ] {
+            let client = CertClient::new(libjambo::Handle(h));
+            if let Ok(resp) = client.call(req) {
+                if resp.magic == jambo_certd::CERT_MAGIC_RESP {
+                    resp_opt = Some(resp);
+                    break;
+                }
+            }
+        }
+        let local_resp = self.cert_daemon.dispatch_ipc(req);
+        resp_opt.unwrap_or(local_resp)
+    }
+
+    fn cmd_cert(&mut self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        let subcmd = if args.is_empty() { "status" } else { args[0] };
+        match subcmd {
+            "status" => self.cmd_cert_status(out),
+            "list" => self.cmd_cert_list(out),
+            "issue" => self.cmd_cert_issue(&args[1..], out),
+            "verify" => self.cmd_cert_verify(&args[1..], out),
+            "revoke" => self.cmd_cert_revoke(&args[1..], out),
+            _ => {
+                let msg = b"Usage: cert [status|list|issue <subject> [usage]|verify <serial>|revoke <serial>]\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                (ShellStatus::InvalidArgument, len)
+            }
+        }
+    }
+
+    fn cmd_cert_status(&mut self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let req = CertRequest::new_status(24, cert_rights::CERT_AUDIT | cert_rights::CERT_VERIFY);
+        let resp = self.send_cert_request(&req);
+
+        let mut c = 0;
+        c = append_bytes(
+            out,
+            c,
+            b"Autorite de Certification de Grappe (jambo-certd PID 24):\n  Identifiant CA (ID)     : ",
+        );
+        c = append_u64(out, c, self.cert_daemon.ca_id as u64);
+        c = append_bytes(out, c, b"\n  Certificats Actifs      : ");
+        c = append_u64(out, c, resp.active_certs as u64);
+        c = append_bytes(out, c, b"\n  Certificats Revoques    : ");
+        c = append_u64(out, c, resp.revoked_certs as u64);
+        c = append_bytes(out, c, b"\n  Prochain Numero de Serie: ");
+        c = append_u64(out, c, resp.serial);
+        c = append_bytes(out, c, b"\n  Statut de l'Autorite    : ");
+        c = append_bytes(out, c, resp.status_as_str().as_bytes());
+        c = append_bytes(out, c, b"\n");
+        (ShellStatus::Success, c)
+    }
+
+    fn cmd_cert_list(&mut self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let req = CertRequest::new_list(24, cert_rights::CERT_AUDIT | cert_rights::CERT_VERIFY);
+        let _ = self.send_cert_request(&req);
+
+        let mut c = 0;
+        c = append_bytes(
+            out,
+            c,
+            b"Certificats Actifs de Grappe (jambo-certd PID 24):\n",
+        );
+        let mut count = 0;
+        for cert in self.cert_daemon.active_certs.iter().flatten() {
+            count += 1;
+            c = append_bytes(out, c, b"  - Serial: ");
+            c = append_u64(out, c, cert.serial);
+            c = append_bytes(out, c, b" | Subject: ");
+            c = append_bytes(out, c, cert.subject_str().as_bytes());
+            c = append_bytes(out, c, b" | Usage: ");
+            c = format_key_usage(cert.key_usage, out, c);
+            c = append_bytes(out, c, b" | Validity: [");
+            c = append_u64(out, c, cert.not_before);
+            c = append_bytes(out, c, b"..");
+            c = append_u64(out, c, cert.not_after);
+            c = append_bytes(out, c, b"]\n");
+        }
+        if count == 0 {
+            c = append_bytes(out, c, b"  (Aucun certificat actif)\n");
+        }
+        (ShellStatus::Success, c)
+    }
+
+    fn cmd_cert_issue(&mut self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if args.is_empty() {
+            let msg = b"Usage: cert issue <subject> [usage]\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            return (ShellStatus::InvalidArgument, len);
+        }
+
+        let subject = args[0];
+        if subject.is_empty() || subject.len() > 32 {
+            let msg = b"cert issue: invalid subject name (length must be 1..32)\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            return (ShellStatus::InvalidArgument, len);
+        }
+
+        let usage = if args.len() > 1 {
+            parse_key_usage(args[1])
+        } else {
+            key_usages::USAGE_SERVER_AUTH | key_usages::USAGE_CLIENT_AUTH
+        };
+
+        let mut pk = [0x55u8; 16];
+        for (i, &b) in subject.as_bytes().iter().enumerate() {
+            pk[i % 16] ^= b;
+        }
+
+        let req = CertRequest::new_issue(24, cert_rights::CERT_ISSUE, subject, pk, 3600, usage);
+        let resp = self.send_cert_request(&req);
+
+        if resp.status != 0 {
+            let mut c = 0;
+            c = append_bytes(out, c, b"cert issue: failed with error code ");
+            c = append_i64(out, c, resp.status as i64);
+            c = append_bytes(out, c, b"\n");
+            return (ShellStatus::ExecutionFailed, c);
+        }
+
+        let mut c = 0;
+        c = append_bytes(out, c, b"cert issue: certificat emis avec succes pour '");
+        c = append_bytes(out, c, subject.as_bytes());
+        c = append_bytes(out, c, b"' (Serial: ");
+        c = append_u64(out, c, resp.serial);
+        c = append_bytes(out, c, b", Usage: ");
+        c = format_key_usage(resp.key_usage, out, c);
+        c = append_bytes(out, c, b", Validite: 3600s)\n");
+        (ShellStatus::Success, c)
+    }
+
+    fn cmd_cert_verify(&mut self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if args.is_empty() {
+            let msg = b"Usage: cert verify <serial>\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            return (ShellStatus::InvalidArgument, len);
+        }
+
+        let serial = match parse_u64(args[0]) {
+            Some(s) => s,
+            None => {
+                let msg = b"cert verify: invalid serial number\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                return (ShellStatus::InvalidArgument, len);
+            }
+        };
+
+        let req = CertRequest::new_verify(24, cert_rights::CERT_VERIFY, serial, 0);
+        let resp = self.send_cert_request(&req);
+
+        let mut c = 0;
+        c = append_bytes(out, c, b"cert verify: certificat Serial #");
+        c = append_u64(out, c, serial);
+        c = append_bytes(out, c, b" -> Statut: ");
+        c = append_bytes(out, c, resp.status_as_str().as_bytes());
+        c = append_bytes(out, c, b"\n");
+        if resp.status == 0 {
+            (ShellStatus::Success, c)
+        } else {
+            (ShellStatus::ExecutionFailed, c)
+        }
+    }
+
+    fn cmd_cert_revoke(&mut self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if args.is_empty() {
+            let msg = b"Usage: cert revoke <serial>\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            return (ShellStatus::InvalidArgument, len);
+        }
+
+        let serial = match parse_u64(args[0]) {
+            Some(s) => s,
+            None => {
+                let msg = b"cert revoke: invalid serial number\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                return (ShellStatus::InvalidArgument, len);
+            }
+        };
+
+        let req = CertRequest::new_revoke(24, cert_rights::CERT_REVOKE, serial);
+        let resp = self.send_cert_request(&req);
+
+        if resp.status != 0 {
+            let mut c = 0;
+            c = append_bytes(out, c, b"cert revoke: failed with error code ");
+            c = append_i64(out, c, resp.status as i64);
+            c = append_bytes(out, c, b"\n");
+            return (ShellStatus::ExecutionFailed, c);
+        }
+
+        let mut c = 0;
+        c = append_bytes(out, c, b"cert revoke: certificat Serial #");
+        c = append_u64(out, c, serial);
+        c = append_bytes(out, c, b" revoque avec succes (REVOKED)\n");
+        (ShellStatus::Success, c)
+    }
+}
+
+fn format_key_usage(usage: u32, out: &mut [u8], mut c: usize) -> usize {
+    let mut first = true;
+    if (usage & key_usages::USAGE_SERVER_AUTH) != 0 {
+        if !first {
+            c = append_bytes(out, c, b"|");
+        }
+        c = append_bytes(out, c, b"ServerAuth");
+        first = false;
+    }
+    if (usage & key_usages::USAGE_CLIENT_AUTH) != 0 {
+        if !first {
+            c = append_bytes(out, c, b"|");
+        }
+        c = append_bytes(out, c, b"ClientAuth");
+        first = false;
+    }
+    if (usage & key_usages::USAGE_CODE_SIGN) != 0 {
+        if !first {
+            c = append_bytes(out, c, b"|");
+        }
+        c = append_bytes(out, c, b"CodeSign");
+        first = false;
+    }
+    if (usage & key_usages::USAGE_MESH_ROUTING) != 0 {
+        if !first {
+            c = append_bytes(out, c, b"|");
+        }
+        c = append_bytes(out, c, b"MeshRouting");
+        first = false;
+    }
+    if first {
+        c = append_bytes(out, c, b"None");
+    }
+    c
+}
+
+fn parse_key_usage(s: &str) -> u32 {
+    if let Some(v) = parse_u32(s) {
+        return v;
+    }
+    let mut usage = 0;
+    if s.eq_ignore_ascii_case("server") || s.eq_ignore_ascii_case("serverauth") {
+        usage |= key_usages::USAGE_SERVER_AUTH;
+    }
+    if s.eq_ignore_ascii_case("client") || s.eq_ignore_ascii_case("clientauth") {
+        usage |= key_usages::USAGE_CLIENT_AUTH;
+    }
+    if s.eq_ignore_ascii_case("code") || s.eq_ignore_ascii_case("codesign") {
+        usage |= key_usages::USAGE_CODE_SIGN;
+    }
+    if s.eq_ignore_ascii_case("mesh") || s.eq_ignore_ascii_case("meshrouting") {
+        usage |= key_usages::USAGE_MESH_ROUTING;
+    }
+    if s.eq_ignore_ascii_case("all") {
+        usage = key_usages::USAGE_SERVER_AUTH
+            | key_usages::USAGE_CLIENT_AUTH
+            | key_usages::USAGE_CODE_SIGN
+            | key_usages::USAGE_MESH_ROUTING;
+    }
+    if usage == 0 {
+        key_usages::USAGE_SERVER_AUTH | key_usages::USAGE_CLIENT_AUTH
+    } else {
+        usage
+    }
 }
 
 fn append_bytes(buf: &mut [u8], cursor: usize, data: &[u8]) -> usize {
@@ -5651,7 +5937,11 @@ mod tests {
         assert!(
             s.contains("  23 | pkgd           | Ring 3 | Ready   | 1000   | Declarative Package Manager & CAS Store")
         );
-        assert!(s.contains("Total: 23 processes"));
+        assert!(s.contains("24  ACTIF    /bin/certd (Demon PKI Ephemere & mTLS de Grappe Ring 3)"));
+        assert!(
+            s.contains("  24 | certd          | Ring 3 | Ready   | 1000   | Ephemeral PKI & Cluster mTLS Daemon")
+        );
+        assert!(s.contains("Total: 24 processes"));
     }
 
     #[test]
@@ -5663,7 +5953,19 @@ mod tests {
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains("  23 | pkgd           | Ring 3 | Ready   | 1000   | Declarative Package Manager & CAS Store"));
-        assert!(s.contains("Total: 23 processes"));
+        assert!(s.contains("Total: 24 processes"));
+    }
+
+    #[test]
+    fn test_ps_contains_24_processes() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        let (st, len) = shell.execute_line("ps", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("  24 | certd          | Ring 3 | Ready   | 1000   | Ephemeral PKI & Cluster mTLS Daemon"));
+        assert!(s.contains("Total: 24 processes"));
     }
 
     #[test]
@@ -5674,7 +5976,7 @@ mod tests {
         let (st, len) = shell.execute_line("help", &mut out);
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
-        assert!(s.contains("23 processus actifs"));
+        assert!(s.contains("24 processus actifs"));
         assert!(s.contains("fdr [status|verify|pcr]"));
         assert!(s.contains("wasm [status|run|info]"));
         assert!(s.contains("pqc [status|kex|sign|audit]"));
@@ -5693,6 +5995,7 @@ mod tests {
         assert!(s.contains("wdog [status|ping|register|targets|trigger|log]"));
         assert!(s.contains("core [status|dump|list|verify|quarantine|purge]"));
         assert!(s.contains("pkg [status|list|install|stage|commit|rollback]"));
+        assert!(s.contains("cert [status|list|issue|verify|revoke]"));
     }
 
     #[test]
@@ -7822,5 +8125,165 @@ mod tests {
         assert_eq!(st3, ShellStatus::ExecutionFailed);
         let s3 = core::str::from_utf8(&out[..len3]).unwrap();
         assert!(s3.contains("pkg rollback: aucun retour en arriere possible"));
+    }
+
+    #[test]
+    fn test_cert_status() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 1024];
+
+        let (st, len) = shell.execute_line("cert status", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("Autorite de Certification de Grappe (jambo-certd PID 24):"));
+        assert!(s.contains("Identifiant CA (ID)     : 1"));
+        assert!(s.contains("Certificats Actifs      : 3"));
+        assert!(s.contains("Certificats Revoques    : 0"));
+        assert!(s.contains("Prochain Numero de Serie: 1003"));
+        assert!(s.contains("Statut de l'Autorite    : READY"));
+    }
+
+    #[test]
+    fn test_cert_list() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 2048];
+
+        let (st, len) = shell.execute_line("cert list", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("Certificats Actifs de Grappe (jambo-certd PID 24):"));
+        assert!(s.contains("Serial: 1000 | Subject: kernel.jambo"));
+        assert!(s.contains("Serial: 1001 | Subject: jsh.jambo"));
+        assert!(s.contains("Serial: 1002 | Subject: pkgd.jambo"));
+        assert!(s.contains("Usage:"));
+        assert!(s.contains("Validity: [0..1000000]"));
+    }
+
+    #[test]
+    fn test_cert_issue() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 1024];
+
+        let (st, len) = shell.execute_line("cert issue sec-mesh.jambo server", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains(
+            "cert issue: certificat emis avec succes pour 'sec-mesh.jambo' (Serial: 1003"
+        ));
+        assert!(s.contains("Usage: ServerAuth"));
+        assert!(s.contains("Validite: 3600s"));
+
+        // Vérification dans cert status (3 -> 4 actifs, next serial 1003 -> 1004)
+        let (st2, len2) = shell.execute_line("cert status", &mut out);
+        assert_eq!(st2, ShellStatus::Success);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("Certificats Actifs      : 4"));
+        assert!(s2.contains("Prochain Numero de Serie: 1004"));
+
+        // Vérification dans cert list
+        let (st3, len3) = shell.execute_line("cert list", &mut out);
+        assert_eq!(st3, ShellStatus::Success);
+        let s3 = core::str::from_utf8(&out[..len3]).unwrap();
+        assert!(s3.contains("Serial: 1003 | Subject: sec-mesh.jambo"));
+    }
+
+    #[test]
+    fn test_cert_verify() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 1024];
+
+        // 1. Vérification d'un certificat existant valide (1000 kernel.jambo)
+        let (st1, len1) = shell.execute_line("cert verify 1000", &mut out);
+        assert_eq!(st1, ShellStatus::Success);
+        let s1 = core::str::from_utf8(&out[..len1]).unwrap();
+        assert!(s1.contains("cert verify: certificat Serial #1000 -> Statut: VALID"));
+
+        // 2. Émission d'un nouveau certificat et vérification
+        let (st2, _) = shell.execute_line("cert issue node1.jambo client", &mut out);
+        assert_eq!(st2, ShellStatus::Success);
+
+        let (st3, len3) = shell.execute_line("cert verify 1003", &mut out);
+        assert_eq!(st3, ShellStatus::Success);
+        let s3 = core::str::from_utf8(&out[..len3]).unwrap();
+        assert!(s3.contains("cert verify: certificat Serial #1003 -> Statut: VALID"));
+
+        // 3. Vérification d'un certificat inexistant (9999)
+        let (st4, len4) = shell.execute_line("cert verify 9999", &mut out);
+        assert_eq!(st4, ShellStatus::ExecutionFailed);
+        let s4 = core::str::from_utf8(&out[..len4]).unwrap();
+        assert!(s4.contains("cert verify: certificat Serial #9999 -> Statut: NOT_FOUND"));
+    }
+
+    #[test]
+    fn test_cert_revoke() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 1024];
+
+        // 1. Émission d'un certificat temporaire (serial 1003)
+        let (st1, _) = shell.execute_line("cert issue temp-service.jambo all", &mut out);
+        assert_eq!(st1, ShellStatus::Success);
+
+        // 2. Révocation du certificat 1003
+        let (st2, len2) = shell.execute_line("cert revoke 1003", &mut out);
+        assert_eq!(st2, ShellStatus::Success);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("cert revoke: certificat Serial #1003 revoque avec succes (REVOKED)"));
+
+        // 3. Vérification post-révocation -> doit être REVOKED
+        let (st3, len3) = shell.execute_line("cert verify 1003", &mut out);
+        assert_eq!(st3, ShellStatus::Success);
+        let s3 = core::str::from_utf8(&out[..len3]).unwrap();
+        assert!(s3.contains("cert verify: certificat Serial #1003 -> Statut: REVOKED"));
+
+        // 4. Vérification dans cert status (3 actifs, 1 révoqué)
+        let (st4, len4) = shell.execute_line("cert status", &mut out);
+        assert_eq!(st4, ShellStatus::Success);
+        let s4 = core::str::from_utf8(&out[..len4]).unwrap();
+        assert!(s4.contains("Certificats Actifs      : 3"));
+        assert!(s4.contains("Certificats Revoques    : 1"));
+
+        // 5. Vérification que le serial 1003 n'apparaît plus dans cert list
+        let (st5, len5) = shell.execute_line("cert list", &mut out);
+        assert_eq!(st5, ShellStatus::Success);
+        let s5 = core::str::from_utf8(&out[..len5]).unwrap();
+        assert!(!s5.contains("Serial: 1003"));
+    }
+
+    #[test]
+    fn test_cert_invalid() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 1024];
+
+        // 1. Sous-commande invalide
+        let (st1, len1) = shell.execute_line("cert invalid_subcmd", &mut out);
+        assert_eq!(st1, ShellStatus::InvalidArgument);
+        let s1 = core::str::from_utf8(&out[..len1]).unwrap();
+        assert!(s1.contains(
+            "Usage: cert [status|list|issue <subject> [usage]|verify <serial>|revoke <serial>]"
+        ));
+
+        // 2. cert issue sans sujet
+        let (st2, len2) = shell.execute_line("cert issue", &mut out);
+        assert_eq!(st2, ShellStatus::InvalidArgument);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("Usage: cert issue <subject> [usage]"));
+
+        // 3. cert verify sans numéro de série
+        let (st3, len3) = shell.execute_line("cert verify", &mut out);
+        assert_eq!(st3, ShellStatus::InvalidArgument);
+        let s3 = core::str::from_utf8(&out[..len3]).unwrap();
+        assert!(s3.contains("Usage: cert verify <serial>"));
+
+        // 4. cert verify avec numéro de série non numérique
+        let (st4, len4) = shell.execute_line("cert verify abc", &mut out);
+        assert_eq!(st4, ShellStatus::InvalidArgument);
+        let s4 = core::str::from_utf8(&out[..len4]).unwrap();
+        assert!(s4.contains("cert verify: invalid serial number"));
+
+        // 5. cert revoke sans numéro de série
+        let (st5, len5) = shell.execute_line("cert revoke", &mut out);
+        assert_eq!(st5, ShellStatus::InvalidArgument);
+        let s5 = core::str::from_utf8(&out[..len5]).unwrap();
+        assert!(s5.contains("Usage: cert revoke <serial>"));
     }
 }
