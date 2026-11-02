@@ -3,7 +3,7 @@ BdsDxe: starting Boot0002 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x
 [2J[01;01H[01;01H[2J[01;01H[01;01H[BOOT] Protocole Limine actif (révision détectée : 3)
 [1;36m
 ================================================================================
-    JAMBO-OS (JamboKernel v0.3.70 — Iron Core)                                 
+    JAMBO-OS (JamboKernel v0.3.71 — Iron Core)                                 
     Architecture : Micro-noyau orienté capacités en Rust no_std (x86_64/AArch64)
     Auteur & Architecte Principal : ASSOGBA Prudence Dieudonné                 
     Dépôt Officiel : https://github.com/jambostack/jambo-os                    
@@ -104,6 +104,7 @@ BdsDxe: starting Boot0002 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x
 [INITRD/TAR] Demon Attestation Distante & ZKP '/bin/attest' extrait (0xdf70 octets)
 [INITRD/TAR] Demon Pare-Feu Applicatif L7 '/bin/waf' extrait (0xeb30 octets)
 [INITRD/TAR] Demon Moteur SIEM '/bin/siem' extrait (0x7968 octets)
+[INITRD/TAR] Demon Surveillance & Reponse EDR '/bin/edr' extrait (0xbec0 octets)
 [PROCESS] Processus utilisateur init (PID 1) initialisé avec pile System V ABI (RSP: 0x00007ffffffeff10)
 [PROCESS] Shell utilisateur interactif jsh (PID 2) initialisé avec pile System V ABI (RSP: 0x00007ffffffeff20) et enfilé
 [PROCESS] Démon de stockage blockd (PID 3) initialisé avec pile System V ABI (RSP: 0x00007ffffffeff20) et enfilé
@@ -135,6 +136,7 @@ BdsDxe: starting Boot0002 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x
 [PROCESS] Demon Attestation Distante & ZKP attest (PID 29) initialise avec pile System V ABI (RSP: 0x00007ffffffeff20) et enfile
 [PROCESS] Demon Pare-Feu Applicatif L7 waf (PID 30) initialise avec pile System V ABI (RSP: 0x00007ffffffeff20) et enfile
 [PROCESS] Demon Moteur SIEM siem (PID 31) initialise avec pile System V ABI (RSP: 0x00007ffffffeff20) et enfile
+[PROCESS] Demon Surveillance & Reponse EDR edr (PID 32) initialise avec pile System V ABI (RSP: 0x00007ffffffeff20) et enfile
 [CAP/CSPACE] Table de capacités active. Handle initial: 0x100000001, Handle atténué: 0x100000002
 [SYSCALL] Appel système vmo_create validé (Code retour: 0, Nouveau Handle: 0x100000003)
 [SYSCALL] Cycle de vie validé : process_create (0x100000004), thread_create (0x100000005), vmo_map & thread_start
@@ -159,14 +161,15 @@ BdsDxe: starting Boot0002 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x
 
 [1;32m[PASS] JamboKernel Iron Core (Ring 0 & Ring 3 transition) validé sous QEMU.[0m
 
-[SIEM] Moteur de correlation d'evenements initialise (PID 31).
-[SIEM] Auto-test: Ingestion d'evenements de reference : OK.
-[SIEM] Auto-test: Correlation de regle Brute Force : OK.
-[SIEM] Auto-test: Generation et deduplication d'alertes : OK.
-[SIEM] Auto-test: Scellement sequentiel du grand livre d'audit : OK.
-[SIEM] Auto-test reussi : ingestion, correlation et alertes valides.
-[SIEM] Serveur SIEM (jambo-siem PID 31) pret.
-[SIEM] Canal IPC SIEM operationnel (endpoint PID 31 pret).
-[TEST] Validation de l'initialisation des 31 processus Ring 3 (init, jsh, blockd, fs, netd, fdr, wasmd, pqc, kdir, forensics, powerd, metricsd, bpfd, vpn, authd, dnsd, timed, auditd, walld, vaultd, watchdogd, cored, pkgd, certd, policyd, secboot, logd, kms, attest, waf, siem)...
-[1;32m[PASS] Moteur SIEM & Correlation Evenements (jambo-siem PID 31) validee sous QEMU.[0m
+[EDR] Daemon EDR souverain et tables de surveillance initialises (PID 32).
+[EDR] Demarrage de l'auto-test du service EDR...
+[EDR] Auto-test 1: Surveillance des processus de reference : OK.
+[EDR] Auto-test 2: Scan de shellcode en memoire vive : OK.
+[EDR] Auto-test 3: Detection d'injection dynamique et divergence ELF : OK.
+[EDR] Auto-test 4: Isolation O(1) immediate et scellement d'audit SHA-256 : OK.
+[EDR] Auto-test reussi : surveillance, anti-injections et isolation valides.
+[EDR] Serveur EDR (jambo-edr PID 32) pret.
+[EDR] Canal IPC EDR operationnel (endpoint PID 32 pret).
+[TEST] Validation de l'initialisation des 32 processus Ring 3 (init, jsh, blockd, fs, netd, fdr, wasmd, pqc, kdir, forensics, powerd, metricsd, bpfd, vpn, authd, dnsd, timed, auditd, walld, vaultd, watchdogd, cored, pkgd, certd, policyd, secboot, logd, kms, attest, waf, siem, edr)...
+[1;32m[PASS] Detection & Reponse sur Terminaux EDR (jambo-edr PID 32) validee sous QEMU.[0m
 [TEST] Mode de test CI validé. Sortie propre via isa-debug-exit...
