@@ -38,6 +38,11 @@ use jambo_dnsd::{
 use jambo_forensics::{ForensicsClient, ForensicsOpcode, ForensicsResponse, FORENSICS_STATUS_OK};
 use jambo_kdir::{KdirClient, KdirResponse, KDIR_PROTECTION_SECURED, KDIR_STATUS_OK};
 #[allow(unused_imports)]
+use jambo_logd::{
+    log_rights, LogCap, LogClient, LogDaemon, LogLevel, LogOpcode, LogRecord, LogRequest,
+    LogResponse, RING_BUFFER_CAPACITY,
+};
+#[allow(unused_imports)]
 use jambo_metricsd::{
     metrics_rights, AlertCondition, JamboMetricsDaemon, MetricsCap, MetricsClient, MetricsOpcode,
     MetricsRequest, MetricsResponse, METRICS_STATUS_OK,
@@ -117,6 +122,7 @@ pub struct JamboShell {
     pub cert_daemon: ClusterCa,
     pub policy_daemon: PolicyEngine,
     pub secboot_daemon: SecureBootManager,
+    pub log_daemon: LogDaemon,
 }
 
 impl Default for JamboShell {
@@ -169,6 +175,8 @@ impl JamboShell {
         policy_daemon.init_defaults();
         let mut secboot_daemon = SecureBootManager::new();
         secboot_daemon.init_defaults();
+        let mut log_daemon = LogDaemon::new();
+        log_daemon.init_defaults();
         Self {
             prompt_user: "jambo",
             commands_executed: 0,
@@ -184,6 +192,7 @@ impl JamboShell {
             cert_daemon,
             policy_daemon,
             secboot_daemon,
+            log_daemon,
         }
     }
 
@@ -240,6 +249,7 @@ impl JamboShell {
             "cert" => self.cmd_cert(args, out),
             "policy" => self.cmd_policy(args, out),
             "secboot" => self.cmd_secboot(args, out),
+            "log" => self.cmd_log(args, out),
             _ => self.cmd_not_found(cmd, out),
         }
     }
@@ -248,7 +258,7 @@ impl JamboShell {
         let text = b"Commandes disponibles:\n\
   help        - Affiche cette aide\n\
   sysinfo     - Metriques memoire et uptime du micro-noyau\n\
-  ps          - Liste les 26 processus actifs\n\
+  ps          - Liste les 27 processus actifs\n\
   echo <args> - Affiche le texte sur la console\n\
   clear       - Reinitialise l'ecran du terminal\n\
   reboot      - Eteint ou redemarre la machine virtuelle\n\
@@ -275,7 +285,8 @@ impl JamboShell {
   pkg [status|list|install|stage|commit|rollback] - Gestion declarative de paquets et mises a jour A/B\n\
   cert [status|list|issue|verify|revoke] - Infrastructure PKI ephemere et mTLS de grappe\n\
   policy [status|eval|rule|list] - Moteur de politiques declaratives et controle d'admission ABAC/RBAC\n\
-  secboot [status|pcr|measure|events|verify] - Chaine de confiance TPM 2.0 et demarrage mesure Ring 3\n";
+  secboot [status|pcr|measure|events|verify] - Chaine de confiance TPM 2.0 et demarrage mesure Ring 3\n\
+  log [status|append|tail|verify|clear] - Journalisation structuree et chainage cryptographique Ring 3\n";
         let len = text.len().min(out.len());
         out[..len].copy_from_slice(&text[..len]);
         (ShellStatus::Success, len)
@@ -345,7 +356,8 @@ impl JamboShell {
  23  ACTIF    /bin/pkgd (Declarative Package Manager & CAS Store Ring 3)\n  23 | pkgd           | Ring 3 | Ready   | 1000   | Declarative Package Manager & CAS Store\n\
  24  ACTIF    /bin/certd (Demon PKI Ephemere & mTLS de Grappe Ring 3)\n  24 | certd          | Ring 3 | Ready   | 1000   | Ephemeral PKI & Cluster mTLS Daemon\n\
  25  ACTIF    /bin/policyd (Moteur Politiques Securite Ring 3)\n  25 | policyd        | Ring 3 | Ready   | 1000   | Security Policy Engine & Admission Control\n\
- 26  ACTIF    /bin/secboot (Demon TPM 2.0 Measured Boot Ring 3)\n  26 | secboot        | Ring 3 | Ready   | 1000   | TPM 2.0 Measured Boot & Secure Trust Chain\nTotal: 26 processes\n";
+ 26  ACTIF    /bin/secboot (Demon TPM 2.0 Measured Boot Ring 3)\n  26 | secboot        | Ring 3 | Ready   | 1000   | TPM 2.0 Measured Boot & Secure Trust Chain\n\
+ 27  ACTIF    /bin/logd (Demon Journalisation & Chaine Inviolable Ring 3)\n  27 | logd           | Ring 3 | Ready   | 1000   | Structured Logging & Tamper-Evident Hash Chain\nTotal: 27 processes\n";
         let len = text.len().min(out.len());
         out[..len].copy_from_slice(&text[..len]);
         (ShellStatus::Success, len)
@@ -6017,6 +6029,240 @@ impl JamboShell {
         }
         (ShellStatus::Success, c)
     }
+
+    fn send_log_request(&mut self, req: &LogRequest) -> LogResponse {
+        let mut resp_opt: Option<LogResponse> = None;
+        for &h in &[
+            27u64, 26u64, 25u64, 24u64, 23u64, 22u64, 21u64, 20u64, 19u64, 18u64, 17u64, 16u64,
+            15u64, 14u64, 13u64, 12u64, 11u64, 10u64, 9u64, 8u64, 7u64, 6u64, 5u64, 4u64, 3u64,
+        ] {
+            let client = LogClient::new(libjambo::Handle(h));
+            if let Ok(resp) = client.call(req) {
+                if resp.magic == jambo_logd::LOG_MAGIC_RESP {
+                    resp_opt = Some(resp);
+                    break;
+                }
+            }
+        }
+        let local_resp = self.log_daemon.dispatch_ipc(req);
+        resp_opt.unwrap_or(local_resp)
+    }
+
+    fn cmd_log(&mut self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        let subcmd = if args.is_empty() { "status" } else { args[0] };
+        match subcmd {
+            "status" => self.cmd_log_status(out),
+            "append" => self.cmd_log_append(&args[1..], out),
+            "tail" => self.cmd_log_tail(&args[1..], out),
+            "verify" => self.cmd_log_verify(out),
+            "clear" => self.cmd_log_clear(out),
+            _ => {
+                let msg =
+                    b"Usage: log [status|append <level> <subsys> <msg>|tail [n]|verify|clear]\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                (ShellStatus::InvalidArgument, len)
+            }
+        }
+    }
+
+    fn cmd_log_status(&mut self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let req = LogRequest::new_status(27, log_rights::LOG_READ | log_rights::LOG_QUERY);
+        let resp = self.send_log_request(&req);
+
+        let mut c = 0;
+        c = append_bytes(
+            out,
+            c,
+            b"Demon de Journalisation & Chaine Inviolable (jambo-logd PID 27):\n  Total Records           : ",
+        );
+        c = append_u64(out, c, resp.total_records as u64);
+        c = append_bytes(out, c, b"\n  Capacity                : ");
+        c = append_u64(out, c, RING_BUFFER_CAPACITY as u64);
+        c = append_bytes(out, c, b"\n  Chaine Cryptographique  : ");
+        if resp.chain_verified != 0 {
+            c = append_bytes(out, c, b"VALID / INTACT\n");
+        } else {
+            c = append_bytes(out, c, b"CORRUPTED / TAMPERED\n");
+        }
+        c = append_bytes(out, c, b"  Dernier Hash Ancre      : ");
+        for &b in resp.last_entry_hash.iter() {
+            c = append_hex_byte(out, c, b);
+        }
+        c = append_bytes(out, c, b"\n  Statut Daemon           : ");
+        c = append_bytes(out, c, resp.status_as_str().as_bytes());
+        c = append_bytes(out, c, b"\n");
+        (ShellStatus::Success, c)
+    }
+
+    fn cmd_log_append(&mut self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if args.len() < 3 {
+            let msg = b"Usage: log append <level> <subsys> <msg>\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            return (ShellStatus::InvalidArgument, len);
+        }
+
+        let level = match LogLevel::from_str(args[0]) {
+            Some(l) => l,
+            None => {
+                let msg = b"log append: niveau invalide (trace|debug|info|warn|error|fatal)\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                return (ShellStatus::InvalidArgument, len);
+            }
+        };
+
+        let subsys = args[1];
+
+        let mut msg_buf = [0u8; 32];
+        let mut msg_len = 0;
+        for (i, &w) in args[2..].iter().enumerate() {
+            if i > 0 && msg_len < 32 {
+                msg_buf[msg_len] = b' ';
+                msg_len += 1;
+            }
+            let b = w.as_bytes();
+            let to_copy = b.len().min(32 - msg_len);
+            msg_buf[msg_len..msg_len + to_copy].copy_from_slice(&b[..to_copy]);
+            msg_len += to_copy;
+        }
+
+        let req = LogRequest::new_append(
+            27,
+            log_rights::LOG_WRITE,
+            level,
+            subsys.as_bytes(),
+            &msg_buf[..msg_len],
+        );
+        let resp = self.send_log_request(&req);
+
+        if resp.status != 0 {
+            let mut c = 0;
+            c = append_bytes(out, c, b"log append: echec d'enregistrement (erreur ");
+            c = append_i64(out, c, resp.status as i64);
+            c = append_bytes(out, c, b")\n");
+            return (ShellStatus::ExecutionFailed, c);
+        }
+
+        let mut c = 0;
+        c = append_bytes(out, c, b"log append: entree #");
+        c = append_u64(out, c, resp.record_id);
+        c = append_bytes(out, c, b" enregistree [");
+        c = append_bytes(out, c, level.as_str().as_bytes());
+        c = append_bytes(out, c, b"] subsys='");
+        c = append_bytes(out, c, subsys.as_bytes());
+        c = append_bytes(out, c, b"' hash=");
+        for &b in resp.last_entry_hash.iter().take(8) {
+            c = append_hex_byte(out, c, b);
+        }
+        c = append_bytes(out, c, b"...\n");
+        (ShellStatus::Success, c)
+    }
+
+    fn cmd_log_tail(&mut self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        let n = if !args.is_empty() {
+            match parse_u32(args[0]) {
+                Some(val) => val as usize,
+                None => 10,
+            }
+        } else {
+            10
+        };
+
+        let total = self.log_daemon.record_count();
+        if total == 0 {
+            let msg = b"log tail: aucun enregistrement disponible (journal vide)\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            return (ShellStatus::Success, len);
+        }
+
+        let mut c = 0;
+        c = append_bytes(
+            out,
+            c,
+            b"Derniers enregistrements de journalisation (jambo-logd PID 27):\n",
+        );
+
+        let start_idx = total.saturating_sub(n);
+        for i in start_idx..total {
+            if let Some(rec) = self.log_daemon.get_record(i) {
+                c = append_bytes(out, c, b"  #");
+                c = append_u64(out, c, rec.id);
+                c = append_bytes(out, c, b" [");
+                c = append_bytes(out, c, rec.level.as_str().as_bytes());
+                c = append_bytes(out, c, b"] [");
+                c = append_bytes(out, c, rec.subsystem_str().as_bytes());
+                c = append_bytes(out, c, b"] ");
+                c = append_bytes(out, c, rec.message_str().as_bytes());
+                c = append_bytes(out, c, b" (hash: ");
+                for &b in rec.entry_hash.iter().take(8) {
+                    c = append_hex_byte(out, c, b);
+                }
+                c = append_bytes(out, c, b"...)\n");
+            }
+        }
+        (ShellStatus::Success, c)
+    }
+
+    fn cmd_log_verify(&mut self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let req = LogRequest::new_verify_chain(27, log_rights::LOG_READ | log_rights::LOG_QUERY);
+        let resp = self.send_log_request(&req);
+
+        let mut c = 0;
+        c = append_bytes(
+            out,
+            c,
+            b"Verification de la Chaine Cryptographique (jambo-logd PID 27):\n  Chaine Cryptographique  : ",
+        );
+        if resp.chain_verified != 0 {
+            c = append_bytes(out, c, b"VALID / INTACT\n");
+            c = append_bytes(out, c, b"  Enregistrements Verifies: ");
+            c = append_u64(out, c, resp.total_records as u64);
+            c = append_bytes(out, c, b"\n  Dernier Hash Ancre      : ");
+            for &b in resp.last_entry_hash.iter() {
+                c = append_hex_byte(out, c, b);
+            }
+            c = append_bytes(out, c, b"\n  Statut                  : ");
+            c = append_bytes(out, c, resp.status_as_str().as_bytes());
+            c = append_bytes(
+                out,
+                c,
+                b"\n  Resultat                : Chaine cryptographique intacte, aucune falsification detectee\n",
+            );
+        } else {
+            c = append_bytes(out, c, b"CORRUPTED / TAMPERED\n");
+            c = append_bytes(out, c, b"  Enregistrements Verifies: ");
+            c = append_u64(out, c, resp.total_records as u64);
+            c = append_bytes(out, c, b"\n  Statut                  : ");
+            c = append_bytes(out, c, resp.status_as_str().as_bytes());
+            c = append_bytes(
+                out,
+                c,
+                b"\n  Resultat                : ALERTE: Rupture d'integrite ou falsification detectee\n",
+            );
+        }
+        (ShellStatus::Success, c)
+    }
+
+    fn cmd_log_clear(&mut self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let req = LogRequest::new_clear_logs(27, log_rights::LOG_FLUSH | log_rights::LOG_ADMIN);
+        let resp = self.send_log_request(&req);
+
+        let mut c = 0;
+        if resp.status == 0 {
+            c = append_bytes(
+                out,
+                c,
+                b"log clear: anneau de journalisation reinitialise, ancre GENESIS_HASH restauree\n",
+            );
+            (ShellStatus::Success, c)
+        } else {
+            c = append_bytes(out, c, b"log clear: echec de la reinitialisation\n");
+            (ShellStatus::ExecutionFailed, c)
+        }
+    }
 }
 
 fn format_policy_action(mask: u32, out: &mut [u8], mut c: usize) -> usize {
@@ -6589,7 +6835,13 @@ mod tests {
         assert!(
             s.contains("  26 | secboot        | Ring 3 | Ready   | 1000   | TPM 2.0 Measured Boot & Secure Trust Chain")
         );
-        assert!(s.contains("Total: 26 processes"));
+        assert!(
+            s.contains("27  ACTIF    /bin/logd (Demon Journalisation & Chaine Inviolable Ring 3)")
+        );
+        assert!(
+            s.contains("  27 | logd           | Ring 3 | Ready   | 1000   | Structured Logging & Tamper-Evident Hash Chain")
+        );
+        assert!(s.contains("Total: 27 processes"));
     }
 
     #[test]
@@ -6601,7 +6853,7 @@ mod tests {
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains("  23 | pkgd           | Ring 3 | Ready   | 1000   | Declarative Package Manager & CAS Store"));
-        assert!(s.contains("Total: 26 processes"));
+        assert!(s.contains("Total: 27 processes"));
     }
 
     #[test]
@@ -6613,7 +6865,7 @@ mod tests {
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains("  24 | certd          | Ring 3 | Ready   | 1000   | Ephemeral PKI & Cluster mTLS Daemon"));
-        assert!(s.contains("Total: 26 processes"));
+        assert!(s.contains("Total: 27 processes"));
     }
 
     #[test]
@@ -6625,7 +6877,7 @@ mod tests {
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains("  25 | policyd        | Ring 3 | Ready   | 1000   | Security Policy Engine & Admission Control"));
-        assert!(s.contains("Total: 26 processes"));
+        assert!(s.contains("Total: 27 processes"));
     }
 
     #[test]
@@ -6637,7 +6889,19 @@ mod tests {
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains("  26 | secboot        | Ring 3 | Ready   | 1000   | TPM 2.0 Measured Boot & Secure Trust Chain"));
-        assert!(s.contains("Total: 26 processes"));
+        assert!(s.contains("Total: 27 processes"));
+    }
+
+    #[test]
+    fn test_ps_contains_27_processes() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        let (st, len) = shell.execute_line("ps", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("  27 | logd           | Ring 3 | Ready   | 1000   | Structured Logging & Tamper-Evident Hash Chain"));
+        assert!(s.contains("Total: 27 processes"));
     }
 
     #[test]
@@ -6648,7 +6912,7 @@ mod tests {
         let (st, len) = shell.execute_line("help", &mut out);
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
-        assert!(s.contains("26 processus actifs"));
+        assert!(s.contains("27 processus actifs"));
         assert!(s.contains("fdr [status|verify|pcr]"));
         assert!(s.contains("wasm [status|run|info]"));
         assert!(s.contains("pqc [status|kex|sign|audit]"));
@@ -6670,6 +6934,7 @@ mod tests {
         assert!(s.contains("cert [status|list|issue|verify|revoke]"));
         assert!(s.contains("policy [status|eval|rule|list]"));
         assert!(s.contains("secboot [status|pcr|measure|events|verify]"));
+        assert!(s.contains("log [status|append|tail|verify|clear]"));
     }
 
     #[test]
@@ -9297,5 +9562,139 @@ mod tests {
         assert_eq!(st3, ShellStatus::InvalidArgument);
         let s3 = core::str::from_utf8(&out[..len3]).unwrap();
         assert!(s3.contains("secboot measure: index PCR invalide"));
+    }
+
+    #[test]
+    fn test_log_status() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 2048];
+
+        let (st, len) = shell.execute_line("log status", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("Demon de Journalisation & Chaine Inviolable (jambo-logd PID 27):"));
+        assert!(s.contains("Total Records           : 3"));
+        assert!(s.contains("Capacity                : 64"));
+        assert!(s.contains("Chaine Cryptographique  : VALID / INTACT"));
+        assert!(s.contains("Statut Daemon           : OK_STATUS"));
+    }
+
+    #[test]
+    fn test_log_append() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 2048];
+
+        let (st, len) = shell.execute_line("log append warn secboot pcr_tampered", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("log append: entree #4 enregistree [WARN] subsys='secboot' hash="));
+
+        // Verifier que l'entree a bien augmente le compteur
+        let (st_s, len_s) = shell.execute_line("log status", &mut out);
+        assert_eq!(st_s, ShellStatus::Success);
+        let s_status = core::str::from_utf8(&out[..len_s]).unwrap();
+        assert!(s_status.contains("Total Records           : 4"));
+
+        // Verifier les arguments invalides
+        let (st_err, len_err) = shell.execute_line("log append", &mut out);
+        assert_eq!(st_err, ShellStatus::InvalidArgument);
+        let s_err = core::str::from_utf8(&out[..len_err]).unwrap();
+        assert!(s_err.contains("Usage: log append <level> <subsys> <msg>"));
+
+        let (st_lvl, len_lvl) = shell.execute_line("log append invalid_lvl sys msg", &mut out);
+        assert_eq!(st_lvl, ShellStatus::InvalidArgument);
+        let s_lvl = core::str::from_utf8(&out[..len_lvl]).unwrap();
+        assert!(s_lvl.contains("log append: niveau invalide"));
+    }
+
+    #[test]
+    fn test_log_tail() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        // Affichage par defaut des entrees
+        let (st, len) = shell.execute_line("log tail", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("Derniers enregistrements de journalisation (jambo-logd PID 27):"));
+        assert!(s.contains("#1 [INFO] [kernel] microkernel started"));
+        assert!(s.contains("#2 [INFO] [init] userland supervisor online"));
+        assert!(s.contains("#3 [INFO] [jsh] interactive shell ready"));
+
+        // Affichage borne a 1 entree
+        let (st_1, len_1) = shell.execute_line("log tail 1", &mut out);
+        assert_eq!(st_1, ShellStatus::Success);
+        let s_1 = core::str::from_utf8(&out[..len_1]).unwrap();
+        assert!(s_1.contains("#3 [INFO] [jsh] interactive shell ready"));
+        assert!(!s_1.contains("#1 [INFO] [kernel]"));
+    }
+
+    #[test]
+    fn test_log_verify() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 2048];
+
+        // Chaine initiale valide
+        let (st, len) = shell.execute_line("log verify", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("Verification de la Chaine Cryptographique (jambo-logd PID 27):"));
+        assert!(s.contains("Chaine Cryptographique  : VALID / INTACT"));
+        assert!(s.contains("Enregistrements Verifies: 3"));
+        assert!(s.contains("Chaine cryptographique intacte, aucune falsification detectee"));
+
+        // Falsification artificielle d'un octet de message
+        if let Some(ref mut rec) = shell.log_daemon.records[0] {
+            rec.message[0] ^= 0xFF;
+        }
+
+        // Detection immediate de falsification
+        let (st_tampered, len_tampered) = shell.execute_line("log verify", &mut out);
+        assert_eq!(st_tampered, ShellStatus::Success);
+        let s_tampered = core::str::from_utf8(&out[..len_tampered]).unwrap();
+        assert!(s_tampered.contains("CORRUPTED / TAMPERED"));
+        assert!(s_tampered.contains("ALERTE: Rupture d'integrite ou falsification detectee"));
+    }
+
+    #[test]
+    fn test_log_clear() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 2048];
+
+        let (st, len) = shell.execute_line("log clear", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains(
+            "log clear: anneau de journalisation reinitialise, ancre GENESIS_HASH restauree"
+        ));
+
+        // Verification apres reinitialisation
+        let (st_status, len_status) = shell.execute_line("log status", &mut out);
+        assert_eq!(st_status, ShellStatus::Success);
+        let s_status = core::str::from_utf8(&out[..len_status]).unwrap();
+        assert!(s_status.contains("Total Records           : 0"));
+
+        let (st_tail, len_tail) = shell.execute_line("log tail", &mut out);
+        assert_eq!(st_tail, ShellStatus::Success);
+        let s_tail = core::str::from_utf8(&out[..len_tail]).unwrap();
+        assert!(s_tail.contains("log tail: aucun enregistrement disponible (journal vide)"));
+
+        let (st_ver, len_ver) = shell.execute_line("log verify", &mut out);
+        assert_eq!(st_ver, ShellStatus::Success);
+        let s_ver = core::str::from_utf8(&out[..len_ver]).unwrap();
+        assert!(s_ver.contains("VALID / INTACT"));
+    }
+
+    #[test]
+    fn test_log_invalid() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 1024];
+
+        let (st, len) = shell.execute_line("log unknown_command", &mut out);
+        assert_eq!(st, ShellStatus::InvalidArgument);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(
+            s.contains("Usage: log [status|append <level> <subsys> <msg>|tail [n]|verify|clear]")
+        );
     }
 }
