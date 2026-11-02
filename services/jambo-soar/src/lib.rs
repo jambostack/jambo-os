@@ -1966,6 +1966,12 @@ impl JamboSoarDaemon {
                 }
 
                 let target_pb_id = req.playbook_id;
+                if self.get_playbook(target_pb_id).is_none() {
+                    resp.status = 1;
+                    resp.set_status_str("PB_NOT_FOUND");
+                    return resp;
+                }
+
                 let inc_id = if req.incident_id != 0 {
                     req.incident_id as u64
                 } else {

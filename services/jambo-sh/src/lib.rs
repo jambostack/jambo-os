@@ -101,6 +101,13 @@ use jambo_siem::{
     SiemRequest, SiemResponse, SIEM_ENDPOINT_ID, SIEM_MAGIC_REQ, SIEM_MAGIC_RESP,
 };
 #[allow(unused_imports)]
+use jambo_soar::{
+    soar_rights, Incident, IncidentCategory, IncidentSeverity, IncidentStatus, JamboSoarDaemon,
+    Playbook, PlaybookStep, SoarAction, SoarAuditEntry, SoarAuditEventType, SoarCap, SoarClient,
+    SoarError, SoarExecutionResult, SoarOpcode, SoarRequest, SoarResponse, SoarSummary, StepStatus,
+    MAX_PLAYBOOKS, SOAR_ENDPOINT_ID, SOAR_MAGIC_REQ, SOAR_MAGIC_RESP,
+};
+#[allow(unused_imports)]
 use jambo_timed::{
     time_rights, ClockServo, JamboTimeDaemon, PreciseTime, PtpSample, ServoMode, TimeClient,
     TimeOpcode, TimeRequest, TimeResponse, TimeSyncCap,
@@ -175,6 +182,7 @@ pub struct JamboShell {
     pub edr_daemon: JamboEdrDaemon,
     pub ndr_daemon: JamboNdrDaemon,
     pub xdr_daemon: JamboXdrDaemon,
+    pub soar_daemon: JamboSoarDaemon,
 }
 
 impl Default for JamboShell {
@@ -264,6 +272,14 @@ impl JamboShell {
         );
         let mut xdr_daemon = JamboXdrDaemon::new(xdr_cap);
         xdr_daemon.init_defaults();
+        let soar_cap = SoarCap::new(
+            libjambo::Handle::new(35, 1),
+            soar_rights::ALL,
+            100_000,
+            10_000,
+        );
+        let mut soar_daemon = JamboSoarDaemon::new(soar_cap);
+        soar_daemon.init_defaults();
         Self {
             prompt_user: "jambo",
             commands_executed: 0,
@@ -287,6 +303,7 @@ impl JamboShell {
             edr_daemon,
             ndr_daemon,
             xdr_daemon,
+            soar_daemon,
         }
     }
 
@@ -351,6 +368,7 @@ impl JamboShell {
             "edr" => self.cmd_edr(args, out),
             "ndr" => self.cmd_ndr(args, out),
             "xdr" => self.cmd_xdr(args, out),
+            "soar" => self.cmd_soar(args, out),
             _ => self.cmd_not_found(cmd, out),
         }
     }
@@ -359,7 +377,7 @@ impl JamboShell {
         let text = b"Commandes disponibles:\n\
   help        - Affiche cette aide\n\
   sysinfo     - Metriques memoire et uptime du micro-noyau\n\
-  ps          - Liste les 34 processus actifs\n\
+  ps          - Liste les 35 processus actifs\n\
   echo <args> - Affiche le texte sur la console\n\
   clear       - Reinitialise l'ecran du terminal\n\
   reboot      - Eteint ou redemarre la machine virtuelle\n\
@@ -394,7 +412,8 @@ impl JamboShell {
   siem [status|ingest|alerts|correlate|rules|audit] - Moteur SIEM et correlation d'evenements temps reel Ring 3\n\
   edr [status|scan|isolate|tree|alerts|audit] - Detection et reponse sur les terminaux souveraine EDR Ring 3\n\
   ndr [status|flows|inspect|isolate|alerts|audit] - Detection et reponse reseau souveraine NDR Ring 3\n\
-  xdr [status|campaigns|correlate|remediate|graph|audit] - Detection et reponse etendue souveraine XDR Ring 3\n";
+  xdr [status|campaigns|correlate|remediate|graph|audit] - Detection et reponse etendue souveraine XDR Ring 3\n\
+  soar [status|playbooks|trigger|incidents|audit] - Orchestration, automatisation et reponse aux incidents SOAR Ring 3\n";
         let len = text.len().min(out.len());
         out[..len].copy_from_slice(&text[..len]);
         (ShellStatus::Success, len)
@@ -471,7 +490,7 @@ impl JamboShell {
  30  ACTIF    /bin/waf (L7 Web Application Firewall Ring 3)\n  30 | waf             | Ring 3 | Ready   | 1000   | L7 Web Application Firewall & Injection Filter\n\
  31  ACTIF    /bin/siem (Security Information & Event Management Ring 3)\n  31 | siem            | Ring 3 | Ready   | 1000   | Security Information & Event Management\n\
  32  ACTIF    /bin/edr (Endpoint Detection & Response Ring 3)\n  32 | edr             | Ring 3 | Ready   | 1000   | Endpoint Detection & Response Daemon\n\
- 33  ACTIF    /bin/ndr (Network Detection & Response Ring 3)\n  33 | ndr             | Ring 3 | Ready   | 1000   | Network Detection & Response Daemon\n  34  ACTIF    /bin/xdr (Extended Detection & Response Ring 3)\n  34 | xdr             | Ring 3 | Ready   | 1000   | Extended Detection & Response Daemon\nTotal: 34 processes\n";
+ 33  ACTIF    /bin/ndr (Network Detection & Response Ring 3)\n  33 | ndr             | Ring 3 | Ready   | 1000   | Network Detection & Response Daemon\n  34  ACTIF    /bin/xdr (Extended Detection & Response Ring 3)\n  34 | xdr             | Ring 3 | Ready   | 1000   | Extended Detection & Response Daemon\n  35  ACTIF    /bin/soar (Security Orchestration, Automation & Response Ring 3)\n  35 | soar            | Ring 3 | Ready   | 1000   | Security Orchestration, Automation & Response Daemon\nTotal: 35 processes\n";
         let len = text.len().min(out.len());
         out[..len].copy_from_slice(&text[..len]);
         (ShellStatus::Success, len)
@@ -8930,6 +8949,419 @@ ID  | Nom             | Racine de Confiance      | Statut             | Confinem
         }
         (ShellStatus::Success, c)
     }
+
+    fn send_soar_request(&mut self, req: &SoarRequest) -> SoarResponse {
+        let mut resp_opt: Option<SoarResponse> = None;
+        for &h in &[
+            35u64, 34u64, 33u64, 32u64, 31u64, 30u64, 29u64, 28u64, 27u64, 26u64, 25u64, 24u64,
+            23u64, 22u64, 21u64, 20u64, 19u64, 18u64, 17u64, 16u64, 15u64, 14u64, 13u64, 12u64,
+            11u64, 10u64, 9u64, 8u64, 7u64, 6u64, 5u64, 4u64, 3u64,
+        ] {
+            let client = SoarClient::new(libjambo::Handle(h));
+            if let Ok(resp) = client.call(req) {
+                if resp.magic == SOAR_MAGIC_RESP {
+                    resp_opt = Some(resp);
+                    break;
+                }
+            }
+        }
+        let local_resp = self.soar_daemon.dispatch_ipc(req);
+        resp_opt.unwrap_or(local_resp)
+    }
+
+    pub fn cmd_soar(&mut self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        let subcmd = if args.is_empty() { "status" } else { args[0] };
+        match subcmd {
+            "status" => self.cmd_soar_status(out),
+            "playbooks" => self.cmd_soar_playbooks(out),
+            "trigger" => self.cmd_soar_trigger(&args[1..], out),
+            "incidents" => self.cmd_soar_incidents(out),
+            "audit" => self.cmd_soar_audit(out),
+            _ => {
+                let msg = b"Usage: soar <status|playbooks|trigger <id>|incidents|audit>\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                (ShellStatus::InvalidArgument, len)
+            }
+        }
+    }
+
+    fn cmd_soar_status(&mut self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let req = SoarRequest::new_status(SOAR_ENDPOINT_ID, soar_rights::ALL);
+        let _resp = self.send_soar_request(&req);
+        let summary = self.soar_daemon.get_summary();
+
+        let mut c = 0;
+        c = append_bytes(
+            out,
+            c,
+            b"Bilan Global SOAR & Orchestration de Securite (jambo-soar PID 35):\n  Statut Operationnel     : ACTIF (DAG Kahn & Reponse Souveraine Ring 3)\n  Playbooks Enregistres   : ",
+        );
+        c = append_u64(out, c, self.soar_daemon.playbook_count as u64);
+        c = append_bytes(out, c, b"\n  Incidents Geres         : ");
+        c = append_u64(out, c, summary.total_incidents as u64);
+        c = append_bytes(out, c, b"\n  Incidents Attenues      : ");
+        c = append_u64(out, c, summary.mitigated_incidents as u64);
+        c = append_bytes(out, c, b"\n  Actions Executees       : ");
+        c = append_u64(out, c, summary.dispatched_actions as u64);
+        c = append_bytes(out, c, b"\n  Integrite Registre      : ");
+        if summary.audit_chain_valid {
+            c = append_bytes(out, c, b"VALIDE (Chaine SHA-256 inalterable)\n");
+        } else {
+            c = append_bytes(out, c, b"CORROMPU (Rupture d'integrite)\n");
+        }
+        c = append_bytes(out, c, b"  Empreinte d'Audit SHA-256: ");
+        for &b in self.soar_daemon.audit_chain.iter() {
+            c = append_hex_byte(out, c, b);
+        }
+        c = append_bytes(out, c, b"\n");
+        (ShellStatus::Success, c)
+    }
+
+    fn cmd_soar_playbooks(&mut self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let req = SoarRequest::new_playbooks(SOAR_ENDPOINT_ID, soar_rights::ALL);
+        let _resp = self.send_soar_request(&req);
+
+        let mut c = 0;
+        c = append_bytes(
+            out,
+            c,
+            b"Table des Playbooks SOAR (PID 35):\nID  | Nom                             | Declencheur           | Etapes | Statut\n-----------------------------------------------------------------------------------\n",
+        );
+        let mut count = 0;
+        for pb in self
+            .soar_daemon
+            .playbooks
+            .iter()
+            .take(self.soar_daemon.playbook_count)
+            .flatten()
+        {
+            count += 1;
+            c = append_bytes(out, c, b" ");
+            c = append_u64(out, c, pb.id as u64);
+            if pb.id < 10 {
+                c = append_bytes(out, c, b"  | ");
+            } else if pb.id < 100 {
+                c = append_bytes(out, c, b" | ");
+            } else {
+                c = append_bytes(out, c, b"| ");
+            }
+
+            let name = pb.name_as_str();
+            let start_n = c;
+            c = append_bytes(out, c, name.as_bytes());
+            let written_n = c - start_n;
+            for _ in written_n..31 {
+                c = append_bytes(out, c, b" ");
+            }
+            c = append_bytes(out, c, b" | ");
+
+            let trig = pb.trigger_name();
+            let start_t = c;
+            c = append_bytes(out, c, trig.as_bytes());
+            let written_t = c - start_t;
+            for _ in written_t..21 {
+                c = append_bytes(out, c, b" ");
+            }
+            c = append_bytes(out, c, b" | ");
+
+            c = append_u64(out, c, pb.steps_count as u64);
+            if pb.steps_count < 10 {
+                c = append_bytes(out, c, b"      | ");
+            } else {
+                c = append_bytes(out, c, b"     | ");
+            }
+
+            if pb.is_enabled {
+                c = append_bytes(out, c, b"ACTIF\n");
+            } else {
+                c = append_bytes(out, c, b"INACTIF\n");
+            }
+        }
+        if count == 0 {
+            c = append_bytes(out, c, b"  (Aucun playbook enregistre)\n");
+        }
+        c = append_bytes(out, c, b"Total: ");
+        c = append_u64(out, c, count as u64);
+        c = append_bytes(out, c, b" playbooks enregistres\n");
+        (ShellStatus::Success, c)
+    }
+
+    fn cmd_soar_trigger(&mut self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if args.is_empty() {
+            let msg = b"Usage: soar trigger <id>\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            return (ShellStatus::InvalidArgument, len);
+        }
+
+        let playbook_id = match parse_u32(args[0]) {
+            Some(id) => id,
+            None => {
+                let msg = b"Usage: soar trigger <id>\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                return (ShellStatus::InvalidArgument, len);
+            }
+        };
+
+        let req =
+            SoarRequest::new_trigger(SOAR_ENDPOINT_ID, soar_rights::ALL, playbook_id, 0, 1000);
+        let resp = self.send_soar_request(&req);
+
+        if resp.status != 0 {
+            let mut c = 0;
+            c = append_bytes(out, c, b"SOAR: Playbook ID ");
+            c = append_u64(out, c, playbook_id as u64);
+            c = append_bytes(out, c, b" non trouve ou declenchement echoue\n");
+            return (ShellStatus::ExecutionFailed, c);
+        }
+
+        let pb = match self.soar_daemon.get_playbook(playbook_id) {
+            Some(p) => *p,
+            None => {
+                let mut c = 0;
+                c = append_bytes(out, c, b"SOAR: Playbook ID ");
+                c = append_u64(out, c, playbook_id as u64);
+                c = append_bytes(out, c, b" introuvable\n");
+                return (ShellStatus::ExecutionFailed, c);
+            }
+        };
+
+        let mut c = 0;
+        c = append_bytes(
+            out,
+            c,
+            b"Rapport d'Execution Playbook SOAR (PID 35) - Playbook ID ",
+        );
+        c = append_u64(out, c, playbook_id as u64);
+        c = append_bytes(out, c, b":\n  Nom du Playbook         : ");
+        c = append_bytes(out, c, pb.name_as_str().as_bytes());
+        c = append_bytes(out, c, b"\n  Declencheur             : ");
+        c = append_bytes(out, c, pb.trigger_name().as_bytes());
+        c = append_bytes(out, c, b"\n  Statut Execution        : ");
+        if resp.execution_status == 0 {
+            c = append_bytes(out, c, b"SUCCES (Attenue)\n");
+        } else {
+            c = append_bytes(out, c, b"ECHEC (Escalade)\n");
+        }
+        c = append_bytes(out, c, b"  Temps d'Execution       : ");
+        c = append_u64(out, c, resp.execution_time_us as u64);
+        c = append_bytes(out, c, b" us\n  Empreinte Scellee SHA-256: ");
+        for &b in resp.audit_hash.iter() {
+            c = append_hex_byte(out, c, b);
+        }
+        c = append_bytes(
+            out,
+            c,
+            b"\nEtapes Executees (Ordre Topologique Kahn):\nEtape | Nom                      | Action                     | Statut\n------------------------------------------------------------------------\n",
+        );
+
+        let mut executed_steps = 0;
+        if let Ok((order, count)) = pb.get_topological_order() {
+            for &step_id in order.iter().take(count) {
+                if let Some(step) = pb
+                    .steps
+                    .iter()
+                    .take(pb.steps_count)
+                    .find(|s| s.step_id == step_id)
+                {
+                    executed_steps += 1;
+                    c = append_bytes(out, c, b" ");
+                    c = append_u64(out, c, step.step_id as u64);
+                    if step.step_id < 10 {
+                        c = append_bytes(out, c, b"     | ");
+                    } else {
+                        c = append_bytes(out, c, b"    | ");
+                    }
+
+                    let sname = step.name_as_str();
+                    let start_sn = c;
+                    c = append_bytes(out, c, sname.as_bytes());
+                    let written_sn = c - start_sn;
+                    for _ in written_sn..24 {
+                        c = append_bytes(out, c, b" ");
+                    }
+                    c = append_bytes(out, c, b" | ");
+
+                    let aname = step.action.as_str();
+                    let start_an = c;
+                    c = append_bytes(out, c, aname.as_bytes());
+                    let written_an = c - start_an;
+                    for _ in written_an..26 {
+                        c = append_bytes(out, c, b" ");
+                    }
+                    c = append_bytes(out, c, b" | ");
+
+                    c = append_bytes(out, c, step_status_str(step.status).as_bytes());
+                    c = append_bytes(out, c, b"\n");
+                }
+            }
+        }
+        c = append_bytes(out, c, b"Total: ");
+        c = append_u64(out, c, executed_steps as u64);
+        c = append_bytes(out, c, b" etapes executees\n");
+        (ShellStatus::Success, c)
+    }
+
+    fn cmd_soar_incidents(&mut self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let req = SoarRequest::new_incidents(SOAR_ENDPOINT_ID, soar_rights::ALL);
+        let _resp = self.send_soar_request(&req);
+
+        let mut c = 0;
+        c = append_bytes(
+            out,
+            c,
+            b"Table des Incidents de Securite SOAR (PID 35):\nID  | Severite | Categorie             | Entite Cible         | Statut      | Playbook\n----------------------------------------------------------------------------------------\n",
+        );
+        let mut count = 0;
+        for inc in self
+            .soar_daemon
+            .incidents
+            .iter()
+            .take(self.soar_daemon.incident_count)
+            .flatten()
+        {
+            count += 1;
+            c = append_bytes(out, c, b" ");
+            c = append_u64(out, c, inc.id);
+            if inc.id < 10 {
+                c = append_bytes(out, c, b"  | ");
+            } else if inc.id < 100 {
+                c = append_bytes(out, c, b" | ");
+            } else {
+                c = append_bytes(out, c, b"| ");
+            }
+
+            let sev = inc.severity.as_str();
+            let start_s = c;
+            c = append_bytes(out, c, sev.as_bytes());
+            let written_s = c - start_s;
+            for _ in written_s..8 {
+                c = append_bytes(out, c, b" ");
+            }
+            c = append_bytes(out, c, b" | ");
+
+            let cat = inc.category.as_str();
+            let start_cat = c;
+            c = append_bytes(out, c, cat.as_bytes());
+            let written_cat = c - start_cat;
+            for _ in written_cat..21 {
+                c = append_bytes(out, c, b" ");
+            }
+            c = append_bytes(out, c, b" | ");
+
+            let ent = inc.entity_as_str();
+            let start_e = c;
+            c = append_bytes(out, c, ent.as_bytes());
+            let written_e = c - start_e;
+            for _ in written_e..20 {
+                c = append_bytes(out, c, b" ");
+            }
+            c = append_bytes(out, c, b" | ");
+
+            let st = inc.status.as_str();
+            let start_st = c;
+            c = append_bytes(out, c, st.as_bytes());
+            let written_st = c - start_st;
+            for _ in written_st..11 {
+                c = append_bytes(out, c, b" ");
+            }
+            c = append_bytes(out, c, b" | ");
+
+            if let Some(pb_id) = inc.mitigated_by_playbook {
+                c = append_bytes(out, c, b"PB-");
+                c = append_u64(out, c, pb_id as u64);
+            } else {
+                c = append_bytes(out, c, b"Aucun");
+            }
+            c = append_bytes(out, c, b"\n");
+        }
+        if count == 0 {
+            c = append_bytes(out, c, b"  (Aucun incident de securite actif)\n");
+        }
+        c = append_bytes(out, c, b"Total: ");
+        c = append_u64(out, c, count as u64);
+        c = append_bytes(out, c, b" incidents geres\n");
+        (ShellStatus::Success, c)
+    }
+
+    fn cmd_soar_audit(&self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let is_valid = self.soar_daemon.verify_audit_integrity();
+        let mut c = 0;
+        c = append_bytes(
+            out,
+            c,
+            b"Grand Livre d'Audit Cryptographique SOAR (PID 35):\n  Integrite Registre      : ",
+        );
+        if is_valid {
+            c = append_bytes(out, c, b"VALIDE (Chaine SHA-256 inalterable)\n");
+        } else {
+            c = append_bytes(out, c, b"CORROMPU (Rupture d'integrite)\n");
+        }
+        c = append_bytes(out, c, b"  Total Entrees Scellees  : ");
+        c = append_u64(out, c, self.soar_daemon.audit_count);
+        c = append_bytes(out, c, b"\n  Empreinte Racine SHA-256: ");
+        for &b in self.soar_daemon.audit_chain.iter() {
+            c = append_hex_byte(out, c, b);
+        }
+        c = append_bytes(out, c, b"\nJournal recent des entrees scellees:\n");
+        let count = (self.soar_daemon.audit_count as usize).min(MAX_AUDIT_LOGS);
+        if count == 0 {
+            c = append_bytes(out, c, b"  (Aucune entree d'audit scellee)\n");
+        } else {
+            let start = count.saturating_sub(10);
+            for entry in self
+                .soar_daemon
+                .audit_records
+                .iter()
+                .take(count)
+                .skip(start)
+                .flatten()
+            {
+                c = append_bytes(out, c, b"  [#");
+                c = append_u64(out, c, entry.sequence);
+                c = append_bytes(out, c, b"] Event: ");
+                let ev_str = soar_event_type_str(entry.event_type);
+                c = append_bytes(out, c, ev_str.as_bytes());
+                c = append_bytes(out, c, b" | Playbook: ");
+                c = append_u64(out, c, entry.playbook_id as u64);
+                c = append_bytes(out, c, b" | Incident: ");
+                c = append_u64(out, c, entry.incident_id);
+                c = append_bytes(out, c, b" | Hash: ");
+                for &b in entry.entry_hash[..8].iter() {
+                    c = append_hex_byte(out, c, b);
+                }
+                c = append_bytes(out, c, b"...\n");
+            }
+        }
+        (ShellStatus::Success, c)
+    }
+}
+
+fn step_status_str(status: StepStatus) -> &'static str {
+    match status {
+        StepStatus::Pending => "Pending",
+        StepStatus::Running => "Running",
+        StepStatus::Completed => "Completed",
+        StepStatus::Failed => "Failed",
+        StepStatus::Skipped => "Skipped",
+    }
+}
+
+fn soar_event_type_str(evt: SoarAuditEventType) -> &'static str {
+    match evt {
+        SoarAuditEventType::IncidentCreated => "IncidentCreated",
+        SoarAuditEventType::PlaybookRegistered => "PlaybookRegistered",
+        SoarAuditEventType::PlaybookExecuted => "PlaybookExecuted",
+        SoarAuditEventType::ActionDispatched => "ActionDispatched",
+        SoarAuditEventType::CapabilityRevoked => "CapabilityRevoked",
+        SoarAuditEventType::NodeIsolated => "NodeIsolated",
+        SoarAuditEventType::PolicyUpdated => "PolicyUpdated",
+        SoarAuditEventType::SnapshotRestored => "SnapshotRestored",
+        SoarAuditEventType::MicroSegmentationEnforced => "MicroSegEnforced",
+        SoarAuditEventType::EntityQuarantined => "EntityQuarantined",
+    }
 }
 
 fn flow_state_str(state: FlowState) -> &'static str {
@@ -9680,7 +10112,7 @@ mod tests {
         assert!(
             s.contains("  30 | waf             | Ring 3 | Ready   | 1000   | L7 Web Application Firewall & Injection Filter")
         );
-        assert!(s.contains("Total: 34 processes"));
+        assert!(s.contains("Total: 35 processes"));
     }
 
     #[test]
@@ -9692,7 +10124,7 @@ mod tests {
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains("  23 | pkgd           | Ring 3 | Ready   | 1000   | Declarative Package Manager & CAS Store"));
-        assert!(s.contains("Total: 34 processes"));
+        assert!(s.contains("Total: 35 processes"));
     }
 
     #[test]
@@ -9704,7 +10136,7 @@ mod tests {
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains("  24 | certd          | Ring 3 | Ready   | 1000   | Ephemeral PKI & Cluster mTLS Daemon"));
-        assert!(s.contains("Total: 34 processes"));
+        assert!(s.contains("Total: 35 processes"));
     }
 
     #[test]
@@ -9716,7 +10148,7 @@ mod tests {
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains("  25 | policyd        | Ring 3 | Ready   | 1000   | Security Policy Engine & Admission Control"));
-        assert!(s.contains("Total: 34 processes"));
+        assert!(s.contains("Total: 35 processes"));
     }
 
     #[test]
@@ -9728,7 +10160,7 @@ mod tests {
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains("  26 | secboot        | Ring 3 | Ready   | 1000   | TPM 2.0 Measured Boot & Secure Trust Chain"));
-        assert!(s.contains("Total: 34 processes"));
+        assert!(s.contains("Total: 35 processes"));
     }
 
     #[test]
@@ -9740,7 +10172,7 @@ mod tests {
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains("  27 | logd           | Ring 3 | Ready   | 1000   | Structured Logging & Tamper-Evident Hash Chain"));
-        assert!(s.contains("Total: 34 processes"));
+        assert!(s.contains("Total: 35 processes"));
     }
 
     #[test]
@@ -9752,7 +10184,7 @@ mod tests {
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains("28 | kms | Running | Key Management Service & HKDF Derivation"));
-        assert!(s.contains("Total: 34 processes"));
+        assert!(s.contains("Total: 35 processes"));
     }
 
     #[test]
@@ -9767,7 +10199,7 @@ mod tests {
         assert!(s.contains(
             "  29 | attest          | Ring 3 | Ready   | 1000   | Remote Attestation & Zero-Knowledge Proofs"
         ));
-        assert!(s.contains("Total: 34 processes"));
+        assert!(s.contains("Total: 35 processes"));
     }
 
     #[test]
@@ -9782,7 +10214,7 @@ mod tests {
         assert!(s.contains(
             "  30 | waf             | Ring 3 | Ready   | 1000   | L7 Web Application Firewall & Injection Filter"
         ));
-        assert!(s.contains("Total: 34 processes"));
+        assert!(s.contains("Total: 35 processes"));
     }
 
     #[test]
@@ -9799,7 +10231,7 @@ mod tests {
         assert!(s.contains(
             "  31 | siem            | Ring 3 | Ready   | 1000   | Security Information & Event Management"
         ));
-        assert!(s.contains("Total: 34 processes"));
+        assert!(s.contains("Total: 35 processes"));
     }
 
     #[test]
@@ -9814,7 +10246,7 @@ mod tests {
         assert!(s.contains(
             "  32 | edr             | Ring 3 | Ready   | 1000   | Endpoint Detection & Response Daemon"
         ));
-        assert!(s.contains("Total: 34 processes"));
+        assert!(s.contains("Total: 35 processes"));
     }
 
     #[test]
@@ -9829,7 +10261,7 @@ mod tests {
         assert!(s.contains(
             "  33 | ndr             | Ring 3 | Ready   | 1000   | Network Detection & Response Daemon"
         ));
-        assert!(s.contains("Total: 34 processes"));
+        assert!(s.contains("Total: 35 processes"));
     }
 
     #[test]
@@ -9844,7 +10276,24 @@ mod tests {
         assert!(s.contains(
             "  34 | xdr             | Ring 3 | Ready   | 1000   | Extended Detection & Response Daemon"
         ));
-        assert!(s.contains("Total: 34 processes"));
+        assert!(s.contains("Total: 35 processes"));
+    }
+
+    #[test]
+    fn test_ps_contains_35_processes() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        let (st, len) = shell.execute_line("ps", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains(
+            "35  ACTIF    /bin/soar (Security Orchestration, Automation & Response Ring 3)"
+        ));
+        assert!(s.contains(
+            "  35 | soar            | Ring 3 | Ready   | 1000   | Security Orchestration, Automation & Response Daemon"
+        ));
+        assert!(s.contains("Total: 35 processes"));
     }
 
     #[test]
@@ -9855,7 +10304,7 @@ mod tests {
         let (st, len) = shell.execute_line("help", &mut out);
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
-        assert!(s.contains("34 processus actifs"));
+        assert!(s.contains("35 processus actifs"));
         assert!(s.contains("fdr [status|verify|pcr]"));
         assert!(s.contains("wasm [status|run|info]"));
         assert!(s.contains("pqc [status|kex|sign|audit]"));
@@ -13875,5 +14324,152 @@ mod tests {
         assert!(
             s2.contains("Usage: xdr <status|campaigns|correlate|remediate <id>|graph [id]|audit>")
         );
+    }
+
+    #[test]
+    fn test_soar_status() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        // 1. "soar status"
+        let (st1, len1) = shell.execute_line("soar status", &mut out);
+        assert_eq!(st1, ShellStatus::Success);
+        let s1 = core::str::from_utf8(&out[..len1]).unwrap();
+        assert!(s1.contains("Bilan Global SOAR & Orchestration de Securite (jambo-soar PID 35):"));
+        assert!(
+            s1.contains("Statut Operationnel     : ACTIF (DAG Kahn & Reponse Souveraine Ring 3)")
+        );
+        assert!(s1.contains("Playbooks Enregistres   : 6"));
+        assert!(s1.contains("Incidents Geres         : 0"));
+        assert!(s1.contains("Incidents Attenues      : 0"));
+        assert!(s1.contains("Actions Executees       : 0"));
+        assert!(s1.contains("Integrite Registre      : VALIDE (Chaine SHA-256 inalterable)"));
+        assert!(s1.contains("Empreinte d'Audit SHA-256:"));
+
+        // 2. Default "soar" without arguments defaults to status
+        let (st2, len2) = shell.execute_line("soar", &mut out);
+        assert_eq!(st2, ShellStatus::Success);
+        assert_eq!(len1, len2);
+    }
+
+    #[test]
+    fn test_soar_playbooks() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        let (st, len) = shell.execute_line("soar playbooks", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("Table des Playbooks SOAR (PID 35):"));
+        assert!(s.contains("PB-ANTI-DDOS-AUTO"));
+        assert!(s.contains("PB-WAF-INJECTION-RESPONSE"));
+        assert!(s.contains("PB-COMPROMISED-CAP-REVOCATION"));
+        assert!(s.contains("PB-DATA-LEAK-CONTAINMENT"));
+        assert!(s.contains("PB-BEHAVIORAL-ANOMALY-RESPONSE"));
+        assert!(s.contains("PB-KERNEL-INTEGRITY-RESTORATION"));
+        assert!(s.contains("Total: 6 playbooks enregistres"));
+    }
+
+    #[test]
+    fn test_soar_trigger() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        // 1. Missing argument
+        let (st1, len1) = shell.execute_line("soar trigger", &mut out);
+        assert_eq!(st1, ShellStatus::InvalidArgument);
+        let s1 = core::str::from_utf8(&out[..len1]).unwrap();
+        assert!(s1.contains("Usage: soar trigger <id>"));
+
+        // 2. Invalid argument
+        let (st2, len2) = shell.execute_line("soar trigger invalid_id", &mut out);
+        assert_eq!(st2, ShellStatus::InvalidArgument);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("Usage: soar trigger <id>"));
+
+        // 3. Playbook not found
+        let (st3, len3) = shell.execute_line("soar trigger 999", &mut out);
+        assert_eq!(st3, ShellStatus::ExecutionFailed);
+        let s3 = core::str::from_utf8(&out[..len3]).unwrap();
+        assert!(s3.contains("SOAR: Playbook ID 999 non trouve"));
+
+        // 4. Successful execution of playbook 1 (PB-ANTI-DDOS-AUTO)
+        let (st4, len4) = shell.execute_line("soar trigger 1", &mut out);
+        assert_eq!(st4, ShellStatus::Success);
+        let s4 = core::str::from_utf8(&out[..len4]).unwrap();
+        assert!(s4.contains("Rapport d'Execution Playbook SOAR (PID 35) - Playbook ID 1:"));
+        assert!(s4.contains("PB-ANTI-DDOS-AUTO"));
+        assert!(s4.contains("Declencheur"));
+        assert!(s4.contains("Statut Execution        : SUCCES (Attenue)"));
+        assert!(s4.contains("Temps d'Execution       : 45 us"));
+        assert!(s4.contains("Empreinte Scellee SHA-256:"));
+        assert!(s4.contains("ApplyRateLimit"));
+        assert!(s4.contains("BlackholeWalld"));
+        assert!(s4.contains("NotifySecOps"));
+        assert!(s4.contains("Completed"));
+        assert!(s4.contains("Total: 3 etapes executees"));
+
+        // Verify daemon state
+        assert_eq!(shell.soar_daemon.incident_count, 1);
+        assert!(shell.soar_daemon.dispatched_count >= 3);
+    }
+
+    #[test]
+    fn test_soar_incidents() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        // 1. Initial state: no active incidents
+        let (st1, len1) = shell.execute_line("soar incidents", &mut out);
+        assert_eq!(st1, ShellStatus::Success);
+        let s1 = core::str::from_utf8(&out[..len1]).unwrap();
+        assert!(s1.contains("Table des Incidents de Securite SOAR (PID 35):"));
+        assert!(s1.contains("Aucun incident de securite actif"));
+        assert!(s1.contains("Total: 0 incidents geres"));
+
+        // 2. Trigger a playbook which automatically creates and mitigates an incident
+        let (st2, _) = shell.execute_line("soar trigger 1", &mut out);
+        assert_eq!(st2, ShellStatus::Success);
+
+        // 3. Verify incident list now contains the incident
+        let (st3, len3) = shell.execute_line("soar incidents", &mut out);
+        assert_eq!(st3, ShellStatus::Success);
+        let s3 = core::str::from_utf8(&out[..len3]).unwrap();
+        assert!(s3.contains("DDoS Flood"));
+        assert!(s3.contains("PB-1"));
+        assert!(s3.contains("Total: 1 incidents geres"));
+    }
+
+    #[test]
+    fn test_soar_audit() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        let (st, len) = shell.execute_line("soar audit", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("Grand Livre d'Audit Cryptographique SOAR (PID 35):"));
+        assert!(s.contains("Integrite Registre      : VALIDE (Chaine SHA-256 inalterable)"));
+        assert!(s.contains("Total Entrees Scellees  : 6"));
+        assert!(s.contains("Empreinte Racine SHA-256:"));
+        assert!(s.contains("Event: PlaybookRegistered"));
+    }
+
+    #[test]
+    fn test_soar_invalid() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        // 1. Unknown subcommand
+        let (st1, len1) = shell.execute_line("soar foobar", &mut out);
+        assert_eq!(st1, ShellStatus::InvalidArgument);
+        let s1 = core::str::from_utf8(&out[..len1]).unwrap();
+        assert!(s1.contains("Usage: soar <status|playbooks|trigger <id>|incidents|audit>"));
+
+        // 2. Help subcommand
+        let (st2, len2) = shell.execute_line("soar help", &mut out);
+        assert_eq!(st2, ShellStatus::InvalidArgument);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("Usage: soar <status|playbooks|trigger <id>|incidents|audit>"));
     }
 }
