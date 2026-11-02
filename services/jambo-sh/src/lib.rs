@@ -96,6 +96,12 @@ use jambo_vpn::{
     VPN_STATUS_PEER_NOT_FOUND, VPN_STATUS_PERMISSION_DENIED,
 };
 #[allow(unused_imports)]
+use jambo_waf::{
+    waf_rights, AttackType, HttpMethod, HttpRequest, HttpResponse, JamboWafDaemon, RuleAction,
+    RuleSeverity, TargetScope, WafCap, WafClient, WafDecision, WafError, WafOpcode, WafRequest,
+    WafResponse, WAF_ENDPOINT_ID, WAF_MAGIC_REQ, WAF_MAGIC_RESP,
+};
+#[allow(unused_imports)]
 use jambo_walld::{
     ip_proto, wall_rights, ConntrackState, JamboFirewall, SecurityZone, WallAction, WallCap,
     WallClient, WallOpcode, WallRequest, WallResponse,
@@ -136,6 +142,7 @@ pub struct JamboShell {
     pub log_daemon: LogDaemon,
     pub kms_daemon: KmsManager,
     pub attest_daemon: JamboAttestDaemon,
+    pub waf_daemon: JamboWafDaemon,
 }
 
 impl Default for JamboShell {
@@ -195,6 +202,9 @@ impl JamboShell {
         let attest_cap = AttestCap::new(libjambo::Handle::new(29, 1), attest_rights::ALL);
         let mut attest_daemon = JamboAttestDaemon::new(attest_cap);
         attest_daemon.init_defaults();
+        let waf_cap = WafCap::new(libjambo::Handle::new(30, 1), waf_rights::ALL, 100_000, 1);
+        let mut waf_daemon = JamboWafDaemon::new(waf_cap);
+        waf_daemon.init_defaults();
         Self {
             prompt_user: "jambo",
             commands_executed: 0,
@@ -213,6 +223,7 @@ impl JamboShell {
             log_daemon,
             kms_daemon,
             attest_daemon,
+            waf_daemon,
         }
     }
 
@@ -272,6 +283,7 @@ impl JamboShell {
             "log" => self.cmd_log(args, out),
             "kms" => self.cmd_kms(args, out),
             "attest" => self.cmd_attest(args, out),
+            "waf" => self.cmd_waf(args, out),
             _ => self.cmd_not_found(cmd, out),
         }
     }
@@ -280,7 +292,7 @@ impl JamboShell {
         let text = b"Commandes disponibles:\n\
   help        - Affiche cette aide\n\
   sysinfo     - Metriques memoire et uptime du micro-noyau\n\
-  ps          - Liste les 29 processus actifs\n\
+  ps          - Liste les 30 processus actifs\n\
   echo <args> - Affiche le texte sur la console\n\
   clear       - Reinitialise l'ecran du terminal\n\
   reboot      - Eteint ou redemarre la machine virtuelle\n\
@@ -310,7 +322,8 @@ impl JamboShell {
   secboot [status|pcr|measure|events|verify] - Chaine de confiance TPM 2.0 et demarrage mesure Ring 3\n\
   log [status|append|tail|verify|clear] - Journalisation structuree et chainage cryptographique Ring 3\n\
   kms [status|list|create|derive|lease|rotate|revoke] - Gestionnaire de cles souveraines & HKDF\n\
-  attest [status|list|claim|verify|zkp|confine|audit] - Attestation cryptographique a distance & ZKP\n";
+  attest [status|list|claim|verify|zkp|confine|audit] - Attestation cryptographique a distance & ZKP\n\
+  waf [status|inspect|quarantine|unquarantine|rules|audit] - Pare-feu applicatif L7 et filtrage d'injections\n";
         let len = text.len().min(out.len());
         out[..len].copy_from_slice(&text[..len]);
         (ShellStatus::Success, len)
@@ -383,7 +396,8 @@ impl JamboShell {
  26  ACTIF    /bin/secboot (Demon TPM 2.0 Measured Boot Ring 3)\n  26 | secboot        | Ring 3 | Ready   | 1000   | TPM 2.0 Measured Boot & Secure Trust Chain\n\
  27  ACTIF    /bin/logd (Demon Journalisation & Chaine Inviolable Ring 3)\n  27 | logd           | Ring 3 | Ready   | 1000   | Structured Logging & Tamper-Evident Hash Chain\n\
  28  ACTIF    /bin/kms (Key Management Service & HKDF Derivation Ring 3)\n  28 | kms            | Ring 3 | Ready   | 1000   | Key Management Service & HKDF Derivation\n  28 | kms | Running | Key Management Service & HKDF Derivation\n\
- 29  ACTIF    /bin/attest (Remote Attestation & ZKP Daemon Ring 3)\n  29 | attest          | Ring 3 | Ready   | 1000   | Remote Attestation & Zero-Knowledge Proofs\nTotal: 29 processes\n";
+ 29  ACTIF    /bin/attest (Remote Attestation & ZKP Daemon Ring 3)\n  29 | attest          | Ring 3 | Ready   | 1000   | Remote Attestation & Zero-Knowledge Proofs\n\
+ 30  ACTIF    /bin/waf (L7 Web Application Firewall Ring 3)\n  30 | waf             | Ring 3 | Ready   | 1000   | L7 Web Application Firewall & Injection Filter\nTotal: 30 processes\n";
         let len = text.len().min(out.len());
         out[..len].copy_from_slice(&text[..len]);
         (ShellStatus::Success, len)
@@ -6929,6 +6943,379 @@ ID  | Nom             | Racine de Confiance      | Statut             | Confinem
         }
         (ShellStatus::Success, c)
     }
+
+    fn send_waf_request(&mut self, req: &WafRequest) -> WafResponse {
+        let mut resp_opt: Option<WafResponse> = None;
+        for &h in &[
+            30u64, 29u64, 28u64, 27u64, 26u64, 25u64, 24u64, 23u64, 22u64, 21u64, 20u64, 19u64,
+            18u64, 17u64, 16u64, 15u64, 14u64, 13u64, 12u64, 11u64, 10u64, 9u64, 8u64, 7u64, 6u64,
+            5u64, 4u64, 3u64,
+        ] {
+            let client = WafClient::new(libjambo::Handle(h));
+            if let Ok(resp) = client.call(req) {
+                if resp.magic == WAF_MAGIC_RESP {
+                    resp_opt = Some(resp);
+                    break;
+                }
+            }
+        }
+        let local_resp = self.waf_daemon.dispatch_ipc(req);
+        resp_opt.unwrap_or(local_resp)
+    }
+
+    pub fn cmd_waf(&mut self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        let subcmd = if args.is_empty() { "status" } else { args[0] };
+        match subcmd {
+            "status" => self.cmd_waf_status(out),
+            "inspect" => self.cmd_waf_inspect(&args[1..], out),
+            "quarantine" => self.cmd_waf_quarantine(&args[1..], out),
+            "unquarantine" => self.cmd_waf_unquarantine(&args[1..], out),
+            "rules" => self.cmd_waf_rules(out),
+            "audit" => self.cmd_waf_audit(out),
+            _ => {
+                let msg = b"Usage: waf [status|inspect <uri> [body]|quarantine <ip>|unquarantine <ip>|rules|audit]\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                (ShellStatus::InvalidArgument, len)
+            }
+        }
+    }
+
+    fn cmd_waf_status(&mut self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let req = WafRequest::new_status(30, waf_rights::ALL);
+        let resp = self.send_waf_request(&req);
+
+        let active_quarantined = self
+            .waf_daemon
+            .quarantined
+            .iter()
+            .filter(|q| q.active)
+            .count();
+        let active_rules = self.waf_daemon.rules[..self.waf_daemon.rule_count]
+            .iter()
+            .filter(|r| r.enabled)
+            .count();
+
+        let mut c = 0;
+        c = append_bytes(
+            out,
+            c,
+            b"Pare-Feu Applicatif L7 & Filtrage d'Injections (jambo-waf PID 30):\n  Statut Operationnel     : ACTIF (Inspection L7 & Zero-Trust Ring 3)\n  Regles Actives          : ",
+        );
+        c = append_u64(out, c, active_rules as u64);
+        c = append_bytes(out, c, b"\n  Total Inspections       : ");
+        c = append_u64(out, c, resp.total_inspections);
+        c = append_bytes(out, c, b"\n  Requetes Bloquees       : ");
+        c = append_u64(out, c, resp.total_blocked as u64);
+        c = append_bytes(out, c, b"\n  IPs en Quarantaine      : ");
+        c = append_u64(out, c, active_quarantined as u64);
+        c = append_bytes(out, c, b"\n  Requetes Validees       : ");
+        c = append_u64(out, c, self.waf_daemon.total_passed);
+        c = append_bytes(out, c, b"\n  Anomalies Detectees     : ");
+        c = append_u64(out, c, self.waf_daemon.total_anomalies);
+        c = append_bytes(out, c, b"\n  Empreinte d'Audit SHA-256: ");
+        for &b in self.waf_daemon.audit_chain.iter() {
+            c = append_hex_byte(out, c, b);
+        }
+        c = append_bytes(out, c, b"\n");
+        (ShellStatus::Success, c)
+    }
+
+    fn cmd_waf_inspect(&mut self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if args.is_empty() {
+            let msg = b"Usage: waf inspect <uri> [body]\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            return (ShellStatus::InvalidArgument, len);
+        }
+
+        let uri = args[0];
+        let mut body_buf = [0u8; 1024];
+        let mut body_len = 0;
+        for (idx, &part) in args[1..].iter().enumerate() {
+            if idx > 0 && body_len < body_buf.len() {
+                body_buf[body_len] = b' ';
+                body_len += 1;
+            }
+            let p_bytes = part.as_bytes();
+            let to_copy = p_bytes.len().min(body_buf.len().saturating_sub(body_len));
+            body_buf[body_len..body_len + to_copy].copy_from_slice(&p_bytes[..to_copy]);
+            body_len += to_copy;
+        }
+
+        let method = if body_len > 0 {
+            HttpMethod::Post
+        } else {
+            HttpMethod::Get
+        };
+        let mut req = HttpRequest::new([192, 168, 1, 100], method, uri);
+        if body_len > 0 {
+            let _ = req.set_body(&body_buf[..body_len]);
+        }
+
+        let admin_cap = self.waf_daemon.admin_cap;
+        let timestamp = sys_info().map(|s| s.uptime_seconds).unwrap_or(100);
+
+        match self.waf_daemon.inspect_request(&admin_cap, &req, timestamp) {
+            Ok(decision) => {
+                let mut c = 0;
+                c = append_bytes(
+                    out,
+                    c,
+                    b"[WAF] Resultat de l'inspection L7:\n  URI                 : ",
+                );
+                c = append_bytes(out, c, uri.as_bytes());
+                c = append_bytes(out, c, b"\n  Methode             : ");
+                c = append_bytes(out, c, method.as_str().as_bytes());
+                match decision {
+                    WafDecision::Allow => {
+                        c = append_bytes(out, c, b"\n  Decision            : ALLOWED\n  Type d'Attaque      : NONE\n  Score d'Anomalie    : 0\n  Action              : PASS\n");
+                    }
+                    WafDecision::Block {
+                        rule_id,
+                        attack_type,
+                        score,
+                    } => {
+                        c = append_bytes(
+                            out,
+                            c,
+                            b"\n  Decision            : BLOCKED\n  Type d'Attaque      : ",
+                        );
+                        c = append_bytes(out, c, attack_type.as_str().as_bytes());
+                        c = append_bytes(out, c, b"\n  Score d'Anomalie    : ");
+                        c = append_u64(out, c, score as u64);
+                        c = append_bytes(out, c, b"\n  Regle Declenchee    : ");
+                        c = append_u64(out, c, rule_id as u64);
+                        c = append_bytes(out, c, b"\n  Action              : DROP\n");
+                    }
+                    WafDecision::Quarantine {
+                        client_ip,
+                        score,
+                        reason,
+                    } => {
+                        c = append_bytes(
+                            out,
+                            c,
+                            b"\n  Decision            : QUARANTINED\n  Type d'Attaque      : ",
+                        );
+                        c = append_bytes(out, c, reason.as_str().as_bytes());
+                        c = append_bytes(out, c, b"\n  Score d'Anomalie    : ");
+                        c = append_u64(out, c, score as u64);
+                        c = append_bytes(out, c, b"\n  IP Quarantaine      : ");
+                        c = append_ipv4(out, c, &client_ip);
+                        c = append_bytes(out, c, b"\n  Action              : ISOLATE\n");
+                    }
+                }
+                (ShellStatus::Success, c)
+            }
+            Err(e) => {
+                let mut c = 0;
+                c = append_bytes(out, c, b"[WAF] Erreur lors de l'inspection: ");
+                let err_str = match e {
+                    WafError::PermissionDenied => "PermissionDenied",
+                    WafError::PayloadTooLarge => "PayloadTooLarge",
+                    WafError::BufferTooSmall => "BufferTooSmall",
+                    WafError::MalformedProtocol => "MalformedProtocol",
+                    _ => "GeneralError",
+                };
+                c = append_bytes(out, c, err_str.as_bytes());
+                c = append_bytes(out, c, b"\n");
+                (ShellStatus::ExecutionFailed, c)
+            }
+        }
+    }
+
+    fn cmd_waf_quarantine(&mut self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if args.is_empty() {
+            let msg = b"Usage: waf quarantine <ip>\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            return (ShellStatus::InvalidArgument, len);
+        }
+
+        let ip = match parse_ipv4(args[0]) {
+            Some(parsed) => parsed,
+            None => {
+                let msg = b"[WAF] Erreur: adresse IPv4 invalide\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                return (ShellStatus::InvalidArgument, len);
+            }
+        };
+
+        let admin_cap = self.waf_daemon.admin_cap;
+        match self
+            .waf_daemon
+            .quarantine_ip(&admin_cap, ip, AttackType::ProtocolAnomaly)
+        {
+            Ok(()) => {
+                let timestamp = sys_info().map(|s| s.uptime_seconds).unwrap_or(100);
+                self.waf_daemon.log_audit(
+                    timestamp,
+                    ip,
+                    AttackType::ProtocolAnomaly,
+                    0,
+                    RuleAction::Quarantine,
+                    100,
+                );
+                let mut c = 0;
+                c = append_bytes(out, c, b"[WAF] Adresse IPv4 ");
+                c = append_ipv4(out, c, &ip);
+                c = append_bytes(out, c, b" placee en quarantaine stricte O(1).\n");
+                (ShellStatus::Success, c)
+            }
+            Err(_) => {
+                let msg = b"[WAF] Erreur: impossible de placer l'adresse en quarantaine (capacite atteinte ou refus)\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                (ShellStatus::ExecutionFailed, len)
+            }
+        }
+    }
+
+    fn cmd_waf_unquarantine(&mut self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if args.is_empty() {
+            let msg = b"Usage: waf unquarantine <ip>\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            return (ShellStatus::InvalidArgument, len);
+        }
+
+        let ip = match parse_ipv4(args[0]) {
+            Some(parsed) => parsed,
+            None => {
+                let msg = b"[WAF] Erreur: adresse IPv4 invalide\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                return (ShellStatus::InvalidArgument, len);
+            }
+        };
+
+        let admin_cap = self.waf_daemon.admin_cap;
+        match self.waf_daemon.lift_quarantine(&admin_cap, ip) {
+            Ok(()) => {
+                let timestamp = sys_info().map(|s| s.uptime_seconds).unwrap_or(100);
+                self.waf_daemon
+                    .log_audit(timestamp, ip, AttackType::None, 0, RuleAction::Allow, 0);
+                let mut c = 0;
+                c = append_bytes(out, c, b"[WAF] Quarantaine levee pour l'adresse IPv4 ");
+                c = append_ipv4(out, c, &ip);
+                c = append_bytes(out, c, b".\n");
+                (ShellStatus::Success, c)
+            }
+            Err(WafError::IpNotFound) => {
+                let mut c = 0;
+                c = append_bytes(out, c, b"[WAF] Erreur: adresse IPv4 ");
+                c = append_ipv4(out, c, &ip);
+                c = append_bytes(out, c, b" non trouvee dans la table de quarantaine\n");
+                (ShellStatus::ExecutionFailed, c)
+            }
+            Err(_) => {
+                let msg = b"[WAF] Erreur: echec de la levee de quarantaine (droits insuffisants)\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                (ShellStatus::ExecutionFailed, len)
+            }
+        }
+    }
+
+    fn cmd_waf_rules(&self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let mut c = 0;
+        c = append_bytes(
+            out,
+            c,
+            b"Regles L7 configurees (jambo-waf PID 30):\nID    | Nom                      | Severite | Action     | Cible\n--------------------------------------------------------------------------------\n",
+        );
+        let mut count = 0;
+        for rule in &self.waf_daemon.rules[..self.waf_daemon.rule_count] {
+            if !rule.enabled {
+                continue;
+            }
+            count += 1;
+            c = append_bytes(out, c, b" ");
+            c = append_u64(out, c, rule.id as u64);
+            c = append_bytes(out, c, b" | ");
+            c = append_bytes(out, c, rule.name_as_str().as_bytes());
+            c = append_bytes(out, c, b" | ");
+            let sev_str = match rule.severity {
+                RuleSeverity::Low => "Low",
+                RuleSeverity::Medium => "Medium",
+                RuleSeverity::High => "High",
+                RuleSeverity::Critical => "Critical",
+            };
+            c = append_bytes(out, c, sev_str.as_bytes());
+            c = append_bytes(out, c, b" | ");
+            let act_str = match rule.action {
+                RuleAction::Allow => "Allow",
+                RuleAction::Block => "Block",
+                RuleAction::Quarantine => "Quarantine",
+                RuleAction::LogOnly => "LogOnly",
+            };
+            c = append_bytes(out, c, act_str.as_bytes());
+            c = append_bytes(out, c, b" | ");
+            let target_str = match rule.target {
+                TargetScope::Uri => "Uri",
+                TargetScope::Header => "Header",
+                TargetScope::Body => "Body",
+                TargetScope::Method => "Method",
+                TargetScope::All => "All",
+            };
+            c = append_bytes(out, c, target_str.as_bytes());
+            c = append_bytes(out, c, b"\n");
+        }
+        c = append_bytes(out, c, b"Total: ");
+        c = append_u64(out, c, count as u64);
+        c = append_bytes(out, c, b" regles actives\n");
+        (ShellStatus::Success, c)
+    }
+
+    fn cmd_waf_audit(&self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let mut c = 0;
+        c = append_bytes(
+            out,
+            c,
+            b"Registre d'Audit Cryptographique Scelle (jambo-waf PID 30):\n  Empreinte d'Audit SHA-256: ",
+        );
+        for &b in self.waf_daemon.audit_chain.iter() {
+            c = append_hex_byte(out, c, b);
+        }
+        c = append_bytes(out, c, b"\nEvenements recents scelles:\n");
+
+        let count = self.waf_daemon.audit_count.min(jambo_waf::MAX_AUDIT_LOGS);
+        if count == 0 {
+            c = append_bytes(out, c, b"  (Aucun evenement d'audit enregistre)\n");
+        } else {
+            for (i, entry) in self.waf_daemon.audit_log[..count].iter().enumerate() {
+                c = append_bytes(out, c, b"  [#");
+                c = append_u64(out, c, (i + 1) as u64);
+                c = append_bytes(out, c, b"] IP: ");
+                c = append_ipv4(out, c, &entry.client_ip);
+                c = append_bytes(out, c, b" | Attaque: ");
+                c = append_bytes(out, c, entry.attack_type.as_str().as_bytes());
+                c = append_bytes(out, c, b" | Regle: ");
+                c = append_u64(out, c, entry.rule_id as u64);
+                c = append_bytes(out, c, b" | Action: ");
+                let act_str = match entry.action {
+                    RuleAction::Allow => "Allow",
+                    RuleAction::Block => "Block",
+                    RuleAction::Quarantine => "Quarantine",
+                    RuleAction::LogOnly => "LogOnly",
+                };
+                c = append_bytes(out, c, act_str.as_bytes());
+                c = append_bytes(out, c, b" | Score: ");
+                c = append_u64(out, c, entry.score as u64);
+                c = append_bytes(out, c, b" | Hash: ");
+                for &b in entry.entry_hash[..8].iter() {
+                    c = append_hex_byte(out, c, b);
+                }
+                c = append_bytes(out, c, b"...\n");
+            }
+        }
+        c = append_bytes(out, c, b"Total: ");
+        c = append_u64(out, c, self.waf_daemon.audit_count as u64);
+        c = append_bytes(out, c, b" evenements scelles\n");
+        (ShellStatus::Success, c)
+    }
 }
 
 fn format_policy_action(mask: u32, out: &mut [u8], mut c: usize) -> usize {
@@ -7549,7 +7936,11 @@ mod tests {
         assert!(
             s.contains("  29 | attest          | Ring 3 | Ready   | 1000   | Remote Attestation & Zero-Knowledge Proofs")
         );
-        assert!(s.contains("Total: 29 processes"));
+        assert!(s.contains("30  ACTIF    /bin/waf (L7 Web Application Firewall Ring 3)"));
+        assert!(
+            s.contains("  30 | waf             | Ring 3 | Ready   | 1000   | L7 Web Application Firewall & Injection Filter")
+        );
+        assert!(s.contains("Total: 30 processes"));
     }
 
     #[test]
@@ -7561,7 +7952,7 @@ mod tests {
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains("  23 | pkgd           | Ring 3 | Ready   | 1000   | Declarative Package Manager & CAS Store"));
-        assert!(s.contains("Total: 29 processes"));
+        assert!(s.contains("Total: 30 processes"));
     }
 
     #[test]
@@ -7573,7 +7964,7 @@ mod tests {
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains("  24 | certd          | Ring 3 | Ready   | 1000   | Ephemeral PKI & Cluster mTLS Daemon"));
-        assert!(s.contains("Total: 29 processes"));
+        assert!(s.contains("Total: 30 processes"));
     }
 
     #[test]
@@ -7585,7 +7976,7 @@ mod tests {
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains("  25 | policyd        | Ring 3 | Ready   | 1000   | Security Policy Engine & Admission Control"));
-        assert!(s.contains("Total: 29 processes"));
+        assert!(s.contains("Total: 30 processes"));
     }
 
     #[test]
@@ -7597,7 +7988,7 @@ mod tests {
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains("  26 | secboot        | Ring 3 | Ready   | 1000   | TPM 2.0 Measured Boot & Secure Trust Chain"));
-        assert!(s.contains("Total: 29 processes"));
+        assert!(s.contains("Total: 30 processes"));
     }
 
     #[test]
@@ -7609,7 +8000,7 @@ mod tests {
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains("  27 | logd           | Ring 3 | Ready   | 1000   | Structured Logging & Tamper-Evident Hash Chain"));
-        assert!(s.contains("Total: 29 processes"));
+        assert!(s.contains("Total: 30 processes"));
     }
 
     #[test]
@@ -7621,7 +8012,7 @@ mod tests {
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains("28 | kms | Running | Key Management Service & HKDF Derivation"));
-        assert!(s.contains("Total: 29 processes"));
+        assert!(s.contains("Total: 30 processes"));
     }
 
     #[test]
@@ -7636,7 +8027,22 @@ mod tests {
         assert!(s.contains(
             "  29 | attest          | Ring 3 | Ready   | 1000   | Remote Attestation & Zero-Knowledge Proofs"
         ));
-        assert!(s.contains("Total: 29 processes"));
+        assert!(s.contains("Total: 30 processes"));
+    }
+
+    #[test]
+    fn test_ps_contains_30_processes() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        let (st, len) = shell.execute_line("ps", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("30  ACTIF    /bin/waf (L7 Web Application Firewall Ring 3)"));
+        assert!(s.contains(
+            "  30 | waf             | Ring 3 | Ready   | 1000   | L7 Web Application Firewall & Injection Filter"
+        ));
+        assert!(s.contains("Total: 30 processes"));
     }
 
     #[test]
@@ -7647,7 +8053,7 @@ mod tests {
         let (st, len) = shell.execute_line("help", &mut out);
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
-        assert!(s.contains("29 processus actifs"));
+        assert!(s.contains("30 processus actifs"));
         assert!(s.contains("fdr [status|verify|pcr]"));
         assert!(s.contains("wasm [status|run|info]"));
         assert!(s.contains("pqc [status|kex|sign|audit]"));
@@ -7672,6 +8078,7 @@ mod tests {
         assert!(s.contains("log [status|append|tail|verify|clear]"));
         assert!(s.contains("kms [status|list|create|derive|lease|rotate|revoke]"));
         assert!(s.contains("attest [status|list|claim|verify|zkp|confine|audit]"));
+        assert!(s.contains("waf [status|inspect|quarantine|unquarantine|rules|audit]"));
     }
 
     #[test]
@@ -10814,5 +11221,145 @@ mod tests {
         assert_eq!(st2, ShellStatus::InvalidArgument);
         let s2 = core::str::from_utf8(&out[..len2]).unwrap();
         assert!(s2.contains("Usage: attest [status|list|claim <node_id>|verify <node_id>|zkp <node_id> [secret]|confine <node_id> <level>|audit]"));
+    }
+
+    #[test]
+    fn test_waf_status() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        let (st, len) = shell.execute_line("waf status", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("Pare-Feu Applicatif L7"));
+        assert!(s.contains("Total Inspections"));
+        assert!(s.contains("Requetes Bloquees"));
+        assert!(s.contains("IPs en Quarantaine"));
+        assert!(s.contains("Regles Actives"));
+        assert!(s.contains("Empreinte d'Audit SHA-256"));
+
+        // Test commande par defaut sans sous-commande
+        let (st2, len2) = shell.execute_line("waf", &mut out);
+        assert_eq!(st2, ShellStatus::Success);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("Pare-Feu Applicatif L7"));
+    }
+
+    #[test]
+    fn test_waf_inspect_clean() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        let (st, len) = shell.execute_line("waf inspect /api/v1/system/status", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("ALLOWED"));
+        assert!(s.contains("NONE"));
+        assert!(s.contains("Score d'Anomalie    : 0"));
+    }
+
+    #[test]
+    fn test_waf_inspect_sqli() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        let (st, len) = shell.execute_line("waf inspect /users?id=1'%20or%20'1'='1", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("BLOCKED"));
+        assert!(s.contains("SQL_INJECTION"));
+        assert!(s.contains("1001"));
+    }
+
+    #[test]
+    fn test_waf_inspect_xss() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        let (st, len) =
+            shell.execute_line("waf inspect /comments <script>alert(1)</script>", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("BLOCKED"));
+        assert!(s.contains("XSS"));
+        assert!(s.contains("1004"));
+    }
+
+    #[test]
+    fn test_waf_quarantine_and_unquarantine() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        // 1. Quarantaine manuelle de l'IP
+        let (st1, len1) = shell.execute_line("waf quarantine 10.0.0.99", &mut out);
+        assert_eq!(st1, ShellStatus::Success);
+        let s1 = core::str::from_utf8(&out[..len1]).unwrap();
+        assert!(s1.contains("10.0.0.99"));
+        assert!(s1.contains("quarantaine"));
+        assert!(shell.waf_daemon.is_ip_quarantined(&[10, 0, 0, 99]));
+
+        // 2. Verification dans waf status
+        let (st2, len2) = shell.execute_line("waf status", &mut out);
+        assert_eq!(st2, ShellStatus::Success);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("IPs en Quarantaine      : 1"));
+
+        // 3. Levee de la quarantaine
+        let (st3, len3) = shell.execute_line("waf unquarantine 10.0.0.99", &mut out);
+        assert_eq!(st3, ShellStatus::Success);
+        let s3 = core::str::from_utf8(&out[..len3]).unwrap();
+        assert!(s3.contains("Quarantaine levee"));
+        assert!(!shell.waf_daemon.is_ip_quarantined(&[10, 0, 0, 99]));
+
+        // 4. IP inconnue pour unquarantine
+        let (st4, len4) = shell.execute_line("waf unquarantine 192.168.99.99", &mut out);
+        assert_eq!(st4, ShellStatus::ExecutionFailed);
+        let s4 = core::str::from_utf8(&out[..len4]).unwrap();
+        assert!(s4.contains("non trouvee"));
+
+        // 5. Argument manquant
+        let (st5, len5) = shell.execute_line("waf quarantine", &mut out);
+        assert_eq!(st5, ShellStatus::InvalidArgument);
+        let s5 = core::str::from_utf8(&out[..len5]).unwrap();
+        assert!(s5.contains("Usage: waf quarantine <ip>"));
+    }
+
+    #[test]
+    fn test_waf_rules() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        let (st, len) = shell.execute_line("waf rules", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("Regles L7 configurees"));
+        assert!(s.contains("SQLi_Tautology"));
+        assert!(s.contains("SQLi_Union_Select"));
+        assert!(s.contains("XSS_Script_Tag"));
+        assert!(s.contains("RCE_Bin_Sh"));
+        assert!(s.contains("Path_Traversal_DotDot"));
+        assert!(s.contains("11 regles"));
+    }
+
+    #[test]
+    fn test_waf_audit() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        // Declencher une detection pour alimenter l'audit
+        let _ = shell.execute_line("waf inspect /users?id=1'%20or%20'1'='1", &mut out);
+
+        let (st, len) = shell.execute_line("waf audit", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("Registre d'Audit Cryptographique Scelle (jambo-waf PID 30)"));
+        assert!(s.contains("Empreinte d'Audit SHA-256"));
+        assert!(s.contains("SQL_INJECTION"));
+
+        // Commande invalide
+        let (st2, len2) = shell.execute_line("waf invalid_cmd", &mut out);
+        assert_eq!(st2, ShellStatus::InvalidArgument);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("Usage: waf [status|inspect <uri> [body]|quarantine <ip>|unquarantine <ip>|rules|audit]"));
     }
 }
