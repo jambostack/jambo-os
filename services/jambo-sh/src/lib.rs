@@ -57,8 +57,11 @@ use jambo_powerd::{
     CpuPowerState, PowerClient, PowerOpcode, PowerProfile, PowerResponse, PowerState,
     POWER_STATUS_OK,
 };
-use jambo_pqc::{
-    PqcClient, PqcResponse, PqcTransitionState, Sha256, DSA_SIGNATURE_LEN, PQC_STATUS_OK,
+use jambo_pqc::{PqcClient, PqcResponse, PqcTransitionState, DSA_SIGNATURE_LEN, PQC_STATUS_OK};
+#[allow(unused_imports)]
+use jambo_secboot::{
+    secboot_rights, BootEvent, SecBootCap, SecBootClient, SecBootOpcode, SecBootRequest,
+    SecBootResponse, SecureBootManager, Sha256, PCR_COUNT,
 };
 #[allow(unused_imports)]
 use jambo_timed::{
@@ -113,6 +116,7 @@ pub struct JamboShell {
     pub pkg_daemon: JamboPkgDaemon,
     pub cert_daemon: ClusterCa,
     pub policy_daemon: PolicyEngine,
+    pub secboot_daemon: SecureBootManager,
 }
 
 impl Default for JamboShell {
@@ -163,6 +167,8 @@ impl JamboShell {
         cert_daemon.init_defaults();
         let mut policy_daemon = PolicyEngine::new();
         policy_daemon.init_defaults();
+        let mut secboot_daemon = SecureBootManager::new();
+        secboot_daemon.init_defaults();
         Self {
             prompt_user: "jambo",
             commands_executed: 0,
@@ -177,6 +183,7 @@ impl JamboShell {
             pkg_daemon,
             cert_daemon,
             policy_daemon,
+            secboot_daemon,
         }
     }
 
@@ -232,6 +239,7 @@ impl JamboShell {
             "pkg" => self.cmd_pkg(args, out),
             "cert" => self.cmd_cert(args, out),
             "policy" => self.cmd_policy(args, out),
+            "secboot" => self.cmd_secboot(args, out),
             _ => self.cmd_not_found(cmd, out),
         }
     }
@@ -240,7 +248,7 @@ impl JamboShell {
         let text = b"Commandes disponibles:\n\
   help        - Affiche cette aide\n\
   sysinfo     - Metriques memoire et uptime du micro-noyau\n\
-  ps          - Liste les 25 processus actifs\n\
+  ps          - Liste les 26 processus actifs\n\
   echo <args> - Affiche le texte sur la console\n\
   clear       - Reinitialise l'ecran du terminal\n\
   reboot      - Eteint ou redemarre la machine virtuelle\n\
@@ -266,7 +274,8 @@ impl JamboShell {
   core [status|dump|list|verify|quarantine|purge] - Capture crash dumps ELF64 et forensique\n\
   pkg [status|list|install|stage|commit|rollback] - Gestion declarative de paquets et mises a jour A/B\n\
   cert [status|list|issue|verify|revoke] - Infrastructure PKI ephemere et mTLS de grappe\n\
-  policy [status|eval|rule|list] - Moteur de politiques declaratives et controle d'admission ABAC/RBAC\n";
+  policy [status|eval|rule|list] - Moteur de politiques declaratives et controle d'admission ABAC/RBAC\n\
+  secboot [status|pcr|measure|events|verify] - Chaine de confiance TPM 2.0 et demarrage mesure Ring 3\n";
         let len = text.len().min(out.len());
         out[..len].copy_from_slice(&text[..len]);
         (ShellStatus::Success, len)
@@ -335,7 +344,8 @@ impl JamboShell {
  22  ACTIF    /bin/cored (Capture Crash Dumps ELF64 & Forensique Ring 3)\n\
  23  ACTIF    /bin/pkgd (Declarative Package Manager & CAS Store Ring 3)\n  23 | pkgd           | Ring 3 | Ready   | 1000   | Declarative Package Manager & CAS Store\n\
  24  ACTIF    /bin/certd (Demon PKI Ephemere & mTLS de Grappe Ring 3)\n  24 | certd          | Ring 3 | Ready   | 1000   | Ephemeral PKI & Cluster mTLS Daemon\n\
- 25  ACTIF    /bin/policyd (Moteur Politiques Securite Ring 3)\n  25 | policyd        | Ring 3 | Ready   | 1000   | Security Policy Engine & Admission Control\nTotal: 25 processes\n";
+ 25  ACTIF    /bin/policyd (Moteur Politiques Securite Ring 3)\n  25 | policyd        | Ring 3 | Ready   | 1000   | Security Policy Engine & Admission Control\n\
+ 26  ACTIF    /bin/secboot (Demon TPM 2.0 Measured Boot Ring 3)\n  26 | secboot        | Ring 3 | Ready   | 1000   | TPM 2.0 Measured Boot & Secure Trust Chain\nTotal: 26 processes\n";
         let len = text.len().min(out.len());
         out[..len].copy_from_slice(&text[..len]);
         (ShellStatus::Success, len)
@@ -5781,6 +5791,232 @@ impl JamboShell {
         }
         (ShellStatus::Success, c)
     }
+
+    fn send_secboot_request(&mut self, req: &SecBootRequest) -> SecBootResponse {
+        let mut resp_opt: Option<SecBootResponse> = None;
+        for &h in &[
+            26u64, 25u64, 24u64, 23u64, 22u64, 21u64, 20u64, 19u64, 18u64, 17u64, 16u64, 15u64,
+            14u64, 13u64, 12u64, 11u64, 10u64, 9u64, 8u64, 7u64, 6u64, 5u64, 4u64, 3u64,
+        ] {
+            let client = SecBootClient::new(libjambo::Handle(h));
+            if let Ok(resp) = client.call(req) {
+                if resp.magic == jambo_secboot::SECBOOT_MAGIC_RESP {
+                    resp_opt = Some(resp);
+                    break;
+                }
+            }
+        }
+        let local_resp = self.secboot_daemon.dispatch_ipc(req);
+        resp_opt.unwrap_or(local_resp)
+    }
+
+    fn cmd_secboot(&mut self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        let subcmd = if args.is_empty() { "status" } else { args[0] };
+        match subcmd {
+            "status" => self.cmd_secboot_status(out),
+            "pcr" => self.cmd_secboot_pcr(&args[1..], out),
+            "measure" => self.cmd_secboot_measure(&args[1..], out),
+            "events" => self.cmd_secboot_events(out),
+            "verify" => self.cmd_secboot_verify(out),
+            _ => {
+                let msg = b"Usage: secboot [status|pcr <index>|measure <pcr> <name> [digest]|events|verify]\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                (ShellStatus::InvalidArgument, len)
+            }
+        }
+    }
+
+    fn cmd_secboot_status(&mut self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let req = SecBootRequest::new_status(26, secboot_rights::INSPECT | secboot_rights::VERIFY);
+        let resp = self.send_secboot_request(&req);
+
+        let mut c = 0;
+        c = append_bytes(
+            out,
+            c,
+            b"Demon TPM 2.0 Measured Boot & Chaine de Confiance (jambo-secboot PID 26):\n  Total Boot Events       : ",
+        );
+        c = append_u64(out, c, resp.total_events as u64);
+        c = append_bytes(out, c, b"\n  Chaine de Confiance     : ");
+        if resp.chain_verified != 0 {
+            c = append_bytes(out, c, b"VALID / INTACT\n");
+        } else {
+            c = append_bytes(out, c, b"DEGRADED / TAMPERED\n");
+        }
+        c = append_bytes(out, c, b"  Statut Daemon           : ");
+        c = append_bytes(out, c, resp.status_as_str().as_bytes());
+        c = append_bytes(out, c, b"\n");
+        (ShellStatus::Success, c)
+    }
+
+    fn cmd_secboot_pcr(&mut self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if args.is_empty() {
+            let msg = b"Usage: secboot pcr <index>\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            return (ShellStatus::InvalidArgument, len);
+        }
+
+        let pcr_index = match parse_u32(args[0]) {
+            Some(idx) if (idx as usize) < PCR_COUNT => idx,
+            _ => {
+                let msg = b"secboot pcr: index PCR invalide (0..23 requis)\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                return (ShellStatus::InvalidArgument, len);
+            }
+        };
+
+        let req = SecBootRequest::new_read_pcr(26, secboot_rights::INSPECT, pcr_index);
+        let resp = self.send_secboot_request(&req);
+
+        if resp.status != 0 {
+            let mut c = 0;
+            c = append_bytes(out, c, b"secboot pcr: echec de lecture du registre PCR ");
+            c = append_u64(out, c, pcr_index as u64);
+            c = append_bytes(out, c, b"\n");
+            return (ShellStatus::ExecutionFailed, c);
+        }
+
+        let mut c = 0;
+        c = append_bytes(out, c, b"PCR[");
+        c = append_u64(out, c, pcr_index as u64);
+        c = append_bytes(out, c, b"] = ");
+        for &b in resp.current_pcr_digest.iter() {
+            c = append_hex_byte(out, c, b);
+        }
+        c = append_bytes(out, c, b"\n");
+        (ShellStatus::Success, c)
+    }
+
+    fn cmd_secboot_measure(&mut self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if args.len() < 2 {
+            let msg = b"Usage: secboot measure <pcr> <name> [digest]\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            return (ShellStatus::InvalidArgument, len);
+        }
+
+        let pcr_index = match parse_u32(args[0]) {
+            Some(idx) if (idx as usize) < PCR_COUNT => idx,
+            _ => {
+                let msg = b"secboot measure: index PCR invalide (0..23 requis)\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                return (ShellStatus::InvalidArgument, len);
+            }
+        };
+
+        let comp_name = args[1];
+        let digest = if args.len() >= 3 {
+            parse_hex_digest(args[2]).unwrap_or_else(|| Sha256::digest(args[2].as_bytes()))
+        } else {
+            Sha256::digest(comp_name.as_bytes())
+        };
+
+        let req = SecBootRequest::new_extend_pcr(
+            26,
+            secboot_rights::MEASURE,
+            pcr_index,
+            1,
+            comp_name.as_bytes(),
+            digest,
+        );
+        let resp = self.send_secboot_request(&req);
+
+        if resp.status != 0 {
+            let mut c = 0;
+            c = append_bytes(out, c, b"secboot measure: echec de mesure du registre PCR ");
+            c = append_u64(out, c, pcr_index as u64);
+            c = append_bytes(out, c, b"\n");
+            return (ShellStatus::ExecutionFailed, c);
+        }
+
+        let mut c = 0;
+        c = append_bytes(out, c, b"secboot measure: PCR[");
+        c = append_u64(out, c, pcr_index as u64);
+        c = append_bytes(out, c, b"] etendu avec succes pour '");
+        c = append_bytes(out, c, comp_name.as_bytes());
+        c = append_bytes(out, c, b"' -> Digest: ");
+        for &b in resp.current_pcr_digest.iter() {
+            c = append_hex_byte(out, c, b);
+        }
+        c = append_bytes(out, c, b"\n");
+        (ShellStatus::Success, c)
+    }
+
+    fn cmd_secboot_events(&mut self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let req = SecBootRequest::new_list_events(26, secboot_rights::INSPECT, 0);
+        let _ = self.send_secboot_request(&req);
+
+        let mut c = 0;
+        c = append_bytes(
+            out,
+            c,
+            b"Journal des Evenements de Demarrage Mesure (TPM 2.0 Event Log PID 26):\n",
+        );
+
+        let total = self.secboot_daemon.event_count();
+        if total == 0 {
+            c = append_bytes(out, c, b"  (Aucun evenement enregistre)\n");
+            return (ShellStatus::Success, c);
+        }
+
+        let max_show = total.min(jambo_secboot::MAX_BOOT_EVENTS);
+        for i in 0..max_show {
+            if let Some(ev) = self.secboot_daemon.get_event(i) {
+                c = append_bytes(out, c, b"  [");
+                c = append_u64(out, c, i as u64);
+                c = append_bytes(out, c, b"] PCR ");
+                c = append_u64(out, c, ev.pcr_index as u64);
+                c = append_bytes(out, c, b" | Component: ");
+                c = append_bytes(out, c, ev.component_name_str().as_bytes());
+                c = append_bytes(out, c, b" | Digest: ");
+                for &b in ev.digest.iter() {
+                    c = append_hex_byte(out, c, b);
+                }
+                c = append_bytes(out, c, b"\n");
+            }
+        }
+        (ShellStatus::Success, c)
+    }
+
+    fn cmd_secboot_verify(&mut self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let req = SecBootRequest::new_verify_chain(26, secboot_rights::VERIFY);
+        let resp = self.send_secboot_request(&req);
+
+        let mut c = 0;
+        c = append_bytes(
+            out,
+            c,
+            b"Verification de la Chaine de Confiance TPM 2.0 (PID 26):\n  Chaine de Confiance     : ",
+        );
+        if resp.chain_verified != 0 {
+            c = append_bytes(out, c, b"VALID / INTACT\n");
+            c = append_bytes(out, c, b"  Evenements Mesures      : ");
+            c = append_u64(out, c, resp.total_events as u64);
+            c = append_bytes(out, c, b"\n  Statut                  : ");
+            c = append_bytes(out, c, resp.status_as_str().as_bytes());
+            c = append_bytes(
+                out,
+                c,
+                b"\n  Resultat                : Chaine de confiance valide et conforme TCG 2.0\n",
+            );
+        } else {
+            c = append_bytes(out, c, b"DEGRADED / TAMPERED\n");
+            c = append_bytes(out, c, b"  Evenements Mesures      : ");
+            c = append_u64(out, c, resp.total_events as u64);
+            c = append_bytes(out, c, b"\n  Statut                  : ");
+            c = append_bytes(out, c, resp.status_as_str().as_bytes());
+            c = append_bytes(
+                out,
+                c,
+                b"\n  Resultat                : Chaine de confiance incomplete ou alteree\n",
+            );
+        }
+        (ShellStatus::Success, c)
+    }
 }
 
 fn format_policy_action(mask: u32, out: &mut [u8], mut c: usize) -> usize {
@@ -6056,6 +6292,31 @@ fn parse_u64(s: &str) -> Option<u64> {
     }
 }
 
+fn parse_hex_digest(s: &str) -> Option<[u8; 32]> {
+    let s = s.trim();
+    if s.len() != 64 {
+        return None;
+    }
+    let bytes = s.as_bytes();
+    let mut out = [0u8; 32];
+    for i in 0..32 {
+        let h = match bytes[i * 2] {
+            b'0'..=b'9' => bytes[i * 2] - b'0',
+            b'a'..=b'f' => bytes[i * 2] - b'a' + 10,
+            b'A'..=b'F' => bytes[i * 2] - b'A' + 10,
+            _ => return None,
+        };
+        let l = match bytes[i * 2 + 1] {
+            b'0'..=b'9' => bytes[i * 2 + 1] - b'0',
+            b'a'..=b'f' => bytes[i * 2 + 1] - b'a' + 10,
+            b'A'..=b'F' => bytes[i * 2 + 1] - b'A' + 10,
+            _ => return None,
+        };
+        out[i] = (h << 4) | l;
+    }
+    Some(out)
+}
+
 fn parse_i64(s: &str) -> Option<i64> {
     let bytes = s.as_bytes();
     if bytes.is_empty() {
@@ -6324,7 +6585,11 @@ mod tests {
         assert!(
             s.contains("  25 | policyd        | Ring 3 | Ready   | 1000   | Security Policy Engine & Admission Control")
         );
-        assert!(s.contains("Total: 25 processes"));
+        assert!(s.contains("26  ACTIF    /bin/secboot (Demon TPM 2.0 Measured Boot Ring 3)"));
+        assert!(
+            s.contains("  26 | secboot        | Ring 3 | Ready   | 1000   | TPM 2.0 Measured Boot & Secure Trust Chain")
+        );
+        assert!(s.contains("Total: 26 processes"));
     }
 
     #[test]
@@ -6336,7 +6601,7 @@ mod tests {
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains("  23 | pkgd           | Ring 3 | Ready   | 1000   | Declarative Package Manager & CAS Store"));
-        assert!(s.contains("Total: 25 processes"));
+        assert!(s.contains("Total: 26 processes"));
     }
 
     #[test]
@@ -6348,7 +6613,7 @@ mod tests {
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains("  24 | certd          | Ring 3 | Ready   | 1000   | Ephemeral PKI & Cluster mTLS Daemon"));
-        assert!(s.contains("Total: 25 processes"));
+        assert!(s.contains("Total: 26 processes"));
     }
 
     #[test]
@@ -6360,18 +6625,30 @@ mod tests {
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains("  25 | policyd        | Ring 3 | Ready   | 1000   | Security Policy Engine & Admission Control"));
-        assert!(s.contains("Total: 25 processes"));
+        assert!(s.contains("Total: 26 processes"));
+    }
+
+    #[test]
+    fn test_ps_contains_26_processes() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        let (st, len) = shell.execute_line("ps", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("  26 | secboot        | Ring 3 | Ready   | 1000   | TPM 2.0 Measured Boot & Secure Trust Chain"));
+        assert!(s.contains("Total: 26 processes"));
     }
 
     #[test]
     fn test_help_contains_power_forensics_kdir_pqc_wasm_fdr() {
         let mut shell = JamboShell::new();
-        let mut out = [0u8; 2048];
+        let mut out = [0u8; 4096];
 
         let (st, len) = shell.execute_line("help", &mut out);
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
-        assert!(s.contains("25 processus actifs"));
+        assert!(s.contains("26 processus actifs"));
         assert!(s.contains("fdr [status|verify|pcr]"));
         assert!(s.contains("wasm [status|run|info]"));
         assert!(s.contains("pqc [status|kex|sign|audit]"));
@@ -6392,6 +6669,7 @@ mod tests {
         assert!(s.contains("pkg [status|list|install|stage|commit|rollback]"));
         assert!(s.contains("cert [status|list|issue|verify|revoke]"));
         assert!(s.contains("policy [status|eval|rule|list]"));
+        assert!(s.contains("secboot [status|pcr|measure|events|verify]"));
     }
 
     #[test]
@@ -8877,5 +9155,147 @@ mod tests {
         assert_eq!(st7, ShellStatus::ExecutionFailed);
         let s7 = core::str::from_utf8(&out[..len7]).unwrap();
         assert!(s7.contains("policy rule del: regle #9999 introuvable"));
+    }
+
+    #[test]
+    fn test_secboot_status() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 2048];
+
+        let (st, len) = shell.execute_line("secboot status", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(
+            s.contains("Demon TPM 2.0 Measured Boot & Chaine de Confiance (jambo-secboot PID 26):")
+        );
+        assert!(s.contains("Total Boot Events       : 6"));
+        assert!(s.contains("Chaine de Confiance     : VALID / INTACT"));
+        assert!(s.contains("Statut Daemon           : READY"));
+    }
+
+    #[test]
+    fn test_secboot_pcr() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 2048];
+
+        // Lecture PCR 0 (CRTM)
+        let (st0, len0) = shell.execute_line("secboot pcr 0", &mut out);
+        assert_eq!(st0, ShellStatus::Success);
+        let s0 = core::str::from_utf8(&out[..len0]).unwrap();
+        assert!(s0.starts_with("PCR[0] = "));
+        assert_eq!(s0.trim_end().len(), "PCR[0] = ".len() + 64);
+
+        // Lecture PCR 4 (Limine)
+        let (st4, len4) = shell.execute_line("secboot pcr 4", &mut out);
+        assert_eq!(st4, ShellStatus::Success);
+        let s4 = core::str::from_utf8(&out[..len4]).unwrap();
+        assert!(s4.starts_with("PCR[4] = "));
+
+        // Lecture PCR 23 (libre, vierge initialement)
+        let (st23, len23) = shell.execute_line("secboot pcr 23", &mut out);
+        assert_eq!(st23, ShellStatus::Success);
+        let s23 = core::str::from_utf8(&out[..len23]).unwrap();
+        assert!(s23.starts_with("PCR[23] = "));
+
+        // Erreur index PCR >= 24
+        let (st_err, len_err) = shell.execute_line("secboot pcr 24", &mut out);
+        assert_eq!(st_err, ShellStatus::InvalidArgument);
+        let s_err = core::str::from_utf8(&out[..len_err]).unwrap();
+        assert!(s_err.contains("secboot pcr: index PCR invalide"));
+
+        // Erreur sans argument
+        let (st_none, len_none) = shell.execute_line("secboot pcr", &mut out);
+        assert_eq!(st_none, ShellStatus::InvalidArgument);
+        let s_none = core::str::from_utf8(&out[..len_none]).unwrap();
+        assert!(s_none.contains("Usage: secboot pcr <index>"));
+    }
+
+    #[test]
+    fn test_secboot_measure() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 2048];
+
+        // Mesure sans digest specifie (calcule SHA-256 du nom)
+        let (st1, len1) = shell.execute_line("secboot measure 12 agent", &mut out);
+        assert_eq!(st1, ShellStatus::Success);
+        let s1 = core::str::from_utf8(&out[..len1]).unwrap();
+        assert!(s1.contains("secboot measure: PCR[12] etendu avec succes pour 'agent' -> Digest: "));
+
+        // Mesure avec empreinte hex 64 caracteres
+        let (st2, len2) = shell.execute_line(
+            "secboot measure 15 payload abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+            &mut out,
+        );
+        assert_eq!(st2, ShellStatus::Success);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(
+            s2.contains("secboot measure: PCR[15] etendu avec succes pour 'payload' -> Digest: ")
+        );
+
+        // Verifier que l'evenement est bien enregistre
+        let (st_ev, len_ev) = shell.execute_line("secboot events", &mut out);
+        assert_eq!(st_ev, ShellStatus::Success);
+        let s_ev = core::str::from_utf8(&out[..len_ev]).unwrap();
+        assert!(s_ev.contains("agent"));
+        assert!(s_ev.contains("payload"));
+    }
+
+    #[test]
+    fn test_secboot_events() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        let (st, len) = shell.execute_line("secboot events", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(
+            s.contains("Journal des Evenements de Demarrage Mesure (TPM 2.0 Event Log PID 26):")
+        );
+        assert!(s.contains("[0] PCR 0 | Component: CRTM | Digest: "));
+        assert!(s.contains("[1] PCR 4 | Component: Limine | Digest: "));
+        assert!(s.contains("[2] PCR 8 | Component: Kernel | Digest: "));
+        assert!(s.contains("[3] PCR 9 | Component: Initrd | Digest: "));
+        assert!(s.contains("[4] PCR 11 | Component: Policy | Digest: "));
+        assert!(s.contains("[5] PCR 12 | Component: Init | Digest: "));
+    }
+
+    #[test]
+    fn test_secboot_verify() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 2048];
+
+        let (st, len) = shell.execute_line("secboot verify", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("Verification de la Chaine de Confiance TPM 2.0 (PID 26):"));
+        assert!(s.contains("Chaine de Confiance     : VALID / INTACT"));
+        assert!(s.contains("Evenements Mesures      : 6"));
+        assert!(s.contains("Statut                  : CHAIN_VALID"));
+        assert!(
+            s.contains("Resultat                : Chaine de confiance valide et conforme TCG 2.0")
+        );
+    }
+
+    #[test]
+    fn test_secboot_invalid() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 1024];
+
+        let (st, len) = shell.execute_line("secboot unknown_cmd", &mut out);
+        assert_eq!(st, ShellStatus::InvalidArgument);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains(
+            "Usage: secboot [status|pcr <index>|measure <pcr> <name> [digest]|events|verify]"
+        ));
+
+        let (st2, len2) = shell.execute_line("secboot measure", &mut out);
+        assert_eq!(st2, ShellStatus::InvalidArgument);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("Usage: secboot measure <pcr> <name> [digest]"));
+
+        let (st3, len3) = shell.execute_line("secboot measure 24 bad_comp", &mut out);
+        assert_eq!(st3, ShellStatus::InvalidArgument);
+        let s3 = core::str::from_utf8(&out[..len3]).unwrap();
+        assert!(s3.contains("secboot measure: index PCR invalide"));
     }
 }

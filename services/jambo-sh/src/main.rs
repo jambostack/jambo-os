@@ -15,14 +15,14 @@ fn panic(_info: &core::panic::PanicInfo) -> ! {
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     println("\x1b[1;36m========================================\x1b[0m");
-    println("\x1b[1;32m  JamboOS Object Shell (jsh) v0.3.64    \x1b[0m");
+    println("\x1b[1;32m  JamboOS Object Shell (jsh) v0.3.65    \x1b[0m");
     println("\x1b[1;36m========================================\x1b[0m");
     print("\x1b[1;32mjambo:/# \x1b[0m");
 
     let mut shell = JamboShell::new();
     let mut line_buf = [0u8; 256];
     let mut line_pos = 0;
-    let mut out_buf = [0u8; 2048];
+    let mut out_buf = [0u8; 4096];
 
     loop {
         let mut rx_byte = [0u8; 1];
