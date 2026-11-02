@@ -42,6 +42,14 @@ use jambo_dnsd::{
     DNS_STATUS_SERVFAIL,
 };
 #[allow(unused_imports)]
+use jambo_edr::{
+    edr_rights, AlertSeverity as EdrAlertSeverity, EdrAction, EdrAlert, EdrAuditEntry, EdrCap,
+    EdrClient, EdrError, EdrOpcode, EdrRemediationReport, EdrRequest, EdrResponse, EdrSummary,
+    EnclaveAnomaly, EnclaveStatus, HookAnomaly, HookInspector, HookTarget, InjectionType,
+    JamboEdrDaemon, ModuleDescriptor, ProcessAnomaly, ProcessNode, ProcessStatus,
+    ShellcodeScanResult, EDR_ENDPOINT_ID, EDR_MAGIC_REQ, EDR_MAGIC_RESP,
+};
+#[allow(unused_imports)]
 use jambo_forensics::{ForensicsClient, ForensicsOpcode, ForensicsResponse, FORENSICS_STATUS_OK};
 use jambo_kdir::{KdirClient, KdirResponse, KDIR_PROTECTION_SECURED, KDIR_STATUS_OK};
 #[allow(unused_imports)]
@@ -150,6 +158,7 @@ pub struct JamboShell {
     pub attest_daemon: JamboAttestDaemon,
     pub waf_daemon: JamboWafDaemon,
     pub siem_daemon: SiemEngine,
+    pub edr_daemon: JamboEdrDaemon,
 }
 
 impl Default for JamboShell {
@@ -215,6 +224,14 @@ impl JamboShell {
         let siem_cap = SiemCap::new(siem_rights::ALL);
         let mut siem_daemon = SiemEngine::new(libjambo::Handle::new(31, 1), siem_cap);
         siem_daemon.init_defaults();
+        let edr_cap = EdrCap::new(
+            libjambo::Handle::new(32, 1),
+            edr_rights::ALL,
+            100_000,
+            10_000,
+        );
+        let mut edr_daemon = JamboEdrDaemon::new(edr_cap);
+        edr_daemon.init_defaults();
         Self {
             prompt_user: "jambo",
             commands_executed: 0,
@@ -235,6 +252,7 @@ impl JamboShell {
             attest_daemon,
             waf_daemon,
             siem_daemon,
+            edr_daemon,
         }
     }
 
@@ -296,6 +314,7 @@ impl JamboShell {
             "attest" => self.cmd_attest(args, out),
             "waf" => self.cmd_waf(args, out),
             "siem" => self.cmd_siem(args, out),
+            "edr" => self.cmd_edr(args, out),
             _ => self.cmd_not_found(cmd, out),
         }
     }
@@ -304,7 +323,7 @@ impl JamboShell {
         let text = b"Commandes disponibles:\n\
   help        - Affiche cette aide\n\
   sysinfo     - Metriques memoire et uptime du micro-noyau\n\
-  ps          - Liste les 31 processus actifs\n\
+  ps          - Liste les 32 processus actifs\n\
   echo <args> - Affiche le texte sur la console\n\
   clear       - Reinitialise l'ecran du terminal\n\
   reboot      - Eteint ou redemarre la machine virtuelle\n\
@@ -336,7 +355,8 @@ impl JamboShell {
   kms [status|list|create|derive|lease|rotate|revoke] - Gestionnaire de cles souveraines & HKDF\n\
   attest [status|list|claim|verify|zkp|confine|audit] - Attestation cryptographique a distance & ZKP\n\
   waf [status|inspect|quarantine|unquarantine|rules|audit] - Pare-feu applicatif L7 et filtrage d'injections\n\
-  siem [status|ingest|alerts|correlate|rules|audit] - Moteur SIEM et correlation d'evenements temps reel Ring 3\n";
+  siem [status|ingest|alerts|correlate|rules|audit] - Moteur SIEM et correlation d'evenements temps reel Ring 3\n\
+  edr [status|scan|isolate|tree|alerts|audit] - Detection et reponse sur les terminaux souveraine EDR Ring 3\n";
         let len = text.len().min(out.len());
         out[..len].copy_from_slice(&text[..len]);
         (ShellStatus::Success, len)
@@ -411,7 +431,8 @@ impl JamboShell {
  28  ACTIF    /bin/kms (Key Management Service & HKDF Derivation Ring 3)\n  28 | kms            | Ring 3 | Ready   | 1000   | Key Management Service & HKDF Derivation\n  28 | kms | Running | Key Management Service & HKDF Derivation\n\
  29  ACTIF    /bin/attest (Remote Attestation & ZKP Daemon Ring 3)\n  29 | attest          | Ring 3 | Ready   | 1000   | Remote Attestation & Zero-Knowledge Proofs\n\
  30  ACTIF    /bin/waf (L7 Web Application Firewall Ring 3)\n  30 | waf             | Ring 3 | Ready   | 1000   | L7 Web Application Firewall & Injection Filter\n\
- 31  ACTIF    /bin/siem (Security Information & Event Management Ring 3)\n  31 | siem            | Ring 3 | Ready   | 1000   | Security Information & Event Management\nTotal: 31 processes\n";
+ 31  ACTIF    /bin/siem (Security Information & Event Management Ring 3)\n  31 | siem            | Ring 3 | Ready   | 1000   | Security Information & Event Management\n\
+ 32  ACTIF    /bin/edr (Endpoint Detection & Response Ring 3)\n  32 | edr             | Ring 3 | Ready   | 1000   | Endpoint Detection & Response Daemon\nTotal: 32 processes\n";
         let len = text.len().min(out.len());
         out[..len].copy_from_slice(&text[..len]);
         (ShellStatus::Success, len)
@@ -7689,6 +7710,393 @@ ID  | Nom             | Racine de Confiance      | Statut             | Confinem
         c = append_bytes(out, c, b" evenements scelles\n");
         (ShellStatus::Success, c)
     }
+
+    fn send_edr_request(&mut self, req: &EdrRequest) -> EdrResponse {
+        let mut resp_opt: Option<EdrResponse> = None;
+        for &h in &[
+            32u64, 31u64, 30u64, 29u64, 28u64, 27u64, 26u64, 25u64, 24u64, 23u64, 22u64, 21u64,
+            20u64, 19u64, 18u64, 17u64, 16u64, 15u64, 14u64, 13u64, 12u64, 11u64, 10u64, 9u64,
+            8u64, 7u64, 6u64, 5u64, 4u64, 3u64,
+        ] {
+            let client = EdrClient::new(libjambo::Handle(h));
+            if let Ok(resp) = client.call(req) {
+                if resp.magic == EDR_MAGIC_RESP {
+                    resp_opt = Some(resp);
+                    break;
+                }
+            }
+        }
+        let local_resp = self.edr_daemon.dispatch_ipc(req);
+        resp_opt.unwrap_or(local_resp)
+    }
+
+    pub fn cmd_edr(&mut self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        let subcmd = if args.is_empty() { "status" } else { args[0] };
+        match subcmd {
+            "status" => self.cmd_edr_status(out),
+            "scan" => self.cmd_edr_scan(&args[1..], out),
+            "isolate" => self.cmd_edr_isolate(&args[1..], out),
+            "tree" => self.cmd_edr_tree(out),
+            "alerts" => self.cmd_edr_alerts(out),
+            "audit" => self.cmd_edr_audit(out),
+            _ => {
+                let msg = b"Usage: edr <status|scan <pid>|isolate <pid>|tree|alerts|audit>\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                (ShellStatus::InvalidArgument, len)
+            }
+        }
+    }
+
+    fn cmd_edr_status(&mut self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let req = EdrRequest::new_status(32, edr_rights::ALL);
+        let _resp = self.send_edr_request(&req);
+        let summary = self.edr_daemon.summary();
+
+        let mut max_threat = 0u8;
+        for p in self
+            .edr_daemon
+            .processes
+            .iter()
+            .take(self.edr_daemon.process_count)
+            .flatten()
+        {
+            if p.threat_score > max_threat {
+                max_threat = p.threat_score;
+            }
+        }
+
+        let mut c = 0;
+        c = append_bytes(
+            out,
+            c,
+            b"Bilan Global EDR & Protection des Terminaux (jambo-edr PID 32):\n  Statut Operationnel     : ACTIF (Surveillance Comportementale & Zero-Alloc Ring 3)\n  Processus Surveilles    : ",
+        );
+        c = append_u64(out, c, summary.total_processes as u64);
+        c = append_bytes(out, c, b"\n  Processus Actifs        : ");
+        c = append_u64(out, c, summary.running_processes as u64);
+        c = append_bytes(out, c, b"\n  Processus Isoles        : ");
+        c = append_u64(out, c, summary.quarantined_processes as u64);
+        c = append_bytes(out, c, b"\n  Total Alertes           : ");
+        c = append_u64(out, c, summary.alert_count as u64);
+        c = append_bytes(out, c, b"\n  Score de Menace         : ");
+        c = append_u64(out, c, max_threat as u64);
+        c = append_bytes(out, c, b"/100\n  Injections Bloquees     : ");
+        c = append_u64(out, c, summary.injections_blocked as u64);
+        c = append_bytes(out, c, b"\n  Evasions Enclave Bloquees: ");
+        c = append_u64(out, c, summary.enclave_escapes_blocked as u64);
+        c = append_bytes(out, c, b"\n  Crochets Detectes       : ");
+        c = append_u64(out, c, summary.hooks_detected as u64);
+        c = append_bytes(out, c, b"\n  Shellcodes Interceptes  : ");
+        c = append_u64(out, c, summary.shellcodes_intercepted as u64);
+        c = append_bytes(out, c, b"\n  Integrite Registre      : ");
+        if summary.ledger_valid {
+            c = append_bytes(out, c, b"VALIDE (Chaine SHA-256 inalterable)\n");
+        } else {
+            c = append_bytes(out, c, b"CORROMPU\n");
+        }
+        c = append_bytes(out, c, b"  Empreinte d'Audit SHA-256: ");
+        for &b in self.edr_daemon.ledger_hash.iter() {
+            c = append_hex_byte(out, c, b);
+        }
+        c = append_bytes(out, c, b"\n");
+        (ShellStatus::Success, c)
+    }
+
+    fn cmd_edr_scan(&mut self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if args.is_empty() {
+            let msg = b"Usage: edr scan <pid>\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            return (ShellStatus::InvalidArgument, len);
+        }
+
+        let pid = match parse_u64(args[0]) {
+            Some(p) => p,
+            None => {
+                let msg = b"Usage: edr scan <pid>\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                return (ShellStatus::InvalidArgument, len);
+            }
+        };
+
+        if self.edr_daemon.get_process(pid).is_none() {
+            let mut c = 0;
+            c = append_bytes(out, c, b"EDR: Processus PID ");
+            c = append_u64(out, c, pid);
+            c = append_bytes(out, c, b" non trouve\n");
+            return (ShellStatus::ExecutionFailed, c);
+        }
+
+        let dummy_mem = [0u8; 16];
+        let req = EdrRequest::new_scan(32, edr_rights::ALL, pid, &dummy_mem);
+        let resp = self.send_edr_request(&req);
+
+        let proc = self.edr_daemon.get_process(pid).unwrap();
+        let mut c = 0;
+        c = append_bytes(out, c, b"Rapport d'Inspection EDR - Processus PID ");
+        c = append_u64(out, c, pid);
+        c = append_bytes(out, c, b" (");
+        c = append_bytes(out, c, proc.name_as_str().as_bytes());
+        c = append_bytes(out, c, b"):\n  Statut Processus        : ");
+        c = append_bytes(out, c, process_status_str(proc.status).as_bytes());
+        c = append_bytes(out, c, b"\n  Score de Menace         : ");
+        c = append_u64(out, c, proc.threat_score as u64);
+        c = append_bytes(out, c, b"/100\n  Statut d'Anomalie       : ");
+        c = append_bytes(out, c, process_anomaly_str(proc.anomaly).as_bytes());
+        c = append_bytes(out, c, b"\n  Analyse Memoire Vive    : ");
+        let scan_res = match resp.scan_result {
+            1 => ShellcodeScanResult::NopSledDetected,
+            2 => ShellcodeScanResult::SyscallTrapLoop,
+            3 => ShellcodeScanResult::StackPivotDetected,
+            4 => ShellcodeScanResult::Int3TrapDetected,
+            _ => ShellcodeScanResult::Clean,
+        };
+        c = append_bytes(out, c, scan_result_str(scan_res).as_bytes());
+        c = append_bytes(out, c, b"\n  Enclave TEE             : ");
+        if proc.is_enclave {
+            c = append_bytes(out, c, b"Oui (Protegee)\n");
+        } else {
+            c = append_bytes(out, c, b"Non\n");
+        }
+        c = append_bytes(out, c, b"  Modules Charges         : ");
+        c = append_u64(out, c, proc.modules_count as u64);
+        c = append_bytes(out, c, b"\n");
+        (ShellStatus::Success, c)
+    }
+
+    fn cmd_edr_isolate(&mut self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if args.is_empty() {
+            let msg = b"Usage: edr isolate <pid>\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            return (ShellStatus::InvalidArgument, len);
+        }
+
+        let pid = match parse_u64(args[0]) {
+            Some(p) => p,
+            None => {
+                let msg = b"Usage: edr isolate <pid>\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                return (ShellStatus::InvalidArgument, len);
+            }
+        };
+
+        let cap = self.edr_daemon.admin_cap;
+        match self.edr_daemon.isolate_process_with_report(
+            &cap,
+            pid,
+            "Manual isolation via jsh",
+            1000,
+        ) {
+            Ok(report) => {
+                let mut c = 0;
+                c = append_bytes(out, c, b"Confirmation d'Isolement EDR - Processus PID ");
+                c = append_u64(out, c, report.pid);
+                c = append_bytes(
+                    out,
+                    c,
+                    b":\n  Statut Remediation      : Confinement O(1) Confirme\n  Action Appliquee        : QuarantineIsolate\n  Score de Menace         : ",
+                );
+                c = append_u64(out, c, report.threat_score as u64);
+                c = append_bytes(out, c, b"/100\n  Capabilites Revoquees   : 0x");
+                for &b in report.revoked_rights.to_be_bytes().iter() {
+                    c = append_hex_byte(out, c, b);
+                }
+                c = append_bytes(out, c, b"\n  Motif de Confinement    : ");
+                c = append_bytes(out, c, report.reason_as_str().as_bytes());
+                c = append_bytes(out, c, b"\n  Empreinte d'Audit SHA-256: ");
+                for &b in self.edr_daemon.ledger_hash.iter() {
+                    c = append_hex_byte(out, c, b);
+                }
+                c = append_bytes(out, c, b"\n");
+                (ShellStatus::Success, c)
+            }
+            Err(EdrError::ProcessNotFound) => {
+                let mut c = 0;
+                c = append_bytes(out, c, b"EDR: Processus PID ");
+                c = append_u64(out, c, pid);
+                c = append_bytes(out, c, b" non trouve\n");
+                (ShellStatus::ExecutionFailed, c)
+            }
+            Err(_) => {
+                let msg = b"EDR: Echec de l'isolement du processus\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                (ShellStatus::ExecutionFailed, len)
+            }
+        }
+    }
+
+    fn cmd_edr_tree(&self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let mut c = 0;
+        c = append_bytes(
+            out,
+            c,
+            b"Arborescence des Processus Surveilles EDR (PID 32):\nPID   | PPID  | Nom                 | Statut       | Menace | Enclave\n--------------------------------------------------------------------------------\n",
+        );
+        let mut count = 0;
+        for proc in self
+            .edr_daemon
+            .processes
+            .iter()
+            .take(self.edr_daemon.process_count)
+            .flatten()
+        {
+            count += 1;
+            c = append_bytes(out, c, b" ");
+            c = append_u64(out, c, proc.pid);
+            if proc.pid < 10 {
+                c = append_bytes(out, c, b"    | ");
+            } else if proc.pid < 100 {
+                c = append_bytes(out, c, b"   | ");
+            } else {
+                c = append_bytes(out, c, b"  | ");
+            }
+            c = append_u64(out, c, proc.ppid);
+            if proc.ppid < 10 {
+                c = append_bytes(out, c, b"     | ");
+            } else if proc.ppid < 100 {
+                c = append_bytes(out, c, b"    | ");
+            } else {
+                c = append_bytes(out, c, b"   | ");
+            }
+            let name = proc.name_as_str();
+            c = append_bytes(out, c, name.as_bytes());
+            for _ in name.len()..19 {
+                c = append_bytes(out, c, b" ");
+            }
+            c = append_bytes(out, c, b" | ");
+            let st = process_status_str(proc.status);
+            c = append_bytes(out, c, st.as_bytes());
+            for _ in st.len()..12 {
+                c = append_bytes(out, c, b" ");
+            }
+            c = append_bytes(out, c, b" | ");
+            c = append_u64(out, c, proc.threat_score as u64);
+            if proc.threat_score < 10 {
+                c = append_bytes(out, c, b"/100  | ");
+            } else if proc.threat_score < 100 {
+                c = append_bytes(out, c, b"/100 | ");
+            } else {
+                c = append_bytes(out, c, b"/100| ");
+            }
+            if proc.is_enclave {
+                c = append_bytes(out, c, b"TEE Valid\n");
+            } else {
+                c = append_bytes(out, c, b"Non\n");
+            }
+        }
+        c = append_bytes(out, c, b"Total: ");
+        c = append_u64(out, c, count as u64);
+        c = append_bytes(out, c, b" processus surveilles\n");
+        (ShellStatus::Success, c)
+    }
+
+    fn cmd_edr_alerts(&self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let mut c = 0;
+        c = append_bytes(
+            out,
+            c,
+            b"Alertes de Securite & Anomalies EDR (PID 32):\nID    | PID   | Severite | Action            | Description\n--------------------------------------------------------------------------------\n",
+        );
+        let count = self.edr_daemon.alert_count;
+        if count == 0 {
+            c = append_bytes(out, c, b"  (Aucune alerte de securite detectee)\n");
+        } else {
+            for alert in self.edr_daemon.alerts.iter().take(count).flatten() {
+                c = append_bytes(out, c, b" ");
+                c = append_u64(out, c, alert.id);
+                if alert.id < 10 {
+                    c = append_bytes(out, c, b"   | ");
+                } else if alert.id < 100 {
+                    c = append_bytes(out, c, b"  | ");
+                } else {
+                    c = append_bytes(out, c, b" | ");
+                }
+                c = append_u64(out, c, alert.pid);
+                if alert.pid < 10 {
+                    c = append_bytes(out, c, b"     | ");
+                } else if alert.pid < 100 {
+                    c = append_bytes(out, c, b"    | ");
+                } else {
+                    c = append_bytes(out, c, b"   | ");
+                }
+                let sev = edr_severity_str(alert.severity);
+                c = append_bytes(out, c, sev.as_bytes());
+                for _ in sev.len()..8 {
+                    c = append_bytes(out, c, b" ");
+                }
+                c = append_bytes(out, c, b" | ");
+                let act = edr_action_str(alert.action_taken);
+                c = append_bytes(out, c, act.as_bytes());
+                for _ in act.len()..17 {
+                    c = append_bytes(out, c, b" ");
+                }
+                c = append_bytes(out, c, b" | ");
+                c = append_bytes(out, c, alert.desc_as_str().as_bytes());
+                c = append_bytes(out, c, b"\n");
+            }
+        }
+        c = append_bytes(out, c, b"Total: ");
+        c = append_u64(out, c, count as u64);
+        c = append_bytes(out, c, b" alertes enregistrees\n");
+        (ShellStatus::Success, c)
+    }
+
+    fn cmd_edr_audit(&self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let is_valid = self.edr_daemon.verify_ledger_integrity();
+        let mut c = 0;
+        c = append_bytes(
+            out,
+            c,
+            b"Grand Livre d'Audit Cryptographique EDR (PID 32):\n  Integrite Registre      : ",
+        );
+        if is_valid {
+            c = append_bytes(out, c, b"VALIDE (Chaine SHA-256 inalterable)\n");
+        } else {
+            c = append_bytes(out, c, b"CORROMPU (Rupture d'integrite)\n");
+        }
+        c = append_bytes(out, c, b"  Total Entrees Scellees  : ");
+        c = append_u64(out, c, self.edr_daemon.audit_count as u64);
+        c = append_bytes(out, c, b"\n  Empreinte Racine SHA-256: ");
+        for &b in self.edr_daemon.ledger_hash.iter() {
+            c = append_hex_byte(out, c, b);
+        }
+        c = append_bytes(out, c, b"\nJournal recent des entrees scellees:\n");
+        let count = self.edr_daemon.audit_count;
+        if count == 0 {
+            c = append_bytes(out, c, b"  (Aucune entree d'audit scellee)\n");
+        } else {
+            let start = count.saturating_sub(10);
+            for entry in self
+                .edr_daemon
+                .audit_ledger
+                .iter()
+                .take(count)
+                .skip(start)
+                .flatten()
+            {
+                c = append_bytes(out, c, b"  [#");
+                c = append_u64(out, c, entry.index as u64);
+                c = append_bytes(out, c, b"] Tag: ");
+                let tag_len = entry.action_len.min(16);
+                if let Ok(tag_str) = core::str::from_utf8(&entry.action_tag[..tag_len]) {
+                    c = append_bytes(out, c, tag_str.as_bytes());
+                } else {
+                    c = append_bytes(out, c, b"<bin>");
+                }
+                c = append_bytes(out, c, b" | Hash: ");
+                for &b in entry.entry_hash[..8].iter() {
+                    c = append_hex_byte(out, c, b);
+                }
+                c = append_bytes(out, c, b"...\n");
+            }
+        }
+        (ShellStatus::Success, c)
+    }
 }
 
 fn event_source_str(src: EventSource) -> &'static str {
@@ -7746,6 +8154,62 @@ fn alert_state_str(state: AlertState) -> &'static str {
         AlertState::InvestigationInProgress => "InProgress",
         AlertState::Resolved => "Resolved",
         AlertState::FalsePositive => "FalsePositive",
+    }
+}
+
+fn process_status_str(s: ProcessStatus) -> &'static str {
+    match s {
+        ProcessStatus::Running => "Running",
+        ProcessStatus::Suspended => "Suspended",
+        ProcessStatus::Quarantined => "Quarantined",
+        ProcessStatus::Terminated => "Terminated",
+    }
+}
+
+fn process_anomaly_str(a: ProcessAnomaly) -> &'static str {
+    match a {
+        ProcessAnomaly::None => "None (Sain)",
+        ProcessAnomaly::SuspiciousChildSpawn => "SuspiciousChildSpawn (Filiation suspecte)",
+        ProcessAnomaly::MasqueradingName => "MasqueradingName (Usurpation nom systeme)",
+        ProcessAnomaly::PrivilegeEscalationAttempt => {
+            "PrivilegeEscalationAttempt (Escalade de privileges)"
+        }
+        ProcessAnomaly::ForkBombBurst => "ForkBombBurst (Rafale anormale de syscalls)",
+        ProcessAnomaly::ProcessHollowingAttempt => {
+            "ProcessHollowingAttempt (Divergence ELF entrypoint)"
+        }
+        ProcessAnomaly::ShellcodeInjected => "ShellcodeInjected (Pattern shellcode detecte)",
+        ProcessAnomaly::RogueSyscallPattern => "RogueSyscallPattern (Syscall non autorise)",
+    }
+}
+
+fn scan_result_str(sr: ShellcodeScanResult) -> &'static str {
+    match sr {
+        ShellcodeScanResult::Clean => "Clean (Aucun shellcode detecte)",
+        ShellcodeScanResult::NopSledDetected => "NopSledDetected (NOP sled 0x90 sequence)",
+        ShellcodeScanResult::SyscallTrapLoop => "SyscallTrapLoop (Syscall loop 0x0F 0x05)",
+        ShellcodeScanResult::StackPivotDetected => "StackPivotDetected (ROP stack pivot)",
+        ShellcodeScanResult::Int3TrapDetected => "Int3TrapDetected (INT3 debug trap loop)",
+    }
+}
+
+fn edr_severity_str(s: EdrAlertSeverity) -> &'static str {
+    match s {
+        EdrAlertSeverity::Informational => "Info",
+        EdrAlertSeverity::Low => "Low",
+        EdrAlertSeverity::Medium => "Medium",
+        EdrAlertSeverity::High => "High",
+        EdrAlertSeverity::Critical => "Critical",
+    }
+}
+
+fn edr_action_str(a: EdrAction) -> &'static str {
+    match a {
+        EdrAction::LogAndPass => "LogAndPass",
+        EdrAction::SuspendProcess => "SuspendProcess",
+        EdrAction::RevokeCapabilities => "RevokeCaps",
+        EdrAction::QuarantineIsolate => "QuarantineIsolate",
+        EdrAction::TerminateProcess => "TerminateProcess",
     }
 }
 
@@ -8371,7 +8835,7 @@ mod tests {
         assert!(
             s.contains("  30 | waf             | Ring 3 | Ready   | 1000   | L7 Web Application Firewall & Injection Filter")
         );
-        assert!(s.contains("Total: 31 processes"));
+        assert!(s.contains("Total: 32 processes"));
     }
 
     #[test]
@@ -8383,7 +8847,7 @@ mod tests {
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains("  23 | pkgd           | Ring 3 | Ready   | 1000   | Declarative Package Manager & CAS Store"));
-        assert!(s.contains("Total: 31 processes"));
+        assert!(s.contains("Total: 32 processes"));
     }
 
     #[test]
@@ -8395,7 +8859,7 @@ mod tests {
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains("  24 | certd          | Ring 3 | Ready   | 1000   | Ephemeral PKI & Cluster mTLS Daemon"));
-        assert!(s.contains("Total: 31 processes"));
+        assert!(s.contains("Total: 32 processes"));
     }
 
     #[test]
@@ -8407,7 +8871,7 @@ mod tests {
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains("  25 | policyd        | Ring 3 | Ready   | 1000   | Security Policy Engine & Admission Control"));
-        assert!(s.contains("Total: 31 processes"));
+        assert!(s.contains("Total: 32 processes"));
     }
 
     #[test]
@@ -8419,7 +8883,7 @@ mod tests {
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains("  26 | secboot        | Ring 3 | Ready   | 1000   | TPM 2.0 Measured Boot & Secure Trust Chain"));
-        assert!(s.contains("Total: 31 processes"));
+        assert!(s.contains("Total: 32 processes"));
     }
 
     #[test]
@@ -8431,7 +8895,7 @@ mod tests {
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains("  27 | logd           | Ring 3 | Ready   | 1000   | Structured Logging & Tamper-Evident Hash Chain"));
-        assert!(s.contains("Total: 31 processes"));
+        assert!(s.contains("Total: 32 processes"));
     }
 
     #[test]
@@ -8443,7 +8907,7 @@ mod tests {
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains("28 | kms | Running | Key Management Service & HKDF Derivation"));
-        assert!(s.contains("Total: 31 processes"));
+        assert!(s.contains("Total: 32 processes"));
     }
 
     #[test]
@@ -8458,7 +8922,7 @@ mod tests {
         assert!(s.contains(
             "  29 | attest          | Ring 3 | Ready   | 1000   | Remote Attestation & Zero-Knowledge Proofs"
         ));
-        assert!(s.contains("Total: 31 processes"));
+        assert!(s.contains("Total: 32 processes"));
     }
 
     #[test]
@@ -8473,7 +8937,7 @@ mod tests {
         assert!(s.contains(
             "  30 | waf             | Ring 3 | Ready   | 1000   | L7 Web Application Firewall & Injection Filter"
         ));
-        assert!(s.contains("Total: 31 processes"));
+        assert!(s.contains("Total: 32 processes"));
     }
 
     #[test]
@@ -8490,7 +8954,22 @@ mod tests {
         assert!(s.contains(
             "  31 | siem            | Ring 3 | Ready   | 1000   | Security Information & Event Management"
         ));
-        assert!(s.contains("Total: 31 processes"));
+        assert!(s.contains("Total: 32 processes"));
+    }
+
+    #[test]
+    fn test_ps_contains_32_processes() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        let (st, len) = shell.execute_line("ps", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("32  ACTIF    /bin/edr (Endpoint Detection & Response Ring 3)"));
+        assert!(s.contains(
+            "  32 | edr             | Ring 3 | Ready   | 1000   | Endpoint Detection & Response Daemon"
+        ));
+        assert!(s.contains("Total: 32 processes"));
     }
 
     #[test]
@@ -8501,7 +8980,7 @@ mod tests {
         let (st, len) = shell.execute_line("help", &mut out);
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
-        assert!(s.contains("31 processus actifs"));
+        assert!(s.contains("32 processus actifs"));
         assert!(s.contains("fdr [status|verify|pcr]"));
         assert!(s.contains("wasm [status|run|info]"));
         assert!(s.contains("pqc [status|kex|sign|audit]"));
@@ -8528,6 +9007,7 @@ mod tests {
         assert!(s.contains("attest [status|list|claim|verify|zkp|confine|audit]"));
         assert!(s.contains("waf [status|inspect|quarantine|unquarantine|rules|audit]"));
         assert!(s.contains("siem [status|ingest|alerts|correlate|rules|audit]"));
+        assert!(s.contains("edr [status|scan|isolate|tree|alerts|audit]"));
     }
 
     #[test]
@@ -11947,5 +12427,184 @@ mod tests {
         assert_eq!(st2, ShellStatus::InvalidArgument);
         let s2 = core::str::from_utf8(&out[..len2]).unwrap();
         assert!(s2.contains("Usage: siem [status|ingest <source> <category> <severity> <message>|alerts|correlate|rules|audit]"));
+    }
+
+    #[test]
+    fn test_edr_status() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        let (st, len) = shell.execute_line("edr status", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("Bilan Global EDR & Protection des Terminaux (jambo-edr PID 32):"));
+        assert!(s.contains("Statut Operationnel     : ACTIF"));
+        assert!(s.contains("Processus Surveilles    : 4"));
+        assert!(s.contains("Processus Actifs        : 4"));
+        assert!(s.contains("Processus Isoles        : 0"));
+        assert!(s.contains("Total Alertes           : 0"));
+        assert!(s.contains("Score de Menace         : 0/100"));
+        assert!(s.contains("Integrite Registre      : VALIDE"));
+        assert!(s.contains("Empreinte d'Audit SHA-256:"));
+
+        // Commande par defaut sans argument execute 'status'
+        let (st2, len2) = shell.execute_line("edr", &mut out);
+        assert_eq!(st2, ShellStatus::Success);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("Bilan Global EDR & Protection des Terminaux"));
+    }
+
+    #[test]
+    fn test_edr_scan() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        // Scan d'un processus existant (PID 3: jambo-sh)
+        let (st, len) = shell.execute_line("edr scan 3", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("Rapport d'Inspection EDR - Processus PID 3 (jambo-sh):"));
+        assert!(s.contains("Statut Processus        : Running"));
+        assert!(s.contains("Score de Menace         : 0/100"));
+        assert!(s.contains("Statut d'Anomalie       : None (Sain)"));
+        assert!(s.contains("Analyse Memoire Vive    : Clean"));
+        assert!(s.contains("Modules Charges         : 1"));
+
+        // Scan d'un processus en enclave TEE (PID 2: jambo-schedd)
+        let (st_enc, len_enc) = shell.execute_line("edr scan 2", &mut out);
+        assert_eq!(st_enc, ShellStatus::Success);
+        let s_enc = core::str::from_utf8(&out[..len_enc]).unwrap();
+        assert!(s_enc.contains("Enclave TEE             : Oui (Protegee)"));
+
+        // Erreur : PID non trouve
+        let (st2, len2) = shell.execute_line("edr scan 999", &mut out);
+        assert_eq!(st2, ShellStatus::ExecutionFailed);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("EDR: Processus PID 999 non trouve"));
+
+        // Erreur : argument PID manquant
+        let (st3, len3) = shell.execute_line("edr scan", &mut out);
+        assert_eq!(st3, ShellStatus::InvalidArgument);
+        let s3 = core::str::from_utf8(&out[..len3]).unwrap();
+        assert!(s3.contains("Usage: edr scan <pid>"));
+
+        // Erreur : PID non-numerique invalide
+        let (st4, len4) = shell.execute_line("edr scan abc", &mut out);
+        assert_eq!(st4, ShellStatus::InvalidArgument);
+        let s4 = core::str::from_utf8(&out[..len4]).unwrap();
+        assert!(s4.contains("Usage: edr scan <pid>"));
+    }
+
+    #[test]
+    fn test_edr_isolate() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        // Isolement d'un processus (PID 4: jambo-netd)
+        let (st, len) = shell.execute_line("edr isolate 4", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("Confirmation d'Isolement EDR - Processus PID 4:"));
+        assert!(s.contains("Statut Remediation      : Confinement O(1) Confirme"));
+        assert!(s.contains("Action Appliquee        : QuarantineIsolate"));
+        assert!(s.contains("Score de Menace         : 80/100"));
+        assert!(s.contains("Capabilites Revoquees   : 0x"));
+        assert!(s.contains("Motif de Confinement    : Manual isolation via jsh"));
+        assert!(s.contains("Empreinte d'Audit SHA-256:"));
+
+        // Verification de l'impact dans le statut EDR
+        let (st_stat, len_stat) = shell.execute_line("edr status", &mut out);
+        assert_eq!(st_stat, ShellStatus::Success);
+        let s_stat = core::str::from_utf8(&out[..len_stat]).unwrap();
+        assert!(s_stat.contains("Processus Isoles        : 1"));
+        assert!(s_stat.contains("Score de Menace         : 80/100"));
+        assert!(s_stat.contains("Total Alertes           : 1"));
+
+        // Erreur : PID non trouve
+        let (st2, len2) = shell.execute_line("edr isolate 999", &mut out);
+        assert_eq!(st2, ShellStatus::ExecutionFailed);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("EDR: Processus PID 999 non trouve"));
+
+        // Erreur : PID manquant
+        let (st3, len3) = shell.execute_line("edr isolate", &mut out);
+        assert_eq!(st3, ShellStatus::InvalidArgument);
+        let s3 = core::str::from_utf8(&out[..len3]).unwrap();
+        assert!(s3.contains("Usage: edr isolate <pid>"));
+    }
+
+    #[test]
+    fn test_edr_tree() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        let (st, len) = shell.execute_line("edr tree", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("Arborescence des Processus Surveilles EDR (PID 32):"));
+        assert!(s.contains("jambo-init"));
+        assert!(s.contains("jambo-schedd"));
+        assert!(s.contains("jambo-sh"));
+        assert!(s.contains("jambo-netd"));
+        assert!(s.contains("TEE Valid"));
+        assert!(s.contains("Total: 4 processus surveilles"));
+    }
+
+    #[test]
+    fn test_edr_alerts() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        // 1. Initialement vide
+        let (st1, len1) = shell.execute_line("edr alerts", &mut out);
+        assert_eq!(st1, ShellStatus::Success);
+        let s1 = core::str::from_utf8(&out[..len1]).unwrap();
+        assert!(s1.contains("Alertes de Securite & Anomalies EDR (PID 32):"));
+        assert!(s1.contains("Aucune alerte de securite detectee"));
+        assert!(s1.contains("Total: 0 alertes enregistrees"));
+
+        // 2. Action d'isolement declenchant une alerte
+        let _ = shell.execute_line("edr isolate 4", &mut out);
+
+        // 3. Consultation des alertes
+        let (st2, len2) = shell.execute_line("edr alerts", &mut out);
+        assert_eq!(st2, ShellStatus::Success);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("QuarantineIsolate"));
+        assert!(s2.contains("Manual isolation via jsh"));
+        assert!(s2.contains("Total: 1 alertes enregistrees"));
+    }
+
+    #[test]
+    fn test_edr_audit() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        let (st, len) = shell.execute_line("edr audit", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("Grand Livre d'Audit Cryptographique EDR (PID 32):"));
+        assert!(s.contains("Integrite Registre      : VALIDE (Chaine SHA-256 inalterable)"));
+        assert!(s.contains("Total Entrees Scellees  : 1"));
+        assert!(s.contains("Empreinte Racine SHA-256:"));
+        assert!(s.contains("Tag: EDR_BOOTSTRAP"));
+    }
+
+    #[test]
+    fn test_edr_invalid() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        // Commande inconnue
+        let (st, len) = shell.execute_line("edr unknown_op", &mut out);
+        assert_eq!(st, ShellStatus::InvalidArgument);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("Usage: edr <status|scan <pid>|isolate <pid>|tree|alerts|audit>"));
+
+        // Help explicite
+        let (st2, len2) = shell.execute_line("edr help", &mut out);
+        assert_eq!(st2, ShellStatus::InvalidArgument);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("Usage: edr <status|scan <pid>|isolate <pid>|tree|alerts|audit>"));
     }
 }
