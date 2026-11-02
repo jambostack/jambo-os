@@ -29,6 +29,7 @@ members = [
     "services/jambo-watchdogd",
     "services/jambo-cored",
     "services/jambo-pkgd",
+    "services/jambo-certd",
     "xtask",
 ]
 

@@ -78,3 +78,4 @@ Ce plan détaille la promotion de `jambo-certd` depuis `incubator/services/jambo
   4. Compiler l'image complète avec `cargo xtask build --release`.
   5. Mettre à jour `target/qemu_output.log` avec la trace de boot QEMU comprenant les 24 démons.
   6. Valider l'état propre du workspace avant le commit final.
+

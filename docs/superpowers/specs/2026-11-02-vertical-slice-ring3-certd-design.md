@@ -60,7 +60,7 @@ pub struct CertRequest {
     pub key_usage: u32,           // Masque d'usages autorisés
     pub validity_seconds: u32,    // Durée de validité en secondes
     pub public_key: [u8; 16],     // Empreinte compacte de clé publique
-    pub subject: [u8; 20],        // Nom du service / sujet (ex: "netd.jambo", "pkgd.jambo")
+    pub subject: [u8; 16],        // Nom du service / sujet (ex: "netd.jambo", "pkgd.jambo")
 }
 
 const _: () = assert!(core::mem::size_of::<CertRequest>() == 64);
@@ -128,3 +128,4 @@ Le shell `jsh` intègre le sous-système `cert` avec les commandes suivantes :
   - Compilation du binaire `certd` en mode bare-metal `x86_64-unknown-none`.
   - Intégration dans le tuple de 24 binaires utilisateur pour la génération de l'archive `initrd.img`.
   - Vérification automatisée dans `run_test` du message officiel QEMU.
+
