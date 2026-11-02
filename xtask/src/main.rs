@@ -1038,10 +1038,41 @@ fn build_edr(release: bool) -> anyhow::Result<PathBuf> {
     Ok(root.join(format!("target/x86_64-unknown-none/{}/edr", profile)))
 }
 
+fn build_ndr(release: bool) -> anyhow::Result<PathBuf> {
+    let root = root_dir();
+    let mut cmd = Command::new("cargo");
+    cmd.current_dir(&root);
+    cmd.args([
+        "build",
+        "--package",
+        "jambo-ndr",
+        "--bin",
+        "ndr",
+        "--target",
+        "x86_64-unknown-none",
+    ]);
+    if release {
+        cmd.arg("--release");
+    }
+    cmd.env(
+        "RUSTFLAGS",
+        "-C link-arg=-Tlibs/user-x86_64.ld -C relocation-model=static",
+    );
+
+    let status = cmd.status()?;
+    if !status.success() {
+        anyhow::bail!("Échec de compilation du binaire jambo-ndr (ndr)");
+    }
+
+    let profile = if release { "release" } else { "debug" };
+    Ok(root.join(format!("target/x86_64-unknown-none/{}/ndr", profile)))
+}
+
 #[allow(clippy::type_complexity)]
 fn build_userland(
     release: bool,
 ) -> anyhow::Result<(
+    PathBuf,
     PathBuf,
     PathBuf,
     PathBuf,
@@ -1107,10 +1138,11 @@ fn build_userland(
     let waf = build_waf(release)?;
     let siem = build_siem(release)?;
     let edr = build_edr(release)?;
+    let ndr = build_ndr(release)?;
     Ok((
         init, jsh, blockd, fs, netd, fdr, wasmd, pqc, kdir, forensics, powerd, metricsd, bpfd, vpn,
         authd, dnsd, timed, auditd, walld, vaultd, watchdogd, cored, pkgd, certd, policyd, secboot,
-        logd, kms, attest, waf, siem, edr,
+        logd, kms, attest, waf, siem, edr, ndr,
     ))
 }
 
@@ -1159,8 +1191,8 @@ fn create_disk_image(path: &Path) -> anyhow::Result<()> {
     file.seek(SeekFrom::Start(8192))?;
     file.write_all(&root_buf)?;
 
-    // 3. Données à l'offset 12288 (LBA 24..31) : "Bienvenue sur JamboOS v0.3.71\n"
-    let banner_data = b"Bienvenue sur JamboOS v0.3.71\n";
+    // 3. Données à l'offset 12288 (LBA 24..31) : "Bienvenue sur JamboOS v0.3.72\n"
+    let banner_data = b"Bienvenue sur JamboOS v0.3.72\n";
     let mut data_buf = [0u8; 4096];
     data_buf[..banner_data.len()].copy_from_slice(banner_data);
 
@@ -1206,6 +1238,7 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
         waf_bin,
         siem_bin,
         edr_bin,
+        ndr_bin,
     ) = build_userland(release)?;
 
     let initrd_stage = root.join("target/initrd_stage");
@@ -1268,6 +1301,8 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
     fs::copy(&siem_bin, bin_dir.join("jambo-siem"))?;
     fs::copy(&edr_bin, bin_dir.join("edr"))?;
     fs::copy(&edr_bin, bin_dir.join("jambo-edr"))?;
+    fs::copy(&ndr_bin, bin_dir.join("ndr"))?;
+    fs::copy(&ndr_bin, bin_dir.join("jambo-ndr"))?;
 
     fs::copy(&init_bin, initrd_stage.join("init"))?;
     fs::copy(&jsh_bin, initrd_stage.join("jsh"))?;
@@ -1324,6 +1359,8 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
     fs::copy(&siem_bin, initrd_stage.join("jambo-siem"))?;
     fs::copy(&edr_bin, initrd_stage.join("edr"))?;
     fs::copy(&edr_bin, initrd_stage.join("jambo-edr"))?;
+    fs::copy(&ndr_bin, initrd_stage.join("ndr"))?;
+    fs::copy(&ndr_bin, initrd_stage.join("jambo-ndr"))?;
 
     let initrd_tar = root.join("target/initrd.tar");
     let status = Command::new("tar")
@@ -1386,6 +1423,8 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
             "bin/jambo-siem",
             "bin/edr",
             "bin/jambo-edr",
+            "bin/ndr",
+            "bin/jambo-ndr",
             "init",
             "jsh",
             "blockd",
@@ -1441,6 +1480,8 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
             "jambo-siem",
             "edr",
             "jambo-edr",
+            "ndr",
+            "jambo-ndr",
         ])
         .status()?;
 
@@ -1651,6 +1692,9 @@ fn run_test(release: bool) -> anyhow::Result<()> {
     let code = output.status.code().unwrap_or(-1);
     let success = code == 33
         || combined.contains(
+            "[PASS] Detection & Reponse Reseau NDR (jambo-ndr PID 33) validee",
+        )
+        || combined.contains(
             "[PASS] Detection & Reponse sur Terminaux EDR (jambo-edr PID 32) validee",
         )
         || combined.contains(
@@ -1728,7 +1772,7 @@ fn run_test(release: bool) -> anyhow::Result<()> {
 
     if success {
         println!("{}", stdout);
-        println!("\x1b[1;32m[TEST PASSÉ AVEC SUCCÈS] Validation complète de JamboKernel Iron Core, JamboFS, VirtIO-Net, FDR, Wasm, PQC, KDIR, Forensics, Powerd, Metrics, BPF, VPN, Authd, Dnsd, Timed, Auditd, Walld, Vaultd, Watchdogd, Cored, Pkgd, Certd, Policyd, Secboot, Logd, Kms, Attest, Waf, Siem & Edr Ring 3.\x1b[0m");
+        println!("\x1b[1;32m[TEST PASSÉ AVEC SUCCÈS] Validation complète de JamboKernel Iron Core, JamboFS, VirtIO-Net, FDR, Wasm, PQC, KDIR, Forensics, Powerd, Metrics, BPF, VPN, Authd, Dnsd, Timed, Auditd, Walld, Vaultd, Watchdogd, Cored, Pkgd, Certd, Policyd, Secboot, Logd, Kms, Attest, Waf, Siem, Edr & Ndr Ring 3.\x1b[0m");
         Ok(())
     } else {
         eprintln!("{}", combined);
