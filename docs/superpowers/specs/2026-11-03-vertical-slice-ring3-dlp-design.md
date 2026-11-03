@@ -126,3 +126,4 @@ const _: () = assert!(core::mem::size_of::<DlpResponse>() == 64);
   - Intégration dans `build_userland` (38 binaires).
   - Copie dans `/bin/dlp`, `/bin/jambo-dlp`, `/dlp`, `/jambo-dlp`.
   - Validation QEMU UEFI avec code de sortie 33 (`isa-debug-exit`).
+

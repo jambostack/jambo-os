@@ -3,7 +3,7 @@ BdsDxe: starting Boot0002 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x
 [2J[01;01H[01;01H[2J[01;01H[01;01H[BOOT] Protocole Limine actif (révision détectée : 3)
 [1;36m
 ================================================================================
-    JAMBO-OS (JamboKernel v0.3.76 — Iron Core)                                 
+    JAMBO-OS (JamboKernel v0.3.77 — Iron Core)                                 
     Architecture : Micro-noyau orienté capacités en Rust no_std (x86_64/AArch64)
     Auteur & Architecte Principal : ASSOGBA Prudence Dieudonné                 
     Dépôt Officiel : https://github.com/jambostack/jambo-os                    
@@ -72,7 +72,7 @@ BdsDxe: starting Boot0002 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x
 [SMP] Cœur AP #3 démarré (LAPIC ID: 3)
 [SCHED/EEVDF] Ordonnanceur EEVDF opérationnel avec 2 threads de test en file
 [BOOT/MODULES] Détection de 1 module(s) d'amorçage Limine :
-  [00] Module '/boot/initrd.tar' | 6764544 octets (cmdline: '')
+  [00] Module '/boot/initrd.tar' | 6995968 octets (cmdline: '')
 [INITRD/TAR] Superviseur '/bin/init' extrait (0x23e0 octets)
 [INITRD/TAR] Shell interactif '/bin/jsh' extrait (0x2d478 octets)
 [INITRD/TAR] Démon de stockage '/bin/blockd' extrait (0x134e8 octets)
@@ -110,6 +110,7 @@ BdsDxe: starting Boot0002 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x
 [INITRD/TAR] Demon Surveillance & Reponse SOAR '/bin/soar' extrait (0xdc98 octets)
 [INITRD/TAR] Demon Analyse Comportementale UEBA '/bin/ueba' extrait (0x7c30 octets)
 [INITRD/TAR] Demon Detection & Reponse Menaces Identites ITDR '/bin/itdr' extrait (0x7bc8 octets)
+[INITRD/TAR] Demon Prevention Fuites Donnees DLP '/bin/dlp' extrait (0x9c90 octets)
 [PROCESS] Processus utilisateur init (PID 1) initialisé avec pile System V ABI (RSP: 0x00007ffffffeff10)
 [PROCESS] Shell utilisateur interactif jsh (PID 2) initialisé avec pile System V ABI (RSP: 0x00007ffffffeff20) et enfilé
 [PROCESS] Démon de stockage blockd (PID 3) initialisé avec pile System V ABI (RSP: 0x00007ffffffeff20) et enfilé
@@ -147,6 +148,7 @@ BdsDxe: starting Boot0002 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x
 [PROCESS] Demon Surveillance & Reponse SOAR soar (PID 35) initialise avec pile System V ABI (RSP: 0x00007ffffffeff20) et enfile
 [PROCESS] Demon Analyse Comportementale UEBA ueba (PID 36) initialise avec pile System V ABI (RSP: 0x00007ffffffeff20) et enfile
 [PROCESS] Demon Detection & Reponse Menaces Identites itdr (PID 37) initialise avec pile System V ABI (RSP: 0x00007ffffffeff20) et enfile
+[PROCESS] Demon Prevention Fuites Donnees dlp (PID 38) initialise avec pile System V ABI (RSP: 0x00007ffffffeff20) et enfile
 [CAP/CSPACE] Table de capacités active. Handle initial: 0x100000001, Handle atténué: 0x100000002
 [SYSCALL] Appel système vmo_create validé (Code retour: 0, Nouveau Handle: 0x100000003)
 [SYSCALL] Cycle de vie validé : process_create (0x100000004), thread_create (0x100000005), vmo_map & thread_start
@@ -190,6 +192,16 @@ BdsDxe: starting Boot0002 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x
 [ITDR] Auto-test reussi : moteur ITDR, attestation d'identite et reponse valides.
 [ITDR] Serveur ITDR (jambo-itdr PID 37) pret.
 [ITDR] Canal IPC ITDR operationnel (endpoint PID 37 pret).
-[TEST] Validation de l'initialisation des 37 processus Ring 3 (init, jsh, blockd, fs, netd, fdr, wasmd, pqc, kdir, forensics, powerd, metricsd, bpfd, vpn, authd, dnsd, timed, auditd, walld, vaultd, watchdogd, cored, pkgd, certd, policyd, secboot, logd, kms, attest, waf, siem, edr, ndr, xdr, soar, ueba, itdr)...
- [1;32m[PASS] Detection & Reponse Menaces Identites ITDR (jambo-itdr PID 37) validee sous QEMU.[0m
+[DLP] Daemon DLP souverain et politiques fondamentales initialises (PID 38).
+[DLP] Demarrage de l'auto-test du service DLP...
+[DLP] Auto-test 1: Politiques DLP fondamentales par defaut : OK (6 regles).
+[DLP] Auto-test 2: Inspection nominale flux inoffensif : OK (ALLOW).
+[DLP] Auto-test 3: Masquage PCI-DSS numero de carte : OK (MASK).
+[DLP] Auto-test 4: Blocage et confinement cle privee SSH : OK (BLOCK/QUARANTINE).
+[DLP] Auto-test 5: Scellement cryptographique d'audit SHA-256 : OK.
+[DLP] Auto-test reussi : moteur DLP, classification et masquage valides.
+[DLP] Serveur DLP (jambo-dlp PID 38) pret.
+[DLP] Canal IPC DLP operationnel (endpoint PID 38 pret).
+[TEST] Validation de l'initialisation des 38 processus Ring 3 (init, jsh, blockd, fs, netd, fdr, wasmd, pqc, kdir, forensics, powerd, metricsd, bpfd, vpn, authd, dnsd, timed, auditd, walld, vaultd, watchdogd, cored, pkgd, certd, policyd, secboot, logd, kms, attest, waf, siem, edr, ndr, xdr, soar, ueba, itdr, dlp)...
+ [1;32m[PASS] Prevention des Fuites de Donnees DLP (jambo-dlp PID 38) validee sous QEMU.[0m
 [TEST] Mode de test CI validé. Sortie propre via isa-debug-exit...
