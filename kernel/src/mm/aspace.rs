@@ -85,6 +85,19 @@ impl AddressSpace {
         Ok(())
     }
 
+    /// Traduit une adresse virtuelle en adresse physique
+    pub fn translate(&self, vaddr: usize) -> Option<usize> {
+        let mappings = self.mappings.lock();
+        let mapping = mappings
+            .iter()
+            .find(|m| vaddr >= m.vaddr && vaddr < m.vaddr + m.vmo.size())?;
+        let offset_in_vmo = vaddr - mapping.vaddr;
+        let page_idx = offset_in_vmo / PAGE_SIZE;
+        let page_offset = offset_in_vmo % PAGE_SIZE;
+        let paddr = mapping.vmo.get_or_alloc_page(page_idx)?;
+        Some(paddr + page_offset)
+    }
+
     /// Résout un défaut de page (Page Fault #14) pour Demand Paging ou Copy-on-Write
     pub fn handle_page_fault(
         &self,

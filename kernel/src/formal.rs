@@ -223,8 +223,8 @@ pub fn verify_ipc_channel_deadlock_freedom_and_soundness() -> FormalProofResult 
     };
     msg2.bytes[0..4].copy_from_slice(&[5, 6, 7, 8]);
 
-    assert!(ep_a.send(msg1).is_ok());
-    assert!(ep_a.send(msg2).is_ok());
+    assert!(ep_a.send(msg1.into()).is_ok());
+    assert!(ep_a.send(msg2.into()).is_ok());
 
     // Réception FIFO stricte côté B
     let recvd1 = ep_b.recv().expect("Recv msg1").expect("Queue not empty");
@@ -250,7 +250,10 @@ pub fn verify_ipc_channel_deadlock_freedom_and_soundness() -> FormalProofResult 
         handles: [jambo_abi::Handle::NULL; MAX_HANDLES],
         handle_count: 0,
     };
-    assert_eq!(ep_b.send(dummy_msg), Err(jambo_abi::SysError::PeerClosed));
+    assert_eq!(
+        ep_b.send(dummy_msg.into()),
+        Err(jambo_abi::SysError::PeerClosed)
+    );
 
     FormalProofResult {
         proof_name: "IPC Channel Bounded FIFO & PeerClosed Deadlock Freedom",

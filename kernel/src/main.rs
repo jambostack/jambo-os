@@ -528,6 +528,206 @@ fn execute_eevdf_smp_hardening_tests() -> bool {
     true
 }
 
+fn execute_zero_copy_ipc_tests() -> bool {
+    kprintln!(
+        "[IPC/ZERO_COPY] Validation des canaux IPC, VMO partagé zéro-copie et barrières mémoire..."
+    );
+
+    // Test 1: VMO partagé réel entre deux processus distincts avec identité de pages physiques (Audit C-05)
+    {
+        let aspace_a = alloc::sync::Arc::new(mm::AddressSpace::new().expect("aspace A"));
+        let aspace_b = alloc::sync::Arc::new(mm::AddressSpace::new().expect("aspace B"));
+        let proc_a = sched::Process::new(110, "proc_a_ipc", aspace_a.clone());
+        let proc_b = sched::Process::new(111, "proc_b_ipc", aspace_b.clone());
+
+        // Process A crée un VMO de 64 Kio
+        let vmo = mm::Vmo::create(64 * 1024);
+        let _cap_a = proc_a.cspace.lock().insert(
+            cap::KernelObject::Vmo(vmo.clone()),
+            jambo_abi::cap_rights::ALL,
+        );
+
+        // Process A mappe le VMO à 0x0080_0000
+        let vaddr_a: usize = 0x0080_0000;
+        aspace_a
+            .map_vmo(
+                vaddr_a,
+                vmo.clone(),
+                jambo_abi::vmo_prot::READ | jambo_abi::vmo_prot::WRITE,
+            )
+            .expect("Mapping VMO dans Proc A");
+
+        // Écriture d'une signature cryptographique depuis l'espace de Proc A
+        let canary: [u8; 16] = [
+            0xCA, 0xFE, 0xBA, 0xBE, 0xDE, 0xAD, 0xBE, 0xEF, 0x01, 0x23, 0x45, 0x67, 0x89, 0xAB,
+            0xCD, 0xEF,
+        ];
+        aspace_a
+            .write_bytes(vaddr_a, &canary)
+            .expect("Écriture signature Proc A");
+
+        // Barrière mémoire Release
+        core::sync::atomic::fence(core::sync::atomic::Ordering::Release);
+
+        // Process A et B partagent un canal IPC
+        let channel = alloc::sync::Arc::new(spin::Mutex::new(ipc::Channel::new()));
+        let ep_a = ipc::ChannelEndpoint::new(channel.clone(), true);
+        let ep_b = ipc::ChannelEndpoint::new(channel, false);
+
+        let _ep_a_h = proc_a.cspace.lock().insert(
+            cap::KernelObject::Channel(ep_a.clone()),
+            jambo_abi::cap_rights::ALL,
+        );
+        let _ep_b_h = proc_b.cspace.lock().insert(
+            cap::KernelObject::Channel(ep_b.clone()),
+            jambo_abi::cap_rights::ALL,
+        );
+
+        // Process A envoie le VMO via son endpoint
+        let mut in_flight = ipc::InFlightMessage::empty();
+        in_flight.byte_count = 8;
+        in_flight.bytes[0..8].copy_from_slice(b"SYNC_VMO");
+        in_flight.caps[0] = Some((
+            cap::KernelObject::Vmo(vmo.clone()),
+            jambo_abi::cap_rights::ALL,
+        ));
+        in_flight.cap_count = 1;
+        assert!(ep_a.send(in_flight).is_ok(), "Émission VMO sur canal");
+
+        // Process B reçoit le VMO
+        let recvd = ep_b.recv().expect("Recv").expect("Message présent");
+        assert_eq!(&recvd.bytes[0..8], b"SYNC_VMO");
+        assert_eq!(recvd.cap_count, 1);
+        let (recvd_obj, rights) = recvd.caps[0].clone().expect("Cap VMO présente");
+
+        let recvd_vmo = match recvd_obj {
+            cap::KernelObject::Vmo(v) => v,
+            _ => panic!("Objet non-VMO reçu"),
+        };
+        let _cap_b = proc_b
+            .cspace
+            .lock()
+            .insert(cap::KernelObject::Vmo(recvd_vmo.clone()), rights);
+
+        // Process B mappe le VMO à 0x0090_0000
+        let vaddr_b: usize = 0x0090_0000;
+        aspace_b
+            .map_vmo(
+                vaddr_b,
+                recvd_vmo,
+                jambo_abi::vmo_prot::READ | jambo_abi::vmo_prot::WRITE,
+            )
+            .expect("Mapping VMO dans Proc B");
+
+        // Barrière mémoire Acquire
+        core::sync::atomic::fence(core::sync::atomic::Ordering::Acquire);
+
+        // Process B lit la signature écrite par Proc A
+        let mut read_canary = [0u8; 16];
+        aspace_b
+            .read_bytes(vaddr_b, &mut read_canary)
+            .expect("Lecture Proc B");
+        assert_eq!(
+            read_canary, canary,
+            "Process B lit la signature exacte de Proc A"
+        );
+
+        // Preuve formelle d'identité des pages physiques (Audit C-05 / Critère d'acceptation)
+        for page_idx in 0..16 {
+            let offset = page_idx * mm::PAGE_SIZE;
+            let paddr_a = aspace_a
+                .translate(vaddr_a + offset)
+                .expect("Traduction vaddr_a");
+            let paddr_b = aspace_b
+                .translate(vaddr_b + offset)
+                .expect("Traduction vaddr_b");
+            assert_eq!(
+                paddr_a, paddr_b,
+                "Les adresses physiques de Proc A et Proc B sont strictement identiques (zéro-copie prouvée)"
+            );
+        }
+
+        // Mutation par Process B : Process A observe instantanément sans copie
+        let mutation: [u8; 8] = [0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88];
+        aspace_b
+            .write_bytes(vaddr_b + 32, &mutation)
+            .expect("Écriture mutation Proc B");
+        core::sync::atomic::fence(core::sync::atomic::Ordering::Release);
+        core::sync::atomic::fence(core::sync::atomic::Ordering::Acquire);
+
+        let mut observed = [0u8; 8];
+        aspace_a
+            .read_bytes(vaddr_a + 32, &mut observed)
+            .expect("Lecture Proc A");
+        assert_eq!(
+            observed, mutation,
+            "Proc A observe la mutation immédiate de Proc B"
+        );
+    }
+
+    // Test 2: SharedRing avec barrières Acquire/Release et masquage circulaire
+    {
+        let desc = jambo_abi::RingDesc {
+            sub_ring_vaddr: 0x1000,
+            comp_ring_vaddr: 0x2000,
+            ring_entries: 64,
+            flags: 0,
+        };
+        let ring = ipc::SharedRing::new(&desc).expect("Création SharedRing valide");
+        assert_eq!(ring.entries, 64);
+        assert_eq!(ring.mask, 63);
+
+        // Avancement avec wrap-around sécurisé (Audit S-03)
+        assert_eq!(ring.advance_index(60, 5), Some(1));
+        assert_eq!(ring.advance_index(63, 1), Some(0));
+
+        // Validation submit_and_complete avec barrières
+        let completed = ring.submit_and_complete(16).expect("submit_and_complete");
+        assert_eq!(completed, 16);
+
+        // Débordement d'entrées rejeté
+        assert_eq!(
+            ring.submit_and_complete(65),
+            Err(jambo_abi::SysError::InvalidArgument)
+        );
+
+        // Descripteur invalide (non-puissance de 2) rejeté
+        let bad_desc = jambo_abi::RingDesc {
+            sub_ring_vaddr: 0x1000,
+            comp_ring_vaddr: 0x2000,
+            ring_entries: 63, // Pas une puissance de 2
+            flags: 0,
+        };
+        assert_eq!(
+            ipc::SharedRing::new(&bad_desc).err(),
+            Some(jambo_abi::SysError::InvalidArgument)
+        );
+    }
+
+    // Test 3: Contrat IPC durci & Rejet des Débordements (Audit S-03 & S-04)
+    {
+        let mut ch = ipc::Channel::new();
+        let mut oversized_msg = ipc::InFlightMessage::empty();
+        oversized_msg.byte_count = ipc::MAX_FASTPATH_BYTES + 1;
+        assert_eq!(
+            ch.send(true, oversized_msg),
+            Err(jambo_abi::SysError::InvalidArgument)
+        );
+
+        let mut oversized_caps = ipc::InFlightMessage::empty();
+        oversized_caps.cap_count = ipc::MAX_HANDLES + 1;
+        assert_eq!(
+            ch.send(true, oversized_caps),
+            Err(jambo_abi::SysError::InvalidArgument)
+        );
+    }
+
+    kprintln!(
+        "[IPC/PASS] Tests zéro-copie, VMO partagé et barrières mémoire validés avec succès !"
+    );
+    true
+}
+
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     // 1. Initialiser l'UART 16550 (COM1) et l'horloge
@@ -562,7 +762,7 @@ pub extern "C" fn _start() -> ! {
     // 4. Bannière système d'accueil sobre Iron Core
     kprintln!("\x1b[1;36m");
     kprintln!("================================================================================");
-    kprintln!("    JAMBO-OS (JamboKernel v0.3.80 — Iron Core)                                 ");
+    kprintln!("    JAMBO-OS (JamboKernel v0.3.81 — Iron Core)                                 ");
     kprintln!("    Architecture : Micro-noyau orienté capacités en Rust no_std (x86_64/AArch64)");
     kprintln!("    Auteur & Architecte Principal : ASSOGBA Prudence Dieudonné                 ");
     kprintln!("    Dépôt Officiel : https://github.com/jambostack/jambo-os                    ");
@@ -1298,13 +1498,46 @@ pub extern "C" fn _start() -> ! {
 
     // Initialisation du démon de stockage VirtIO-Block Ring 3 (PID 3 : blockd)
     let blockd_binary = blockd_elf_bytes.unwrap_or(&test_elf);
-    if let Ok((_blockd_process, blockd_thread)) = sched::Process::create_user_process(
+    let maybe_blockd = sched::Process::create_user_process(
         3,
         "blockd",
         blockd_binary,
         &["blockd"],
         &["PATH=/bin:/usr/bin", "TERM=xterm-256color"],
-    ) {
+    );
+
+    // Initialisation du serveur de fichiers JamboFS Ring 3 (PID 4 : fs)
+    let fs_binary = fs_elf_bytes.unwrap_or(&test_elf);
+    let maybe_fs = sched::Process::create_user_process(
+        4,
+        "fs",
+        fs_binary,
+        &["fs"],
+        &["PATH=/bin:/usr/bin", "TERM=xterm-256color"],
+    );
+
+    if let (Ok((blockd_process, blockd_thread)), Ok((fs_process, fs_thread))) =
+        (maybe_blockd, maybe_fs)
+    {
+        // Appairage du canal IPC authentique entre blockd et fs (Audit C-05)
+        let block_fs_channel = alloc::sync::Arc::new(spin::Mutex::new(crate::ipc::Channel::new()));
+        let blockd_ep = crate::ipc::ChannelEndpoint::new(block_fs_channel.clone(), true);
+        let fs_ep = crate::ipc::ChannelEndpoint::new(block_fs_channel, false);
+
+        let blockd_h = blockd_process.cspace.lock().insert(
+            crate::cap::KernelObject::Channel(blockd_ep),
+            jambo_abi::cap_rights::ALL,
+        );
+        let fs_h = fs_process.cspace.lock().insert(
+            crate::cap::KernelObject::Channel(fs_ep),
+            jambo_abi::cap_rights::ALL,
+        );
+        kprintln!(
+            "[IPC/RENDEZVOUS] Canal IPC blockd <-> fs configuré (blockd handle: {:#x}, fs handle: {:#x})",
+            blockd_h.0,
+            fs_h.0
+        );
+
         let blockd_sp = blockd_thread.lock().user_rsp;
         assert_eq!(blockd_sp % 16, 0, "Alignement 16 octets du RSP blockd");
         blockd_thread.lock().deadline = 1000;
@@ -1313,19 +1546,7 @@ pub extern "C" fn _start() -> ! {
             "[PROCESS] Démon de stockage blockd (PID 3) initialisé avec pile System V ABI (RSP: {:#018x}) et enfilé",
             blockd_sp
         );
-    } else {
-        kprintln!("[WARN] Échec de la création du processus blockd");
-    }
 
-    // Initialisation du serveur de fichiers JamboFS Ring 3 (PID 4 : fs)
-    let fs_binary = fs_elf_bytes.unwrap_or(&test_elf);
-    if let Ok((_fs_process, fs_thread)) = sched::Process::create_user_process(
-        4,
-        "fs",
-        fs_binary,
-        &["fs"],
-        &["PATH=/bin:/usr/bin", "TERM=xterm-256color"],
-    ) {
         let fs_sp = fs_thread.lock().user_rsp;
         assert_eq!(fs_sp % 16, 0, "Alignement 16 octets du RSP fs");
         fs_thread.lock().deadline = 1000;
@@ -1335,7 +1556,7 @@ pub extern "C" fn _start() -> ! {
             fs_sp
         );
     } else {
-        kprintln!("[WARN] Échec de la création du processus fs");
+        kprintln!("[WARN] Échec de la création conjointe des processus blockd et fs");
     }
 
     // Initialisation du démon réseau VirtIO-Net Ring 3 (PID 5 : netd)
@@ -2349,6 +2570,12 @@ pub extern "C" fn _start() -> ! {
         "Échec des tests de durcissement EEVDF & Résilience SMP Multicœur"
     );
 
+    let zero_copy_ipc_success = execute_zero_copy_ipc_tests();
+    assert!(
+        zero_copy_ipc_success,
+        "Échec des tests de canaux IPC, VMO partagé zéro-copie & barrières mémoire"
+    );
+
     kprintln!();
     kprintln!(
         "\x1b[1;32m[PASS] JamboKernel Iron Core (Ring 0 & Ring 3 transition) validé sous QEMU.\x1b[0m"
@@ -2375,7 +2602,7 @@ pub extern "C" fn _start() -> ! {
 
     if is_test_mode {
         kprintln!("[TEST] Validation de l'initialisation des 38 processus Ring 3 (init, jsh, blockd, fs, netd, fdr, wasmd, pqc, kdir, forensics, powerd, metricsd, bpfd, vpn, authd, dnsd, timed, auditd, walld, vaultd, watchdogd, cored, pkgd, certd, policyd, secboot, logd, kms, attest, waf, siem, edr, ndr, xdr, soar, ueba, itdr, dlp)...");
-        kprintln!("\x1b[1;32m[PASS] Ordonnanceur EEVDF et resilience SMP multicoeur valides sous QEMU.\x1b[0m");
+        kprintln!("\x1b[1;32m[PASS] Canaux IPC Ring Buffers Zero-Copy et VMO Partage valides sous QEMU.\x1b[0m");
         kprintln!("[TEST] Mode de test CI validé. Sortie propre via isa-debug-exit...");
         exit_qemu(QemuExitCode::Success);
     }

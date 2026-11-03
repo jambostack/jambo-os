@@ -4,6 +4,7 @@ pub const JAMBOFS_MAGIC: u64 = 0x53465F4F424D414A; // "JAMBO_FS" en ASCII little
 pub const JAMBOFS_VERSION: u32 = 1;
 pub const BLOCK_SIZE: usize = 4096;
 
+pub const BLOCK_OP_GET_VMO: u32 = 0;
 pub const BLOCK_OP_READ: u32 = 1;
 pub const BLOCK_OP_WRITE: u32 = 2;
 pub const BLOCK_OP_FLUSH: u32 = 3;
@@ -340,6 +341,100 @@ impl BlockClient {
 
     pub fn with_vmo(channel: libjambo::Handle, vmo_ptr: *mut u8) -> Self {
         Self { channel, vmo_ptr }
+    }
+
+    /// Initialise le VMO partagé en le demandant explicitement au démon blockd (Audit C-05)
+    pub fn init_shared_vmo(&mut self) -> Result<(), libjambo::SysError> {
+        if self.channel.is_null() {
+            return Err(libjambo::SysError::InvalidHandle);
+        }
+
+        let req = BlockRequest {
+            opcode: BLOCK_OP_GET_VMO,
+            req_id: 1,
+            lba: 0,
+            count: 0,
+            buf_offset: 0,
+            _reserved: 0,
+        };
+
+        let mut tx_msg = ChannelMessage::default();
+        let req_bytes = req.to_bytes();
+        let req_size = core::mem::size_of::<BlockRequest>();
+        tx_msg.bytes[..req_size].copy_from_slice(&req_bytes);
+        tx_msg.byte_count = req_size;
+
+        let (ret_send, _) = unsafe {
+            libjambo::syscall6(
+                libjambo::SyscallNumber::ChannelCall,
+                self.channel.0,
+                &tx_msg as *const ChannelMessage as u64,
+                0,
+                0,
+                0,
+                0,
+            )
+        };
+        if ret_send != 0 {
+            return Err(libjambo::SysError::PeerClosed);
+        }
+
+        let mut rx_msg = ChannelMessage::default();
+        let mut attempts = 0;
+        let resp_size = core::mem::size_of::<BlockResponse>();
+        loop {
+            let (ret_recv, _) = unsafe {
+                libjambo::syscall6(
+                    libjambo::SyscallNumber::ChannelCall,
+                    self.channel.0,
+                    0,
+                    &mut rx_msg as *mut ChannelMessage as u64,
+                    0,
+                    0,
+                    0,
+                )
+            };
+            if ret_recv == 0 && rx_msg.byte_count >= resp_size {
+                break;
+            }
+            if ret_recv != 0 && ret_recv != (libjambo::SysError::TimedOut as i64) {
+                return Err(libjambo::SysError::PeerClosed);
+            }
+            attempts += 1;
+            if attempts > 10_000 {
+                return Err(libjambo::SysError::TimedOut);
+            }
+            syscall_thread_yield();
+        }
+
+        if let Some(resp) = BlockResponse::from_bytes(&rx_msg.bytes[..rx_msg.byte_count]) {
+            if resp.status != 0 {
+                return Err(libjambo::SysError::InvalidArgument);
+            }
+        } else {
+            return Err(libjambo::SysError::InvalidArgument);
+        }
+
+        if rx_msg.handle_count > 0 && !rx_msg.handles[0].is_null() {
+            let vmo_handle = rx_msg.handles[0];
+            let (map_ret, _) = unsafe {
+                libjambo::syscall6(
+                    libjambo::SyscallNumber::VmoMap,
+                    0,
+                    vmo_handle.0,
+                    SHARED_VMO_ADDR as u64,
+                    (libjambo::vmo_prot::READ | libjambo::vmo_prot::WRITE) as u64,
+                    0,
+                    0,
+                )
+            };
+            if map_ret == 0 {
+                self.vmo_ptr = SHARED_VMO_ADDR as *mut u8;
+                return Ok(());
+            }
+        }
+
+        Ok(())
     }
 
     /// Lit un bloc de 4 Kio (8 secteurs de 512 octets) à partir du secteur `lba`

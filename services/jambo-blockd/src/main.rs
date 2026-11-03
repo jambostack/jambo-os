@@ -12,6 +12,7 @@ fn panic(_info: &core::panic::PanicInfo) -> ! {
     }
 }
 
+pub const BLOCK_OP_GET_VMO: u32 = 0;
 pub const BLOCK_OP_READ: u32 = 1;
 pub const BLOCK_OP_WRITE: u32 = 2;
 pub const BLOCK_OP_FLUSH: u32 = 3;
@@ -20,7 +21,7 @@ pub const BLOCK_OP_FLUSH: u32 = 3;
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct BlockRequest {
-    pub opcode: u32, // 1 = Read, 2 = Write, 3 = Flush
+    pub opcode: u32, // 0 = GetVmo, 1 = Read, 2 = Write, 3 = Flush
     pub req_id: u32,
     pub lba: u64,
     pub count: u32,
@@ -102,7 +103,9 @@ pub fn syscall_thread_yield() {
 }
 
 // Ports de configuration PCIe standard x86
+#[cfg(target_arch = "x86_64")]
 const PCI_CONFIG_ADDRESS: u16 = 0xCF8;
+#[cfg(target_arch = "x86_64")]
 const PCI_CONFIG_DATA: u16 = 0xCFC;
 
 #[cfg(target_arch = "x86_64")]
@@ -246,14 +249,14 @@ fn scan_pci_virtio_block() -> Option<PciBlockDevice> {
     None
 }
 
-/// Arène VMO partagée pour les transferts zéro-copie (64 Kio = 16 blocs de 4 Kio)
+/// Adresse et taille de projection du VMO partagé zéro-copie
+pub const SHARED_VMO_ADDR: usize = 0x0070_0000;
 pub const SHARED_VMO_SIZE: usize = 64 * 1024;
-static mut SHARED_VMO_ARENA: [u8; SHARED_VMO_SIZE] = [0u8; SHARED_VMO_SIZE];
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     println("\x1b[1;36m================================================\x1b[0m");
-    println("\x1b[1;32m  JamboOS Block Storage Daemon (PID 3) v0.3.42  \x1b[0m");
+    println("\x1b[1;32m  JamboOS Block Storage Daemon (PID 3) v0.3.81  \x1b[0m");
     println("\x1b[1;36m================================================\x1b[0m");
 
     let dev_params = scan_pci_virtio_block().unwrap_or(PciBlockDevice {
@@ -278,21 +281,37 @@ pub extern "C" fn _start() -> ! {
         println("[BLOCKD] Initialisation VirtIO Modern 1.0 MMIO réussie.");
     }
 
-    // Initialisation du canal IPC pour communication avec le service de fichiers (jambo-fs)
-    let mut ch_h1: u64 = 0;
-    let mut ch_h2: u64 = 0;
+    // 1. Allouer un véritable VMO noyau partagé de 64 Kio (Audit C-05)
+    let mut vmo_h: u64 = 0;
     unsafe {
         libjambo::syscall6(
-            libjambo::SyscallNumber::ChannelCreate,
+            libjambo::SyscallNumber::VmoCreate,
+            SHARED_VMO_SIZE as u64,
             0,
-            &mut ch_h1 as *mut u64 as u64,
-            &mut ch_h2 as *mut u64 as u64,
+            &mut vmo_h as *mut u64 as u64,
             0,
             0,
             0,
         );
     }
-    let server_endpoint = libjambo::Handle(if ch_h1 != 0 { ch_h1 } else { 1 });
+    let vmo_handle = libjambo::Handle(vmo_h);
+    if !vmo_handle.is_null() {
+        unsafe {
+            libjambo::syscall6(
+                libjambo::SyscallNumber::VmoMap,
+                0,
+                vmo_handle.0,
+                SHARED_VMO_ADDR as u64,
+                (libjambo::vmo_prot::READ | libjambo::vmo_prot::WRITE) as u64,
+                0,
+                0,
+            );
+        }
+        println("[BLOCKD] VMO partagé noyau 64 Kio projeté avec succès à 0x0070_0000.");
+    }
+
+    // 2. Point d'accès IPC standard (Endpoint pré-injecté par le noyau à Handle::new(1, 1))
+    let server_endpoint = libjambo::Handle::new(1, 1);
     println("[BLOCKD] Canal IPC de requêtes de stockage opérationnel.");
 
     // Boucle coopérative de traitement des requêtes de stockage
@@ -314,18 +333,67 @@ pub extern "C" fn _start() -> ! {
             if let Some(req) = BlockRequest::from_bytes(&rx_msg.bytes[..rx_msg.byte_count]) {
                 let mut status = 0i32;
                 let mut bytes_transferred = 0u32;
-                let offset = req.buf_offset as usize;
-                let total_bytes = (req.count as usize) * virtio_drv::SECTOR_SIZE;
+                let mut tx_msg = ChannelMessage::default();
 
                 match req.opcode {
+                    // Opcode 0 : Transmission sécurisée du VMO partagé vers le client FS (Audit C-05)
+                    BLOCK_OP_GET_VMO => {
+                        let mut dup_vmo: u64 = 0;
+                        unsafe {
+                            libjambo::syscall6(
+                                libjambo::SyscallNumber::CapDup,
+                                vmo_handle.0,
+                                libjambo::cap_rights::ALL as u64,
+                                &mut dup_vmo as *mut u64 as u64,
+                                0,
+                                0,
+                                0,
+                            );
+                        }
+                        status = 0;
+                        bytes_transferred = SHARED_VMO_SIZE as u32;
+                        tx_msg.handles[0] = libjambo::Handle(dup_vmo);
+                        tx_msg.handle_count = 1;
+                    }
+
+                    // Opcode 1 : Lecture de blocs avec calculs arithmétiques 100 % vérifiés (Audit S-04)
                     BLOCK_OP_READ => {
-                        if offset + total_bytes <= SHARED_VMO_SIZE {
+                        let offset = req.buf_offset as usize;
+                        let total_bytes =
+                            match (req.count as usize).checked_mul(virtio_drv::SECTOR_SIZE) {
+                                Some(b) => b,
+                                None => {
+                                    status = libjambo::SysError::InvalidArgument as i32;
+                                    0
+                                }
+                            };
+                        let end_offset = match offset.checked_add(total_bytes) {
+                            Some(end) => end,
+                            None => {
+                                status = libjambo::SysError::InvalidArgument as i32;
+                                usize::MAX
+                            }
+                        };
+                        let end_lba = match req.lba.checked_add(req.count as u64) {
+                            Some(end) => end,
+                            None => {
+                                status = libjambo::SysError::InvalidArgument as i32;
+                                u64::MAX
+                            }
+                        };
+
+                        if end_lba <= dev_params.capacity_sectors
+                            && end_offset <= SHARED_VMO_SIZE
+                            && status == 0
+                        {
                             for s in 0..req.count {
                                 let sector_lba = req.lba + s as u64;
                                 let sector_off = offset + (s as usize) * virtio_drv::SECTOR_SIZE;
                                 let dest = unsafe {
-                                    &mut SHARED_VMO_ARENA
-                                        [sector_off..sector_off + virtio_drv::SECTOR_SIZE]
+                                    core::slice::from_raw_parts_mut(
+                                        (SHARED_VMO_ADDR + sector_off) as *mut u8,
+                                        virtio_drv::SECTOR_SIZE,
+                                    )
                                 };
                                 match driver.submit_read(sector_lba, dest) {
                                     Ok(n) => bytes_transferred += n as u32,
@@ -335,18 +403,49 @@ pub extern "C" fn _start() -> ! {
                                     }
                                 }
                             }
-                        } else {
+                        } else if status == 0 {
                             status = libjambo::SysError::InvalidArgument as i32;
                         }
                     }
+
+                    // Opcode 2 : Écriture de blocs avec calculs arithmétiques 100 % vérifiés (Audit S-04)
                     BLOCK_OP_WRITE => {
-                        if offset + total_bytes <= SHARED_VMO_SIZE {
+                        let offset = req.buf_offset as usize;
+                        let total_bytes =
+                            match (req.count as usize).checked_mul(virtio_drv::SECTOR_SIZE) {
+                                Some(b) => b,
+                                None => {
+                                    status = libjambo::SysError::InvalidArgument as i32;
+                                    0
+                                }
+                            };
+                        let end_offset = match offset.checked_add(total_bytes) {
+                            Some(end) => end,
+                            None => {
+                                status = libjambo::SysError::InvalidArgument as i32;
+                                usize::MAX
+                            }
+                        };
+                        let end_lba = match req.lba.checked_add(req.count as u64) {
+                            Some(end) => end,
+                            None => {
+                                status = libjambo::SysError::InvalidArgument as i32;
+                                u64::MAX
+                            }
+                        };
+
+                        if end_lba <= dev_params.capacity_sectors
+                            && end_offset <= SHARED_VMO_SIZE
+                            && status == 0
+                        {
                             for s in 0..req.count {
                                 let sector_lba = req.lba + s as u64;
                                 let sector_off = offset + (s as usize) * virtio_drv::SECTOR_SIZE;
                                 let src = unsafe {
-                                    &SHARED_VMO_ARENA
-                                        [sector_off..sector_off + virtio_drv::SECTOR_SIZE]
+                                    core::slice::from_raw_parts(
+                                        (SHARED_VMO_ADDR + sector_off) as *const u8,
+                                        virtio_drv::SECTOR_SIZE,
+                                    )
                                 };
                                 match driver.submit_write(sector_lba, src) {
                                     Ok(n) => bytes_transferred += n as u32,
@@ -356,15 +455,18 @@ pub extern "C" fn _start() -> ! {
                                     }
                                 }
                             }
-                        } else {
+                        } else if status == 0 {
                             status = libjambo::SysError::InvalidArgument as i32;
                         }
                     }
+
+                    // Opcode 3 : Vidage des caches
                     BLOCK_OP_FLUSH => {
                         if let Err(e) = driver.flush() {
                             status = e as i32;
                         }
                     }
+
                     _ => {
                         status = libjambo::SysError::NotSupported as i32;
                     }
@@ -377,7 +479,6 @@ pub extern "C" fn _start() -> ! {
                     _reserved: 0,
                 };
 
-                let mut tx_msg = ChannelMessage::default();
                 let resp_bytes = resp.to_bytes();
                 tx_msg.bytes[..16].copy_from_slice(&resp_bytes);
                 tx_msg.byte_count = 16;

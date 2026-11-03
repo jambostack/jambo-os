@@ -1,4 +1,5 @@
 extern crate alloc;
+use crate::cap::KernelObject;
 use alloc::collections::VecDeque;
 use jambo_abi::{Handle, SysError};
 use spin::Mutex;
@@ -6,6 +7,8 @@ use spin::Mutex;
 pub const MAX_FASTPATH_BYTES: usize = 64;
 pub const MAX_HANDLES: usize = 4;
 
+/// Message IPC brut tel qu'échangé en espace utilisateur
+#[repr(C)]
 #[derive(Clone, Copy)]
 pub struct ChannelMessage {
     pub bytes: [u8; MAX_FASTPATH_BYTES],
@@ -14,9 +17,51 @@ pub struct ChannelMessage {
     pub handle_count: usize,
 }
 
+impl Default for ChannelMessage {
+    fn default() -> Self {
+        Self {
+            bytes: [0u8; MAX_FASTPATH_BYTES],
+            byte_count: 0,
+            handles: [Handle::NULL; MAX_HANDLES],
+            handle_count: 0,
+        }
+    }
+}
+
+/// Message IPC en vol au sein du micro-noyau avec capacités protégées
+#[derive(Clone)]
+pub struct InFlightMessage {
+    pub bytes: [u8; MAX_FASTPATH_BYTES],
+    pub byte_count: usize,
+    pub caps: [Option<(KernelObject, u32)>; MAX_HANDLES],
+    pub cap_count: usize,
+}
+
+impl InFlightMessage {
+    pub const fn empty() -> Self {
+        Self {
+            bytes: [0u8; MAX_FASTPATH_BYTES],
+            byte_count: 0,
+            caps: [None, None, None, None],
+            cap_count: 0,
+        }
+    }
+}
+
+impl From<ChannelMessage> for InFlightMessage {
+    fn from(msg: ChannelMessage) -> Self {
+        Self {
+            bytes: msg.bytes,
+            byte_count: msg.byte_count,
+            caps: [None, None, None, None],
+            cap_count: 0,
+        }
+    }
+}
+
 pub struct Channel {
-    pub endpoint_a_queue: VecDeque<ChannelMessage>,
-    pub endpoint_b_queue: VecDeque<ChannelMessage>,
+    pub endpoint_a_queue: VecDeque<InFlightMessage>,
+    pub endpoint_b_queue: VecDeque<InFlightMessage>,
     pub is_closed: bool,
 }
 
@@ -29,9 +74,12 @@ impl Channel {
         }
     }
 
-    pub fn send(&mut self, is_endpoint_a: bool, msg: ChannelMessage) -> Result<(), SysError> {
+    pub fn send(&mut self, is_endpoint_a: bool, msg: InFlightMessage) -> Result<(), SysError> {
         if self.is_closed {
             return Err(SysError::PeerClosed);
+        }
+        if msg.byte_count > MAX_FASTPATH_BYTES || msg.cap_count > MAX_HANDLES {
+            return Err(SysError::InvalidArgument);
         }
         let target_queue = if is_endpoint_a {
             &mut self.endpoint_b_queue
@@ -42,7 +90,7 @@ impl Channel {
         Ok(())
     }
 
-    pub fn recv(&mut self, is_endpoint_a: bool) -> Result<Option<ChannelMessage>, SysError> {
+    pub fn recv(&mut self, is_endpoint_a: bool) -> Result<Option<InFlightMessage>, SysError> {
         if self.is_closed {
             return Err(SysError::PeerClosed);
         }
@@ -74,11 +122,11 @@ impl ChannelEndpoint {
         })
     }
 
-    pub fn send(&self, msg: ChannelMessage) -> Result<(), SysError> {
+    pub fn send(&self, msg: InFlightMessage) -> Result<(), SysError> {
         self.channel.lock().send(self.is_endpoint_a, msg)
     }
 
-    pub fn recv(&self) -> Result<Option<ChannelMessage>, SysError> {
+    pub fn recv(&self) -> Result<Option<InFlightMessage>, SysError> {
         self.channel.lock().recv(self.is_endpoint_a)
     }
 

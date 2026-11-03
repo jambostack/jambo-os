@@ -420,15 +420,64 @@ pub extern "C" fn dispatch_syscall(
                         Ok(m) => m,
                         Err(e) => return e as i64,
                     };
-                if let Err(e) = ep.send(msg) {
+
+                // Audit S-03: Validation stricte des limites de charge utile
+                if msg.byte_count > crate::ipc::MAX_FASTPATH_BYTES
+                    || msg.handle_count > crate::ipc::MAX_HANDLES
+                {
+                    return SysError::InvalidArgument as i64;
+                }
+
+                // Transfert atomique des capacités de l'émetteur vers le message en vol
+                let mut in_flight = crate::ipc::InFlightMessage::empty();
+                in_flight.bytes = msg.bytes;
+                in_flight.byte_count = msg.byte_count;
+                in_flight.cap_count = msg.handle_count;
+
+                for i in 0..msg.handle_count {
+                    let h = msg.handles[i];
+                    if !h.is_null() {
+                        let mut cs = get_cspace(&current_cspace);
+                        let cap = match cs.get_cap(h) {
+                            Ok(c) => c,
+                            Err(e) => return e as i64,
+                        };
+                        if (cap.rights & (cap_rights::TRANSFER | cap_rights::DUPLICATE)) == 0 {
+                            return SysError::PermissionDenied as i64;
+                        }
+                        if (cap.rights & cap_rights::TRANSFER) != 0 {
+                            let _ = cs.drop_cap(h);
+                        }
+                        in_flight.caps[i] = Some((cap.object, cap.rights));
+                    }
+                }
+
+                if let Err(e) = ep.send(in_flight) {
                     return e as i64;
                 }
             }
 
             if recv_ptr != 0 {
                 match ep.recv() {
-                    Ok(Some(msg)) => {
-                        if let Err(e) = write_user_val(current_aspace.as_ref(), recv_ptr, &msg) {
+                    Ok(Some(in_flight)) => {
+                        let mut out_msg = crate::ipc::ChannelMessage {
+                            bytes: in_flight.bytes,
+                            byte_count: in_flight.byte_count,
+                            handles: [Handle::NULL; crate::ipc::MAX_HANDLES],
+                            handle_count: in_flight.cap_count,
+                        };
+
+                        // Installation atomique des capacités dans le CSpace du récepteur
+                        for i in 0..in_flight.cap_count {
+                            if let Some((obj, rights)) = in_flight.caps[i].clone() {
+                                let mut cs = get_cspace(&current_cspace);
+                                let new_h = cs.insert(obj, rights);
+                                out_msg.handles[i] = new_h;
+                            }
+                        }
+
+                        if let Err(e) = write_user_val(current_aspace.as_ref(), recv_ptr, &out_msg)
+                        {
                             return e as i64;
                         }
                     }
@@ -512,6 +561,7 @@ pub extern "C" fn dispatch_syscall(
         18 => {
             let ring_h = Handle(a1);
             let to_submit = a2 as u32;
+            let min_complete = a3 as u32;
 
             let ring = {
                 let cspace = get_cspace(&current_cspace);
@@ -520,6 +570,10 @@ pub extern "C" fn dispatch_syscall(
                     _ => return SysError::InvalidHandle as i64,
                 }
             };
+
+            if to_submit > ring.entries || min_complete > ring.entries {
+                return SysError::InvalidArgument as i64;
+            }
 
             match ring.submit_and_complete(to_submit) {
                 Ok(completed) => completed as i64,

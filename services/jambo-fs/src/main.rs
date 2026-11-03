@@ -21,9 +21,12 @@ pub extern "C" fn _start() -> ! {
     println("\x1b[1;32m   JamboOS File System Service (PID 4) v0.3.42  \x1b[0m");
     println("\x1b[1;36m================================================\x1b[0m");
 
-    // 1. Se connecter au canal IPC du pilote de bloc jambo-blockd
-    let blockd_endpoint = libjambo::Handle(2);
-    let block_client = BlockClient::new(blockd_endpoint);
+    // 1. Se connecter au canal IPC du pilote de bloc jambo-blockd (Handle standard Handle::new(1, 1))
+    let blockd_endpoint = libjambo::Handle::new(1, 1);
+    let mut block_client = BlockClient::new(blockd_endpoint);
+    if let Ok(()) = block_client.init_shared_vmo() {
+        println("[FS] VMO partagé zéro-copie 64 Kio synchronisé et projeté à 0x0070_0000.");
+    }
     println("[FS] Connexion au service de stockage jambo-blockd établie.");
 
     // 2. Exécute le montage de JamboFS et vérifie l'intégrité de l'Uberblock
