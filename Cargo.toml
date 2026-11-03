@@ -43,6 +43,7 @@ members = [
     "services/jambo-soar",
     "services/jambo-ueba",
     "services/jambo-itdr",
+    "services/jambo-dlp",
     "xtask",
 ]
 

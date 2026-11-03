@@ -1,0 +1,16 @@
+[package]
+name = "jambo-dlp"
+version = "0.3.77"
+edition = "2021"
+
+[lib]
+name = "jambo_dlp"
+path = "src/lib.rs"
+
+[[bin]]
+name = "dlp"
+path = "src/main.rs"
+test = false
+
+[dependencies]
+libjambo = { path = "../../libs/libjambo" }
