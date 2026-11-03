@@ -26,7 +26,7 @@ impl FutexManager {
 
         let current_thread = {
             let sched = SCHEDULER.lock();
-            sched.current.clone()
+            sched.current()
         };
 
         if let Some(thread) = current_thread {

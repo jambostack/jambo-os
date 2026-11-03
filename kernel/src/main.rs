@@ -113,7 +113,7 @@ extern "C" fn test_worker() {
     kprintln!("[SCHED] Exécution d'un thread travailleur dans son contexte propre.");
     {
         let sched = sched::SCHEDULER.lock();
-        if let Some(ref curr) = sched.current {
+        if let Some(ref curr) = sched.current() {
             curr.lock().state = sched::ThreadState::Exited;
         }
     }
@@ -156,7 +156,7 @@ fn execute_boundary_hardening_tests() -> bool {
     // Définir thread_a comme thread courant
     {
         let mut sched = sched::SCHEDULER.lock();
-        sched.current = Some(thread_a.clone());
+        sched.set_current(Some(thread_a.clone()));
     }
 
     // Mapper une page de données utilisateur valide dans Proc A à 0x0050_0000
@@ -195,7 +195,7 @@ fn execute_boundary_hardening_tests() -> bool {
     // Basculer vers Thread B (Proc B)
     {
         let mut sched = sched::SCHEDULER.lock();
-        sched.current = Some(thread_b.clone());
+        sched.set_current(Some(thread_b.clone()));
     }
 
     // Proc B tente d'accéder au handle de Proc A via CapDup (syscall 1) -> InvalidHandle !
@@ -209,7 +209,7 @@ fn execute_boundary_hardening_tests() -> bool {
     // G. Re-basculer sur Proc A et tester CapTransfer avec atténuation monotone
     {
         let mut sched = sched::SCHEDULER.lock();
-        sched.current = Some(thread_a.clone());
+        sched.set_current(Some(thread_a.clone()));
     }
 
     // Proc A a un handle sur Proc B dans sa CSpace
@@ -239,7 +239,7 @@ fn execute_boundary_hardening_tests() -> bool {
     // Rétablir SCHEDULER.current = None
     {
         let mut sched = sched::SCHEDULER.lock();
-        sched.current = None;
+        sched.set_current(None);
     }
 
     kprintln!("[SECURITY/PASS] Tests adversariaux et isolation CSpace validés avec succès !");
@@ -2206,7 +2206,7 @@ pub extern "C" fn _start() -> ! {
         aspace: None,
         cspace: None,
     }));
-    sched::SCHEDULER.lock().current = Some(supervisor_thread);
+    sched::SCHEDULER.lock().set_current(Some(supervisor_thread));
     sched::EevdfScheduler::reschedule();
 
     kprintln!("[SYSTEM] JamboKernel Iron Core en attente d'interruptions (Boucle Idle)...");

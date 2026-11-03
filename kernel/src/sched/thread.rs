@@ -196,7 +196,8 @@ impl Thread {
 extern "C" fn user_thread_trampoline() -> ! {
     let (aspace, user_entry, user_rsp, kernel_stack_top) = {
         let sched = super::SCHEDULER.lock();
-        let curr = sched.current.as_ref().expect("Thread courant").lock();
+        let curr = sched.current().expect("Thread courant");
+        let curr = curr.lock();
         (
             curr.aspace
                 .clone()

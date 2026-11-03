@@ -112,7 +112,7 @@ pub extern "C" fn dispatch_syscall(
 ) -> i64 {
     let (current_aspace, current_cspace) = {
         let sched = SCHEDULER.lock();
-        if let Some(ref curr) = sched.current {
+        if let Some(curr) = sched.current() {
             let t = curr.lock();
             (t.aspace.clone(), t.cspace.clone())
         } else {
@@ -363,7 +363,7 @@ pub extern "C" fn dispatch_syscall(
         11 => {
             {
                 let sched = SCHEDULER.lock();
-                if let Some(ref curr) = sched.current {
+                if let Some(curr) = sched.current() {
                     curr.lock().state = ThreadState::Exited;
                 }
             }

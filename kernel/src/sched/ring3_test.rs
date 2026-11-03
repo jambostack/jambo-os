@@ -119,7 +119,7 @@ pub fn execute_ring3_roundtrip_test() -> bool {
 
     {
         let mut sched = SCHEDULER.lock();
-        sched.current = Some(main_kernel_thread.clone());
+        sched.set_current(Some(main_kernel_thread.clone()));
         sched.enqueue(user_thread.clone());
     }
 

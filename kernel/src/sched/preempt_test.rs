@@ -22,7 +22,7 @@ extern "C" fn uncooperative_compute_worker() {
     // Sortie propre une fois la préemption validée
     {
         let sched = SCHEDULER.lock();
-        if let Some(ref curr) = sched.current {
+        if let Some(ref curr) = sched.current() {
             curr.lock().state = ThreadState::Exited;
         }
     }
@@ -77,7 +77,7 @@ pub fn execute_preemption_test() -> bool {
 
     {
         let mut sched = SCHEDULER.lock();
-        sched.current = Some(supervisor_thread.clone());
+        sched.set_current(Some(supervisor_thread.clone()));
         sched.enqueue(worker_thread.clone());
     }
 
