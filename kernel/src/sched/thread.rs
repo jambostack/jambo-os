@@ -30,6 +30,11 @@ pub struct Thread {
     pub vruntime: u64,
     pub deadline: u64,
     pub weight: u32,
+    pub base_weight: u32,
+    pub base_deadline: u64,
+    pub wait_ticks: u64,
+    pub cpu_affinity: Option<u32>,
+    pub last_cpu: u32,
     pub is_user: bool,
     pub user_entry: u64,
     pub user_rsp: u64,
@@ -77,6 +82,11 @@ impl Thread {
             vruntime: 0,
             deadline: 10,
             weight: 1024,
+            base_weight: 1024,
+            base_deadline: 10,
+            wait_ticks: 0,
+            cpu_affinity: None,
+            last_cpu: 0,
             is_user: false,
             user_entry: 0,
             user_rsp: 0,
@@ -122,12 +132,63 @@ impl Thread {
             vruntime: 0,
             deadline: 10,
             weight: 1024,
+            base_weight: 1024,
+            base_deadline: 10,
+            wait_ticks: 0,
+            cpu_affinity: None,
+            last_cpu: 0,
             is_user: true,
             user_entry,
             user_rsp,
             aspace: Some(aspace),
             cspace: Some(cspace),
         })))
+    }
+
+    /// Crée un thread idle dédié pour un processeur donné
+    pub fn new_idle(cpu_id: u32) -> Arc<Mutex<Self>> {
+        Arc::new(Mutex::new(Self {
+            id: 0x8000_0000_0000_0000 | (cpu_id as u64),
+            process_id: 0,
+            state: ThreadState::Running,
+            rsp: 0,
+            stack_base: 0,
+            stack_top: 0,
+            vruntime: u64::MAX / 2,
+            deadline: u64::MAX,
+            weight: 1,
+            base_weight: 1,
+            base_deadline: u64::MAX,
+            wait_ticks: 0,
+            cpu_affinity: Some(cpu_id),
+            last_cpu: cpu_id,
+            is_user: false,
+            user_entry: 0,
+            user_rsp: 0,
+            aspace: None,
+            cspace: None,
+        }))
+    }
+
+    /// Rehausse temporairement la priorité (héritage de priorité pour éviter les inversions)
+    pub fn boost_priority(&mut self, target_weight: u32, target_deadline: u64) {
+        if target_weight > self.weight {
+            self.weight = target_weight;
+        }
+        if target_deadline < self.deadline {
+            self.deadline = target_deadline;
+        }
+    }
+
+    /// Rétablit le poids et la deadline nominaux après libération d'une ressource ou fin de traitement
+    pub fn restore_priority(&mut self) {
+        self.weight = self.base_weight;
+        self.deadline = self.base_deadline;
+    }
+
+    /// Définit l'affinité CPU (None = flottant sur tout cœur, Some(id) = épinglé sur cpu_id)
+    pub fn set_affinity(&mut self, cpu: Option<u32>) {
+        self.cpu_affinity = cpu;
     }
 }
 

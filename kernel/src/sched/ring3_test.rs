@@ -105,6 +105,11 @@ pub fn execute_ring3_roundtrip_test() -> bool {
         vruntime: 0,
         deadline: 0, // Priorité maximale pour la reprise après yield
         weight: 1024,
+        base_weight: 1024,
+        base_deadline: 0,
+        wait_ticks: 0,
+        cpu_affinity: None,
+        last_cpu: 0,
         is_user: false,
         user_entry: 0,
         user_rsp: 0,
