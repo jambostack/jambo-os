@@ -51,6 +51,7 @@ pub fn execute_preemption_test() -> bool {
         }
     };
     worker_thread.lock().deadline = 1; // Deadline minimale pour déclencher la préemption rapidement
+    worker_thread.lock().set_affinity(Some(0));
 
     // 2. Créer le thread superviseur appelant comme thread actif (Thread B)
     let supervisor_thread = Arc::new(Mutex::new(Thread {
@@ -66,7 +67,7 @@ pub fn execute_preemption_test() -> bool {
         base_weight: 1024,
         base_deadline: 0,
         wait_ticks: 0,
-        cpu_affinity: None,
+        cpu_affinity: Some(0),
         last_cpu: 0,
         is_user: false,
         user_entry: 0,

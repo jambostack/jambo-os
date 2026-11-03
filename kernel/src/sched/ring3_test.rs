@@ -94,6 +94,7 @@ pub fn execute_ring3_roundtrip_test() -> bool {
 
     // Configurer une deadline prioritaire pour le test (2 vs 0 pour kernel)
     user_thread.lock().deadline = 2;
+    user_thread.lock().set_affinity(Some(0));
 
     kprintln!(
         "[RING3/TEST] Thread Ring 3 créé avec succès (Entry: {:#010x}, RSP: {:#018x})",
@@ -115,7 +116,7 @@ pub fn execute_ring3_roundtrip_test() -> bool {
         base_weight: 1024,
         base_deadline: 0,
         wait_ticks: 0,
-        cpu_affinity: None,
+        cpu_affinity: Some(0),
         last_cpu: 0,
         is_user: false,
         user_entry: 0,

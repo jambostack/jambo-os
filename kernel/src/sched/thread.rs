@@ -145,15 +145,33 @@ impl Thread {
         })))
     }
 
-    /// Crée un thread idle dédié pour un processeur donné
-    pub fn new_idle(cpu_id: u32) -> Arc<Mutex<Self>> {
-        Arc::new(Mutex::new(Self {
+    /// Crée un thread idle dédié pour un processeur donné avec sa propre pile superviseur de 16 Kio
+    pub fn new_idle(cpu_id: u32) -> Option<Arc<Mutex<Self>>> {
+        let stack_paddr = PMM.lock().allocate(2)?; // 16 Kio de pile superviseur (Ring 0)
+        let stack_base = phys_to_virt(stack_paddr);
+        let stack_top = stack_base + 4 * PAGE_SIZE;
+
+        let mut rsp = stack_top as *mut u64;
+        unsafe {
+            rsp = rsp.sub(1);
+            *rsp = cpu_idle_trampoline as *const () as usize as u64;
+
+            rsp = rsp.sub(1);
+            *rsp = 0x202; // RFLAGS (IF activé)
+
+            for _ in 0..6 {
+                rsp = rsp.sub(1);
+                *rsp = 0;
+            }
+        }
+
+        Some(Arc::new(Mutex::new(Self {
             id: 0x8000_0000_0000_0000 | (cpu_id as u64),
             process_id: 0,
-            state: ThreadState::Running,
-            rsp: 0,
-            stack_base: 0,
-            stack_top: 0,
+            state: ThreadState::Ready,
+            rsp: rsp as u64,
+            stack_base,
+            stack_top,
             vruntime: u64::MAX / 2,
             deadline: u64::MAX,
             weight: 1,
@@ -167,7 +185,7 @@ impl Thread {
             user_rsp: 0,
             aspace: None,
             cspace: None,
-        }))
+        })))
     }
 
     /// Rehausse temporairement la priorité (héritage de priorité pour éviter les inversions)
@@ -230,6 +248,21 @@ extern "C" fn user_thread_trampoline() -> ! {
         unsafe {
             super::context::enter_user_mode(user_entry, user_rsp);
         }
+    }
+}
+
+/// Point d'entrée de la boucle d'inactivité (Idle) pour un processeur
+pub extern "C" fn cpu_idle_trampoline() -> ! {
+    loop {
+        #[cfg(target_arch = "x86_64")]
+        unsafe {
+            core::arch::asm!("sti; hlt", options(nomem, nostack, preserves_flags));
+        }
+        #[cfg(target_arch = "aarch64")]
+        unsafe {
+            core::arch::asm!("wfi", options(nomem, nostack, preserves_flags));
+        }
+        super::eevdf::EevdfScheduler::reschedule();
     }
 }
 

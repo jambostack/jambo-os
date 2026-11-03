@@ -64,10 +64,11 @@ impl EevdfScheduler {
     /// Enregistre un thread idle dédié pour un processeur donné
     pub fn register_cpu_idle(&mut self, cpu_id: usize) {
         if cpu_id < MAX_CPUS && self.idle_threads[cpu_id].is_none() {
-            let idle = Thread::new_idle(cpu_id as u32);
-            self.idle_threads[cpu_id] = Some(idle.clone());
-            if self.current_per_cpu[cpu_id].is_none() {
-                self.current_per_cpu[cpu_id] = Some(idle);
+            if let Some(idle) = Thread::new_idle(cpu_id as u32) {
+                self.idle_threads[cpu_id] = Some(idle.clone());
+                if self.current_per_cpu[cpu_id].is_none() {
+                    self.current_per_cpu[cpu_id] = Some(idle);
+                }
             }
         }
     }
@@ -264,6 +265,11 @@ impl EevdfScheduler {
 
             let prev_current = sched.current_per_cpu[cpu_id].take();
             if let Some(current) = prev_current {
+                if Arc::ptr_eq(&current, &next_thread) {
+                    sched.current_per_cpu[cpu_id] = Some(current);
+                    return;
+                }
+
                 let mut curr = current.lock();
                 let is_idle = curr.id >= 0x8000_0000_0000_0000;
 
@@ -339,29 +345,7 @@ impl EevdfScheduler {
             cpu_id
         );
 
-        loop {
-            let has_work = {
-                let sched = SCHEDULER.lock();
-                sched.runqueue.iter().any(|t| {
-                    let guard = t.lock();
-                    guard.state == ThreadState::Ready
-                        && guard.cpu_affinity.map_or(true, |c| c as usize == cpu_id)
-                })
-            };
-
-            if has_work {
-                Self::reschedule();
-            } else {
-                #[cfg(target_arch = "x86_64")]
-                unsafe {
-                    core::arch::asm!("sti; hlt; cli", options(nomem, nostack, preserves_flags));
-                }
-                #[cfg(target_arch = "aarch64")]
-                unsafe {
-                    core::arch::asm!("wfi", options(nomem, nostack, preserves_flags));
-                }
-            }
-        }
+        super::thread::cpu_idle_trampoline();
     }
 }
 
