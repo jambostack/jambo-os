@@ -51,6 +51,13 @@ use jambo_edr::{
 };
 #[allow(unused_imports)]
 use jambo_forensics::{ForensicsClient, ForensicsOpcode, ForensicsResponse, FORENSICS_STATUS_OK};
+#[allow(unused_imports)]
+use jambo_itdr::{
+    itdr_rights, IdentityRecord, IdentityState, IdentityThreatEvent, IdentityThreatType,
+    IdentityType, ItdrAuditEntry, ItdrCap, ItdrClient, ItdrError, ItdrRemediationReport,
+    ItdrRequest, ItdrResponse, ItdrSummary, JamboItdrDaemon, ResponseActionType, ThreatStatus,
+    ITDR_ENDPOINT_ID, ITDR_REQ_MAGIC, ITDR_RESP_MAGIC,
+};
 use jambo_kdir::{KdirClient, KdirResponse, KDIR_PROTECTION_SECURED, KDIR_STATUS_OK};
 #[allow(unused_imports)]
 use jambo_kms::{
@@ -191,6 +198,7 @@ pub struct JamboShell {
     pub xdr_daemon: JamboXdrDaemon,
     pub soar_daemon: JamboSoarDaemon,
     pub ueba_daemon: JamboUebaDaemon,
+    pub itdr_daemon: JamboItdrDaemon,
 }
 
 impl Default for JamboShell {
@@ -296,6 +304,14 @@ impl JamboShell {
         );
         let mut ueba_daemon = JamboUebaDaemon::new(ueba_cap);
         ueba_daemon.init_defaults();
+        let itdr_cap = ItdrCap::new(
+            libjambo::Handle::new(37, 1),
+            itdr_rights::ALL,
+            100_000,
+            10_000,
+        );
+        let mut itdr_daemon = JamboItdrDaemon::new(itdr_cap);
+        itdr_daemon.init_defaults();
         Self {
             prompt_user: "jambo",
             commands_executed: 0,
@@ -321,6 +337,7 @@ impl JamboShell {
             xdr_daemon,
             soar_daemon,
             ueba_daemon,
+            itdr_daemon,
         }
     }
 
@@ -387,6 +404,7 @@ impl JamboShell {
             "xdr" => self.cmd_xdr(args, out),
             "soar" => self.cmd_soar(args, out),
             "ueba" => self.cmd_ueba(args, out),
+            "itdr" => self.cmd_itdr(args, out),
             _ => self.cmd_not_found(cmd, out),
         }
     }
@@ -395,7 +413,7 @@ impl JamboShell {
         let text = b"Commandes disponibles:\n\
   help        - Affiche cette aide\n\
   sysinfo     - Metriques memoire et uptime du micro-noyau\n\
-  ps          - Liste les 36 processus actifs\n\
+  ps          - Liste les 37 processus actifs\n\
   echo <args> - Affiche le texte sur la console\n\
   clear       - Reinitialise l'ecran du terminal\n\
   reboot      - Eteint ou redemarre la machine virtuelle\n\
@@ -432,7 +450,8 @@ impl JamboShell {
   ndr [status|flows|inspect|isolate|alerts|audit] - Detection et reponse reseau souveraine NDR Ring 3\n\
   xdr [status|campaigns|correlate|remediate|graph|audit] - Detection et reponse etendue souveraine XDR Ring 3\n\
   soar [status|playbooks|trigger|incidents|audit] - Orchestration, automatisation et reponse aux incidents SOAR Ring 3\n\
-  ueba [status|profile|anomalies|score|quarantine|audit] - Analyse comportementale des utilisateurs et entites UEBA Ring 3\n";
+  ueba [status|profile|anomalies|score|quarantine|audit] - Analyse comportementale des utilisateurs et entites UEBA Ring 3\n\
+  itdr [status|identities|threats|revoke|isolate|remediate|audit] - Detection et reponse aux menaces d'identites ITDR Ring 3\n";
         let len = text.len().min(out.len());
         out[..len].copy_from_slice(&text[..len]);
         (ShellStatus::Success, len)
@@ -509,7 +528,7 @@ impl JamboShell {
  30  ACTIF    /bin/waf (L7 Web Application Firewall Ring 3)\n  30 | waf             | Ring 3 | Ready   | 1000   | L7 Web Application Firewall & Injection Filter\n\
  31  ACTIF    /bin/siem (Security Information & Event Management Ring 3)\n  31 | siem            | Ring 3 | Ready   | 1000   | Security Information & Event Management\n\
  32  ACTIF    /bin/edr (Endpoint Detection & Response Ring 3)\n  32 | edr             | Ring 3 | Ready   | 1000   | Endpoint Detection & Response Daemon\n\
- 33  ACTIF    /bin/ndr (Network Detection & Response Ring 3)\n  33 | ndr             | Ring 3 | Ready   | 1000   | Network Detection & Response Daemon\n  34  ACTIF    /bin/xdr (Extended Detection & Response Ring 3)\n  34 | xdr             | Ring 3 | Ready   | 1000   | Extended Detection & Response Daemon\n  35  ACTIF    /bin/soar (Security Orchestration, Automation & Response Ring 3)\n  35 | soar            | Ring 3 | Ready   | 1000   | Security Orchestration, Automation & Response Daemon\n  36  ACTIF    /bin/ueba (User & Entity Behavior Analytics Ring 3)\n  36 | ueba            | Ring 3 | Ready   | 1000   | User & Entity Behavior Analytics Daemon\nTotal: 36 processes\n";
+ 33  ACTIF    /bin/ndr (Network Detection & Response Ring 3)\n  33 | ndr             | Ring 3 | Ready   | 1000   | Network Detection & Response Daemon\n  34  ACTIF    /bin/xdr (Extended Detection & Response Ring 3)\n  34 | xdr             | Ring 3 | Ready   | 1000   | Extended Detection & Response Daemon\n  35  ACTIF    /bin/soar (Security Orchestration, Automation & Response Ring 3)\n  35 | soar            | Ring 3 | Ready   | 1000   | Security Orchestration, Automation & Response Daemon\n  36  ACTIF    /bin/ueba (User & Entity Behavior Analytics Ring 3)\n  36 | ueba            | Ring 3 | Ready   | 1000   | User & Entity Behavior Analytics Daemon\n  37  ACTIF    /bin/itdr (Identity Threat Detection & Response Ring 3)\n  37 | itdr            | Ring 3 | Ready   | 1000   | Identity Threat Detection & Response Daemon\nTotal: 37 processes\n";
         let len = text.len().min(out.len());
         out[..len].copy_from_slice(&text[..len]);
         (ShellStatus::Success, len)
@@ -9617,6 +9636,321 @@ ID  | Nom             | Racine de Confiance      | Statut             | Confinem
         c = append_bytes(out, c, b"\n");
         (ShellStatus::Success, c)
     }
+
+    fn send_itdr_request(&mut self, req: &ItdrRequest) -> ItdrResponse {
+        let mut resp_opt: Option<ItdrResponse> = None;
+        for &h in &[
+            37u64, 36u64, 35u64, 34u64, 33u64, 32u64, 31u64, 30u64, 29u64, 28u64, 27u64, 26u64,
+            25u64, 24u64, 23u64, 22u64, 21u64, 20u64, 19u64, 18u64, 17u64, 16u64, 15u64, 14u64,
+            13u64,
+        ] {
+            let client = ItdrClient::new(libjambo::Handle(h));
+            if let Ok(resp) = client.call(req) {
+                if resp.magic == ITDR_RESP_MAGIC {
+                    resp_opt = Some(resp);
+                    break;
+                }
+            }
+        }
+        let local_resp = self.itdr_daemon.dispatch_ipc(req);
+        resp_opt.unwrap_or(local_resp)
+    }
+
+    pub fn cmd_itdr(&mut self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        let subcmd = if args.is_empty() { "status" } else { args[0] };
+        match subcmd {
+            "status" => self.cmd_itdr_status(out),
+            "identities" => self.cmd_itdr_identities(out),
+            "threats" => self.cmd_itdr_threats(out),
+            "revoke" => self.cmd_itdr_revoke(&args[1..], out),
+            "isolate" => self.cmd_itdr_isolate(&args[1..], out),
+            "remediate" => self.cmd_itdr_remediate(out),
+            "audit" => self.cmd_itdr_audit(out),
+            _ => {
+                let msg = b"Usage: itdr <status|identities|threats|revoke <id>|isolate <id>|remediate|audit>\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                (ShellStatus::InvalidArgument, len)
+            }
+        }
+    }
+
+    fn cmd_itdr_status(&mut self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let req = ItdrRequest {
+            magic: ITDR_REQ_MAGIC,
+            opcode: 1, // GetStatus
+            handle_id: ITDR_ENDPOINT_ID,
+            rights: itdr_rights::ALL,
+            ..Default::default()
+        };
+        let _resp = self.send_itdr_request(&req);
+        let cap = self.itdr_daemon.admin_cap;
+        let summary = match self.itdr_daemon.get_summary(&cap) {
+            Ok(s) => s,
+            Err(_) => return (ShellStatus::ExecutionFailed, 0),
+        };
+
+        let mut c = 0;
+        c = append_bytes(
+            out,
+            c,
+            b"Bilan Global ITDR & Menaces sur l'Identite (jambo-itdr PID 37):\n  Statut Operationnel     : ACTIF (Surveillance Identites & Confinement O(1) Ring 3)\n  Identites Surveillees   : ",
+        );
+        c = append_u64(out, c, summary.total_identities as u64);
+        c = append_bytes(out, c, b"\n  Identites Actives       : ");
+        c = append_u64(out, c, summary.active_identities as u64);
+        c = append_bytes(out, c, b"\n  Identites en Quarantaine: ");
+        c = append_u64(out, c, summary.quarantined_identities as u64);
+        c = append_bytes(out, c, b"\n  Menaces Detectees       : ");
+        c = append_u64(out, c, summary.total_threats as u64);
+        c = append_bytes(out, c, b"\n  Menaces Actives         : ");
+        c = append_u64(out, c, summary.active_threats as u64);
+        c = append_bytes(out, c, b"\n  Menaces Attenuees       : ");
+        c = append_u64(out, c, summary.mitigated_threats as u64);
+        c = append_bytes(out, c, b"\n  Actions Proactives      : ");
+        c = append_u64(out, c, summary.actions_count as u64);
+        c = append_bytes(out, c, b"\n  Score Moyen de Confiance: ");
+        c = append_u64(out, c, self.itdr_daemon.calculate_avg_trust_score() as u64);
+        c = append_bytes(out, c, b" / 100\n  Indice Global Risque    : ");
+        c = append_u64(out, c, summary.global_identity_risk as u64);
+        c = append_bytes(out, c, b" / 100\n  Grand Livre d'Audit     : ");
+        if summary.ledger_valid {
+            c = append_bytes(
+                out,
+                c,
+                b"VALIDE (Chaine SHA-256 inalterable)\n  Empreinte Racine SHA-256: ",
+            );
+            for &b in self.itdr_daemon.last_hash.iter() {
+                c = append_hex_byte(out, c, b);
+            }
+        } else {
+            c = append_bytes(out, c, b"CORROMPU (Rupture d'integrite)");
+        }
+        c = append_bytes(out, c, b"\n");
+        (ShellStatus::Success, c)
+    }
+
+    fn cmd_itdr_identities(&self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let mut c = 0;
+        c = append_bytes(
+            out,
+            c,
+            b"Table des Identites Souveraines Surveillees (PID 37):\n ID | Nom                             | Type             | Confiance | Statut       | Caps\n----+---------------------------------+------------------+-----------+--------------+-------\n",
+        );
+
+        for id_rec in self
+            .itdr_daemon
+            .identities
+            .iter()
+            .take(self.itdr_daemon.identity_count)
+            .flatten()
+        {
+            c = append_padded_u64(out, c, id_rec.id as u64, 3);
+            c = append_bytes(out, c, b" | ");
+            c = append_padded_str(out, c, id_rec.name_as_str(), 31);
+            c = append_bytes(out, c, b" | ");
+            c = append_padded_str(out, c, id_rec.id_type.as_str(), 16);
+            c = append_bytes(out, c, b" | ");
+            c = append_padded_u64(out, c, id_rec.trust_score as u64, 3);
+            c = append_bytes(out, c, b"/100    | ");
+            c = append_padded_str(out, c, id_rec.state.as_str(), 12);
+            c = append_bytes(out, c, b" | 0x");
+            c = append_hex_u32(out, c, id_rec.assigned_caps);
+            c = append_bytes(out, c, b"\n");
+        }
+        c = append_bytes(out, c, b"Total: ");
+        c = append_u64(out, c, self.itdr_daemon.identity_count as u64);
+        c = append_bytes(out, c, b" identites surveillees\n");
+        (ShellStatus::Success, c)
+    }
+
+    fn cmd_itdr_threats(&self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let mut c = 0;
+        c = append_bytes(
+            out,
+            c,
+            b"Table des Menaces d'Identite Detectees (PID 37):\n ID | ID Entite | Vecteur Menace           | Severite | Score | Statut\n----+-----------+--------------------------+----------+-------+-------------\n",
+        );
+
+        for th in self
+            .itdr_daemon
+            .threats
+            .iter()
+            .take(self.itdr_daemon.threat_count)
+            .flatten()
+        {
+            c = append_padded_u64(out, c, th.id as u64, 3);
+            c = append_bytes(out, c, b" | ");
+            c = append_padded_u64(out, c, th.identity_id as u64, 9);
+            c = append_bytes(out, c, b" | ");
+            c = append_padded_str(out, c, th.threat_type.as_str(), 24);
+            c = append_bytes(out, c, b" | ");
+            c = append_padded_str(out, c, th.severity.as_str(), 8);
+            c = append_bytes(out, c, b" | ");
+            c = append_padded_u64(out, c, th.anomaly_score as u64, 3);
+            c = append_bytes(out, c, b"   | ");
+            c = append_bytes(out, c, th.status.as_str().as_bytes());
+            c = append_bytes(out, c, b"\n");
+        }
+        c = append_bytes(out, c, b"Total: ");
+        c = append_u64(out, c, self.itdr_daemon.threat_count as u64);
+        c = append_bytes(out, c, b" menaces enregistrees\n");
+        (ShellStatus::Success, c)
+    }
+
+    fn cmd_itdr_revoke(&mut self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if args.is_empty() {
+            let msg = b"Usage: itdr revoke <id>\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            return (ShellStatus::InvalidArgument, len);
+        }
+
+        let id: u32 = match args[0].parse() {
+            Ok(v) => v,
+            Err(_) => {
+                let msg = b"Usage: itdr revoke <id>\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                return (ShellStatus::InvalidArgument, len);
+            }
+        };
+
+        let req = ItdrRequest {
+            magic: ITDR_REQ_MAGIC,
+            opcode: 5, // RevokeIdentity
+            handle_id: ITDR_ENDPOINT_ID,
+            rights: itdr_rights::ALL,
+            identity_id: id,
+            epoch: 12345,
+            ..Default::default()
+        };
+        let resp = self.send_itdr_request(&req);
+
+        let mut c = 0;
+        if resp.status == 0 {
+            c = append_bytes(
+                out,
+                c,
+                b"Revocation Definitive d'Identite Appliquee (PID 37):\n  ID Entite               : ",
+            );
+            c = append_u64(out, c, id as u64);
+            c = append_bytes(out, c, b"\n  Statut                  : REVOCATION_DEFINITIVE\n  Capabilites Assigneess  : 0x00000000 (Purgees)\n  Score de Confiance      : 0 / 100\n");
+            (ShellStatus::Success, c)
+        } else {
+            c = append_bytes(out, c, b"ITDR: Echec de revocation de l'identite ID ");
+            c = append_u64(out, c, id as u64);
+            c = append_bytes(out, c, b" (Identite non trouvee ou droits insuffisants)\n");
+            (ShellStatus::ExecutionFailed, c)
+        }
+    }
+
+    fn cmd_itdr_isolate(&mut self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if args.is_empty() {
+            let msg = b"Usage: itdr isolate <id>\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            return (ShellStatus::InvalidArgument, len);
+        }
+
+        let id: u32 = match args[0].parse() {
+            Ok(v) => v,
+            Err(_) => {
+                let msg = b"Usage: itdr isolate <id>\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                return (ShellStatus::InvalidArgument, len);
+            }
+        };
+
+        let req = ItdrRequest {
+            magic: ITDR_REQ_MAGIC,
+            opcode: 6, // IsolateIdentity
+            handle_id: ITDR_ENDPOINT_ID,
+            rights: itdr_rights::ALL,
+            identity_id: id,
+            epoch: 12345,
+            ..Default::default()
+        };
+        let resp = self.send_itdr_request(&req);
+
+        let mut c = 0;
+        if resp.status == 0 {
+            c = append_bytes(
+                out,
+                c,
+                b"Mise en Quarantaine Atomique O(1) Appliquee (PID 37):\n  ID Entite Isolee        : ",
+            );
+            c = append_u64(out, c, id as u64);
+            c = append_bytes(out, c, b"\n  Statut                  : QUARANTAINE_ACTIVE (Confinement O(1))\n  Capabilites             : Restreintes (0x00000000)\n");
+            (ShellStatus::Success, c)
+        } else {
+            c = append_bytes(out, c, b"ITDR: Echec d'isolation de l'identite ID ");
+            c = append_u64(out, c, id as u64);
+            c = append_bytes(out, c, b" (Identite non trouvee ou droits insuffisants)\n");
+            (ShellStatus::ExecutionFailed, c)
+        }
+    }
+
+    fn cmd_itdr_remediate(&mut self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let req = ItdrRequest {
+            magic: ITDR_REQ_MAGIC,
+            opcode: 7, // RemediateAll
+            handle_id: ITDR_ENDPOINT_ID,
+            rights: itdr_rights::ALL,
+            epoch: 12345,
+            ..Default::default()
+        };
+        let resp = self.send_itdr_request(&req);
+
+        let mut c = 0;
+        if resp.status == 0 {
+            c = append_bytes(
+                out,
+                c,
+                b"Rapport de Confinement Autonome O(1) & Remediation ITDR (PID 37):\n  Statut                  : Succes (Confinement Autonome & Purge Menaces O(1))\n  Identites en Quarantaine: ",
+            );
+            c = append_u64(out, c, resp.quarantined_identities as u64);
+            c = append_bytes(out, c, b"\n  Menaces Actives Restantes: ");
+            c = append_u64(out, c, resp.active_threats as u64);
+            c = append_bytes(out, c, b"\n  Score Moyen de Confiance : ");
+            c = append_u64(out, c, resp.avg_trust_score as u64);
+            c = append_bytes(out, c, b" / 100\n  Indice Global Risque     : ");
+            c = append_u64(out, c, resp.global_identity_risk as u64);
+            c = append_bytes(out, c, b" / 100\n  Empreinte Scellee SHA-256: ");
+            for &b in resp.audit_hash.iter() {
+                c = append_hex_byte(out, c, b);
+            }
+            c = append_bytes(out, c, b"\n");
+            (ShellStatus::Success, c)
+        } else {
+            c = append_bytes(out, c, b"ITDR: Echec de remediation autonome\n");
+            (ShellStatus::ExecutionFailed, c)
+        }
+    }
+
+    fn cmd_itdr_audit(&self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let is_valid = self.itdr_daemon.verify_ledger_integrity();
+        let mut c = 0;
+        c = append_bytes(
+            out,
+            c,
+            b"Grand Livre d'Audit Cryptographique ITDR (PID 37):\n  Integrite Registre      : ",
+        );
+        if is_valid {
+            c = append_bytes(out, c, b"VALIDE (Chaine SHA-256 inalterable)\n");
+        } else {
+            c = append_bytes(out, c, b"CORROMPU (Rupture d'integrite)\n");
+        }
+        c = append_bytes(out, c, b"  Total Entrees Scellees  : ");
+        c = append_u64(out, c, self.itdr_daemon.ledger_count as u64);
+        c = append_bytes(out, c, b"\n  Empreinte Racine SHA-256: ");
+        for &b in self.itdr_daemon.last_hash.iter() {
+            c = append_hex_byte(out, c, b);
+        }
+        c = append_bytes(out, c, b"\n");
+        (ShellStatus::Success, c)
+    }
 }
 
 fn step_status_str(status: StepStatus) -> &'static str {
@@ -9947,6 +10281,33 @@ fn append_hex_byte(buf: &mut [u8], mut cursor: usize, byte: u8) -> usize {
     if cursor < buf.len() {
         buf[cursor] = HEX[(byte & 0x0F) as usize];
         cursor += 1;
+    }
+    cursor
+}
+
+fn append_hex_u32(buf: &mut [u8], mut cursor: usize, val: u32) -> usize {
+    for &b in val.to_be_bytes().iter() {
+        cursor = append_hex_byte(buf, cursor, b);
+    }
+    cursor
+}
+
+fn append_padded_str(buf: &mut [u8], mut cursor: usize, s: &str, width: usize) -> usize {
+    let start = cursor;
+    cursor = append_bytes(buf, cursor, s.as_bytes());
+    let written = cursor - start;
+    for _ in written..width {
+        cursor = append_bytes(buf, cursor, b" ");
+    }
+    cursor
+}
+
+fn append_padded_u64(buf: &mut [u8], mut cursor: usize, val: u64, width: usize) -> usize {
+    let start = cursor;
+    cursor = append_u64(buf, cursor, val);
+    let written = cursor - start;
+    for _ in written..width {
+        cursor = append_bytes(buf, cursor, b" ");
     }
     cursor
 }
@@ -10392,7 +10753,7 @@ mod tests {
         assert!(
             s.contains("  30 | waf             | Ring 3 | Ready   | 1000   | L7 Web Application Firewall & Injection Filter")
         );
-        assert!(s.contains("Total: 36 processes"));
+        assert!(s.contains("Total: 37 processes"));
     }
 
     #[test]
@@ -10404,7 +10765,7 @@ mod tests {
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains("  23 | pkgd           | Ring 3 | Ready   | 1000   | Declarative Package Manager & CAS Store"));
-        assert!(s.contains("Total: 36 processes"));
+        assert!(s.contains("Total: 37 processes"));
     }
 
     #[test]
@@ -10416,7 +10777,7 @@ mod tests {
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains("  24 | certd          | Ring 3 | Ready   | 1000   | Ephemeral PKI & Cluster mTLS Daemon"));
-        assert!(s.contains("Total: 36 processes"));
+        assert!(s.contains("Total: 37 processes"));
     }
 
     #[test]
@@ -10428,7 +10789,7 @@ mod tests {
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains("  25 | policyd        | Ring 3 | Ready   | 1000   | Security Policy Engine & Admission Control"));
-        assert!(s.contains("Total: 36 processes"));
+        assert!(s.contains("Total: 37 processes"));
     }
 
     #[test]
@@ -10440,7 +10801,7 @@ mod tests {
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains("  26 | secboot        | Ring 3 | Ready   | 1000   | TPM 2.0 Measured Boot & Secure Trust Chain"));
-        assert!(s.contains("Total: 36 processes"));
+        assert!(s.contains("Total: 37 processes"));
     }
 
     #[test]
@@ -10452,7 +10813,7 @@ mod tests {
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains("  27 | logd           | Ring 3 | Ready   | 1000   | Structured Logging & Tamper-Evident Hash Chain"));
-        assert!(s.contains("Total: 36 processes"));
+        assert!(s.contains("Total: 37 processes"));
     }
 
     #[test]
@@ -10464,7 +10825,7 @@ mod tests {
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains("28 | kms | Running | Key Management Service & HKDF Derivation"));
-        assert!(s.contains("Total: 36 processes"));
+        assert!(s.contains("Total: 37 processes"));
     }
 
     #[test]
@@ -10479,7 +10840,7 @@ mod tests {
         assert!(s.contains(
             "  29 | attest          | Ring 3 | Ready   | 1000   | Remote Attestation & Zero-Knowledge Proofs"
         ));
-        assert!(s.contains("Total: 36 processes"));
+        assert!(s.contains("Total: 37 processes"));
     }
 
     #[test]
@@ -10494,7 +10855,7 @@ mod tests {
         assert!(s.contains(
             "  30 | waf             | Ring 3 | Ready   | 1000   | L7 Web Application Firewall & Injection Filter"
         ));
-        assert!(s.contains("Total: 36 processes"));
+        assert!(s.contains("Total: 37 processes"));
     }
 
     #[test]
@@ -10511,7 +10872,7 @@ mod tests {
         assert!(s.contains(
             "  31 | siem            | Ring 3 | Ready   | 1000   | Security Information & Event Management"
         ));
-        assert!(s.contains("Total: 36 processes"));
+        assert!(s.contains("Total: 37 processes"));
     }
 
     #[test]
@@ -10526,7 +10887,7 @@ mod tests {
         assert!(s.contains(
             "  32 | edr             | Ring 3 | Ready   | 1000   | Endpoint Detection & Response Daemon"
         ));
-        assert!(s.contains("Total: 36 processes"));
+        assert!(s.contains("Total: 37 processes"));
     }
 
     #[test]
@@ -10541,7 +10902,7 @@ mod tests {
         assert!(s.contains(
             "  33 | ndr             | Ring 3 | Ready   | 1000   | Network Detection & Response Daemon"
         ));
-        assert!(s.contains("Total: 36 processes"));
+        assert!(s.contains("Total: 37 processes"));
     }
 
     #[test]
@@ -10556,7 +10917,7 @@ mod tests {
         assert!(s.contains(
             "  34 | xdr             | Ring 3 | Ready   | 1000   | Extended Detection & Response Daemon"
         ));
-        assert!(s.contains("Total: 36 processes"));
+        assert!(s.contains("Total: 37 processes"));
     }
 
     #[test]
@@ -10573,7 +10934,7 @@ mod tests {
         assert!(s.contains(
             "  35 | soar            | Ring 3 | Ready   | 1000   | Security Orchestration, Automation & Response Daemon"
         ));
-        assert!(s.contains("Total: 36 processes"));
+        assert!(s.contains("Total: 37 processes"));
     }
 
     #[test]
@@ -10588,7 +10949,22 @@ mod tests {
         assert!(s.contains(
             "  36 | ueba            | Ring 3 | Ready   | 1000   | User & Entity Behavior Analytics Daemon"
         ));
-        assert!(s.contains("Total: 36 processes"));
+        assert!(s.contains("Total: 37 processes"));
+    }
+
+    #[test]
+    fn test_ps_contains_37_processes() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        let (st, len) = shell.execute_line("ps", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("37  ACTIF    /bin/itdr (Identity Threat Detection & Response Ring 3)"));
+        assert!(s.contains(
+            "  37 | itdr            | Ring 3 | Ready   | 1000   | Identity Threat Detection & Response Daemon"
+        ));
+        assert!(s.contains("Total: 37 processes"));
     }
 
     #[test]
@@ -10599,7 +10975,7 @@ mod tests {
         let (st, len) = shell.execute_line("help", &mut out);
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
-        assert!(s.contains("36 processus actifs"));
+        assert!(s.contains("37 processus actifs"));
         assert!(s.contains("fdr [status|verify|pcr]"));
         assert!(s.contains("wasm [status|run|info]"));
         assert!(s.contains("pqc [status|kex|sign|audit]"));
@@ -14881,6 +15257,130 @@ mod tests {
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains(
             "Usage: ueba <status|profile <name>|anomalies|score <name>|quarantine <name>|audit>"
+        ));
+    }
+
+    #[test]
+    fn test_itdr_status() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        let (st, len) = shell.execute_line("itdr status", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("Bilan Global ITDR & Menaces sur l'Identite (jambo-itdr PID 37):"));
+        assert!(s.contains("Identites Surveillees   : 5"));
+        assert!(s.contains("Menaces Detectees       : 3"));
+        assert!(s.contains("Grand Livre d'Audit     : VALIDE (Chaine SHA-256 inalterable)"));
+    }
+
+    #[test]
+    fn test_itdr_identities() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        let (st, len) = shell.execute_line("itdr identities", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("Table des Identites Souveraines Surveillees (PID 37):"));
+        assert!(s.contains("kernel::jambo-authd"));
+        assert!(s.contains("daemon::jambo-netd"));
+        assert!(s.contains("mesh::node-eu-west-1"));
+        assert!(s.contains("Total: 5 identites surveillees"));
+    }
+
+    #[test]
+    fn test_itdr_threats() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        let (st, len) = shell.execute_line("itdr threats", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("Table des Menaces d'Identite Detectees (PID 37):"));
+        assert!(s.contains("TokenCompromise"));
+        assert!(s.contains("CapabilityUsurpation"));
+        assert!(s.contains("SessionReplay"));
+        assert!(s.contains("Total: 3 menaces enregistrees"));
+    }
+
+    #[test]
+    fn test_itdr_revoke() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        // 1. Missing argument
+        let (st1, _len1) = shell.execute_line("itdr revoke", &mut out);
+        assert_eq!(st1, ShellStatus::InvalidArgument);
+
+        // 2. Revoke identity 5
+        let (st2, len2) = shell.execute_line("itdr revoke 5", &mut out);
+        assert_eq!(st2, ShellStatus::Success);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("Revocation Definitive d'Identite Appliquee (PID 37):"));
+        assert!(s2.contains("REVOCATION_DEFINITIVE"));
+
+        // Verify daemon state
+        let rec = shell.itdr_daemon.identities[4].unwrap();
+        assert_eq!(rec.state, IdentityState::Revoked);
+        assert_eq!(rec.trust_score, 0);
+    }
+
+    #[test]
+    fn test_itdr_isolate() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        // 1. Missing argument
+        let (st1, _len1) = shell.execute_line("itdr isolate", &mut out);
+        assert_eq!(st1, ShellStatus::InvalidArgument);
+
+        // 2. Isolate identity 3
+        let (st2, len2) = shell.execute_line("itdr isolate 3", &mut out);
+        assert_eq!(st2, ShellStatus::Success);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("Mise en Quarantaine Atomique O(1) Appliquee (PID 37):"));
+        assert!(s2.contains("QUARANTAINE_ACTIVE"));
+
+        // Verify daemon state
+        let rec = shell.itdr_daemon.identities[2].unwrap();
+        assert_eq!(rec.state, IdentityState::Quarantined);
+    }
+
+    #[test]
+    fn test_itdr_remediate() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        let (st, len) = shell.execute_line("itdr remediate", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("Rapport de Confinement Autonome O(1) & Remediation ITDR (PID 37):"));
+        assert!(s.contains("Succes (Confinement Autonome & Purge Menaces O(1))"));
+    }
+
+    #[test]
+    fn test_itdr_audit() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        let (st, len) = shell.execute_line("itdr audit", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("Grand Livre d'Audit Cryptographique ITDR (PID 37):"));
+        assert!(s.contains("Integrite Registre      : VALIDE (Chaine SHA-256 inalterable)"));
+    }
+
+    #[test]
+    fn test_itdr_invalid() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        let (st, len) = shell.execute_line("itdr foobar", &mut out);
+        assert_eq!(st, ShellStatus::InvalidArgument);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains(
+            "Usage: itdr <status|identities|threats|revoke <id>|isolate <id>|remediate|audit>"
         ));
     }
 }

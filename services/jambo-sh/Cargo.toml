@@ -1,6 +1,6 @@
 [package]
 name = "jambo-sh"
-version = "0.3.75"
+version = "0.3.76"
 edition = "2021"
 
 [lib]
@@ -47,4 +47,5 @@ jambo-ndr = { path = "../jambo-ndr" }
 jambo-xdr = { path = "../jambo-xdr" }
 jambo-soar = { path = "../jambo-soar" }
 jambo-ueba = { path = "../jambo-ueba" }
+jambo-itdr = { path = "../jambo-itdr" }
 
