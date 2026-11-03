@@ -92,3 +92,4 @@ Le Jalon 3.32 de la feuille de route opérationnelle (Palier 3 — Sécurité Av
    - Version bump `v0.3.76`.
    - Extraction de `/bin/itdr` et démarrage PID 37 avec alignement 16 octets.
    - Validation QEMU avec ligne : `[PASS] Detection & Reponse Menaces Identites ITDR (jambo-itdr PID 37) validee sous QEMU.`.
+

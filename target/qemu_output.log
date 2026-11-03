@@ -3,7 +3,7 @@ BdsDxe: starting Boot0002 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x
 [2J[01;01H[01;01H[2J[01;01H[01;01H[BOOT] Protocole Limine actif (révision détectée : 3)
 [1;36m
 ================================================================================
-    JAMBO-OS (JamboKernel v0.3.75 — Iron Core)                                 
+    JAMBO-OS (JamboKernel v0.3.76 — Iron Core)                                 
     Architecture : Micro-noyau orienté capacités en Rust no_std (x86_64/AArch64)
     Auteur & Architecte Principal : ASSOGBA Prudence Dieudonné                 
     Dépôt Officiel : https://github.com/jambostack/jambo-os                    
@@ -72,7 +72,7 @@ BdsDxe: starting Boot0002 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x
 [SMP] Cœur AP #3 démarré (LAPIC ID: 3)
 [SCHED/EEVDF] Ordonnanceur EEVDF opérationnel avec 2 threads de test en file
 [BOOT/MODULES] Détection de 1 module(s) d'amorçage Limine :
-  [00] Module '/boot/initrd.tar' | 6576128 octets (cmdline: '')
+  [00] Module '/boot/initrd.tar' | 6764544 octets (cmdline: '')
 [INITRD/TAR] Superviseur '/bin/init' extrait (0x23e0 octets)
 [INITRD/TAR] Shell interactif '/bin/jsh' extrait (0x2d478 octets)
 [INITRD/TAR] Démon de stockage '/bin/blockd' extrait (0x134e8 octets)
@@ -109,6 +109,7 @@ BdsDxe: starting Boot0002 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x
 [INITRD/TAR] Demon Surveillance & Reponse XDR '/bin/xdr' extrait (0x9b30 octets)
 [INITRD/TAR] Demon Surveillance & Reponse SOAR '/bin/soar' extrait (0xdc98 octets)
 [INITRD/TAR] Demon Analyse Comportementale UEBA '/bin/ueba' extrait (0x7c30 octets)
+[INITRD/TAR] Demon Detection & Reponse Menaces Identites ITDR '/bin/itdr' extrait (0x7bc8 octets)
 [PROCESS] Processus utilisateur init (PID 1) initialisé avec pile System V ABI (RSP: 0x00007ffffffeff10)
 [PROCESS] Shell utilisateur interactif jsh (PID 2) initialisé avec pile System V ABI (RSP: 0x00007ffffffeff20) et enfilé
 [PROCESS] Démon de stockage blockd (PID 3) initialisé avec pile System V ABI (RSP: 0x00007ffffffeff20) et enfilé
@@ -145,6 +146,7 @@ BdsDxe: starting Boot0002 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x
 [PROCESS] Demon Surveillance & Reponse XDR xdr (PID 34) initialise avec pile System V ABI (RSP: 0x00007ffffffeff20) et enfile
 [PROCESS] Demon Surveillance & Reponse SOAR soar (PID 35) initialise avec pile System V ABI (RSP: 0x00007ffffffeff20) et enfile
 [PROCESS] Demon Analyse Comportementale UEBA ueba (PID 36) initialise avec pile System V ABI (RSP: 0x00007ffffffeff20) et enfile
+[PROCESS] Demon Detection & Reponse Menaces Identites itdr (PID 37) initialise avec pile System V ABI (RSP: 0x00007ffffffeff20) et enfile
 [CAP/CSPACE] Table de capacités active. Handle initial: 0x100000001, Handle atténué: 0x100000002
 [SYSCALL] Appel système vmo_create validé (Code retour: 0, Nouveau Handle: 0x100000003)
 [SYSCALL] Cycle de vie validé : process_create (0x100000004), thread_create (0x100000005), vmo_map & thread_start
@@ -178,6 +180,16 @@ BdsDxe: starting Boot0002 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x
 [UEBA] Auto-test reussi : moteur d'analyse, baselines et quarantaine valides.
 [UEBA] Serveur UEBA (jambo-ueba PID 36) pret.
 [UEBA] Canal IPC UEBA operationnel (endpoint PID 36 pret).
-[TEST] Validation de l'initialisation des 36 processus Ring 3 (init, jsh, blockd, fs, netd, fdr, wasmd, pqc, kdir, forensics, powerd, metricsd, bpfd, vpn, authd, dnsd, timed, auditd, walld, vaultd, watchdogd, cored, pkgd, certd, policyd, secboot, logd, kms, attest, waf, siem, edr, ndr, xdr, soar, ueba)...
-[1;32m[PASS] Analyse Comportementale UEBA (jambo-ueba PID 36) validee sous QEMU.[0m
+[ITDR] Daemon ITDR souverain et inventaire d'identites initialises (PID 37).
+[ITDR] Demarrage de l'auto-test du service ITDR...
+[ITDR] Auto-test 1: Inventaire d'identites souveraines par defaut : OK (3 identites).
+[ITDR] Auto-test 2: Ingestion d'evenement d'activite nominale : OK.
+[ITDR] Auto-test 3: Detection de menace critique (exfiltration de jeton) : OK.
+[ITDR] Auto-test 4: Confinement et revocation atomique O(1) : OK.
+[ITDR] Auto-test 5: Scellement cryptographique d'audit SHA-256 : OK.
+[ITDR] Auto-test reussi : moteur ITDR, attestation d'identite et reponse valides.
+[ITDR] Serveur ITDR (jambo-itdr PID 37) pret.
+[ITDR] Canal IPC ITDR operationnel (endpoint PID 37 pret).
+[TEST] Validation de l'initialisation des 37 processus Ring 3 (init, jsh, blockd, fs, netd, fdr, wasmd, pqc, kdir, forensics, powerd, metricsd, bpfd, vpn, authd, dnsd, timed, auditd, walld, vaultd, watchdogd, cored, pkgd, certd, policyd, secboot, logd, kms, attest, waf, siem, edr, ndr, xdr, soar, ueba, itdr)...
+ [1;32m[PASS] Detection & Reponse Menaces Identites ITDR (jambo-itdr PID 37) validee sous QEMU.[0m
 [TEST] Mode de test CI validé. Sortie propre via isa-debug-exit...
