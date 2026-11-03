@@ -123,7 +123,7 @@ unsafe impl GlobalAlloc for JamboGlobalAlloc {
                 order += 1;
             }
             let paddr = super::pmm::virt_to_phys(ptr as usize);
-            super::pmm::PMM.lock().free(paddr, order);
+            let _ = super::pmm::PMM.lock().free(paddr, order);
             return;
         }
 

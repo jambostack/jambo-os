@@ -10,10 +10,25 @@ pub enum VmoType {
     Physical,
 }
 
+pub struct VmoBacking {
+    pub pages: Mutex<Vec<Option<usize>>>,
+    pub vmo_type: VmoType,
+}
+
+impl Drop for VmoBacking {
+    fn drop(&mut self) {
+        let mut pages = self.pages.lock();
+        for page in pages.iter_mut() {
+            if let Some(paddr) = page.take() {
+                let _ = free_page(paddr);
+            }
+        }
+    }
+}
+
 pub struct Vmo {
     size: usize,
-    vmo_type: VmoType,
-    pages: Mutex<Vec<Option<usize>>>,
+    backing: Arc<VmoBacking>,
     is_cow: bool,
 }
 
@@ -28,15 +43,17 @@ impl Vmo {
 
         Arc::new(Self {
             size,
-            vmo_type: VmoType::Anonymous,
-            pages: Mutex::new(pages),
+            backing: Arc::new(VmoBacking {
+                pages: Mutex::new(pages),
+                vmo_type: VmoType::Anonymous,
+            }),
             is_cow: false,
         })
     }
 
     /// Obtient la page physique à l'index donné, en l'allouant si nécessaire
     pub fn get_or_alloc_page(&self, page_index: usize) -> Option<usize> {
-        let mut pages = self.pages.lock();
+        let mut pages = self.backing.pages.lock();
         if page_index >= pages.len() {
             return None;
         }
@@ -55,19 +72,11 @@ impl Vmo {
         }
     }
 
-    /// Clone un VMO avec sémantique Copy-on-Write (CoW)
+    /// Clone un VMO avec sémantique Copy-on-Write (CoW) partageant le backing ref-counté
     pub fn clone_cow(&self) -> Arc<Self> {
-        let pages = self.pages.lock();
-        let mut new_pages = Vec::with_capacity(pages.len());
-
-        for page in pages.iter() {
-            new_pages.push(*page);
-        }
-
         Arc::new(Self {
             size: self.size,
-            vmo_type: self.vmo_type,
-            pages: Mutex::new(new_pages),
+            backing: self.backing.clone(),
             is_cow: true,
         })
     }
@@ -79,17 +88,8 @@ impl Vmo {
     pub fn page_count(&self) -> usize {
         (self.size + PAGE_SIZE - 1) / PAGE_SIZE
     }
-}
 
-impl Drop for Vmo {
-    fn drop(&mut self) {
-        if !self.is_cow {
-            let mut pages = self.pages.lock();
-            for page in pages.iter_mut() {
-                if let Some(paddr) = page.take() {
-                    free_page(paddr);
-                }
-            }
-        }
+    pub fn is_cow(&self) -> bool {
+        self.is_cow
     }
 }

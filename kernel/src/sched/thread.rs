@@ -175,7 +175,7 @@ impl Drop for Thread {
     fn drop(&mut self) {
         if self.stack_base != 0 {
             let paddr = virt_to_phys(self.stack_base);
-            PMM.lock().free(paddr, 2);
+            let _ = PMM.lock().free(paddr, 2);
         }
     }
 }

@@ -3,6 +3,16 @@ use spin::Mutex;
 
 pub const PAGE_SIZE: usize = 4096;
 pub const MAX_ORDER: usize = 11; // De 4 Kio (Ordre 0) à 4 Mio (Ordre 10)
+pub const MAX_TRACKED_PAGES: usize = 1024 * 1024; // 1 048 576 pages = 4 Gio de RAM physique
+pub const BITMAP_WORDS: usize = MAX_TRACKED_PAGES / 64; // 16 384 mots u64 (128 Kio en .bss)
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PmmError {
+    InvalidOrder,
+    Misaligned,
+    OutOfBounds,
+    DoubleFree,
+}
 
 pub static HHDM_OFFSET: AtomicUsize = AtomicUsize::new(0);
 
@@ -23,6 +33,7 @@ struct FreeBlock {
 
 pub struct BuddyAllocator {
     free_lists: [*mut FreeBlock; MAX_ORDER],
+    alloc_bitmap: [u64; BITMAP_WORDS],
     total_pages: usize,
     allocated_pages: usize,
 }
@@ -34,8 +45,73 @@ impl BuddyAllocator {
     pub const fn new() -> Self {
         Self {
             free_lists: [core::ptr::null_mut(); MAX_ORDER],
+            alloc_bitmap: [0u64; BITMAP_WORDS],
             total_pages: 0,
             allocated_pages: 0,
+        }
+    }
+
+    #[inline]
+    pub fn is_page_allocated(&self, pfn: usize) -> bool {
+        if pfn >= MAX_TRACKED_PAGES {
+            return false;
+        }
+        let word_idx = pfn / 64;
+        let bit_idx = pfn % 64;
+        (self.alloc_bitmap[word_idx] & (1u64 << bit_idx)) != 0
+    }
+
+    #[inline]
+    fn set_page_state(&mut self, pfn: usize, allocated: bool) {
+        if pfn >= MAX_TRACKED_PAGES {
+            return;
+        }
+        let word_idx = pfn / 64;
+        let bit_idx = pfn % 64;
+        if allocated {
+            self.alloc_bitmap[word_idx] |= 1u64 << bit_idx;
+        } else {
+            self.alloc_bitmap[word_idx] &= !(1u64 << bit_idx);
+        }
+    }
+
+    pub fn is_range_allocated(&self, start_pfn: usize, order: usize) -> bool {
+        let count = 1usize << order;
+        if start_pfn + count > MAX_TRACKED_PAGES {
+            return false;
+        }
+        for i in 0..count {
+            if !self.is_page_allocated(start_pfn + i) {
+                return false;
+            }
+        }
+        true
+    }
+
+    pub fn is_range_free(&self, start_pfn: usize, order: usize) -> bool {
+        let count = 1usize << order;
+        if start_pfn + count > MAX_TRACKED_PAGES {
+            return false;
+        }
+        for i in 0..count {
+            if self.is_page_allocated(start_pfn + i) {
+                return false;
+            }
+        }
+        true
+    }
+
+    pub fn set_range_allocated(&mut self, start_pfn: usize, order: usize) {
+        let count = 1usize << order;
+        for i in 0..count {
+            self.set_page_state(start_pfn + i, true);
+        }
+    }
+
+    pub fn set_range_free(&mut self, start_pfn: usize, order: usize) {
+        let count = 1usize << order;
+        for i in 0..count {
+            self.set_page_state(start_pfn + i, false);
         }
     }
 
@@ -84,7 +160,21 @@ impl BuddyAllocator {
         self.free_lists[order] = block_ptr;
     }
 
+    unsafe fn remove_free_block(&mut self, paddr: usize, order: usize) -> bool {
+        let target_ptr = phys_to_virt(paddr) as *mut FreeBlock;
+        let mut curr_ptr = &mut self.free_lists[order];
+        while !(*curr_ptr).is_null() {
+            if *curr_ptr == target_ptr {
+                *curr_ptr = (**curr_ptr).next;
+                return true;
+            }
+            curr_ptr = &mut (**curr_ptr).next;
+        }
+        false
+    }
+
     /// Alloue un bloc de pages physiques contiguës de taille 2^order * 4 Kio
+    /// avec zero-scrubbing systématique et marquage bitmap
     pub fn allocate(&mut self, order: usize) -> Option<usize> {
         if order >= MAX_ORDER {
             return None;
@@ -119,20 +209,65 @@ impl BuddyAllocator {
             }
         }
 
+        let pfn = paddr / PAGE_SIZE;
+        self.set_range_allocated(pfn, order);
         self.allocated_pages += 1 << order;
+
+        // Zero-scrubbing préventif de l'intégralité du bloc alloué
+        unsafe {
+            let vaddr = phys_to_virt(paddr) as *mut u8;
+            core::ptr::write_bytes(vaddr, 0, PAGE_SIZE << order);
+        }
+
         Some(paddr)
     }
 
-    /// Libère un bloc de pages physiques précédemment alloué
-    pub fn free(&mut self, paddr: usize, order: usize) {
+    /// Libère un bloc de pages physiques précédemment alloué avec protection anti-double-free et fusion Buddy
+    pub fn free(&mut self, mut paddr: usize, mut order: usize) -> Result<(), PmmError> {
         if order >= MAX_ORDER {
-            return;
+            return Err(PmmError::InvalidOrder);
         }
-        // SAFETY: Réintégration du bloc de mémoire physique dans le Buddy Allocator
+
+        let block_size = PAGE_SIZE << order;
+        if (paddr & (block_size - 1)) != 0 {
+            return Err(PmmError::Misaligned);
+        }
+
+        let pfn = paddr / PAGE_SIZE;
+        if pfn + (1 << order) > MAX_TRACKED_PAGES {
+            return Err(PmmError::OutOfBounds);
+        }
+
+        // Détection formelle de double-free : le bloc doit être entièrement ALLOCATED
+        if !self.is_range_allocated(pfn, order) {
+            return Err(PmmError::DoubleFree);
+        }
+
+        // Marquer les pages comme libres dans le bitmap
+        self.set_range_free(pfn, order);
+        self.allocated_pages = self.allocated_pages.saturating_sub(1 << order);
+
+        // Fusion récursive avec les buddies (Buddy Coalescing)
+        while order < MAX_ORDER - 1 {
+            let current_block_bytes = PAGE_SIZE << order;
+            let buddy_paddr = paddr ^ current_block_bytes;
+            let buddy_pfn = buddy_paddr / PAGE_SIZE;
+
+            if buddy_pfn + (1 << order) <= MAX_TRACKED_PAGES
+                && self.is_range_free(buddy_pfn, order)
+                && unsafe { self.remove_free_block(buddy_paddr, order) }
+            {
+                paddr = paddr.min(buddy_paddr);
+                order += 1;
+            } else {
+                break;
+            }
+        }
+
         unsafe {
             self.push_block(paddr, order);
         }
-        self.allocated_pages = self.allocated_pages.saturating_sub(1 << order);
+        Ok(())
     }
 
     pub fn total_pages(&self) -> usize {
@@ -152,6 +287,6 @@ pub fn alloc_page() -> Option<usize> {
 }
 
 /// Libère une page physique 4 Kio
-pub fn free_page(paddr: usize) {
-    PMM.lock().free(paddr, 0);
+pub fn free_page(paddr: usize) -> Result<(), PmmError> {
+    PMM.lock().free(paddr, 0)
 }
