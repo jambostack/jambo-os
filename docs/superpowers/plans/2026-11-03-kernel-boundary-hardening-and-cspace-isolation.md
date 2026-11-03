@@ -29,7 +29,7 @@
 **Interfaces:**
 - Produces: `USER_ADDR_LIMIT`, `validate_user_range`, `copy_from_user`, `copy_to_user`, `copy_from_user_slice`, `copy_to_user_slice`.
 
-- [ ] **Step 1: Créer `kernel/src/syscall/user_ptr.rs`**
+- [x] **Step 1: Créer `kernel/src/syscall/user_ptr.rs`**
   - Définir `USER_ADDR_LIMIT: u64 = 0x0000_7fff_ffff_0000`.
   - Implémenter `validate_user_range(aspace: &AddressSpace, vaddr: u64, len: usize, write: bool) -> Result<(), SysError>`.
   - Implémenter les génériques `copy_from_user<T: Copy>` et `copy_to_user<T: Copy>`.
@@ -40,14 +40,14 @@
     - Rejet d'adresses en espace noyau (`0xffff800000000000`).
     - Succès sur les plages allouées dans un `AddressSpace` de test.
 
-- [ ] **Step 2: Enregistrer le sous-module dans `kernel/src/syscall/mod.rs`**
+- [x] **Step 2: Enregistrer le sous-module dans `kernel/src/syscall/mod.rs`**
   - Ajouter `pub mod user_ptr;`.
 
-- [ ] **Step 3: Vérification locale**
+- [x] **Step 3: Vérification locale**
   - Exécuter `cargo check --package kernel`.
   - Exécuter `cargo test --package kernel --lib`.
 
-- [ ] **Step 4: Commit Task 1**
+- [x] **Step 4: Commit Task 1**
   - `git add kernel/src/syscall/ ; git commit -m "feat(kernel/syscall): implement secure user memory validation and copy primitives (v0.3.78)"`
 
 ---
@@ -64,21 +64,21 @@
 - Produces: `Process.cspace: Arc<Mutex<CSpace>>`, `Thread.cspace: Option<Arc<Mutex<CSpace>>>`.
 - Consumes: `CSpace::new()`, `cspace.duplicate()`, `cspace.lookup()`, `cspace.drop_cap()`.
 
-- [ ] **Step 1: Mettre à jour `struct Process` dans `kernel/src/sched/process.rs`**
+- [x] **Step 1: Mettre à jour `struct Process` dans `kernel/src/sched/process.rs`**
   - Ajouter le champ `pub cspace: Arc<Mutex<CSpace>>` dans `Process`.
   - Dans `Process::new()` et `Process::create_user_process()`, instancier un `CSpace` dédié par processus.
 
-- [ ] **Step 2: Mettre à jour `struct Thread` dans `kernel/src/sched/thread.rs`**
+- [x] **Step 2: Mettre à jour `struct Thread` dans `kernel/src/sched/thread.rs`**
   - Ajouter le champ `pub cspace: Option<Arc<Mutex<CSpace>>>` dans `Thread`.
   - Propager la référence du CSpace lors de `Thread::new_user()`.
 
-- [ ] **Step 3: Mettre à jour les tests unitaires et créations de processus**
+- [x] **Step 3: Mettre à jour les tests unitaires et créations de processus**
   - Adapter `Process::new()` dans tous les tests appelants.
 
-- [ ] **Step 4: Vérification locale**
+- [x] **Step 4: Vérification locale**
   - `cargo check --package kernel`.
 
-- [ ] **Step 5: Commit Task 2**
+- [x] **Step 5: Commit Task 2**
   - `git add kernel/ ; git commit -m "feat(kernel/cap): isolate cspace per process and propagate to threads (v0.3.78)"`
 
 ---
@@ -92,11 +92,11 @@
 - Consumes: `user_ptr::{copy_from_user, copy_to_user, copy_from_user_slice, copy_to_user_slice}`, `Thread.cspace`.
 - Produces: zéro déréférencement direct, vérification de chaque pointeur utilisateur, `CapTransfer` non amplifiable.
 
-- [ ] **Step 1: Résolution dynamique du CSpace et de l'AddressSpace courant**
+- [x] **Step 1: Résolution dynamique du CSpace et de l'AddressSpace courant**
   - Extraire `(current_aspace, current_cspace)` depuis `SCHEDULER.lock().current`.
   - Fallback vers `KERNEL_CSPACE` uniquement si aucun thread n'est actif (mode bootstrap noyau).
 
-- [ ] **Step 2: Sécurisation des syscalls de capacités**
+- [x] **Step 2: Sécurisation des syscalls de capacités**
   - Syscall 1 (`CapDup`) : écriture du handle via `copy_to_user`.
   - Syscall 2 (`CapDrop`) : suppression dans le CSpace du processus courant.
   - Syscall 3 (`CapTransfer`) :
@@ -106,17 +106,17 @@
     - Insertion dans le CSpace cible et écriture du nouveau handle via `copy_to_user`.
     - Retrait de la capacité du CSpace source.
 
-- [ ] **Step 3: Sécurisation de tous les autres syscalls manipulant des pointeurs**
+- [x] **Step 3: Sécurisation de tous les autres syscalls manipulant des pointeurs**
   - `VmoCreate` : écriture du handle via `copy_to_user`.
   - `ChannelCreate` : écriture des handles `out_h1` et `out_h2` via `copy_to_user`.
   - `ChannelCall` : lecture du payload et des handles via `copy_from_user_slice`, écriture de la réponse via `copy_to_user_slice`.
   - `TimeNow` / `SysInfo` : copie sécurisée via `copy_to_user`.
   - `FutexWait` : lecture de l'entier utilisateur via `copy_from_user`.
 
-- [ ] **Step 4: Vérification d'absence totale de déréférencements directs**
+- [x] **Step 4: Vérification d'absence totale de déréférencements directs**
   - Vérifier par script qu'aucun `as *mut` ou `as *const` n'est déréférencé directement dans `dispatch.rs`.
 
-- [ ] **Step 5: Commit Task 3**
+- [x] **Step 5: Commit Task 3**
   - `git add kernel/src/syscall/dispatch.rs ; git commit -m "refactor(kernel/syscall): eliminate raw pointer dereferences and secure cap dispatch (v0.3.78)"`
 
 ---
@@ -130,26 +130,26 @@
 - Modify: `xtask/src/main.rs` (bannière disque `v0.3.78`, validation assertion)
 - Modify: `target/qemu_output.log`
 
-- [ ] **Step 1: Écrire une suite de tests adversariaux pour `dispatch_syscall`**
+- [x] **Step 1: Écrire une suite de tests adversariaux pour `dispatch_syscall`**
   - Tester `dispatch_syscall` avec `out_ptr = 0` -> renvoie `SysError::BadAddress`.
   - Tester `dispatch_syscall` avec `out_ptr = 0xffff800000000000` (HHDM) -> renvoie `SysError::BadAddress`.
   - Tester `CapTransfer` -> vérifier que les droits sont strictement réduits.
   - Tester l'étanchéité : le processus A ne peut pas manipuler le handle de B.
 
-- [ ] **Step 2: Mettre à jour les versions et bannières vers `0.3.78`**
+- [x] **Step 2: Mettre à jour les versions et bannières vers `0.3.78`**
   - `kernel/Cargo.toml`, `xtask/Cargo.toml`, `kernel/src/main.rs`, `xtask/src/main.rs`.
 
-- [ ] **Step 3: Exécution des tests et compilation release**
+- [x] **Step 3: Exécution des tests et compilation release**
   - `cargo test --package kernel`
   - `cargo run --package xtask -- build --release`
 
-- [ ] **Step 4: Validation QEMU et mise à jour du journal de boot**
+- [x] **Step 4: Validation QEMU et mise à jour du journal de boot**
   - `target/qemu_output.log` mis à jour avec la bannière `v0.3.78` et `[PASS] Durcissement Frontieres Noyau & Isolation CSpace validee sous QEMU.`.
 
-- [ ] **Step 5: Commit, Tag et Push**
+- [x] **Step 5: Commit, Tag et Push**
   - `git commit -am "test(e2e): validate kernel boundary hardening and per-process cspace under QEMU (v0.3.78)"`
   - `git tag -a v0.3.78 -m "Release v0.3.78 - Jalon 4.1 (Kernel Boundary Hardening & Per-Process CSpace)"`
   - `git push origin main ; git push origin v0.3.78`
 
-- [ ] **Step 6: Mise à jour des artifacts de feuille de route**
+- [x] **Step 6: Mise à jour des artifacts de feuille de route**
   - Mettre à jour `synthese_avis_et_feuille_de_route_jamboos.md` en validant le Jalon 4.1 comme TERMINÉ ✅.

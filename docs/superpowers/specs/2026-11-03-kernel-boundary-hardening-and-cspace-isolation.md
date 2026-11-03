@@ -139,3 +139,4 @@ Il est impossible pour le récepteur d'obtenir plus de droits que l'émetteur.
 2. **Étanchéité Multi-Processus** : Le processus A tentant de faire `CapDrop` ou `CapDup` sur un `Handle` de B doit recevoir `SysError::InvalidHandle`.
 3. **Résilience Adversariale** : Tout appel système passant `0x0`, `0x1`, `0xffff_8000_0000_0000` (adresse noyau) ou `u64::MAX` doit renvoyer proprement `SysError::BadAddress` sans panique ni crash du micro-noyau.
 4. **Boot QEMU & CI** : Les 38 processus démarrent normalement avec leurs CSpaces isolés et les tests unitaires du noyau passent à 100 %.
+

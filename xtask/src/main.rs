@@ -1897,6 +1897,9 @@ fn run_test(release: bool) -> anyhow::Result<()> {
     let code = output.status.code().unwrap_or(-1);
     let success = code == 33
         || combined.contains(
+            "[PASS] Durcissement Frontieres Noyau & Isolation CSpace validee",
+        )
+        || combined.contains(
             "[PASS] Prevention des Fuites de Donnees DLP (jambo-dlp PID 38) validee",
         )
         || combined.contains(

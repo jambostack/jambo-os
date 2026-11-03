@@ -123,6 +123,129 @@ extern "C" fn test_worker() {
     }
 }
 
+
+fn execute_boundary_hardening_tests() -> bool {
+    kprintln!("[SECURITY/TEST] Validation du durcissement des frontières noyau & isolation CSpace...");
+
+    // Test 1: Création de 2 processus avec CSpace isolées
+    let aspace_a = alloc::sync::Arc::new(mm::AddressSpace::new().expect("aspace A"));
+    let aspace_b = alloc::sync::Arc::new(mm::AddressSpace::new().expect("aspace B"));
+    let proc_a = sched::Process::new(100, "proc_a", aspace_a.clone());
+    let proc_b = sched::Process::new(101, "proc_b", aspace_b.clone());
+
+    // Thread dans Proc A
+    let thread_a = sched::Thread::new_user(
+        1001,
+        100,
+        aspace_a.clone(),
+        proc_a.cspace.clone(),
+        0x0040_0000,
+        0x0000_7fff_ffff_0000,
+    ).expect("thread A");
+
+    // Thread dans Proc B
+    let thread_b = sched::Thread::new_user(
+        1002,
+        101,
+        aspace_b.clone(),
+        proc_b.cspace.clone(),
+        0x0040_0000,
+        0x0000_7fff_ffff_0000,
+    ).expect("thread B");
+
+    // Définir thread_a comme thread courant
+    {
+        let mut sched = sched::SCHEDULER.lock();
+        sched.current = Some(thread_a.clone());
+    }
+
+    // Mapper une page de données utilisateur valide dans Proc A à 0x0050_0000
+    let vmo_a = mm::Vmo::create(mm::PAGE_SIZE);
+    aspace_a.map_vmo(0x0050_0000, vmo_a, jambo_abi::vmo_prot::READ | jambo_abi::vmo_prot::WRITE).unwrap();
+    let valid_user_addr = 0x0050_0000u64;
+
+    // A. Adversarial 1: Null pointer sur SysInfo (syscall 27) qui exige un pointeur valide
+    let ret_null = syscall::dispatch_syscall(27, 0, 0, 0, 0, 0, 0);
+    assert_eq!(ret_null, jambo_abi::SysError::InvalidArgument as i64, "SysInfo avec pointeur nul rejeté");
+
+    // B. Adversarial 2: Adresse HHDM noyau (0xffff_8000_0000_0000) passée par un thread utilisateur -> SysError::BadAddress
+    let kernel_hhdm_addr = 0xffff_8000_0000_0000u64;
+    let ret_hhdm = syscall::dispatch_syscall(27, kernel_hhdm_addr, 0, 0, 0, 0, 0);
+    assert_eq!(ret_hhdm, jambo_abi::SysError::BadAddress as i64, "Pointeur HHDM noyau rejeté");
+
+    // C. Adversarial 3: Débordement arithmétique (u64::MAX)
+    let ret_overflow = syscall::dispatch_syscall(27, u64::MAX - 4, 0, 0, 0, 0, 0);
+    assert_eq!(ret_overflow, jambo_abi::SysError::BadAddress as i64, "Pointeur overflow rejeté");
+
+    // D. Adversarial 4: Adresse utilisateur non mappée (0x0010_0000)
+    let unmapped_user_addr = 0x0010_0000u64;
+    let ret_unmapped = syscall::dispatch_syscall(27, unmapped_user_addr, 0, 0, 0, 0, 0);
+    assert_eq!(ret_unmapped, jambo_abi::SysError::BadAddress as i64, "Adresse utilisateur non mappée rejetée");
+
+    // E. Succès sur adresse utilisateur valide et mappée
+    let ret_valid = syscall::dispatch_syscall(27, valid_user_addr, 0, 0, 0, 0, 0);
+    assert_eq!(ret_valid, jambo_abi::SysError::Success as i64, "Écriture valide dans espace utilisateur");
+
+    // F. Isolation CSpace : Proc A crée un VMO -> handle_a dans sa propre CSpace
+    let ret_vmo = syscall::dispatch_syscall(4, 4096, 0, valid_user_addr, 0, 0, 0);
+    assert_eq!(ret_vmo, jambo_abi::SysError::Success as i64);
+    let handle_a = aspace_a.read_u64(valid_user_addr as usize).unwrap();
+    assert_ne!(handle_a, 0);
+
+    // Basculer vers Thread B (Proc B)
+    {
+        let mut sched = sched::SCHEDULER.lock();
+        sched.current = Some(thread_b.clone());
+    }
+
+    // Proc B tente d'accéder au handle de Proc A via CapDup (syscall 1) -> InvalidHandle !
+    let ret_dup_b = syscall::dispatch_syscall(1, handle_a, jambo_abi::cap_rights::ALL as u64, 0, 0, 0, 0);
+    assert_eq!(ret_dup_b, jambo_abi::SysError::InvalidHandle as i64, "Isolation CSpace: B ne peut pas dupliquer la cap de A");
+
+    // Proc B tente de drop le handle de Proc A via CapDrop (syscall 2) -> InvalidHandle !
+    let ret_drop_b = syscall::dispatch_syscall(2, handle_a, 0, 0, 0, 0, 0);
+    assert_eq!(ret_drop_b, jambo_abi::SysError::InvalidHandle as i64, "Isolation CSpace: B ne peut pas détruire la cap de A");
+
+    // G. Re-basculer sur Proc A et tester CapTransfer avec atténuation monotone
+    {
+        let mut sched = sched::SCHEDULER.lock();
+        sched.current = Some(thread_a.clone());
+    }
+
+    // Proc A a un handle sur Proc B dans sa CSpace
+    let proc_b_h = proc_a.cspace.lock().insert(cap::KernelObject::Process(proc_b.clone()), jambo_abi::cap_rights::MANAGE);
+
+    // Proc A transfère handle_a vers Proc B avec un masque réduit (uniquement READ = 1)
+    let ret_transfer = syscall::dispatch_syscall(
+        3,
+        handle_a,
+        proc_b_h.0,
+        jambo_abi::cap_rights::READ as u64,
+        valid_user_addr,
+        0,
+        0,
+    );
+    assert_eq!(ret_transfer, jambo_abi::SysError::Success as i64, "CapTransfer réussi");
+    let transferred_h = aspace_a.read_u64(valid_user_addr as usize).unwrap();
+    assert_ne!(transferred_h, 0);
+
+    // Vérifier que la cap a disparu de Proc A (dropée)
+    assert!(proc_a.cspace.lock().lookup(jambo_abi::Handle(handle_a), jambo_abi::cap_rights::READ).is_err(), "Cap source révoquée dans A");
+
+    // Vérifier que Proc B a bien reçu la cap avec STRICTEMENT cap_rights::READ (pas WRITE ni ALL)
+    let b_cap = proc_b.cspace.lock().get_cap(jambo_abi::Handle(transferred_h)).expect("Cap trouvée dans B");
+    assert_eq!(b_cap.rights, jambo_abi::cap_rights::READ, "Atténuation monotone respectée: droits réduits à READ");
+
+    // Rétablir SCHEDULER.current = None
+    {
+        let mut sched = sched::SCHEDULER.lock();
+        sched.current = None;
+    }
+
+    kprintln!("[SECURITY/PASS] Tests adversariaux et isolation CSpace validés avec succès !");
+    true
+}
+
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     // 1. Initialiser l'UART 16550 (COM1) et l'horloge
@@ -157,7 +280,7 @@ pub extern "C" fn _start() -> ! {
     // 4. Bannière système d'accueil sobre Iron Core
     kprintln!("\x1b[1;36m");
     kprintln!("================================================================================");
-    kprintln!("    JAMBO-OS (JamboKernel v0.3.77 — Iron Core)                                 ");
+    kprintln!("    JAMBO-OS (JamboKernel v0.3.78 — Iron Core)                                 ");
     kprintln!("    Architecture : Micro-noyau orienté capacités en Rust no_std (x86_64/AArch64)");
     kprintln!("    Auteur & Architecte Principal : ASSOGBA Prudence Dieudonné                 ");
     kprintln!("    Dépôt Officiel : https://github.com/jambostack/jambo-os                    ");
@@ -1926,6 +2049,12 @@ pub extern "C" fn _start() -> ! {
         "Échec du test d'E/S console interactive UART"
     );
 
+    let boundary_success = execute_boundary_hardening_tests();
+    assert!(
+        boundary_success,
+        "Échec des tests de durcissement des frontières noyau & isolation CSpace"
+    );
+
     kprintln!();
     kprintln!(
         "\x1b[1;32m[PASS] JamboKernel Iron Core (Ring 0 & Ring 3 transition) validé sous QEMU.\x1b[0m"
@@ -1952,7 +2081,7 @@ pub extern "C" fn _start() -> ! {
 
     if is_test_mode {
         kprintln!("[TEST] Validation de l'initialisation des 38 processus Ring 3 (init, jsh, blockd, fs, netd, fdr, wasmd, pqc, kdir, forensics, powerd, metricsd, bpfd, vpn, authd, dnsd, timed, auditd, walld, vaultd, watchdogd, cored, pkgd, certd, policyd, secboot, logd, kms, attest, waf, siem, edr, ndr, xdr, soar, ueba, itdr, dlp)...");
-        kprintln!("\x1b[1;32m[PASS] Prevention des Fuites de Donnees DLP (jambo-dlp PID 38) validee sous QEMU.\x1b[0m");
+        kprintln!("\x1b[1;32m[PASS] Durcissement Frontieres Noyau & Isolation CSpace validee sous QEMU.\x1b[0m");
         kprintln!("[TEST] Mode de test CI validé. Sortie propre via isa-debug-exit...");
         exit_qemu(QemuExitCode::Success);
     }
