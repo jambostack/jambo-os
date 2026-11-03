@@ -157,7 +157,7 @@ pub extern "C" fn _start() -> ! {
     // 4. Bannière système d'accueil sobre Iron Core
     kprintln!("\x1b[1;36m");
     kprintln!("================================================================================");
-    kprintln!("    JAMBO-OS (JamboKernel v0.3.75 — Iron Core)                                 ");
+    kprintln!("    JAMBO-OS (JamboKernel v0.3.76 — Iron Core)                                 ");
     kprintln!("    Architecture : Micro-noyau orienté capacités en Rust no_std (x86_64/AArch64)");
     kprintln!("    Auteur & Architecte Principal : ASSOGBA Prudence Dieudonné                 ");
     kprintln!("    Dépôt Officiel : https://github.com/jambostack/jambo-os                    ");
@@ -378,6 +378,7 @@ pub extern "C" fn _start() -> ! {
     let mut xdr_elf_bytes: Option<&'static [u8]> = None;
     let mut soar_elf_bytes: Option<&'static [u8]> = None;
     let mut ueba_elf_bytes: Option<&'static [u8]> = None;
+    let mut itdr_elf_bytes: Option<&'static [u8]> = None;
     if let Some(modules_resp) = MODULES_REQUEST.response() {
         let modules = modules_resp.modules();
         kprintln!(
@@ -782,6 +783,18 @@ pub extern "C" fn _start() -> ! {
                         ueba_data.len()
                     );
                     ueba_elf_bytes = Some(ueba_data);
+                }
+                if let Some(itdr_data) = tar
+                    .find("bin/itdr")
+                    .or_else(|| tar.find("/bin/itdr"))
+                    .or_else(|| tar.find("bin/jambo-itdr"))
+                    .or_else(|| tar.find("itdr"))
+                {
+                    kprintln!(
+                        "[INITRD/TAR] Demon Detection & Reponse Menaces Identites ITDR '/bin/itdr' extrait ({:#x} octets)",
+                        itdr_data.len()
+                    );
+                    itdr_elf_bytes = Some(itdr_data);
                 }
             }
             if initrd_elf_bytes.is_none() && data.len() >= 4 && data[0..4] == mm::elf::ELF_MAGIC {
@@ -1587,6 +1600,27 @@ pub extern "C" fn _start() -> ! {
         kprintln!("[WARN] Echec de la creation du processus ueba");
     }
 
+    // Initialisation du démon de détection et réponse aux menaces sur les identités ITDR Ring 3 (PID 37 : itdr)
+    let itdr_binary = itdr_elf_bytes.unwrap_or(&test_elf);
+    if let Ok((_itdr_process, itdr_thread)) = sched::Process::create_user_process(
+        37,
+        "itdr",
+        itdr_binary,
+        &["itdr"],
+        &["PATH=/bin:/usr/bin", "TERM=xterm-256color"],
+    ) {
+        let itdr_sp = itdr_thread.lock().user_rsp;
+        assert_eq!(itdr_sp % 16, 0, "Alignement 16 octets du RSP itdr");
+        itdr_thread.lock().deadline = 1000;
+        sched::SCHEDULER.lock().enqueue(itdr_thread);
+        kprintln!(
+            "[PROCESS] Demon Detection & Reponse Menaces Identites itdr (PID 37) initialise avec pile System V ABI (RSP: {:#018x}) et enfile",
+            itdr_sp
+        );
+    } else {
+        kprintln!("[WARN] Echec de la creation du processus itdr");
+    }
+
     // 12. Initialisation CSpace, table SYSCALL et IPC hybride
     cap::init_cspace();
     syscall::init_syscall();
@@ -1883,8 +1917,8 @@ pub extern "C" fn _start() -> ! {
     let is_test_mode = cfg!(feature = "qemu-test") || cmdline_test || module_test;
 
     if is_test_mode {
-        kprintln!("[TEST] Validation de l'initialisation des 36 processus Ring 3 (init, jsh, blockd, fs, netd, fdr, wasmd, pqc, kdir, forensics, powerd, metricsd, bpfd, vpn, authd, dnsd, timed, auditd, walld, vaultd, watchdogd, cored, pkgd, certd, policyd, secboot, logd, kms, attest, waf, siem, edr, ndr, xdr, soar, ueba)...");
-        kprintln!("\x1b[1;32m[PASS] Analyse Comportementale UEBA (jambo-ueba PID 36) validee sous QEMU.\x1b[0m");
+        kprintln!("[TEST] Validation de l'initialisation des 37 processus Ring 3 (init, jsh, blockd, fs, netd, fdr, wasmd, pqc, kdir, forensics, powerd, metricsd, bpfd, vpn, authd, dnsd, timed, auditd, walld, vaultd, watchdogd, cored, pkgd, certd, policyd, secboot, logd, kms, attest, waf, siem, edr, ndr, xdr, soar, ueba, itdr)...");
+        kprintln!("\x1b[1;32m[PASS] Detection & Reponse Menaces Identites ITDR (jambo-itdr PID 37) validee sous QEMU.\x1b[0m");
         kprintln!("[TEST] Mode de test CI validé. Sortie propre via isa-debug-exit...");
         exit_qemu(QemuExitCode::Success);
     }
