@@ -7,7 +7,9 @@ pub mod ring3_test;
 pub mod thread;
 
 pub use context::{enter_user_mode, switch_context};
-pub use eevdf::{EevdfScheduler, SCHEDULER};
+pub use eevdf::{
+    EevdfScheduler, DEFAULT_QUANTUM_TICKS, MAX_CPUS, MAX_LAG, MAX_WAIT_TICKS, SCHEDULER,
+};
 pub use interactive_test::execute_interactive_io_test;
 pub use preempt_test::execute_preemption_test;
 pub use process::{allocate_pid, Process, ProcessState};

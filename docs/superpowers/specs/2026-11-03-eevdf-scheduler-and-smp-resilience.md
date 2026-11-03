@@ -126,3 +126,4 @@ pub struct EevdfScheduler {
    - Détection et activation des cœurs secondaires sans panique.
    - Validation de la ligne exacte :
      `[PASS] Ordonnanceur EEVDF et resilience SMP multicoeur valides sous QEMU.`
+

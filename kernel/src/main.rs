@@ -90,9 +90,7 @@ unsafe extern "C" fn ap_start(info: &limine::mp::MpInfo) -> ! {
         info.processor_id,
         info.lapic_id
     );
-    loop {
-        core::arch::asm!("hlt", options(nomem, nostack, preserves_flags));
-    }
+    sched::EevdfScheduler::ap_entry(info.processor_id as usize);
 }
 
 #[cfg(target_arch = "aarch64")]
@@ -104,9 +102,7 @@ unsafe extern "C" fn ap_start(info: &limine::mp::MpInfo) -> ! {
         info.processor_id,
         info.mpidr
     );
-    loop {
-        core::arch::asm!("wfi", options(nomem, nostack, preserves_flags));
-    }
+    sched::EevdfScheduler::ap_entry(info.processor_id as usize);
 }
 
 extern "C" fn test_worker() {
@@ -327,6 +323,139 @@ fn execute_pmm_hardening_tests() -> bool {
     true
 }
 
+fn execute_eevdf_smp_hardening_tests() -> bool {
+    kprintln!("[EEVDF/TEST] Validation du durcissement EEVDF & Résilience SMP Multicœur...");
+
+    // Test 1: Éligibilité et sélection par deadline minimale parmi les threads éligibles
+    {
+        let mut sched = sched::EevdfScheduler::new();
+        sched.virtual_time = 100;
+
+        let t1 = sched::Thread::new_kernel(101, 1, test_worker).expect("t1");
+        let t2 = sched::Thread::new_kernel(102, 1, test_worker).expect("t2");
+        let t3 = sched::Thread::new_kernel(103, 1, test_worker).expect("t3");
+
+        // t1: vruntime = 80 (éligible, car 80 <= 100), deadline = 90
+        t1.lock().vruntime = 80;
+        t1.lock().deadline = 90;
+        // t2: vruntime = 70 (éligible, car 70 <= 100), deadline = 85 (plus petite deadline)
+        t2.lock().vruntime = 70;
+        t2.lock().deadline = 85;
+        // t3: vruntime = 150 (ineligible, car 150 > 100)
+        t3.lock().vruntime = 150;
+        t3.lock().deadline = 60; // petite deadline mais inéligible !
+
+        // Insertion manuelle dans runqueue sans réécrire les deadlines du test
+        t1.lock().state = sched::ThreadState::Ready;
+        t2.lock().state = sched::ThreadState::Ready;
+        t3.lock().state = sched::ThreadState::Ready;
+        sched.runqueue.push(t1.clone());
+        sched.runqueue.push(t2.clone());
+        sched.runqueue.push(t3.clone());
+
+        let picked = sched.pick_next_for_cpu(0).expect("pick thread");
+        assert_eq!(picked.lock().id, 102, "t2 choisi car éligible avec la plus petite deadline");
+    }
+
+    // Test 2: Bornage de Lag Virtuel (Anti-Monopolisation)
+    {
+        let mut sched = sched::EevdfScheduler::new();
+        sched.virtual_time = 200;
+
+        let t_lag_low = sched::Thread::new_kernel(201, 1, test_worker).expect("t_lag_low");
+        t_lag_low.lock().vruntime = 10; // Très en retard (lag = 190)
+        sched.enqueue(t_lag_low.clone());
+        // Doit être borné à V - MAX_LAG = 200 - 50 = 150
+        assert_eq!(
+            t_lag_low.lock().vruntime,
+            150,
+            "Bornage inférieur de vruntime (anti-monopolisation)"
+        );
+
+        let t_lag_high = sched::Thread::new_kernel(202, 1, test_worker).expect("t_lag_high");
+        t_lag_high.lock().vruntime = 500; // Trop en avance
+        sched.enqueue(t_lag_high.clone());
+        // Doit être borné à V + MAX_LAG = 200 + 50 = 250
+        assert_eq!(
+            t_lag_high.lock().vruntime,
+            250,
+            "Bornage supérieur de vruntime"
+        );
+    }
+
+    // Test 3: Résilience Anti-Famine par Vieillissement (Aging)
+    {
+        let mut sched = sched::EevdfScheduler::new();
+        sched.virtual_time = 100;
+
+        let t_starved = sched::Thread::new_kernel(301, 1, test_worker).expect("t_starved");
+        t_starved.lock().state = sched::ThreadState::Ready;
+        t_starved.lock().vruntime = 300; // Inéligible initialement
+        t_starved.lock().deadline = 5000;
+        t_starved.lock().wait_ticks = sched::MAX_WAIT_TICKS; // Seuil de famine atteint !
+
+        sched.runqueue.push(t_starved.clone());
+
+        let picked = sched.pick_next_for_cpu(0).expect("thread promu");
+        assert_eq!(picked.lock().id, 301, "Thread affamé promu d'urgence");
+        assert_eq!(picked.lock().wait_ticks, 0, "wait_ticks réinitialisé après exécution");
+    }
+
+    // Test 4: Héritage de Priorité & Restauration
+    {
+        let thread = sched::Thread::new_kernel(401, 1, test_worker).expect("thread boost");
+        {
+            let mut t = thread.lock();
+            assert_eq!(t.weight, 1024);
+            assert_eq!(t.deadline, 10);
+            t.boost_priority(4096, 5);
+            assert_eq!(t.weight, 4096, "Poids temporairement augmenté");
+            assert_eq!(t.deadline, 5, "Deadline temporairement raccourcie");
+            t.restore_priority();
+            assert_eq!(t.weight, 1024, "Poids nominal restauré");
+            assert_eq!(t.deadline, 10, "Deadline nominale restaurée");
+        }
+    }
+
+    // Test 5: Affinité Multicœur SMP & Dispatching Inter-CPU
+    {
+        let mut sched = sched::EevdfScheduler::new();
+        sched.virtual_time = 0;
+
+        let t_cpu0 = sched::Thread::new_kernel(501, 1, test_worker).expect("t_cpu0");
+        t_cpu0.lock().set_affinity(Some(0));
+
+        let t_cpu1 = sched::Thread::new_kernel(502, 1, test_worker).expect("t_cpu1");
+        t_cpu1.lock().set_affinity(Some(1));
+
+        let t_floating = sched::Thread::new_kernel(503, 1, test_worker).expect("t_floating");
+        t_floating.lock().set_affinity(None);
+
+        sched.enqueue(t_cpu0.clone());
+        sched.enqueue(t_cpu1.clone());
+        sched.enqueue(t_floating.clone());
+
+        // CPU 0 demande un thread : doit choisir un thread autorisé sur CPU 0 (pas t_cpu1)
+        let picked0 = sched.pick_next_for_cpu(0).expect("pick for cpu 0");
+        assert_ne!(
+            picked0.lock().id,
+            502,
+            "CPU 0 ne doit pas choisir un thread épinglé exclusivement sur CPU 1"
+        );
+
+        // CPU 1 demande un thread : doit choisir le thread épinglé sur CPU 1
+        let picked1 = sched.pick_next_for_cpu(1).expect("pick for cpu 1");
+        assert_eq!(
+            picked1.lock().id,
+            502,
+            "CPU 1 choisit le thread épinglé sur CPU 1"
+        );
+    }
+
+    kprintln!("[EEVDF/PASS] Tests de durcissement EEVDF et résilience SMP validés avec succès !");
+    true
+}
+
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     // 1. Initialiser l'UART 16550 (COM1) et l'horloge
@@ -361,7 +490,7 @@ pub extern "C" fn _start() -> ! {
     // 4. Bannière système d'accueil sobre Iron Core
     kprintln!("\x1b[1;36m");
     kprintln!("================================================================================");
-    kprintln!("    JAMBO-OS (JamboKernel v0.3.79 — Iron Core)                                 ");
+    kprintln!("    JAMBO-OS (JamboKernel v0.3.80 — Iron Core)                                 ");
     kprintln!("    Architecture : Micro-noyau orienté capacités en Rust no_std (x86_64/AArch64)");
     kprintln!("    Auteur & Architecte Principal : ASSOGBA Prudence Dieudonné                 ");
     kprintln!("    Dépôt Officiel : https://github.com/jambostack/jambo-os                    ");
@@ -2142,6 +2271,12 @@ pub extern "C" fn _start() -> ! {
         "Échec des tests de durcissement PMM Buddy Allocator & Cycle de Vie VMO"
     );
 
+    let eevdf_smp_success = execute_eevdf_smp_hardening_tests();
+    assert!(
+        eevdf_smp_success,
+        "Échec des tests de durcissement EEVDF & Résilience SMP Multicœur"
+    );
+
     kprintln!();
     kprintln!(
         "\x1b[1;32m[PASS] JamboKernel Iron Core (Ring 0 & Ring 3 transition) validé sous QEMU.\x1b[0m"
@@ -2168,7 +2303,7 @@ pub extern "C" fn _start() -> ! {
 
     if is_test_mode {
         kprintln!("[TEST] Validation de l'initialisation des 38 processus Ring 3 (init, jsh, blockd, fs, netd, fdr, wasmd, pqc, kdir, forensics, powerd, metricsd, bpfd, vpn, authd, dnsd, timed, auditd, walld, vaultd, watchdogd, cored, pkgd, certd, policyd, secboot, logd, kms, attest, waf, siem, edr, ndr, xdr, soar, ueba, itdr, dlp)...");
-        kprintln!("\x1b[1;32m[PASS] Securisation PMM Buddy Allocator & Cycle de Vie VMO validee sous QEMU.\x1b[0m");
+        kprintln!("\x1b[1;32m[PASS] Ordonnanceur EEVDF et resilience SMP multicoeur valides sous QEMU.\x1b[0m");
         kprintln!("[TEST] Mode de test CI validé. Sortie propre via isa-debug-exit...");
         exit_qemu(QemuExitCode::Success);
     }

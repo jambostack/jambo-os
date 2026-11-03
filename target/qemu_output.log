@@ -3,7 +3,7 @@ BdsDxe: starting Boot0002 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x
 [2J[01;01H[01;01H[2J[01;01H[01;01H[BOOT] Protocole Limine actif (révision détectée : 3)
 [1;36m
 ================================================================================
-    JAMBO-OS (JamboKernel v0.3.79 — Iron Core)                                 
+    JAMBO-OS (JamboKernel v0.3.80 — Iron Core)                                 
     Architecture : Micro-noyau orienté capacités en Rust no_std (x86_64/AArch64)
     Auteur & Architecte Principal : ASSOGBA Prudence Dieudonné                 
     Dépôt Officiel : https://github.com/jambostack/jambo-os                    
@@ -67,9 +67,12 @@ BdsDxe: starting Boot0002 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x
 [CPU/APIC] Contrôleur Local APIC (xAPIC MMIO) initialisé
 [SMP] Détection de 4 cœurs logiques
 [SMP] Cœur AP #1 démarré (LAPIC ID: 1)
+[SMP/AP] Cœur AP #1 a rejoint l'ordonnanceur EEVDF
 [SMP] Cœur AP #2 démarré (LAPIC ID: 2)
+[SMP/AP] Cœur AP #2 a rejoint l'ordonnanceur EEVDF
 [SMP] Multicœur SMP opérationnel (4 cœurs actifs sur 4)
 [SMP] Cœur AP #3 démarré (LAPIC ID: 3)
+[SMP/AP] Cœur AP #3 a rejoint l'ordonnanceur EEVDF
 [SCHED/EEVDF] Ordonnanceur EEVDF opérationnel avec 2 threads de test en file
 [BOOT/MODULES] Détection de 1 module(s) d'amorçage Limine :
   [00] Module '/boot/initrd.tar' | 6995968 octets (cmdline: '')
@@ -174,6 +177,8 @@ BdsDxe: starting Boot0002 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x
 [SECURITY/PASS] Tests adversariaux et isolation CSpace validés avec succès !
 [PMM/TEST] Validation du durcissement PMM Buddy Allocator & Cycle de vie VMO...
 [PMM/PASS] Tests adversariaux PMM et cycle de vie VMO validés avec succès !
+[EEVDF/TEST] Validation du durcissement EEVDF & Résilience SMP Multicœur...
+[EEVDF/PASS] Tests de durcissement EEVDF et résilience SMP validés avec succès !
 
 [1;32m[PASS] JamboKernel Iron Core (Ring 0 & Ring 3 transition) validé sous QEMU.[0m
 
@@ -207,5 +212,5 @@ BdsDxe: starting Boot0002 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x
 [DLP] Serveur DLP (jambo-dlp PID 38) pret.
 [DLP] Canal IPC DLP operationnel (endpoint PID 38 pret).
 [TEST] Validation de l'initialisation des 38 processus Ring 3 (init, jsh, blockd, fs, netd, fdr, wasmd, pqc, kdir, forensics, powerd, metricsd, bpfd, vpn, authd, dnsd, timed, auditd, walld, vaultd, watchdogd, cored, pkgd, certd, policyd, secboot, logd, kms, attest, waf, siem, edr, ndr, xdr, soar, ueba, itdr, dlp)...
- [1;32m[PASS] Securisation PMM Buddy Allocator & Cycle de Vie VMO validee sous QEMU.[0m
+ [1;32m[PASS] Ordonnanceur EEVDF et resilience SMP multicoeur valides sous QEMU.[0m
 [TEST] Mode de test CI validé. Sortie propre via isa-debug-exit...

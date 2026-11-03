@@ -29,24 +29,24 @@
 - Consumes: `PMM`, `PAGE_SIZE`, `AddressSpace`, `CSpace`.
 - Produces: `Thread.base_weight`, `Thread.base_deadline`, `Thread.wait_ticks`, `Thread.cpu_affinity`, `Thread.last_cpu`, `Thread::boost_priority`, `Thread::restore_priority`.
 
-- [ ] **Step 1: Ajouter les nouveaux champs dans `struct Thread`**
+- [x] **Step 1: Ajouter les nouveaux champs dans `struct Thread`**
   - `base_weight: u32` (sauvegarde du poids nominal)
   - `base_deadline: u64` (sauvegarde de la deadline nominale)
   - `wait_ticks: u64` (temps d'attente en file sans exécution)
   - `cpu_affinity: Option<u32>` (None = tout CPU, Some(id) = restreint)
   - `last_cpu: u32` (ID du dernier CPU exécutant)
 
-- [ ] **Step 2: Mettre à jour les constructeurs `new_kernel` et `new_user`**
+- [x] **Step 2: Mettre à jour les constructeurs `new_kernel` et `new_user`**
   - Initialiser `base_weight = weight`, `base_deadline = deadline`, `wait_ticks = 0`, `cpu_affinity = None`, `last_cpu = 0`.
 
-- [ ] **Step 3: Implémenter `boost_priority` et `restore_priority` sur `Thread`**
+- [x] **Step 3: Implémenter `boost_priority` et `restore_priority` sur `Thread`**
   - `boost_priority(&mut self, target_weight: u32, target_deadline: u64)` : rehausse `self.weight = max(self.weight, target_weight)` et `self.deadline = min(self.deadline, target_deadline)`.
   - `restore_priority(&mut self)` : rétablit `self.weight = self.base_weight` et `self.deadline = self.base_deadline`.
 
-- [ ] **Step 4: Vérification locale**
+- [x] **Step 4: Vérification locale**
   - `cargo check --package kernel`
 
-- [ ] **Step 5: Commit Task 1**
+- [x] **Step 5: Commit Task 1**
   - `git add kernel/src/sched/thread.rs kernel/src/sched/mod.rs ; git commit -m "feat(kernel/sched): extend thread with eevdf metadata, smp affinity and priority boost (v0.3.80)"`
 
 ---
@@ -65,12 +65,12 @@
 - Consumes: `arch::current_cpu()`, `Thread`, `switch_context`.
 - Produces: `MAX_CPUS = 64`, `EevdfScheduler::current_per_cpu`, `EevdfScheduler::current()`, `EevdfScheduler::current_for_cpu(cpu_id)`, `EevdfScheduler::set_current(...)`, `EevdfScheduler::register_cpu_idle(cpu_id)`, `EevdfScheduler::pick_next_for_cpu(cpu_id)`, `EevdfScheduler::ap_entry(cpu_id)`.
 
-- [ ] **Step 1: Réorganiser `EevdfScheduler` pour supporter le multicœur**
+- [x] **Step 1: Réorganiser `EevdfScheduler` pour supporter le multicœur**
   - Remplacer le `current` scalaire par `pub current_per_cpu: [Option<Arc<Mutex<Thread>>>; MAX_CPUS]` et `pub idle_threads: [Option<Arc<Mutex<Thread>>>; MAX_CPUS]`.
   - Ajouter `virtual_time: u64` et constantes `MAX_LAG = 50`, `MAX_WAIT_TICKS = 100`, `DEFAULT_QUANTUM_TICKS = 10`.
   - Conserver un accesseur `current(&self)` et `set_current(&mut self, thread)` pointant sur le CPU appelant via `crate::arch::current_cpu().cpu_id`.
 
-- [ ] **Step 2: Implémenter l'éligibilité et la sélection EEVDF multicœur**
+- [x] **Step 2: Implémenter l'éligibilité et la sélection EEVDF multicœur**
   - `update_virtual_time(&mut self)` : recalcule $V$ comme le minimum des `vruntime` des threads prêts.
   - Bornage de lag à l'enfilement (`enqueue`) : si un thread est enfilé, borner son `vruntime` dans $[V - \text{MAX\_LAG}, V + \text{MAX\_LAG}]$.
   - `pick_next_for_cpu(&mut self, cpu_id: usize) -> Option<Arc<Mutex<Thread>>>` :
@@ -78,18 +78,18 @@
     - Sélectionner parmi eux celui dont la deadline est minimale.
     - Incrémenter `wait_ticks` des autres threads de la file ; si `wait_ticks >= MAX_WAIT_TICKS`, forcer une promotion immédiate (deadline = $V$).
 
-- [ ] **Step 3: Mettre à jour `on_timer_tick` et `reschedule` pour le CPU courant**
+- [x] **Step 3: Mettre à jour `on_timer_tick` et `reschedule` pour le CPU courant**
   - `on_timer_tick` inspecte `current_per_cpu[cpu_id]`, avance le vruntime, et déclenche `reschedule()` lorsque le quantum expire.
   - `reschedule()` opère de manière atomique sur `current_per_cpu[cpu_id]`, effectuant la bascule de pile et de CR3 via `switch_context` pour le cœur local.
   - `ap_entry(cpu_id: usize) -> !` : boucle idle pour les APs qui prend immédiatement le travail disponible ou attend sous `hlt`/`wfi`.
 
-- [ ] **Step 4: Mettre à jour les appelants de `sched.current` dans le noyau**
+- [x] **Step 4: Mettre à jour les appelants de `sched.current` dans le noyau**
   - Mettre à jour `dispatch.rs`, `futex.rs`, `port.rs`, `thread.rs`, `preempt_test.rs`, `ring3_test.rs` pour utiliser `sched.current()` / `sched.set_current(...)`.
 
-- [ ] **Step 5: Vérification locale**
+- [x] **Step 5: Vérification locale**
   - `cargo check --package kernel`
 
-- [ ] **Step 6: Commit Task 2**
+- [x] **Step 6: Commit Task 2**
   - `git add kernel/src/sched/eevdf.rs kernel/src/sched/mod.rs kernel/src/syscall/dispatch.rs kernel/src/ipc/futex.rs kernel/src/ipc/port.rs kernel/src/sched/thread.rs kernel/src/sched/ring3_test.rs kernel/src/sched/preempt_test.rs ; git commit -m "feat(kernel/sched): implement multi-core eevdf with per-cpu runqueues and anti-starvation (v0.3.80)"`
 
 ---
@@ -103,10 +103,10 @@
 - Modify: `xtask/src/main.rs`
 - Modify: `target/qemu_output.log`
 
-- [ ] **Step 1: Raccorder `ap_start` à la boucle d'ordonnancement**
+- [x] **Step 1: Raccorder `ap_start` à la boucle d'ordonnancement**
   - Dans `ap_start`, après l'initialisation de GDT/IDT/PerCpu, enregistrer l'idle thread du CPU et appeler `sched::EevdfScheduler::ap_entry(info.processor_id as usize)`.
 
-- [ ] **Step 2: Ajouter la suite de tests de durcissement EEVDF & SMP dans `kernel/src/main.rs`**
+- [x] **Step 2: Ajouter la suite de tests de durcissement EEVDF & SMP dans `kernel/src/main.rs`**
   - `execute_eevdf_smp_hardening_tests() -> bool` :
     1. Test d'éligibilité et ordonnancement par deadline parmi éligibles.
     2. Test de bornage de lag virtuel (anti-monopolisation).
@@ -114,18 +114,18 @@
     4. Test d'héritage de priorité (`boost_priority` / `restore_priority`).
     5. Test d'affinité multi-cœur SMP (threads épinglés et concurrents).
 
-- [ ] **Step 3: Mettre à jour la bannière et la chaîne PASS**
+- [x] **Step 3: Mettre à jour la bannière et la chaîne PASS**
   - Bannière : `JamboKernel v0.3.80 — Iron Core`.
   - Ligne PASS : `[PASS] Ordonnanceur EEVDF et resilience SMP multicoeur valides sous QEMU.`.
 
-- [ ] **Step 4: Monter les versions à `0.3.80`**
+- [x] **Step 4: Monter les versions à `0.3.80`**
   - `kernel/Cargo.toml` et `xtask/Cargo.toml`.
 
-- [ ] **Step 5: Compilation release complète et exécution xtask**
+- [x] **Step 5: Compilation release complète et exécution xtask**
   - `cargo run --package xtask -- build --release`
   - Mettre à jour `target/qemu_output.log`.
 
-- [ ] **Step 6: Mettre à jour la feuille de route**
+- [x] **Step 6: Mettre à jour la feuille de route**
   - Marquer le Jalon 4.3 comme TERMINÉ ✅ dans `synthese_avis_et_feuille_de_route_jamboos.md`.
 
 - [ ] **Step 7: Commit, Tag et Push**

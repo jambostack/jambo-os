@@ -1897,6 +1897,9 @@ fn run_test(release: bool) -> anyhow::Result<()> {
     let code = output.status.code().unwrap_or(-1);
     let success = code == 33
         || combined.contains(
+            "[PASS] Ordonnanceur EEVDF et resilience SMP multicoeur valides",
+        )
+        || combined.contains(
             "[PASS] Securisation PMM Buddy Allocator & Cycle de Vie VMO validee",
         )
         || combined.contains(
