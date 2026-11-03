@@ -1,0 +1,16 @@
+[package]
+name = "jambo-itdr"
+version = "0.3.76"
+edition = "2021"
+
+[lib]
+name = "jambo_itdr"
+path = "src/lib.rs"
+
+[[bin]]
+name = "itdr"
+path = "src/main.rs"
+test = false
+
+[dependencies]
+libjambo = { path = "../../libs/libjambo" }
