@@ -6,7 +6,7 @@ use spin::Mutex;
 pub const MAX_FASTPATH_BYTES: usize = 64;
 pub const MAX_HANDLES: usize = 4;
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub struct ChannelMessage {
     pub bytes: [u8; MAX_FASTPATH_BYTES],
     pub byte_count: usize,

@@ -1,10 +1,104 @@
-use crate::cap::{KernelObject, KERNEL_CSPACE};
+use crate::cap::{CSpace, KernelObject, KERNEL_CSPACE};
 use crate::mm::{AddressSpace, Vmo};
 use crate::sched::{
     allocate_pid, allocate_tid, EevdfScheduler, Process, Thread, ThreadState, SCHEDULER,
 };
 use alloc::sync::Arc;
 use jambo_abi::{cap_rights, Handle, SysError};
+
+#[inline]
+fn get_cspace<'a>(
+    current_cspace: &'a Option<Arc<spin::Mutex<CSpace>>>,
+) -> spin::MutexGuard<'a, CSpace> {
+    match current_cspace {
+        Some(ref cs) => cs.lock(),
+        None => KERNEL_CSPACE.lock(),
+    }
+}
+
+#[inline]
+fn write_user_val<T: Copy>(
+    aspace: Option<&Arc<AddressSpace>>,
+    uaddr: u64,
+    val: &T,
+) -> Result<(), SysError> {
+    if uaddr == 0 {
+        return Ok(());
+    }
+    match aspace {
+        Some(a) => crate::syscall::user_ptr::copy_to_user(a, uaddr, val),
+        None => {
+            unsafe {
+                core::ptr::write(uaddr as *mut T, *val);
+            }
+            Ok(())
+        }
+    }
+}
+
+#[inline]
+fn read_user_val<T: Copy>(
+    aspace: Option<&Arc<AddressSpace>>,
+    uaddr: u64,
+) -> Result<T, SysError> {
+    if uaddr == 0 {
+        return Err(SysError::BadAddress);
+    }
+    match aspace {
+        Some(a) => crate::syscall::user_ptr::copy_from_user(a, uaddr),
+        None => {
+            unsafe {
+                Ok(core::ptr::read(uaddr as *const T))
+            }
+        }
+    }
+}
+
+#[inline]
+fn write_user_slice(
+    aspace: Option<&Arc<AddressSpace>>,
+    uaddr: u64,
+    src: &[u8],
+) -> Result<(), SysError> {
+    if src.is_empty() {
+        return Ok(());
+    }
+    if uaddr == 0 {
+        return Err(SysError::BadAddress);
+    }
+    match aspace {
+        Some(a) => crate::syscall::user_ptr::copy_to_user_slice(a, uaddr, src),
+        None => {
+            unsafe {
+                core::ptr::copy_nonoverlapping(src.as_ptr(), uaddr as *mut u8, src.len());
+            }
+            Ok(())
+        }
+    }
+}
+
+#[inline]
+fn read_user_slice(
+    aspace: Option<&Arc<AddressSpace>>,
+    uaddr: u64,
+    dst: &mut [u8],
+) -> Result<(), SysError> {
+    if dst.is_empty() {
+        return Ok(());
+    }
+    if uaddr == 0 {
+        return Err(SysError::BadAddress);
+    }
+    match aspace {
+        Some(a) => crate::syscall::user_ptr::copy_from_user_slice(a, uaddr, dst),
+        None => {
+            unsafe {
+                core::ptr::copy_nonoverlapping(uaddr as *const u8, dst.as_mut_ptr(), dst.len());
+            }
+            Ok(())
+        }
+    }
+}
 
 #[no_mangle]
 pub extern "C" fn dispatch_syscall(
@@ -16,19 +110,27 @@ pub extern "C" fn dispatch_syscall(
     a5: u64,
     _a6: u64,
 ) -> i64 {
+    let (current_aspace, current_cspace) = {
+        let sched = SCHEDULER.lock();
+        if let Some(ref curr) = sched.current {
+            let t = curr.lock();
+            (t.aspace.clone(), t.cspace.clone())
+        } else {
+            (None, None)
+        }
+    };
+
     match num {
-        // 1: CapDup
+        // 1: CapDup (handle: a1, rights: a2, out_ptr: a3)
         1 => {
             let handle = Handle(a1);
             let rights = a2 as u32;
-            let out_ptr = a3 as *mut u64;
-            let mut cspace = KERNEL_CSPACE.lock();
+            let out_ptr = a3;
+            let mut cspace = get_cspace(&current_cspace);
             match cspace.duplicate(handle, rights) {
                 Ok(new_handle) => {
-                    if !out_ptr.is_null() {
-                        unsafe {
-                            *out_ptr = new_handle.0;
-                        }
+                    if let Err(e) = write_user_val(current_aspace.as_ref(), out_ptr, &new_handle.0) {
+                        return e as i64;
                     }
                     SysError::Success as i64
                 }
@@ -36,50 +138,83 @@ pub extern "C" fn dispatch_syscall(
             }
         }
 
-        // 2: CapDrop
+        // 2: CapDrop (handle: a1)
         2 => {
             let handle = Handle(a1);
-            let mut cspace = KERNEL_CSPACE.lock();
+            let mut cspace = get_cspace(&current_cspace);
             match cspace.drop_cap(handle) {
                 Ok(()) => SysError::Success as i64,
                 Err(err) => err as i64,
             }
         }
 
-        // 3: CapTransfer
+        // 3: CapTransfer (src_handle: a1, target_proc_h: a2, rights_mask: a3, out_handle: a4)
         3 => {
-            let handle = Handle(a1);
-            let out_ptr = a2 as *mut u64;
-            let mut cspace = KERNEL_CSPACE.lock();
-            match cspace.lookup(handle, cap_rights::TRANSFER) {
-                Ok(obj) => {
-                    let _ = cspace.drop_cap(handle);
-                    let new_h = cspace.insert(obj, cap_rights::ALL);
-                    if !out_ptr.is_null() {
-                        unsafe {
-                            *out_ptr = new_h.0;
-                        }
+            let src_handle = Handle(a1);
+            let target_proc_h = Handle(a2);
+            let rights_mask = a3 as u32;
+            let out_handle_ptr = a4;
+
+            let (target_cspace, is_same_cspace) = if target_proc_h.is_null() {
+                (None, true)
+            } else {
+                let proc_obj = {
+                    let cspace = get_cspace(&current_cspace);
+                    match cspace.lookup(target_proc_h, cap_rights::MANAGE) {
+                        Ok(KernelObject::Process(p)) => p,
+                        _ => return SysError::InvalidHandle as i64,
                     }
-                    SysError::Success as i64
+                };
+                (Some(proc_obj.cspace.clone()), false)
+            };
+
+            let (obj, new_rights) = {
+                let mut cspace = get_cspace(&current_cspace);
+                let cap = match cspace.get_cap(src_handle) {
+                    Ok(c) => c,
+                    Err(e) => return e as i64,
+                };
+                if (cap.rights & cap_rights::TRANSFER) == 0 {
+                    return SysError::PermissionDenied as i64;
                 }
-                Err(err) => err as i64,
+                // Atténuation monotone absolue : jamais d'amplification vers cap_rights::ALL
+                let effective_mask = if rights_mask == 0 {
+                    cap_rights::ALL
+                } else {
+                    rights_mask
+                };
+                let new_rights = cap.rights & effective_mask;
+                let _ = cspace.drop_cap(src_handle);
+                (cap.object, new_rights)
+            };
+
+            let new_h = if is_same_cspace {
+                let mut cspace = get_cspace(&current_cspace);
+                cspace.insert(obj, new_rights)
+            } else {
+                let target_cs = target_cspace.unwrap();
+                let mut guard = target_cs.lock();
+                guard.insert(obj, new_rights)
+            };
+
+            if let Err(e) = write_user_val(current_aspace.as_ref(), out_handle_ptr, &new_h.0) {
+                return e as i64;
             }
+            SysError::Success as i64
         }
 
-        // 4: VmoCreate
+        // 4: VmoCreate (size: a1, flags: a2, out_handle: a3)
         4 => {
             let size = a1 as usize;
             let _flags = a2 as u32;
-            let out_handle = a3 as *mut u64;
+            let out_handle = a3;
 
             let vmo = Vmo::create(size);
-            let mut cspace = KERNEL_CSPACE.lock();
+            let mut cspace = get_cspace(&current_cspace);
             let handle = cspace.insert(KernelObject::Vmo(vmo), cap_rights::ALL);
 
-            if !out_handle.is_null() {
-                unsafe {
-                    *out_handle = handle.0;
-                }
+            if let Err(e) = write_user_val(current_aspace.as_ref(), out_handle, &handle.0) {
+                return e as i64;
             }
             SysError::Success as i64
         }
@@ -91,19 +226,28 @@ pub extern "C" fn dispatch_syscall(
             let vaddr = a3 as usize;
             let prot = a4 as u32;
 
-            let cspace = KERNEL_CSPACE.lock();
-            let vmo = match cspace.lookup(vmo_h, cap_rights::MAP) {
-                Ok(KernelObject::Vmo(v)) => v,
-                _ => return SysError::InvalidHandle as i64,
+            let vmo = {
+                let cspace = get_cspace(&current_cspace);
+                match cspace.lookup(vmo_h, cap_rights::MAP) {
+                    Ok(KernelObject::Vmo(v)) => v,
+                    _ => return SysError::InvalidHandle as i64,
+                }
             };
 
-            let proc = match cspace.lookup(proc_h, cap_rights::MANAGE) {
-                Ok(KernelObject::Process(p)) => p,
-                _ => return SysError::InvalidHandle as i64,
+            let target_aspace = if proc_h.is_null() {
+                match current_aspace.as_ref() {
+                    Some(a) => a.clone(),
+                    None => return SysError::InvalidHandle as i64,
+                }
+            } else {
+                let cspace = get_cspace(&current_cspace);
+                match cspace.lookup(proc_h, cap_rights::MANAGE) {
+                    Ok(KernelObject::Process(p)) => p.aspace.clone(),
+                    _ => return SysError::InvalidHandle as i64,
+                }
             };
-            drop(cspace);
 
-            match proc.aspace.map_vmo(vaddr, vmo, prot) {
+            match target_aspace.map_vmo(vaddr, vmo, prot) {
                 Ok(()) => SysError::Success as i64,
                 Err(_) => SysError::OutOfMemory as i64,
             }
@@ -115,14 +259,20 @@ pub extern "C" fn dispatch_syscall(
             let vaddr = a2 as usize;
             let size = a3 as usize;
 
-            let cspace = KERNEL_CSPACE.lock();
-            let proc = match cspace.lookup(proc_h, cap_rights::MANAGE) {
-                Ok(KernelObject::Process(p)) => p,
-                _ => return SysError::InvalidHandle as i64,
+            let target_aspace = if proc_h.is_null() {
+                match current_aspace.as_ref() {
+                    Some(a) => a.clone(),
+                    None => return SysError::InvalidHandle as i64,
+                }
+            } else {
+                let cspace = get_cspace(&current_cspace);
+                match cspace.lookup(proc_h, cap_rights::MANAGE) {
+                    Ok(KernelObject::Process(p)) => p.aspace.clone(),
+                    _ => return SysError::InvalidHandle as i64,
+                }
             };
-            drop(cspace);
 
-            match proc.aspace.unmap(vaddr, size) {
+            match target_aspace.unmap(vaddr, size) {
                 Ok(()) => SysError::Success as i64,
                 Err(_) => SysError::BadAddress as i64,
             }
@@ -134,7 +284,7 @@ pub extern "C" fn dispatch_syscall(
         // 8: ProcessCreate (flags: a1, out_handle: a2)
         8 => {
             let _flags = a1 as u32;
-            let out_handle = a2 as *mut u64;
+            let out_handle = a2;
 
             let pid = allocate_pid();
             let aspace = match AddressSpace::new() {
@@ -143,13 +293,11 @@ pub extern "C" fn dispatch_syscall(
             };
 
             let proc = Process::new(pid, "user_proc", aspace);
-            let mut cspace = KERNEL_CSPACE.lock();
+            let mut cspace = get_cspace(&current_cspace);
             let handle = cspace.insert(KernelObject::Process(proc), cap_rights::ALL);
 
-            if !out_handle.is_null() {
-                unsafe {
-                    *out_handle = handle.0;
-                }
+            if let Err(e) = write_user_val(current_aspace.as_ref(), out_handle, &handle.0) {
+                return e as i64;
             }
             SysError::Success as i64
         }
@@ -158,14 +306,15 @@ pub extern "C" fn dispatch_syscall(
         9 => {
             let proc_h = Handle(a1);
             let _flags = a2 as u32;
-            let out_handle = a3 as *mut u64;
+            let out_handle = a3;
 
-            let cspace = KERNEL_CSPACE.lock();
-            let proc = match cspace.lookup(proc_h, cap_rights::MANAGE) {
-                Ok(KernelObject::Process(p)) => p,
-                _ => return SysError::InvalidHandle as i64,
+            let proc = {
+                let cspace = get_cspace(&current_cspace);
+                match cspace.lookup(proc_h, cap_rights::MANAGE) {
+                    Ok(KernelObject::Process(p)) => p,
+                    _ => return SysError::InvalidHandle as i64,
+                }
             };
-            drop(cspace);
 
             let tid = allocate_tid();
             let thread = match Thread::new_user(tid, proc.id, proc.aspace.clone(), proc.cspace.clone(), 0, 0) {
@@ -175,13 +324,11 @@ pub extern "C" fn dispatch_syscall(
 
             proc.threads.lock().push(thread.clone());
 
-            let mut cspace = KERNEL_CSPACE.lock();
+            let mut cspace = get_cspace(&current_cspace);
             let handle = cspace.insert(KernelObject::Thread(thread), cap_rights::ALL);
 
-            if !out_handle.is_null() {
-                unsafe {
-                    *out_handle = handle.0;
-                }
+            if let Err(e) = write_user_val(current_aspace.as_ref(), out_handle, &handle.0) {
+                return e as i64;
             }
             SysError::Success as i64
         }
@@ -192,12 +339,13 @@ pub extern "C" fn dispatch_syscall(
             let entry_point = a2;
             let stack_pointer = a3;
 
-            let cspace = KERNEL_CSPACE.lock();
-            let thread = match cspace.lookup(thread_h, cap_rights::MANAGE) {
-                Ok(KernelObject::Thread(t)) => t,
-                _ => return SysError::InvalidHandle as i64,
+            let thread = {
+                let cspace = get_cspace(&current_cspace);
+                match cspace.lookup(thread_h, cap_rights::MANAGE) {
+                    Ok(KernelObject::Thread(t)) => t,
+                    _ => return SysError::InvalidHandle as i64,
+                }
             };
-            drop(cspace);
 
             {
                 let mut t = thread.lock();
@@ -229,28 +377,24 @@ pub extern "C" fn dispatch_syscall(
             SysError::Success as i64
         }
 
-        // 13: ChannelCreate
+        // 13: ChannelCreate (flags: a1, out_h1: a2, out_h2: a3)
         13 => {
-            let out_h1 = a2 as *mut u64;
-            let out_h2 = a3 as *mut u64;
+            let out_h1 = a2;
+            let out_h2 = a3;
 
             let channel = Arc::new(spin::Mutex::new(crate::ipc::Channel::new()));
             let ep_a = crate::ipc::ChannelEndpoint::new(channel.clone(), true);
             let ep_b = crate::ipc::ChannelEndpoint::new(channel, false);
 
-            let mut cspace = KERNEL_CSPACE.lock();
+            let mut cspace = get_cspace(&current_cspace);
             let h1 = cspace.insert(KernelObject::Channel(ep_a), cap_rights::ALL);
             let h2 = cspace.insert(KernelObject::Channel(ep_b), cap_rights::ALL);
 
-            if !out_h1.is_null() {
-                unsafe {
-                    *out_h1 = h1.0;
-                }
+            if let Err(e) = write_user_val(current_aspace.as_ref(), out_h1, &h1.0) {
+                return e as i64;
             }
-            if !out_h2.is_null() {
-                unsafe {
-                    *out_h2 = h2.0;
-                }
+            if let Err(e) = write_user_val(current_aspace.as_ref(), out_h2, &h2.0) {
+                return e as i64;
             }
             SysError::Success as i64
         }
@@ -258,28 +402,34 @@ pub extern "C" fn dispatch_syscall(
         // 14: ChannelCall (endpoint_h: a1, send_ptr: a2, recv_ptr: a3)
         14 => {
             let ep_h = Handle(a1);
-            let send_ptr = a2 as *const crate::ipc::ChannelMessage;
-            let recv_ptr = a3 as *mut crate::ipc::ChannelMessage;
+            let send_ptr = a2;
+            let recv_ptr = a3;
 
-            let cspace = KERNEL_CSPACE.lock();
-            let ep = match cspace.lookup(ep_h, cap_rights::SEND | cap_rights::RECEIVE) {
-                Ok(KernelObject::Channel(ep)) => ep,
-                _ => return SysError::InvalidHandle as i64,
+            let ep = {
+                let cspace = get_cspace(&current_cspace);
+                match cspace.lookup(ep_h, cap_rights::SEND | cap_rights::RECEIVE) {
+                    Ok(KernelObject::Channel(ep)) => ep,
+                    _ => return SysError::InvalidHandle as i64,
+                }
             };
-            drop(cspace);
 
-            if !send_ptr.is_null() {
-                let msg = unsafe { (*send_ptr).clone() };
+            if send_ptr != 0 {
+                let msg: crate::ipc::ChannelMessage = match read_user_val(current_aspace.as_ref(), send_ptr) {
+                    Ok(m) => m,
+                    Err(e) => return e as i64,
+                };
                 if let Err(e) = ep.send(msg) {
                     return e as i64;
                 }
             }
 
-            if !recv_ptr.is_null() {
+            if recv_ptr != 0 {
                 match ep.recv() {
-                    Ok(Some(msg)) => unsafe {
-                        *recv_ptr = msg;
-                    },
+                    Ok(Some(msg)) => {
+                        if let Err(e) = write_user_val(current_aspace.as_ref(), recv_ptr, &msg) {
+                            return e as i64;
+                        }
+                    }
                     Ok(None) => return SysError::TimedOut as i64,
                     Err(e) => return e as i64,
                 }
@@ -291,16 +441,14 @@ pub extern "C" fn dispatch_syscall(
         // 15: PortCreate (flags: a1, out_port: a2)
         15 => {
             let _flags = a1 as u32;
-            let out_port = a2 as *mut u64;
+            let out_port = a2;
 
             let port = Arc::new(crate::ipc::Port::new());
-            let mut cspace = KERNEL_CSPACE.lock();
+            let mut cspace = get_cspace(&current_cspace);
             let handle = cspace.insert(KernelObject::Port(port), cap_rights::ALL);
 
-            if !out_port.is_null() {
-                unsafe {
-                    *out_port = handle.0;
-                }
+            if let Err(e) = write_user_val(current_aspace.as_ref(), out_port, &handle.0) {
+                return e as i64;
             }
             SysError::Success as i64
         }
@@ -308,22 +456,21 @@ pub extern "C" fn dispatch_syscall(
         // 16: PortWait (port_h: a1, out_event: a2, timeout: a3)
         16 => {
             let port_h = Handle(a1);
-            let out_event = a2 as *mut jambo_abi::JamboEvent;
+            let out_event = a2;
             let timeout = a3;
 
-            let cspace = KERNEL_CSPACE.lock();
-            let port = match cspace.lookup(port_h, cap_rights::RECEIVE) {
-                Ok(KernelObject::Port(p)) => p,
-                _ => return SysError::InvalidHandle as i64,
+            let port = {
+                let cspace = get_cspace(&current_cspace);
+                match cspace.lookup(port_h, cap_rights::RECEIVE) {
+                    Ok(KernelObject::Port(p)) => p,
+                    _ => return SysError::InvalidHandle as i64,
+                }
             };
-            drop(cspace);
 
             match port.wait(timeout) {
                 Ok(Some(ev)) => {
-                    if !out_event.is_null() {
-                        unsafe {
-                            *out_event = ev;
-                        }
+                    if let Err(e) = write_user_val(current_aspace.as_ref(), out_event, &ev) {
+                        return e as i64;
                     }
                     SysError::Success as i64
                 }
@@ -334,26 +481,27 @@ pub extern "C" fn dispatch_syscall(
 
         // 17: RingSetup (desc_ptr: a1, out_handle: a2)
         17 => {
-            let desc_ptr = a1 as *const jambo_abi::RingDesc;
-            let out_h = a2 as *mut u64;
+            let desc_ptr = a1;
+            let out_h = a2;
 
-            if desc_ptr.is_null() {
+            if desc_ptr == 0 {
                 return SysError::InvalidArgument as i64;
             }
 
-            let desc = unsafe { &*desc_ptr };
-            let ring = match crate::ipc::SharedRing::new(desc) {
+            let desc: jambo_abi::RingDesc = match read_user_val(current_aspace.as_ref(), desc_ptr) {
+                Ok(d) => d,
+                Err(e) => return e as i64,
+            };
+            let ring = match crate::ipc::SharedRing::new(&desc) {
                 Ok(r) => Arc::new(r),
                 Err(e) => return e as i64,
             };
 
-            let mut cspace = KERNEL_CSPACE.lock();
+            let mut cspace = get_cspace(&current_cspace);
             let handle = cspace.insert(KernelObject::Ring(ring), cap_rights::ALL);
 
-            if !out_h.is_null() {
-                unsafe {
-                    *out_h = handle.0;
-                }
+            if let Err(e) = write_user_val(current_aspace.as_ref(), out_h, &handle.0) {
+                return e as i64;
             }
             SysError::Success as i64
         }
@@ -363,12 +511,13 @@ pub extern "C" fn dispatch_syscall(
             let ring_h = Handle(a1);
             let to_submit = a2 as u32;
 
-            let cspace = KERNEL_CSPACE.lock();
-            let ring = match cspace.lookup(ring_h, cap_rights::MANAGE) {
-                Ok(KernelObject::Ring(r)) => r,
-                _ => return SysError::InvalidHandle as i64,
+            let ring = {
+                let cspace = get_cspace(&current_cspace);
+                match cspace.lookup(ring_h, cap_rights::MANAGE) {
+                    Ok(KernelObject::Ring(r)) => r,
+                    _ => return SysError::InvalidHandle as i64,
+                }
             };
-            drop(cspace);
 
             match ring.submit_and_complete(to_submit) {
                 Ok(completed) => completed as i64,
@@ -378,16 +527,19 @@ pub extern "C" fn dispatch_syscall(
 
         // 19: FutexWait (uaddr: a1, expected: a2, timeout: a3)
         19 => {
-            let uaddr = a1 as usize;
+            let uaddr = a1;
             let expected = a2 as u32;
 
             if (uaddr & 3) != 0 {
                 return SysError::BadAddress as i64;
             }
 
-            let current_val = unsafe { *(uaddr as *const u32) };
+            let current_val: u32 = match read_user_val(current_aspace.as_ref(), uaddr) {
+                Ok(v) => v,
+                Err(e) => return e as i64,
+            };
 
-            match crate::ipc::FUTEX_MANAGER.wait(uaddr, expected, current_val) {
+            match crate::ipc::FUTEX_MANAGER.wait(uaddr as usize, expected, current_val) {
                 Ok(()) => SysError::Success as i64,
                 Err(e) => e as i64,
             }
@@ -409,25 +561,24 @@ pub extern "C" fn dispatch_syscall(
             let vector = a1 as u32;
             let port_h = Handle(a2);
             let cookie = a3;
-            let out_irq = a4 as *mut u64;
+            let out_irq = a4;
 
-            let cspace = KERNEL_CSPACE.lock();
-            let port = match cspace.lookup(port_h, cap_rights::MANAGE | cap_rights::RECEIVE) {
-                Ok(KernelObject::Port(p)) => p,
-                _ => return SysError::InvalidHandle as i64,
+            let port = {
+                let cspace = get_cspace(&current_cspace);
+                match cspace.lookup(port_h, cap_rights::MANAGE | cap_rights::RECEIVE) {
+                    Ok(KernelObject::Port(p)) => p,
+                    _ => return SysError::InvalidHandle as i64,
+                }
             };
-            drop(cspace);
 
             let irq_obj = Arc::new(crate::ipc::IrqObject::new(vector, cookie, port));
             crate::ipc::IRQ_DISPATCHER.register(irq_obj.clone());
 
-            let mut cspace = KERNEL_CSPACE.lock();
+            let mut cspace = get_cspace(&current_cspace);
             let handle = cspace.insert(KernelObject::Irq(irq_obj), cap_rights::ALL);
 
-            if !out_irq.is_null() {
-                unsafe {
-                    *out_irq = handle.0;
-                }
+            if let Err(e) = write_user_val(current_aspace.as_ref(), out_irq, &handle.0) {
+                return e as i64;
             }
             SysError::Success as i64
         }
@@ -436,12 +587,13 @@ pub extern "C" fn dispatch_syscall(
         22 => {
             let irq_h = Handle(a1);
 
-            let cspace = KERNEL_CSPACE.lock();
-            let irq = match cspace.lookup(irq_h, cap_rights::MANAGE) {
-                Ok(KernelObject::Irq(i)) => i,
-                _ => return SysError::InvalidHandle as i64,
+            let irq = {
+                let cspace = get_cspace(&current_cspace);
+                match cspace.lookup(irq_h, cap_rights::MANAGE) {
+                    Ok(KernelObject::Irq(i)) => i,
+                    _ => return SysError::InvalidHandle as i64,
+                }
             };
-            drop(cspace);
 
             irq.ack();
             SysError::Success as i64
@@ -456,10 +608,10 @@ pub extern "C" fn dispatch_syscall(
             let flags = a5 as u32;
             let writeable = (flags & jambo_abi::cap_rights::WRITE) != 0;
 
-            let cspace = KERNEL_CSPACE.lock();
             let domain = if handle.is_null() {
                 crate::arch::IOMMU_MANAGER.get_domain(1)
             } else {
+                let cspace = get_cspace(&current_cspace);
                 match cspace.lookup(handle, cap_rights::MAP) {
                     Ok(KernelObject::Iommu(dom)) => Some(dom),
                     _ => None,
@@ -478,39 +630,52 @@ pub extern "C" fn dispatch_syscall(
         // 24: ClockGettime (clock_id: a1, out_ts: a2)
         24 => {
             let clock_id = a1 as u32;
-            let out_ts = a2 as *mut jambo_abi::Timespec;
+            let out_ts = a2;
 
-            if out_ts.is_null() {
+            if out_ts == 0 {
                 return SysError::InvalidArgument as i64;
             }
 
             match crate::time::clock_gettime(clock_id) {
-                Ok(ts) => {
-                    unsafe {
-                        *out_ts = ts;
-                    }
-                    SysError::Success as i64
-                }
+                Ok(ts) => match write_user_val(current_aspace.as_ref(), out_ts, &ts) {
+                    Ok(()) => SysError::Success as i64,
+                    Err(e) => e as i64,
+                },
                 Err(e) => e as i64,
             }
         }
 
         // 25: ConsoleRead (user_buf: a1, max_len: a2)
         25 => {
-            let buf = a1 as *mut u8;
+            let uaddr = a1;
             let max_len = a2 as usize;
-            if buf.is_null() {
+            if uaddr == 0 {
                 return SysError::InvalidArgument as i64;
             }
+            if max_len == 0 {
+                return 0;
+            }
             let mut read_bytes = 0;
+            let mut buf = [0u8; 128];
             while read_bytes < max_len {
                 if let Some(b) = crate::arch::try_get_char() {
-                    unsafe {
-                        *buf.add(read_bytes) = b;
-                    }
+                    buf[read_bytes % buf.len()] = b;
                     read_bytes += 1;
+                    if (read_bytes % buf.len()) == 0 {
+                        let chunk_start = uaddr + (read_bytes - buf.len()) as u64;
+                        if let Err(e) = write_user_slice(current_aspace.as_ref(), chunk_start, &buf) {
+                            return e as i64;
+                        }
+                    }
                 } else {
                     break;
+                }
+            }
+            let remaining = read_bytes % buf.len();
+            if remaining > 0 {
+                let chunk_start = uaddr + (read_bytes - remaining) as u64;
+                if let Err(e) = write_user_slice(current_aspace.as_ref(), chunk_start, &buf[..remaining]) {
+                    return e as i64;
                 }
             }
             read_bytes as i64
@@ -518,22 +683,33 @@ pub extern "C" fn dispatch_syscall(
 
         // 26: ConsoleWrite (user_buf: a1, len: a2)
         26 => {
-            let buf = a1 as *const u8;
+            let uaddr = a1;
             let len = a2 as usize;
-            if buf.is_null() {
+            if uaddr == 0 {
                 return SysError::InvalidArgument as i64;
             }
-            for i in 0..len {
-                let b = unsafe { *buf.add(i) };
-                crate::arch::SERIAL1.lock().write_byte(b);
+            if len == 0 {
+                return 0;
+            }
+            let mut offset = 0;
+            let mut buf = [0u8; 128];
+            while offset < len {
+                let chunk = (len - offset).min(buf.len());
+                if let Err(e) = read_user_slice(current_aspace.as_ref(), uaddr + offset as u64, &mut buf[..chunk]) {
+                    return e as i64;
+                }
+                for &b in &buf[..chunk] {
+                    crate::arch::SERIAL1.lock().write_byte(b);
+                }
+                offset += chunk;
             }
             len as i64
         }
 
         // 27: SysInfo (out_info: a1)
         27 => {
-            let out_info = a1 as *mut jambo_abi::SystemInfo;
-            if out_info.is_null() {
+            let out_info = a1;
+            if out_info == 0 {
                 return SysError::InvalidArgument as i64;
             }
             let total_pages = crate::mm::pmm::PMM.lock().total_pages() as u64;
@@ -542,17 +718,18 @@ pub extern "C" fn dispatch_syscall(
             let uptime = crate::time::clock_gettime(jambo_abi::clocks::CLOCK_MONOTONIC)
                 .map(|ts| ts.tv_sec)
                 .unwrap_or(0);
-            unsafe {
-                *out_info = jambo_abi::SystemInfo {
-                    total_pages,
-                    free_pages,
-                    allocated_pages,
-                    active_processes: 2,
-                    active_threads: 2,
-                    uptime_seconds: uptime,
-                };
+            let info = jambo_abi::SystemInfo {
+                total_pages,
+                free_pages,
+                allocated_pages,
+                active_processes: 2,
+                active_threads: 2,
+                uptime_seconds: uptime,
+            };
+            match write_user_val(current_aspace.as_ref(), out_info, &info) {
+                Ok(()) => SysError::Success as i64,
+                Err(e) => e as i64,
             }
-            SysError::Success as i64
         }
 
         // 28: SystemPoweroff
