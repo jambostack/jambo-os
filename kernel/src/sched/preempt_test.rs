@@ -67,6 +67,7 @@ pub fn execute_preemption_test() -> bool {
         user_entry: 0,
         user_rsp: 0,
         aspace: None,
+        cspace: None,
     }));
 
     {

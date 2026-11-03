@@ -1983,6 +1983,7 @@ pub extern "C" fn _start() -> ! {
         user_entry: 0,
         user_rsp: 0,
         aspace: None,
+        cspace: None,
     }));
     sched::SCHEDULER.lock().current = Some(supervisor_thread);
     sched::EevdfScheduler::reschedule();

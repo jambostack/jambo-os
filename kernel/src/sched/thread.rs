@@ -1,4 +1,5 @@
 extern crate alloc;
+use crate::cap::CSpace;
 use crate::mm::{phys_to_virt, virt_to_phys, AddressSpace, PAGE_SIZE, PMM};
 use alloc::sync::Arc;
 use core::sync::atomic::{AtomicU64, Ordering};
@@ -33,6 +34,7 @@ pub struct Thread {
     pub user_entry: u64,
     pub user_rsp: u64,
     pub aspace: Option<Arc<AddressSpace>>,
+    pub cspace: Option<Arc<Mutex<CSpace>>>,
 }
 
 impl Thread {
@@ -79,6 +81,7 @@ impl Thread {
             user_entry: 0,
             user_rsp: 0,
             aspace: None,
+            cspace: None,
         })))
     }
 
@@ -87,6 +90,7 @@ impl Thread {
         id: u64,
         process_id: u64,
         aspace: Arc<AddressSpace>,
+        cspace: Arc<Mutex<CSpace>>,
         user_entry: u64,
         user_rsp: u64,
     ) -> Option<Arc<Mutex<Self>>> {
@@ -122,6 +126,7 @@ impl Thread {
             user_entry,
             user_rsp,
             aspace: Some(aspace),
+            cspace: Some(cspace),
         })))
     }
 }

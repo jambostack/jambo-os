@@ -1,5 +1,6 @@
 extern crate alloc;
 use super::thread::Thread;
+use crate::cap::CSpace;
 use crate::mm::{load_elf64, AddressSpace};
 use alloc::string::String;
 use alloc::sync::Arc;
@@ -25,6 +26,7 @@ pub struct Process {
     pub id: u64,
     pub name: String,
     pub aspace: Arc<AddressSpace>,
+    pub cspace: Arc<Mutex<CSpace>>,
     pub threads: Mutex<Vec<Arc<Mutex<Thread>>>>,
     pub state: Mutex<ProcessState>,
     pub entry_point: u64,
@@ -37,6 +39,7 @@ impl Process {
             id,
             name: String::from(name),
             aspace,
+            cspace: Arc::new(Mutex::new(CSpace::new())),
             threads: Mutex::new(Vec::new()),
             state: Mutex::new(ProcessState::Active),
             entry_point: 0,
@@ -160,12 +163,14 @@ impl Process {
         envs: &[&str],
     ) -> Result<(Arc<Self>, Arc<Mutex<Thread>>), SysError> {
         let aspace = Arc::new(AddressSpace::new().ok_or(SysError::OutOfMemory)?);
+        let cspace = Arc::new(Mutex::new(CSpace::new()));
         let elf_info = load_elf64(&aspace, elf_bytes)?;
 
         let process = Arc::new(Self {
             id,
             name: String::from(name),
             aspace: aspace.clone(),
+            cspace: cspace.clone(),
             threads: Mutex::new(Vec::new()),
             state: Mutex::new(ProcessState::Active),
             entry_point: elf_info.entry_point,
@@ -185,7 +190,7 @@ impl Process {
             process.setup_user_stack(elf_info.stack_pointer, args, envs, &auxv_entries)?;
 
         let thread_id = id * 1000 + 1;
-        let thread = Thread::new_user(thread_id, id, aspace.clone(), elf_info.entry_point, user_sp)
+        let thread = Thread::new_user(thread_id, id, aspace.clone(), cspace.clone(), elf_info.entry_point, user_sp)
             .ok_or(SysError::OutOfMemory)?;
 
         process.threads.lock().push(thread.clone());

@@ -99,6 +99,19 @@ impl CSpace {
         }
     }
 
+    /// Récupère la capacité brute (objet et droits) associée à un handle
+    pub fn get_cap(&self, handle: Handle) -> Result<Capability, SysError> {
+        let idx = handle.index() as usize;
+        if idx >= self.slots.len() {
+            return Err(SysError::InvalidHandle);
+        }
+        let slot = &self.slots[idx];
+        if slot.generation != handle.generation() {
+            return Err(SysError::InvalidHandle);
+        }
+        slot.cap.clone().ok_or(SysError::InvalidHandle)
+    }
+
     /// Duplique une capacité en réduisant optionnellement ses droits
     pub fn duplicate(&mut self, handle: Handle, rights_mask: u32) -> Result<Handle, SysError> {
         let obj = self.lookup(handle, cap_rights::DUPLICATE)?;

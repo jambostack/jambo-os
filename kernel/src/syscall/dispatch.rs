@@ -168,7 +168,7 @@ pub extern "C" fn dispatch_syscall(
             drop(cspace);
 
             let tid = allocate_tid();
-            let thread = match Thread::new_user(tid, proc.id, proc.aspace.clone(), 0, 0) {
+            let thread = match Thread::new_user(tid, proc.id, proc.aspace.clone(), proc.cspace.clone(), 0, 0) {
                 Some(t) => t,
                 None => return SysError::OutOfMemory as i64,
             };

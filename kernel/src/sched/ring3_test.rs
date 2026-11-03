@@ -77,7 +77,7 @@ pub fn execute_ring3_roundtrip_test() -> bool {
     let user_rsp = 0x0000_7FFF_FFFF_0000u64 - 16;
 
     // 4. Créer le thread utilisateur
-    let user_thread = match Thread::new_user(999, 1, aspace, user_entry, user_rsp) {
+    let user_thread = match Thread::new_user(999, 1, aspace, Arc::new(Mutex::new(crate::cap::CSpace::new())), user_entry, user_rsp) {
         Some(t) => t,
         None => {
             kprintln!("[RING3/ERR] Échec d'allocation du thread utilisateur");
@@ -109,6 +109,7 @@ pub fn execute_ring3_roundtrip_test() -> bool {
         user_entry: 0,
         user_rsp: 0,
         aspace: None,
+        cspace: None,
     }));
 
     {
