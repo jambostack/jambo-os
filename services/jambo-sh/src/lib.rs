@@ -36,6 +36,13 @@ use jambo_cored::{
     core_rights, CoreCap, CoreClient, CoreOpcode, CoreRequest, CoreResponse, JamboCoreDaemon,
 };
 #[allow(unused_imports)]
+use jambo_dlp::{
+    dlp_rights, DlpAction, DlpAuditEntry, DlpCap, DlpClient, DlpDataType, DlpError,
+    DlpInspectionResult, DlpOpcode, DlpPolicy, DlpQuarantineEntry, DlpRequest, DlpResponse,
+    DlpSummary, DlpViolationRecord, JamboDlpDaemon, ThreatSeverity as DlpThreatSeverity,
+    DLP_ENDPOINT_ID, DLP_REQ_MAGIC, DLP_RESP_MAGIC,
+};
+#[allow(unused_imports)]
 use jambo_dnsd::{
     dns_rights, DnsCap, DnsClient, DnsOpcode, DnsRecordData, DnsRequest, DnsResponse, DnsType,
     JamboDnsDaemon, DNS_STATUS_ERROR, DNS_STATUS_NXDOMAIN, DNS_STATUS_OK, DNS_STATUS_REFUSED,
@@ -199,6 +206,7 @@ pub struct JamboShell {
     pub soar_daemon: JamboSoarDaemon,
     pub ueba_daemon: JamboUebaDaemon,
     pub itdr_daemon: JamboItdrDaemon,
+    pub dlp_daemon: JamboDlpDaemon,
 }
 
 impl Default for JamboShell {
@@ -312,6 +320,14 @@ impl JamboShell {
         );
         let mut itdr_daemon = JamboItdrDaemon::new(itdr_cap);
         itdr_daemon.init_defaults();
+        let dlp_cap = DlpCap::new(
+            libjambo::Handle::new(38, 1),
+            dlp_rights::ALL,
+            100_000,
+            10_000,
+        );
+        let mut dlp_daemon = JamboDlpDaemon::new(dlp_cap);
+        dlp_daemon.init_defaults();
         Self {
             prompt_user: "jambo",
             commands_executed: 0,
@@ -338,6 +354,7 @@ impl JamboShell {
             soar_daemon,
             ueba_daemon,
             itdr_daemon,
+            dlp_daemon,
         }
     }
 
@@ -405,6 +422,7 @@ impl JamboShell {
             "soar" => self.cmd_soar(args, out),
             "ueba" => self.cmd_ueba(args, out),
             "itdr" => self.cmd_itdr(args, out),
+            "dlp" => self.cmd_dlp(args, out),
             _ => self.cmd_not_found(cmd, out),
         }
     }
@@ -413,7 +431,7 @@ impl JamboShell {
         let text = b"Commandes disponibles:\n\
   help        - Affiche cette aide\n\
   sysinfo     - Metriques memoire et uptime du micro-noyau\n\
-  ps          - Liste les 37 processus actifs\n\
+  ps          - Liste les 38 processus actifs\n\
   echo <args> - Affiche le texte sur la console\n\
   clear       - Reinitialise l'ecran du terminal\n\
   reboot      - Eteint ou redemarre la machine virtuelle\n\
@@ -451,7 +469,8 @@ impl JamboShell {
   xdr [status|campaigns|correlate|remediate|graph|audit] - Detection et reponse etendue souveraine XDR Ring 3\n\
   soar [status|playbooks|trigger|incidents|audit] - Orchestration, automatisation et reponse aux incidents SOAR Ring 3\n\
   ueba [status|profile|anomalies|score|quarantine|audit] - Analyse comportementale des utilisateurs et entites UEBA Ring 3\n\
-  itdr [status|identities|threats|revoke|isolate|remediate|audit] - Detection et reponse aux menaces d'identites ITDR Ring 3\n";
+  itdr [status|identities|threats|revoke|isolate|remediate|audit] - Detection et reponse aux menaces d'identites ITDR Ring 3\n\
+  dlp [status|inspect|rules|incidents|audit] - Prevention des fuites de donnees DLP Ring 3\n";
         let len = text.len().min(out.len());
         out[..len].copy_from_slice(&text[..len]);
         (ShellStatus::Success, len)
@@ -528,7 +547,7 @@ impl JamboShell {
  30  ACTIF    /bin/waf (L7 Web Application Firewall Ring 3)\n  30 | waf             | Ring 3 | Ready   | 1000   | L7 Web Application Firewall & Injection Filter\n\
  31  ACTIF    /bin/siem (Security Information & Event Management Ring 3)\n  31 | siem            | Ring 3 | Ready   | 1000   | Security Information & Event Management\n\
  32  ACTIF    /bin/edr (Endpoint Detection & Response Ring 3)\n  32 | edr             | Ring 3 | Ready   | 1000   | Endpoint Detection & Response Daemon\n\
- 33  ACTIF    /bin/ndr (Network Detection & Response Ring 3)\n  33 | ndr             | Ring 3 | Ready   | 1000   | Network Detection & Response Daemon\n  34  ACTIF    /bin/xdr (Extended Detection & Response Ring 3)\n  34 | xdr             | Ring 3 | Ready   | 1000   | Extended Detection & Response Daemon\n  35  ACTIF    /bin/soar (Security Orchestration, Automation & Response Ring 3)\n  35 | soar            | Ring 3 | Ready   | 1000   | Security Orchestration, Automation & Response Daemon\n  36  ACTIF    /bin/ueba (User & Entity Behavior Analytics Ring 3)\n  36 | ueba            | Ring 3 | Ready   | 1000   | User & Entity Behavior Analytics Daemon\n  37  ACTIF    /bin/itdr (Identity Threat Detection & Response Ring 3)\n  37 | itdr            | Ring 3 | Ready   | 1000   | Identity Threat Detection & Response Daemon\nTotal: 37 processes\n";
+ 33  ACTIF    /bin/ndr (Network Detection & Response Ring 3)\n  33 | ndr             | Ring 3 | Ready   | 1000   | Network Detection & Response Daemon\n  34  ACTIF    /bin/xdr (Extended Detection & Response Ring 3)\n  34 | xdr             | Ring 3 | Ready   | 1000   | Extended Detection & Response Daemon\n  35  ACTIF    /bin/soar (Security Orchestration, Automation & Response Ring 3)\n  35 | soar            | Ring 3 | Ready   | 1000   | Security Orchestration, Automation & Response Daemon\n  36  ACTIF    /bin/ueba (User & Entity Behavior Analytics Ring 3)\n  36 | ueba            | Ring 3 | Ready   | 1000   | User & Entity Behavior Analytics Daemon\n  37  ACTIF    /bin/itdr (Identity Threat Detection & Response Ring 3)\n  37 | itdr            | Ring 3 | Ready   | 1000   | Identity Threat Detection & Response Daemon\n  38  ACTIF    /bin/dlp (Data Loss Prevention Daemon Ring 3)\n  38 | dlp             | Ring 3 | Ready   | 1000   | Data Loss Prevention & Sensitive Flow Filter\nTotal: 38 processes\n";
         let len = text.len().min(out.len());
         out[..len].copy_from_slice(&text[..len]);
         (ShellStatus::Success, len)
@@ -9951,6 +9970,283 @@ ID  | Nom             | Racine de Confiance      | Statut             | Confinem
         c = append_bytes(out, c, b"\n");
         (ShellStatus::Success, c)
     }
+
+    fn send_dlp_request(&mut self, req: &DlpRequest) -> DlpResponse {
+        let mut resp_opt: Option<DlpResponse> = None;
+        for &h in &[
+            38u64, 37u64, 36u64, 35u64, 34u64, 33u64, 32u64, 31u64, 30u64, 29u64, 28u64, 27u64,
+            26u64, 25u64, 24u64, 23u64, 22u64, 21u64, 20u64, 19u64, 18u64, 17u64, 16u64, 15u64,
+            14u64, 13u64,
+        ] {
+            let client = DlpClient::new(libjambo::Handle(h));
+            if let Ok(resp) = client.call(req) {
+                if resp.magic == DLP_RESP_MAGIC {
+                    resp_opt = Some(resp);
+                    break;
+                }
+            }
+        }
+        let local_resp = self.dlp_daemon.dispatch_ipc(req);
+        resp_opt.unwrap_or(local_resp)
+    }
+
+    pub fn cmd_dlp(&mut self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        let subcmd = if args.is_empty() { "status" } else { args[0] };
+        match subcmd {
+            "status" => self.cmd_dlp_status(out),
+            "inspect" => self.cmd_dlp_inspect(&args[1..], out),
+            "rules" => self.cmd_dlp_rules(out),
+            "incidents" => self.cmd_dlp_incidents(out),
+            "audit" => self.cmd_dlp_audit(out),
+            _ => {
+                let msg = b"Usage: dlp <status|inspect <text>|rules|incidents|audit>\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                (ShellStatus::InvalidArgument, len)
+            }
+        }
+    }
+
+    fn cmd_dlp_status(&mut self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let req = DlpRequest {
+            magic: DLP_REQ_MAGIC,
+            opcode: 1, // GetStatus
+            handle_id: DLP_ENDPOINT_ID as u64,
+            rights: dlp_rights::ALL,
+            ..Default::default()
+        };
+        let _resp = self.send_dlp_request(&req);
+        let summary = self.dlp_daemon.get_summary();
+
+        let mut c = 0;
+        c = append_bytes(
+            out,
+            c,
+            b"Bilan Global DLP & Prevention Fuites de Donnees (jambo-dlp PID 38):\n  Statut Operationnel     : ACTIF (Inspection Flux & Masquage O(1) Ring 3)\n  Politiques Actives      : ",
+        );
+        c = append_u64(out, c, summary.policies_count as u64);
+        c = append_bytes(out, c, b"\n  Flux Reseau Scannes     : ");
+        c = append_u64(out, c, summary.flows_scanned as u64);
+        c = append_bytes(out, c, b"\n  Violations Detectees    : ");
+        c = append_u64(out, c, summary.violations_detected as u64);
+        c = append_bytes(out, c, b"\n  Payloads Masques/Sanit. : ");
+        c = append_u64(out, c, summary.payloads_masked as u64);
+        c = append_bytes(out, c, b"\n  Flux Bloques            : ");
+        c = append_u64(out, c, summary.flows_blocked as u64);
+        c = append_bytes(out, c, b"\n  Flux en Quarantaine     : ");
+        c = append_u64(out, c, summary.flows_quarantined as u64);
+        c = append_bytes(out, c, b"\n  Tampons Quarantaine O(1): ");
+        c = append_u64(out, c, summary.quarantine_count as u64);
+        c = append_bytes(out, c, b" / 32\n  Grand Livre d'Audit     : ");
+        if summary.ledger_valid {
+            c = append_bytes(
+                out,
+                c,
+                b"VALIDE (Chaine SHA-256 inalterable)\n  Empreinte Racine SHA-256: ",
+            );
+            for &b in self.dlp_daemon.last_audit_hash.iter() {
+                c = append_hex_byte(out, c, b);
+            }
+        } else {
+            c = append_bytes(out, c, b"CORROMPU (Rupture d'integrite)");
+        }
+        c = append_bytes(out, c, b"\n");
+        (ShellStatus::Success, c)
+    }
+
+    fn cmd_dlp_inspect(&mut self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if args.is_empty() {
+            let msg = b"Usage: dlp inspect <payload_text>\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            return (ShellStatus::InvalidArgument, len);
+        }
+
+        let mut input_buf = [0u8; 256];
+        let mut in_len = 0;
+        for (i, &arg) in args.iter().enumerate() {
+            if i > 0 && in_len < input_buf.len() {
+                input_buf[in_len] = b' ';
+                in_len += 1;
+            }
+            let bytes = arg.as_bytes();
+            let to_copy = bytes.len().min(input_buf.len().saturating_sub(in_len));
+            input_buf[in_len..in_len + to_copy].copy_from_slice(&bytes[..to_copy]);
+            in_len += to_copy;
+        }
+
+        let mut sanitized = [0u8; 256];
+        let flow_id = self.dlp_daemon.flows_scanned as u32 + 1;
+        let res = match self.dlp_daemon.inspect_flow(
+            flow_id,
+            "shell_cmd",
+            "egress_net",
+            &input_buf[..in_len],
+            &mut sanitized,
+            1000,
+        ) {
+            Ok(r) => r,
+            Err(_) => return (ShellStatus::ExecutionFailed, 0),
+        };
+
+        let mut c = 0;
+        c = append_bytes(out, c, b"Resultat Inspection DLP (Flux #");
+        c = append_u64(out, c, res.flow_id as u64);
+        c = append_bytes(out, c, b"):\n  Action Appliquee       : ");
+        match res.action {
+            DlpAction::Allow => c = append_bytes(out, c, b"ALLOW (Autorise)\n"),
+            DlpAction::Mask => c = append_bytes(out, c, b"MASK (Masquage irreversible)\n"),
+            DlpAction::Block => c = append_bytes(out, c, b"BLOCK (Bloque)\n"),
+            DlpAction::Quarantine => c = append_bytes(out, c, b"QUARANTINE (Confinement O(1))\n"),
+        }
+        c = append_bytes(out, c, b"  Type de Donnees        : ");
+        let type_str = match res.data_type {
+            DlpDataType::None => "None (Donnees saines)",
+            DlpDataType::PiiCreditCard => "PII: Carte Bancaire (PCI-DSS)",
+            DlpDataType::PiiNationalId => "PII: Numero d'Identification Nationale",
+            DlpDataType::CryptoPrivateKey => "Secret: Cle Privee Cryptographique (SSH/RSA)",
+            DlpDataType::ApiTokenOrSecret => "Secret: Jeton d'API / Cle Secrete",
+            DlpDataType::HighEntropyExfiltration => "Anomalie: Exfiltration Forte Entropie",
+            DlpDataType::SovereignDefenseSecret => "Secret: Defense Souveraine Classifiee",
+        };
+        c = append_bytes(out, c, type_str.as_bytes());
+        c = append_bytes(out, c, b"\n  Entropie de Shannon    : ");
+        c = append_u64(out, c, (res.entropy_millibits / 1000) as u64);
+        c = append_bytes(out, c, b".");
+        let milli = (res.entropy_millibits % 1000) as u64;
+        if milli < 10 {
+            c = append_bytes(out, c, b"00");
+        } else if milli < 100 {
+            c = append_bytes(out, c, b"0");
+        }
+        c = append_u64(out, c, milli);
+        c = append_bytes(out, c, b" bits/octet\n  Confinement Quarantaine: ");
+        if res.quarantined {
+            c = append_bytes(out, c, b"OUI (Isole)\n");
+        } else {
+            c = append_bytes(out, c, b"NON\n");
+        }
+        c = append_bytes(out, c, b"  Taille Traitee         : ");
+        c = append_u64(out, c, res.bytes_processed as u64);
+        c = append_bytes(out, c, b" octets\n  Taille Sortie Assainie : ");
+        c = append_u64(out, c, res.output_len as u64);
+        c = append_bytes(out, c, b" octets\n");
+        if res.action == DlpAction::Mask && res.output_len > 0 {
+            c = append_bytes(out, c, b"  Payload Assaini        : \"");
+            let print_len = res.output_len.min(64);
+            c = append_bytes(out, c, &sanitized[..print_len]);
+            c = append_bytes(out, c, b"\"\n");
+        }
+        (ShellStatus::Success, c)
+    }
+
+    fn cmd_dlp_rules(&self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let mut c = 0;
+        c = append_bytes(
+            out,
+            c,
+            b"Table des Politiques de Prevention DLP Souveraines (PID 38):\nID | Statut   | Action     | Quarantaine | Seuil Entr | Description\n---+----------+------------+-------------+------------+--------------------------------\n",
+        );
+        for pol in self.dlp_daemon.policies.iter().flatten() {
+            c = append_u64(out, c, pol.policy_id as u64);
+            c = append_bytes(out, c, b"  | ");
+            if pol.enabled {
+                c = append_bytes(out, c, b"ACTIF    | ");
+            } else {
+                c = append_bytes(out, c, b"INACTIF  | ");
+            }
+            match pol.action {
+                DlpAction::Allow => c = append_bytes(out, c, b"Allow      | "),
+                DlpAction::Mask => c = append_bytes(out, c, b"Mask       | "),
+                DlpAction::Block => c = append_bytes(out, c, b"Block      | "),
+                DlpAction::Quarantine => c = append_bytes(out, c, b"Quarantine | "),
+            }
+            if pol.quarantine_on_match {
+                c = append_bytes(out, c, b"OUI         | ");
+            } else {
+                c = append_bytes(out, c, b"NON         | ");
+            }
+            c = append_u64(out, c, pol.min_entropy_threshold as u64);
+            c = append_bytes(out, c, b"       | ");
+            c = append_bytes(out, c, &pol.name[..pol.name_len]);
+            c = append_bytes(out, c, b"\n");
+        }
+        c = append_bytes(out, c, b"Total: ");
+        c = append_u64(out, c, self.dlp_daemon.policy_count as u64);
+        c = append_bytes(out, c, b" politiques configurees\n");
+        (ShellStatus::Success, c)
+    }
+
+    fn cmd_dlp_incidents(&self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let mut c = 0;
+        c = append_bytes(
+            out,
+            c,
+            b"Journal des Violations & Confinements DLP (jambo-dlp PID 38):\nID | Flux | PolID | Gravite  | Action     | Entropie | Type de Donnees\n---+------+-------+----------+------------+----------+--------------------------------\n",
+        );
+        for v in self.dlp_daemon.violations.iter().flatten() {
+            c = append_u64(out, c, v.violation_id as u64);
+            c = append_bytes(out, c, b"  | ");
+            c = append_u64(out, c, v.flow_id as u64);
+            c = append_bytes(out, c, b"    | ");
+            c = append_u64(out, c, v.policy_id as u64);
+            c = append_bytes(out, c, b"     | ");
+            match v.severity {
+                DlpThreatSeverity::Low => c = append_bytes(out, c, b"Low      | "),
+                DlpThreatSeverity::Medium => c = append_bytes(out, c, b"Medium   | "),
+                DlpThreatSeverity::High => c = append_bytes(out, c, b"High     | "),
+                DlpThreatSeverity::Critical => c = append_bytes(out, c, b"Critical | "),
+            }
+            match v.action_taken {
+                DlpAction::Allow => c = append_bytes(out, c, b"Allow      | "),
+                DlpAction::Mask => c = append_bytes(out, c, b"Mask       | "),
+                DlpAction::Block => c = append_bytes(out, c, b"Block      | "),
+                DlpAction::Quarantine => c = append_bytes(out, c, b"Quarantine | "),
+            }
+            c = append_u64(out, c, (v.entropy_millibits / 1000) as u64);
+            c = append_bytes(out, c, b".");
+            c = append_u64(out, c, ((v.entropy_millibits % 1000) / 100) as u64);
+            c = append_bytes(out, c, b"      | ");
+            let dt_str = match v.data_type {
+                DlpDataType::None => "None",
+                DlpDataType::PiiCreditCard => "Credit Card (PCI-DSS)",
+                DlpDataType::PiiNationalId => "National ID PII",
+                DlpDataType::CryptoPrivateKey => "Crypto Private Key",
+                DlpDataType::ApiTokenOrSecret => "API Token / Secret",
+                DlpDataType::HighEntropyExfiltration => "High Entropy Exfiltration",
+                DlpDataType::SovereignDefenseSecret => "Sovereign Defense Secret",
+            };
+            c = append_bytes(out, c, dt_str.as_bytes());
+            c = append_bytes(out, c, b"\n");
+        }
+        c = append_bytes(out, c, b"Total: ");
+        c = append_u64(out, c, self.dlp_daemon.violation_count as u64);
+        c = append_bytes(out, c, b" violations enregistrees\n");
+        (ShellStatus::Success, c)
+    }
+
+    fn cmd_dlp_audit(&self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let is_valid = self.dlp_daemon.verify_audit_integrity();
+        let mut c = 0;
+        c = append_bytes(
+            out,
+            c,
+            b"Grand Livre d'Audit Cryptographique DLP (PID 38):\n  Integrite Registre      : ",
+        );
+        if is_valid {
+            c = append_bytes(out, c, b"VALIDE (Chaine SHA-256 inalterable)\n");
+        } else {
+            c = append_bytes(out, c, b"CORROMPU (Rupture d'integrite)\n");
+        }
+        c = append_bytes(out, c, b"  Total Entrees Scellees  : ");
+        c = append_u64(out, c, self.dlp_daemon.audit_count as u64);
+        c = append_bytes(out, c, b"\n  Empreinte Racine SHA-256: ");
+        for &b in self.dlp_daemon.last_audit_hash.iter() {
+            c = append_hex_byte(out, c, b);
+        }
+        c = append_bytes(out, c, b"\n");
+        (ShellStatus::Success, c)
+    }
 }
 
 fn step_status_str(status: StepStatus) -> &'static str {
@@ -10675,7 +10971,7 @@ mod tests {
     #[test]
     fn test_ps_contains_22_processes() {
         let mut shell = JamboShell::new();
-        let mut out = [0u8; 4096];
+        let mut out = [0u8; 8192];
 
         let (st, len) = shell.execute_line("ps", &mut out);
         assert_eq!(st, ShellStatus::Success);
@@ -10753,85 +11049,85 @@ mod tests {
         assert!(
             s.contains("  30 | waf             | Ring 3 | Ready   | 1000   | L7 Web Application Firewall & Injection Filter")
         );
-        assert!(s.contains("Total: 37 processes"));
+        assert!(s.contains("Total: 38 processes"));
     }
 
     #[test]
     fn test_ps_contains_23_processes() {
         let mut shell = JamboShell::new();
-        let mut out = [0u8; 4096];
+        let mut out = [0u8; 8192];
 
         let (st, len) = shell.execute_line("ps", &mut out);
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains("  23 | pkgd           | Ring 3 | Ready   | 1000   | Declarative Package Manager & CAS Store"));
-        assert!(s.contains("Total: 37 processes"));
+        assert!(s.contains("Total: 38 processes"));
     }
 
     #[test]
     fn test_ps_contains_24_processes() {
         let mut shell = JamboShell::new();
-        let mut out = [0u8; 4096];
+        let mut out = [0u8; 8192];
 
         let (st, len) = shell.execute_line("ps", &mut out);
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains("  24 | certd          | Ring 3 | Ready   | 1000   | Ephemeral PKI & Cluster mTLS Daemon"));
-        assert!(s.contains("Total: 37 processes"));
+        assert!(s.contains("Total: 38 processes"));
     }
 
     #[test]
     fn test_ps_contains_25_processes() {
         let mut shell = JamboShell::new();
-        let mut out = [0u8; 4096];
+        let mut out = [0u8; 8192];
 
         let (st, len) = shell.execute_line("ps", &mut out);
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains("  25 | policyd        | Ring 3 | Ready   | 1000   | Security Policy Engine & Admission Control"));
-        assert!(s.contains("Total: 37 processes"));
+        assert!(s.contains("Total: 38 processes"));
     }
 
     #[test]
     fn test_ps_contains_26_processes() {
         let mut shell = JamboShell::new();
-        let mut out = [0u8; 4096];
+        let mut out = [0u8; 8192];
 
         let (st, len) = shell.execute_line("ps", &mut out);
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains("  26 | secboot        | Ring 3 | Ready   | 1000   | TPM 2.0 Measured Boot & Secure Trust Chain"));
-        assert!(s.contains("Total: 37 processes"));
+        assert!(s.contains("Total: 38 processes"));
     }
 
     #[test]
     fn test_ps_contains_27_processes() {
         let mut shell = JamboShell::new();
-        let mut out = [0u8; 4096];
+        let mut out = [0u8; 8192];
 
         let (st, len) = shell.execute_line("ps", &mut out);
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains("  27 | logd           | Ring 3 | Ready   | 1000   | Structured Logging & Tamper-Evident Hash Chain"));
-        assert!(s.contains("Total: 37 processes"));
+        assert!(s.contains("Total: 38 processes"));
     }
 
     #[test]
     fn test_ps_contains_28_processes() {
         let mut shell = JamboShell::new();
-        let mut out = [0u8; 4096];
+        let mut out = [0u8; 8192];
 
         let (st, len) = shell.execute_line("ps", &mut out);
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains("28 | kms | Running | Key Management Service & HKDF Derivation"));
-        assert!(s.contains("Total: 37 processes"));
+        assert!(s.contains("Total: 38 processes"));
     }
 
     #[test]
     fn test_ps_contains_29_processes() {
         let mut shell = JamboShell::new();
-        let mut out = [0u8; 4096];
+        let mut out = [0u8; 8192];
 
         let (st, len) = shell.execute_line("ps", &mut out);
         assert_eq!(st, ShellStatus::Success);
@@ -10840,13 +11136,13 @@ mod tests {
         assert!(s.contains(
             "  29 | attest          | Ring 3 | Ready   | 1000   | Remote Attestation & Zero-Knowledge Proofs"
         ));
-        assert!(s.contains("Total: 37 processes"));
+        assert!(s.contains("Total: 38 processes"));
     }
 
     #[test]
     fn test_ps_contains_30_processes() {
         let mut shell = JamboShell::new();
-        let mut out = [0u8; 4096];
+        let mut out = [0u8; 8192];
 
         let (st, len) = shell.execute_line("ps", &mut out);
         assert_eq!(st, ShellStatus::Success);
@@ -10855,13 +11151,13 @@ mod tests {
         assert!(s.contains(
             "  30 | waf             | Ring 3 | Ready   | 1000   | L7 Web Application Firewall & Injection Filter"
         ));
-        assert!(s.contains("Total: 37 processes"));
+        assert!(s.contains("Total: 38 processes"));
     }
 
     #[test]
     fn test_ps_contains_31_processes() {
         let mut shell = JamboShell::new();
-        let mut out = [0u8; 4096];
+        let mut out = [0u8; 8192];
 
         let (st, len) = shell.execute_line("ps", &mut out);
         assert_eq!(st, ShellStatus::Success);
@@ -10872,13 +11168,13 @@ mod tests {
         assert!(s.contains(
             "  31 | siem            | Ring 3 | Ready   | 1000   | Security Information & Event Management"
         ));
-        assert!(s.contains("Total: 37 processes"));
+        assert!(s.contains("Total: 38 processes"));
     }
 
     #[test]
     fn test_ps_contains_32_processes() {
         let mut shell = JamboShell::new();
-        let mut out = [0u8; 4096];
+        let mut out = [0u8; 8192];
 
         let (st, len) = shell.execute_line("ps", &mut out);
         assert_eq!(st, ShellStatus::Success);
@@ -10887,13 +11183,13 @@ mod tests {
         assert!(s.contains(
             "  32 | edr             | Ring 3 | Ready   | 1000   | Endpoint Detection & Response Daemon"
         ));
-        assert!(s.contains("Total: 37 processes"));
+        assert!(s.contains("Total: 38 processes"));
     }
 
     #[test]
     fn test_ps_contains_33_processes() {
         let mut shell = JamboShell::new();
-        let mut out = [0u8; 4096];
+        let mut out = [0u8; 8192];
 
         let (st, len) = shell.execute_line("ps", &mut out);
         assert_eq!(st, ShellStatus::Success);
@@ -10902,13 +11198,13 @@ mod tests {
         assert!(s.contains(
             "  33 | ndr             | Ring 3 | Ready   | 1000   | Network Detection & Response Daemon"
         ));
-        assert!(s.contains("Total: 37 processes"));
+        assert!(s.contains("Total: 38 processes"));
     }
 
     #[test]
     fn test_ps_contains_34_processes() {
         let mut shell = JamboShell::new();
-        let mut out = [0u8; 4096];
+        let mut out = [0u8; 8192];
 
         let (st, len) = shell.execute_line("ps", &mut out);
         assert_eq!(st, ShellStatus::Success);
@@ -10917,13 +11213,13 @@ mod tests {
         assert!(s.contains(
             "  34 | xdr             | Ring 3 | Ready   | 1000   | Extended Detection & Response Daemon"
         ));
-        assert!(s.contains("Total: 37 processes"));
+        assert!(s.contains("Total: 38 processes"));
     }
 
     #[test]
     fn test_ps_contains_35_processes() {
         let mut shell = JamboShell::new();
-        let mut out = [0u8; 4096];
+        let mut out = [0u8; 8192];
 
         let (st, len) = shell.execute_line("ps", &mut out);
         assert_eq!(st, ShellStatus::Success);
@@ -10934,13 +11230,13 @@ mod tests {
         assert!(s.contains(
             "  35 | soar            | Ring 3 | Ready   | 1000   | Security Orchestration, Automation & Response Daemon"
         ));
-        assert!(s.contains("Total: 37 processes"));
+        assert!(s.contains("Total: 38 processes"));
     }
 
     #[test]
     fn test_ps_contains_36_processes() {
         let mut shell = JamboShell::new();
-        let mut out = [0u8; 4096];
+        let mut out = [0u8; 8192];
 
         let (st, len) = shell.execute_line("ps", &mut out);
         assert_eq!(st, ShellStatus::Success);
@@ -10949,13 +11245,13 @@ mod tests {
         assert!(s.contains(
             "  36 | ueba            | Ring 3 | Ready   | 1000   | User & Entity Behavior Analytics Daemon"
         ));
-        assert!(s.contains("Total: 37 processes"));
+        assert!(s.contains("Total: 38 processes"));
     }
 
     #[test]
     fn test_ps_contains_37_processes() {
         let mut shell = JamboShell::new();
-        let mut out = [0u8; 4096];
+        let mut out = [0u8; 8192];
 
         let (st, len) = shell.execute_line("ps", &mut out);
         assert_eq!(st, ShellStatus::Success);
@@ -10964,7 +11260,22 @@ mod tests {
         assert!(s.contains(
             "  37 | itdr            | Ring 3 | Ready   | 1000   | Identity Threat Detection & Response Daemon"
         ));
-        assert!(s.contains("Total: 37 processes"));
+        assert!(s.contains("Total: 38 processes"));
+    }
+
+    #[test]
+    fn test_ps_contains_38_processes() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 8192];
+
+        let (st, len) = shell.execute_line("ps", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("38  ACTIF    /bin/dlp (Data Loss Prevention Daemon Ring 3)"));
+        assert!(s.contains(
+            "  38 | dlp             | Ring 3 | Ready   | 1000   | Data Loss Prevention & Sensitive Flow Filter"
+        ));
+        assert!(s.contains("Total: 38 processes"));
     }
 
     #[test]
@@ -10975,7 +11286,7 @@ mod tests {
         let (st, len) = shell.execute_line("help", &mut out);
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
-        assert!(s.contains("37 processus actifs"));
+        assert!(s.contains("38 processus actifs"));
         assert!(s.contains("fdr [status|verify|pcr]"));
         assert!(s.contains("wasm [status|run|info]"));
         assert!(s.contains("pqc [status|kex|sign|audit]"));
@@ -11007,6 +11318,8 @@ mod tests {
         assert!(s.contains("xdr [status|campaigns|correlate|remediate|graph|audit]"));
         assert!(s.contains("soar [status|playbooks|trigger|incidents|audit]"));
         assert!(s.contains("ueba [status|profile|anomalies|score|quarantine|audit]"));
+        assert!(s.contains("itdr [status|identities|threats|revoke|isolate|remediate|audit]"));
+        assert!(s.contains("dlp [status|inspect|rules|incidents|audit]"));
     }
 
     #[test]
@@ -15382,5 +15695,122 @@ mod tests {
         assert!(s.contains(
             "Usage: itdr <status|identities|threats|revoke <id>|isolate <id>|remediate|audit>"
         ));
+    }
+
+    #[test]
+    fn test_dlp_status() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        let (st, len) = shell.execute_line("dlp status", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("Bilan Global DLP & Prevention Fuites de Donnees (jambo-dlp PID 38):"));
+        assert!(s.contains("Politiques Actives      : 6"));
+        assert!(s.contains("Grand Livre d'Audit     : VALIDE (Chaine SHA-256 inalterable)"));
+    }
+
+    #[test]
+    fn test_dlp_inspect_clean() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        let (st, len) =
+            shell.execute_line("dlp inspect Normal unclassified system packet", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("Resultat Inspection DLP (Flux #1):"));
+        assert!(s.contains("Action Appliquee       : ALLOW (Autorise)"));
+        assert!(s.contains("Type de Donnees        : None (Donnees saines)"));
+        assert!(s.contains("Confinement Quarantaine: NON"));
+    }
+
+    #[test]
+    fn test_dlp_inspect_card() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        let (st, len) = shell.execute_line(
+            "dlp inspect Card payment 4111111111111111 transaction",
+            &mut out,
+        );
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("Resultat Inspection DLP (Flux #1):"));
+        assert!(s.contains("Action Appliquee       : MASK (Masquage irreversible)"));
+        assert!(s.contains("Type de Donnees        : PII: Carte Bancaire (PCI-DSS)"));
+        assert!(s.contains(
+            "Payload Assaini        : \"Card payment ****-****-****-REDACTED transaction\""
+        ));
+    }
+
+    #[test]
+    fn test_dlp_inspect_key() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        let (st, len) = shell.execute_line(
+            "dlp inspect -----BEGIN RSA PRIVATE KEY----- secret",
+            &mut out,
+        );
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("Action Appliquee       : BLOCK (Bloque)"));
+        assert!(s.contains("Secret: Cle Privee Cryptographique (SSH/RSA)"));
+        assert!(s.contains("Confinement Quarantaine: OUI (Isole)"));
+    }
+
+    #[test]
+    fn test_dlp_rules() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        let (st, len) = shell.execute_line("dlp rules", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("Table des Politiques de Prevention DLP Souveraines (PID 38):"));
+        assert!(s.contains("Sovereign Classified Defense"));
+        assert!(s.contains("Private Key Leak Prevention"));
+        assert!(s.contains("PCI-DSS Credit Card Redaction"));
+        assert!(s.contains("Total: 6 politiques configurees"));
+    }
+
+    #[test]
+    fn test_dlp_incidents() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        // First trigger an incident
+        let _ = shell.execute_line("dlp inspect payment 4111111111111111 info", &mut out);
+
+        let (st, len) = shell.execute_line("dlp incidents", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("Journal des Violations & Confinements DLP (jambo-dlp PID 38):"));
+        assert!(s.contains("Credit Card (PCI-DSS)"));
+        assert!(s.contains("Total: 1 violations enregistrees"));
+    }
+
+    #[test]
+    fn test_dlp_audit() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        let (st, len) = shell.execute_line("dlp audit", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("Grand Livre d'Audit Cryptographique DLP (PID 38):"));
+        assert!(s.contains("Integrite Registre      : VALIDE (Chaine SHA-256 inalterable)"));
+    }
+
+    #[test]
+    fn test_dlp_invalid() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        let (st, len) = shell.execute_line("dlp foobar", &mut out);
+        assert_eq!(st, ShellStatus::InvalidArgument);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("Usage: dlp <status|inspect <text>|rules|incidents|audit>"));
     }
 }

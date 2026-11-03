@@ -822,6 +822,9 @@ impl JamboDlpDaemon {
                 }
 
                 if digit_len >= 13 && digit_len <= 19 && check_luhn(&digits_only[..digit_len]) {
+                    while end > start && (payload[end - 1] == b' ' || payload[end - 1] == b'-') {
+                        end -= 1;
+                    }
                     return (
                         DlpDataType::PiiCreditCard,
                         ThreatSeverity::High,
