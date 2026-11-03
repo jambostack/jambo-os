@@ -127,6 +127,34 @@ impl AddressSpace {
         Err(jambo_abi::SysError::BadAddress)
     }
 
+    /// Valide qu'une plage virtuelle [vaddr, vaddr + len) est couverte par les mappings
+    /// avec les permissions requises.
+    pub fn validate_range(&self, vaddr: usize, len: usize, write: bool) -> Result<(), jambo_abi::SysError> {
+        if len == 0 {
+            return Ok(());
+        }
+        let end = vaddr.checked_add(len).ok_or(jambo_abi::SysError::BadAddress)?;
+        let mappings = self.mappings.lock();
+        let mut curr = vaddr;
+        while curr < end {
+            let mapping = mappings
+                .iter()
+                .find(|m| curr >= m.vaddr && curr < m.vaddr + m.vmo.size())
+                .ok_or(jambo_abi::SysError::BadAddress)?;
+
+            if write && (mapping.prot & jambo_abi::vmo_prot::WRITE) == 0 {
+                return Err(jambo_abi::SysError::PermissionDenied);
+            }
+            if !write && (mapping.prot & jambo_abi::vmo_prot::READ) == 0 {
+                return Err(jambo_abi::SysError::PermissionDenied);
+            }
+
+            let chunk_end = mapping.vaddr + mapping.vmo.size();
+            curr = chunk_end;
+        }
+        Ok(())
+    }
+
     /// Écrit des données dans l'espace d'adressage virtuel à l'adresse spécifiée
     pub fn write_bytes(&self, vaddr: usize, data: &[u8]) -> Result<(), jambo_abi::SysError> {
         let mut bytes_written = 0;
