@@ -165,3 +165,4 @@ pub struct Vmo {
 3. **Zéro-Leak Inter-Processus** : Toute page allouée est garantie contenir 4096 zéros binaires.
 4. **Boot QEMU CI** : Les 38 démons démarrent avec succès sous QEMU, avec bannière `v0.3.79` et validation de la ligne exacte :
    `[PASS] Securisation PMM Buddy Allocator & Cycle de Vie VMO validee sous QEMU.`
+

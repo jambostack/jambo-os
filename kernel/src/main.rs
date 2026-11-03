@@ -246,6 +246,87 @@ fn execute_boundary_hardening_tests() -> bool {
     true
 }
 
+
+fn execute_pmm_hardening_tests() -> bool {
+    kprintln!("[PMM/TEST] Validation du durcissement PMM Buddy Allocator & Cycle de vie VMO...");
+
+    // Test 1: Protection anti-double-free Ordre 0
+    let paddr = mm::alloc_page().expect("alloc page");
+    assert_eq!(mm::free_page(paddr), Ok(()), "Premier free_page nominal");
+    let double_free_res = mm::free_page(paddr);
+    assert_eq!(
+        double_free_res,
+        Err(mm::PmmError::DoubleFree),
+        "Double-free Ordre 0 formellement détecté et neutralisé"
+    );
+
+    // Test 2: Rejet d'adresse désalignée
+    let misaligned_res = mm::PMM.lock().free(0x1001, 0);
+    assert_eq!(
+        misaligned_res,
+        Err(mm::PmmError::Misaligned),
+        "Adresse désalignée rejetée"
+    );
+
+    // Test 3: Rejet d'adresse hors bornes
+    let oob_res = mm::PMM.lock().free(0xFFFF_FFFF_0000, 0);
+    assert_eq!(
+        oob_res,
+        Err(mm::PmmError::OutOfBounds),
+        "Adresse hors bornes rejetée"
+    );
+
+    // Test 4: Zero-scrubbing systématique
+    let p1 = mm::alloc_page().expect("alloc page for scrubbing test");
+    unsafe {
+        core::ptr::write_bytes(mm::phys_to_virt(p1) as *mut u8, 0xDE, mm::PAGE_SIZE);
+    }
+    assert_eq!(mm::free_page(p1), Ok(()));
+    let p2 = mm::alloc_page().expect("realloc page");
+    let slice = unsafe {
+        core::slice::from_raw_parts(mm::phys_to_virt(p2) as *const u8, mm::PAGE_SIZE)
+    };
+    assert!(
+        slice.iter().all(|&b| b == 0),
+        "Zero-scrubbing préventif vérifié sur toute la page réallouée"
+    );
+    let _ = mm::free_page(p2);
+
+    // Test 5: Allocation multi-pages (Ordre 1) et anti-double-free Ordre 1
+    let blk = mm::PMM.lock().allocate(1).expect("alloc order 1 block");
+    assert_eq!(mm::PMM.lock().free(blk, 1), Ok(()), "Libération bloc ordre 1 nominale");
+    assert_eq!(
+        mm::PMM.lock().free(blk, 1),
+        Err(mm::PmmError::DoubleFree),
+        "Double-free bloc ordre 1 neutralisé"
+    );
+
+    // Test 6: Cycle de vie sécurisé des VMO avec clone CoW
+    {
+        let vmo_parent = mm::Vmo::create(8192);
+        let paddr0 = vmo_parent.get_or_alloc_page(0).expect("alloc page 0 in parent");
+        let vmo_child = vmo_parent.clone_cow();
+        // Destruction anticipée du parent
+        drop(vmo_parent);
+        // Le clone child conserve la page sans use-after-free
+        assert_eq!(
+            vmo_child.get_or_alloc_page(0),
+            Some(paddr0),
+            "Page physique accessible dans le clone CoW après destruction du parent"
+        );
+        drop(vmo_child);
+        // Après destruction du dernier clone, la page est libérée
+        assert_eq!(
+            mm::free_page(paddr0),
+            Err(mm::PmmError::DoubleFree),
+            "Page correctement libérée lors du drop du dernier VMO la référençant"
+        );
+    }
+
+    kprintln!("[PMM/PASS] Tests adversariaux PMM et cycle de vie VMO validés avec succès !");
+    true
+}
+
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     // 1. Initialiser l'UART 16550 (COM1) et l'horloge
@@ -280,7 +361,7 @@ pub extern "C" fn _start() -> ! {
     // 4. Bannière système d'accueil sobre Iron Core
     kprintln!("\x1b[1;36m");
     kprintln!("================================================================================");
-    kprintln!("    JAMBO-OS (JamboKernel v0.3.78 — Iron Core)                                 ");
+    kprintln!("    JAMBO-OS (JamboKernel v0.3.79 — Iron Core)                                 ");
     kprintln!("    Architecture : Micro-noyau orienté capacités en Rust no_std (x86_64/AArch64)");
     kprintln!("    Auteur & Architecte Principal : ASSOGBA Prudence Dieudonné                 ");
     kprintln!("    Dépôt Officiel : https://github.com/jambostack/jambo-os                    ");
@@ -2055,6 +2136,12 @@ pub extern "C" fn _start() -> ! {
         "Échec des tests de durcissement des frontières noyau & isolation CSpace"
     );
 
+    let pmm_hardening_success = execute_pmm_hardening_tests();
+    assert!(
+        pmm_hardening_success,
+        "Échec des tests de durcissement PMM Buddy Allocator & Cycle de Vie VMO"
+    );
+
     kprintln!();
     kprintln!(
         "\x1b[1;32m[PASS] JamboKernel Iron Core (Ring 0 & Ring 3 transition) validé sous QEMU.\x1b[0m"
@@ -2081,7 +2168,7 @@ pub extern "C" fn _start() -> ! {
 
     if is_test_mode {
         kprintln!("[TEST] Validation de l'initialisation des 38 processus Ring 3 (init, jsh, blockd, fs, netd, fdr, wasmd, pqc, kdir, forensics, powerd, metricsd, bpfd, vpn, authd, dnsd, timed, auditd, walld, vaultd, watchdogd, cored, pkgd, certd, policyd, secboot, logd, kms, attest, waf, siem, edr, ndr, xdr, soar, ueba, itdr, dlp)...");
-        kprintln!("\x1b[1;32m[PASS] Durcissement Frontieres Noyau & Isolation CSpace validee sous QEMU.\x1b[0m");
+        kprintln!("\x1b[1;32m[PASS] Securisation PMM Buddy Allocator & Cycle de Vie VMO validee sous QEMU.\x1b[0m");
         kprintln!("[TEST] Mode de test CI validé. Sortie propre via isa-debug-exit...");
         exit_qemu(QemuExitCode::Success);
     }
