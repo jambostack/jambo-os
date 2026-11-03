@@ -256,7 +256,9 @@ impl EevdfScheduler {
                         }
                     }
                     // Sinon basculer vers l'idle thread
-                    sched.idle_threads[cpu_id].clone().expect("Thread idle requis")
+                    sched.idle_threads[cpu_id]
+                        .clone()
+                        .expect("Thread idle requis")
                 }
             };
 
@@ -332,7 +334,10 @@ impl EevdfScheduler {
             sched.register_cpu_idle(cpu_id);
         }
 
-        kprintln!("[SMP/AP] Cœur AP #{} a rejoint l'ordonnanceur EEVDF", cpu_id);
+        kprintln!(
+            "[SMP/AP] Cœur AP #{} a rejoint l'ordonnanceur EEVDF",
+            cpu_id
+        );
 
         loop {
             let has_work = {

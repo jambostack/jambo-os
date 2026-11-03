@@ -26,9 +26,7 @@ pub fn validate_user_range(
     }
 
     // 2. Détection de débordement arithmétique 64 bits
-    let end = vaddr
-        .checked_add(len as u64)
-        .ok_or(SysError::BadAddress)?;
+    let end = vaddr.checked_add(len as u64).ok_or(SysError::BadAddress)?;
 
     // 3. Confinement dans l'espace utilisateur canonique
     if end > USER_ADDR_LIMIT {
@@ -68,8 +66,7 @@ pub fn copy_from_user<T: Copy>(aspace: &AddressSpace, src_vaddr: u64) -> Result<
     let size = core::mem::size_of::<T>();
     validate_user_range(aspace, src_vaddr, size, false)?;
     let mut val = core::mem::MaybeUninit::<T>::uninit();
-    let slice =
-        unsafe { core::slice::from_raw_parts_mut(val.as_mut_ptr() as *mut u8, size) };
+    let slice = unsafe { core::slice::from_raw_parts_mut(val.as_mut_ptr() as *mut u8, size) };
     aspace.read_bytes(src_vaddr as usize, slice)?;
     Ok(unsafe { val.assume_init() })
 }

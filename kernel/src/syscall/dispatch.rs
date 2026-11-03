@@ -37,20 +37,13 @@ fn write_user_val<T: Copy>(
 }
 
 #[inline]
-fn read_user_val<T: Copy>(
-    aspace: Option<&Arc<AddressSpace>>,
-    uaddr: u64,
-) -> Result<T, SysError> {
+fn read_user_val<T: Copy>(aspace: Option<&Arc<AddressSpace>>, uaddr: u64) -> Result<T, SysError> {
     if uaddr == 0 {
         return Err(SysError::BadAddress);
     }
     match aspace {
         Some(a) => crate::syscall::user_ptr::copy_from_user(a, uaddr),
-        None => {
-            unsafe {
-                Ok(core::ptr::read(uaddr as *const T))
-            }
-        }
+        None => unsafe { Ok(core::ptr::read(uaddr as *const T)) },
     }
 }
 
@@ -129,7 +122,8 @@ pub extern "C" fn dispatch_syscall(
             let mut cspace = get_cspace(&current_cspace);
             match cspace.duplicate(handle, rights) {
                 Ok(new_handle) => {
-                    if let Err(e) = write_user_val(current_aspace.as_ref(), out_ptr, &new_handle.0) {
+                    if let Err(e) = write_user_val(current_aspace.as_ref(), out_ptr, &new_handle.0)
+                    {
                         return e as i64;
                     }
                     SysError::Success as i64
@@ -317,7 +311,14 @@ pub extern "C" fn dispatch_syscall(
             };
 
             let tid = allocate_tid();
-            let thread = match Thread::new_user(tid, proc.id, proc.aspace.clone(), proc.cspace.clone(), 0, 0) {
+            let thread = match Thread::new_user(
+                tid,
+                proc.id,
+                proc.aspace.clone(),
+                proc.cspace.clone(),
+                0,
+                0,
+            ) {
                 Some(t) => t,
                 None => return SysError::OutOfMemory as i64,
             };
@@ -414,10 +415,11 @@ pub extern "C" fn dispatch_syscall(
             };
 
             if send_ptr != 0 {
-                let msg: crate::ipc::ChannelMessage = match read_user_val(current_aspace.as_ref(), send_ptr) {
-                    Ok(m) => m,
-                    Err(e) => return e as i64,
-                };
+                let msg: crate::ipc::ChannelMessage =
+                    match read_user_val(current_aspace.as_ref(), send_ptr) {
+                        Ok(m) => m,
+                        Err(e) => return e as i64,
+                    };
                 if let Err(e) = ep.send(msg) {
                     return e as i64;
                 }
@@ -663,7 +665,8 @@ pub extern "C" fn dispatch_syscall(
                     read_bytes += 1;
                     if (read_bytes % buf.len()) == 0 {
                         let chunk_start = uaddr + (read_bytes - buf.len()) as u64;
-                        if let Err(e) = write_user_slice(current_aspace.as_ref(), chunk_start, &buf) {
+                        if let Err(e) = write_user_slice(current_aspace.as_ref(), chunk_start, &buf)
+                        {
                             return e as i64;
                         }
                     }
@@ -674,7 +677,9 @@ pub extern "C" fn dispatch_syscall(
             let remaining = read_bytes % buf.len();
             if remaining > 0 {
                 let chunk_start = uaddr + (read_bytes - remaining) as u64;
-                if let Err(e) = write_user_slice(current_aspace.as_ref(), chunk_start, &buf[..remaining]) {
+                if let Err(e) =
+                    write_user_slice(current_aspace.as_ref(), chunk_start, &buf[..remaining])
+                {
                     return e as i64;
                 }
             }
@@ -695,7 +700,11 @@ pub extern "C" fn dispatch_syscall(
             let mut buf = [0u8; 128];
             while offset < len {
                 let chunk = (len - offset).min(buf.len());
-                if let Err(e) = read_user_slice(current_aspace.as_ref(), uaddr + offset as u64, &mut buf[..chunk]) {
+                if let Err(e) = read_user_slice(
+                    current_aspace.as_ref(),
+                    uaddr + offset as u64,
+                    &mut buf[..chunk],
+                ) {
                     return e as i64;
                 }
                 for &b in &buf[..chunk] {

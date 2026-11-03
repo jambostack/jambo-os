@@ -190,8 +190,15 @@ impl Process {
             process.setup_user_stack(elf_info.stack_pointer, args, envs, &auxv_entries)?;
 
         let thread_id = id * 1000 + 1;
-        let thread = Thread::new_user(thread_id, id, aspace.clone(), cspace.clone(), elf_info.entry_point, user_sp)
-            .ok_or(SysError::OutOfMemory)?;
+        let thread = Thread::new_user(
+            thread_id,
+            id,
+            aspace.clone(),
+            cspace.clone(),
+            elf_info.entry_point,
+            user_sp,
+        )
+        .ok_or(SysError::OutOfMemory)?;
 
         process.threads.lock().push(thread.clone());
 

@@ -119,9 +119,10 @@ extern "C" fn test_worker() {
     }
 }
 
-
 fn execute_boundary_hardening_tests() -> bool {
-    kprintln!("[SECURITY/TEST] Validation du durcissement des frontières noyau & isolation CSpace...");
+    kprintln!(
+        "[SECURITY/TEST] Validation du durcissement des frontières noyau & isolation CSpace..."
+    );
 
     // Test 1: Création de 2 processus avec CSpace isolées
     let aspace_a = alloc::sync::Arc::new(mm::AddressSpace::new().expect("aspace A"));
@@ -137,7 +138,8 @@ fn execute_boundary_hardening_tests() -> bool {
         proc_a.cspace.clone(),
         0x0040_0000,
         0x0000_7fff_ffff_0000,
-    ).expect("thread A");
+    )
+    .expect("thread A");
 
     // Thread dans Proc B
     let thread_b = sched::Thread::new_user(
@@ -147,7 +149,8 @@ fn execute_boundary_hardening_tests() -> bool {
         proc_b.cspace.clone(),
         0x0040_0000,
         0x0000_7fff_ffff_0000,
-    ).expect("thread B");
+    )
+    .expect("thread B");
 
     // Définir thread_a comme thread courant
     {
@@ -157,30 +160,56 @@ fn execute_boundary_hardening_tests() -> bool {
 
     // Mapper une page de données utilisateur valide dans Proc A à 0x0050_0000
     let vmo_a = mm::Vmo::create(mm::PAGE_SIZE);
-    aspace_a.map_vmo(0x0050_0000, vmo_a, jambo_abi::vmo_prot::READ | jambo_abi::vmo_prot::WRITE).unwrap();
+    aspace_a
+        .map_vmo(
+            0x0050_0000,
+            vmo_a,
+            jambo_abi::vmo_prot::READ | jambo_abi::vmo_prot::WRITE,
+        )
+        .unwrap();
     let valid_user_addr = 0x0050_0000u64;
 
     // A. Adversarial 1: Null pointer sur SysInfo (syscall 27) qui exige un pointeur valide
     let ret_null = syscall::dispatch_syscall(27, 0, 0, 0, 0, 0, 0);
-    assert_eq!(ret_null, jambo_abi::SysError::InvalidArgument as i64, "SysInfo avec pointeur nul rejeté");
+    assert_eq!(
+        ret_null,
+        jambo_abi::SysError::InvalidArgument as i64,
+        "SysInfo avec pointeur nul rejeté"
+    );
 
     // B. Adversarial 2: Adresse HHDM noyau (0xffff_8000_0000_0000) passée par un thread utilisateur -> SysError::BadAddress
     let kernel_hhdm_addr = 0xffff_8000_0000_0000u64;
     let ret_hhdm = syscall::dispatch_syscall(27, kernel_hhdm_addr, 0, 0, 0, 0, 0);
-    assert_eq!(ret_hhdm, jambo_abi::SysError::BadAddress as i64, "Pointeur HHDM noyau rejeté");
+    assert_eq!(
+        ret_hhdm,
+        jambo_abi::SysError::BadAddress as i64,
+        "Pointeur HHDM noyau rejeté"
+    );
 
     // C. Adversarial 3: Débordement arithmétique (u64::MAX)
     let ret_overflow = syscall::dispatch_syscall(27, u64::MAX - 4, 0, 0, 0, 0, 0);
-    assert_eq!(ret_overflow, jambo_abi::SysError::BadAddress as i64, "Pointeur overflow rejeté");
+    assert_eq!(
+        ret_overflow,
+        jambo_abi::SysError::BadAddress as i64,
+        "Pointeur overflow rejeté"
+    );
 
     // D. Adversarial 4: Adresse utilisateur non mappée (0x0010_0000)
     let unmapped_user_addr = 0x0010_0000u64;
     let ret_unmapped = syscall::dispatch_syscall(27, unmapped_user_addr, 0, 0, 0, 0, 0);
-    assert_eq!(ret_unmapped, jambo_abi::SysError::BadAddress as i64, "Adresse utilisateur non mappée rejetée");
+    assert_eq!(
+        ret_unmapped,
+        jambo_abi::SysError::BadAddress as i64,
+        "Adresse utilisateur non mappée rejetée"
+    );
 
     // E. Succès sur adresse utilisateur valide et mappée
     let ret_valid = syscall::dispatch_syscall(27, valid_user_addr, 0, 0, 0, 0, 0);
-    assert_eq!(ret_valid, jambo_abi::SysError::Success as i64, "Écriture valide dans espace utilisateur");
+    assert_eq!(
+        ret_valid,
+        jambo_abi::SysError::Success as i64,
+        "Écriture valide dans espace utilisateur"
+    );
 
     // F. Isolation CSpace : Proc A crée un VMO -> handle_a dans sa propre CSpace
     let ret_vmo = syscall::dispatch_syscall(4, 4096, 0, valid_user_addr, 0, 0, 0);
@@ -195,12 +224,21 @@ fn execute_boundary_hardening_tests() -> bool {
     }
 
     // Proc B tente d'accéder au handle de Proc A via CapDup (syscall 1) -> InvalidHandle !
-    let ret_dup_b = syscall::dispatch_syscall(1, handle_a, jambo_abi::cap_rights::ALL as u64, 0, 0, 0, 0);
-    assert_eq!(ret_dup_b, jambo_abi::SysError::InvalidHandle as i64, "Isolation CSpace: B ne peut pas dupliquer la cap de A");
+    let ret_dup_b =
+        syscall::dispatch_syscall(1, handle_a, jambo_abi::cap_rights::ALL as u64, 0, 0, 0, 0);
+    assert_eq!(
+        ret_dup_b,
+        jambo_abi::SysError::InvalidHandle as i64,
+        "Isolation CSpace: B ne peut pas dupliquer la cap de A"
+    );
 
     // Proc B tente de drop le handle de Proc A via CapDrop (syscall 2) -> InvalidHandle !
     let ret_drop_b = syscall::dispatch_syscall(2, handle_a, 0, 0, 0, 0, 0);
-    assert_eq!(ret_drop_b, jambo_abi::SysError::InvalidHandle as i64, "Isolation CSpace: B ne peut pas détruire la cap de A");
+    assert_eq!(
+        ret_drop_b,
+        jambo_abi::SysError::InvalidHandle as i64,
+        "Isolation CSpace: B ne peut pas détruire la cap de A"
+    );
 
     // G. Re-basculer sur Proc A et tester CapTransfer avec atténuation monotone
     {
@@ -209,7 +247,10 @@ fn execute_boundary_hardening_tests() -> bool {
     }
 
     // Proc A a un handle sur Proc B dans sa CSpace
-    let proc_b_h = proc_a.cspace.lock().insert(cap::KernelObject::Process(proc_b.clone()), jambo_abi::cap_rights::MANAGE);
+    let proc_b_h = proc_a.cspace.lock().insert(
+        cap::KernelObject::Process(proc_b.clone()),
+        jambo_abi::cap_rights::MANAGE,
+    );
 
     // Proc A transfère handle_a vers Proc B avec un masque réduit (uniquement READ = 1)
     let ret_transfer = syscall::dispatch_syscall(
@@ -221,16 +262,35 @@ fn execute_boundary_hardening_tests() -> bool {
         0,
         0,
     );
-    assert_eq!(ret_transfer, jambo_abi::SysError::Success as i64, "CapTransfer réussi");
+    assert_eq!(
+        ret_transfer,
+        jambo_abi::SysError::Success as i64,
+        "CapTransfer réussi"
+    );
     let transferred_h = aspace_a.read_u64(valid_user_addr as usize).unwrap();
     assert_ne!(transferred_h, 0);
 
     // Vérifier que la cap a disparu de Proc A (dropée)
-    assert!(proc_a.cspace.lock().lookup(jambo_abi::Handle(handle_a), jambo_abi::cap_rights::READ).is_err(), "Cap source révoquée dans A");
+    assert!(
+        proc_a
+            .cspace
+            .lock()
+            .lookup(jambo_abi::Handle(handle_a), jambo_abi::cap_rights::READ)
+            .is_err(),
+        "Cap source révoquée dans A"
+    );
 
     // Vérifier que Proc B a bien reçu la cap avec STRICTEMENT cap_rights::READ (pas WRITE ni ALL)
-    let b_cap = proc_b.cspace.lock().get_cap(jambo_abi::Handle(transferred_h)).expect("Cap trouvée dans B");
-    assert_eq!(b_cap.rights, jambo_abi::cap_rights::READ, "Atténuation monotone respectée: droits réduits à READ");
+    let b_cap = proc_b
+        .cspace
+        .lock()
+        .get_cap(jambo_abi::Handle(transferred_h))
+        .expect("Cap trouvée dans B");
+    assert_eq!(
+        b_cap.rights,
+        jambo_abi::cap_rights::READ,
+        "Atténuation monotone respectée: droits réduits à READ"
+    );
 
     // Rétablir SCHEDULER.current = None
     {
@@ -241,7 +301,6 @@ fn execute_boundary_hardening_tests() -> bool {
     kprintln!("[SECURITY/PASS] Tests adversariaux et isolation CSpace validés avec succès !");
     true
 }
-
 
 fn execute_pmm_hardening_tests() -> bool {
     kprintln!("[PMM/TEST] Validation du durcissement PMM Buddy Allocator & Cycle de vie VMO...");
@@ -279,9 +338,8 @@ fn execute_pmm_hardening_tests() -> bool {
     }
     assert_eq!(mm::free_page(p1), Ok(()));
     let p2 = mm::alloc_page().expect("realloc page");
-    let slice = unsafe {
-        core::slice::from_raw_parts(mm::phys_to_virt(p2) as *const u8, mm::PAGE_SIZE)
-    };
+    let slice =
+        unsafe { core::slice::from_raw_parts(mm::phys_to_virt(p2) as *const u8, mm::PAGE_SIZE) };
     assert!(
         slice.iter().all(|&b| b == 0),
         "Zero-scrubbing préventif vérifié sur toute la page réallouée"
@@ -290,7 +348,11 @@ fn execute_pmm_hardening_tests() -> bool {
 
     // Test 5: Allocation multi-pages (Ordre 1) et anti-double-free Ordre 1
     let blk = mm::PMM.lock().allocate(1).expect("alloc order 1 block");
-    assert_eq!(mm::PMM.lock().free(blk, 1), Ok(()), "Libération bloc ordre 1 nominale");
+    assert_eq!(
+        mm::PMM.lock().free(blk, 1),
+        Ok(()),
+        "Libération bloc ordre 1 nominale"
+    );
     assert_eq!(
         mm::PMM.lock().free(blk, 1),
         Err(mm::PmmError::DoubleFree),
@@ -300,7 +362,9 @@ fn execute_pmm_hardening_tests() -> bool {
     // Test 6: Cycle de vie sécurisé des VMO avec clone CoW
     {
         let vmo_parent = mm::Vmo::create(8192);
-        let paddr0 = vmo_parent.get_or_alloc_page(0).expect("alloc page 0 in parent");
+        let paddr0 = vmo_parent
+            .get_or_alloc_page(0)
+            .expect("alloc page 0 in parent");
         let vmo_child = vmo_parent.clone_cow();
         // Destruction anticipée du parent
         drop(vmo_parent);
@@ -354,7 +418,11 @@ fn execute_eevdf_smp_hardening_tests() -> bool {
         sched.runqueue.push(t3.clone());
 
         let picked = sched.pick_next_for_cpu(0).expect("pick thread");
-        assert_eq!(picked.lock().id, 102, "t2 choisi car éligible avec la plus petite deadline");
+        assert_eq!(
+            picked.lock().id,
+            102,
+            "t2 choisi car éligible avec la plus petite deadline"
+        );
     }
 
     // Test 2: Bornage de Lag Virtuel (Anti-Monopolisation)
@@ -398,7 +466,11 @@ fn execute_eevdf_smp_hardening_tests() -> bool {
 
         let picked = sched.pick_next_for_cpu(0).expect("thread promu");
         assert_eq!(picked.lock().id, 301, "Thread affamé promu d'urgence");
-        assert_eq!(picked.lock().wait_ticks, 0, "wait_ticks réinitialisé après exécution");
+        assert_eq!(
+            picked.lock().wait_ticks,
+            0,
+            "wait_ticks réinitialisé après exécution"
+        );
     }
 
     // Test 4: Héritage de Priorité & Restauration

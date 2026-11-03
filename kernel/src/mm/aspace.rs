@@ -129,11 +129,18 @@ impl AddressSpace {
 
     /// Valide qu'une plage virtuelle [vaddr, vaddr + len) est couverte par les mappings
     /// avec les permissions requises.
-    pub fn validate_range(&self, vaddr: usize, len: usize, write: bool) -> Result<(), jambo_abi::SysError> {
+    pub fn validate_range(
+        &self,
+        vaddr: usize,
+        len: usize,
+        write: bool,
+    ) -> Result<(), jambo_abi::SysError> {
         if len == 0 {
             return Ok(());
         }
-        let end = vaddr.checked_add(len).ok_or(jambo_abi::SysError::BadAddress)?;
+        let end = vaddr
+            .checked_add(len)
+            .ok_or(jambo_abi::SysError::BadAddress)?;
         let mappings = self.mappings.lock();
         let mut curr = vaddr;
         while curr < end {
