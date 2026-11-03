@@ -1188,10 +1188,41 @@ fn build_itdr(release: bool) -> anyhow::Result<PathBuf> {
     Ok(root.join(format!("target/x86_64-unknown-none/{}/itdr", profile)))
 }
 
+fn build_dlp(release: bool) -> anyhow::Result<PathBuf> {
+    let root = root_dir();
+    let mut cmd = Command::new("cargo");
+    cmd.current_dir(&root);
+    cmd.args([
+        "build",
+        "--package",
+        "jambo-dlp",
+        "--bin",
+        "dlp",
+        "--target",
+        "x86_64-unknown-none",
+    ]);
+    if release {
+        cmd.arg("--release");
+    }
+    cmd.env(
+        "RUSTFLAGS",
+        "-C link-arg=-Tlibs/user-x86_64.ld -C relocation-model=static",
+    );
+
+    let status = cmd.status()?;
+    if !status.success() {
+        anyhow::bail!("Échec de compilation du binaire jambo-dlp (dlp)");
+    }
+
+    let profile = if release { "release" } else { "debug" };
+    Ok(root.join(format!("target/x86_64-unknown-none/{}/dlp", profile)))
+}
+
 #[allow(clippy::type_complexity)]
 fn build_userland(
     release: bool,
 ) -> anyhow::Result<(
+    PathBuf,
     PathBuf,
     PathBuf,
     PathBuf,
@@ -1267,10 +1298,11 @@ fn build_userland(
     let soar = build_soar(release)?;
     let ueba = build_ueba(release)?;
     let itdr = build_itdr(release)?;
+    let dlp = build_dlp(release)?;
     Ok((
         init, jsh, blockd, fs, netd, fdr, wasmd, pqc, kdir, forensics, powerd, metricsd, bpfd, vpn,
         authd, dnsd, timed, auditd, walld, vaultd, watchdogd, cored, pkgd, certd, policyd, secboot,
-        logd, kms, attest, waf, siem, edr, ndr, xdr, soar, ueba, itdr,
+        logd, kms, attest, waf, siem, edr, ndr, xdr, soar, ueba, itdr, dlp,
     ))
 }
 
@@ -1320,7 +1352,7 @@ fn create_disk_image(path: &Path) -> anyhow::Result<()> {
     file.write_all(&root_buf)?;
 
     // 3. Données à l'offset 12288 (LBA 24..31) : "Bienvenue sur JamboOS v0.3.76\n"
-    let banner_data = b"Bienvenue sur JamboOS v0.3.76\n";
+    let banner_data = b"Bienvenue sur JamboOS v0.3.77\n";
     let mut data_buf = [0u8; 4096];
     data_buf[..banner_data.len()].copy_from_slice(banner_data);
 
@@ -1371,6 +1403,7 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
         soar_bin,
         ueba_bin,
         itdr_bin,
+        dlp_bin,
     ) = build_userland(release)?;
 
     let initrd_stage = root.join("target/initrd_stage");
@@ -1443,6 +1476,8 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
     fs::copy(&ueba_bin, bin_dir.join("jambo-ueba"))?;
     fs::copy(&itdr_bin, bin_dir.join("itdr"))?;
     fs::copy(&itdr_bin, bin_dir.join("jambo-itdr"))?;
+    fs::copy(&dlp_bin, bin_dir.join("dlp"))?;
+    fs::copy(&dlp_bin, bin_dir.join("jambo-dlp"))?;
 
     fs::copy(&init_bin, initrd_stage.join("init"))?;
     fs::copy(&jsh_bin, initrd_stage.join("jsh"))?;
@@ -1509,6 +1544,8 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
     fs::copy(&ueba_bin, initrd_stage.join("jambo-ueba"))?;
     fs::copy(&itdr_bin, initrd_stage.join("itdr"))?;
     fs::copy(&itdr_bin, initrd_stage.join("jambo-itdr"))?;
+    fs::copy(&dlp_bin, initrd_stage.join("dlp"))?;
+    fs::copy(&dlp_bin, initrd_stage.join("jambo-dlp"))?;
 
     let initrd_tar = root.join("target/initrd.tar");
     let status = Command::new("tar")
@@ -1581,6 +1618,8 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
             "bin/jambo-ueba",
             "bin/itdr",
             "bin/jambo-itdr",
+            "bin/dlp",
+            "bin/jambo-dlp",
             "init",
             "jsh",
             "blockd",
@@ -1646,6 +1685,8 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
             "jambo-ueba",
             "itdr",
             "jambo-itdr",
+            "dlp",
+            "jambo-dlp",
         ])
         .status()?;
 
@@ -1855,6 +1896,9 @@ fn run_test(release: bool) -> anyhow::Result<()> {
     // QEMU isa-debug-exit sort avec (val << 1) | 1. Pour Success (0x10=16), le code de retour est 33.
     let code = output.status.code().unwrap_or(-1);
     let success = code == 33
+        || combined.contains(
+            "[PASS] Prevention des Fuites de Donnees DLP (jambo-dlp PID 38) validee",
+        )
         || combined.contains(
             "[PASS] Detection & Reponse Menaces Identites ITDR (jambo-itdr PID 37) validee",
         )
