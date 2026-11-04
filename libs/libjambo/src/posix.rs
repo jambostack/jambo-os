@@ -3,6 +3,7 @@
 //! Fournit les symboles C d'entrée standard (write, read, mmap, munmap, exit, sched_yield, etc.)
 //! mappés sur les 29 appels système sous-jacents de JamboKernel.
 
+#[cfg(not(test))]
 use crate::{console_read, console_write, syscall6, vmo_prot, SyscallNumber, SystemInfo};
 
 // Constantes POSIX standard pour descripteurs de fichiers
@@ -38,6 +39,7 @@ pub const ENOSYS: i32 = 38;
 ///
 /// # Safety
 /// Le pointeur `buf` doit être valide pour la lecture de `count` octets.
+#[cfg(not(test))]
 #[no_mangle]
 pub unsafe extern "C" fn write(fd: i32, buf: *const u8, count: usize) -> isize {
     if buf.is_null() && count > 0 {
@@ -59,6 +61,7 @@ pub unsafe extern "C" fn write(fd: i32, buf: *const u8, count: usize) -> isize {
 ///
 /// # Safety
 /// Le pointeur `buf` doit être valide pour l'écriture de `count` octets.
+#[cfg(not(test))]
 #[no_mangle]
 pub unsafe extern "C" fn read(fd: i32, buf: *mut u8, count: usize) -> isize {
     if buf.is_null() && count > 0 {
@@ -77,6 +80,7 @@ pub unsafe extern "C" fn read(fd: i32, buf: *mut u8, count: usize) -> isize {
 }
 
 /// Cède le temps processeur au planificateur (équivalent sched_yield POSIX)
+#[cfg(not(test))]
 #[no_mangle]
 pub extern "C" fn sched_yield() -> i32 {
     crate::syscall_thread_yield();
@@ -84,6 +88,7 @@ pub extern "C" fn sched_yield() -> i32 {
 }
 
 /// Termine immédiatement l'exécution du processus appelant (_exit POSIX)
+#[cfg(not(test))]
 #[no_mangle]
 pub extern "C" fn _exit(status: i32) -> ! {
     unsafe {
@@ -95,6 +100,7 @@ pub extern "C" fn _exit(status: i32) -> ! {
 }
 
 /// Termine l'exécution du processus (alias exit POSIX)
+#[cfg(not(test))]
 #[no_mangle]
 pub extern "C" fn exit(status: i32) -> ! {
     _exit(status);
@@ -104,6 +110,7 @@ pub extern "C" fn exit(status: i32) -> ! {
 ///
 /// # Safety
 /// L'appelant doit respecter les contraintes de mémoire virtuelle.
+#[cfg(not(test))]
 #[no_mangle]
 pub unsafe extern "C" fn mmap(
     _addr: *mut u8,
@@ -161,6 +168,7 @@ pub unsafe extern "C" fn mmap(
 ///
 /// # Safety
 /// Le pointeur `addr` doit correspondre à une projection active de taille `length`.
+#[cfg(not(test))]
 #[no_mangle]
 pub unsafe extern "C" fn munmap(addr: *mut u8, length: usize) -> i32 {
     if addr.is_null() || length == 0 {
@@ -252,12 +260,182 @@ pub unsafe extern "C" fn strlen(s: *const c_char) -> usize {
     len
 }
 
+/// Compare deux chaînes C lexicographiquement (strcmp C standard)
+///
+/// # Safety
+/// `s1` et `s2` doivent pointer vers des chaînes terminées par `\0`.
+#[no_mangle]
+pub unsafe extern "C" fn strcmp(s1: *const c_char, s2: *const c_char) -> i32 {
+    let mut p1 = s1 as *const u8;
+    let mut p2 = s2 as *const u8;
+    while *p1 != 0 && *p1 == *p2 {
+        p1 = p1.add(1);
+        p2 = p2.add(1);
+    }
+    (*p1 as i32) - (*p2 as i32)
+}
+
+/// Compare au maximum `n` octets de deux chaînes C (strncmp C standard)
+///
+/// # Safety
+/// `s1` et `s2` doivent être lisibles pour `n` octets ou jusqu'à `\0`.
+#[no_mangle]
+pub unsafe extern "C" fn strncmp(s1: *const c_char, s2: *const c_char, n: usize) -> i32 {
+    if n == 0 {
+        return 0;
+    }
+    let mut p1 = s1 as *const u8;
+    let mut p2 = s2 as *const u8;
+    let mut i = 0;
+    while i < n && *p1 != 0 && *p1 == *p2 {
+        p1 = p1.add(1);
+        p2 = p2.add(1);
+        i += 1;
+    }
+    if i == n {
+        0
+    } else {
+        (*p1 as i32) - (*p2 as i32)
+    }
+}
+
+/// Copie au plus `n` caractères de `src` vers `dest` (strncpy C standard)
+///
+/// # Safety
+/// `dest` doit être valide pour l'écriture de `n` octets.
+#[no_mangle]
+pub unsafe extern "C" fn strncpy(dest: *mut c_char, src: *const c_char, n: usize) -> *mut c_char {
+    let d = dest as *mut u8;
+    let s = src as *const u8;
+    let mut i = 0;
+    let mut copying = true;
+    while i < n {
+        if copying {
+            let b = *s.add(i);
+            *d.add(i) = b;
+            if b == 0 {
+                copying = false;
+            }
+        } else {
+            *d.add(i) = 0;
+        }
+        i += 1;
+    }
+    dest
+}
+
+/// Recherche la première occurrence du caractère `c` dans la chaîne `s` (strchr C standard)
+///
+/// # Safety
+/// `s` doit être un pointeur valide vers une chaîne terminée par `\0`.
+#[no_mangle]
+pub unsafe extern "C" fn strchr(s: *const c_char, c: i32) -> *mut c_char {
+    let target = c as u8;
+    let mut ptr = s as *const u8;
+    loop {
+        if *ptr == target {
+            return ptr as *mut c_char;
+        }
+        if *ptr == 0 {
+            return core::ptr::null_mut();
+        }
+        ptr = ptr.add(1);
+    }
+}
+
+/// Convertit une chaîne de caractères en entier signé 32 bits (atoi C standard)
+///
+/// # Safety
+/// `nptr` doit pointer vers une chaîne terminée par `\0`.
+#[no_mangle]
+pub unsafe extern "C" fn atoi(nptr: *const c_char) -> i32 {
+    if nptr.is_null() {
+        return 0;
+    }
+    let mut ptr = nptr as *const u8;
+    while *ptr == b' ' || (*ptr >= 9 && *ptr <= 13) {
+        ptr = ptr.add(1);
+    }
+    let mut sign = 1i32;
+    if *ptr == b'-' {
+        sign = -1;
+        ptr = ptr.add(1);
+    } else if *ptr == b'+' {
+        ptr = ptr.add(1);
+    }
+    let mut result: i32 = 0;
+    while *ptr >= b'0' && *ptr <= b'9' {
+        let digit = (*ptr - b'0') as i32;
+        result = result.wrapping_mul(10).wrapping_add(digit);
+        ptr = ptr.add(1);
+    }
+    result.wrapping_mul(sign)
+}
+
+#[cfg(not(test))]
+const MALLOC_MAGIC: usize = 0x4A41_4D42_4F53; // "JAMBOS"
+
+#[cfg(not(test))]
+#[repr(C)]
+struct AllocHeader {
+    magic: usize,
+    size: usize,
+}
+
+/// Alloue un bloc mémoire de `size` octets (malloc C standard via mmap anonyme)
+///
+/// # Safety
+/// La mémoire allouée doit être libérée par `free`.
+#[cfg(not(test))]
+#[no_mangle]
+pub unsafe extern "C" fn malloc(size: usize) -> *mut c_void {
+    if size == 0 {
+        return core::ptr::null_mut();
+    }
+    let total = size + core::mem::size_of::<AllocHeader>();
+    let ptr = mmap(
+        core::ptr::null_mut(),
+        total,
+        PROT_READ | PROT_WRITE,
+        MAP_ANONYMOUS | MAP_PRIVATE,
+        -1,
+        0,
+    );
+    if ptr == MAP_FAILED || ptr.is_null() {
+        return core::ptr::null_mut();
+    }
+    let header = ptr as *mut AllocHeader;
+    (*header).magic = MALLOC_MAGIC;
+    (*header).size = total;
+    ptr.add(core::mem::size_of::<AllocHeader>()) as *mut c_void
+}
+
+/// Libère un bloc mémoire alloué par `malloc` (free C standard via munmap)
+///
+/// # Safety
+/// `ptr` doit provenir d'un appel antérieur à `malloc`.
+#[cfg(not(test))]
+#[no_mangle]
+pub unsafe extern "C" fn free(ptr: *mut c_void) {
+    if ptr.is_null() {
+        return;
+    }
+    let raw = (ptr as *mut u8).sub(core::mem::size_of::<AllocHeader>());
+    let header = raw as *mut AllocHeader;
+    if (*header).magic == MALLOC_MAGIC {
+        let total = (*header).size;
+        (*header).magic = 0; // Invalidation du magic anti double-free
+        munmap(raw, total);
+    }
+}
+
 // --- API C Native JamboOS ---
 
 /// Écrit des octets vers la console série JamboOS via C-ABI
 ///
 /// # Safety
 /// Le tampon `buf` doit pointer vers au moins `len` octets lisibles.
+#[cfg(not(test))]
 #[no_mangle]
 pub unsafe extern "C" fn jambo_console_write(buf: *const u8, len: usize) -> isize {
     write(STDOUT_FILENO, buf, len)
@@ -267,18 +445,21 @@ pub unsafe extern "C" fn jambo_console_write(buf: *const u8, len: usize) -> isiz
 ///
 /// # Safety
 /// Le tampon `buf` doit être valide pour l'écriture de `len` octets.
+#[cfg(not(test))]
 #[no_mangle]
 pub unsafe extern "C" fn jambo_console_read(buf: *mut u8, len: usize) -> isize {
     read(STDIN_FILENO, buf, len)
 }
 
 /// Cède le processeur au scheduler EEVDF via C-ABI
+#[cfg(not(test))]
 #[no_mangle]
 pub extern "C" fn jambo_yield() -> i32 {
     sched_yield()
 }
 
 /// Quitte le thread courant via C-ABI
+#[cfg(not(test))]
 #[no_mangle]
 pub extern "C" fn jambo_exit(status: i32) -> ! {
     _exit(status);
@@ -288,6 +469,7 @@ pub extern "C" fn jambo_exit(status: i32) -> ! {
 ///
 /// # Safety
 /// Le pointeur `out_info` doit pointer vers une structure `SystemInfo` valide et accessible en écriture.
+#[cfg(not(test))]
 #[no_mangle]
 pub unsafe extern "C" fn jambo_sys_info(out_info: *mut SystemInfo) -> i32 {
     if out_info.is_null() {
@@ -306,6 +488,7 @@ pub unsafe extern "C" fn jambo_sys_info(out_info: *mut SystemInfo) -> i32 {
 ///
 /// # Safety
 /// Le pointeur `out_handle` doit être accessible en écriture pour stocker le descripteur 64 bits résultant.
+#[cfg(not(test))]
 #[no_mangle]
 pub unsafe extern "C" fn jambo_vmo_create(size: u64, flags: u32, out_handle: *mut u64) -> i32 {
     if out_handle.is_null() {
@@ -331,6 +514,7 @@ pub unsafe extern "C" fn jambo_vmo_create(size: u64, flags: u32, out_handle: *mu
 ///
 /// # Safety
 /// Le pointeur `out_mapped` doit être accessible en écriture pour stocker l'adresse virtuelle projetée.
+#[cfg(not(test))]
 #[no_mangle]
 pub unsafe extern "C" fn jambo_vmo_map(
     vmo: u64,
@@ -362,6 +546,7 @@ pub unsafe extern "C" fn jambo_vmo_map(
 ///
 /// # Safety
 /// L'adresse virtuelle `vaddr` et la longueur `length` doivent correspondre à une projection VMO active.
+#[cfg(not(test))]
 #[no_mangle]
 pub unsafe extern "C" fn jambo_vmo_unmap(vaddr: u64, length: u64) -> i32 {
     munmap(vaddr as *mut u8, length as usize)
@@ -371,6 +556,7 @@ pub unsafe extern "C" fn jambo_vmo_unmap(vaddr: u64, length: u64) -> i32 {
 ///
 /// # Safety
 /// Le pointeur `val` doit être valide pour la lecture (sur écriture PCI) ou l'écriture (sur lecture PCI).
+#[cfg(not(test))]
 #[no_mangle]
 pub unsafe extern "C" fn jambo_device_io(
     op: u32,
@@ -428,6 +614,72 @@ mod tests {
                 ),
                 0
             );
+        }
+    }
+
+    #[test]
+    fn test_posix_string_comparisons_and_copy() {
+        let s1 = b"abc\0";
+        let s2 = b"abc\0";
+        let s3 = b"abd\0";
+        let s4 = b"abb\0";
+        unsafe {
+            assert_eq!(
+                strcmp(s1.as_ptr() as *const c_char, s2.as_ptr() as *const c_char),
+                0
+            );
+            assert!(strcmp(s1.as_ptr() as *const c_char, s3.as_ptr() as *const c_char) < 0);
+            assert!(strcmp(s1.as_ptr() as *const c_char, s4.as_ptr() as *const c_char) > 0);
+
+            assert_eq!(
+                strncmp(
+                    s1.as_ptr() as *const c_char,
+                    s3.as_ptr() as *const c_char,
+                    2
+                ),
+                0
+            );
+            assert!(
+                strncmp(
+                    s1.as_ptr() as *const c_char,
+                    s3.as_ptr() as *const c_char,
+                    3
+                ) < 0
+            );
+
+            let mut dest = [0u8; 16];
+            strncpy(
+                dest.as_mut_ptr() as *mut c_char,
+                s1.as_ptr() as *const c_char,
+                2,
+            );
+            assert_eq!(dest[0], b'a');
+            assert_eq!(dest[1], b'b');
+            assert_eq!(dest[2], 0);
+
+            let needle = strchr(s1.as_ptr() as *const c_char, b'b' as i32);
+            assert!(!needle.is_null());
+            assert_eq!(*needle as u8, b'b');
+
+            let missing = strchr(s1.as_ptr() as *const c_char, b'z' as i32);
+            assert!(missing.is_null());
+        }
+    }
+
+    #[test]
+    fn test_posix_atoi() {
+        unsafe {
+            let num1 = b"12345\0";
+            assert_eq!(atoi(num1.as_ptr() as *const c_char), 12345);
+
+            let num2 = b"-42\0";
+            assert_eq!(atoi(num2.as_ptr() as *const c_char), -42);
+
+            let num3 = b"  +999 with trailing text\0";
+            assert_eq!(atoi(num3.as_ptr() as *const c_char), 999);
+
+            let zero = b"0\0";
+            assert_eq!(atoi(zero.as_ptr() as *const c_char), 0);
         }
     }
 }

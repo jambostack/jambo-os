@@ -1,9 +1,9 @@
 # FEUILLE DE ROUTE D'INGÉNIERIE SYSTÈME — JamboOS
 
 > **Dernière mise à jour** : 4 novembre 2026  
-> **Version actuelle** : `v0.3.87` (Pre-Alpha / Prototype Expérimental de Recherche)  
+> **Version actuelle** : `v0.3.88` (Pre-Alpha / Prototype Expérimental de Recherche)  
 > **Statut global** : Prototype de micro-noyau orienté capacités en Rust `![no_std]`. **Projet à un stade très initial et immature, à une année-lumière d'une version 1.0.0 utilisable en production.**  
-> **Objectif stratégique immédiat** : Stabiliser les fondations expérimentales (Palier 5 : Démonstration Silicium, ABI v0.4, ESP FAT32 & Outillage de distribution).
+> **Objectif stratégique immédiat** : Stabiliser la libc minimale et enrichir les commandes du shell interactif (Palier 6 : Jalon 6.1 `v0.3.88`).
 
 ---
 
@@ -54,6 +54,10 @@ flowchart LR
 │            • v0.3.85 (Jalon 5.2) : Audit Incubateur & ADR-0084 à 0087  │
 │            • v0.3.86 (Jalon 5.3) : Couche POSIX & C-ABI statique       │
 │            • v0.3.87 (Jalon 5.4) : Démo Bare-metal & cargo xtask dist  │
+├────────────────────────────────────────────────────────────────────────┤
+│ Palier 6 : Stabilisation libc Minimale & Shell jsh Étendu              │
+│            [VALIDÉ — v0.3.88]                                          │
+│            • v0.3.88 (Jalon 6.1) : Primitives C-ABI & commandes jsh    │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -66,8 +70,8 @@ flowchart LR
 
 | Étape | Version Cible | Objectif Majeur | Statut |
 | :---: | :---: | :--- | :---: |
-| **Palier 5** | **`v0.3.87`** | **Démonstration Silicium, ESP FAT32, ABI v0.4 & Outils de Distribution** | 🟢 **Actuel** |
-| **Palier 6** | `v0.4.0` | Stabilisation de la libc minimale & Shell interactif `jsh` étendu | 🟡 Prochain |
+| **Palier 5** | `v0.3.87` | Démonstration Silicium, ESP FAT32, ABI v0.4 & Outils de Distribution | 🟢 Validé |
+| **Palier 6** | **`v0.3.88`** | **Primitives C-ABI (strcmp/atoi/malloc/free) & Commandes jsh (uname/version/caps)** | 🟢 **Actuel** |
 | **Palier 7** | `v0.5.0` | Pilotes matériels natifs (NVMe PCIe natif, USB xHCI, UART PL011 ARM64) | ⚪ Planifié |
 | **Palier 8** | `v0.6.0` | Pile réseau complète TCP/IP & Socket API en Ring 3 | ⚪ Planifié |
 | **Palier 9** | `v0.7.0` | Système de fichiers JamboFS avec journalisation CoW & persistance chiffrée | ⚪ Planifié |
@@ -77,24 +81,29 @@ flowchart LR
 
 ---
 
-### Palier 5 — Récapitulatif des Livrables Techniques (`v0.3.84` à `v0.3.87`)
-
-* **Jalon 5.1 (`v0.3.84`)** : Générateur d'arborescence standardisée ESP FAT32 (`cargo xtask esp`), utilitaire de flash (`cargo xtask flash-usb`) et guide physique [`docs/BAREMETAL.md`](docs/BAREMETAL.md).
-* **Jalon 5.2 (`v0.3.85`)** : Formalisation des ADR-0084 à ADR-0087 et audit de compilation 100% de l'incubateur R&D.
-* **Jalon 5.3 (`v0.3.86`)** : Couche de compatibilité POSIX / C-ABI statique minimale (`libjambo::posix` et `jambo.h`).
-* **Jalon 5.4 (`v0.3.87`)** : Protocole officiel de démonstration silicium [`docs/DEMO.md`](docs/DEMO.md), outil de distribution d'artefacts déterministe `cargo xtask dist` avec calcul SHA-256 sans dépendance tierce, et publication des notes de version [`docs/RELEASE_NOTES_v0.3.87.md`](docs/RELEASE_NOTES_v0.3.87.md).
+### Palier 6 — Jalon 6.1 (`v0.3.88`) — Primitives C-ABI & Shell jsh Étendu 🟢 `[CORE-EXP]`
+* **Objectif** : Étendre les primitives de la couche POSIX / C-ABI statique et enrichir l'interactivité du shell `jsh`.
+* **Livrables techniques validés** :
+  1. **Extension C-ABI Statique (`libs/libjambo/src/posix.rs` & `jambo.h`)** :
+     * Implémentation des fonctions de manipulation de chaînes : `strcmp()`, `strncmp()`, `strncpy()`, `strchr()`, `atoi()`.
+     * Primitives d'allocation mémoire utilisateur `malloc()` et `free()` basées sur l'arène VMO anonyme `mmap()`.
+     * Tests unitaires automatisés validés à 100% (`cargo test --package libjambo`).
+  2. **Enrichissement du Shell Interactif `jsh` (`services/jambo-sh`)** :
+     * Nouvelles commandes d'administration et d'introspection système : `uname`, `version`, `uptime`, `caps`.
+     * Mise à niveau de la bannière système et synchronisation de version (`v0.3.88`).
 
 ---
 
-## 4. Matrice de Référence des Composants & Statuts (`v0.3.87`)
+## 4. Matrice de Référence des Composants & Statuts (`v0.3.88`)
 
 | Composant | Répertoire | Statut Réel | Rôle & Responsabilité Technique |
 | :--- | :--- | :---: | :--- |
 | **Micro-Noyau JamboKernel** | `kernel/` | 🟢 `[CORE-EXP]` | TCB minimal (< 95 Kio `.text`), EEVDF expérimental, PML4 W^X, Buddy PMM, CSpace anti-ABA |
 | **ABI Système jambo-abi** | `abi/jambo-abi/` | 🟢 `[CORE-EXP]` | 29 syscalls x86_64/AArch64, descripteurs CSpace, contrats IPC et DeviceIo |
-| **Bibliothèque Espace Utilisateur**| `libs/libjambo/` | 🟡 `[RING3-STUB]`| Point d'entrée `_start`, gestion de pile System V ABI, couche POSIX minimale |
+| **Bibliothèque Espace Utilisateur**| `libs/libjambo/` | 🟡 `[RING3-STUB]`| Point d'entrée `_start`, gestion de pile System V ABI, couche POSIX (malloc/free, string) |
 | **Pilote VirtIO Modern** | `drivers/virtio/` | 🟡 `[RING3-STUB]`| Pilote VirtIO Modern 1.2 simplifié (Block & Net), Virtqueues DMA et broker DeviceIo |
 | **38 Microservices Ring 3** | `services/` | 🟡 `[RING3-STUB]`| Prototypes et squelettes fonctionnels : `init` (PID 1) à `dlp` (PID 38) |
+| **Shell Interactif jsh** | `services/jambo-sh/`| 🟡 `[RING3-STUB]`| Terminal interactif Ring 3 avec 44 commandes (sysinfo, ps, uname, caps, etc.) |
 | **Outillage Déploiement xtask** | `xtask/` | 🟢 `[CORE-EXP]` | Build release, initrd.tar, disk.raw, ISO Limine, générateur ESP FAT32 et distributeur dist |
 | **Incubateur Recherche & IA** | `incubator/` | 🔵 `[SIM]` | ~100 briques prospectives isolées (PQC, FHE, Wasm, ZK) avec charte de graduation |
 
@@ -102,6 +111,10 @@ flowchart LR
 
 ## 5. Journal des Jalons et Historique de Versionnage
 
+* **2026-11-04** : **Jalon 6.1 (`v0.3.88`) — Primitives C-ABI Statiques & Shell jsh Étendu**
+  * Extension de `libjambo::posix` avec `strcmp`, `strncmp`, `strncpy`, `strchr`, `atoi`, `malloc` et `free`.
+  * Ajout des commandes `uname`, `version`, `uptime` et `caps` dans le shell interactif `jambo-sh`.
+  * Suite de tests unitaires C-ABI enrichie et validée à 100% (`cargo test --package libjambo`).
 * **2026-11-04** : **Jalon 5.4 (`v0.3.87`) — Démonstration Silicium, Stabilisation ABI v0.4 & Outils de Distribution**
   * Publication du protocole de démonstration sur silicium physique [`docs/DEMO.md`](docs/DEMO.md).
   * Implémentation du distributeur d'artefacts `cargo xtask dist` avec sommes de contrôle SHA-256 déterministes.

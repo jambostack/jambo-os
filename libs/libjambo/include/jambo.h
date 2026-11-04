@@ -273,6 +273,13 @@ void *memcpy(void *dest, const void *src, size_t n);
 void *memset(void *dest, int c, size_t n);
 int memcmp(const void *s1, const void *s2, size_t n);
 size_t strlen(const char *s);
+int strcmp(const char *s1, const char *s2);
+int strncmp(const char *s1, const char *s2, size_t n);
+char *strncpy(char *dest, const char *src, size_t n);
+char *strchr(const char *s, int c);
+int atoi(const char *nptr);
+void *malloc(size_t size);
+void free(void *ptr);
 
 /* === API C Native JamboOS === */
 
@@ -285,10 +292,6 @@ int32_t jambo_vmo_create(uint64_t size, uint32_t flags, uint64_t *out_handle);
 int32_t jambo_vmo_map(uint64_t vmo, uint64_t vaddr, uint64_t length, uint32_t rights, uint64_t *out_mapped);
 int32_t jambo_vmo_unmap(uint64_t vaddr, uint64_t length);
 int32_t jambo_device_io(uint32_t op, uint8_t bus, uint8_t dev, uint8_t func, uint8_t offset, uint32_t *val);
-}
-
-
-
 #ifdef __cplusplus
 }
 #endif

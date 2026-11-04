@@ -423,6 +423,10 @@ impl JamboShell {
             "ueba" => self.cmd_ueba(args, out),
             "itdr" => self.cmd_itdr(args, out),
             "dlp" => self.cmd_dlp(args, out),
+            "uname" => self.cmd_uname(out),
+            "version" => self.cmd_version(out),
+            "uptime" => self.cmd_uptime(out),
+            "caps" => self.cmd_caps(out),
             _ => self.cmd_not_found(cmd, out),
         }
     }
@@ -433,6 +437,10 @@ impl JamboShell {
   sysinfo     - Metriques memoire et uptime du micro-noyau\n\
   ps          - Liste les 38 processus actifs\n\
   echo <args> - Affiche le texte sur la console\n\
+  uname       - Affiche le nom et l'architecture du systeme\n\
+  version     - Affiche les details de version du micro-noyau\n\
+  uptime      - Affiche le temps d'activite du systeme\n\
+  caps        - Affiche les capacites CSpace du shell\n\
   clear       - Reinitialise l'ecran du terminal\n\
   reboot      - Eteint ou redemarre la machine virtuelle\n\
   cat <path>  - Affiche le contenu d'un fichier\n\
@@ -511,6 +519,61 @@ impl JamboShell {
                 (ShellStatus::ExecutionFailed, len)
             }
         }
+    }
+
+    fn cmd_uname(&self, out: &mut [u8]) -> (ShellStatus, usize) {
+        #[cfg(target_arch = "x86_64")]
+        let text = b"JamboOS 0.3.88-pre-alpha x86_64 Limine\n";
+        #[cfg(target_arch = "aarch64")]
+        let text = b"JamboOS 0.3.88-pre-alpha aarch64 Limine\n";
+        #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+        let text = b"JamboOS 0.3.88-pre-alpha unknown Limine\n";
+
+        let len = text.len().min(out.len());
+        out[..len].copy_from_slice(&text[..len]);
+        (ShellStatus::Success, len)
+    }
+
+    fn cmd_version(&self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let text = b"JamboOS v0.3.88 (Pre-Alpha Prototype)\n\
+Architecture : Micro-noyau oriente capacites no_std\n\
+Auteur & Architecte : ASSOGBA Prudence Dieudonne\n\
+ABI : 29 Appels Systeme (jambo-abi v0.4) avec compatibilite POSIX statique\n";
+        let len = text.len().min(out.len());
+        out[..len].copy_from_slice(&text[..len]);
+        (ShellStatus::Success, len)
+    }
+
+    fn cmd_uptime(&self, out: &mut [u8]) -> (ShellStatus, usize) {
+        match sys_info() {
+            Ok(info) => {
+                let mut buf = [0u8; 64];
+                let mut cursor = 0;
+                cursor = append_bytes(&mut buf, cursor, b"Uptime : ");
+                cursor = append_u64(&mut buf, cursor, info.uptime_seconds);
+                cursor = append_bytes(&mut buf, cursor, b" secondes\n");
+                let len = cursor.min(out.len());
+                out[..len].copy_from_slice(&buf[..len]);
+                (ShellStatus::Success, len)
+            }
+            Err(_) => {
+                let err_msg = b"Erreur: Impossible de lire l'uptime.\n";
+                let len = err_msg.len().min(out.len());
+                out[..len].copy_from_slice(&err_msg[..len]);
+                (ShellStatus::ExecutionFailed, len)
+            }
+        }
+    }
+
+    fn cmd_caps(&self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let text = b"Capacites CSpace du shell (PID 2):\n\
+  [CAP 0] Console UART COM1   (Droits: READ | WRITE)\n\
+  [CAP 1] VMO Heap Ring 3     (Droits: READ | WRITE | MAP)\n\
+  [CAP 2] IPC Channel init    (Droits: SEND | RECEIVE | CALL)\n\
+  [CAP 3] Syscall Broker      (Droits: YIELD | EXIT | DEVICE_IO)\n";
+        let len = text.len().min(out.len());
+        out[..len].copy_from_slice(&text[..len]);
+        (ShellStatus::Success, len)
     }
 
     fn cmd_ps(&self, out: &mut [u8]) -> (ShellStatus, usize) {

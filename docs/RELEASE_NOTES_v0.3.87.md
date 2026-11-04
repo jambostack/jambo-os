@@ -59,3 +59,4 @@ L'accession à une version 1.0.0 de production industrielle suivra des paliers p
 | **Palier 10**| `v0.8.0` | Serveur d'affichage graphique & compositeur fenêtré en Ring 3 | ⚪ Planifié |
 | **Palier 11**| `v0.9.0` | Campagne d'audit formel de sécurité, fuzzing TCB (libFuzzer/AFL) & SMP stress | ⚪ Planifié |
 | **Palier 12**| `v1.0.0` | Version Long-Term Support (LTS) certifiée pour la production critique | ⚪ Horizon |
+

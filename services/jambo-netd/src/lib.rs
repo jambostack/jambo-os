@@ -9,6 +9,9 @@
 //! - Support des capacités réseau `NetworkCapability` (NetCap)
 
 #![no_std]
+#![allow(clippy::len_without_is_empty)]
+#![allow(clippy::chunks_exact_to_as_chunks)]
+#![allow(clippy::too_many_arguments)]
 
 use jambo_abi::{Handle, SysError};
 use virtio_drv::VirtioNetDriver;

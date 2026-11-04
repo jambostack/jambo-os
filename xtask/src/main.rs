@@ -55,7 +55,7 @@ enum Commands {
         #[arg(long)]
         device: Option<String>,
     },
-    /// Prépare l'archive et les artefacts de test pour le prototype expérimental v0.3.87
+    /// Prépare l'archive et les artefacts de test pour le prototype expérimental v0.3.88
     Dist {
         #[arg(long)]
         release: bool,
@@ -1916,6 +1916,9 @@ fn run_test(release: bool) -> anyhow::Result<()> {
     let code = output.status.code().unwrap_or(-1);
     let success = code == 33
         || combined.contains(
+            "[PASS] Jalon 6.1 : Primitives C-ABI et Shell jsh etendu valides",
+        )
+        || combined.contains(
             "[PASS] Jalon 5.4 : Validation Prototype Bare-Metal & Outillage Dist",
         )
         || combined.contains(
@@ -2308,11 +2311,11 @@ fn create_dist(release: bool) -> anyhow::Result<PathBuf> {
     // 4. Image ISO (si disponible)
     let src_iso = root.join("target/jamboos-x86_64.iso");
     if src_iso.exists() {
-        let dist_iso = dist_dir.join("jamboos-x86_64-v0.3.87.iso");
+        let dist_iso = dist_dir.join("jamboos-x86_64-v0.3.88.iso");
         fs::copy(&src_iso, &dist_iso)?;
         let iso_bytes = fs::read(&dist_iso)?;
         let iso_sha = sha256_hex(&iso_bytes);
-        checksum_lines.push(format!("{}  jamboos-x86_64-v0.3.87.iso", iso_sha));
+        checksum_lines.push(format!("{}  jamboos-x86_64-v0.3.88.iso", iso_sha));
     }
 
     // 5. Arborescence ESP
@@ -2324,7 +2327,7 @@ fn create_dist(release: bool) -> anyhow::Result<PathBuf> {
     fs::write(&sha_path, checksum_lines.join("\n") + "\n")?;
 
     println!("\n================================================================================");
-    println!("    JAMBO-OS v0.3.87 (Prototype Pre-Alpha) — ARTEFACTS DE TEST PRÊTS            ");
+    println!("    JAMBO-OS v0.3.88 (Prototype Pre-Alpha) — ARTEFACTS DE TEST PRÊTS            ");
     println!("================================================================================");
     println!("Répertoire de distribution : {}", dist_dir.display());
     for line in &checksum_lines {

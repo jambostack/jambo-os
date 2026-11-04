@@ -807,7 +807,7 @@ pub extern "C" fn dispatch_syscall(
         // 29: DeviceIo (op: a1, bdf: a2, offset: a3, val_or_ptr: a4)
         29 => {
             let op = a1 as u32;
-            let bdf = a2 as u64;
+            let bdf = a2;
             let offset = a3 as u8;
             let val_or_ptr = a4;
 

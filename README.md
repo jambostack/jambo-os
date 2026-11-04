@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.3.87--pre--alpha-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.3.88--pre--alpha-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,7 +27,7 @@
 ---
 
 > [!WARNING]
-> **Avertissement sur la Maturité & Stade du Projet : Version `v0.3.87` (Pre-Alpha / Prototype Expérimental)**  
+> **Avertissement sur la Maturité & Stade du Projet : Version `v0.3.88` (Pre-Alpha / Prototype Expérimental)**  
 > **JamboOS est un projet expérimental de recherche à un stade très initial (Pre-Alpha). Le système est encore très immature et à une année-lumière d'une version 1.0.0 utilisable en production.**  
 > 
 > Ce dépôt explore la faisabilité d'un micro-noyau moderne en Rust `![no_std]` inspiré des principes de seL4 et Zircon. Bien que le système démarre sous QEMU et sur machine UEFI réelle :
