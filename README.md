@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.3.85-blue.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.3.86-blue.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,7 +27,7 @@
 ---
 
 > [!NOTE]
-> **Statut du Projet : Version `v0.3.85` (Palier 5 : Déploiement Silicium Physique, 38 Microservices & Formalisation ADR)**  
+> **Statut du Projet : Version `v0.3.86` (Palier 5 : Déploiement Silicium Physique, Couche POSIX & C-ABI Statique)**  
 > JamboOS est un micro-noyau moderne de 3e génération orienté capacités (*Capability-based security*), développé à partir de zéro en Rust bare-metal (`#![no_std]`).  
 > 
 > Le système est **authentiquement opérationnel sous QEMU UEFI et bare-metal sur silicium physique** :

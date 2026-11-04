@@ -115,6 +115,7 @@ typedef struct {
 #define JAMBO_SYS_CONSOLE_WRITE  26
 #define JAMBO_SYS_SYS_INFO       27
 #define JAMBO_SYS_SYS_POWEROFF   28
+#define JAMBO_SYS_DEVICE_IO      29
 
 typedef struct {
     uint64_t total_pages;
@@ -257,6 +258,33 @@ static inline int64_t jambo_irq_ack(jambo_handle_t irq) {
 
 static inline int64_t jambo_clock_gettime(uint32_t clock_id, jambo_timespec_t* out_ts) {
     return jambo_syscall6(JAMBO_SYS_CLOCK_GETTIME, (uint64_t)clock_id, (uint64_t)(uintptr_t)out_ts, 0, 0, 0, 0, NULL);
+}
+
+/* === Déclarations POSIX C-ABI Minimales === */
+
+ssize_t write(int fd, const void *buf, size_t count);
+ssize_t read(int fd, void *buf, size_t count);
+int sched_yield(void);
+void _exit(int status) __attribute__((noreturn));
+void exit(int status) __attribute__((noreturn));
+void *mmap(void *addr, size_t length, int prot, int flags, int fd, int64_t offset);
+int munmap(void *addr, size_t length);
+void *memcpy(void *dest, const void *src, size_t n);
+void *memset(void *dest, int c, size_t n);
+int memcmp(const void *s1, const void *s2, size_t n);
+size_t strlen(const char *s);
+
+/* === API C Native JamboOS === */
+
+int64_t jambo_console_write(const uint8_t *buf, size_t len);
+int64_t jambo_console_read(uint8_t *buf, size_t len);
+int32_t jambo_yield(void);
+void jambo_exit(int32_t status) __attribute__((noreturn));
+int32_t jambo_sys_info(jambo_sysinfo_t *out_info);
+int32_t jambo_vmo_create(uint64_t size, uint32_t flags, uint64_t *out_handle);
+int32_t jambo_vmo_map(uint64_t vmo, uint64_t vaddr, uint64_t length, uint32_t rights, uint64_t *out_mapped);
+int32_t jambo_vmo_unmap(uint64_t vaddr, uint64_t length);
+int32_t jambo_device_io(uint32_t op, uint8_t bus, uint8_t dev, uint8_t func, uint8_t offset, uint32_t *val);
 }
 
 

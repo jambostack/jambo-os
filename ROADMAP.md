@@ -1,9 +1,9 @@
 # FEUILLE DE ROUTE D'INGÉNIERIE SYSTÈME — JamboOS
 
 > **Dernière mise à jour** : 4 novembre 2026  
-> **Version actuelle** : `v0.3.85` (Palier 5 : Déploiement Silicium Physique, Audit Incubateur & Formalisation ADRs)  
+> **Version actuelle** : `v0.3.86` (Palier 5 : Déploiement Silicium Physique & Couche POSIX / C-ABI Statique)  
 > **Statut global** : Système d'Exploitation Micro-noyau de 3e Génération en Rust `![no_std]` orienté capacités avec 38 microservices Ring 3 opérationnels sous QEMU UEFI et bare-metal.  
-> **Objectif stratégique immédiat** : Palier 5 — Déploiement Silicium Physique (Intel NUC & Raspberry Pi 4), Conformité POSIX/C-ABI minimale (`jambo-libc`) et Préparation de la v1.0 Long-Term Support (LTS).
+> **Objectif stratégique immédiat** : Palier 5 — Déploiement Silicium Physique (Intel NUC & Raspberry Pi 4), Démonstration Vidéo Bare-Metal et Préparation de la v1.0 Long-Term Support (LTS).
 
 ---
 
@@ -94,8 +94,9 @@ flowchart LR
 │                                • Audit étanchéité & compilation 100%   │
 ├────────────────────────────────────────────────────────────────────────┤
 │ Jalon 5.3 (v0.3.86) : Couche POSIX / C-ABI Statique Minimale           │
-│                       • Implémentation de jambo-libc (#![no_std])       │
-│                       • Traduction transparente syscalls POSIX -> ABI   │
+│                       [VALIDÉ] • Implémentation libjambo::posix (#![no_std])   │
+│                                • read/write/mmap/exit mappés sur syscalls      │
+│                                • Tests unitaires C-ABI passés à 100%           │
 ├────────────────────────────────────────────────────────────────────────┤
 │ Jalon 5.4 (v1.0.0-rc1): Démonstration Bare-Metal & Gel d'ABI Long-Term │
 │                       • Gel de l'ABI et des 29 appels système           │
@@ -127,11 +128,19 @@ flowchart LR
 
 ---
 
-### Jalon 5.3 (`v0.3.86`) — Couche de Compatibilité POSIX / C-ABI Statique Minimale (`jambo-libc`)
-* **Objectif** : Permettre à des applications tierces (compilées en C ou Rust classique) de s'exécuter dans l'espace utilisateur Ring 3 sans modification de leur code source.
-* **Axes d'ingénierie** :
-  * Bibliothèque statique `#![no_std]` ultra-compacte traduisant les fonctions C standard (`read`, `write`, `open`, `mmap`, `brk`, `exit`) en appels système natifs JamboOS orientés capacités.
-  * Allocation mémoire utilisateur via un mini-allocateur d'arène reposant sur le syscall `Syscall::VmoMap`.
+### Jalon 5.3 (`v0.3.86`) — Couche de Compatibilité POSIX / C-ABI Statique Minimale 🟢 `[PROD]`
+* **Objectif** : Permettre à des exécutables utilisateurs et bibliothèques C standard de tourner en Ring 3 sans modification via une couche de compatibilité statique `#![no_std]`.
+* **Livrables techniques validés** :
+  1. **Module POSIX & C-ABI (`libs/libjambo/src/posix.rs`)** :
+     * Primitives d'E/S de flux : `write()` et `read()` redirigeant les descripteurs 0 (stdin), 1 (stdout) et 2 (stderr) vers les appels système de console série (`ConsoleRead` = 25, `ConsoleWrite` = 26).
+     * Primitives de contrôle d'exécution : `sched_yield()` (`ThreadYield` = 12), `_exit()` et `exit()` (`ThreadExit` = 11).
+     * Primitives de gestion mémoire virtuelle : `mmap()` (allocation anonyme basée sur `VmoCreate` = 4 et `VmoMap` = 5) et `munmap()` (`VmoUnmap` = 6).
+     * Primitives mémoire et chaînes de caractères C standard : `memcpy()`, `memset()`, `memcmp()`, `strlen()`.
+     * API C native JamboOS exportée : `jambo_console_write()`, `jambo_vmo_create()`, `jambo_vmo_map()`, `jambo_device_io()`.
+  2. **Mise à Jour de l'En-tête C Officiel ([`libs/libjambo/include/jambo.h`](libs/libjambo/include/jambo.h))** :
+     * Déclaration des 29 appels système (`JAMBO_SYS_DEVICE_IO 29`), signatures des fonctions C-ABI et structures auxiliaires.
+  3. **Suite de Tests Unitaires C-ABI (`cargo test --package libjambo`)** :
+     * Validation du comportement de `memset`, `memcpy`, `memcmp` et `strlen` (1 test passé, 0 échec).
 
 ---
 
@@ -160,6 +169,10 @@ flowchart LR
 
 ## 5. Journal des Jalons et Historique de Versionnage
 
+* **2026-11-04** : **Jalon 5.3 (`v0.3.86`) — Couche de Compatibilité POSIX & C-ABI Statique Minimale**
+  * Implémentation du runtime C-ABI dans [`libs/libjambo/src/posix.rs`](libs/libjambo/src/posix.rs) (`read`, `write`, `mmap`, `munmap`, `exit`, `sched_yield`, `memcpy`, `memset`).
+  * Mise à niveau de l'en-tête officiel [`libs/libjambo/include/jambo.h`](libs/libjambo/include/jambo.h) avec les déclarations des 29 appels système et fonctions POSIX.
+  * Validation unitaire complète (`cargo test --package libjambo`).
 * **2026-11-04** : **Jalon 5.2 (`v0.3.85`) — Audit de Conformité de l'Incubateur & Formalisation des ADRs**
   * Formalisation des ADR-0084 (Broker DeviceIo), ADR-0085 (Entropie RDRAND), ADR-0086 (CSpace anti-ABA) et ADR-0087 (Déploiement ESP universel).
   * Audit complet et compilation 100% sans erreur du workspace autonome `incubator/` (70+ crates).

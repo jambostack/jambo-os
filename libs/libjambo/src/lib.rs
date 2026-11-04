@@ -2,6 +2,8 @@
 
 pub use jambo_abi::*;
 
+pub mod posix;
+
 /// Wrapper d'appel système brut pour x86-64
 ///
 /// # Safety
