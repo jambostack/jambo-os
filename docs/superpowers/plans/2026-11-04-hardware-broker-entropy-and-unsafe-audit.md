@@ -182,3 +182,4 @@ Write tests asserting:
 - [ ] **Step 4: Commit and tag `v0.3.82`**
 
 Commit all changes, tag `v0.3.82`, and push to `origin/main`.
+

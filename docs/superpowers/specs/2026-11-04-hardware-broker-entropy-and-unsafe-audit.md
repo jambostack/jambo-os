@@ -78,3 +78,4 @@ Le noyau fournit une fonction d'entropie matérielle `get_random_u64()` :
 5. **Compilation & QEMU** :
    - Compilation complète du noyau et des 38 microservices en mode debug et release sans erreur.
    - Validation sous QEMU confirmant le succès de la suite de tests.
+

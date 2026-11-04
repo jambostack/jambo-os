@@ -1897,6 +1897,9 @@ fn run_test(release: bool) -> anyhow::Result<()> {
     let code = output.status.code().unwrap_or(-1);
     let success = code == 33
         || combined.contains(
+            "[PASS] Documentation d'Architecture, Benchmarks Comparatifs et Jalon 4.6 valides",
+        )
+        || combined.contains(
             "[PASS] Broker Materiel DeviceIo et Entropie AT_RANDOM valides",
         )
         || combined.contains(
