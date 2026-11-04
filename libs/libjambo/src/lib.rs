@@ -169,3 +169,58 @@ pub fn syscall_ipc_register_endpoint(endpoint: u64) -> Handle {
     }
     Handle(if srv_h != 0 { srv_h } else { endpoint })
 }
+
+/// Lit un registre 32 bits de l'espace de configuration PCI via le broker noyau (Syscall 29 DeviceIo)
+pub fn pci_read32(bus: u8, dev: u8, func: u8, offset: u8) -> u32 {
+    let bdf = ((bus as u64) << 16) | ((dev as u64 & 0x1F) << 11) | ((func as u64 & 0x07) << 8);
+    let mut val: u32 = 0xFFFF_FFFF;
+    let (ret, _) = unsafe {
+        syscall6(
+            SyscallNumber::DeviceIo,
+            device_io_op::PCI_READ32 as u64,
+            bdf,
+            offset as u64,
+            &mut val as *mut u32 as u64,
+            0,
+            0,
+        )
+    };
+    if ret == 0 {
+        val
+    } else {
+        0xFFFF_FFFF
+    }
+}
+
+/// Lit un registre 16 bits de l'espace de configuration PCI via le broker noyau
+pub fn pci_read16(bus: u8, dev: u8, func: u8, offset: u8) -> u16 {
+    let dword = pci_read32(bus, dev, func, offset & 0xFC);
+    ((dword >> ((offset & 2) * 8)) & 0xFFFF) as u16
+}
+
+/// Lit un registre 8 bits de l'espace de configuration PCI via le broker noyau
+pub fn pci_read8(bus: u8, dev: u8, func: u8, offset: u8) -> u8 {
+    let dword = pci_read32(bus, dev, func, offset & 0xFC);
+    ((dword >> ((offset & 3) * 8)) & 0xFF) as u8
+}
+
+/// Écrit un registre 32 bits de l'espace de configuration PCI via le broker noyau
+pub fn pci_write32(bus: u8, dev: u8, func: u8, offset: u8, val: u32) -> Result<(), SysError> {
+    let bdf = ((bus as u64) << 16) | ((dev as u64 & 0x1F) << 11) | ((func as u64 & 0x07) << 8);
+    let (ret, _) = unsafe {
+        syscall6(
+            SyscallNumber::DeviceIo,
+            device_io_op::PCI_WRITE32 as u64,
+            bdf,
+            offset as u64,
+            val as u64,
+            0,
+            0,
+        )
+    };
+    if ret == 0 {
+        Ok(())
+    } else {
+        Err(SysError::PermissionDenied)
+    }
+}

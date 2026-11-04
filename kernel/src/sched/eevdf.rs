@@ -322,11 +322,13 @@ impl EevdfScheduler {
         }
 
         if !prev_rsp_ptr.is_null() {
+            // SAFETY: switch_context effectue la sauvegarde et la restauration des registres callee-saved entre deux piles valides.
             unsafe {
                 switch_context(prev_rsp_ptr, next_rsp);
             }
         } else {
             let mut dummy_rsp: u64 = 0;
+            // SAFETY: switch_context effectue le premier saut vers la pile du thread cible (next_rsp).
             unsafe {
                 switch_context(&mut dummy_rsp, next_rsp);
             }

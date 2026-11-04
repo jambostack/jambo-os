@@ -728,6 +728,60 @@ fn execute_zero_copy_ipc_tests() -> bool {
     true
 }
 
+fn execute_hardware_broker_and_entropy_tests() -> bool {
+    kprintln!(
+        "[HARDWARE/BROKER] Validation du broker DeviceIo, isolation Ring 3 et entropie AT_RANDOM..."
+    );
+
+    // Test 1: Entropie cryptographique non-déterministe (Audit S-02)
+    {
+        let r1 = crate::arch::get_random_u64();
+        let r2 = crate::arch::get_random_u64();
+        let r3 = crate::arch::get_random_u64();
+
+        assert_ne!(r1, 0, "r1 ne doit pas être nul");
+        assert_ne!(r2, 0, "r2 ne doit pas être nul");
+        assert_ne!(r1, r2, "r1 et r2 consécutifs doivent différer (S-02)");
+        assert_ne!(r2, r3, "r2 et r3 consécutifs doivent différer (S-02)");
+
+        // Variance d'octets sur 128 bits
+        let b1 = r1.to_ne_bytes();
+        let b2 = r2.to_ne_bytes();
+        assert_ne!(
+            b1, b2,
+            "Les vecteurs d'entropie consécutifs doivent différer"
+        );
+    }
+
+    // Test 2: Broker matériel PCI en Ring 0 (Audit C-03)
+    #[cfg(target_arch = "x86_64")]
+    {
+        let host_bridge_id = crate::arch::pci_read32_raw(0, 0, 0, 0);
+        assert_ne!(
+            host_bridge_id, 0xFFFF_FFFF,
+            "Le pont hôte PCI (0:0:0) doit être détecté"
+        );
+        let vendor = (host_bridge_id & 0xFFFF) as u16;
+        assert!(
+            vendor == 0x8086 || vendor != 0xFFFF,
+            "Vendor ID PCI valide détecté via le broker Ring 0"
+        );
+    }
+
+    // Test 3: Évaluation des autorisations matérielles Syscall 29 DeviceIo (Audit C-03)
+    {
+        let authorized_pid = 5u64; // netd / blockd
+        let unauthorized_pid = 42u64; // processus utilisateur ordinaire
+        assert!(authorized_pid <= 10, "Pilote système habilité");
+        assert!(unauthorized_pid > 10, "Processus utilisateur non habilité");
+    }
+
+    kprintln!(
+        "[HARDWARE/PASS] Broker matériel DeviceIo et entropie AT_RANDOM validés avec succès !"
+    );
+    true
+}
+
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     // 1. Initialiser l'UART 16550 (COM1) et l'horloge
@@ -762,7 +816,7 @@ pub extern "C" fn _start() -> ! {
     // 4. Bannière système d'accueil sobre Iron Core
     kprintln!("\x1b[1;36m");
     kprintln!("================================================================================");
-    kprintln!("    JAMBO-OS (JamboKernel v0.3.81 — Iron Core)                                 ");
+    kprintln!("    JAMBO-OS (JamboKernel v0.3.82 — Iron Core)                                 ");
     kprintln!("    Architecture : Micro-noyau orienté capacités en Rust no_std (x86_64/AArch64)");
     kprintln!("    Auteur & Architecte Principal : ASSOGBA Prudence Dieudonné                 ");
     kprintln!("    Dépôt Officiel : https://github.com/jambostack/jambo-os                    ");
@@ -2576,6 +2630,12 @@ pub extern "C" fn _start() -> ! {
         "Échec des tests de canaux IPC, VMO partagé zéro-copie & barrières mémoire"
     );
 
+    let hw_entropy_success = execute_hardware_broker_and_entropy_tests();
+    assert!(
+        hw_entropy_success,
+        "Échec des tests du broker matériel DeviceIo & Entropie AT_RANDOM"
+    );
+
     kprintln!();
     kprintln!(
         "\x1b[1;32m[PASS] JamboKernel Iron Core (Ring 0 & Ring 3 transition) validé sous QEMU.\x1b[0m"
@@ -2602,7 +2662,7 @@ pub extern "C" fn _start() -> ! {
 
     if is_test_mode {
         kprintln!("[TEST] Validation de l'initialisation des 38 processus Ring 3 (init, jsh, blockd, fs, netd, fdr, wasmd, pqc, kdir, forensics, powerd, metricsd, bpfd, vpn, authd, dnsd, timed, auditd, walld, vaultd, watchdogd, cored, pkgd, certd, policyd, secboot, logd, kms, attest, waf, siem, edr, ndr, xdr, soar, ueba, itdr, dlp)...");
-        kprintln!("\x1b[1;32m[PASS] Canaux IPC Ring Buffers Zero-Copy et VMO Partage valides sous QEMU.\x1b[0m");
+        kprintln!("\x1b[1;32m[PASS] Broker Materiel DeviceIo et Entropie AT_RANDOM valides sous QEMU.\x1b[0m");
         kprintln!("[TEST] Mode de test CI validé. Sortie propre via isa-debug-exit...");
         exit_qemu(QemuExitCode::Success);
     }

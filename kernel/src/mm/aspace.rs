@@ -23,11 +23,13 @@ impl AddressSpace {
     /// Crée un nouvel espace d'adressage virtuel isolé
     pub fn new() -> Option<Self> {
         let pml4_paddr = alloc_page()?;
+        // SAFETY: pml4_paddr est une page physique allouée par alloc_page() et convertie via phys_to_virt (fenêtre HHDM valide).
         let pml4 = unsafe { &mut *(phys_to_virt(pml4_paddr) as *mut PageTable) };
         pml4.zero();
 
         // Recopier la moitié supérieure (Higher-Half Kernel Space) depuis le PML4 actif
         let current_cr3 = super::paging::read_cr3();
+        // SAFETY: current_cr3 provient de read_cr3() pointant vers la table PML4 actuellement active du noyau en HHDM.
         let current_pml4 = unsafe { &*(phys_to_virt(current_cr3) as *const PageTable) };
 
         // Entrées 256 à 511 correspondent à la moitié supérieure (0xFFFF_8000_0000_0000+)
@@ -52,11 +54,13 @@ impl AddressSpace {
             flags |= PAGE_NO_EXECUTE;
         }
 
+        // SAFETY: self.pml4_paddr est la page racine de cet espace d'adressage, valide et accessible en HHDM.
         let pml4 = unsafe { &mut *(phys_to_virt(self.pml4_paddr) as *mut PageTable) };
 
         for i in 0..page_count {
             let page_vaddr = vaddr + i * PAGE_SIZE;
             if let Some(paddr) = vmo.get_or_alloc_page(i) {
+                // SAFETY: map_page installe l'entrée de page pour le VMO dans l'espace PML4 spécifié.
                 unsafe {
                     map_page(pml4, page_vaddr, paddr, flags)?;
                 }
@@ -70,10 +74,12 @@ impl AddressSpace {
     /// Démappe une plage virtuelle
     pub fn unmap(&self, vaddr: usize, size: usize) -> Result<(), &'static str> {
         let page_count = (size + PAGE_SIZE - 1) / PAGE_SIZE;
+        // SAFETY: self.pml4_paddr est la page racine de cet espace d'adressage, valide et accessible en HHDM.
         let pml4 = unsafe { &mut *(phys_to_virt(self.pml4_paddr) as *mut PageTable) };
 
         for i in 0..page_count {
             let page_vaddr = vaddr + i * PAGE_SIZE;
+            // SAFETY: unmap_page libère la correspondance virtuelle dans la table de pages sans aliasing.
             unsafe {
                 unmap_page(pml4, page_vaddr)?;
             }
@@ -124,7 +130,9 @@ impl AddressSpace {
                         flags |= PAGE_NO_EXECUTE;
                     }
 
+                    // SAFETY: self.pml4_paddr est valide et accessible via la fenêtre HHDM.
                     let pml4 = unsafe { &mut *(phys_to_virt(self.pml4_paddr) as *mut PageTable) };
+                    // SAFETY: map_page installe la page allouée par le VMO lors de la résolution du défaut de page.
                     unsafe {
                         map_page(pml4, page_vaddr, paddr, flags)
                             .map_err(|_| jambo_abi::SysError::OutOfMemory)?;
@@ -206,7 +214,9 @@ impl AddressSpace {
                 flags |= PAGE_NO_EXECUTE;
             }
 
+            // SAFETY: self.pml4_paddr est la table racine valide de l'espace d'adressage.
             let pml4 = unsafe { &mut *(phys_to_virt(self.pml4_paddr) as *mut PageTable) };
+            // SAFETY: La page physique du VMO est mappée et accessible via HHDM ; copy_nonoverlapping écrit les octets dans les limites calculées.
             unsafe {
                 let _ = map_page(pml4, page_vaddr, paddr, flags);
                 let target_ptr = (phys_to_virt(paddr) + page_offset) as *mut u8;
@@ -247,6 +257,7 @@ impl AddressSpace {
                 .get_or_alloc_page(page_idx)
                 .ok_or(jambo_abi::SysError::BadAddress)?;
 
+            // SAFETY: La page physique du VMO est accessible via HHDM ; copy_nonoverlapping lit les octets dans les limites calculées.
             unsafe {
                 let src_ptr = (phys_to_virt(paddr) + page_offset) as *const u8;
                 core::ptr::copy_nonoverlapping(

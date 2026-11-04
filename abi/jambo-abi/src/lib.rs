@@ -93,7 +93,7 @@ pub mod clocks {
     pub const CLOCK_BOOTTIME: u32 = 2;
 }
 
-/// Numéros d'appels système (24 syscalls)
+/// Numéros d'appels système (29 syscalls)
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SyscallNumber {
@@ -136,6 +136,19 @@ pub enum SyscallNumber {
     ConsoleWrite = 26,
     SysInfo = 27,
     SystemPoweroff = 28,
+
+    // Famille 7 : Broker Matériel Sécurisé (Phase 45 - v0.3.82)
+    DeviceIo = 29,
+}
+
+/// Codes d'opérations pour l'appel système DeviceIo (Syscall 29)
+pub mod device_io_op {
+    pub const PCI_READ32: u32 = 1;
+    pub const PCI_WRITE32: u32 = 2;
+    pub const PCI_READ16: u32 = 3;
+    pub const PCI_WRITE16: u32 = 4;
+    pub const PCI_READ8: u32 = 5;
+    pub const PCI_WRITE8: u32 = 6;
 }
 
 /// Métriques système rapportées par l'appel système SysInfo (Syscall 27)

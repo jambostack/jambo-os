@@ -58,12 +58,13 @@ impl Process {
     ) -> Result<u64, SysError> {
         let mut sp = stack_top;
 
-        // 1. Écrire les 16 octets aléatoires pour AT_RANDOM
+        // 1. Écrire les 16 octets aléatoires pour AT_RANDOM (Audit S-02)
         sp -= 16;
-        let random_bytes = [
-            0x42, 0x13, 0x37, 0x73, 0x5a, 0x9b, 0x10, 0xef, 0xfe, 0xca, 0x00, 0x42, 0x11, 0x22,
-            0x33, 0x44,
-        ];
+        let r1 = crate::arch::get_random_u64();
+        let r2 = crate::arch::get_random_u64();
+        let mut random_bytes = [0u8; 16];
+        random_bytes[0..8].copy_from_slice(&r1.to_ne_bytes());
+        random_bytes[8..16].copy_from_slice(&r2.to_ne_bytes());
         self.aspace.write_bytes(sp as usize, &random_bytes)?;
         let random_ptr = sp;
 

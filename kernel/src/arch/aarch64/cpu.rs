@@ -17,6 +17,7 @@ static mut PER_CPU: [PerCpuData; MAX_CPUS] = [PerCpuData {
 
 pub fn init_per_cpu(cpu_id: u32, mpidr: u64, is_bsp: bool) {
     if (cpu_id as usize) < MAX_CPUS {
+        // SAFETY: Initialisation matérielle séquentielle du processeur local au démarrage.
         unsafe {
             PER_CPU[cpu_id as usize] = PerCpuData {
                 cpu_id,
@@ -28,6 +29,7 @@ pub fn init_per_cpu(cpu_id: u32, mpidr: u64, is_bsp: bool) {
 }
 
 pub fn current_cpu() -> &'static PerCpuData {
+    // SAFETY: Accès en lecture aux métadonnées Per-CPU AArch64 initialisées au démarrage.
     unsafe { &PER_CPU[0] }
 }
 

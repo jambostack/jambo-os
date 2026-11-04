@@ -67,3 +67,30 @@ pub fn inl(port: u16) -> u32 {
 pub fn io_wait() {
     outb(0x80, 0);
 }
+
+const PCI_CONFIG_ADDRESS: u16 = 0xCF8;
+const PCI_CONFIG_DATA: u16 = 0xCFC;
+
+/// Lit un registre 32 bits de configuration PCI en Ring 0 (Broker matériel)
+#[inline]
+pub fn pci_read32_raw(bus: u8, dev: u8, func: u8, offset: u8) -> u32 {
+    let conf_addr = 0x8000_0000
+        | ((bus as u32) << 16)
+        | ((dev as u32 & 0x1F) << 11)
+        | ((func as u32 & 0x07) << 8)
+        | ((offset as u32) & 0xFC);
+    outl(PCI_CONFIG_ADDRESS, conf_addr);
+    inl(PCI_CONFIG_DATA)
+}
+
+/// Écrit un registre 32 bits de configuration PCI en Ring 0 (Broker matériel)
+#[inline]
+pub fn pci_write32_raw(bus: u8, dev: u8, func: u8, offset: u8, val: u32) {
+    let conf_addr = 0x8000_0000
+        | ((bus as u32) << 16)
+        | ((dev as u32 & 0x1F) << 11)
+        | ((func as u32 & 0x07) << 8)
+        | ((offset as u32) & 0xFC);
+    outl(PCI_CONFIG_ADDRESS, conf_addr);
+    outl(PCI_CONFIG_DATA, val);
+}

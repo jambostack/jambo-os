@@ -45,6 +45,7 @@ pub fn copy_to_user<T: Copy>(
 ) -> Result<(), SysError> {
     let size = core::mem::size_of::<T>();
     validate_user_range(aspace, dst_vaddr, size, true)?;
+    // SAFETY: val est une référence valide à un type Copy aligné en mémoire noyau; slice couvre exactement sa taille en octets.
     let slice = unsafe { core::slice::from_raw_parts(val as *const T as *const u8, size) };
     aspace.write_bytes(dst_vaddr as usize, slice)
 }
@@ -66,8 +67,10 @@ pub fn copy_from_user<T: Copy>(aspace: &AddressSpace, src_vaddr: u64) -> Result<
     let size = core::mem::size_of::<T>();
     validate_user_range(aspace, src_vaddr, size, false)?;
     let mut val = core::mem::MaybeUninit::<T>::uninit();
+    // SAFETY: val est alloué sur la pile et slice couvre exactement size octets mutables non initialisés.
     let slice = unsafe { core::slice::from_raw_parts_mut(val.as_mut_ptr() as *mut u8, size) };
     aspace.read_bytes(src_vaddr as usize, slice)?;
+    // SAFETY: val a été complètement initialisé par read_bytes qui a copié size octets valides.
     Ok(unsafe { val.assume_init() })
 }
 

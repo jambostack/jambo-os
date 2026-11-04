@@ -56,6 +56,7 @@ impl Thread {
 
         // Préparer le cadre initial de pile pour le premier retour de switch_context
         let mut rsp = stack_top as *mut u64;
+        // SAFETY: Initialisation du cadre d'appel sur la pile noyau fraîchement allouée (RIP, RFLAGS, registres callee-saved).
         unsafe {
             // Adresse de retour (RIP) pointant sur la fonction d'entrée du thread
             rsp = rsp.sub(1);
@@ -109,6 +110,7 @@ impl Thread {
         let stack_top = stack_base + 4 * PAGE_SIZE;
 
         let mut rsp = stack_top as *mut u64;
+        // SAFETY: Initialisation du cadre d'appel pour le trampoline de bascule Ring 3 sur la pile superviseur allouée.
         unsafe {
             rsp = rsp.sub(1);
             *rsp = user_thread_trampoline as *const () as usize as u64;
@@ -152,6 +154,7 @@ impl Thread {
         let stack_top = stack_base + 4 * PAGE_SIZE;
 
         let mut rsp = stack_top as *mut u64;
+        // SAFETY: Initialisation du cadre d'appel pour la boucle d'inactivité (cpu_idle_trampoline).
         unsafe {
             rsp = rsp.sub(1);
             *rsp = cpu_idle_trampoline as *const () as usize as u64;
@@ -230,6 +233,7 @@ extern "C" fn user_thread_trampoline() -> ! {
     {
         crate::arch::set_kernel_stack(kernel_stack_top);
         crate::arch::set_current_kernel_stack(kernel_stack_top);
+        // SAFETY: Configuration de la base de segment GS noyau, de la table CR3 et saut sécurisé vers le point d'entrée Ring 3.
         unsafe {
             let cpu = crate::arch::current_cpu();
             crate::arch::x86_64::apic::wrmsr(
@@ -245,6 +249,7 @@ extern "C" fn user_thread_trampoline() -> ! {
     {
         let _ = (aspace, kernel_stack_top);
         crate::arch::set_current_kernel_stack(kernel_stack_top);
+        // SAFETY: Saut en espace utilisateur Ring 3 AArch64 (EL0) via eret.
         unsafe {
             super::context::enter_user_mode(user_entry, user_rsp);
         }
@@ -255,10 +260,12 @@ extern "C" fn user_thread_trampoline() -> ! {
 pub extern "C" fn cpu_idle_trampoline() -> ! {
     loop {
         #[cfg(target_arch = "x86_64")]
+        // SAFETY: Activation des interruptions et mise en sommeil du processeur jusqu'à la prochaine interruption matérielle.
         unsafe {
             core::arch::asm!("sti; hlt", options(nomem, nostack, preserves_flags));
         }
         #[cfg(target_arch = "aarch64")]
+        // SAFETY: Attente d'interruption sur architecture AArch64 (wfi).
         unsafe {
             core::arch::asm!("wfi", options(nomem, nostack, preserves_flags));
         }

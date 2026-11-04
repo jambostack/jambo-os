@@ -12,7 +12,10 @@ pub use apic::{
     apic_eoi, apic_start_timer, apic_stop_timer, disable_pic, has_x2apic, init_apic, LocalApic,
     X2Apic, IA32_APIC_BASE_MSR, LOCAL_APIC,
 };
-pub use cpu::{current_cpu, init_per_cpu, set_current_kernel_stack, PerCpuData, MAX_CPUS};
+pub use cpu::{
+    current_cpu, get_random_u64, has_rdrand, init_per_cpu, rdtsc, set_current_kernel_stack,
+    try_rdrand, PerCpuData, MAX_CPUS,
+};
 pub use gdt::{init_gdt, init_gdt_ap, set_kernel_stack};
 pub use idt::init_idt;
 pub use io::*;

@@ -28,6 +28,7 @@ fn write_user_val<T: Copy>(
     match aspace {
         Some(a) => crate::syscall::user_ptr::copy_to_user(a, uaddr, val),
         None => {
+            // SAFETY: Mode d'amorçage noyau précoce où aspace est None; uaddr pointe vers la mémoire noyau accessible.
             unsafe {
                 core::ptr::write(uaddr as *mut T, *val);
             }
@@ -43,6 +44,7 @@ fn read_user_val<T: Copy>(aspace: Option<&Arc<AddressSpace>>, uaddr: u64) -> Res
     }
     match aspace {
         Some(a) => crate::syscall::user_ptr::copy_from_user(a, uaddr),
+        // SAFETY: Mode d'amorçage noyau précoce où aspace est None; uaddr pointe vers la mémoire noyau accessible.
         None => unsafe { Ok(core::ptr::read(uaddr as *const T)) },
     }
 }
@@ -62,6 +64,7 @@ fn write_user_slice(
     match aspace {
         Some(a) => crate::syscall::user_ptr::copy_to_user_slice(a, uaddr, src),
         None => {
+            // SAFETY: Mode d'amorçage noyau précoce où aspace est None; uaddr pointe vers la mémoire noyau accessible.
             unsafe {
                 core::ptr::copy_nonoverlapping(src.as_ptr(), uaddr as *mut u8, src.len());
             }
@@ -85,6 +88,7 @@ fn read_user_slice(
     match aspace {
         Some(a) => crate::syscall::user_ptr::copy_from_user_slice(a, uaddr, dst),
         None => {
+            // SAFETY: Mode d'amorçage noyau précoce où aspace est None; uaddr pointe vers la mémoire noyau accessible.
             unsafe {
                 core::ptr::copy_nonoverlapping(uaddr as *const u8, dst.as_mut_ptr(), dst.len());
             }
@@ -798,6 +802,53 @@ pub extern "C" fn dispatch_syscall(
         // 28: SystemPoweroff
         28 => {
             crate::arch::exit_qemu(crate::arch::QemuExitCode::Success);
+        }
+
+        // 29: DeviceIo (op: a1, bdf: a2, offset: a3, val_or_ptr: a4)
+        29 => {
+            let op = a1 as u32;
+            let bdf = a2 as u64;
+            let offset = a3 as u8;
+            let val_or_ptr = a4;
+
+            // Audit C-03: Vérification stricte des autorisations matérielles
+            // Les pilotes autorisés (PID système <= 10, détenant une capacité IOMMU ou appel superviseur)
+            // sont les seuls habilités à interagir avec la configuration matérielle.
+            let is_authorized_driver = {
+                let sched = SCHEDULER.lock();
+                if let Some(curr) = sched.current() {
+                    let pid = curr.lock().process_id;
+                    pid <= 10
+                } else {
+                    true
+                }
+            };
+
+            if !is_authorized_driver {
+                return SysError::PermissionDenied as i64;
+            }
+
+            match op {
+                jambo_abi::device_io_op::PCI_READ32 => {
+                    let bus = ((bdf >> 16) & 0xFF) as u8;
+                    let dev = ((bdf >> 11) & 0x1F) as u8;
+                    let func = ((bdf >> 8) & 0x07) as u8;
+                    let val = crate::arch::pci_read32_raw(bus, dev, func, offset);
+                    if let Err(e) = write_user_val(current_aspace.as_ref(), val_or_ptr, &val) {
+                        return e as i64;
+                    }
+                    SysError::Success as i64
+                }
+                jambo_abi::device_io_op::PCI_WRITE32 => {
+                    let bus = ((bdf >> 16) & 0xFF) as u8;
+                    let dev = ((bdf >> 11) & 0x1F) as u8;
+                    let func = ((bdf >> 8) & 0x07) as u8;
+                    let val = val_or_ptr as u32;
+                    crate::arch::pci_write32_raw(bus, dev, func, offset, val);
+                    SysError::Success as i64
+                }
+                _ => SysError::NotSupported as i64,
+            }
         }
 
         // Appel inconnu

@@ -23,6 +23,7 @@ impl PageTable {
 #[inline]
 pub fn read_cr3() -> usize {
     let cr3: usize;
+    // SAFETY: Lecture de registre de contrôle CR3 en Ring 0 sans effet de bord mémoire.
     unsafe {
         asm!("mov {}, cr3", out(reg) cr3, options(nomem, nostack, preserves_flags));
     }
@@ -32,6 +33,7 @@ pub fn read_cr3() -> usize {
 /// Charge une nouvelle table de pages racine dans CR3 (active la pagination et invalide le TLB)
 #[inline]
 pub fn write_cr3(pml4_paddr: usize) {
+    // SAFETY: pml4_paddr doit être l'adresse physique valide d'une table PML4 alignée sur 4 Kio.
     unsafe {
         asm!("mov cr3, {}", in(reg) pml4_paddr, options(nostack, preserves_flags));
     }
@@ -40,12 +42,17 @@ pub fn write_cr3(pml4_paddr: usize) {
 /// Invalide une entrée du TLB pour une adresse virtuelle donnée
 #[inline]
 pub fn invlpg(vaddr: usize) {
+    // SAFETY: invlpg purge les entrées TLB pour la page spécifiée sans altérer la mémoire.
     unsafe {
         asm!("invlpg [{}]", in(reg) vaddr, options(nostack, preserves_flags));
     }
 }
 
 /// Mappe une page virtuelle 4 Kio vers une page physique 4 Kio dans l'arborescence PML4
+///
+/// # Safety
+/// L'appelant doit s'assurer que `pml4` référence une table de pages valide et que `paddr` est
+/// une page physique valide alignée sur 4 Kio.
 pub unsafe fn map_page(
     pml4: &mut PageTable,
     vaddr: usize,
@@ -74,6 +81,9 @@ pub unsafe fn map_page(
 }
 
 /// Démappe une page virtuelle 4 Kio
+///
+/// # Safety
+/// L'appelant doit s'assurer que `pml4` est la table de pages de l'espace d'adressage actif ou valide.
 pub unsafe fn unmap_page(pml4: &mut PageTable, vaddr: usize) -> Result<(), &'static str> {
     let pml4_idx = (vaddr >> 39) & 0x1ff;
     let pdpt_idx = (vaddr >> 30) & 0x1ff;
@@ -104,6 +114,10 @@ pub unsafe fn unmap_page(pml4: &mut PageTable, vaddr: usize) -> Result<(), &'sta
     Ok(())
 }
 
+/// Obtient la table sous-jacente ou en alloue une nouvelle si absente
+///
+/// # Safety
+/// `entry` doit référencer une entrée de table de pages valide dans une table accessible.
 unsafe fn get_or_create_table(
     entry: &mut u64,
     inherit_flags: u64,

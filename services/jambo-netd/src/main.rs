@@ -30,47 +30,8 @@ fn panic(_info: &core::panic::PanicInfo) -> ! {
     }
 }
 
-// Ports de configuration PCIe standard x86
-const PCI_CONFIG_ADDRESS: u16 = 0xCF8;
-const PCI_CONFIG_DATA: u16 = 0xCFC;
-
-#[cfg(target_arch = "x86_64")]
-unsafe fn pci_read32(bus: u8, dev: u8, func: u8, offset: u8) -> u32 {
-    let conf_addr = 0x8000_0000
-        | ((bus as u32) << 16)
-        | ((dev as u32 & 0x1F) << 11)
-        | ((func as u32 & 0x07) << 8)
-        | ((offset as u32) & 0xFC);
-    core::arch::asm!(
-        "out dx, eax",
-        in("dx") PCI_CONFIG_ADDRESS,
-        in("eax") conf_addr,
-        options(nomem, nostack)
-    );
-    let val: u32;
-    core::arch::asm!(
-        "in eax, dx",
-        out("eax") val,
-        in("dx") PCI_CONFIG_DATA,
-        options(nomem, nostack)
-    );
-    val
-}
-
-#[cfg(not(target_arch = "x86_64"))]
-unsafe fn pci_read32(_bus: u8, _dev: u8, _func: u8, _offset: u8) -> u32 {
-    0xFFFF_FFFF
-}
-
-unsafe fn pci_read16(bus: u8, dev: u8, func: u8, offset: u8) -> u16 {
-    let dword = pci_read32(bus, dev, func, offset & 0xFC);
-    ((dword >> ((offset & 2) * 8)) & 0xFFFF) as u16
-}
-
-unsafe fn pci_read8(bus: u8, dev: u8, func: u8, offset: u8) -> u8 {
-    let dword = pci_read32(bus, dev, func, offset & 0xFC);
-    ((dword >> ((offset & 3) * 8)) & 0xFF) as u8
-}
+// Audit C-03: Remplacement des E/S directes par ports Ring 3 (out dx, in dx) par le broker matériel sécurisé DeviceIo (Syscall 29)
+use libjambo::{pci_read16, pci_read32, pci_read8};
 
 pub struct PciNetDevice {
     pub common_cfg_base: u64,
@@ -83,7 +44,7 @@ pub fn scan_pci_virtio_net() -> Option<PciNetDevice> {
     for bus in 0..=1 {
         for dev in 0..32 {
             for func in 0..8 {
-                let vendor_id = unsafe { pci_read16(bus, dev, func, 0x00) };
+                let vendor_id = pci_read16(bus, dev, func, 0x00);
                 if vendor_id != 0x1AF4 {
                     if func == 0 && (vendor_id == 0xFFFF || vendor_id == 0x0000) {
                         break;
@@ -91,7 +52,7 @@ pub fn scan_pci_virtio_net() -> Option<PciNetDevice> {
                     continue;
                 }
 
-                let device_id = unsafe { pci_read16(bus, dev, func, 0x02) };
+                let device_id = pci_read16(bus, dev, func, 0x02);
                 if device_id != 0x1041 && device_id != 0x1000 {
                     continue;
                 }
@@ -100,12 +61,12 @@ pub fn scan_pci_virtio_net() -> Option<PciNetDevice> {
                 let mut bar_idx = 0;
                 while bar_idx < 6 {
                     let bar_offset = 0x10 + (bar_idx as u8) * 4;
-                    let bar_val = unsafe { pci_read32(bus, dev, func, bar_offset) };
+                    let bar_val = pci_read32(bus, dev, func, bar_offset);
                     let is_io = (bar_val & 1) != 0;
                     if !is_io && bar_val != 0 {
                         let mem_type = (bar_val >> 1) & 3;
                         if mem_type == 2 && bar_idx + 1 < 6 {
-                            let bar_high = unsafe { pci_read32(bus, dev, func, bar_offset + 4) };
+                            let bar_high = pci_read32(bus, dev, func, bar_offset + 4);
                             bars[bar_idx] = ((bar_high as u64) << 32) | ((bar_val & !0x0F) as u64);
                             bar_idx += 2;
                             continue;
@@ -116,12 +77,12 @@ pub fn scan_pci_virtio_net() -> Option<PciNetDevice> {
                     bar_idx += 1;
                 }
 
-                let status = unsafe { pci_read16(bus, dev, func, 0x06) };
+                let status = pci_read16(bus, dev, func, 0x06);
                 if (status & (1 << 4)) == 0 {
                     continue;
                 }
 
-                let mut cap_ptr = unsafe { pci_read8(bus, dev, func, 0x34) };
+                let mut cap_ptr = pci_read8(bus, dev, func, 0x34);
                 let mut common_cfg = 0u64;
                 let mut notify_cfg = 0u64;
                 let mut notify_mult = 4u32;
@@ -129,13 +90,13 @@ pub fn scan_pci_virtio_net() -> Option<PciNetDevice> {
                 let mut loop_guard = 0;
 
                 while cap_ptr != 0 && loop_guard < 48 {
-                    let cap_id = unsafe { pci_read8(bus, dev, func, cap_ptr) };
-                    let next_ptr = unsafe { pci_read8(bus, dev, func, cap_ptr + 1) };
+                    let cap_id = pci_read8(bus, dev, func, cap_ptr);
+                    let next_ptr = pci_read8(bus, dev, func, cap_ptr + 1);
 
                     if cap_id == 0x09 {
-                        let cfg_type = unsafe { pci_read8(bus, dev, func, cap_ptr + 3) };
-                        let bar = unsafe { pci_read8(bus, dev, func, cap_ptr + 4) } as usize;
-                        let offset = unsafe { pci_read32(bus, dev, func, cap_ptr + 8) } as u64;
+                        let cfg_type = pci_read8(bus, dev, func, cap_ptr + 3);
+                        let bar = pci_read8(bus, dev, func, cap_ptr + 4) as usize;
+                        let offset = pci_read32(bus, dev, func, cap_ptr + 8) as u64;
 
                         if bar < 6 && bars[bar] != 0 {
                             let base = bars[bar] + offset;
@@ -143,8 +104,7 @@ pub fn scan_pci_virtio_net() -> Option<PciNetDevice> {
                                 virtio_drv::VIRTIO_PCI_CAP_COMMON_CFG => common_cfg = base,
                                 virtio_drv::VIRTIO_PCI_CAP_NOTIFY_CFG => {
                                     notify_cfg = base;
-                                    notify_mult =
-                                        unsafe { pci_read32(bus, dev, func, cap_ptr + 16) };
+                                    notify_mult = pci_read32(bus, dev, func, cap_ptr + 16);
                                 }
                                 virtio_drv::VIRTIO_PCI_CAP_DEVICE_CFG => device_cfg = base,
                                 _ => {}

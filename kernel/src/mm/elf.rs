@@ -79,6 +79,7 @@ pub fn load_elf64(aspace: &AddressSpace, elf_bytes: &[u8]) -> Result<ElfLoadResu
 
     // 1. Valider l'en-tête ELF64
     let header_ptr = elf_bytes.as_ptr() as *const Elf64Header;
+    // SAFETY: elf_bytes.len() >= size_of::<Elf64Header>() est vérifié ci-dessus ; read_unaligned évite les UB d'alignement.
     let header = unsafe { core::ptr::read_unaligned(header_ptr) };
 
     if header.e_ident[0..4] != ELF_MAGIC {
@@ -112,7 +113,9 @@ pub fn load_elf64(aspace: &AddressSpace, elf_bytes: &[u8]) -> Result<ElfLoadResu
     // 2. Parcourir et mapper tous les segments PT_LOAD
     for i in 0..phnum {
         let phdr_offset = phoff + i * phentsize;
+        // SAFETY: phdr_offset + phentsize est vérifié être contenu dans elf_bytes.len() ; pointeur valide.
         let phdr_ptr = unsafe { elf_bytes.as_ptr().add(phdr_offset) as *const Elf64Phdr };
+        // SAFETY: read_unaligned garantit une lecture sans UB sur des segments éventuellement non alignés.
         let phdr = unsafe { core::ptr::read_unaligned(phdr_ptr) };
 
         if phdr.p_type == 6 {
@@ -156,6 +159,7 @@ pub fn load_elf64(aspace: &AddressSpace, elf_bytes: &[u8]) -> Result<ElfLoadResu
 
                     if page_offset < filesz {
                         let to_copy = (filesz - page_offset).min(PAGE_SIZE);
+                        // SAFETY: page_virt est une page physique allouée par le VMO et accessible en HHDM ; segment_bytes et to_copy sont bornés par filesz.
                         unsafe {
                             core::ptr::copy_nonoverlapping(
                                 segment_bytes.as_ptr().add(page_offset),
@@ -173,6 +177,7 @@ pub fn load_elf64(aspace: &AddressSpace, elf_bytes: &[u8]) -> Result<ElfLoadResu
                         }
                     } else {
                         // Page entièrement dans le BSS
+                        // SAFETY: page_virt pointe sur une page allouée par le VMO de taille PAGE_SIZE accessible en HHDM.
                         unsafe {
                             core::ptr::write_bytes(page_virt, 0, PAGE_SIZE);
                         }
