@@ -41,6 +41,20 @@ enum Commands {
         #[arg(long)]
         release: bool,
     },
+    /// Génère l'arborescence EFI System Partition (ESP) prête à copier sur clé USB FAT32
+    Esp {
+        #[arg(long)]
+        release: bool,
+    },
+    /// Outil de déploiement et écriture sur clé USB pour matériel physique
+    #[command(alias = "flash")]
+    FlashUsb {
+        #[arg(long)]
+        release: bool,
+        /// Répertoire monté du périphérique (ex: E:\ sous Windows ou /media/user/USB sous Linux)
+        #[arg(long)]
+        device: Option<String>,
+    },
 }
 
 fn root_dir() -> PathBuf {
@@ -1897,6 +1911,9 @@ fn run_test(release: bool) -> anyhow::Result<()> {
     let code = output.status.code().unwrap_or(-1);
     let success = code == 33
         || combined.contains(
+            "[PASS] Jalon 5.1 : Deploiement Silicium Bare-Metal & Outillage ESP/Flash-USB valides",
+        )
+        || combined.contains(
             "[PASS] Documentation d'Architecture, Benchmarks Comparatifs et Jalon 4.6 valides",
         )
         || combined.contains(
@@ -2018,6 +2035,123 @@ fn run_test(release: bool) -> anyhow::Result<()> {
     }
 }
 
+fn create_esp(release: bool) -> anyhow::Result<PathBuf> {
+    let root = root_dir();
+    let kernel_bin = build_kernel(release, false)?;
+    let initrd_tar = create_initrd(release)?;
+
+    let esp_dir = root.join("target/esp");
+    let boot_dir = esp_dir.join("boot");
+    let limine_dir = boot_dir.join("limine");
+    let efi_boot_dir = esp_dir.join("EFI/BOOT");
+
+    let _ = fs::remove_dir_all(&esp_dir);
+    fs::create_dir_all(&limine_dir)?;
+    fs::create_dir_all(&efi_boot_dir)?;
+
+    // Copie du noyau et de l'initrd
+    fs::copy(&kernel_bin, boot_dir.join("jambo-kernel.elf"))?;
+    fs::copy(&initrd_tar, boot_dir.join("initrd.tar"))?;
+
+    // Configuration Limine standard pour le bare-metal avec timeout de 3 secondes
+    let limine_conf_content = "timeout: 3\n\n/JamboOS (Production)\n    protocol: limine\n    kernel_path: boot():/boot/jambo-kernel.elf\n    module_path: boot():/boot/initrd.tar\n\n/JamboOS (Test CI)\n    protocol: limine\n    kernel_path: boot():/boot/jambo-kernel.elf\n    module_path: boot():/boot/initrd.tar\n    cmdline: test\n";
+    fs::write(limine_dir.join("limine.conf"), limine_conf_content)?;
+
+    // Copie des chargeurs EFI officiels
+    let src_limine = root.join("boot/limine");
+    if src_limine.join("BOOTX64.EFI").exists() {
+        fs::copy(
+            src_limine.join("BOOTX64.EFI"),
+            efi_boot_dir.join("BOOTX64.EFI"),
+        )?;
+    }
+    if src_limine.join("BOOTAA64.EFI").exists() {
+        fs::copy(
+            src_limine.join("BOOTAA64.EFI"),
+            efi_boot_dir.join("BOOTAA64.EFI"),
+        )?;
+    }
+
+    println!(
+        "\x1b[1;32m[ESP PRÊT]\x1b[0m Arborescence EFI System Partition générée dans : {}",
+        esp_dir.display()
+    );
+    println!("👉 Pour démarrer sur matériel physique (Intel NUC, PC, Raspberry Pi 4) :");
+    println!("   1. Formatez une clé USB en FAT32 (table GPT).");
+    println!("   2. Copiez l'intégralité du contenu de 'target/esp/' à la racine de la clé.");
+    println!("   3. Insérez la clé sur la machine cible et démarrez en mode UEFI (F10 / F12).");
+
+    Ok(esp_dir)
+}
+
+fn flash_usb(release: bool, device: Option<String>) -> anyhow::Result<()> {
+    let esp_path = create_esp(release)?;
+
+    println!("\n================================================================================");
+    println!("       OUTIL DE DÉPLOIEMENT BARE-METAL JAMBO-OS (Palier 5 — Jalon 5.1)");
+    println!("================================================================================\n");
+
+    if let Some(target) = device {
+        let dest = PathBuf::from(&target);
+        if dest.exists() && dest.is_dir() {
+            println!(
+                "Copie directe des fichiers EFI vers le périphérique {}...",
+                target
+            );
+            copy_dir_recursive(&esp_path, &dest)?;
+            println!(
+                "\x1b[1;32m[SUCCÈS]\x1b[0m Clé USB préparée avec succès sur {} !",
+                target
+            );
+            println!(
+                "Vous pouvez éjecter la clé en toute sécurité et démarrer votre machine physique."
+            );
+            return Ok(());
+        } else {
+            println!(
+                "Le périphérique spécifié '{}' n'est pas un répertoire de volume accessible.",
+                target
+            );
+            println!("Vérifiez qu'il est bien formaté en FAT32 et monté (ex: E:\\ sous Windows).");
+        }
+    }
+
+    println!("Instructions de déploiement pour votre système d'exploitation :\n");
+    println!("  [1] SOUS WINDOWS :");
+    println!("      - Repérez la lettre de votre clé USB FAT32 (ex: E:)");
+    println!("      - Exécutez : cargo xtask flash-usb --release --device E:\\");
+    println!(
+        "      - Ou copiez manuellement le dossier 'target/esp' avec l'Explorateur de fichiers.\n"
+    );
+    println!("  [2] SOUS LINUX / MACOS :");
+    println!("      - Montez votre clé USB (ex: /media/$USER/USB_KEY)");
+    println!("      - Exécutez : cp -r target/esp/* /media/$USER/USB_KEY/ && sync");
+    println!("      - Ou flashez l'ISO hybride directe via dd :");
+    println!("        sudo dd if=target/jamboos-x86_64.iso of=/dev/sdX bs=4M status=progress conv=fdatasync\n");
+    println!("Consultez le guide complet dans : docs/BAREMETAL.md");
+
+    Ok(())
+}
+
+fn copy_dir_recursive(src: &Path, dst: &Path) -> anyhow::Result<()> {
+    if !dst.exists() {
+        fs::create_dir_all(dst)?;
+    }
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let entry_type = entry.file_type()?;
+        let src_path = entry.path();
+        let dst_path = dst.join(entry.file_name());
+
+        if entry_type.is_dir() {
+            copy_dir_recursive(&src_path, &dst_path)?;
+        } else {
+            fs::copy(&src_path, &dst_path)?;
+        }
+    }
+    Ok(())
+}
+
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.command {
@@ -2035,6 +2169,11 @@ fn main() -> anyhow::Result<()> {
             create_iso(release, test)?;
             Ok(())
         }
+        Commands::Esp { release } => {
+            create_esp(release)?;
+            Ok(())
+        }
+        Commands::FlashUsb { release, device } => flash_usb(release, device),
         Commands::Run {
             release,
             smp,

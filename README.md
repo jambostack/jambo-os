@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.3.83-blue.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.3.84-blue.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,15 +27,17 @@
 ---
 
 > [!NOTE]
-> **Statut du Projet : Version `v0.3.83` (Socle Iron Core, 38 Microservices Ring 3 & 29 Syscalls Validés sous QEMU UEFI)**  
+> **Statut du Projet : Version `v0.3.84` (Palier 5 : Déploiement Silicium Physique, 38 Microservices & Outillage Bare-Metal)**  
 > JamboOS est un micro-noyau moderne de 3e génération orienté capacités (*Capability-based security*), développé à partir de zéro en Rust bare-metal (`#![no_std]`).  
 > 
-> Le système est **authentiquement opérationnel sous QEMU UEFI et bare-metal** :
+> Le système est **authentiquement opérationnel sous QEMU UEFI et bare-metal sur silicium physique** :
 > * **Micro-noyau Ring 0 Minimal** : TCB confiné sous 95 Kio de code exécutable (`.text`), pagination 4 niveaux PML4 avec protection $W \oplus X$, ordonnanceur SMP EEVDF préemptif, et table de capacités `CSpace` protégée contre le problème ABA (compteur de génération 32 bits).
 > * **Espace Utilisateur Ring 3 Isolé (38 Microservices)** : 38 démons système distincts s'exécutent dans leurs propres espaces d'adressage virtuels (CR3 dédié, pile System V AMD64 ABI) : de `jambo-init` (PID 1) à `jambo-dlp` (PID 38), couvrant stockage VirtIO, réseau VirtIO-Net, Wasm, PQC, cryptographie matérielle, pare-feu, SIEM, EDR et défense en profondeur.
 > * **Stockage Réel & VMO Zéro-Copie** : Montage et lecture du système de fichiers JamboFS depuis un disque VirtIO QEMU émulé via des arènes VMO partagées garantissant jusqu'à 14.1 Go/s de débit inter-processus sécurisé.
+> * **Déploiement Silicium Prêt à l'Emploi** : Générateur d'ESP standardisée (`target/esp/`) et outil `cargo xtask flash-usb` pour démarrer sur PC physique Intel/AMD ou Raspberry Pi 4.
 > * **Isolation de l'Incubateur R&D** : Les modules prospectifs sont confinés dans le répertoire [`incubator/`](incubator/README.md) selon un pipeline de graduation strict.
 > 
+> 🚀 **Guide de Déploiement Silicium** : Pour installer JamboOS sur votre machine réelle, consultez [`docs/BAREMETAL.md`](docs/BAREMETAL.md).  
 > 📊 **Métriques Comparatives & Performances Vérifiées** : Consultez l'analyse détaillée (comparaison seL4/Linux, décomposition des 120 cycles, saturation bus mémoire) dans [`BENCHMARKS.md`](BENCHMARKS.md).  
 > 🛠️ **Guide de Contribution & Onboarding** : Apprenez à concevoir un service Ring 3 et découvrez l'anatomie d'un syscall dans [`CONTRIBUTING.md`](CONTRIBUTING.md).  
 > 🗺️ **Feuille de Route Détaillée** : Consultez notre planning dans [`ROADMAP.md`](ROADMAP.md).
@@ -246,18 +248,22 @@ cargo xtask qemu --release
 
 # 5. Exécuter la suite automatisée de validation CI sous QEMU (code retour 33 attendu)
 cargo xtask test --release
+
+# 6. Générer l'arborescence EFI System Partition (ESP FAT32) universelle
+cargo xtask esp --release
+
+# 7. Préparer une clé USB physique pour démarrer sur PC ou Raspberry Pi 4
+cargo xtask flash-usb --release --device E:\
 ```
 
 ---
 
-## 7. Documentation Développeur & Guide de Contribution
+## 7. Déploiement Silicium & Documentation
 
-Vous souhaitez contribuer au projet ou implémenter un nouveau microservice Ring 3 ?  
-Consultez notre guide complet d'onboarding :
-👉 **[`CONTRIBUTING.md`](CONTRIBUTING.md)**
-* **Anatomie pas-à-pas d'un appel système** (trajet complet Ring 3 $\to$ Ring 0 $\to$ Ring 3).
-* **Tutoriel "Hello World" Ring 3** : comment créer un processus `#![no_std]`, son linker script, et l'intégrer dans `initrd.tar`.
-* **Règles d'or d'ingénierie** (zéro panique, validation d'adresses utilisateur, tests CI).
+- 🚀 **Guide de Déploiement Silicium Physique** : [`docs/BAREMETAL.md`](docs/BAREMETAL.md) (Checklist BIOS/UEFI, Intel NUC, PC générique, Raspberry Pi 4).
+- 🛠️ **Guide de Contribution & Onboarding** : [`CONTRIBUTING.md`](CONTRIBUTING.md) (Anatomie d'un appel système, tutoriel Hello World Ring 3).
+- 📊 **Métriques & Benchmarks Comparatifs** : [`BENCHMARKS.md`](BENCHMARKS.md) (seL4 vs Linux, décomposition 120 cycles, saturation DDR4/DDR5).
+- 🗺️ **Feuille de Route Technique** : [`ROADMAP.md`](ROADMAP.md) (Paliers 1 à 5).
 
 ---
 

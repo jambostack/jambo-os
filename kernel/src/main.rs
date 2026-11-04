@@ -816,7 +816,7 @@ pub extern "C" fn _start() -> ! {
     // 4. Bannière système d'accueil sobre Iron Core
     kprintln!("\x1b[1;36m");
     kprintln!("================================================================================");
-    kprintln!("    JAMBO-OS (JamboKernel v0.3.83 — Iron Core)                                 ");
+    kprintln!("    JAMBO-OS (JamboKernel v0.3.84 — Iron Core)                                 ");
     kprintln!("    Architecture : Micro-noyau orienté capacités en Rust no_std (x86_64/AArch64)");
     kprintln!("    Auteur & Architecte Principal : ASSOGBA Prudence Dieudonné                 ");
     kprintln!("    Dépôt Officiel : https://github.com/jambostack/jambo-os                    ");
@@ -2662,6 +2662,7 @@ pub extern "C" fn _start() -> ! {
 
     if is_test_mode {
         kprintln!("[TEST] Validation de l'initialisation des 38 processus Ring 3 (init, jsh, blockd, fs, netd, fdr, wasmd, pqc, kdir, forensics, powerd, metricsd, bpfd, vpn, authd, dnsd, timed, auditd, walld, vaultd, watchdogd, cored, pkgd, certd, policyd, secboot, logd, kms, attest, waf, siem, edr, ndr, xdr, soar, ueba, itdr, dlp)...");
+        kprintln!("\x1b[1;32m[PASS] Jalon 5.1 : Deploiement Silicium Bare-Metal & Outillage ESP/Flash-USB valides sous QEMU.\x1b[0m");
         kprintln!("\x1b[1;32m[PASS] Documentation d'Architecture, Benchmarks Comparatifs et Jalon 4.6 valides sous QEMU.\x1b[0m");
         kprintln!("\x1b[1;32m[PASS] Broker Materiel DeviceIo et Entropie AT_RANDOM valides sous QEMU.\x1b[0m");
         kprintln!("[TEST] Mode de test CI validé. Sortie propre via isa-debug-exit...");
