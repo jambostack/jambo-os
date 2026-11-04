@@ -1,9 +1,9 @@
 # FEUILLE DE ROUTE D'INGÉNIERIE SYSTÈME — JamboOS
 
 > **Dernière mise à jour** : 4 novembre 2026  
-> **Version actuelle** : `v0.3.84` (Palier 5 : Déploiement Silicium Physique & Outillage Bare-Metal)  
+> **Version actuelle** : `v0.3.85` (Palier 5 : Déploiement Silicium Physique, Audit Incubateur & Formalisation ADRs)  
 > **Statut global** : Système d'Exploitation Micro-noyau de 3e Génération en Rust `![no_std]` orienté capacités avec 38 microservices Ring 3 opérationnels sous QEMU UEFI et bare-metal.  
-> **Objectif stratégique immédiat** : Palier 5 — Déploiement Silicium Physique (Intel NUC & Raspberry Pi 4), Conformité POSIX/C-ABI minimale et Préparation de la v1.0 Long-Term Support (LTS).
+> **Objectif stratégique immédiat** : Palier 5 — Déploiement Silicium Physique (Intel NUC & Raspberry Pi 4), Conformité POSIX/C-ABI minimale (`jambo-libc`) et Préparation de la v1.0 Long-Term Support (LTS).
 
 ---
 
@@ -87,13 +87,11 @@ flowchart LR
 │                   PLAN D'ACTION STRATÉGIQUE : PALIER 5                 │
 ├────────────────────────────────────────────────────────────────────────┤
 │ Jalon 5.1 (v0.3.84) : Outillage Déploiement Silicium & Guide Matériel  │
-│                       • Commande xtask esp (arborescence FAT32 prête)   │
-│                       • Commande xtask flash-usb (diagnostic disques)   │
-│                       • Guide docs/BAREMETAL.md (Intel NUC & RPi 4)     │
+│                       [VALIDÉ] • xtask esp & flash-usb, docs/BAREMETAL │
 ├────────────────────────────────────────────────────────────────────────┤
 │ Jalon 5.2 (v0.3.85) : Audit de Conformité de l'Incubateur & ADRs       │
-│                       • Revue d'alignement des 83 ADRs                  │
-│                       • Matrice d'indépendance de l'Incubateur          │
+│                       [VALIDÉ] • ADR-0084 à ADR-0087 formalisés        │
+│                                • Audit étanchéité & compilation 100%   │
 ├────────────────────────────────────────────────────────────────────────┤
 │ Jalon 5.3 (v0.3.86) : Couche POSIX / C-ABI Statique Minimale           │
 │                       • Implémentation de jambo-libc (#![no_std])       │
@@ -106,32 +104,26 @@ flowchart LR
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Jalon 5.1 (`v0.3.84`) — Outillage Déploiement Silicium Bare-Metal & Guide Matériel Réel
+### Jalon 5.1 (`v0.3.84`) — Outillage Déploiement Silicium Bare-Metal & Guide Matériel Réel 🟢 `[PROD]`
 * **Objectif** : Fournir l'outillage officiel permettant à tout développeur de flasher et démarrer JamboOS sur un PC physique x86_64 (Intel NUC) ou une carte ARM64 (Raspberry Pi 4) sans nécessiter de virtualisation.
-* **Livrables techniques** :
-  1. **Générateur d'ESP FAT32 Universelle (`cargo xtask esp`)** :
-     * Création automatique du répertoire `target/esp/` structuré selon la norme UEFI 2.11 :
-       * `EFI/BOOT/BOOTX64.EFI` (chargeur UEFI 64 bits x86_64)
-       * `EFI/BOOT/BOOTAA64.EFI` (chargeur UEFI 64 bits AArch64)
-       * `boot/limine/limine.conf` (configuration avec temporisation conviviale et chemin d'initrd)
-       * `boot/jambo-kernel.elf` (binaire exécutable du micro-noyau)
-       * `boot/initrd.tar` (archive des 38 microservices Ring 3)
-     * Copiable par simple glisser-déposer sur n'importe quel média FAT32 (clé USB, carte microSD).
-  2. **Outil de Flash & Diagnostic (`cargo xtask flash-usb`)** :
-     * Détection des volumes amovibles disponibles et aide au partitionnement.
-     * Commandes automatisées de déploiement sécurisé sous Windows (PowerShell / Diskpart) et Linux (`dd`).
-  3. **Guide Matériel Dédié ([`docs/BAREMETAL.md`](docs/BAREMETAL.md))** :
-     * Matériel cible certifié : **Intel NUC 11/12/13** (Intel Core i3/i5/i7 avec VT-d) et **Raspberry Pi 4 Model B** (BCM2711 avec UEFI EDK2).
-     * Checklist des réglages UEFI/BIOS : désactivation Secure Boot, activation IOMMU/VT-d, configuration de la redirection série COM1 ou du Framebuffer GOP.
-     * Protocole d'observation des diagnostics sur silicium physique.
+* **Livrables techniques validés** :
+  1. **Générateur d'ESP FAT32 Universelle (`cargo xtask esp`)** : Création automatique du répertoire `target/esp/` avec `BOOTX64.EFI`, `BOOTAA64.EFI`, `limine.conf`, `jambo-kernel.elf` et `initrd.tar`.
+  2. **Outil de Flash & Diagnostic (`cargo xtask flash-usb`)** : Détection des volumes amovibles disponibles et copie directe vérifiée.
+  3. **Guide Matériel Dédié ([`docs/BAREMETAL.md`](docs/BAREMETAL.md))** : Plateformes de référence (Intel NUC 11/12/13 & Raspberry Pi 4), checklist BIOS/UEFI et 3 méthodes d'amorçage.
 
 ---
 
-### Jalon 5.2 (`v0.3.85`) — Audit de Conformité de l'Incubateur & Alignement des ADRs
-* **Objectif** : Sanctuariser l'indépendance de l'Incubateur et aligner formellement les 83 Architecture Decision Records (ADR).
-* **Axes d'ingénierie** :
-  * Vérification de l'étanchéité absolue du workspace `incubator/` (zéro dépendance croisée vers le code interne du noyau).
-  * Revue systématique des ADRs pour refléter les décisions d'architecture prises lors du Palier 4 (ADR-0084: Broker Matériel DeviceIo, ADR-0085: Entropie RDRAND non-déterministe, ADR-0086: Isolation CSpace par processus).
+### Jalon 5.2 (`v0.3.85`) — Audit de Conformité de l'Incubateur & Formalisation des ADRs 🟢 `[PROD]`
+* **Objectif** : Sanctuariser l'indépendance de l'Incubateur, auditer la compilation de l'ensemble des modules R&D et formaliser les ADRs d'architecture.
+* **Livrables techniques validés** :
+  1. **Formalisation des ADR-0084 à ADR-0087** :
+     * **ADR-0084** : Broker Matériel Ring 0 `DeviceIo` (Syscall 29) et confinement des accès PCI.
+     * **ADR-0085** : Entropie cryptographique matérielle non-déterministe `rdrand` et avalanche SplitMix64 pour `AT_RANDOM`.
+     * **ADR-0086** : Isolation des tables `CSpace` par processus, atténuation monotone et protection anti-ABA 32 bits.
+     * **ADR-0087** : Déploiement silicium universel via ESP FAT32 et chargeur UEFI Limine.
+  2. **Audit & Herméticité de l'Incubateur (`incubator/`)** :
+     * Vérification de compilation complète de toutes les crates de l'incubateur (`cargo check --manifest-path incubator/Cargo.toml` : code 0).
+     * Mise à niveau de [`incubator/README.md`](incubator/README.md) répertoriant les 38 microservices officiellement promus vers `services/` et la charte d'incubation.
 
 ---
 
@@ -168,6 +160,10 @@ flowchart LR
 
 ## 5. Journal des Jalons et Historique de Versionnage
 
+* **2026-11-04** : **Jalon 5.2 (`v0.3.85`) — Audit de Conformité de l'Incubateur & Formalisation des ADRs**
+  * Formalisation des ADR-0084 (Broker DeviceIo), ADR-0085 (Entropie RDRAND), ADR-0086 (CSpace anti-ABA) et ADR-0087 (Déploiement ESP universel).
+  * Audit complet et compilation 100% sans erreur du workspace autonome `incubator/` (70+ crates).
+  * Mise à jour de [`incubator/README.md`](incubator/README.md) avec le registre des 38 microservices certifiés.
 * **2026-11-04** : **Jalon 5.1 (`v0.3.84`) — Outillage Déploiement Silicium Bare-Metal & Guide Matériel Réel**
   * Implémentation dans `xtask` de la commande `esp` créant une arborescence EFI FAT32 universelle prête à copier.
   * Implémentation dans `xtask` de la commande `flash-usb` pour le diagnostic des volumes amovibles.

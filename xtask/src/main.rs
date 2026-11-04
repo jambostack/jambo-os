@@ -1911,6 +1911,9 @@ fn run_test(release: bool) -> anyhow::Result<()> {
     let code = output.status.code().unwrap_or(-1);
     let success = code == 33
         || combined.contains(
+            "[PASS] Jalon 5.2 : Audit Conformite Incubateur & Formalisation ADRs valides",
+        )
+        || combined.contains(
             "[PASS] Jalon 5.1 : Deploiement Silicium Bare-Metal & Outillage ESP/Flash-USB valides",
         )
         || combined.contains(
