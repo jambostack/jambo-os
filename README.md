@@ -9,11 +9,11 @@
 </p>
 
 <h1 align="center"><strong>JamboOS (jambostack/jambo-os)</strong></h1>
-<p align="center"><strong>Système d'Exploitation Micro-noyau de 3e Génération Orienté Capacités en Rust <code>#![no_std]</code></strong></p>
+<p align="center"><strong>Prototype Expérimental de Micro-noyau Orienté Capacités en Rust <code>#![no_std]</code></strong></p>
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.3.86-blue.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.3.87--pre--alpha-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -21,25 +21,25 @@
 <p align="center">
   <em>Auteur & Architecte Principal</em> : <strong>ASSOGBA Prudence Dieudonné</strong> &bull;
   <em>Dépôt officiel</em> : <a href="https://github.com/jambostack/jambo-os">https://github.com/jambostack/jambo-os</a><br>
-  <em>Architectures cibles</em> : x86_64 (Long Mode 64 bits) & AArch64 (ARM64) / Multicœur SMP / UEFI 2.11 (Protocole Limine v3)
+  <em>Architectures cibles (expérimentales)</em> : x86_64 (Long Mode) & AArch64 (ARM64) / SMP / UEFI (Protocole Limine v3)
 </p>
 
 ---
 
-> [!NOTE]
-> **Statut du Projet : Version `v0.3.86` (Palier 5 : Déploiement Silicium Physique, Couche POSIX & C-ABI Statique)**  
-> JamboOS est un micro-noyau moderne de 3e génération orienté capacités (*Capability-based security*), développé à partir de zéro en Rust bare-metal (`#![no_std]`).  
+> [!WARNING]
+> **Avertissement sur la Maturité & Stade du Projet : Version `v0.3.87` (Pre-Alpha / Prototype Expérimental)**  
+> **JamboOS est un projet expérimental de recherche à un stade très initial (Pre-Alpha). Le système est encore très immature et à une année-lumière d'une version 1.0.0 utilisable en production.**  
 > 
-> Le système est **authentiquement opérationnel sous QEMU UEFI et bare-metal sur silicium physique** :
-> * **Micro-noyau Ring 0 Minimal** : TCB confiné sous 95 Kio de code exécutable (`.text`), pagination 4 niveaux PML4 avec protection $W \oplus X$, ordonnanceur SMP EEVDF préemptif, et table de capacités `CSpace` protégée contre le problème ABA (compteur de génération 32 bits).
-> * **Espace Utilisateur Ring 3 Isolé (38 Microservices)** : 38 démons système distincts s'exécutent dans leurs propres espaces d'adressage virtuels (CR3 dédié, pile System V AMD64 ABI) : de `jambo-init` (PID 1) à `jambo-dlp` (PID 38), couvrant stockage VirtIO, réseau VirtIO-Net, Wasm, PQC, cryptographie matérielle, pare-feu, SIEM, EDR et défense en profondeur.
-> * **Stockage Réel & VMO Zéro-Copie** : Montage et lecture du système de fichiers JamboFS depuis un disque VirtIO QEMU émulé via des arènes VMO partagées garantissant jusqu'à 14.1 Go/s de débit inter-processus sécurisé.
-> * **Déploiement Silicium Prêt à l'Emploi** : Générateur d'ESP standardisée (`target/esp/`) et outil `cargo xtask flash-usb` pour démarrer sur PC physique Intel/AMD ou Raspberry Pi 4.
-> * **Isolation de l'Incubateur R&D** : Les modules prospectifs sont confinés dans le répertoire [`incubator/`](incubator/README.md) selon un pipeline de graduation strict.
+> Ce dépôt explore la faisabilité d'un micro-noyau moderne en Rust `![no_std]` inspiré des principes de seL4 et Zircon. Bien que le système démarre sous QEMU et sur machine UEFI réelle :
+> * **Stade de Développement** : Les microservices et pilotes actuels sont des prototypes et squelettes fonctionnels minimaux servant de preuve de concept.
+> * **Périmètre Opérationnel** : Pagination PML4 de base, ordonnanceur EEVDF expérimental, pilote VirtIO simplifié, arènes VMO et couche POSIX minimale.
+> * **Feuille de Route** : De nombreux chantiers majeurs (pilotes matériels réels NVMe/USB, pile TCP/IP complète, système de fichiers persistant, audits formels et campagnes de fuzzing) devront être menés sur le long terme avant d'envisager une quelconque stabilité.
 > 
-> 🚀 **Guide de Déploiement Silicium** : Pour installer JamboOS sur votre machine réelle, consultez [`docs/BAREMETAL.md`](docs/BAREMETAL.md).  
-> 📊 **Métriques Comparatives & Performances Vérifiées** : Consultez l'analyse détaillée (comparaison seL4/Linux, décomposition des 120 cycles, saturation bus mémoire) dans [`BENCHMARKS.md`](BENCHMARKS.md).  
-> 🛠️ **Guide de Contribution & Onboarding** : Apprenez à concevoir un service Ring 3 et découvrez l'anatomie d'un syscall dans [`CONTRIBUTING.md`](CONTRIBUTING.md).  
+> 📜 **Notes de Version v0.3.87** : Consultez [`docs/RELEASE_NOTES_v0.3.87.md`](docs/RELEASE_NOTES_v0.3.87.md).  
+> 🚀 **Guide de Test Silicium** : Pour tester le prototype sur machine réelle, consultez [`docs/BAREMETAL.md`](docs/BAREMETAL.md).  
+> 🎬 **Protocole de Démonstration** : Suivez le script de test pas-à-pas dans [`docs/DEMO.md`](docs/DEMO.md).  
+> 📊 **Métriques Expérimentales** : Consultez les mesures préliminaires dans [`BENCHMARKS.md`](BENCHMARKS.md).  
+> 🛠️ **Guide de Contribution** : Découvrez les conventions internes dans [`CONTRIBUTING.md`](CONTRIBUTING.md).  
 > 🗺️ **Feuille de Route Détaillée** : Consultez notre planning dans [`ROADMAP.md`](ROADMAP.md).
 
 ---

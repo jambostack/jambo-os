@@ -1,27 +1,27 @@
 # FEUILLE DE ROUTE D'INGÉNIERIE SYSTÈME — JamboOS
 
 > **Dernière mise à jour** : 4 novembre 2026  
-> **Version actuelle** : `v0.3.86` (Palier 5 : Déploiement Silicium Physique & Couche POSIX / C-ABI Statique)  
-> **Statut global** : Système d'Exploitation Micro-noyau de 3e Génération en Rust `![no_std]` orienté capacités avec 38 microservices Ring 3 opérationnels sous QEMU UEFI et bare-metal.  
-> **Objectif stratégique immédiat** : Palier 5 — Déploiement Silicium Physique (Intel NUC & Raspberry Pi 4), Démonstration Vidéo Bare-Metal et Préparation de la v1.0 Long-Term Support (LTS).
+> **Version actuelle** : `v0.3.87` (Pre-Alpha / Prototype Expérimental de Recherche)  
+> **Statut global** : Prototype de micro-noyau orienté capacités en Rust `![no_std]`. **Projet à un stade très initial et immature, à une année-lumière d'une version 1.0.0 utilisable en production.**  
+> **Objectif stratégique immédiat** : Stabiliser les fondations expérimentales (Palier 5 : Démonstration Silicium, ABI v0.4, ESP FAT32 & Outillage de distribution).
 
 ---
 
 ## 1. Principes Directeurs & Cadre de Maturité
 
-À la suite de la revue critique et constructive d'architecture et de l'achèvement du cycle de durcissement *Iron Hardening*, JamboOS applique une politique de **transparence technique totale** articulée autour d'une échelle de maturité à 3 stades stricts :
+JamboOS applique une politique de **transparence technique totale** sur la maturité réelle de ses composants. Le projet distingue trois stades :
 
 ```mermaid
 flowchart LR
-    A["[SIM] Incubateur R&D<br/>• Modèles algorithmiques en mémoire<br/>• Recherche cryptographique & IA<br/>• Emplacement: incubator/"] -->|Promotion| B["[RING3-HW] Service Ring 3<br/>• Binaire ELF64 isolé (CR3 propre)<br/>• Pile System V ABI<br/>• Pilotage matériel IPC / IOMMU<br/>• Emplacement: services/ & drivers/"]
-    B -->|Certification| C["[PROD] Socle Officiel Certifié<br/>• Inclus dans le runner CI<br/>• TCB garanti &lt; 95 Kio<br/>• Zéro allocation non bornée<br/>• Emplacement: kernel/ & abi/"]
+    A["[SIM] Incubateur R&D<br/>• Algorithmes exploratoires en mémoire<br/>• Recherche cryptographique & IA<br/>• Emplacement: incubator/"] -->|Ébauche| B["[RING3-STUB] Prototype Ring 3<br/>• Binaire ELF64 minimal (CR3 propre)<br/>• Squelette fonctionnel d'expérimentation<br/>• Emplacement: services/ & drivers/"]
+    B -->|Durcissement| C["[CORE-EXP] Noyau Expérimental<br/>• TCB minimal &lt; 95 Kio<br/>• Pagination PML4 et EEVDF expérimental<br/>• Emplacement: kernel/ & abi/"]
 ```
 
-| Niveau | Sigle | Emplacement | Définition & Critères d'Ingénierie |
+| Niveau | Sigle | Emplacement | Définition & Stade Réel |
 | :---: | :---: | :--- | :--- |
-| 🟢 | **`[PROD]`** | `kernel/`, `abi/`, `xtask/` | **Production Certifiée** : Code compilé en `#![no_std]`, exécuté sous QEMU et bare-metal, 0 allocation dynamique non maîtrisée, linters stricts (`clippy -D warnings`), audit formel de bornes. |
-| 🟡 | **`[RING3-HW]`** | `services/`, `drivers/`, `libs/` | **Exécutable Ring 3 Autonome** : Binaire ELF64 isolé dans son propre espace d'adressage virtuel (CR3), pilotant le matériel via IPC/VMO sous barrière IOMMU. 38 microservices actuellement certifiés. |
-| 🔵 | **`[SIM]`** | `incubator/` | **Modèle Prospectif / Incubateur** : Algorithmes et preuves de concept validés logiquement en mémoire, en attente de portage vers la chaîne d'outillage Ring 3. |
+| 🟢 | **`[CORE-EXP]`** | `kernel/`, `abi/`, `xtask/` | **Socle Noyau Expérimental** : Code bare-metal compilé en `#![no_std]`, amorçable sous QEMU et bare-metal UEFI, testé via CI. |
+| 🟡 | **`[RING3-STUB]`**| `services/`, `drivers/`, `libs/` | **Prototypes Ring 3** : Squelettes et microservices de preuve de concept (PoC) isolés dans leurs espaces virtuels (CR3 propre). |
+| 🔵 | **`[SIM]`** | `incubator/` | **Recherche & Exploration** : Briques de recherche prospective isolées du reste de la chaîne d'outillage. |
 
 ---
 
@@ -31,16 +31,15 @@ flowchart LR
 ┌────────────────────────────────────────────────────────────────────────┐
 │                   HISTORIQUE DES PALIERS ACCOMPLIS                     │
 ├────────────────────────────────────────────────────────────────────────┤
-│ Palier 1 : Stabilisation « Iron Core » (Micro-noyau minimal Ring 0)    │
-│            [VALIDÉ — v0.3.40]                                          │
+│ Palier 1 : Élagage du Noyau & Base Iron Core [v0.3.40]                 │
 ├────────────────────────────────────────────────────────────────────────┤
-│ Palier 2 : Tranche Verticale Ring 3 (Stockage, Réseau, Shell)          │
+│ Palier 2 : Tranche Verticale Expérimentale (Stockage, Réseau, Shell)   │
 │            [VALIDÉ — v0.3.41 à v0.3.44]                                │
 ├────────────────────────────────────────────────────────────────────────┤
-│ Palier 3 : Écosystème des 38 Microservices Ring 3 & Résilience        │
+│ Palier 3 : Squelettes des 38 Microservices Ring 3                      │
 │            [VALIDÉ — v0.3.45 à v0.3.77]                                │
 ├────────────────────────────────────────────────────────────────────────┤
-│ Palier 4 : Cycle de Durcissement Fondamental « Iron Hardening »        │
+│ Palier 4 : Cycle de Durcissement « Iron Hardening »                     │
 │            [VALIDÉ — v0.3.78 à v0.3.83]                                │
 │            • v0.3.78 (Jalon 4.1) : Frontières Noyau & CSpace isolées   │
 │            • v0.3.79 (Jalon 4.2) : PMM Buddy & Cycle de vie VMO        │
@@ -48,127 +47,66 @@ flowchart LR
 │            • v0.3.81 (Jalon 4.4) : IPC Ring Buffers & VMO zéro-copie   │
 │            • v0.3.82 (Jalon 4.5) : Broker DeviceIo & Entropie RDRAND   │
 │            • v0.3.83 (Jalon 4.6) : Documentation, Guide & Benchmarks   │
+├────────────────────────────────────────────────────────────────────────┤
+│ Palier 5 : Déploiement Silicium Bare-Metal, ABI v0.4 & Distribution    │
+│            [VALIDÉ — v0.3.84 à v0.3.87]                                │
+│            • v0.3.84 (Jalon 5.1) : Outillage ESP FAT32 & docs/BAREMETAL│
+│            • v0.3.85 (Jalon 5.2) : Audit Incubateur & ADR-0084 à 0087  │
+│            • v0.3.86 (Jalon 5.3) : Couche POSIX & C-ABI statique       │
+│            • v0.3.87 (Jalon 5.4) : Démo Bare-metal & cargo xtask dist  │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Palier 1 : Stabilisation de l'Iron Core (`v0.3.40`) 🟢 `[PROD]`
-* **Élagage Radical du Ring 0** : Suppression des 80+ suites de tests mocks logées dans le noyau (TCB confiné sous 95 Kio de code exécutable `.text`).
-* **Pagination Matérielle 4 Niveaux (x86_64)** : Gestion des tables PML4/PDPT/PD/PT, commutation de CR3 en assembleur inline, politique $W \oplus X$ et identité HHDM.
-* **Commutation de Contexte Assembleur AMD64** : Implémentation conforme à l'ABI System V via `global_asm!` et ordonnanceur SMP EEVDF.
-* **Sécurité par Capacités (`CSpace`)** : Primitives de descripteurs 64 bits avec compteur de génération 32 bits anti-ABA.
+---
 
-### Palier 2 : La Tranche Verticale Ring 3 (`v0.3.41` à `v0.3.44`) 🟡 `[RING3-HW]`
-* **Jalon 2.1 (`v0.3.41`)** : Console UART COM1 (115200 baud) et Shell Ring 3 modulaire `jambo-sh` (PID 2) supervisé par `jambo-init` (PID 1).
-* **Jalon 2.2 (`v0.3.42`)** : Pilote VirtIO-Block Modern 1.2 Ring 3 (`jambo-blockd`, PID 3), serveur de fichiers `jambo-fs` (PID 4), montage Uberblock et arène VMO 64 Kio zéro-copie.
-* **Jalon 2.3 (`v0.3.43`)** : Assainissement du monorepo avec isolation de ~100 crates prospectives dans `incubator/` et publication initiale de [`BENCHMARKS.md`](BENCHMARKS.md).
-* **Jalon 2.4 (`v0.3.44`)** : Pilote VirtIO-Net Modern 1.2 Ring 3 (`jambo-netd`, PID 5), micro-pile réseau `#![no_std]`, résolutions ARP et traitement des requêtes ICMP Echo (ping) sous QEMU.
+## 3. Plan d'Ingénierie & Paliers Futurs Vers la Maturité
 
-### Palier 3 : Écosystème des 38 Microservices Ring 3 (`v0.3.45` à `v0.3.77`) 🟡 `[RING3-HW]`
-* **38 Démons Isolés Autonomes** : Déploiement complet des microservices système, de `jambo-fdr` (PID 6, résilience matérielle) et `jambo-wasmd` (PID 7, micro-VM Wasm) jusqu'à `jambo-dlp` (PID 38, prévention des fuites de données).
-* **Confinement Spatial & Temporel** : Chaque microservice possède son propre espace virtuel PML4 (CR3), sa pile System V ABI et ses canaux IPC dédiés.
+> [!NOTE]
+> Le chemin menant à une version 1.0.0 stable et utilisable en conditions réelles exigera de longues phases de stabilisation, de développement de pilotes natifs et d'audits formels.
 
-### Palier 4 : Cycle de Durcissement Fondamental « Iron Hardening » (`v0.3.78` à `v0.3.83`) 🟢 `[PROD]`
-* **Jalon 4.1 (`v0.3.78`)** : Résolution **C-01** (CSpace privées par processus, atténuation monotone dans `CapTransfer`) et **C-02** (Éradication des déréférencements directs en Ring 0, module `user_ptr.rs` avec validation `USER_ADDR_LIMIT`).
-* **Jalon 4.2 (`v0.3.79`)** : Résolution **S-05** (Bitmap d'attribution physique anti-double-free, fusion récursive des buddies, zero-scrubbing) et **C-06** (Encapsulation `Arc<VmoBacking>`, cycle de vie déterministe immunisant les clones CoW contre le use-after-free).
-* **Jalon 4.3 (`v0.3.80`)** : Résolution **A-04** (Convergence active des cœurs secondaires AP vers l'ordonnanceur EEVDF, temps virtuel monotone $V$, bornage des lags $[-50, 50]$ et promotion anti-famine 100 ticks).
-* **Jalon 4.4 (`v0.3.81`)** : Résolution **C-05** (Handshake dynamique de canaux IPC et arènes VMO sans descripteurs hardcodés) et **S-04** (Arithmétique protégée sur les bornes I/O, barrières mémoire `Acquire`/`Release`).
-* **Jalon 4.5 (`v0.3.82`)** : Résolution **C-03** (Broker matériel Ring 0 via Syscall 29 `DeviceIo` éliminant les instructions d'E/S directes en Ring 3), **S-02** (Entropie matérielle non-déterministe via instruction `rdrand` et SplitMix64 pour les canaris ASLR `AT_RANDOM`), et audit exhaustif de l'unsafe TCB.
-* **Jalon 4.6 (`v0.3.83`)** : Intégration complète des recommandations audio d'architecture et de métrologie :
-  * Création du guide développeur [`CONTRIBUTING.md`](CONTRIBUTING.md) (anatomie d'un syscall, diagramme séquentiel Mermaid, conventions de registres, tutoriel "Hello World" Ring 3).
-  * Refonte exhaustive de [`BENCHMARKS.md`](BENCHMARKS.md) (confrontation QEMU vs Silicium physique, décomposition des 120 cycles, saturation des bus mémoire DDR4/DDR5 et preuve du surcoût de sécurité de 7.2%).
-  * Mise à niveau de [`README.md`](README.md) avec modélisation des menaces face aux OS monolithiques (3 scénarios d'attaque réels).
+| Étape | Version Cible | Objectif Majeur | Statut |
+| :---: | :---: | :--- | :---: |
+| **Palier 5** | **`v0.3.87`** | **Démonstration Silicium, ESP FAT32, ABI v0.4 & Outils de Distribution** | 🟢 **Actuel** |
+| **Palier 6** | `v0.4.0` | Stabilisation de la libc minimale & Shell interactif `jsh` étendu | 🟡 Prochain |
+| **Palier 7** | `v0.5.0` | Pilotes matériels natifs (NVMe PCIe natif, USB xHCI, UART PL011 ARM64) | ⚪ Planifié |
+| **Palier 8** | `v0.6.0` | Pile réseau complète TCP/IP & Socket API en Ring 3 | ⚪ Planifié |
+| **Palier 9** | `v0.7.0` | Système de fichiers JamboFS avec journalisation CoW & persistance chiffrée | ⚪ Planifié |
+| **Palier 10**| `v0.8.0` | Serveur d'affichage graphique & compositeur fenêtré en Ring 3 | ⚪ Planifié |
+| **Palier 11**| `v0.9.0` | Campagne d'audit formel de sécurité, fuzzing TCB (libFuzzer/AFL) & SMP stress | ⚪ Planifié |
+| **Palier 12**| `v1.0.0` | Stabilisation générale et maturité de production (horizon lointain) | ⚪ Horizon |
 
 ---
 
-## 3. Plan Stratégique : Palier 5 — Déploiement Silicium Bare-Metal & Vers JamboOS v1.0 LTS
+### Palier 5 — Récapitulatif des Livrables Techniques (`v0.3.84` à `v0.3.87`)
 
-```
-┌────────────────────────────────────────────────────────────────────────┐
-│                   PLAN D'ACTION STRATÉGIQUE : PALIER 5                 │
-├────────────────────────────────────────────────────────────────────────┤
-│ Jalon 5.1 (v0.3.84) : Outillage Déploiement Silicium & Guide Matériel  │
-│                       [VALIDÉ] • xtask esp & flash-usb, docs/BAREMETAL │
-├────────────────────────────────────────────────────────────────────────┤
-│ Jalon 5.2 (v0.3.85) : Audit de Conformité de l'Incubateur & ADRs       │
-│                       [VALIDÉ] • ADR-0084 à ADR-0087 formalisés        │
-│                                • Audit étanchéité & compilation 100%   │
-├────────────────────────────────────────────────────────────────────────┤
-│ Jalon 5.3 (v0.3.86) : Couche POSIX / C-ABI Statique Minimale           │
-│                       [VALIDÉ] • Implémentation libjambo::posix (#![no_std])   │
-│                                • read/write/mmap/exit mappés sur syscalls      │
-│                                • Tests unitaires C-ABI passés à 100%           │
-├────────────────────────────────────────────────────────────────────────┤
-│ Jalon 5.4 (v1.0.0-rc1): Démonstration Bare-Metal & Gel d'ABI Long-Term │
-│                       • Gel de l'ABI et des 29 appels système           │
-│                       • Démonstration vidéo sur silicium physique réel  │
-│                       • Version v1.0.0 Long-Term Support (LTS)          │
-└────────────────────────────────────────────────────────────────────────┘
-```
-
-### Jalon 5.1 (`v0.3.84`) — Outillage Déploiement Silicium Bare-Metal & Guide Matériel Réel 🟢 `[PROD]`
-* **Objectif** : Fournir l'outillage officiel permettant à tout développeur de flasher et démarrer JamboOS sur un PC physique x86_64 (Intel NUC) ou une carte ARM64 (Raspberry Pi 4) sans nécessiter de virtualisation.
-* **Livrables techniques validés** :
-  1. **Générateur d'ESP FAT32 Universelle (`cargo xtask esp`)** : Création automatique du répertoire `target/esp/` avec `BOOTX64.EFI`, `BOOTAA64.EFI`, `limine.conf`, `jambo-kernel.elf` et `initrd.tar`.
-  2. **Outil de Flash & Diagnostic (`cargo xtask flash-usb`)** : Détection des volumes amovibles disponibles et copie directe vérifiée.
-  3. **Guide Matériel Dédié ([`docs/BAREMETAL.md`](docs/BAREMETAL.md))** : Plateformes de référence (Intel NUC 11/12/13 & Raspberry Pi 4), checklist BIOS/UEFI et 3 méthodes d'amorçage.
+* **Jalon 5.1 (`v0.3.84`)** : Générateur d'arborescence standardisée ESP FAT32 (`cargo xtask esp`), utilitaire de flash (`cargo xtask flash-usb`) et guide physique [`docs/BAREMETAL.md`](docs/BAREMETAL.md).
+* **Jalon 5.2 (`v0.3.85`)** : Formalisation des ADR-0084 à ADR-0087 et audit de compilation 100% de l'incubateur R&D.
+* **Jalon 5.3 (`v0.3.86`)** : Couche de compatibilité POSIX / C-ABI statique minimale (`libjambo::posix` et `jambo.h`).
+* **Jalon 5.4 (`v0.3.87`)** : Protocole officiel de démonstration silicium [`docs/DEMO.md`](docs/DEMO.md), outil de distribution d'artefacts déterministe `cargo xtask dist` avec calcul SHA-256 sans dépendance tierce, et publication des notes de version [`docs/RELEASE_NOTES_v0.3.87.md`](docs/RELEASE_NOTES_v0.3.87.md).
 
 ---
 
-### Jalon 5.2 (`v0.3.85`) — Audit de Conformité de l'Incubateur & Formalisation des ADRs 🟢 `[PROD]`
-* **Objectif** : Sanctuariser l'indépendance de l'Incubateur, auditer la compilation de l'ensemble des modules R&D et formaliser les ADRs d'architecture.
-* **Livrables techniques validés** :
-  1. **Formalisation des ADR-0084 à ADR-0087** :
-     * **ADR-0084** : Broker Matériel Ring 0 `DeviceIo` (Syscall 29) et confinement des accès PCI.
-     * **ADR-0085** : Entropie cryptographique matérielle non-déterministe `rdrand` et avalanche SplitMix64 pour `AT_RANDOM`.
-     * **ADR-0086** : Isolation des tables `CSpace` par processus, atténuation monotone et protection anti-ABA 32 bits.
-     * **ADR-0087** : Déploiement silicium universel via ESP FAT32 et chargeur UEFI Limine.
-  2. **Audit & Herméticité de l'Incubateur (`incubator/`)** :
-     * Vérification de compilation complète de toutes les crates de l'incubateur (`cargo check --manifest-path incubator/Cargo.toml` : code 0).
-     * Mise à niveau de [`incubator/README.md`](incubator/README.md) répertoriant les 38 microservices officiellement promus vers `services/` et la charte d'incubation.
-
----
-
-### Jalon 5.3 (`v0.3.86`) — Couche de Compatibilité POSIX / C-ABI Statique Minimale 🟢 `[PROD]`
-* **Objectif** : Permettre à des exécutables utilisateurs et bibliothèques C standard de tourner en Ring 3 sans modification via une couche de compatibilité statique `#![no_std]`.
-* **Livrables techniques validés** :
-  1. **Module POSIX & C-ABI (`libs/libjambo/src/posix.rs`)** :
-     * Primitives d'E/S de flux : `write()` et `read()` redirigeant les descripteurs 0 (stdin), 1 (stdout) et 2 (stderr) vers les appels système de console série (`ConsoleRead` = 25, `ConsoleWrite` = 26).
-     * Primitives de contrôle d'exécution : `sched_yield()` (`ThreadYield` = 12), `_exit()` et `exit()` (`ThreadExit` = 11).
-     * Primitives de gestion mémoire virtuelle : `mmap()` (allocation anonyme basée sur `VmoCreate` = 4 et `VmoMap` = 5) et `munmap()` (`VmoUnmap` = 6).
-     * Primitives mémoire et chaînes de caractères C standard : `memcpy()`, `memset()`, `memcmp()`, `strlen()`.
-     * API C native JamboOS exportée : `jambo_console_write()`, `jambo_vmo_create()`, `jambo_vmo_map()`, `jambo_device_io()`.
-  2. **Mise à Jour de l'En-tête C Officiel ([`libs/libjambo/include/jambo.h`](libs/libjambo/include/jambo.h))** :
-     * Déclaration des 29 appels système (`JAMBO_SYS_DEVICE_IO 29`), signatures des fonctions C-ABI et structures auxiliaires.
-  3. **Suite de Tests Unitaires C-ABI (`cargo test --package libjambo`)** :
-     * Validation du comportement de `memset`, `memcpy`, `memcmp` et `strlen` (1 test passé, 0 échec).
-
----
-
-### Jalon 5.4 (`v1.0.0-rc1`) — Gel d'ABI, Démonstration Vidéo Bare-Metal & Version v1.0 LTS
-* **Objectif** : Marquer l'aboutissement du projet JamboOS avec une version stable Long-Term Support (LTS).
-* **Axes d'ingénierie** :
-  * Gel définitif de l'ABI et des 29 appels système.
-  * Enregistrement d'une démonstration vidéo publique attestant du démarrage et de l'exécution sur une machine physique réelle Intel NUC et Raspberry Pi 4.
-  * Tag officiel `v1.0.0`.
-
----
-
-## 4. Matrice de Référence des Composants & Statuts (`v0.3.84`)
+## 4. Matrice de Référence des Composants & Statuts (`v0.3.87`)
 
 | Composant | Répertoire | Statut Réel | Rôle & Responsabilité Technique |
 | :--- | :--- | :---: | :--- |
-| **Micro-Noyau JamboKernel** | `kernel/` | 🟢 `[PROD]` | TCB minimal (< 95 Kio `.text`), EEVDF SMP, PML4 W^X, Buddy Allocator, CSpace anti-ABA |
-| **ABI Système jambo-abi** | `abi/jambo-abi/` | 🟢 `[PROD]` | 29 syscalls x86_64/AArch64, descripteurs CSpace, contrats IPC et DeviceIo |
-| **Bibliothèque Espace Utilisateur**| `libs/libjambo/` | 🟡 `[RING3-HW]`| Point d'entrée `_start`, gestion de pile System V ABI, wrappers de syscalls sécurisés |
-| **Pilote VirtIO Modern** | `drivers/virtio/` | 🟡 `[RING3-HW]`| Pilote VirtIO Modern 1.2 (Block & Net), Virtqueues DMA et broker DeviceIo |
-| **38 Microservices Ring 3** | `services/` | 🟡 `[RING3-HW]`| Superviseur `init` (PID 1), Shell `jsh` (PID 2) jusqu'à `dlp` (PID 38) |
-| **Outillage Déploiement xtask** | `xtask/` | 🟢 `[PROD]` | Build release, initrd.tar, disk.raw, ISO Limine, générateur ESP FAT32 et test CI |
+| **Micro-Noyau JamboKernel** | `kernel/` | 🟢 `[CORE-EXP]` | TCB minimal (< 95 Kio `.text`), EEVDF expérimental, PML4 W^X, Buddy PMM, CSpace anti-ABA |
+| **ABI Système jambo-abi** | `abi/jambo-abi/` | 🟢 `[CORE-EXP]` | 29 syscalls x86_64/AArch64, descripteurs CSpace, contrats IPC et DeviceIo |
+| **Bibliothèque Espace Utilisateur**| `libs/libjambo/` | 🟡 `[RING3-STUB]`| Point d'entrée `_start`, gestion de pile System V ABI, couche POSIX minimale |
+| **Pilote VirtIO Modern** | `drivers/virtio/` | 🟡 `[RING3-STUB]`| Pilote VirtIO Modern 1.2 simplifié (Block & Net), Virtqueues DMA et broker DeviceIo |
+| **38 Microservices Ring 3** | `services/` | 🟡 `[RING3-STUB]`| Prototypes et squelettes fonctionnels : `init` (PID 1) à `dlp` (PID 38) |
+| **Outillage Déploiement xtask** | `xtask/` | 🟢 `[CORE-EXP]` | Build release, initrd.tar, disk.raw, ISO Limine, générateur ESP FAT32 et distributeur dist |
 | **Incubateur Recherche & IA** | `incubator/` | 🔵 `[SIM]` | ~100 briques prospectives isolées (PQC, FHE, Wasm, ZK) avec charte de graduation |
 
 ---
 
 ## 5. Journal des Jalons et Historique de Versionnage
 
+* **2026-11-04** : **Jalon 5.4 (`v0.3.87`) — Démonstration Silicium, Stabilisation ABI v0.4 & Outils de Distribution**
+  * Publication du protocole de démonstration sur silicium physique [`docs/DEMO.md`](docs/DEMO.md).
+  * Implémentation du distributeur d'artefacts `cargo xtask dist` avec sommes de contrôle SHA-256 déterministes.
+  * Publication des notes de version [`docs/RELEASE_NOTES_v0.3.87.md`](docs/RELEASE_NOTES_v0.3.87.md).
+  * Recadrage réaliste du statut du projet : prototype expérimental de recherche (Pre-Alpha).
 * **2026-11-04** : **Jalon 5.3 (`v0.3.86`) — Couche de Compatibilité POSIX & C-ABI Statique Minimale**
   * Implémentation du runtime C-ABI dans [`libs/libjambo/src/posix.rs`](libs/libjambo/src/posix.rs) (`read`, `write`, `mmap`, `munmap`, `exit`, `sched_yield`, `memcpy`, `memset`).
   * Mise à niveau de l'en-tête officiel [`libs/libjambo/include/jambo.h`](libs/libjambo/include/jambo.h) avec les déclarations des 29 appels système et fonctions POSIX.
