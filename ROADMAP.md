@@ -23,6 +23,15 @@ flowchart LR
 | 🟡 | **`[RING3-STUB]`**| `services/`, `drivers/`, `libs/` | **Prototypes Ring 3** : Squelettes et microservices de preuve de concept (PoC) isolés dans leurs espaces virtuels (CR3 propre). |
 | 🔵 | **`[SIM]`** | `incubator/` | **Recherche & Exploration** : Briques de recherche prospective isolées du reste de la chaîne d'outillage. |
 
+### Politique Stricte de Versionnage & Gel des Tags Git
+
+> [!IMPORTANT]
+> **Règle Fondamentale sur les Tags Git & l'Évolution des Versions** :
+> 1. **Maturité Réelle & Horizon v1.0.0** : Le système est un prototype de recherche expérimental très immature, à des années-lumière d'une version 1.0.0. JamboOS ne dispose même pas encore d'une véritable **ISO d'installation autonome** (partitionnement GPT du disque cible, déploiement du système de base, installation du chargeur UEFI).
+> 2. **Évolution Lente sur `0.*.*`** : Toutes les versions demeurent sur la série `0.*.*`. Aucun saut de version majeur ou hâtif.
+> 3. **Interdiction de Poser des Tags Git à Chaque Cycle** : Les cycles de développement, sous-jalons et commits ordinaires progressent **exclusivement par commits classiques sans poser de tag Git**.
+> 4. **Critères d'Attribution d'un Tag Git** : Un tag Git est un jalon d'exception qui exige une **stabilité réelle prouvée**, des tests physiques bare-metal concluants et la disponibilité d'une véritable ISO d'installation fonctionnelle.
+
 ---
 
 ## 2. Bilan des Paliers Accomplis (Historique de Consolidation)
