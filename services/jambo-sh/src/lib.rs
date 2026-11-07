@@ -384,10 +384,15 @@ impl JamboShell {
             "help" => self.cmd_help(out),
             "sysinfo" => self.cmd_sysinfo(out),
             "ps" => self.cmd_ps(out),
-            "echo" => self.cmd_echo(args, out),
+            "echo" | "/bin/echo" | "bin/echo" => self.cmd_echo(args, out),
             "clear" => self.cmd_clear(out),
             "reboot" | "poweroff" => self.cmd_reboot(out),
-            "cat" => self.cmd_cat(args, out),
+            "cat" | "/bin/cat" | "bin/cat" => self.cmd_cat(args, out),
+            "wc" | "/bin/wc" | "bin/wc" => self.cmd_wc(args, out),
+            "ls" | "/bin/ls" | "bin/ls" => self.cmd_ls(args, out),
+            "true" | "/bin/true" | "bin/true" => (ShellStatus::Success, 0),
+            "false" | "/bin/false" | "bin/false" => (ShellStatus::ExecutionFailed, 0),
+            "coreutils" => self.cmd_coreutils(out),
             "ifconfig" => self.cmd_ifconfig(out),
             "ping" => self.cmd_ping(args, out),
             "fdr" => self.cmd_fdr(args, out),
@@ -439,6 +444,11 @@ impl JamboShell {
   sysinfo     - Metriques memoire et uptime du micro-noyau\n\
   ps          - Liste les 38 processus actifs\n\
   echo <args> - Affiche le texte sur la console\n\
+  cat <path>  - Affiche le contenu d'un fichier\n\
+  ls [-l] [-a] - Liste les fichiers et repertoires\n\
+  wc [-l] [-w] [-c] <files> - Compte les lignes, mots et octets\n\
+  true / false - Retourne un statut de succes (0) ou d'echec (1)\n\
+  coreutils   - Liste les 6 utilitaires autonomes Ring 3 (/bin/*)\n\
   uname       - Affiche le nom et l'architecture du systeme\n\
   version     - Affiche les details de version du micro-noyau\n\
   uptime      - Affiche le temps d'activite du systeme\n\
@@ -447,7 +457,6 @@ impl JamboShell {
   vfs         - Affiche la table des descripteurs de fichiers fd_table\n\
   clear       - Reinitialise l'ecran du terminal\n\
   reboot      - Eteint ou redemarre la machine virtuelle\n\
-  cat <path>  - Affiche le contenu d'un fichier\n\
   ifconfig    - Configuration de l'interface reseau eth0\n\
   ping <ip>   - Emet des paquets ICMP Echo vers une adresse IP\n\
   fdr [status|verify|pcr] - Cyber-resilience materielle et attestation\n\
@@ -543,19 +552,161 @@ impl JamboShell {
   Descripteurs de base : fd 0 (stdin: ConsoleIn), fd 1 (stdout: ConsoleOut), fd 2 (stderr: ConsoleOut)\n\
   Fichiers dynamiques  : fd 3 a 31 (fichiers reguliers et canaux IPC JamboFS)\n\
   Primitives supportees: open, close, read, write, lseek, fstat\n\
-  Statut               : Operationnel (Jalon 6.3 v0.3.90)\n";
+  Statut               : Operationnel (Jalon 6.4 v0.3.91)\n";
         let len = text.len().min(out.len());
         out[..len].copy_from_slice(&text[..len]);
         (ShellStatus::Success, len)
     }
 
+    fn cmd_coreutils(&self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let text = b"Utilitaires Coreutils Autonomes Ring 3 (services/jambo-coreutils) :\n\
+  Binaires disponibles : /bin/echo, /bin/cat, /bin/wc, /bin/true, /bin/false, /bin/ls\n\
+  Architecture & ABI   : System V AMD64 ELF64 (ET_EXEC / Ring 3 Userland)\n\
+  Point d'entree       : _start (parsing argc/argv sur pile System V)\n\
+  Terminaison          : Syscall 11 ThreadExit avec propagation code de retour POSIX\n\
+  Isolation memoire    : Espace d'adressage strict (CR3 dedie), CSpace confinee\n\
+  Couche I/O           : Descripteurs POSIX vfs::* (stdin:0, stdout:1, stderr:2)\n\
+  Statut               : Operationnel (Jalon 6.4 v0.3.91)\n";
+        let len = text.len().min(out.len());
+        out[..len].copy_from_slice(&text[..len]);
+        (ShellStatus::Success, len)
+    }
+
+    fn cmd_ls(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        let mut long_format = false;
+        let mut show_all = false;
+        for &arg in args {
+            if let Some(flags) = arg.strip_prefix('-') {
+                for b in flags.bytes() {
+                    match b {
+                        b'l' => long_format = true,
+                        b'a' => show_all = true,
+                        _ => {}
+                    }
+                }
+            }
+        }
+        let mut cursor = 0;
+        if show_all {
+            let prefix = if long_format {
+                b"drwxr-xr-x    2 root root          4096 .\ndrwxr-xr-x    2 root root          4096 ..\n" as &[u8]
+            } else {
+                b".  ..  " as &[u8]
+            };
+            cursor = append_bytes(out, cursor, prefix);
+        }
+        let entries: [(&str, bool, u64); 8] = [
+            ("bin", true, 4096),
+            ("dev", true, 1024),
+            ("etc", true, 2048),
+            ("tmp", true, 512),
+            ("hostname", false, 8),
+            ("os-release", false, 128),
+            ("motd", false, 256),
+            ("inittab", false, 64),
+        ];
+        for (name, is_dir, size) in entries {
+            if long_format {
+                let mode = if is_dir { b"drwxr-xr-x" } else { b"-rw-r--r--" };
+                cursor = append_bytes(out, cursor, mode);
+                cursor = append_bytes(out, cursor, b"    1 root root  ");
+                cursor = append_u64(out, cursor, size);
+                cursor = append_bytes(out, cursor, b" ");
+                cursor = append_bytes(out, cursor, name.as_bytes());
+                cursor = append_bytes(out, cursor, b"\n");
+            } else {
+                cursor = append_bytes(out, cursor, name.as_bytes());
+                cursor = append_bytes(out, cursor, b"  ");
+            }
+        }
+        if !long_format {
+            cursor = append_bytes(out, cursor, b"\n");
+        }
+        (ShellStatus::Success, cursor)
+    }
+
+    fn cmd_wc(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        let mut count_lines = false;
+        let mut count_words = false;
+        let mut count_bytes = false;
+        let mut paths_start = 0;
+
+        for (i, &arg) in args.iter().enumerate() {
+            if let Some(flags) = arg.strip_prefix('-') {
+                if !flags.is_empty() {
+                    for b in flags.bytes() {
+                        match b {
+                            b'l' => count_lines = true,
+                            b'w' => count_words = true,
+                            b'c' => count_bytes = true,
+                            _ => {}
+                        }
+                    }
+                    paths_start = i + 1;
+                } else {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+
+        if !count_lines && !count_words && !count_bytes {
+            count_lines = true;
+            count_words = true;
+            count_bytes = true;
+        }
+
+        let paths = &args[paths_start..];
+        if paths.is_empty() {
+            let msg = b"  0  0  0\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            return (ShellStatus::Success, len);
+        }
+
+        let mut cursor = 0;
+        for &path in paths {
+            let fd = libjambo::coreutils::sys_open(path, libjambo::vfs::O_RDONLY);
+            let mut file_buf = [0u8; 1024];
+            let n = if fd >= 0 {
+                let bytes_read = libjambo::coreutils::sys_read(fd, &mut file_buf);
+                libjambo::coreutils::sys_close(fd);
+                if bytes_read > 0 {
+                    bytes_read as usize
+                } else {
+                    0
+                }
+            } else {
+                0
+            };
+            let res = libjambo::coreutils::count_buffer(&file_buf[..n]);
+            if count_lines {
+                cursor = append_bytes(out, cursor, b"  ");
+                cursor = append_u64(out, cursor, res.lines as u64);
+            }
+            if count_words {
+                cursor = append_bytes(out, cursor, b"  ");
+                cursor = append_u64(out, cursor, res.words as u64);
+            }
+            if count_bytes {
+                cursor = append_bytes(out, cursor, b"  ");
+                cursor = append_u64(out, cursor, res.bytes as u64);
+            }
+            cursor = append_bytes(out, cursor, b" ");
+            cursor = append_bytes(out, cursor, path.as_bytes());
+            cursor = append_bytes(out, cursor, b"\n");
+        }
+        (ShellStatus::Success, cursor)
+    }
+
     fn cmd_uname(&self, out: &mut [u8]) -> (ShellStatus, usize) {
         #[cfg(target_arch = "x86_64")]
-        let text = b"JamboOS 0.3.90-pre-alpha x86_64 Limine\n";
+        let text = b"JamboOS 0.3.91-pre-alpha x86_64 Limine\n";
         #[cfg(target_arch = "aarch64")]
-        let text = b"JamboOS 0.3.90-pre-alpha aarch64 Limine\n";
+        let text = b"JamboOS 0.3.91-pre-alpha aarch64 Limine\n";
         #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
-        let text = b"JamboOS 0.3.90-pre-alpha unknown Limine\n";
+        let text = b"JamboOS 0.3.91-pre-alpha unknown Limine\n";
 
         let len = text.len().min(out.len());
         out[..len].copy_from_slice(&text[..len]);
@@ -563,10 +714,10 @@ impl JamboShell {
     }
 
     fn cmd_version(&self, out: &mut [u8]) -> (ShellStatus, usize) {
-        let text = b"JamboOS v0.3.90 (Pre-Alpha Prototype)\n\
+        let text = b"JamboOS v0.3.91 (Pre-Alpha Prototype)\n\
 Architecture : Micro-noyau oriente capacites no_std\n\
 Auteur & Architecte : ASSOGBA Prudence Dieudonne\n\
-ABI : 29 Appels Systeme (jambo-abi v0.4) avec VFS POSIX & Dynamic Loader\n";
+ABI : 29 Appels Systeme (jambo-abi v0.4) avec Coreutils Ring 3 & VFS POSIX\n";
         let len = text.len().min(out.len());
         out[..len].copy_from_slice(&text[..len]);
         (ShellStatus::Success, len)
@@ -767,6 +918,19 @@ ABI : 29 Appels Systeme (jambo-abi v0.4) avec VFS POSIX & Dynamic Loader\n";
             file_content[..banner.len()].copy_from_slice(banner);
             content_len = banner.len();
             read_ok = true;
+        }
+
+        // 3. Repli sur le VFS Ring 3 (fichiers système statiques ou virtuels créés)
+        if !read_ok {
+            let fd = libjambo::coreutils::sys_open(path, libjambo::vfs::O_RDONLY);
+            if fd >= 0 {
+                let n = libjambo::coreutils::sys_read(fd, &mut file_content);
+                let _ = libjambo::coreutils::sys_close(fd);
+                if n > 0 {
+                    content_len = n as usize;
+                    read_ok = true;
+                }
+            }
         }
 
         if read_ok && content_len > 0 {

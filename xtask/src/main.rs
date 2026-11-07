@@ -1238,6 +1238,45 @@ fn build_dlp(release: bool) -> anyhow::Result<PathBuf> {
 }
 
 #[allow(clippy::type_complexity)]
+fn build_coreutils(
+    release: bool,
+) -> anyhow::Result<(PathBuf, PathBuf, PathBuf, PathBuf, PathBuf, PathBuf)> {
+    let root = root_dir();
+    let mut cmd = Command::new("cargo");
+    cmd.current_dir(&root);
+    cmd.args([
+        "build",
+        "--package",
+        "jambo-coreutils",
+        "--target",
+        "x86_64-unknown-none",
+    ]);
+    if release {
+        cmd.arg("--release");
+    }
+    cmd.env(
+        "RUSTFLAGS",
+        "-C link-arg=-Tlibs/user-x86_64.ld -C relocation-model=static",
+    );
+
+    let status = cmd.status()?;
+    if !status.success() {
+        anyhow::bail!("Échec de compilation du package jambo-coreutils");
+    }
+
+    let profile = if release { "release" } else { "debug" };
+    let dir = root.join(format!("target/x86_64-unknown-none/{}", profile));
+    Ok((
+        dir.join("echo"),
+        dir.join("cat"),
+        dir.join("wc"),
+        dir.join("true"),
+        dir.join("false"),
+        dir.join("ls"),
+    ))
+}
+
+#[allow(clippy::type_complexity)]
 fn build_userland(
     release: bool,
 ) -> anyhow::Result<(
@@ -1424,11 +1463,19 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
         itdr_bin,
         dlp_bin,
     ) = build_userland(release)?;
+    let (echo_bin, cat_bin, wc_bin, true_bin, false_bin, ls_bin) = build_coreutils(release)?;
 
     let initrd_stage = root.join("target/initrd_stage");
     let bin_dir = initrd_stage.join("bin");
     let _ = fs::remove_dir_all(&initrd_stage);
     fs::create_dir_all(&bin_dir)?;
+
+    fs::copy(&echo_bin, bin_dir.join("echo"))?;
+    fs::copy(&cat_bin, bin_dir.join("cat"))?;
+    fs::copy(&wc_bin, bin_dir.join("wc"))?;
+    fs::copy(&true_bin, bin_dir.join("true"))?;
+    fs::copy(&false_bin, bin_dir.join("false"))?;
+    fs::copy(&ls_bin, bin_dir.join("ls"))?;
 
     fs::copy(&init_bin, bin_dir.join("init"))?;
     fs::copy(&jsh_bin, bin_dir.join("jsh"))?;
@@ -1566,12 +1613,25 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
     fs::copy(&dlp_bin, initrd_stage.join("dlp"))?;
     fs::copy(&dlp_bin, initrd_stage.join("jambo-dlp"))?;
 
+    fs::copy(&echo_bin, initrd_stage.join("echo"))?;
+    fs::copy(&cat_bin, initrd_stage.join("cat"))?;
+    fs::copy(&wc_bin, initrd_stage.join("wc"))?;
+    fs::copy(&true_bin, initrd_stage.join("true"))?;
+    fs::copy(&false_bin, initrd_stage.join("false"))?;
+    fs::copy(&ls_bin, initrd_stage.join("ls"))?;
+
     let initrd_tar = root.join("target/initrd.tar");
     let status = Command::new("tar")
         .current_dir(&initrd_stage)
         .args([
             "-cf",
             initrd_tar.to_str().unwrap(),
+            "bin/echo",
+            "bin/cat",
+            "bin/wc",
+            "bin/true",
+            "bin/false",
+            "bin/ls",
             "bin/init",
             "bin/jsh",
             "bin/blockd",
@@ -1706,6 +1766,12 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
             "jambo-itdr",
             "dlp",
             "jambo-dlp",
+            "echo",
+            "cat",
+            "wc",
+            "true",
+            "false",
+            "ls",
         ])
         .status()?;
 
@@ -1915,6 +1981,9 @@ fn run_test(release: bool) -> anyhow::Result<()> {
     // QEMU isa-debug-exit sort avec (val << 1) | 1. Pour Success (0x10=16), le code de retour est 33.
     let code = output.status.code().unwrap_or(-1);
     let success = code == 33
+        || combined.contains(
+            "[PASS] Jalon 6.4 : Utilitaires Coreutils autonomes Ring 3 et execution capabilaire valides",
+        )
         || combined.contains(
             "[PASS] Jalon 6.3 : VFS POSIX, fd_table et descripteurs utilisateur valides",
         )
@@ -2317,11 +2386,11 @@ fn create_dist(release: bool) -> anyhow::Result<PathBuf> {
     // 4. Image ISO (si disponible)
     let src_iso = root.join("target/jamboos-x86_64.iso");
     if src_iso.exists() {
-        let dist_iso = dist_dir.join("jamboos-x86_64-v0.3.90.iso");
+        let dist_iso = dist_dir.join("jamboos-x86_64-v0.3.91.iso");
         fs::copy(&src_iso, &dist_iso)?;
         let iso_bytes = fs::read(&dist_iso)?;
         let iso_sha = sha256_hex(&iso_bytes);
-        checksum_lines.push(format!("{}  jamboos-x86_64-v0.3.90.iso", iso_sha));
+        checksum_lines.push(format!("{}  jamboos-x86_64-v0.3.91.iso", iso_sha));
     }
 
     // 5. Arborescence ESP
@@ -2333,7 +2402,7 @@ fn create_dist(release: bool) -> anyhow::Result<PathBuf> {
     fs::write(&sha_path, checksum_lines.join("\n") + "\n")?;
 
     println!("\n================================================================================");
-    println!("    JAMBO-OS v0.3.90 (Prototype Pre-Alpha) — ARTEFACTS DE TEST PRÊTS            ");
+    println!("    JAMBO-OS v0.3.91 (Prototype Pre-Alpha) — ARTEFACTS DE TEST PRÊTS            ");
     println!("================================================================================");
     println!("Répertoire de distribution : {}", dist_dir.display());
     for line in &checksum_lines {

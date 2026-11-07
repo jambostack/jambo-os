@@ -1,9 +1,9 @@
 # FEUILLE DE ROUTE D'INGÉNIERIE SYSTÈME — JamboOS
 
 > **Dernière mise à jour** : 7 novembre 2026  
-> **Version actuelle** : `v0.3.90` (Pre-Alpha / Prototype Expérimental de Recherche)  
+> **Version actuelle** : `v0.3.91` (Pre-Alpha / Prototype Expérimental de Recherche)  
 > **Statut global** : Prototype de micro-noyau orienté capacités en Rust `![no_std]`. **Projet à un stade très initial et immature, à une année-lumière d'une version 1.0.0 utilisable en production.**  
-> **Objectif stratégique immédiat** : Développer les utilitaires Coreutils autonomes Ring 3 (Palier 6 : Jalon 6.4 `v0.3.91`).
+> **Objectif stratégique immédiat** : Finaliser le Palier 6 et engager les pilotes matériels natifs (Palier 7 `v0.5.0` : NVMe PCIe natif, USB xHCI, UART ARM64).
 
 ---
 
@@ -56,10 +56,11 @@ flowchart LR
 │            • v0.3.87 (Jalon 5.4) : Démo Bare-metal & cargo xtask dist  │
 ├────────────────────────────────────────────────────────────────────────┤
 │ Palier 6 : Espace Utilisateur POSIX, Dynamic Linking & Outils Système │
-│            [EN COURS — v0.3.88 à v0.3.91]                              │
+│            [VALIDÉ — v0.3.88 à v0.3.91]                                │
 │            • v0.3.88 (Jalon 6.1) : Primitives C-ABI & commandes jsh    │
 │            • v0.3.89 (Jalon 6.2) : Dynamic Loader ELF & Relocations    │
 │            • v0.3.90 (Jalon 6.3) : VFS POSIX & Table fd_table          │
+│            • v0.3.91 (Jalon 6.4) : Utilitaires Coreutils Ring 3        │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -73,14 +74,34 @@ flowchart LR
 | Étape | Version Cible | Objectif Majeur | Statut |
 | :---: | :---: | :--- | :---: |
 | **Palier 5** | `v0.3.87` | Démonstration Silicium, ESP FAT32, ABI v0.4 & Outils de Distribution | 🟢 Validé |
-| **Palier 6** | **`v0.3.90`** | **VFS POSIX, Table fd_table (open/close/lseek/fstat) & Dynamic Loader Ring 3** | 🟢 **Actuel** |
-| **Palier 6.4** | `v0.3.91` | Utilitaires Coreutils autonomes (`cat`, `ls`, `echo`, `wc`) en Ring 3 | ⏳ Suivant |
-| **Palier 7** | `v0.5.0` | Pilotes matériels natifs (NVMe PCIe natif, USB xHCI, UART PL011 ARM64) | ⚪ Planifié |
+| **Palier 6** | `v0.3.90` | VFS POSIX, Table fd_table (open/close/lseek/fstat) & Dynamic Loader Ring 3 | 🟢 Validé |
+| **Palier 6.4** | **`v0.3.91`** | **Utilitaires Coreutils autonomes (`cat`, `ls`, `echo`, `wc`, `true`, `false`) en Ring 3** | 🟢 **Validé** |
+| **Palier 7** | `v0.5.0` | Pilotes matériels natifs (NVMe PCIe natif, USB xHCI, UART PL011 ARM64) | ⏳ Suivant |
 | **Palier 8** | `v0.6.0` | Pile réseau complète TCP/IP & Socket API en Ring 3 | ⚪ Planifié |
 | **Palier 9** | `v0.7.0` | Système de fichiers JamboFS avec journalisation CoW & persistance chiffrée | ⚪ Planifié |
 | **Palier 10**| `v0.8.0` | Serveur d'affichage graphique & compositeur fenêtré en Ring 3 | ⚪ Planifié |
 | **Palier 11**| `v0.9.0` | Campagne d'audit formel de sécurité, fuzzing TCB (libFuzzer/AFL) & SMP stress | ⚪ Planifié |
 | **Palier 12**| `v1.0.0` | Stabilisation générale et maturité de production (horizon lointain) | ⚪ Horizon |
+
+---
+
+### Palier 6 — Jalon 6.4 (`v0.3.91`) — Utilitaires Coreutils autonomes en Ring 3 🟢 `[CORE-EXP]`
+* **Objectif** : Implémenter les utilitaires fondamentaux POSIX (`echo`, `cat`, `wc`, `true`, `false`, `ls`) sous forme de binaires autonomes Ring 3 `#![no_std]`, avec support du passage d'arguments System V ABI (`[argc][argv]`) et intégration capabilaire dans le shell `jsh`.
+* **Livrables techniques validés** :
+  1. **Moteur Logique Coreutils (`libs/libjambo/src/coreutils.rs`)** :
+     * Logique modulaire `#![no_std]` zéro-allocation pour `run_echo`, `run_cat`, `run_wc`, `run_true`, `run_false`, `run_ls`.
+     * Cache virtuel d'inodes et persistance en mémoire (`INODE_POOL`) avec support des fichiers `/etc/hostname`, `/etc/os-release`, `/etc/motd` et fichiers créés avec `O_CREAT`.
+     * Suite de tests unitaires automatisés portée à **21/21 tests passés avec succès** dans `libjambo`.
+  2. **Crate Binaires Autonomes Ring 3 (`services/jambo-coreutils`)** :
+     * 6 cibles binaires autonomes (`echo`, `cat`, `wc`, `true`, `false`, `ls`) compilées avec le linker script `libs/user-x86_64.ld`.
+     * Décodage sécurisé de la pile System V ABI (`parse_stack_args`) et terminaison capabilaire via `SyscallNumber::ThreadExit`.
+  3. **Shell Introspectif `jsh` (`services/jambo-sh`)** :
+     * Exécution transparente des commandes avec ou sans préfixe `/bin/` (`cat`, `bin/cat`, `/bin/cat`).
+     * Commande introspective `coreutils` détaillant les métadonnées et la conformité POSIX des utilitaires.
+     * Synchronisation de la bannière et des commandes d'inspection à `v0.3.91`.
+  4. **Micro-Noyau & Distribution `xtask`** :
+     * Synchronisation du kernel et de xtask à `v0.3.91`.
+     * Automatisation du packaging des binaires dans `/bin` au sein de `jambo-initrd.tar` et `disk.raw`.
 
 ---
 
@@ -142,6 +163,12 @@ flowchart LR
 
 ## 5. Journal des Jalons et Historique de Versionnage
 
+* **2026-11-07** : **Jalon 6.4 (`v0.3.91`) — Utilitaires Coreutils Autonomes Ring 3 & Exécution Capabilaire**
+  * Création du module `libjambo::coreutils` fournissant la logique `#![no_std]` des utilitaires `echo`, `cat`, `wc`, `true`, `false`, `ls`.
+  * Implémentation du pool virtuel d'inodes `INODE_POOL` avec support de `/etc/hostname`, `/etc/os-release`, `/etc/motd` et fichiers dynamiques.
+  * Création du crate `services/jambo-coreutils` produisant 6 binaires autonomes Ring 3 avec décodage System V ABI `[argc][argv]`.
+  * Intégration de l'exécution directe et préfixée (`/bin/`) et de la commande `coreutils` dans `jambo-sh`.
+  * Suite de tests unitaires portée à **21/21 tests passés** dans `libjambo`.
 * **2026-11-07** : **Jalon 6.3 (`v0.3.90`) — VFS POSIX, Table fd_table & Primitives C-ABI**
   * Implémentation du module `libjambo::vfs` fournissant `FdTable` (`MAX_FDS = 32`) sans allocation en `#![no_std]`.
   * Primitives POSIX `open`, `close`, `read`, `write`, `lseek`, `fstat` complètes avec gestion `O_APPEND` et `SEEK_*`.

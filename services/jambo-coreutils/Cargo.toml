@@ -1,0 +1,36 @@
+[package]
+name = "jambo-coreutils"
+version = "0.3.91"
+edition = "2021"
+
+[lib]
+name = "jambo_coreutils"
+path = "src/lib.rs"
+
+[[bin]]
+name = "echo"
+path = "src/bin/echo.rs"
+
+[[bin]]
+name = "cat"
+path = "src/bin/cat.rs"
+
+[[bin]]
+name = "wc"
+path = "src/bin/wc.rs"
+
+[[bin]]
+name = "true"
+path = "src/bin/true.rs"
+
+[[bin]]
+name = "false"
+path = "src/bin/false.rs"
+
+[[bin]]
+name = "ls"
+path = "src/bin/ls.rs"
+
+[dependencies]
+libjambo = { path = "../../libs/libjambo" }
+

@@ -2,6 +2,7 @@
 
 pub use jambo_abi::*;
 
+pub mod coreutils;
 pub mod dynlink;
 pub mod posix;
 pub mod vfs;
