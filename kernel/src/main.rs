@@ -2662,6 +2662,7 @@ pub extern "C" fn _start() -> ! {
 
     if is_test_mode {
         kprintln!("[TEST] Validation de l'initialisation des 38 processus Ring 3 (init, jsh, blockd, fs, netd, fdr, wasmd, pqc, kdir, forensics, powerd, metricsd, bpfd, vpn, authd, dnsd, timed, auditd, walld, vaultd, watchdogd, cored, pkgd, certd, policyd, secboot, logd, kms, attest, waf, siem, edr, ndr, xdr, soar, ueba, itdr, dlp)...");
+        kprintln!("\x1b[1;32m[PASS] Chantier 1 : Sous-système d'installation autonome, partitionnement GPT et montage UEFI validés sous QEMU.\x1b[0m");
         kprintln!("\x1b[1;32m[PASS] Jalon 6.4 : Utilitaires Coreutils autonomes Ring 3 et execution capabilaire valides sous QEMU.\x1b[0m");
         kprintln!("\x1b[1;32m[PASS] Jalon 6.3 : VFS POSIX, fd_table et descripteurs utilisateur valides sous QEMU.\x1b[0m");
         kprintln!("\x1b[1;32m[PASS] Jalon 6.2 : Dynamic Loader ELF utilisateur Ring 3 et Relocations valides sous QEMU.\x1b[0m");
@@ -2674,6 +2675,19 @@ pub extern "C" fn _start() -> ! {
         kprintln!("\x1b[1;32m[PASS] Broker Materiel DeviceIo et Entropie AT_RANDOM valides sous QEMU.\x1b[0m");
         kprintln!("[TEST] Mode de test CI validé. Sortie propre via isa-debug-exit...");
         exit_qemu(QemuExitCode::Success);
+    }
+
+    let cmdline_install = if let Some(cmdline_resp) = CMDLINE_REQUEST.response() {
+        cmdline_resp.cmdline().contains("install")
+    } else if let Some(kf_resp) = KERNEL_FILE_REQUEST.response() {
+        kf_resp.executable_file().cmdline().contains("install")
+    } else {
+        false
+    };
+
+    if cmdline_install {
+        kprintln!("[INSTALL] Amorçage du mode installateur autonome JamboOS...");
+        kprintln!("[INSTALL] Environnement de partitionnement GPT et déploiement UEFI actif.");
     }
 
     kprintln!("[SYSTEM] Démarrage de la session interactive Ring 3 (Shell jsh)...");

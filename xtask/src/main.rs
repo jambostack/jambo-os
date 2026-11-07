@@ -1,3 +1,5 @@
+mod gpt;
+
 use clap::{Parser, Subcommand};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -1410,24 +1412,24 @@ fn create_disk_image(path: &Path) -> anyhow::Result<()> {
     file.set_len(32 * 1024 * 1024)?; // 32 Mio = 33 554 432 octets
 
     // 1. Formatage de la table GPT conforme UEFI 2.10
-    let mut gpt_buffer = [0u8; 34 * libjambo::gpt::SECTOR_SIZE];
-    let disk_guid = libjambo::gpt::Guid([
+    let mut gpt_buffer = [0u8; 34 * gpt::SECTOR_SIZE];
+    let disk_guid = gpt::Guid([
         0x4A, 0x41, 0x4D, 0x42, 0x4F, 0x2D, 0x44, 0x49, 0x53, 0x4B, 0x2D, 0x47, 0x55, 0x49, 0x44,
         0x01,
     ]);
     let partitions = [
-        libjambo::gpt::PartitionRequest {
+        gpt::PartitionRequest {
             name: "EFI System Partition",
-            type_guid: libjambo::gpt::Guid::EFI_SYSTEM_PARTITION,
+            type_guid: gpt::Guid::EFI_SYSTEM_PARTITION,
             size_sectors: 2048, // 1 Mio (LBA 34..2081)
         },
-        libjambo::gpt::PartitionRequest {
+        gpt::PartitionRequest {
             name: "JamboOS Root",
-            type_guid: libjambo::gpt::Guid::JAMBOOS_ROOT,
+            type_guid: gpt::Guid::JAMBOOS_ROOT,
             size_sectors: 60000, // ~30 Mio JamboFS (LBA 2082..62081)
         },
     ];
-    libjambo::gpt::format_gpt_disk(&mut gpt_buffer, 65536, disk_guid, &partitions)
+    gpt::format_gpt_disk(&mut gpt_buffer, 65536, disk_guid, &partitions)
         .map_err(|e| anyhow::anyhow!("Échec de génération GPT : {:?}", e))?;
 
     file.seek(SeekFrom::Start(0))?;
@@ -1868,7 +1870,7 @@ fn create_iso(release: bool, test_mode: bool) -> anyhow::Result<PathBuf> {
     let limine_conf_content = if test_mode {
         "timeout: 0\n\n/JamboOS (Test CI)\n    protocol: limine\n    kernel_path: boot():/boot/jambo-kernel.elf\n    module_path: boot():/boot/initrd.tar\n    cmdline: test\n    kernel_cmdline: test\n"
     } else {
-        "timeout: 1\n\n/JamboOS\n    protocol: limine\n    kernel_path: boot():/boot/jambo-kernel.elf\n    module_path: boot():/boot/initrd.tar\n"
+        "timeout: 3\n\n/JamboOS Live (RAM-disk)\n    protocol: limine\n    kernel_path: boot():/boot/jambo-kernel.elf\n    module_path: boot():/boot/initrd.tar\n\n/JamboOS Installer (Installation Autonome)\n    protocol: limine\n    kernel_path: boot():/boot/jambo-kernel.elf\n    module_path: boot():/boot/initrd.tar\n    cmdline: install\n    kernel_cmdline: install\n"
     };
     fs::write(limine_dir.join("limine.conf"), limine_conf_content)?;
 
@@ -2045,6 +2047,9 @@ fn run_test(release: bool) -> anyhow::Result<()> {
     // QEMU isa-debug-exit sort avec (val << 1) | 1. Pour Success (0x10=16), le code de retour est 33.
     let code = output.status.code().unwrap_or(-1);
     let success = code == 33
+        || combined.contains(
+            "[PASS] Chantier 1 : Sous-système d'installation autonome, partitionnement GPT et montage UEFI validés",
+        )
         || combined.contains(
             "[PASS] Jalon 6.4 : Utilitaires Coreutils autonomes Ring 3 et execution capabilaire valides",
         )

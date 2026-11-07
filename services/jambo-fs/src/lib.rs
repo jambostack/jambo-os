@@ -532,6 +532,174 @@ impl BlockClient {
 
         Ok(())
     }
+
+    /// Écrit un bloc de 4 Kio (8 secteurs de 512 octets) à partir du secteur `lba`
+    pub fn write_block(&self, lba: u64, src: &[u8]) -> Result<(), libjambo::SysError> {
+        let to_copy = src.len().min(BLOCK_SIZE);
+        let dest_ptr = if !self.vmo_ptr.is_null() {
+            self.vmo_ptr
+        } else {
+            core::ptr::addr_of_mut!(LOCAL_VMO_ARENA) as *mut u8
+        };
+
+        if dest_ptr.is_null() {
+            return Err(libjambo::SysError::BadAddress);
+        }
+
+        unsafe {
+            core::ptr::copy_nonoverlapping(src.as_ptr(), dest_ptr, to_copy);
+            if to_copy < BLOCK_SIZE {
+                core::ptr::write_bytes(dest_ptr.add(to_copy), 0, BLOCK_SIZE - to_copy);
+            }
+        }
+
+        if self.channel.is_null() {
+            return Ok(());
+        }
+
+        let req = BlockRequest {
+            opcode: BLOCK_OP_WRITE,
+            req_id: 2,
+            lba,
+            count: 8,
+            buf_offset: 0,
+            _reserved: 0,
+        };
+
+        let mut tx_msg = ChannelMessage::default();
+        let req_bytes = req.to_bytes();
+        let req_size = core::mem::size_of::<BlockRequest>();
+        tx_msg.bytes[..req_size].copy_from_slice(&req_bytes);
+        tx_msg.byte_count = req_size;
+
+        let (ret_send, _) = unsafe {
+            libjambo::syscall6(
+                libjambo::SyscallNumber::ChannelCall,
+                self.channel.0,
+                &tx_msg as *const ChannelMessage as u64,
+                0,
+                0,
+                0,
+                0,
+            )
+        };
+        if ret_send != 0 {
+            return Err(libjambo::SysError::PeerClosed);
+        }
+
+        let mut rx_msg = ChannelMessage::default();
+        let mut attempts = 0;
+        let resp_size = core::mem::size_of::<BlockResponse>();
+        loop {
+            let (ret_recv, _) = unsafe {
+                libjambo::syscall6(
+                    libjambo::SyscallNumber::ChannelCall,
+                    self.channel.0,
+                    0,
+                    &mut rx_msg as *mut ChannelMessage as u64,
+                    0,
+                    0,
+                    0,
+                )
+            };
+            if ret_recv == 0 && rx_msg.byte_count >= resp_size {
+                break;
+            }
+            if ret_recv != 0 && ret_recv != (libjambo::SysError::TimedOut as i64) {
+                return Err(libjambo::SysError::PeerClosed);
+            }
+            attempts += 1;
+            if attempts > 10_000 {
+                return Err(libjambo::SysError::TimedOut);
+            }
+            syscall_thread_yield();
+        }
+
+        if let Some(resp) = BlockResponse::from_bytes(&rx_msg.bytes[..rx_msg.byte_count]) {
+            if resp.status != 0 {
+                return Err(libjambo::SysError::InvalidArgument);
+            }
+        } else {
+            return Err(libjambo::SysError::InvalidArgument);
+        }
+
+        Ok(())
+    }
+
+    /// Envoie une requête de synchronisation matérielle de stockage (flush cache)
+    pub fn flush(&self) -> Result<(), libjambo::SysError> {
+        if self.channel.is_null() {
+            return Ok(());
+        }
+
+        let req = BlockRequest {
+            opcode: BLOCK_OP_FLUSH,
+            req_id: 3,
+            lba: 0,
+            count: 0,
+            buf_offset: 0,
+            _reserved: 0,
+        };
+
+        let mut tx_msg = ChannelMessage::default();
+        let req_bytes = req.to_bytes();
+        let req_size = core::mem::size_of::<BlockRequest>();
+        tx_msg.bytes[..req_size].copy_from_slice(&req_bytes);
+        tx_msg.byte_count = req_size;
+
+        let (ret_send, _) = unsafe {
+            libjambo::syscall6(
+                libjambo::SyscallNumber::ChannelCall,
+                self.channel.0,
+                &tx_msg as *const ChannelMessage as u64,
+                0,
+                0,
+                0,
+                0,
+            )
+        };
+        if ret_send != 0 {
+            return Err(libjambo::SysError::PeerClosed);
+        }
+
+        let mut rx_msg = ChannelMessage::default();
+        let mut attempts = 0;
+        let resp_size = core::mem::size_of::<BlockResponse>();
+        loop {
+            let (ret_recv, _) = unsafe {
+                libjambo::syscall6(
+                    libjambo::SyscallNumber::ChannelCall,
+                    self.channel.0,
+                    0,
+                    &mut rx_msg as *mut ChannelMessage as u64,
+                    0,
+                    0,
+                    0,
+                )
+            };
+            if ret_recv == 0 && rx_msg.byte_count >= resp_size {
+                break;
+            }
+            if ret_recv != 0 && ret_recv != (libjambo::SysError::TimedOut as i64) {
+                return Err(libjambo::SysError::PeerClosed);
+            }
+            attempts += 1;
+            if attempts > 10_000 {
+                return Err(libjambo::SysError::TimedOut);
+            }
+            syscall_thread_yield();
+        }
+
+        if let Some(resp) = BlockResponse::from_bytes(&rx_msg.bytes[..rx_msg.byte_count]) {
+            if resp.status != 0 {
+                return Err(libjambo::SysError::InvalidArgument);
+            }
+        } else {
+            return Err(libjambo::SysError::InvalidArgument);
+        }
+
+        Ok(())
+    }
 }
 
 /// Système de fichiers JamboFS transactionnel monté en espace utilisateur
