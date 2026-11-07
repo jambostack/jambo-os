@@ -292,6 +292,52 @@ int32_t jambo_vmo_create(uint64_t size, uint32_t flags, uint64_t *out_handle);
 int32_t jambo_vmo_map(uint64_t vmo, uint64_t vaddr, uint64_t length, uint32_t rights, uint64_t *out_mapped);
 int32_t jambo_vmo_unmap(uint64_t vaddr, uint64_t length);
 int32_t jambo_device_io(uint32_t op, uint8_t bus, uint8_t dev, uint8_t func, uint8_t offset, uint32_t *val);
+
+/* === Édition de Liens Dynamiques & Relocations (Jalon 6.2) === */
+
+#define R_X86_64_NONE      0
+#define R_X86_64_64        1
+#define R_X86_64_PC32      2
+#define R_X86_64_GOT32     3
+#define R_X86_64_PLT32     4
+#define R_X86_64_COPY      5
+#define R_X86_64_GLOB_DAT  6
+#define R_X86_64_JUMP_SLOT 7
+#define R_X86_64_RELATIVE  8
+#define R_X86_64_32        10
+
+#define DT_NULL            0
+#define DT_NEEDED          1
+#define DT_PLTGOT          3
+#define DT_STRTAB          5
+#define DT_SYMTAB          6
+#define DT_RELA            7
+#define DT_RELASZ          8
+#define DT_RELAENT         9
+#define DT_STRSZ           10
+#define DT_SYMENT          11
+#define DT_JMPREL          23
+#define DT_BIND_NOW        24
+
+typedef struct {
+    int64_t d_tag;
+    uint64_t d_val;
+} Elf64_Dyn;
+
+typedef struct {
+    uint64_t r_offset;
+    uint64_t r_info;
+    int64_t  r_addend;
+} Elf64_Rela;
+
+typedef struct {
+    uint32_t st_name;
+    uint8_t  st_info;
+    uint8_t  st_other;
+    uint16_t st_shndx;
+    uint64_t st_value;
+    uint64_t st_size;
+} Elf64_Sym;
 #ifdef __cplusplus
 }
 #endif
