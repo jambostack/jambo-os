@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.3.88--pre--alpha-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.3.89--pre--alpha-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -27,15 +27,15 @@
 ---
 
 > [!WARNING]
-> **Avertissement sur la Maturité & Stade du Projet : Version `v0.3.88` (Pre-Alpha / Prototype Expérimental)**  
+> **Avertissement sur la Maturité & Stade du Projet : Version `v0.3.89` (Pre-Alpha / Prototype Expérimental)**  
 > **JamboOS est un projet expérimental de recherche à un stade très initial (Pre-Alpha). Le système est encore très immature et à une année-lumière d'une version 1.0.0 utilisable en production.**  
 > 
 > Ce dépôt explore la faisabilité d'un micro-noyau moderne en Rust `![no_std]` inspiré des principes de seL4 et Zircon. Bien que le système démarre sous QEMU et sur machine UEFI réelle :
 > * **Stade de Développement** : Les microservices et pilotes actuels sont des prototypes et squelettes fonctionnels minimaux servant de preuve de concept.
-> * **Périmètre Opérationnel** : Pagination PML4 de base, ordonnanceur EEVDF expérimental, pilote VirtIO simplifié, arènes VMO et couche POSIX minimale.
+> * **Périmètre Opérationnel** : Pagination PML4 de base, ordonnanceur EEVDF expérimental, pilote VirtIO simplifié, arènes VMO, couche POSIX minimale et Dynamic Loader ELF64 Ring 3 (`libjambo::dynlink`).
 > * **Feuille de Route** : De nombreux chantiers majeurs (pilotes matériels réels NVMe/USB, pile TCP/IP complète, système de fichiers persistant, audits formels et campagnes de fuzzing) devront être menés sur le long terme avant d'envisager une quelconque stabilité.
 > 
-> 📜 **Notes de Version v0.3.87** : Consultez [`docs/RELEASE_NOTES_v0.3.87.md`](docs/RELEASE_NOTES_v0.3.87.md).  
+> 📜 **Notes de Version v0.3.89** : Consultez [`docs/RELEASE_NOTES_v0.3.89.md`](docs/RELEASE_NOTES_v0.3.89.md).  
 > 🚀 **Guide de Test Silicium** : Pour tester le prototype sur machine réelle, consultez [`docs/BAREMETAL.md`](docs/BAREMETAL.md).  
 > 🎬 **Protocole de Démonstration** : Suivez le script de test pas-à-pas dans [`docs/DEMO.md`](docs/DEMO.md).  
 > 📊 **Métriques Expérimentales** : Consultez les mesures préliminaires dans [`BENCHMARKS.md`](BENCHMARKS.md).  

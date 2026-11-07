@@ -1,9 +1,9 @@
 # FEUILLE DE ROUTE D'INGÉNIERIE SYSTÈME — JamboOS
 
-> **Dernière mise à jour** : 4 novembre 2026  
-> **Version actuelle** : `v0.3.88` (Pre-Alpha / Prototype Expérimental de Recherche)  
+> **Dernière mise à jour** : 7 novembre 2026  
+> **Version actuelle** : `v0.3.89` (Pre-Alpha / Prototype Expérimental de Recherche)  
 > **Statut global** : Prototype de micro-noyau orienté capacités en Rust `![no_std]`. **Projet à un stade très initial et immature, à une année-lumière d'une version 1.0.0 utilisable en production.**  
-> **Objectif stratégique immédiat** : Stabiliser la libc minimale et enrichir les commandes du shell interactif (Palier 6 : Jalon 6.1 `v0.3.88`).
+> **Objectif stratégique immédiat** : Développer le VFS POSIX et les descripteurs de fichiers utilisateur (Palier 6 : Jalon 6.3 `v0.3.90`).
 
 ---
 
@@ -55,9 +55,10 @@ flowchart LR
 │            • v0.3.86 (Jalon 5.3) : Couche POSIX & C-ABI statique       │
 │            • v0.3.87 (Jalon 5.4) : Démo Bare-metal & cargo xtask dist  │
 ├────────────────────────────────────────────────────────────────────────┤
-│ Palier 6 : Stabilisation libc Minimale & Shell jsh Étendu              │
-│            [VALIDÉ — v0.3.88]                                          │
+│ Palier 6 : Espace Utilisateur POSIX, Dynamic Linking & Outils Système │
+│            [EN COURS — v0.3.88 à v0.3.91]                              │
 │            • v0.3.88 (Jalon 6.1) : Primitives C-ABI & commandes jsh    │
+│            • v0.3.89 (Jalon 6.2) : Dynamic Loader ELF & Relocations    │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -71,13 +72,29 @@ flowchart LR
 | Étape | Version Cible | Objectif Majeur | Statut |
 | :---: | :---: | :--- | :---: |
 | **Palier 5** | `v0.3.87` | Démonstration Silicium, ESP FAT32, ABI v0.4 & Outils de Distribution | 🟢 Validé |
-| **Palier 6** | **`v0.3.88`** | **Primitives C-ABI (strcmp/atoi/malloc/free) & Commandes jsh (uname/version/caps)** | 🟢 **Actuel** |
+| **Palier 6** | **`v0.3.89`** | **Dynamic Loader ELF Ring 3 (libjambo::dynlink), Relocations & Commande dynlink** | 🟢 **Actuel** |
+| **Palier 6.3** | `v0.3.90` | Primitives VFS POSIX, descripteurs de fichiers (`fd_table`) & interfaçage `jambo-fs` | ⏳ Suivant |
+| **Palier 6.4** | `v0.3.91` | Utilitaires Coreutils autonomes (`cat`, `ls`, `echo`, `wc`) en Ring 3 | ⚪ Planifié |
 | **Palier 7** | `v0.5.0` | Pilotes matériels natifs (NVMe PCIe natif, USB xHCI, UART PL011 ARM64) | ⚪ Planifié |
 | **Palier 8** | `v0.6.0` | Pile réseau complète TCP/IP & Socket API en Ring 3 | ⚪ Planifié |
 | **Palier 9** | `v0.7.0` | Système de fichiers JamboFS avec journalisation CoW & persistance chiffrée | ⚪ Planifié |
 | **Palier 10**| `v0.8.0` | Serveur d'affichage graphique & compositeur fenêtré en Ring 3 | ⚪ Planifié |
 | **Palier 11**| `v0.9.0` | Campagne d'audit formel de sécurité, fuzzing TCB (libFuzzer/AFL) & SMP stress | ⚪ Planifié |
 | **Palier 12**| `v1.0.0` | Stabilisation générale et maturité de production (horizon lointain) | ⚪ Horizon |
+
+---
+
+### Palier 6 — Jalon 6.2 (`v0.3.89`) — Dynamic Loader ELF & Relocations 🟢 `[CORE-EXP]`
+* **Objectif** : Implémenter le chargeur dynamique ELF64 Ring 3 souverain, les relocalisations System V AMD64 (`R_X86_64_RELATIVE`, `R_X86_64_GLOB_DAT`, `R_X86_64_64`) et le durcissement RELRO de la GOT.
+* **Livrables techniques validés** :
+  1. **Dynamic Loader Souverain (`libs/libjambo/src/dynlink.rs` & `jambo.h`)** :
+     * Structures `Elf64Dyn`, `Elf64Rela`, `Elf64Sym` conformes System V AMD64 `#![no_std]`.
+     * Moteur de relocalisation autonome résolvant `R_X86_64_RELATIVE` (Base + Addend) et `R_X86_64_GLOB_DAT` (GOT).
+     * Table `GotTable` protégée par verrouillage irréversible `seal_relro()` contre toute corruption post-liaison.
+     * Suite de tests unitaires automatisés validée à 100% (`cargo test --package libjambo`).
+  2. **Shell Interactif `jsh` (`services/jambo-sh`)** :
+     * Commande introspective `dynlink` (alias `ldd`) affichant l'état du chargeur dynamique et la protection RELRO.
+     * Synchronisation de la bannière et des commandes d'inspection à `v0.3.89`.
 
 ---
 
@@ -111,6 +128,12 @@ flowchart LR
 
 ## 5. Journal des Jalons et Historique de Versionnage
 
+* **2026-11-07** : **Jalon 6.2 (`v0.3.89`) — Dynamic Loader ELF64 Ring 3, Relocations & RELRO**
+  * Implémentation du module `libjambo::dynlink` avec structures `Elf64Dyn`, `Elf64Rela`, `Elf64Sym`.
+  * Support des relocations `R_X86_64_RELATIVE` (Base + Addend), `R_X86_64_GLOB_DAT` (GOT) et `R_X86_64_64`.
+  * Table `GotTable` durcie par scellement irréversible RELRO (*Read-Only Relocations*).
+  * Ajout de la commande introspective `dynlink` / `ldd` dans le shell interactif `jambo-sh`.
+  * Suite de tests unitaires validée à 100% (`7 passed; 0 failed` dans `libjambo`).
 * **2026-11-04** : **Jalon 6.1 (`v0.3.88`) — Primitives C-ABI Statiques & Shell jsh Étendu**
   * Extension de `libjambo::posix` avec `strcmp`, `strncmp`, `strncpy`, `strchr`, `atoi`, `malloc` et `free`.
   * Ajout des commandes `uname`, `version`, `uptime` et `caps` dans le shell interactif `jambo-sh`.

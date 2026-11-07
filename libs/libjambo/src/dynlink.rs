@@ -227,15 +227,8 @@ impl DynamicLoader {
                 DT_PLTGOT => info.pltgot = tag.d_val,
                 DT_JMPREL => info.jmprel = tag.d_val,
                 DT_BIND_NOW => info.bind_now = true,
-                DT_FLAGS => {
-                    if (tag.d_val & DF_1_NOW) != 0 {
-                        info.bind_now = true;
-                    }
-                }
-                DT_FLAGS_1 => {
-                    if (tag.d_val & DF_1_NOW) != 0 {
-                        info.bind_now = true;
-                    }
+                DT_FLAGS | DT_FLAGS_1 if (tag.d_val & DF_1_NOW) != 0 => {
+                    info.bind_now = true;
                 }
                 _ => {}
             }
