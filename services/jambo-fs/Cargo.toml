@@ -10,6 +10,7 @@ path = "src/lib.rs"
 [[bin]]
 name = "jambo-fs"
 path = "src/main.rs"
+test = false
 
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }

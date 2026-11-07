@@ -1,5 +1,8 @@
 #![no_std]
 
+#[cfg(test)]
+extern crate std;
+
 pub const JAMBOFS_MAGIC: u64 = 0x53465F4F424D414A; // "JAMBO_FS" en ASCII little-endian
 pub const JAMBOFS_VERSION: u32 = 1;
 pub const BLOCK_SIZE: usize = 4096;
@@ -819,5 +822,152 @@ impl JamboFs {
 
         out[..data_to_copy.len()].copy_from_slice(data_to_copy);
         Ok(data_to_copy.len())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_uberblock_default_and_validation() {
+        let ub = Uberblock::default();
+        assert_eq!(ub.magic, JAMBOFS_MAGIC);
+        assert_eq!(ub.version, JAMBOFS_VERSION);
+        assert_eq!(ub.block_size, BLOCK_SIZE as u32);
+        assert!(ub.is_valid());
+
+        let corrupted = Uberblock {
+            magic: 0xDEADBEEF,
+            ..ub
+        };
+        assert!(!corrupted.is_valid());
+
+        let bad_version = Uberblock { version: 999, ..ub };
+        assert!(!bad_version.is_valid());
+    }
+
+    #[test]
+    fn test_merkle_block_checksum() {
+        let block_a = [0x5Au8; 4096];
+        let block_b = [0xA5u8; 4096];
+        let seed = 0x1234_5678_9ABC_DEF0;
+
+        let hash_a1 = compute_block_checksum(&block_a, seed);
+        let hash_a2 = compute_block_checksum(&block_a, seed);
+        let hash_b = compute_block_checksum(&block_b, seed);
+        let hash_a_diff_seed = compute_block_checksum(&block_a, seed.wrapping_add(1));
+
+        assert_eq!(hash_a1, hash_a2);
+        assert_ne!(hash_a1, hash_b);
+        assert_ne!(hash_a1, hash_a_diff_seed);
+        assert_ne!(hash_a1, [0u8; 32]);
+    }
+
+    #[test]
+    fn test_bplus_tree_node_init() {
+        let leaf = BPlusTreeNode::new_leaf(42);
+        assert!(leaf.is_leaf);
+        assert_eq!(leaf.generation, 42);
+        assert_eq!(leaf.entry_count, 0);
+        assert_eq!(leaf.node_checksum, [0u8; 32]);
+    }
+
+    #[test]
+    fn test_fs_inode_block_calculation() {
+        let inode1 = FsInode::new(101, 512, 1);
+        assert_eq!(inode1.ino, 101);
+        assert_eq!(inode1.size, 512);
+        assert_eq!(inode1.block_count, 1);
+
+        let inode2 = FsInode::new(102, 4096, 1);
+        assert_eq!(inode2.block_count, 1);
+
+        let inode3 = FsInode::new(103, 4097, 1);
+        assert_eq!(inode3.block_count, 2);
+
+        let inode4 = FsInode::new(104, 32 * 1024, 1);
+        assert_eq!(inode4.block_count, 8);
+    }
+
+    #[test]
+    fn test_block_request_response_roundtrip() {
+        let req = BlockRequest {
+            opcode: BLOCK_OP_WRITE,
+            req_id: 42,
+            lba: 1024,
+            count: 8,
+            buf_offset: 256,
+            _reserved: 0,
+        };
+        let bytes = req.to_bytes();
+        let parsed = BlockRequest::from_bytes(&bytes).expect("Requête désérialisable");
+        assert_eq!(parsed.opcode, BLOCK_OP_WRITE);
+        assert_eq!(parsed.req_id, 42);
+        assert_eq!(parsed.lba, 1024);
+        assert_eq!(parsed.count, 8);
+        assert_eq!(parsed.buf_offset, 256);
+
+        let resp = BlockResponse {
+            req_id: 42,
+            status: 0,
+            bytes_transferred: 4096,
+            _reserved: 0,
+        };
+        let resp_bytes = resp.to_bytes();
+        let parsed_resp = BlockResponse::from_bytes(&resp_bytes).expect("Réponse désérialisable");
+        assert_eq!(parsed_resp.req_id, 42);
+        assert_eq!(parsed_resp.status, 0);
+        assert_eq!(parsed_resp.bytes_transferred, 4096);
+    }
+
+    #[test]
+    fn test_fs_request_response_roundtrip() {
+        let req = FsRequest::new_read(7, "/etc/config.json");
+        let bytes = req.to_bytes();
+        let parsed = FsRequest::from_bytes(&bytes).expect("Requête FS désérialisable");
+        assert_eq!(parsed.req_id, 7);
+        assert_eq!(parsed.path_len, 16);
+        assert_eq!(&parsed.path[..16], b"/etc/config.json");
+
+        let mut resp_data = [0u8; 48];
+        resp_data[..5].copy_from_slice(b"hello");
+        let resp = FsResponse {
+            req_id: 7,
+            status: 0,
+            length: 5,
+            data: resp_data,
+            _reserved: 0,
+        };
+        let resp_bytes = resp.to_bytes();
+        let parsed_resp = FsResponse::from_bytes(&resp_bytes).expect("Réponse FS désérialisable");
+        assert_eq!(parsed_resp.req_id, 7);
+        assert_eq!(parsed_resp.status, 0);
+        assert_eq!(parsed_resp.length, 5);
+        assert_eq!(&parsed_resp.data[..5], b"hello");
+    }
+
+    #[test]
+    fn test_jambofs_fallback_and_banner_read() {
+        let dummy_client = BlockClient {
+            channel: libjambo::Handle(0),
+            vmo_ptr: core::ptr::null_mut(),
+        };
+        let fs = JamboFs::new_fallback(dummy_client);
+        assert!(fs.active_uberblock.is_valid());
+        assert_eq!(fs.root_offset, BLOCK_SIZE as u64);
+
+        let mut out = [0u8; 64];
+        let bytes_read = fs
+            .read_file("/banner.txt", &mut out)
+            .expect("Lecture banner");
+        assert!(bytes_read > 0);
+        let banner_str = core::str::from_utf8(&out[..bytes_read]).expect("UTF-8 valide");
+        assert!(banner_str.contains("JamboOS"));
+
+        assert_eq!(
+            fs.read_file("/nonexistent.txt", &mut out),
+            Err(FsError::FileNotFound)
+        );
     }
 }
