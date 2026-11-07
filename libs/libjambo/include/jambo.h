@@ -281,6 +281,49 @@ int atoi(const char *nptr);
 void *malloc(size_t size);
 void free(void *ptr);
 
+/* === Constantes VFS & Fichiers POSIX (Jalon 6.3) === */
+
+#define O_RDONLY    0
+#define O_WRONLY    1
+#define O_RDWR      2
+#define O_ACCMODE   3
+#define O_CREAT     0100
+#define O_EXCL      0200
+#define O_TRUNC     01000
+#define O_APPEND    02000
+
+#define SEEK_SET    0
+#define SEEK_CUR    1
+#define SEEK_END    2
+
+#define S_IFMT      0170000
+#define S_IFREG     0100000
+#define S_IFDIR     0040000
+#define S_IFCHR     0020000
+#define S_IFIFO     0010000
+
+typedef struct {
+    uint64_t st_dev;
+    uint64_t st_ino;
+    uint32_t st_mode;
+    uint32_t st_nlink;
+    uint32_t st_uid;
+    uint32_t st_gid;
+    uint64_t st_rdev;
+    int64_t  st_size;
+    int64_t  st_blksize;
+    int64_t  st_blocks;
+    int64_t  st_atime;
+    int64_t  st_mtime;
+    int64_t  st_ctime;
+} jambo_stat_t;
+
+int open(const char *pathname, int flags, ...);
+int close(int fd);
+int64_t lseek(int fd, int64_t offset, int whence);
+int fstat(int fd, jambo_stat_t *buf);
+int stat(const char *pathname, jambo_stat_t *buf);
+
 /* === API C Native JamboOS === */
 
 int64_t jambo_console_write(const uint8_t *buf, size_t len);

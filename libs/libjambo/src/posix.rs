@@ -4,7 +4,7 @@
 //! mappés sur les 29 appels système sous-jacents de JamboKernel.
 
 #[cfg(not(test))]
-use crate::{console_read, console_write, syscall6, vmo_prot, SyscallNumber, SystemInfo};
+use crate::{syscall6, vmo_prot, SyscallNumber, SystemInfo};
 
 // Constantes POSIX standard pour descripteurs de fichiers
 pub const STDIN_FILENO: i32 = 0;
@@ -45,16 +45,13 @@ pub unsafe extern "C" fn write(fd: i32, buf: *const u8, count: usize) -> isize {
     if buf.is_null() && count > 0 {
         return -EFAULT as isize;
     }
-    match fd {
-        STDOUT_FILENO | STDERR_FILENO => {
-            let slice = core::slice::from_raw_parts(buf, count);
-            match console_write(slice) {
-                Ok(n) => n as isize,
-                Err(_) => -EFAULT as isize,
-            }
-        }
-        _ => -EBADF as isize,
-    }
+    let slice = core::slice::from_raw_parts(buf, count);
+    crate::vfs::with_fd_table(|table| match table.write(fd, slice) {
+        Ok(n) => n as isize,
+        Err(jambo_abi::SysError::PermissionDenied) => -EBADF as isize,
+        Err(jambo_abi::SysError::OutOfMemory) => -ENOMEM as isize,
+        Err(_) => -EBADF as isize,
+    })
 }
 
 /// Lit jusqu'à `count` octets depuis le descripteur de fichier `fd` vers `buf`
@@ -67,16 +64,76 @@ pub unsafe extern "C" fn read(fd: i32, buf: *mut u8, count: usize) -> isize {
     if buf.is_null() && count > 0 {
         return -EFAULT as isize;
     }
-    match fd {
-        STDIN_FILENO => {
-            let slice = core::slice::from_raw_parts_mut(buf, count);
-            match console_read(slice) {
-                Ok(n) => n as isize,
-                Err(_) => -EFAULT as isize,
-            }
-        }
-        _ => -EBADF as isize,
+    let slice = core::slice::from_raw_parts_mut(buf, count);
+    crate::vfs::with_fd_table(|table| match table.read(fd, slice) {
+        Ok(n) => n as isize,
+        Err(jambo_abi::SysError::PermissionDenied) => -EBADF as isize,
+        Err(_) => -EBADF as isize,
+    })
+}
+
+/// Ouvre un fichier désigné par `pathname` avec les drapeaux `flags`
+///
+/// # Safety
+/// `pathname` doit pointer vers une chaîne C valide terminée par un octet nul.
+#[cfg(not(test))]
+#[no_mangle]
+pub unsafe extern "C" fn open(pathname: *const core::ffi::c_char, flags: i32, _mode: u32) -> i32 {
+    if pathname.is_null() {
+        return -EFAULT;
     }
+    let c_str = core::ffi::CStr::from_ptr(pathname);
+    let path = match c_str.to_str() {
+        Ok(s) => s,
+        Err(_) => return -EINVAL,
+    };
+    crate::vfs::with_fd_table(|table| {
+        match table.alloc_fd(crate::vfs::FdKind::RegularFile, flags, path) {
+            Ok(fd) => fd,
+            Err(jambo_abi::SysError::OutOfMemory) => -ENOMEM,
+            Err(_) => -EINVAL,
+        }
+    })
+}
+
+/// Ferme un descripteur de fichier ouvert
+#[cfg(not(test))]
+#[no_mangle]
+pub extern "C" fn close(fd: i32) -> i32 {
+    crate::vfs::with_fd_table(|table| match table.free_fd(fd) {
+        Ok(()) => 0,
+        Err(_) => -EBADF,
+    })
+}
+
+/// Repositionne le pointeur de fichier
+#[cfg(not(test))]
+#[no_mangle]
+pub extern "C" fn lseek(fd: i32, offset: i64, whence: i32) -> i64 {
+    crate::vfs::with_fd_table(|table| match table.lseek(fd, offset, whence) {
+        Ok(pos) => pos,
+        Err(jambo_abi::SysError::NotSupported) => -29, // ESPIPE
+        Err(_) => -EINVAL as i64,
+    })
+}
+
+/// Récupère les métadonnées de fichier fstat
+///
+/// # Safety
+/// `statbuf` doit pointer vers une zone mémoire valide pour l'écriture d'un `PosixStat`.
+#[cfg(not(test))]
+#[no_mangle]
+pub unsafe extern "C" fn fstat(fd: i32, statbuf: *mut crate::vfs::PosixStat) -> i32 {
+    if statbuf.is_null() {
+        return -EFAULT;
+    }
+    crate::vfs::with_fd_table(|table| match table.fstat(fd) {
+        Ok(st) => {
+            *statbuf = st;
+            0
+        }
+        Err(_) => -EBADF,
+    })
 }
 
 /// Cède le temps processeur au planificateur (équivalent sched_yield POSIX)

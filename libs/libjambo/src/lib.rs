@@ -4,6 +4,7 @@ pub use jambo_abi::*;
 
 pub mod dynlink;
 pub mod posix;
+pub mod vfs;
 
 /// Wrapper d'appel système brut pour x86-64
 ///
