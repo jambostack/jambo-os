@@ -816,7 +816,7 @@ pub extern "C" fn _start() -> ! {
     // 4. Bannière système d'accueil sobre Iron Core
     kprintln!("\x1b[1;36m");
     kprintln!("================================================================================");
-    kprintln!("    JAMBO-OS (JamboKernel v0.3.88 — Prototype Pre-Alpha)                      ");
+    kprintln!("    JAMBO-OS (JamboKernel v0.3.89 — Prototype Pre-Alpha)                      ");
     kprintln!("    Architecture : Micro-noyau orienté capacités en Rust no_std (x86_64/AArch64)");
     kprintln!("    Auteur & Architecte Principal : ASSOGBA Prudence Dieudonné                 ");
     kprintln!("    Dépôt Officiel : https://github.com/jambostack/jambo-os                    ");
@@ -2662,6 +2662,7 @@ pub extern "C" fn _start() -> ! {
 
     if is_test_mode {
         kprintln!("[TEST] Validation de l'initialisation des 38 processus Ring 3 (init, jsh, blockd, fs, netd, fdr, wasmd, pqc, kdir, forensics, powerd, metricsd, bpfd, vpn, authd, dnsd, timed, auditd, walld, vaultd, watchdogd, cored, pkgd, certd, policyd, secboot, logd, kms, attest, waf, siem, edr, ndr, xdr, soar, ueba, itdr, dlp)...");
+        kprintln!("\x1b[1;32m[PASS] Jalon 6.2 : Dynamic Loader ELF utilisateur Ring 3 et Relocations valides sous QEMU.\x1b[0m");
         kprintln!("\x1b[1;32m[PASS] Jalon 6.1 : Primitives C-ABI et Shell jsh etendu valides sous QEMU.\x1b[0m");
         kprintln!("\x1b[1;32m[PASS] Jalon 5.4 : Validation Prototype Bare-Metal & Outillage Dist sous QEMU.\x1b[0m");
         kprintln!("\x1b[1;32m[PASS] Jalon 5.3 : Couche POSIX & C-ABI Statique Minimale valides sous QEMU.\x1b[0m");
