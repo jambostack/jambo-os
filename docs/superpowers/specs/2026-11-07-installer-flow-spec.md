@@ -1,13 +1,13 @@
-# Spécification Technique : Flux d'Installation Autonome & Options d'Amorçage ISO UEFI (Série 0.*.*)
+# Spécification Technique : Flux d'Installation et Déploiement UEFI sur Stockage Cible (Série 0.*.*)
 
 ## 1. Contexte & Problématique
 
 Dans le cadre du Chantier 1 (Priorité 1) de stabilisation réelle du système JamboOS en Pre-Alpha (série `0.*.*`) :
 - Le partitionnement GPT (GUID Partition Table conforme UEFI 2.10) et le service utilisateur Ring 3 `jambo-installer` ont été introduits avec succès.
 - Pour transformer ce prototype en un véritable système installable, il est nécessaire :
-  1. D'implémenter le flux d'installation automatisé (`installer install`) réalisant la détection de la géométrie, le partitionnement GPT, l'initialisation de l'ESP FAT32 et de la racine JamboFS, ainsi que le déploiement des fichiers de boot Limine.
+  1. D'implémenter le flux d'installation standard (`installer install`) réalisant la détection de la géométrie, le partitionnement GPT, l'initialisation de l'ESP FAT32 et de la racine JamboFS, ainsi que le déploiement des fichiers de boot Limine.
   2. D'enrichir l'API `BlockClient` dans `jambo-fs` avec les opérations d'écriture de bloc (`write_block`) et de synchronisation de cache (`flush`) exploitant les opcodes `BLOCK_OP_WRITE` (2) et `BLOCK_OP_FLUSH` (3) déjà présents dans le démon de stockage `jambo-blockd`.
-  3. D'enrichir la configuration du chargeur Limine dans l'ISO d'amorçage pour proposer le choix entre la session Live RAM-disk et l'Installateur Autonome.
+  3. D'enrichir la configuration du chargeur Limine dans l'ISO d'amorçage pour proposer le choix entre la session Live RAM-disk et l'Assistant d'Installation.
   4. De connecter la détection de la ligne de commande `cmdline: install` dans le noyau pour orchestrer le démarrage direct de l'installeur.
 
 ## 2. Architecture & Composants Cibles
@@ -39,7 +39,7 @@ Dans le cadre du Chantier 1 (Priorité 1) de stabilisation réelle du système J
 ### 2.3. Menu d'Amorçage Hybride Limine (`xtask/src/main.rs`)
 - Mise à niveau de `limine.conf` généré dans `target/iso_root/boot/limine/limine.conf` :
   - Entrée 1 : `/JamboOS Live (Session Interactive RAM-disk)`
-  - Entrée 2 : `/JamboOS Installer (Installation Autonome)` avec `cmdline: install`
+  - Entrée 2 : `/JamboOS Installer (Assistant d'Installation)` avec `cmdline: install`
 
 ### 2.4. Intégration Shell `jsh` (`services/jambo-sh`)
 - Prise en charge de `installer install` avec rapport détaillé en console série.

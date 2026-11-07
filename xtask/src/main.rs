@@ -1870,7 +1870,7 @@ fn create_iso(release: bool, test_mode: bool) -> anyhow::Result<PathBuf> {
     let limine_conf_content = if test_mode {
         "timeout: 0\n\n/JamboOS (Test CI)\n    protocol: limine\n    kernel_path: boot():/boot/jambo-kernel.elf\n    module_path: boot():/boot/initrd.tar\n    cmdline: test\n    kernel_cmdline: test\n"
     } else {
-        "timeout: 3\n\n/JamboOS Live (RAM-disk)\n    protocol: limine\n    kernel_path: boot():/boot/jambo-kernel.elf\n    module_path: boot():/boot/initrd.tar\n\n/JamboOS Installer (Installation Autonome)\n    protocol: limine\n    kernel_path: boot():/boot/jambo-kernel.elf\n    module_path: boot():/boot/initrd.tar\n    cmdline: install\n    kernel_cmdline: install\n"
+        "timeout: 3\n\n/JamboOS Live (RAM-disk)\n    protocol: limine\n    kernel_path: boot():/boot/jambo-kernel.elf\n    module_path: boot():/boot/initrd.tar\n\n/JamboOS Installer (Assistant d'Installation)\n    protocol: limine\n    kernel_path: boot():/boot/jambo-kernel.elf\n    module_path: boot():/boot/initrd.tar\n    cmdline: install\n    kernel_cmdline: install\n"
     };
     fs::write(limine_dir.join("limine.conf"), limine_conf_content)?;
 
@@ -2048,10 +2048,10 @@ fn run_test(release: bool) -> anyhow::Result<()> {
     let code = output.status.code().unwrap_or(-1);
     let success = code == 33
         || combined.contains(
-            "[PASS] Chantier 1 : Sous-système d'installation autonome, partitionnement GPT et montage UEFI validés",
+            "[PASS] Chantier 1 : Sous-système d'installation, partitionnement GPT et montage UEFI validés",
         )
         || combined.contains(
-            "[PASS] Jalon 6.4 : Utilitaires Coreutils autonomes Ring 3 et execution capabilaire valides",
+            "[PASS] Jalon 6.4 : Utilitaires Coreutils Ring 3 et execution capabilaire valides",
         )
         || combined.contains(
             "[PASS] Jalon 6.3 : VFS POSIX, fd_table et descripteurs utilisateur valides",

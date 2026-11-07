@@ -1,7 +1,7 @@
-//! Service d'installation autonome JamboOS (Ring 3).
+//! Utilitaire d'installation JamboOS (Ring 3).
 //!
 //! Ce binaire fournit les mécanismes d'initialisation, de formatage GPT (GUID Partition Table)
-//! et de vérification d'intégrité pour l'installation autonome de JamboOS sur disque dur/SSD.
+//! et de vérification d'intégrité pour l'installation de JamboOS sur disque cible.
 
 #![no_std]
 #![no_main]
@@ -185,7 +185,7 @@ pub unsafe extern "C" fn _start() -> ! {
         }
         "install" | "--install" => {
             println("\x1b[1;35m===================================================================\x1b[0m");
-            println("\x1b[1;32m  JAMBO-OS INSTALLATEUR AUTONOME — DÉPLOIEMENT UEFI SUR DISQUE CIBLE\x1b[0m");
+            println("\x1b[1;32m  JAMBO-OS INSTALLATEUR — DÉPLOIEMENT UEFI SUR DISQUE CIBLE\x1b[0m");
             println("\x1b[1;35m===================================================================\x1b[0m");
             println("\x1b[1;33m[1/6] Diagnostic du support de stockage cible...\x1b[0m");
             println("      Contrôleur de stockage : VirtIO Block / NVMe détecté");
@@ -273,7 +273,7 @@ pub unsafe extern "C" fn _start() -> ! {
         }
         _ => {
             println("Usage : installer [info | format | verify | install]");
-            println("Sous-système d'installation autonome JamboOS (Série 0.*.*)");
+            println("Utilitaire d'installation JamboOS (Série 0.*.*)");
             println("Options :");
             println("  info    : Affiche la géométrie et le schéma de partitionnement cible");
             println("  format  : Initialise la table GPT avec l'ESP et la partition racine");

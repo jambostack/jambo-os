@@ -10,7 +10,7 @@
   - Exposition dans `libs/libjambo/src/lib.rs`
   - Suite de tests unitaires automatisés validée à 100% (`cargo test --package libjambo`)
 
-- [ ] **Task 2: Crate `services/jambo-installer` & Binaire Autonome Ring 3**
+- [ ] **Task 2: Crate `services/jambo-installer` & Binaire Ring 3**
   - Création du crate `services/jambo-installer` avec cible binaire `installer`
   - Logique de partitionnement et de déploiement d'OS
   - Point d'entrée System V AMD64 `_start`, parsing arguments et sortie via `SyscallNumber::ThreadExit`

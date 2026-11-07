@@ -1,4 +1,4 @@
-# Plan d'Implémentation : Flux d'Installation Autonome & Options d'Amorçage ISO UEFI (Série 0.*.*)
+# Plan d'Implémentation : Flux d'Installation et Déploiement UEFI sur Stockage Cible (Série 0.*.*)
 
 ## Structure des Tâches
 
@@ -24,9 +24,9 @@
 - [ ] **Task 4: Menu d'Amorçage ISO Limine dans `xtask` & Détection Noyau**
   - Configuration de `limine.conf` dans `xtask/src/main.rs` avec double entrée :
     - `JamboOS Live (RAM-disk)`
-    - `JamboOS Installer (Installation Autonome)` (`cmdline: install`)
+    - `JamboOS Installer (Assistant d'Installation)` (`cmdline: install`)
   - Traitement de `cmdline.contains("install")` dans `kernel/src/main.rs`
-  - Validation du jalon d'installation autonome dans les tests CI QEMU
+  - Validation du jalon d'installation dans les tests CI QEMU
 
 - [ ] **Task 5: Quality Gate Complète & Commit Conventionnel**
   - `cargo fmt --all -- --check`

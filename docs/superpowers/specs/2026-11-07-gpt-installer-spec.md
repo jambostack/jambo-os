@@ -5,7 +5,7 @@
 JamboOS est un prototype de recherche en Pre-Alpha (série `0.*.*`). Jusqu'à présent :
 - L'image de disque générée (`target/disk.raw`) était un volume bloc brut de 32 Mio sans aucune table de partitionnement, écrivant l'Uberblock JamboFS directement à l'offset 0 (LBA 0).
 - Le système ne disposait d'aucune prise en charge du partitionnement standard UEFI **GPT (GUID Partition Table)** ni de **MBR Protecteur**.
-- Le système ne disposait d'aucun mécanisme d'installation autonome permettant à une machine cible de partitionner son stockage de masse (NVMe/SATA/VirtIO), de déployer l'EFI System Partition (ESP) et la racine, et d'installer le chargeur UEFI pour un amorçage autonome et persistant.
+- Le système ne disposait d'aucun mécanisme d'installation permettant à une machine cible de partitionner son stockage de masse (NVMe/SATA/VirtIO), de déployer l'EFI System Partition (ESP) et la racine, et d'installer le chargeur UEFI pour un amorçage persistant sur disque.
 
 ## 2. Objectifs Techniques
 
@@ -19,7 +19,7 @@ JamboOS est un prototype de recherche en Pre-Alpha (série `0.*.*`). Jusqu'à pr
    - Suite complète de tests unitaires (couverture 100% de la sérialisation, calcul CRC32, détection de corruption).
 
 2. **Crate & Service d'Installation Ring 3 (`services/jambo-installer`)** :
-   - Binaire autonome exécutable en espace utilisateur Ring 3 (`_start`, System V ABI).
+   - Binaire exécutable en espace utilisateur Ring 3 (`_start`, System V ABI).
    - Logique d'inspection de disque, écriture de table GPT et déploiement du payload système (kernel ELF, initrd, Limine UEFI).
 
 3. **Intégration dans le Shell `jsh` (`services/jambo-sh`)** :

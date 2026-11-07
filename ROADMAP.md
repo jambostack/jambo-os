@@ -3,7 +3,7 @@
 > **Dernière mise à jour** : 7 novembre 2026  
 > **Version actuelle** : Série `0.*.*` (Prototype Expérimental de Recherche en Pre-Alpha)  
 > **Statut global** : Prototype de micro-noyau orienté capacités en Rust `![no_std]`. **Projet à un stade très initial (Pre-Alpha) confiné strictement à la série 0.*.*, sans aucune projection vers une 1.0.0.**  
-> **Objectif prioritaire immédiat** : Développer l'ISO d'installation autonome et l'installeur système (`jambo-installer`), suivi des pilotes matériels réels et de la stabilisation sur disque physique.
+> **Objectif prioritaire immédiat** : Développer l'ISO d'installation et l'installeur système (`jambo-installer`), suivi des pilotes matériels réels et de la stabilisation sur disque physique.
 
 ---
 
@@ -27,10 +27,10 @@ flowchart LR
 
 > [!IMPORTANT]
 > **Règle Fondamentale sur les Versions & l'Élimination de Toute Prétention v1.0.0** :
-> 1. **Bannissement de l'Horizon v1.0.0** : Toute évocation d'une "version 1.0.0" ou de pseudo-paliers vers une "1.0.0" est formellement bannie. Le projet est un prototype de recherche expérimental (Pre-Alpha) à un stade initial. Le système ne dispose même pas encore d'une **ISO d'installation autonome** (outillage de partitionnement GPT du disque cible, installeur déployant les binaires et chargeur UEFI Limine sur disque dur/SSD pour un démarrage persistant).
+> 1. **Bannissement de l'Horizon v1.0.0** : Toute évocation d'une "version 1.0.0" ou de pseudo-paliers vers une "1.0.0" est formellement bannie. Le projet est un prototype de recherche expérimental (Pre-Alpha) à un stade initial. Le système ne dispose même pas encore d'une **ISO d'installation** (outillage de partitionnement GPT du disque cible, installeur déployant les binaires et chargeur UEFI Limine sur disque dur/SSD pour un démarrage persistant).
 > 2. **Évolution Lente Exclusivement sur `0.*.*`** : Le projet demeure strictement confiné sur la série `0.*.*`. Aucun saut de version artificiel.
 > 3. **Interdiction de Poser des Tags Git** : L'attribution de tags Git est gelée. Les développements progressent **exclusivement par commits classiques** au format Conventional Commits.
-> 4. **Prérequis Non-Négociables pour un Futur Tag** : Aucun tag ne sera posé avant d'avoir prouvé une **stabilité réelle** sur matériel physique, un système de fichiers persistant sur disque réel et une **ISO d'installation autonome opérationnelle**.
+> 4. **Prérequis Non-Négociables pour un Futur Tag** : Aucun tag ne sera posé avant d'avoir prouvé une **stabilité réelle** sur matériel physique, un système de fichiers persistant sur disque réel et une **ISO d'installation opérationnelle**.
 
 ---
 
@@ -82,23 +82,23 @@ flowchart LR
 
 | Chantier Fondamental | Périmètre Technique | Objectif Concret | Statut |
 | :--- | :--- | :--- | :---: |
-| **Chantier A : ISO d'Installation Autonome** | `services/jambo-installer`, `xtask/` | Installeur capable de partitionner un disque cible en GPT, formater l'ESP FAT32 et la racine, déployer le système de base et installer Limine UEFI pour un démarrage autonome hors RAM-disk | ⏳ **Priorité 1** |
+| **Chantier A : ISO et Utilitaire d'Installation** | `services/jambo-installer`, `xtask/` | Installeur capable de partitionner un disque cible en GPT, formater l'ESP FAT32 et la racine, déployer le système de base et installer Limine UEFI pour un démarrage persistant hors RAM-disk | ⏳ **Priorité 1** |
 | **Chantier B : Pilotes Matériels Réels** | `drivers/nvme/`, `drivers/usb/`, `drivers/uart/` | Remplacement des stubs par des pilotes matériels concrets (contrôleur NVMe PCIe, bus USB xHCI / clavier, UART série physique) | ⚪ Planifié |
 | **Chantier C : Système de Fichiers Persistant** | `services/jambo-fs/`, `kernel/` | Persistance réelle des blocs sur partition de stockage physique avec journalisation et transactions cohérentes | ⚪ Planifié |
-| **Chantier D : Pile Réseau & Sockets Ring 3** | `services/jambo-netd/`, `libs/libjambo/` | Pile réseau autonome TCP/IP et interface de sockets POSIX standard en espace utilisateur | ⚪ Planifié |
+| **Chantier D : Pile Réseau & Sockets Ring 3** | `services/jambo-netd/`, `libs/libjambo/` | Pile réseau TCP/IP et interface de sockets POSIX standard en espace utilisateur | ⚪ Planifié |
 | **Chantier E : Fuzzing TCB & Résilience Silicium** | `kernel/`, `tests/` | Campagnes de fuzzing intensives (libFuzzer/AFL), stress-tests SMP multicoeur et validation sur configurations matérielles réelles multiples | ⚪ Planifié |
 
 ---
 
-### Palier 6 — Jalon 6.4 (`v0.3.91`) — Utilitaires Coreutils autonomes en Ring 3 🟢 `[CORE-EXP]`
-* **Objectif** : Implémenter les utilitaires fondamentaux POSIX (`echo`, `cat`, `wc`, `true`, `false`, `ls`) sous forme de binaires autonomes Ring 3 `#![no_std]`, avec support du passage d'arguments System V ABI (`[argc][argv]`) et intégration capabilaire dans le shell `jsh`.
+### Palier 6 — Jalon 6.4 (`v0.3.91`) — Utilitaires Coreutils Ring 3 🟢 `[CORE-EXP]`
+* **Objectif** : Implémenter les utilitaires fondamentaux POSIX (`echo`, `cat`, `wc`, `true`, `false`, `ls`) sous forme de binaires Ring 3 `#![no_std]`, avec support du passage d'arguments System V ABI (`[argc][argv]`) et intégration capabilaire dans le shell `jsh`.
 * **Livrables techniques validés** :
   1. **Moteur Logique Coreutils (`libs/libjambo/src/coreutils.rs`)** :
      * Logique modulaire `#![no_std]` zéro-allocation pour `run_echo`, `run_cat`, `run_wc`, `run_true`, `run_false`, `run_ls`.
      * Cache virtuel d'inodes et persistance en mémoire (`INODE_POOL`) avec support des fichiers `/etc/hostname`, `/etc/os-release`, `/etc/motd` et fichiers créés avec `O_CREAT`.
      * Suite de tests unitaires automatisés portée à **21/21 tests passés avec succès** dans `libjambo`.
-  2. **Crate Binaires Autonomes Ring 3 (`services/jambo-coreutils`)** :
-     * 6 cibles binaires autonomes (`echo`, `cat`, `wc`, `true`, `false`, `ls`) compilées avec le linker script `libs/user-x86_64.ld`.
+  2. **Crate Binaires Ring 3 (`services/jambo-coreutils`)** :
+     * 6 cibles binaires Ring 3 (`echo`, `cat`, `wc`, `true`, `false`, `ls`) compilées avec le linker script `libs/user-x86_64.ld`.
      * Décodage sécurisé de la pile System V ABI (`parse_stack_args`) et terminaison capabilaire via `SyscallNumber::ThreadExit`.
   3. **Shell Introspectif `jsh` (`services/jambo-sh`)** :
      * Exécution transparente des commandes avec ou sans préfixe `/bin/` (`cat`, `bin/cat`, `/bin/cat`).
@@ -129,7 +129,7 @@ flowchart LR
 * **Livrables techniques validés** :
   1. **Dynamic Loader Souverain (`libs/libjambo/src/dynlink.rs` & `jambo.h`)** :
      * Structures `Elf64Dyn`, `Elf64Rela`, `Elf64Sym` conformes System V AMD64 `#![no_std]`.
-     * Moteur de relocalisation autonome résolvant `R_X86_64_RELATIVE` (Base + Addend) et `R_X86_64_GLOB_DAT` (GOT).
+     * Moteur de relocalisation ELF64 résolvant `R_X86_64_RELATIVE` (Base + Addend) et `R_X86_64_GLOB_DAT` (GOT).
      * Table `GotTable` protégée par verrouillage irréversible `seal_relro()` contre toute corruption post-liaison.
      * Suite de tests unitaires automatisés validée à 100% (`cargo test --package libjambo`).
   2. **Shell Interactif `jsh` (`services/jambo-sh`)** :
@@ -168,10 +168,10 @@ flowchart LR
 
 ## 5. Journal des Jalons et Historique de Versionnage
 
-* **2026-11-07** : **Jalon 6.4 (`v0.3.91`) — Utilitaires Coreutils Autonomes Ring 3 & Exécution Capabilaire**
+* **2026-11-07** : **Jalon 6.4 (`v0.3.91`) — Utilitaires Coreutils Ring 3 & Exécution Capabilaire**
   * Création du module `libjambo::coreutils` fournissant la logique `#![no_std]` des utilitaires `echo`, `cat`, `wc`, `true`, `false`, `ls`.
   * Implémentation du pool virtuel d'inodes `INODE_POOL` avec support de `/etc/hostname`, `/etc/os-release`, `/etc/motd` et fichiers dynamiques.
-  * Création du crate `services/jambo-coreutils` produisant 6 binaires autonomes Ring 3 avec décodage System V ABI `[argc][argv]`.
+  * Création du crate `services/jambo-coreutils` produisant 6 binaires Ring 3 avec décodage System V ABI `[argc][argv]`.
   * Intégration de l'exécution directe et préfixée (`/bin/`) et de la commande `coreutils` dans `jambo-sh`.
   * Suite de tests unitaires portée à **21/21 tests passés** dans `libjambo`.
 * **2026-11-07** : **Jalon 6.3 (`v0.3.90`) — VFS POSIX, Table fd_table & Primitives C-ABI**
@@ -201,7 +201,7 @@ flowchart LR
   * Validation unitaire complète (`cargo test --package libjambo`).
 * **2026-11-04** : **Jalon 5.2 (`v0.3.85`) — Audit de Conformité de l'Incubateur & Formalisation des ADRs**
   * Formalisation des ADR-0084 (Broker DeviceIo), ADR-0085 (Entropie RDRAND), ADR-0086 (CSpace anti-ABA) et ADR-0087 (Déploiement ESP universel).
-  * Audit complet et compilation 100% sans erreur du workspace autonome `incubator/` (70+ crates).
+  * Audit complet et compilation 100% sans erreur du workspace indépendant `incubator/` (70+ crates).
   * Mise à jour de [`incubator/README.md`](incubator/README.md) avec le registre des 38 microservices certifiés.
 * **2026-11-04** : **Jalon 5.1 (`v0.3.84`) — Outillage Déploiement Silicium Bare-Metal & Guide Matériel Réel**
   * Implémentation dans `xtask` de la commande `esp` créant une arborescence EFI FAT32 universelle prête à copier.

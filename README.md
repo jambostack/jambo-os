@@ -28,12 +28,12 @@
 
 > [!WARNING]
 > **Avertissement sur la Maturité & Stade du Projet : Série `0.*.*` (Pre-Alpha / Prototype Expérimental)**  
-> **JamboOS est un projet expérimental de recherche à un stade très initial (Pre-Alpha). Toute projection vers une version 1.0.0 est bannie : le système ne dispose même pas encore d'une ISO d'installation autonome et l'attribution de tags Git est strictement gelée.**  
+> **JamboOS est un projet expérimental de recherche à un stade très initial (Pre-Alpha). Toute projection vers une version 1.0.0 est bannie : le système ne dispose même pas encore d'une véritable ISO d'installation et l'attribution de tags Git est strictement gelée.**  
 > 
 > Ce dépôt explore la faisabilité d'un micro-noyau moderne en Rust `![no_std]` inspiré des principes de seL4 et Zircon. Bien que le système démarre sous QEMU et sur machine UEFI réelle :
 > * **Stade de Développement** : Les microservices et pilotes actuels sont des prototypes et squelettes fonctionnels minimaux servant de preuve de concept.
-> * **Périmètre Opérationnel** : Pagination PML4 de base, ordonnanceur EEVDF expérimental, pilote VirtIO simplifié, arènes VMO, VFS POSIX (`fd_table`), Dynamic Loader ELF64 Ring 3 (`libjambo::dynlink`), et suite d'utilitaires autonomes Ring 3 Coreutils (`echo`, `cat`, `wc`, `true`, `false`, `ls`).
-> * **Chantiers Prioritaires** : Conception d'une véritable ISO d'installation autonome, pilotes matériels réels (NVMe, USB xHCI, UART), système de fichiers persistant, et stabilisation rigoureuse avant tout éventuel futur tag Git.
+> * **Périmètre Opérationnel** : Pagination PML4 de base, ordonnanceur EEVDF expérimental, pilote VirtIO simplifié, arènes VMO, VFS POSIX (`fd_table`), Dynamic Loader ELF64 Ring 3 (`libjambo::dynlink`), et suite d'utilitaires Ring 3 Coreutils (`echo`, `cat`, `wc`, `true`, `false`, `ls`).
+> * **Chantiers Prioritaires** : Conception d'une véritable ISO d'installation, pilotes matériels réels (NVMe, USB xHCI, UART), système de fichiers persistant, et stabilisation rigoureuse avant tout éventuel futur tag Git.
 > 
 > 📜 **Notes de Version v0.3.91** : Consultez [`docs/RELEASE_NOTES_v0.3.91.md`](docs/RELEASE_NOTES_v0.3.91.md).  
 > 🚀 **Guide de Test Silicium** : Pour tester le prototype sur machine réelle, consultez [`docs/BAREMETAL.md`](docs/BAREMETAL.md).  
@@ -122,7 +122,7 @@ flowchart LR
 | Niveau | Sigle | Emplacement | Définition & Critères d'Ingénierie |
 | :---: | :---: | :--- | :--- |
 | 🟢 | **`[PROD]`** | `kernel/`, `abi/`, `xtask/` | **Production Certifiée** : Code compilé en `#![no_std]`, exécuté sous QEMU et bare-metal, 0 allocation dynamique non maîtrisée, linters stricts (`clippy -D warnings`), audit formel de bornes. |
-| 🟡 | **`[RING3-HW]`** | `services/`, `drivers/`, `libs/` | **Exécutable Ring 3 Autonome** : Binaire ELF64 isolé dans son propre espace d'adressage virtuel (CR3), pilotant le matériel via IPC/VMO sous barrière IOMMU. 38 microservices actuellement certifiés. |
+| 🟡 | **`[RING3-HW]`** | `services/`, `drivers/`, `libs/` | **Exécutable Ring 3 Isolé** : Binaire ELF64 isolé dans son propre espace d'adressage virtuel (CR3), pilotant le matériel via IPC/VMO sous barrière IOMMU. 38 microservices actuellement certifiés. |
 | 🔵 | **`[SIM]`** | `incubator/` | **Modèle Prospectif / Incubateur** : Algorithmes et preuves de concept validés logiquement en mémoire, en attente de portage vers la chaîne d'outillage Ring 3. |
 
 ---
@@ -200,7 +200,7 @@ jambo-os/
 │       └── syscall/         # Dispatcher des 29 appels système sécurisés
 ├── libs/
 │   └── libjambo/            # Runtime d'espace utilisateur Ring 3 et wrappers de syscalls
-├── services/                # Les 38 Microservices Ring 3 Autonomes
+├── services/                # Les 38 Microservices Ring 3
 │   ├── jambo-init/          # Superviseur système PID 1 en Ring 3
 │   ├── jambo-sh/            # Shell interactif sur console série UART COM1 (PID 2)
 │   ├── jambo-blockd/        # Démon de stockage VirtIO-Block moderne (PID 3)
@@ -208,7 +208,7 @@ jambo-os/
 │   ├── jambo-netd/          # Pile réseau VirtIO-Net (PID 5)
 │   ├── ...                  # 33 autres démons de sécurité et de résilience
 │   └── jambo-dlp/           # Prévention des fuites de données (PID 38)
-├── incubator/               # Recherche Avancée (Workspace Autonome isolé)
+├── incubator/               # Recherche Avancée (Workspace indépendant isolé)
 │   ├── Cargo.toml           # Manifeste indépendant de l'incubateur
 │   └── README.md            # Charte, statuts [SIM]/[SPEC] et critères de graduation
 ├── xtask/                   # Orchestrateur Rust : compilation, initrd, disk.raw, ISO et test QEMU

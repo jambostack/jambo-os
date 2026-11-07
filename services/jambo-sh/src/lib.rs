@@ -449,7 +449,7 @@ impl JamboShell {
   ls [-l] [-a] - Liste les fichiers et repertoires\n\
   wc [-l] [-w] [-c] <files> - Compte les lignes, mots et octets\n\
   true / false - Retourne un statut de succes (0) ou d'echec (1)\n\
-  coreutils   - Liste les 6 utilitaires autonomes Ring 3 (/bin/*)\n\
+  coreutils   - Liste les 6 utilitaires Ring 3 (/bin/*)\n\
   uname       - Affiche le nom et l'architecture du systeme\n\
   version     - Affiche les details de version du micro-noyau\n\
   uptime      - Affiche le temps d'activite du systeme\n\
@@ -493,7 +493,7 @@ impl JamboShell {
   ueba [status|profile|anomalies|score|quarantine|audit] - Analyse comportementale des utilisateurs et entites UEBA Ring 3\n\
   itdr [status|identities|threats|revoke|isolate|remediate|audit] - Detection et reponse aux menaces d'identites ITDR Ring 3\n\
   dlp [status|inspect|rules|incidents|audit] - Prevention des fuites de donnees DLP Ring 3\n\
-  installer [info|format|verify|install] - Sous-systeme d'installation autonome GPT et UEFI\n";
+  installer [info|format|verify|install] - Utilitaire d'installation et de partitionnement GPT UEFI\n";
         let len = text.len().min(out.len());
         out[..len].copy_from_slice(&text[..len]);
         (ShellStatus::Success, len)
@@ -561,7 +561,7 @@ impl JamboShell {
     }
 
     fn cmd_coreutils(&self, out: &mut [u8]) -> (ShellStatus, usize) {
-        let text = b"Utilitaires Coreutils Autonomes Ring 3 (services/jambo-coreutils) :\n\
+        let text = b"Utilitaires Coreutils Ring 3 (services/jambo-coreutils) :\n\
   Binaires disponibles : /bin/echo, /bin/cat, /bin/wc, /bin/true, /bin/false, /bin/ls\n\
   Architecture & ABI   : System V AMD64 ELF64 (ET_EXEC / Ring 3 Userland)\n\
   Point d'entree       : _start (parsing argc/argv sur pile System V)\n\
@@ -587,7 +587,7 @@ Secteur LBA 1: En-tete GPT 'EFI PART' (CRC32 valide, 92 octets)\n\
 Secteurs 2..33: 128 entrees de partition de 128 octets\n\
 Partition 1  : EFI System Partition (ESP) - Type C12A7328-F81F-11D2-BA4B-00A0C93EC93B\n\
 Partition 2  : JamboOS System Root - Type 6A616D62-6F6F-7300-726F-6F7400000001\n\
-Statut       : Pret pour deploiement autonome hors live-RAM\n";
+Statut       : Pret pour deploiement sur disque cible\n";
                 cursor = append_bytes(out, cursor, msg);
             }
             "format" => {
@@ -672,7 +672,7 @@ Statut       : Pret pour deploiement autonome hors live-RAM\n";
                 ];
                 match libjambo::gpt::format_gpt_disk(&mut disk_buf, 65536, disk_guid, &reqs) {
                     Ok(()) => {
-                        let msg = b"\x1b[1;32m[INSTALLER] Deploiement autonome termine avec succes :\x1b[0m\n\
+                        let msg = b"\x1b[1;32m[INSTALLER] Deploiement sur disque termine avec succes :\x1b[0m\n\
   [1] Stockage cible : VirtIO/NVMe 65536 secteurs (32 Mio)\n\
   [2] Table GPT conforme UEFI 2.10 ecrite (LBA 0..33)\n\
   [3] Partition ESP FAT32 : LBA 34..2081 (1 Mio) avec BOOTX64.EFI et limine.conf\n\
@@ -682,7 +682,7 @@ Statut       : Pret pour deploiement autonome hors live-RAM\n";
                         cursor = append_bytes(out, cursor, msg);
                     }
                     Err(_) => {
-                        let msg = b"\x1b[1;31m[INSTALLER] Echec du deploiement autonome\x1b[0m\n";
+                        let msg = b"\x1b[1;31m[INSTALLER] Echec du deploiement sur disque\x1b[0m\n";
                         cursor = append_bytes(out, cursor, msg);
                         return (ShellStatus::ExecutionFailed, cursor);
                     }
@@ -690,11 +690,11 @@ Statut       : Pret pour deploiement autonome hors live-RAM\n";
             }
             _ => {
                 let msg = b"Usage : installer [info | format | verify | install]\n\
-Sous-systeme d'installation autonome JamboOS (Serie 0.*.*)\n\
+Utilitaire d'installation JamboOS (Serie 0.*.*)\n\
   info    : Affiche l'architecture et les specifications GPT cibles\n\
   format  : Simule le partitionnement GPT avec ESP (32 Mio) et Root (64 Mio)\n\
   verify  : Controle la conformite et l'integrite CRC32\n\
-  install : Execute le flux complet de deploiement autonome et de formatage UEFI\n";
+  install : Execute le flux complet de deploiement et de formatage UEFI\n";
                 cursor = append_bytes(out, cursor, msg);
             }
         }
