@@ -423,6 +423,7 @@ impl JamboShell {
             "ueba" => self.cmd_ueba(args, out),
             "itdr" => self.cmd_itdr(args, out),
             "dlp" => self.cmd_dlp(args, out),
+            "dynlink" | "ldd" => self.cmd_dynlink(out),
             "uname" => self.cmd_uname(out),
             "version" => self.cmd_version(out),
             "uptime" => self.cmd_uptime(out),
@@ -441,6 +442,7 @@ impl JamboShell {
   version     - Affiche les details de version du micro-noyau\n\
   uptime      - Affiche le temps d'activite du systeme\n\
   caps        - Affiche les capacites CSpace du shell\n\
+  dynlink     - Affiche l'etat du dynamic loader ELF64 et relocations\n\
   clear       - Reinitialise l'ecran du terminal\n\
   reboot      - Eteint ou redemarre la machine virtuelle\n\
   cat <path>  - Affiche le contenu d'un fichier\n\
@@ -521,13 +523,25 @@ impl JamboShell {
         }
     }
 
+    fn cmd_dynlink(&self, out: &mut [u8]) -> (ShellStatus, usize) {
+        let text = b"Dynamic Loader ELF64 Ring 3 (libjambo::dynlink) :\n\
+  Format supporte     : ELF64 ET_DYN (PIE / Shared Objects)\n\
+  Relocations System V: R_X86_64_RELATIVE, R_X86_64_GLOB_DAT, R_X86_64_JUMP_SLOT\n\
+  Protection memoire  : W^X strict & Durcissement irreversible RELRO\n\
+  GOT Capacity        : 64 entrees par processus\n\
+  Statut              : Operationnel (Jalon 6.2 v0.3.89)\n";
+        let len = text.len().min(out.len());
+        out[..len].copy_from_slice(&text[..len]);
+        (ShellStatus::Success, len)
+    }
+
     fn cmd_uname(&self, out: &mut [u8]) -> (ShellStatus, usize) {
         #[cfg(target_arch = "x86_64")]
-        let text = b"JamboOS 0.3.88-pre-alpha x86_64 Limine\n";
+        let text = b"JamboOS 0.3.89-pre-alpha x86_64 Limine\n";
         #[cfg(target_arch = "aarch64")]
-        let text = b"JamboOS 0.3.88-pre-alpha aarch64 Limine\n";
+        let text = b"JamboOS 0.3.89-pre-alpha aarch64 Limine\n";
         #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
-        let text = b"JamboOS 0.3.88-pre-alpha unknown Limine\n";
+        let text = b"JamboOS 0.3.89-pre-alpha unknown Limine\n";
 
         let len = text.len().min(out.len());
         out[..len].copy_from_slice(&text[..len]);
@@ -535,10 +549,10 @@ impl JamboShell {
     }
 
     fn cmd_version(&self, out: &mut [u8]) -> (ShellStatus, usize) {
-        let text = b"JamboOS v0.3.88 (Pre-Alpha Prototype)\n\
+        let text = b"JamboOS v0.3.89 (Pre-Alpha Prototype)\n\
 Architecture : Micro-noyau oriente capacites no_std\n\
 Auteur & Architecte : ASSOGBA Prudence Dieudonne\n\
-ABI : 29 Appels Systeme (jambo-abi v0.4) avec compatibilite POSIX statique\n";
+ABI : 29 Appels Systeme (jambo-abi v0.4) avec Dynamic Loader libjambo\n";
         let len = text.len().min(out.len());
         out[..len].copy_from_slice(&text[..len]);
         (ShellStatus::Success, len)
