@@ -540,20 +540,58 @@ pub struct JamboFs {
     pub client: BlockClient,
     pub active_uberblock: Uberblock,
     pub root_offset: u64,
+    pub partition_base_lba: u64,
 }
 
 impl JamboFs {
-    /// Monte le volume JamboFS en lisant et validant l'Uberblock (LBA 0..7)
+    /// Monte le volume JamboFS en lisant et validant l'Uberblock (LBA 0..7 ou partition GPT)
     pub fn mount(client: &BlockClient) -> Result<Self, FsError> {
         let mut block_buf = [0u8; BLOCK_SIZE];
         client
             .read_block(0, &mut block_buf)
             .map_err(FsError::BlockIoError)?;
 
-        let uberblock = unsafe {
+        let mut uberblock = unsafe {
             let ptr = block_buf.as_ptr() as *const Uberblock;
             ptr.read_unaligned()
         };
+
+        let mut partition_base_lba = 0u64;
+
+        if !uberblock.is_valid() {
+            // Lecture des premiers secteurs pour détection GPT (LBA 0..33)
+            let mut gpt_buf = [0u8; 34 * 512];
+            let blocks_to_read = gpt_buf.len().div_ceil(BLOCK_SIZE);
+            for b in 0..blocks_to_read {
+                let mut chunk = [0u8; BLOCK_SIZE];
+                if client.read_block(b as u64 * 8, &mut chunk).is_ok() {
+                    let start = b * BLOCK_SIZE;
+                    let end = (start + BLOCK_SIZE).min(gpt_buf.len());
+                    gpt_buf[start..end].copy_from_slice(&chunk[..end - start]);
+                }
+            }
+
+            if let Ok(info) = libjambo::gpt::parse_gpt_disk(&gpt_buf) {
+                for part in &info.partitions[..info.partition_count.min(4)] {
+                    if part.partition_type_guid == libjambo::gpt::Guid::JAMBOOS_ROOT {
+                        partition_base_lba = part.starting_lba;
+                        if client
+                            .read_block(partition_base_lba, &mut block_buf)
+                            .is_ok()
+                        {
+                            let cand = unsafe {
+                                let ptr = block_buf.as_ptr() as *const Uberblock;
+                                ptr.read_unaligned()
+                            };
+                            if cand.is_valid() {
+                                uberblock = cand;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
         if !uberblock.is_valid() {
             if uberblock.magic != JAMBOFS_MAGIC {
@@ -571,6 +609,7 @@ impl JamboFs {
             client: *client,
             active_uberblock: uberblock,
             root_offset,
+            partition_base_lba,
         })
     }
 
@@ -580,6 +619,7 @@ impl JamboFs {
             client,
             active_uberblock: Uberblock::default(),
             root_offset: BLOCK_SIZE as u64,
+            partition_base_lba: 0,
         }
     }
 
@@ -590,8 +630,9 @@ impl JamboFs {
         }
 
         let mut block_buf = [0u8; BLOCK_SIZE];
-        // LBA 24 correspond au bloc de données de /banner.txt (LBA 24..31)
-        let _ = self.client.read_block(24, &mut block_buf);
+        // LBA 24 relatif au début de la partition Root correspond au bloc de données de /banner.txt
+        let banner_lba = self.partition_base_lba + 24;
+        let _ = self.client.read_block(banner_lba, &mut block_buf);
 
         let mut len = 0;
         while len < block_buf.len() && block_buf[len] != 0 {

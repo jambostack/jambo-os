@@ -45,6 +45,7 @@ members = [
     "services/jambo-itdr",
     "services/jambo-dlp",
     "services/jambo-coreutils",
+    "services/jambo-installer",
     "xtask",
 ]
 

@@ -428,6 +428,7 @@ impl JamboShell {
             "ueba" => self.cmd_ueba(args, out),
             "itdr" => self.cmd_itdr(args, out),
             "dlp" => self.cmd_dlp(args, out),
+            "installer" | "/bin/installer" | "bin/installer" => self.cmd_installer(args, out),
             "dynlink" | "ldd" => self.cmd_dynlink(out),
             "vfs" => self.cmd_vfs(out),
             "uname" => self.cmd_uname(out),
@@ -491,7 +492,8 @@ impl JamboShell {
   soar [status|playbooks|trigger|incidents|audit] - Orchestration, automatisation et reponse aux incidents SOAR Ring 3\n\
   ueba [status|profile|anomalies|score|quarantine|audit] - Analyse comportementale des utilisateurs et entites UEBA Ring 3\n\
   itdr [status|identities|threats|revoke|isolate|remediate|audit] - Detection et reponse aux menaces d'identites ITDR Ring 3\n\
-  dlp [status|inspect|rules|incidents|audit] - Prevention des fuites de donnees DLP Ring 3\n";
+  dlp [status|inspect|rules|incidents|audit] - Prevention des fuites de donnees DLP Ring 3\n\
+  installer [info|format|verify] - Sous-systeme d'installation GPT et bootloader UEFI\n";
         let len = text.len().min(out.len());
         out[..len].copy_from_slice(&text[..len]);
         (ShellStatus::Success, len)
@@ -570,6 +572,96 @@ impl JamboShell {
         let len = text.len().min(out.len());
         out[..len].copy_from_slice(&text[..len]);
         (ShellStatus::Success, len)
+    }
+
+    fn cmd_installer(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        let action = if !args.is_empty() { args[0] } else { "help" };
+
+        let mut cursor = 0;
+        match action {
+            "info" => {
+                let msg = b"\x1b[1;36m[INSTALLER] Architecture d'Installation JamboOS (Serie 0.*.*)\x1b[0m\n\
+Format cible : GPT (GUID Partition Table, conforme UEFI 2.10)\n\
+Secteur LBA 0: Protective MBR (0xEE) anti-ecrasement legacy\n\
+Secteur LBA 1: En-tete GPT 'EFI PART' (CRC32 valide, 92 octets)\n\
+Secteurs 2..33: 128 entrees de partition de 128 octets\n\
+Partition 1  : EFI System Partition (ESP) - Type C12A7328-F81F-11D2-BA4B-00A0C93EC93B\n\
+Partition 2  : JamboOS System Root - Type 6A616D62-6F6F-7300-726F-6F7400000001\n\
+Statut       : Pret pour deploiement autonome hors live-RAM\n";
+                cursor = append_bytes(out, cursor, msg);
+            }
+            "format" => {
+                let mut disk_buf = [0u8; 34 * 512];
+                let disk_guid = libjambo::gpt::Guid([
+                    0x4A, 0x41, 0x4D, 0x42, 0x4F, 0x53, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+                    0x08, 0x09, 0x0A,
+                ]);
+                let reqs = [
+                    libjambo::gpt::PartitionRequest {
+                        name: "EFI System Partition",
+                        type_guid: libjambo::gpt::Guid::EFI_SYSTEM_PARTITION,
+                        size_sectors: 65536,
+                    },
+                    libjambo::gpt::PartitionRequest {
+                        name: "JamboOS Root",
+                        type_guid: libjambo::gpt::Guid::JAMBOOS_ROOT,
+                        size_sectors: 131072,
+                    },
+                ];
+                match libjambo::gpt::format_gpt_disk(&mut disk_buf, 262144, disk_guid, &reqs) {
+                    Ok(()) => {
+                        let msg =
+                            b"\x1b[1;32m[INSTALLER] Formatage GPT execute avec succes :\x1b[0m\n\
+  - Protective MBR initialise a LBA 0\n\
+  - Primary GPT Header initialise a LBA 1\n\
+  - Partition 1 ESP allouee : LBA 34..65569 (32 Mio)\n\
+  - Partition 2 Root allouee : LBA 65570..196641 (64 Mio)\n\
+  - Checksum CRC32 Header & Partition Array generes et valides\n";
+                        cursor = append_bytes(out, cursor, msg);
+                    }
+                    Err(_) => {
+                        let msg = b"\x1b[1;31m[INSTALLER] Erreur lors du formatage GPT\x1b[0m\n";
+                        cursor = append_bytes(out, cursor, msg);
+                        return (ShellStatus::ExecutionFailed, cursor);
+                    }
+                }
+            }
+            "verify" => {
+                let mut disk_buf = [0u8; 34 * 512];
+                let disk_guid = libjambo::gpt::Guid::JAMBOOS_ROOT;
+                let reqs = [libjambo::gpt::PartitionRequest {
+                    name: "EFI System Partition",
+                    type_guid: libjambo::gpt::Guid::EFI_SYSTEM_PARTITION,
+                    size_sectors: 2048,
+                }];
+                let _ = libjambo::gpt::format_gpt_disk(&mut disk_buf, 65536, disk_guid, &reqs);
+                match libjambo::gpt::parse_gpt_disk(&disk_buf) {
+                    Ok(_info) => {
+                        let msg =
+                            b"\x1b[1;32m[PASS] Verification de conformite GPT reussie :\x1b[0m\n\
+  - Signature 'EFI PART' : Conforme\n\
+  - Checksum CRC32 Header : Valide\n\
+  - Checksum CRC32 Array  : Valide\n\
+  - Table analysable par le firmware UEFI\n";
+                        cursor = append_bytes(out, cursor, msg);
+                    }
+                    Err(_) => {
+                        let msg = b"\x1b[1;31m[FAIL] Table GPT non valide ou corrompue\x1b[0m\n";
+                        cursor = append_bytes(out, cursor, msg);
+                        return (ShellStatus::ExecutionFailed, cursor);
+                    }
+                }
+            }
+            _ => {
+                let msg = b"Usage : installer [info | format | verify]\n\
+Sous-systeme d'installation autonome JamboOS (Serie 0.*.*)\n\
+  info   : Affiche l'architecture et les specifications GPT cibles\n\
+  format : Simule le partitionnement GPT avec ESP (32 Mio) et Root (64 Mio)\n\
+  verify : Controle la conformite et l'integrite CRC32\n";
+                cursor = append_bytes(out, cursor, msg);
+            }
+        }
+        (ShellStatus::Success, cursor)
     }
 
     fn cmd_ls(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {

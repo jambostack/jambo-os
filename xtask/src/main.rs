@@ -1276,6 +1276,36 @@ fn build_coreutils(
     ))
 }
 
+fn build_installer(release: bool) -> anyhow::Result<PathBuf> {
+    let root = root_dir();
+    let mut cmd = Command::new("cargo");
+    cmd.current_dir(&root);
+    cmd.args([
+        "build",
+        "--package",
+        "jambo-installer",
+        "--bin",
+        "installer",
+        "--target",
+        "x86_64-unknown-none",
+    ]);
+    if release {
+        cmd.arg("--release");
+    }
+    cmd.env(
+        "RUSTFLAGS",
+        "-C link-arg=-Tlibs/user-x86_64.ld -C relocation-model=static",
+    );
+
+    let status = cmd.status()?;
+    if !status.success() {
+        anyhow::bail!("Échec de compilation du binaire jambo-installer");
+    }
+
+    let profile = if release { "release" } else { "debug" };
+    Ok(root.join(format!("target/x86_64-unknown-none/{}/installer", profile)))
+}
+
 #[allow(clippy::type_complexity)]
 fn build_userland(
     release: bool,
@@ -1379,7 +1409,32 @@ fn create_disk_image(path: &Path) -> anyhow::Result<()> {
 
     file.set_len(32 * 1024 * 1024)?; // 32 Mio = 33 554 432 octets
 
-    // 1. Uberblock JamboFS à l'offset 0 (LBA 0..7)
+    // 1. Formatage de la table GPT conforme UEFI 2.10
+    let mut gpt_buffer = [0u8; 34 * libjambo::gpt::SECTOR_SIZE];
+    let disk_guid = libjambo::gpt::Guid([
+        0x4A, 0x41, 0x4D, 0x42, 0x4F, 0x2D, 0x44, 0x49, 0x53, 0x4B, 0x2D, 0x47, 0x55, 0x49, 0x44,
+        0x01,
+    ]);
+    let partitions = [
+        libjambo::gpt::PartitionRequest {
+            name: "EFI System Partition",
+            type_guid: libjambo::gpt::Guid::EFI_SYSTEM_PARTITION,
+            size_sectors: 2048, // 1 Mio (LBA 34..2081)
+        },
+        libjambo::gpt::PartitionRequest {
+            name: "JamboOS Root",
+            type_guid: libjambo::gpt::Guid::JAMBOOS_ROOT,
+            size_sectors: 60000, // ~30 Mio JamboFS (LBA 2082..62081)
+        },
+    ];
+    libjambo::gpt::format_gpt_disk(&mut gpt_buffer, 65536, disk_guid, &partitions)
+        .map_err(|e| anyhow::anyhow!("Échec de génération GPT : {:?}", e))?;
+
+    file.seek(SeekFrom::Start(0))?;
+    file.write_all(&gpt_buffer)?;
+
+    // 2. Uberblock JamboFS dans la partition Root à LBA 2082 (offset 2082 * 512 = 1 065 984)
+    let root_part_offset = 2082 * 512;
     let mut uberblock_buf = [0u8; 4096];
     // Magic: 0x53465F4F424D414A ("JAMBO_FS")
     uberblock_buf[0..8].copy_from_slice(&0x53465F4F424D414Au64.to_le_bytes());
@@ -1392,10 +1447,10 @@ fn create_disk_image(path: &Path) -> anyhow::Result<()> {
     // Root tree offset: 8192
     uberblock_buf[24..32].copy_from_slice(&8192u64.to_le_bytes());
 
-    file.seek(SeekFrom::Start(0))?;
+    file.seek(SeekFrom::Start(root_part_offset))?;
     file.write_all(&uberblock_buf)?;
 
-    // 2. Nœud racine à l'offset 8192 (LBA 16..23) : entrée "banner.txt", direct_block LBA 24, size 30
+    // 3. Nœud racine JamboFS à l'offset root_part_offset + 8192 : entrée "banner.txt", direct_block LBA relatif 24
     let mut root_buf = [0u8; 4096];
     root_buf[0..8].copy_from_slice(&1u64.to_le_bytes()); // Inode 1
     root_buf[8..16].copy_from_slice(&30u64.to_le_bytes()); // Taille 30 octets
@@ -1406,15 +1461,15 @@ fn create_disk_image(path: &Path) -> anyhow::Result<()> {
     let name = b"banner.txt";
     root_buf[64..64 + name.len()].copy_from_slice(name);
 
-    file.seek(SeekFrom::Start(8192))?;
+    file.seek(SeekFrom::Start(root_part_offset + 8192))?;
     file.write_all(&root_buf)?;
 
-    // 3. Données à l'offset 12288 (LBA 24..31) : "Bienvenue sur JamboOS v0.3.76\n"
+    // 4. Données à l'offset root_part_offset + 12288 : "Bienvenue sur JamboOS v0.3.77\n"
     let banner_data = b"Bienvenue sur JamboOS v0.3.77\n";
     let mut data_buf = [0u8; 4096];
     data_buf[..banner_data.len()].copy_from_slice(banner_data);
 
-    file.seek(SeekFrom::Start(12288))?;
+    file.seek(SeekFrom::Start(root_part_offset + 12288))?;
     file.write_all(&data_buf)?;
 
     file.flush()?;
@@ -1464,6 +1519,7 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
         dlp_bin,
     ) = build_userland(release)?;
     let (echo_bin, cat_bin, wc_bin, true_bin, false_bin, ls_bin) = build_coreutils(release)?;
+    let installer_bin = build_installer(release)?;
 
     let initrd_stage = root.join("target/initrd_stage");
     let bin_dir = initrd_stage.join("bin");
@@ -1476,6 +1532,8 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
     fs::copy(&true_bin, bin_dir.join("true"))?;
     fs::copy(&false_bin, bin_dir.join("false"))?;
     fs::copy(&ls_bin, bin_dir.join("ls"))?;
+    fs::copy(&installer_bin, bin_dir.join("installer"))?;
+    fs::copy(&installer_bin, bin_dir.join("jambo-installer"))?;
 
     fs::copy(&init_bin, bin_dir.join("init"))?;
     fs::copy(&jsh_bin, bin_dir.join("jsh"))?;
@@ -1619,6 +1677,8 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
     fs::copy(&true_bin, initrd_stage.join("true"))?;
     fs::copy(&false_bin, initrd_stage.join("false"))?;
     fs::copy(&ls_bin, initrd_stage.join("ls"))?;
+    fs::copy(&installer_bin, initrd_stage.join("installer"))?;
+    fs::copy(&installer_bin, initrd_stage.join("jambo-installer"))?;
 
     let initrd_tar = root.join("target/initrd.tar");
     let status = Command::new("tar")
@@ -1632,6 +1692,8 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
             "bin/true",
             "bin/false",
             "bin/ls",
+            "bin/installer",
+            "bin/jambo-installer",
             "bin/init",
             "bin/jsh",
             "bin/blockd",
@@ -1772,6 +1834,8 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
             "true",
             "false",
             "ls",
+            "installer",
+            "jambo-installer",
         ])
         .status()?;
 

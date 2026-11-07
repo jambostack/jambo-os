@@ -1,0 +1,12 @@
+[package]
+name = "jambo-installer"
+version = "0.3.91"
+edition = "2021"
+
+[[bin]]
+name = "installer"
+path = "src/main.rs"
+
+[dependencies]
+libjambo = { path = "../../libs/libjambo" }
+
