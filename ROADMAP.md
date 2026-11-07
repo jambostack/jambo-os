@@ -1,9 +1,9 @@
 # FEUILLE DE ROUTE D'INGÉNIERIE SYSTÈME — JamboOS
 
 > **Dernière mise à jour** : 7 novembre 2026  
-> **Version actuelle** : `v0.3.89` (Pre-Alpha / Prototype Expérimental de Recherche)  
+> **Version actuelle** : `v0.3.90` (Pre-Alpha / Prototype Expérimental de Recherche)  
 > **Statut global** : Prototype de micro-noyau orienté capacités en Rust `![no_std]`. **Projet à un stade très initial et immature, à une année-lumière d'une version 1.0.0 utilisable en production.**  
-> **Objectif stratégique immédiat** : Développer le VFS POSIX et les descripteurs de fichiers utilisateur (Palier 6 : Jalon 6.3 `v0.3.90`).
+> **Objectif stratégique immédiat** : Développer les utilitaires Coreutils autonomes Ring 3 (Palier 6 : Jalon 6.4 `v0.3.91`).
 
 ---
 
@@ -59,6 +59,7 @@ flowchart LR
 │            [EN COURS — v0.3.88 à v0.3.91]                              │
 │            • v0.3.88 (Jalon 6.1) : Primitives C-ABI & commandes jsh    │
 │            • v0.3.89 (Jalon 6.2) : Dynamic Loader ELF & Relocations    │
+│            • v0.3.90 (Jalon 6.3) : VFS POSIX & Table fd_table          │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -72,15 +73,28 @@ flowchart LR
 | Étape | Version Cible | Objectif Majeur | Statut |
 | :---: | :---: | :--- | :---: |
 | **Palier 5** | `v0.3.87` | Démonstration Silicium, ESP FAT32, ABI v0.4 & Outils de Distribution | 🟢 Validé |
-| **Palier 6** | **`v0.3.89`** | **Dynamic Loader ELF Ring 3 (libjambo::dynlink), Relocations & Commande dynlink** | 🟢 **Actuel** |
-| **Palier 6.3** | `v0.3.90` | Primitives VFS POSIX, descripteurs de fichiers (`fd_table`) & interfaçage `jambo-fs` | ⏳ Suivant |
-| **Palier 6.4** | `v0.3.91` | Utilitaires Coreutils autonomes (`cat`, `ls`, `echo`, `wc`) en Ring 3 | ⚪ Planifié |
+| **Palier 6** | **`v0.3.90`** | **VFS POSIX, Table fd_table (open/close/lseek/fstat) & Dynamic Loader Ring 3** | 🟢 **Actuel** |
+| **Palier 6.4** | `v0.3.91` | Utilitaires Coreutils autonomes (`cat`, `ls`, `echo`, `wc`) en Ring 3 | ⏳ Suivant |
 | **Palier 7** | `v0.5.0` | Pilotes matériels natifs (NVMe PCIe natif, USB xHCI, UART PL011 ARM64) | ⚪ Planifié |
 | **Palier 8** | `v0.6.0` | Pile réseau complète TCP/IP & Socket API en Ring 3 | ⚪ Planifié |
 | **Palier 9** | `v0.7.0` | Système de fichiers JamboFS avec journalisation CoW & persistance chiffrée | ⚪ Planifié |
 | **Palier 10**| `v0.8.0` | Serveur d'affichage graphique & compositeur fenêtré en Ring 3 | ⚪ Planifié |
 | **Palier 11**| `v0.9.0` | Campagne d'audit formel de sécurité, fuzzing TCB (libFuzzer/AFL) & SMP stress | ⚪ Planifié |
 | **Palier 12**| `v1.0.0` | Stabilisation générale et maturité de production (horizon lointain) | ⚪ Horizon |
+
+---
+
+### Palier 6 — Jalon 6.3 (`v0.3.90`) — VFS POSIX & Table de Descripteurs fd_table 🟢 `[CORE-EXP]`
+* **Objectif** : Implémenter le sous-système VFS POSIX `#![no_std]`, la table `fd_table` privée par processus (32 descripteurs max) et les primitives `open`, `close`, `read`, `write`, `lseek`, `fstat`.
+* **Livrables techniques validés** :
+  1. **Couche VFS & Table de Descripteurs (`libs/libjambo/src/vfs.rs` & `jambo.h`)** :
+     * Table `FdTable` (`MAX_FDS = 32`) avec réservation de `fd = 0` (stdin), `1` (stdout), `2` (stderr).
+     * Primitives POSIX `open`, `close`, `read`, `write`, `lseek`, `fstat` opérationnelles.
+     * Gestion de la concurrence utilisateur par spinlock atomique `with_fd_table`.
+     * Suite de tests unitaires automatisés validée à 100% (**11/11 tests passés** dans `libjambo`).
+  2. **Shell Interactif `jsh` (`services/jambo-sh`)** :
+     * Commande `vfs` listant la table des descripteurs ouverts et les primitives VFS supportées.
+     * Bannière et commandes d'inspection système calées à `v0.3.90`.
 
 ---
 
@@ -128,6 +142,12 @@ flowchart LR
 
 ## 5. Journal des Jalons et Historique de Versionnage
 
+* **2026-11-07** : **Jalon 6.3 (`v0.3.90`) — VFS POSIX, Table fd_table & Primitives C-ABI**
+  * Implémentation du module `libjambo::vfs` fournissant `FdTable` (`MAX_FDS = 32`) sans allocation en `#![no_std]`.
+  * Primitives POSIX `open`, `close`, `read`, `write`, `lseek`, `fstat` complètes avec gestion `O_APPEND` et `SEEK_*`.
+  * Déclarations C-ABI `jambo_stat_t` et prototypes POSIX standard dans `libs/libjambo/include/jambo.h`.
+  * Ajout de la commande introspective `vfs` dans le shell interactif `jambo-sh`.
+  * Suite de tests unitaires automatisés validée à 100% (**11/11 tests passés** dans `libjambo`).
 * **2026-11-07** : **Jalon 6.2 (`v0.3.89`) — Dynamic Loader ELF64 Ring 3, Relocations & RELRO**
   * Implémentation du module `libjambo::dynlink` avec structures `Elf64Dyn`, `Elf64Rela`, `Elf64Sym`.
   * Support des relocations `R_X86_64_RELATIVE` (Base + Addend), `R_X86_64_GLOB_DAT` (GOT) et `R_X86_64_64`.

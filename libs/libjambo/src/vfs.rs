@@ -131,14 +131,14 @@ impl FdTable {
 
     /// Alloue le plus petit descripteur de fichier disponible (fd >= 3)
     pub fn alloc_fd(&mut self, kind: FdKind, flags: i32, path: &str) -> Result<i32, SysError> {
-        for fd in 3..MAX_FDS {
-            if self.entries[fd].kind == FdKind::Closed {
+        for (fd, entry) in self.entries.iter_mut().enumerate().skip(3) {
+            if entry.kind == FdKind::Closed {
                 let mut path_buf = [0u8; MAX_PATH_LEN];
                 let path_bytes = path.as_bytes();
                 let len = path_bytes.len().min(MAX_PATH_LEN);
                 path_buf[..len].copy_from_slice(&path_bytes[..len]);
 
-                self.entries[fd] = FdEntry {
+                *entry = FdEntry {
                     kind,
                     flags,
                     offset: 0,
@@ -317,11 +317,17 @@ impl FdTable {
                 st.st_nlink = 1;
                 st.st_size = entry.size as i64;
                 st.st_blksize = 512;
-                st.st_blocks = ((entry.size + 511) / 512) as i64;
+                st.st_blocks = entry.size.div_ceil(512) as i64;
             }
             _ => return Err(SysError::InvalidArgument),
         }
         Ok(st)
+    }
+}
+
+impl Default for FdTable {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
