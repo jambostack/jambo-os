@@ -1039,6 +1039,7 @@ pub extern "C" fn _start() -> ! {
     let mut ueba_elf_bytes: Option<&'static [u8]> = None;
     let mut itdr_elf_bytes: Option<&'static [u8]> = None;
     let mut dlp_elf_bytes: Option<&'static [u8]> = None;
+    let mut installer_elf_bytes: Option<&'static [u8]> = None;
     if let Some(modules_resp) = MODULES_REQUEST.response() {
         let modules = modules_resp.modules();
         kprintln!(
@@ -1467,6 +1468,18 @@ pub extern "C" fn _start() -> ! {
                         dlp_data.len()
                     );
                     dlp_elf_bytes = Some(dlp_data);
+                }
+                if let Some(inst_data) = tar
+                    .find("bin/installer")
+                    .or_else(|| tar.find("/bin/installer"))
+                    .or_else(|| tar.find("bin/jambo-installer"))
+                    .or_else(|| tar.find("installer"))
+                {
+                    kprintln!(
+                        "[INITRD/TAR] Utilitaire d'installation '/bin/installer' extrait ({:#x} octets)",
+                        inst_data.len()
+                    );
+                    installer_elf_bytes = Some(inst_data);
                 }
             }
             if initrd_elf_bytes.is_none() && data.len() >= 4 && data[0..4] == mm::elf::ELF_MAGIC {
@@ -2335,6 +2348,46 @@ pub extern "C" fn _start() -> ! {
         kprintln!("[WARN] Echec de la creation du processus dlp");
     }
 
+    let cmdline_install = if let Some(cmdline_resp) = CMDLINE_REQUEST.response() {
+        cmdline_resp.cmdline().contains("install")
+    } else if let Some(kf_resp) = KERNEL_FILE_REQUEST.response() {
+        kf_resp.executable_file().cmdline().contains("install")
+    } else {
+        false
+    };
+
+    // Initialisation de l'utilitaire d'installation Ring 3 (PID 39 : installer)
+    let installer_binary = installer_elf_bytes.unwrap_or(&test_elf);
+    if let Ok((_installer_process, installer_thread)) = sched::Process::create_user_process(
+        39,
+        "installer",
+        installer_binary,
+        if cmdline_install {
+            &["installer", "install"]
+        } else {
+            &["installer", "info"]
+        },
+        &["PATH=/bin:/usr/bin", "TERM=xterm-256color"],
+    ) {
+        let inst_sp = installer_thread.lock().user_rsp;
+        assert_eq!(inst_sp % 16, 0, "Alignement 16 octets du RSP installer");
+        if cmdline_install {
+            installer_thread.lock().deadline = 500;
+            sched::SCHEDULER.lock().enqueue(installer_thread);
+            kprintln!(
+                "[PROCESS] Utilitaire d'installation installer (PID 39) enfile en mode deploiment direct (RSP: {:#018x})",
+                inst_sp
+            );
+        } else {
+            kprintln!(
+                "[PROCESS] Utilitaire d'installation installer (PID 39) initialise avec pile System V ABI (RSP: {:#018x})",
+                inst_sp
+            );
+        }
+    } else {
+        kprintln!("[WARN] Echec de la creation du processus installer");
+    }
+
     // 12. Initialisation CSpace, table SYSCALL et IPC hybride
     cap::init_cspace();
     syscall::init_syscall();
@@ -2661,7 +2714,7 @@ pub extern "C" fn _start() -> ! {
     let is_test_mode = cfg!(feature = "qemu-test") || cmdline_test || module_test;
 
     if is_test_mode {
-        kprintln!("[TEST] Validation de l'initialisation des 38 processus Ring 3 (init, jsh, blockd, fs, netd, fdr, wasmd, pqc, kdir, forensics, powerd, metricsd, bpfd, vpn, authd, dnsd, timed, auditd, walld, vaultd, watchdogd, cored, pkgd, certd, policyd, secboot, logd, kms, attest, waf, siem, edr, ndr, xdr, soar, ueba, itdr, dlp)...");
+        kprintln!("[TEST] Validation de l'initialisation des 39 processus Ring 3 (init, jsh, blockd, fs, netd, fdr, wasmd, pqc, kdir, forensics, powerd, metricsd, bpfd, vpn, authd, dnsd, timed, auditd, walld, vaultd, watchdogd, cored, pkgd, certd, policyd, secboot, logd, kms, attest, waf, siem, edr, ndr, xdr, soar, ueba, itdr, dlp, installer)...");
         kprintln!("\x1b[1;32m[PASS] Chantier 1 : Sous-système d'installation, partitionnement GPT et montage UEFI validés sous QEMU.\x1b[0m");
         kprintln!("\x1b[1;32m[PASS] Jalon 6.4 : Utilitaires Coreutils Ring 3 et execution capabilaire valides sous QEMU.\x1b[0m");
         kprintln!("\x1b[1;32m[PASS] Jalon 6.3 : VFS POSIX, fd_table et descripteurs utilisateur valides sous QEMU.\x1b[0m");
@@ -2676,14 +2729,6 @@ pub extern "C" fn _start() -> ! {
         kprintln!("[TEST] Mode de test CI validé. Sortie propre via isa-debug-exit...");
         exit_qemu(QemuExitCode::Success);
     }
-
-    let cmdline_install = if let Some(cmdline_resp) = CMDLINE_REQUEST.response() {
-        cmdline_resp.cmdline().contains("install")
-    } else if let Some(kf_resp) = KERNEL_FILE_REQUEST.response() {
-        kf_resp.executable_file().cmdline().contains("install")
-    } else {
-        false
-    };
 
     if cmdline_install {
         kprintln!("[INSTALL] Démarrage de l'installeur JamboOS...");

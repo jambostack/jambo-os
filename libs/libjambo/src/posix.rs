@@ -40,7 +40,7 @@ pub const ENOSYS: i32 = 38;
 /// # Safety
 /// Le pointeur `buf` doit être valide pour la lecture de `count` octets.
 #[cfg(not(test))]
-#[no_mangle]
+#[cfg_attr(target_os = "none", no_mangle)]
 pub unsafe extern "C" fn write(fd: i32, buf: *const u8, count: usize) -> isize {
     if buf.is_null() && count > 0 {
         return -EFAULT as isize;
@@ -59,7 +59,7 @@ pub unsafe extern "C" fn write(fd: i32, buf: *const u8, count: usize) -> isize {
 /// # Safety
 /// Le pointeur `buf` doit être valide pour l'écriture de `count` octets.
 #[cfg(not(test))]
-#[no_mangle]
+#[cfg_attr(target_os = "none", no_mangle)]
 pub unsafe extern "C" fn read(fd: i32, buf: *mut u8, count: usize) -> isize {
     if buf.is_null() && count > 0 {
         return -EFAULT as isize;
@@ -77,7 +77,7 @@ pub unsafe extern "C" fn read(fd: i32, buf: *mut u8, count: usize) -> isize {
 /// # Safety
 /// `pathname` doit pointer vers une chaîne C valide terminée par un octet nul.
 #[cfg(not(test))]
-#[no_mangle]
+#[cfg_attr(target_os = "none", no_mangle)]
 pub unsafe extern "C" fn open(pathname: *const core::ffi::c_char, flags: i32, _mode: u32) -> i32 {
     if pathname.is_null() {
         return -EFAULT;
@@ -98,7 +98,7 @@ pub unsafe extern "C" fn open(pathname: *const core::ffi::c_char, flags: i32, _m
 
 /// Ferme un descripteur de fichier ouvert
 #[cfg(not(test))]
-#[no_mangle]
+#[cfg_attr(target_os = "none", no_mangle)]
 pub extern "C" fn close(fd: i32) -> i32 {
     crate::vfs::with_fd_table(|table| match table.free_fd(fd) {
         Ok(()) => 0,
@@ -108,7 +108,7 @@ pub extern "C" fn close(fd: i32) -> i32 {
 
 /// Repositionne le pointeur de fichier
 #[cfg(not(test))]
-#[no_mangle]
+#[cfg_attr(target_os = "none", no_mangle)]
 pub extern "C" fn lseek(fd: i32, offset: i64, whence: i32) -> i64 {
     crate::vfs::with_fd_table(|table| match table.lseek(fd, offset, whence) {
         Ok(pos) => pos,
@@ -122,7 +122,7 @@ pub extern "C" fn lseek(fd: i32, offset: i64, whence: i32) -> i64 {
 /// # Safety
 /// `statbuf` doit pointer vers une zone mémoire valide pour l'écriture d'un `PosixStat`.
 #[cfg(not(test))]
-#[no_mangle]
+#[cfg_attr(target_os = "none", no_mangle)]
 pub unsafe extern "C" fn fstat(fd: i32, statbuf: *mut crate::vfs::PosixStat) -> i32 {
     if statbuf.is_null() {
         return -EFAULT;
@@ -138,7 +138,7 @@ pub unsafe extern "C" fn fstat(fd: i32, statbuf: *mut crate::vfs::PosixStat) -> 
 
 /// Cède le temps processeur au planificateur (équivalent sched_yield POSIX)
 #[cfg(not(test))]
-#[no_mangle]
+#[cfg_attr(target_os = "none", no_mangle)]
 pub extern "C" fn sched_yield() -> i32 {
     crate::syscall_thread_yield();
     0
@@ -146,7 +146,7 @@ pub extern "C" fn sched_yield() -> i32 {
 
 /// Termine immédiatement l'exécution du processus appelant (_exit POSIX)
 #[cfg(not(test))]
-#[no_mangle]
+#[cfg_attr(target_os = "none", no_mangle)]
 pub extern "C" fn _exit(status: i32) -> ! {
     unsafe {
         syscall6(SyscallNumber::ThreadExit, status as u64, 0, 0, 0, 0, 0);
@@ -158,7 +158,7 @@ pub extern "C" fn _exit(status: i32) -> ! {
 
 /// Termine l'exécution du processus (alias exit POSIX)
 #[cfg(not(test))]
-#[no_mangle]
+#[cfg_attr(target_os = "none", no_mangle)]
 pub extern "C" fn exit(status: i32) -> ! {
     _exit(status);
 }
@@ -168,7 +168,7 @@ pub extern "C" fn exit(status: i32) -> ! {
 /// # Safety
 /// L'appelant doit respecter les contraintes de mémoire virtuelle.
 #[cfg(not(test))]
-#[no_mangle]
+#[cfg_attr(target_os = "none", no_mangle)]
 pub unsafe extern "C" fn mmap(
     _addr: *mut u8,
     length: usize,
@@ -226,7 +226,7 @@ pub unsafe extern "C" fn mmap(
 /// # Safety
 /// Le pointeur `addr` doit correspondre à une projection active de taille `length`.
 #[cfg(not(test))]
-#[no_mangle]
+#[cfg_attr(target_os = "none", no_mangle)]
 pub unsafe extern "C" fn munmap(addr: *mut u8, length: usize) -> i32 {
     if addr.is_null() || length == 0 {
         return -EINVAL;
@@ -255,7 +255,7 @@ use core::ffi::{c_char, c_void};
 ///
 /// # Safety
 /// Les zones mémoire doivent être valides et ne pas se chevaucher.
-#[no_mangle]
+#[cfg_attr(target_os = "none", no_mangle)]
 pub unsafe extern "C" fn memcpy(dest: *mut c_void, src: *const c_void, n: usize) -> *mut c_void {
     let d = dest as *mut u8;
     let s = src as *const u8;
@@ -271,7 +271,7 @@ pub unsafe extern "C" fn memcpy(dest: *mut c_void, src: *const c_void, n: usize)
 ///
 /// # Safety
 /// La zone mémoire `dest` doit être valide pour l'écriture de `n` octets.
-#[no_mangle]
+#[cfg_attr(target_os = "none", no_mangle)]
 pub unsafe extern "C" fn memset(dest: *mut c_void, c: i32, n: usize) -> *mut c_void {
     let d = dest as *mut u8;
     let byte = c as u8;
@@ -287,7 +287,7 @@ pub unsafe extern "C" fn memset(dest: *mut c_void, c: i32, n: usize) -> *mut c_v
 ///
 /// # Safety
 /// `s1` et `s2` doivent être valides pour la lecture de `n` octets.
-#[no_mangle]
+#[cfg_attr(target_os = "none", no_mangle)]
 pub unsafe extern "C" fn memcmp(s1: *const c_void, s2: *const c_void, n: usize) -> i32 {
     let a = s1 as *const u8;
     let b = s2 as *const u8;
@@ -307,7 +307,7 @@ pub unsafe extern "C" fn memcmp(s1: *const c_void, s2: *const c_void, n: usize) 
 ///
 /// # Safety
 /// `s` doit être un pointeur valide vers une chaîne terminée par `\0`.
-#[no_mangle]
+#[cfg_attr(target_os = "none", no_mangle)]
 pub unsafe extern "C" fn strlen(s: *const c_char) -> usize {
     let ptr = s as *const u8;
     let mut len = 0;
@@ -321,7 +321,7 @@ pub unsafe extern "C" fn strlen(s: *const c_char) -> usize {
 ///
 /// # Safety
 /// `s1` et `s2` doivent pointer vers des chaînes terminées par `\0`.
-#[no_mangle]
+#[cfg_attr(target_os = "none", no_mangle)]
 pub unsafe extern "C" fn strcmp(s1: *const c_char, s2: *const c_char) -> i32 {
     let mut p1 = s1 as *const u8;
     let mut p2 = s2 as *const u8;
@@ -336,7 +336,7 @@ pub unsafe extern "C" fn strcmp(s1: *const c_char, s2: *const c_char) -> i32 {
 ///
 /// # Safety
 /// `s1` et `s2` doivent être lisibles pour `n` octets ou jusqu'à `\0`.
-#[no_mangle]
+#[cfg_attr(target_os = "none", no_mangle)]
 pub unsafe extern "C" fn strncmp(s1: *const c_char, s2: *const c_char, n: usize) -> i32 {
     if n == 0 {
         return 0;
@@ -360,7 +360,7 @@ pub unsafe extern "C" fn strncmp(s1: *const c_char, s2: *const c_char, n: usize)
 ///
 /// # Safety
 /// `dest` doit être valide pour l'écriture de `n` octets.
-#[no_mangle]
+#[cfg_attr(target_os = "none", no_mangle)]
 pub unsafe extern "C" fn strncpy(dest: *mut c_char, src: *const c_char, n: usize) -> *mut c_char {
     let d = dest as *mut u8;
     let s = src as *const u8;
@@ -385,7 +385,7 @@ pub unsafe extern "C" fn strncpy(dest: *mut c_char, src: *const c_char, n: usize
 ///
 /// # Safety
 /// `s` doit être un pointeur valide vers une chaîne terminée par `\0`.
-#[no_mangle]
+#[cfg_attr(target_os = "none", no_mangle)]
 pub unsafe extern "C" fn strchr(s: *const c_char, c: i32) -> *mut c_char {
     let target = c as u8;
     let mut ptr = s as *const u8;
@@ -404,7 +404,7 @@ pub unsafe extern "C" fn strchr(s: *const c_char, c: i32) -> *mut c_char {
 ///
 /// # Safety
 /// `nptr` doit pointer vers une chaîne terminée par `\0`.
-#[no_mangle]
+#[cfg_attr(target_os = "none", no_mangle)]
 pub unsafe extern "C" fn atoi(nptr: *const c_char) -> i32 {
     if nptr.is_null() {
         return 0;
@@ -444,7 +444,7 @@ struct AllocHeader {
 /// # Safety
 /// La mémoire allouée doit être libérée par `free`.
 #[cfg(not(test))]
-#[no_mangle]
+#[cfg_attr(target_os = "none", no_mangle)]
 pub unsafe extern "C" fn malloc(size: usize) -> *mut c_void {
     if size == 0 {
         return core::ptr::null_mut();
@@ -472,7 +472,7 @@ pub unsafe extern "C" fn malloc(size: usize) -> *mut c_void {
 /// # Safety
 /// `ptr` doit provenir d'un appel antérieur à `malloc`.
 #[cfg(not(test))]
-#[no_mangle]
+#[cfg_attr(target_os = "none", no_mangle)]
 pub unsafe extern "C" fn free(ptr: *mut c_void) {
     if ptr.is_null() {
         return;
@@ -493,7 +493,7 @@ pub unsafe extern "C" fn free(ptr: *mut c_void) {
 /// # Safety
 /// Le tampon `buf` doit pointer vers au moins `len` octets lisibles.
 #[cfg(not(test))]
-#[no_mangle]
+#[cfg_attr(target_os = "none", no_mangle)]
 pub unsafe extern "C" fn jambo_console_write(buf: *const u8, len: usize) -> isize {
     write(STDOUT_FILENO, buf, len)
 }
@@ -503,21 +503,21 @@ pub unsafe extern "C" fn jambo_console_write(buf: *const u8, len: usize) -> isiz
 /// # Safety
 /// Le tampon `buf` doit être valide pour l'écriture de `len` octets.
 #[cfg(not(test))]
-#[no_mangle]
+#[cfg_attr(target_os = "none", no_mangle)]
 pub unsafe extern "C" fn jambo_console_read(buf: *mut u8, len: usize) -> isize {
     read(STDIN_FILENO, buf, len)
 }
 
 /// Cède le processeur au scheduler EEVDF via C-ABI
 #[cfg(not(test))]
-#[no_mangle]
+#[cfg_attr(target_os = "none", no_mangle)]
 pub extern "C" fn jambo_yield() -> i32 {
     sched_yield()
 }
 
 /// Quitte le thread courant via C-ABI
 #[cfg(not(test))]
-#[no_mangle]
+#[cfg_attr(target_os = "none", no_mangle)]
 pub extern "C" fn jambo_exit(status: i32) -> ! {
     _exit(status);
 }
@@ -527,7 +527,7 @@ pub extern "C" fn jambo_exit(status: i32) -> ! {
 /// # Safety
 /// Le pointeur `out_info` doit pointer vers une structure `SystemInfo` valide et accessible en écriture.
 #[cfg(not(test))]
-#[no_mangle]
+#[cfg_attr(target_os = "none", no_mangle)]
 pub unsafe extern "C" fn jambo_sys_info(out_info: *mut SystemInfo) -> i32 {
     if out_info.is_null() {
         return -EFAULT;
@@ -546,7 +546,7 @@ pub unsafe extern "C" fn jambo_sys_info(out_info: *mut SystemInfo) -> i32 {
 /// # Safety
 /// Le pointeur `out_handle` doit être accessible en écriture pour stocker le descripteur 64 bits résultant.
 #[cfg(not(test))]
-#[no_mangle]
+#[cfg_attr(target_os = "none", no_mangle)]
 pub unsafe extern "C" fn jambo_vmo_create(size: u64, flags: u32, out_handle: *mut u64) -> i32 {
     if out_handle.is_null() {
         return -EFAULT;
@@ -572,7 +572,7 @@ pub unsafe extern "C" fn jambo_vmo_create(size: u64, flags: u32, out_handle: *mu
 /// # Safety
 /// Le pointeur `out_mapped` doit être accessible en écriture pour stocker l'adresse virtuelle projetée.
 #[cfg(not(test))]
-#[no_mangle]
+#[cfg_attr(target_os = "none", no_mangle)]
 pub unsafe extern "C" fn jambo_vmo_map(
     vmo: u64,
     vaddr: u64,
@@ -604,7 +604,7 @@ pub unsafe extern "C" fn jambo_vmo_map(
 /// # Safety
 /// L'adresse virtuelle `vaddr` et la longueur `length` doivent correspondre à une projection VMO active.
 #[cfg(not(test))]
-#[no_mangle]
+#[cfg_attr(target_os = "none", no_mangle)]
 pub unsafe extern "C" fn jambo_vmo_unmap(vaddr: u64, length: u64) -> i32 {
     munmap(vaddr as *mut u8, length as usize)
 }
@@ -614,7 +614,7 @@ pub unsafe extern "C" fn jambo_vmo_unmap(vaddr: u64, length: u64) -> i32 {
 /// # Safety
 /// Le pointeur `val` doit être valide pour la lecture (sur écriture PCI) ou l'écriture (sur lecture PCI).
 #[cfg(not(test))]
-#[no_mangle]
+#[cfg_attr(target_os = "none", no_mangle)]
 pub unsafe extern "C" fn jambo_device_io(
     op: u32,
     bus: u8,

@@ -6,7 +6,8 @@
 #![no_std]
 #![no_main]
 
-use libjambo::gpt::{format_gpt_disk, parse_gpt_disk, Guid, PartitionRequest, SECTOR_SIZE};
+use jambo_installer::{parse_stack_args, InstallationPlan};
+use libjambo::gpt::{Guid, SECTOR_SIZE};
 use libjambo::println;
 
 #[cfg(not(test))]
@@ -15,52 +16,6 @@ fn panic(_info: &core::panic::PanicInfo) -> ! {
     loop {
         core::hint::spin_loop();
     }
-}
-
-/// Extrait les arguments de la pile au format System V ABI AMD64.
-///
-/// # Safety
-///
-/// L'appelant doit garantir que `sp` pointe vers le sommet de la pile initialisé
-/// par le noyau ou le dynamic loader (`*sp == argc`).
-pub unsafe fn parse_stack_args<'a>(
-    sp: *const usize,
-    storage: &'a mut [&'a str; 16],
-) -> (&'a str, &'a [&'a str]) {
-    if sp.is_null() {
-        return ("", &[]);
-    }
-    let argc = *sp;
-    let mut count = 0;
-    let argv_ptr = sp.add(1) as *const *const u8;
-
-    while count < argc && count < 16 {
-        let arg_ptr = *argv_ptr.add(count);
-        if arg_ptr.is_null() {
-            break;
-        }
-
-        let mut len = 0;
-        while *arg_ptr.add(len) != 0 && len < 256 {
-            len += 1;
-        }
-
-        let slice = core::slice::from_raw_parts(arg_ptr, len);
-        if let Ok(s) = core::str::from_utf8(slice) {
-            storage[count] = s;
-            count += 1;
-        } else {
-            break;
-        }
-    }
-
-    let prog = if count > 0 { storage[0] } else { "" };
-    let args = if count > 1 {
-        &storage[1..count]
-    } else {
-        &storage[..0]
-    };
-    (prog, args)
 }
 
 /// Termine le processus en appelant SyscallNumber::ThreadExit.
@@ -126,58 +81,51 @@ pub unsafe extern "C" fn _start() -> ! {
                 0x44, 0x01,
             ]);
 
-            let requests = [
-                PartitionRequest {
-                    name: "EFI System Partition",
-                    type_guid: Guid::EFI_SYSTEM_PARTITION,
-                    size_sectors: 65536, // 32 Mio ESP
-                },
-                PartitionRequest {
-                    name: "JamboOS Root",
-                    type_guid: Guid::JAMBOOS_ROOT,
-                    size_sectors: 131072, // 64 Mio Système JamboFS
-                },
-            ];
-
-            match format_gpt_disk(&mut test_disk, 262144, disk_guid, &requests) {
-                Ok(()) => {
-                    println("\x1b[1;32m[INSTALLER] Table GPT générée avec succès :\x1b[0m");
-                    println("  -> MBR Protecteur écrit à LBA 0");
-                    println("  -> En-tête GPT écrit à LBA 1 (CRC32 vérifié)");
-                    println("  -> Partition ESP allouée : LBA 34..65569 (32 Mio)");
-                    println("  -> Partition Root allouée : LBA 65570..196641 (64 Mio)");
+            if let Some(plan) = InstallationPlan::calculate(262144) {
+                match plan.generate_gpt(&mut test_disk, disk_guid) {
+                    Ok(()) => {
+                        println("\x1b[1;32m[INSTALLER] Table GPT générée avec succès :\x1b[0m");
+                        println("  -> MBR Protecteur écrit à LBA 0");
+                        println("  -> En-tête GPT écrit à LBA 1 (CRC32 vérifié)");
+                        println("  -> Partition ESP allouée : LBA 34..65569 (32 Mio)");
+                        println("  -> Partition Root allouée : LBA 65570..196641 (64 Mio)");
+                    }
+                    Err(_err) => {
+                        println("\x1b[1;31m[INSTALLER] Échec du formatage GPT\x1b[0m");
+                        exit_code = 1;
+                    }
                 }
-                Err(_err) => {
-                    println("\x1b[1;31m[INSTALLER] Échec du formatage GPT : code d'erreur\x1b[0m");
-                    exit_code = 1;
-                }
+            } else {
+                println("\x1b[1;31m[INSTALLER] Capacité de stockage insuffisante\x1b[0m");
+                exit_code = 1;
             }
         }
         "verify" | "--verify" => {
             println("\x1b[1;36m[INSTALLER] Vérification de l'intégrité de la table GPT...\x1b[0m");
             let mut test_disk = [0u8; 34 * SECTOR_SIZE];
             let disk_guid = Guid::JAMBOOS_ROOT;
-            let requests = [PartitionRequest {
-                name: "EFI System Partition",
-                type_guid: Guid::EFI_SYSTEM_PARTITION,
-                size_sectors: 2048,
-            }];
 
-            if format_gpt_disk(&mut test_disk, 65536, disk_guid, &requests).is_ok() {
-                match parse_gpt_disk(&test_disk) {
-                    Ok(_info) => {
-                        println(
-                            "\x1b[1;32m[PASS] Intégrité de la table GPT confirmée à 100% :\x1b[0m",
-                        );
-                        println("  - Signature EFI PART : Valide");
-                        println("  - Somme CRC32 Header : Conforme");
-                        println("  - Somme CRC32 Array  : Conforme");
-                        println("  - Partitions actives : 1 détectée");
+            if let Some(plan) = InstallationPlan::calculate(65536) {
+                if plan.generate_gpt(&mut test_disk, disk_guid).is_ok() {
+                    match plan.verify_gpt(&test_disk) {
+                        Ok(_info) => {
+                            println(
+                                "\x1b[1;32m[PASS] Intégrité de la table GPT confirmée à 100% :\x1b[0m",
+                            );
+                            println("  - Signature EFI PART : Valide");
+                            println("  - Somme CRC32 Header : Conforme");
+                            println("  - Somme CRC32 Array  : Conforme");
+                            println("  - Partitions actives : 2 détectées");
+                        }
+                        Err(_) => {
+                            println(
+                                "\x1b[1;31m[FAIL] Échec de la vérification de la table GPT\x1b[0m",
+                            );
+                            exit_code = 1;
+                        }
                     }
-                    Err(_) => {
-                        println("\x1b[1;31m[FAIL] Échec de la vérification de la table GPT\x1b[0m");
-                        exit_code = 1;
-                    }
+                } else {
+                    exit_code = 1;
                 }
             } else {
                 exit_code = 1;
@@ -200,47 +148,50 @@ pub unsafe extern "C" fn _start() -> ! {
                 0x4A, 0x41, 0x4D, 0x42, 0x4F, 0x2D, 0x44, 0x49, 0x53, 0x4B, 0x2D, 0x47, 0x55, 0x49,
                 0x44, 0x01,
             ]);
-            let requests = [
-                PartitionRequest {
-                    name: "EFI System Partition",
-                    type_guid: Guid::EFI_SYSTEM_PARTITION,
-                    size_sectors: 2048, // 1 Mio ESP (LBA 34..2081)
-                },
-                PartitionRequest {
-                    name: "JamboOS Root",
-                    type_guid: Guid::JAMBOOS_ROOT,
-                    size_sectors: 60000, // ~30 Mio JamboFS (LBA 2082..62081)
-                },
-            ];
 
-            match format_gpt_disk(&mut gpt_disk, 65536, disk_guid, &requests) {
-                Ok(()) => {
-                    println("      [OK] MBR Protecteur LBA 0 (Type 0xEE) généré.");
-                    println("      [OK] En-tête GPT Primaire LBA 1 (EFI PART, CRC32 scellé).");
-                    println("      [OK] Partition 1 ESP allouée : LBA 34..2081 (1 Mio).");
-                    println("      [OK] Partition 2 Root allouée : LBA 2082..62081 (~30 Mio).");
+            let maybe_plan = InstallationPlan::calculate(65536);
+            if let Some(plan) = maybe_plan {
+                match plan.generate_gpt(&mut gpt_disk, disk_guid) {
+                    Ok(()) => {
+                        println("      [OK] MBR Protecteur LBA 0 (Type 0xEE) généré.");
+                        println("      [OK] En-tête GPT Primaire LBA 1 (EFI PART, CRC32 scellé).");
+                        println("      [OK] Partition 1 ESP allouée : LBA 34..2081 (1 Mio).");
+                        println("      [OK] Partition 2 Root allouée : LBA 2082..62081 (~30 Mio).");
+                    }
+                    Err(_err) => {
+                        println(
+                            "\x1b[1;31m      [FAIL] Échec de la génération de la table GPT\x1b[0m",
+                        );
+                        exit_code = 1;
+                    }
                 }
-                Err(_err) => {
-                    println("\x1b[1;31m      [FAIL] Échec de la génération de la table GPT\x1b[0m");
-                    exit_code = 1;
-                }
+            } else {
+                exit_code = 1;
             }
 
             if exit_code == 0 {
                 println(
                     "\x1b[1;33m[3/6] Validation de l'intégrité de la table de partitions...\x1b[0m",
                 );
-                match parse_gpt_disk(&gpt_disk) {
-                    Ok(_info) => {
-                        println("      [OK] Signature GPT validée.");
-                        println("      [OK] Intégrité CRC32 en-tête et tableau confirmée.");
-                        println("      [OK] Nombre de partitions détectées : 2.");
-                        println("      Partition ESP  : Type C12A7328-F81F-11D2-BA4B-00A0C93EC93B");
-                        println("      Partition Root : Type 6A616D62-6F6F-7300-726F-6F7400000001");
-                    }
-                    Err(_err) => {
-                        println("\x1b[1;31m      [FAIL] Échec du contrôle d'intégrité GPT\x1b[0m");
-                        exit_code = 1;
+                if let Some(plan) = maybe_plan {
+                    match plan.verify_gpt(&gpt_disk) {
+                        Ok(_info) => {
+                            println("      [OK] Signature GPT validée.");
+                            println("      [OK] Intégrité CRC32 en-tête et tableau confirmée.");
+                            println("      [OK] Nombre de partitions détectées : 2.");
+                            println(
+                                "      Partition ESP  : Type C12A7328-F81F-11D2-BA4B-00A0C93EC93B",
+                            );
+                            println(
+                                "      Partition Root : Type 6A616D62-6F6F-7300-726F-6F7400000001",
+                            );
+                        }
+                        Err(_err) => {
+                            println(
+                                "\x1b[1;31m      [FAIL] Échec du contrôle d'intégrité GPT\x1b[0m",
+                            );
+                            exit_code = 1;
+                        }
                     }
                 }
             }

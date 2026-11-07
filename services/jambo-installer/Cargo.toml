@@ -3,9 +3,14 @@ name = "jambo-installer"
 version = "0.3.91"
 edition = "2021"
 
+[lib]
+name = "jambo_installer"
+path = "src/lib.rs"
+
 [[bin]]
 name = "installer"
 path = "src/main.rs"
+test = false
 
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }
