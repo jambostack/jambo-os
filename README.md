@@ -27,13 +27,13 @@
 ---
 
 > [!WARNING]
-> **Avertissement sur la Maturité & Stade du Projet : Version `v0.3.91` (Pre-Alpha / Prototype Expérimental)**  
-> **JamboOS est un projet expérimental de recherche à un stade très initial (Pre-Alpha). Le système est encore très immature et à une année-lumière d'une version 1.0.0 utilisable en production.**  
+> **Avertissement sur la Maturité & Stade du Projet : Série `0.*.*` (Pre-Alpha / Prototype Expérimental)**  
+> **JamboOS est un projet expérimental de recherche à un stade très initial (Pre-Alpha). Toute projection vers une version 1.0.0 est bannie : le système ne dispose même pas encore d'une ISO d'installation autonome et l'attribution de tags Git est strictement gelée.**  
 > 
 > Ce dépôt explore la faisabilité d'un micro-noyau moderne en Rust `![no_std]` inspiré des principes de seL4 et Zircon. Bien que le système démarre sous QEMU et sur machine UEFI réelle :
 > * **Stade de Développement** : Les microservices et pilotes actuels sont des prototypes et squelettes fonctionnels minimaux servant de preuve de concept.
 > * **Périmètre Opérationnel** : Pagination PML4 de base, ordonnanceur EEVDF expérimental, pilote VirtIO simplifié, arènes VMO, VFS POSIX (`fd_table`), Dynamic Loader ELF64 Ring 3 (`libjambo::dynlink`), et suite d'utilitaires autonomes Ring 3 Coreutils (`echo`, `cat`, `wc`, `true`, `false`, `ls`).
-> * **Feuille de Route** : De nombreux chantiers majeurs (pilotes matériels réels NVMe/USB, pile TCP/IP complète, système de fichiers persistant, audits formels et campagnes de fuzzing) devront être menés sur le long terme avant d'envisager une quelconque stabilité.
+> * **Chantiers Prioritaires** : Conception d'une véritable ISO d'installation autonome, pilotes matériels réels (NVMe, USB xHCI, UART), système de fichiers persistant, et stabilisation rigoureuse avant tout éventuel futur tag Git.
 > 
 > 📜 **Notes de Version v0.3.91** : Consultez [`docs/RELEASE_NOTES_v0.3.91.md`](docs/RELEASE_NOTES_v0.3.91.md).  
 > 🚀 **Guide de Test Silicium** : Pour tester le prototype sur machine réelle, consultez [`docs/BAREMETAL.md`](docs/BAREMETAL.md).  

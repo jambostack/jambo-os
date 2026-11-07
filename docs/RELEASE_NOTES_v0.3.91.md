@@ -72,13 +72,10 @@ JamboOS demeure un **prototype de recherche académique et expérimental**. Le s
 
 ---
 
-## 🗺️ Feuille de Route Réaliste
+## 🗺️ Chantiers de Stabilisation Réelle (Série 0.*.*)
 
-| Palier | Version Cible | Objectif Majeur | Statut |
-| :--- | :--- | :--- | :--- |
-| **Palier 6 — Jalon 6.1** | `v0.3.88` | Primitives C-ABI / POSIX (`string`, `malloc`) & Shell introspectif | ✅ Validé |
-| **Palier 6 — Jalon 6.2** | `v0.3.89` | Dynamic Loader ELF utilisateur Ring 3 & Relocations | ✅ Validé |
-| **Palier 6 — Jalon 6.3** | `v0.3.90` | VFS POSIX, descripteurs de fichiers (`fd_table`) & interfaçage `jambo-fs` | ✅ Validé |
-| **Palier 6 — Jalon 6.4** | `v0.3.91` | Utilitaires Coreutils autonomes (`cat`, `ls`, `echo`, `wc`, `true`, `false`) en Ring 3 | ✅ **Terminé** |
-| **Palier 7** | `v0.5.0` | Pilotes matériels natifs (NVMe PCIe natif, USB xHCI, UART PL011 ARM64) | ⏳ Suivant |
+- **Priorité 1** : Conception d'une véritable ISO d'installation autonome et d'un installeur (`jambo-installer`) assurant le partitionnement GPT cible et le déploiement persistant.
+- **Priorité 2** : Développement de pilotes matériels natifs concrets (NVMe PCIe, USB xHCI / clavier, UART).
+- **Priorité 3** : Système de fichiers persistant sur disque physique (JamboFS).
+- **Politique de Versionnage** : Évolution lente et confinée à la série `0.*.*`, gel total des tags Git jusqu'à validation sur matériel réel et disponibilité de l'installeur.
 

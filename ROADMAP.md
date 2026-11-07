@@ -1,9 +1,9 @@
 # FEUILLE DE ROUTE D'INGÉNIERIE SYSTÈME — JamboOS
 
 > **Dernière mise à jour** : 7 novembre 2026  
-> **Version actuelle** : `v0.3.91` (Pre-Alpha / Prototype Expérimental de Recherche)  
-> **Statut global** : Prototype de micro-noyau orienté capacités en Rust `![no_std]`. **Projet à un stade très initial et immature, à une année-lumière d'une version 1.0.0 utilisable en production.**  
-> **Objectif stratégique immédiat** : Finaliser le Palier 6 et engager les pilotes matériels natifs (Palier 7 `v0.5.0` : NVMe PCIe natif, USB xHCI, UART ARM64).
+> **Version actuelle** : Série `0.*.*` (Prototype Expérimental de Recherche en Pre-Alpha)  
+> **Statut global** : Prototype de micro-noyau orienté capacités en Rust `![no_std]`. **Projet à un stade très initial (Pre-Alpha) confiné strictement à la série 0.*.*, sans aucune projection vers une 1.0.0.**  
+> **Objectif prioritaire immédiat** : Développer l'ISO d'installation autonome et l'installeur système (`jambo-installer`), suivi des pilotes matériels réels et de la stabilisation sur disque physique.
 
 ---
 
@@ -26,11 +26,11 @@ flowchart LR
 ### Politique Stricte de Versionnage & Gel des Tags Git
 
 > [!IMPORTANT]
-> **Règle Fondamentale sur les Tags Git & l'Évolution des Versions** :
-> 1. **Maturité Réelle & Horizon v1.0.0** : Le système est un prototype de recherche expérimental très immature, à des années-lumière d'une version 1.0.0. JamboOS ne dispose même pas encore d'une véritable **ISO d'installation autonome** (partitionnement GPT du disque cible, déploiement du système de base, installation du chargeur UEFI).
-> 2. **Évolution Lente sur `0.*.*`** : Toutes les versions demeurent sur la série `0.*.*`. Aucun saut de version majeur ou hâtif.
-> 3. **Interdiction de Poser des Tags Git à Chaque Cycle** : Les cycles de développement, sous-jalons et commits ordinaires progressent **exclusivement par commits classiques sans poser de tag Git**.
-> 4. **Critères d'Attribution d'un Tag Git** : Un tag Git est un jalon d'exception qui exige une **stabilité réelle prouvée**, des tests physiques bare-metal concluants et la disponibilité d'une véritable ISO d'installation fonctionnelle.
+> **Règle Fondamentale sur les Versions & l'Élimination de Toute Prétention v1.0.0** :
+> 1. **Bannissement de l'Horizon v1.0.0** : Toute évocation d'une "version 1.0.0" ou de pseudo-paliers vers une "1.0.0" est formellement bannie. Le projet est un prototype de recherche expérimental (Pre-Alpha) à un stade initial. Le système ne dispose même pas encore d'une **ISO d'installation autonome** (outillage de partitionnement GPT du disque cible, installeur déployant les binaires et chargeur UEFI Limine sur disque dur/SSD pour un démarrage persistant).
+> 2. **Évolution Lente Exclusivement sur `0.*.*`** : Le projet demeure strictement confiné sur la série `0.*.*`. Aucun saut de version artificiel.
+> 3. **Interdiction de Poser des Tags Git** : L'attribution de tags Git est gelée. Les développements progressent **exclusivement par commits classiques** au format Conventional Commits.
+> 4. **Prérequis Non-Négociables pour un Futur Tag** : Aucun tag ne sera posé avant d'avoir prouvé une **stabilité réelle** sur matériel physique, un système de fichiers persistant sur disque réel et une **ISO d'installation autonome opérationnelle**.
 
 ---
 
@@ -75,22 +75,18 @@ flowchart LR
 
 ---
 
-## 3. Plan d'Ingénierie & Paliers Futurs Vers la Maturité
+## 3. Chantiers Techniques de Stabilisation Réelle (Série 0.*.*)
 
 > [!NOTE]
-> Le chemin menant à une version 1.0.0 stable et utilisable en conditions réelles exigera de longues phases de stabilisation, de développement de pilotes natifs et d'audits formels.
+> Le système est strictement maintenu dans la série `0.*.*` en Pre-Alpha. Toute projection vers une prétendue « 1.0.0 » est purgée. L'effort d'ingénierie se concentre exclusivement sur les besoins fondamentaux manquants avant d'envisager une quelconque stabilité.
 
-| Étape | Version Cible | Objectif Majeur | Statut |
-| :---: | :---: | :--- | :---: |
-| **Palier 5** | `v0.3.87` | Démonstration Silicium, ESP FAT32, ABI v0.4 & Outils de Distribution | 🟢 Validé |
-| **Palier 6** | `v0.3.90` | VFS POSIX, Table fd_table (open/close/lseek/fstat) & Dynamic Loader Ring 3 | 🟢 Validé |
-| **Palier 6.4** | **`v0.3.91`** | **Utilitaires Coreutils autonomes (`cat`, `ls`, `echo`, `wc`, `true`, `false`) en Ring 3** | 🟢 **Validé** |
-| **Palier 7** | `v0.5.0` | Pilotes matériels natifs (NVMe PCIe natif, USB xHCI, UART PL011 ARM64) | ⏳ Suivant |
-| **Palier 8** | `v0.6.0` | Pile réseau complète TCP/IP & Socket API en Ring 3 | ⚪ Planifié |
-| **Palier 9** | `v0.7.0` | Système de fichiers JamboFS avec journalisation CoW & persistance chiffrée | ⚪ Planifié |
-| **Palier 10**| `v0.8.0` | Serveur d'affichage graphique & compositeur fenêtré en Ring 3 | ⚪ Planifié |
-| **Palier 11**| `v0.9.0` | Campagne d'audit formel de sécurité, fuzzing TCB (libFuzzer/AFL) & SMP stress | ⚪ Planifié |
-| **Palier 12**| `v1.0.0` | Stabilisation générale et maturité de production (horizon lointain) | ⚪ Horizon |
+| Chantier Fondamental | Périmètre Technique | Objectif Concret | Statut |
+| :--- | :--- | :--- | :---: |
+| **Chantier A : ISO d'Installation Autonome** | `services/jambo-installer`, `xtask/` | Installeur capable de partitionner un disque cible en GPT, formater l'ESP FAT32 et la racine, déployer le système de base et installer Limine UEFI pour un démarrage autonome hors RAM-disk | ⏳ **Priorité 1** |
+| **Chantier B : Pilotes Matériels Réels** | `drivers/nvme/`, `drivers/usb/`, `drivers/uart/` | Remplacement des stubs par des pilotes matériels concrets (contrôleur NVMe PCIe, bus USB xHCI / clavier, UART série physique) | ⚪ Planifié |
+| **Chantier C : Système de Fichiers Persistant** | `services/jambo-fs/`, `kernel/` | Persistance réelle des blocs sur partition de stockage physique avec journalisation et transactions cohérentes | ⚪ Planifié |
+| **Chantier D : Pile Réseau & Sockets Ring 3** | `services/jambo-netd/`, `libs/libjambo/` | Pile réseau autonome TCP/IP et interface de sockets POSIX standard en espace utilisateur | ⚪ Planifié |
+| **Chantier E : Fuzzing TCB & Résilience Silicium** | `kernel/`, `tests/` | Campagnes de fuzzing intensives (libFuzzer/AFL), stress-tests SMP multicoeur et validation sur configurations matérielles réelles multiples | ⚪ Planifié |
 
 ---
 
