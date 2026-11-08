@@ -74,7 +74,7 @@ JamboOS demeure un **prototype de recherche académique et expérimental**. Le s
 
 ## 🗺️ Chantiers de Stabilisation Réelle (Série 0.*.*)
 
-- **Priorité 1** : Conception d'une véritable ISO d'installation autonome et d'un installeur (`jambo-installer`) assurant le partitionnement GPT cible et le déploiement persistant.
+- **Priorité 1** : Conception d'une image ISO d'installation et de déploiement persistant (`jambo-installer`) assurant le partitionnement GPT cible.
 - **Priorité 2** : Développement de pilotes matériels natifs concrets (NVMe PCIe, USB xHCI / clavier, UART).
 - **Priorité 3** : Système de fichiers persistant sur disque physique (JamboFS).
 - **Politique de Versionnage** : Évolution lente et confinée à la série `0.*.*`, gel total des tags Git jusqu'à validation sur matériel réel et disponibilité de l'installeur.

@@ -36,12 +36,24 @@ enum Commands {
         smp: usize,
         #[arg(long, default_value = "2G")]
         memory: String,
+        /// Émule un contrôleur matériel NVMe 1.4 sur PCIe au lieu de VirtIO-Blk
+        #[arg(long)]
+        nvme: bool,
+        /// Émule un contrôleur d'hôte USB xHCI 1.2 avec périphériques HID (clavier/souris)
+        #[arg(long)]
+        xhci: bool,
     },
     /// Exécute les tests automatisés de démarrage sous QEMU pour la CI
     #[command(alias = "test-qemu")]
     Test {
         #[arg(long)]
         release: bool,
+        /// Émule un contrôleur matériel NVMe 1.4 sur PCIe au lieu de VirtIO-Blk
+        #[arg(long)]
+        nvme: bool,
+        /// Émule un contrôleur d'hôte USB xHCI 1.2 avec périphériques HID (clavier/souris)
+        #[arg(long)]
+        xhci: bool,
     },
     /// Génère l'arborescence EFI System Partition (ESP) prête à copier sur clé USB FAT32
     Esp {
@@ -1947,7 +1959,7 @@ fn create_iso(release: bool, test_mode: bool) -> anyhow::Result<PathBuf> {
     Ok(iso_output)
 }
 
-fn run_qemu(release: bool, smp: usize, memory: &str) -> anyhow::Result<()> {
+fn run_qemu(release: bool, smp: usize, memory: &str, nvme: bool, xhci: bool) -> anyhow::Result<()> {
     let root = root_dir();
     let iso = create_iso(release, false)?;
 
@@ -1975,10 +1987,36 @@ fn run_qemu(release: bool, smp: usize, memory: &str) -> anyhow::Result<()> {
         ovmf_path,
         "-cdrom",
         iso.to_str().unwrap(),
-        "-drive",
-        "file=target/disk.raw,format=raw,if=none,id=disk0",
-        "-device",
-        "virtio-blk-pci,drive=disk0,disable-legacy=on",
+    ]);
+
+    if nvme {
+        cmd.args([
+            "-drive",
+            "file=target/disk.raw,format=raw,if=none,id=nvmedisk0",
+            "-device",
+            "nvme,serial=jambonvme01,drive=nvmedisk0",
+        ]);
+    } else {
+        cmd.args([
+            "-drive",
+            "file=target/disk.raw,format=raw,if=none,id=disk0",
+            "-device",
+            "virtio-blk-pci,drive=disk0,disable-legacy=on",
+        ]);
+    }
+
+    if xhci {
+        cmd.args([
+            "-device",
+            "qemu-xhci,id=xhci0",
+            "-device",
+            "usb-kbd,bus=xhci0.0",
+            "-device",
+            "usb-mouse,bus=xhci0.0",
+        ]);
+    }
+
+    cmd.args([
         "-device",
         "virtio-net-pci,netdev=net0",
         "-netdev",
@@ -1994,7 +2032,7 @@ fn run_qemu(release: bool, smp: usize, memory: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn run_test(release: bool) -> anyhow::Result<()> {
+fn run_test(release: bool, nvme: bool, xhci: bool) -> anyhow::Result<()> {
     let root = root_dir();
     let iso = create_iso(release, true)?;
 
@@ -2021,10 +2059,36 @@ fn run_test(release: bool) -> anyhow::Result<()> {
         ovmf_path,
         "-cdrom",
         iso.to_str().unwrap(),
-        "-drive",
-        "file=target/disk.raw,format=raw,if=none,id=disk0",
-        "-device",
-        "virtio-blk-pci,drive=disk0,disable-legacy=on",
+    ]);
+
+    if nvme {
+        cmd.args([
+            "-drive",
+            "file=target/disk.raw,format=raw,if=none,id=nvmedisk0",
+            "-device",
+            "nvme,serial=jambonvme01,drive=nvmedisk0",
+        ]);
+    } else {
+        cmd.args([
+            "-drive",
+            "file=target/disk.raw,format=raw,if=none,id=disk0",
+            "-device",
+            "virtio-blk-pci,drive=disk0,disable-legacy=on",
+        ]);
+    }
+
+    if xhci {
+        cmd.args([
+            "-device",
+            "qemu-xhci,id=xhci0",
+            "-device",
+            "usb-kbd,bus=xhci0.0",
+            "-device",
+            "usb-mouse,bus=xhci0.0",
+        ]);
+    }
+
+    cmd.args([
         "-device",
         "virtio-net-pci,netdev=net0",
         "-netdev",
@@ -2512,7 +2576,48 @@ fn main() -> anyhow::Result<()> {
             release,
             smp,
             memory,
-        } => run_qemu(release, smp, &memory),
-        Commands::Test { release } => run_test(release),
+            nvme,
+            xhci,
+        } => run_qemu(release, smp, &memory, nvme, xhci),
+        Commands::Test {
+            release,
+            nvme,
+            xhci,
+        } => run_test(release, nvme, xhci),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_cli_parsing_nvme_and_xhci_flags() {
+        let cli = Cli::try_parse_from(["xtask", "run", "--nvme", "--xhci"]).unwrap();
+        match cli.command {
+            Commands::Run { nvme, xhci, .. } => {
+                assert!(nvme);
+                assert!(xhci);
+            }
+            _ => panic!("Expected Commands::Run"),
+        }
+
+        let cli_test = Cli::try_parse_from(["xtask", "test", "--nvme", "--xhci"]).unwrap();
+        match cli_test.command {
+            Commands::Test { nvme, xhci, .. } => {
+                assert!(nvme);
+                assert!(xhci);
+            }
+            _ => panic!("Expected Commands::Test"),
+        }
+
+        let cli_default = Cli::try_parse_from(["xtask", "run"]).unwrap();
+        match cli_default.command {
+            Commands::Run { nvme, xhci, .. } => {
+                assert!(!nvme);
+                assert!(!xhci);
+            }
+            _ => panic!("Expected Commands::Run"),
+        }
     }
 }
