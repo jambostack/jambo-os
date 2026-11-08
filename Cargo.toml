@@ -6,6 +6,7 @@ members = [
     "libs/libjambo",
     "drivers/virtio",
     "drivers/nvme",
+    "drivers/xhci",
     "services/jambo-init",
     "services/jambo-sh",
     "services/jambo-blockd",
