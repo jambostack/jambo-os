@@ -1,0 +1,11 @@
+[package]
+name = "nvme-drv"
+version = "0.3.91"
+edition = "2021"
+
+[lib]
+name = "nvme_drv"
+path = "src/lib.rs"
+
+[dependencies]
+libjambo = { path = "../../libs/libjambo" }
