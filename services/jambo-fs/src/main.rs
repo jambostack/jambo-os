@@ -30,7 +30,7 @@ pub extern "C" fn _start() -> ! {
     println("[FS] Connexion au service de stockage jambo-blockd établie.");
 
     // 2. Exécute le montage de JamboFS et vérifie l'intégrité de l'Uberblock
-    let fs = match JamboFs::mount(&block_client) {
+    let mut fs = match JamboFs::mount(&block_client) {
         Ok(mounted_fs) => {
             println("[FS] Volume JamboFS monté avec succès. Uberblock vérifié.");
             mounted_fs
@@ -75,23 +75,24 @@ pub extern "C" fn _start() -> ! {
 
         if ret == 0 && rx_msg.byte_count > 0 {
             let mut path_buf = [0u8; 64];
-            let mut path_len = 0;
-            let mut req_id = 1u32;
 
-            if let Some(req) = FsRequest::from_bytes(&rx_msg.bytes[..rx_msg.byte_count]) {
-                req_id = req.req_id;
-                if req.opcode == FsOpcode::Read as u32 {
+            let (req_id, opcode, path_len, write_len) =
+                if let Some(req) = FsRequest::from_bytes(&rx_msg.bytes[..rx_msg.byte_count]) {
                     let p_len = (req.path_len as usize)
                         .min(req.path.len())
                         .min(path_buf.len());
                     path_buf[..p_len].copy_from_slice(&req.path[..p_len]);
-                    path_len = p_len;
-                }
-            } else {
-                let p_len = rx_msg.byte_count.min(path_buf.len());
-                path_buf[..p_len].copy_from_slice(&rx_msg.bytes[..p_len]);
-                path_len = p_len;
-            }
+                    (
+                        req.req_id,
+                        req.opcode,
+                        p_len,
+                        (req.length as usize).min(512),
+                    )
+                } else {
+                    let p_len = rx_msg.byte_count.min(path_buf.len());
+                    path_buf[..p_len].copy_from_slice(&rx_msg.bytes[..p_len]);
+                    (1u32, FsOpcode::Read as u32, p_len, 0usize)
+                };
 
             let path_str = core::str::from_utf8(&path_buf[..path_len])
                 .unwrap_or("")
@@ -106,23 +107,63 @@ pub extern "C" fn _start() -> ! {
                 _reserved: 0,
             };
 
-            match fs.read_file(path_str, &mut file_buf) {
-                Ok(read_len) => {
-                    resp.status = 0;
-                    resp.length = read_len as u32;
-                    let copy_len = read_len.min(resp.data.len());
-                    resp.data[..copy_len].copy_from_slice(&file_buf[..copy_len]);
-                    println("[FS] Requête de lecture traitée avec succès.");
+            if opcode == FsOpcode::Write as u32 {
+                let mut write_payload = [0u8; 512];
+                if !block_client.vmo_ptr.is_null() && write_len > 0 {
+                    unsafe {
+                        core::ptr::copy_nonoverlapping(
+                            block_client.vmo_ptr,
+                            write_payload.as_mut_ptr(),
+                            write_len,
+                        );
+                    }
                 }
-                Err(err) => {
-                    resp.status = match err {
-                        jambo_fs::FsError::FileNotFound => {
-                            libjambo::SysError::InvalidArgument as i32
-                        }
-                        jambo_fs::FsError::BlockIoError(e) => e as i32,
-                        _ => libjambo::SysError::InvalidArgument as i32,
-                    };
-                    println("[FS] Fichier introuvable ou erreur de lecture.");
+                match fs.write_file(path_str, &write_payload[..write_len]) {
+                    Ok(written) => {
+                        resp.status = 0;
+                        resp.length = written as u32;
+                        println("[FS] Écriture transactionnelle JamboFS effectuée avec succès.");
+                    }
+                    Err(err) => {
+                        resp.status = match err {
+                            jambo_fs::FsError::BlockIoError(e) => e as i32,
+                            _ => libjambo::SysError::InvalidArgument as i32,
+                        };
+                        println("[FS] Erreur lors de l'écriture transactionnelle JamboFS.");
+                    }
+                }
+            } else if opcode == FsOpcode::Sync as u32 {
+                match fs.sync() {
+                    Ok(()) => {
+                        resp.status = 0;
+                        println("[FS] Synchronisation matérielle (Flush JamboFS) réussie.");
+                    }
+                    Err(err) => {
+                        resp.status = match err {
+                            jambo_fs::FsError::BlockIoError(e) => e as i32,
+                            _ => libjambo::SysError::InvalidArgument as i32,
+                        };
+                    }
+                }
+            } else {
+                match fs.read_file(path_str, &mut file_buf) {
+                    Ok(read_len) => {
+                        resp.status = 0;
+                        resp.length = read_len as u32;
+                        let copy_len = read_len.min(resp.data.len());
+                        resp.data[..copy_len].copy_from_slice(&file_buf[..copy_len]);
+                        println("[FS] Requête de lecture traitée avec succès.");
+                    }
+                    Err(err) => {
+                        resp.status = match err {
+                            jambo_fs::FsError::FileNotFound => {
+                                libjambo::SysError::InvalidArgument as i32
+                            }
+                            jambo_fs::FsError::BlockIoError(e) => e as i32,
+                            _ => libjambo::SysError::InvalidArgument as i32,
+                        };
+                        println("[FS] Fichier introuvable ou erreur de lecture.");
+                    }
                 }
             }
 

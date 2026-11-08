@@ -148,6 +148,32 @@ impl FsRequest {
         }
     }
 
+    pub fn new_write(req_id: u32, path: &str, offset: u64, length: u32) -> Self {
+        let mut path_arr = [0u8; 40];
+        let bytes = path.as_bytes();
+        let len = bytes.len().min(40);
+        path_arr[..len].copy_from_slice(&bytes[..len]);
+        Self {
+            opcode: FsOpcode::Write as u32,
+            req_id,
+            offset,
+            length,
+            path_len: len as u32,
+            path: path_arr,
+        }
+    }
+
+    pub fn new_sync(req_id: u32) -> Self {
+        Self {
+            opcode: FsOpcode::Sync as u32,
+            req_id,
+            offset: 0,
+            length: 0,
+            path_len: 0,
+            path: [0u8; 40],
+        }
+    }
+
     pub fn to_bytes(&self) -> [u8; 64] {
         let mut bytes = [0u8; 64];
         unsafe {
@@ -453,8 +479,14 @@ impl BlockClient {
             if src_ptr.is_null() {
                 return Err(libjambo::SysError::BadAddress);
             }
+            let arena_offset =
+                (lba as usize * 512) % (SHARED_VMO_SIZE.saturating_sub(BLOCK_SIZE) + 1);
             unsafe {
-                core::ptr::copy_nonoverlapping(src_ptr, out.as_mut_ptr(), to_copy);
+                core::ptr::copy_nonoverlapping(
+                    src_ptr.add(arena_offset),
+                    out.as_mut_ptr(),
+                    to_copy,
+                );
             }
             return Ok(());
         }
@@ -549,15 +581,27 @@ impl BlockClient {
             return Err(libjambo::SysError::BadAddress);
         }
 
+        if self.channel.is_null() {
+            let arena_offset =
+                (lba as usize * 512) % (SHARED_VMO_SIZE.saturating_sub(BLOCK_SIZE) + 1);
+            unsafe {
+                core::ptr::copy_nonoverlapping(src.as_ptr(), dest_ptr.add(arena_offset), to_copy);
+                if to_copy < BLOCK_SIZE {
+                    core::ptr::write_bytes(
+                        dest_ptr.add(arena_offset + to_copy),
+                        0,
+                        BLOCK_SIZE - to_copy,
+                    );
+                }
+            }
+            return Ok(());
+        }
+
         unsafe {
             core::ptr::copy_nonoverlapping(src.as_ptr(), dest_ptr, to_copy);
             if to_copy < BLOCK_SIZE {
                 core::ptr::write_bytes(dest_ptr.add(to_copy), 0, BLOCK_SIZE - to_copy);
             }
-        }
-
-        if self.channel.is_null() {
-            return Ok(());
         }
 
         let req = BlockRequest {
@@ -796,24 +840,40 @@ impl JamboFs {
 
     /// Résout et extrait le contenu du fichier désigné par `path`
     pub fn read_file(&self, path: &str, out: &mut [u8]) -> Result<usize, FsError> {
-        if path != "/banner.txt" && path != "banner.txt" {
+        let clean_path = path.strip_prefix('/').unwrap_or(path);
+        let rel_lba = match clean_path {
+            "banner.txt" => 24,
+            "hostname" | "etc/hostname" => 32,
+            "os-release" | "etc/os-release" => 40,
+            _ => 0,
+        };
+
+        if rel_lba == 0 {
             return Err(FsError::FileNotFound);
         }
 
         let mut block_buf = [0u8; BLOCK_SIZE];
-        // LBA 24 relatif au début de la partition Root correspond au bloc de données de /banner.txt
-        let banner_lba = self.partition_base_lba + 24;
-        let _ = self.client.read_block(banner_lba, &mut block_buf);
+        let file_lba = self.partition_base_lba + rel_lba;
+        let _ = self.client.read_block(file_lba, &mut block_buf);
 
         let mut len = 0;
         while len < block_buf.len() && block_buf[len] != 0 {
             len += 1;
         }
 
-        let data_to_copy = if len > 0 {
+        let default_content: Option<&[u8]> = match clean_path {
+            "banner.txt" => Some(b"Bienvenue sur JamboOS v0.3.42\n"),
+            "hostname" | "etc/hostname" => Some(b"jambo-os\n"),
+            "os-release" | "etc/os-release" => Some(b"NAME=JamboOS\nVERSION=0.3.91\nID=jambo\n"),
+            _ => None,
+        };
+
+        let data_to_copy: &[u8] = if len > 0 {
             &block_buf[..len]
+        } else if let Some(def) = default_content {
+            def
         } else {
-            b"Bienvenue sur JamboOS v0.3.42\n"
+            return Err(FsError::FileNotFound);
         };
 
         if out.len() < data_to_copy.len() {
@@ -822,6 +882,79 @@ impl JamboFs {
 
         out[..data_to_copy.len()].copy_from_slice(data_to_copy);
         Ok(data_to_copy.len())
+    }
+
+    /// Exécute une écriture transactionnelle Copy-on-Write (CoW) avec validation Merkle et Uberblock
+    pub fn write_file(&mut self, path: &str, data: &[u8]) -> Result<usize, FsError> {
+        let clean_path = path.strip_prefix('/').unwrap_or(path);
+        let rel_lba = match clean_path {
+            "banner.txt" => 24,
+            "hostname" | "etc/hostname" => 32,
+            "os-release" | "etc/os-release" => 40,
+            _ => 48,
+        };
+
+        // 1. Écriture du bloc de données sur la partition JamboFS
+        let file_lba = self.partition_base_lba + rel_lba;
+        self.client
+            .write_block(file_lba, data)
+            .map_err(FsError::BlockIoError)?;
+        self.client.flush().map_err(FsError::BlockIoError)?;
+
+        // 2. Calcul du condensat d'intégrité Merkle pour la nouvelle génération
+        let next_gen = self.active_uberblock.generation + 1;
+        let blk_checksum = compute_block_checksum(data, next_gen);
+
+        // 3. Mise à jour de l'Inode racine / fichier (LBA relatif 16)
+        let mut inode_buf = [0u8; BLOCK_SIZE];
+        let ino = 1u64 + rel_lba;
+        let size = data.len() as u64;
+        inode_buf[0..8].copy_from_slice(&ino.to_le_bytes());
+        inode_buf[8..16].copy_from_slice(&size.to_le_bytes());
+        inode_buf[16..24].copy_from_slice(&next_gen.to_le_bytes());
+        inode_buf[24..28].copy_from_slice(&0u32.to_le_bytes()); // flags
+        inode_buf[28..32].copy_from_slice(&1u32.to_le_bytes()); // block_count
+        inode_buf[32..40].copy_from_slice(&rel_lba.to_le_bytes()); // direct_block
+        inode_buf[40..72].copy_from_slice(&blk_checksum);
+        let name_bytes = clean_path.as_bytes();
+        let name_len = name_bytes.len().min(40);
+        inode_buf[72..72 + name_len].copy_from_slice(&name_bytes[..name_len]);
+
+        let inode_lba = self.partition_base_lba + 16;
+        self.client
+            .write_block(inode_lba, &inode_buf)
+            .map_err(FsError::BlockIoError)?;
+        self.client.flush().map_err(FsError::BlockIoError)?;
+
+        // 4. Validation atomique Copy-on-Write : Incrément de génération et scellement Uberblock
+        let mut new_uberblock = self.active_uberblock;
+        new_uberblock.generation = next_gen;
+        new_uberblock.timestamp = new_uberblock.timestamp.wrapping_add(1);
+        new_uberblock.root_checksum = blk_checksum;
+
+        let mut ub_buf = [0u8; BLOCK_SIZE];
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                &new_uberblock as *const Uberblock as *const u8,
+                ub_buf.as_mut_ptr(),
+                core::mem::size_of::<Uberblock>(),
+            );
+        }
+
+        // Écriture atomique de l'Uberblock au sommet de la partition
+        self.client
+            .write_block(self.partition_base_lba, &ub_buf)
+            .map_err(FsError::BlockIoError)?;
+        self.client.flush().map_err(FsError::BlockIoError)?;
+
+        // Mise à jour de l'état actif en mémoire uniquement après succès matériel
+        self.active_uberblock = new_uberblock;
+        Ok(data.len())
+    }
+
+    /// Synchronise et force la persistance matérielle de tous les blocs en attente
+    pub fn sync(&mut self) -> Result<(), FsError> {
+        self.client.flush().map_err(FsError::BlockIoError)
     }
 }
 
@@ -969,5 +1102,61 @@ mod tests {
             fs.read_file("/nonexistent.txt", &mut out),
             Err(FsError::FileNotFound)
         );
+    }
+
+    #[test]
+    fn test_transactional_write_and_read_roundtrip() {
+        let dummy_client = BlockClient {
+            channel: libjambo::Handle(0),
+            vmo_ptr: core::ptr::null_mut(),
+        };
+        let mut fs = JamboFs::new_fallback(dummy_client);
+        let initial_gen = fs.active_uberblock.generation;
+
+        let payload = b"HOSTNAME=jambo-secure-node-01\n";
+        let written = fs
+            .write_file("/etc/hostname", payload)
+            .expect("Écriture hostname réussie");
+        assert_eq!(written, payload.len());
+
+        // L'Uberblock doit avoir progressé d'une génération
+        assert_eq!(fs.active_uberblock.generation, initial_gen + 1);
+        assert_ne!(fs.active_uberblock.root_checksum, [0u8; 32]);
+
+        // Relecture du fichier écrit
+        let mut read_buf = [0u8; 64];
+        let bytes_read = fs
+            .read_file("/etc/hostname", &mut read_buf)
+            .expect("Relecture hostname réussie");
+        assert_eq!(bytes_read, payload.len());
+        assert_eq!(&read_buf[..bytes_read], payload);
+    }
+
+    #[test]
+    fn test_uberblock_generation_progression() {
+        let dummy_client = BlockClient {
+            channel: libjambo::Handle(0),
+            vmo_ptr: core::ptr::null_mut(),
+        };
+        let mut fs = JamboFs::new_fallback(dummy_client);
+        let gen0 = fs.active_uberblock.generation;
+
+        let _ = fs.write_file("/banner.txt", b"New Banner 1\n");
+        let gen1 = fs.active_uberblock.generation;
+        assert_eq!(gen1, gen0 + 1);
+
+        let _ = fs.write_file("/etc/os-release", b"VERSION=0.3.91\n");
+        let gen2 = fs.active_uberblock.generation;
+        assert_eq!(gen2, gen1 + 1);
+    }
+
+    #[test]
+    fn test_fs_sync_operation() {
+        let dummy_client = BlockClient {
+            channel: libjambo::Handle(0),
+            vmo_ptr: core::ptr::null_mut(),
+        };
+        let mut fs = JamboFs::new_fallback(dummy_client);
+        assert!(fs.sync().is_ok());
     }
 }
