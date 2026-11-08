@@ -183,7 +183,11 @@ pub extern "C" fn _start() -> ! {
     println("\x1b[1;32m   JamboOS Network Daemon (PID 5) v0.3.44       \x1b[0m");
     println("\x1b[1;36m================================================\x1b[0m");
 
-    // 1. Découverte matérielle VirtIO-Net PCIe (0x1AF4:0x1041)
+    // 1. Découverte matérielle VirtIO-Net PCIe (0x1AF4:0x1041 / 0x1000)
+    if let Some(_pci_info) = libjambo::pci::find_pci_device(|d| d.is_virtio_net()) {
+        println("[NETD] Contrôleur virtio-net-pci détecté sur le bus PCIe (0x1AF4).");
+    }
+
     let dev_params = scan_pci_virtio_net().unwrap_or(PciNetDevice {
         common_cfg_base: 0xFE01_0000,
         notify_base: 0xFE01_1000,

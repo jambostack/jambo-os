@@ -36,6 +36,7 @@ pub const SEEK_END: i32 = 2;
 
 // Modes et types de fichiers (stat st_mode)
 pub const S_IFMT: u32 = 0o170000;
+pub const S_IFSOCK: u32 = 0o140000; // Socket réseau
 pub const S_IFREG: u32 = 0o100000; // Fichier régulier
 pub const S_IFDIR: u32 = 0o040000; // Répertoire
 pub const S_IFCHR: u32 = 0o020000; // Périphérique caractère (console)
@@ -52,6 +53,7 @@ pub enum FdKind {
     ConsoleOut,
     RegularFile,
     IpcChannel,
+    Socket,
 }
 
 #[derive(Clone, Copy)]
@@ -166,6 +168,16 @@ impl FdTable {
         Ok(())
     }
 
+    /// Alloue un descripteur de fichier pour une socket réseau
+    pub fn alloc_socket(
+        &mut self,
+        _domain: u16,
+        _type_: i32,
+        _protocol: i32,
+    ) -> Result<i32, SysError> {
+        self.alloc_fd(FdKind::Socket, O_RDWR, "socket:[net]")
+    }
+
     /// Récupère une référence vers l'entrée de descripteur
     pub fn get(&self, fd: i32) -> Option<&FdEntry> {
         if fd >= 0 && (fd as usize) < MAX_FDS {
@@ -203,8 +215,11 @@ impl FdTable {
     pub fn lseek(&mut self, fd: i32, offset: i64, whence: i32) -> Result<i64, SysError> {
         let entry = self.get_mut(fd).ok_or(SysError::InvalidArgument)?;
 
-        if matches!(entry.kind, FdKind::ConsoleIn | FdKind::ConsoleOut) {
-            return Err(SysError::NotSupported); // ESPIPE : Impossible de se déplacer sur un périphérique caractère
+        if matches!(
+            entry.kind,
+            FdKind::ConsoleIn | FdKind::ConsoleOut | FdKind::Socket
+        ) {
+            return Err(SysError::NotSupported); // ESPIPE : Impossible de se déplacer sur un périphérique caractère ou une socket
         }
 
         let new_offset = match whence {
@@ -242,9 +257,9 @@ impl FdTable {
                     Ok(0)
                 }
             }
-            FdKind::RegularFile => {
+            FdKind::RegularFile | FdKind::Socket => {
                 if entry.offset >= entry.size {
-                    return Ok(0); // EOF
+                    return Ok(0); // EOF / Pas de données disponibles
                 }
                 let available = (entry.size - entry.offset) as usize;
                 let to_read = buf.len().min(available);
@@ -277,7 +292,7 @@ impl FdTable {
                     Ok(buf.len())
                 }
             }
-            FdKind::RegularFile => {
+            FdKind::RegularFile | FdKind::Socket => {
                 // Si O_APPEND est positionné, toujours écrire à la fin du fichier
                 if (entry.flags & O_APPEND) != 0 {
                     entry.offset = entry.size;
@@ -285,7 +300,7 @@ impl FdTable {
 
                 let start = entry.offset as usize;
                 if start >= FILE_BUFFER_SIZE {
-                    return Err(SysError::OutOfMemory); // ENOSPC
+                    return Err(SysError::OutOfMemory); // ENOSPC / ENOBUFS
                 }
                 let space_left = FILE_BUFFER_SIZE - start;
                 let to_write = buf.len().min(space_left);
@@ -314,6 +329,13 @@ impl FdTable {
             }
             FdKind::RegularFile => {
                 st.st_mode = S_IFREG | 0o644;
+                st.st_nlink = 1;
+                st.st_size = entry.size as i64;
+                st.st_blksize = 512;
+                st.st_blocks = entry.size.div_ceil(512) as i64;
+            }
+            FdKind::Socket => {
+                st.st_mode = S_IFSOCK | 0o666;
                 st.st_nlink = 1;
                 st.st_size = entry.size as i64;
                 st.st_blksize = 512;
@@ -474,5 +496,35 @@ mod tests {
         // Stat de la console (fd = 1)
         let st_console = table.fstat(1).expect("fstat stdout");
         assert_eq!(st_console.st_mode & S_IFMT, S_IFCHR);
+    }
+
+    #[test]
+    fn test_vfs_socket_descriptor() {
+        let mut table = FdTable::new();
+        let sock_fd = table.alloc_socket(2, 1, 6).expect("Allouer socket");
+        assert!(sock_fd >= 3);
+
+        let entry = table.get(sock_fd).expect("Entrée socket valide");
+        assert_eq!(entry.kind, FdKind::Socket);
+        assert_eq!(entry.path_str(), "socket:[net]");
+
+        // Écriture de données réseau
+        let msg = b"GET / HTTP/1.1\r\nHost: jamboos.local\r\n\r\n";
+        let written = table.write(sock_fd, msg).expect("Écriture socket");
+        assert_eq!(written, msg.len());
+
+        // Lseek doit échouer sur une socket (ESPIPE)
+        assert!(table.lseek(sock_fd, 0, SEEK_SET).is_err());
+
+        // Lecture des données
+        let mut rx_buf = [0u8; 64];
+        table.get_mut(sock_fd).unwrap().offset = 0; // Réinitialise offset de lecture
+        let read_len = table.read(sock_fd, &mut rx_buf).expect("Lecture socket");
+        assert_eq!(read_len, msg.len());
+        assert_eq!(&rx_buf[..read_len], msg);
+
+        // Stat de la socket
+        let st = table.fstat(sock_fd).expect("fstat socket");
+        assert_eq!(st.st_mode & S_IFMT, S_IFSOCK);
     }
 }

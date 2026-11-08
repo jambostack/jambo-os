@@ -469,3 +469,60 @@ pub use gpu::{VirtioGpuDriver, VirtioGpuRect};
 pub use net::{
     VirtioNetDriver, VirtioNetHdr, VIRTIO_NET_F_CSUM, VIRTIO_NET_F_MAC, VIRTIO_NET_F_STATUS,
 };
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_virtio_struct_sizes_and_alignments() {
+        assert_eq!(core::mem::size_of::<VirtioBlkReqHeader>(), 16);
+        assert_eq!(core::mem::size_of::<VirtqDesc>(), 16);
+        assert_eq!(core::mem::align_of::<VirtqDesc>(), 16);
+        assert_eq!(core::mem::size_of::<VirtioNetHdr>(), 10);
+    }
+
+    #[test]
+    fn test_virtio_block_driver_mock_io() {
+        let mut blk = VirtioBlockDriver::new(0, 0, 4, 1024);
+        assert_eq!(blk.capacity_sectors, 1024);
+        assert_eq!(blk.capacity_bytes(), 1024 * 512);
+
+        // En mode mock (common_cfg_base == 0)
+        let mut buf = [0u8; 512];
+        let r = blk.submit_read(0, &mut buf).expect("Lecture mock");
+        assert_eq!(r, 512);
+
+        let w = blk.submit_write(0, &[0xAA; 512]).expect("Écriture mock");
+        assert_eq!(w, 512);
+
+        assert!(blk.flush().is_ok());
+
+        // Hors limites
+        assert_eq!(
+            blk.submit_read(1024, &mut buf),
+            Err(libjambo::SysError::InvalidArgument)
+        );
+        assert_eq!(
+            blk.submit_write(1024, &buf),
+            Err(libjambo::SysError::InvalidArgument)
+        );
+    }
+
+    #[test]
+    fn test_virtio_net_driver_mock_io() {
+        let mut net = VirtioNetDriver::new(0, 0, 4, 0);
+        net.mac_address = [0x52, 0x54, 0x00, 0x12, 0x34, 0x56];
+        assert_eq!(net.packets_tx_count, 0);
+        assert_eq!(net.packets_rx_count, 0);
+
+        let packet = [0u8; 64];
+        let tx_res = net.transmit(&packet);
+        assert!(tx_res.is_ok());
+        assert_eq!(net.packets_tx_count, 1);
+
+        let mut rx_buf = [0u8; 1536];
+        let rx_res = net.poll_receive(&mut rx_buf);
+        assert_eq!(rx_res, Ok(None));
+    }
+}

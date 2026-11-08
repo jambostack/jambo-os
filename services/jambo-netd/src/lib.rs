@@ -847,6 +847,307 @@ impl JamboNetd {
     }
 }
 
+// =========================================================================
+// En-tête UDP & Gestion des Datagrammes (RFC 768)
+// =========================================================================
+
+/// En-tête UDP standard (RFC 768 - 8 octets)
+#[repr(C, packed)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct UdpHeader {
+    pub src_port: u16,
+    pub dst_port: u16,
+    pub length: u16,
+    pub checksum: u16,
+}
+
+const _: () = assert!(core::mem::size_of::<UdpHeader>() == 8);
+
+impl UdpHeader {
+    pub const fn new(src_port: u16, dst_port: u16, payload_len: usize) -> Self {
+        Self {
+            src_port: src_port.to_be(),
+            dst_port: dst_port.to_be(),
+            length: ((8 + payload_len) as u16).to_be(),
+            checksum: 0,
+        }
+    }
+
+    #[inline]
+    pub fn src_port(&self) -> u16 {
+        u16::from_be(self.src_port)
+    }
+
+    #[inline]
+    pub fn dst_port(&self) -> u16 {
+        u16::from_be(self.dst_port)
+    }
+
+    #[inline]
+    pub fn length(&self) -> u16 {
+        u16::from_be(self.length)
+    }
+
+    #[inline]
+    pub fn checksum(&self) -> u16 {
+        u16::from_be(self.checksum)
+    }
+
+    pub fn to_bytes(&self) -> [u8; 8] {
+        let mut bytes = [0u8; 8];
+        unsafe {
+            core::ptr::copy_nonoverlapping(self as *const Self as *const u8, bytes.as_mut_ptr(), 8);
+        }
+        bytes
+    }
+
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        if bytes.len() < 8 {
+            return None;
+        }
+        unsafe {
+            let ptr = bytes.as_ptr() as *const Self;
+            Some(ptr.read_unaligned())
+        }
+    }
+}
+
+/// Calcule la somme de contrôle UDP RFC 768 avec le pseudo-en-tête IPv4
+pub fn compute_udp_checksum(
+    src_ip: [u8; 4],
+    dst_ip: [u8; 4],
+    udp_hdr: &UdpHeader,
+    payload: &[u8],
+) -> u16 {
+    let mut sum: u32 = 0;
+
+    // Pseudo-en-tête IPv4 (12 octets)
+    for chunk in src_ip.chunks_exact(2) {
+        sum += u16::from_be_bytes([chunk[0], chunk[1]]) as u32;
+    }
+    for chunk in dst_ip.chunks_exact(2) {
+        sum += u16::from_be_bytes([chunk[0], chunk[1]]) as u32;
+    }
+    sum += IP_PROTO_UDP as u32; // zero (8b) + protocol (8b)
+    sum += udp_hdr.length() as u32; // UDP length
+
+    // En-tête UDP (sans le champ checksum)
+    sum += udp_hdr.src_port() as u32;
+    sum += udp_hdr.dst_port() as u32;
+    sum += udp_hdr.length() as u32;
+
+    // Données de charge utile UDP
+    let mut chunks = payload.chunks_exact(2);
+    for chunk in chunks.by_ref() {
+        sum += u16::from_be_bytes([chunk[0], chunk[1]]) as u32;
+    }
+    if let Some(&last) = chunks.remainder().first() {
+        sum += u16::from_be_bytes([last, 0]) as u32;
+    }
+
+    while (sum >> 16) != 0 {
+        sum = (sum & 0xFFFF) + (sum >> 16);
+    }
+
+    let inverted = !(sum as u16);
+    if inverted == 0 {
+        0xFFFF // RFC 768: une somme nulle est transmise comme 0xFFFF
+    } else {
+        inverted
+    }
+}
+
+/// Forge une trame Ethernet/IPv4/UDP complète prête à être émise
+pub fn forge_udp_packet(
+    src_mac: [u8; 6],
+    src_ip: [u8; 4],
+    dst_mac: [u8; 6],
+    dst_ip: [u8; 4],
+    src_port: u16,
+    dst_port: u16,
+    payload: &[u8],
+    out_buf: &mut [u8],
+) -> Option<usize> {
+    let total_len = 14 + 20 + 8 + payload.len();
+    if out_buf.len() < total_len {
+        return None;
+    }
+
+    let eth = EthernetHeader::new(dst_mac, src_mac, ETHERTYPE_IPV4);
+    let ip = Ipv4Header::new(IP_PROTO_UDP, src_ip, dst_ip, (8 + payload.len()) as u16);
+    let mut udp = UdpHeader::new(src_port, dst_port, payload.len());
+    let csum = compute_udp_checksum(src_ip, dst_ip, &udp, payload);
+    udp.checksum = csum.to_be();
+
+    out_buf[..14].copy_from_slice(&eth.to_bytes());
+    out_buf[14..34].copy_from_slice(&ip.to_bytes());
+    out_buf[34..42].copy_from_slice(&udp.to_bytes());
+    out_buf[42..total_len].copy_from_slice(payload);
+
+    Some(total_len)
+}
+
+// =========================================================================
+// Gestionnaire de Sockets Réseau Ring 3
+// =========================================================================
+
+/// Type de protocole de transport pour la socket
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SocketProtocol {
+    Tcp,
+    Udp,
+    Raw,
+}
+
+/// État d'une socket gérée dans la table du démon réseau
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ManagedSocket {
+    pub protocol: SocketProtocol,
+    pub local_port: u16,
+    pub remote_port: u16,
+    pub local_ip: [u8; 4],
+    pub remote_ip: [u8; 4],
+    pub is_bound: bool,
+    pub is_connected: bool,
+    pub is_listening: bool,
+}
+
+/// Gestionnaire de table de sockets sans allocation (#![no_std])
+pub struct SocketTable {
+    pub sockets: [Option<ManagedSocket>; 16],
+    next_ephemeral: u16,
+}
+
+impl Default for SocketTable {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SocketTable {
+    pub const fn new() -> Self {
+        const INIT_OPT: Option<ManagedSocket> = None;
+        Self {
+            sockets: [INIT_OPT; 16],
+            next_ephemeral: 49152,
+        }
+    }
+
+    /// Alloue un nouvel emplacement de socket
+    pub fn alloc_socket(&mut self, protocol: SocketProtocol) -> Result<usize, SysError> {
+        for (i, slot) in self.sockets.iter_mut().enumerate() {
+            if slot.is_none() {
+                let sock = ManagedSocket {
+                    protocol,
+                    local_port: 0,
+                    remote_port: 0,
+                    local_ip: DEFAULT_IPV4,
+                    remote_ip: [0, 0, 0, 0],
+                    is_bound: false,
+                    is_connected: false,
+                    is_listening: false,
+                };
+                *slot = Some(sock);
+                return Ok(i);
+            }
+        }
+        Err(SysError::OutOfMemory)
+    }
+
+    /// Lie la socket à une adresse et un port local (bind)
+    pub fn bind(&mut self, id: usize, ip: [u8; 4], port: u16) -> Result<(), SysError> {
+        if id >= 16 {
+            return Err(SysError::InvalidArgument);
+        }
+        let protocol = self.sockets[id]
+            .as_ref()
+            .ok_or(SysError::InvalidArgument)?
+            .protocol;
+
+        let allocated_port = if port == 0 {
+            let ephem = self.next_ephemeral;
+            self.next_ephemeral = if ephem == 65535 { 49152 } else { ephem + 1 };
+            ephem
+        } else {
+            // Vérifie l'absence de conflit de port
+            for (i, other) in self.sockets.iter().enumerate() {
+                if i != id {
+                    if let Some(s) = other {
+                        if s.is_bound && s.local_port == port && s.protocol == protocol {
+                            return Err(SysError::ResourceBusy);
+                        }
+                    }
+                }
+            }
+            port
+        };
+
+        let sock = self.sockets[id].as_mut().ok_or(SysError::InvalidArgument)?;
+        sock.local_ip = ip;
+        sock.local_port = allocated_port;
+        sock.is_bound = true;
+        Ok(())
+    }
+
+    /// Connecte la socket à une adresse distante
+    pub fn connect(
+        &mut self,
+        id: usize,
+        remote_ip: [u8; 4],
+        remote_port: u16,
+    ) -> Result<(), SysError> {
+        if id >= 16 {
+            return Err(SysError::InvalidArgument);
+        }
+        let sock = self.sockets[id].as_mut().ok_or(SysError::InvalidArgument)?;
+
+        if !sock.is_bound {
+            let ephem = self.next_ephemeral;
+            self.next_ephemeral = if ephem == 65535 { 49152 } else { ephem + 1 };
+            sock.local_port = ephem;
+            sock.is_bound = true;
+        }
+
+        sock.remote_ip = remote_ip;
+        sock.remote_port = remote_port;
+        sock.is_connected = true;
+        Ok(())
+    }
+
+    /// Ferme la socket et libère son emplacement
+    pub fn close(&mut self, id: usize) -> Result<(), SysError> {
+        if id >= 16 {
+            return Err(SysError::InvalidArgument);
+        }
+        if self.sockets[id].is_none() {
+            return Err(SysError::InvalidArgument);
+        }
+        self.sockets[id] = None;
+        Ok(())
+    }
+
+    /// Récupère la socket par son index
+    pub fn get(&self, id: usize) -> Option<&ManagedSocket> {
+        if id < 16 {
+            self.sockets[id].as_ref()
+        } else {
+            None
+        }
+    }
+
+    /// Recherche une socket par son port d'écoute et son protocole
+    pub fn find_by_port(&self, port: u16, protocol: SocketProtocol) -> Option<usize> {
+        for (i, slot) in self.sockets.iter().enumerate() {
+            if let Some(sock) = slot {
+                if sock.is_bound && sock.local_port == port && sock.protocol == protocol {
+                    return Some(i);
+                }
+            }
+        }
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -967,5 +1268,94 @@ mod tests {
         assert_eq!(parsed_resp.rtt_ms, 1);
         assert_eq!(parsed_resp.mac, [0x52, 0x54, 0x00, 0x12, 0x34, 0x56]);
         assert_eq!(parsed_resp.ip, [10, 0, 2, 15]);
+    }
+
+    #[test]
+    fn test_udp_header_serialization() {
+        let udp = UdpHeader::new(53, 1024, 64);
+        assert_eq!(udp.src_port(), 53);
+        assert_eq!(udp.dst_port(), 1024);
+        assert_eq!(udp.length(), 72);
+
+        let bytes = udp.to_bytes();
+        let parsed = UdpHeader::from_bytes(&bytes).unwrap();
+        assert_eq!(parsed.src_port(), 53);
+        assert_eq!(parsed.dst_port(), 1024);
+        assert_eq!(parsed.length(), 72);
+    }
+
+    #[test]
+    fn test_udp_packet_forge_and_checksum() {
+        let src_mac = [0x52, 0x54, 0x00, 0x12, 0x34, 0x56];
+        let src_ip = [10, 0, 2, 15];
+        let dst_mac = [0x52, 0x55, 0x0A, 0x00, 0x02, 0x02];
+        let dst_ip = [10, 0, 2, 2];
+        let payload = b"DNS Query: jamboos.dev";
+
+        let mut out_buf = [0u8; 128];
+        let total = forge_udp_packet(
+            src_mac,
+            src_ip,
+            dst_mac,
+            dst_ip,
+            5353,
+            53,
+            payload,
+            &mut out_buf,
+        )
+        .expect("Forge UDP réussi");
+
+        assert_eq!(total, 14 + 20 + 8 + payload.len());
+
+        let eth = EthernetHeader::from_bytes(&out_buf[..14]).unwrap();
+        assert_eq!(eth.ethertype(), ETHERTYPE_IPV4);
+
+        let ip = Ipv4Header::from_bytes(&out_buf[14..34]).unwrap();
+        assert_eq!(ip.proto, IP_PROTO_UDP);
+        assert!(verify_ipv4_checksum(&ip));
+
+        let udp = UdpHeader::from_bytes(&out_buf[34..42]).unwrap();
+        assert_eq!(udp.src_port(), 5353);
+        assert_eq!(udp.dst_port(), 53);
+        assert_eq!(udp.length(), (8 + payload.len()) as u16);
+        assert_ne!(udp.checksum(), 0);
+    }
+
+    #[test]
+    fn test_socket_table_lifecycle() {
+        let mut table = SocketTable::new();
+
+        // 1. Allouer socket UDP
+        let s0 = table.alloc_socket(SocketProtocol::Udp).unwrap();
+        assert_eq!(s0, 0);
+
+        // 2. Bind sur port spécifique
+        table.bind(s0, [10, 0, 2, 15], 8080).unwrap();
+        let sock = table.get(s0).unwrap();
+        assert!(sock.is_bound);
+        assert_eq!(sock.local_port, 8080);
+
+        // 3. Conflit de bind sur le même port/protocole
+        let s1 = table.alloc_socket(SocketProtocol::Udp).unwrap();
+        assert_eq!(
+            table.bind(s1, [10, 0, 2, 15], 8080),
+            Err(SysError::ResourceBusy)
+        );
+
+        // 4. Bind avec port éphémère automatique
+        table.bind(s1, [10, 0, 2, 15], 0).unwrap();
+        let sock1 = table.get(s1).unwrap();
+        assert!(sock1.local_port >= 49152);
+
+        // 5. Connect
+        table.connect(s0, [10, 0, 2, 2], 53).unwrap();
+        let sock0 = table.get(s0).unwrap();
+        assert!(sock0.is_connected);
+        assert_eq!(sock0.remote_ip, [10, 0, 2, 2]);
+        assert_eq!(sock0.remote_port, 53);
+
+        // 6. Close
+        table.close(s0).unwrap();
+        assert!(table.get(s0).is_none());
     }
 }

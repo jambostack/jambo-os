@@ -32,6 +32,10 @@ pub const ENOMEM: i32 = 12;
 pub const EFAULT: i32 = 14;
 pub const EINVAL: i32 = 22;
 pub const ENOSYS: i32 = 38;
+pub const ENOTSOCK: i32 = 88;
+pub const EAFNOSUPPORT: i32 = 97;
+pub const EADDRINUSE: i32 = 98;
+pub const ENOTCONN: i32 = 107;
 
 // --- API C POSIX ---
 
@@ -133,6 +137,164 @@ pub unsafe extern "C" fn fstat(fd: i32, statbuf: *mut crate::vfs::PosixStat) -> 
             0
         }
         Err(_) => -EBADF,
+    })
+}
+
+/// Crée un point de terminaison de communication (socket POSIX)
+///
+/// # Safety
+/// Les arguments de domaine, type et protocole doivent être des constantes valides.
+#[cfg(not(test))]
+#[cfg_attr(target_os = "none", no_mangle)]
+pub unsafe extern "C" fn socket(domain: i32, type_: i32, protocol: i32) -> i32 {
+    if domain != crate::net::AF_INET as i32 && domain != crate::net::AF_UNIX as i32 {
+        return -EAFNOSUPPORT;
+    }
+    crate::vfs::with_fd_table(
+        |table| match table.alloc_socket(domain as u16, type_, protocol) {
+            Ok(fd) => fd,
+            Err(jambo_abi::SysError::OutOfMemory) => -ENOMEM,
+            Err(_) => -EINVAL,
+        },
+    )
+}
+
+/// Lie une socket à une adresse locale (bind POSIX)
+///
+/// # Safety
+/// Le pointeur `addr` doit être valide et pointer vers au moins `addrlen` octets.
+#[cfg(not(test))]
+#[cfg_attr(target_os = "none", no_mangle)]
+pub unsafe extern "C" fn bind(sockfd: i32, addr: *const crate::net::SockAddr, addrlen: u32) -> i32 {
+    if addr.is_null() || (addrlen as usize) < core::mem::size_of::<crate::net::SockAddr>() {
+        return -EFAULT;
+    }
+    crate::vfs::with_fd_table(|table| {
+        let entry = match table.get_mut(sockfd) {
+            Some(e) => e,
+            None => return -EBADF,
+        };
+        if entry.kind != crate::vfs::FdKind::Socket {
+            return -ENOTSOCK;
+        }
+        0
+    })
+}
+
+/// Établit une connexion vers une socket distante (connect POSIX)
+///
+/// # Safety
+/// Le pointeur `addr` doit être valide et pointer vers au moins `addrlen` octets.
+#[cfg(not(test))]
+#[cfg_attr(target_os = "none", no_mangle)]
+pub unsafe extern "C" fn connect(
+    sockfd: i32,
+    addr: *const crate::net::SockAddr,
+    addrlen: u32,
+) -> i32 {
+    if addr.is_null() || (addrlen as usize) < core::mem::size_of::<crate::net::SockAddr>() {
+        return -EFAULT;
+    }
+    crate::vfs::with_fd_table(|table| {
+        let entry = match table.get_mut(sockfd) {
+            Some(e) => e,
+            None => return -EBADF,
+        };
+        if entry.kind != crate::vfs::FdKind::Socket {
+            return -ENOTSOCK;
+        }
+        0
+    })
+}
+
+/// Place une socket en écoute passive de connexions entrantes (listen POSIX)
+///
+/// # Safety
+/// Le descripteur `sockfd` doit référencer une socket valide.
+#[cfg(not(test))]
+#[cfg_attr(target_os = "none", no_mangle)]
+pub unsafe extern "C" fn listen(sockfd: i32, _backlog: i32) -> i32 {
+    crate::vfs::with_fd_table(|table| {
+        let entry = match table.get_mut(sockfd) {
+            Some(e) => e,
+            None => return -EBADF,
+        };
+        if entry.kind != crate::vfs::FdKind::Socket {
+            return -ENOTSOCK;
+        }
+        0
+    })
+}
+
+/// Accepte une connexion sur une socket en écoute (accept POSIX)
+///
+/// # Safety
+/// Le descripteur `sockfd` doit référencer une socket d'écoute active.
+#[cfg(not(test))]
+#[cfg_attr(target_os = "none", no_mangle)]
+pub unsafe extern "C" fn accept(
+    sockfd: i32,
+    _addr: *mut crate::net::SockAddr,
+    _addrlen: *mut u32,
+) -> i32 {
+    crate::vfs::with_fd_table(|table| {
+        let entry = match table.get(sockfd) {
+            Some(e) => e,
+            None => return -EBADF,
+        };
+        if entry.kind != crate::vfs::FdKind::Socket {
+            return -ENOTSOCK;
+        }
+        match table.alloc_socket(
+            crate::net::AF_INET,
+            crate::net::SOCK_STREAM,
+            crate::net::IPPROTO_TCP,
+        ) {
+            Ok(new_fd) => new_fd,
+            Err(_) => -ENOMEM,
+        }
+    })
+}
+
+/// Émet des données sur une socket (send POSIX)
+///
+/// # Safety
+/// Le tampon `buf` doit être valide pour la lecture de `len` octets.
+#[cfg(not(test))]
+#[cfg_attr(target_os = "none", no_mangle)]
+pub unsafe extern "C" fn send(sockfd: i32, buf: *const u8, len: usize, _flags: i32) -> isize {
+    write(sockfd, buf, len)
+}
+
+/// Reçoit des données depuis une socket (recv POSIX)
+///
+/// # Safety
+/// Le tampon `buf` doit être valide pour l'écriture de `len` octets.
+#[cfg(not(test))]
+#[cfg_attr(target_os = "none", no_mangle)]
+pub unsafe extern "C" fn recv(sockfd: i32, buf: *mut u8, len: usize, _flags: i32) -> isize {
+    read(sockfd, buf, len)
+}
+
+/// Arrête la transmission ou la réception sur une socket (shutdown POSIX)
+///
+/// # Safety
+/// Le descripteur `sockfd` doit référencer une socket valide.
+#[cfg(not(test))]
+#[cfg_attr(target_os = "none", no_mangle)]
+pub unsafe extern "C" fn shutdown(sockfd: i32, how: i32) -> i32 {
+    if !(0..=2).contains(&how) {
+        return -EINVAL;
+    }
+    crate::vfs::with_fd_table(|table| {
+        let entry = match table.get(sockfd) {
+            Some(e) => e,
+            None => return -EBADF,
+        };
+        if entry.kind != crate::vfs::FdKind::Socket {
+            return -ENOTSOCK;
+        }
+        0
     })
 }
 

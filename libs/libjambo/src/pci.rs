@@ -179,6 +179,30 @@ impl PciDeviceInfo {
     pub fn is_xhci(&self) -> bool {
         self.class() == PciClass::UsbXhci
     }
+
+    /// Indique si le périphérique appartient à la famille VirtIO OASIS standard.
+    #[inline]
+    pub fn is_virtio(&self) -> bool {
+        self.vendor_id == 0x1AF4
+    }
+
+    /// Indique si le périphérique est un contrôleur réseau VirtIO-Net (Modern 0x1041 ou Transitional 0x1000).
+    #[inline]
+    pub fn is_virtio_net(&self) -> bool {
+        self.vendor_id == 0x1AF4 && (self.device_id == 0x1041 || self.device_id == 0x1000)
+    }
+
+    /// Indique si le périphérique est un contrôleur de bloc VirtIO-Blk (Modern 0x1042 ou Transitional 0x1001).
+    #[inline]
+    pub fn is_virtio_block(&self) -> bool {
+        self.vendor_id == 0x1AF4 && (self.device_id == 0x1042 || self.device_id == 0x1001)
+    }
+
+    /// Indique si le périphérique correspond à une interface Ethernet (native ou VirtIO-Net).
+    #[inline]
+    pub fn is_ethernet(&self) -> bool {
+        self.class() == PciClass::Ethernet || self.is_virtio_net()
+    }
 }
 
 /// Sonde un emplacement PCIe (Bus, Device, Function) et extrait l'en-tête Type 0 s'il existe.
@@ -325,6 +349,24 @@ mod tests {
             bar0: None,
         };
         assert_eq!(virtio_dev.class(), PciClass::VirtIo);
+        assert!(virtio_dev.is_virtio());
+        assert!(virtio_dev.is_virtio_block());
+        assert!(!virtio_dev.is_virtio_net());
+
+        let virtio_net_dev = PciDeviceInfo {
+            address: PciAddress::new(0, 4, 0),
+            vendor_id: 0x1AF4,
+            device_id: 0x1041, // VirtIO Net Modern
+            class_code: 0x02,
+            subclass: 0x00,
+            prog_if: 0x00,
+            revision: 1,
+            bar0: None,
+        };
+        assert!(virtio_net_dev.is_virtio());
+        assert!(virtio_net_dev.is_virtio_net());
+        assert!(virtio_net_dev.is_ethernet());
+        assert!(!virtio_net_dev.is_virtio_block());
     }
 
     #[test]
