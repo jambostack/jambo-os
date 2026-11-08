@@ -1,5 +1,6 @@
 use super::pmm::{alloc_page, phys_to_virt};
 use core::arch::asm;
+use core::sync::atomic::{AtomicUsize, Ordering};
 
 pub const PAGE_PRESENT: u64 = 1 << 0;
 pub const PAGE_WRITABLE: u64 = 1 << 1;
@@ -7,6 +8,18 @@ pub const PAGE_USER: u64 = 1 << 2;
 pub const PAGE_NO_EXECUTE: u64 = 1 << 63;
 
 const PHYS_ADDR_MASK: u64 = 0x000f_ffff_ffff_f000;
+
+static BOOT_KERNEL_CR3: AtomicUsize = AtomicUsize::new(0);
+
+/// Enregistre la table PML4 racine initiale du noyau
+pub fn init_boot_kernel_cr3(cr3: usize) {
+    BOOT_KERNEL_CR3.store(cr3, Ordering::SeqCst);
+}
+
+/// Obtient l'adresse physique de la table PML4 racine du noyau
+pub fn boot_kernel_cr3() -> usize {
+    BOOT_KERNEL_CR3.load(Ordering::SeqCst)
+}
 
 #[repr(C, align(4096))]
 pub struct PageTable {

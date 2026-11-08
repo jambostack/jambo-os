@@ -168,8 +168,16 @@ core::arch::global_asm!(
 
     common_interrupt_handler:
         PUSH_ALL
+        test byte ptr [rsp + 0x90], 3
+        jz 1f
+        swapgs
+    1:
         mov rdi, rsp
         call exception_handler
+        test byte ptr [rsp + 0x90], 3
+        jz 2f
+        swapgs
+    2:
         POP_ALL
         add rsp, 16
         iretq
@@ -221,8 +229,16 @@ core::arch::global_asm!(
 
     timer_interrupt_entry:
         PUSH_ALL
+        test byte ptr [rsp + 0x90], 3
+        jz 1f
+        swapgs
+    1:
         mov rdi, rsp
         call timer_interrupt_handler
+        test byte ptr [rsp + 0x90], 3
+        jz 2f
+        swapgs
+    2:
         POP_ALL
         add rsp, 16
         iretq
@@ -235,8 +251,16 @@ core::arch::global_asm!(
 
     serial_interrupt_entry:
         PUSH_ALL
+        test byte ptr [rsp + 0x90], 3
+        jz 1f
+        swapgs
+    1:
         mov rdi, rsp
         call serial_interrupt_handler
+        test byte ptr [rsp + 0x90], 3
+        jz 2f
+        swapgs
+    2:
         POP_ALL
         add rsp, 16
         iretq

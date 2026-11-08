@@ -158,9 +158,23 @@ impl EevdfScheduler {
 
             let is_eligible = thread.vruntime <= v || thread.wait_ticks >= MAX_WAIT_TICKS;
 
-            if is_eligible && thread.deadline < min_deadline {
-                min_deadline = thread.deadline;
-                best_idx = Some(i);
+            if is_eligible {
+                let better = match best_idx {
+                    None => true,
+                    Some(_) => {
+                        if thread.deadline < min_deadline {
+                            true
+                        } else if thread.deadline == min_deadline {
+                            thread.cpu_affinity.is_some()
+                        } else {
+                            false
+                        }
+                    }
+                };
+                if better {
+                    min_deadline = thread.deadline;
+                    best_idx = Some(i);
+                }
             }
         }
 
@@ -175,7 +189,19 @@ impl EevdfScheduler {
                             continue;
                         }
                     }
-                    if thread.vruntime < min_vruntime {
+                    let better = match best_idx {
+                        None => true,
+                        Some(_) => {
+                            if thread.vruntime < min_vruntime {
+                                true
+                            } else if thread.vruntime == min_vruntime {
+                                thread.cpu_affinity.is_some()
+                            } else {
+                                false
+                            }
+                        }
+                    };
+                    if better {
                         min_vruntime = thread.vruntime;
                         best_idx = Some(i);
                     }
@@ -237,7 +263,7 @@ impl EevdfScheduler {
     pub fn reschedule() {
         let cpu_id = crate::arch::current_cpu().cpu_id as usize;
 
-        let (prev_rsp_ptr, next_rsp, next_aspace, next_stack_top) = {
+        let (prev_rsp_ptr, next_rsp, next_aspace, _next_stack_top) = {
             let mut sched = SCHEDULER.lock();
 
             // S'assurer de la présence d'un thread idle pour ce CPU
@@ -310,14 +336,33 @@ impl EevdfScheduler {
             #[cfg(target_arch = "x86_64")]
             {
                 crate::mm::paging::write_cr3(_aspace.pml4_paddr);
-                crate::arch::set_kernel_stack(next_stack_top);
-                crate::arch::set_current_kernel_stack(next_stack_top);
+                crate::arch::set_kernel_stack(_next_stack_top);
+                crate::arch::set_current_kernel_stack(_next_stack_top);
             }
-        } else if next_stack_top != 0 {
+        } else {
             #[cfg(target_arch = "x86_64")]
             {
-                crate::arch::set_kernel_stack(next_stack_top);
-                crate::arch::set_current_kernel_stack(next_stack_top);
+                let boot_cr3 = crate::mm::paging::boot_kernel_cr3();
+                if boot_cr3 != 0 && crate::mm::paging::read_cr3() != boot_cr3 {
+                    crate::mm::paging::write_cr3(boot_cr3);
+                }
+                if _next_stack_top != 0 {
+                    crate::arch::set_kernel_stack(_next_stack_top);
+                    crate::arch::set_current_kernel_stack(_next_stack_top);
+                }
+            }
+        }
+
+        #[cfg(target_arch = "x86_64")]
+        {
+            let cpu = crate::arch::current_cpu();
+            let cpu_ptr = cpu as *const _ as u64;
+            // SAFETY: Garantit que KERNEL_GS_BASE_MSR pointe toujours vers le PerCpuData du cœur local pour swapgs
+            unsafe {
+                crate::arch::x86_64::apic::wrmsr(
+                    crate::arch::x86_64::cpu::IA32_KERNEL_GS_BASE_MSR,
+                    cpu_ptr,
+                );
             }
         }
 

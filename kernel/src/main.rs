@@ -833,6 +833,7 @@ pub extern "C" fn _start() -> ! {
     } else {
         kprintln!("[WARN] HHDM non fourni par le chargeur d'amorçage.");
     }
+    mm::init_boot_kernel_cr3(mm::read_cr3());
 
     // 6. Allocateur de mémoire physique (PMM Buddy Allocator)
     if let Some(mmap_resp) = MEMMAP_REQUEST.response() {

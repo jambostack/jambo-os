@@ -89,11 +89,6 @@ pub fn execute_preemption_test() -> bool {
         "[PREEMPT/TIMER] Timer APIC armé (vecteur 32). Activation des interruptions CPU (STI)..."
     );
 
-    // Activer les interruptions matérielles (STI)
-    unsafe {
-        core::arch::asm!("sti", options(nomem, nostack));
-    }
-
     // 4. Céder le contrôle au thread de calcul non coopératif
     kprintln!(
         "[PREEMPT/SWITCH] Bascule vers le thread de calcul non coopératif (boucle sans yield)..."

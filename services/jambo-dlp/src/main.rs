@@ -22,14 +22,8 @@ use libjambo::println;
 #[panic_handler]
 fn panic(_info: &core::panic::PanicInfo) -> ! {
     println("[dlp] PANIC: bare-metal DLP service fault");
-    #[cfg(target_arch = "x86_64")]
-    unsafe {
-        for b in b"[dlp] PANIC: bare-metal DLP service fault\n" {
-            core::arch::asm!("out dx, al", in("dx") 0x3F8u16, in("al") *b, options(nomem, nostack));
-        }
-    }
     loop {
-        core::hint::spin_loop();
+        libjambo::syscall_thread_yield();
     }
 }
 
@@ -99,9 +93,9 @@ pub extern "C" fn _start() -> ! {
     println("[DLP] Auto-test 3: Blocage immediat et mise en quarantaine O(1) de cle privee : OK.");
 
     // Auto-test 4: Détection et confinement de flux haute entropie
-    let mut high_entropy = [0u8; 64];
+    let mut high_entropy = [0u8; 256];
     for (i, item) in high_entropy.iter_mut().enumerate() {
-        *item = (i * 37 + 11) as u8;
+        *item = i as u8;
     }
     let res_entropy = daemon
         .inspect_flow(
