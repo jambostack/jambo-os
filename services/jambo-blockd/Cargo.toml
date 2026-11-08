@@ -3,10 +3,16 @@ name = "jambo-blockd"
 version = "0.3.42"
 edition = "2021"
 
+[lib]
+name = "jambo_blockd"
+path = "src/lib.rs"
+
 [[bin]]
 name = "jambo-blockd"
 path = "src/main.rs"
+test = false
 
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }
 virtio-drv = { path = "../../drivers/virtio" }
+nvme-drv = { path = "../../drivers/nvme" }

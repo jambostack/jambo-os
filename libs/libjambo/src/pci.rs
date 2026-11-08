@@ -181,6 +181,59 @@ impl PciDeviceInfo {
     }
 }
 
+/// Sonde un emplacement PCIe (Bus, Device, Function) et extrait l'en-tête Type 0 s'il existe.
+pub fn probe_pci_device(bus: u8, device: u8, function: u8) -> Option<PciDeviceInfo> {
+    let addr = PciAddress::new(bus, device, function);
+    let vendor_id = addr.read16(0x00);
+    if vendor_id == 0xFFFF || vendor_id == 0x0000 {
+        return None;
+    }
+    let device_id = addr.read16(0x02);
+    let rev_prog = addr.read16(0x08);
+    let revision = rev_prog as u8;
+    let prog_if = (rev_prog >> 8) as u8;
+    let sub_class = addr.read16(0x0A);
+    let subclass = sub_class as u8;
+    let class_code = (sub_class >> 8) as u8;
+
+    let bar0_low = addr.read32(0x10);
+    let bar0_high = if ((bar0_low >> 1) & 3) == 2 {
+        Some(addr.read32(0x14))
+    } else {
+        None
+    };
+    let bar0 = PciBar::parse(0, bar0_low, bar0_high);
+
+    Some(PciDeviceInfo {
+        address: addr,
+        vendor_id,
+        device_id,
+        class_code,
+        subclass,
+        prog_if,
+        revision,
+        bar0,
+    })
+}
+
+/// Énumère les périphériques sur les bus PCIe principaux (bus 0..=1) selon un prédicat de filtrage.
+pub fn find_pci_device<F: Fn(&PciDeviceInfo) -> bool>(predicate: F) -> Option<PciDeviceInfo> {
+    for bus in 0..=1 {
+        for dev in 0..32 {
+            for func in 0..8 {
+                if let Some(info) = probe_pci_device(bus, dev, func) {
+                    if predicate(&info) {
+                        return Some(info);
+                    }
+                } else if func == 0 {
+                    break;
+                }
+            }
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -272,5 +325,13 @@ mod tests {
             bar0: None,
         };
         assert_eq!(virtio_dev.class(), PciClass::VirtIo);
+    }
+
+    #[test]
+    fn test_pci_scan_fallback_on_host() {
+        // En mode test unitaire hôte, aucun périphérique PCI matériel n'est connecté au broker DeviceIo
+        assert_eq!(probe_pci_device(0, 0, 0), None);
+        assert_eq!(find_pci_device(|d| d.is_nvme()), None);
+        assert_eq!(find_pci_device(|d| d.is_xhci()), None);
     }
 }

@@ -10,6 +10,8 @@ path = "src/lib.rs"
 [[bin]]
 name = "jambo-init"
 path = "src/main.rs"
+test = false
 
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }
+xhci-drv = { path = "../../drivers/xhci" }
