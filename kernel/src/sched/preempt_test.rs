@@ -67,6 +67,7 @@ pub fn execute_preemption_test() -> bool {
         base_weight: 1024,
         base_deadline: 0,
         wait_ticks: 0,
+        wake_timestamp_us: 0,
         cpu_affinity: Some(0),
         last_cpu: 0,
         is_user: false,

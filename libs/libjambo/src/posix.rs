@@ -192,6 +192,91 @@ pub unsafe extern "C" fn statvfs(
     })
 }
 
+pub const SYS_NMLN: usize = 65;
+
+/// Structure standard POSIX `utsname` (sys/utsname.h)
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PosixUtsname {
+    pub sysname: [core::ffi::c_char; SYS_NMLN],
+    pub nodename: [core::ffi::c_char; SYS_NMLN],
+    pub release: [core::ffi::c_char; SYS_NMLN],
+    pub version: [core::ffi::c_char; SYS_NMLN],
+    pub machine: [core::ffi::c_char; SYS_NMLN],
+}
+
+impl Default for PosixUtsname {
+    fn default() -> Self {
+        Self {
+            sysname: [0; SYS_NMLN],
+            nodename: [0; SYS_NMLN],
+            release: [0; SYS_NMLN],
+            version: [0; SYS_NMLN],
+            machine: [0; SYS_NMLN],
+        }
+    }
+}
+
+/// Renseigne le nom et les informations sur le système d'exploitation (uname POSIX)
+///
+/// # Safety
+/// `buf` doit être un pointeur valide et accessible en écriture vers une structure `PosixUtsname`.
+#[cfg_attr(target_os = "none", no_mangle)]
+pub unsafe extern "C" fn uname(buf: *mut PosixUtsname) -> i32 {
+    if buf.is_null() {
+        return -EFAULT;
+    }
+
+    let mut u = PosixUtsname::default();
+
+    let sys = b"JamboOS\0";
+    let node = b"jambo-node-0\0";
+    let rel = b"0.3.44\0";
+    #[cfg(target_arch = "x86_64")]
+    let ver = b"#1 SMP PREEMPT EEVDF x86_64\0";
+    #[cfg(target_arch = "aarch64")]
+    let ver = b"#1 SMP PREEMPT EEVDF aarch64\0";
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    let ver = b"#1 SMP PREEMPT EEVDF unknown\0";
+
+    #[cfg(target_arch = "x86_64")]
+    let mach = b"x86_64\0";
+    #[cfg(target_arch = "aarch64")]
+    let mach = b"aarch64\0";
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    let mach = b"unknown\0";
+
+    // SAFETY: Copie des chaînes C terminées par \0
+    core::ptr::copy_nonoverlapping(
+        sys.as_ptr() as *const core::ffi::c_char,
+        u.sysname.as_mut_ptr(),
+        sys.len(),
+    );
+    core::ptr::copy_nonoverlapping(
+        node.as_ptr() as *const core::ffi::c_char,
+        u.nodename.as_mut_ptr(),
+        node.len(),
+    );
+    core::ptr::copy_nonoverlapping(
+        rel.as_ptr() as *const core::ffi::c_char,
+        u.release.as_mut_ptr(),
+        rel.len(),
+    );
+    core::ptr::copy_nonoverlapping(
+        ver.as_ptr() as *const core::ffi::c_char,
+        u.version.as_mut_ptr(),
+        ver.len(),
+    );
+    core::ptr::copy_nonoverlapping(
+        mach.as_ptr() as *const core::ffi::c_char,
+        u.machine.as_mut_ptr(),
+        mach.len(),
+    );
+
+    *buf = u;
+    0
+}
+
 /// Duplique un descripteur de fichier ouvert vers le plus petit descripteur disponible (dup POSIX)
 #[cfg(not(test))]
 #[cfg_attr(target_os = "none", no_mangle)]
@@ -1004,6 +1089,40 @@ mod tests {
 
             let zero = b"0\0";
             assert_eq!(atoi(zero.as_ptr() as *const c_char), 0);
+        }
+    }
+
+    #[test]
+    fn test_posix_uname() {
+        unsafe {
+            let mut u = PosixUtsname::default();
+            assert_eq!(uname(core::ptr::null_mut()), -EFAULT);
+            assert_eq!(uname(&mut u), 0);
+
+            let sysname = core::ffi::CStr::from_ptr(u.sysname.as_ptr())
+                .to_str()
+                .unwrap();
+            let nodename = core::ffi::CStr::from_ptr(u.nodename.as_ptr())
+                .to_str()
+                .unwrap();
+            let release = core::ffi::CStr::from_ptr(u.release.as_ptr())
+                .to_str()
+                .unwrap();
+            let version = core::ffi::CStr::from_ptr(u.version.as_ptr())
+                .to_str()
+                .unwrap();
+            let machine = core::ffi::CStr::from_ptr(u.machine.as_ptr())
+                .to_str()
+                .unwrap();
+
+            assert_eq!(sysname, "JamboOS");
+            assert_eq!(nodename, "jambo-node-0");
+            assert_eq!(release, "0.3.44");
+            assert!(version.contains("SMP PREEMPT EEVDF"));
+            #[cfg(target_arch = "x86_64")]
+            assert_eq!(machine, "x86_64");
+            #[cfg(target_arch = "aarch64")]
+            assert_eq!(machine, "aarch64");
         }
     }
 }

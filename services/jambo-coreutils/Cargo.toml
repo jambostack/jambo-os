@@ -10,99 +10,127 @@ path = "src/lib.rs"
 [[bin]]
 name = "echo"
 path = "src/bin/echo.rs"
+test = false
 
 [[bin]]
 name = "cat"
 path = "src/bin/cat.rs"
+test = false
 
 [[bin]]
 name = "wc"
 path = "src/bin/wc.rs"
+test = false
 
 [[bin]]
 name = "true"
 path = "src/bin/true.rs"
+test = false
 
 [[bin]]
 name = "false"
 path = "src/bin/false.rs"
+test = false
 
 [[bin]]
 name = "ls"
 path = "src/bin/ls.rs"
+test = false
 
 [[bin]]
 name = "head"
 path = "src/bin/head.rs"
+test = false
 
 [[bin]]
 name = "tail"
 path = "src/bin/tail.rs"
+test = false
 
 [[bin]]
 name = "touch"
 path = "src/bin/touch.rs"
+test = false
 
 [[bin]]
 name = "mkdir"
 path = "src/bin/mkdir.rs"
+test = false
 
 [[bin]]
 name = "rm"
 path = "src/bin/rm.rs"
+test = false
 
 [[bin]]
 name = "cp"
 path = "src/bin/cp.rs"
+test = false
 
 [[bin]]
 name = "mv"
 path = "src/bin/mv.rs"
+test = false
 
 [[bin]]
 name = "tee"
 path = "src/bin/tee.rs"
+test = false
 
 [[bin]]
 name = "env"
 path = "src/bin/env.rs"
+test = false
 
 [[bin]]
 name = "grep"
 path = "src/bin/grep.rs"
+test = false
 
 [[bin]]
 name = "sort"
 path = "src/bin/sort.rs"
+test = false
 
 [[bin]]
 name = "uniq"
 path = "src/bin/uniq.rs"
+test = false
 
 [[bin]]
 name = "find"
 path = "src/bin/find.rs"
+test = false
 
 [[bin]]
 name = "chmod"
 path = "src/bin/chmod.rs"
+test = false
 
 [[bin]]
 name = "chown"
 path = "src/bin/chown.rs"
+test = false
 
 [[bin]]
 name = "id"
 path = "src/bin/id.rs"
+test = false
 
 [[bin]]
 name = "du"
 path = "src/bin/du.rs"
+test = false
 
 [[bin]]
 name = "df"
 path = "src/bin/df.rs"
+test = false
+
+[[bin]]
+name = "uname"
+path = "src/bin/uname.rs"
+test = false
 
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }
-

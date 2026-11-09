@@ -557,7 +557,7 @@ impl JamboShell {
             "fuzz" | "/bin/fuzz" | "bin/fuzz" => self.cmd_fuzz(args, out),
             "dynlink" | "ldd" => self.cmd_dynlink(out),
             "vfs" => self.cmd_vfs(out),
-            "uname" => self.cmd_uname(out),
+            "uname" | "/bin/uname" | "bin/uname" => self.cmd_uname(args, out),
             "version" => self.cmd_version(out),
             "uptime" => self.cmd_uptime(out),
             "caps" => self.cmd_caps(out),
@@ -711,7 +711,7 @@ impl JamboShell {
 
     fn cmd_coreutils(&self, out: &mut [u8]) -> (ShellStatus, usize) {
         let text = b"Utilitaires Coreutils Ring 3 (services/jambo-coreutils) :\n\
-  Binaires disponibles : /bin/echo, /bin/cat, /bin/head, /bin/tail, /bin/touch, /bin/mkdir, /bin/rm, /bin/cp, /bin/mv, /bin/tee, /bin/env, /bin/grep, /bin/sort, /bin/uniq, /bin/find, /bin/chmod, /bin/chown, /bin/id, /bin/du, /bin/df, /bin/wc, /bin/true, /bin/false, /bin/ls (24 utilitaires)\n\
+  Binaires disponibles : /bin/echo, /bin/cat, /bin/head, /bin/tail, /bin/touch, /bin/mkdir, /bin/rm, /bin/cp, /bin/mv, /bin/tee, /bin/env, /bin/grep, /bin/sort, /bin/uniq, /bin/find, /bin/chmod, /bin/chown, /bin/id, /bin/du, /bin/df, /bin/uname, /bin/wc, /bin/true, /bin/false, /bin/ls (25 utilitaires)\n\
   Architecture & ABI   : System V AMD64 ELF64 (ET_EXEC / Ring 3 Userland)\n\
   Point d'entree       : _start (parsing argc/argv sur pile System V)\n\
   Terminaison          : Syscall 11 ThreadExit avec propagation code de retour POSIX\n\
@@ -1061,17 +1061,24 @@ Utilitaire d'installation JamboOS (Serie 0.*.*)\n\
         (ShellStatus::Success, cursor)
     }
 
-    fn cmd_uname(&self, out: &mut [u8]) -> (ShellStatus, usize) {
-        #[cfg(target_arch = "x86_64")]
-        let text = b"JamboOS 0.3.92-pre-alpha x86_64 Limine\n";
-        #[cfg(target_arch = "aarch64")]
-        let text = b"JamboOS 0.3.92-pre-alpha aarch64 Limine\n";
-        #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
-        let text = b"JamboOS 0.3.92-pre-alpha unknown Limine\n";
-
-        let len = text.len().min(out.len());
-        out[..len].copy_from_slice(&text[..len]);
-        (ShellStatus::Success, len)
+    fn cmd_uname(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if let Ok((r, w)) = libjambo::vfs::pipe() {
+            let code = libjambo::coreutils::run_uname(args, w, w);
+            let _ = libjambo::coreutils::sys_close(w);
+            let n = libjambo::coreutils::sys_read(r, out);
+            let _ = libjambo::coreutils::sys_close(r);
+            let len = if n > 0 { n as usize } else { 0 };
+            if code == 0 {
+                (ShellStatus::Success, len)
+            } else {
+                (ShellStatus::ExecutionFailed, len)
+            }
+        } else {
+            let msg = b"uname: pipe creation failed\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
     }
 
     fn cmd_version(&self, out: &mut [u8]) -> (ShellStatus, usize) {
@@ -17092,7 +17099,7 @@ mod tests {
         let (st, len) = shell.execute_line("coreutils", &mut out);
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
-        assert!(s.contains("24 utilitaires"));
+        assert!(s.contains("25 utilitaires"));
         assert!(s.contains("/bin/head"));
         assert!(s.contains("/bin/tail"));
         assert!(s.contains("/bin/touch"));
@@ -17111,6 +17118,7 @@ mod tests {
         assert!(s.contains("/bin/id"));
         assert!(s.contains("/bin/du"));
         assert!(s.contains("/bin/df"));
+        assert!(s.contains("/bin/uname"));
     }
 
     #[test]
@@ -17373,6 +17381,39 @@ mod tests {
 
         // 4. Commande df sur cible inexistante -> ExecutionFailed
         let (st_err, _) = shell.execute_line("df /nonexistent_mnt_point", &mut out);
+        assert_eq!(st_err, ShellStatus::ExecutionFailed);
+    }
+
+    #[test]
+    fn test_uname_shell_execution() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 1024];
+
+        // 1. Commande uname standard (nom du noyau)
+        let (st, len) = shell.execute_line("uname", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert_eq!(s.trim(), "JamboOS");
+
+        // 2. Commande uname -a (all)
+        let (st_a, len_a) = shell.execute_line("uname -a", &mut out);
+        assert_eq!(st_a, ShellStatus::Success);
+        let s_a = core::str::from_utf8(&out[..len_a]).unwrap();
+        assert!(s_a.contains("JamboOS"));
+        assert!(s_a.contains("jambo-node-0"));
+        assert!(s_a.contains("0.3.44"));
+        assert!(s_a.contains("SMP PREEMPT EEVDF"));
+        #[cfg(target_arch = "x86_64")]
+        assert!(s_a.contains("x86_64"));
+
+        // 3. Commande uname avec chemin absolu /bin/uname -s -r
+        let (st_bin, len_bin) = shell.execute_line("/bin/uname -s -r", &mut out);
+        assert_eq!(st_bin, ShellStatus::Success);
+        let s_bin = core::str::from_utf8(&out[..len_bin]).unwrap();
+        assert!(s_bin.contains("JamboOS 0.3.44"));
+
+        // 4. Option invalide -> ExecutionFailed
+        let (st_err, _) = shell.execute_line("uname --invalid-option-xyz", &mut out);
         assert_eq!(st_err, ShellStatus::ExecutionFailed);
     }
 }

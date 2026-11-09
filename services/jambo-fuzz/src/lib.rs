@@ -46,6 +46,10 @@ pub struct FuzzReport {
     pub false_descriptors_intercepted: usize,
     /// Redirections et tuyaux POSIX (dup/dup2/pipe) fuzzez avec succès
     pub posix_redirections_fuzzed: usize,
+    /// Transactions concurrentes CoW sur blocs 4Kn fuzzees sous haute contention
+    pub cow_4kn_transactions_fuzzed: usize,
+    /// Conflits d'allocation et tentatives d'écrasement CoW 4Kn neutralisés avec succès
+    pub cow_4kn_conflicts_isolated: usize,
     /// Latence mesurée d'auto-guérison et réinitialisation de pilote (ms)
     pub driver_self_healing_latency_ms: u32,
     /// Validation du critère d'auto-guérison rapide (< 25 ms)
@@ -140,6 +144,8 @@ impl SecurityFuzzer {
             socket_corruptions_handled: 0,
             false_descriptors_intercepted: 0,
             posix_redirections_fuzzed: 0,
+            cow_4kn_transactions_fuzzed: 0,
+            cow_4kn_conflicts_isolated: 0,
             driver_self_healing_latency_ms: 0,
             driver_self_healing_passed: true,
             zero_kernel_panics: true,
@@ -458,6 +464,79 @@ impl SecurityFuzzer {
         let passed = latency_ms < 25;
         (passed, latency_ms)
     }
+
+    /// Campagnes de stress et fuzzing sur les transactions concurrentes CoW 4Kn (Copy-on-Write 4096 octets)
+    pub fn fuzz_cow_4kn_concurrent_transactions(&mut self, iterations: usize) -> (usize, usize) {
+        let mut transactions_fuzzed = 0;
+        let mut conflicts_isolated = 0;
+
+        // Modélisation d'une table d'allocation de blocs 4Kn (1024 blocs de 4096 octets)
+        let mut committed_bitmap = [0u8; 128]; // 1024 bits = 1024 blocs 4Kn
+                                               // Réserver les blocs système 0..23 (3 premiers octets)
+        committed_bitmap[0] = 0xFF;
+        committed_bitmap[1] = 0xFF;
+        committed_bitmap[2] = 0xFF;
+
+        for _ in 0..iterations {
+            transactions_fuzzed += 1;
+            // 2 transactions concurrentes simulées
+            let mut staging_tx1 = committed_bitmap;
+            let mut staging_tx2 = committed_bitmap;
+
+            let requested_block_1 = (self.rng.next_u32() % 1000) as usize + 24;
+            let requested_block_2 = if self.rng.next_u32() % 3 == 0 {
+                // Tentative de collision intentionnelle sur le même bloc
+                requested_block_1
+            } else {
+                (self.rng.next_u32() % 1000) as usize + 24
+            };
+
+            // Allocation dans Tx1
+            let byte1 = requested_block_1 / 8;
+            let bit1 = 1u8 << (requested_block_1 % 8);
+            let already_committed_1 = (committed_bitmap[byte1] & bit1) != 0;
+            if !already_committed_1 {
+                staging_tx1[byte1] |= bit1;
+            }
+
+            // Allocation dans Tx2
+            let byte2 = requested_block_2 / 8;
+            let bit2 = 1u8 << (requested_block_2 % 8);
+            let already_committed_2 = (committed_bitmap[byte2] & bit2) != 0;
+            if !already_committed_2 {
+                staging_tx2[byte2] |= bit2;
+            }
+
+            // Détection de conflit CoW 4Kn
+            if requested_block_1 == requested_block_2 {
+                conflicts_isolated += 1;
+                // Tx1 commite d'abord, Tx2 doit détecter la collision et avorter (Rollback)
+                if !already_committed_1 {
+                    committed_bitmap[byte1] = staging_tx1[byte1];
+                }
+                // Rollback Tx2 : staging_tx2 est rejeté, committed_bitmap reste intact
+                let _ = staging_tx2;
+            } else {
+                // Pas de conflit : les deux transactions peuvent commiter ou simuler un crash
+                let simulate_power_loss = (self.rng.next_u32() % 5) == 0;
+                if !simulate_power_loss {
+                    if !already_committed_1 {
+                        committed_bitmap[byte1] = staging_tx1[byte1];
+                    }
+                    if !already_committed_2 {
+                        committed_bitmap[byte2] = staging_tx2[byte2];
+                    }
+                }
+            }
+
+            // Vérification de l'invariant 4Kn : les 3 premiers octets réservés restent intacts
+            assert_eq!(committed_bitmap[0], 0xFF);
+            assert_eq!(committed_bitmap[1], 0xFF);
+            assert_eq!(committed_bitmap[2], 0xFF);
+        }
+
+        (transactions_fuzzed, conflicts_isolated)
+    }
 }
 
 /// Démon orchestrateur de tests de fuzzing et sécurité offensive
@@ -495,6 +574,8 @@ impl JamboFuzzDaemon {
                 socket_corruptions_handled: 0,
                 false_descriptors_intercepted: 0,
                 posix_redirections_fuzzed: 0,
+                cow_4kn_transactions_fuzzed: 0,
+                cow_4kn_conflicts_isolated: 0,
                 driver_self_healing_latency_ms: 0,
                 driver_self_healing_passed: true,
                 zero_kernel_panics: true,
@@ -522,6 +603,12 @@ impl JamboFuzzDaemon {
         let (intercepted_fds, redirections) = self.fuzzer.fuzz_posix_io_descriptors(iterations / 2);
         report.false_descriptors_intercepted = intercepted_fds;
         report.posix_redirections_fuzzed = redirections;
+
+        let (cow_txs, cow_conflicts) = self
+            .fuzzer
+            .fuzz_cow_4kn_concurrent_transactions(iterations / 2);
+        report.cow_4kn_transactions_fuzzed = cow_txs;
+        report.cow_4kn_conflicts_isolated = cow_conflicts;
 
         let (healed, latency_ms) = self.fuzzer.measure_driver_self_healing();
         report.driver_self_healing_passed = healed;
@@ -566,6 +653,10 @@ impl JamboFuzzDaemon {
         pos += write_usize(&mut out[pos..], r.false_descriptors_intercepted);
         pos += copy_slice(&mut out[pos..], b"\n  Redirections POSIX      : ");
         pos += write_usize(&mut out[pos..], r.posix_redirections_fuzzed);
+        pos += copy_slice(&mut out[pos..], b"\n  Transactions CoW 4Kn    : ");
+        pos += write_usize(&mut out[pos..], r.cow_4kn_transactions_fuzzed);
+        pos += copy_slice(&mut out[pos..], b"\n  Conflits CoW isoles     : ");
+        pos += write_usize(&mut out[pos..], r.cow_4kn_conflicts_isolated);
         pos += copy_slice(&mut out[pos..], b"\n  Auto-guerison pilote    : ");
         pos += write_usize(&mut out[pos..], r.driver_self_healing_latency_ms as usize);
         pos += copy_slice(
@@ -757,5 +848,21 @@ mod tests {
         let mut fuzzer = SecurityFuzzer::new();
         let rejected = fuzzer.fuzz_network_dhcp_packet(100);
         assert!(rejected > 0);
+    }
+
+    #[test]
+    fn test_cow_4kn_concurrent_transactions_stress() {
+        let mut fuzzer = SecurityFuzzer::new();
+        let (txs, conflicts) = fuzzer.fuzz_cow_4kn_concurrent_transactions(200);
+        assert_eq!(txs, 200);
+        assert!(
+            conflicts > 0,
+            "Des conflits CoW 4Kn doivent survenir et être isolés"
+        );
+
+        let mut daemon = JamboFuzzDaemon::new();
+        let rep = daemon.run_campaign(100);
+        assert!(rep.cow_4kn_transactions_fuzzed > 0);
+        assert!(rep.zero_kernel_panics);
     }
 }

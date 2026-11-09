@@ -576,6 +576,26 @@ fn execute_eevdf_smp_hardening_tests() -> bool {
         );
     }
 
+    // Test 6: Métriques de latence de réveil et respect du SLA (< 50 µs)
+    {
+        let mut sched = sched::EevdfScheduler::new();
+        sched.virtual_time = 1000;
+
+        let t_sla = sched::Thread::new_kernel(601, 1, test_worker).expect("t_sla");
+        sched.enqueue(t_sla.clone());
+        assert_eq!(t_sla.lock().wake_timestamp_us, 1000);
+
+        // Simulation d'une sélection 20 µs plus tard (conforme au SLA < 50 µs)
+        sched.virtual_time = 1020;
+        let picked = sched.pick_next_for_cpu(0).expect("pick sla thread");
+        assert_eq!(picked.lock().id, 601);
+
+        assert_eq!(sched.metrics.wakeup_count, 1);
+        assert_eq!(sched.metrics.min_wakeup_latency_us, 20);
+        assert_eq!(sched.metrics.max_wakeup_latency_us, 20);
+        assert_eq!(sched.metrics.sla_violations_count, 0);
+    }
+
     kprintln!("[EEVDF/PASS] Tests de durcissement EEVDF et résilience SMP validés avec succès !");
     true
 }
@@ -2818,6 +2838,7 @@ pub extern "C" fn _start() -> ! {
         base_weight: 1024,
         base_deadline: 10_000,
         wait_ticks: 0,
+        wake_timestamp_us: 0,
         cpu_affinity: None,
         last_cpu: 0,
         is_user: false,

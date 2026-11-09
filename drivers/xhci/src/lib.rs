@@ -425,6 +425,12 @@ pub enum UsbSpeed {
     SuperSpeedPlus, // 10 Gb/s (USB 3.1 Gen 2 / 3.2)
 }
 
+impl Default for UsbSpeed {
+    fn default() -> Self {
+        UsbSpeed::Unknown(0)
+    }
+}
+
 /// État décodé d'un port Root-Hub xHCI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PortStatus {
@@ -465,6 +471,447 @@ impl PortStatus {
             over_current,
             speed,
             link_state,
+        }
+    }
+}
+
+// ============================================================================
+// Descripteurs et Protocole USB Hub (USB 2.0 & SuperSpeed Hub USB 3.0)
+// ============================================================================
+
+pub const USB_DESC_TYPE_HUB: u8 = 0x29;
+pub const USB_DESC_TYPE_SS_HUB: u8 = 0x2A;
+
+pub const HUB_REQ_GET_STATUS: u8 = 0x00;
+pub const HUB_REQ_CLEAR_FEATURE: u8 = 0x01;
+pub const HUB_REQ_SET_FEATURE: u8 = 0x03;
+pub const HUB_REQ_GET_DESCRIPTOR: u8 = 0x06;
+pub const HUB_REQ_SET_DESCRIPTOR: u8 = 0x07;
+
+pub const PORT_FEAT_CONNECTION: u16 = 0;
+pub const PORT_FEAT_ENABLE: u16 = 1;
+pub const PORT_FEAT_SUSPEND: u16 = 2;
+pub const PORT_FEAT_OVER_CURRENT: u16 = 3;
+pub const PORT_FEAT_RESET: u16 = 4;
+pub const PORT_FEAT_POWER: u16 = 8;
+pub const PORT_FEAT_C_CONNECTION: u16 = 16;
+pub const PORT_FEAT_C_ENABLE: u16 = 17;
+pub const PORT_FEAT_C_SUSPEND: u16 = 18;
+pub const PORT_FEAT_C_OVER_CURRENT: u16 = 19;
+pub const PORT_FEAT_C_RESET: u16 = 20;
+
+/// Descripteur de concentrateur USB Hub 2.0 (RFC USB 2.0 Section 11.23.2.1)
+#[repr(C, packed)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UsbHubDescriptor {
+    pub length: u8,
+    pub descriptor_type: u8,
+    pub num_ports: u8,
+    pub characteristics: u16,
+    pub power_on_to_power_good: u8,
+    pub hub_controller_current: u8,
+    pub device_removable: u8,
+}
+
+impl UsbHubDescriptor {
+    #[inline]
+    pub fn ports(&self) -> u8 {
+        self.num_ports
+    }
+    #[inline]
+    pub fn is_valid(&self) -> bool {
+        self.descriptor_type == USB_DESC_TYPE_HUB && self.length >= 7
+    }
+}
+
+/// Descripteur de concentrateur SuperSpeed USB 3.0 (USB 3.0 Section 10.13.2.1)
+#[repr(C, packed)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UsbSsHubDescriptor {
+    pub length: u8,
+    pub descriptor_type: u8,
+    pub num_ports: u8,
+    pub characteristics: u16,
+    pub power_on_to_power_good: u8,
+    pub hub_controller_current: u8,
+    pub hub_hdr_dec_lat: u8,
+    pub hub_delay: u16,
+    pub device_removable: u16,
+}
+
+impl UsbSsHubDescriptor {
+    #[inline]
+    pub fn ports(&self) -> u8 {
+        self.num_ports
+    }
+    #[inline]
+    pub fn is_valid(&self) -> bool {
+        self.descriptor_type == USB_DESC_TYPE_SS_HUB && self.length >= 12
+    }
+}
+
+/// Statut d'un Hub USB et changements d'état
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct UsbHubStatus {
+    pub local_power_lost: bool,
+    pub over_current: bool,
+    pub change_local_power: bool,
+    pub change_over_current: bool,
+}
+
+impl UsbHubStatus {
+    pub fn parse(status_raw: u16, change_raw: u16) -> Self {
+        Self {
+            local_power_lost: (status_raw & 1) != 0,
+            over_current: (status_raw & 2) != 0,
+            change_local_power: (change_raw & 1) != 0,
+            change_over_current: (change_raw & 2) != 0,
+        }
+    }
+}
+
+/// Statut détaillé et drapeaux de changement d'un port Hub
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct HubPortStatusAndChange {
+    pub connected: bool,
+    pub enabled: bool,
+    pub suspend: bool,
+    pub over_current: bool,
+    pub reset: bool,
+    pub powered: bool,
+    pub low_speed: bool,
+    pub high_speed: bool,
+    pub speed: UsbSpeed,
+    pub change_connect: bool,
+    pub change_enable: bool,
+    pub change_suspend: bool,
+    pub change_over_current: bool,
+    pub change_reset: bool,
+}
+
+impl HubPortStatusAndChange {
+    pub fn parse(status_raw: u16, change_raw: u16) -> Self {
+        let connected = (status_raw & (1 << 0)) != 0;
+        let enabled = (status_raw & (1 << 1)) != 0;
+        let suspend = (status_raw & (1 << 2)) != 0;
+        let over_current = (status_raw & (1 << 3)) != 0;
+        let reset = (status_raw & (1 << 4)) != 0;
+        let powered = (status_raw & (1 << 8)) != 0;
+        let low_speed = (status_raw & (1 << 9)) != 0;
+        let high_speed = (status_raw & (1 << 10)) != 0;
+
+        let speed = if high_speed {
+            UsbSpeed::HighSpeed
+        } else if low_speed {
+            UsbSpeed::LowSpeed
+        } else if enabled {
+            UsbSpeed::FullSpeed
+        } else {
+            UsbSpeed::Unknown(0)
+        };
+
+        Self {
+            connected,
+            enabled,
+            suspend,
+            over_current,
+            reset,
+            powered,
+            low_speed,
+            high_speed,
+            speed,
+            change_connect: (change_raw & (1 << 0)) != 0,
+            change_enable: (change_raw & (1 << 1)) != 0,
+            change_suspend: (change_raw & (1 << 2)) != 0,
+            change_over_current: (change_raw & (1 << 3)) != 0,
+            change_reset: (change_raw & (1 << 4)) != 0,
+        }
+    }
+}
+
+// ============================================================================
+// USB Mass Storage Bulk-Only Transport (BOT) & Commandes SCSI Transparentes
+// ============================================================================
+
+pub const CBW_SIGNATURE: u32 = 0x4342_5355; // "USBC"
+pub const CSW_SIGNATURE: u32 = 0x5342_5355; // "USBS"
+
+pub const CBW_FLAG_DATA_IN: u8 = 0x80;
+pub const CBW_FLAG_DATA_OUT: u8 = 0x00;
+
+pub const CSW_STATUS_PASSED: u8 = 0x00;
+pub const CSW_STATUS_FAILED: u8 = 0x01;
+pub const CSW_STATUS_PHASE_ERROR: u8 = 0x02;
+
+pub const SCSI_CMD_TEST_UNIT_READY: u8 = 0x00;
+pub const SCSI_CMD_REQUEST_SENSE: u8 = 0x03;
+pub const SCSI_CMD_INQUIRY: u8 = 0x12;
+pub const SCSI_CMD_READ_CAPACITY_10: u8 = 0x25;
+pub const SCSI_CMD_READ_10: u8 = 0x28;
+pub const SCSI_CMD_WRITE_10: u8 = 0x2A;
+
+/// Command Block Wrapper (31 octets, USB Mass Storage Class BOT RFC 1.0)
+#[repr(C, packed)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CommandBlockWrapper {
+    pub signature: u32,
+    pub tag: u32,
+    pub data_transfer_length: u32,
+    pub flags: u8,
+    pub lun: u8,
+    pub cb_length: u8,
+    pub cb: [u8; 16],
+}
+
+impl CommandBlockWrapper {
+    pub fn new(tag: u32, transfer_length: u32, is_in: bool, lun: u8, cb_len: u8) -> Self {
+        Self {
+            signature: CBW_SIGNATURE,
+            tag,
+            data_transfer_length: transfer_length,
+            flags: if is_in {
+                CBW_FLAG_DATA_IN
+            } else {
+                CBW_FLAG_DATA_OUT
+            },
+            lun: lun & 0x0F,
+            cb_length: cb_len.min(16),
+            cb: [0u8; 16],
+        }
+    }
+
+    #[inline]
+    pub fn signature(&self) -> u32 {
+        self.signature
+    }
+
+    #[inline]
+    pub fn tag(&self) -> u32 {
+        self.tag
+    }
+
+    #[inline]
+    pub fn data_transfer_length(&self) -> u32 {
+        self.data_transfer_length
+    }
+
+    #[inline]
+    pub fn flags(&self) -> u8 {
+        self.flags
+    }
+
+    #[inline]
+    pub fn lun(&self) -> u8 {
+        self.lun
+    }
+
+    #[inline]
+    pub fn cb_length(&self) -> u8 {
+        self.cb_length
+    }
+
+    /// Exporte la structure CBW sous forme de tableau d'octets contigu (31 octets)
+    pub fn as_bytes(&self) -> [u8; 31] {
+        let mut buf = [0u8; 31];
+        // SAFETY: Copie mémoire de 31 octets depuis self vers buf
+        unsafe {
+            core::ptr::copy_nonoverlapping(self as *const Self as *const u8, buf.as_mut_ptr(), 31);
+        }
+        buf
+    }
+}
+
+/// Command Status Wrapper (13 octets)
+#[repr(C, packed)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct CommandStatusWrapper {
+    pub signature: u32,
+    pub tag: u32,
+    pub data_residue: u32,
+    pub status: u8,
+}
+
+impl CommandStatusWrapper {
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        if bytes.len() < 13 {
+            return None;
+        }
+        let mut csw = Self::default();
+        // SAFETY: Copie mémoire de 13 octets depuis bytes vers csw
+        unsafe {
+            core::ptr::copy_nonoverlapping(bytes.as_ptr(), &mut csw as *mut Self as *mut u8, 13);
+        }
+        if csw.signature == CSW_SIGNATURE {
+            Some(csw)
+        } else {
+            None
+        }
+    }
+}
+
+/// Données décodées SCSI INQUIRY (36 octets)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScsiInquiryInfo {
+    pub peripheral_device_type: u8,
+    pub is_removable: bool,
+    pub vendor_id: [u8; 8],
+    pub product_id: [u8; 16],
+    pub product_rev: [u8; 4],
+}
+
+/// Capacité géométrique retournée par SCSI READ CAPACITY (10)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ScsiCapacity10 {
+    pub last_lba: u32,
+    pub block_size: u32,
+    pub total_sectors: u64,
+    pub total_bytes: u64,
+}
+
+/// Gestionnaire de transport USB Mass Storage BOT
+#[derive(Debug, Clone, Copy)]
+pub struct UsbMassStorageBot {
+    pub slot_id: u8,
+    pub bulk_in_ep: u8,
+    pub bulk_out_ep: u8,
+    pub lun: u8,
+    pub current_tag: u32,
+    pub sector_size: u32,
+    pub total_sectors: u64,
+    pub is_ready: bool,
+}
+
+impl UsbMassStorageBot {
+    pub fn new(slot_id: u8, bulk_in_ep: u8, bulk_out_ep: u8) -> Self {
+        Self {
+            slot_id,
+            bulk_in_ep,
+            bulk_out_ep,
+            lun: 0,
+            current_tag: 1,
+            sector_size: 512,
+            total_sectors: 0,
+            is_ready: false,
+        }
+    }
+
+    fn next_tag(&mut self) -> u32 {
+        let tag = self.current_tag;
+        self.current_tag = self.current_tag.wrapping_add(1);
+        if self.current_tag == 0 {
+            self.current_tag = 1;
+        }
+        tag
+    }
+
+    /// Construit un CBW pour SCSI TEST UNIT READY (0 octet de données)
+    pub fn build_cbw_test_unit_ready(&mut self) -> (CommandBlockWrapper, u32) {
+        let tag = self.next_tag();
+        let mut cbw = CommandBlockWrapper::new(tag, 0, false, self.lun, 6);
+        cbw.cb[0] = SCSI_CMD_TEST_UNIT_READY;
+        (cbw, tag)
+    }
+
+    /// Construit un CBW pour SCSI INQUIRY (36 octets attendus)
+    pub fn build_cbw_inquiry(&mut self) -> (CommandBlockWrapper, u32) {
+        let tag = self.next_tag();
+        let mut cbw = CommandBlockWrapper::new(tag, 36, true, self.lun, 6);
+        cbw.cb[0] = SCSI_CMD_INQUIRY;
+        cbw.cb[4] = 36; // Allocation length
+        (cbw, tag)
+    }
+
+    /// Construit un CBW pour SCSI READ CAPACITY (10) (8 octets attendus)
+    pub fn build_cbw_read_capacity_10(&mut self) -> (CommandBlockWrapper, u32) {
+        let tag = self.next_tag();
+        let mut cbw = CommandBlockWrapper::new(tag, 8, true, self.lun, 10);
+        cbw.cb[0] = SCSI_CMD_READ_CAPACITY_10;
+        (cbw, tag)
+    }
+
+    /// Construit un CBW pour SCSI READ (10)
+    pub fn build_cbw_read_10(&mut self, lba: u32, block_count: u16) -> (CommandBlockWrapper, u32) {
+        let tag = self.next_tag();
+        let byte_len = (block_count as u32) * self.sector_size;
+        let mut cbw = CommandBlockWrapper::new(tag, byte_len, true, self.lun, 10);
+        cbw.cb[0] = SCSI_CMD_READ_10;
+        let lba_be = lba.to_be_bytes();
+        cbw.cb[2..6].copy_from_slice(&lba_be);
+        let blocks_be = block_count.to_be_bytes();
+        cbw.cb[7..9].copy_from_slice(&blocks_be);
+        (cbw, tag)
+    }
+
+    /// Construit un CBW pour SCSI WRITE (10)
+    pub fn build_cbw_write_10(&mut self, lba: u32, block_count: u16) -> (CommandBlockWrapper, u32) {
+        let tag = self.next_tag();
+        let byte_len = (block_count as u32) * self.sector_size;
+        let mut cbw = CommandBlockWrapper::new(tag, byte_len, false, self.lun, 10);
+        cbw.cb[0] = SCSI_CMD_WRITE_10;
+        let lba_be = lba.to_be_bytes();
+        cbw.cb[2..6].copy_from_slice(&lba_be);
+        let blocks_be = block_count.to_be_bytes();
+        cbw.cb[7..9].copy_from_slice(&blocks_be);
+        (cbw, tag)
+    }
+
+    /// Décode la réponse standard SCSI INQUIRY (36 octets)
+    pub fn parse_inquiry_response(&self, data: &[u8]) -> Option<ScsiInquiryInfo> {
+        if data.len() < 36 {
+            return None;
+        }
+        let peripheral_device_type = data[0] & 0x1F;
+        let is_removable = (data[1] & 0x80) != 0;
+        let mut vendor_id = [0u8; 8];
+        let mut product_id = [0u8; 16];
+        let mut product_rev = [0u8; 4];
+
+        vendor_id.copy_from_slice(&data[8..16]);
+        product_id.copy_from_slice(&data[16..32]);
+        product_rev.copy_from_slice(&data[32..36]);
+
+        Some(ScsiInquiryInfo {
+            peripheral_device_type,
+            is_removable,
+            vendor_id,
+            product_id,
+            product_rev,
+        })
+    }
+
+    /// Décode la réponse READ CAPACITY (10) (8 octets : LBA u32 BE, BlockSize u32 BE)
+    pub fn parse_read_capacity_10(&mut self, data: &[u8]) -> Option<ScsiCapacity10> {
+        if data.len() < 8 {
+            return None;
+        }
+        let last_lba = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
+        let block_size = u32::from_be_bytes([data[4], data[5], data[6], data[7]]);
+
+        let total_sectors = (last_lba as u64).saturating_add(1);
+        let total_bytes = total_sectors * (block_size as u64);
+
+        self.sector_size = if block_size != 0 { block_size } else { 512 };
+        self.total_sectors = total_sectors;
+        self.is_ready = true;
+
+        Some(ScsiCapacity10 {
+            last_lba,
+            block_size,
+            total_sectors,
+            total_bytes,
+        })
+    }
+
+    /// Valide un Command Status Wrapper (CSW) reçu en réponse d'une commande
+    pub fn verify_csw(&self, expected_tag: u32, data: &[u8]) -> Result<u32, SysError> {
+        let csw = CommandStatusWrapper::from_bytes(data).ok_or(SysError::InvalidArgument)?;
+        if csw.tag != expected_tag {
+            return Err(SysError::InvalidArgument);
+        }
+        if csw.status == CSW_STATUS_PASSED {
+            Ok(csw.data_residue)
+        } else {
+            Err(SysError::BadAddress)
         }
     }
 }
@@ -1319,6 +1766,48 @@ impl XhciController {
             Ok(None)
         }
     }
+
+    /// Soumet un Command Block Wrapper (CBW) sur l'endpoint Bulk OUT d'un périphérique Mass Storage BOT.
+    pub fn submit_bot_cbw(
+        &mut self,
+        bot: &UsbMassStorageBot,
+        cbw_iova: u64,
+        ioc: bool,
+    ) -> Result<usize, SysError> {
+        self.queue_bulk_transfer(bot.bulk_out_ep, cbw_iova, 31, ioc, false)
+    }
+
+    /// Soumet un transfert de données entrant (Data IN) pour une transaction BOT.
+    pub fn submit_bot_data_in(
+        &mut self,
+        bot: &UsbMassStorageBot,
+        data_iova: u64,
+        length: u32,
+        ioc: bool,
+    ) -> Result<usize, SysError> {
+        self.queue_bulk_transfer(bot.bulk_in_ep, data_iova, length, ioc, true)
+    }
+
+    /// Soumet un transfert de données sortant (Data OUT) pour une transaction BOT.
+    pub fn submit_bot_data_out(
+        &mut self,
+        bot: &UsbMassStorageBot,
+        data_iova: u64,
+        length: u32,
+        ioc: bool,
+    ) -> Result<usize, SysError> {
+        self.queue_bulk_transfer(bot.bulk_out_ep, data_iova, length, ioc, false)
+    }
+
+    /// Soumet la réception d'un Command Status Wrapper (CSW, 13 octets) sur l'endpoint Bulk IN.
+    pub fn submit_bot_csw(
+        &mut self,
+        bot: &UsbMassStorageBot,
+        csw_iova: u64,
+        ioc: bool,
+    ) -> Result<usize, SysError> {
+        self.queue_bulk_transfer(bot.bulk_in_ep, csw_iova, 13, ioc, false)
+    }
 }
 
 // ============================================================================
@@ -1723,5 +2212,146 @@ mod tests {
         assert!(status.completed);
         assert_eq!(status.bytes_transferred, 4096);
         assert_eq!(ctrl.ep_rings[2].streams[0].total_bytes_transferred, 4096);
+    }
+
+    #[test]
+    fn test_usb_hub_descriptors_and_status() {
+        // Test UsbHubDescriptor
+        let hub_desc = UsbHubDescriptor {
+            length: 9,
+            descriptor_type: USB_DESC_TYPE_HUB,
+            num_ports: 4,
+            characteristics: 0x0009,
+            power_on_to_power_good: 50,
+            hub_controller_current: 100,
+            device_removable: 0,
+        };
+        assert!(hub_desc.is_valid());
+        assert_eq!(hub_desc.ports(), 4);
+
+        // Test UsbSsHubDescriptor
+        let ss_hub_desc = UsbSsHubDescriptor {
+            length: 12,
+            descriptor_type: USB_DESC_TYPE_SS_HUB,
+            num_ports: 8,
+            characteristics: 0x0008,
+            power_on_to_power_good: 32,
+            hub_controller_current: 0,
+            hub_hdr_dec_lat: 4,
+            hub_delay: 160,
+            device_removable: 0,
+        };
+        assert!(ss_hub_desc.is_valid());
+        assert_eq!(ss_hub_desc.ports(), 8);
+
+        // Test UsbHubStatus
+        let status = UsbHubStatus::parse(0x0001, 0x0002);
+        assert!(status.local_power_lost);
+        assert!(!status.over_current);
+        assert!(!status.change_local_power);
+        assert!(status.change_over_current);
+
+        // Test HubPortStatusAndChange (Port connecté, alimenté, SuperSpeed, changement connect)
+        let port_sc = HubPortStatusAndChange::parse(0x0103, 0x0001);
+        assert!(port_sc.connected);
+        assert!(port_sc.enabled);
+        assert!(port_sc.powered);
+        assert!(port_sc.change_connect);
+    }
+
+    #[test]
+    fn test_mass_storage_bot_cbw_csw_roundtrip() {
+        let mut bot = UsbMassStorageBot::new(1, 1, 2);
+        assert_eq!(bot.sector_size, 512);
+
+        // 1. SCSI TEST UNIT READY
+        let (cbw_tur, tag_tur) = bot.build_cbw_test_unit_ready();
+        assert_eq!(cbw_tur.signature(), CBW_SIGNATURE);
+        assert_eq!(cbw_tur.tag(), tag_tur);
+        assert_eq!(cbw_tur.data_transfer_length(), 0);
+        assert_eq!(cbw_tur.cb[0], SCSI_CMD_TEST_UNIT_READY);
+
+        // 2. SCSI INQUIRY
+        let (cbw_inq, tag_inq) = bot.build_cbw_inquiry();
+        assert_eq!(cbw_inq.tag(), tag_inq);
+        assert_eq!(cbw_inq.data_transfer_length(), 36);
+        assert_eq!(cbw_inq.cb[0], SCSI_CMD_INQUIRY);
+        assert_eq!(cbw_inq.flags(), CBW_FLAG_DATA_IN);
+
+        let mut inq_resp = [0u8; 36];
+        inq_resp[0] = 0x00; // Direct Access Block Device
+        inq_resp[1] = 0x80; // Removable
+        inq_resp[8..16].copy_from_slice(b"JAMBO_OS");
+        inq_resp[16..32].copy_from_slice(b"USB FLASH DRIVE ");
+        inq_resp[32..36].copy_from_slice(b"1.00");
+
+        let inq_info = bot
+            .parse_inquiry_response(&inq_resp)
+            .expect("valid inquiry");
+        assert_eq!(inq_info.peripheral_device_type, 0);
+        assert!(inq_info.is_removable);
+        assert_eq!(&inq_info.vendor_id, b"JAMBO_OS");
+        assert_eq!(&inq_info.product_id, b"USB FLASH DRIVE ");
+
+        // 3. SCSI READ CAPACITY (10)
+        let (cbw_cap, tag_cap) = bot.build_cbw_read_capacity_10();
+        assert_eq!(cbw_cap.tag(), tag_cap);
+        assert_eq!(cbw_cap.data_transfer_length(), 8);
+
+        // Réponse: Dernier LBA = 0x001E847F (1 999 999 -> 2 000 000 secteurs), Taille de bloc = 512
+        let cap_resp: [u8; 8] = [
+            0x00, 0x1E, 0x84, 0x7F, // LBA
+            0x00, 0x00, 0x02, 0x00, // 512 octets
+        ];
+        let cap = bot.parse_read_capacity_10(&cap_resp).expect("valid cap");
+        assert_eq!(cap.last_lba, 1_999_999);
+        assert_eq!(cap.block_size, 512);
+        assert_eq!(cap.total_sectors, 2_000_000);
+        assert_eq!(cap.total_bytes, 1_024_000_000); // 1.024 Go
+        assert!(bot.is_ready);
+
+        // 4. SCSI READ (10) et vérification CSW
+        let (cbw_read, tag_read) = bot.build_cbw_read_10(100, 8);
+        assert_eq!(cbw_read.data_transfer_length(), 8 * 512);
+        assert_eq!(cbw_read.cb[0], SCSI_CMD_READ_10);
+
+        let csw_bytes = [
+            0x55,
+            0x53,
+            0x42,
+            0x53, // "USBS" signature
+            (tag_read & 0xFF) as u8,
+            ((tag_read >> 8) & 0xFF) as u8,
+            ((tag_read >> 16) & 0xFF) as u8,
+            ((tag_read >> 24) & 0xFF) as u8,
+            0x00,
+            0x00,
+            0x00,
+            0x00, // data residue = 0
+            0x00, // CSW_STATUS_PASSED
+        ];
+        let residue = bot.verify_csw(tag_read, &csw_bytes).expect("csw passed");
+        assert_eq!(residue, 0);
+
+        // 5. Test Controller BOT submission
+        let mut ctrl = XhciController::new();
+        ctrl.ready = true;
+        assert!(ctrl.configure_endpoint_ring(1, false).is_ok()); // Bulk IN
+        assert!(ctrl.configure_endpoint_ring(2, false).is_ok()); // Bulk OUT
+
+        let cbw_idx = ctrl
+            .submit_bot_cbw(&bot, 0x1000_0000, true)
+            .expect("cbw submit");
+        assert_eq!(cbw_idx, 0);
+
+        let data_idx = ctrl
+            .submit_bot_data_in(&bot, 0x2000_0000, 4096, true)
+            .expect("data in submit");
+        assert_eq!(data_idx, 0);
+
+        let csw_idx = ctrl
+            .submit_bot_csw(&bot, 0x3000_0000, true)
+            .expect("csw submit");
+        assert_eq!(csw_idx, 1); // 2nd TRB on Bulk IN
     }
 }

@@ -10,12 +10,57 @@ pub const MAX_CPUS: usize = 64;
 pub const MAX_LAG: u64 = 50;
 pub const MAX_WAIT_TICKS: u64 = 100;
 pub const DEFAULT_QUANTUM_TICKS: u64 = 10;
+pub const WAKEUP_LATENCY_SLA_US: u64 = 50;
+
+/// Métriques de latence de réveil et respect du SLA temps-réel (< 50 µs)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WakeupLatencyMetrics {
+    pub min_wakeup_latency_us: u64,
+    pub max_wakeup_latency_us: u64,
+    pub total_wakeup_latency_us: u64,
+    pub wakeup_count: u64,
+    pub sla_violations_count: u64,
+}
+
+impl Default for WakeupLatencyMetrics {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl WakeupLatencyMetrics {
+    pub const fn new() -> Self {
+        Self {
+            min_wakeup_latency_us: u64::MAX,
+            max_wakeup_latency_us: 0,
+            total_wakeup_latency_us: 0,
+            wakeup_count: 0,
+            sla_violations_count: 0,
+        }
+    }
+
+    #[inline]
+    pub fn record_latency(&mut self, latency_us: u64) {
+        self.wakeup_count = self.wakeup_count.saturating_add(1);
+        self.total_wakeup_latency_us = self.total_wakeup_latency_us.saturating_add(latency_us);
+        if latency_us < self.min_wakeup_latency_us {
+            self.min_wakeup_latency_us = latency_us;
+        }
+        if latency_us > self.max_wakeup_latency_us {
+            self.max_wakeup_latency_us = latency_us;
+        }
+        if latency_us > WAKEUP_LATENCY_SLA_US {
+            self.sla_violations_count = self.sla_violations_count.saturating_add(1);
+        }
+    }
+}
 
 pub struct EevdfScheduler {
     pub runqueue: Vec<Arc<Mutex<Thread>>>,
     pub current_per_cpu: [Option<Arc<Mutex<Thread>>>; MAX_CPUS],
     pub idle_threads: [Option<Arc<Mutex<Thread>>>; MAX_CPUS],
     pub virtual_time: u64,
+    pub metrics: WakeupLatencyMetrics,
 }
 
 impl EevdfScheduler {
@@ -26,6 +71,7 @@ impl EevdfScheduler {
             current_per_cpu: [NONE_THREAD; MAX_CPUS],
             idle_threads: [NONE_THREAD; MAX_CPUS],
             virtual_time: 0,
+            metrics: WakeupLatencyMetrics::new(),
         }
     }
 
@@ -93,6 +139,7 @@ impl EevdfScheduler {
             let mut t = thread.lock();
             t.state = ThreadState::Ready;
             t.wait_ticks = 0;
+            t.wake_timestamp_us = self.virtual_time;
 
             // Bornage du lag : clamp vruntime dans [V - MAX_LAG, V + MAX_LAG]
             let v = self.virtual_time;
@@ -225,6 +272,8 @@ impl EevdfScheduler {
             guard.state = ThreadState::Running;
             guard.wait_ticks = 0;
             guard.last_cpu = cpu_id as u32;
+            let latency_us = self.virtual_time.saturating_sub(guard.wake_timestamp_us);
+            self.metrics.record_latency(latency_us);
         }
 
         Some(next)

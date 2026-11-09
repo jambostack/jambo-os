@@ -1533,6 +1533,240 @@ impl ArpTable {
 }
 
 // =========================================================================
+// Proxy ARP (RFC 1027) & Routage d'Adresses Virtuelles Ring 3
+// =========================================================================
+
+pub const MAX_PROXY_ARP_ENTRIES: usize = 16;
+
+/// Règle de routage Proxy ARP pour une adresse IPv4 assignée à un microservice ou conteneur
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProxyArpRule {
+    pub ip: [u8; 4],
+    pub proxy_mac: [u8; 6],
+    pub active: bool,
+}
+
+impl ProxyArpRule {
+    pub const fn empty() -> Self {
+        Self {
+            ip: [0; 4],
+            proxy_mac: [0; 6],
+            active: false,
+        }
+    }
+}
+
+/// Table de correspondance Proxy ARP
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProxyArpTable {
+    pub rules: [ProxyArpRule; MAX_PROXY_ARP_ENTRIES],
+    pub count: usize,
+}
+
+impl Default for ProxyArpTable {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ProxyArpTable {
+    pub const fn new() -> Self {
+        Self {
+            rules: [ProxyArpRule::empty(); MAX_PROXY_ARP_ENTRIES],
+            count: 0,
+        }
+    }
+
+    /// Enregistre ou met à jour une adresse IPv4 proxifiée avec l'adresse MAC répondeur
+    pub fn add_proxy(&mut self, ip: [u8; 4], mac: [u8; 6]) -> bool {
+        // Recherche si la règle existe déjà
+        for rule in self.rules.iter_mut() {
+            if rule.active && rule.ip == ip {
+                rule.proxy_mac = mac;
+                return true;
+            }
+        }
+        // Insertion dans un emplacement libre
+        for rule in self.rules.iter_mut() {
+            if !rule.active {
+                rule.ip = ip;
+                rule.proxy_mac = mac;
+                rule.active = true;
+                self.count += 1;
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Supprime une adresse IPv4 proxifiée
+    pub fn remove_proxy(&mut self, ip: [u8; 4]) -> bool {
+        for rule in self.rules.iter_mut() {
+            if rule.active && rule.ip == ip {
+                rule.active = false;
+                self.count = self.count.saturating_sub(1);
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Recherche si une adresse IP est proxifiée et retourne l'adresse MAC associée
+    pub fn lookup(&self, ip: [u8; 4]) -> Option<[u8; 6]> {
+        for rule in self.rules.iter() {
+            if rule.active && rule.ip == ip {
+                return Some(rule.proxy_mac);
+            }
+        }
+        None
+    }
+
+    /// Indique si l'adresse IP fait partie des adresses proxifiées
+    #[inline]
+    pub fn is_proxied(&self, ip: [u8; 4]) -> bool {
+        self.lookup(ip).is_some()
+    }
+}
+
+/// Construit une trame ARP Reply pour une requête Proxy ARP (RFC 1027).
+pub fn forge_arp_proxy_reply(
+    proxy_mac: [u8; 6],
+    proxied_ip: [u8; 4],
+    req: &ArpPacket,
+    out_frame: &mut [u8],
+) -> Option<usize> {
+    if out_frame.len() < 60 {
+        return None;
+    }
+    out_frame[..60].fill(0);
+
+    let eth = EthernetHeader::new(req.src_mac, proxy_mac, ETHERTYPE_ARP);
+    let reply = ArpPacket::new_reply(proxy_mac, proxied_ip, req.src_mac, req.src_ip);
+
+    out_frame[..14].copy_from_slice(&eth.to_bytes());
+    out_frame[14..42].copy_from_slice(&reply.to_bytes());
+
+    Some(60)
+}
+
+// =========================================================================
+// Gestionnaire et Métriques Ping ICMP (RFC 792)
+// =========================================================================
+
+pub const MAX_PENDING_PINGS: usize = 16;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct PendingPing {
+    pub id: u16,
+    pub seq: u16,
+    pub target_ip: [u8; 4],
+    pub send_tick: u64,
+    pub active: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct IcmpPingMetrics {
+    pub packets_sent: u64,
+    pub packets_received: u64,
+    pub packets_lost: u64,
+    pub min_rtt_ticks: u64,
+    pub max_rtt_ticks: u64,
+    pub last_rtt_ticks: u64,
+    pub total_rtt_ticks: u64,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct IcmpPingTracker {
+    pub pending: [PendingPing; MAX_PENDING_PINGS],
+    pub metrics: IcmpPingMetrics,
+}
+
+impl Default for IcmpPingTracker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl IcmpPingTracker {
+    pub const fn new() -> Self {
+        Self {
+            pending: [PendingPing {
+                id: 0,
+                seq: 0,
+                target_ip: [0; 4],
+                send_tick: 0,
+                active: false,
+            }; MAX_PENDING_PINGS],
+            metrics: IcmpPingMetrics {
+                packets_sent: 0,
+                packets_received: 0,
+                packets_lost: 0,
+                min_rtt_ticks: u64::MAX,
+                max_rtt_ticks: 0,
+                last_rtt_ticks: 0,
+                total_rtt_ticks: 0,
+            },
+        }
+    }
+
+    /// Enregistre une émission ICMP Echo Request
+    pub fn record_sent(&mut self, id: u16, seq: u16, target_ip: [u8; 4], tick: u64) {
+        self.metrics.packets_sent = self.metrics.packets_sent.saturating_add(1);
+        for p in self.pending.iter_mut() {
+            if !p.active {
+                p.id = id;
+                p.seq = seq;
+                p.target_ip = target_ip;
+                p.send_tick = tick;
+                p.active = true;
+                return;
+            }
+        }
+        self.pending[0] = PendingPing {
+            id,
+            seq,
+            target_ip,
+            send_tick: tick,
+            active: true,
+        };
+    }
+
+    /// Traite la réception d'un ICMP Echo Reply correspondant et calcule le RTT
+    pub fn record_reply(&mut self, id: u16, seq: u16, tick: u64) -> Option<u64> {
+        for p in self.pending.iter_mut() {
+            if p.active && p.id == id && p.seq == seq {
+                p.active = false;
+                let rtt = tick.saturating_sub(p.send_tick);
+                self.metrics.packets_received = self.metrics.packets_received.saturating_add(1);
+                self.metrics.last_rtt_ticks = rtt;
+                if rtt < self.metrics.min_rtt_ticks {
+                    self.metrics.min_rtt_ticks = rtt;
+                }
+                if rtt > self.metrics.max_rtt_ticks {
+                    self.metrics.max_rtt_ticks = rtt;
+                }
+                self.metrics.total_rtt_ticks = self.metrics.total_rtt_ticks.saturating_add(rtt);
+                return Some(rtt);
+            }
+        }
+        None
+    }
+
+    /// Purge les pings expirés (timeout)
+    pub fn expire_older_than(&mut self, current_tick: u64, timeout_ticks: u64) -> usize {
+        let mut expired = 0;
+        for p in self.pending.iter_mut() {
+            if p.active && current_tick.saturating_sub(p.send_tick) > timeout_ticks {
+                p.active = false;
+                self.metrics.packets_lost = self.metrics.packets_lost.saturating_add(1);
+                expired += 1;
+            }
+        }
+        expired
+    }
+}
+
+// =========================================================================
 // Protocole de Configuration Dynamique d'Hôte DHCP (RFC 2131)
 // =========================================================================
 
@@ -2555,5 +2789,67 @@ mod tests {
         assert_eq!(resolver.lookup_cache("gateway.local"), None);
         resolver.insert_cache("gateway.local", resolved_ip);
         assert_eq!(resolver.lookup_cache("gateway.local"), Some([10, 0, 2, 2]));
+    }
+
+    #[test]
+    fn test_proxy_arp_lifecycle_and_forge() {
+        let mut proxy_tbl = ProxyArpTable::new();
+        let target_ip = [10, 0, 2, 50];
+        let proxy_mac = [0x52, 0x54, 0x00, 0xAA, 0xBB, 0xCC];
+
+        assert!(!proxy_tbl.is_proxied(target_ip));
+        assert!(proxy_tbl.add_proxy(target_ip, proxy_mac));
+        assert!(proxy_tbl.is_proxied(target_ip));
+        assert_eq!(proxy_tbl.lookup(target_ip), Some(proxy_mac));
+
+        // Forge ARP Request depuis un client
+        let client_mac = [0x00, 0x11, 0x22, 0x33, 0x44, 0x55];
+        let client_ip = [10, 0, 2, 15];
+        let req = ArpPacket::new_request(client_mac, client_ip, target_ip);
+
+        let mut tx_buf = [0u8; 128];
+        let reply_len = forge_arp_proxy_reply(proxy_mac, target_ip, &req, &mut tx_buf)
+            .expect("proxy reply forged");
+        assert_eq!(reply_len, 60);
+
+        let eth = EthernetHeader::from_bytes(&tx_buf[..14]).unwrap();
+        assert_eq!(eth.dst_mac, client_mac);
+        assert_eq!(eth.src_mac, proxy_mac);
+
+        let reply = ArpPacket::from_bytes(&tx_buf[14..42]).unwrap();
+        assert_eq!(reply.opcode(), ARP_OPCODE_REPLY);
+        assert_eq!(reply.src_ip, target_ip);
+        assert_eq!(reply.src_mac, proxy_mac);
+        assert_eq!(reply.dst_ip, client_ip);
+        assert_eq!(reply.dst_mac, client_mac);
+
+        // Suppression de la règle proxy
+        assert!(proxy_tbl.remove_proxy(target_ip));
+        assert!(!proxy_tbl.is_proxied(target_ip));
+    }
+
+    #[test]
+    fn test_icmp_ping_tracker_rtt_and_expiry() {
+        let mut tracker = IcmpPingTracker::new();
+        let target_ip = [10, 0, 2, 2];
+
+        // 1. Enregistrement de 2 requêtes
+        tracker.record_sent(0x1337, 1, target_ip, 1000);
+        tracker.record_sent(0x1337, 2, target_ip, 1010);
+        assert_eq!(tracker.metrics.packets_sent, 2);
+
+        // 2. Réception du reply pour seq 1 après 15 ticks
+        let rtt1 = tracker
+            .record_reply(0x1337, 1, 1015)
+            .expect("valid reply seq 1");
+        assert_eq!(rtt1, 15);
+        assert_eq!(tracker.metrics.packets_received, 1);
+        assert_eq!(tracker.metrics.min_rtt_ticks, 15);
+        assert_eq!(tracker.metrics.max_rtt_ticks, 15);
+
+        // 3. Expiration du seq 2 avec timeout de 50 ticks au temps 1100
+        let expired = tracker.expire_older_than(1100, 50);
+        assert_eq!(expired, 1);
+        assert_eq!(tracker.metrics.packets_lost, 1);
     }
 }

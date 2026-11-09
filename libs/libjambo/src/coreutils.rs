@@ -4312,6 +4312,149 @@ pub fn run_df(args: &[&str], out_fd: i32, err_fd: i32) -> i32 {
     }
 }
 
+/// Exécute l'utilitaire standard POSIX `uname` pour afficher les informations système
+pub fn run_uname(args: &[&str], out_fd: i32, err_fd: i32) -> i32 {
+    let mut show_all = false;
+    let mut show_kernel_name = false;
+    let mut show_nodename = false;
+    let mut show_kernel_release = false;
+    let mut show_kernel_version = false;
+    let mut show_machine = false;
+    let mut show_processor = false;
+    let mut show_hardware_platform = false;
+    let mut show_operating_system = false;
+
+    for &arg in args {
+        match arg {
+            "-a" | "--all" => show_all = true,
+            "-s" | "--kernel-name" => show_kernel_name = true,
+            "-n" | "--nodename" => show_nodename = true,
+            "-r" | "--kernel-release" => show_kernel_release = true,
+            "-v" | "--kernel-version" => show_kernel_version = true,
+            "-m" | "--machine" => show_machine = true,
+            "-p" | "--processor" => show_processor = true,
+            "-i" | "--hardware-platform" => show_hardware_platform = true,
+            "-o" | "--operating-system" => show_operating_system = true,
+            "--help" => {
+                let _ = sys_write(out_fd, b"Usage: uname [OPTION]...\nPrint certain system information.  With no OPTION, same as -s.\n\n  -a, --all                print all information\n  -s, --kernel-name        print the kernel name\n  -n, --nodename           print the network node hostname\n  -r, --kernel-release     print the operating system release\n  -v, --kernel-version     print the kernel version\n  -m, --machine            print the machine hardware name\n  -p, --processor          print the processor type\n  -i, --hardware-platform  print the hardware platform\n  -o, --operating-system   print the operating system\n      --help               display this help and exit\n");
+                return 0;
+            }
+            opt if opt.starts_with('-') => {
+                let mut valid_combined = true;
+                for ch in opt[1..].chars() {
+                    match ch {
+                        'a' => show_all = true,
+                        's' => show_kernel_name = true,
+                        'n' => show_nodename = true,
+                        'r' => show_kernel_release = true,
+                        'v' => show_kernel_version = true,
+                        'm' => show_machine = true,
+                        'p' => show_processor = true,
+                        'i' => show_hardware_platform = true,
+                        'o' => show_operating_system = true,
+                        _ => {
+                            valid_combined = false;
+                            break;
+                        }
+                    }
+                }
+                if !valid_combined {
+                    let _ = sys_write(err_fd, b"uname: extra operand or unrecognized option '");
+                    let _ = sys_write(err_fd, opt.as_bytes());
+                    let _ = sys_write(err_fd, b"'\n");
+                    return 1;
+                }
+            }
+            extra => {
+                let _ = sys_write(err_fd, b"uname: extra operand '");
+                let _ = sys_write(err_fd, extra.as_bytes());
+                let _ = sys_write(err_fd, b"'\n");
+                return 1;
+            }
+        }
+    }
+
+    if show_all {
+        show_kernel_name = true;
+        show_nodename = true;
+        show_kernel_release = true;
+        show_kernel_version = true;
+        show_machine = true;
+        show_processor = true;
+        show_hardware_platform = true;
+        show_operating_system = true;
+    }
+
+    if !show_kernel_name
+        && !show_nodename
+        && !show_kernel_release
+        && !show_kernel_version
+        && !show_machine
+        && !show_processor
+        && !show_hardware_platform
+        && !show_operating_system
+    {
+        show_kernel_name = true;
+    }
+
+    let mut first = true;
+    let mut write_field = |val: &str| {
+        if !first {
+            let _ = sys_write(out_fd, b" ");
+        }
+        first = false;
+        let _ = sys_write(out_fd, val.as_bytes());
+    };
+
+    if show_kernel_name {
+        write_field("JamboOS");
+    }
+    if show_nodename {
+        write_field("jambo-node-0");
+    }
+    if show_kernel_release {
+        write_field("0.3.44");
+    }
+    if show_kernel_version {
+        #[cfg(target_arch = "x86_64")]
+        write_field("#1 SMP PREEMPT EEVDF x86_64");
+        #[cfg(target_arch = "aarch64")]
+        write_field("#1 SMP PREEMPT EEVDF aarch64");
+        #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+        write_field("#1 SMP PREEMPT EEVDF unknown");
+    }
+    if show_machine {
+        #[cfg(target_arch = "x86_64")]
+        write_field("x86_64");
+        #[cfg(target_arch = "aarch64")]
+        write_field("aarch64");
+        #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+        write_field("unknown");
+    }
+    if show_processor {
+        #[cfg(target_arch = "x86_64")]
+        write_field("x86_64");
+        #[cfg(target_arch = "aarch64")]
+        write_field("aarch64");
+        #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+        write_field("unknown");
+    }
+    if show_hardware_platform {
+        #[cfg(target_arch = "x86_64")]
+        write_field("x86_64");
+        #[cfg(target_arch = "aarch64")]
+        write_field("aarch64");
+        #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+        write_field("unknown");
+    }
+    if show_operating_system {
+        write_field("JamboOS");
+    }
+
+    let _ = sys_write(out_fd, b"\n");
+    0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5043,6 +5186,67 @@ mod tests {
         let s4 = core::str::from_utf8(&out4[..n4 as usize]).unwrap();
         assert!(s4.contains("/tmp"));
         assert!(s4.contains("[JamboFS CoW Snapshots] Actifs: 0/16"));
+        sys_close(r4);
+    }
+
+    #[test]
+    fn test_uname_utility() {
+        // 1. uname par défaut (-s)
+        let (r1, w1) = crate::vfs::pipe().expect("pipe uname 1");
+        let code1 = run_uname(&[], w1, 2);
+        assert_eq!(code1, 0);
+        sys_close(w1);
+        let mut out1 = [0u8; 256];
+        let n1 = sys_read(r1, &mut out1);
+        assert!(n1 > 0);
+        let s1 = core::str::from_utf8(&out1[..n1 as usize]).unwrap();
+        assert_eq!(s1.trim(), "JamboOS");
+        sys_close(r1);
+
+        // 2. uname avec tous les drapeaux (-a)
+        let (r2, w2) = crate::vfs::pipe().expect("pipe uname 2");
+        let code2 = run_uname(&["-a"], w2, 2);
+        assert_eq!(code2, 0);
+        sys_close(w2);
+        let mut out2 = [0u8; 256];
+        let n2 = sys_read(r2, &mut out2);
+        assert!(n2 > 0);
+        let s2 = core::str::from_utf8(&out2[..n2 as usize]).unwrap();
+        assert!(s2.contains("JamboOS"));
+        assert!(s2.contains("jambo-node-0"));
+        assert!(s2.contains("0.3.44"));
+        assert!(s2.contains("SMP PREEMPT EEVDF"));
+        #[cfg(target_arch = "x86_64")]
+        assert!(s2.contains("x86_64"));
+        #[cfg(target_arch = "aarch64")]
+        assert!(s2.contains("aarch64"));
+        sys_close(r2);
+
+        // 3. uname avec options combinées (-srm)
+        let (r3, w3) = crate::vfs::pipe().expect("pipe uname 3");
+        let code3 = run_uname(&["-srm"], w3, 2);
+        assert_eq!(code3, 0);
+        sys_close(w3);
+        let mut out3 = [0u8; 256];
+        let n3 = sys_read(r3, &mut out3);
+        assert!(n3 > 0);
+        let s3 = core::str::from_utf8(&out3[..n3 as usize]).unwrap();
+        assert!(s3.contains("JamboOS"));
+        assert!(s3.contains("0.3.44"));
+        #[cfg(target_arch = "x86_64")]
+        assert!(s3.contains("x86_64"));
+        sys_close(r3);
+
+        // 4. uname avec option inconnue
+        let (r4, w4) = crate::vfs::pipe().expect("pipe uname 4");
+        let code4 = run_uname(&["-z"], 1, w4);
+        assert_eq!(code4, 1);
+        sys_close(w4);
+        let mut out4 = [0u8; 256];
+        let n4 = sys_read(r4, &mut out4);
+        assert!(n4 > 0);
+        let s4 = core::str::from_utf8(&out4[..n4 as usize]).unwrap();
+        assert!(s4.contains("unrecognized option '-z'"));
         sys_close(r4);
     }
 }

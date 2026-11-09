@@ -1743,6 +1743,258 @@ impl CowBitmapAllocator {
     }
 }
 
+// =========================================================================
+// Compression LZ4 Bare-Metal no_std pour Blocs CoW 4 Kio
+// =========================================================================
+
+pub const BLOCK_MAGIC_LZ4: u32 = 0x184D_2204;
+pub const MAX_COMPRESSED_PAYLOAD: usize =
+    BLOCK_SIZE - core::mem::size_of::<CompressedBlockHeader>();
+
+#[repr(C, packed)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CompressedBlockHeader {
+    pub magic: u32,
+    pub uncompressed_size: u16,
+    pub compressed_size: u16,
+    pub checksum: [u8; 32],
+}
+
+impl CompressedBlockHeader {
+    #[inline]
+    pub fn magic(&self) -> u32 {
+        self.magic
+    }
+    #[inline]
+    pub fn uncompressed_size(&self) -> u16 {
+        self.uncompressed_size
+    }
+    #[inline]
+    pub fn compressed_size(&self) -> u16 {
+        self.compressed_size
+    }
+}
+
+/// Compresse un bloc de 4096 octets avec l'algorithme LZ4 bare-metal.
+/// Si la compression ne réduit pas la taille d'au moins 64 octets, renvoie None (incompressible).
+pub fn lz4_compress_block(src: &[u8; BLOCK_SIZE], dst: &mut [u8]) -> Option<usize> {
+    if dst.len() < 128 {
+        return None;
+    }
+
+    const HASH_SIZE: usize = 1024;
+    let mut hash_table = [0u16; HASH_SIZE];
+
+    let mut in_pos = 0usize;
+    let mut out_pos = 0usize;
+    let mut anchor = 0usize;
+
+    while in_pos + 4 < BLOCK_SIZE && out_pos + 16 < BLOCK_SIZE {
+        let seq = u32::from_le_bytes([
+            src[in_pos],
+            src[in_pos + 1],
+            src[in_pos + 2],
+            src[in_pos + 3],
+        ]);
+        let h = ((seq.wrapping_mul(2654435761)) >> 22) as usize % HASH_SIZE;
+        let stored = hash_table[h];
+        hash_table[h] = (in_pos as u16) + 1;
+
+        if stored != 0 {
+            let ref_pos = (stored - 1) as usize;
+            if in_pos > ref_pos
+                && (in_pos - ref_pos) < 65535
+                && src[ref_pos..ref_pos + 4] == src[in_pos..in_pos + 4]
+            {
+                let mut match_len = 4usize;
+                while in_pos + match_len < BLOCK_SIZE
+                    && src[ref_pos + match_len] == src[in_pos + match_len]
+                {
+                    match_len += 1;
+                }
+
+                let lit_len = in_pos - anchor;
+                let offset = (in_pos - ref_pos) as u16;
+
+                let token_lit = if lit_len >= 15 { 15 } else { lit_len as u8 };
+                let token_match = if (match_len - 4) >= 15 {
+                    15
+                } else {
+                    (match_len - 4) as u8
+                };
+                let token = (token_lit << 4) | token_match;
+
+                if out_pos >= dst.len() {
+                    return None;
+                }
+                dst[out_pos] = token;
+                out_pos += 1;
+
+                if lit_len >= 15 {
+                    let mut rem = lit_len - 15;
+                    while rem >= 255 {
+                        if out_pos >= dst.len() {
+                            return None;
+                        }
+                        dst[out_pos] = 255;
+                        out_pos += 1;
+                        rem -= 255;
+                    }
+                    if out_pos >= dst.len() {
+                        return None;
+                    }
+                    dst[out_pos] = rem as u8;
+                    out_pos += 1;
+                }
+
+                if out_pos + lit_len > dst.len() {
+                    return None;
+                }
+                dst[out_pos..out_pos + lit_len].copy_from_slice(&src[anchor..anchor + lit_len]);
+                out_pos += lit_len;
+
+                if out_pos + 2 > dst.len() {
+                    return None;
+                }
+                let off_bytes = offset.to_le_bytes();
+                dst[out_pos..out_pos + 2].copy_from_slice(&off_bytes);
+                out_pos += 2;
+
+                if (match_len - 4) >= 15 {
+                    let mut rem = match_len - 4 - 15;
+                    while rem >= 255 {
+                        if out_pos >= dst.len() {
+                            return None;
+                        }
+                        dst[out_pos] = 255;
+                        out_pos += 1;
+                        rem -= 255;
+                    }
+                    if out_pos >= dst.len() {
+                        return None;
+                    }
+                    dst[out_pos] = rem as u8;
+                    out_pos += 1;
+                }
+
+                in_pos += match_len;
+                anchor = in_pos;
+                continue;
+            }
+        }
+        in_pos += 1;
+    }
+
+    let final_lit = BLOCK_SIZE - anchor;
+    let token_lit = if final_lit >= 15 { 15 } else { final_lit as u8 };
+    if out_pos >= dst.len() {
+        return None;
+    }
+    dst[out_pos] = token_lit << 4;
+    out_pos += 1;
+
+    if final_lit >= 15 {
+        let mut rem = final_lit - 15;
+        while rem >= 255 {
+            if out_pos >= dst.len() {
+                return None;
+            }
+            dst[out_pos] = 255;
+            out_pos += 1;
+            rem -= 255;
+        }
+        if out_pos >= dst.len() {
+            return None;
+        }
+        dst[out_pos] = rem as u8;
+        out_pos += 1;
+    }
+
+    if out_pos + final_lit > dst.len() {
+        return None;
+    }
+    dst[out_pos..out_pos + final_lit].copy_from_slice(&src[anchor..BLOCK_SIZE]);
+    out_pos += final_lit;
+
+    let max_allowed = (BLOCK_SIZE - 64).min(dst.len());
+    if out_pos <= max_allowed {
+        Some(out_pos)
+    } else {
+        None
+    }
+}
+
+/// Décompresse un flux LZ4 brut dans un bloc de 4096 octets.
+pub fn lz4_decompress_block(src: &[u8], dst: &mut [u8; BLOCK_SIZE]) -> Result<usize, FsError> {
+    let mut in_pos = 0usize;
+    let mut out_pos = 0usize;
+
+    while in_pos < src.len() && out_pos < BLOCK_SIZE {
+        let token = src[in_pos];
+        in_pos += 1;
+
+        let mut lit_len = (token >> 4) as usize;
+        if lit_len == 15 {
+            while in_pos < src.len() {
+                let b = src[in_pos];
+                in_pos += 1;
+                lit_len += b as usize;
+                if b != 255 {
+                    break;
+                }
+            }
+        }
+
+        if out_pos + lit_len > BLOCK_SIZE || in_pos + lit_len > src.len() {
+            return Err(FsError::CorruptedData);
+        }
+        dst[out_pos..out_pos + lit_len].copy_from_slice(&src[in_pos..in_pos + lit_len]);
+        out_pos += lit_len;
+        in_pos += lit_len;
+
+        if in_pos >= src.len() || out_pos >= BLOCK_SIZE {
+            break;
+        }
+
+        if in_pos + 2 > src.len() {
+            return Err(FsError::CorruptedData);
+        }
+        let offset = u16::from_le_bytes([src[in_pos], src[in_pos + 1]]) as usize;
+        in_pos += 2;
+
+        if offset == 0 || offset > out_pos {
+            return Err(FsError::CorruptedData);
+        }
+
+        let mut match_len = ((token & 0x0F) + 4) as usize;
+        if (token & 0x0F) == 15 {
+            while in_pos < src.len() {
+                let b = src[in_pos];
+                in_pos += 1;
+                match_len += b as usize;
+                if b != 255 {
+                    break;
+                }
+            }
+        }
+
+        if out_pos + match_len > BLOCK_SIZE {
+            return Err(FsError::CorruptedData);
+        }
+
+        for _ in 0..match_len {
+            dst[out_pos] = dst[out_pos - offset];
+            out_pos += 1;
+        }
+    }
+
+    if out_pos == BLOCK_SIZE {
+        Ok(out_pos)
+    } else {
+        Err(FsError::CorruptedData)
+    }
+}
+
 /// Système de fichiers JamboFS transactionnel monté en espace utilisateur
 #[derive(Debug, Clone, Copy)]
 pub struct JamboFs {
@@ -1992,6 +2244,79 @@ impl JamboFs {
             .map_err(FsError::BlockIoError)?;
         let (lba, _) = self.dedup_table.register_or_dedup(&hash, target_lba);
         Ok((lba, false))
+    }
+
+    /// Écrit un bloc de 4 Kio avec tentative de compression LZ4 bare-metal.
+    /// Si le bloc est compressible (gain >= 64 octets), il est encapsulé avec un CompressedBlockHeader.
+    /// Retourne `(lba_physique, etait_compresse, taille_stockee)`.
+    pub fn write_block_lz4(
+        &mut self,
+        data: &[u8; BLOCK_SIZE],
+        target_lba: u64,
+    ) -> Result<(u64, bool, usize), FsError> {
+        let mut comp_buf = [0u8; BLOCK_SIZE];
+        let header_size = core::mem::size_of::<CompressedBlockHeader>();
+
+        if let Some(comp_len) = lz4_compress_block(data, &mut comp_buf[header_size..]) {
+            let header = CompressedBlockHeader {
+                magic: BLOCK_MAGIC_LZ4,
+                uncompressed_size: BLOCK_SIZE as u16,
+                compressed_size: comp_len as u16,
+                checksum: blake3_block_hash(data),
+            };
+
+            // SAFETY: Copie structurée de CompressedBlockHeader (40 octets) au début du tampon
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    &header as *const CompressedBlockHeader as *const u8,
+                    comp_buf.as_mut_ptr(),
+                    header_size,
+                );
+            }
+            comp_buf[header_size + comp_len..].fill(0);
+
+            self.client
+                .write_block(target_lba, &comp_buf)
+                .map_err(FsError::BlockIoError)?;
+
+            Ok((target_lba, true, header_size + comp_len))
+        } else {
+            self.client
+                .write_block(target_lba, data)
+                .map_err(FsError::BlockIoError)?;
+
+            Ok((target_lba, false, BLOCK_SIZE))
+        }
+    }
+
+    /// Lit un bloc de 4 Kio et le décompresse automatiquement si l'en-tête LZ4 est présent et valide.
+    pub fn read_block_lz4(&self, lba: u64, out: &mut [u8; BLOCK_SIZE]) -> Result<bool, FsError> {
+        let mut raw_buf = [0u8; BLOCK_SIZE];
+        self.client
+            .read_block(lba, &mut raw_buf)
+            .map_err(FsError::BlockIoError)?;
+
+        let header_size = core::mem::size_of::<CompressedBlockHeader>();
+        // SAFETY: Lecture avec read_unaligned de l'en-tête potentiel
+        let header = unsafe {
+            let ptr = raw_buf.as_ptr() as *const CompressedBlockHeader;
+            ptr.read_unaligned()
+        };
+
+        if header.magic == BLOCK_MAGIC_LZ4
+            && (header.compressed_size as usize) <= MAX_COMPRESSED_PAYLOAD
+        {
+            let payload = &raw_buf[header_size..header_size + header.compressed_size as usize];
+            lz4_decompress_block(payload, out)?;
+            let calc_hash = blake3_block_hash(out);
+            if calc_hash != header.checksum {
+                return Err(FsError::CorruptedData);
+            }
+            Ok(true)
+        } else {
+            out.copy_from_slice(&raw_buf);
+            Ok(false)
+        }
     }
 
     /// Indique si le volume racine est monté en mode persistant direct
@@ -2802,5 +3127,80 @@ mod tests {
         let bytes = m1.to_bytes();
         let parsed = FsMetrics::from_bytes(&bytes).expect("parse metrics");
         assert_eq!(parsed, m1);
+    }
+
+    #[test]
+    fn test_lz4_compression_roundtrip_and_cow_blocks() {
+        // 1. Préparation d'un bloc hautement répétitif (compressible)
+        let mut compressible_data = [0u8; BLOCK_SIZE];
+        for (i, b) in compressible_data.iter_mut().enumerate() {
+            *b = (i % 64) as u8;
+        }
+
+        let mut comp_buf = [0u8; BLOCK_SIZE];
+        let comp_len = lz4_compress_block(&compressible_data, &mut comp_buf)
+            .expect("compressible block compressed");
+        assert!(
+            comp_len < 500,
+            "Le bloc répétitif doit être compressé drastiquement (actuel: {})",
+            comp_len
+        );
+
+        // Décompression et vérification de conformité bit-à-bit
+        let mut decomp_buf = [0u8; BLOCK_SIZE];
+        let decomp_len = lz4_decompress_block(&comp_buf[..comp_len], &mut decomp_buf)
+            .expect("decompression successful");
+        assert_eq!(decomp_len, BLOCK_SIZE);
+        assert_eq!(&decomp_buf[..], &compressible_data[..]);
+
+        // 2. Test avec JamboFs client mock
+        let client = BlockClient::new(libjambo::Handle(0));
+        let mut fs = JamboFs::new_fallback(client);
+
+        // Écriture du bloc compressé
+        let (lba, was_compressed, stored_len) = fs
+            .write_block_lz4(&compressible_data, 100)
+            .expect("write_block_lz4");
+        assert_eq!(lba, 100);
+        assert!(was_compressed);
+        assert!(stored_len < 600);
+
+        // Relecture avec décompression automatique
+        let mut read_back = [0u8; BLOCK_SIZE];
+        let was_decomp = fs
+            .read_block_lz4(100, &mut read_back)
+            .expect("read_block_lz4");
+        assert!(was_decomp);
+        assert_eq!(&read_back[..], &compressible_data[..]);
+
+        // 3. Bloc arbitraire haute entropie (roundtrip garanti peu importe le ratio de compression)
+        let mut high_entropy_data = [0u8; BLOCK_SIZE];
+        let mut lfsr = 0xACE1u32;
+        for b in high_entropy_data.iter_mut() {
+            let bit = (lfsr ^ (lfsr >> 2) ^ (lfsr >> 3) ^ (lfsr >> 5)) & 1;
+            lfsr = (lfsr >> 1) | (bit << 15);
+            *b = (lfsr & 0xFF) as u8;
+        }
+
+        let (_lba_raw, was_comp_raw, _stored_raw) = fs
+            .write_block_lz4(&high_entropy_data, 101)
+            .expect("write raw");
+
+        let mut read_raw = [0u8; BLOCK_SIZE];
+        let was_decomp_raw = fs.read_block_lz4(101, &mut read_raw).expect("read raw");
+        assert_eq!(was_decomp_raw, was_comp_raw);
+        assert_eq!(&read_raw[..], &high_entropy_data[..]);
+
+        // 4. Bloc brut écrit sans en-tête LZ4 (doit être reconnu comme non compressé)
+        let uncompressed_raw = [0x42u8; BLOCK_SIZE];
+        fs.client
+            .write_block(102, &uncompressed_raw)
+            .expect("write raw direct");
+        let mut read_direct = [0u8; BLOCK_SIZE];
+        let is_comp = fs
+            .read_block_lz4(102, &mut read_direct)
+            .expect("read raw direct");
+        assert!(!is_comp);
+        assert_eq!(&read_direct[..], &uncompressed_raw[..]);
     }
 }

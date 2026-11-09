@@ -13,11 +13,12 @@
 #![no_main]
 
 use jambo_netd::{
-    forge_arp_reply, forge_icmp_echo_reply, forge_icmp_echo_request, syscall_thread_yield,
-    ArpPacket, ChannelMessage, EthernetHeader, IcmpHeader, Ipv4Header, NetOpcode, NetRequest,
-    NetResponse, ARP_OPCODE_REQUEST, DEFAULT_GATEWAY, DEFAULT_GATEWAY_MAC, DEFAULT_IPV4,
-    DEFAULT_NETMASK, ETHERTYPE_ARP, ETHERTYPE_IPV4, ICMP_TYPE_ECHO_REPLY, ICMP_TYPE_ECHO_REQUEST,
-    IP_PROTO_ICMP, MAX_FASTPATH_BYTES,
+    forge_arp_proxy_reply, forge_arp_reply, forge_icmp_echo_reply, forge_icmp_echo_request,
+    syscall_thread_yield, ArpPacket, ChannelMessage, EthernetHeader, IcmpHeader, IcmpPingTracker,
+    Ipv4Header, NetOpcode, NetRequest, NetResponse, ProxyArpTable, ARP_OPCODE_REQUEST,
+    DEFAULT_GATEWAY, DEFAULT_GATEWAY_MAC, DEFAULT_IPV4, DEFAULT_NETMASK, ETHERTYPE_ARP,
+    ETHERTYPE_IPV4, ICMP_TYPE_ECHO_REPLY, ICMP_TYPE_ECHO_REQUEST, IP_PROTO_ICMP,
+    MAX_FASTPATH_BYTES,
 };
 use libjambo::{print, println};
 use virtio_drv::VirtioNetDriver;
@@ -249,6 +250,12 @@ pub extern "C" fn _start() -> ! {
     let mut rx_buf = [0u8; 1536];
     let mut ping_seq = 1u16;
     let mut last_rtt_ms = 1u32;
+    let mut ping_ticks = 100u64;
+
+    let mut proxy_arp = ProxyArpTable::new();
+    let mut ping_tracker = IcmpPingTracker::new();
+    proxy_arp.add_proxy([10, 0, 2, 20], my_mac);
+    proxy_arp.add_proxy([10, 0, 2, 21], my_mac);
 
     println("[NETD] Émission d'une requête ICMP Echo (ping) vers 10.0.2.2...");
     let ping_payload = b"JamboOS ICMP Echo Test v0.3.44";
@@ -263,11 +270,14 @@ pub extern "C" fn _start() -> ! {
         &mut tx_buf,
     ) {
         let _ = driver.transmit(&tx_buf[..ping_len]);
+        ping_tracker.record_sent(0x1337, ping_seq, gateway_ip, ping_ticks);
         ping_seq = ping_seq.wrapping_add(1);
     }
 
     // 5. Boucle événementielle de service Ring 3
     loop {
+        ping_ticks = ping_ticks.wrapping_add(1);
+
         // A. Scruter l'arrivée de paquets réseau entrants sur Virtqueue 0
         if let Ok(Some(rx_len)) = driver.poll_receive(&mut rx_buf) {
             if rx_len >= 14 {
@@ -283,11 +293,22 @@ pub extern "C" fn _start() -> ! {
                             }
 
                             // Si ARP Request pour notre IP : réponse immédiate ARP Reply
-                            if arp.opcode() == ARP_OPCODE_REQUEST && arp.dst_ip == my_ip {
-                                if let Some(reply_len) =
-                                    forge_arp_reply(my_mac, my_ip, &arp, &mut tx_buf)
-                                {
-                                    let _ = driver.transmit(&tx_buf[..reply_len]);
+                            if arp.opcode() == ARP_OPCODE_REQUEST {
+                                if arp.dst_ip == my_ip {
+                                    if let Some(reply_len) =
+                                        forge_arp_reply(my_mac, my_ip, &arp, &mut tx_buf)
+                                    {
+                                        let _ = driver.transmit(&tx_buf[..reply_len]);
+                                    }
+                                } else if let Some(proxy_mac) = proxy_arp.lookup(arp.dst_ip) {
+                                    if let Some(reply_len) = forge_arp_proxy_reply(
+                                        proxy_mac,
+                                        arp.dst_ip,
+                                        &arp,
+                                        &mut tx_buf,
+                                    ) {
+                                        let _ = driver.transmit(&tx_buf[..reply_len]);
+                                    }
                                 }
                             }
                         }
@@ -295,7 +316,9 @@ pub extern "C" fn _start() -> ! {
                     // Traitement des paquets IPv4 (ICMP Echo Request / Reply)
                     else if ethertype == ETHERTYPE_IPV4 && rx_len >= 14 + 20 {
                         if let Some(ip) = Ipv4Header::from_bytes(&rx_buf[14..34]) {
-                            if ip.proto == IP_PROTO_ICMP && ip.dst_ip == my_ip {
+                            if ip.proto == IP_PROTO_ICMP
+                                && (ip.dst_ip == my_ip || proxy_arp.is_proxied(ip.dst_ip))
+                            {
                                 let ihl = ip.ihl_bytes();
                                 if rx_len >= 14 + ihl + 8 {
                                     if let Some(icmp) =
@@ -310,9 +333,13 @@ pub extern "C" fn _start() -> ! {
                                             && icmp.code == 0
                                         {
                                             let payload = &rx_buf[14 + ihl + 8..rx_len];
+                                            let responder_ip =
+                                                if ip.dst_ip == my_ip { my_ip } else { ip.dst_ip };
+                                            let responder_mac =
+                                                proxy_arp.lookup(ip.dst_ip).unwrap_or(my_mac);
                                             if let Some(reply_len) = forge_icmp_echo_reply(
-                                                my_mac,
-                                                my_ip,
+                                                responder_mac,
+                                                responder_ip,
                                                 &eth,
                                                 &ip,
                                                 &icmp,
@@ -324,7 +351,13 @@ pub extern "C" fn _start() -> ! {
                                         }
                                         // Si ICMP Echo Reply reçu pour notre ping
                                         else if icmp.icmp_type == ICMP_TYPE_ECHO_REPLY {
-                                            last_rtt_ms = 1;
+                                            if let Some(rtt) = ping_tracker
+                                                .record_reply(icmp.id, icmp.seq, ping_ticks)
+                                            {
+                                                last_rtt_ms = rtt as u32;
+                                            } else {
+                                                last_rtt_ms = 1;
+                                            }
                                         }
                                     }
                                 }
