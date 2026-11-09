@@ -1272,6 +1272,7 @@ fn build_coreutils(
     PathBuf,
     PathBuf,
     PathBuf,
+    PathBuf,
 )> {
     let root = root_dir();
     let mut cmd = Command::new("cargo");
@@ -1316,6 +1317,7 @@ fn build_coreutils(
         dir.join("env"),
         dir.join("grep"),
         dir.join("sort"),
+        dir.join("uniq"),
     ))
 }
 
@@ -1609,6 +1611,7 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
         env_bin,
         grep_bin,
         sort_bin,
+        uniq_bin,
     ) = build_coreutils(release)?;
     let installer_bin = build_installer(release)?;
     let fuzz_bin = build_fuzzer(release)?;
@@ -1635,6 +1638,7 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
     fs::copy(&env_bin, bin_dir.join("env"))?;
     fs::copy(&grep_bin, bin_dir.join("grep"))?;
     fs::copy(&sort_bin, bin_dir.join("sort"))?;
+    fs::copy(&uniq_bin, bin_dir.join("uniq"))?;
     fs::copy(&installer_bin, bin_dir.join("installer"))?;
     fs::copy(&installer_bin, bin_dir.join("jambo-installer"))?;
     fs::copy(&fuzz_bin, bin_dir.join("fuzz"))?;

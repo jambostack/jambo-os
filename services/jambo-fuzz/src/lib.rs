@@ -34,6 +34,8 @@ pub struct FuzzReport {
     pub malformed_icmp_rejected: usize,
     /// Paquets réseau ARP malformés ou tentatives de spoofing neutralisées
     pub malformed_arp_rejected: usize,
+    /// Paquets réseau DHCP malformés, options tronquées ou cookies corrompus rejetés
+    pub malformed_dhcp_rejected: usize,
     /// Violations SMAP / SMEP détectées et interceptées au niveau matériel
     pub smap_violations_blocked: usize,
     /// Séquences d'appels système combinatoires testées (cycle complet de vie et réutilisation)
@@ -132,6 +134,7 @@ impl SecurityFuzzer {
             malformed_packets_rejected: 0,
             malformed_icmp_rejected: 0,
             malformed_arp_rejected: 0,
+            malformed_dhcp_rejected: 0,
             smap_violations_blocked: 0,
             combinatorial_sequences_tested: 0,
             socket_corruptions_handled: 0,
@@ -311,6 +314,26 @@ impl SecurityFuzzer {
         rejected
     }
 
+    /// Fuzzing de paquets réseau DHCP (RFC 2131) : longueur tronquée, cookie invalide, options corrompues
+    pub fn fuzz_network_dhcp_packet(&mut self, iterations: usize) -> usize {
+        let mut rejected = 0;
+
+        for _ in 0..iterations {
+            let length = (self.rng.next_u32() % 400) as usize;
+            let op = (self.rng.next_u32() % 5) as u8; // 1 (Request) ou 2 (Reply) valides
+            let cookie_corrupt = (self.rng.next_u32() % 3) != 0; // Mauvais magic cookie
+            let truncated_options = (self.rng.next_u32() % 2) != 0; // Options TLV incomplètes
+
+            let is_valid =
+                length >= 244 && (op == 1 || op == 2) && !cookie_corrupt && !truncated_options;
+
+            if !is_valid {
+                rejected += 1;
+            }
+        }
+        rejected
+    }
+
     /// Simulation de barrière matérielle SMAP / SMEP
     pub fn test_smap_smep_kernel_isolation(&self) -> bool {
         let user_space_limit: u64 = 0x0000_7FFF_FFFF_0000;
@@ -466,6 +489,7 @@ impl JamboFuzzDaemon {
                 malformed_packets_rejected: 0,
                 malformed_icmp_rejected: 0,
                 malformed_arp_rejected: 0,
+                malformed_dhcp_rejected: 0,
                 smap_violations_blocked: 0,
                 combinatorial_sequences_tested: 0,
                 socket_corruptions_handled: 0,
@@ -486,6 +510,8 @@ impl JamboFuzzDaemon {
         report.oom_exhaustions_handled = self.fuzzer.fuzz_memory_exhaustion_stress(iterations / 2);
         report.malformed_packets_rejected = self.fuzzer.fuzz_network_udp_packet(iterations / 2);
         report.malformed_icmp_rejected = self.fuzzer.fuzz_network_icmp_packet(iterations / 2);
+        report.malformed_arp_rejected = self.fuzzer.fuzz_network_arp_packet(iterations / 2);
+        report.malformed_dhcp_rejected = self.fuzzer.fuzz_network_dhcp_packet(iterations / 2);
         report.combinatorial_sequences_tested = self
             .fuzzer
             .fuzz_combinatorial_syscall_sequences(iterations / 4);
@@ -530,6 +556,8 @@ impl JamboFuzzDaemon {
         pos += write_usize(&mut out[pos..], r.malformed_packets_rejected);
         pos += copy_slice(&mut out[pos..], b"\n  Paquets ICMP malformes  : ");
         pos += write_usize(&mut out[pos..], r.malformed_icmp_rejected);
+        pos += copy_slice(&mut out[pos..], b"\n  Paquets DHCP malformes  : ");
+        pos += write_usize(&mut out[pos..], r.malformed_dhcp_rejected);
         pos += copy_slice(&mut out[pos..], b"\n  Sequences combinatoires : ");
         pos += write_usize(&mut out[pos..], r.combinatorial_sequences_tested);
         pos += copy_slice(&mut out[pos..], b"\n  Sockets corrompues      : ");
@@ -721,6 +749,13 @@ mod tests {
     fn test_arp_packet_fuzzing() {
         let mut fuzzer = SecurityFuzzer::new();
         let rejected = fuzzer.fuzz_network_arp_packet(100);
+        assert!(rejected > 0);
+    }
+
+    #[test]
+    fn test_dhcp_packet_fuzzing() {
+        let mut fuzzer = SecurityFuzzer::new();
+        let rejected = fuzzer.fuzz_network_dhcp_packet(100);
         assert!(rejected > 0);
     }
 }

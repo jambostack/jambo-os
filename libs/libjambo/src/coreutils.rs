@@ -1270,6 +1270,167 @@ pub fn run_sort(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
     0
 }
 
+/// Exécute l'utilitaire `uniq` filtrant les lignes adjacentes répétées dans un flux
+pub fn run_uniq(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    let mut show_count = false;
+    let mut repeated_only = false;
+    let mut unique_only = false;
+    let mut ignore_case = false;
+    let mut positional: [&str; 2] = ["", ""];
+    let mut pos_count = 0;
+
+    let mut i = 0;
+    let mut parsing_flags = true;
+    while i < args.len() {
+        let arg = args[i];
+        if parsing_flags && arg == "--" {
+            parsing_flags = false;
+            i += 1;
+            continue;
+        }
+        if parsing_flags && arg.starts_with('-') && arg != "-" {
+            for b in arg[1..].bytes() {
+                match b {
+                    b'c' => show_count = true,
+                    b'd' => repeated_only = true,
+                    b'u' => unique_only = true,
+                    b'i' => ignore_case = true,
+                    _ => {
+                        let _ = sys_write(err_fd, b"uniq: option invalide -- '");
+                        let b_slice = [b];
+                        let _ = sys_write(err_fd, &b_slice);
+                        let _ = sys_write(err_fd, b"'\n");
+                        return 1;
+                    }
+                }
+            }
+        } else if pos_count < positional.len() {
+            positional[pos_count] = arg;
+            pos_count += 1;
+        }
+        i += 1;
+    }
+
+    let input_path = if pos_count >= 1 { positional[0] } else { "-" };
+    let output_path = if pos_count >= 2 { positional[1] } else { "-" };
+
+    let actual_in_fd = if input_path == "-" {
+        in_fd
+    } else {
+        let fd = sys_open(input_path, O_RDONLY);
+        if fd < 0 {
+            let _ = sys_write(err_fd, b"uniq: cannot read: ");
+            let _ = sys_write(err_fd, input_path.as_bytes());
+            let _ = sys_write(err_fd, b": No such file or directory\n");
+            return 1;
+        }
+        fd
+    };
+
+    let actual_out_fd = if output_path == "-" {
+        out_fd
+    } else {
+        let fd = sys_open(output_path, O_CREAT | O_WRONLY | O_TRUNC);
+        if fd < 0 {
+            if actual_in_fd != in_fd {
+                let _ = sys_close(actual_in_fd);
+            }
+            let _ = sys_write(err_fd, b"uniq: cannot write: ");
+            let _ = sys_write(err_fd, output_path.as_bytes());
+            let _ = sys_write(err_fd, b": Error opening file\n");
+            return 1;
+        }
+        fd
+    };
+
+    const MAX_UNIQ_BYTES: usize = 8192;
+    const MAX_UNIQ_LINES: usize = 256;
+
+    let mut content_buf = [0u8; MAX_UNIQ_BYTES];
+    let mut content_len = 0;
+
+    loop {
+        if content_len >= MAX_UNIQ_BYTES {
+            break;
+        }
+        let n = sys_read(actual_in_fd, &mut content_buf[content_len..]);
+        if n <= 0 {
+            break;
+        }
+        content_len += n as usize;
+    }
+
+    if actual_in_fd != in_fd {
+        let _ = sys_close(actual_in_fd);
+    }
+
+    let mut lines: [(usize, usize); MAX_UNIQ_LINES] = [(0, 0); MAX_UNIQ_LINES];
+    let mut line_count = 0;
+    let mut line_start = 0;
+
+    let buf_slice = &content_buf[..content_len];
+    for (pos, &byte) in buf_slice.iter().enumerate() {
+        if byte == b'\n' {
+            if line_count < MAX_UNIQ_LINES {
+                lines[line_count] = (line_start, pos + 1);
+                line_count += 1;
+            }
+            line_start = pos + 1;
+        }
+    }
+    if line_start < content_len && line_count < MAX_UNIQ_LINES {
+        lines[line_count] = (line_start, content_len);
+        line_count += 1;
+    }
+
+    // Parcours groupé par lignes consécutives identiques
+    let mut idx = 0;
+    while idx < line_count {
+        let current_slice = &buf_slice[lines[idx].0..lines[idx].1];
+        let mut count: u64 = 1;
+        let mut next_idx = idx + 1;
+
+        while next_idx < line_count {
+            let next_slice = &buf_slice[lines[next_idx].0..lines[next_idx].1];
+            let equal = if ignore_case {
+                compare_lexicographical(current_slice, next_slice, true)
+                    == core::cmp::Ordering::Equal
+            } else {
+                current_slice == next_slice
+            };
+
+            if equal {
+                count += 1;
+                next_idx += 1;
+            } else {
+                break;
+            }
+        }
+
+        let should_emit = !(repeated_only && count == 1) && !(unique_only && count > 1);
+
+        if should_emit {
+            if show_count {
+                let _ = sys_write(actual_out_fd, b"      ");
+                write_u64_fd(actual_out_fd, count);
+                let _ = sys_write(actual_out_fd, b" ");
+            }
+            let _ = sys_write(actual_out_fd, current_slice);
+            if !current_slice.ends_with(b"\n") {
+                let _ = sys_write(actual_out_fd, b"\n");
+            }
+        }
+
+        idx = next_idx;
+    }
+
+    if actual_out_fd != out_fd {
+        let _ = sys_close(actual_out_fd);
+    }
+
+    0
+}
+
 /// Exécute l'utilitaire `wc` comptant les lignes, mots et octets
 pub fn run_wc(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
     let mut count_lines = false;

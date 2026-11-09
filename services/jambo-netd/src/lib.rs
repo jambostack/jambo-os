@@ -1532,6 +1532,201 @@ impl ArpTable {
     }
 }
 
+// =========================================================================
+// Protocole de Configuration Dynamique d'Hôte DHCP (RFC 2131)
+// =========================================================================
+
+pub const DHCP_SERVER_PORT: u16 = 67;
+pub const DHCP_CLIENT_PORT: u16 = 68;
+pub const DHCP_MAGIC_COOKIE: [u8; 4] = [99, 130, 83, 99];
+pub const DHCP_OP_BOOTREQUEST: u8 = 1;
+pub const DHCP_OP_BOOTREPLY: u8 = 2;
+
+pub const DHCP_OPT_PAD: u8 = 0;
+pub const DHCP_OPT_SUBNET_MASK: u8 = 1;
+pub const DHCP_OPT_ROUTER: u8 = 3;
+pub const DHCP_OPT_DNS_SERVER: u8 = 6;
+pub const DHCP_OPT_LEASE_TIME: u8 = 51;
+pub const DHCP_OPT_MESSAGE_TYPE: u8 = 53;
+pub const DHCP_OPT_SERVER_IDENTIFIER: u8 = 54;
+pub const DHCP_OPT_END: u8 = 255;
+
+pub const DHCP_MSG_DISCOVER: u8 = 1;
+pub const DHCP_MSG_OFFER: u8 = 2;
+pub const DHCP_MSG_REQUEST: u8 = 3;
+pub const DHCP_MSG_ACK: u8 = 5;
+pub const DHCP_MSG_NAK: u8 = 6;
+
+/// En-tête de trame DHCP/BOOTP (240 octets avec le magic cookie RFC 2131)
+#[repr(C, packed)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DhcpPacketHeader {
+    pub op: u8,
+    pub htype: u8,
+    pub hlen: u8,
+    pub hops: u8,
+    pub xid: u32,
+    pub secs: u16,
+    pub flags: u16,
+    pub ciaddr: [u8; 4],
+    pub yiaddr: [u8; 4],
+    pub siaddr: [u8; 4],
+    pub giaddr: [u8; 4],
+    pub chaddr: [u8; 16],
+    pub sname: [u8; 64],
+    pub file: [u8; 128],
+    pub magic_cookie: [u8; 4],
+}
+
+const _: () = assert!(core::mem::size_of::<DhcpPacketHeader>() == 240);
+
+/// Offre de bail réseau IP retournée par le serveur DHCP
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct DhcpOffer {
+    pub yiaddr: [u8; 4],
+    pub server_ip: [u8; 4],
+    pub subnet_mask: [u8; 4],
+    pub router: [u8; 4],
+    pub dns_server: [u8; 4],
+    pub lease_time_secs: u32,
+}
+
+/// Machine d'état du client DHCP Ring 3
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DhcpClientState {
+    Init,
+    Selecting { xid: u32 },
+    Requesting { xid: u32, offer: DhcpOffer },
+    Bound(DhcpOffer),
+    Failed,
+}
+
+/// Construit un paquet DHCP DISCOVER conforme RFC 2131
+pub fn build_dhcp_discover(client_mac: [u8; 6], xid: u32, out: &mut [u8]) -> usize {
+    if out.len() < 240 + 4 {
+        return 0;
+    }
+
+    let mut chaddr = [0u8; 16];
+    chaddr[0..6].copy_from_slice(&client_mac);
+
+    let hdr = DhcpPacketHeader {
+        op: DHCP_OP_BOOTREQUEST,
+        htype: 1, // Ethernet
+        hlen: 6,
+        hops: 0,
+        xid: xid.to_be(),
+        secs: 0,
+        flags: 0x8000u16.to_be(), // Broadcast flag
+        ciaddr: [0; 4],
+        yiaddr: [0; 4],
+        siaddr: [0; 4],
+        giaddr: [0; 4],
+        chaddr,
+        sname: [0; 64],
+        file: [0; 128],
+        magic_cookie: DHCP_MAGIC_COOKIE,
+    };
+
+    // SAFETY: DhcpPacketHeader est packed et fait 240 octets, out.len() >= 244
+    unsafe {
+        core::ptr::copy_nonoverlapping(
+            &hdr as *const DhcpPacketHeader as *const u8,
+            out.as_mut_ptr(),
+            240,
+        );
+    }
+
+    // Option 53: DHCP Message Type = Discover (longueur 1, valeur 1)
+    out[240] = DHCP_OPT_MESSAGE_TYPE;
+    out[241] = 1;
+    out[242] = DHCP_MSG_DISCOVER;
+    // Option 255: End
+    out[243] = DHCP_OPT_END;
+
+    244
+}
+
+/// Analyse un paquet DHCP OFFER retourné par un serveur DHCP
+pub fn parse_dhcp_offer(payload: &[u8], expected_xid: u32) -> Result<DhcpOffer, SysError> {
+    if payload.len() < 240 {
+        return Err(SysError::InvalidArgument);
+    }
+
+    // SAFETY: payload.len() >= 240, read_unaligned accepte tout alignement
+    let hdr = unsafe {
+        let ptr = payload.as_ptr() as *const DhcpPacketHeader;
+        ptr.read_unaligned()
+    };
+
+    if hdr.op != DHCP_OP_BOOTREPLY {
+        return Err(SysError::InvalidArgument);
+    }
+    if u32::from_be(hdr.xid) != expected_xid {
+        return Err(SysError::InvalidArgument);
+    }
+    if hdr.magic_cookie != DHCP_MAGIC_COOKIE {
+        return Err(SysError::InvalidArgument);
+    }
+
+    let mut offer = DhcpOffer {
+        yiaddr: hdr.yiaddr,
+        server_ip: hdr.siaddr,
+        subnet_mask: [255, 255, 255, 0],
+        router: [0, 0, 0, 0],
+        dns_server: [0, 0, 0, 0],
+        lease_time_secs: 3600,
+    };
+
+    // Parcours sécurisé des options TLV
+    let mut cursor = 240;
+    while cursor < payload.len() {
+        let opt_type = payload[cursor];
+        if opt_type == DHCP_OPT_END {
+            break;
+        }
+        if opt_type == DHCP_OPT_PAD {
+            cursor += 1;
+            continue;
+        }
+
+        if cursor + 1 >= payload.len() {
+            break;
+        }
+        let opt_len = payload[cursor + 1] as usize;
+        let data_start = cursor + 2;
+        let data_end = data_start + opt_len;
+        if data_end > payload.len() {
+            break;
+        }
+
+        let opt_data = &payload[data_start..data_end];
+        match opt_type {
+            DHCP_OPT_SUBNET_MASK if opt_len == 4 => {
+                offer.subnet_mask.copy_from_slice(opt_data);
+            }
+            DHCP_OPT_ROUTER if opt_len >= 4 => {
+                offer.router.copy_from_slice(&opt_data[0..4]);
+            }
+            DHCP_OPT_DNS_SERVER if opt_len >= 4 => {
+                offer.dns_server.copy_from_slice(&opt_data[0..4]);
+            }
+            DHCP_OPT_SERVER_IDENTIFIER if opt_len == 4 => {
+                offer.server_ip.copy_from_slice(opt_data);
+            }
+            DHCP_OPT_LEASE_TIME if opt_len == 4 => {
+                let bytes: [u8; 4] = opt_data.try_into().unwrap_or([0; 4]);
+                offer.lease_time_secs = u32::from_be_bytes(bytes);
+            }
+            _ => {}
+        }
+
+        cursor = data_end;
+    }
+
+    Ok(offer)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1871,5 +2066,88 @@ mod tests {
         assert_eq!(table.dynamic_count, 0);
         // La passerelle statique ne s'est pas évaporée
         assert_eq!(table.lookup(gw_ip), Some(gw_mac));
+    }
+
+    #[test]
+    fn test_dhcp_discover_and_offer_parsing() {
+        let mac = [0x52, 0x54, 0x00, 0x12, 0x34, 0x56];
+        let xid = 0x12345678;
+
+        // 1. Génération d'un DHCP Discover
+        let mut buf = [0u8; 300];
+        let len = build_dhcp_discover(mac, xid, &mut buf);
+        assert_eq!(len, 244);
+        assert_eq!(buf[0], DHCP_OP_BOOTREQUEST);
+        assert_eq!(&buf[236..240], &DHCP_MAGIC_COOKIE);
+        assert_eq!(buf[240], DHCP_OPT_MESSAGE_TYPE);
+        assert_eq!(buf[242], DHCP_MSG_DISCOVER);
+        assert_eq!(buf[243], DHCP_OPT_END);
+
+        // 2. Forge d'une réponse DHCP Offer
+        let mut offer_buf = [0u8; 300];
+        let mut hdr = DhcpPacketHeader {
+            op: DHCP_OP_BOOTREPLY,
+            htype: 1,
+            hlen: 6,
+            hops: 0,
+            xid: xid.to_be(),
+            secs: 0,
+            flags: 0,
+            ciaddr: [0; 4],
+            yiaddr: [10, 0, 2, 15],
+            siaddr: [10, 0, 2, 2],
+            giaddr: [0; 4],
+            chaddr: [0; 16],
+            sname: [0; 64],
+            file: [0; 128],
+            magic_cookie: DHCP_MAGIC_COOKIE,
+        };
+        hdr.chaddr[0..6].copy_from_slice(&mac);
+
+        // SAFETY: DhcpPacketHeader fait 240 octets, offer_buf en fait 300
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                &hdr as *const DhcpPacketHeader as *const u8,
+                offer_buf.as_mut_ptr(),
+                240,
+            );
+        }
+
+        // Options: Subnet Mask (10.0.2.0/24 -> 255.255.255.0)
+        let mut opt_cursor = 240;
+        offer_buf[opt_cursor] = DHCP_OPT_SUBNET_MASK;
+        offer_buf[opt_cursor + 1] = 4;
+        offer_buf[opt_cursor + 2..opt_cursor + 6].copy_from_slice(&[255, 255, 255, 0]);
+        opt_cursor += 6;
+
+        // Option: Router Gateway (10.0.2.2)
+        offer_buf[opt_cursor] = DHCP_OPT_ROUTER;
+        offer_buf[opt_cursor + 1] = 4;
+        offer_buf[opt_cursor + 2..opt_cursor + 6].copy_from_slice(&[10, 0, 2, 2]);
+        opt_cursor += 6;
+
+        // Option: DNS Server (10.0.2.3)
+        offer_buf[opt_cursor] = DHCP_OPT_DNS_SERVER;
+        offer_buf[opt_cursor + 1] = 4;
+        offer_buf[opt_cursor + 2..opt_cursor + 6].copy_from_slice(&[10, 0, 2, 3]);
+        opt_cursor += 6;
+
+        // Option: End
+        offer_buf[opt_cursor] = DHCP_OPT_END;
+        opt_cursor += 1;
+
+        // 3. Analyse du DHCP Offer
+        let parsed = parse_dhcp_offer(&offer_buf[..opt_cursor], xid).expect("parse_dhcp_offer");
+        assert_eq!(parsed.yiaddr, [10, 0, 2, 15]);
+        assert_eq!(parsed.server_ip, [10, 0, 2, 2]);
+        assert_eq!(parsed.subnet_mask, [255, 255, 255, 0]);
+        assert_eq!(parsed.router, [10, 0, 2, 2]);
+        assert_eq!(parsed.dns_server, [10, 0, 2, 3]);
+
+        // 4. Rejet avec XID erroné
+        assert_eq!(
+            parse_dhcp_offer(&offer_buf[..opt_cursor], 0xDEADBEEF),
+            Err(SysError::InvalidArgument)
+        );
     }
 }

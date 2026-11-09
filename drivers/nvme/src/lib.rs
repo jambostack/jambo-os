@@ -28,7 +28,11 @@ pub const NVME_ADMIN_DELETE_CQ: u8 = 0x04;
 pub const NVME_ADMIN_CREATE_CQ: u8 = 0x05;
 pub const NVME_ADMIN_IDENTIFY: u8 = 0x06;
 pub const NVME_ADMIN_GET_LOG_PAGE: u8 = 0x02;
+pub const NVME_ADMIN_SET_FEATURES: u8 = 0x09;
+pub const NVME_ADMIN_ASYNC_EVENT_REQ: u8 = 0x0C;
 pub const NVME_LOG_SMART_HEALTH: u8 = 0x02;
+pub const NVME_FEAT_TEMPERATURE_THRESHOLD: u32 = 0x04;
+pub const NVME_FEAT_ASYNC_EVENT_CONFIG: u32 = 0x0B;
 
 pub const NVME_IO_FLUSH: u8 = 0x00;
 pub const NVME_IO_WRITE: u8 = 0x01;
@@ -792,6 +796,76 @@ impl NvmeController {
         // SAFETY: NvmeSmartLog est packed, Copy et couvre exactement 512 octets.
         unsafe { core::ptr::read_unaligned(raw_buf.as_ptr() as *const NvmeSmartLog) }
     }
+
+    /// Émet une commande d'administration Asynchronous Event Request (AER, Opcode 0x0C).
+    /// Permet au contrôleur de notifier l'hôte de manière asynchrone lors d'un incident matériel ou d'un seuil critique atteint.
+    pub fn request_async_event(&mut self) -> Result<u16, SysError> {
+        if !self.ready {
+            return Err(SysError::ResourceBusy);
+        }
+
+        let cmd = NvmeSubmissionEntry {
+            cdw0: NVME_ADMIN_ASYNC_EVENT_REQ as u32,
+            ..Default::default()
+        };
+
+        let cid = self.admin_queue.submit(cmd);
+        Ok(cid)
+    }
+
+    /// Décode le résultat d'un événement asynchrone complété (champ DW0 de la NvmeCompletionEntry).
+    pub fn parse_async_event_result(dw0: u32) -> NvmeAsyncEventType {
+        let event_type = dw0 & 0x07;
+        let event_info = ((dw0 >> 8) & 0xFF) as u8;
+
+        match event_type {
+            0 => NvmeAsyncEventType::ErrorStatus {
+                error_code: event_info,
+            },
+            1 => NvmeAsyncEventType::SmartHealthStatus {
+                critical_warning: event_info,
+            },
+            2 => NvmeAsyncEventType::Notice { event_info },
+            3 => NvmeAsyncEventType::NvmSubsystemReset,
+            _ => NvmeAsyncEventType::Unknown(dw0),
+        }
+    }
+
+    /// Configure le seuil d'alerte de température via la commande NVMe Set Features (Opcode 0x09, FID 0x04).
+    pub fn set_temperature_threshold(&mut self, threshold_kelvin: u16) -> Result<(), SysError> {
+        if !self.ready {
+            return Err(SysError::ResourceBusy);
+        }
+
+        let cdw10 = NVME_FEAT_TEMPERATURE_THRESHOLD;
+        let cdw11 = threshold_kelvin as u32;
+
+        let cmd = NvmeSubmissionEntry {
+            cdw0: NVME_ADMIN_SET_FEATURES as u32,
+            cdw10,
+            cdw11,
+            ..Default::default()
+        };
+
+        let cid = self.admin_queue.submit(cmd);
+        let _ = self.admin_queue.poll_completion(cid)?;
+        Ok(())
+    }
+}
+
+/// Type d'événement asynchrone NVMe 1.4 rapporté par le contrôleur
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NvmeAsyncEventType {
+    /// Erreur matérielle ou statut d'intégrité
+    ErrorStatus { error_code: u8 },
+    /// Alerte critique SMART/Health (température, usure, réserve)
+    SmartHealthStatus { critical_warning: u8 },
+    /// Notification de mise à jour d'état du sous-système NVMe
+    Notice { event_info: u8 },
+    /// Réinitialisation du sous-système NVM
+    NvmSubsystemReset,
+    /// Type d'événement réservé ou inconnu
+    Unknown(u32),
 }
 
 /// Journal d'état de santé et de télémétrie SMART NVMe 1.4 (Section 5.14.1.2)
@@ -1209,5 +1283,42 @@ mod tests {
         let cmd_flush = ctrl.io_queue.sq[2];
         assert_eq!((cmd_flush.cdw0 & 0xFF) as u8, NVME_IO_FLUSH);
         assert_eq!(cmd_flush.nsid, 2);
+    }
+
+    #[test]
+    fn test_async_event_and_features_threshold() {
+        let mut ctrl = NvmeController::new();
+        ctrl.ready = true;
+
+        // 1. Commande Set Features : Temperature Threshold (348 K = 75 °C)
+        assert!(ctrl.set_temperature_threshold(348).is_ok());
+        let cmd_feat = ctrl.admin_queue.sq[0];
+        assert_eq!((cmd_feat.cdw0 & 0xFF) as u8, NVME_ADMIN_SET_FEATURES);
+        assert_eq!(cmd_feat.cdw10, NVME_FEAT_TEMPERATURE_THRESHOLD);
+        assert_eq!(cmd_feat.cdw11, 348);
+
+        // 2. Commande Asynchronous Event Request (AER)
+        let cid = ctrl.request_async_event().expect("request_async_event");
+        let cmd_aer = ctrl.admin_queue.sq[1];
+        assert_eq!((cmd_aer.cdw0 & 0xFF) as u8, NVME_ADMIN_ASYNC_EVENT_REQ);
+        assert_eq!(cid, 1);
+
+        // 3. Décodage d'un événement asynchrone SMART Health Status
+        // DW0: [2:0] = 1 (SmartHealthStatus), [15:8] = 0x02 (température critique)
+        let dw0_smart = 1 | (0x02 << 8);
+        let event = NvmeController::parse_async_event_result(dw0_smart);
+        assert_eq!(
+            event,
+            NvmeAsyncEventType::SmartHealthStatus {
+                critical_warning: 0x02
+            }
+        );
+
+        // 4. Décodage d'un événement Notice
+        let dw0_notice = 2 | (0x05 << 8);
+        assert_eq!(
+            NvmeController::parse_async_event_result(dw0_notice),
+            NvmeAsyncEventType::Notice { event_info: 0x05 }
+        );
     }
 }
