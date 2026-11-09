@@ -153,6 +153,11 @@ pub extern "C" fn dispatch_syscall(
             let rights_mask = a3 as u32;
             let out_handle_ptr = a4;
 
+            // Pré-validation de sécurité du pointeur utilisateur de sortie pour préserver l'invariance capabilaire
+            if out_handle_ptr == 0 || out_handle_ptr >= 0x0000_7FFF_FFFF_0000 {
+                return SysError::BadAddress as i64;
+            }
+
             let (target_cspace, is_same_cspace) = if target_proc_h.is_null() {
                 (None, true)
             } else {
@@ -166,7 +171,7 @@ pub extern "C" fn dispatch_syscall(
                 (Some(proc_obj.cspace.clone()), false)
             };
 
-            let (obj, new_rights) = {
+            let new_h = if is_same_cspace {
                 let mut cspace = get_cspace(&current_cspace);
                 let cap = match cspace.get_cap(src_handle) {
                     Ok(c) => c,
@@ -175,24 +180,23 @@ pub extern "C" fn dispatch_syscall(
                 if (cap.rights & cap_rights::TRANSFER) == 0 {
                     return SysError::PermissionDenied as i64;
                 }
-                // Atténuation monotone absolue : jamais d'amplification vers cap_rights::ALL
                 let effective_mask = if rights_mask == 0 {
                     cap_rights::ALL
                 } else {
                     rights_mask
                 };
                 let new_rights = cap.rights & effective_mask;
+                let obj = cap.object;
                 let _ = cspace.drop_cap(src_handle);
-                (cap.object, new_rights)
-            };
-
-            let new_h = if is_same_cspace {
-                let mut cspace = get_cspace(&current_cspace);
                 cspace.insert(obj, new_rights)
             } else {
                 let target_cs = target_cspace.unwrap();
-                let mut guard = target_cs.lock();
-                guard.insert(obj, new_rights)
+                let mut src_cs = get_cspace(&current_cspace);
+                let mut dst_cs = target_cs.lock();
+                match src_cs.transfer_to(src_handle, rights_mask, &mut dst_cs) {
+                    Ok(h) => h,
+                    Err(e) => return e as i64,
+                }
             };
 
             if let Err(e) = write_user_val(current_aspace.as_ref(), out_handle_ptr, &new_h.0) {

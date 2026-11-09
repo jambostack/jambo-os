@@ -749,6 +749,33 @@ impl BlockClient {
     }
 }
 
+/// Drapeaux de montage du système de fichiers JamboFS
+#[repr(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MountFlags(pub u32);
+
+impl MountFlags {
+    pub const READ_ONLY: Self = Self(0x01);
+    pub const READ_WRITE: Self = Self(0x02);
+    pub const PERSISTENT_DIRECT: Self = Self(0x04);
+    pub const SYNC_BARRIER: Self = Self(0x08);
+
+    #[inline]
+    pub const fn default_rw() -> Self {
+        Self(Self::READ_WRITE.0 | Self::PERSISTENT_DIRECT.0 | Self::SYNC_BARRIER.0)
+    }
+
+    #[inline]
+    pub fn is_read_write(&self) -> bool {
+        (self.0 & Self::READ_WRITE.0) != 0
+    }
+
+    #[inline]
+    pub fn is_persistent(&self) -> bool {
+        (self.0 & Self::PERSISTENT_DIRECT.0) != 0
+    }
+}
+
 /// Système de fichiers JamboFS transactionnel monté en espace utilisateur
 #[derive(Debug, Clone, Copy)]
 pub struct JamboFs {
@@ -756,11 +783,18 @@ pub struct JamboFs {
     pub active_uberblock: Uberblock,
     pub root_offset: u64,
     pub partition_base_lba: u64,
+    pub flags: MountFlags,
+    pub active_slot_b: bool,
 }
 
 impl JamboFs {
     /// Monte le volume JamboFS en lisant et validant l'Uberblock (LBA 0..7 ou partition GPT)
     pub fn mount(client: &BlockClient) -> Result<Self, FsError> {
+        Self::mount_persistent_root(client, MountFlags::default_rw())
+    }
+
+    /// Monte le volume racine avec drapeaux explicites et sélection transactionnelle Uberblock A/B
+    pub fn mount_persistent_root(client: &BlockClient, flags: MountFlags) -> Result<Self, FsError> {
         let mut block_buf = [0u8; BLOCK_SIZE];
         client
             .read_block(0, &mut block_buf)
@@ -808,6 +842,25 @@ impl JamboFs {
             }
         }
 
+        // Vérification du slot Uberblock B alternatif pour retenir la génération la plus avancée
+        let mut active_slot_b = false;
+        let mut block_b_buf = [0u8; BLOCK_SIZE];
+        if client
+            .read_block(partition_base_lba + 8, &mut block_b_buf)
+            .is_ok()
+        {
+            // SAFETY: block_b_buf a une taille de BLOCK_SIZE (4096 octets), supérieure à sizeof(Uberblock), et read_unaligned autorise tout alignement.
+            let ub_b = unsafe {
+                let ptr = block_b_buf.as_ptr() as *const Uberblock;
+                ptr.read_unaligned()
+            };
+            if ub_b.is_valid() && (!uberblock.is_valid() || ub_b.generation > uberblock.generation)
+            {
+                uberblock = ub_b;
+                active_slot_b = true;
+            }
+        }
+
         if !uberblock.is_valid() {
             if uberblock.magic != JAMBOFS_MAGIC {
                 return Err(FsError::InvalidMagic);
@@ -825,6 +878,8 @@ impl JamboFs {
             active_uberblock: uberblock,
             root_offset,
             partition_base_lba,
+            flags,
+            active_slot_b,
         })
     }
 
@@ -835,7 +890,15 @@ impl JamboFs {
             active_uberblock: Uberblock::default(),
             root_offset: BLOCK_SIZE as u64,
             partition_base_lba: 0,
+            flags: MountFlags::default_rw(),
+            active_slot_b: false,
         }
+    }
+
+    /// Indique si le volume racine est monté en mode persistant direct
+    #[inline]
+    pub fn is_persistent_rw(&self) -> bool {
+        self.flags.is_read_write() && self.flags.is_persistent()
     }
 
     /// Résout et extrait le contenu du fichier désigné par `path`
@@ -926,7 +989,7 @@ impl JamboFs {
             .map_err(FsError::BlockIoError)?;
         self.client.flush().map_err(FsError::BlockIoError)?;
 
-        // 4. Validation atomique Copy-on-Write : Incrément de génération et scellement Uberblock
+        // 4. Validation atomique Copy-on-Write : Incrément de génération et scellement Uberblock A/B
         let mut new_uberblock = self.active_uberblock;
         new_uberblock.generation = next_gen;
         new_uberblock.timestamp = new_uberblock.timestamp.wrapping_add(1);
@@ -941,14 +1004,21 @@ impl JamboFs {
             );
         }
 
-        // Écriture atomique de l'Uberblock au sommet de la partition
+        // Alternance transactionnelle : écriture sur le slot A (LBA base) ou slot B (LBA base + 8)
+        let target_ub_lba = if self.active_slot_b {
+            self.partition_base_lba // Slot A
+        } else {
+            self.partition_base_lba + 8 // Slot B
+        };
+
         self.client
-            .write_block(self.partition_base_lba, &ub_buf)
+            .write_block(target_ub_lba, &ub_buf)
             .map_err(FsError::BlockIoError)?;
         self.client.flush().map_err(FsError::BlockIoError)?;
 
         // Mise à jour de l'état actif en mémoire uniquement après succès matériel
         self.active_uberblock = new_uberblock;
+        self.active_slot_b = !self.active_slot_b;
         Ok(data.len())
     }
 
@@ -1158,5 +1228,24 @@ mod tests {
         };
         let mut fs = JamboFs::new_fallback(dummy_client);
         assert!(fs.sync().is_ok());
+    }
+
+    #[test]
+    fn test_persistent_rw_mount_and_ab_flip() {
+        let dummy_client = BlockClient {
+            channel: libjambo::Handle(0),
+            vmo_ptr: core::ptr::null_mut(),
+        };
+        let mut fs = JamboFs::new_fallback(dummy_client);
+        assert!(fs.is_persistent_rw());
+        assert!(!fs.active_slot_b);
+
+        // Premier write -> bascule sur slot B
+        let _ = fs.write_file("/test1.txt", b"First CoW write\n");
+        assert!(fs.active_slot_b);
+
+        // Deuxième write -> bascule sur slot A
+        let _ = fs.write_file("/test2.txt", b"Second CoW write\n");
+        assert!(!fs.active_slot_b);
     }
 }

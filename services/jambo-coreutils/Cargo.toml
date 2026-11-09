@@ -51,6 +51,14 @@ path = "src/bin/mkdir.rs"
 name = "rm"
 path = "src/bin/rm.rs"
 
+[[bin]]
+name = "cp"
+path = "src/bin/cp.rs"
+
+[[bin]]
+name = "mv"
+path = "src/bin/mv.rs"
+
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }
 

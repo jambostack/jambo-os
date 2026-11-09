@@ -393,6 +393,8 @@ impl JamboShell {
             "touch" | "/bin/touch" | "bin/touch" => self.cmd_touch(args, out),
             "mkdir" | "/bin/mkdir" | "bin/mkdir" => self.cmd_mkdir(args, out),
             "rm" | "/bin/rm" | "bin/rm" => self.cmd_rm(args, out),
+            "cp" | "/bin/cp" | "bin/cp" => self.cmd_cp(args, out),
+            "mv" | "/bin/mv" | "bin/mv" => self.cmd_mv(args, out),
             "wc" | "/bin/wc" | "bin/wc" => self.cmd_wc(args, out),
             "ls" | "/bin/ls" | "bin/ls" => self.cmd_ls(args, out),
             "true" | "/bin/true" | "bin/true" => (ShellStatus::Success, 0),
@@ -457,10 +459,12 @@ impl JamboShell {
   touch <files> - Cree un fichier vide ou met a jour son horodatage\n\
   mkdir [-p] <dir> - Cree un repertoire virtuel\n\
   rm [-f] [-r] <files> - Supprime un fichier ou un repertoire\n\
+  cp [-r] <src> <dst> - Copie un fichier ou un repertoire\n\
+  mv <src> <dst> - Deplace ou renomme un fichier ou un repertoire\n\
   ls [-l] [-a] - Liste les fichiers et repertoires\n\
   wc [-l] [-w] [-c] <files> - Compte les lignes, mots et octets\n\
   true / false - Retourne un statut de succes (0) ou d'echec (1)\n\
-  coreutils   - Liste les 11 utilitaires Ring 3 (/bin/*)\n\
+  coreutils   - Liste les 13 utilitaires Ring 3 (/bin/*)\n\
   uname       - Affiche le nom et l'architecture du systeme\n\
   version     - Affiche les details de version du micro-noyau\n\
   uptime      - Affiche le temps d'activite du systeme\n\
@@ -574,7 +578,7 @@ impl JamboShell {
 
     fn cmd_coreutils(&self, out: &mut [u8]) -> (ShellStatus, usize) {
         let text = b"Utilitaires Coreutils Ring 3 (services/jambo-coreutils) :\n\
-  Binaires disponibles : /bin/echo, /bin/cat, /bin/head, /bin/tail, /bin/touch, /bin/mkdir, /bin/rm, /bin/wc, /bin/true, /bin/false, /bin/ls (11 utilitaires)\n\
+  Binaires disponibles : /bin/echo, /bin/cat, /bin/head, /bin/tail, /bin/touch, /bin/mkdir, /bin/rm, /bin/cp, /bin/mv, /bin/wc, /bin/true, /bin/false, /bin/ls (13 utilitaires)\n\
   Architecture & ABI   : System V AMD64 ELF64 (ET_EXEC / Ring 3 Userland)\n\
   Point d'entree       : _start (parsing argc/argv sur pile System V)\n\
   Terminaison          : Syscall 11 ThreadExit avec propagation code de retour POSIX\n\
@@ -1481,6 +1485,42 @@ ABI : 29 Appels Systeme (jambo-abi v0.4) avec Coreutils Ring 3, VFS POSIX & Fuzz
             }
         }
         (ShellStatus::Success, 0)
+    }
+
+    fn cmd_cp(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if args.len() < 2 {
+            let msg = b"cp: missing file operand\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            return (ShellStatus::ExecutionFailed, len);
+        }
+        let code = libjambo::coreutils::run_cp(args, 2);
+        if code == 0 {
+            (ShellStatus::Success, 0)
+        } else {
+            let msg = b"cp: copy operation failed\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
+    }
+
+    fn cmd_mv(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if args.len() < 2 {
+            let msg = b"mv: missing file operand\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            return (ShellStatus::ExecutionFailed, len);
+        }
+        let code = libjambo::coreutils::run_mv(args, 2);
+        if code == 0 {
+            (ShellStatus::Success, 0)
+        } else {
+            let msg = b"mv: move operation failed\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
     }
 
     fn cmd_ifconfig(&self, out: &mut [u8]) -> (ShellStatus, usize) {
@@ -16660,19 +16700,21 @@ mod tests {
     }
 
     #[test]
-    fn test_coreutils_11_binaries() {
+    fn test_coreutils_13_binaries() {
         let mut shell = JamboShell::new();
         let mut out = [0u8; 1024];
 
         let (st, len) = shell.execute_line("coreutils", &mut out);
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
-        assert!(s.contains("11 utilitaires"));
+        assert!(s.contains("13 utilitaires"));
         assert!(s.contains("/bin/head"));
         assert!(s.contains("/bin/tail"));
         assert!(s.contains("/bin/touch"));
         assert!(s.contains("/bin/mkdir"));
         assert!(s.contains("/bin/rm"));
+        assert!(s.contains("/bin/cp"));
+        assert!(s.contains("/bin/mv"));
     }
 
     #[test]
@@ -16707,5 +16749,29 @@ mod tests {
         // 6. rm -r
         let (st_rm_r, _) = shell.execute_line("rm -r /tmp/sh_test_dir", &mut out);
         assert_eq!(st_rm_r, ShellStatus::Success);
+    }
+
+    #[test]
+    fn test_cp_mv_shell_commands() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 1024];
+
+        // 1. touch source file
+        let (st_t, _) = shell.execute_line("touch /tmp/sh_src.txt", &mut out);
+        assert_eq!(st_t, ShellStatus::Success);
+
+        // 2. cp to dst
+        let (st_cp, _) = shell.execute_line("cp /tmp/sh_src.txt /tmp/sh_dst.txt", &mut out);
+        assert_eq!(st_cp, ShellStatus::Success);
+
+        // 3. mv to target
+        let (st_mv, _) = shell.execute_line("mv /tmp/sh_dst.txt /tmp/sh_moved.txt", &mut out);
+        assert_eq!(st_mv, ShellStatus::Success);
+
+        // 4. cleanup
+        let (st_rm1, _) = shell.execute_line("rm /tmp/sh_src.txt", &mut out);
+        assert_eq!(st_rm1, ShellStatus::Success);
+        let (st_rm2, _) = shell.execute_line("rm /tmp/sh_moved.txt", &mut out);
+        assert_eq!(st_rm2, ShellStatus::Success);
     }
 }

@@ -1266,6 +1266,8 @@ fn build_coreutils(
     PathBuf,
     PathBuf,
     PathBuf,
+    PathBuf,
+    PathBuf,
 )> {
     let root = root_dir();
     let mut cmd = Command::new("cargo");
@@ -1304,6 +1306,8 @@ fn build_coreutils(
         dir.join("touch"),
         dir.join("mkdir"),
         dir.join("rm"),
+        dir.join("cp"),
+        dir.join("mv"),
     ))
 }
 
@@ -1591,6 +1595,8 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
         touch_bin,
         mkdir_bin,
         rm_bin,
+        cp_bin,
+        mv_bin,
     ) = build_coreutils(release)?;
     let installer_bin = build_installer(release)?;
     let fuzz_bin = build_fuzzer(release)?;
@@ -1611,6 +1617,8 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
     fs::copy(&touch_bin, bin_dir.join("touch"))?;
     fs::copy(&mkdir_bin, bin_dir.join("mkdir"))?;
     fs::copy(&rm_bin, bin_dir.join("rm"))?;
+    fs::copy(&cp_bin, bin_dir.join("cp"))?;
+    fs::copy(&mv_bin, bin_dir.join("mv"))?;
     fs::copy(&installer_bin, bin_dir.join("installer"))?;
     fs::copy(&installer_bin, bin_dir.join("jambo-installer"))?;
     fs::copy(&fuzz_bin, bin_dir.join("fuzz"))?;
@@ -1763,6 +1771,8 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
     fs::copy(&touch_bin, initrd_stage.join("touch"))?;
     fs::copy(&mkdir_bin, initrd_stage.join("mkdir"))?;
     fs::copy(&rm_bin, initrd_stage.join("rm"))?;
+    fs::copy(&cp_bin, initrd_stage.join("cp"))?;
+    fs::copy(&mv_bin, initrd_stage.join("mv"))?;
     fs::copy(&installer_bin, initrd_stage.join("installer"))?;
     fs::copy(&installer_bin, initrd_stage.join("jambo-installer"))?;
     fs::copy(&fuzz_bin, initrd_stage.join("fuzz"))?;
@@ -1785,6 +1795,8 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
             "bin/touch",
             "bin/mkdir",
             "bin/rm",
+            "bin/cp",
+            "bin/mv",
             "bin/installer",
             "bin/jambo-installer",
             "bin/fuzz",
@@ -1934,6 +1946,8 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
             "touch",
             "mkdir",
             "rm",
+            "cp",
+            "mv",
             "installer",
             "jambo-installer",
             "fuzz",

@@ -1281,6 +1281,357 @@ pub fn run_rm(args: &[&str], err_fd: i32) -> i32 {
     }
 }
 
+/// Récupère les métadonnées (est_repertoire, taille) d'un noeud dans le pool d'inodes virtuel
+pub fn stat_pool_node(path: &str) -> Option<(bool, usize)> {
+    let clean = path.trim_end_matches('/');
+    // SAFETY: Accès protégé en lecture au pool d'inodes virtuel
+    unsafe {
+        let pool = core::ptr::addr_of!(INODE_POOL);
+        for node in (*pool).iter() {
+            if node.is_active && node.path_str() == clean {
+                return Some((node.is_dir, node.size));
+            }
+        }
+    }
+    None
+}
+
+/// Concatène un répertoire et un nom de fichier dans un tampon fixe sans allocation
+pub fn join_path<'a>(
+    dir: &str,
+    file: &str,
+    buf: &'a mut [u8; crate::vfs::MAX_PATH_LEN],
+) -> Option<&'a str> {
+    let dir_clean = dir.trim_end_matches('/');
+    let file_clean = file.trim_start_matches('/');
+    let dir_bytes = dir_clean.as_bytes();
+    let file_bytes = file_clean.as_bytes();
+    let total_len = dir_bytes.len() + 1 + file_bytes.len();
+    if total_len > crate::vfs::MAX_PATH_LEN {
+        return None;
+    }
+    buf[..dir_bytes.len()].copy_from_slice(dir_bytes);
+    buf[dir_bytes.len()] = b'/';
+    buf[dir_bytes.len() + 1..total_len].copy_from_slice(file_bytes);
+    core::str::from_utf8(&buf[..total_len]).ok()
+}
+
+type InodeSnapshotItem = (
+    [u8; crate::vfs::MAX_PATH_LEN],
+    usize,
+    bool,
+    [u8; crate::vfs::FILE_BUFFER_SIZE],
+    usize,
+);
+
+/// Copie le flux d'un fichier source vers un fichier destination via le VFS
+pub fn copy_file_contents(src: &str, dst: &str) -> Result<usize, i32> {
+    let in_fd = sys_open(src, crate::vfs::O_RDONLY);
+    if in_fd < 0 {
+        return Err(-1);
+    }
+    let out_fd = sys_open(
+        dst,
+        crate::vfs::O_CREAT | crate::vfs::O_WRONLY | crate::vfs::O_TRUNC,
+    );
+    if out_fd < 0 {
+        let _ = sys_close(in_fd);
+        return Err(-1);
+    }
+    let mut buf = [0u8; 1024];
+    let mut total = 0;
+    loop {
+        let r = sys_read(in_fd, &mut buf);
+        if r <= 0 {
+            break;
+        }
+        let w = sys_write(out_fd, &buf[..r as usize]);
+        if w < 0 {
+            let _ = sys_close(in_fd);
+            let _ = sys_close(out_fd);
+            return Err(-1);
+        }
+        total += w as usize;
+    }
+    let _ = sys_close(in_fd);
+    let _ = sys_close(out_fd);
+    Ok(total)
+}
+
+/// Exécute l'utilitaire `cp` pour la copie de fichiers et répertoires
+pub fn run_cp(args: &[&str], err_fd: i32) -> i32 {
+    let mut recursive = false;
+    let mut _force = false;
+    let mut paths_start = 0;
+    for (i, &arg) in args.iter().enumerate() {
+        if arg.starts_with('-') && arg != "-" {
+            for b in arg[1..].bytes() {
+                match b {
+                    b'r' | b'R' => recursive = true,
+                    b'f' => _force = true,
+                    _ => {}
+                }
+            }
+            paths_start = i + 1;
+        } else {
+            break;
+        }
+    }
+
+    let operands = &args[paths_start..];
+    if operands.is_empty() {
+        let _ = sys_write(err_fd, b"cp: missing file operand\n");
+        return 1;
+    }
+    if operands.len() == 1 {
+        let _ = sys_write(err_fd, b"cp: missing destination file operand after '");
+        let _ = sys_write(err_fd, operands[0].as_bytes());
+        let _ = sys_write(err_fd, b"'\n");
+        return 1;
+    }
+
+    let src = operands[0].trim_end_matches('/');
+    let dst_raw = operands[1].trim_end_matches('/');
+
+    if src == dst_raw {
+        let _ = sys_write(err_fd, b"cp: '");
+        let _ = sys_write(err_fd, src.as_bytes());
+        let _ = sys_write(err_fd, b"' and '");
+        let _ = sys_write(err_fd, dst_raw.as_bytes());
+        let _ = sys_write(err_fd, b"' are the same file\n");
+        return 1;
+    }
+
+    let src_stat = match stat_pool_node(src) {
+        Some(st) => st,
+        None => {
+            let _ = sys_write(err_fd, b"cp: cannot stat '");
+            let _ = sys_write(err_fd, src.as_bytes());
+            let _ = sys_write(err_fd, b"': No such file or directory\n");
+            return 1;
+        }
+    };
+
+    let dst_stat = stat_pool_node(dst_raw);
+    let is_dst_dir = dst_stat.map(|(is_dir, _)| is_dir).unwrap_or(false);
+
+    let mut path_buf = [0u8; crate::vfs::MAX_PATH_LEN];
+    let final_dst = if is_dst_dir {
+        let base = match src.rfind('/') {
+            Some(idx) => &src[idx + 1..],
+            None => src,
+        };
+        match join_path(dst_raw, base, &mut path_buf) {
+            Some(p) => p,
+            None => {
+                let _ = sys_write(err_fd, b"cp: destination path too long\n");
+                return 1;
+            }
+        }
+    } else {
+        dst_raw
+    };
+
+    if src_stat.0 {
+        if !recursive {
+            let _ = sys_write(err_fd, b"cp: -r not specified; omitting directory '");
+            let _ = sys_write(err_fd, src.as_bytes());
+            let _ = sys_write(err_fd, b"'\n");
+            return 1;
+        }
+        if stat_pool_node(final_dst).is_none() {
+            let _ = sys_mkdir_pool(final_dst, 0o755);
+        }
+        // SAFETY: Duplication arborescente depuis INODE_POOL
+        unsafe {
+            let pool = core::ptr::addr_of_mut!(INODE_POOL);
+            let mut snapshot: [Option<InodeSnapshotItem>; 32] = [None; 32];
+            for (i, node) in (*pool).iter().enumerate() {
+                if node.is_active {
+                    snapshot[i] = Some((
+                        node.path,
+                        node.path_len,
+                        node.is_dir,
+                        node.buffer,
+                        node.size,
+                    ));
+                }
+            }
+            for (path_arr, path_len, is_dir, buffer_arr, size) in snapshot.iter().flatten() {
+                let item_path = core::str::from_utf8(&path_arr[..*path_len]).unwrap_or("");
+                if item_path.starts_with(src) && item_path != src {
+                    let sub_suffix = &item_path[src.len()..];
+                    let mut sub_buf = [0u8; crate::vfs::MAX_PATH_LEN];
+                    if let Some(target_sub) = join_path(final_dst, sub_suffix, &mut sub_buf) {
+                        if *is_dir {
+                            let _ = sys_mkdir_pool(target_sub, 0o755);
+                        } else {
+                            for slot in (*pool).iter_mut() {
+                                if !slot.is_active {
+                                    let tb = target_sub.as_bytes();
+                                    let len = tb.len().min(crate::vfs::MAX_PATH_LEN);
+                                    slot.path[..len].copy_from_slice(&tb[..len]);
+                                    slot.path_len = len;
+                                    slot.is_active = true;
+                                    slot.is_dir = false;
+                                    slot.size = *size;
+                                    slot.buffer[..*size].copy_from_slice(&buffer_arr[..*size]);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        0
+    } else {
+        if copy_file_contents(src, final_dst).is_err() {
+            let _ = sys_write(err_fd, b"cp: cannot copy '");
+            let _ = sys_write(err_fd, src.as_bytes());
+            let _ = sys_write(err_fd, b"' to '");
+            let _ = sys_write(err_fd, final_dst.as_bytes());
+            let _ = sys_write(err_fd, b"'\n");
+            return 1;
+        }
+        0
+    }
+}
+
+/// Exécute l'utilitaire `mv` déplaçant ou renommant fichiers et répertoires
+pub fn run_mv(args: &[&str], err_fd: i32) -> i32 {
+    let mut _force = false;
+    let mut paths_start = 0;
+    for (i, &arg) in args.iter().enumerate() {
+        if arg.starts_with('-') && arg != "-" {
+            for b in arg[1..].bytes() {
+                if b == b'f' {
+                    _force = true;
+                }
+            }
+            paths_start = i + 1;
+        } else {
+            break;
+        }
+    }
+
+    let operands = &args[paths_start..];
+    if operands.is_empty() {
+        let _ = sys_write(err_fd, b"mv: missing file operand\n");
+        return 1;
+    }
+    if operands.len() == 1 {
+        let _ = sys_write(err_fd, b"mv: missing destination file operand after '");
+        let _ = sys_write(err_fd, operands[0].as_bytes());
+        let _ = sys_write(err_fd, b"'\n");
+        return 1;
+    }
+
+    let src = operands[0].trim_end_matches('/');
+    let dst_raw = operands[1].trim_end_matches('/');
+
+    if src == dst_raw {
+        let _ = sys_write(err_fd, b"mv: '");
+        let _ = sys_write(err_fd, src.as_bytes());
+        let _ = sys_write(err_fd, b"' and '");
+        let _ = sys_write(err_fd, dst_raw.as_bytes());
+        let _ = sys_write(err_fd, b"' are the same file\n");
+        return 1;
+    }
+
+    let src_stat = match stat_pool_node(src) {
+        Some(st) => st,
+        None => {
+            let _ = sys_write(err_fd, b"mv: cannot stat '");
+            let _ = sys_write(err_fd, src.as_bytes());
+            let _ = sys_write(err_fd, b"': No such file or directory\n");
+            return 1;
+        }
+    };
+
+    let dst_stat = stat_pool_node(dst_raw);
+    let is_dst_dir = dst_stat.map(|(is_dir, _)| is_dir).unwrap_or(false);
+
+    let mut path_buf = [0u8; crate::vfs::MAX_PATH_LEN];
+    let final_dst = if is_dst_dir {
+        let base = match src.rfind('/') {
+            Some(idx) => &src[idx + 1..],
+            None => src,
+        };
+        match join_path(dst_raw, base, &mut path_buf) {
+            Some(p) => p,
+            None => {
+                let _ = sys_write(err_fd, b"mv: destination path too long\n");
+                return 1;
+            }
+        }
+    } else {
+        dst_raw
+    };
+
+    // Si la cible existe déjà et n'est pas un répertoire, l'écraser
+    if let Some((is_dir, _)) = stat_pool_node(final_dst) {
+        if is_dir && !src_stat.0 {
+            let _ = sys_write(err_fd, b"mv: cannot overwrite directory '");
+            let _ = sys_write(err_fd, final_dst.as_bytes());
+            let _ = sys_write(err_fd, b"' with non-directory\n");
+            return 1;
+        }
+        let _ = sys_unlink_pool(final_dst);
+    }
+
+    // SAFETY: Modification atomique in-place des chemins dans INODE_POOL
+    unsafe {
+        let pool = core::ptr::addr_of_mut!(INODE_POOL);
+        if src_stat.0 {
+            for node in (*pool).iter_mut() {
+                if !node.is_active {
+                    continue;
+                }
+                let p_str = node.path_str();
+                if p_str == src {
+                    let tb = final_dst.as_bytes();
+                    let len = tb.len().min(crate::vfs::MAX_PATH_LEN);
+                    node.path = [0u8; crate::vfs::MAX_PATH_LEN];
+                    node.path[..len].copy_from_slice(&tb[..len]);
+                    node.path_len = len;
+                } else if p_str.starts_with(src) && p_str.as_bytes().get(src.len()) == Some(&b'/') {
+                    let suffix = &p_str[src.len()..];
+                    let mut joined = [0u8; crate::vfs::MAX_PATH_LEN];
+                    if let Some(np) = join_path(final_dst, suffix, &mut joined) {
+                        let nb = np.as_bytes();
+                        let len = nb.len().min(crate::vfs::MAX_PATH_LEN);
+                        node.path = [0u8; crate::vfs::MAX_PATH_LEN];
+                        node.path[..len].copy_from_slice(&nb[..len]);
+                        node.path_len = len;
+                    }
+                }
+            }
+        } else {
+            let mut found = false;
+            for node in (*pool).iter_mut() {
+                if node.is_active && node.path_str() == src {
+                    let tb = final_dst.as_bytes();
+                    let len = tb.len().min(crate::vfs::MAX_PATH_LEN);
+                    node.path = [0u8; crate::vfs::MAX_PATH_LEN];
+                    node.path[..len].copy_from_slice(&tb[..len]);
+                    node.path_len = len;
+                    found = true;
+                    break;
+                }
+            }
+            if !found {
+                let _ = sys_write(err_fd, b"mv: cannot stat '");
+                let _ = sys_write(err_fd, src.as_bytes());
+                let _ = sys_write(err_fd, b"': No such file or directory\n");
+                return 1;
+            }
+        }
+    }
+
+    0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1431,5 +1782,60 @@ mod tests {
         // Suppression avec rm -r
         let code_rm = run_rm(&["-r", "/tmp/new_dir"], 2);
         assert_eq!(code_rm, 0);
+    }
+
+    #[test]
+    fn test_cp_and_mv_lifecycle() {
+        // 1. Création d'un fichier source
+        let fd = sys_open("/tmp/cp_src.txt", O_CREAT | O_WRONLY);
+        assert!(fd >= 3);
+        let data = b"Content to be copied and moved\n";
+        let _ = sys_write(fd, data);
+        sys_close(fd);
+
+        // 2. Copie du fichier
+        let code_cp = run_cp(&["/tmp/cp_src.txt", "/tmp/cp_dst.txt"], 2);
+        assert_eq!(code_cp, 0);
+
+        // Vérification de la copie
+        let fd_cp = sys_open("/tmp/cp_dst.txt", O_RDONLY);
+        assert!(fd_cp >= 3);
+        let mut read_buf = [0u8; 64];
+        let n = sys_read(fd_cp, &mut read_buf);
+        assert_eq!(n, data.len() as isize);
+        assert_eq!(&read_buf[..n as usize], data);
+        sys_close(fd_cp);
+
+        // 3. Déplacement (mv) vers un nouveau chemin
+        let code_mv = run_mv(&["/tmp/cp_dst.txt", "/tmp/mv_target.txt"], 2);
+        assert_eq!(code_mv, 0);
+
+        // Ancien chemin n'existe plus
+        let fd_old = sys_open("/tmp/cp_dst.txt", O_RDONLY);
+        assert_eq!(fd_old, -1);
+
+        // Nouveau chemin contient les données
+        let fd_new = sys_open("/tmp/mv_target.txt", O_RDONLY);
+        assert!(fd_new >= 3);
+        let n_mv = sys_read(fd_new, &mut read_buf);
+        assert_eq!(n_mv, data.len() as isize);
+        assert_eq!(&read_buf[..n_mv as usize], data);
+        sys_close(fd_new);
+
+        // 4. Copie récursive de répertoire
+        let _ = run_mkdir(&["-p", "/tmp/src_dir"], 2);
+        let fd_sub = sys_open("/tmp/src_dir/sub.txt", O_CREAT | O_WRONLY);
+        assert!(fd_sub >= 3);
+        let _ = sys_write(fd_sub, b"Subfile data\n");
+        sys_close(fd_sub);
+
+        let code_cp_dir = run_cp(&["-r", "/tmp/src_dir", "/tmp/dst_dir"], 2);
+        assert_eq!(code_cp_dir, 0);
+
+        // Nettoyage
+        let _ = run_rm(&["/tmp/cp_src.txt"], 2);
+        let _ = run_rm(&["/tmp/mv_target.txt"], 2);
+        let _ = run_rm(&["-r", "/tmp/src_dir"], 2);
+        let _ = run_rm(&["-r", "/tmp/dst_dir"], 2);
     }
 }

@@ -33,6 +33,79 @@ pub const NVME_IO_WRITE: u8 = 0x01;
 pub const NVME_IO_READ: u8 = 0x02;
 
 pub const QUEUE_SIZE: usize = 64;
+pub const NVME_PRP_ENTRIES_MAX: usize = 512;
+
+/// Liste de pointeurs de pages de régions physiques (PRP List) conforme NVMe 1.4 (4096 octets, alignement 4096).
+#[repr(C, align(4096))]
+#[derive(Clone, Copy)]
+pub struct NvmePrpList {
+    pub entries: [u64; NVME_PRP_ENTRIES_MAX],
+}
+
+impl Default for NvmePrpList {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl NvmePrpList {
+    pub const fn new() -> Self {
+        Self {
+            entries: [0u64; NVME_PRP_ENTRIES_MAX],
+        }
+    }
+
+    /// Définit l'adresse d'une entrée PRP à l'indice donné (0..512)
+    pub fn set_entry(&mut self, index: usize, page_iova: u64) -> Result<(), SysError> {
+        if index >= NVME_PRP_ENTRIES_MAX {
+            return Err(SysError::OutOfMemory);
+        }
+        self.entries[index] = page_iova;
+        Ok(())
+    }
+
+    /// Réinitialise la liste
+    pub fn clear(&mut self) {
+        self.entries = [0u64; NVME_PRP_ENTRIES_MAX];
+    }
+}
+
+/// Descripteur de buffer DMA zéro-copie pour transferts blocs multi-pages NVMe 1.4.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NvmeDmaBuffer {
+    pub prp1: u64,
+    pub prp2: u64,
+    pub page_count: usize,
+}
+
+impl NvmeDmaBuffer {
+    /// Crée un descripteur simple (1 page mémoire)
+    pub const fn single_page(iova: u64) -> Self {
+        Self {
+            prp1: iova,
+            prp2: 0,
+            page_count: 1,
+        }
+    }
+
+    /// Crée un descripteur dual-page (2 pages mémoires directes)
+    pub const fn dual_page(page1_iova: u64, page2_iova: u64) -> Self {
+        Self {
+            prp1: page1_iova,
+            prp2: page2_iova,
+            page_count: 2,
+        }
+    }
+
+    /// Crée un descripteur scatter-gather avec PRP List pour transferts de grande taille (jusqu'à 2 Mio)
+    pub const fn scatter_gather(page1_iova: u64, prp_list_iova: u64, total_pages: usize) -> Self {
+        Self {
+            prp1: page1_iova,
+            prp2: prp_list_iova,
+            page_count: total_pages,
+        }
+    }
+}
 
 /// Entrée de la file de soumission NVMe conforme à la spécification NVMe 1.4 (64 octets).
 #[repr(C, align(64))]
@@ -217,8 +290,13 @@ impl NvmeController {
         Ok(())
     }
 
-    /// Émet une commande de lecture de blocs (NVMe Read).
-    pub fn read_blocks(&mut self, lba: u64, count: u16, dma_iova: u64) -> Result<(), SysError> {
+    /// Émet une commande de lecture de blocs (NVMe Read) avec descripteur DMA personnalisé.
+    pub fn read_blocks_dma(
+        &mut self,
+        lba: u64,
+        count: u16,
+        dma: NvmeDmaBuffer,
+    ) -> Result<(), SysError> {
         if !self.ready {
             return Err(SysError::ResourceBusy);
         }
@@ -228,8 +306,44 @@ impl NvmeController {
             nsid: 1,
             reserved: 0,
             mptr: 0,
-            prp1: dma_iova,
-            prp2: 0,
+            prp1: dma.prp1,
+            prp2: dma.prp2,
+            cdw10: lba as u32,
+            cdw11: (lba >> 32) as u32,
+            cdw12: count.saturating_sub(1) as u32,
+            cdw13: 0,
+            cdw14: 0,
+            cdw15: 0,
+        };
+
+        let cid = self.io_queue.submit(cmd);
+        let _ = self.io_queue.poll_completion(cid)?;
+        Ok(())
+    }
+
+    /// Émet une commande de lecture de blocs (NVMe Read).
+    pub fn read_blocks(&mut self, lba: u64, count: u16, dma_iova: u64) -> Result<(), SysError> {
+        self.read_blocks_dma(lba, count, NvmeDmaBuffer::single_page(dma_iova))
+    }
+
+    /// Émet une commande d'écriture de blocs (NVMe Write) avec descripteur DMA personnalisé.
+    pub fn write_blocks_dma(
+        &mut self,
+        lba: u64,
+        count: u16,
+        dma: NvmeDmaBuffer,
+    ) -> Result<(), SysError> {
+        if !self.ready {
+            return Err(SysError::ResourceBusy);
+        }
+
+        let cmd = NvmeSubmissionEntry {
+            cdw0: NVME_IO_WRITE as u32,
+            nsid: 1,
+            reserved: 0,
+            mptr: 0,
+            prp1: dma.prp1,
+            prp2: dma.prp2,
             cdw10: lba as u32,
             cdw11: (lba >> 32) as u32,
             cdw12: count.saturating_sub(1) as u32,
@@ -245,28 +359,7 @@ impl NvmeController {
 
     /// Émet une commande d'écriture de blocs (NVMe Write).
     pub fn write_blocks(&mut self, lba: u64, count: u16, dma_iova: u64) -> Result<(), SysError> {
-        if !self.ready {
-            return Err(SysError::ResourceBusy);
-        }
-
-        let cmd = NvmeSubmissionEntry {
-            cdw0: NVME_IO_WRITE as u32,
-            nsid: 1,
-            reserved: 0,
-            mptr: 0,
-            prp1: dma_iova,
-            prp2: 0,
-            cdw10: lba as u32,
-            cdw11: (lba >> 32) as u32,
-            cdw12: count.saturating_sub(1) as u32,
-            cdw13: 0,
-            cdw14: 0,
-            cdw15: 0,
-        };
-
-        let cid = self.io_queue.submit(cmd);
-        let _ = self.io_queue.poll_completion(cid)?;
-        Ok(())
+        self.write_blocks_dma(lba, count, NvmeDmaBuffer::single_page(dma_iova))
     }
 
     /// Émet une commande de synchronisation cache matérielle (NVMe Flush).
@@ -423,5 +516,26 @@ mod tests {
         assert!(ctrl.flush().is_ok());
         let flush_cmd = ctrl.io_queue.sq[2];
         assert_eq!((flush_cmd.cdw0 & 0xFF) as u8, NVME_IO_FLUSH);
+
+        // Test Scatter-Gather DMA Multi-Pages (PRP List)
+        let mut prp_list = NvmePrpList::new();
+        assert_eq!(core::mem::size_of::<NvmePrpList>(), 4096);
+        assert_eq!(core::mem::align_of::<NvmePrpList>(), 4096);
+
+        // Remplir 16 pages mémoires physiques (64 Kio)
+        for i in 0..16 {
+            assert!(prp_list
+                .set_entry(i, 0x3000_0000 + ((i as u64 + 1) * 0x1000))
+                .is_ok());
+        }
+
+        let dma_sg = NvmeDmaBuffer::scatter_gather(0x3000_0000, 0x4000_0000, 17);
+        assert!(ctrl.read_blocks_dma(4096, 128, dma_sg).is_ok()); // 128 blocs de 512 = 64 Kio
+        let sg_cmd = ctrl.io_queue.sq[3];
+        assert_eq!((sg_cmd.cdw0 & 0xFF) as u8, NVME_IO_READ);
+        assert_eq!(sg_cmd.prp1, 0x3000_0000);
+        assert_eq!(sg_cmd.prp2, 0x4000_0000);
+        assert_eq!(sg_cmd.cdw10, 4096);
+        assert_eq!(sg_cmd.cdw12, 127); // 128 - 1
     }
 }

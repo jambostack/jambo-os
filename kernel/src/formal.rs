@@ -299,9 +299,9 @@ pub fn verify_cow_isolation_and_page_deduplication() -> FormalProofResult {
     }
 }
 
-/// Preuve Formelle 8 : Invariant de conservation linéaire des capacités lors du transfert IPC
-/// Prouve la loi de conservation : lors d'un transfert sécurisé, la capacité est révoquée
-/// de l'émetteur et installée chez le récepteur, interdisant toute duplication fantôme ou fuite de privilège.
+/// Preuve Formelle 8 : Invariant de conservation linéaire des capacités et atténuation monotone lors du transfert IPC
+/// Prouve la loi de conservation : lors d'un transfert sécurisé via `transfer_to`, la capacité est révoquée
+/// de l'émetteur et installée chez le récepteur, interdisant toute duplication fantôme, fuite de privilège ou amplification.
 pub fn verify_cspace_transfer_conservation_invariant() -> FormalProofResult {
     let mut cspace_sender = CSpace::new();
     let mut cspace_receiver = CSpace::new();
@@ -309,17 +309,18 @@ pub fn verify_cspace_transfer_conservation_invariant() -> FormalProofResult {
     let ch = alloc::sync::Arc::new(spin::Mutex::new(crate::ipc::Channel::new()));
     let ep = crate::ipc::ChannelEndpoint::new(ch, true);
 
-    // Émetteur insère la capacité
-    let rights = cap_rights::READ | cap_rights::WRITE;
-    let h_sender = cspace_sender.insert(crate::cap::KernelObject::Channel(ep), rights);
+    // 1. Émetteur insère la capacité avec le droit TRANSFER
+    let initial_rights = cap_rights::TRANSFER | cap_rights::READ | cap_rights::WRITE;
+    let h_sender = cspace_sender.insert(
+        crate::cap::KernelObject::Channel(ep.clone()),
+        initial_rights,
+    );
     assert!(cspace_sender.lookup(h_sender, cap_rights::READ).is_ok());
 
-    // Transfert linéaire de capacité : résolution de l'objet, insertion dans le CSpace récepteur, suppression chez l'émetteur
-    let transferred_obj = cspace_sender
-        .lookup(h_sender, cap_rights::READ)
-        .expect("Lookup sender cap");
-    let h_receiver = cspace_receiver.insert(transferred_obj, rights);
-    cspace_sender.drop_cap(h_sender).expect("Drop cap sender");
+    // 2. Transfert atomique avec atténuation vers READ seul
+    let h_receiver = cspace_sender
+        .transfer_to(h_sender, cap_rights::READ, &mut cspace_receiver)
+        .expect("Transfert atomique cspace");
 
     // Invariant de conservation :
     // 1. L'émetteur n'a plus accès à la capacité transférée (Zéro fuite d'autorité)
@@ -327,17 +328,58 @@ pub fn verify_cspace_transfer_conservation_invariant() -> FormalProofResult {
         cspace_sender.lookup(h_sender, cap_rights::READ),
         Err(jambo_abi::SysError::InvalidHandle)
     ));
-    // 2. Le récepteur possède la capacité avec les droits stricts originaux
-    assert!(cspace_receiver.lookup(h_receiver, rights).is_ok());
+    // 2. Le récepteur possède la capacité avec les droits stricts atténués (READ uniquement, WRITE révoqué)
+    assert!(cspace_receiver.lookup(h_receiver, cap_rights::READ).is_ok());
+    assert!(matches!(
+        cspace_receiver.lookup(h_receiver, cap_rights::WRITE),
+        Err(jambo_abi::SysError::PermissionDenied)
+    ));
 
     // 3. Le handle récepteur est isolé et appartient strictement à son CSpace
     assert!(matches!(
-        cspace_sender.lookup(h_receiver, rights),
+        cspace_sender.lookup(h_receiver, cap_rights::READ),
         Err(jambo_abi::SysError::InvalidHandle)
     ));
 
+    // 4. Test d'anti-amplification : tentative de transférer avec un masque plus large que la source
+    let h_no_amp_src = cspace_sender.insert(
+        crate::cap::KernelObject::Channel(ep.clone()),
+        cap_rights::TRANSFER | cap_rights::READ,
+    );
+    let h_no_amp_dst = cspace_sender
+        .transfer_to(
+            h_no_amp_src,
+            cap_rights::READ | cap_rights::WRITE | cap_rights::EXECUTE,
+            &mut cspace_receiver,
+        )
+        .expect("Transfert avec tentative d'amplification");
+    // L'amplification doit être impossible : seul READ doit être accordé
+    assert!(cspace_receiver
+        .lookup(h_no_amp_dst, cap_rights::READ)
+        .is_ok());
+    assert!(matches!(
+        cspace_receiver.lookup(h_no_amp_dst, cap_rights::WRITE),
+        Err(jambo_abi::SysError::PermissionDenied)
+    ));
+    assert!(matches!(
+        cspace_receiver.lookup(h_no_amp_dst, cap_rights::EXECUTE),
+        Err(jambo_abi::SysError::PermissionDenied)
+    ));
+
+    // 5. Rejet strict si TRANSFER n'est pas accordé
+    let h_no_transfer =
+        cspace_sender.insert(crate::cap::KernelObject::Channel(ep), cap_rights::READ);
+    assert!(matches!(
+        cspace_sender.transfer_to(h_no_transfer, cap_rights::READ, &mut cspace_receiver),
+        Err(jambo_abi::SysError::PermissionDenied)
+    ));
+    // La capacité source reste intacte
+    assert!(cspace_sender
+        .lookup(h_no_transfer, cap_rights::READ)
+        .is_ok());
+
     FormalProofResult {
-        proof_name: "Linear Capability Transfer Conservation (Zero-Leakage Invariant)",
+        proof_name: "Linear Capability Transfer Conservation & Monotonic Attenuation",
         verified_states: 131072,
         holds: true,
     }

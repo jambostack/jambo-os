@@ -122,6 +122,46 @@ impl CSpace {
         Ok(self.insert(obj, new_rights))
     }
 
+    /// Transfère atomiquement une capacité vers un CSpace cible en appliquant l'atténuation monotone des droits
+    pub fn transfer_to(
+        &mut self,
+        handle: Handle,
+        rights_mask: u32,
+        target: &mut CSpace,
+    ) -> Result<Handle, SysError> {
+        let idx = handle.index() as usize;
+        if idx >= self.slots.len() {
+            return Err(SysError::InvalidHandle);
+        }
+        let slot = &self.slots[idx];
+        if slot.generation != handle.generation() {
+            return Err(SysError::InvalidHandle);
+        }
+        let cap = slot.cap.as_ref().ok_or(SysError::InvalidHandle)?;
+        if (cap.rights & cap_rights::TRANSFER) == 0 {
+            return Err(SysError::PermissionDenied);
+        }
+
+        // Atténuation monotone stricte : aucune amplification possible au-delà des droits actuels
+        let effective_mask = if rights_mask == 0 {
+            cap_rights::ALL
+        } else {
+            rights_mask
+        };
+        let final_rights = cap.rights & effective_mask;
+        let obj = cap.object.clone();
+
+        // Insertion dans le CSpace récepteur
+        let new_handle = target.insert(obj, final_rights);
+
+        // Clôture atomique de la capacité source
+        let slot_mut = &mut self.slots[idx];
+        slot_mut.cap = None;
+        slot_mut.generation = slot_mut.generation.wrapping_add(1);
+
+        Ok(new_handle)
+    }
+
     /// Révoque et libère une capacité
     pub fn drop_cap(&mut self, handle: Handle) -> Result<(), SysError> {
         let idx = handle.index() as usize;
