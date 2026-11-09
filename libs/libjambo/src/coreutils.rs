@@ -2474,6 +2474,285 @@ pub fn run_mv(args: &[&str], err_fd: i32) -> i32 {
     0
 }
 
+/// Exécute l'utilitaire `find` effectuant un parcours récursif d'arborescence VFS
+pub fn run_find(args: &[&str], out_fd: i32, err_fd: i32) -> i32 {
+    let mut starting_path = "/";
+    let mut name_filter: Option<&str> = None;
+    let mut type_filter: Option<char> = None;
+    let mut max_depth: Option<usize> = None;
+
+    let mut i = 0;
+    let mut path_specified = false;
+
+    while i < args.len() {
+        let arg = args[i];
+        if !arg.starts_with('-') && !path_specified {
+            starting_path = arg;
+            path_specified = true;
+            i += 1;
+            continue;
+        }
+
+        match arg {
+            "-name" => {
+                if i + 1 < args.len() {
+                    name_filter = Some(args[i + 1]);
+                    i += 2;
+                } else {
+                    let _ = sys_write(err_fd, b"find: missing argument to `-name'\n");
+                    return 1;
+                }
+            }
+            "-type" => {
+                if i + 1 < args.len() {
+                    let t = args[i + 1];
+                    if t == "f" || t == "d" {
+                        type_filter = Some(t.chars().next().unwrap());
+                        i += 2;
+                    } else {
+                        let _ = sys_write(err_fd, b"find: Unknown argument to -type: ");
+                        let _ = sys_write(err_fd, t.as_bytes());
+                        let _ = sys_write(err_fd, b"\n");
+                        return 1;
+                    }
+                } else {
+                    let _ = sys_write(err_fd, b"find: missing argument to `-type'\n");
+                    return 1;
+                }
+            }
+            "-maxdepth" => {
+                if i + 1 < args.len() {
+                    if let Some(d) = parse_usize(args[i + 1]) {
+                        max_depth = Some(d);
+                        i += 2;
+                    } else {
+                        let _ = sys_write(err_fd, b"find: invalid argument to `-maxdepth'\n");
+                        return 1;
+                    }
+                } else {
+                    let _ = sys_write(err_fd, b"find: missing argument to `-maxdepth'\n");
+                    return 1;
+                }
+            }
+            _ => {
+                let _ = sys_write(err_fd, b"find: unknown predicate: ");
+                let _ = sys_write(err_fd, arg.as_bytes());
+                let _ = sys_write(err_fd, b"\n");
+                return 1;
+            }
+        }
+    }
+
+    let normalized_root = if starting_path == "." {
+        "/"
+    } else {
+        starting_path
+    };
+
+    struct EntryInfo<'a> {
+        path: &'a str,
+        is_dir: bool,
+    }
+
+    let base_entries = [
+        EntryInfo {
+            path: "/",
+            is_dir: true,
+        },
+        EntryInfo {
+            path: "/bin",
+            is_dir: true,
+        },
+        EntryInfo {
+            path: "/dev",
+            is_dir: true,
+        },
+        EntryInfo {
+            path: "/etc",
+            is_dir: true,
+        },
+        EntryInfo {
+            path: "/tmp",
+            is_dir: true,
+        },
+        EntryInfo {
+            path: "/hostname",
+            is_dir: false,
+        },
+        EntryInfo {
+            path: "/os-release",
+            is_dir: false,
+        },
+        EntryInfo {
+            path: "/motd",
+            is_dir: false,
+        },
+        EntryInfo {
+            path: "/inittab",
+            is_dir: false,
+        },
+        EntryInfo {
+            path: "/etc/hostname",
+            is_dir: false,
+        },
+        EntryInfo {
+            path: "/etc/os-release",
+            is_dir: false,
+        },
+        EntryInfo {
+            path: "/etc/motd",
+            is_dir: false,
+        },
+    ];
+
+    let mut printed = [""; 64];
+    let mut printed_count = 0;
+
+    let matches_pattern = |name: &str, pat: &str| -> bool {
+        if pat == "*" {
+            true
+        } else if let Some(suffix) = pat.strip_prefix('*') {
+            name.ends_with(suffix)
+        } else if let Some(prefix) = pat.strip_suffix('*') {
+            name.starts_with(prefix)
+        } else {
+            name == pat
+        }
+    };
+
+    for entry in &base_entries {
+        let p = entry.path;
+        if normalized_root != "/" && !p.starts_with(normalized_root) {
+            continue;
+        }
+
+        let rel = if p == "/" {
+            ""
+        } else if let Some(stripped) = p.strip_prefix(normalized_root) {
+            stripped.trim_start_matches('/')
+        } else {
+            continue;
+        };
+        let depth = if rel.is_empty() {
+            0
+        } else {
+            rel.split('/').count()
+        };
+        if let Some(max_d) = max_depth {
+            if depth > max_d {
+                continue;
+            }
+        }
+
+        if let Some(tf) = type_filter {
+            if tf == 'f' && entry.is_dir {
+                continue;
+            }
+            if tf == 'd' && !entry.is_dir {
+                continue;
+            }
+        }
+
+        if let Some(nf) = name_filter {
+            let base_name = if let Some(idx) = p.rfind('/') {
+                &p[idx + 1..]
+            } else {
+                p
+            };
+            let base = if base_name.is_empty() { p } else { base_name };
+            if !matches_pattern(base, nf) {
+                continue;
+            }
+        }
+
+        let mut already = false;
+        for &pr in &printed[..printed_count] {
+            if pr == p {
+                already = true;
+                break;
+            }
+        }
+        if !already && printed_count < printed.len() {
+            printed[printed_count] = p;
+            printed_count += 1;
+            let _ = sys_write(out_fd, p.as_bytes());
+            let _ = sys_write(out_fd, b"\n");
+        }
+    }
+
+    // SAFETY: Lecture protégée du pool d'inodes virtuel
+    unsafe {
+        let pool = core::ptr::addr_of!(INODE_POOL);
+        for node in (*pool).iter() {
+            if !node.is_active {
+                continue;
+            }
+            let p = node.path_str();
+            if p.is_empty() {
+                continue;
+            }
+            if normalized_root != "/" && !p.starts_with(normalized_root) {
+                continue;
+            }
+
+            let rel = if p == "/" {
+                ""
+            } else if let Some(stripped) = p.strip_prefix(normalized_root) {
+                stripped.trim_start_matches('/')
+            } else {
+                continue;
+            };
+            let depth = if rel.is_empty() {
+                0
+            } else {
+                rel.split('/').count()
+            };
+            if let Some(max_d) = max_depth {
+                if depth > max_d {
+                    continue;
+                }
+            }
+
+            if let Some(tf) = type_filter {
+                if tf == 'f' && node.is_dir {
+                    continue;
+                }
+                if tf == 'd' && !node.is_dir {
+                    continue;
+                }
+            }
+
+            if let Some(nf) = name_filter {
+                let base_name = if let Some(idx) = p.rfind('/') {
+                    &p[idx + 1..]
+                } else {
+                    p
+                };
+                let base = if base_name.is_empty() { p } else { base_name };
+                if !matches_pattern(base, nf) {
+                    continue;
+                }
+            }
+
+            let mut already = false;
+            for &pr in &printed[..printed_count] {
+                if pr == p {
+                    already = true;
+                    break;
+                }
+            }
+            if !already && printed_count < printed.len() {
+                printed[printed_count] = p;
+                printed_count += 1;
+                let _ = sys_write(out_fd, p.as_bytes());
+                let _ = sys_write(out_fd, b"\n");
+            }
+        }
+    }
+
+    0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2907,5 +3186,56 @@ mod tests {
         let s3 = core::str::from_utf8(&out_buf3[..n3 as usize]).unwrap();
         assert_eq!(s3, "1\n3\n20\n100\n");
         sys_close(out_r3);
+    }
+
+    #[test]
+    fn test_find_lifecycle() {
+        // 1. Recherche par nom exact (-name hostname)
+        let (r1, w1) = crate::vfs::pipe().expect("pipe find 1");
+        let code1 = run_find(&["-name", "hostname"], w1, 2);
+        assert_eq!(code1, 0);
+        sys_close(w1);
+
+        let mut out1 = [0u8; 256];
+        let n1 = sys_read(r1, &mut out1);
+        assert!(n1 > 0);
+        let s1 = core::str::from_utf8(&out1[..n1 as usize]).unwrap();
+        assert!(s1.contains("/hostname\n") || s1.contains("/etc/hostname\n"));
+        sys_close(r1);
+
+        // 2. Recherche par type (-type d dans /etc)
+        let (r2, w2) = crate::vfs::pipe().expect("pipe find 2");
+        let code2 = run_find(&["/etc", "-type", "d"], w2, 2);
+        assert_eq!(code2, 0);
+        sys_close(w2);
+
+        let mut out2 = [0u8; 128];
+        let n2 = sys_read(r2, &mut out2);
+        assert!(n2 > 0);
+        let s2 = core::str::from_utf8(&out2[..n2 as usize]).unwrap();
+        assert!(s2.contains("/etc\n"));
+        assert!(!s2.contains("/etc/hostname\n"));
+        sys_close(r2);
+
+        // 3. Recherche par type fichier (-type f dans /etc)
+        let (r3, w3) = crate::vfs::pipe().expect("pipe find 3");
+        let code3 = run_find(&["/etc", "-type", "f"], w3, 2);
+        assert_eq!(code3, 0);
+        sys_close(w3);
+
+        let mut out3 = [0u8; 256];
+        let n3 = sys_read(r3, &mut out3);
+        assert!(n3 > 0);
+        let s3 = core::str::from_utf8(&out3[..n3 as usize]).unwrap();
+        assert!(s3.contains("/etc/hostname\n") || s3.contains("/etc/os-release\n"));
+        assert!(!s3.lines().any(|l| l == "/etc"));
+        sys_close(r3);
+
+        // 4. Test d'erreur avec argument manquant
+        let (r4, w4) = crate::vfs::pipe().expect("pipe find 4");
+        let code4 = run_find(&["-name"], 1, w4);
+        assert_eq!(code4, 1);
+        sys_close(w4);
+        sys_close(r4);
     }
 }

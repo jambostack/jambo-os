@@ -1727,6 +1727,333 @@ pub fn parse_dhcp_offer(payload: &[u8], expected_xid: u32) -> Result<DhcpOffer, 
     Ok(offer)
 }
 
+// =========================================================================
+// Protocole DNS Client (Domain Name System - RFC 1035)
+// =========================================================================
+
+pub const DNS_PORT: u16 = 53;
+pub const DNS_TYPE_A: u16 = 1; // Enregistrement IPv4 hôte
+pub const DNS_TYPE_CNAME: u16 = 5; // Canonical Name
+pub const DNS_TYPE_AAAA: u16 = 28; // Enregistrement IPv6
+pub const DNS_CLASS_IN: u16 = 1; // Classe Internet standard
+
+pub const DNS_FLAG_QR_RESPONSE: u16 = 0x8000;
+pub const DNS_FLAG_RD: u16 = 0x0100; // Recursion Desired
+pub const DNS_FLAG_RA: u16 = 0x0080; // Recursion Available
+pub const DNS_RCODE_MASK: u16 = 0x000F;
+pub const DNS_RCODE_NO_ERROR: u16 = 0;
+pub const DNS_RCODE_NAME_ERROR: u16 = 3; // NXDOMAIN
+
+/// En-tête de message DNS (12 octets, RFC 1035 § 4.1.1)
+#[repr(C, packed)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DnsHeader {
+    pub id: u16,
+    pub flags: u16,
+    pub qdcount: u16,
+    pub ancount: u16,
+    pub nscount: u16,
+    pub arcount: u16,
+}
+
+const _: () = assert!(core::mem::size_of::<DnsHeader>() == 12);
+
+impl DnsHeader {
+    #[inline]
+    pub fn id(&self) -> u16 {
+        u16::from_be(self.id)
+    }
+
+    #[inline]
+    pub fn flags(&self) -> u16 {
+        u16::from_be(self.flags)
+    }
+
+    #[inline]
+    pub fn qdcount(&self) -> u16 {
+        u16::from_be(self.qdcount)
+    }
+
+    #[inline]
+    pub fn ancount(&self) -> u16 {
+        u16::from_be(self.ancount)
+    }
+
+    #[inline]
+    pub fn is_response(&self) -> bool {
+        (self.flags() & DNS_FLAG_QR_RESPONSE) != 0
+    }
+
+    #[inline]
+    pub fn rcode(&self) -> u16 {
+        self.flags() & DNS_RCODE_MASK
+    }
+}
+
+pub const MAX_DNS_CACHE_ENTRIES: usize = 8;
+pub const MAX_DOMAIN_LEN: usize = 64;
+
+/// Entrée du cache de résolution DNS Ring 3
+#[derive(Clone, Copy)]
+pub struct DnsCacheEntry {
+    pub domain: [u8; MAX_DOMAIN_LEN],
+    pub domain_len: usize,
+    pub ip: [u8; 4],
+    pub active: bool,
+}
+
+impl Default for DnsCacheEntry {
+    fn default() -> Self {
+        Self {
+            domain: [0u8; MAX_DOMAIN_LEN],
+            domain_len: 0,
+            ip: [0; 4],
+            active: false,
+        }
+    }
+}
+
+/// Client résolveur DNS local avec cache sans allocation mémoire
+pub struct DnsClientResolver {
+    pub dns_server_ip: [u8; 4],
+    pub next_txid: u16,
+    pub cache: [DnsCacheEntry; MAX_DNS_CACHE_ENTRIES],
+}
+
+impl Default for DnsClientResolver {
+    fn default() -> Self {
+        Self::new([10, 0, 2, 3]) // Serveur DNS SLIRP QEMU par défaut
+    }
+}
+
+impl DnsClientResolver {
+    pub const fn new(dns_server_ip: [u8; 4]) -> Self {
+        const EMPTY_ENTRY: DnsCacheEntry = DnsCacheEntry {
+            domain: [0u8; MAX_DOMAIN_LEN],
+            domain_len: 0,
+            ip: [0; 4],
+            active: false,
+        };
+        Self {
+            dns_server_ip,
+            next_txid: 0x1234,
+            cache: [EMPTY_ENTRY; MAX_DNS_CACHE_ENTRIES],
+        }
+    }
+
+    /// Recherche une entrée dans le cache DNS local
+    pub fn lookup_cache(&self, domain: &str) -> Option<[u8; 4]> {
+        for entry in self.cache.iter() {
+            if entry.active
+                && entry.domain_len == domain.len()
+                && &entry.domain[..entry.domain_len] == domain.as_bytes()
+            {
+                return Some(entry.ip);
+            }
+        }
+        None
+    }
+
+    /// Enregistre une adresse IP résolue dans le cache DNS
+    pub fn insert_cache(&mut self, domain: &str, ip: [u8; 4]) {
+        let b = domain.as_bytes();
+        let len = b.len().min(MAX_DOMAIN_LEN);
+        // Remplacement d'une entrée existante ou premier slot libre
+        for entry in self.cache.iter_mut() {
+            if entry.active && entry.domain_len == len && entry.domain[..len] == b[..len] {
+                entry.ip = ip;
+                return;
+            }
+        }
+        for entry in self.cache.iter_mut() {
+            if !entry.active {
+                entry.domain[..len].copy_from_slice(&b[..len]);
+                entry.domain_len = len;
+                entry.ip = ip;
+                entry.active = true;
+                return;
+            }
+        }
+        // Éviction du premier slot si plein
+        self.cache[0].domain[..len].copy_from_slice(&b[..len]);
+        self.cache[0].domain_len = len;
+        self.cache[0].ip = ip;
+        self.cache[0].active = true;
+    }
+
+    /// Forge un paquet de requête DNS conforme RFC 1035
+    pub fn forge_query(&mut self, domain: &str, out: &mut [u8]) -> Result<(usize, u16), SysError> {
+        let txid = self.next_txid;
+        self.next_txid = self.next_txid.wrapping_add(1);
+        let len = build_dns_query(domain, txid, out)?;
+        Ok((len, txid))
+    }
+}
+
+/// Construit une trame DNS Query (RFC 1035) pour une résolution de nom d'hôte (Type A IPv4)
+pub fn build_dns_query(domain: &str, txid: u16, out: &mut [u8]) -> Result<usize, SysError> {
+    if domain.is_empty() || domain.len() > 255 {
+        return Err(SysError::InvalidArgument);
+    }
+
+    // Taille minimale requise : 12 (en-tête) + domain.len() + 2 (labels) + 4 (QTYPE, QCLASS)
+    let needed = 12 + domain.len() + 2 + 4;
+    if out.len() < needed {
+        return Err(SysError::BufferTooSmall);
+    }
+
+    // 1. En-tête DNS (12 octets)
+    let hdr = DnsHeader {
+        id: txid.to_be(),
+        flags: DNS_FLAG_RD.to_be(), // Recursion Desired (0x0100)
+        qdcount: 1u16.to_be(),      // 1 question
+        ancount: 0,
+        nscount: 0,
+        arcount: 0,
+    };
+
+    // SAFETY: out.len() >= needed >= 12 validé précédemment, DnsHeader a une taille fixe de 12 octets
+    unsafe {
+        core::ptr::copy_nonoverlapping(&hdr as *const DnsHeader as *const u8, out.as_mut_ptr(), 12);
+    }
+
+    // 2. Question section : Encodage QNAME par labels (ex: "jambo.local" -> \x05jambo\x05local\x00)
+    let mut cursor = 12;
+    for part in domain.split('.') {
+        if part.is_empty() {
+            continue;
+        }
+        let part_bytes = part.as_bytes();
+        if part_bytes.len() > 63 {
+            return Err(SysError::InvalidArgument);
+        }
+        out[cursor] = part_bytes.len() as u8;
+        cursor += 1;
+        out[cursor..cursor + part_bytes.len()].copy_from_slice(part_bytes);
+        cursor += part_bytes.len();
+    }
+    // Terminaison du QNAME
+    out[cursor] = 0;
+    cursor += 1;
+
+    // 3. QTYPE (Type A = 1) et QCLASS (Class IN = 1)
+    let qtype = DNS_TYPE_A.to_be_bytes();
+    out[cursor..cursor + 2].copy_from_slice(&qtype);
+    cursor += 2;
+
+    let qclass = DNS_CLASS_IN.to_be_bytes();
+    out[cursor..cursor + 2].copy_from_slice(&qclass);
+    cursor += 2;
+
+    Ok(cursor)
+}
+
+/// Analyse une trame DNS Response (RFC 1035) et extrait la première adresse IPv4 résolue
+pub fn parse_dns_response(packet: &[u8], expected_txid: u16) -> Result<[u8; 4], SysError> {
+    if packet.len() < 12 {
+        return Err(SysError::BufferTooSmall);
+    }
+
+    // SAFETY: packet.len() >= 12 validé précédemment, read_unaligned supporte tout alignement
+    let hdr = unsafe {
+        let ptr = packet.as_ptr() as *const DnsHeader;
+        ptr.read_unaligned()
+    };
+
+    if hdr.id() != expected_txid {
+        return Err(SysError::InvalidArgument);
+    }
+
+    if !hdr.is_response() {
+        return Err(SysError::InvalidArgument);
+    }
+
+    if hdr.rcode() != DNS_RCODE_NO_ERROR {
+        return Err(SysError::InvalidArgument);
+    }
+
+    let ancount = hdr.ancount();
+    if ancount == 0 {
+        return Err(SysError::InvalidArgument);
+    }
+
+    let mut cursor = 12;
+
+    // Saute la section Question
+    let qdcount = hdr.qdcount();
+    for _ in 0..qdcount {
+        while cursor < packet.len() {
+            let len = packet[cursor];
+            if len == 0 {
+                cursor += 1;
+                break;
+            }
+            if (len & 0xC0) == 0xC0 {
+                // Pointeur de compression
+                cursor += 2;
+                break;
+            }
+            cursor += 1 + len as usize;
+        }
+        cursor += 4; // QTYPE + QCLASS
+    }
+
+    // Parcourt les enregistrements de la section Answer
+    for _ in 0..ancount {
+        if cursor >= packet.len() {
+            break;
+        }
+
+        // Saute le champ NAME (pointeur ou labels)
+        if (packet[cursor] & 0xC0) == 0xC0 {
+            cursor += 2;
+        } else {
+            while cursor < packet.len() {
+                let len = packet[cursor];
+                if len == 0 {
+                    cursor += 1;
+                    break;
+                }
+                cursor += 1 + len as usize;
+            }
+        }
+
+        if cursor + 10 > packet.len() {
+            break;
+        }
+
+        let rtype = u16::from_be_bytes([packet[cursor], packet[cursor + 1]]);
+        let _rclass = u16::from_be_bytes([packet[cursor + 2], packet[cursor + 3]]);
+        let _ttl = u32::from_be_bytes([
+            packet[cursor + 4],
+            packet[cursor + 5],
+            packet[cursor + 6],
+            packet[cursor + 7],
+        ]);
+        let rdlength = u16::from_be_bytes([packet[cursor + 8], packet[cursor + 9]]) as usize;
+        cursor += 10;
+
+        if cursor + rdlength > packet.len() {
+            break;
+        }
+
+        // Si enregistrement Type A (IPv4) avec longueur 4 octets
+        if rtype == DNS_TYPE_A && rdlength == 4 {
+            let ip = [
+                packet[cursor],
+                packet[cursor + 1],
+                packet[cursor + 2],
+                packet[cursor + 3],
+            ];
+            return Ok(ip);
+        }
+
+        cursor += rdlength;
+    }
+
+    Err(SysError::InvalidArgument)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2149,5 +2476,84 @@ mod tests {
             parse_dhcp_offer(&offer_buf[..opt_cursor], 0xDEADBEEF),
             Err(SysError::InvalidArgument)
         );
+    }
+
+    #[test]
+    fn test_dns_query_encoding_and_response_parsing() {
+        let domain = "gateway.local";
+        let txid = 0x5678;
+
+        // 1. Encodage d'une requête DNS (build_dns_query)
+        let mut query_buf = [0u8; 128];
+        let query_len = build_dns_query(domain, txid, &mut query_buf).expect("build query");
+
+        let expected_hdr_len = 12;
+        let expected_qname_len = 1 + 7 + 1 + 5 + 1; // \x07gateway\x05local\x00 = 15 octets
+        let expected_tail_len = 4; // QTYPE + QCLASS
+        assert_eq!(
+            query_len,
+            expected_hdr_len + expected_qname_len + expected_tail_len
+        );
+
+        // SAFETY: query_buf contient les 12 octets d'en-tête DNS
+        let hdr = unsafe { (query_buf.as_ptr() as *const DnsHeader).read_unaligned() };
+        assert_eq!(hdr.id(), txid);
+        assert_eq!(hdr.flags(), DNS_FLAG_RD);
+        assert_eq!(hdr.qdcount(), 1);
+        assert_eq!(hdr.ancount(), 0);
+
+        // 2. Forge d'une réponse DNS conforme RFC 1035 (1 Answer: gateway.local -> 10.0.2.2)
+        let mut resp_buf = [0u8; 128];
+        // En-tête (flags: QR=1, RD=1, RA=1, RCODE=0 -> 0x8180)
+        let resp_hdr = DnsHeader {
+            id: txid.to_be(),
+            flags: (DNS_FLAG_QR_RESPONSE | DNS_FLAG_RD | DNS_FLAG_RA).to_be(),
+            qdcount: 1u16.to_be(),
+            ancount: 1u16.to_be(),
+            nscount: 0,
+            arcount: 0,
+        };
+        // SAFETY: Copie de l'en-tête de réponse DNS dans un tampon de taille suffisante
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                &resp_hdr as *const DnsHeader as *const u8,
+                resp_buf.as_mut_ptr(),
+                12,
+            );
+        }
+
+        // Copie de la section Question depuis la requête
+        resp_buf[12..query_len].copy_from_slice(&query_buf[12..query_len]);
+        let mut cur = query_len;
+
+        // Section Answer :
+        // Pointeur de compression vers le nom à l'offset 12 : 0xC00C
+        resp_buf[cur] = 0xC0;
+        resp_buf[cur + 1] = 12;
+        cur += 2;
+
+        // TYPE A (1), CLASS IN (1), TTL (300s), RDLENGTH (4)
+        resp_buf[cur..cur + 2].copy_from_slice(&DNS_TYPE_A.to_be_bytes());
+        cur += 2;
+        resp_buf[cur..cur + 2].copy_from_slice(&DNS_CLASS_IN.to_be_bytes());
+        cur += 2;
+        resp_buf[cur..cur + 4].copy_from_slice(&300u32.to_be_bytes());
+        cur += 4;
+        resp_buf[cur..cur + 2].copy_from_slice(&4u16.to_be_bytes());
+        cur += 2;
+
+        // RDATA : 10.0.2.2
+        resp_buf[cur..cur + 4].copy_from_slice(&[10, 0, 2, 2]);
+        cur += 4;
+
+        // 3. Décodage de la réponse DNS
+        let resolved_ip = parse_dns_response(&resp_buf[..cur], txid).expect("parse_dns_response");
+        assert_eq!(resolved_ip, [10, 0, 2, 2]);
+
+        // 4. Test du client DNS avec cache
+        let mut resolver = DnsClientResolver::new([10, 0, 2, 3]);
+        assert_eq!(resolver.lookup_cache("gateway.local"), None);
+        resolver.insert_cache("gateway.local", resolved_ip);
+        assert_eq!(resolver.lookup_cache("gateway.local"), Some([10, 0, 2, 2]));
     }
 }

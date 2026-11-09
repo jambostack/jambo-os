@@ -363,6 +363,97 @@ impl PortStatus {
 }
 
 // ============================================================================
+// Interrupter & Anneau d'Événements xHCI (ERST / ERDP) - Spécification xHCI 1.2
+// ============================================================================
+
+/// Entrée dans la table de segments de l'anneau d'événements (Event Ring Segment Table Entry - ERSTE, 16 octets)
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct EventRingSegmentTableEntry {
+    pub ring_segment_base_address: u64,
+    pub ring_segment_size: u32,
+    pub reserved: u32,
+}
+
+/// Registres de gestion d'un Interrupter xHCI (Section 5.5.2)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XhciInterrupter {
+    pub iman: u32,
+    pub imod: u32,
+    pub erstsz: u32,
+    pub erstba: u64,
+    pub erdp: u64,
+    pub cycle_bit: bool,
+    pub dequeue_idx: usize,
+    pub ring_size: usize,
+    pub events_handled: u64,
+    pub active: bool,
+}
+
+impl Default for XhciInterrupter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl XhciInterrupter {
+    pub const fn new() -> Self {
+        Self {
+            iman: 0,
+            imod: 0,
+            erstsz: 0,
+            erstba: 0,
+            erdp: 0,
+            cycle_bit: true,
+            dequeue_idx: 0,
+            ring_size: RING_ENTRIES,
+            events_handled: 0,
+            active: false,
+        }
+    }
+
+    /// Active les interruptions matérielles sur cet interrupter (bit 1 IE de IMAN).
+    pub fn enable_interrupts(&mut self) {
+        self.iman |= 1 << 1;
+    }
+
+    /// Désactive les interruptions matérielles.
+    pub fn disable_interrupts(&mut self) {
+        self.iman &= !(1 << 1);
+    }
+
+    /// Vérifie si une interruption est en attente (bit 0 IP de IMAN).
+    pub fn is_interrupt_pending(&self) -> bool {
+        (self.iman & 1) != 0
+    }
+
+    /// Acquitte l'interruption en cours (écriture 1 sur IP).
+    pub fn acknowledge_interrupt(&mut self) {
+        self.iman |= 1; // RW1C
+    }
+
+    /// Met à jour le pointeur de dépilement ERDP et acquitte le bit EHB (Event Handler Busy).
+    pub fn advance_erdp(&mut self, next_trb_addr: u64) {
+        // Bit 3 = EHB (écrire 1 pour effacer), bits 63:4 = adresse du TRB
+        self.erdp = (next_trb_addr & !0x0F) | (1 << 3);
+        self.dequeue_idx = (self.dequeue_idx + 1) % self.ring_size;
+        if self.dequeue_idx == 0 {
+            self.cycle_bit = !self.cycle_bit;
+        }
+        self.events_handled = self.events_handled.wrapping_add(1);
+    }
+}
+
+/// Événement de détection à chaud (Hot-Plug) sur un port root-hub USB
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PortHotPlugEvent {
+    NoChange,
+    DeviceConnected { port_id: u8, speed: UsbSpeed },
+    DeviceDisconnected { port_id: u8, slot_id: Option<u8> },
+    PortResetCompleted { port_id: u8 },
+}
+
+// ============================================================================
 // Décodeurs USB HID Boot Protocol (Clavier & Souris)
 // ============================================================================
 
@@ -511,6 +602,8 @@ pub struct XhciController {
     pub ep_rings: [EndpointTransferRing; MAX_ENDPOINTS],
     pub keyboard: UsbKeyboardState,
     pub mouse: UsbMouseState,
+    pub interrupter: XhciInterrupter,
+    pub port_slots: [Option<u8>; 16],
     pub ready: bool,
 }
 
@@ -558,6 +651,8 @@ impl XhciController {
                 dy: 0,
                 wheel: 0,
             },
+            interrupter: XhciInterrupter::new(),
+            port_slots: [None; 16],
             ready: false,
         }
     }
@@ -782,6 +877,104 @@ impl XhciController {
         }
         self.ready = true;
         Ok(())
+    }
+
+    /// Initialise l'Interrupter primaire et lie la table de segments ERST et le pointeur de dépilement ERDP.
+    pub fn init_primary_interrupter(
+        &mut self,
+        erst_iova: u64,
+        ring_iova: u64,
+        ring_entries: u32,
+    ) -> Result<(), SysError> {
+        if !self.ready {
+            return Err(SysError::ResourceBusy);
+        }
+        if (erst_iova & 0x3F) != 0 || (ring_iova & 0x3F) != 0 {
+            // Doit être aligné sur 64 octets
+            return Err(SysError::BadAddress);
+        }
+        self.interrupter.erstba = erst_iova;
+        self.interrupter.erstsz = 1; // 1 segment
+        self.interrupter.erdp = ring_iova | (1 << 3); // initial EHB
+        self.interrupter.ring_size = ring_entries as usize;
+        self.interrupter.dequeue_idx = 0;
+        self.interrupter.cycle_bit = true;
+        self.interrupter.enable_interrupts();
+        self.interrupter.active = true;
+        Ok(())
+    }
+
+    /// Acquitte la consommation d'un événement sur ERDP.
+    pub fn acknowledge_erdp(&mut self, next_trb_addr: u64) {
+        self.interrupter.advance_erdp(next_trb_addr);
+    }
+
+    /// Associe un numéro de slot à un port USB (après Enable Slot / Address Device).
+    pub fn bind_port_slot(&mut self, port_id: u8, slot_id: u8) -> Result<(), SysError> {
+        if port_id == 0 || port_id as usize > self.port_slots.len() {
+            return Err(SysError::InvalidArgument);
+        }
+        self.port_slots[port_id as usize - 1] = Some(slot_id);
+        Ok(())
+    }
+
+    /// Traite un TRB de changement de statut de port (Port Status Change Event, Type 34)
+    /// et retourne l'événement de détection à chaud (Hot-Plug).
+    pub fn handle_port_status_change_trb(
+        &mut self,
+        trb: &Trb,
+        raw_portsc: u32,
+    ) -> Result<PortHotPlugEvent, SysError> {
+        if trb.trb_type() != TRB_TYPE_PORT_STATUS_CHANGE {
+            return Err(SysError::InvalidArgument);
+        }
+
+        let port_id = ((trb.parameter >> 24) & 0xFF) as u8;
+        if port_id == 0 || port_id as usize > self.port_slots.len() {
+            return Err(SysError::InvalidArgument);
+        }
+
+        let status = PortStatus::parse(raw_portsc);
+
+        // Détection de connexion (CCS=1 et PED=1 ou en cours)
+        if status.connected {
+            Ok(PortHotPlugEvent::DeviceConnected {
+                port_id,
+                speed: status.speed,
+            })
+        } else {
+            // Déconnexion détectée (Hot-Unplug)
+            let current_slot = self.port_slots[port_id as usize - 1];
+            Ok(PortHotPlugEvent::DeviceDisconnected {
+                port_id,
+                slot_id: current_slot,
+            })
+        }
+    }
+
+    /// Traite la déconnexion à chaud (Hot-Unplug) d'un périphérique :
+    /// désactive le slot de périphérique, réinitialise les anneaux de transfert associés
+    /// et libère l'allocation de ressources Ring 3.
+    pub fn handle_hotplug_disconnect(&mut self, port_id: u8) -> Result<Option<u8>, SysError> {
+        if port_id == 0 || port_id as usize > self.port_slots.len() {
+            return Err(SysError::InvalidArgument);
+        }
+
+        let slot_id = self.port_slots[port_id as usize - 1];
+        if let Some(sid) = slot_id {
+            // Émission de la commande de désactivation de slot
+            let _ = self.disable_slot(sid);
+            // Réinitialisation des endpoints
+            for ep in self.ep_rings.iter_mut() {
+                if ep.active {
+                    ep.reset();
+                }
+            }
+            self.port_slots[port_id as usize - 1] = None;
+            Ok(Some(sid))
+        } else {
+            Ok(None)
+        }
     }
 }
 
@@ -1028,5 +1221,93 @@ mod tests {
         let isoch_trb2 = ctrl.ep_rings[4].ring.trbs[1];
         assert_eq!(isoch_trb2.trb_type(), TRB_TYPE_ISOCH);
         assert_eq!((isoch_trb2.control >> 20) & 0x7FF, 128);
+    }
+
+    #[test]
+    fn test_interrupter_erst_and_erdp() {
+        let mut ctrl = XhciController::new();
+        ctrl.ready = true;
+
+        let erst_iova = 0x4000_1000u64; // aligné 64
+        let ring_iova = 0x4000_2000u64; // aligné 64
+        assert!(ctrl
+            .init_primary_interrupter(erst_iova, ring_iova, 32)
+            .is_ok());
+
+        assert!(ctrl.interrupter.active);
+        assert_eq!(ctrl.interrupter.erstba, erst_iova);
+        assert_eq!(ctrl.interrupter.erstsz, 1);
+        assert_eq!(ctrl.interrupter.erdp, ring_iova | (1 << 3));
+        assert!(ctrl.interrupter.cycle_bit);
+
+        // Simulation de consommation de 2 événements
+        let next_event_addr1 = ring_iova + 16;
+        ctrl.acknowledge_erdp(next_event_addr1);
+        assert_eq!(ctrl.interrupter.dequeue_idx, 1);
+        assert_eq!(ctrl.interrupter.events_handled, 1);
+        assert_eq!(ctrl.interrupter.erdp, next_event_addr1 | (1 << 3));
+
+        let next_event_addr2 = ring_iova + 32;
+        ctrl.acknowledge_erdp(next_event_addr2);
+        assert_eq!(ctrl.interrupter.dequeue_idx, 2);
+        assert_eq!(ctrl.interrupter.events_handled, 2);
+    }
+
+    #[test]
+    fn test_hotplug_connect_and_disconnect_handling() {
+        let mut ctrl = XhciController::new();
+        ctrl.ready = true;
+
+        // Configuration d'un endpoint pour tester la réinitialisation
+        assert!(ctrl.configure_endpoint_ring(1, false).is_ok());
+        assert!(ctrl.ep_rings[1].active);
+
+        // 1. Événement Port Status Change : Port 1 connecté en SuperSpeed (raw PORTSC: CCS=1, PED=1, PP=1, Speed=4)
+        let raw_connect = 1 | (1 << 1) | (1 << 9) | (4 << 10);
+        let trb_connect = Trb {
+            parameter: 1 << 24, // Port ID 1 dans bits 31:24
+            status: (TRB_COMP_SUCCESS as u32) << 24,
+            control: (TRB_TYPE_PORT_STATUS_CHANGE << 10) | 1,
+        };
+
+        let ev_connect = ctrl
+            .handle_port_status_change_trb(&trb_connect, raw_connect)
+            .expect("Port status change ok");
+        assert_eq!(
+            ev_connect,
+            PortHotPlugEvent::DeviceConnected {
+                port_id: 1,
+                speed: UsbSpeed::SuperSpeed
+            }
+        );
+
+        // Attribution du slot 3 au port 1
+        assert!(ctrl.bind_port_slot(1, 3).is_ok());
+        assert_eq!(ctrl.port_slots[0], Some(3));
+
+        // 2. Événement Déconnexion à chaud (Hot-Unplug) : CCS=0 (déconnecté)
+        let raw_disconnect = 1 << 9; // Alim active mais CCS=0
+        let trb_disconnect = Trb {
+            parameter: 1 << 24, // Port ID 1
+            status: (TRB_COMP_SUCCESS as u32) << 24,
+            control: (TRB_TYPE_PORT_STATUS_CHANGE << 10) | 1,
+        };
+
+        let ev_disconnect = ctrl
+            .handle_port_status_change_trb(&trb_disconnect, raw_disconnect)
+            .expect("Port status disconnect ok");
+        assert_eq!(
+            ev_disconnect,
+            PortHotPlugEvent::DeviceDisconnected {
+                port_id: 1,
+                slot_id: Some(3)
+            }
+        );
+
+        // Exécution de la déconnexion et libération du slot
+        let freed_slot = ctrl.handle_hotplug_disconnect(1).expect("Disconnect ok");
+        assert_eq!(freed_slot, Some(3));
+        assert_eq!(ctrl.port_slots[0], None);
+        assert!(!ctrl.ep_rings[1].active); // Endpoint réinitialisé
     }
 }

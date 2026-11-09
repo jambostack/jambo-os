@@ -1169,6 +1169,234 @@ impl SnapshotTable {
     }
 }
 
+// ============================================================================
+// Journal des Transactions CoW (WAL / Write-Ahead Logging & Intent Log)
+// ============================================================================
+
+pub const WAL_MAGIC: u64 = 0x57414C5F4A414D42; // "WAL_JAMB"
+pub const WAL_VERSION: u32 = 1;
+pub const WAL_OP_NONE: u32 = 0;
+pub const WAL_OP_WRITE_INODE: u32 = 1;
+pub const WAL_OP_WRITE_DATA: u32 = 2;
+pub const WAL_OP_COMMIT: u32 = 3;
+pub const WAL_OP_ABORT: u32 = 4;
+pub const WAL_REL_LBA: u64 = 4; // LBA relatif 4 sur la partition JamboFS
+pub const WAL_RECORD_SIZE: usize = 512;
+pub const WAL_PAYLOAD_SIZE: usize = 384;
+
+/// Enregistrement d'intention transactionnelle Write-Ahead Log (512 octets)
+#[repr(C, align(512))]
+#[derive(Debug, Clone, Copy)]
+pub struct WalRecord {
+    pub magic: u64,
+    pub version: u32,
+    pub op_type: u32,
+    pub txid: u64,
+    pub generation: u64,
+    pub target_lba: u64,
+    pub payload_len: u32,
+    pub _reserved: u32,
+    pub payload_checksum: [u8; 32],
+    pub record_checksum: [u8; 32],
+    pub payload: [u8; WAL_PAYLOAD_SIZE],
+}
+
+impl Default for WalRecord {
+    fn default() -> Self {
+        Self {
+            magic: WAL_MAGIC,
+            version: WAL_VERSION,
+            op_type: WAL_OP_NONE,
+            txid: 0,
+            generation: 0,
+            target_lba: 0,
+            payload_len: 0,
+            _reserved: 0,
+            payload_checksum: [0; 32],
+            record_checksum: [0; 32],
+            payload: [0; WAL_PAYLOAD_SIZE],
+        }
+    }
+}
+
+impl WalRecord {
+    pub fn is_valid(&self) -> bool {
+        if self.magic != WAL_MAGIC || self.version != WAL_VERSION {
+            return false;
+        }
+        if self.payload_len as usize > WAL_PAYLOAD_SIZE {
+            return false;
+        }
+        let computed =
+            compute_block_checksum(&self.payload[..self.payload_len as usize], self.txid);
+        computed == self.payload_checksum
+    }
+}
+
+/// Gestionnaire du Intent Log / WAL pour la résilience aux pannes d'énergie
+#[derive(Debug, Clone, Copy, Default)]
+pub struct MetadataWalManager {
+    pub current_txid: u64,
+    pub active_records: usize,
+}
+
+impl MetadataWalManager {
+    pub const fn new() -> Self {
+        Self {
+            current_txid: 1,
+            active_records: 0,
+        }
+    }
+
+    /// Enregistre une intention de transaction dans le WAL avant écriture matérielle CoW
+    pub fn log_intent(
+        &mut self,
+        client: &BlockClient,
+        partition_base_lba: u64,
+        op_type: u32,
+        generation: u64,
+        target_lba: u64,
+        data: &[u8],
+    ) -> Result<u64, FsError> {
+        let txid = self.current_txid;
+        self.current_txid = self.current_txid.wrapping_add(1);
+
+        let copy_len = data.len().min(WAL_PAYLOAD_SIZE);
+        let mut rec = WalRecord {
+            magic: WAL_MAGIC,
+            version: WAL_VERSION,
+            op_type,
+            txid,
+            generation,
+            target_lba,
+            payload_len: copy_len as u32,
+            _reserved: 0,
+            payload_checksum: [0; 32],
+            record_checksum: [0; 32],
+            payload: [0; WAL_PAYLOAD_SIZE],
+        };
+        rec.payload[..copy_len].copy_from_slice(&data[..copy_len]);
+        rec.payload_checksum = compute_block_checksum(&rec.payload[..copy_len], txid);
+        rec.record_checksum = compute_block_checksum(&rec.payload_checksum, generation);
+
+        let mut block_buf = [0u8; BLOCK_SIZE];
+        // SAFETY: Copie d'une structure WalRecord de taille fixe 512 octets dans un tampon de taille BLOCK_SIZE (4096 octets)
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                &rec as *const WalRecord as *const u8,
+                block_buf.as_mut_ptr(),
+                core::mem::size_of::<WalRecord>(),
+            );
+        }
+
+        let wal_lba = partition_base_lba + WAL_REL_LBA;
+        client
+            .write_block(wal_lba, &block_buf)
+            .map_err(FsError::BlockIoError)?;
+        client.flush().map_err(FsError::BlockIoError)?;
+        self.active_records = self.active_records.saturating_add(1);
+        Ok(txid)
+    }
+
+    /// Scelle la transaction dans le WAL en marquant un enregistrement COMMIT
+    pub fn commit_intent(
+        &mut self,
+        client: &BlockClient,
+        partition_base_lba: u64,
+        txid: u64,
+        generation: u64,
+    ) -> Result<(), FsError> {
+        let rec = WalRecord {
+            magic: WAL_MAGIC,
+            version: WAL_VERSION,
+            op_type: WAL_OP_COMMIT,
+            txid,
+            generation,
+            target_lba: 0,
+            payload_len: 0,
+            _reserved: 0,
+            payload_checksum: [0; 32],
+            record_checksum: compute_block_checksum(&[0; 32], txid),
+            payload: [0; WAL_PAYLOAD_SIZE],
+        };
+
+        let mut block_buf = [0u8; BLOCK_SIZE];
+        // SAFETY: Copie d'une structure WalRecord de taille fixe 512 octets dans un tampon de taille BLOCK_SIZE (4096 octets)
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                &rec as *const WalRecord as *const u8,
+                block_buf.as_mut_ptr(),
+                core::mem::size_of::<WalRecord>(),
+            );
+        }
+
+        let wal_lba = partition_base_lba + WAL_REL_LBA;
+        client
+            .write_block(wal_lba, &block_buf)
+            .map_err(FsError::BlockIoError)?;
+        client.flush().map_err(FsError::BlockIoError)?;
+        self.active_records = 0;
+        Ok(())
+    }
+
+    /// Rejoue les transactions non scellées présentes dans le WAL (Recovery après coupure électrique)
+    pub fn replay_wal(
+        &mut self,
+        client: &BlockClient,
+        partition_base_lba: u64,
+        active_generation: u64,
+    ) -> Result<usize, FsError> {
+        let wal_lba = partition_base_lba + WAL_REL_LBA;
+        let mut block_buf = [0u8; BLOCK_SIZE];
+        client
+            .read_block(wal_lba, &mut block_buf)
+            .map_err(FsError::BlockIoError)?;
+
+        // SAFETY: block_buf a une taille de 4096 octets, supérieure à WalRecord (512 octets), et read_unaligned supporte tout alignement
+        let rec = unsafe {
+            let ptr = block_buf.as_ptr() as *const WalRecord;
+            ptr.read_unaligned()
+        };
+
+        if !rec.is_valid() {
+            return Ok(0);
+        }
+
+        if rec.op_type == WAL_OP_COMMIT || rec.op_type == WAL_OP_ABORT {
+            return Ok(0);
+        }
+
+        if rec.generation >= active_generation
+            && (rec.op_type == WAL_OP_WRITE_INODE || rec.op_type == WAL_OP_WRITE_DATA)
+            && rec.target_lba > 0
+            && rec.payload_len > 0
+        {
+            let mut data_buf = [0u8; BLOCK_SIZE];
+            let len = (rec.payload_len as usize).min(WAL_PAYLOAD_SIZE);
+            data_buf[..len].copy_from_slice(&rec.payload[..len]);
+            client
+                .write_block(rec.target_lba, &data_buf)
+                .map_err(FsError::BlockIoError)?;
+            client.flush().map_err(FsError::BlockIoError)?;
+            return Ok(1);
+        }
+
+        Ok(0)
+    }
+
+    /// Purge le journal WAL
+    pub fn clear(&mut self, client: &BlockClient, partition_base_lba: u64) -> Result<(), FsError> {
+        let wal_lba = partition_base_lba + WAL_REL_LBA;
+        let zero_buf = [0u8; BLOCK_SIZE];
+        client
+            .write_block(wal_lba, &zero_buf)
+            .map_err(FsError::BlockIoError)?;
+        client.flush().map_err(FsError::BlockIoError)?;
+        self.active_records = 0;
+        Ok(())
+    }
+}
+
 /// Système de fichiers JamboFS transactionnel monté en espace utilisateur
 #[derive(Debug, Clone, Copy)]
 pub struct JamboFs {
@@ -1180,6 +1408,7 @@ pub struct JamboFs {
     pub active_slot_b: bool,
     pub dedup_table: BlockDedupTable,
     pub snapshot_table: SnapshotTable,
+    pub wal: MetadataWalManager,
 }
 
 impl JamboFs {
@@ -1268,7 +1497,7 @@ impl JamboFs {
 
         let root_offset = uberblock.root_tree_offset;
 
-        Ok(Self {
+        let mut fs = Self {
             client: *client,
             active_uberblock: uberblock,
             root_offset,
@@ -1277,7 +1506,13 @@ impl JamboFs {
             active_slot_b,
             dedup_table: BlockDedupTable::new(),
             snapshot_table: SnapshotTable::new(),
-        })
+            wal: MetadataWalManager::new(),
+        };
+
+        // Replay automatique de résilience après coupure électrique
+        let _ = fs.replay_intent_log();
+
+        Ok(fs)
     }
 
     /// Crée une instance de secours avec un Uberblock standard
@@ -1291,6 +1526,7 @@ impl JamboFs {
             active_slot_b: false,
             dedup_table: BlockDedupTable::new(),
             snapshot_table: SnapshotTable::new(),
+            wal: MetadataWalManager::new(),
         }
     }
 
@@ -1464,6 +1700,19 @@ impl JamboFs {
             .map_err(FsError::BlockIoError)?;
         self.client.flush().map_err(FsError::BlockIoError)?;
 
+        // 3b. Journalisation d'intention Write-Ahead Log (WAL) avant scellement d'Uberblock
+        let txid = self
+            .wal
+            .log_intent(
+                &self.client,
+                self.partition_base_lba,
+                WAL_OP_WRITE_INODE,
+                next_gen,
+                inode_lba,
+                &inode_buf,
+            )
+            .unwrap_or(0);
+
         // 4. Validation atomique Copy-on-Write : Incrément de génération et scellement Uberblock A/B
         let mut new_uberblock = self.active_uberblock;
         new_uberblock.generation = next_gen;
@@ -1491,10 +1740,31 @@ impl JamboFs {
             .map_err(FsError::BlockIoError)?;
         self.client.flush().map_err(FsError::BlockIoError)?;
 
+        // 5. Scellement du WAL après persistance réussie de l'Uberblock
+        if txid > 0 {
+            let _ = self
+                .wal
+                .commit_intent(&self.client, self.partition_base_lba, txid, next_gen);
+        }
+
         // Mise à jour de l'état actif en mémoire uniquement après succès matériel
         self.active_uberblock = new_uberblock;
         self.active_slot_b = !self.active_slot_b;
         Ok(data.len())
+    }
+
+    /// Rejoue les intentions orphelines du journal WAL (Recovery suite à une coupure électrique)
+    pub fn replay_intent_log(&mut self) -> Result<usize, FsError> {
+        self.wal.replay_wal(
+            &self.client,
+            self.partition_base_lba,
+            self.active_uberblock.generation,
+        )
+    }
+
+    /// Purge le journal WAL
+    pub fn clear_intent_log(&mut self) -> Result<(), FsError> {
+        self.wal.clear(&self.client, self.partition_base_lba)
     }
 
     /// Synchronise et force la persistance matérielle de tous les blocs en attente
@@ -1932,5 +2202,52 @@ mod tests {
         assert_eq!(report1.blocks_scanned, 3);
         assert_eq!(report1.errors_detected, 0);
         assert!(report1.blocks_healthy > 0);
+    }
+
+    #[test]
+    fn test_intent_log_wal_power_loss_recovery() {
+        let dummy_client = BlockClient {
+            channel: libjambo::Handle(0),
+            vmo_ptr: core::ptr::null_mut(),
+        };
+        let mut fs = JamboFs::new_fallback(dummy_client);
+
+        // 1. Enregistrement d'une intention de mise à jour d'inode (simulation crash juste après WAL)
+        let simulated_next_gen = fs.active_uberblock.generation + 1;
+        let mut uncommitted_data = [0u8; 64];
+        uncommitted_data[..14].copy_from_slice(b"node-recovered");
+        let target_lba = fs.partition_base_lba + 16;
+
+        let txid = fs
+            .wal
+            .log_intent(
+                &fs.client,
+                fs.partition_base_lba,
+                WAL_OP_WRITE_INODE,
+                simulated_next_gen,
+                target_lba,
+                &uncommitted_data,
+            )
+            .expect("Log intent ok");
+        assert!(txid > 0);
+
+        // Simulation : L'Uberblock n'a PAS été incrémenté (coupure de courant inopinée avant scellement)
+        // Au redémarrage (mount_root / replay), le système détecte l'intention non commitée
+        let replayed = fs.replay_intent_log().expect("Replay wal ok");
+        assert_eq!(replayed, 1);
+
+        // Vérification que le bloc cible a bien reçu les données rejouées
+        let mut verify_buf = [0u8; BLOCK_SIZE];
+        fs.client
+            .read_block(target_lba, &mut verify_buf)
+            .expect("Read replayed block");
+        assert_eq!(&verify_buf[..14], b"node-recovered");
+
+        // 2. Commit propre et vérification qu'il n'y a plus rien à rejouer
+        fs.wal
+            .commit_intent(&fs.client, fs.partition_base_lba, txid, simulated_next_gen)
+            .expect("Commit wal ok");
+        let replayed2 = fs.replay_intent_log().expect("Replay after commit");
+        assert_eq!(replayed2, 0);
     }
 }

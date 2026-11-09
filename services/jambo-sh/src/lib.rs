@@ -505,6 +505,7 @@ impl JamboShell {
             "grep" | "/bin/grep" | "bin/grep" => self.cmd_grep(args, out),
             "sort" | "/bin/sort" | "bin/sort" => self.cmd_sort(args, out),
             "uniq" | "/bin/uniq" | "bin/uniq" => self.cmd_uniq(args, out),
+            "find" | "/bin/find" | "bin/find" => self.cmd_find(args, out),
             "export" => self.cmd_export(args, out),
             "unset" => self.cmd_unset(args, out),
             "wc" | "/bin/wc" | "bin/wc" => self.cmd_wc(args, out),
@@ -699,7 +700,7 @@ impl JamboShell {
 
     fn cmd_coreutils(&self, out: &mut [u8]) -> (ShellStatus, usize) {
         let text = b"Utilitaires Coreutils Ring 3 (services/jambo-coreutils) :\n\
-  Binaires disponibles : /bin/echo, /bin/cat, /bin/head, /bin/tail, /bin/touch, /bin/mkdir, /bin/rm, /bin/cp, /bin/mv, /bin/tee, /bin/env, /bin/grep, /bin/sort, /bin/uniq, /bin/wc, /bin/true, /bin/false, /bin/ls (18 utilitaires)\n\
+  Binaires disponibles : /bin/echo, /bin/cat, /bin/head, /bin/tail, /bin/touch, /bin/mkdir, /bin/rm, /bin/cp, /bin/mv, /bin/tee, /bin/env, /bin/grep, /bin/sort, /bin/uniq, /bin/find, /bin/wc, /bin/true, /bin/false, /bin/ls (19 utilitaires)\n\
   Architecture & ABI   : System V AMD64 ELF64 (ET_EXEC / Ring 3 Userland)\n\
   Point d'entree       : _start (parsing argc/argv sur pile System V)\n\
   Terminaison          : Syscall 11 ThreadExit avec propagation code de retour POSIX\n\
@@ -1715,6 +1716,26 @@ ABI : 29 Appels Systeme (jambo-abi v0.4) avec Coreutils Ring 3, VFS POSIX & Fuzz
             }
         } else {
             let msg = b"uniq: pipe creation failed\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
+    }
+
+    fn cmd_find(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if let Ok((r, w)) = libjambo::vfs::pipe() {
+            let code = libjambo::coreutils::run_find(args, w, w);
+            let _ = libjambo::coreutils::sys_close(w);
+            let n = libjambo::coreutils::sys_read(r, out);
+            let _ = libjambo::coreutils::sys_close(r);
+            let len = if n > 0 { n as usize } else { 0 };
+            if code == 0 {
+                (ShellStatus::Success, len)
+            } else {
+                (ShellStatus::ExecutionFailed, len)
+            }
+        } else {
+            let msg = b"find: pipe creation failed\n";
             let len = msg.len().min(out.len());
             out[..len].copy_from_slice(&msg[..len]);
             (ShellStatus::ExecutionFailed, len)

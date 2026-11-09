@@ -79,6 +79,10 @@ path = "src/bin/sort.rs"
 name = "uniq"
 path = "src/bin/uniq.rs"
 
+[[bin]]
+name = "find"
+path = "src/bin/find.rs"
+
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }
 
