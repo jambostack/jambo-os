@@ -506,6 +506,7 @@ impl JamboShell {
             "sort" | "/bin/sort" | "bin/sort" => self.cmd_sort(args, out),
             "uniq" | "/bin/uniq" | "bin/uniq" => self.cmd_uniq(args, out),
             "find" | "/bin/find" | "bin/find" => self.cmd_find(args, out),
+            "chmod" | "/bin/chmod" | "bin/chmod" => self.cmd_chmod(args, out),
             "export" => self.cmd_export(args, out),
             "unset" => self.cmd_unset(args, out),
             "wc" | "/bin/wc" | "bin/wc" => self.cmd_wc(args, out),
@@ -579,6 +580,8 @@ impl JamboShell {
   grep [-i] [-v] [-n] [-c] <pattern> <files> - Recherche des lignes correspondant a un motif\n\
   sort [-r] [-n] [-u] [-i] <files> - Trie les lignes de fichiers ou de l'entree standard\n\
   uniq [-c] [-d] [-u] [-i] [in [out]] - Filtre ou rapporte les lignes repetees adjacentes\n\
+  find [path] [-name pat] [-type f|d] [-maxdepth N] - Recherche des fichiers\n\
+  chmod [-R] [-v] <mode> <files> - Modifie les permissions octales de fichiers ou repertoires\n\
   export <K=V> - Definit une variable d'environnement dans le shell\n\
   unset <K>   - Supprime une variable d'environnement du shell\n\
   ls [-l] [-a] - Liste les fichiers et repertoires\n\
@@ -700,7 +703,7 @@ impl JamboShell {
 
     fn cmd_coreutils(&self, out: &mut [u8]) -> (ShellStatus, usize) {
         let text = b"Utilitaires Coreutils Ring 3 (services/jambo-coreutils) :\n\
-  Binaires disponibles : /bin/echo, /bin/cat, /bin/head, /bin/tail, /bin/touch, /bin/mkdir, /bin/rm, /bin/cp, /bin/mv, /bin/tee, /bin/env, /bin/grep, /bin/sort, /bin/uniq, /bin/find, /bin/wc, /bin/true, /bin/false, /bin/ls (19 utilitaires)\n\
+  Binaires disponibles : /bin/echo, /bin/cat, /bin/head, /bin/tail, /bin/touch, /bin/mkdir, /bin/rm, /bin/cp, /bin/mv, /bin/tee, /bin/env, /bin/grep, /bin/sort, /bin/uniq, /bin/find, /bin/chmod, /bin/wc, /bin/true, /bin/false, /bin/ls (20 utilitaires)\n\
   Architecture & ABI   : System V AMD64 ELF64 (ET_EXEC / Ring 3 Userland)\n\
   Point d'entree       : _start (parsing argc/argv sur pile System V)\n\
   Terminaison          : Syscall 11 ThreadExit avec propagation code de retour POSIX\n\
@@ -1736,6 +1739,26 @@ ABI : 29 Appels Systeme (jambo-abi v0.4) avec Coreutils Ring 3, VFS POSIX & Fuzz
             }
         } else {
             let msg = b"find: pipe creation failed\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
+    }
+
+    fn cmd_chmod(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if let Ok((r, w)) = libjambo::vfs::pipe() {
+            let code = libjambo::coreutils::run_chmod(args, w);
+            let _ = libjambo::coreutils::sys_close(w);
+            let n = libjambo::coreutils::sys_read(r, out);
+            let _ = libjambo::coreutils::sys_close(r);
+            let len = if n > 0 { n as usize } else { 0 };
+            if code == 0 {
+                (ShellStatus::Success, len)
+            } else {
+                (ShellStatus::ExecutionFailed, len)
+            }
+        } else {
+            let msg = b"chmod: pipe creation failed\n";
             let len = msg.len().min(out.len());
             out[..len].copy_from_slice(&msg[..len]);
             (ShellStatus::ExecutionFailed, len)
@@ -16981,7 +17004,7 @@ mod tests {
         let (st, len) = shell.execute_line("coreutils", &mut out);
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
-        assert!(s.contains("18 utilitaires"));
+        assert!(s.contains("20 utilitaires"));
         assert!(s.contains("/bin/head"));
         assert!(s.contains("/bin/tail"));
         assert!(s.contains("/bin/touch"));
@@ -16994,6 +17017,36 @@ mod tests {
         assert!(s.contains("/bin/grep"));
         assert!(s.contains("/bin/sort"));
         assert!(s.contains("/bin/uniq"));
+        assert!(s.contains("/bin/find"));
+        assert!(s.contains("/bin/chmod"));
+    }
+
+    #[test]
+    fn test_chmod_execution() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 1024];
+
+        // 1. Chmod sur /etc/hostname
+        let (st1, _) = shell.execute_line("chmod 600 /etc/hostname", &mut out);
+        assert_eq!(st1, ShellStatus::Success);
+        assert_eq!(
+            libjambo::coreutils::sys_get_mode_pool("/etc/hostname"),
+            Some(0o600)
+        );
+
+        // 2. Chmod verbeux
+        let (st2, len2) = shell.execute_line("chmod -v 644 /etc/hostname", &mut out);
+        assert_eq!(st2, ShellStatus::Success);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("mode of '/etc/hostname' changed to 644"));
+        assert_eq!(
+            libjambo::coreutils::sys_get_mode_pool("/etc/hostname"),
+            Some(0o644)
+        );
+
+        // 3. Chmod sur fichier inexistant -> ExecutionFailed
+        let (st3, _) = shell.execute_line("chmod 644 /etc/inexistant_xyz", &mut out);
+        assert_eq!(st3, ShellStatus::ExecutionFailed);
     }
 
     #[test]

@@ -45,7 +45,7 @@ struct IdtDescriptor {
 }
 
 #[repr(C)]
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TrapFrame {
     pub r15: u64,
     pub r14: u64,

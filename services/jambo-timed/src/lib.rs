@@ -24,6 +24,7 @@ pub enum TimeOpcode {
     StepTime = 3,
     PtpSync = 4,
     GetStatus = 5,
+    SntpSync = 6,
 }
 
 impl TimeOpcode {
@@ -34,6 +35,7 @@ impl TimeOpcode {
             3 => Some(Self::StepTime),
             4 => Some(Self::PtpSync),
             5 => Some(Self::GetStatus),
+            6 => Some(Self::SntpSync),
             _ => None,
         }
     }
@@ -731,6 +733,17 @@ impl JamboTimeDaemon {
                     status = -6;
                 }
             }
+            TimeOpcode::SntpSync => {
+                let sample = PtpSample {
+                    t1_master_tx: PreciseTime::new(req.t1_sec as u64, req.t1_ns),
+                    t2_slave_rx: PreciseTime::new(req.t2_sec as u64, req.t2_ns),
+                    t3_slave_tx: PreciseTime::new(req.t3_sec as u64, req.t3_ns),
+                    t4_master_rx: PreciseTime::new(req.t4_sec as u64, req.t4_ns),
+                };
+                if let Err(_e) = self.server.apply_ptp_sync(&cap, &sample) {
+                    status = -8;
+                }
+            }
             TimeOpcode::GetStatus => {
                 if !cap.can_read() {
                     status = -7;
@@ -751,6 +764,292 @@ impl JamboTimeDaemon {
             sync_count: self.server.sync_count,
             monotonic_nanos: self.server.servo.last_monotonic_nanos,
         }
+    }
+
+    /// Synchronise l'horloge locale avec les résultats d'un échange SNTPv4
+    pub fn sync_sntp_result(&mut self, result: &SntpSyncResult) -> Result<(), SysError> {
+        let cap = self.admin_cap;
+        let sample = PtpSample {
+            t1_master_tx: result.t1_client_tx,
+            t2_slave_rx: result.t2_server_rx,
+            t3_slave_tx: result.t3_server_tx,
+            t4_master_rx: result.t4_client_rx,
+        };
+        let _ = self.server.apply_ptp_sync(&cap, &sample)?;
+        Ok(())
+    }
+}
+
+// ============================================================================
+// PROTOCOLE NTP CLIENT (RFC 5905 SNTPv4)
+// ============================================================================
+
+pub const NTP_PORT: u16 = 123;
+pub const NTP_PACKET_SIZE: usize = 48;
+pub const NTP_UNIX_OFFSET_SECS: u64 = 2_208_988_800;
+pub const NTP_VERSION_4: u8 = 4;
+pub const NTP_MODE_CLIENT: u8 = 3;
+pub const NTP_MODE_SERVER: u8 = 4;
+
+/// Horodatage 64 bits NTP conforme RFC 5905 (32 bits secondes + 32 bits fraction de seconde)
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct NtpTimestamp {
+    pub seconds: u32,
+    pub fraction: u32,
+}
+
+impl NtpTimestamp {
+    pub const fn new(seconds: u32, fraction: u32) -> Self {
+        Self { seconds, fraction }
+    }
+
+    /// Convertit un temps précis Unix (secondes + nanosecondes) en horodatage NTP (Epoch 1900-01-01)
+    pub fn from_precise_time(t: PreciseTime) -> Self {
+        let ntp_secs = t.seconds.wrapping_add(NTP_UNIX_OFFSET_SECS) as u32;
+        let frac =
+            (((t.nanoseconds as u64) << 32).wrapping_add(500_000_000) / 1_000_000_000) as u32;
+        Self {
+            seconds: ntp_secs,
+            fraction: frac,
+        }
+    }
+
+    /// Convertit un horodatage NTP en temps précis Unix (Epoch 1970-01-01)
+    pub fn to_precise_time(&self) -> PreciseTime {
+        let unix_secs = (self.seconds as u64).saturating_sub(NTP_UNIX_OFFSET_SECS);
+        let nanos =
+            ((((self.fraction as u64) * 1_000_000_000).wrapping_add(0x8000_0000)) >> 32) as u32;
+        PreciseTime::new(unix_secs, nanos)
+    }
+
+    /// Retourne la valeur totale en nanosecondes Unix
+    pub fn as_unix_nanos(&self) -> u64 {
+        self.to_precise_time().as_nanos()
+    }
+}
+
+/// Paquet SNTPv4 standard de 48 octets (384 bits) conforme RFC 5905
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NtpPacket {
+    pub li_vn_mode: u8,
+    pub stratum: u8,
+    pub poll: i8,
+    pub precision: i8,
+    pub root_delay: u32,
+    pub root_dispersion: u32,
+    pub ref_id: [u8; 4],
+    pub ref_timestamp: NtpTimestamp,
+    pub origin_timestamp: NtpTimestamp,
+    pub receive_timestamp: NtpTimestamp,
+    pub transmit_timestamp: NtpTimestamp,
+}
+
+const _: () = assert!(core::mem::size_of::<NtpPacket>() == 48);
+
+impl Default for NtpPacket {
+    fn default() -> Self {
+        Self {
+            li_vn_mode: (NTP_VERSION_4 << 3) | NTP_MODE_CLIENT,
+            stratum: 0,
+            poll: 4,       // 16 secondes
+            precision: -6, // ~15.6 millisecondes
+            root_delay: 0,
+            root_dispersion: 0,
+            ref_id: [0; 4],
+            ref_timestamp: NtpTimestamp::default(),
+            origin_timestamp: NtpTimestamp::default(),
+            receive_timestamp: NtpTimestamp::default(),
+            transmit_timestamp: NtpTimestamp::default(),
+        }
+    }
+}
+
+impl NtpPacket {
+    /// Forge une requête client SNTPv4 conforme RFC 5905 avec horodatage d'émission T1
+    pub fn new_client_request(t1: PreciseTime) -> Self {
+        Self {
+            li_vn_mode: (NTP_VERSION_4 << 3) | NTP_MODE_CLIENT,
+            stratum: 0,
+            poll: 4,
+            precision: -6,
+            root_delay: 0,
+            root_dispersion: 0,
+            ref_id: [0; 4],
+            ref_timestamp: NtpTimestamp::default(),
+            origin_timestamp: NtpTimestamp::default(),
+            receive_timestamp: NtpTimestamp::default(),
+            transmit_timestamp: NtpTimestamp::from_precise_time(t1),
+        }
+    }
+
+    /// Extrait le Leap Indicator (LI, bits 7:6)
+    #[inline]
+    pub fn leap_indicator(&self) -> u8 {
+        (self.li_vn_mode >> 6) & 0x03
+    }
+
+    /// Extrait le numéro de version NTP (VN, bits 5:3)
+    #[inline]
+    pub fn version(&self) -> u8 {
+        (self.li_vn_mode >> 3) & 0x07
+    }
+
+    /// Extrait le mode d'association (Mode, bits 2:0)
+    #[inline]
+    pub fn mode(&self) -> u8 {
+        self.li_vn_mode & 0x07
+    }
+
+    /// Sérialise le paquet en 48 octets en ordre réseau (Big-Endian)
+    pub fn to_bytes(&self) -> [u8; NTP_PACKET_SIZE] {
+        let mut bytes = [0u8; NTP_PACKET_SIZE];
+        bytes[0] = self.li_vn_mode;
+        bytes[1] = self.stratum;
+        bytes[2] = self.poll as u8;
+        bytes[3] = self.precision as u8;
+        bytes[4..8].copy_from_slice(&self.root_delay.to_be_bytes());
+        bytes[8..12].copy_from_slice(&self.root_dispersion.to_be_bytes());
+        bytes[12..16].copy_from_slice(&self.ref_id);
+
+        bytes[16..20].copy_from_slice(&self.ref_timestamp.seconds.to_be_bytes());
+        bytes[20..24].copy_from_slice(&self.ref_timestamp.fraction.to_be_bytes());
+
+        bytes[24..28].copy_from_slice(&self.origin_timestamp.seconds.to_be_bytes());
+        bytes[28..32].copy_from_slice(&self.origin_timestamp.fraction.to_be_bytes());
+
+        bytes[32..36].copy_from_slice(&self.receive_timestamp.seconds.to_be_bytes());
+        bytes[36..40].copy_from_slice(&self.receive_timestamp.fraction.to_be_bytes());
+
+        bytes[40..44].copy_from_slice(&self.transmit_timestamp.seconds.to_be_bytes());
+        bytes[44..48].copy_from_slice(&self.transmit_timestamp.fraction.to_be_bytes());
+        bytes
+    }
+
+    /// Désérialise un paquet NTP à partir de 48 octets en ordre réseau (Big-Endian)
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        if bytes.len() < NTP_PACKET_SIZE {
+            return None;
+        }
+
+        let root_delay = u32::from_be_bytes(bytes[4..8].try_into().ok()?);
+        let root_dispersion = u32::from_be_bytes(bytes[8..12].try_into().ok()?);
+        let mut ref_id = [0u8; 4];
+        ref_id.copy_from_slice(&bytes[12..16]);
+
+        let ref_ts = NtpTimestamp {
+            seconds: u32::from_be_bytes(bytes[16..20].try_into().ok()?),
+            fraction: u32::from_be_bytes(bytes[20..24].try_into().ok()?),
+        };
+        let orig_ts = NtpTimestamp {
+            seconds: u32::from_be_bytes(bytes[24..28].try_into().ok()?),
+            fraction: u32::from_be_bytes(bytes[28..32].try_into().ok()?),
+        };
+        let rx_ts = NtpTimestamp {
+            seconds: u32::from_be_bytes(bytes[32..36].try_into().ok()?),
+            fraction: u32::from_be_bytes(bytes[36..40].try_into().ok()?),
+        };
+        let tx_ts = NtpTimestamp {
+            seconds: u32::from_be_bytes(bytes[40..44].try_into().ok()?),
+            fraction: u32::from_be_bytes(bytes[44..48].try_into().ok()?),
+        };
+
+        Some(Self {
+            li_vn_mode: bytes[0],
+            stratum: bytes[1],
+            poll: bytes[2] as i8,
+            precision: bytes[3] as i8,
+            root_delay,
+            root_dispersion,
+            ref_id,
+            ref_timestamp: ref_ts,
+            origin_timestamp: orig_ts,
+            receive_timestamp: rx_ts,
+            transmit_timestamp: tx_ts,
+        })
+    }
+}
+
+/// Résultat d'une synchronisation RFC 5905 quadri-points (T1, T2, T3, T4)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SntpSyncResult {
+    pub stratum: u8,
+    pub offset_nanos: i64,
+    pub delay_nanos: i64,
+    pub t1_client_tx: PreciseTime,
+    pub t2_server_rx: PreciseTime,
+    pub t3_server_tx: PreciseTime,
+    pub t4_client_rx: PreciseTime,
+    pub server_time: PreciseTime,
+    pub synchronized_time: PreciseTime,
+}
+
+/// Client SNTPv4 autonome en espace utilisateur Ring 3
+pub struct SntpClient;
+
+impl SntpClient {
+    /// Construit le paquet binaire de 48 octets pour une requête client
+    pub fn build_request_bytes(t1: PreciseTime) -> [u8; NTP_PACKET_SIZE] {
+        let packet = NtpPacket::new_client_request(t1);
+        packet.to_bytes()
+    }
+
+    /// Valide la réponse reçue d'un serveur NTP et calcule le délai et le décalage (RFC 5905)
+    pub fn process_response(
+        req_t1: PreciseTime,
+        resp_bytes: &[u8],
+        t4: PreciseTime,
+    ) -> Result<SntpSyncResult, SysError> {
+        let packet = NtpPacket::from_bytes(resp_bytes).ok_or(SysError::InvalidArgument)?;
+
+        // Règle RFC 5905 : Le mode doit être Server (4) ou Broadcast (5)
+        let mode = packet.mode();
+        if mode != NTP_MODE_SERVER && mode != 5 {
+            return Err(SysError::InvalidArgument);
+        }
+
+        // Règle RFC 5905 : Le stratum doit être entre 1 (horloge atomique/GPS) et 15
+        // Stratum 0 = Kiss-o'-Death (KoD) ou serveur non synchronisé
+        if packet.stratum == 0 || packet.stratum > 15 {
+            return Err(SysError::ResourceBusy);
+        }
+
+        // Règle RFC 5905 : L'Origin Timestamp doit correspondre à T1 émis par le client (anti-spoofing)
+        let orig_t = packet.origin_timestamp.to_precise_time();
+        if orig_t.seconds != req_t1.seconds || orig_t.nanoseconds.abs_diff(req_t1.nanoseconds) > 10
+        {
+            return Err(SysError::PermissionDenied);
+        }
+
+        let t1_nanos = req_t1.as_nanos() as i64;
+        let t2 = packet.receive_timestamp.to_precise_time();
+        let t2_nanos = t2.as_nanos() as i64;
+        let t3 = packet.transmit_timestamp.to_precise_time();
+        let t3_nanos = t3.as_nanos() as i64;
+        let t4_nanos = t4.as_nanos() as i64;
+
+        // Calculs RFC 5905 quadri-points :
+        // Round-trip delay : delta = (T4 - T1) - (T3 - T2)
+        let delay_nanos = (t4_nanos - t1_nanos) - (t3_nanos - t2_nanos);
+
+        // Clock offset : theta = ((T2 - T1) + (T3 - T4)) / 2
+        let offset_nanos = ((t2_nanos - t1_nanos) + (t3_nanos - t4_nanos)) / 2;
+
+        let sync_nanos = (t4_nanos + offset_nanos).max(0) as u64;
+        let synchronized_time = PreciseTime::from_nanos(sync_nanos);
+
+        Ok(SntpSyncResult {
+            stratum: packet.stratum,
+            offset_nanos,
+            delay_nanos,
+            t1_client_tx: req_t1,
+            t2_server_rx: t2,
+            t3_server_tx: t3,
+            t4_client_rx: t4,
+            server_time: t3,
+            synchronized_time,
+        })
     }
 }
 
@@ -888,5 +1187,105 @@ mod tests {
         let unauth_req = TimeRequest::new(TimeOpcode::StepTime, unauth_cap);
         let unauth_resp = daemon.handle_ipc_request(&unauth_req);
         assert!(unauth_resp.status < 0);
+    }
+
+    #[test]
+    fn test_sntp_rfc5905_packet_and_synchronization() {
+        // 1. Forge d'une requête client SNTPv4 (T1 = 1792340000.100000000)
+        let t1 = PreciseTime::new(1792340000, 100_000_000);
+        let req_bytes = SntpClient::build_request_bytes(t1);
+        assert_eq!(req_bytes.len(), 48);
+
+        let parsed_req = NtpPacket::from_bytes(&req_bytes).expect("parse req");
+        assert_eq!(parsed_req.leap_indicator(), 0);
+        assert_eq!(parsed_req.version(), 4);
+        assert_eq!(parsed_req.mode(), NTP_MODE_CLIENT);
+        assert_eq!(parsed_req.stratum, 0);
+
+        let t1_decoded = parsed_req.transmit_timestamp.to_precise_time();
+        assert_eq!(t1_decoded.seconds, t1.seconds);
+        assert!(t1_decoded.nanoseconds.abs_diff(t1.nanoseconds) <= 1);
+
+        // 2. Simulation d'une réponse de serveur NTP Stratum 1 (GPS)
+        // T2 (serveur rx) = 1792340000.108000000 (delay 6ms, offset 2ms)
+        // T3 (serveur tx) = 1792340000.110000000
+        let t2 = PreciseTime::new(1792340000, 108_000_000);
+        let t3 = PreciseTime::new(1792340000, 110_000_000);
+
+        let mut resp_packet = NtpPacket {
+            li_vn_mode: (0 << 6) | (NTP_VERSION_4 << 3) | NTP_MODE_SERVER,
+            stratum: 1, // Stratum 1 (Primary Reference)
+            poll: 4,
+            precision: -18,
+            root_delay: 0,
+            root_dispersion: 100,
+            ref_id: *b"GPS\0",
+            ref_timestamp: NtpTimestamp::from_precise_time(t2),
+            origin_timestamp: NtpTimestamp::from_precise_time(t1), // Copie conforme de T1
+            receive_timestamp: NtpTimestamp::from_precise_time(t2),
+            transmit_timestamp: NtpTimestamp::from_precise_time(t3),
+        };
+        let resp_bytes = resp_packet.to_bytes();
+
+        // 3. Réception client T4 = 1792340000.118000000
+        let t4 = PreciseTime::new(1792340000, 118_000_000);
+
+        let sync_result =
+            SntpClient::process_response(t1, &resp_bytes, t4).expect("process sntp response ok");
+
+        assert_eq!(sync_result.stratum, 1);
+        // delta = (T4 - T1) - (T3 - T2) = (18ms - 0) - (10ms - 8ms) = 18ms - 2ms = 16ms
+        assert_eq!(sync_result.delay_nanos, 16_000_000);
+        // theta = ((T2 - T1) + (T3 - T4)) / 2 = ((8ms) + (10ms - 18ms)) / 2 = (8ms - 8ms)/2 = 0
+        // Pour un test avec décalage :
+        // T2 = 110ms (+10ms), T3 = 112ms, T4 = 118ms
+        // theta = (10ms + (-6ms)) / 2 = +2ms
+        let t2_off = PreciseTime::new(1792340000, 110_000_000);
+        let t3_off = PreciseTime::new(1792340000, 112_000_000);
+        resp_packet.receive_timestamp = NtpTimestamp::from_precise_time(t2_off);
+        resp_packet.transmit_timestamp = NtpTimestamp::from_precise_time(t3_off);
+        let resp_bytes_off = resp_packet.to_bytes();
+
+        let sync_res2 = SntpClient::process_response(t1, &resp_bytes_off, t4)
+            .expect("process sntp response offset");
+        assert_eq!(sync_res2.offset_nanos, 2_000_000); // +2 ms offset
+        assert_eq!(sync_res2.delay_nanos, 16_000_000); // 16 ms round-trip delay RFC 5905
+
+        // 4. Application au démon et asservissement du servo
+        let mut daemon = JamboTimeDaemon::new();
+        assert!(daemon.sync_sntp_result(&sync_res2).is_ok());
+        let (mode, _ppm, off, del, syncs) = daemon.status();
+        assert_eq!(syncs, 1);
+        assert_eq!(off, 2_000_000);
+        assert_eq!(del, 8_000_000); // 8 ms one-way delay asservi dans le PLL
+        assert_eq!(mode, ServoMode::Slewing);
+
+        // 5. Tests adversariaux : rejet mode invalide
+        let mut bad_mode_packet = resp_packet;
+        bad_mode_packet.li_vn_mode = (0 << 6) | (4 << 3) | NTP_MODE_CLIENT; // Mode 3 au lieu de 4
+        let bad_mode_bytes = bad_mode_packet.to_bytes();
+        assert_eq!(
+            SntpClient::process_response(t1, &bad_mode_bytes, t4).err(),
+            Some(SysError::InvalidArgument)
+        );
+
+        // Rejet stratum 0 (serveur non synchronisé / KoD)
+        let mut bad_stratum_packet = resp_packet;
+        bad_stratum_packet.stratum = 0;
+        let bad_stratum_bytes = bad_stratum_packet.to_bytes();
+        assert_eq!(
+            SntpClient::process_response(t1, &bad_stratum_bytes, t4).err(),
+            Some(SysError::ResourceBusy)
+        );
+
+        // Rejet spoofing d'Origin Timestamp
+        let spoofed_t1 = PreciseTime::new(1792340000, 999_000_000);
+        let mut spoofed_packet = resp_packet;
+        spoofed_packet.origin_timestamp = NtpTimestamp::from_precise_time(spoofed_t1);
+        let spoofed_bytes = spoofed_packet.to_bytes();
+        assert_eq!(
+            SntpClient::process_response(t1, &spoofed_bytes, t4).err(),
+            Some(SysError::PermissionDenied)
+        );
     }
 }

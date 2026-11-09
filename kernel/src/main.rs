@@ -432,7 +432,7 @@ fn execute_pmm_hardening_tests() -> bool {
         );
     }
 
-    // Exécution de la suite mathématique de vérification formelle (13/13 preuves)
+    // Exécution de la suite mathématique de vérification formelle (14/14 preuves)
     formal::run_all_formal_proofs();
 
     kprintln!("[PMM/PASS] Tests adversariaux PMM et cycle de vie VMO validés avec succès !");

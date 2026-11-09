@@ -1397,6 +1397,299 @@ impl MetadataWalManager {
     }
 }
 
+pub const BITMAP_MAGIC: u64 = 0x53465F4D41503130; // "JAMB_MAP"
+pub const BITMAP_VERSION: u32 = 1;
+pub const BITMAP_REL_LBA: u64 = 14;
+pub const BITMAP_BLOCKS_COUNT: usize = 2048;
+pub const BITMAP_BYTES_COUNT: usize = BITMAP_BLOCKS_COUNT / 8; // 256 octets
+pub const BITMAP_RESERVED_SYSTEM_BLOCKS: usize = 24; // Blocs 0..23 réservés pour le micro-noyau & JamboFS
+
+/// En-tête de persistance du bitmap de blocs libres CoW (64 octets)
+#[repr(C, align(64))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BitmapHeader {
+    pub magic: u64,
+    pub version: u32,
+    pub total_blocks: u32,
+    pub allocated_blocks: u32,
+    pub generation: u64,
+    pub checksum: [u8; 32],
+}
+
+impl Default for BitmapHeader {
+    fn default() -> Self {
+        Self {
+            magic: BITMAP_MAGIC,
+            version: BITMAP_VERSION,
+            total_blocks: BITMAP_BLOCKS_COUNT as u32,
+            allocated_blocks: BITMAP_RESERVED_SYSTEM_BLOCKS as u32,
+            generation: 1,
+            checksum: [0; 32],
+        }
+    }
+}
+
+/// Gestionnaire transactionnel d'allocation de blocs libres Copy-on-Write (Bitmap Allocator)
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct CowBitmapAllocator {
+    pub header: BitmapHeader,
+    pub bits: [u8; BITMAP_BYTES_COUNT],
+    pub working_bits: [u8; BITMAP_BYTES_COUNT],
+    pub working_allocated: u32,
+    pub in_transaction: bool,
+}
+
+impl Default for CowBitmapAllocator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl CowBitmapAllocator {
+    pub fn new() -> Self {
+        let mut bits = [0u8; BITMAP_BYTES_COUNT];
+        // Réserver les blocs système 0..23 (3 premiers octets = 0xFF)
+        bits[0] = 0xFF;
+        bits[1] = 0xFF;
+        bits[2] = 0xFF;
+
+        let working_bits = bits;
+        let header = BitmapHeader {
+            checksum: blake3_block_hash(&bits),
+            ..Default::default()
+        };
+
+        Self {
+            header,
+            bits,
+            working_bits,
+            working_allocated: BITMAP_RESERVED_SYSTEM_BLOCKS as u32,
+            in_transaction: false,
+        }
+    }
+
+    /// Indique si un bloc donné est actuellement alloué
+    #[inline]
+    pub fn is_block_allocated(&self, block_idx: usize) -> bool {
+        if block_idx >= BITMAP_BLOCKS_COUNT {
+            return true;
+        }
+        let byte_idx = block_idx / 8;
+        let bit_mask = 1u8 << (block_idx % 8);
+        (self.bits[byte_idx] & bit_mask) != 0
+    }
+
+    /// Ouvre une transaction d'allocation CoW isolée (staging)
+    pub fn begin_transaction(&mut self) {
+        self.working_bits.copy_from_slice(&self.bits);
+        self.working_allocated = self.header.allocated_blocks;
+        self.in_transaction = true;
+    }
+
+    /// Annule la transaction courante et rétablit l'état antérieur (CoW Rollback)
+    pub fn rollback_transaction(&mut self) {
+        self.working_bits.copy_from_slice(&self.bits);
+        self.working_allocated = self.header.allocated_blocks;
+        self.in_transaction = false;
+    }
+
+    /// Scelle la transaction courante sur le stockage physique avec barrière matérielle
+    pub fn commit_transaction(
+        &mut self,
+        client: &BlockClient,
+        partition_base_lba: u64,
+        generation: u64,
+    ) -> Result<(), FsError> {
+        self.bits.copy_from_slice(&self.working_bits);
+        self.header.allocated_blocks = self.working_allocated;
+        self.header.generation = generation;
+        self.header.checksum = blake3_block_hash(&self.bits);
+
+        let mut block_buf = [0u8; BLOCK_SIZE];
+        // SAFETY: Copie structurée de BitmapHeader (64 octets) au début du tampon de bloc
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                &self.header as *const BitmapHeader as *const u8,
+                block_buf.as_mut_ptr(),
+                core::mem::size_of::<BitmapHeader>(),
+            );
+        }
+        block_buf[64..64 + BITMAP_BYTES_COUNT].copy_from_slice(&self.bits);
+
+        let bitmap_lba = partition_base_lba + BITMAP_REL_LBA;
+        client
+            .write_block(bitmap_lba, &block_buf)
+            .map_err(FsError::BlockIoError)?;
+        // Barrière matérielle impérative de synchronisation CoW
+        client.flush().map_err(FsError::BlockIoError)?;
+        self.in_transaction = false;
+        Ok(())
+    }
+
+    /// Alloue un nouveau bloc libre de manière transactionnelle
+    pub fn alloc_block(
+        &mut self,
+        client: &BlockClient,
+        partition_base_lba: u64,
+        generation: u64,
+    ) -> Result<u64, FsError> {
+        let active_bits = if self.in_transaction {
+            &mut self.working_bits
+        } else {
+            &mut self.bits
+        };
+
+        let mut found_idx = None;
+        for (byte_idx, &byte) in active_bits.iter().enumerate() {
+            if byte != 0xFF {
+                for bit in 0..8 {
+                    if (byte & (1 << bit)) == 0 {
+                        let idx = byte_idx * 8 + bit;
+                        if idx < BITMAP_BLOCKS_COUNT {
+                            found_idx = Some(idx);
+                            break;
+                        }
+                    }
+                }
+                if found_idx.is_some() {
+                    break;
+                }
+            }
+        }
+
+        let idx = match found_idx {
+            Some(i) => i,
+            None => return Err(FsError::BufferTooSmall), // Disque plein
+        };
+
+        let byte_idx = idx / 8;
+        let bit_mask = 1u8 << (idx % 8);
+        active_bits[byte_idx] |= bit_mask;
+
+        if self.in_transaction {
+            self.working_allocated = self.working_allocated.saturating_add(1);
+        } else {
+            self.header.allocated_blocks = self.header.allocated_blocks.saturating_add(1);
+            self.working_bits[byte_idx] |= bit_mask;
+            self.working_allocated = self.header.allocated_blocks;
+
+            // Persistance directe avec barrière matérielle
+            let mut block_buf = [0u8; BLOCK_SIZE];
+            self.header.generation = generation;
+            self.header.checksum = blake3_block_hash(&self.bits);
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    &self.header as *const BitmapHeader as *const u8,
+                    block_buf.as_mut_ptr(),
+                    core::mem::size_of::<BitmapHeader>(),
+                );
+            }
+            block_buf[64..64 + BITMAP_BYTES_COUNT].copy_from_slice(&self.bits);
+            let bitmap_lba = partition_base_lba + BITMAP_REL_LBA;
+            client
+                .write_block(bitmap_lba, &block_buf)
+                .map_err(FsError::BlockIoError)?;
+            client.flush().map_err(FsError::BlockIoError)?;
+        }
+
+        Ok(idx as u64)
+    }
+
+    /// Libère un bloc précédemment alloué (CoW free)
+    pub fn free_block(
+        &mut self,
+        client: &BlockClient,
+        partition_base_lba: u64,
+        block_idx: usize,
+        generation: u64,
+    ) -> Result<(), FsError> {
+        if !(BITMAP_RESERVED_SYSTEM_BLOCKS..BITMAP_BLOCKS_COUNT).contains(&block_idx) {
+            return Err(FsError::InvalidMagic); // Protection des blocs système réservés
+        }
+
+        let byte_idx = block_idx / 8;
+        let bit_mask = 1u8 << (block_idx % 8);
+
+        if self.in_transaction {
+            if (self.working_bits[byte_idx] & bit_mask) != 0 {
+                self.working_bits[byte_idx] &= !bit_mask;
+                self.working_allocated = self.working_allocated.saturating_sub(1);
+            }
+        } else {
+            if (self.bits[byte_idx] & bit_mask) != 0 {
+                self.bits[byte_idx] &= !bit_mask;
+                self.working_bits[byte_idx] &= !bit_mask;
+                self.header.allocated_blocks = self.header.allocated_blocks.saturating_sub(1);
+                self.working_allocated = self.header.allocated_blocks;
+
+                let mut block_buf = [0u8; BLOCK_SIZE];
+                self.header.generation = generation;
+                self.header.checksum = blake3_block_hash(&self.bits);
+                unsafe {
+                    core::ptr::copy_nonoverlapping(
+                        &self.header as *const BitmapHeader as *const u8,
+                        block_buf.as_mut_ptr(),
+                        core::mem::size_of::<BitmapHeader>(),
+                    );
+                }
+                block_buf[64..64 + BITMAP_BYTES_COUNT].copy_from_slice(&self.bits);
+                let bitmap_lba = partition_base_lba + BITMAP_REL_LBA;
+                client
+                    .write_block(bitmap_lba, &block_buf)
+                    .map_err(FsError::BlockIoError)?;
+                client.flush().map_err(FsError::BlockIoError)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Charge et valide le bitmap présent sur le stockage physique
+    pub fn load(&mut self, client: &BlockClient, partition_base_lba: u64) -> Result<(), FsError> {
+        let bitmap_lba = partition_base_lba + BITMAP_REL_LBA;
+        let mut block_buf = [0u8; BLOCK_SIZE];
+        client
+            .read_block(bitmap_lba, &mut block_buf)
+            .map_err(FsError::BlockIoError)?;
+
+        let hdr = unsafe {
+            let ptr = block_buf.as_ptr() as *const BitmapHeader;
+            ptr.read_unaligned()
+        };
+
+        if hdr.magic == BITMAP_MAGIC && hdr.version == BITMAP_VERSION {
+            let mut candidate_bits = [0u8; BITMAP_BYTES_COUNT];
+            candidate_bits.copy_from_slice(&block_buf[64..64 + BITMAP_BYTES_COUNT]);
+            let actual_checksum = blake3_block_hash(&candidate_bits);
+            if actual_checksum == hdr.checksum {
+                self.header = hdr;
+                self.bits = candidate_bits;
+                self.working_bits = candidate_bits;
+                self.working_allocated = hdr.allocated_blocks;
+                return Ok(());
+            }
+        }
+
+        // Si non présent ou invalide, initialisation par défaut et écriture initiale avec barrière
+        *self = Self::new();
+        let mut block_buf = [0u8; BLOCK_SIZE];
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                &self.header as *const BitmapHeader as *const u8,
+                block_buf.as_mut_ptr(),
+                core::mem::size_of::<BitmapHeader>(),
+            );
+        }
+        block_buf[64..64 + BITMAP_BYTES_COUNT].copy_from_slice(&self.bits);
+        client
+            .write_block(bitmap_lba, &block_buf)
+            .map_err(FsError::BlockIoError)?;
+        client.flush().map_err(FsError::BlockIoError)?;
+        Ok(())
+    }
+}
+
 /// Système de fichiers JamboFS transactionnel monté en espace utilisateur
 #[derive(Debug, Clone, Copy)]
 pub struct JamboFs {
@@ -1409,6 +1702,7 @@ pub struct JamboFs {
     pub dedup_table: BlockDedupTable,
     pub snapshot_table: SnapshotTable,
     pub wal: MetadataWalManager,
+    pub bitmap: CowBitmapAllocator,
 }
 
 impl JamboFs {
@@ -1497,6 +1791,9 @@ impl JamboFs {
 
         let root_offset = uberblock.root_tree_offset;
 
+        let mut bitmap = CowBitmapAllocator::new();
+        let _ = bitmap.load(client, partition_base_lba);
+
         let mut fs = Self {
             client: *client,
             active_uberblock: uberblock,
@@ -1507,6 +1804,7 @@ impl JamboFs {
             dedup_table: BlockDedupTable::new(),
             snapshot_table: SnapshotTable::new(),
             wal: MetadataWalManager::new(),
+            bitmap,
         };
 
         // Replay automatique de résilience après coupure électrique
@@ -1527,7 +1825,34 @@ impl JamboFs {
             dedup_table: BlockDedupTable::new(),
             snapshot_table: SnapshotTable::new(),
             wal: MetadataWalManager::new(),
+            bitmap: CowBitmapAllocator::new(),
         }
+    }
+
+    /// Alloue un nouveau bloc physique libre pour une opération CoW
+    pub fn allocate_cow_block(&mut self) -> Result<u64, FsError> {
+        let gen = self.active_uberblock.generation;
+        self.bitmap
+            .alloc_block(&self.client, self.partition_base_lba, gen)
+    }
+
+    /// Libère un bloc physique CoW obsolète
+    pub fn free_cow_block(&mut self, block_idx: usize) -> Result<(), FsError> {
+        let gen = self.active_uberblock.generation;
+        self.bitmap
+            .free_block(&self.client, self.partition_base_lba, block_idx, gen)
+    }
+
+    /// Retourne le nombre de blocs actuellement disponibles (libres)
+    #[inline]
+    pub fn free_blocks_count(&self) -> usize {
+        BITMAP_BLOCKS_COUNT.saturating_sub(self.bitmap.header.allocated_blocks as usize)
+    }
+
+    /// Retourne le nombre de blocs actuellement alloués
+    #[inline]
+    pub fn allocated_blocks_count(&self) -> usize {
+        self.bitmap.header.allocated_blocks as usize
     }
 
     /// Crée un instant snapshot immuable sans duplication physique de blocs (CoW)
@@ -2249,5 +2574,87 @@ mod tests {
             .expect("Commit wal ok");
         let replayed2 = fs.replay_intent_log().expect("Replay after commit");
         assert_eq!(replayed2, 0);
+    }
+
+    #[test]
+    fn test_cow_bitmap_allocator_and_sync_barrier() {
+        let dummy_client = BlockClient {
+            channel: libjambo::Handle(0),
+            vmo_ptr: core::ptr::null_mut(),
+        };
+        let mut fs = JamboFs::new_fallback(dummy_client);
+
+        // 1. État initial : les 24 blocs système réservés (0..23) sont alloués
+        assert_eq!(fs.allocated_blocks_count(), BITMAP_RESERVED_SYSTEM_BLOCKS);
+        assert_eq!(
+            fs.free_blocks_count(),
+            BITMAP_BLOCKS_COUNT - BITMAP_RESERVED_SYSTEM_BLOCKS
+        );
+        for i in 0..BITMAP_RESERVED_SYSTEM_BLOCKS {
+            assert!(fs.bitmap.is_block_allocated(i));
+        }
+        assert!(!fs.bitmap.is_block_allocated(24));
+
+        // 2. Allocation unitaire directe
+        let blk1 = fs.allocate_cow_block().expect("alloc first block");
+        assert_eq!(blk1, 24);
+        assert!(fs.bitmap.is_block_allocated(24));
+        assert_eq!(
+            fs.allocated_blocks_count(),
+            BITMAP_RESERVED_SYSTEM_BLOCKS + 1
+        );
+
+        // 3. Libération du bloc 24
+        assert!(fs.free_cow_block(24).is_ok());
+        assert!(!fs.bitmap.is_block_allocated(24));
+        assert_eq!(fs.allocated_blocks_count(), BITMAP_RESERVED_SYSTEM_BLOCKS);
+
+        // 4. Protection contre la libération d'un bloc système réservé
+        assert!(fs.free_cow_block(0).is_err());
+        assert!(fs.free_cow_block(12).is_err());
+        assert!(fs.free_cow_block(16).is_err());
+
+        // 5. Transaction CoW avec Rollback
+        fs.bitmap.begin_transaction();
+        let blk_a = fs
+            .bitmap
+            .alloc_block(&fs.client, fs.partition_base_lba, 2)
+            .expect("tx alloc a");
+        let blk_b = fs
+            .bitmap
+            .alloc_block(&fs.client, fs.partition_base_lba, 2)
+            .expect("tx alloc b");
+        assert_eq!(blk_a, 24);
+        assert_eq!(blk_b, 25);
+        // En transaction, working_bits a les blocs alloués mais bits n'est pas encore commité
+        assert!(!fs.bitmap.is_block_allocated(24));
+
+        fs.bitmap.rollback_transaction();
+        // Après rollback, l'état initial est restauré
+        assert!(!fs.bitmap.is_block_allocated(24));
+        assert!(!fs.bitmap.is_block_allocated(25));
+        assert_eq!(fs.allocated_blocks_count(), BITMAP_RESERVED_SYSTEM_BLOCKS);
+
+        // 6. Transaction CoW avec Commit et barrière matérielle
+        fs.bitmap.begin_transaction();
+        let blk_c = fs
+            .bitmap
+            .alloc_block(&fs.client, fs.partition_base_lba, 3)
+            .expect("tx alloc c");
+        assert_eq!(blk_c, 24);
+        assert!(fs
+            .bitmap
+            .commit_transaction(&fs.client, fs.partition_base_lba, 3)
+            .is_ok());
+
+        assert!(fs.bitmap.is_block_allocated(24));
+        assert_eq!(
+            fs.allocated_blocks_count(),
+            BITMAP_RESERVED_SYSTEM_BLOCKS + 1
+        );
+
+        // Validation du checksum BLAKE3 du bitmap après commit
+        let expected_checksum = blake3_block_hash(&fs.bitmap.bits);
+        assert_eq!(fs.bitmap.header.checksum, expected_checksum);
     }
 }

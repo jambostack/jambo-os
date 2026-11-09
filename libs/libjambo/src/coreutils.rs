@@ -15,6 +15,7 @@ pub struct VfsFileNode {
     pub size: usize,
     pub is_active: bool,
     pub is_dir: bool,
+    pub mode: u32,
 }
 
 impl VfsFileNode {
@@ -26,6 +27,7 @@ impl VfsFileNode {
             size: 0,
             is_active: false,
             is_dir: false,
+            mode: 0o644,
         }
     }
 
@@ -61,6 +63,7 @@ pub static mut INODE_POOL: [VfsFileNode; 32] = [
         size: 14,
         is_active: true,
         is_dir: false,
+        mode: 0o644,
     },
     // 1: /etc/os-release
     VfsFileNode {
@@ -88,6 +91,7 @@ pub static mut INODE_POOL: [VfsFileNode; 32] = [
         size: 38,
         is_active: true,
         is_dir: false,
+        mode: 0o644,
     },
     // 2: /etc/motd
     VfsFileNode {
@@ -115,6 +119,7 @@ pub static mut INODE_POOL: [VfsFileNode; 32] = [
         size: 38,
         is_active: true,
         is_dir: false,
+        mode: 0o644,
     },
     // 3: /etc (répertoire)
     VfsFileNode {
@@ -133,6 +138,7 @@ pub static mut INODE_POOL: [VfsFileNode; 32] = [
         size: 0,
         is_active: true,
         is_dir: true,
+        mode: 0o755,
     },
     // 4: /tmp (répertoire)
     VfsFileNode {
@@ -151,6 +157,7 @@ pub static mut INODE_POOL: [VfsFileNode; 32] = [
         size: 0,
         is_active: true,
         is_dir: true,
+        mode: 0o777,
     },
     VfsFileNode::empty(),
     VfsFileNode::empty(),
@@ -213,6 +220,7 @@ pub fn sys_open(path: &str, flags: i32) -> i32 {
                     node.buffer = [0u8; crate::vfs::FILE_BUFFER_SIZE];
                     node.is_active = true;
                     node.is_dir = false;
+                    node.mode = 0o644;
                     inode_idx = Some(i);
                     break;
                 }
@@ -274,6 +282,7 @@ pub fn sys_mkdir_pool(path: &str, _mode: u32) -> i32 {
                 node.buffer = [0u8; crate::vfs::FILE_BUFFER_SIZE];
                 node.is_active = true;
                 node.is_dir = true;
+                node.mode = if _mode != 0 { _mode } else { 0o755 };
                 return 0;
             }
         }
@@ -336,6 +345,66 @@ pub fn sys_rmdir_pool(path: &str) -> i32 {
         (*pool)[idx].path_len = 0;
         0
     }
+}
+
+/// Modifie les permissions octales d'un fichier ou répertoire dans le pool d'inodes virtuel
+pub fn sys_chmod_pool(path: &str, mode: u32) -> i32 {
+    let clean_path = path.trim_end_matches('/');
+    let target = if clean_path.is_empty() {
+        "/"
+    } else {
+        clean_path
+    };
+    let mut found = false;
+    // SAFETY: Accès protégé au pool d'inodes virtuel
+    unsafe {
+        let pool = core::ptr::addr_of_mut!(INODE_POOL);
+        for node in (*pool).iter_mut() {
+            if node.is_active {
+                let p = node.path_str();
+                if p == target
+                    || (target.starts_with('/') && p == &target[1..])
+                    || (!target.starts_with('/') && p.strip_prefix('/').unwrap_or("") == target)
+                {
+                    node.mode = mode & 0o7777;
+                    found = true;
+                    break;
+                }
+            }
+        }
+    }
+    let _ = crate::vfs::with_fd_table(|tbl| tbl.chmod(target, mode));
+    if found {
+        0
+    } else {
+        -1
+    }
+}
+
+/// Lit les permissions octales actuelles d'un fichier ou répertoire dans le pool d'inodes virtuel
+pub fn sys_get_mode_pool(path: &str) -> Option<u32> {
+    let clean_path = path.trim_end_matches('/');
+    let target = if clean_path.is_empty() {
+        "/"
+    } else {
+        clean_path
+    };
+    // SAFETY: Accès protégé au pool d'inodes virtuel
+    unsafe {
+        let pool = core::ptr::addr_of!(INODE_POOL);
+        for node in (*pool).iter() {
+            if node.is_active {
+                let p = node.path_str();
+                if p == target
+                    || (target.starts_with('/') && p == &target[1..])
+                    || (!target.starts_with('/') && p.strip_prefix('/').unwrap_or("") == target)
+                {
+                    return Some(node.mode);
+                }
+            }
+        }
+    }
+    None
 }
 
 /// Ferme un descripteur de fichier VFS et synchronise les métadonnées
@@ -2316,6 +2385,7 @@ pub fn run_cp(args: &[&str], err_fd: i32) -> i32 {
                                     slot.path_len = len;
                                     slot.is_active = true;
                                     slot.is_dir = false;
+                                    slot.mode = 0o644;
                                     slot.size = *size;
                                     slot.buffer[..*size].copy_from_slice(&buffer_arr[..*size]);
                                     break;
@@ -2751,6 +2821,113 @@ pub fn run_find(args: &[&str], out_fd: i32, err_fd: i32) -> i32 {
     }
 
     0
+}
+
+/// Exécute l'utilitaire `chmod` pour modifier les masques de permissions octales
+pub fn run_chmod(args: &[&str], err_fd: i32) -> i32 {
+    let mut recursive = false;
+    let mut verbose = false;
+    let mut mode_str: Option<&str> = None;
+    let mut files_start = 0;
+
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i];
+        if arg == "-R" || arg == "--recursive" {
+            recursive = true;
+            i += 1;
+        } else if arg == "-v" || arg == "--verbose" {
+            verbose = true;
+            i += 1;
+        } else if arg.starts_with('-') && !arg.chars().skip(1).all(|c| c.is_ascii_digit()) {
+            let _ = sys_write(err_fd, b"chmod: unrecognized option '");
+            let _ = sys_write(err_fd, arg.as_bytes());
+            let _ = sys_write(err_fd, b"'\n");
+            return 1;
+        } else if mode_str.is_none() {
+            mode_str = Some(arg);
+            files_start = i + 1;
+            break;
+        } else {
+            i += 1;
+        }
+    }
+
+    let raw_mode = match mode_str {
+        Some(m) => m,
+        None => {
+            let _ = sys_write(err_fd, b"chmod: missing operand\n");
+            return 1;
+        }
+    };
+
+    let files = &args[files_start..];
+    if files.is_empty() {
+        let _ = sys_write(err_fd, b"chmod: missing operand after '");
+        let _ = sys_write(err_fd, raw_mode.as_bytes());
+        let _ = sys_write(err_fd, b"'\n");
+        return 1;
+    }
+
+    // Parsing du mode octal (supporte ex: 755, 0755, 644, 600, etc.)
+    let mut mode: u32 = 0;
+    for b in raw_mode.bytes() {
+        if !(b'0'..=b'7').contains(&b) {
+            let _ = sys_write(err_fd, b"chmod: invalid mode: '");
+            let _ = sys_write(err_fd, raw_mode.as_bytes());
+            let _ = sys_write(err_fd, b"'\n");
+            return 1;
+        }
+        mode = (mode << 3) | (b - b'0') as u32;
+    }
+
+    if mode > 0o7777 {
+        let _ = sys_write(err_fd, b"chmod: invalid mode: '");
+        let _ = sys_write(err_fd, raw_mode.as_bytes());
+        let _ = sys_write(err_fd, b"'\n");
+        return 1;
+    }
+
+    let mut has_error = false;
+    for &target in files {
+        let res = sys_chmod_pool(target, mode);
+        if res < 0 {
+            let _ = sys_write(err_fd, b"chmod: cannot access '");
+            let _ = sys_write(err_fd, target.as_bytes());
+            let _ = sys_write(err_fd, b"': No such file or directory\n");
+            has_error = true;
+        } else if recursive {
+            let clean = target.trim_end_matches('/');
+            // SAFETY: Accès protégé au pool d'inodes virtuel
+            unsafe {
+                let pool = core::ptr::addr_of_mut!(INODE_POOL);
+                for node in (*pool).iter_mut() {
+                    if node.is_active {
+                        let p = node.path_str();
+                        if p.starts_with(clean)
+                            && (p.len() == clean.len()
+                                || p.as_bytes().get(clean.len()) == Some(&b'/'))
+                        {
+                            node.mode = mode & 0o7777;
+                        }
+                    }
+                }
+            }
+        }
+        if verbose && res == 0 {
+            let _ = sys_write(err_fd, b"mode of '");
+            let _ = sys_write(err_fd, target.as_bytes());
+            let _ = sys_write(err_fd, b"' changed to ");
+            let _ = sys_write(err_fd, raw_mode.as_bytes());
+            let _ = sys_write(err_fd, b"\n");
+        }
+    }
+
+    if has_error {
+        1
+    } else {
+        0
+    }
 }
 
 #[cfg(test)]
@@ -3237,5 +3414,60 @@ mod tests {
         assert_eq!(code4, 1);
         sys_close(w4);
         sys_close(r4);
+    }
+
+    #[test]
+    fn test_chmod_lifecycle() {
+        // 1. Modification du mode d'un fichier existant (/etc/hostname) en 0600
+        let (r1, w1) = crate::vfs::pipe().expect("pipe chmod 1");
+        let code1 = run_chmod(&["600", "/etc/hostname"], w1);
+        assert_eq!(code1, 0);
+        sys_close(w1);
+        sys_close(r1);
+
+        assert_eq!(sys_get_mode_pool("/etc/hostname"), Some(0o600));
+
+        // 2. Modification verbeuse (-v) en 0644
+        let (r2, w2) = crate::vfs::pipe().expect("pipe chmod 2");
+        let code2 = run_chmod(&["-v", "644", "/etc/hostname"], w2);
+        assert_eq!(code2, 0);
+        sys_close(w2);
+
+        let mut out2 = [0u8; 128];
+        let n2 = sys_read(r2, &mut out2);
+        assert!(n2 > 0);
+        let s2 = core::str::from_utf8(&out2[..n2 as usize]).unwrap();
+        assert!(s2.contains("mode of '/etc/hostname' changed to 644"));
+        sys_close(r2);
+        assert_eq!(sys_get_mode_pool("/etc/hostname"), Some(0o644));
+
+        // 3. Modification récursive (-R) sur /etc
+        let (r3, w3) = crate::vfs::pipe().expect("pipe chmod 3");
+        let code3 = run_chmod(&["-R", "750", "/etc"], w3);
+        assert_eq!(code3, 0);
+        sys_close(w3);
+        sys_close(r3);
+        assert_eq!(sys_get_mode_pool("/etc"), Some(0o750));
+        assert_eq!(sys_get_mode_pool("/etc/hostname"), Some(0o750));
+        assert_eq!(sys_get_mode_pool("/etc/os-release"), Some(0o750));
+
+        // Rétablissement en 0644 pour ne pas perturber les autres tests
+        let _ = sys_chmod_pool("/etc/hostname", 0o644);
+        let _ = sys_chmod_pool("/etc/os-release", 0o644);
+        let _ = sys_chmod_pool("/etc", 0o755);
+
+        // 4. Test d'erreur : fichier inexistant
+        let (r4, w4) = crate::vfs::pipe().expect("pipe chmod 4");
+        let code4 = run_chmod(&["644", "/nonexistent_file_xyz"], w4);
+        assert_eq!(code4, 1);
+        sys_close(w4);
+        sys_close(r4);
+
+        // 5. Test d'erreur : mode octal invalide
+        let (r5, w5) = crate::vfs::pipe().expect("pipe chmod 5");
+        let code5 = run_chmod(&["999", "/etc/hostname"], w5);
+        assert_eq!(code5, 1);
+        sys_close(w5);
+        sys_close(r5);
     }
 }

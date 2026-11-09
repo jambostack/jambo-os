@@ -224,7 +224,8 @@ pub struct NvmeMsixRing {
     pub entries: [NvmeMsixTableEntry; NVME_MSIX_MAX_VECTORS],
     pub vector_count: usize,
     pub enabled: bool,
-    pub pending_bits: u32, // Registre PBA (Pending Bit Array)
+    pub pending_bits: u32,   // Registre PBA (Pending Bit Array)
+    pub function_mask: bool, // Masquage global (Function Mask)
 }
 
 impl Default for NvmeMsixRing {
@@ -250,7 +251,24 @@ impl NvmeMsixRing {
             vector_count: count,
             enabled: false,
             pending_bits: 0,
+            function_mask: false,
         }
+    }
+
+    /// Active ou désactive le masquage global au niveau fonctionnel (MSI-X Function Mask)
+    pub fn set_function_mask(&mut self, mask: bool) {
+        self.function_mask = mask;
+    }
+
+    /// Indique si les interruptions sont globalement masquées ou si le vecteur individuel est masqué
+    pub fn is_vector_effective_masked(&self, index: usize) -> bool {
+        if self.function_mask {
+            return true;
+        }
+        if index >= self.vector_count {
+            return true;
+        }
+        self.entries[index].is_masked()
     }
 
     /// Configure un vecteur MSI-X pour délivrer l'interruption au LAPIC cible (x86/x86_64)
@@ -498,6 +516,30 @@ impl NvmeQueuePair {
             command_id: cid,
             status: if self.cq_phase { 1 } else { 0 },
         })
+    }
+
+    /// Vérifie s'il y a une complétion disponible sur la tête de file sans la consommer
+    pub fn peek_completion(&self) -> Option<NvmeCompletionEntry> {
+        let entry = self.cq[self.cq_head as usize];
+        if entry.phase() == self.cq_phase {
+            Some(entry)
+        } else {
+            None
+        }
+    }
+
+    /// Consomme une complétion disponible sur la tête de la file
+    pub fn consume_completion(&mut self) -> Option<NvmeCompletionEntry> {
+        let entry = self.cq[self.cq_head as usize];
+        if entry.phase() == self.cq_phase {
+            self.cq_head = (self.cq_head + 1) % (QUEUE_SIZE as u16);
+            if self.cq_head == 0 {
+                self.cq_phase = !self.cq_phase;
+            }
+            Some(entry)
+        } else {
+            None
+        }
     }
 }
 
@@ -758,6 +800,238 @@ impl NvmeController {
         let cid = self.io_queue.submit(cmd);
         let _ = self.io_queue.poll_completion(cid)?;
         Ok(())
+    }
+
+    /// Soumet une commande de lecture de blocs asynchrone (Non-blocking NVMe Read) avec descripteur DMA
+    pub fn submit_async_read_dma(
+        &mut self,
+        lba: u64,
+        count: u16,
+        dma: NvmeDmaBuffer,
+    ) -> Result<u16, SysError> {
+        if !self.ready {
+            return Err(SysError::ResourceBusy);
+        }
+        let cmd = NvmeSubmissionEntry {
+            cdw0: NVME_IO_READ as u32,
+            nsid: 1,
+            reserved: 0,
+            mptr: 0,
+            prp1: dma.prp1,
+            prp2: dma.prp2,
+            cdw10: lba as u32,
+            cdw11: (lba >> 32) as u32,
+            cdw12: count.saturating_sub(1) as u32,
+            cdw13: 0,
+            cdw14: 0,
+            cdw15: 0,
+        };
+        Ok(self.io_queue.submit(cmd))
+    }
+
+    /// Soumet une commande de lecture de blocs asynchrone (Non-blocking NVMe Read)
+    pub fn submit_async_read(
+        &mut self,
+        lba: u64,
+        count: u16,
+        dma_iova: u64,
+    ) -> Result<u16, SysError> {
+        self.submit_async_read_dma(lba, count, NvmeDmaBuffer::single_page(dma_iova))
+    }
+
+    /// Soumet une commande d'écriture de blocs asynchrone (Non-blocking NVMe Write) avec descripteur DMA
+    pub fn submit_async_write_dma(
+        &mut self,
+        lba: u64,
+        count: u16,
+        dma: NvmeDmaBuffer,
+    ) -> Result<u16, SysError> {
+        if !self.ready {
+            return Err(SysError::ResourceBusy);
+        }
+        let cmd = NvmeSubmissionEntry {
+            cdw0: NVME_IO_WRITE as u32,
+            nsid: 1,
+            reserved: 0,
+            mptr: 0,
+            prp1: dma.prp1,
+            prp2: dma.prp2,
+            cdw10: lba as u32,
+            cdw11: (lba >> 32) as u32,
+            cdw12: count.saturating_sub(1) as u32,
+            cdw13: 0,
+            cdw14: 0,
+            cdw15: 0,
+        };
+        Ok(self.io_queue.submit(cmd))
+    }
+
+    /// Soumet une commande d'écriture de blocs asynchrone (Non-blocking NVMe Write)
+    pub fn submit_async_write(
+        &mut self,
+        lba: u64,
+        count: u16,
+        dma_iova: u64,
+    ) -> Result<u16, SysError> {
+        self.submit_async_write_dma(lba, count, NvmeDmaBuffer::single_page(dma_iova))
+    }
+
+    /// Soumet une commande d'écriture de zéros matérielle asynchrone (Non-blocking Write Zeroes)
+    pub fn submit_async_write_zeroes(
+        &mut self,
+        lba: u64,
+        count: u16,
+        deallocate: bool,
+    ) -> Result<u16, SysError> {
+        if !self.ready {
+            return Err(SysError::ResourceBusy);
+        }
+        if count == 0 {
+            return Err(SysError::InvalidArgument);
+        }
+        let mut cdw12 = (count - 1) as u32;
+        if deallocate {
+            cdw12 |= 1 << 25;
+        }
+        let cmd = NvmeSubmissionEntry {
+            cdw0: NVME_IO_WRITE_ZEROES as u32,
+            nsid: 1,
+            cdw10: lba as u32,
+            cdw11: (lba >> 32) as u32,
+            cdw12,
+            ..Default::default()
+        };
+        Ok(self.io_queue.submit(cmd))
+    }
+
+    /// Soumet une commande de synchronisation cache asynchrone (Non-blocking Flush)
+    pub fn submit_async_flush(&mut self, nsid: u32) -> Result<u16, SysError> {
+        if !self.ready {
+            return Err(SysError::ResourceBusy);
+        }
+        let cmd = NvmeSubmissionEntry {
+            cdw0: NVME_IO_FLUSH as u32,
+            nsid,
+            ..Default::default()
+        };
+        Ok(self.io_queue.submit(cmd))
+    }
+
+    /// Vérifie si une commande asynchrone spécifique a été complétée sur la file I/O sans bloquer
+    pub fn poll_async_completion(
+        &mut self,
+        qid: u16,
+        cid: u16,
+    ) -> Result<Option<NvmeCompletionEntry>, SysError> {
+        let q = if qid == 0 {
+            &mut self.admin_queue
+        } else {
+            &mut self.io_queue
+        };
+        let entry = q.cq[q.cq_head as usize];
+        if entry.phase() == q.cq_phase && entry.command_id == cid {
+            q.cq_head = (q.cq_head + 1) % (QUEUE_SIZE as u16);
+            if q.cq_head == 0 {
+                q.cq_phase = !q.cq_phase;
+            }
+            if entry.is_success() {
+                Ok(Some(entry))
+            } else {
+                Err(SysError::BadAddress)
+            }
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Récolte toutes les complétions asynchrones disponibles sur une file sans bloquer
+    pub fn reap_async_completions(&mut self, qid: u16, out: &mut [NvmeCompletionEntry]) -> usize {
+        let q = if qid == 0 {
+            &mut self.admin_queue
+        } else {
+            &mut self.io_queue
+        };
+        let mut count = 0;
+        while count < out.len() {
+            if let Some(entry) = q.consume_completion() {
+                out[count] = entry;
+                count += 1;
+            } else {
+                break;
+            }
+        }
+        count
+    }
+
+    /// Reconfigure dynamiquement un vecteur MSI-X vers une nouvelle cible LAPIC/Vecteur (migration dynamique)
+    pub fn rebind_msix_vector(
+        &mut self,
+        vector_index: usize,
+        new_apic_id: u8,
+        new_cpu_vector: u8,
+    ) -> Result<(), SysError> {
+        if vector_index >= self.msix.vector_count {
+            return Err(SysError::InvalidArgument);
+        }
+        let current_masked = self.msix.entries[vector_index].is_masked();
+        self.msix
+            .configure_vector(vector_index, new_apic_id, new_cpu_vector, current_masked)
+    }
+
+    /// Active ou désactive le masquage dynamique d'un vecteur MSI-X
+    pub fn set_msix_vector_mask(
+        &mut self,
+        vector_index: usize,
+        masked: bool,
+    ) -> Result<(), SysError> {
+        if masked {
+            self.msix.mask_vector(vector_index)
+        } else {
+            self.msix.unmask_vector(vector_index)
+        }
+    }
+
+    /// Active ou désactive le masquage global au niveau fonctionnel (MSI-X Function Mask)
+    pub fn set_msix_function_mask(&mut self, masked: bool) {
+        self.msix.set_function_mask(masked);
+    }
+
+    /// Réceptionne et traite un événement d'interruption dynamique MSI-X, acquitte le PBA et extrait la complétion
+    pub fn dispatch_dynamic_msix_event(
+        &mut self,
+        cpu_vector: u8,
+    ) -> Option<(u16, NvmeCompletionEntry)> {
+        for (qid, &v_idx) in self.cq_vector_map.iter().enumerate() {
+            if v_idx != 0xFF && (v_idx as usize) < self.msix.vector_count {
+                if self.msix.is_vector_effective_masked(v_idx as usize) {
+                    continue;
+                }
+                let entry = self.msix.entries[v_idx as usize];
+                if entry.vector_number() == cpu_vector {
+                    let _ = self.msix.clear_pending(v_idx as usize);
+                    let q = if qid == 0 {
+                        &mut self.admin_queue
+                    } else {
+                        &mut self.io_queue
+                    };
+                    if let Some(c) = q.consume_completion() {
+                        return Some((qid as u16, c));
+                    }
+                    return Some((
+                        qid as u16,
+                        NvmeCompletionEntry {
+                            dw0: 0,
+                            reserved: 0,
+                            sq_head: q.sq_tail,
+                            sq_id: qid as u16,
+                            command_id: 0,
+                            status: if q.cq_phase { 1 } else { 0 },
+                        },
+                    ));
+                }
+            }
+        }
+        None
     }
 
     /// Réinitialise les anneaux du contrôleur après un incident matériel.
@@ -1320,5 +1594,66 @@ mod tests {
             NvmeController::parse_async_event_result(dw0_notice),
             NvmeAsyncEventType::Notice { event_info: 0x05 }
         );
+    }
+
+    #[test]
+    fn test_async_command_transfers_and_dynamic_msix() {
+        let mut ctrl = NvmeController::new();
+        ctrl.ready = true;
+        assert!(ctrl.enable_msix(8).is_ok());
+
+        // 1. Soumission asynchrone Read
+        let cid_read = ctrl
+            .submit_async_read(0x1000, 4, 0x4000_0000)
+            .expect("async read");
+        assert_eq!(cid_read, 0);
+        let cmd_read = ctrl.io_queue.sq[0];
+        assert_eq!((cmd_read.cdw0 & 0xFF) as u8, NVME_IO_READ);
+        assert_eq!(cmd_read.cdw10, 0x1000);
+
+        // 2. Soumission asynchrone Write Zeroes
+        let cid_wz = ctrl
+            .submit_async_write_zeroes(0x2000, 8, true)
+            .expect("async write zeroes");
+        assert_eq!(cid_wz, 1);
+        let cmd_wz = ctrl.io_queue.sq[1];
+        assert_eq!((cmd_wz.cdw0 & 0xFF) as u8, NVME_IO_WRITE_ZEROES);
+
+        // 3. Soumission asynchrone Flush
+        let cid_flush = ctrl.submit_async_flush(1).expect("async flush");
+        assert_eq!(cid_flush, 2);
+
+        // 4. Configuration et Rebind dynamique de vecteur MSI-X
+        // Lier CQ 1 au vecteur 2 (APIC ID 0, CPU Vector 0x42)
+        assert!(ctrl.bind_cq_msix(1, 2, 0, 0x42).is_ok());
+        assert_eq!(ctrl.msix.entries[2].vector_number(), 0x42);
+
+        // Rebind dynamique vers APIC ID 3, CPU Vector 0x55 (migration de charge CPU)
+        assert!(ctrl.rebind_msix_vector(2, 3, 0x55).is_ok());
+        assert_eq!(ctrl.msix.entries[2].vector_number(), 0x55);
+        assert_eq!(ctrl.msix.entries[2].msg_addr_lo, 0xFEE0_0000 | (3 << 12));
+
+        // 5. Test du masquage individuel et global Function Mask
+        assert!(!ctrl.msix.is_vector_effective_masked(2));
+        assert!(ctrl.set_msix_vector_mask(2, true).is_ok());
+        assert!(ctrl.msix.is_vector_effective_masked(2));
+        assert!(ctrl.set_msix_vector_mask(2, false).is_ok());
+        assert!(!ctrl.msix.is_vector_effective_masked(2));
+
+        ctrl.set_msix_function_mask(true);
+        assert!(ctrl.msix.is_vector_effective_masked(2));
+        ctrl.set_msix_function_mask(false);
+        assert!(!ctrl.msix.is_vector_effective_masked(2));
+
+        // 6. Signalement d'interruption dans le PBA et dispatch dynamique
+        assert!(ctrl.msix.signal_pending(2).is_ok());
+        assert!(ctrl.msix.is_pending(2).unwrap());
+
+        let event = ctrl.dispatch_dynamic_msix_event(0x55);
+        assert!(event.is_some());
+        let (qid, _c) = event.unwrap();
+        assert_eq!(qid, 1);
+        // Le bit PBA doit avoir été acquitté et effacé
+        assert!(!ctrl.msix.is_pending(2).unwrap());
     }
 }

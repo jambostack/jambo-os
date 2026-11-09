@@ -83,6 +83,10 @@ path = "src/bin/uniq.rs"
 name = "find"
 path = "src/bin/find.rs"
 
+[[bin]]
+name = "chmod"
+path = "src/bin/chmod.rs"
+
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }
 

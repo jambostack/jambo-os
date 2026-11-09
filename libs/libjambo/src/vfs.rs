@@ -90,6 +90,7 @@ impl PipeChannel {
 pub struct FdEntry {
     pub kind: FdKind,
     pub flags: i32,
+    pub mode: u32,
     pub offset: u64,
     pub size: u64,
     pub pipe_id: u8,
@@ -103,6 +104,7 @@ impl FdEntry {
         Self {
             kind: FdKind::Closed,
             flags: 0,
+            mode: 0,
             offset: 0,
             size: 0,
             pipe_id: 0,
@@ -179,6 +181,7 @@ impl FdTable {
                 *entry = FdEntry {
                     kind,
                     flags,
+                    mode: 0,
                     offset: 0,
                     size: 0,
                     pipe_id: 0,
@@ -560,26 +563,42 @@ impl FdTable {
 
         match entry.kind {
             FdKind::ConsoleIn | FdKind::ConsoleOut => {
-                st.st_mode = S_IFCHR | 0o666;
+                st.st_mode = if entry.mode != 0 {
+                    entry.mode
+                } else {
+                    S_IFCHR | 0o666
+                };
                 st.st_nlink = 1;
                 st.st_size = 0;
             }
             FdKind::RegularFile => {
-                st.st_mode = S_IFREG | 0o644;
+                st.st_mode = if entry.mode != 0 {
+                    entry.mode
+                } else {
+                    S_IFREG | 0o644
+                };
                 st.st_nlink = 1;
                 st.st_size = entry.size as i64;
                 st.st_blksize = 512;
                 st.st_blocks = entry.size.div_ceil(512) as i64;
             }
             FdKind::Socket => {
-                st.st_mode = S_IFSOCK | 0o666;
+                st.st_mode = if entry.mode != 0 {
+                    entry.mode
+                } else {
+                    S_IFSOCK | 0o666
+                };
                 st.st_nlink = 1;
                 st.st_size = entry.size as i64;
                 st.st_blksize = 512;
                 st.st_blocks = entry.size.div_ceil(512) as i64;
             }
             FdKind::PipeReader | FdKind::PipeWriter => {
-                st.st_mode = S_IFIFO | 0o600;
+                st.st_mode = if entry.mode != 0 {
+                    entry.mode
+                } else {
+                    S_IFIFO | 0o600
+                };
                 st.st_nlink = 1;
                 let pidx = entry.pipe_id as usize;
                 if pidx < MAX_PIPES && self.pipes[pidx].active {
@@ -593,12 +612,57 @@ impl FdTable {
         Ok(st)
     }
 
+    /// Modifie le masque de permissions d'un descripteur ouvert (fchmod)
+    pub fn fchmod(&mut self, fd: i32, mode: u32) -> Result<(), SysError> {
+        let entry = self.get_mut(fd).ok_or(SysError::InvalidArgument)?;
+        if entry.kind == FdKind::Closed {
+            return Err(SysError::InvalidArgument);
+        }
+        let file_type = match entry.kind {
+            FdKind::RegularFile => S_IFREG,
+            FdKind::ConsoleIn | FdKind::ConsoleOut => S_IFCHR,
+            FdKind::Socket => S_IFSOCK,
+            FdKind::PipeReader | FdKind::PipeWriter => S_IFIFO,
+            _ => 0,
+        };
+        entry.mode = file_type | (mode & 0o7777);
+        Ok(())
+    }
+
+    /// Modifie le masque de permissions de tous les descripteurs ouverts sur ce chemin (chmod)
+    pub fn chmod(&mut self, path: &str, mode: u32) -> Result<(), SysError> {
+        let mut modified = false;
+        for entry in self.entries.iter_mut() {
+            if entry.kind != FdKind::Closed && entry.path_str() == path {
+                let file_type = match entry.kind {
+                    FdKind::RegularFile => S_IFREG,
+                    FdKind::ConsoleIn | FdKind::ConsoleOut => S_IFCHR,
+                    FdKind::Socket => S_IFSOCK,
+                    FdKind::PipeReader | FdKind::PipeWriter => S_IFIFO,
+                    _ => 0,
+                };
+                entry.mode = file_type | (mode & 0o7777);
+                modified = true;
+            }
+        }
+        if modified {
+            Ok(())
+        } else {
+            Err(SysError::InvalidArgument)
+        }
+    }
+
     /// Récupère les métadonnées pour un chemin donné dans la table des descripteurs
     pub fn stat(&self, path: &str) -> Result<PosixStat, SysError> {
         for entry in &self.entries {
             if entry.kind != FdKind::Closed && entry.path_str() == path {
+                let st_mode = if entry.mode != 0 {
+                    entry.mode
+                } else {
+                    S_IFREG | 0o644
+                };
                 return Ok(PosixStat {
-                    st_mode: S_IFREG | 0o644,
+                    st_mode,
                     st_nlink: 1,
                     st_size: entry.size as i64,
                     st_blksize: 512,
@@ -665,6 +729,16 @@ pub fn dup2(oldfd: i32, newfd: i32) -> Result<i32, SysError> {
 /// Alloue un canal de communication IPC anonyme (pipe POSIX) sur la table globale
 pub fn pipe() -> Result<(i32, i32), SysError> {
     with_fd_table(|table| table.alloc_pipe())
+}
+
+/// Modifie le masque de permissions d'un descripteur de fichier ouvert (fchmod POSIX)
+pub fn fchmod(fd: i32, mode: u32) -> Result<(), SysError> {
+    with_fd_table(|table| table.fchmod(fd, mode))
+}
+
+/// Modifie le masque de permissions associé à un chemin dans la table VFS
+pub fn chmod(path: &str, mode: u32) -> Result<(), SysError> {
+    with_fd_table(|table| table.chmod(path, mode))
 }
 
 // ============================================================================
@@ -905,5 +979,31 @@ mod tests {
         // Tenter d'écrire sur le pipe sans lecteur : doit retourner PeerClosed (EPIPE)
         let res = table.write(wfd, b"broken pipe test");
         assert_eq!(res, Err(SysError::PeerClosed));
+    }
+
+    #[test]
+    fn test_vfs_chmod_and_fchmod() {
+        let mut table = FdTable::new();
+        let fd = table
+            .alloc_fd(FdKind::RegularFile, O_RDWR, "/etc/secure.conf")
+            .expect("alloc regular file");
+
+        // Vérification du mode par défaut
+        let st0 = table.fstat(fd).expect("fstat");
+        assert_eq!(st0.st_mode, S_IFREG | 0o644);
+
+        // Application de fchmod (passage en 0600)
+        assert!(table.fchmod(fd, 0o600).is_ok());
+        let st1 = table.fstat(fd).expect("fstat after fchmod");
+        assert_eq!(st1.st_mode, S_IFREG | 0o600);
+
+        // Application de chmod par chemin (passage en 0755)
+        assert!(table.chmod("/etc/secure.conf", 0o755).is_ok());
+        let st2 = table.fstat(fd).expect("fstat after chmod");
+        assert_eq!(st2.st_mode, S_IFREG | 0o755);
+
+        // Test sur descripteur invalide
+        assert!(table.fchmod(99, 0o644).is_err());
+        assert!(table.chmod("/nonexistent", 0o644).is_err());
     }
 }
