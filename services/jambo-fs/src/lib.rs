@@ -948,6 +948,101 @@ impl MountFlags {
     }
 }
 
+/// Entrée de la table de déduplication de blocs
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct DedupEntry {
+    pub hash: [u8; 32],
+    pub physical_lba: u64,
+    pub refcount: u32,
+    pub active: bool,
+}
+
+pub const MAX_DEDUP_ENTRIES: usize = 64;
+
+/// Table de déduplication de blocs basée sur l'empreinte BLAKE3 (Ring 3 CoW Deduplication)
+#[derive(Debug, Clone, Copy)]
+pub struct BlockDedupTable {
+    pub entries: [DedupEntry; MAX_DEDUP_ENTRIES],
+    pub active_count: usize,
+    pub dedup_hits: u64,
+    pub blocks_saved: u64,
+}
+
+impl Default for BlockDedupTable {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl BlockDedupTable {
+    pub const fn new() -> Self {
+        Self {
+            entries: [DedupEntry {
+                hash: [0u8; 32],
+                physical_lba: 0,
+                refcount: 0,
+                active: false,
+            }; MAX_DEDUP_ENTRIES],
+            active_count: 0,
+            dedup_hits: 0,
+            blocks_saved: 0,
+        }
+    }
+
+    /// Recherche si un bloc ayant ce hash BLAKE3 existe déjà en mémoire/disque
+    pub fn lookup(&self, hash: &[u8; 32]) -> Option<u64> {
+        for entry in self.entries.iter() {
+            if entry.active && &entry.hash == hash {
+                return Some(entry.physical_lba);
+            }
+        }
+        None
+    }
+
+    /// Enregistre un bloc ou incrémente son compteur de références s'il est déjà présent
+    pub fn register_or_dedup(&mut self, hash: &[u8; 32], lba: u64) -> (u64, bool) {
+        for entry in self.entries.iter_mut() {
+            if entry.active && &entry.hash == hash {
+                entry.refcount = entry.refcount.saturating_add(1);
+                self.dedup_hits = self.dedup_hits.saturating_add(1);
+                self.blocks_saved = self.blocks_saved.saturating_add(1);
+                return (entry.physical_lba, true);
+            }
+        }
+
+        // Nouvelle entrée
+        for entry in self.entries.iter_mut() {
+            if !entry.active {
+                entry.hash.copy_from_slice(hash);
+                entry.physical_lba = lba;
+                entry.refcount = 1;
+                entry.active = true;
+                self.active_count += 1;
+                return (lba, false);
+            }
+        }
+
+        // Si la table est pleine, on ne déduplique pas
+        (lba, false)
+    }
+
+    /// Décrémente le refcount d'un bloc lors d'une libération CoW
+    pub fn decrement(&mut self, hash: &[u8; 32]) -> Option<u32> {
+        for entry in self.entries.iter_mut() {
+            if entry.active && &entry.hash == hash {
+                entry.refcount = entry.refcount.saturating_sub(1);
+                let remaining = entry.refcount;
+                if remaining == 0 {
+                    entry.active = false;
+                    self.active_count = self.active_count.saturating_sub(1);
+                }
+                return Some(remaining);
+            }
+        }
+        None
+    }
+}
+
 /// Système de fichiers JamboFS transactionnel monté en espace utilisateur
 #[derive(Debug, Clone, Copy)]
 pub struct JamboFs {
@@ -957,6 +1052,7 @@ pub struct JamboFs {
     pub partition_base_lba: u64,
     pub flags: MountFlags,
     pub active_slot_b: bool,
+    pub dedup_table: BlockDedupTable,
 }
 
 impl JamboFs {
@@ -1052,6 +1148,7 @@ impl JamboFs {
             partition_base_lba,
             flags,
             active_slot_b,
+            dedup_table: BlockDedupTable::new(),
         })
     }
 
@@ -1064,7 +1161,28 @@ impl JamboFs {
             partition_base_lba: 0,
             flags: MountFlags::default_rw(),
             active_slot_b: false,
+            dedup_table: BlockDedupTable::new(),
         }
+    }
+
+    /// Écrit un bloc de 4 Kio avec déduplication CoW par empreinte BLAKE3
+    /// Retourne `(lba_physique, etait_deduplique)`
+    pub fn write_block_dedup(
+        &mut self,
+        data: &[u8; BLOCK_SIZE],
+        target_lba: u64,
+    ) -> Result<(u64, bool), FsError> {
+        let hash = blake3_block_hash(data);
+        if let Some(existing_lba) = self.dedup_table.lookup(&hash) {
+            let (lba, _) = self.dedup_table.register_or_dedup(&hash, existing_lba);
+            return Ok((lba, true));
+        }
+
+        self.client
+            .write_block(target_lba, data)
+            .map_err(FsError::BlockIoError)?;
+        let (lba, _) = self.dedup_table.register_or_dedup(&hash, target_lba);
+        Ok((lba, false))
     }
 
     /// Indique si le volume racine est monté en mode persistant direct
@@ -1481,5 +1599,45 @@ mod tests {
 
         let verify_res = fs.verify_file_integrity("/hostname");
         assert_eq!(verify_res, Ok(false));
+    }
+
+    #[test]
+    fn test_block_deduplication_lifecycle() {
+        let dummy_client = BlockClient {
+            channel: libjambo::Handle(0),
+            vmo_ptr: core::ptr::null_mut(),
+        };
+        let mut fs = JamboFs::new_fallback(dummy_client);
+
+        let mut block_data = [0x5Au8; BLOCK_SIZE];
+        block_data[0..12].copy_from_slice(b"SharedData4K");
+
+        // 1. Première écriture : miss de déduplication, écriture physique sur LBA 100
+        let (lba1, dedup1) = fs
+            .write_block_dedup(&block_data, 100)
+            .expect("Première écriture");
+        assert_eq!(lba1, 100);
+        assert!(!dedup1);
+        assert_eq!(fs.dedup_table.active_count, 1);
+        assert_eq!(fs.dedup_table.dedup_hits, 0);
+
+        // 2. Seconde écriture avec données identiques : hit de déduplication !
+        // Réutilisation de LBA 100 sans I/O sur LBA 200
+        let (lba2, dedup2) = fs
+            .write_block_dedup(&block_data, 200)
+            .expect("Seconde écriture dédupliquée");
+        assert_eq!(lba2, 100);
+        assert!(dedup2);
+        assert_eq!(fs.dedup_table.active_count, 1);
+        assert_eq!(fs.dedup_table.dedup_hits, 1);
+        assert_eq!(fs.dedup_table.blocks_saved, 1);
+
+        // 3. Décrémentation lors d'une libération CoW
+        let hash = blake3_block_hash(&block_data);
+        assert_eq!(fs.dedup_table.decrement(&hash), Some(1));
+        assert_eq!(fs.dedup_table.active_count, 1);
+
+        assert_eq!(fs.dedup_table.decrement(&hash), Some(0));
+        assert_eq!(fs.dedup_table.active_count, 0);
     }
 }

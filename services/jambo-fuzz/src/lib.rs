@@ -30,6 +30,8 @@ pub struct FuzzReport {
     pub ipc_overflows_handled: usize,
     /// Paquets réseau malformés ou altérés interceptés
     pub malformed_packets_rejected: usize,
+    /// Paquets réseau ICMP Echo malformés ou tronqués neutralisés
+    pub malformed_icmp_rejected: usize,
     /// Violations SMAP / SMEP détectées et interceptées au niveau matériel
     pub smap_violations_blocked: usize,
     /// Séquences d'appels système combinatoires testées (cycle complet de vie et réutilisation)
@@ -126,6 +128,7 @@ impl SecurityFuzzer {
             oom_exhaustions_handled: 0,
             ipc_overflows_handled: 0,
             malformed_packets_rejected: 0,
+            malformed_icmp_rejected: 0,
             smap_violations_blocked: 0,
             combinatorial_sequences_tested: 0,
             socket_corruptions_handled: 0,
@@ -250,6 +253,24 @@ impl SecurityFuzzer {
                 || declared_udp_len > packet_len
                 || corrupted_checksum
             {
+                rejected += 1;
+            }
+        }
+        rejected
+    }
+
+    /// Fuzzing des paquets réseau ICMP Echo (RFC 792 ping)
+    pub fn fuzz_network_icmp_packet(&mut self, iterations: usize) -> usize {
+        let mut rejected = 0;
+        for _ in 0..iterations {
+            let icmp_type = (self.rng.next_u32() % 16) as u8;
+            let code = (self.rng.next_u32() % 8) as u8;
+            let total_len = (self.rng.next_u64() as usize) % 2048;
+            let corrupted_checksum = (self.rng.next_u64() & 1) == 1;
+
+            // RFC 792 : En-tête ICMP Echo Request (type 8, code 0) ou Echo Reply (type 0, code 0), min 8 octets, max MTU 1500
+            let is_valid_type_code = (icmp_type == 8 && code == 0) || (icmp_type == 0 && code == 0);
+            if !(8..=1500).contains(&total_len) || !is_valid_type_code || corrupted_checksum {
                 rejected += 1;
             }
         }
@@ -409,6 +430,7 @@ impl JamboFuzzDaemon {
                 oom_exhaustions_handled: 0,
                 ipc_overflows_handled: 0,
                 malformed_packets_rejected: 0,
+                malformed_icmp_rejected: 0,
                 smap_violations_blocked: 0,
                 combinatorial_sequences_tested: 0,
                 socket_corruptions_handled: 0,
@@ -428,6 +450,7 @@ impl JamboFuzzDaemon {
         report.ipc_overflows_handled = self.fuzzer.fuzz_ipc_channel_overflow(iterations / 2);
         report.oom_exhaustions_handled = self.fuzzer.fuzz_memory_exhaustion_stress(iterations / 2);
         report.malformed_packets_rejected = self.fuzzer.fuzz_network_udp_packet(iterations / 2);
+        report.malformed_icmp_rejected = self.fuzzer.fuzz_network_icmp_packet(iterations / 2);
         report.combinatorial_sequences_tested = self
             .fuzzer
             .fuzz_combinatorial_syscall_sequences(iterations / 4);
@@ -470,6 +493,8 @@ impl JamboFuzzDaemon {
         pos += write_usize(&mut out[pos..], r.ipc_overflows_handled);
         pos += copy_slice(&mut out[pos..], b"\n  Paquets UDP malformes   : ");
         pos += write_usize(&mut out[pos..], r.malformed_packets_rejected);
+        pos += copy_slice(&mut out[pos..], b"\n  Paquets ICMP malformes  : ");
+        pos += write_usize(&mut out[pos..], r.malformed_icmp_rejected);
         pos += copy_slice(&mut out[pos..], b"\n  Sequences combinatoires : ");
         pos += write_usize(&mut out[pos..], r.combinatorial_sequences_tested);
         pos += copy_slice(&mut out[pos..], b"\n  Sockets corrompues      : ");
@@ -648,5 +673,12 @@ mod tests {
         let (healed, latency) = fuzzer.measure_driver_self_healing();
         assert!(healed);
         assert!(latency < 25);
+    }
+
+    #[test]
+    fn test_icmp_packet_fuzzing() {
+        let mut fuzzer = SecurityFuzzer::new();
+        let rejected = fuzzer.fuzz_network_icmp_packet(100);
+        assert!(rejected > 0);
     }
 }

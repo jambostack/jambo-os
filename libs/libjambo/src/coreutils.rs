@@ -800,6 +800,242 @@ pub fn run_env(args: &[&str], _in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
     }
 }
 
+/// Recherche de sous-tranche d'octets avec option d'insensibilité à la casse
+fn contains_subslice(haystack: &[u8], needle: &[u8], ignore_case: bool) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+    if haystack.len() < needle.len() {
+        return false;
+    }
+    let max_start = haystack.len() - needle.len();
+    for i in 0..=max_start {
+        let mut matched = true;
+        for j in 0..needle.len() {
+            let h = if ignore_case {
+                haystack[i + j].to_ascii_lowercase()
+            } else {
+                haystack[i + j]
+            };
+            let n = if ignore_case {
+                needle[j].to_ascii_lowercase()
+            } else {
+                needle[j]
+            };
+            if h != n {
+                matched = false;
+                break;
+            }
+        }
+        if matched {
+            return true;
+        }
+    }
+    false
+}
+
+/// Traite un flux d'octets pour la recherche grep
+#[allow(clippy::too_many_arguments)]
+fn grep_stream(
+    fd: i32,
+    pattern: &str,
+    ignore_case: bool,
+    invert_match: bool,
+    line_number: bool,
+    count_only: bool,
+    prefix_filename: Option<&str>,
+    out_fd: i32,
+) -> (usize, usize) {
+    let mut buf = [0u8; 1024];
+    let mut line_buf = [0u8; 512];
+    let mut line_len = 0;
+    let mut total_matches = 0;
+    let mut line_count = 0;
+
+    let pattern_bytes = pattern.as_bytes();
+
+    loop {
+        let n = sys_read(fd, &mut buf);
+        if n <= 0 {
+            break;
+        }
+        for &b in &buf[..n as usize] {
+            if b == b'\n' {
+                line_count += 1;
+                let is_match = contains_subslice(&line_buf[..line_len], pattern_bytes, ignore_case);
+                let selected = is_match ^ invert_match;
+                if selected {
+                    total_matches += 1;
+                    if !count_only {
+                        if let Some(prefix) = prefix_filename {
+                            let _ = sys_write(out_fd, prefix.as_bytes());
+                            let _ = sys_write(out_fd, b":");
+                        }
+                        if line_number {
+                            write_u64_fd(out_fd, line_count as u64);
+                            let _ = sys_write(out_fd, b":");
+                        }
+                        let _ = sys_write(out_fd, &line_buf[..line_len]);
+                        let _ = sys_write(out_fd, b"\n");
+                    }
+                }
+                line_len = 0;
+            } else if line_len < line_buf.len() {
+                line_buf[line_len] = b;
+                line_len += 1;
+            }
+        }
+    }
+
+    if line_len > 0 {
+        line_count += 1;
+        let is_match = contains_subslice(&line_buf[..line_len], pattern_bytes, ignore_case);
+        let selected = is_match ^ invert_match;
+        if selected {
+            total_matches += 1;
+            if !count_only {
+                if let Some(prefix) = prefix_filename {
+                    let _ = sys_write(out_fd, prefix.as_bytes());
+                    let _ = sys_write(out_fd, b":");
+                }
+                if line_number {
+                    write_u64_fd(out_fd, line_count as u64);
+                    let _ = sys_write(out_fd, b":");
+                }
+                let _ = sys_write(out_fd, &line_buf[..line_len]);
+                let _ = sys_write(out_fd, b"\n");
+            }
+        }
+    }
+
+    if count_only {
+        if let Some(prefix) = prefix_filename {
+            let _ = sys_write(out_fd, prefix.as_bytes());
+            let _ = sys_write(out_fd, b":");
+        }
+        write_u64_fd(out_fd, total_matches as u64);
+        let _ = sys_write(out_fd, b"\n");
+    }
+
+    (total_matches, line_count)
+}
+
+/// Exécute l'utilitaire `grep` (filtrage et recherche de motifs textuels POSIX)
+pub fn run_grep(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    let mut ignore_case = false;
+    let mut invert_match = false;
+    let mut line_number = false;
+    let mut count_only = false;
+    let mut pattern: Option<&str> = None;
+    let mut file_indices: [usize; 16] = [0; 16];
+    let mut file_count = 0;
+
+    let mut i = 0;
+    let mut parsing_flags = true;
+    while i < args.len() {
+        let arg = args[i];
+        if parsing_flags && arg == "--" {
+            parsing_flags = false;
+            i += 1;
+            continue;
+        }
+        if parsing_flags && arg.starts_with('-') && arg != "-" {
+            for b in arg[1..].bytes() {
+                match b {
+                    b'i' => ignore_case = true,
+                    b'v' => invert_match = true,
+                    b'n' => line_number = true,
+                    b'c' => count_only = true,
+                    _ => {
+                        let _ = sys_write(err_fd, b"grep: option invalide -- '");
+                        let b_slice = [b];
+                        let _ = sys_write(err_fd, &b_slice);
+                        let _ = sys_write(err_fd, b"'\n");
+                        return 2;
+                    }
+                }
+            }
+        } else if pattern.is_none() {
+            pattern = Some(arg);
+        } else if file_count < file_indices.len() {
+            file_indices[file_count] = i;
+            file_count += 1;
+        }
+        i += 1;
+    }
+
+    let pat = match pattern {
+        Some(p) => p,
+        None => {
+            let _ = sys_write(
+                err_fd,
+                b"grep: motif manquant\nUsage: grep [-ivnc] PATTERN [FILE...]\n",
+            );
+            return 2;
+        }
+    };
+
+    let mut total_matches = 0;
+
+    if file_count == 0 {
+        let (matches, _) = grep_stream(
+            in_fd,
+            pat,
+            ignore_case,
+            invert_match,
+            line_number,
+            count_only,
+            None,
+            out_fd,
+        );
+        total_matches += matches;
+    } else {
+        let multiple_files = file_count > 1;
+        for &idx in &file_indices[..file_count] {
+            let file_path = args[idx];
+            let fd = if file_path == "-" {
+                in_fd
+            } else {
+                let fd = sys_open(file_path, O_RDONLY);
+                if fd < 0 {
+                    let _ = sys_write(err_fd, b"grep: ");
+                    let _ = sys_write(err_fd, file_path.as_bytes());
+                    let _ = sys_write(err_fd, b": No such file or directory\n");
+                    continue;
+                }
+                fd
+            };
+
+            let prefix = if multiple_files {
+                Some(file_path)
+            } else {
+                None
+            };
+            let (matches, _) = grep_stream(
+                fd,
+                pat,
+                ignore_case,
+                invert_match,
+                line_number,
+                count_only,
+                prefix,
+                out_fd,
+            );
+            total_matches += matches;
+
+            if file_path != "-" {
+                sys_close(fd);
+            }
+        }
+    }
+
+    if total_matches > 0 {
+        0
+    } else {
+        1
+    }
+}
+
 /// Exécute l'utilitaire `wc` comptant les lignes, mots et octets
 pub fn run_wc(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
     let mut count_lines = false;
@@ -2147,5 +2383,77 @@ mod tests {
         assert!(!out_u.contains("USER="));
         assert!(out_u.contains("OS=JamboOS\n"));
         sys_close(read_u);
+    }
+
+    #[test]
+    fn test_grep_lifecycle() {
+        let text = b"First line: Hello World\nSecond line: rust bare-metal\nThird line: hello jambo-os\nFourth line: END\n";
+
+        // 1. Recherche standard (sensible à la casse)
+        let (r1, w1) = crate::vfs::pipe().expect("pipe grep 1");
+        let (out_r1, out_w1) = crate::vfs::pipe().expect("pipe grep out 1");
+        let _ = sys_write(w1, text);
+        sys_close(w1);
+        let code1 = run_grep(&["Hello"], r1, out_w1, 2);
+        assert_eq!(code1, 0);
+        sys_close(out_w1);
+        sys_close(r1);
+
+        let mut out_buf1 = [0u8; 256];
+        let n1 = sys_read(out_r1, &mut out_buf1);
+        assert!(n1 > 0);
+        let s1 = core::str::from_utf8(&out_buf1[..n1 as usize]).unwrap();
+        assert_eq!(s1, "First line: Hello World\n");
+        sys_close(out_r1);
+
+        // 2. Recherche insensible à la casse avec numérotation de ligne (-i -n)
+        let (r2, w2) = crate::vfs::pipe().expect("pipe grep 2");
+        let (out_r2, out_w2) = crate::vfs::pipe().expect("pipe grep out 2");
+        let _ = sys_write(w2, text);
+        sys_close(w2);
+        let code2 = run_grep(&["-i", "-n", "hello"], r2, out_w2, 2);
+        assert_eq!(code2, 0);
+        sys_close(out_w2);
+        sys_close(r2);
+
+        let mut out_buf2 = [0u8; 256];
+        let n2 = sys_read(out_r2, &mut out_buf2);
+        assert!(n2 > 0);
+        let s2 = core::str::from_utf8(&out_buf2[..n2 as usize]).unwrap();
+        assert!(s2.contains("1:First line: Hello World\n"));
+        assert!(s2.contains("3:Third line: hello jambo-os\n"));
+        sys_close(out_r2);
+
+        // 3. Décompte des lignes (-c)
+        let (r3, w3) = crate::vfs::pipe().expect("pipe grep 3");
+        let (out_r3, out_w3) = crate::vfs::pipe().expect("pipe grep out 3");
+        let _ = sys_write(w3, text);
+        sys_close(w3);
+        let code3 = run_grep(&["-i", "-c", "hello"], r3, out_w3, 2);
+        assert_eq!(code3, 0);
+        sys_close(out_w3);
+        sys_close(r3);
+
+        let mut out_buf3 = [0u8; 64];
+        let n3 = sys_read(out_r3, &mut out_buf3);
+        assert_eq!(n3, b"2\n".len() as isize);
+        assert_eq!(&out_buf3[..n3 as usize], b"2\n");
+        sys_close(out_r3);
+
+        // 4. Inversion de correspondance (-v)
+        let (r4, w4) = crate::vfs::pipe().expect("pipe grep 4");
+        let (out_r4, out_w4) = crate::vfs::pipe().expect("pipe grep out 4");
+        let _ = sys_write(w4, text);
+        sys_close(w4);
+        let code4 = run_grep(&["-v", "line", "-c"], r4, out_w4, 2);
+        assert_eq!(code4, 1); // 0 lignes sans "line" -> code 1
+        sys_close(out_w4);
+        sys_close(r4);
+
+        let mut out_buf4 = [0u8; 64];
+        let n4 = sys_read(out_r4, &mut out_buf4);
+        assert_eq!(n4, b"0\n".len() as isize);
+        assert_eq!(&out_buf4[..n4 as usize], b"0\n");
+        sys_close(out_r4);
     }
 }

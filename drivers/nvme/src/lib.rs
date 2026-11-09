@@ -27,6 +27,8 @@ pub const NVME_ADMIN_CREATE_SQ: u8 = 0x01;
 pub const NVME_ADMIN_DELETE_CQ: u8 = 0x04;
 pub const NVME_ADMIN_CREATE_CQ: u8 = 0x05;
 pub const NVME_ADMIN_IDENTIFY: u8 = 0x06;
+pub const NVME_ADMIN_GET_LOG_PAGE: u8 = 0x02;
+pub const NVME_LOG_SMART_HEALTH: u8 = 0x02;
 
 pub const NVME_IO_FLUSH: u8 = 0x00;
 pub const NVME_IO_WRITE: u8 = 0x01;
@@ -713,6 +715,154 @@ impl NvmeController {
         self.ready = true;
         Ok(())
     }
+
+    /// Émet une commande d'administration NVMe Get Log Page pour récupérer les métriques SMART/Health
+    pub fn request_smart_log(&mut self, prp1_iova: u64) -> Result<u16, SysError> {
+        if !self.ready {
+            return Err(SysError::ResourceBusy);
+        }
+
+        // CDW10 : [31:16] = Nombre de Dwords (512 / 4 - 1 = 127 = 0x007F), [7:0] = Log Page Identifier (0x02)
+        let num_dwords = (core::mem::size_of::<NvmeSmartLog>() / 4) - 1;
+        let cdw10 = ((num_dwords as u32) << 16) | (NVME_LOG_SMART_HEALTH as u32);
+
+        let cmd = NvmeSubmissionEntry {
+            cdw0: NVME_ADMIN_GET_LOG_PAGE as u32,
+            nsid: 0xFFFF_FFFF, // Portée globale au contrôleur
+            prp1: prp1_iova,
+            cdw10,
+            ..Default::default()
+        };
+
+        let cid = self.admin_queue.submit(cmd);
+        let _ = self.admin_queue.poll_completion(cid)?;
+        Ok(cid)
+    }
+
+    /// Décode une trame brute de 512 octets en journal d'état de santé SMART
+    pub fn parse_smart_log(raw_buf: &[u8; 512]) -> NvmeSmartLog {
+        // SAFETY: NvmeSmartLog est packed, Copy et couvre exactement 512 octets.
+        unsafe { core::ptr::read_unaligned(raw_buf.as_ptr() as *const NvmeSmartLog) }
+    }
+}
+
+/// Journal d'état de santé et de télémétrie SMART NVMe 1.4 (Section 5.14.1.2)
+#[repr(C, packed)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NvmeSmartLog {
+    /// Drapeaux d'avertissement critique (bit 0: spare sous le seuil, bit 1: température critique, etc.)
+    pub critical_warning: u8,
+    /// Température globale composite en Kelvin (ex: 298 K = 25 °C)
+    pub composite_temperature_kelvin: [u8; 2],
+    /// Pourcentage de capacité de réserve disponible (0 à 100 %)
+    pub available_spare_percent: u8,
+    /// Seuil minimal d'alerte de réserve disponible
+    pub available_spare_threshold: u8,
+    /// Pourcentage d'usure estimée du support Flash
+    pub percentage_used: u8,
+    /// Réservé NVMe spec
+    pub rsvd5: [u8; 27],
+    /// Unités de données lues (1 unité = 1 000 secteurs de 512 octets)
+    pub data_units_read: [u8; 16],
+    /// Unités de données écrites
+    pub data_units_written: [u8; 16],
+    /// Nombre de commandes de lecture hôte
+    pub host_read_commands: [u8; 16],
+    /// Nombre de commandes d'écriture hôte
+    pub host_write_commands: [u8; 16],
+    /// Temps d'occupation du contrôleur en minutes
+    pub controller_busy_time: [u8; 16],
+    /// Nombre de cycles de mise sous tension
+    pub power_cycles: [u8; 16],
+    /// Heures de fonctionnement sous tension
+    pub power_on_hours: [u8; 16],
+    /// Nombre d'arrêts non sécurisés / coupures brutales
+    pub unsafe_shutdowns: [u8; 16],
+    /// Nombre d'erreurs d'intégrité des données et médias
+    pub media_errors: [u8; 16],
+    /// Nombre d'entrées d'erreurs journalisées
+    pub num_error_log_entries: [u8; 16],
+    /// Temps cumulé avec température en zone d'alerte (minutes)
+    pub warning_temp_time_minutes: u32,
+    /// Temps cumulé avec température en zone critique (minutes)
+    pub critical_temp_time_minutes: u32,
+    /// Capteurs de température individuels (en Kelvin)
+    pub temp_sensors: [u16; 8],
+    /// Réservé pour alignement sur 512 octets
+    pub rsvd217: [u8; 295],
+}
+
+impl Default for NvmeSmartLog {
+    fn default() -> Self {
+        Self {
+            critical_warning: 0,
+            composite_temperature_kelvin: 310u16.to_le_bytes(), // 37 °C nominal
+            available_spare_percent: 100,
+            available_spare_threshold: 10,
+            percentage_used: 1,
+            rsvd5: [0u8; 27],
+            data_units_read: [0u8; 16],
+            data_units_written: [0u8; 16],
+            host_read_commands: [0u8; 16],
+            host_write_commands: [0u8; 16],
+            controller_busy_time: [0u8; 16],
+            power_cycles: [0u8; 16],
+            power_on_hours: [0u8; 16],
+            unsafe_shutdowns: [0u8; 16],
+            media_errors: [0u8; 16],
+            num_error_log_entries: [0u8; 16],
+            warning_temp_time_minutes: 0,
+            critical_temp_time_minutes: 0,
+            temp_sensors: [0u16; 8],
+            rsvd217: [0u8; 295],
+        }
+    }
+}
+
+impl NvmeSmartLog {
+    /// Convertit la température composite en degrés Celsius
+    #[inline]
+    pub fn composite_temp_celsius(&self) -> i16 {
+        let kelvin = u16::from_le_bytes(self.composite_temperature_kelvin);
+        (kelvin as i16).saturating_sub(273)
+    }
+
+    /// Indique si le périphérique est dans un état nominal sain
+    #[inline]
+    pub fn is_healthy(&self) -> bool {
+        self.critical_warning == 0 && self.available_spare_percent >= self.available_spare_threshold
+    }
+
+    /// Indique si la capacité de réserve disponible a franchi le seuil critique
+    #[inline]
+    pub fn is_spare_critical(&self) -> bool {
+        (self.critical_warning & 0x01) != 0
+            || self.available_spare_percent < self.available_spare_threshold
+    }
+
+    /// Indique si la température du contrôleur dépasse le seuil critique
+    #[inline]
+    pub fn is_temperature_critical(&self) -> bool {
+        (self.critical_warning & 0x02) != 0
+    }
+
+    /// Indique si la fiabilité interne du support NVM est dégradée
+    #[inline]
+    pub fn is_reliability_degraded(&self) -> bool {
+        (self.critical_warning & 0x04) != 0
+    }
+
+    /// Indique si le sous-système de stockage est basculé en lecture seule de secours
+    #[inline]
+    pub fn is_read_only(&self) -> bool {
+        (self.critical_warning & 0x08) != 0
+    }
+
+    /// Indique si le mécanisme de sauvegarde de la mémoire volatile a échoué
+    #[inline]
+    pub fn is_volatile_backup_failed(&self) -> bool {
+        (self.critical_warning & 0x10) != 0
+    }
 }
 
 #[cfg(test)]
@@ -941,5 +1091,47 @@ mod tests {
         assert!(ctrl.msix.is_masked(1).unwrap());
         // Quand masqué, l'interruption n'est pas traitée
         assert_eq!(ctrl.handle_msix_interrupt(49), None);
+    }
+
+    #[test]
+    fn test_smart_health_log_lifecycle() {
+        assert_eq!(core::mem::size_of::<NvmeSmartLog>(), 512);
+
+        // 1. Initialisation d'un log nominal
+        let default_log = NvmeSmartLog::default();
+        assert!(default_log.is_healthy());
+        assert!(!default_log.is_spare_critical());
+        assert!(!default_log.is_temperature_critical());
+        assert_eq!(default_log.composite_temp_celsius(), 37); // 310 K - 273 = 37 °C
+
+        // 2. Émission d'une requête Admin Get Log Page
+        let mut ctrl = NvmeController::new();
+        ctrl.ready = true;
+        let cid = ctrl
+            .request_smart_log(0x0000_1000)
+            .expect("request_smart_log");
+        let last_cmd = ctrl.admin_queue.sq[0];
+        assert_eq!((last_cmd.cdw0 & 0xFF) as u8, NVME_ADMIN_GET_LOG_PAGE);
+        assert_eq!(last_cmd.nsid, 0xFFFF_FFFF);
+        assert_eq!(last_cmd.prp1, 0x0000_1000);
+        // CDW10 : [31:16] = 127 (0x007F), [7:0] = 0x02
+        assert_eq!(last_cmd.cdw10, 0x007F_0002);
+        assert_eq!(cid, 0);
+
+        // 3. Décodage d'un rapport avec avertissements critiques
+        let mut raw_buf = [0u8; 512];
+        raw_buf[0] = 0x03; // Bit 0 (spare critique) + Bit 1 (température critique)
+        raw_buf[1] = 0x48; // 328 Kelvin (0x0148) = 55 °C
+        raw_buf[2] = 0x01;
+        raw_buf[3] = 5; // Available spare: 5%
+        raw_buf[4] = 10; // Threshold: 10%
+        raw_buf[5] = 85; // Percentage used: 85%
+
+        let decoded = NvmeController::parse_smart_log(&raw_buf);
+        assert!(!decoded.is_healthy());
+        assert!(decoded.is_spare_critical());
+        assert!(decoded.is_temperature_critical());
+        assert_eq!(decoded.composite_temp_celsius(), 55);
+        assert_eq!(decoded.percentage_used, 85);
     }
 }

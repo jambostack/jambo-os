@@ -67,6 +67,10 @@ path = "src/bin/tee.rs"
 name = "env"
 path = "src/bin/env.rs"
 
+[[bin]]
+name = "grep"
+path = "src/bin/grep.rs"
+
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }
 
