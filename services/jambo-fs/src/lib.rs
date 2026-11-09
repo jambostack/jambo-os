@@ -1699,6 +1699,7 @@ pub struct JamboFs {
     pub partition_base_lba: u64,
     pub flags: MountFlags,
     pub active_slot_b: bool,
+    pub geometry: libjambo::gpt::SectorGeometry,
     pub dedup_table: BlockDedupTable,
     pub snapshot_table: SnapshotTable,
     pub wal: MetadataWalManager,
@@ -1724,21 +1725,21 @@ impl JamboFs {
         };
 
         let mut partition_base_lba = 0u64;
+        let mut geometry = libjambo::gpt::SectorGeometry::Sector512e;
 
         if !uberblock.is_valid() {
-            // Lecture des premiers secteurs pour détection GPT (LBA 0..33)
-            let mut gpt_buf = [0u8; 34 * 512];
-            let blocks_to_read = gpt_buf.len().div_ceil(BLOCK_SIZE);
-            for b in 0..blocks_to_read {
+            // Lecture des premiers secteurs pour détection GPT (au moins 6 blocs de 4 Kio pour couvrir 4Kn et 512e)
+            let mut gpt_buf = [0u8; 6 * BLOCK_SIZE];
+            for b in 0..6 {
                 let mut chunk = [0u8; BLOCK_SIZE];
                 if client.read_block(b as u64 * 8, &mut chunk).is_ok() {
                     let start = b * BLOCK_SIZE;
-                    let end = (start + BLOCK_SIZE).min(gpt_buf.len());
-                    gpt_buf[start..end].copy_from_slice(&chunk[..end - start]);
+                    gpt_buf[start..start + BLOCK_SIZE].copy_from_slice(&chunk);
                 }
             }
 
-            if let Ok(info) = libjambo::gpt::parse_gpt_disk(&gpt_buf) {
+            if let Ok((info, detected_geom)) = libjambo::gpt::detect_and_parse_gpt(&gpt_buf) {
+                geometry = detected_geom;
                 for part in &info.partitions[..info.partition_count.min(4)] {
                     if part.partition_type_guid == libjambo::gpt::Guid::JAMBOOS_ROOT {
                         partition_base_lba = part.starting_lba;
@@ -1763,10 +1764,8 @@ impl JamboFs {
         // Vérification du slot Uberblock B alternatif pour retenir la génération la plus avancée
         let mut active_slot_b = false;
         let mut block_b_buf = [0u8; BLOCK_SIZE];
-        if client
-            .read_block(partition_base_lba + 8, &mut block_b_buf)
-            .is_ok()
-        {
+        let slot_b_lba = partition_base_lba + geometry.sectors_per_4k_block();
+        if client.read_block(slot_b_lba, &mut block_b_buf).is_ok() {
             // SAFETY: block_b_buf a une taille de BLOCK_SIZE (4096 octets), supérieure à sizeof(Uberblock), et read_unaligned autorise tout alignement.
             let ub_b = unsafe {
                 let ptr = block_b_buf.as_ptr() as *const Uberblock;
@@ -1801,6 +1800,7 @@ impl JamboFs {
             partition_base_lba,
             flags,
             active_slot_b,
+            geometry,
             dedup_table: BlockDedupTable::new(),
             snapshot_table: SnapshotTable::new(),
             wal: MetadataWalManager::new(),
@@ -1822,11 +1822,17 @@ impl JamboFs {
             partition_base_lba: 0,
             flags: MountFlags::default_rw(),
             active_slot_b: false,
+            geometry: libjambo::gpt::SectorGeometry::Sector512e,
             dedup_table: BlockDedupTable::new(),
             snapshot_table: SnapshotTable::new(),
             wal: MetadataWalManager::new(),
             bitmap: CowBitmapAllocator::new(),
         }
+    }
+
+    /// Indique si le système de fichiers est monté sur un support 4Kn natif
+    pub fn is_4kn(&self) -> bool {
+        self.geometry == libjambo::gpt::SectorGeometry::Sector4Kn
     }
 
     /// Alloue un nouveau bloc physique libre pour une opération CoW
@@ -2053,11 +2059,11 @@ impl JamboFs {
             );
         }
 
-        // Alternance transactionnelle : écriture sur le slot A (LBA base) ou slot B (LBA base + 8)
+        // Alternance transactionnelle : écriture sur le slot A (LBA base) ou slot B (LBA base + secteur 4K)
         let target_ub_lba = if self.active_slot_b {
             self.partition_base_lba // Slot A
         } else {
-            self.partition_base_lba + 8 // Slot B
+            self.partition_base_lba + self.geometry.sectors_per_4k_block() // Slot B
         };
 
         self.client
@@ -2656,5 +2662,18 @@ mod tests {
         // Validation du checksum BLAKE3 du bitmap après commit
         let expected_checksum = blake3_block_hash(&fs.bitmap.bits);
         assert_eq!(fs.bitmap.header.checksum, expected_checksum);
+    }
+
+    #[test]
+    fn test_4kn_gpt_partition_mount() {
+        let client = BlockClient::new(libjambo::Handle(0));
+        let fs = JamboFs::new_fallback(client);
+        assert_eq!(fs.geometry, libjambo::gpt::SectorGeometry::Sector512e);
+        assert!(!fs.is_4kn());
+
+        let mut fs_4kn = fs;
+        fs_4kn.geometry = libjambo::gpt::SectorGeometry::Sector4Kn;
+        assert!(fs_4kn.is_4kn());
+        assert_eq!(fs_4kn.geometry.sectors_per_4k_block(), 1);
     }
 }

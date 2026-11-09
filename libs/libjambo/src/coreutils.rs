@@ -3272,6 +3272,563 @@ pub fn run_id(args: &[&str], _in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
     0
 }
 
+/// Écrit un nombre entier 64 bits non signé en décimal sur le descripteur
+fn write_u64_dec(fd: i32, mut val: u64) {
+    if val == 0 {
+        let _ = sys_write(fd, b"0");
+        return;
+    }
+    let mut buf = [0u8; 20];
+    let mut idx = 20;
+    while val > 0 {
+        idx -= 1;
+        buf[idx] = b'0' + (val % 10) as u8;
+        val /= 10;
+    }
+    let _ = sys_write(fd, &buf[idx..]);
+}
+
+/// Écrit une taille en octets dans un format lisible pour un humain (B, K, M, G)
+fn write_human_size(fd: i32, bytes: u64) {
+    if bytes < 1024 {
+        write_u64_dec(fd, bytes);
+        let _ = sys_write(fd, b"B");
+    } else if bytes < 1024 * 1024 {
+        let kib = bytes / 1024;
+        let rem = bytes % 1024;
+        let frac = (rem * 10) / 1024;
+        write_u64_dec(fd, kib);
+        if kib < 10 && frac > 0 {
+            let _ = sys_write(fd, b".");
+            write_u64_dec(fd, frac);
+        }
+        let _ = sys_write(fd, b"K");
+    } else if bytes < 1024 * 1024 * 1024 {
+        let mib = bytes / (1024 * 1024);
+        let rem = bytes % (1024 * 1024);
+        let frac = (rem * 10) / (1024 * 1024);
+        write_u64_dec(fd, mib);
+        if mib < 10 && frac > 0 {
+            let _ = sys_write(fd, b".");
+            write_u64_dec(fd, frac);
+        }
+        let _ = sys_write(fd, b"M");
+    } else {
+        let gib = bytes / (1024 * 1024 * 1024);
+        write_u64_dec(fd, gib);
+        let _ = sys_write(fd, b"G");
+    }
+}
+
+/// Écrit la taille calculée d'un fichier ou répertoire selon les options d'affichage
+fn print_du_size_and_path(
+    out_fd: i32,
+    bytes: u64,
+    path: &str,
+    human: bool,
+    bytes_mode: bool,
+    block_1m: bool,
+) {
+    if human {
+        write_human_size(out_fd, bytes);
+    } else if bytes_mode {
+        write_u64_dec(out_fd, bytes);
+    } else if block_1m {
+        let mib = bytes
+            .div_ceil(1024 * 1024)
+            .max(if bytes > 0 { 1 } else { 0 });
+        write_u64_dec(out_fd, mib);
+    } else {
+        // Blocs standard de 1 Kio (1024 octets)
+        let kib = bytes.div_ceil(1024).max(if bytes > 0 { 4 } else { 0 });
+        write_u64_dec(out_fd, kib);
+    }
+    let _ = sys_write(out_fd, b"\t");
+    let _ = sys_write(out_fd, path.as_bytes());
+    let _ = sys_write(out_fd, b"\n");
+}
+
+/// Exécute l'utilitaire standard POSIX `du` pour calculer l'espace disque consommé
+pub fn run_du(args: &[&str], out_fd: i32, err_fd: i32) -> i32 {
+    let mut summarize = false;
+    let mut human_readable = false;
+    let mut all_files = false;
+    let mut bytes_mode = false;
+    let mut block_1m = false;
+
+    let mut targets_buf = [""; 16];
+    let mut target_count = 0;
+
+    for &arg in args {
+        if arg == "-s" || arg == "--summarize" {
+            summarize = true;
+        } else if arg == "-h" || arg == "--human-readable" {
+            human_readable = true;
+        } else if arg == "-a" || arg == "--all" {
+            all_files = true;
+        } else if arg == "-b" || arg == "--bytes" {
+            bytes_mode = true;
+        } else if arg == "-k" {
+            bytes_mode = false;
+            block_1m = false;
+        } else if arg == "-m" {
+            block_1m = true;
+            bytes_mode = false;
+        } else if arg.starts_with('-') {
+            let _ = sys_write(err_fd, b"du: unrecognized option '");
+            let _ = sys_write(err_fd, arg.as_bytes());
+            let _ = sys_write(err_fd, b"'\n");
+            return 1;
+        } else if target_count < targets_buf.len() {
+            targets_buf[target_count] = arg;
+            target_count += 1;
+        }
+    }
+
+    let default_target = ["."];
+    let targets = if target_count == 0 {
+        &default_target[..]
+    } else {
+        &targets_buf[..target_count]
+    };
+
+    #[derive(Clone, Copy)]
+    struct DuNode<'a> {
+        path: &'a str,
+        is_dir: bool,
+        size: u64,
+    }
+
+    let mut nodes: [DuNode<'static>; 48] = [
+        DuNode {
+            path: "/",
+            is_dir: true,
+            size: 4096,
+        },
+        DuNode {
+            path: "/bin",
+            is_dir: true,
+            size: 4096,
+        },
+        DuNode {
+            path: "/dev",
+            is_dir: true,
+            size: 4096,
+        },
+        DuNode {
+            path: "/etc",
+            is_dir: true,
+            size: 4096,
+        },
+        DuNode {
+            path: "/tmp",
+            is_dir: true,
+            size: 4096,
+        },
+        DuNode {
+            path: "/hostname",
+            is_dir: false,
+            size: 14,
+        },
+        DuNode {
+            path: "/os-release",
+            is_dir: false,
+            size: 38,
+        },
+        DuNode {
+            path: "/motd",
+            is_dir: false,
+            size: 24,
+        },
+        DuNode {
+            path: "/inittab",
+            is_dir: false,
+            size: 30,
+        },
+        DuNode {
+            path: "/etc/hostname",
+            is_dir: false,
+            size: 14,
+        },
+        DuNode {
+            path: "/etc/os-release",
+            is_dir: false,
+            size: 38,
+        },
+        DuNode {
+            path: "/etc/motd",
+            is_dir: false,
+            size: 24,
+        },
+        DuNode {
+            path: "",
+            is_dir: false,
+            size: 0,
+        },
+        DuNode {
+            path: "",
+            is_dir: false,
+            size: 0,
+        },
+        DuNode {
+            path: "",
+            is_dir: false,
+            size: 0,
+        },
+        DuNode {
+            path: "",
+            is_dir: false,
+            size: 0,
+        },
+        DuNode {
+            path: "",
+            is_dir: false,
+            size: 0,
+        },
+        DuNode {
+            path: "",
+            is_dir: false,
+            size: 0,
+        },
+        DuNode {
+            path: "",
+            is_dir: false,
+            size: 0,
+        },
+        DuNode {
+            path: "",
+            is_dir: false,
+            size: 0,
+        },
+        DuNode {
+            path: "",
+            is_dir: false,
+            size: 0,
+        },
+        DuNode {
+            path: "",
+            is_dir: false,
+            size: 0,
+        },
+        DuNode {
+            path: "",
+            is_dir: false,
+            size: 0,
+        },
+        DuNode {
+            path: "",
+            is_dir: false,
+            size: 0,
+        },
+        DuNode {
+            path: "",
+            is_dir: false,
+            size: 0,
+        },
+        DuNode {
+            path: "",
+            is_dir: false,
+            size: 0,
+        },
+        DuNode {
+            path: "",
+            is_dir: false,
+            size: 0,
+        },
+        DuNode {
+            path: "",
+            is_dir: false,
+            size: 0,
+        },
+        DuNode {
+            path: "",
+            is_dir: false,
+            size: 0,
+        },
+        DuNode {
+            path: "",
+            is_dir: false,
+            size: 0,
+        },
+        DuNode {
+            path: "",
+            is_dir: false,
+            size: 0,
+        },
+        DuNode {
+            path: "",
+            is_dir: false,
+            size: 0,
+        },
+        DuNode {
+            path: "",
+            is_dir: false,
+            size: 0,
+        },
+        DuNode {
+            path: "",
+            is_dir: false,
+            size: 0,
+        },
+        DuNode {
+            path: "",
+            is_dir: false,
+            size: 0,
+        },
+        DuNode {
+            path: "",
+            is_dir: false,
+            size: 0,
+        },
+        DuNode {
+            path: "",
+            is_dir: false,
+            size: 0,
+        },
+        DuNode {
+            path: "",
+            is_dir: false,
+            size: 0,
+        },
+        DuNode {
+            path: "",
+            is_dir: false,
+            size: 0,
+        },
+        DuNode {
+            path: "",
+            is_dir: false,
+            size: 0,
+        },
+        DuNode {
+            path: "",
+            is_dir: false,
+            size: 0,
+        },
+        DuNode {
+            path: "",
+            is_dir: false,
+            size: 0,
+        },
+        DuNode {
+            path: "",
+            is_dir: false,
+            size: 0,
+        },
+        DuNode {
+            path: "",
+            is_dir: false,
+            size: 0,
+        },
+        DuNode {
+            path: "",
+            is_dir: false,
+            size: 0,
+        },
+        DuNode {
+            path: "",
+            is_dir: false,
+            size: 0,
+        },
+        DuNode {
+            path: "",
+            is_dir: false,
+            size: 0,
+        },
+        DuNode {
+            path: "",
+            is_dir: false,
+            size: 0,
+        },
+    ];
+    let mut node_count = 12;
+
+    // Intégration des entrées dynamiques d'INODE_POOL
+    // SAFETY: Accès protégé au pool d'inodes virtuel
+    unsafe {
+        let pool = core::ptr::addr_of!(INODE_POOL);
+        for vfs_node in (*pool).iter() {
+            if !vfs_node.is_active {
+                continue;
+            }
+            let p = vfs_node.path_str();
+            if p.is_empty() {
+                continue;
+            }
+            let mut existing = false;
+            for n in &mut nodes[..node_count] {
+                if n.path == p {
+                    n.size = vfs_node.size as u64;
+                    n.is_dir = vfs_node.is_dir;
+                    existing = true;
+                    break;
+                }
+            }
+            if !existing && node_count < nodes.len() {
+                nodes[node_count] = DuNode {
+                    path: p,
+                    is_dir: vfs_node.is_dir,
+                    size: if vfs_node.is_dir {
+                        4096
+                    } else {
+                        vfs_node.size as u64
+                    },
+                };
+                node_count += 1;
+            }
+        }
+    }
+
+    let mut has_error = false;
+
+    for &target in targets {
+        let norm_target = if target == "." {
+            "/"
+        } else {
+            let t = target.trim_end_matches('/');
+            if t.is_empty() {
+                "/"
+            } else {
+                t
+            }
+        };
+
+        // Recherche de correspondance pour le chemin demandé
+        let mut target_node: Option<DuNode> = None;
+        for n in &nodes[..node_count] {
+            if n.path == norm_target {
+                target_node = Some(*n);
+                break;
+            }
+        }
+
+        if target_node.is_none() && norm_target != "/" {
+            // Vérifier si un descendant existe (répertoire implicite)
+            let mut has_child = false;
+            for n in &nodes[..node_count] {
+                if n.path.starts_with(norm_target)
+                    && n.path.as_bytes().get(norm_target.len()) == Some(&b'/')
+                {
+                    has_child = true;
+                    break;
+                }
+            }
+            if has_child {
+                target_node = Some(DuNode {
+                    path: norm_target,
+                    is_dir: true,
+                    size: 4096,
+                });
+            }
+        }
+
+        let current_target = match target_node {
+            Some(n) => n,
+            None => {
+                let _ = sys_write(err_fd, b"du: cannot access '");
+                let _ = sys_write(err_fd, target.as_bytes());
+                let _ = sys_write(err_fd, b"': No such file or directory\n");
+                has_error = true;
+                continue;
+            }
+        };
+
+        if !current_target.is_dir {
+            // Fichier individuel
+            print_du_size_and_path(
+                out_fd,
+                current_target.size,
+                target,
+                human_readable,
+                bytes_mode,
+                block_1m,
+            );
+            continue;
+        }
+
+        // Répertoire : calcul de l'arborescence descendante
+        let is_descendant = |child: &str, parent: &str| -> bool {
+            if parent == "/" {
+                child.starts_with('/') && child != "/"
+            } else {
+                child.starts_with(parent) && child.as_bytes().get(parent.len()) == Some(&b'/')
+            }
+        };
+
+        // Collecte des sous-répertoires uniques
+        let mut subdirs = [""; 16];
+        let mut subdir_count = 0;
+
+        for n in &nodes[..node_count] {
+            if n.is_dir && is_descendant(n.path, norm_target) {
+                let mut found = false;
+                for &sd in &subdirs[..subdir_count] {
+                    if sd == n.path {
+                        found = true;
+                        break;
+                    }
+                }
+                if !found && subdir_count < subdirs.len() {
+                    subdirs[subdir_count] = n.path;
+                    subdir_count += 1;
+                }
+            }
+        }
+
+        // Fonction locale de calcul de taille récursive
+        let calc_dir_bytes = |dir_path: &str| -> u64 {
+            let mut total = 4096u64; // Taille de base de l'inode répertoire
+            for n in &nodes[..node_count] {
+                if is_descendant(n.path, dir_path) {
+                    total = total.saturating_add(n.size);
+                }
+            }
+            total
+        };
+
+        if !summarize {
+            // 1. Si -a est actif, affichage de tous les fichiers enfants
+            if all_files {
+                for n in &nodes[..node_count] {
+                    if !n.is_dir && is_descendant(n.path, norm_target) {
+                        print_du_size_and_path(
+                            out_fd,
+                            n.size,
+                            n.path,
+                            human_readable,
+                            bytes_mode,
+                            block_1m,
+                        );
+                    }
+                }
+            }
+
+            // 2. Affichage des sous-répertoires
+            for &sd in &subdirs[..subdir_count] {
+                let sub_size = calc_dir_bytes(sd);
+                print_du_size_and_path(out_fd, sub_size, sd, human_readable, bytes_mode, block_1m);
+            }
+        }
+
+        // 3. Affichage récapitulatif du répertoire cible lui-même
+        let root_total_bytes = calc_dir_bytes(norm_target);
+        print_du_size_and_path(
+            out_fd,
+            root_total_bytes,
+            target,
+            human_readable,
+            bytes_mode,
+            block_1m,
+        );
+    }
+
+    if has_error {
+        1
+    } else {
+        0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3878,6 +4435,71 @@ mod tests {
         let mut out5 = [0u8; 32];
         let n5 = sys_read(r5, &mut out5);
         assert_eq!(&out5[..n5 as usize], b"0\n");
+        sys_close(r5);
+    }
+
+    #[test]
+    fn test_du_utility() {
+        // 1. Calcul résumé (-s) sur /etc
+        let (r1, w1) = crate::vfs::pipe().expect("pipe du 1");
+        let code1 = run_du(&["-s", "/etc"], w1, 2);
+        assert_eq!(code1, 0);
+        sys_close(w1);
+        let mut out1 = [0u8; 128];
+        let n1 = sys_read(r1, &mut out1);
+        assert!(n1 > 0);
+        let s1 = core::str::from_utf8(&out1[..n1 as usize]).unwrap();
+        assert!(s1.ends_with("\t/etc\n"));
+        sys_close(r1);
+
+        // 2. Calcul sur fichier individuel en mode octets (-b)
+        let (r2, w2) = crate::vfs::pipe().expect("pipe du 2");
+        let code2 = run_du(&["-b", "/etc/hostname"], w2, 2);
+        assert_eq!(code2, 0);
+        sys_close(w2);
+        let mut out2 = [0u8; 128];
+        let n2 = sys_read(r2, &mut out2);
+        assert!(n2 > 0);
+        let s2 = core::str::from_utf8(&out2[..n2 as usize]).unwrap();
+        assert_eq!(s2, "14\t/etc/hostname\n");
+        sys_close(r2);
+
+        // 3. Calcul lisible (-h) sur fichier individuel
+        let (r3, w3) = crate::vfs::pipe().expect("pipe du 3");
+        let code3 = run_du(&["-h", "/etc/hostname"], w3, 2);
+        assert_eq!(code3, 0);
+        sys_close(w3);
+        let mut out3 = [0u8; 128];
+        let n3 = sys_read(r3, &mut out3);
+        assert!(n3 > 0);
+        let s3 = core::str::from_utf8(&out3[..n3 as usize]).unwrap();
+        assert_eq!(s3, "14B\t/etc/hostname\n");
+        sys_close(r3);
+
+        // 4. Calcul avec tous les fichiers (-a) sur /etc
+        let (r4, w4) = crate::vfs::pipe().expect("pipe du 4");
+        let code4 = run_du(&["-a", "/etc"], w4, 2);
+        assert_eq!(code4, 0);
+        sys_close(w4);
+        let mut out4 = [0u8; 256];
+        let n4 = sys_read(r4, &mut out4);
+        assert!(n4 > 0);
+        let s4 = core::str::from_utf8(&out4[..n4 as usize]).unwrap();
+        assert!(s4.contains("/etc/hostname\n"));
+        assert!(s4.contains("/etc/os-release\n"));
+        assert!(s4.ends_with("\t/etc\n"));
+        sys_close(r4);
+
+        // 5. Test d'erreur : cible inexistante
+        let (r5, w5) = crate::vfs::pipe().expect("pipe du 5");
+        let code5 = run_du(&["/nonexistent_xyz_dir"], 1, w5);
+        assert_eq!(code5, 1);
+        sys_close(w5);
+        let mut out5 = [0u8; 128];
+        let n5 = sys_read(r5, &mut out5);
+        assert!(n5 > 0);
+        let s5 = core::str::from_utf8(&out5[..n5 as usize]).unwrap();
+        assert!(s5.contains("du: cannot access '/nonexistent_xyz_dir': No such file or directory"));
         sys_close(r5);
     }
 }

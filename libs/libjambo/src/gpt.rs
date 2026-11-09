@@ -8,6 +8,70 @@ use core::fmt;
 /// Taille standard d'un secteur logique en octets.
 pub const SECTOR_SIZE: usize = 512;
 
+/// Taille standard d'un secteur logique 4Kn natif en octets (4 Kio).
+pub const SECTOR_SIZE_4KN: usize = 4096;
+
+/// Géométrie de secteur logique/physique d'un support de stockage de blocs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SectorGeometry {
+    /// Secteurs logiques de 512 octets (512e ou support traditionnel).
+    Sector512e,
+    /// Secteurs logiques et physiques natifs de 4096 octets (4Kn).
+    Sector4Kn,
+}
+
+impl SectorGeometry {
+    /// Taille d'un secteur logique en octets.
+    pub const fn sector_size(&self) -> usize {
+        match self {
+            SectorGeometry::Sector512e => SECTOR_SIZE,
+            SectorGeometry::Sector4Kn => SECTOR_SIZE_4KN,
+        }
+    }
+
+    /// Nombre de secteurs logiques requis pour couvrir un bloc de 4 Kio.
+    pub const fn sectors_per_4k_block(&self) -> u64 {
+        match self {
+            SectorGeometry::Sector512e => 8,
+            SectorGeometry::Sector4Kn => 1,
+        }
+    }
+
+    /// Premier LBA utilisable pour les partitions après les métadonnées GPT primaires.
+    pub const fn first_usable_lba(&self) -> u64 {
+        match self {
+            SectorGeometry::Sector512e => 34,
+            SectorGeometry::Sector4Kn => 6,
+        }
+    }
+
+    /// Nombre total de secteurs réservés pour les structures GPT primaires.
+    pub const fn gpt_reserved_sectors(&self) -> u64 {
+        match self {
+            SectorGeometry::Sector512e => 34,
+            SectorGeometry::Sector4Kn => 6,
+        }
+    }
+
+    /// Convertit un décalage en octets en numéro de secteur LBA.
+    pub const fn bytes_to_lba(&self, bytes: u64) -> u64 {
+        bytes / (self.sector_size() as u64)
+    }
+
+    /// Convertit un numéro de secteur LBA en décalage en octets.
+    pub const fn lba_to_bytes(&self, lba: u64) -> u64 {
+        lba * (self.sector_size() as u64)
+    }
+
+    /// Vérifie si un LBA est strictement aligné sur une frontière physique de 4 Kio (anti-RMW).
+    pub const fn is_4k_aligned(&self, lba: u64) -> bool {
+        match self {
+            SectorGeometry::Sector512e => (lba % 8) == 0,
+            SectorGeometry::Sector4Kn => true,
+        }
+    }
+}
+
 /// Nombre standard d'entrées de partition GPT dans la table primaire.
 pub const DEFAULT_PARTITION_ENTRIES: u32 = 128;
 
@@ -267,39 +331,43 @@ pub struct GptDiskInfo {
     pub partitions: [GptPartitionEntry; 4],
 }
 
-/// Formate un tampon disque en écrivant le MBR protecteur, l'en-tête GPT et les entrées.
-///
-/// Le tampon fourni doit faire au moins 34 secteurs (17 408 octets) représentant
-/// LBA 0 (MBR), LBA 1 (GPT Header) et LBA 2..33 (Table de 128 entrées).
-pub fn format_gpt_disk(
+/// Formate un tampon disque en écrivant le MBR protecteur, l'en-tête GPT et les entrées selon la géométrie spécifiée.
+pub fn format_gpt_disk_with_geometry(
     buffer: &mut [u8],
     total_disk_sectors: u64,
     disk_guid: Guid,
     requests: &[PartitionRequest],
+    geometry: SectorGeometry,
 ) -> Result<(), GptError> {
-    const MIN_REQUIRED_BYTES: usize = 34 * SECTOR_SIZE;
-    if buffer.len() < MIN_REQUIRED_BYTES {
+    let sector_size = geometry.sector_size();
+    let reserved_sectors = geometry.gpt_reserved_sectors();
+    let min_required_bytes = reserved_sectors as usize * sector_size;
+
+    if buffer.len() < min_required_bytes {
         return Err(GptError::BufferTooSmall);
     }
-    if total_disk_sectors < 68 {
+    if total_disk_sectors < reserved_sectors * 2 {
         return Err(GptError::DiskTooSmall);
     }
     if requests.len() > 128 {
         return Err(GptError::TooManyPartitions);
     }
 
-    buffer[..MIN_REQUIRED_BYTES].fill(0);
+    buffer[..min_required_bytes].fill(0);
 
-    // 1. Écriture du MBR Protecteur à LBA 0 (offset 0..512)
+    // 1. Écriture du MBR Protecteur à LBA 0 (les 512 premiers octets du secteur 0)
     let mbr = ProtectiveMbr::new(total_disk_sectors);
     mbr.write_to_slice(&mut buffer[0..SECTOR_SIZE]);
 
-    // 2. Construction du tableau d'entrées de partition à LBA 2..33 (offset 1024..17408)
-    let mut current_lba: u64 = 34; // Premier LBA utilisable après les structures GPT primaires
-    let last_usable_lba = total_disk_sectors.saturating_sub(34);
+    // 2. Construction du tableau d'entrées de partition à LBA 2
+    let mut current_lba: u64 = geometry.first_usable_lba();
+    let last_usable_lba = total_disk_sectors.saturating_sub(reserved_sectors);
 
-    let entries_offset = 2 * SECTOR_SIZE;
+    let entries_offset = 2 * sector_size;
     let entries_len = 128 * PARTITION_ENTRY_SIZE as usize;
+    if buffer.len() < entries_offset + entries_len {
+        return Err(GptError::BufferTooSmall);
+    }
     let entries_slice = &mut buffer[entries_offset..entries_offset + entries_len];
 
     for (idx, req) in requests.iter().enumerate() {
@@ -332,16 +400,16 @@ pub fn format_gpt_disk(
     // 3. Calcul du CRC32 du tableau d'entrées de partition
     let entries_crc = crc32(entries_slice);
 
-    // 4. Construction de l'en-tête GPT à LBA 1 (offset 512..1024)
+    // 4. Construction de l'en-tête GPT à LBA 1
     let mut header = GptHeader {
         signature: GPT_SIGNATURE,
         revision: GPT_REVISION_1_0,
         header_size: GPT_HEADER_SIZE,
-        header_crc32: 0, // Mis à zéro pour le calcul
+        header_crc32: 0,
         reserved: 0,
         my_lba: 1,
         alternate_lba: total_disk_sectors - 1,
-        first_usable_lba: 34,
+        first_usable_lba: geometry.first_usable_lba(),
         last_usable_lba,
         disk_guid,
         partition_entry_lba: 2,
@@ -362,41 +430,57 @@ pub fn format_gpt_disk(
         *ptr
     };
 
-    let header_offset = SECTOR_SIZE;
+    let header_offset = sector_size;
     buffer[header_offset..header_offset + 92].copy_from_slice(&final_header_bytes);
 
     Ok(())
 }
 
-/// Formate la table de partitions GPT secondaire de secours (Backup GPT conforme UEFI 2.10).
-///
-/// Le tampon fourni doit contenir au moins 33 secteurs (16 896 octets) représentant :
-/// - Les 32 secteurs des entrées de partition (LBA total_disk_sectors - 33 .. total_disk_sectors - 2)
-/// - Le dernier secteur contenant l'en-tête GPT secondaire (LBA total_disk_sectors - 1)
-pub fn format_backup_gpt_disk(
+/// Formate un tampon disque en écrivant le MBR protecteur, l'en-tête GPT et les entrées (512e par défaut).
+pub fn format_gpt_disk(
     buffer: &mut [u8],
     total_disk_sectors: u64,
     disk_guid: Guid,
     requests: &[PartitionRequest],
 ) -> Result<(), GptError> {
-    const BACKUP_REQUIRED_BYTES: usize = 33 * SECTOR_SIZE;
-    if buffer.len() < BACKUP_REQUIRED_BYTES {
+    format_gpt_disk_with_geometry(
+        buffer,
+        total_disk_sectors,
+        disk_guid,
+        requests,
+        SectorGeometry::Sector512e,
+    )
+}
+
+/// Formate la table de partitions GPT secondaire de secours selon la géométrie spécifiée.
+pub fn format_backup_gpt_disk_with_geometry(
+    buffer: &mut [u8],
+    total_disk_sectors: u64,
+    disk_guid: Guid,
+    requests: &[PartitionRequest],
+    geometry: SectorGeometry,
+) -> Result<(), GptError> {
+    let sector_size = geometry.sector_size();
+    let reserved_sectors = geometry.gpt_reserved_sectors();
+    let backup_sectors = reserved_sectors.saturating_sub(1);
+    let backup_required_bytes = backup_sectors as usize * sector_size;
+
+    if buffer.len() < backup_required_bytes {
         return Err(GptError::BufferTooSmall);
     }
-    if total_disk_sectors < 68 {
+    if total_disk_sectors < reserved_sectors * 2 {
         return Err(GptError::DiskTooSmall);
     }
     if requests.len() > 128 {
         return Err(GptError::TooManyPartitions);
     }
 
-    buffer[..BACKUP_REQUIRED_BYTES].fill(0);
+    buffer[..backup_required_bytes].fill(0);
 
-    // 1. Écriture du tableau d'entrées de partition (offset 0..32*512)
     let entries_len = 128 * PARTITION_ENTRY_SIZE as usize;
     let entries_slice = &mut buffer[0..entries_len];
-    let mut current_lba: u64 = 34;
-    let last_usable_lba = total_disk_sectors.saturating_sub(34);
+    let mut current_lba: u64 = geometry.first_usable_lba();
+    let last_usable_lba = total_disk_sectors.saturating_sub(reserved_sectors);
 
     for (idx, req) in requests.iter().enumerate() {
         if current_lba + req.size_sectors > last_usable_lba {
@@ -424,11 +508,9 @@ pub fn format_backup_gpt_disk(
         entries_slice[offset..offset + 128].copy_from_slice(&entry_bytes);
     }
 
-    // 2. Calcul du CRC32 du tableau d'entrées
     let entries_crc = crc32(entries_slice);
 
-    // 3. Construction de l'en-tête GPT secondaire à l'offset 32*512
-    let backup_entry_lba = total_disk_sectors.saturating_sub(33);
+    let partition_entry_lba = total_disk_sectors - reserved_sectors;
     let mut header = GptHeader {
         signature: GPT_SIGNATURE,
         revision: GPT_REVISION_1_0,
@@ -437,10 +519,10 @@ pub fn format_backup_gpt_disk(
         reserved: 0,
         my_lba: total_disk_sectors - 1,
         alternate_lba: 1,
-        first_usable_lba: 34,
+        first_usable_lba: geometry.first_usable_lba(),
         last_usable_lba,
         disk_guid,
-        partition_entry_lba: backup_entry_lba,
+        partition_entry_lba,
         num_partition_entries: DEFAULT_PARTITION_ENTRIES,
         size_of_partition_entry: PARTITION_ENTRY_SIZE,
         partition_entry_array_crc32: entries_crc,
@@ -457,16 +539,36 @@ pub fn format_backup_gpt_disk(
         *ptr
     };
 
-    let header_offset = 32 * SECTOR_SIZE;
+    let header_offset = backup_required_bytes - sector_size;
     buffer[header_offset..header_offset + 92].copy_from_slice(&final_header_bytes);
 
     Ok(())
 }
 
-/// Analyse un tampon contenant au moins 34 secteurs et vérifie l'intégrité de la table GPT.
-pub fn parse_gpt_disk(buffer: &[u8]) -> Result<GptDiskInfo, GptError> {
-    const MIN_REQUIRED_BYTES: usize = 34 * SECTOR_SIZE;
-    if buffer.len() < MIN_REQUIRED_BYTES {
+/// Formate la table de partitions GPT secondaire de secours (Backup GPT conforme UEFI 2.10, 512e par défaut).
+pub fn format_backup_gpt_disk(
+    buffer: &mut [u8],
+    total_disk_sectors: u64,
+    disk_guid: Guid,
+    requests: &[PartitionRequest],
+) -> Result<(), GptError> {
+    format_backup_gpt_disk_with_geometry(
+        buffer,
+        total_disk_sectors,
+        disk_guid,
+        requests,
+        SectorGeometry::Sector512e,
+    )
+}
+
+/// Analyse un tampon contenant la table GPT selon la géométrie spécifiée.
+pub fn parse_gpt_disk_with_geometry(
+    buffer: &[u8],
+    geometry: SectorGeometry,
+) -> Result<GptDiskInfo, GptError> {
+    let sector_size = geometry.sector_size();
+    let min_required_bytes = geometry.gpt_reserved_sectors() as usize * sector_size;
+    if buffer.len() < min_required_bytes {
         return Err(GptError::BufferTooSmall);
     }
 
@@ -475,8 +577,8 @@ pub fn parse_gpt_disk(buffer: &[u8]) -> Result<GptDiskInfo, GptError> {
         return Err(GptError::InvalidMbrSignature);
     }
 
-    // 2. Vérification de l'En-tête GPT à LBA 1 (offset 512..1024)
-    let header_slice = &buffer[SECTOR_SIZE..SECTOR_SIZE + GPT_HEADER_SIZE as usize];
+    // 2. Vérification de l'En-tête GPT à LBA 1 (offset sector_size)
+    let header_slice = &buffer[sector_size..sector_size + GPT_HEADER_SIZE as usize];
     let header: GptHeader = unsafe {
         let ptr = header_slice.as_ptr() as *const GptHeader;
         core::ptr::read_unaligned(ptr)
@@ -501,8 +603,8 @@ pub fn parse_gpt_disk(buffer: &[u8]) -> Result<GptDiskInfo, GptError> {
         return Err(GptError::HeaderCrcMismatch);
     }
 
-    // 3. Vérification du tableau de partitions à LBA 2..33
-    let entries_offset = (header.partition_entry_lba as usize) * SECTOR_SIZE;
+    // 3. Vérification du tableau de partitions à LBA 2
+    let entries_offset = (header.partition_entry_lba as usize) * sector_size;
     let entries_len =
         (header.num_partition_entries as usize) * (header.size_of_partition_entry as usize);
 
@@ -543,6 +645,23 @@ pub fn parse_gpt_disk(buffer: &[u8]) -> Result<GptDiskInfo, GptError> {
         partition_count: count,
         partitions,
     })
+}
+
+/// Analyse un tampon contenant au moins 34 secteurs et vérifie l'intégrité de la table GPT (512e par défaut).
+pub fn parse_gpt_disk(buffer: &[u8]) -> Result<GptDiskInfo, GptError> {
+    parse_gpt_disk_with_geometry(buffer, SectorGeometry::Sector512e)
+}
+
+/// Détecte automatiquement la géométrie (512e ou 4Kn) et extrait la table GPT.
+pub fn detect_and_parse_gpt(buffer: &[u8]) -> Result<(GptDiskInfo, SectorGeometry), GptError> {
+    if let Ok(info) = parse_gpt_disk_with_geometry(buffer, SectorGeometry::Sector512e) {
+        return Ok((info, SectorGeometry::Sector512e));
+    }
+    if let Ok(info) = parse_gpt_disk_with_geometry(buffer, SectorGeometry::Sector4Kn) {
+        return Ok((info, SectorGeometry::Sector4Kn));
+    }
+    parse_gpt_disk_with_geometry(buffer, SectorGeometry::Sector512e)
+        .map(|info| (info, SectorGeometry::Sector512e))
 }
 
 #[cfg(test)]
@@ -664,5 +783,50 @@ mod tests {
 
         let alternate_lba = u64::from_le_bytes(hdr_slice[32..40].try_into().unwrap());
         assert_eq!(alternate_lba, 1);
+    }
+
+    #[test]
+    fn test_4kn_gpt_formatting_and_parsing() {
+        // En 4Kn, les structures primaires (LBA 0..5) occupent 6 * 4096 = 24 576 octets
+        let mut disk_buf = [0u8; 6 * 4096];
+        let disk_guid = Guid([0xAA; 16]);
+        let requests = [
+            PartitionRequest {
+                name: "EFI 4Kn",
+                type_guid: Guid::EFI_SYSTEM_PARTITION,
+                size_sectors: 256, // 256 blocs de 4K = 1 Mio
+            },
+            PartitionRequest {
+                name: "JamboOS Root 4Kn",
+                type_guid: Guid::JAMBOOS_ROOT,
+                size_sectors: 4096, // 16 Mio
+            },
+        ];
+
+        let total_sectors = 100_000;
+        let res = format_gpt_disk_with_geometry(
+            &mut disk_buf,
+            total_sectors,
+            disk_guid,
+            &requests,
+            SectorGeometry::Sector4Kn,
+        );
+        assert!(res.is_ok());
+
+        // Analyse explicite avec géométrie 4Kn
+        let parse_res = parse_gpt_disk_with_geometry(&disk_buf, SectorGeometry::Sector4Kn);
+        assert!(parse_res.is_ok());
+        let info = parse_res.unwrap();
+        assert_eq!(info.disk_guid, disk_guid);
+        assert_eq!(info.first_usable_lba, 6);
+        assert_eq!(info.partition_count, 2);
+        assert_eq!(info.partitions[0].starting_lba, 6);
+        assert_eq!(info.partitions[0].ending_lba, 6 + 256 - 1);
+        assert_eq!(info.partitions[1].starting_lba, 6 + 256);
+
+        // Détection automatique de géométrie
+        let (auto_info, geom) = detect_and_parse_gpt(&disk_buf).expect("Auto-detection 4Kn");
+        assert_eq!(geom, SectorGeometry::Sector4Kn);
+        assert_eq!(auto_info.partition_count, 2);
     }
 }

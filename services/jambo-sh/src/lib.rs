@@ -509,6 +509,7 @@ impl JamboShell {
             "chmod" | "/bin/chmod" | "bin/chmod" => self.cmd_chmod(args, out),
             "chown" | "/bin/chown" | "bin/chown" => self.cmd_chown(args, out),
             "id" | "/bin/id" | "bin/id" => self.cmd_id(args, out),
+            "du" | "/bin/du" | "bin/du" => self.cmd_du(args, out),
             "export" => self.cmd_export(args, out),
             "unset" => self.cmd_unset(args, out),
             "wc" | "/bin/wc" | "bin/wc" => self.cmd_wc(args, out),
@@ -707,7 +708,7 @@ impl JamboShell {
 
     fn cmd_coreutils(&self, out: &mut [u8]) -> (ShellStatus, usize) {
         let text = b"Utilitaires Coreutils Ring 3 (services/jambo-coreutils) :\n\
-  Binaires disponibles : /bin/echo, /bin/cat, /bin/head, /bin/tail, /bin/touch, /bin/mkdir, /bin/rm, /bin/cp, /bin/mv, /bin/tee, /bin/env, /bin/grep, /bin/sort, /bin/uniq, /bin/find, /bin/chmod, /bin/chown, /bin/id, /bin/wc, /bin/true, /bin/false, /bin/ls (22 utilitaires)\n\
+  Binaires disponibles : /bin/echo, /bin/cat, /bin/head, /bin/tail, /bin/touch, /bin/mkdir, /bin/rm, /bin/cp, /bin/mv, /bin/tee, /bin/env, /bin/grep, /bin/sort, /bin/uniq, /bin/find, /bin/chmod, /bin/chown, /bin/id, /bin/du, /bin/wc, /bin/true, /bin/false, /bin/ls (23 utilitaires)\n\
   Architecture & ABI   : System V AMD64 ELF64 (ET_EXEC / Ring 3 Userland)\n\
   Point d'entree       : _start (parsing argc/argv sur pile System V)\n\
   Terminaison          : Syscall 11 ThreadExit avec propagation code de retour POSIX\n\
@@ -1803,6 +1804,26 @@ ABI : 29 Appels Systeme (jambo-abi v0.4) avec Coreutils Ring 3, VFS POSIX & Fuzz
             }
         } else {
             let msg = b"id: pipe creation failed\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
+    }
+
+    fn cmd_du(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if let Ok((r, w)) = libjambo::vfs::pipe() {
+            let code = libjambo::coreutils::run_du(args, w, w);
+            let _ = libjambo::coreutils::sys_close(w);
+            let n = libjambo::coreutils::sys_read(r, out);
+            let _ = libjambo::coreutils::sys_close(r);
+            let len = if n > 0 { n as usize } else { 0 };
+            if code == 0 {
+                (ShellStatus::Success, len)
+            } else {
+                (ShellStatus::ExecutionFailed, len)
+            }
+        } else {
+            let msg = b"du: pipe creation failed\n";
             let len = msg.len().min(out.len());
             out[..len].copy_from_slice(&msg[..len]);
             (ShellStatus::ExecutionFailed, len)
@@ -17048,7 +17069,7 @@ mod tests {
         let (st, len) = shell.execute_line("coreutils", &mut out);
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
-        assert!(s.contains("20 utilitaires"));
+        assert!(s.contains("23 utilitaires"));
         assert!(s.contains("/bin/head"));
         assert!(s.contains("/bin/tail"));
         assert!(s.contains("/bin/touch"));
@@ -17062,6 +17083,10 @@ mod tests {
         assert!(s.contains("/bin/sort"));
         assert!(s.contains("/bin/uniq"));
         assert!(s.contains("/bin/find"));
+        assert!(s.contains("/bin/chmod"));
+        assert!(s.contains("/bin/chown"));
+        assert!(s.contains("/bin/id"));
+        assert!(s.contains("/bin/du"));
         assert!(s.contains("/bin/chmod"));
     }
 
@@ -17271,6 +17296,28 @@ mod tests {
 
         // 3. Commande chown erreur
         let (st_err, _) = shell.execute_line("chown root:root /nonexistent_file_xyz", &mut out);
+        assert_eq!(st_err, ShellStatus::ExecutionFailed);
+    }
+
+    #[test]
+    fn test_du_shell_execution() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 512];
+
+        // 1. Commande du -s sur /etc
+        let (st_du, len_du) = shell.execute_line("du -s /etc", &mut out);
+        assert_eq!(st_du, ShellStatus::Success);
+        let s_du = core::str::from_utf8(&out[..len_du]).unwrap();
+        assert!(s_du.ends_with("\t/etc\n"));
+
+        // 2. Commande du sur fichier avec mode octets -b
+        let (st_b, len_b) = shell.execute_line("du -b /etc/hostname", &mut out);
+        assert_eq!(st_b, ShellStatus::Success);
+        let s_b = core::str::from_utf8(&out[..len_b]).unwrap();
+        assert_eq!(s_b, "14\t/etc/hostname\n");
+
+        // 3. Commande du sur fichier inexistant -> ExecutionFailed
+        let (st_err, _) = shell.execute_line("du /nonexistent_path_xyz", &mut out);
         assert_eq!(st_err, ShellStatus::ExecutionFailed);
     }
 }

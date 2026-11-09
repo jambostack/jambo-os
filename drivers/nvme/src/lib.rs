@@ -579,6 +579,54 @@ impl NvmeController {
         }
     }
 
+    /// Configure la géométrie des blocs logiques (512 octets en 512e ou 4096 octets en 4Kn)
+    pub fn configure_lba_geometry(&mut self, block_size: u32) -> Result<(), SysError> {
+        if block_size != 512 && block_size != 4096 {
+            return Err(SysError::InvalidArgument);
+        }
+        let total_capacity_bytes = self.namespace_size_blocks * (self.block_size as u64);
+        self.block_size = block_size;
+        self.namespace_size_blocks = total_capacity_bytes / (block_size as u64);
+        Ok(())
+    }
+
+    /// Indique si le contrôleur opère en mode secteurs natifs 4Kn (4096 octets)
+    pub fn is_4kn(&self) -> bool {
+        self.block_size == 4096
+    }
+
+    /// Indique si le contrôleur opère en mode secteurs logiques 512 octets (512e)
+    pub fn is_512e(&self) -> bool {
+        self.block_size == 512
+    }
+
+    /// Calcule le nombre de LBA matériels correspondant à `num_4k_blocks` blocs de 4 Kio
+    pub fn blocks_to_lba_count(&self, num_4k_blocks: u32) -> u32 {
+        if self.is_4kn() {
+            num_4k_blocks
+        } else {
+            num_4k_blocks * 8
+        }
+    }
+
+    /// Calcule le LBA matériel pour un décalage de bloc relatif de 4 Kio
+    pub fn lba_for_4k_block(&self, base_lba: u64, rel_4k_block: u64) -> u64 {
+        if self.is_4kn() {
+            base_lba + rel_4k_block
+        } else {
+            base_lba + rel_4k_block * 8
+        }
+    }
+
+    /// Vérifie l'alignement sur une frontière physique de 4 Kio (protection anti-RMW)
+    pub fn is_lba_4k_aligned(&self, lba: u64) -> bool {
+        if self.is_4kn() {
+            true
+        } else {
+            (lba % 8) == 0
+        }
+    }
+
     /// Active et initialise l'anneau MSI-X avec le nombre de vecteurs demandés
     pub fn enable_msix(&mut self, vector_count: usize) -> Result<(), SysError> {
         self.msix = NvmeMsixRing::new(vector_count);
@@ -1655,5 +1703,32 @@ mod tests {
         assert_eq!(qid, 1);
         // Le bit PBA doit avoir été acquitté et effacé
         assert!(!ctrl.msix.is_pending(2).unwrap());
+    }
+
+    #[test]
+    fn test_nvme_4kn_and_512e_geometry() {
+        let mut ctrl = NvmeController::new();
+        assert!(ctrl.is_512e());
+        assert!(!ctrl.is_4kn());
+        assert_eq!(ctrl.block_size, 512);
+        assert_eq!(ctrl.blocks_to_lba_count(1), 8);
+        assert_eq!(ctrl.lba_for_4k_block(2048, 2), 2048 + 16);
+        assert!(ctrl.is_lba_4k_aligned(2048));
+        assert!(!ctrl.is_lba_4k_aligned(2049));
+
+        // Reconfiguration en mode 4Kn natif
+        assert!(ctrl.configure_lba_geometry(4096).is_ok());
+        assert!(ctrl.is_4kn());
+        assert!(!ctrl.is_512e());
+        assert_eq!(ctrl.block_size, 4096);
+        assert_eq!(ctrl.namespace_size_blocks, 2_097_152 / 8);
+        assert_eq!(ctrl.blocks_to_lba_count(1), 1);
+        assert_eq!(ctrl.lba_for_4k_block(256, 2), 256 + 2);
+        assert!(ctrl.is_lba_4k_aligned(256));
+        assert!(ctrl.is_lba_4k_aligned(257)); // En 4Kn, chaque secteur LBA est un bloc physique de 4K
+
+        // Rejet des géométries invalides
+        assert!(ctrl.configure_lba_geometry(1024).is_err());
+        assert!(ctrl.configure_lba_geometry(8192).is_err());
     }
 }

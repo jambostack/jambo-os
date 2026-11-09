@@ -69,6 +69,44 @@ impl InstallationPlan {
         })
     }
 
+    /// Calcule un plan de partitionnement conforme UEFI 2.10 en tenant compte de la géométrie de secteur (512e ou 4Kn).
+    pub fn calculate_with_geometry(
+        total_sectors: u64,
+        geometry: libjambo::gpt::SectorGeometry,
+    ) -> Option<Self> {
+        let sector_size = geometry.sector_size();
+        let gpt_reserved = geometry.gpt_reserved_sectors();
+        let min_sectors = gpt_reserved * 2 + 512;
+        if total_sectors < min_sectors {
+            return None;
+        }
+
+        let usable_sectors = total_sectors.saturating_sub(gpt_reserved * 2);
+        let min_esp_sectors = match geometry {
+            libjambo::gpt::SectorGeometry::Sector512e => 2048,
+            libjambo::gpt::SectorGeometry::Sector4Kn => 256,
+        };
+        let max_esp_sectors = min_esp_sectors * 32;
+        let esp_sectors = (usable_sectors / 8).clamp(min_esp_sectors, max_esp_sectors);
+        let root_sectors = usable_sectors.saturating_sub(esp_sectors);
+
+        if root_sectors < 128 {
+            return None;
+        }
+
+        let esp_start_lba = geometry.first_usable_lba();
+        let root_start_lba = esp_start_lba + esp_sectors;
+
+        Some(Self {
+            total_sectors,
+            sector_size,
+            esp_sectors,
+            root_sectors,
+            esp_start_lba,
+            root_start_lba,
+        })
+    }
+
     /// Génère la table de partitions GPT (LBA 0..33) dans le tampon de destination fourni.
     pub fn generate_gpt(&self, out: &mut [u8], disk_guid: Guid) -> Result<(), &'static str> {
         if out.len() < 34 * SECTOR_SIZE {
