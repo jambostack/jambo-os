@@ -503,6 +503,7 @@ impl JamboShell {
             "tee" | "/bin/tee" | "bin/tee" => self.cmd_tee(args, out),
             "env" | "/bin/env" | "bin/env" => self.cmd_env(args, out),
             "grep" | "/bin/grep" | "bin/grep" => self.cmd_grep(args, out),
+            "sort" | "/bin/sort" | "bin/sort" => self.cmd_sort(args, out),
             "export" => self.cmd_export(args, out),
             "unset" => self.cmd_unset(args, out),
             "wc" | "/bin/wc" | "bin/wc" => self.cmd_wc(args, out),
@@ -694,7 +695,7 @@ impl JamboShell {
 
     fn cmd_coreutils(&self, out: &mut [u8]) -> (ShellStatus, usize) {
         let text = b"Utilitaires Coreutils Ring 3 (services/jambo-coreutils) :\n\
-  Binaires disponibles : /bin/echo, /bin/cat, /bin/head, /bin/tail, /bin/touch, /bin/mkdir, /bin/rm, /bin/cp, /bin/mv, /bin/tee, /bin/env, /bin/grep, /bin/wc, /bin/true, /bin/false, /bin/ls (16 utilitaires)\n\
+  Binaires disponibles : /bin/echo, /bin/cat, /bin/head, /bin/tail, /bin/touch, /bin/mkdir, /bin/rm, /bin/cp, /bin/mv, /bin/tee, /bin/env, /bin/grep, /bin/sort, /bin/wc, /bin/true, /bin/false, /bin/ls (17 utilitaires)\n\
   Architecture & ABI   : System V AMD64 ELF64 (ET_EXEC / Ring 3 Userland)\n\
   Point d'entree       : _start (parsing argc/argv sur pile System V)\n\
   Terminaison          : Syscall 11 ThreadExit avec propagation code de retour POSIX\n\
@@ -1670,6 +1671,26 @@ ABI : 29 Appels Systeme (jambo-abi v0.4) avec Coreutils Ring 3, VFS POSIX & Fuzz
             }
         } else {
             let msg = b"grep: pipe creation failed\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
+    }
+
+    fn cmd_sort(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if let Ok((r, w)) = libjambo::vfs::pipe() {
+            let code = libjambo::coreutils::run_sort(args, 0, w, w);
+            let _ = libjambo::coreutils::sys_close(w);
+            let n = libjambo::coreutils::sys_read(r, out);
+            let _ = libjambo::coreutils::sys_close(r);
+            let len = if n > 0 { n as usize } else { 0 };
+            if code == 0 {
+                (ShellStatus::Success, len)
+            } else {
+                (ShellStatus::ExecutionFailed, len)
+            }
+        } else {
+            let msg = b"sort: pipe creation failed\n";
             let len = msg.len().min(out.len());
             out[..len].copy_from_slice(&msg[..len]);
             (ShellStatus::ExecutionFailed, len)
@@ -16926,6 +16947,7 @@ mod tests {
         assert!(s.contains("/bin/tee"));
         assert!(s.contains("/bin/env"));
         assert!(s.contains("/bin/grep"));
+        assert!(s.contains("/bin/sort"));
     }
 
     #[test]
@@ -16948,6 +16970,17 @@ mod tests {
         // 3. Grep avec motif absent -> échec
         let (st3, _) = shell.execute_line("grep nonexistent_pattern /etc/hostname", &mut out);
         assert_eq!(st3, ShellStatus::ExecutionFailed);
+    }
+
+    #[test]
+    fn test_sort_pipe_execution() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 1024];
+
+        let (st, len) = shell.execute_line("sort /etc/hostname", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("jambo-node-01"));
     }
 
     #[test]

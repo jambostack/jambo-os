@@ -1043,6 +1043,138 @@ impl BlockDedupTable {
     }
 }
 
+pub const MAX_SNAPSHOTS: usize = 16;
+pub const MAX_SNAPSHOT_NAME_LEN: usize = 32;
+
+/// Descripteur de snapshot CoW transactionnel JamboFS (Instant Snapshot)
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SnapshotDescriptor {
+    pub snapshot_id: u64,
+    pub generation: u64,
+    pub root_tree_offset: u64,
+    pub root_checksum: [u8; 32],
+    pub name: [u8; MAX_SNAPSHOT_NAME_LEN],
+    pub name_len: usize,
+    pub created_timestamp: u64,
+    pub active: bool,
+}
+
+impl Default for SnapshotDescriptor {
+    fn default() -> Self {
+        Self {
+            snapshot_id: 0,
+            generation: 0,
+            root_tree_offset: 0,
+            root_checksum: [0u8; 32],
+            name: [0u8; MAX_SNAPSHOT_NAME_LEN],
+            name_len: 0,
+            created_timestamp: 0,
+            active: false,
+        }
+    }
+}
+
+impl SnapshotDescriptor {
+    pub fn name_str(&self) -> &str {
+        core::str::from_utf8(&self.name[..self.name_len]).unwrap_or("")
+    }
+}
+
+/// Table des snapshots CoW de JamboFS (jusqu'à 16 instant snapshots sans copie de données physiques)
+#[derive(Debug, Clone, Copy)]
+pub struct SnapshotTable {
+    pub entries: [SnapshotDescriptor; MAX_SNAPSHOTS],
+    pub next_snapshot_id: u64,
+    pub snapshot_count: usize,
+}
+
+impl Default for SnapshotTable {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SnapshotTable {
+    pub const fn new() -> Self {
+        Self {
+            entries: [SnapshotDescriptor {
+                snapshot_id: 0,
+                generation: 0,
+                root_tree_offset: 0,
+                root_checksum: [0u8; 32],
+                name: [0u8; MAX_SNAPSHOT_NAME_LEN],
+                name_len: 0,
+                created_timestamp: 0,
+                active: false,
+            }; MAX_SNAPSHOTS],
+            next_snapshot_id: 1,
+            snapshot_count: 0,
+        }
+    }
+
+    /// Enregistre un nouvel instant snapshot à partir de l'état actuel de l'Uberblock
+    pub fn create_snapshot(&mut self, name: &str, uberblock: &Uberblock) -> Result<u64, FsError> {
+        let name_bytes = name.as_bytes();
+        let len = name_bytes.len().min(MAX_SNAPSHOT_NAME_LEN);
+
+        for entry in self.entries.iter() {
+            if entry.active && entry.name_str() == name {
+                return Err(FsError::BufferTooSmall);
+            }
+        }
+
+        for entry in self.entries.iter_mut() {
+            if !entry.active {
+                let id = self.next_snapshot_id;
+                self.next_snapshot_id += 1;
+                entry.snapshot_id = id;
+                entry.generation = uberblock.generation;
+                entry.root_tree_offset = uberblock.root_tree_offset;
+                entry.root_checksum = uberblock.root_checksum;
+                entry.name = [0u8; MAX_SNAPSHOT_NAME_LEN];
+                entry.name[..len].copy_from_slice(&name_bytes[..len]);
+                entry.name_len = len;
+                entry.created_timestamp = uberblock.timestamp;
+                entry.active = true;
+                self.snapshot_count += 1;
+                return Ok(id);
+            }
+        }
+
+        Err(FsError::BufferTooSmall)
+    }
+
+    pub fn find_by_name(&self, name: &str) -> Option<&SnapshotDescriptor> {
+        for entry in self.entries.iter() {
+            if entry.active && entry.name_str() == name {
+                return Some(entry);
+            }
+        }
+        None
+    }
+
+    pub fn find_by_id(&self, id: u64) -> Option<&SnapshotDescriptor> {
+        for entry in self.entries.iter() {
+            if entry.active && entry.snapshot_id == id {
+                return Some(entry);
+            }
+        }
+        None
+    }
+
+    pub fn delete_snapshot(&mut self, id: u64) -> bool {
+        for entry in self.entries.iter_mut() {
+            if entry.active && entry.snapshot_id == id {
+                entry.active = false;
+                self.snapshot_count = self.snapshot_count.saturating_sub(1);
+                return true;
+            }
+        }
+        false
+    }
+}
+
 /// Système de fichiers JamboFS transactionnel monté en espace utilisateur
 #[derive(Debug, Clone, Copy)]
 pub struct JamboFs {
@@ -1053,6 +1185,7 @@ pub struct JamboFs {
     pub flags: MountFlags,
     pub active_slot_b: bool,
     pub dedup_table: BlockDedupTable,
+    pub snapshot_table: SnapshotTable,
 }
 
 impl JamboFs {
@@ -1149,6 +1282,7 @@ impl JamboFs {
             flags,
             active_slot_b,
             dedup_table: BlockDedupTable::new(),
+            snapshot_table: SnapshotTable::new(),
         })
     }
 
@@ -1162,7 +1296,34 @@ impl JamboFs {
             flags: MountFlags::default_rw(),
             active_slot_b: false,
             dedup_table: BlockDedupTable::new(),
+            snapshot_table: SnapshotTable::new(),
         }
+    }
+
+    /// Crée un instant snapshot immuable sans duplication physique de blocs (CoW)
+    pub fn create_snapshot(&mut self, name: &str) -> Result<u64, FsError> {
+        self.snapshot_table
+            .create_snapshot(name, &self.active_uberblock)
+    }
+
+    /// Supprime un snapshot existant par son identifiant
+    pub fn delete_snapshot(&mut self, id: u64) -> bool {
+        self.snapshot_table.delete_snapshot(id)
+    }
+
+    /// Restaure l'état du système de fichiers à un instant snapshot antérieur (Rollback CoW)
+    pub fn rollback_to_snapshot(&mut self, id: u64) -> Result<(), FsError> {
+        let snap = match self.snapshot_table.find_by_id(id) {
+            Some(s) => *s,
+            None => return Err(FsError::FileNotFound),
+        };
+
+        self.active_uberblock.root_tree_offset = snap.root_tree_offset;
+        self.active_uberblock.root_checksum = snap.root_checksum;
+        self.active_uberblock.generation = self.active_uberblock.generation.saturating_add(1);
+        self.root_offset = snap.root_tree_offset;
+
+        self.sync()
     }
 
     /// Écrit un bloc de 4 Kio avec déduplication CoW par empreinte BLAKE3
@@ -1639,5 +1800,38 @@ mod tests {
 
         assert_eq!(fs.dedup_table.decrement(&hash), Some(0));
         assert_eq!(fs.dedup_table.active_count, 0);
+    }
+
+    #[test]
+    fn test_cow_snapshot_lifecycle() {
+        let dummy_client = BlockClient {
+            channel: libjambo::Handle(0),
+            vmo_ptr: core::ptr::null_mut(),
+        };
+        let mut fs = JamboFs::new_fallback(dummy_client);
+
+        // 1. Écriture initiale d'un fichier et création d'un instant snapshot "snap_init"
+        let _ = fs.write_file("/config.txt", b"CONFIG_VERSION=1.0\n");
+        let snap_id = fs.create_snapshot("snap_init").expect("Création snapshot");
+        assert_eq!(snap_id, 1);
+        assert_eq!(fs.snapshot_table.snapshot_count, 1);
+
+        let snap_desc = fs.snapshot_table.find_by_id(snap_id).unwrap();
+        assert_eq!(snap_desc.name_str(), "snap_init");
+        let snap_gen = snap_desc.generation;
+        let snap_checksum = snap_desc.root_checksum;
+
+        // 2. Modification ultérieure (nouvelle génération CoW)
+        let _ = fs.write_file("/config.txt", b"CONFIG_VERSION=2.0-MODIFIED\n");
+        assert!(fs.active_uberblock.generation > snap_gen);
+
+        // 3. Rollback vers le snapshot antérieur
+        assert!(fs.rollback_to_snapshot(snap_id).is_ok());
+        assert_eq!(fs.active_uberblock.root_checksum, snap_checksum);
+
+        // 4. Suppression du snapshot
+        assert!(fs.delete_snapshot(snap_id));
+        assert_eq!(fs.snapshot_table.snapshot_count, 0);
+        assert!(fs.snapshot_table.find_by_id(snap_id).is_none());
     }
 }

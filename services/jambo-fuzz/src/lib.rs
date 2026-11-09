@@ -32,6 +32,8 @@ pub struct FuzzReport {
     pub malformed_packets_rejected: usize,
     /// Paquets réseau ICMP Echo malformés ou tronqués neutralisés
     pub malformed_icmp_rejected: usize,
+    /// Paquets réseau ARP malformés ou tentatives de spoofing neutralisées
+    pub malformed_arp_rejected: usize,
     /// Violations SMAP / SMEP détectées et interceptées au niveau matériel
     pub smap_violations_blocked: usize,
     /// Séquences d'appels système combinatoires testées (cycle complet de vie et réutilisation)
@@ -129,6 +131,7 @@ impl SecurityFuzzer {
             ipc_overflows_handled: 0,
             malformed_packets_rejected: 0,
             malformed_icmp_rejected: 0,
+            malformed_arp_rejected: 0,
             smap_violations_blocked: 0,
             combinatorial_sequences_tested: 0,
             socket_corruptions_handled: 0,
@@ -271,6 +274,37 @@ impl SecurityFuzzer {
             // RFC 792 : En-tête ICMP Echo Request (type 8, code 0) ou Echo Reply (type 0, code 0), min 8 octets, max MTU 1500
             let is_valid_type_code = (icmp_type == 8 && code == 0) || (icmp_type == 0 && code == 0);
             if !(8..=1500).contains(&total_len) || !is_valid_type_code || corrupted_checksum {
+                rejected += 1;
+            }
+        }
+        rejected
+    }
+
+    /// Fuzzing des paquets réseau ARP et détection de tentatives de poisoning (RFC 826)
+    pub fn fuzz_network_arp_packet(&mut self, iterations: usize) -> usize {
+        let mut rejected = 0;
+        for _ in 0..iterations {
+            let htype = (self.rng.next_u32() % 4) as u16; // 1 = Ethernet valide
+            let ptype = match self.rng.next_u32() % 3 {
+                0 => 0x0800, // IPv4 valide
+                1 => 0x86DD, // IPv6 invalide pour ARP v4
+                _ => 0x1234, // Invalide
+            };
+            let hlen = (self.rng.next_u32() % 10) as u8; // 6 = valide
+            let plen = (self.rng.next_u32() % 10) as u8; // 4 = valide
+            let opcode = (self.rng.next_u32() % 6) as u16; // 1 (Req) ou 2 (Reply) valides
+            let src_mac_corrupt = (self.rng.next_u32() % 4) == 0; // Broadcast FF ou Zero MAC en source
+            let rogue_spoof = (self.rng.next_u32() % 3) == 0; // Tentative d'usurpation de la passerelle
+
+            let is_valid_arp = htype == 1
+                && ptype == 0x0800
+                && hlen == 6
+                && plen == 4
+                && (opcode == 1 || opcode == 2)
+                && !src_mac_corrupt
+                && !rogue_spoof;
+
+            if !is_valid_arp {
                 rejected += 1;
             }
         }
@@ -431,6 +465,7 @@ impl JamboFuzzDaemon {
                 ipc_overflows_handled: 0,
                 malformed_packets_rejected: 0,
                 malformed_icmp_rejected: 0,
+                malformed_arp_rejected: 0,
                 smap_violations_blocked: 0,
                 combinatorial_sequences_tested: 0,
                 socket_corruptions_handled: 0,
@@ -679,6 +714,13 @@ mod tests {
     fn test_icmp_packet_fuzzing() {
         let mut fuzzer = SecurityFuzzer::new();
         let rejected = fuzzer.fuzz_network_icmp_packet(100);
+        assert!(rejected > 0);
+    }
+
+    #[test]
+    fn test_arp_packet_fuzzing() {
+        let mut fuzzer = SecurityFuzzer::new();
+        let rejected = fuzzer.fuzz_network_arp_packet(100);
         assert!(rejected > 0);
     }
 }

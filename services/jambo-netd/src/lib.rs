@@ -1371,6 +1371,167 @@ impl ConntrackTable {
     }
 }
 
+// =========================================================================
+// Table de Correspondance ARP & Protection Anti-Poisoning (RFC 826 / Ring 3)
+// =========================================================================
+
+pub const MAX_ARP_ENTRIES: usize = 32;
+pub const ARP_DEFAULT_TTL_SECS: u32 = 300;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArpEntryState {
+    Free,
+    Dynamic,
+    Static,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ArpEntry {
+    pub ip: [u8; 4],
+    pub mac: [u8; 6],
+    pub state: ArpEntryState,
+    pub ttl_secs: u32,
+    pub hits: u64,
+}
+
+impl ArpEntry {
+    pub const fn empty() -> Self {
+        Self {
+            ip: [0; 4],
+            mac: [0; 6],
+            state: ArpEntryState::Free,
+            ttl_secs: 0,
+            hits: 0,
+        }
+    }
+}
+
+pub struct ArpTable {
+    pub entries: [ArpEntry; MAX_ARP_ENTRIES],
+    pub dynamic_count: usize,
+    pub static_count: usize,
+    pub spoofing_attempts_blocked: u64,
+}
+
+impl Default for ArpTable {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ArpTable {
+    pub const fn new() -> Self {
+        Self {
+            entries: [ArpEntry::empty(); MAX_ARP_ENTRIES],
+            dynamic_count: 0,
+            static_count: 0,
+            spoofing_attempts_blocked: 0,
+        }
+    }
+
+    /// Initialise la table avec la passerelle par défaut en tant qu'entrée statique protégée
+    pub fn new_with_gateway(gw_ip: [u8; 4], gw_mac: [u8; 6]) -> Self {
+        let mut table = Self::new();
+        let _ = table.insert_static(gw_ip, gw_mac);
+        table
+    }
+
+    /// Insère ou verrouille une entrée statique permanente (inviolable par ARP dynamique)
+    pub fn insert_static(&mut self, ip: [u8; 4], mac: [u8; 6]) -> Result<(), SysError> {
+        for entry in self.entries.iter_mut() {
+            if entry.state != ArpEntryState::Free && entry.ip == ip {
+                if entry.state == ArpEntryState::Dynamic {
+                    self.dynamic_count = self.dynamic_count.saturating_sub(1);
+                    self.static_count += 1;
+                }
+                entry.mac = mac;
+                entry.state = ArpEntryState::Static;
+                entry.ttl_secs = u32::MAX;
+                return Ok(());
+            }
+        }
+
+        for entry in self.entries.iter_mut() {
+            if entry.state == ArpEntryState::Free {
+                entry.ip = ip;
+                entry.mac = mac;
+                entry.state = ArpEntryState::Static;
+                entry.ttl_secs = u32::MAX;
+                self.static_count += 1;
+                return Ok(());
+            }
+        }
+
+        Err(SysError::OutOfMemory)
+    }
+
+    /// Résout une adresse IPv4 en adresse MAC
+    pub fn lookup(&mut self, ip: [u8; 4]) -> Option<[u8; 6]> {
+        for entry in self.entries.iter_mut() {
+            if entry.state != ArpEntryState::Free && entry.ip == ip {
+                entry.hits = entry.hits.saturating_add(1);
+                return Some(entry.mac);
+            }
+        }
+        None
+    }
+
+    /// Met à jour ou insère une correspondance dynamique apprise depuis une trame reçue
+    /// Rejette les tentatives d'écrasement d'une entrée statique et les adresses invalides
+    pub fn update_dynamic(&mut self, ip: [u8; 4], mac: [u8; 6]) -> Result<bool, SysError> {
+        if mac == [0xFF; 6] || mac == [0x00; 6] {
+            return Err(SysError::InvalidArgument);
+        }
+        if ip == [0, 0, 0, 0] || ip == [255, 255, 255, 255] {
+            return Err(SysError::InvalidArgument);
+        }
+
+        for entry in self.entries.iter_mut() {
+            if entry.state != ArpEntryState::Free && entry.ip == ip {
+                if entry.state == ArpEntryState::Static {
+                    if entry.mac != mac {
+                        self.spoofing_attempts_blocked =
+                            self.spoofing_attempts_blocked.saturating_add(1);
+                        return Err(SysError::PermissionDenied);
+                    }
+                    return Ok(false);
+                }
+
+                entry.mac = mac;
+                entry.ttl_secs = ARP_DEFAULT_TTL_SECS;
+                return Ok(true);
+            }
+        }
+
+        for entry in self.entries.iter_mut() {
+            if entry.state == ArpEntryState::Free {
+                entry.ip = ip;
+                entry.mac = mac;
+                entry.state = ArpEntryState::Dynamic;
+                entry.ttl_secs = ARP_DEFAULT_TTL_SECS;
+                self.dynamic_count += 1;
+                return Ok(true);
+            }
+        }
+
+        Err(SysError::OutOfMemory)
+    }
+
+    /// Avance le temps de `elapsed_secs` et purge les entrées dynamiques expirées
+    pub fn tick(&mut self, elapsed_secs: u32) {
+        for entry in self.entries.iter_mut() {
+            if entry.state == ArpEntryState::Dynamic {
+                if entry.ttl_secs <= elapsed_secs {
+                    entry.state = ArpEntryState::Free;
+                    self.dynamic_count = self.dynamic_count.saturating_sub(1);
+                } else {
+                    entry.ttl_secs -= elapsed_secs;
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1666,5 +1827,49 @@ mod tests {
         // 4. Écoulement du temps et purge après expiration
         ct.tick(301);
         assert_eq!(ct.active_count(), 0);
+    }
+
+    #[test]
+    fn test_arp_table_and_spoofing_defense() {
+        let gw_ip = [10, 0, 2, 2];
+        let gw_mac = [0x52, 0x55, 0x0A, 0x00, 0x02, 0x02];
+        let mut table = ArpTable::new_with_gateway(gw_ip, gw_mac);
+
+        // 1. Consultation de la passerelle statique
+        assert_eq!(table.lookup(gw_ip), Some(gw_mac));
+        assert_eq!(table.static_count, 1);
+        assert_eq!(table.dynamic_count, 0);
+
+        // 2. Ajout dynamique d'un hôte légitime
+        let host_ip = [10, 0, 2, 50];
+        let host_mac = [0x00, 0x11, 0x22, 0x33, 0x44, 0x55];
+        assert!(table.update_dynamic(host_ip, host_mac).unwrap());
+        assert_eq!(table.lookup(host_ip), Some(host_mac));
+        assert_eq!(table.dynamic_count, 1);
+
+        // 3. Tentative d'usurpation (ARP Spoofing) sur la passerelle -> Doit être bloquée !
+        let rogue_mac = [0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE];
+        let spoof_res = table.update_dynamic(gw_ip, rogue_mac);
+        assert_eq!(spoof_res, Err(SysError::PermissionDenied));
+        assert_eq!(table.spoofing_attempts_blocked, 1);
+        // L'adresse de la passerelle n'a pas été altérée
+        assert_eq!(table.lookup(gw_ip), Some(gw_mac));
+
+        // 4. Rejet des adresses invalides
+        assert_eq!(
+            table.update_dynamic([10, 0, 2, 60], [0xFF; 6]),
+            Err(SysError::InvalidArgument)
+        );
+        assert_eq!(
+            table.update_dynamic([0, 0, 0, 0], [0x12; 6]),
+            Err(SysError::InvalidArgument)
+        );
+
+        // 5. Expiration TTL
+        table.tick(301);
+        assert_eq!(table.lookup(host_ip), None);
+        assert_eq!(table.dynamic_count, 0);
+        // La passerelle statique ne s'est pas évaporée
+        assert_eq!(table.lookup(gw_ip), Some(gw_mac));
     }
 }

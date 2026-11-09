@@ -33,6 +33,7 @@ pub const NVME_LOG_SMART_HEALTH: u8 = 0x02;
 pub const NVME_IO_FLUSH: u8 = 0x00;
 pub const NVME_IO_WRITE: u8 = 0x01;
 pub const NVME_IO_READ: u8 = 0x02;
+pub const NVME_IO_WRITE_ZEROES: u8 = 0x08;
 
 pub const QUEUE_SIZE: usize = 64;
 pub const NVME_PRP_ENTRIES_MAX: usize = 512;
@@ -708,6 +709,53 @@ impl NvmeController {
         Ok(())
     }
 
+    /// Émet une commande de synchronisation cache matérielle ciblée sur un namespace spécifique.
+    pub fn flush_namespace(&mut self, nsid: u32) -> Result<(), SysError> {
+        if !self.ready {
+            return Err(SysError::ResourceBusy);
+        }
+
+        let cmd = NvmeSubmissionEntry {
+            cdw0: NVME_IO_FLUSH as u32,
+            nsid,
+            ..Default::default()
+        };
+
+        let cid = self.io_queue.submit(cmd);
+        let _ = self.io_queue.poll_completion(cid)?;
+        Ok(())
+    }
+
+    /// Émet une commande d'écriture de zéros matérielle (NVMe Write Zeroes, opcode 0x08).
+    /// Permet la remise à zéro atomique de blocs LBA sans transfert de payload DMA sur le bus PCIe.
+    /// Si `deallocate` est actif (bit 25 DEAC), le contrôleur peut désallouer physiquement les blocs (TRIM CoW).
+    pub fn write_zeroes(&mut self, lba: u64, count: u16, deallocate: bool) -> Result<(), SysError> {
+        if !self.ready {
+            return Err(SysError::ResourceBusy);
+        }
+        if count == 0 {
+            return Err(SysError::InvalidArgument);
+        }
+
+        let mut cdw12 = (count - 1) as u32;
+        if deallocate {
+            cdw12 |= 1 << 25; // Bit 25: Deallocate (DEAC)
+        }
+
+        let cmd = NvmeSubmissionEntry {
+            cdw0: NVME_IO_WRITE_ZEROES as u32,
+            nsid: 1,
+            cdw10: lba as u32,
+            cdw11: (lba >> 32) as u32,
+            cdw12,
+            ..Default::default()
+        };
+
+        let cid = self.io_queue.submit(cmd);
+        let _ = self.io_queue.poll_completion(cid)?;
+        Ok(())
+    }
+
     /// Réinitialise les anneaux du contrôleur après un incident matériel.
     pub fn recover_from_crash(&mut self) -> Result<(), SysError> {
         self.admin_queue = NvmeQueuePair::new(0);
@@ -1133,5 +1181,33 @@ mod tests {
         assert!(decoded.is_temperature_critical());
         assert_eq!(decoded.composite_temp_celsius(), 55);
         assert_eq!(decoded.percentage_used, 85);
+    }
+
+    #[test]
+    fn test_write_zeroes_and_flush_lifecycle() {
+        let mut ctrl = NvmeController::new();
+        ctrl.ready = true;
+
+        // 1. Commande Write Zeroes sans désallocation
+        assert!(ctrl.write_zeroes(0x1000, 8, false).is_ok());
+        let cmd_wz = ctrl.io_queue.sq[0];
+        assert_eq!((cmd_wz.cdw0 & 0xFF) as u8, NVME_IO_WRITE_ZEROES);
+        assert_eq!(cmd_wz.nsid, 1);
+        assert_eq!(cmd_wz.cdw10, 0x1000);
+        assert_eq!(cmd_wz.cdw11, 0);
+        assert_eq!(cmd_wz.cdw12, 7); // 8 - 1 = 7, pas de bit DEAC
+
+        // 2. Commande Write Zeroes avec désallocation (TRIM / DEAC)
+        assert!(ctrl.write_zeroes(0x2000, 16, true).is_ok());
+        let cmd_deac = ctrl.io_queue.sq[1];
+        assert_eq!((cmd_deac.cdw0 & 0xFF) as u8, NVME_IO_WRITE_ZEROES);
+        assert_eq!(cmd_deac.cdw10, 0x2000);
+        assert_eq!(cmd_deac.cdw12, 15 | (1 << 25)); // bit 25 DEAC
+
+        // 3. Commande Flush sur namespace spécifique
+        assert!(ctrl.flush_namespace(2).is_ok());
+        let cmd_flush = ctrl.io_queue.sq[2];
+        assert_eq!((cmd_flush.cdw0 & 0xFF) as u8, NVME_IO_FLUSH);
+        assert_eq!(cmd_flush.nsid, 2);
     }
 }

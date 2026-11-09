@@ -1036,6 +1036,240 @@ pub fn run_grep(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
     }
 }
 
+fn parse_leading_int(slice: &[u8]) -> i64 {
+    let mut i = 0;
+    while i < slice.len() && (slice[i] == b' ' || slice[i] == b'\t') {
+        i += 1;
+    }
+    if i >= slice.len() {
+        return 0;
+    }
+    let is_neg = if slice[i] == b'-' {
+        i += 1;
+        true
+    } else if slice[i] == b'+' {
+        i += 1;
+        false
+    } else {
+        false
+    };
+    let mut val: i64 = 0;
+    while i < slice.len() && slice[i].is_ascii_digit() {
+        val = val
+            .saturating_mul(10)
+            .saturating_add((slice[i] - b'0') as i64);
+        i += 1;
+    }
+    if is_neg {
+        -val
+    } else {
+        val
+    }
+}
+
+fn compare_lexicographical(a: &[u8], b: &[u8], ignore_case: bool) -> core::cmp::Ordering {
+    let len = a.len().min(b.len());
+    for i in 0..len {
+        let ba = if ignore_case {
+            a[i].to_ascii_lowercase()
+        } else {
+            a[i]
+        };
+        let bb = if ignore_case {
+            b[i].to_ascii_lowercase()
+        } else {
+            b[i]
+        };
+        match ba.cmp(&bb) {
+            core::cmp::Ordering::Equal => continue,
+            other => return other,
+        }
+    }
+    a.len().cmp(&b.len())
+}
+
+fn compare_lines(
+    a: &[u8],
+    b: &[u8],
+    numeric: bool,
+    ignore_case: bool,
+    reverse: bool,
+) -> core::cmp::Ordering {
+    let ord = if numeric {
+        let na = parse_leading_int(a);
+        let nb = parse_leading_int(b);
+        match na.cmp(&nb) {
+            core::cmp::Ordering::Equal => compare_lexicographical(a, b, ignore_case),
+            other => other,
+        }
+    } else {
+        compare_lexicographical(a, b, ignore_case)
+    };
+    if reverse {
+        ord.reverse()
+    } else {
+        ord
+    }
+}
+
+/// Exécute l'utilitaire `sort` (tri de lignes de texte POSIX)
+pub fn run_sort(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    let mut reverse = false;
+    let mut numeric = false;
+    let mut unique = false;
+    let mut ignore_case = false;
+    let mut file_indices: [usize; 16] = [0; 16];
+    let mut file_count = 0;
+
+    let mut i = 0;
+    let mut parsing_flags = true;
+    while i < args.len() {
+        let arg = args[i];
+        if parsing_flags && arg == "--" {
+            parsing_flags = false;
+            i += 1;
+            continue;
+        }
+        if parsing_flags && arg.starts_with('-') && arg != "-" {
+            for b in arg[1..].bytes() {
+                match b {
+                    b'r' => reverse = true,
+                    b'n' => numeric = true,
+                    b'u' => unique = true,
+                    b'f' | b'i' => ignore_case = true,
+                    _ => {
+                        let _ = sys_write(err_fd, b"sort: option invalide -- '");
+                        let b_slice = [b];
+                        let _ = sys_write(err_fd, &b_slice);
+                        let _ = sys_write(err_fd, b"'\n");
+                        return 2;
+                    }
+                }
+            }
+        } else if file_count < file_indices.len() {
+            file_indices[file_count] = i;
+            file_count += 1;
+        }
+        i += 1;
+    }
+
+    const MAX_SORT_BYTES: usize = 8192;
+    const MAX_SORT_LINES: usize = 256;
+
+    let mut content_buf = [0u8; MAX_SORT_BYTES];
+    let mut content_len = 0;
+
+    if file_count == 0 {
+        // Lecture depuis in_fd
+        loop {
+            if content_len >= MAX_SORT_BYTES {
+                break;
+            }
+            let n = sys_read(in_fd, &mut content_buf[content_len..]);
+            if n <= 0 {
+                break;
+            }
+            content_len += n as usize;
+        }
+    } else {
+        // Lecture séquentielle de chaque fichier
+        for &idx in &file_indices[..file_count] {
+            let file_path = args[idx];
+            let fd = if file_path == "-" {
+                in_fd
+            } else {
+                let fd = sys_open(file_path, O_RDONLY);
+                if fd < 0 {
+                    let _ = sys_write(err_fd, b"sort: cannot read: ");
+                    let _ = sys_write(err_fd, file_path.as_bytes());
+                    let _ = sys_write(err_fd, b": No such file or directory\n");
+                    return 2;
+                }
+                fd
+            };
+
+            loop {
+                if content_len >= MAX_SORT_BYTES {
+                    break;
+                }
+                let n = sys_read(fd, &mut content_buf[content_len..]);
+                if n <= 0 {
+                    break;
+                }
+                content_len += n as usize;
+            }
+
+            if file_path != "-" {
+                sys_close(fd);
+            }
+        }
+    }
+
+    // Découpage en lignes (start, end)
+    let mut lines: [(usize, usize); MAX_SORT_LINES] = [(0, 0); MAX_SORT_LINES];
+    let mut line_count = 0;
+    let mut line_start = 0;
+
+    let buf_slice = &content_buf[..content_len];
+    for (pos, &byte) in buf_slice.iter().enumerate() {
+        if byte == b'\n' {
+            if line_count < MAX_SORT_LINES {
+                lines[line_count] = (line_start, pos + 1);
+                line_count += 1;
+            }
+            line_start = pos + 1;
+        }
+    }
+    if line_start < content_len && line_count < MAX_SORT_LINES {
+        lines[line_count] = (line_start, content_len);
+        line_count += 1;
+    }
+
+    // Tri par insertion (stable, in-situ, zéro allocation)
+    for j in 1..line_count {
+        let key = lines[j];
+        let key_slice = &buf_slice[key.0..key.1];
+        let mut k = j;
+        while k > 0 {
+            let prev = lines[k - 1];
+            let prev_slice = &buf_slice[prev.0..prev.1];
+            let ord = compare_lines(key_slice, prev_slice, numeric, ignore_case, reverse);
+            if ord == core::cmp::Ordering::Less {
+                lines[k] = lines[k - 1];
+                k -= 1;
+            } else {
+                break;
+            }
+        }
+        lines[k] = key;
+    }
+
+    // Écriture vers out_fd avec déduplication optionnelle (-u)
+    let mut prev_emitted: Option<&[u8]> = None;
+    for &(start, end) in &lines[..line_count] {
+        let current_line = &buf_slice[start..end];
+        if unique {
+            if let Some(prev) = prev_emitted {
+                let is_dup = if ignore_case {
+                    compare_lexicographical(current_line, prev, true) == core::cmp::Ordering::Equal
+                } else {
+                    current_line == prev
+                };
+                if is_dup {
+                    continue;
+                }
+            }
+        }
+        let _ = sys_write(out_fd, current_line);
+        if !current_line.ends_with(b"\n") {
+            let _ = sys_write(out_fd, b"\n");
+        }
+        prev_emitted = Some(current_line);
+    }
+
+    0
+}
+
 /// Exécute l'utilitaire `wc` comptant les lignes, mots et octets
 pub fn run_wc(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
     let mut count_lines = false;
@@ -2455,5 +2689,62 @@ mod tests {
         assert_eq!(n4, b"0\n".len() as isize);
         assert_eq!(&out_buf4[..n4 as usize], b"0\n");
         sys_close(out_r4);
+    }
+
+    #[test]
+    fn test_sort_lifecycle() {
+        let text = b"banana\napple\ncherry\napple\n100 items\n20 items\n3 items\nBanana\n";
+
+        // 1. Tri standard (lexicographique)
+        let (r1, w1) = crate::vfs::pipe().expect("pipe sort 1");
+        let (out_r1, out_w1) = crate::vfs::pipe().expect("pipe sort out 1");
+        let _ = sys_write(w1, text);
+        sys_close(w1);
+        let code1 = run_sort(&[], r1, out_w1, 2);
+        assert_eq!(code1, 0);
+        sys_close(out_w1);
+        sys_close(r1);
+
+        let mut out_buf1 = [0u8; 256];
+        let n1 = sys_read(out_r1, &mut out_buf1);
+        assert!(n1 > 0);
+        let s1 = core::str::from_utf8(&out_buf1[..n1 as usize]).unwrap();
+        // Dans l'ordre ASCII : '1', '2', '3', 'B', 'a', 'b', 'c'
+        assert!(s1.starts_with("100 items\n"));
+        sys_close(out_r1);
+
+        // 2. Tri inverse (-r) avec elimination de doublons (-u)
+        let (r2, w2) = crate::vfs::pipe().expect("pipe sort 2");
+        let (out_r2, out_w2) = crate::vfs::pipe().expect("pipe sort out 2");
+        let _ = sys_write(w2, b"cherry\napple\nbanana\napple\n");
+        sys_close(w2);
+        let code2 = run_sort(&["-r", "-u"], r2, out_w2, 2);
+        assert_eq!(code2, 0);
+        sys_close(out_w2);
+        sys_close(r2);
+
+        let mut out_buf2 = [0u8; 128];
+        let n2 = sys_read(out_r2, &mut out_buf2);
+        assert!(n2 > 0);
+        let s2 = core::str::from_utf8(&out_buf2[..n2 as usize]).unwrap();
+        assert_eq!(s2, "cherry\nbanana\napple\n");
+        sys_close(out_r2);
+
+        // 3. Tri numerique (-n)
+        let (r3, w3) = crate::vfs::pipe().expect("pipe sort 3");
+        let (out_r3, out_w3) = crate::vfs::pipe().expect("pipe sort out 3");
+        let _ = sys_write(w3, b"100\n3\n20\n1\n");
+        sys_close(w3);
+        let code3 = run_sort(&["-n"], r3, out_w3, 2);
+        assert_eq!(code3, 0);
+        sys_close(out_w3);
+        sys_close(r3);
+
+        let mut out_buf3 = [0u8; 64];
+        let n3 = sys_read(out_r3, &mut out_buf3);
+        assert!(n3 > 0);
+        let s3 = core::str::from_utf8(&out_buf3[..n3 as usize]).unwrap();
+        assert_eq!(s3, "1\n3\n20\n100\n");
+        sys_close(out_r3);
     }
 }
