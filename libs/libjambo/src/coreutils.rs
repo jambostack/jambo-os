@@ -74,7 +74,7 @@ static mut INODE_POOL: [VfsFileNode; 16] = [
         path_len: 15,
         buffer: {
             let mut b = [0u8; crate::vfs::FILE_BUFFER_SIZE];
-            let c = b"NAME=JamboOS\nVERSION=0.3.91\nID=jamboos\n";
+            let c = b"NAME=JamboOS\nVERSION=0.3.92\nID=jamboos\n";
             let mut i = 0;
             while i < c.len() {
                 b[i] = c[i];

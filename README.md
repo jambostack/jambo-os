@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml"><img src="https://github.com/jambostack/jambo-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.3.91--pre--alpha-orange.svg" alt="Version"></a>
+  <a href="https://github.com/jambostack/jambo-os"><img src="https://img.shields.io/badge/version-v0.3.92--pre--alpha-orange.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-nightly%20%23!%5Bno__std%5D-red.svg" alt="Rust"></a>
 </p>
@@ -28,14 +28,14 @@
 
 > [!WARNING]
 > **Avertissement sur la Maturité & Stade du Projet : Série `0.*.*` (Pre-Alpha / Prototype Expérimental)**  
-> **JamboOS est un projet expérimental de recherche à un stade très initial (Pre-Alpha). Toute projection vers une version 1.0.0 est bannie : le système ne dispose même pas encore d'une véritable ISO d'installation et l'attribution de tags Git est strictement gelée.**  
+> **JamboOS est un projet expérimental de recherche à un stade très initial (Pre-Alpha). Toute projection vers une version 1.0.0 est bannie : l'attribution de tags Git est strictement gelée et le développement progresse sobrement dans la série `0.*.*`.**  
 > 
 > Ce dépôt explore la faisabilité d'un micro-noyau moderne en Rust `![no_std]` inspiré des principes de seL4 et Zircon. Bien que le système démarre sous QEMU et sur machine UEFI réelle :
 > * **Stade de Développement** : Les microservices et pilotes actuels sont des prototypes et squelettes fonctionnels minimaux servant de preuve de concept.
-> * **Périmètre Opérationnel** : Pagination PML4 de base, ordonnanceur EEVDF expérimental, pilote VirtIO simplifié, arènes VMO, VFS POSIX (`fd_table`), Dynamic Loader ELF64 Ring 3 (`libjambo::dynlink`), et suite d'utilitaires Ring 3 Coreutils (`echo`, `cat`, `wc`, `true`, `false`, `ls`).
-> * **Chantiers Prioritaires** : Conception d'une véritable ISO d'installation, pilotes matériels réels (NVMe, USB xHCI, UART), système de fichiers persistant, et stabilisation rigoureuse avant tout éventuel futur tag Git.
+> * **Périmètre Opérationnel (Palier 7 - v0.3.92)** : Pagination PML4, ordonnanceur EEVDF, pilotes matériels Ring 3 (NVMe 1.4, USB xHCI 1.2, VirtIO), persistance JamboFS CoW avec hachage Merkle 256-bit, pile réseau POSIX Ring 3 (`libjambo::net`, UDP RFC 768), partitionnement GPT / déploiement UEFI (`jambo-installer`), moteur de fuzzing TCB et barrières matérielles SMAP/IOMMU (`jambo-fuzz`), et 40 microservices isolés.
+> * **Chantiers Prioritaires** : Poursuite des tests d'intégration matérielle sur bancs silicium hétérogènes, protocoles TCP/IP avancés, et stabilisation rigoureuse avant tout éventuel futur tag Git.
 > 
-> 📜 **Notes de Version v0.3.91** : Consultez [`docs/RELEASE_NOTES_v0.3.91.md`](docs/RELEASE_NOTES_v0.3.91.md).  
+> 📜 **Notes de Version v0.3.92** : Consultez [`docs/RELEASE_NOTES_v0.3.92.md`](docs/RELEASE_NOTES_v0.3.92.md).  
 > 🚀 **Guide de Test Silicium** : Pour tester le prototype sur machine réelle, consultez [`docs/BAREMETAL.md`](docs/BAREMETAL.md).  
 > 🎬 **Protocole de Démonstration** : Suivez le script de test pas-à-pas dans [`docs/DEMO.md`](docs/DEMO.md).  
 > 📊 **Métriques Expérimentales** : Consultez les mesures préliminaires dans [`BENCHMARKS.md`](BENCHMARKS.md).  

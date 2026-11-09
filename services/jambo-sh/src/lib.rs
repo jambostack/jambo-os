@@ -556,7 +556,7 @@ impl JamboShell {
   Descripteurs de base : fd 0 (stdin: ConsoleIn), fd 1 (stdout: ConsoleOut), fd 2 (stderr: ConsoleOut)\n\
   Fichiers dynamiques  : fd 3 a 31 (fichiers reguliers et canaux IPC JamboFS)\n\
   Primitives supportees: open, close, read, write, lseek, fstat\n\
-  Statut               : Operationnel (Jalon 6.4 v0.3.91)\n";
+  Statut               : Operationnel (Jalon 7.1 v0.3.92)\n";
         let len = text.len().min(out.len());
         out[..len].copy_from_slice(&text[..len]);
         (ShellStatus::Success, len)
@@ -570,7 +570,7 @@ impl JamboShell {
   Terminaison          : Syscall 11 ThreadExit avec propagation code de retour POSIX\n\
   Isolation memoire    : Espace d'adressage strict (CR3 dedie), CSpace confinee\n\
   Couche I/O           : Descripteurs POSIX vfs::* (stdin:0, stdout:1, stderr:2)\n\
-  Statut               : Operationnel (Jalon 6.4 v0.3.91)\n";
+  Statut               : Operationnel (Jalon 7.1 v0.3.92)\n";
         let len = text.len().min(out.len());
         out[..len].copy_from_slice(&text[..len]);
         (ShellStatus::Success, len)
@@ -916,11 +916,11 @@ Utilitaire d'installation JamboOS (Serie 0.*.*)\n\
 
     fn cmd_uname(&self, out: &mut [u8]) -> (ShellStatus, usize) {
         #[cfg(target_arch = "x86_64")]
-        let text = b"JamboOS 0.3.91-pre-alpha x86_64 Limine\n";
+        let text = b"JamboOS 0.3.92-pre-alpha x86_64 Limine\n";
         #[cfg(target_arch = "aarch64")]
-        let text = b"JamboOS 0.3.91-pre-alpha aarch64 Limine\n";
+        let text = b"JamboOS 0.3.92-pre-alpha aarch64 Limine\n";
         #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
-        let text = b"JamboOS 0.3.91-pre-alpha unknown Limine\n";
+        let text = b"JamboOS 0.3.92-pre-alpha unknown Limine\n";
 
         let len = text.len().min(out.len());
         out[..len].copy_from_slice(&text[..len]);
@@ -928,10 +928,10 @@ Utilitaire d'installation JamboOS (Serie 0.*.*)\n\
     }
 
     fn cmd_version(&self, out: &mut [u8]) -> (ShellStatus, usize) {
-        let text = b"JamboOS v0.3.91 (Pre-Alpha Prototype)\n\
+        let text = b"JamboOS v0.3.92 (Pre-Alpha Prototype)\n\
 Architecture : Micro-noyau oriente capacites no_std\n\
 Auteur & Architecte : ASSOGBA Prudence Dieudonne\n\
-ABI : 29 Appels Systeme (jambo-abi v0.4) avec Coreutils Ring 3 & VFS POSIX\n";
+ABI : 29 Appels Systeme (jambo-abi v0.4) avec Coreutils Ring 3, VFS POSIX & Fuzzing TCB\n";
         let len = text.len().min(out.len());
         out[..len].copy_from_slice(&text[..len]);
         (ShellStatus::Success, len)

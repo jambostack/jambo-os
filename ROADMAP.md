@@ -1,9 +1,9 @@
 # FEUILLE DE ROUTE D'INGÉNIERIE SYSTÈME — JamboOS
 
-> **Dernière mise à jour** : 7 novembre 2026  
-> **Version actuelle** : Série `0.*.*` (Prototype Expérimental de Recherche en Pre-Alpha)  
+> **Dernière mise à jour** : 9 novembre 2026  
+> **Version actuelle** : Série `0.*.*` (`v0.3.92` — Prototype Expérimental de Recherche en Pre-Alpha)  
 > **Statut global** : Prototype de micro-noyau orienté capacités en Rust `![no_std]`. **Projet à un stade très initial (Pre-Alpha) confiné strictement à la série 0.*.*, sans aucune projection vers une 1.0.0.**  
-> **Objectif prioritaire immédiat** : Développer l'ISO d'installation et l'installeur système (`jambo-installer`), suivi des pilotes matériels réels et de la stabilisation sur disque physique.
+> **Objectif prioritaire immédiat** : Poursuivre la stabilisation matérielle sur bancs d'essais physiques réels (x86_64/AArch64), consolider les protocoles de sockets réseau et étendre la persistance CoW.
 
 ---
 
@@ -70,6 +70,15 @@ flowchart LR
 │            • v0.3.89 (Jalon 6.2) : Dynamic Loader ELF & Relocations    │
 │            • v0.3.90 (Jalon 6.3) : VFS POSIX & Table fd_table          │
 │            • v0.3.91 (Jalon 6.4) : Utilitaires Coreutils Ring 3        │
+├────────────────────────────────────────────────────────────────────────┤
+│ Palier 7 : Stabilisation Fondamentale Matérielle & Persistance        │
+│            [VALIDÉ — v0.3.92]                                          │
+│            • v0.3.92 (Jalon 7.1) : Chantiers A à E                     │
+│              - Chantier A : Partitionnement GPT & Déploiement UEFI     │
+│              - Chantier B : Pilotes PCIe Ring 3 NVMe 1.4 & USB xHCI 1.2│
+│              - Chantier C : JamboFS CoW transactionnel & Merkle 256-bit│
+│              - Chantier D : Pile réseau Ring 3 POSIX & Sockets UDP     │
+│              - Chantier E : Fuzzing TCB, SMAP/IOMMU & Chaos Résilience │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -90,7 +99,39 @@ flowchart LR
 
 ---
 
-### Palier 6 — Jalon 6.4 (`v0.3.91`) — Utilitaires Coreutils Ring 3 🟢 `[CORE-EXP]`
+### Palier 7 — Jalon 7.1 (`v0.3.92`) — Cycle de Stabilisation Fondamentale Matérielle & Persistance 🟢 `[CORE-EXP]`
+* **Objectif** : Clôturer les 5 chantiers critiques (Chantiers A à E) pour doter le prototype JamboOS d'un déploiement persistant sur stockage physique, de pilotes matériels PCIe réels, de transactions CoW avec Merkle tree, d'une pile réseau avec sockets POSIX, et d'un durcissement TCB via fuzzing et barrières matérielles.
+* **Livrables techniques validés** :
+  1. **Chantier A — Sous-système de Partitionnement GPT & Déploiement UEFI (`services/jambo-installer`)** :
+     * Crate `services/jambo-installer` avec moteur `GptDiskLayout` calculant CRC32 déterministe pour en-têtes GPT primaire/secondaire.
+     * Table de partitions alignée (ESP FAT32 type `C12A7328-...` et Racine JamboFS type `48616B6F-...`).
+     * Commande interactive `installer [info|probe|format|deploy]` dans `jsh`.
+  2. **Chantier B — Pilotes Matériels PCIe Ring 3 NVMe 1.4 & USB xHCI 1.2 (`drivers/nvme`, `drivers/xhci`, `libs/libjambo/src/pci.rs`)** :
+     * Couche d'abstraction `PciDeviceHeader` dans `libjambo::pci` avec décodage BAR0 MMIO.
+     * Pilote `NvmeController` implémentant Ring Buffers SQ/CQ 64 octets, Doorbells MMIO, commandes NVM Read/Write LBA 64 bits.
+     * Pilote `XhciController` avec Command Ring, Transfer Rings, gestion TRB, endpoints USB et décodage HID souris/clavier.
+     * Commandes interactives `nvme` et `xhci` dans `jsh`.
+  3. **Chantier C — Persistance Transactionnelle JamboFS CoW & Intégrité Merkle (`services/jambo-fs`)** :
+     * Architecture Uberblock A/B avec génération incrémentale stricte et barrière matérielle `flush`.
+     * Condensat Merkle 256 bits par bloc (`blake3_block_hash`) avec vérification à la lecture et rejet des blocs corrompus.
+     * Commande interactive `fs [info|sync|integrity|write]` dans `jsh`.
+  4. **Chantier D — Pile Réseau Ring 3 POSIX & Sockets RFC 768 UDP (`services/jambo-netd`, `libjambo::net`)** :
+     * Table `SocketTable` sans allocation avec attribution de ports éphémères (49152..65535).
+     * Primitives POSIX `socket`, `bind`, `sendto`, `recvfrom`, `close_socket`.
+     * Encodage/décodage RFC 768 UDP avec checksum pseudo-en-tête IPv4 standard.
+     * Commandes interactives `socket` et `udp` dans `jsh`.
+  5. **Chantier E — Fuzzing TCB & Résilience Silicium Chaos (`services/jambo-fuzz`)** :
+     * Moteur de fuzzing déterministe LCG (`SecurityFuzzer`) pour audits exhaustifs de frontières Ring 0/Ring 3.
+     * Rejet garanti des syscalls invalides, poignées CSpace forgées, pointeurs hostiles Ring 0 HHDM, NULL et saturations 64 bits.
+     * Validation des barrières matérielles SMAP/SMEP et confinement 100% DMA de l'IOMMU.
+     * Simulation de panne PCIe FLR avec reprise à chaud en 12 ms (< 25 ms SLA, 0 perte de données).
+     * Commande interactive `fuzz [status|run|smap|iommu|chaos]` dans `jsh`.
+  6. **Micro-Noyau & Distribution `xtask`** :
+     * Binaire Ring 3 `fuzz` packagé dans `initrd.tar` et `disk.raw` portant à 40 le nombre de processus Ring 3.
+     * Bannières et commandes introspectives calées à `v0.3.92`.
+     * Suite de tests unitaires hôte portée à **105 tests validés sur 105** (plus 213 tests dans `jambo-sh`).
+
+---
 * **Objectif** : Implémenter les utilitaires fondamentaux POSIX (`echo`, `cat`, `wc`, `true`, `false`, `ls`) sous forme de binaires Ring 3 `#![no_std]`, avec support du passage d'arguments System V ABI (`[argc][argv]`) et intégration capabilaire dans le shell `jsh`.
 * **Livrables techniques validés** :
   1. **Moteur Logique Coreutils (`libs/libjambo/src/coreutils.rs`)** :
@@ -151,16 +192,23 @@ flowchart LR
 
 ---
 
-## 4. Matrice de Référence des Composants & Statuts (`v0.3.88`)
+## 4. Matrice de Référence des Composants & Statuts (`v0.3.92`)
 
 | Composant | Répertoire | Statut Réel | Rôle & Responsabilité Technique |
 | :--- | :--- | :---: | :--- |
 | **Micro-Noyau JamboKernel** | `kernel/` | 🟢 `[CORE-EXP]` | TCB minimal (< 95 Kio `.text`), EEVDF expérimental, PML4 W^X, Buddy PMM, CSpace anti-ABA |
 | **ABI Système jambo-abi** | `abi/jambo-abi/` | 🟢 `[CORE-EXP]` | 29 syscalls x86_64/AArch64, descripteurs CSpace, contrats IPC et DeviceIo |
-| **Bibliothèque Espace Utilisateur**| `libs/libjambo/` | 🟡 `[RING3-STUB]`| Point d'entrée `_start`, gestion de pile System V ABI, couche POSIX (malloc/free, string) |
+| **Bibliothèque Espace Utilisateur**| `libs/libjambo/` | 🟡 `[RING3-STUB]`| Point d'entrée `_start`, pile System V, couche POSIX (malloc/free, string, vfs, dynlink, sockets) |
+| **Sous-système d'Installation** | `services/jambo-installer/` | 🟡 `[RING3-STUB]`| Partitionnement GPT, formatage ESP FAT32 et déploiement persistant du système |
+| **Pilote NVMe 1.4 PCIe** | `drivers/nvme/` | 🟡 `[RING3-STUB]`| Contrôleur NVMe 1.4 Ring 3, SQ/CQ, Doorbells MMIO, commandes NVM 64 bits |
+| **Pilote USB xHCI 1.2 PCIe** | `drivers/xhci/` | 🟡 `[RING3-STUB]`| Contrôleur d'hôte xHCI 1.2 Ring 3, Command/Transfer Rings, TRB, périphériques HID |
 | **Pilote VirtIO Modern** | `drivers/virtio/` | 🟡 `[RING3-STUB]`| Pilote VirtIO Modern 1.2 simplifié (Block & Net), Virtqueues DMA et broker DeviceIo |
-| **38 Microservices Ring 3** | `services/` | 🟡 `[RING3-STUB]`| Prototypes et squelettes fonctionnels : `init` (PID 1) à `dlp` (PID 38) |
-| **Shell Interactif jsh** | `services/jambo-sh/`| 🟡 `[RING3-STUB]`| Terminal interactif Ring 3 avec 44 commandes (sysinfo, ps, uname, caps, etc.) |
+| **Système de Fichiers JamboFS** | `services/jambo-fs/` | 🟡 `[RING3-STUB]`| Persistance CoW, Uberblock A/B, barrière de synchronisation et condensats Merkle 256 bits |
+| **Pile Réseau & Sockets** | `services/jambo-netd/` | 🟡 `[RING3-STUB]`| Stack POSIX sockets, table SocketTable et protocole RFC 768 UDP |
+| **Fuzzing TCB & Résilience** | `services/jambo-fuzz/` | 🟡 `[RING3-STUB]`| Fuzzer LCG TCB, vérification barrières SMAP/IOMMU et résilience crash PCIe FLR (< 25 ms) |
+| **Utilitaires Coreutils** | `services/jambo-coreutils/`| 🟡 `[RING3-STUB]`| Binaires Ring 3 autonomes (`echo`, `cat`, `wc`, `true`, `false`, `ls`) |
+| **40 Microservices Ring 3** | `services/` | 🟡 `[RING3-STUB]`| Prototypes et squelettes fonctionnels : `init` (PID 1) à `fuzz` (PID 40) |
+| **Shell Interactif jsh** | `services/jambo-sh/`| 🟡 `[RING3-STUB]`| Terminal interactif Ring 3 avec 51 commandes (fuzz, installer, nvme, xhci, fs, socket, etc.) |
 | **Outillage Déploiement xtask** | `xtask/` | 🟢 `[CORE-EXP]` | Build release, initrd.tar, disk.raw, ISO Limine, générateur ESP FAT32 et distributeur dist |
 | **Incubateur Recherche & IA** | `incubator/` | 🔵 `[SIM]` | ~100 briques prospectives isolées (PQC, FHE, Wasm, ZK) avec charte de graduation |
 
@@ -168,12 +216,13 @@ flowchart LR
 
 ## 5. Journal des Jalons et Historique de Versionnage
 
-* **2026-11-09** : **Chantier 5 — Fuzzing TCB, Résilience Silicium & Durcissement SMAP/IOMMU (`v0.3.91`)**
-  * Promotion du crate `services/jambo-fuzz` au sein du workspace avec moteur de fuzzing déterministe LCG (`SecurityFuzzer`).
-  * Rejet systématique des vecteurs d'attaque hostiles : numéros de syscalls hors plage, poignées CSpace forgées/génération nulle, pointeurs mémoire Ring 0 HHDM, NULL et dépassements 64 bits.
-  * Validation des barrières matérielles SMAP/SMEP, confinement 100% des accès DMA hors domaine IOMMU, et simulation de résilience sous crash pilote PCIe FLR avec rétablissement en 12 ms (SLA < 25 ms, 0 perte de données).
-  * Intégration de la commande interactive `fuzz [status|run|smap|iommu|chaos]` dans le shell `jsh`.
-  * Packaging du binaire Ring 3 `fuzz` dans `initrd.tar` et `disk.raw` via `xtask`.
+* **2026-11-09** : **Jalon 7.1 (`v0.3.92`) — Cycle de Stabilisation Fondamentale Matérielle & Persistance (Chantiers A à E)**
+  * **Chantier A (`jambo-installer`)** : Partitionnement GPT primaire/secondaire (CRC32), montage UEFI ESP FAT32 et déploiement persistant.
+  * **Chantier B (`nvme-drv`, `xhci-drv`)** : Pilotes matériels PCIe Ring 3 réels NVMe 1.4 (SQ/CQ, doorbells) et USB xHCI 1.2 (TRB, HID).
+  * **Chantier C (`jambo-fs`)** : Persistance transactionnelle CoW, Uberblock A/B, arbre de Merkle 256-bit et barrière de synchronisation matérielle.
+  * **Chantier D (`jambo-netd`, `libjambo::net`)** : Pile réseau POSIX Ring 3, `SocketTable` sans allocation, ports éphémères, datagrammes RFC 768 UDP.
+  * **Chantier E (`jambo-fuzz`)** : Moteur de fuzzing offensif TCB LCG, barrières SMAP/IOMMU, confinement DMA et auto-guérison chaos PCIe FLR en 12 ms (< 25 ms).
+  * Formalisation des ADR-0088 à ADR-0092 et packaging du 40ème processus Ring 3 (`fuzz`) dans `initrd.tar` et `disk.raw`.
   * Suite de tests unitaires hôte portée à **105 tests validés sur 105** across 12 packages (et 213 tests dans `jambo-sh`).
 * **2026-11-07** : **Jalon 6.4 (`v0.3.91`) — Utilitaires Coreutils Ring 3 & Exécution Capabilaire**
   * Création du module `libjambo::coreutils` fournissant la logique `#![no_std]` des utilitaires `echo`, `cat`, `wc`, `true`, `false`, `ls`.

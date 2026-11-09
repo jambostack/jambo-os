@@ -864,7 +864,7 @@ impl JamboFs {
         let default_content: Option<&[u8]> = match clean_path {
             "banner.txt" => Some(b"Bienvenue sur JamboOS v0.3.42\n"),
             "hostname" | "etc/hostname" => Some(b"jambo-os\n"),
-            "os-release" | "etc/os-release" => Some(b"NAME=JamboOS\nVERSION=0.3.91\nID=jambo\n"),
+            "os-release" | "etc/os-release" => Some(b"NAME=JamboOS\nVERSION=0.3.92\nID=jambo\n"),
             _ => None,
         };
 
@@ -1145,7 +1145,7 @@ mod tests {
         let gen1 = fs.active_uberblock.generation;
         assert_eq!(gen1, gen0 + 1);
 
-        let _ = fs.write_file("/etc/os-release", b"VERSION=0.3.91\n");
+        let _ = fs.write_file("/etc/os-release", b"VERSION=0.3.92\n");
         let gen2 = fs.active_uberblock.generation;
         assert_eq!(gen2, gen1 + 1);
     }

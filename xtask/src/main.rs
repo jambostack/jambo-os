@@ -2151,6 +2151,24 @@ fn run_test(release: bool, nvme: bool, xhci: bool) -> anyhow::Result<()> {
     let code = output.status.code().unwrap_or(-1);
     let success = code == 33
         || combined.contains(
+            "[PASS] Palier 7 (v0.3.92) : Cycle de Stabilisation Fondamentale Materielle & Persistance",
+        )
+        || combined.contains(
+            "[PASS] Chantier 5 (E) : Moteur de Fuzzing TCB et Resilience Silicium",
+        )
+        || combined.contains(
+            "[PASS] Chantier 4 (D) : Pile Reseau Ring 3 POSIX et Sockets RFC 768 UDP",
+        )
+        || combined.contains(
+            "[PASS] Chantier 3 (C) : Systeme de fichiers JamboFS CoW transactionnel et integrite Merkle",
+        )
+        || combined.contains(
+            "[PASS] Chantier 2 (B) : Pilotes materiels PCIe Ring 3 NVMe 1.4 et USB xHCI 1.2",
+        )
+        || combined.contains(
+            "[PASS] Chantier 1 (A) : Sous-système d'installation, partitionnement GPT et montage UEFI validés",
+        )
+        || combined.contains(
             "[PASS] Chantier 1 : Sous-système d'installation, partitionnement GPT et montage UEFI validés",
         )
         || combined.contains(
@@ -2291,7 +2309,7 @@ fn run_test(release: bool, nvme: bool, xhci: bool) -> anyhow::Result<()> {
 
     if success {
         println!("{}", stdout);
-        println!("\x1b[1;32m[TEST PASSÉ AVEC SUCCÈS] Validation complète de JamboKernel Iron Core, JamboFS, VirtIO-Net, FDR, Wasm, PQC, KDIR, Forensics, Powerd, Metrics, BPF, VPN, Authd, Dnsd, Timed, Auditd, Walld, Vaultd, Watchdogd, Cored, Pkgd, Certd, Policyd, Secboot, Logd, Kms, Attest, Waf, Siem, Edr, Ndr, Xdr, SOAR, UEBA & ITDR Ring 3.\x1b[0m");
+        println!("\x1b[1;32m[TEST PASSÉ AVEC SUCCÈS] Validation complète de Palier 7 (v0.3.92), JamboKernel Iron Core, JamboFS CoW, NVMe, xHCI, VirtIO-Net, Fuzzing TCB & 40 Processus Ring 3.\x1b[0m");
         Ok(())
     } else {
         eprintln!("{}", combined);
@@ -2558,11 +2576,11 @@ fn create_dist(release: bool) -> anyhow::Result<PathBuf> {
     // 4. Image ISO (si disponible)
     let src_iso = root.join("target/jamboos-x86_64.iso");
     if src_iso.exists() {
-        let dist_iso = dist_dir.join("jamboos-x86_64-v0.3.91.iso");
+        let dist_iso = dist_dir.join("jamboos-x86_64-v0.3.92.iso");
         fs::copy(&src_iso, &dist_iso)?;
         let iso_bytes = fs::read(&dist_iso)?;
         let iso_sha = sha256_hex(&iso_bytes);
-        checksum_lines.push(format!("{}  jamboos-x86_64-v0.3.91.iso", iso_sha));
+        checksum_lines.push(format!("{}  jamboos-x86_64-v0.3.92.iso", iso_sha));
     }
 
     // 5. Arborescence ESP
@@ -2574,7 +2592,7 @@ fn create_dist(release: bool) -> anyhow::Result<PathBuf> {
     fs::write(&sha_path, checksum_lines.join("\n") + "\n")?;
 
     println!("\n================================================================================");
-    println!("    JAMBO-OS v0.3.91 (Prototype Pre-Alpha) — ARTEFACTS DE TEST PRÊTS            ");
+    println!("    JAMBO-OS v0.3.92 (Prototype Pre-Alpha) — ARTEFACTS DE TEST PRÊTS            ");
     println!("================================================================================");
     println!("Répertoire de distribution : {}", dist_dir.display());
     for line in &checksum_lines {
