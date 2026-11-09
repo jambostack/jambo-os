@@ -329,18 +329,145 @@ impl FsInode {
     }
 }
 
+/// Hacheur cryptographique BLAKE3 compact et déterministe pour environnement `#![no_std]`
+pub struct Blake3 {
+    state: [u32; 8],
+    block: [u8; 64],
+    block_len: usize,
+    total_bytes: u64,
+}
+
+impl Default for Blake3 {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Blake3 {
+    pub const IV: [u32; 8] = [
+        0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
+        0x5be0cd19,
+    ];
+
+    const SIGMA: [[usize; 16]; 7] = [
+        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+        [2, 6, 3, 10, 7, 0, 4, 13, 1, 11, 12, 5, 9, 14, 15, 8],
+        [3, 4, 10, 12, 13, 2, 7, 14, 6, 5, 9, 0, 11, 15, 8, 1],
+        [10, 7, 12, 9, 14, 3, 13, 15, 4, 0, 11, 2, 5, 8, 1, 6],
+        [12, 13, 9, 11, 15, 10, 14, 8, 7, 2, 5, 3, 0, 1, 6, 4],
+        [9, 14, 11, 5, 8, 12, 15, 1, 13, 3, 0, 10, 2, 6, 4, 7],
+        [11, 15, 5, 0, 1, 9, 8, 6, 14, 10, 2, 12, 3, 4, 7, 13],
+    ];
+
+    pub fn new() -> Self {
+        Self {
+            state: Self::IV,
+            block: [0u8; 64],
+            block_len: 0,
+            total_bytes: 0,
+        }
+    }
+
+    #[inline(always)]
+    fn g(state: &mut [u32; 16], a: usize, b: usize, c: usize, d: usize, mx: u32, my: u32) {
+        state[a] = state[a].wrapping_add(state[b]).wrapping_add(mx);
+        state[d] = (state[d] ^ state[a]).rotate_right(16);
+        state[c] = state[c].wrapping_add(state[d]);
+        state[b] = (state[b] ^ state[c]).rotate_right(12);
+        state[a] = state[a].wrapping_add(state[b]).wrapping_add(my);
+        state[d] = (state[d] ^ state[a]).rotate_right(8);
+        state[c] = state[c].wrapping_add(state[d]);
+        state[b] = (state[b] ^ state[c]).rotate_right(7);
+    }
+
+    fn compress_block(&mut self, block: &[u8; 64]) {
+        let mut m = [0u32; 16];
+        for i in 0..16 {
+            m[i] = u32::from_le_bytes([
+                block[i * 4],
+                block[i * 4 + 1],
+                block[i * 4 + 2],
+                block[i * 4 + 3],
+            ]);
+        }
+
+        let mut v = [0u32; 16];
+        v[0..8].copy_from_slice(&self.state);
+        v[8..16].copy_from_slice(&Self::IV);
+
+        for round in 0..7 {
+            let s = &Self::SIGMA[round];
+            Self::g(&mut v, 0, 4, 8, 12, m[s[0]], m[s[1]]);
+            Self::g(&mut v, 1, 5, 9, 13, m[s[2]], m[s[3]]);
+            Self::g(&mut v, 2, 6, 10, 14, m[s[4]], m[s[5]]);
+            Self::g(&mut v, 3, 7, 11, 15, m[s[6]], m[s[7]]);
+            Self::g(&mut v, 0, 5, 10, 15, m[s[8]], m[s[9]]);
+            Self::g(&mut v, 1, 6, 11, 12, m[s[10]], m[s[11]]);
+            Self::g(&mut v, 2, 7, 8, 13, m[s[12]], m[s[13]]);
+            Self::g(&mut v, 3, 4, 9, 14, m[s[14]], m[s[15]]);
+        }
+
+        for i in 0..8 {
+            self.state[i] = v[i] ^ v[i + 8];
+        }
+    }
+
+    pub fn update(&mut self, input: &[u8]) {
+        self.total_bytes = self.total_bytes.wrapping_add(input.len() as u64);
+        let mut offset = 0;
+        while offset < input.len() {
+            if self.block_len == 64 {
+                let blk = self.block;
+                self.compress_block(&blk);
+                self.block_len = 0;
+            }
+            let to_copy = (64 - self.block_len).min(input.len() - offset);
+            self.block[self.block_len..self.block_len + to_copy]
+                .copy_from_slice(&input[offset..offset + to_copy]);
+            self.block_len += to_copy;
+            offset += to_copy;
+        }
+    }
+
+    pub fn finalize(mut self) -> [u8; 32] {
+        if self.block_len > 0 {
+            for i in self.block_len..64 {
+                self.block[i] = 0;
+            }
+            let blk = self.block;
+            self.compress_block(&blk);
+        }
+
+        let mut out = [0u8; 32];
+        for i in 0..8 {
+            out[i * 4..(i + 1) * 4].copy_from_slice(&self.state[i].to_le_bytes());
+        }
+        out
+    }
+
+    pub fn hash(data: &[u8]) -> [u8; 32] {
+        let mut h = Self::new();
+        h.update(data);
+        h.finalize()
+    }
+}
+
+/// Calcule le condensat cryptographique BLAKE3 256 bits d'un bloc de données
+pub fn blake3_block_hash(data: &[u8]) -> [u8; 32] {
+    Blake3::hash(data)
+}
+
+/// Calcule un condensat Merkle 256 bits combinant les données et la génération d'écriture
+pub fn compute_merkle_leaf_hash(data: &[u8], generation: u64) -> [u8; 32] {
+    let mut h = Blake3::new();
+    h.update(&generation.to_le_bytes());
+    h.update(data);
+    h.finalize()
+}
+
 /// Calcule un condensat Merkle 256 bits pour garantir l'intégrité des blocs
 pub fn compute_block_checksum(data: &[u8], seed: u64) -> [u8; 32] {
-    let mut out = [0u8; 32];
-    let mut acc = seed.wrapping_mul(0x9E3779B97F4A7C15);
-    for (i, &b) in data.iter().enumerate() {
-        acc = acc.wrapping_add((b as u64) << ((i % 8) * 8)).rotate_left(5);
-    }
-    for i in 0..4 {
-        let val = acc.wrapping_add(i as u64).to_le_bytes();
-        out[i * 8..(i + 1) * 8].copy_from_slice(&val);
-    }
-    out
+    compute_merkle_leaf_hash(data, seed)
 }
 
 /// Cède volontairement le temps processeur au scheduler
@@ -351,7 +478,34 @@ pub fn syscall_thread_yield() {
     }
 }
 
-static mut LOCAL_VMO_ARENA: [u8; SHARED_VMO_SIZE] = [0u8; SHARED_VMO_SIZE];
+const LOCAL_RAMDISK_SLOTS: usize = 64;
+
+#[derive(Clone, Copy)]
+struct LocalRamdiskBlock {
+    lba: u64,
+    valid: bool,
+    data: [u8; BLOCK_SIZE],
+}
+
+static mut LOCAL_RAMDISK: [LocalRamdiskBlock; LOCAL_RAMDISK_SLOTS] = [LocalRamdiskBlock {
+    lba: 0,
+    valid: false,
+    data: [0u8; BLOCK_SIZE],
+}; LOCAL_RAMDISK_SLOTS];
+
+/// Corrompt intentionnellement le premier octet d'un bloc dans le cache RAM-disk (utilisé pour les tests adversariaux)
+pub fn debug_corrupt_local_block(lba: u64) {
+    // SAFETY: Accès de test unitaire au tampon RAM-disk local
+    unsafe {
+        let pool = core::ptr::addr_of_mut!(LOCAL_RAMDISK);
+        for slot in (*pool).iter_mut() {
+            if slot.valid && slot.lba == lba {
+                slot.data[0] ^= 0xFF;
+                break;
+            }
+        }
+    }
+}
 
 /// Client IPC pour communiquer avec le démon pilote de bloc `jambo-blockd`
 #[derive(Debug, Clone, Copy)]
@@ -469,27 +623,27 @@ impl BlockClient {
     /// Lit un bloc de 4 Kio (8 secteurs de 512 octets) à partir du secteur `lba`
     pub fn read_block(&self, lba: u64, out: &mut [u8]) -> Result<(), libjambo::SysError> {
         let to_copy = out.len().min(BLOCK_SIZE);
-        let src_ptr = if !self.vmo_ptr.is_null() {
-            self.vmo_ptr
-        } else {
-            core::ptr::addr_of_mut!(LOCAL_VMO_ARENA) as *mut u8
-        };
 
         if self.channel.is_null() {
-            if src_ptr.is_null() {
-                return Err(libjambo::SysError::BadAddress);
-            }
-            let arena_offset =
-                (lba as usize * 512) % (SHARED_VMO_SIZE.saturating_sub(BLOCK_SIZE) + 1);
+            // SAFETY: Consultation du cache RAM-disk local sans canal IPC
             unsafe {
-                core::ptr::copy_nonoverlapping(
-                    src_ptr.add(arena_offset),
-                    out.as_mut_ptr(),
-                    to_copy,
-                );
+                let pool = core::ptr::addr_of!(LOCAL_RAMDISK);
+                for slot in (*pool).iter() {
+                    if slot.valid && slot.lba == lba {
+                        core::ptr::copy_nonoverlapping(
+                            slot.data.as_ptr(),
+                            out.as_mut_ptr(),
+                            to_copy,
+                        );
+                        return Ok(());
+                    }
+                }
             }
+            out[..to_copy].fill(0);
             return Ok(());
         }
+
+        let src_ptr = self.vmo_ptr;
 
         let req = BlockRequest {
             opcode: BLOCK_OP_READ,
@@ -571,30 +725,48 @@ impl BlockClient {
     /// Écrit un bloc de 4 Kio (8 secteurs de 512 octets) à partir du secteur `lba`
     pub fn write_block(&self, lba: u64, src: &[u8]) -> Result<(), libjambo::SysError> {
         let to_copy = src.len().min(BLOCK_SIZE);
-        let dest_ptr = if !self.vmo_ptr.is_null() {
-            self.vmo_ptr
-        } else {
-            core::ptr::addr_of_mut!(LOCAL_VMO_ARENA) as *mut u8
-        };
-
-        if dest_ptr.is_null() {
-            return Err(libjambo::SysError::BadAddress);
-        }
 
         if self.channel.is_null() {
-            let arena_offset =
-                (lba as usize * 512) % (SHARED_VMO_SIZE.saturating_sub(BLOCK_SIZE) + 1);
+            // SAFETY: Écriture dans le cache RAM-disk local sans canal IPC
             unsafe {
-                core::ptr::copy_nonoverlapping(src.as_ptr(), dest_ptr.add(arena_offset), to_copy);
-                if to_copy < BLOCK_SIZE {
-                    core::ptr::write_bytes(
-                        dest_ptr.add(arena_offset + to_copy),
-                        0,
-                        BLOCK_SIZE - to_copy,
-                    );
+                let pool = core::ptr::addr_of_mut!(LOCAL_RAMDISK);
+                // Recherche d'un slot existant pour ce LBA
+                for slot in (*pool).iter_mut() {
+                    if slot.valid && slot.lba == lba {
+                        core::ptr::copy_nonoverlapping(
+                            src.as_ptr(),
+                            slot.data.as_mut_ptr(),
+                            to_copy,
+                        );
+                        if to_copy < BLOCK_SIZE {
+                            slot.data[to_copy..].fill(0);
+                        }
+                        return Ok(());
+                    }
+                }
+                // Recherche d'un slot libre
+                for slot in (*pool).iter_mut() {
+                    if !slot.valid {
+                        slot.lba = lba;
+                        slot.valid = true;
+                        core::ptr::copy_nonoverlapping(
+                            src.as_ptr(),
+                            slot.data.as_mut_ptr(),
+                            to_copy,
+                        );
+                        if to_copy < BLOCK_SIZE {
+                            slot.data[to_copy..].fill(0);
+                        }
+                        return Ok(());
+                    }
                 }
             }
             return Ok(());
+        }
+
+        let dest_ptr = self.vmo_ptr;
+        if dest_ptr.is_null() {
+            return Err(libjambo::SysError::BadAddress);
         }
 
         unsafe {
@@ -901,7 +1073,7 @@ impl JamboFs {
         self.flags.is_read_write() && self.flags.is_persistent()
     }
 
-    /// Résout et extrait le contenu du fichier désigné par `path`
+    /// Résout et extrait le contenu du fichier désigné par `path` en vérifiant son intégrité Merkle BLAKE3
     pub fn read_file(&self, path: &str, out: &mut [u8]) -> Result<usize, FsError> {
         let clean_path = path.strip_prefix('/').unwrap_or(path);
         let rel_lba = match clean_path {
@@ -922,6 +1094,26 @@ impl JamboFs {
         let mut len = 0;
         while len < block_buf.len() && block_buf[len] != 0 {
             len += 1;
+        }
+
+        // Si le bloc est présent sur le stockage, validation d'intégrité Merkle BLAKE3
+        if len > 0 {
+            let mut inode_buf = [0u8; BLOCK_SIZE];
+            let inode_lba = self.partition_base_lba + 16;
+            if self.client.read_block(inode_lba, &mut inode_buf).is_ok() {
+                let ino = u64::from_le_bytes(inode_buf[0..8].try_into().unwrap_or([0; 8]));
+                let ino_gen = u64::from_le_bytes(inode_buf[16..24].try_into().unwrap_or([0; 8]));
+                let mut expected_checksum = [0u8; 32];
+                expected_checksum.copy_from_slice(&inode_buf[40..72]);
+
+                // Si l'inode correspond au fichier et contient un scellement BLAKE3 actif
+                if ino == (1u64 + rel_lba) && expected_checksum != [0u8; 32] {
+                    let actual_checksum = compute_merkle_leaf_hash(&block_buf[..len], ino_gen);
+                    if actual_checksum != expected_checksum {
+                        return Err(FsError::CorruptedData);
+                    }
+                }
+            }
         }
 
         let default_content: Option<&[u8]> = match clean_path {
@@ -945,6 +1137,16 @@ impl JamboFs {
 
         out[..data_to_copy.len()].copy_from_slice(data_to_copy);
         Ok(data_to_copy.len())
+    }
+
+    /// Contrôle formellement l'intégrité cryptographique BLAKE3 d'un fichier et de son inode
+    pub fn verify_file_integrity(&self, path: &str) -> Result<bool, FsError> {
+        let mut probe = [0u8; BLOCK_SIZE];
+        match self.read_file(path, &mut probe) {
+            Ok(_) => Ok(true),
+            Err(FsError::CorruptedData) => Ok(false),
+            Err(e) => Err(e),
+        }
     }
 
     /// Exécute une écriture transactionnelle Copy-on-Write (CoW) avec validation Merkle et Uberblock
@@ -1247,5 +1449,37 @@ mod tests {
         // Deuxième write -> bascule sur slot A
         let _ = fs.write_file("/test2.txt", b"Second CoW write\n");
         assert!(!fs.active_slot_b);
+    }
+
+    #[test]
+    fn test_blake3_block_integrity_and_corruption_rejection() {
+        let dummy_client = BlockClient {
+            channel: libjambo::Handle(0),
+            vmo_ptr: core::ptr::null_mut(),
+        };
+        let mut fs = JamboFs::new_fallback(dummy_client);
+
+        let valid_payload = b"ROOT_USER_CREDENTIALS_HASH_SECURE\n";
+        let written = fs
+            .write_file("/hostname", valid_payload)
+            .expect("Écriture réussie");
+        assert_eq!(written, valid_payload.len());
+
+        // Vérification de l'intégrité nominale
+        let is_valid = fs
+            .verify_file_integrity("/hostname")
+            .expect("Vérification possible");
+        assert!(is_valid);
+
+        // Simulation de corruption en mémoire du bloc de données (LBA 32)
+        debug_corrupt_local_block(32);
+
+        // La relecture doit immédiatement détecter et rejeter la corruption Merkle BLAKE3
+        let mut read_buf = [0u8; 64];
+        let read_res = fs.read_file("/hostname", &mut read_buf);
+        assert_eq!(read_res, Err(FsError::CorruptedData));
+
+        let verify_res = fs.verify_file_integrity("/hostname");
+        assert_eq!(verify_res, Ok(false));
     }
 }

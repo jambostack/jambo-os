@@ -9,7 +9,12 @@
 extern crate std;
 
 use libjambo::gpt::{
-    format_gpt_disk, parse_gpt_disk, GptDiskInfo, Guid, PartitionRequest, SECTOR_SIZE,
+    format_backup_gpt_disk, format_gpt_disk, parse_gpt_disk, GptDiskInfo, Guid, PartitionRequest,
+    SECTOR_SIZE,
+};
+
+use jambo_fs::{
+    compute_merkle_leaf_hash, BlockClient, Uberblock, BLOCK_SIZE, JAMBOFS_MAGIC, JAMBOFS_VERSION,
 };
 
 /// Configuration et plan de déploiement d'une installation JamboOS sur support de stockage.
@@ -90,6 +95,138 @@ impl InstallationPlan {
     /// Valide l'intégrité de la table de partitions GPT présente dans le tampon.
     pub fn verify_gpt(&self, disk_buf: &[u8]) -> Result<GptDiskInfo, &'static str> {
         parse_gpt_disk(disk_buf).map_err(|_| "Table GPT corrompue ou non conforme")
+    }
+
+    /// Génère la table de partitions GPT secondaire de secours (Backup GPT conforme UEFI 2.10).
+    pub fn generate_backup_gpt(&self, out: &mut [u8], disk_guid: Guid) -> Result<(), &'static str> {
+        if out.len() < 33 * SECTOR_SIZE {
+            return Err("Tampon insuffisant pour accueillir la table GPT secondaire");
+        }
+
+        let requests = [
+            PartitionRequest {
+                name: "EFI System Partition",
+                type_guid: Guid::EFI_SYSTEM_PARTITION,
+                size_sectors: self.esp_sectors,
+            },
+            PartitionRequest {
+                name: "JamboOS Root",
+                type_guid: Guid::JAMBOOS_ROOT,
+                size_sectors: self.root_sectors,
+            },
+        ];
+
+        format_backup_gpt_disk(out, self.total_sectors, disk_guid, &requests)
+            .map_err(|_| "Échec lors de la génération de la table GPT secondaire")
+    }
+
+    /// Déploie le partitionnement GPT et la racine JamboFS sur un périphérique de bloc physique
+    pub fn deploy_to_block_device(
+        &self,
+        client: &BlockClient,
+        disk_guid: Guid,
+    ) -> Result<(), &'static str> {
+        // 1. Écriture des 34 secteurs GPT primaires (MBR + Header + Entries) par blocs de 4 Kio
+        let mut primary_gpt_buf = [0u8; 34 * SECTOR_SIZE];
+        self.generate_gpt(&mut primary_gpt_buf, disk_guid)?;
+
+        let num_primary_blocks = primary_gpt_buf.len().div_ceil(BLOCK_SIZE);
+        for b in 0..num_primary_blocks {
+            let start = b * BLOCK_SIZE;
+            let end = (start + BLOCK_SIZE).min(primary_gpt_buf.len());
+            let mut block = [0u8; BLOCK_SIZE];
+            block[..end - start].copy_from_slice(&primary_gpt_buf[start..end]);
+            let lba = (b * 8) as u64;
+            client
+                .write_block(lba, &block)
+                .map_err(|_| "Erreur d'écriture GPT primaire sur support de stockage")?;
+        }
+
+        // 2. Écriture des 33 secteurs GPT secondaires (Backup GPT)
+        let mut backup_gpt_buf = [0u8; 33 * SECTOR_SIZE];
+        self.generate_backup_gpt(&mut backup_gpt_buf, disk_guid)?;
+
+        let backup_start_lba = self.total_sectors.saturating_sub(33);
+        let num_backup_blocks = backup_gpt_buf.len().div_ceil(BLOCK_SIZE);
+        for b in 0..num_backup_blocks {
+            let start = b * BLOCK_SIZE;
+            let end = (start + BLOCK_SIZE).min(backup_gpt_buf.len());
+            let mut block = [0u8; BLOCK_SIZE];
+            block[..end - start].copy_from_slice(&backup_gpt_buf[start..end]);
+            let lba = backup_start_lba + (b * 8) as u64;
+            client
+                .write_block(lba, &block)
+                .map_err(|_| "Erreur d'écriture GPT secondaire sur support de stockage")?;
+        }
+
+        // 3. Initialisation du système de fichiers JamboFS transactionnel à root_start_lba
+        let banner_content = b"Bienvenue sur JamboOS v0.3.42\n";
+        let banner_lba = self.root_start_lba + 24;
+        let mut banner_block = [0u8; BLOCK_SIZE];
+        banner_block[..banner_content.len()].copy_from_slice(banner_content);
+        client
+            .write_block(banner_lba, &banner_block)
+            .map_err(|_| "Erreur d'écriture de la bannière système")?;
+
+        // Calcul du condensat d'intégrité Merkle BLAKE3 pour la génération initiale 1
+        let merkle_root_checksum = compute_merkle_leaf_hash(banner_content, 1);
+
+        // Inode racine scellé à root_start_lba + 16
+        let mut inode_buf = [0u8; BLOCK_SIZE];
+        let ino = 1u64 + 24;
+        let size = banner_content.len() as u64;
+        inode_buf[0..8].copy_from_slice(&ino.to_le_bytes());
+        inode_buf[8..16].copy_from_slice(&size.to_le_bytes());
+        inode_buf[16..24].copy_from_slice(&1u64.to_le_bytes()); // generation = 1
+        inode_buf[24..28].copy_from_slice(&0u32.to_le_bytes());
+        inode_buf[28..32].copy_from_slice(&1u32.to_le_bytes()); // block_count = 1
+        inode_buf[32..40].copy_from_slice(&24u64.to_le_bytes()); // direct_block = 24
+        inode_buf[40..72].copy_from_slice(&merkle_root_checksum);
+        let name_bytes = b"banner.txt";
+        inode_buf[72..72 + name_bytes.len()].copy_from_slice(name_bytes);
+
+        let inode_lba = self.root_start_lba + 16;
+        client
+            .write_block(inode_lba, &inode_buf)
+            .map_err(|_| "Erreur d'écriture de l'inode racine JamboFS")?;
+
+        // Uberblock initial scellé
+        let uberblock = Uberblock {
+            magic: JAMBOFS_MAGIC,
+            version: JAMBOFS_VERSION,
+            block_size: BLOCK_SIZE as u32,
+            generation: 1,
+            root_tree_offset: BLOCK_SIZE as u64,
+            root_checksum: merkle_root_checksum,
+            flags: 0,
+            timestamp: 1,
+        };
+
+        let mut ub_buf = [0u8; BLOCK_SIZE];
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                &uberblock as *const Uberblock as *const u8,
+                ub_buf.as_mut_ptr(),
+                core::mem::size_of::<Uberblock>(),
+            );
+        }
+
+        // Écriture de l'Uberblock Slot A (LBA base racine)
+        client
+            .write_block(self.root_start_lba, &ub_buf)
+            .map_err(|_| "Erreur d'écriture de l'Uberblock A")?;
+
+        // Écriture de l'Uberblock Slot B (LBA base racine + 8) pour résilience CoW immédiate
+        client
+            .write_block(self.root_start_lba + 8, &ub_buf)
+            .map_err(|_| "Erreur d'écriture de l'Uberblock B")?;
+
+        // 4. Barrière de synchronisation matérielle NVMe / VirtIO
+        client
+            .flush()
+            .map_err(|_| "Erreur lors du flush de synchronisation matérielle de stockage")?;
+
+        Ok(())
     }
 }
 
@@ -185,6 +322,49 @@ mod tests {
         let info = plan.verify_gpt(&buffer).expect("Table GPT valide");
         assert_eq!(info.disk_guid, disk_guid);
         assert_eq!(info.partition_count, 2);
+    }
+
+    #[test]
+    fn test_backup_gpt_generation() {
+        let plan = InstallationPlan::calculate(65536).unwrap();
+        let mut buffer = [0u8; 33 * SECTOR_SIZE];
+        let disk_guid = Guid::JAMBOOS_ROOT;
+
+        assert!(plan.generate_backup_gpt(&mut buffer, disk_guid).is_ok());
+
+        // L'en-tête de secours est à l'offset 32 * SECTOR_SIZE
+        let sig = u64::from_le_bytes(buffer[32 * 512..32 * 512 + 8].try_into().unwrap());
+        assert_eq!(sig, libjambo::gpt::GPT_SIGNATURE);
+    }
+
+    #[test]
+    fn test_deploy_to_block_device_lifecycle() {
+        let plan = InstallationPlan::calculate(65536).unwrap();
+        let dummy_client = BlockClient {
+            channel: libjambo::Handle(0),
+            vmo_ptr: core::ptr::null_mut(),
+        };
+        let disk_guid = Guid::JAMBOOS_ROOT;
+
+        let deploy_res = plan.deploy_to_block_device(&dummy_client, disk_guid);
+        assert!(deploy_res.is_ok());
+
+        // Après déploiement, le montage JamboFS sur la racine doit détecter l'Uberblock A scellé
+        let fs =
+            jambo_fs::JamboFs::mount(&dummy_client).expect("Montage persistant après installation");
+        assert_eq!(fs.active_uberblock.magic, JAMBOFS_MAGIC);
+        assert_eq!(fs.active_uberblock.version, JAMBOFS_VERSION);
+        assert_eq!(fs.active_uberblock.generation, 1);
+        assert_ne!(fs.active_uberblock.root_checksum, [0u8; 32]);
+
+        // Vérification de la lecture du fichier déployé
+        let mut read_buf = [0u8; 64];
+        let len = fs
+            .read_file("/banner.txt", &mut read_buf)
+            .expect("Lecture banner déployé");
+        assert!(len > 0);
+        let s = core::str::from_utf8(&read_buf[..len]).unwrap();
+        assert!(s.contains("JamboOS"));
     }
 
     #[test]

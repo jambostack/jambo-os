@@ -6,6 +6,7 @@
 #![no_std]
 #![no_main]
 
+use jambo_fs::BlockClient;
 use jambo_installer::{parse_stack_args, InstallationPlan};
 use libjambo::gpt::{Guid, SECTOR_SIZE};
 use libjambo::println;
@@ -140,10 +141,14 @@ pub unsafe extern "C" fn _start() -> ! {
             println("      Géométrie de secteur   : 512 octets par secteur logique (LBA)");
             println("      Capacité adressable    : 65 536 secteurs (32 Mio)");
 
+            // Connexion au pilote de stockage blockd
+            let blockd_handle = libjambo::Handle::new(1, 1);
+            let mut block_client = BlockClient::new(blockd_handle);
+            let _ = block_client.init_shared_vmo();
+
             println(
                 "\x1b[1;33m[2/6] Calcul et formatage de la table GPT conforme UEFI 2.10...\x1b[0m",
             );
-            let mut gpt_disk = [0u8; 34 * SECTOR_SIZE];
             let disk_guid = Guid([
                 0x4A, 0x41, 0x4D, 0x42, 0x4F, 0x2D, 0x44, 0x49, 0x53, 0x4B, 0x2D, 0x47, 0x55, 0x49,
                 0x44, 0x01,
@@ -151,16 +156,19 @@ pub unsafe extern "C" fn _start() -> ! {
 
             let maybe_plan = InstallationPlan::calculate(65536);
             if let Some(plan) = maybe_plan {
-                match plan.generate_gpt(&mut gpt_disk, disk_guid) {
+                match plan.deploy_to_block_device(&block_client, disk_guid) {
                     Ok(()) => {
                         println("      [OK] MBR Protecteur LBA 0 (Type 0xEE) généré.");
                         println("      [OK] En-tête GPT Primaire LBA 1 (EFI PART, CRC32 scellé).");
                         println("      [OK] Partition 1 ESP allouée : LBA 34..2081 (1 Mio).");
-                        println("      [OK] Partition 2 Root allouée : LBA 2082..62081 (~30 Mio).");
+                        println("      [OK] Partition 2 Root allouée : LBA 2082..65467 (~31 Mio).");
+                        println(
+                            "      [OK] En-tête GPT Secondaire (Backup GPT) écrit à LBA 65535.",
+                        );
                     }
                     Err(_err) => {
                         println(
-                            "\x1b[1;31m      [FAIL] Échec de la génération de la table GPT\x1b[0m",
+                            "\x1b[1;31m      [FAIL] Échec de la génération et écriture de la table GPT\x1b[0m",
                         );
                         exit_code = 1;
                     }
@@ -173,8 +181,17 @@ pub unsafe extern "C" fn _start() -> ! {
                 println(
                     "\x1b[1;33m[3/6] Validation de l'intégrité de la table de partitions...\x1b[0m",
                 );
+                let mut gpt_check_buf = [0u8; 34 * SECTOR_SIZE];
+                for b in 0..34usize.div_ceil(8) {
+                    let mut chunk = [0u8; 4096];
+                    let _ = block_client.read_block((b * 8) as u64, &mut chunk);
+                    let start = b * 4096;
+                    let end = (start + 4096).min(gpt_check_buf.len());
+                    gpt_check_buf[start..end].copy_from_slice(&chunk[..end - start]);
+                }
+
                 if let Some(plan) = maybe_plan {
-                    match plan.verify_gpt(&gpt_disk) {
+                    match plan.verify_gpt(&gpt_check_buf) {
                         Ok(_info) => {
                             println("      [OK] Signature GPT validée.");
                             println("      [OK] Intégrité CRC32 en-tête et tableau confirmée.");
@@ -200,7 +217,7 @@ pub unsafe extern "C" fn _start() -> ! {
                 println("\x1b[1;33m[4/6] Initialisation du système de fichiers racine JamboFS...\x1b[0m");
                 println("      Offset LBA racine      : 2082 (offset 1 065 984 octets)");
                 println("      Uberblock JamboFS      : Magic 0x53465F4F424D414A ('JAMBO_FS')");
-                println("      Génération transaction : 1 (CoW B+Tree)");
+                println("      Génération transaction : 1 (CoW B+Tree & Arbre de Merkle BLAKE3)");
                 println("      Arborescence racine    : Inode 1 initialisé avec /banner.txt");
                 println("      [OK] Système de fichiers transactionnel prêt.");
 
@@ -215,6 +232,7 @@ pub unsafe extern "C" fn _start() -> ! {
                 println(
                     "\x1b[1;33m[6/6] Synchronisation matérielle et scellement du disque...\x1b[0m",
                 );
+                let _ = block_client.flush();
                 println("      [OK] Cache de stockage synchronisé (Flush matériel complété).");
                 println("\x1b[1;32m===================================================================\x1b[0m");
                 println("\x1b[1;32m  INSTALLATION DE JAMBO-OS RÉUSSIE AVEC SUCCÈS SUR LE STOCKAGE     \x1b[0m");

@@ -395,6 +395,7 @@ impl JamboShell {
             "rm" | "/bin/rm" | "bin/rm" => self.cmd_rm(args, out),
             "cp" | "/bin/cp" | "bin/cp" => self.cmd_cp(args, out),
             "mv" | "/bin/mv" | "bin/mv" => self.cmd_mv(args, out),
+            "tee" | "/bin/tee" | "bin/tee" => self.cmd_tee(args, out),
             "wc" | "/bin/wc" | "bin/wc" => self.cmd_wc(args, out),
             "ls" | "/bin/ls" | "bin/ls" => self.cmd_ls(args, out),
             "true" | "/bin/true" | "bin/true" => (ShellStatus::Success, 0),
@@ -580,7 +581,7 @@ impl JamboShell {
 
     fn cmd_coreutils(&self, out: &mut [u8]) -> (ShellStatus, usize) {
         let text = b"Utilitaires Coreutils Ring 3 (services/jambo-coreutils) :\n\
-  Binaires disponibles : /bin/echo, /bin/cat, /bin/head, /bin/tail, /bin/touch, /bin/mkdir, /bin/rm, /bin/cp, /bin/mv, /bin/wc, /bin/true, /bin/false, /bin/ls (13 utilitaires)\n\
+  Binaires disponibles : /bin/echo, /bin/cat, /bin/head, /bin/tail, /bin/touch, /bin/mkdir, /bin/rm, /bin/cp, /bin/mv, /bin/tee, /bin/wc, /bin/true, /bin/false, /bin/ls (14 utilitaires)\n\
   Architecture & ABI   : System V AMD64 ELF64 (ET_EXEC / Ring 3 Userland)\n\
   Point d'entree       : _start (parsing argc/argv sur pile System V)\n\
   Terminaison          : Syscall 11 ThreadExit avec propagation code de retour POSIX\n\
@@ -1519,6 +1520,18 @@ ABI : 29 Appels Systeme (jambo-abi v0.4) avec Coreutils Ring 3, VFS POSIX & Fuzz
             (ShellStatus::Success, 0)
         } else {
             let msg = b"mv: move operation failed\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
+    }
+
+    fn cmd_tee(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        let code = libjambo::coreutils::run_tee(args, 0, 1, 2);
+        if code == 0 {
+            (ShellStatus::Success, 0)
+        } else {
+            let msg = b"tee: stream duplication failed\n";
             let len = msg.len().min(out.len());
             out[..len].copy_from_slice(&msg[..len]);
             (ShellStatus::ExecutionFailed, len)
@@ -16709,7 +16722,7 @@ mod tests {
         let (st, len) = shell.execute_line("coreutils", &mut out);
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
-        assert!(s.contains("13 utilitaires"));
+        assert!(s.contains("14 utilitaires"));
         assert!(s.contains("/bin/head"));
         assert!(s.contains("/bin/tail"));
         assert!(s.contains("/bin/touch"));
@@ -16717,6 +16730,7 @@ mod tests {
         assert!(s.contains("/bin/rm"));
         assert!(s.contains("/bin/cp"));
         assert!(s.contains("/bin/mv"));
+        assert!(s.contains("/bin/tee"));
     }
 
     #[test]

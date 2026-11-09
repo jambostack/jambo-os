@@ -59,6 +59,10 @@ path = "src/bin/cp.rs"
 name = "mv"
 path = "src/bin/mv.rs"
 
+[[bin]]
+name = "tee"
+path = "src/bin/tee.rs"
+
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }
 

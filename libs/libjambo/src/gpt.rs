@@ -368,6 +368,101 @@ pub fn format_gpt_disk(
     Ok(())
 }
 
+/// Formate la table de partitions GPT secondaire de secours (Backup GPT conforme UEFI 2.10).
+///
+/// Le tampon fourni doit contenir au moins 33 secteurs (16 896 octets) représentant :
+/// - Les 32 secteurs des entrées de partition (LBA total_disk_sectors - 33 .. total_disk_sectors - 2)
+/// - Le dernier secteur contenant l'en-tête GPT secondaire (LBA total_disk_sectors - 1)
+pub fn format_backup_gpt_disk(
+    buffer: &mut [u8],
+    total_disk_sectors: u64,
+    disk_guid: Guid,
+    requests: &[PartitionRequest],
+) -> Result<(), GptError> {
+    const BACKUP_REQUIRED_BYTES: usize = 33 * SECTOR_SIZE;
+    if buffer.len() < BACKUP_REQUIRED_BYTES {
+        return Err(GptError::BufferTooSmall);
+    }
+    if total_disk_sectors < 68 {
+        return Err(GptError::DiskTooSmall);
+    }
+    if requests.len() > 128 {
+        return Err(GptError::TooManyPartitions);
+    }
+
+    buffer[..BACKUP_REQUIRED_BYTES].fill(0);
+
+    // 1. Écriture du tableau d'entrées de partition (offset 0..32*512)
+    let entries_len = 128 * PARTITION_ENTRY_SIZE as usize;
+    let entries_slice = &mut buffer[0..entries_len];
+    let mut current_lba: u64 = 34;
+    let last_usable_lba = total_disk_sectors.saturating_sub(34);
+
+    for (idx, req) in requests.iter().enumerate() {
+        if current_lba + req.size_sectors > last_usable_lba {
+            return Err(GptError::DiskTooSmall);
+        }
+
+        let start_lba = current_lba;
+        let end_lba = start_lba + req.size_sectors - 1;
+        current_lba = end_lba + 1;
+
+        let mut unique_bytes = disk_guid.0;
+        unique_bytes[15] = unique_bytes[15].wrapping_add((idx + 1) as u8);
+        let unique_guid = Guid(unique_bytes);
+
+        let mut entry = GptPartitionEntry::empty();
+        entry.partition_type_guid = req.type_guid;
+        entry.unique_partition_guid = unique_guid;
+        entry.starting_lba = start_lba;
+        entry.ending_lba = end_lba;
+        entry.attributes = 0;
+        entry.set_name_ascii(req.name);
+
+        let entry_bytes: [u8; 128] = unsafe { core::mem::transmute(entry) };
+        let offset = idx * 128;
+        entries_slice[offset..offset + 128].copy_from_slice(&entry_bytes);
+    }
+
+    // 2. Calcul du CRC32 du tableau d'entrées
+    let entries_crc = crc32(entries_slice);
+
+    // 3. Construction de l'en-tête GPT secondaire à l'offset 32*512
+    let backup_entry_lba = total_disk_sectors.saturating_sub(33);
+    let mut header = GptHeader {
+        signature: GPT_SIGNATURE,
+        revision: GPT_REVISION_1_0,
+        header_size: GPT_HEADER_SIZE,
+        header_crc32: 0,
+        reserved: 0,
+        my_lba: total_disk_sectors - 1,
+        alternate_lba: 1,
+        first_usable_lba: 34,
+        last_usable_lba,
+        disk_guid,
+        partition_entry_lba: backup_entry_lba,
+        num_partition_entries: DEFAULT_PARTITION_ENTRIES,
+        size_of_partition_entry: PARTITION_ENTRY_SIZE,
+        partition_entry_array_crc32: entries_crc,
+    };
+
+    let header_bytes: [u8; 92] = unsafe {
+        let ptr = &header as *const GptHeader as *const [u8; 92];
+        *ptr
+    };
+    header.header_crc32 = crc32(&header_bytes);
+
+    let final_header_bytes: [u8; 92] = unsafe {
+        let ptr = &header as *const GptHeader as *const [u8; 92];
+        *ptr
+    };
+
+    let header_offset = 32 * SECTOR_SIZE;
+    buffer[header_offset..header_offset + 92].copy_from_slice(&final_header_bytes);
+
+    Ok(())
+}
+
 /// Analyse un tampon contenant au moins 34 secteurs et vérifie l'intégrité de la table GPT.
 pub fn parse_gpt_disk(buffer: &[u8]) -> Result<GptDiskInfo, GptError> {
     const MIN_REQUIRED_BYTES: usize = 34 * SECTOR_SIZE;
@@ -536,5 +631,38 @@ mod tests {
         disk_buf[512 + 40] ^= 0xFF;
         let err = parse_gpt_disk(&disk_buf);
         assert_eq!(err, Err(GptError::HeaderCrcMismatch));
+    }
+
+    #[test]
+    fn test_backup_gpt_formatting() {
+        let mut backup_buf = [0u8; 33 * 512];
+        let disk_guid = Guid([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]);
+        let requests = [
+            PartitionRequest {
+                name: "EFI System Partition",
+                type_guid: Guid::EFI_SYSTEM_PARTITION,
+                size_sectors: 2048,
+            },
+            PartitionRequest {
+                name: "JamboOS Root",
+                type_guid: Guid::JAMBOOS_ROOT,
+                size_sectors: 16384,
+            },
+        ];
+
+        let total_sectors = 65536;
+        let res = format_backup_gpt_disk(&mut backup_buf, total_sectors, disk_guid, &requests);
+        assert!(res.is_ok());
+
+        // L'en-tête secondaire est situé à l'offset 32 * 512
+        let hdr_slice = &backup_buf[32 * 512..32 * 512 + 92];
+        let sig = u64::from_le_bytes(hdr_slice[0..8].try_into().unwrap());
+        assert_eq!(sig, GPT_SIGNATURE);
+
+        let my_lba = u64::from_le_bytes(hdr_slice[24..32].try_into().unwrap());
+        assert_eq!(my_lba, total_sectors - 1);
+
+        let alternate_lba = u64::from_le_bytes(hdr_slice[32..40].try_into().unwrap());
+        assert_eq!(alternate_lba, 1);
     }
 }

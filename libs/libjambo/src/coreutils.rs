@@ -5,7 +5,7 @@
 //! Chaque routine s'interface avec les descripteurs POSIX (`vfs::*`)
 //! sans recourir à des allocations heap obligatoires.
 
-use crate::vfs::{with_fd_table, O_RDONLY};
+use crate::vfs::{with_fd_table, O_APPEND, O_CREAT, O_RDONLY, O_TRUNC, O_WRONLY};
 
 #[derive(Clone, Copy)]
 pub struct VfsFileNode {
@@ -580,6 +580,78 @@ pub fn run_cat(paths: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
             let _ = sys_write(out_fd, &chunk[..n as usize]);
         }
         let _ = sys_close(fd);
+    }
+
+    if has_error {
+        1
+    } else {
+        0
+    }
+}
+
+/// Exécute l'utilitaire `tee` dupliquant le flux d'entrée standard vers la sortie et un ou plusieurs fichiers
+pub fn run_tee(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    let mut append_mode = false;
+    let mut target_paths: [&str; 8] = [""; 8];
+    let mut target_count = 0;
+
+    for &arg in args {
+        match arg {
+            "-a" | "--append" => append_mode = true,
+            "-i" | "--ignore-interrupts" => {} // Ignoré mais accepté conformément à POSIX
+            path if !path.starts_with('-') && path != "-" && target_count < target_paths.len() => {
+                target_paths[target_count] = path;
+                target_count += 1;
+            }
+            _ => {}
+        }
+    }
+
+    let mut target_fds: [i32; 8] = [-1; 8];
+    let mut opened_count = 0;
+    let mut has_error = false;
+
+    let open_flags = if append_mode {
+        O_CREAT | O_WRONLY | O_APPEND
+    } else {
+        O_CREAT | O_WRONLY | O_TRUNC
+    };
+
+    for &path in target_paths.iter().take(target_count) {
+        let fd = sys_open(path, open_flags);
+        if fd < 0 {
+            let _ = sys_write(err_fd, b"tee: ");
+            let _ = sys_write(err_fd, path.as_bytes());
+            let _ = sys_write(err_fd, b": Error opening file\n");
+            has_error = true;
+        } else {
+            target_fds[opened_count] = fd;
+            opened_count += 1;
+        }
+    }
+
+    // Boucle de transfert : lecture depuis in_fd et diffusion vers out_fd et chaque fichier
+    let mut chunk = [0u8; 512];
+    loop {
+        let n = sys_read(in_fd, &mut chunk);
+        if n <= 0 {
+            break;
+        }
+        let slice = &chunk[..n as usize];
+        let _ = sys_write(out_fd, slice);
+
+        for &fd in target_fds.iter().take(opened_count) {
+            if fd >= 0 {
+                let _ = sys_write(fd, slice);
+            }
+        }
+    }
+
+    // Clôture des descripteurs de fichiers cibles
+    for &fd in target_fds.iter().take(opened_count) {
+        if fd >= 0 {
+            let _ = sys_close(fd);
+        }
     }
 
     if has_error {
@@ -1837,5 +1909,53 @@ mod tests {
         let _ = run_rm(&["/tmp/mv_target.txt"], 2);
         let _ = run_rm(&["-r", "/tmp/src_dir"], 2);
         let _ = run_rm(&["-r", "/tmp/dst_dir"], 2);
+    }
+
+    #[test]
+    fn test_tee_standard_and_append_lifecycle() {
+        // 1. Préparation d'un pipe pour simuler stdin
+        let (read_end, write_end) = crate::vfs::pipe().expect("Création pipe");
+
+        // Écriture du payload initial dans le pipe
+        let payload1 = b"Pipeline chunk 1\n";
+        let _ = sys_write(write_end, payload1);
+        sys_close(write_end); // Fermeture du côté écriture pour générer EOF lors de la lecture
+
+        // 2. Exécution de tee écrivant vers stdout (fd 1) et /tmp/tee_out.txt
+        let code1 = run_tee(&["/tmp/tee_out.txt"], read_end, 1, 2);
+        assert_eq!(code1, 0);
+        sys_close(read_end);
+
+        // Vérification du contenu du premier fichier
+        let fd_check1 = sys_open("/tmp/tee_out.txt", O_RDONLY);
+        assert!(fd_check1 >= 3);
+        let mut buf = [0u8; 64];
+        let n1 = sys_read(fd_check1, &mut buf);
+        assert_eq!(n1, payload1.len() as isize);
+        assert_eq!(&buf[..n1 as usize], payload1);
+        sys_close(fd_check1);
+
+        // 3. Second pipe avec mode append (-a)
+        let (read_end2, write_end2) = crate::vfs::pipe().expect("Création pipe 2");
+        let payload2 = b"Appended chunk 2\n";
+        let _ = sys_write(write_end2, payload2);
+        sys_close(write_end2);
+
+        let code2 = run_tee(&["-a", "/tmp/tee_out.txt"], read_end2, 1, 2);
+        assert_eq!(code2, 0);
+        sys_close(read_end2);
+
+        // Vérification de la concaténation dans le fichier
+        let fd_check2 = sys_open("/tmp/tee_out.txt", O_RDONLY);
+        assert!(fd_check2 >= 3);
+        let n2 = sys_read(fd_check2, &mut buf);
+        let expected_total = payload1.len() + payload2.len();
+        assert_eq!(n2, expected_total as isize);
+        assert_eq!(&buf[..payload1.len()], payload1);
+        assert_eq!(&buf[payload1.len()..n2 as usize], payload2);
+        sys_close(fd_check2);
+
+        // Nettoyage
+        let _ = run_rm(&["/tmp/tee_out.txt"], 2);
     }
 }
