@@ -87,6 +87,14 @@ path = "src/bin/find.rs"
 name = "chmod"
 path = "src/bin/chmod.rs"
 
+[[bin]]
+name = "chown"
+path = "src/bin/chown.rs"
+
+[[bin]]
+name = "id"
+path = "src/bin/id.rs"
+
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }
 

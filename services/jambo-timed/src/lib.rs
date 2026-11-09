@@ -1213,7 +1213,7 @@ mod tests {
         let t3 = PreciseTime::new(1792340000, 110_000_000);
 
         let mut resp_packet = NtpPacket {
-            li_vn_mode: (0 << 6) | (NTP_VERSION_4 << 3) | NTP_MODE_SERVER,
+            li_vn_mode: (NTP_VERSION_4 << 3) | NTP_MODE_SERVER,
             stratum: 1, // Stratum 1 (Primary Reference)
             poll: 4,
             precision: -18,
@@ -1262,7 +1262,7 @@ mod tests {
 
         // 5. Tests adversariaux : rejet mode invalide
         let mut bad_mode_packet = resp_packet;
-        bad_mode_packet.li_vn_mode = (0 << 6) | (4 << 3) | NTP_MODE_CLIENT; // Mode 3 au lieu de 4
+        bad_mode_packet.li_vn_mode = (4 << 3) | NTP_MODE_CLIENT; // Mode 3 au lieu de 4
         let bad_mode_bytes = bad_mode_packet.to_bytes();
         assert_eq!(
             SntpClient::process_response(t1, &bad_mode_bytes, t4).err(),

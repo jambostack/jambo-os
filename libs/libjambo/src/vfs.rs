@@ -8,7 +8,7 @@
 //! 4. Descripteurs dynamiques `>= 3` pour fichiers réguliers et canaux IPC.
 //! 5. Primitives d'accès et métadonnées `PosixStat` (`fstat`, `stat`).
 
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use jambo_abi::SysError;
 
 // ============================================================================
@@ -91,6 +91,8 @@ pub struct FdEntry {
     pub kind: FdKind,
     pub flags: i32,
     pub mode: u32,
+    pub uid: u32,
+    pub gid: u32,
     pub offset: u64,
     pub size: u64,
     pub pipe_id: u8,
@@ -105,6 +107,8 @@ impl FdEntry {
             kind: FdKind::Closed,
             flags: 0,
             mode: 0,
+            uid: 0,
+            gid: 0,
             offset: 0,
             size: 0,
             pipe_id: 0,
@@ -182,6 +186,8 @@ impl FdTable {
                     kind,
                     flags,
                     mode: 0,
+                    uid: 0,
+                    gid: 0,
                     offset: 0,
                     size: 0,
                     pipe_id: 0,
@@ -609,6 +615,8 @@ impl FdTable {
             }
             _ => return Err(SysError::InvalidArgument),
         }
+        st.st_uid = entry.uid;
+        st.st_gid = entry.gid;
         Ok(st)
     }
 
@@ -626,6 +634,17 @@ impl FdTable {
             _ => 0,
         };
         entry.mode = file_type | (mode & 0o7777);
+        Ok(())
+    }
+
+    /// Modifie le propriétaire et le groupe d'un descripteur ouvert (fchown POSIX)
+    pub fn fchown(&mut self, fd: i32, uid: u32, gid: u32) -> Result<(), SysError> {
+        let entry = self.get_mut(fd).ok_or(SysError::InvalidArgument)?;
+        if entry.kind == FdKind::Closed {
+            return Err(SysError::InvalidArgument);
+        }
+        entry.uid = uid;
+        entry.gid = gid;
         Ok(())
     }
 
@@ -652,6 +671,23 @@ impl FdTable {
         }
     }
 
+    /// Modifie le propriétaire et le groupe de tous les descripteurs ouverts sur ce chemin (chown POSIX)
+    pub fn chown(&mut self, path: &str, uid: u32, gid: u32) -> Result<(), SysError> {
+        let mut modified = false;
+        for entry in self.entries.iter_mut() {
+            if entry.kind != FdKind::Closed && entry.path_str() == path {
+                entry.uid = uid;
+                entry.gid = gid;
+                modified = true;
+            }
+        }
+        if modified {
+            Ok(())
+        } else {
+            Err(SysError::InvalidArgument)
+        }
+    }
+
     /// Récupère les métadonnées pour un chemin donné dans la table des descripteurs
     pub fn stat(&self, path: &str) -> Result<PosixStat, SysError> {
         for entry in &self.entries {
@@ -664,6 +700,8 @@ impl FdTable {
                 return Ok(PosixStat {
                     st_mode,
                     st_nlink: 1,
+                    st_uid: entry.uid,
+                    st_gid: entry.gid,
                     st_size: entry.size as i64,
                     st_blksize: 512,
                     st_blocks: entry.size.div_ceil(512) as i64,
@@ -739,6 +777,64 @@ pub fn fchmod(fd: i32, mode: u32) -> Result<(), SysError> {
 /// Modifie le masque de permissions associé à un chemin dans la table VFS
 pub fn chmod(path: &str, mode: u32) -> Result<(), SysError> {
     with_fd_table(|table| table.chmod(path, mode))
+}
+
+/// Modifie le propriétaire et le groupe d'un descripteur de fichier ouvert (fchown POSIX)
+pub fn fchown(fd: i32, uid: u32, gid: u32) -> Result<(), SysError> {
+    with_fd_table(|table| table.fchown(fd, uid, gid))
+}
+
+/// Modifie le propriétaire et le groupe associé à un chemin dans la table VFS (chown POSIX)
+pub fn chown(path: &str, uid: u32, gid: u32) -> Result<(), SysError> {
+    with_fd_table(|table| table.chown(path, uid, gid))
+}
+
+// Variables atomiques de contexte d'identité utilisateur et groupe Ring 3
+static CURRENT_UID: AtomicU32 = AtomicU32::new(0);
+static CURRENT_GID: AtomicU32 = AtomicU32::new(0);
+static CURRENT_EUID: AtomicU32 = AtomicU32::new(0);
+static CURRENT_EGID: AtomicU32 = AtomicU32::new(0);
+
+/// Retourne l'identifiant utilisateur réel (UID) du processus courant
+pub fn getuid() -> u32 {
+    CURRENT_UID.load(Ordering::Relaxed)
+}
+
+/// Retourne l'identifiant utilisateur effectif (EUID) du processus courant
+pub fn geteuid() -> u32 {
+    CURRENT_EUID.load(Ordering::Relaxed)
+}
+
+/// Retourne l'identifiant de groupe réel (GID) du processus courant
+pub fn getgid() -> u32 {
+    CURRENT_GID.load(Ordering::Relaxed)
+}
+
+/// Retourne l'identifiant de groupe effectif (EGID) du processus courant
+pub fn getegid() -> u32 {
+    CURRENT_EGID.load(Ordering::Relaxed)
+}
+
+/// Définit l'identifiant utilisateur (UID/EUID) du processus courant
+pub fn setuid(uid: u32) -> Result<(), SysError> {
+    let euid = geteuid();
+    if euid != 0 && uid != euid {
+        return Err(SysError::PermissionDenied);
+    }
+    CURRENT_UID.store(uid, Ordering::Relaxed);
+    CURRENT_EUID.store(uid, Ordering::Relaxed);
+    Ok(())
+}
+
+/// Définit l'identifiant de groupe (GID/EGID) du processus courant
+pub fn setgid(gid: u32) -> Result<(), SysError> {
+    let euid = geteuid();
+    if euid != 0 && gid != getegid() {
+        return Err(SysError::PermissionDenied);
+    }
+    CURRENT_GID.store(gid, Ordering::Relaxed);
+    CURRENT_EGID.store(gid, Ordering::Relaxed);
+    Ok(())
 }
 
 // ============================================================================
@@ -1005,5 +1101,40 @@ mod tests {
         // Test sur descripteur invalide
         assert!(table.fchmod(99, 0o644).is_err());
         assert!(table.chmod("/nonexistent", 0o644).is_err());
+    }
+
+    #[test]
+    fn test_vfs_chown_and_identity() {
+        let mut table = FdTable::new();
+        let fd = table
+            .alloc_fd(FdKind::RegularFile, O_RDWR, "/var/run/app.pid")
+            .expect("alloc regular file");
+
+        let st0 = table.fstat(fd).expect("fstat");
+        assert_eq!(st0.st_uid, 0);
+        assert_eq!(st0.st_gid, 0);
+
+        // Modification de propriété par fchown
+        assert!(table.fchown(fd, 1000, 1000).is_ok());
+        let st1 = table.fstat(fd).expect("fstat after fchown");
+        assert_eq!(st1.st_uid, 1000);
+        assert_eq!(st1.st_gid, 1000);
+
+        // Modification par chemin chown
+        assert!(table.chown("/var/run/app.pid", 1001, 1002).is_ok());
+        let st2 = table.fstat(fd).expect("fstat after chown");
+        assert_eq!(st2.st_uid, 1001);
+        assert_eq!(st2.st_gid, 1002);
+
+        // Identités du processus
+        assert_eq!(getuid(), 0);
+        assert_eq!(getgid(), 0);
+        assert!(setuid(1000).is_ok());
+        assert_eq!(getuid(), 1000);
+        assert_eq!(geteuid(), 1000);
+
+        // Rétablir root pour les autres tests
+        CURRENT_UID.store(0, Ordering::Relaxed);
+        CURRENT_EUID.store(0, Ordering::Relaxed);
     }
 }

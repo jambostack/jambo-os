@@ -75,6 +75,82 @@ pub const TRB_FLAG_SIA: u32 = 1 << 31; // Start Isoch ASAP
 
 pub const RING_ENTRIES: usize = 32;
 pub const MAX_ENDPOINTS: usize = 8;
+pub const MAX_STREAMS_PER_ENDPOINT: usize = 4;
+
+/// Segment d'une liste Scatter-Gather pour les transferts DMA discontinus USB 3.0
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SgSegment {
+    pub iova: u64,
+    pub length: u32,
+}
+
+impl SgSegment {
+    pub const fn new(iova: u64, length: u32) -> Self {
+        Self { iova, length }
+    }
+}
+
+/// Contexte de Stream xHCI (16 octets, pointant vers l'anneau de transfert du flux)
+#[repr(C, align(16))]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct StreamContext {
+    /// Adresse IOVA de l'anneau de transfert TRB (bits 63:4) + flags SCT (bits 3:1) + DCS (bit 0)
+    pub tr_dequeue_pointer: u64,
+    pub reserved1: u32,
+    pub reserved2: u32,
+}
+
+impl StreamContext {
+    pub const fn new(ring_iova: u64, cycle: bool) -> Self {
+        let dcs = if cycle { 1 } else { 0 };
+        let sct_primary = 1 << 1; // Stream Context Type = Primary
+        Self {
+            tr_dequeue_pointer: (ring_iova & !0xF) | sct_primary | dcs,
+            reserved1: 0,
+            reserved2: 0,
+        }
+    }
+}
+
+/// Anneau de transfert xHCI dédié à un flux Bulk spécifique (Block Stream / UAS)
+pub struct BulkStreamRing {
+    pub stream_id: u16,
+    pub ring: XhciRing,
+    pub active: bool,
+    pub total_bytes_transferred: u64,
+    pub last_status: TransferStatus,
+}
+
+impl Default for BulkStreamRing {
+    fn default() -> Self {
+        Self::new(0)
+    }
+}
+
+impl BulkStreamRing {
+    pub const fn new(stream_id: u16) -> Self {
+        Self {
+            stream_id,
+            ring: XhciRing::new(),
+            active: false,
+            total_bytes_transferred: 0,
+            last_status: TransferStatus {
+                trb_idx: 0,
+                bytes_transferred: 0,
+                completed: false,
+                completion_code: 0,
+            },
+        }
+    }
+
+    pub fn reset(&mut self) {
+        self.ring.reset();
+        self.active = false;
+        self.total_bytes_transferred = 0;
+        self.last_status = TransferStatus::default();
+    }
+}
 
 /// État d'un transfert USB 3.0 en attente ou complété
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -93,6 +169,8 @@ pub struct EndpointTransferRing {
     pub active: bool,
     pub total_bytes_transferred: u64,
     pub last_status: TransferStatus,
+    pub streams_enabled: bool,
+    pub streams: [BulkStreamRing; MAX_STREAMS_PER_ENDPOINT],
 }
 
 impl Default for EndpointTransferRing {
@@ -115,6 +193,13 @@ impl EndpointTransferRing {
                 completed: false,
                 completion_code: 0,
             },
+            streams_enabled: false,
+            streams: [
+                BulkStreamRing::new(0),
+                BulkStreamRing::new(0),
+                BulkStreamRing::new(0),
+                BulkStreamRing::new(0),
+            ],
         }
     }
 
@@ -124,6 +209,12 @@ impl EndpointTransferRing {
         self.active = false;
         self.total_bytes_transferred = 0;
         self.last_status = TransferStatus::default();
+        self.streams_enabled = false;
+        let mut idx = 0;
+        while idx < self.streams.len() {
+            self.streams[idx].reset();
+            idx += 1;
+        }
     }
 }
 
@@ -151,7 +242,23 @@ impl Trb {
     /// Construit un TRB Normal pour transfert Bulk USB 3.0
     #[inline]
     pub fn normal(data_iova: u64, length: u32, cycle: bool, ioc: bool, isp: bool) -> Self {
+        Self::normal_chained(data_iova, length, cycle, false, ioc, isp)
+    }
+
+    /// Construit un TRB Normal chaîné (avec bit CH - Chain bit) pour le scatter-gather
+    #[inline]
+    pub fn normal_chained(
+        data_iova: u64,
+        length: u32,
+        cycle: bool,
+        chain: bool,
+        ioc: bool,
+        isp: bool,
+    ) -> Self {
         let mut control = ((TRB_TYPE_NORMAL & 0x3F) << 10) | if cycle { 1 } else { 0 };
+        if chain {
+            control |= TRB_FLAG_CH;
+        }
         if ioc {
             control |= TRB_FLAG_IOC;
         }
@@ -716,6 +823,242 @@ impl XhciController {
         ep.ring.trbs[idx] = normal_trb;
         ep.ring.enqueue_idx = next_idx;
         Ok(idx)
+    }
+
+    /// Soumet un transfert Bulk avec liste Scatter-Gather (segments mémoire discontinus).
+    /// Chaque segment intermédiaire possède le bit `CH` (Chain bit), et le dernier segment
+    /// porte les drapeaux de complétion `ioc` et `isp`.
+    pub fn queue_bulk_scatter_gather(
+        &mut self,
+        ep_id: u8,
+        segments: &[SgSegment],
+        ioc: bool,
+        isp: bool,
+    ) -> Result<usize, SysError> {
+        if !self.ready {
+            return Err(SysError::ResourceBusy);
+        }
+        if ep_id as usize >= MAX_ENDPOINTS || segments.is_empty() {
+            return Err(SysError::InvalidArgument);
+        }
+        let ep = &mut self.ep_rings[ep_id as usize];
+        if !ep.active {
+            return Err(SysError::InvalidArgument);
+        }
+
+        let first_idx = ep.ring.enqueue_idx;
+        for (k, seg) in segments.iter().enumerate() {
+            let is_last = k == segments.len() - 1;
+            let chain = !is_last;
+            let seg_ioc = is_last && ioc;
+            let seg_isp = is_last && isp;
+
+            let cycle = ep.ring.cycle_bit;
+            let trb = Trb::normal_chained(seg.iova, seg.length, cycle, chain, seg_ioc, seg_isp);
+            let idx = ep.ring.enqueue_idx;
+            let next_idx = (idx + 1) % RING_ENTRIES;
+
+            if next_idx == 0 {
+                let link = Trb::link(0, ep.ring.cycle_bit, true);
+                ep.ring.trbs[idx] = link;
+                ep.ring.cycle_bit = !ep.ring.cycle_bit;
+                ep.ring.enqueue_idx = 0;
+                let new_cycle = ep.ring.cycle_bit;
+                let re_trb =
+                    Trb::normal_chained(seg.iova, seg.length, new_cycle, chain, seg_ioc, seg_isp);
+                let cur = ep.ring.enqueue_idx;
+                ep.ring.trbs[cur] = re_trb;
+                ep.ring.enqueue_idx = (cur + 1) % RING_ENTRIES;
+            } else {
+                ep.ring.trbs[idx] = trb;
+                ep.ring.enqueue_idx = next_idx;
+            }
+        }
+        Ok(first_idx)
+    }
+
+    /// Configure un flux Bulk (Block Stream / UAS) sur un endpoint supportant le streaming.
+    pub fn configure_bulk_stream(&mut self, ep_id: u8, stream_id: u16) -> Result<(), SysError> {
+        if ep_id as usize >= MAX_ENDPOINTS || stream_id == 0 {
+            return Err(SysError::InvalidArgument);
+        }
+        let ep = &mut self.ep_rings[ep_id as usize];
+        if !ep.active {
+            return Err(SysError::InvalidArgument);
+        }
+        ep.streams_enabled = true;
+
+        let mut target_idx = None;
+        for (i, stream) in ep.streams.iter().enumerate() {
+            if stream.active && stream.stream_id == stream_id {
+                target_idx = Some(i);
+                break;
+            }
+        }
+        if target_idx.is_none() {
+            for (i, stream) in ep.streams.iter().enumerate() {
+                if !stream.active {
+                    target_idx = Some(i);
+                    break;
+                }
+            }
+        }
+        let idx = target_idx.ok_or(SysError::OutOfMemory)?;
+        let s = &mut ep.streams[idx];
+        s.reset();
+        s.stream_id = stream_id;
+        s.active = true;
+        Ok(())
+    }
+
+    /// Soumet un transfert Bulk sur un flux de données (Stream) spécifique d'un endpoint.
+    pub fn queue_stream_bulk_transfer(
+        &mut self,
+        ep_id: u8,
+        stream_id: u16,
+        data_iova: u64,
+        length: u32,
+        ioc: bool,
+        isp: bool,
+    ) -> Result<usize, SysError> {
+        if !self.ready {
+            return Err(SysError::ResourceBusy);
+        }
+        if ep_id as usize >= MAX_ENDPOINTS || stream_id == 0 {
+            return Err(SysError::InvalidArgument);
+        }
+        let ep = &mut self.ep_rings[ep_id as usize];
+        if !ep.active || !ep.streams_enabled {
+            return Err(SysError::InvalidArgument);
+        }
+
+        let stream = ep
+            .streams
+            .iter_mut()
+            .find(|s| s.active && s.stream_id == stream_id)
+            .ok_or(SysError::InvalidArgument)?;
+
+        let cycle = stream.ring.cycle_bit;
+        let normal_trb = Trb::normal(data_iova, length, cycle, ioc, isp);
+        let idx = stream.ring.enqueue_idx;
+        let next_idx = (idx + 1) % RING_ENTRIES;
+
+        if next_idx == 0 {
+            let link = Trb::link(0, stream.ring.cycle_bit, true);
+            stream.ring.trbs[idx] = link;
+            stream.ring.cycle_bit = !stream.ring.cycle_bit;
+            stream.ring.enqueue_idx = 0;
+            return Ok(idx);
+        }
+
+        stream.ring.trbs[idx] = normal_trb;
+        stream.ring.enqueue_idx = next_idx;
+        Ok(idx)
+    }
+
+    /// Soumet un transfert Scatter-Gather sur un flux de données (Stream) d'un endpoint.
+    pub fn queue_stream_scatter_gather(
+        &mut self,
+        ep_id: u8,
+        stream_id: u16,
+        segments: &[SgSegment],
+        ioc: bool,
+        isp: bool,
+    ) -> Result<usize, SysError> {
+        if !self.ready {
+            return Err(SysError::ResourceBusy);
+        }
+        if ep_id as usize >= MAX_ENDPOINTS || stream_id == 0 || segments.is_empty() {
+            return Err(SysError::InvalidArgument);
+        }
+        let ep = &mut self.ep_rings[ep_id as usize];
+        if !ep.active || !ep.streams_enabled {
+            return Err(SysError::InvalidArgument);
+        }
+
+        let stream = ep
+            .streams
+            .iter_mut()
+            .find(|s| s.active && s.stream_id == stream_id)
+            .ok_or(SysError::InvalidArgument)?;
+
+        let first_idx = stream.ring.enqueue_idx;
+        for (k, seg) in segments.iter().enumerate() {
+            let is_last = k == segments.len() - 1;
+            let chain = !is_last;
+            let seg_ioc = is_last && ioc;
+            let seg_isp = is_last && isp;
+
+            let cycle = stream.ring.cycle_bit;
+            let trb = Trb::normal_chained(seg.iova, seg.length, cycle, chain, seg_ioc, seg_isp);
+            let idx = stream.ring.enqueue_idx;
+            let next_idx = (idx + 1) % RING_ENTRIES;
+
+            if next_idx == 0 {
+                let link = Trb::link(0, stream.ring.cycle_bit, true);
+                stream.ring.trbs[idx] = link;
+                stream.ring.cycle_bit = !stream.ring.cycle_bit;
+                stream.ring.enqueue_idx = 0;
+                let new_cycle = stream.ring.cycle_bit;
+                let re_trb =
+                    Trb::normal_chained(seg.iova, seg.length, new_cycle, chain, seg_ioc, seg_isp);
+                let cur = stream.ring.enqueue_idx;
+                stream.ring.trbs[cur] = re_trb;
+                stream.ring.enqueue_idx = (cur + 1) % RING_ENTRIES;
+            } else {
+                stream.ring.trbs[idx] = trb;
+                stream.ring.enqueue_idx = next_idx;
+            }
+        }
+        Ok(first_idx)
+    }
+
+    /// Traite un événement de transfert pour un Stream xHCI et met à jour ses métriques.
+    pub fn handle_stream_transfer_event(
+        &mut self,
+        ep_id: u8,
+        stream_id: u16,
+        trb: &Trb,
+    ) -> Result<TransferStatus, SysError> {
+        let comp_code = trb.completion_code();
+        if (ep_id as usize) >= MAX_ENDPOINTS || stream_id == 0 {
+            return Err(SysError::InvalidArgument);
+        }
+
+        let ep = &mut self.ep_rings[ep_id as usize];
+        if !ep.active || !ep.streams_enabled {
+            return Err(SysError::InvalidArgument);
+        }
+
+        let stream = ep
+            .streams
+            .iter_mut()
+            .find(|s| s.active && s.stream_id == stream_id)
+            .ok_or(SysError::InvalidArgument)?;
+
+        let remaining = trb.transfer_remainder();
+        let requested_bytes = if stream.ring.enqueue_idx > 0 {
+            stream.ring.trbs[stream.ring.enqueue_idx - 1].status & 0x1FFFF
+        } else {
+            0
+        };
+
+        let transferred = requested_bytes.saturating_sub(remaining);
+        stream.total_bytes_transferred += transferred as u64;
+
+        let status = TransferStatus {
+            trb_idx: stream.ring.enqueue_idx.saturating_sub(1),
+            bytes_transferred: transferred,
+            completed: comp_code == TRB_COMP_SUCCESS,
+            completion_code: comp_code,
+        };
+
+        stream.last_status = status;
+        if comp_code == TRB_COMP_SUCCESS {
+            Ok(status)
+        } else {
+            Err(SysError::BadAddress)
+        }
     }
 
     /// Soumet un transfert Isochrone USB 3.0 sur l'anneau de transfert de l'endpoint.
@@ -1309,5 +1652,76 @@ mod tests {
         assert_eq!(freed_slot, Some(3));
         assert_eq!(ctrl.port_slots[0], None);
         assert!(!ctrl.ep_rings[1].active); // Endpoint réinitialisé
+    }
+
+    #[test]
+    fn test_bulk_scatter_gather_and_streams() {
+        let mut ctrl = XhciController::new();
+        ctrl.ready = true;
+
+        assert!(ctrl.configure_endpoint_ring(2, false).is_ok());
+
+        // 1. Test Scatter-Gather sur Endpoint 2 (3 segments non contigus)
+        let segments = [
+            SgSegment::new(0x1000_0000, 2048),
+            SgSegment::new(0x2000_0000, 4096),
+            SgSegment::new(0x3000_0000, 1024),
+        ];
+
+        let sg_idx = ctrl
+            .queue_bulk_scatter_gather(2, &segments, true, true)
+            .expect("queue scatter gather");
+        assert_eq!(sg_idx, 0);
+
+        let ep = &ctrl.ep_rings[2];
+        // Premier segment : Chain bit = 1, IOC = 0
+        assert_eq!(ep.ring.trbs[0].parameter, 0x1000_0000);
+        assert_ne!(ep.ring.trbs[0].control & TRB_FLAG_CH, 0);
+        assert_eq!(ep.ring.trbs[0].control & TRB_FLAG_IOC, 0);
+
+        // Deuxième segment : Chain bit = 1, IOC = 0
+        assert_eq!(ep.ring.trbs[1].parameter, 0x2000_0000);
+        assert_ne!(ep.ring.trbs[1].control & TRB_FLAG_CH, 0);
+        assert_eq!(ep.ring.trbs[1].control & TRB_FLAG_IOC, 0);
+
+        // Troisième segment : Chain bit = 0, IOC = 1, ISP = 1
+        assert_eq!(ep.ring.trbs[2].parameter, 0x3000_0000);
+        assert_eq!(ep.ring.trbs[2].control & TRB_FLAG_CH, 0);
+        assert_ne!(ep.ring.trbs[2].control & TRB_FLAG_IOC, 0);
+        assert_ne!(ep.ring.trbs[2].control & TRB_FLAG_ISP, 0);
+
+        // 2. Test Bulk Stream (UAS - Stream ID 1 et 2)
+        assert!(ctrl.configure_bulk_stream(2, 1).is_ok());
+        assert!(ctrl.configure_bulk_stream(2, 2).is_ok());
+        assert!(ctrl.ep_rings[2].streams_enabled);
+
+        // Soumission de transfert sur Stream 1
+        let s1_idx = ctrl
+            .queue_stream_bulk_transfer(2, 1, 0x5000_0000, 4096, true, false)
+            .expect("queue stream 1");
+        assert_eq!(s1_idx, 0);
+
+        // Soumission de transfert scatter-gather sur Stream 2
+        let stream_sg = [
+            SgSegment::new(0x6000_0000, 512),
+            SgSegment::new(0x7000_0000, 1536),
+        ];
+        let s2_idx = ctrl
+            .queue_stream_scatter_gather(2, 2, &stream_sg, true, false)
+            .expect("queue stream 2 sg");
+        assert_eq!(s2_idx, 0);
+
+        // Complétion de stream 1
+        let trb_ev = Trb {
+            parameter: 0x5000_0000,
+            status: (TRB_COMP_SUCCESS as u32) << 24, // 0 bytes remaining
+            control: (TRB_TYPE_TRANSFER_EVENT << 10) | (2 << 16) | 1,
+        };
+        let status = ctrl
+            .handle_stream_transfer_event(2, 1, &trb_ev)
+            .expect("stream 1 completion");
+        assert!(status.completed);
+        assert_eq!(status.bytes_transferred, 4096);
+        assert_eq!(ctrl.ep_rings[2].streams[0].total_bytes_transferred, 4096);
     }
 }

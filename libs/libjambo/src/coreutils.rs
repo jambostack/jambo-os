@@ -16,6 +16,8 @@ pub struct VfsFileNode {
     pub is_active: bool,
     pub is_dir: bool,
     pub mode: u32,
+    pub uid: u32,
+    pub gid: u32,
 }
 
 impl VfsFileNode {
@@ -28,6 +30,8 @@ impl VfsFileNode {
             is_active: false,
             is_dir: false,
             mode: 0o644,
+            uid: 0,
+            gid: 0,
         }
     }
 
@@ -64,6 +68,8 @@ pub static mut INODE_POOL: [VfsFileNode; 32] = [
         is_active: true,
         is_dir: false,
         mode: 0o644,
+        uid: 0,
+        gid: 0,
     },
     // 1: /etc/os-release
     VfsFileNode {
@@ -92,6 +98,8 @@ pub static mut INODE_POOL: [VfsFileNode; 32] = [
         is_active: true,
         is_dir: false,
         mode: 0o644,
+        uid: 0,
+        gid: 0,
     },
     // 2: /etc/motd
     VfsFileNode {
@@ -120,6 +128,8 @@ pub static mut INODE_POOL: [VfsFileNode; 32] = [
         is_active: true,
         is_dir: false,
         mode: 0o644,
+        uid: 0,
+        gid: 0,
     },
     // 3: /etc (répertoire)
     VfsFileNode {
@@ -139,6 +149,8 @@ pub static mut INODE_POOL: [VfsFileNode; 32] = [
         is_active: true,
         is_dir: true,
         mode: 0o755,
+        uid: 0,
+        gid: 0,
     },
     // 4: /tmp (répertoire)
     VfsFileNode {
@@ -158,6 +170,8 @@ pub static mut INODE_POOL: [VfsFileNode; 32] = [
         is_active: true,
         is_dir: true,
         mode: 0o777,
+        uid: 0,
+        gid: 0,
     },
     VfsFileNode::empty(),
     VfsFileNode::empty(),
@@ -242,6 +256,9 @@ pub fn sys_open(path: &str, flags: i32) -> i32 {
                         let pool = core::ptr::addr_of!(INODE_POOL);
                         let node = &(*pool)[node_idx];
                         entry.size = node.size as u64;
+                        entry.mode = node.mode;
+                        entry.uid = node.uid;
+                        entry.gid = node.gid;
                         let len = node.size.min(crate::vfs::FILE_BUFFER_SIZE);
                         entry.buffer[..len].copy_from_slice(&node.buffer[..len]);
                         if (flags & crate::vfs::O_TRUNC) != 0 {
@@ -400,6 +417,67 @@ pub fn sys_get_mode_pool(path: &str) -> Option<u32> {
                     || (!target.starts_with('/') && p.strip_prefix('/').unwrap_or("") == target)
                 {
                     return Some(node.mode);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Modifie le propriétaire et le groupe d'un fichier ou répertoire dans le pool d'inodes virtuel
+pub fn sys_chown_pool(path: &str, uid: u32, gid: u32) -> i32 {
+    let clean_path = path.trim_end_matches('/');
+    let target = if clean_path.is_empty() {
+        "/"
+    } else {
+        clean_path
+    };
+    let mut found = false;
+    // SAFETY: Accès protégé au pool d'inodes virtuel
+    unsafe {
+        let pool = core::ptr::addr_of_mut!(INODE_POOL);
+        for node in (*pool).iter_mut() {
+            if node.is_active {
+                let p = node.path_str();
+                if p == target
+                    || (target.starts_with('/') && p == &target[1..])
+                    || (!target.starts_with('/') && p.strip_prefix('/').unwrap_or("") == target)
+                {
+                    node.uid = uid;
+                    node.gid = gid;
+                    found = true;
+                    break;
+                }
+            }
+        }
+    }
+    let _ = crate::vfs::with_fd_table(|tbl| tbl.chown(target, uid, gid));
+    if found {
+        0
+    } else {
+        -1
+    }
+}
+
+/// Lit le propriétaire et le groupe actuels d'un fichier ou répertoire dans le pool d'inodes virtuel
+pub fn sys_get_owner_pool(path: &str) -> Option<(u32, u32)> {
+    let clean_path = path.trim_end_matches('/');
+    let target = if clean_path.is_empty() {
+        "/"
+    } else {
+        clean_path
+    };
+    // SAFETY: Accès protégé au pool d'inodes virtuel
+    unsafe {
+        let pool = core::ptr::addr_of!(INODE_POOL);
+        for node in (*pool).iter() {
+            if node.is_active {
+                let p = node.path_str();
+                if p == target
+                    || (target.starts_with('/') && p == &target[1..])
+                    || (!target.starts_with('/') && p.strip_prefix('/').unwrap_or("") == target)
+                {
+                    return Some((node.uid, node.gid));
                 }
             }
         }
@@ -2930,6 +3008,270 @@ pub fn run_chmod(args: &[&str], err_fd: i32) -> i32 {
     }
 }
 
+/// Résout un identifiant ou nom d'utilisateur/groupe vers sa valeur numérique
+fn resolve_user_or_group(name: &str) -> Option<u32> {
+    match name {
+        "root" => Some(0),
+        "daemon" => Some(1),
+        "bin" => Some(2),
+        "sys" => Some(3),
+        "adm" => Some(4),
+        "user" => Some(1000),
+        "nobody" => Some(65534),
+        numeric if !numeric.is_empty() && numeric.bytes().all(|b| b.is_ascii_digit()) => {
+            let mut val: u32 = 0;
+            for b in numeric.bytes() {
+                val = val.checked_mul(10)?.checked_add((b - b'0') as u32)?;
+            }
+            Some(val)
+        }
+        _ => None,
+    }
+}
+
+/// Analyse une spécification de propriétaire et groupe (ex: "root", "root:root", ":bin", "1000:1000", "user.user")
+#[allow(clippy::result_unit_err)]
+pub fn parse_owner_group(spec: &str) -> Result<(Option<u32>, Option<u32>), ()> {
+    if spec.is_empty() {
+        return Err(());
+    }
+
+    let (user_part, group_part) = if let Some(pos) = spec.find(':') {
+        (&spec[..pos], Some(&spec[pos + 1..]))
+    } else if let Some(pos) = spec.find('.') {
+        (&spec[..pos], Some(&spec[pos + 1..]))
+    } else {
+        (spec, None)
+    };
+
+    let uid = if user_part.is_empty() {
+        None
+    } else {
+        Some(resolve_user_or_group(user_part).ok_or(())?)
+    };
+
+    let gid = match group_part {
+        Some("") => None,
+        Some(g) => Some(resolve_user_or_group(g).ok_or(())?),
+        None => None,
+    };
+
+    if uid.is_none() && gid.is_none() {
+        return Err(());
+    }
+
+    Ok((uid, gid))
+}
+
+/// Exécute l'utilitaire `chown` pour modifier le propriétaire et/ou le groupe de fichiers ou répertoires
+pub fn run_chown(args: &[&str], err_fd: i32) -> i32 {
+    let mut recursive = false;
+    let mut verbose = false;
+    let mut owner_str: Option<&str> = None;
+    let mut files_start = 0;
+
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i];
+        if arg == "-R" || arg == "--recursive" {
+            recursive = true;
+            i += 1;
+        } else if arg == "-v" || arg == "--verbose" {
+            verbose = true;
+            i += 1;
+        } else if arg.starts_with('-') && !arg.chars().skip(1).all(|c| c.is_ascii_digit()) {
+            let _ = sys_write(err_fd, b"chown: unrecognized option '");
+            let _ = sys_write(err_fd, arg.as_bytes());
+            let _ = sys_write(err_fd, b"'\n");
+            return 1;
+        } else if owner_str.is_none() {
+            owner_str = Some(arg);
+            files_start = i + 1;
+            break;
+        } else {
+            i += 1;
+        }
+    }
+
+    let raw_spec = match owner_str {
+        Some(s) => s,
+        None => {
+            let _ = sys_write(err_fd, b"chown: missing operand\n");
+            return 1;
+        }
+    };
+
+    let (parsed_uid, parsed_gid) = match parse_owner_group(raw_spec) {
+        Ok(res) => res,
+        Err(_) => {
+            let _ = sys_write(err_fd, b"chown: invalid user: '");
+            let _ = sys_write(err_fd, raw_spec.as_bytes());
+            let _ = sys_write(err_fd, b"'\n");
+            return 1;
+        }
+    };
+
+    let files = &args[files_start..];
+    if files.is_empty() {
+        let _ = sys_write(err_fd, b"chown: missing operand after '");
+        let _ = sys_write(err_fd, raw_spec.as_bytes());
+        let _ = sys_write(err_fd, b"'\n");
+        return 1;
+    }
+
+    let mut has_error = false;
+    for &target in files {
+        let (current_uid, current_gid) = match sys_get_owner_pool(target) {
+            Some(pair) => pair,
+            None => {
+                let _ = sys_write(err_fd, b"chown: cannot access '");
+                let _ = sys_write(err_fd, target.as_bytes());
+                let _ = sys_write(err_fd, b"': No such file or directory\n");
+                has_error = true;
+                continue;
+            }
+        };
+
+        let target_uid = parsed_uid.unwrap_or(current_uid);
+        let target_gid = parsed_gid.unwrap_or(current_gid);
+
+        let res = sys_chown_pool(target, target_uid, target_gid);
+        if res < 0 {
+            let _ = sys_write(err_fd, b"chown: cannot access '");
+            let _ = sys_write(err_fd, target.as_bytes());
+            let _ = sys_write(err_fd, b"': No such file or directory\n");
+            has_error = true;
+        } else {
+            if recursive {
+                let clean = target.trim_end_matches('/');
+                // SAFETY: Accès protégé au pool d'inodes virtuel
+                unsafe {
+                    let pool = core::ptr::addr_of_mut!(INODE_POOL);
+                    for node in (*pool).iter_mut() {
+                        if node.is_active {
+                            let p = node.path_str();
+                            if p.starts_with(clean)
+                                && (p.len() == clean.len()
+                                    || p.as_bytes().get(clean.len()) == Some(&b'/'))
+                            {
+                                if let Some(u) = parsed_uid {
+                                    node.uid = u;
+                                }
+                                if let Some(g) = parsed_gid {
+                                    node.gid = g;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if verbose {
+                let _ = sys_write(err_fd, b"ownership of '");
+                let _ = sys_write(err_fd, target.as_bytes());
+                let _ = sys_write(err_fd, b"' retained as ");
+                let _ = sys_write(err_fd, raw_spec.as_bytes());
+                let _ = sys_write(err_fd, b"\n");
+            }
+        }
+    }
+
+    if has_error {
+        1
+    } else {
+        0
+    }
+}
+
+/// Écrit un nombre entier non signé en décimal sur le descripteur
+fn write_u32(fd: i32, mut val: u32) {
+    if val == 0 {
+        let _ = sys_write(fd, b"0");
+        return;
+    }
+    let mut buf = [0u8; 10];
+    let mut idx = 10;
+    while val > 0 {
+        idx -= 1;
+        buf[idx] = b'0' + (val % 10) as u8;
+        val /= 10;
+    }
+    let _ = sys_write(fd, &buf[idx..]);
+}
+
+/// Exécute l'utilitaire `id` affichant les identités utilisateur et groupe Ring 3
+pub fn run_id(args: &[&str], _in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    let mut user_only = false;
+    let mut group_only = false;
+    let mut groups_all = false;
+    let mut name_only = false;
+
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i];
+        if arg.starts_with('-') && arg != "-" {
+            for b in arg[1..].bytes() {
+                match b {
+                    b'u' => user_only = true,
+                    b'g' => group_only = true,
+                    b'G' => groups_all = true,
+                    b'n' => name_only = true,
+                    _ => {
+                        let _ = sys_write(err_fd, b"id: extra operand -- '");
+                        let b_slice = [b];
+                        let _ = sys_write(err_fd, &b_slice);
+                        let _ = sys_write(err_fd, b"'\n");
+                        return 1;
+                    }
+                }
+            }
+        }
+        i += 1;
+    }
+
+    let uid = crate::vfs::getuid();
+    let gid = crate::vfs::getgid();
+
+    let user_name = if uid == 0 { "root" } else { "user" };
+    let group_name = if gid == 0 { "root" } else { "user" };
+
+    if user_only {
+        if name_only {
+            let _ = sys_write(out_fd, user_name.as_bytes());
+        } else {
+            write_u32(out_fd, uid);
+        }
+        let _ = sys_write(out_fd, b"\n");
+        return 0;
+    }
+
+    if group_only || groups_all {
+        if name_only {
+            let _ = sys_write(out_fd, group_name.as_bytes());
+        } else {
+            write_u32(out_fd, gid);
+        }
+        let _ = sys_write(out_fd, b"\n");
+        return 0;
+    }
+
+    // Sortie standard format POSIX : uid=0(root) gid=0(root) groups=0(root)
+    let _ = sys_write(out_fd, b"uid=");
+    write_u32(out_fd, uid);
+    let _ = sys_write(out_fd, b"(");
+    let _ = sys_write(out_fd, user_name.as_bytes());
+    let _ = sys_write(out_fd, b") gid=");
+    write_u32(out_fd, gid);
+    let _ = sys_write(out_fd, b"(");
+    let _ = sys_write(out_fd, group_name.as_bytes());
+    let _ = sys_write(out_fd, b") groups=");
+    write_u32(out_fd, gid);
+    let _ = sys_write(out_fd, b"(");
+    let _ = sys_write(out_fd, group_name.as_bytes());
+    let _ = sys_write(out_fd, b")\n");
+
+    0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3468,6 +3810,74 @@ mod tests {
         let code5 = run_chmod(&["999", "/etc/hostname"], w5);
         assert_eq!(code5, 1);
         sys_close(w5);
+        sys_close(r5);
+    }
+
+    #[test]
+    fn test_chown_and_id_utilities() {
+        // 1. Parsing de spécification propriétaire/groupe
+        assert_eq!(parse_owner_group("root"), Ok((Some(0), None)));
+        assert_eq!(parse_owner_group("root:root"), Ok((Some(0), Some(0))));
+        assert_eq!(parse_owner_group(":bin"), Ok((None, Some(2))));
+        assert_eq!(parse_owner_group("1000:1000"), Ok((Some(1000), Some(1000))));
+        assert_eq!(parse_owner_group("user.user"), Ok((Some(1000), Some(1000))));
+        assert!(parse_owner_group("invalid_user_xyz").is_err());
+
+        // 2. chown simple
+        let (r1, w1) = crate::vfs::pipe().expect("pipe chown 1");
+        let code1 = run_chown(&["1000:1000", "/etc/hostname"], w1);
+        assert_eq!(code1, 0);
+        sys_close(w1);
+        sys_close(r1);
+        assert_eq!(sys_get_owner_pool("/etc/hostname"), Some((1000, 1000)));
+
+        // 3. chown verbose (-v)
+        let (r2, w2) = crate::vfs::pipe().expect("pipe chown 2");
+        let code2 = run_chown(&["-v", "root:root", "/etc/hostname"], w2);
+        assert_eq!(code2, 0);
+        sys_close(w2);
+        let mut out2 = [0u8; 128];
+        let n2 = sys_read(r2, &mut out2);
+        assert!(n2 > 0);
+        let s2 = core::str::from_utf8(&out2[..n2 as usize]).unwrap();
+        assert!(s2.contains("ownership of '/etc/hostname' retained as root:root"));
+        sys_close(r2);
+        assert_eq!(sys_get_owner_pool("/etc/hostname"), Some((0, 0)));
+
+        // 4. chown récursif (-R)
+        let (r3, w3) = crate::vfs::pipe().expect("pipe chown 3");
+        let code3 = run_chown(&["-R", "1000", "/etc"], w3);
+        assert_eq!(code3, 0);
+        sys_close(w3);
+        sys_close(r3);
+        assert_eq!(sys_get_owner_pool("/etc"), Some((1000, 0)));
+        assert_eq!(sys_get_owner_pool("/etc/hostname"), Some((1000, 0)));
+
+        // Rétablissement en root:root
+        let _ = sys_chown_pool("/etc/hostname", 0, 0);
+        let _ = sys_chown_pool("/etc/os-release", 0, 0);
+        let _ = sys_chown_pool("/etc", 0, 0);
+
+        // 5. Test utilitaire id
+        let (r4, w4) = crate::vfs::pipe().expect("pipe id 1");
+        let code4 = run_id(&[], 0, w4, 2);
+        assert_eq!(code4, 0);
+        sys_close(w4);
+        let mut out4 = [0u8; 128];
+        let n4 = sys_read(r4, &mut out4);
+        assert!(n4 > 0);
+        let s4 = core::str::from_utf8(&out4[..n4 as usize]).unwrap();
+        assert!(s4.starts_with("uid=0(root) gid=0(root)"));
+        sys_close(r4);
+
+        // id -u
+        let (r5, w5) = crate::vfs::pipe().expect("pipe id 2");
+        let code5 = run_id(&["-u"], 0, w5, 2);
+        assert_eq!(code5, 0);
+        sys_close(w5);
+        let mut out5 = [0u8; 32];
+        let n5 = sys_read(r5, &mut out5);
+        assert_eq!(&out5[..n5 as usize], b"0\n");
         sys_close(r5);
     }
 }
