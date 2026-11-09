@@ -179,6 +179,32 @@ pub enum ShellStatus {
     ExecutionFailed,
 }
 
+pub const MAX_ENV_VARS: usize = 8;
+pub const MAX_ENV_KEY_LEN: usize = 16;
+pub const MAX_ENV_VAL_LEN: usize = 32;
+
+/// Entrée de variable d'environnement sans allocation heap
+#[derive(Clone, Copy)]
+pub struct ShellEnvEntry {
+    pub key: [u8; MAX_ENV_KEY_LEN],
+    pub key_len: usize,
+    pub val: [u8; MAX_ENV_VAL_LEN],
+    pub val_len: usize,
+    pub active: bool,
+}
+
+impl Default for ShellEnvEntry {
+    fn default() -> Self {
+        Self {
+            key: [0u8; MAX_ENV_KEY_LEN],
+            key_len: 0,
+            val: [0u8; MAX_ENV_VAL_LEN],
+            val_len: 0,
+            active: false,
+        }
+    }
+}
+
 /// Interpréteur de commandes JamboShell
 pub struct JamboShell {
     pub prompt_user: &'static str,
@@ -207,6 +233,7 @@ pub struct JamboShell {
     pub ueba_daemon: JamboUebaDaemon,
     pub itdr_daemon: JamboItdrDaemon,
     pub dlp_daemon: JamboDlpDaemon,
+    pub env_vars: [ShellEnvEntry; MAX_ENV_VARS],
 }
 
 impl Default for JamboShell {
@@ -328,7 +355,7 @@ impl JamboShell {
         );
         let mut dlp_daemon = JamboDlpDaemon::new(dlp_cap);
         dlp_daemon.init_defaults();
-        Self {
+        let mut shell = Self {
             prompt_user: "jambo",
             commands_executed: 0,
             auth_daemon,
@@ -355,7 +382,85 @@ impl JamboShell {
             ueba_daemon,
             itdr_daemon,
             dlp_daemon,
+            env_vars: [ShellEnvEntry::default(); MAX_ENV_VARS],
+        };
+        shell.init_defaults_env();
+        shell
+    }
+
+    /// Initialise les variables d'environnement par défaut
+    fn init_defaults_env(&mut self) {
+        self.set_env("PATH", "/bin");
+        self.set_env("USER", "root");
+        self.set_env("SHELL", "/bin/jsh");
+        self.set_env("TERM", "xterm-256color");
+        self.set_env("HOME", "/root");
+        self.set_env("OS", "JamboOS");
+    }
+
+    /// Récupère la valeur d'une variable d'environnement
+    pub fn get_env<'a>(&'a self, key: &str) -> Option<&'a str> {
+        let key_bytes = key.as_bytes();
+        for entry in self.env_vars.iter() {
+            if entry.active
+                && entry.key_len == key_bytes.len()
+                && &entry.key[..entry.key_len] == key_bytes
+            {
+                return core::str::from_utf8(&entry.val[..entry.val_len]).ok();
+            }
         }
+        None
+    }
+
+    /// Définit ou met à jour une variable d'environnement sans allocation heap
+    pub fn set_env(&mut self, key: &str, val: &str) -> bool {
+        let key_bytes = key.as_bytes();
+        let val_bytes = val.as_bytes();
+        if key_bytes.len() > MAX_ENV_KEY_LEN || val_bytes.len() > MAX_ENV_VAL_LEN {
+            return false;
+        }
+
+        // Vérifier si la variable existe déjà
+        for entry in self.env_vars.iter_mut() {
+            if entry.active
+                && entry.key_len == key_bytes.len()
+                && &entry.key[..entry.key_len] == key_bytes
+            {
+                entry.val[..val_bytes.len()].copy_from_slice(val_bytes);
+                entry.val_len = val_bytes.len();
+                return true;
+            }
+        }
+
+        // Trouver un slot libre
+        for entry in self.env_vars.iter_mut() {
+            if !entry.active {
+                entry.key[..key_bytes.len()].copy_from_slice(key_bytes);
+                entry.key_len = key_bytes.len();
+                entry.val[..val_bytes.len()].copy_from_slice(val_bytes);
+                entry.val_len = val_bytes.len();
+                entry.active = true;
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Supprime une variable d'environnement
+    pub fn unset_env(&mut self, key: &str) -> bool {
+        let key_bytes = key.as_bytes();
+        for entry in self.env_vars.iter_mut() {
+            if entry.active
+                && entry.key_len == key_bytes.len()
+                && &entry.key[..entry.key_len] == key_bytes
+            {
+                entry.active = false;
+                entry.key_len = 0;
+                entry.val_len = 0;
+                return true;
+            }
+        }
+        false
     }
 
     /// Analyse et exécute une ligne de commande saisie par l'utilisateur
@@ -396,6 +501,9 @@ impl JamboShell {
             "cp" | "/bin/cp" | "bin/cp" => self.cmd_cp(args, out),
             "mv" | "/bin/mv" | "bin/mv" => self.cmd_mv(args, out),
             "tee" | "/bin/tee" | "bin/tee" => self.cmd_tee(args, out),
+            "env" | "/bin/env" | "bin/env" => self.cmd_env(args, out),
+            "export" => self.cmd_export(args, out),
+            "unset" => self.cmd_unset(args, out),
             "wc" | "/bin/wc" | "bin/wc" => self.cmd_wc(args, out),
             "ls" | "/bin/ls" | "bin/ls" => self.cmd_ls(args, out),
             "true" | "/bin/true" | "bin/true" => (ShellStatus::Success, 0),
@@ -462,10 +570,14 @@ impl JamboShell {
   rm [-f] [-r] <files> - Supprime un fichier ou un repertoire\n\
   cp [-r] <src> <dst> - Copie un fichier ou un repertoire\n\
   mv <src> <dst> - Deplace ou renomme un fichier ou un repertoire\n\
+  tee [-a] <files> - Duplique l'entree standard vers la sortie et des fichiers\n\
+  env [-i] [-u K] [K=V] [cmd] - Affiche ou modifie l'environnement Ring 3\n\
+  export <K=V> - Definit une variable d'environnement dans le shell\n\
+  unset <K>   - Supprime une variable d'environnement du shell\n\
   ls [-l] [-a] - Liste les fichiers et repertoires\n\
   wc [-l] [-w] [-c] <files> - Compte les lignes, mots et octets\n\
   true / false - Retourne un statut de succes (0) ou d'echec (1)\n\
-  coreutils   - Liste les 13 utilitaires Ring 3 (/bin/*)\n\
+  coreutils   - Liste les 15 utilitaires Ring 3 (/bin/*)\n\
   uname       - Affiche le nom et l'architecture du systeme\n\
   version     - Affiche les details de version du micro-noyau\n\
   uptime      - Affiche le temps d'activite du systeme\n\
@@ -581,7 +693,7 @@ impl JamboShell {
 
     fn cmd_coreutils(&self, out: &mut [u8]) -> (ShellStatus, usize) {
         let text = b"Utilitaires Coreutils Ring 3 (services/jambo-coreutils) :\n\
-  Binaires disponibles : /bin/echo, /bin/cat, /bin/head, /bin/tail, /bin/touch, /bin/mkdir, /bin/rm, /bin/cp, /bin/mv, /bin/tee, /bin/wc, /bin/true, /bin/false, /bin/ls (14 utilitaires)\n\
+  Binaires disponibles : /bin/echo, /bin/cat, /bin/head, /bin/tail, /bin/touch, /bin/mkdir, /bin/rm, /bin/cp, /bin/mv, /bin/tee, /bin/env, /bin/wc, /bin/true, /bin/false, /bin/ls (15 utilitaires)\n\
   Architecture & ABI   : System V AMD64 ELF64 (ET_EXEC / Ring 3 Userland)\n\
   Point d'entree       : _start (parsing argc/argv sur pile System V)\n\
   Terminaison          : Syscall 11 ThreadExit avec propagation code de retour POSIX\n\
@@ -1033,7 +1145,12 @@ ABI : 29 Appels Systeme (jambo-abi v0.4) avec Coreutils Ring 3, VFS POSIX & Fuzz
                 out[cursor] = b' ';
                 cursor += 1;
             }
-            let bytes = arg.as_bytes();
+            let val = if let Some(var_name) = arg.strip_prefix('$') {
+                self.get_env(var_name).unwrap_or("")
+            } else {
+                arg
+            };
+            let bytes = val.as_bytes();
             let to_copy = bytes.len().min(out.len().saturating_sub(cursor));
             out[cursor..cursor + to_copy].copy_from_slice(&bytes[..to_copy]);
             cursor += to_copy;
@@ -1536,6 +1653,61 @@ ABI : 29 Appels Systeme (jambo-abi v0.4) avec Coreutils Ring 3, VFS POSIX & Fuzz
             out[..len].copy_from_slice(&msg[..len]);
             (ShellStatus::ExecutionFailed, len)
         }
+    }
+
+    fn cmd_env(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if args.is_empty() {
+            let mut cursor = 0;
+            for entry in self.env_vars.iter() {
+                if entry.active {
+                    let k = &entry.key[..entry.key_len];
+                    let v = &entry.val[..entry.val_len];
+                    let needed = k.len() + v.len() + 2;
+                    if cursor + needed <= out.len() {
+                        out[cursor..cursor + k.len()].copy_from_slice(k);
+                        cursor += k.len();
+                        out[cursor] = b'=';
+                        cursor += 1;
+                        out[cursor..cursor + v.len()].copy_from_slice(v);
+                        cursor += v.len();
+                        out[cursor] = b'\n';
+                        cursor += 1;
+                    }
+                }
+            }
+            (ShellStatus::Success, cursor)
+        } else {
+            let code = libjambo::coreutils::run_env(args, 0, 1, 2);
+            if code == 0 {
+                (ShellStatus::Success, 0)
+            } else {
+                let msg = b"env: execution failed\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                (ShellStatus::ExecutionFailed, len)
+            }
+        }
+    }
+
+    fn cmd_export(&mut self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if args.is_empty() {
+            return self.cmd_env(args, out);
+        }
+        for &arg in args {
+            if let Some(eq) = arg.find('=') {
+                let k = &arg[..eq];
+                let v = &arg[eq + 1..];
+                self.set_env(k, v);
+            }
+        }
+        (ShellStatus::Success, 0)
+    }
+
+    fn cmd_unset(&mut self, args: &[&str], _out: &mut [u8]) -> (ShellStatus, usize) {
+        for &arg in args {
+            self.unset_env(arg);
+        }
+        (ShellStatus::Success, 0)
     }
 
     fn cmd_ifconfig(&self, out: &mut [u8]) -> (ShellStatus, usize) {
@@ -16722,7 +16894,7 @@ mod tests {
         let (st, len) = shell.execute_line("coreutils", &mut out);
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
-        assert!(s.contains("14 utilitaires"));
+        assert!(s.contains("15 utilitaires"));
         assert!(s.contains("/bin/head"));
         assert!(s.contains("/bin/tail"));
         assert!(s.contains("/bin/touch"));
@@ -16731,6 +16903,7 @@ mod tests {
         assert!(s.contains("/bin/cp"));
         assert!(s.contains("/bin/mv"));
         assert!(s.contains("/bin/tee"));
+        assert!(s.contains("/bin/env"));
     }
 
     #[test]
@@ -16803,5 +16976,50 @@ mod tests {
         assert!(s.contains("Virtual File System (VFS)"));
         assert!(s.contains("Redirection I/O"));
         assert!(s.contains("Pipes Anonymes IPC"));
+    }
+
+    #[test]
+    fn test_environment_variables_lifecycle() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 1024];
+
+        // 1. Vérification des variables par défaut
+        assert_eq!(shell.get_env("USER"), Some("root"));
+        assert_eq!(shell.get_env("OS"), Some("JamboOS"));
+        assert_eq!(shell.get_env("SHELL"), Some("/bin/jsh"));
+
+        // 2. Affichage par défaut via la commande built-in env
+        let (st_env, len_env) = shell.execute_line("env", &mut out);
+        assert_eq!(st_env, ShellStatus::Success);
+        let s_env = core::str::from_utf8(&out[..len_env]).unwrap();
+        assert!(s_env.contains("USER=root\n"));
+        assert!(s_env.contains("OS=JamboOS\n"));
+
+        // 3. Définition via export
+        let (st_exp, _) = shell.execute_line("export APP_ENV=production", &mut out);
+        assert_eq!(st_exp, ShellStatus::Success);
+        assert_eq!(shell.get_env("APP_ENV"), Some("production"));
+
+        // 4. Expansion de variables via echo
+        let (st_echo, len_echo) = shell.execute_line("echo $USER is on $OS", &mut out);
+        assert_eq!(st_echo, ShellStatus::Success);
+        let s_echo = core::str::from_utf8(&out[..len_echo]).unwrap();
+        assert_eq!(s_echo, "root is on JamboOS\n");
+
+        let (st_echo2, len_echo2) = shell.execute_line("echo Mode: $APP_ENV", &mut out);
+        assert_eq!(st_echo2, ShellStatus::Success);
+        let s_echo2 = core::str::from_utf8(&out[..len_echo2]).unwrap();
+        assert_eq!(s_echo2, "Mode: production\n");
+
+        // 5. Suppression via unset
+        let (st_un, _) = shell.execute_line("unset APP_ENV", &mut out);
+        assert_eq!(st_un, ShellStatus::Success);
+        assert_eq!(shell.get_env("APP_ENV"), None);
+
+        // 6. Echo sur variable unset -> chaîne vide
+        let (st_echo3, len_echo3) = shell.execute_line("echo $APP_ENV", &mut out);
+        assert_eq!(st_echo3, ShellStatus::Success);
+        let s_echo3 = core::str::from_utf8(&out[..len_echo3]).unwrap();
+        assert_eq!(s_echo3, "\n");
     }
 }

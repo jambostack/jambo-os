@@ -34,6 +34,7 @@ pub const NVME_IO_READ: u8 = 0x02;
 
 pub const QUEUE_SIZE: usize = 64;
 pub const NVME_PRP_ENTRIES_MAX: usize = 512;
+pub const NVME_PRP_CHAIN_MAX_PAGES: usize = 1023; // 511 (primaire) + 512 (extension)
 
 /// Liste de pointeurs de pages de régions physiques (PRP List) conforme NVMe 1.4 (4096 octets, alignement 4096).
 #[repr(C, align(4096))]
@@ -67,6 +68,257 @@ impl NvmePrpList {
     /// Réinitialise la liste
     pub fn clear(&mut self) {
         self.entries = [0u64; NVME_PRP_ENTRIES_MAX];
+    }
+}
+
+/// Descripteur de table de chaînage de pages PRP conforme NVMe 1.4 section 4.1.2.
+/// Lorsque le nombre de pages physiques excède une seule table (512 entrées),
+/// la dernière entrée (511) de la première table pointe vers l'IOVA de la table d'extension.
+#[repr(C, align(4096))]
+#[derive(Clone, Copy)]
+pub struct NvmePrpExtensionChain {
+    /// Première page de PRP List (entrées 0..510 = IOVA données, entrée 511 = IOVA extension si chaîné)
+    pub primary_list: NvmePrpList,
+    /// Seconde page de PRP List (page d'extension, entrées 0..511 = IOVA données)
+    pub extension_list: NvmePrpList,
+    /// Nombre de pages de données enregistrées dans la chaîne (hors PRP1)
+    pub data_page_count: usize,
+    /// Adresse IOVA de la table d'extension physique
+    pub extension_iova: u64,
+}
+
+impl Default for NvmePrpExtensionChain {
+    fn default() -> Self {
+        Self::new(0)
+    }
+}
+
+impl NvmePrpExtensionChain {
+    /// Crée une chaîne PRP avec l'adresse IOVA de la page d'extension
+    pub const fn new(extension_iova: u64) -> Self {
+        Self {
+            primary_list: NvmePrpList::new(),
+            extension_list: NvmePrpList::new(),
+            data_page_count: 0,
+            extension_iova,
+        }
+    }
+
+    /// Réinitialise la chaîne PRP
+    pub fn reset(&mut self, extension_iova: u64) {
+        self.primary_list.clear();
+        self.extension_list.clear();
+        self.data_page_count = 0;
+        self.extension_iova = extension_iova;
+    }
+
+    /// Ajoute une page de données physique à la liste chaînée
+    pub fn add_data_page(&mut self, page_iova: u64) -> Result<(), SysError> {
+        if self.data_page_count >= NVME_PRP_CHAIN_MAX_PAGES {
+            return Err(SysError::OutOfMemory);
+        }
+
+        if self.data_page_count < (NVME_PRP_ENTRIES_MAX - 1) {
+            // Entre 0 et 510 : écriture directe dans la table primaire
+            self.primary_list
+                .set_entry(self.data_page_count, page_iova)?;
+            self.data_page_count += 1;
+            Ok(())
+        } else if self.data_page_count == (NVME_PRP_ENTRIES_MAX - 1) {
+            // Transition vers la table d'extension :
+            // L'entrée 511 de la table primaire pointe vers l'adresse IOVA de la table d'extension
+            self.primary_list
+                .set_entry(NVME_PRP_ENTRIES_MAX - 1, self.extension_iova)?;
+            self.extension_list.set_entry(0, page_iova)?;
+            self.data_page_count += 1;
+            Ok(())
+        } else {
+            // Au-delà de 511 : écriture dans la table d'extension
+            let ext_idx = self.data_page_count - (NVME_PRP_ENTRIES_MAX - 1);
+            if ext_idx >= NVME_PRP_ENTRIES_MAX {
+                return Err(SysError::OutOfMemory);
+            }
+            self.extension_list.set_entry(ext_idx, page_iova)?;
+            self.data_page_count += 1;
+            Ok(())
+        }
+    }
+
+    /// Indique si la chaîne utilise une page d'extension (plus de 511 pages)
+    #[inline]
+    pub fn is_chained(&self) -> bool {
+        self.data_page_count >= NVME_PRP_ENTRIES_MAX
+    }
+
+    /// Vérifie l'intégrité matérielle du chaînage NVMe 1.4
+    pub fn verify_integrity(&self) -> bool {
+        if self.is_chained() {
+            // La dernière entrée de primary_list doit correspondre à l'IOVA de l'extension
+            self.primary_list.entries[NVME_PRP_ENTRIES_MAX - 1] == self.extension_iova
+                && self.extension_iova != 0
+        } else {
+            true
+        }
+    }
+
+    /// Construit le descripteur NvmeDmaBuffer associé
+    pub fn build_dma_buffer(&self, first_page_iova: u64, primary_list_iova: u64) -> NvmeDmaBuffer {
+        NvmeDmaBuffer::scatter_gather(
+            first_page_iova,
+            primary_list_iova,
+            self.data_page_count + 1, // + 1 pour la première page de données (PRP1)
+        )
+    }
+}
+
+pub const NVME_MSIX_MAX_VECTORS: usize = 32;
+pub const MSIX_VECTOR_CONTROL_MASK: u32 = 0x01;
+
+/// Entrée de table MSI-X conforme PCIe / NVMe 1.4 (16 octets, alignement 16).
+#[repr(C, align(16))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct NvmeMsixTableEntry {
+    pub msg_addr_lo: u32,
+    pub msg_addr_hi: u32,
+    pub msg_data: u32,
+    pub vector_control: u32,
+}
+
+impl NvmeMsixTableEntry {
+    /// Indique si ce vecteur d'interruption est masqué
+    #[inline]
+    pub fn is_masked(&self) -> bool {
+        (self.vector_control & MSIX_VECTOR_CONTROL_MASK) != 0
+    }
+
+    /// Masque ce vecteur d'interruption
+    #[inline]
+    pub fn mask(&mut self) {
+        self.vector_control |= MSIX_VECTOR_CONTROL_MASK;
+    }
+
+    /// Démasque ce vecteur d'interruption
+    #[inline]
+    pub fn unmask(&mut self) {
+        self.vector_control &= !MSIX_VECTOR_CONTROL_MASK;
+    }
+
+    /// Extrait le numéro de vecteur CPU configuré (bits 7:0 de msg_data)
+    #[inline]
+    pub fn vector_number(&self) -> u8 {
+        (self.msg_data & 0xFF) as u8
+    }
+}
+
+/// Anneau de gestion des interruptions MSI-X pour files NVMe.
+#[repr(C, align(64))]
+#[derive(Clone, Copy)]
+pub struct NvmeMsixRing {
+    pub entries: [NvmeMsixTableEntry; NVME_MSIX_MAX_VECTORS],
+    pub vector_count: usize,
+    pub enabled: bool,
+    pub pending_bits: u32, // Registre PBA (Pending Bit Array)
+}
+
+impl Default for NvmeMsixRing {
+    fn default() -> Self {
+        Self::new(0)
+    }
+}
+
+impl NvmeMsixRing {
+    pub const fn new(vector_count: usize) -> Self {
+        let count = if vector_count > NVME_MSIX_MAX_VECTORS {
+            NVME_MSIX_MAX_VECTORS
+        } else {
+            vector_count
+        };
+        Self {
+            entries: [NvmeMsixTableEntry {
+                msg_addr_lo: 0,
+                msg_addr_hi: 0,
+                msg_data: 0,
+                vector_control: MSIX_VECTOR_CONTROL_MASK, // Masqué par défaut
+            }; NVME_MSIX_MAX_VECTORS],
+            vector_count: count,
+            enabled: false,
+            pending_bits: 0,
+        }
+    }
+
+    /// Configure un vecteur MSI-X pour délivrer l'interruption au LAPIC cible (x86/x86_64)
+    pub fn configure_vector(
+        &mut self,
+        index: usize,
+        apic_id: u8,
+        vector: u8,
+        masked: bool,
+    ) -> Result<(), SysError> {
+        if index >= self.vector_count {
+            return Err(SysError::InvalidArgument);
+        }
+
+        // Format standard MSI x86 : 0xFEE0_0000 | (APIC_ID << 12)
+        let msg_addr = 0xFEE0_0000u32 | ((apic_id as u32) << 12);
+        self.entries[index] = NvmeMsixTableEntry {
+            msg_addr_lo: msg_addr,
+            msg_addr_hi: 0,
+            msg_data: vector as u32,
+            vector_control: if masked { MSIX_VECTOR_CONTROL_MASK } else { 0 },
+        };
+        Ok(())
+    }
+
+    /// Masque un vecteur
+    pub fn mask_vector(&mut self, index: usize) -> Result<(), SysError> {
+        if index >= self.vector_count {
+            return Err(SysError::InvalidArgument);
+        }
+        self.entries[index].mask();
+        Ok(())
+    }
+
+    /// Démasque un vecteur
+    pub fn unmask_vector(&mut self, index: usize) -> Result<(), SysError> {
+        if index >= self.vector_count {
+            return Err(SysError::InvalidArgument);
+        }
+        self.entries[index].unmask();
+        Ok(())
+    }
+
+    /// Indique si un vecteur est masqué
+    pub fn is_masked(&self, index: usize) -> Result<bool, SysError> {
+        if index >= self.vector_count {
+            return Err(SysError::InvalidArgument);
+        }
+        Ok(self.entries[index].is_masked())
+    }
+
+    /// Enregistre une interruption en attente dans le PBA
+    pub fn signal_pending(&mut self, index: usize) -> Result<(), SysError> {
+        if index >= self.vector_count || index >= 32 {
+            return Err(SysError::InvalidArgument);
+        }
+        self.pending_bits |= 1u32 << index;
+        Ok(())
+    }
+
+    /// Acquitte et efface une interruption du PBA
+    pub fn clear_pending(&mut self, index: usize) -> Result<(), SysError> {
+        if index >= self.vector_count || index >= 32 {
+            return Err(SysError::InvalidArgument);
+        }
+        self.pending_bits &= !(1u32 << index);
+        Ok(())
+    }
+
+    /// Vérifie si une interruption est en attente dans le PBA
+    pub fn is_pending(&self, index: usize) -> Result<bool, SysError> {
+        if index >= self.vector_count || index >= 32 {
+            return Err(SysError::InvalidArgument);
+        }
+        Ok((self.pending_bits & (1u32 << index)) != 0)
     }
 }
 
@@ -252,6 +504,8 @@ pub struct NvmeController {
     pub block_size: u32,
     pub ready: bool,
     pub next_cid: u16,
+    pub msix: NvmeMsixRing,
+    pub cq_vector_map: [u8; 8],
 }
 
 impl Default for NvmeController {
@@ -271,7 +525,80 @@ impl NvmeController {
             block_size: 512,
             ready: false,
             next_cid: 1,
+            msix: NvmeMsixRing::new(4),
+            cq_vector_map: [0xFF; 8],
         }
+    }
+
+    /// Active et initialise l'anneau MSI-X avec le nombre de vecteurs demandés
+    pub fn enable_msix(&mut self, vector_count: usize) -> Result<(), SysError> {
+        self.msix = NvmeMsixRing::new(vector_count);
+        self.msix.enabled = true;
+        self.cq_vector_map = [0xFF; 8];
+        Ok(())
+    }
+
+    /// Associe une file de complétion (CQ) à un vecteur MSI-X et configure la livraison APIC
+    pub fn bind_cq_msix(
+        &mut self,
+        qid: u16,
+        vector_index: usize,
+        apic_id: u8,
+        cpu_vector: u8,
+    ) -> Result<(), SysError> {
+        if qid as usize >= self.cq_vector_map.len() {
+            return Err(SysError::InvalidArgument);
+        }
+        self.msix
+            .configure_vector(vector_index, apic_id, cpu_vector, false)?;
+        self.cq_vector_map[qid as usize] = vector_index as u8;
+        Ok(())
+    }
+
+    /// Réceptionne un événement d'interruption CPU MSI-X et résout l'identifiant de la file CQ associée
+    pub fn handle_msix_interrupt(&mut self, cpu_vector: u8) -> Option<u16> {
+        for (qid, &v_idx) in self.cq_vector_map.iter().enumerate() {
+            if v_idx != 0xFF && (v_idx as usize) < self.msix.vector_count {
+                let entry = self.msix.entries[v_idx as usize];
+                if !entry.is_masked() && entry.vector_number() == cpu_vector {
+                    let _ = self.msix.clear_pending(v_idx as usize);
+                    return Some(qid as u16);
+                }
+            }
+        }
+        None
+    }
+
+    /// Émet une commande de lecture avec une chaîne d'extension PRP (transfert multi-pages scatter-gather)
+    pub fn read_blocks_chained(
+        &mut self,
+        lba: u64,
+        count: u16,
+        chain: &NvmePrpExtensionChain,
+        first_page_iova: u64,
+        primary_list_iova: u64,
+    ) -> Result<(), SysError> {
+        if !chain.verify_integrity() {
+            return Err(SysError::InvalidArgument);
+        }
+        let dma = chain.build_dma_buffer(first_page_iova, primary_list_iova);
+        self.read_blocks_dma(lba, count, dma)
+    }
+
+    /// Émet une commande d'écriture avec une chaîne d'extension PRP (transfert multi-pages scatter-gather)
+    pub fn write_blocks_chained(
+        &mut self,
+        lba: u64,
+        count: u16,
+        chain: &NvmePrpExtensionChain,
+        first_page_iova: u64,
+        primary_list_iova: u64,
+    ) -> Result<(), SysError> {
+        if !chain.verify_integrity() {
+            return Err(SysError::InvalidArgument);
+        }
+        let dma = chain.build_dma_buffer(first_page_iova, primary_list_iova);
+        self.write_blocks_dma(lba, count, dma)
     }
 
     /// Calcule le décalage mémoire du registre Doorbell pour une file donnée.
@@ -537,5 +864,82 @@ mod tests {
         assert_eq!(sg_cmd.prp2, 0x4000_0000);
         assert_eq!(sg_cmd.cdw10, 4096);
         assert_eq!(sg_cmd.cdw12, 127); // 128 - 1
+    }
+
+    #[test]
+    fn test_prp_extension_chaining() {
+        let mut chain = NvmePrpExtensionChain::new(0x5000_0000);
+        assert!(!chain.is_chained());
+        assert_eq!(chain.data_page_count, 0);
+
+        // Ajouter 511 pages (remplit la table primaire sans chaînage)
+        for i in 0..511 {
+            assert!(chain
+                .add_data_page(0x1000_0000 + (i as u64 * 0x1000))
+                .is_ok());
+        }
+        assert!(!chain.is_chained());
+        assert_eq!(chain.data_page_count, 511);
+
+        // Ajouter la 512e page -> déclenche le chaînage vers extension_iova (0x5000_0000)
+        assert!(chain.add_data_page(0x2000_0000).is_ok());
+        assert!(chain.is_chained());
+        assert_eq!(chain.data_page_count, 512);
+        assert_eq!(chain.primary_list.entries[511], 0x5000_0000);
+        assert_eq!(chain.extension_list.entries[0], 0x2000_0000);
+        assert!(chain.verify_integrity());
+
+        // Ajouter 100 pages supplémentaires dans la table d'extension
+        for i in 1..101 {
+            assert!(chain
+                .add_data_page(0x2000_0000 + (i as u64 * 0x1000))
+                .is_ok());
+        }
+        assert_eq!(chain.data_page_count, 612);
+        assert!(chain.verify_integrity());
+
+        // Tester la construction du NvmeDmaBuffer et l'envoi d'une commande
+        let mut ctrl = NvmeController::new();
+        ctrl.ready = true;
+        assert!(ctrl
+            .read_blocks_chained(0, 1024, &chain, 0x0FFF_0000, 0x4000_0000)
+            .is_ok());
+        let last_cmd = ctrl.io_queue.sq[0];
+        assert_eq!((last_cmd.cdw0 & 0xFF) as u8, NVME_IO_READ);
+        assert_eq!(last_cmd.prp1, 0x0FFF_0000);
+        assert_eq!(last_cmd.prp2, 0x4000_0000);
+    }
+
+    #[test]
+    fn test_msix_ring_and_controller_binding() {
+        let mut ctrl = NvmeController::new();
+        assert!(ctrl.enable_msix(8).is_ok());
+        assert_eq!(ctrl.msix.vector_count, 8);
+        assert!(ctrl.msix.enabled);
+
+        // Lier Admin CQ (qid 0) au vecteur MSI-X 0 (vecteur CPU 48 sur APIC 0)
+        assert!(ctrl.bind_cq_msix(0, 0, 0, 48).is_ok());
+        assert!(!ctrl.msix.is_masked(0).unwrap());
+        assert_eq!(ctrl.msix.entries[0].msg_addr_lo, 0xFEE0_0000);
+        assert_eq!(ctrl.msix.entries[0].vector_number(), 48);
+
+        // Lier I/O CQ (qid 1) au vecteur MSI-X 1 (vecteur CPU 49 sur APIC 1)
+        assert!(ctrl.bind_cq_msix(1, 1, 1, 49).is_ok());
+        assert_eq!(ctrl.msix.entries[1].msg_addr_lo, 0xFEE0_1000);
+        assert_eq!(ctrl.msix.entries[1].vector_number(), 49);
+
+        // Simuler la réception d'une interruption MSI-X vecteur CPU 49
+        assert!(ctrl.msix.signal_pending(1).is_ok());
+        assert!(ctrl.msix.is_pending(1).unwrap());
+
+        let qid_dispatched = ctrl.handle_msix_interrupt(49);
+        assert_eq!(qid_dispatched, Some(1)); // I/O CQ identifiée
+        assert!(!ctrl.msix.is_pending(1).unwrap()); // PBA effacé
+
+        // Masquer le vecteur 1
+        assert!(ctrl.msix.mask_vector(1).is_ok());
+        assert!(ctrl.msix.is_masked(1).unwrap());
+        // Quand masqué, l'interruption n'est pas traitée
+        assert_eq!(ctrl.handle_msix_interrupt(49), None);
     }
 }

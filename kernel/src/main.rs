@@ -292,6 +292,31 @@ fn execute_boundary_hardening_tests() -> bool {
         "Atténuation monotone respectée: droits réduits à READ"
     );
 
+    // Vérifier que Proc B ne peut pas re-transférer sans cap_rights::TRANSFER
+    let mut dummy_cspace = cap::CSpace::new();
+    let transfer_no_perm = proc_b.cspace.lock().transfer_to(
+        jambo_abi::Handle(transferred_h),
+        jambo_abi::cap_rights::ALL,
+        &mut dummy_cspace,
+    );
+    assert_eq!(
+        transfer_no_perm.err(),
+        Some(jambo_abi::SysError::PermissionDenied),
+        "Transfert sans cap_rights::TRANSFER formellement rejeté"
+    );
+
+    // Validation formelle de la barrière anti-spectre et de la non-amplification des droits
+    assert_eq!(
+        cap::sanitize_slot_index(0xDEAD_BEEF, 16),
+        None,
+        "Indice CSpace hors bornes neutralisé par barrière anti-spectre"
+    );
+    assert_eq!(
+        cap::attenuate_rights(jambo_abi::cap_rights::READ, jambo_abi::cap_rights::ALL),
+        jambo_abi::cap_rights::READ,
+        "Atténuation monotone formelle: READ & ALL = READ"
+    );
+
     // Rétablir SCHEDULER.current = None
     {
         let mut sched = sched::SCHEDULER.lock();

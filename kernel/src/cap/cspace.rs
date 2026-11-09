@@ -31,6 +31,48 @@ struct CSpaceSlot {
     generation: u32,
 }
 
+/// Barrière de sérialisation spéculative matérielle contre les attaques Spectre V1 (Bounds Check Bypass).
+/// Bloque l'exécution spéculative d'instructions tant que les vérifications de bornes ne sont pas résolues.
+#[inline(always)]
+pub fn speculation_barrier() {
+    #[cfg(target_arch = "x86_64")]
+    // SAFETY: lfence garantit la sérialisation matérielle des accès mémoire et des instructions spéculatives.
+    unsafe {
+        core::arch::asm!("lfence", options(nomem, nostack, preserves_flags));
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    // SAFETY: isb garantit la synchronisation des instructions et bloque la spéculation sur AArch64.
+    unsafe {
+        core::arch::asm!("isb", options(nomem, nostack, preserves_flags));
+    }
+}
+
+/// Sécurise l'index de slot contre le contournement spéculatif des limites de tableau (Spectre V1).
+/// En cas d'indice hors bornes, la barrière matérielle stoppe immédiatement l'exécution spéculative
+/// et retourne `None`.
+#[inline(always)]
+pub fn sanitize_slot_index(idx: usize, len: usize) -> Option<usize> {
+    if idx >= len {
+        speculation_barrier();
+        return None;
+    }
+    speculation_barrier();
+    Some(idx)
+}
+
+/// Atténue de façon monotone les droits d'une capacité.
+/// Invariant formel : (attenuate_rights(orig, mask) & !orig) == 0.
+#[inline(always)]
+pub fn attenuate_rights(original: u32, rights_mask: u32) -> u32 {
+    let mask = if rights_mask == 0 {
+        original
+    } else {
+        rights_mask
+    };
+    original & mask
+}
+
 pub struct CSpace {
     slots: Vec<CSpaceSlot>,
 }
@@ -76,12 +118,10 @@ impl CSpace {
         Handle::new(index, gen)
     }
 
-    /// Résout un Handle et vérifie les droits demandés
+    /// Résout un Handle et vérifie les droits demandés avec barrière anti-spectre
     pub fn lookup(&self, handle: Handle, required_rights: u32) -> Result<KernelObject, SysError> {
-        let idx = handle.index() as usize;
-        if idx >= self.slots.len() {
-            return Err(SysError::InvalidHandle);
-        }
+        let raw_idx = handle.index() as usize;
+        let idx = sanitize_slot_index(raw_idx, self.slots.len()).ok_or(SysError::InvalidHandle)?;
 
         let slot = &self.slots[idx];
         if slot.generation != handle.generation() {
@@ -99,12 +139,10 @@ impl CSpace {
         }
     }
 
-    /// Récupère la capacité brute (objet et droits) associée à un handle
+    /// Récupère la capacité brute (objet et droits) associée à un handle avec barrière anti-spectre
     pub fn get_cap(&self, handle: Handle) -> Result<Capability, SysError> {
-        let idx = handle.index() as usize;
-        if idx >= self.slots.len() {
-            return Err(SysError::InvalidHandle);
-        }
+        let raw_idx = handle.index() as usize;
+        let idx = sanitize_slot_index(raw_idx, self.slots.len()).ok_or(SysError::InvalidHandle)?;
         let slot = &self.slots[idx];
         if slot.generation != handle.generation() {
             return Err(SysError::InvalidHandle);
@@ -115,9 +153,15 @@ impl CSpace {
     /// Duplique une capacité en réduisant optionnellement ses droits
     pub fn duplicate(&mut self, handle: Handle, rights_mask: u32) -> Result<Handle, SysError> {
         let obj = self.lookup(handle, cap_rights::DUPLICATE)?;
-        let idx = handle.index() as usize;
+        let raw_idx = handle.index() as usize;
+        let idx = sanitize_slot_index(raw_idx, self.slots.len()).ok_or(SysError::InvalidHandle)?;
         let current_rights = self.slots[idx].cap.as_ref().unwrap().rights;
-        let new_rights = current_rights & rights_mask; // Les droits ne peuvent qu'être réduits
+        let new_rights = attenuate_rights(current_rights, rights_mask);
+        debug_assert_eq!(
+            new_rights & !current_rights,
+            0,
+            "Violation d'atténuation monotone des droits lors d'une duplication CSpace"
+        );
 
         Ok(self.insert(obj, new_rights))
     }
@@ -129,10 +173,8 @@ impl CSpace {
         rights_mask: u32,
         target: &mut CSpace,
     ) -> Result<Handle, SysError> {
-        let idx = handle.index() as usize;
-        if idx >= self.slots.len() {
-            return Err(SysError::InvalidHandle);
-        }
+        let raw_idx = handle.index() as usize;
+        let idx = sanitize_slot_index(raw_idx, self.slots.len()).ok_or(SysError::InvalidHandle)?;
         let slot = &self.slots[idx];
         if slot.generation != handle.generation() {
             return Err(SysError::InvalidHandle);
@@ -143,31 +185,29 @@ impl CSpace {
         }
 
         // Atténuation monotone stricte : aucune amplification possible au-delà des droits actuels
-        let effective_mask = if rights_mask == 0 {
-            cap_rights::ALL
-        } else {
-            rights_mask
-        };
-        let final_rights = cap.rights & effective_mask;
+        let final_rights = attenuate_rights(cap.rights, rights_mask);
+        debug_assert_eq!(
+            final_rights & !cap.rights,
+            0,
+            "Violation d'atténuation monotone des droits lors d'un transfert CSpace"
+        );
         let obj = cap.object.clone();
-
-        // Insertion dans le CSpace récepteur
-        let new_handle = target.insert(obj, final_rights);
 
         // Clôture atomique de la capacité source
         let slot_mut = &mut self.slots[idx];
         slot_mut.cap = None;
         slot_mut.generation = slot_mut.generation.wrapping_add(1);
 
+        // Insertion dans le CSpace récepteur
+        let new_handle = target.insert(obj, final_rights);
+
         Ok(new_handle)
     }
 
-    /// Révoque et libère une capacité
+    /// Révoque et libère une capacité avec barrière anti-spectre
     pub fn drop_cap(&mut self, handle: Handle) -> Result<(), SysError> {
-        let idx = handle.index() as usize;
-        if idx >= self.slots.len() {
-            return Err(SysError::InvalidHandle);
-        }
+        let raw_idx = handle.index() as usize;
+        let idx = sanitize_slot_index(raw_idx, self.slots.len()).ok_or(SysError::InvalidHandle)?;
 
         let slot = &mut self.slots[idx];
         if slot.generation != handle.generation() {

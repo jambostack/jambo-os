@@ -661,6 +661,145 @@ pub fn run_tee(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
     }
 }
 
+/// Exécute l'utilitaire `env` affichant ou modifiant l'environnement sans allocation dynamique globale
+pub fn run_env(args: &[&str], _in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    const MAX_ENV_SLOTS: usize = 32;
+
+    #[derive(Clone, Copy)]
+    struct EnvSlot<'a> {
+        key: &'a str,
+        val: &'a str,
+        active: bool,
+    }
+
+    let mut slots: [EnvSlot; MAX_ENV_SLOTS] = [EnvSlot {
+        key: "",
+        val: "",
+        active: false,
+    }; MAX_ENV_SLOTS];
+
+    // Variables d'environnement standard par défaut
+    const DEFAULT_ENV: [(&str, &str); 6] = [
+        ("PATH", "/bin"),
+        ("USER", "root"),
+        ("SHELL", "/bin/jsh"),
+        ("TERM", "xterm-256color"),
+        ("HOME", "/root"),
+        ("OS", "JamboOS"),
+    ];
+
+    let mut ignore_env = false;
+    let mut unset_targets: [&str; 8] = [""; 8];
+    let mut unset_count = 0;
+    let mut arg_idx = 0;
+
+    // Analyse des options préliminaires (-i, -u)
+    while arg_idx < args.len() {
+        let arg = args[arg_idx];
+        if arg == "-i" || arg == "--ignore-environment" {
+            ignore_env = true;
+            arg_idx += 1;
+        } else if arg == "-u" {
+            if arg_idx + 1 < args.len() && unset_count < unset_targets.len() {
+                unset_targets[unset_count] = args[arg_idx + 1];
+                unset_count += 1;
+                arg_idx += 2;
+            } else {
+                let _ = sys_write(err_fd, b"env: option requires an argument -- 'u'\n");
+                return 1;
+            }
+        } else if let Some(target) = arg.strip_prefix("--unset=") {
+            if unset_count < unset_targets.len() {
+                unset_targets[unset_count] = target;
+                unset_count += 1;
+            }
+            arg_idx += 1;
+        } else {
+            break;
+        }
+    }
+
+    // Charger les variables par défaut si -i n'est pas spécifié
+    let mut slot_count = 0;
+    if !ignore_env {
+        for &(k, v) in &DEFAULT_ENV {
+            let mut is_unset = false;
+            for &u in unset_targets.iter().take(unset_count) {
+                if u == k {
+                    is_unset = true;
+                    break;
+                }
+            }
+            if !is_unset && slot_count < MAX_ENV_SLOTS {
+                slots[slot_count] = EnvSlot {
+                    key: k,
+                    val: v,
+                    active: true,
+                };
+                slot_count += 1;
+            }
+        }
+    }
+
+    // Analyse des paires KEY=VALUE
+    while arg_idx < args.len() {
+        let arg = args[arg_idx];
+        if let Some(eq_pos) = arg.find('=') {
+            let key = &arg[..eq_pos];
+            let val = &arg[eq_pos + 1..];
+
+            let mut updated = false;
+            for slot in slots.iter_mut().take(slot_count) {
+                if slot.active && slot.key == key {
+                    slot.val = val;
+                    updated = true;
+                    break;
+                }
+            }
+            if !updated && slot_count < MAX_ENV_SLOTS {
+                slots[slot_count] = EnvSlot {
+                    key,
+                    val,
+                    active: true,
+                };
+                slot_count += 1;
+            }
+            arg_idx += 1;
+        } else {
+            break;
+        }
+    }
+
+    // Si une sous-commande est spécifiée
+    if arg_idx < args.len() {
+        let cmd = args[arg_idx];
+        let sub_args = &args[arg_idx + 1..];
+        match cmd {
+            "echo" => run_echo(sub_args, out_fd),
+            "ls" => run_ls(sub_args, out_fd, err_fd),
+            "true" => 0,
+            "false" => 1,
+            _ => {
+                let _ = sys_write(err_fd, b"env: executing '");
+                let _ = sys_write(err_fd, cmd.as_bytes());
+                let _ = sys_write(err_fd, b"'\n");
+                0
+            }
+        }
+    } else {
+        // Aucune commande : afficher toutes les variables actives au format KEY=VALUE\n
+        for slot in slots.iter().take(slot_count) {
+            if slot.active {
+                let _ = sys_write(out_fd, slot.key.as_bytes());
+                let _ = sys_write(out_fd, b"=");
+                let _ = sys_write(out_fd, slot.val.as_bytes());
+                let _ = sys_write(out_fd, b"\n");
+            }
+        }
+        0
+    }
+}
+
 /// Exécute l'utilitaire `wc` comptant les lignes, mots et octets
 pub fn run_wc(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
     let mut count_lines = false;
@@ -1957,5 +2096,56 @@ mod tests {
 
         // Nettoyage
         let _ = run_rm(&["/tmp/tee_out.txt"], 2);
+    }
+
+    #[test]
+    fn test_env_lifecycle() {
+        // 1. Pipe pour capturer la sortie de env
+        let (read_end, write_end) = crate::vfs::pipe().expect("Création pipe env");
+
+        // Exécution de env par défaut avec un ajout et un override
+        let code = run_env(
+            &["CUSTOM_VAR=HelloWorld", "USER=jambo_admin"],
+            0,
+            write_end,
+            2,
+        );
+        assert_eq!(code, 0);
+        sys_close(write_end);
+
+        let mut output = [0u8; 512];
+        let n = sys_read(read_end, &mut output);
+        assert!(n > 0);
+        let out_str = core::str::from_utf8(&output[..n as usize]).expect("utf8");
+        assert!(out_str.contains("CUSTOM_VAR=HelloWorld\n"));
+        assert!(out_str.contains("USER=jambo_admin\n"));
+        assert!(out_str.contains("OS=JamboOS\n"));
+        sys_close(read_end);
+
+        // 2. Test avec -i (environnement vide) et une seule variable
+        let (read_i, write_i) = crate::vfs::pipe().expect("Création pipe env -i");
+        let code_i = run_env(&["-i", "STANDALONE=1"], 0, write_i, 2);
+        assert_eq!(code_i, 0);
+        sys_close(write_i);
+
+        let mut output_i = [0u8; 128];
+        let ni = sys_read(read_i, &mut output_i);
+        assert_eq!(ni, b"STANDALONE=1\n".len() as isize);
+        assert_eq!(&output_i[..ni as usize], b"STANDALONE=1\n");
+        sys_close(read_i);
+
+        // 3. Test avec -u USER (suppression de variable standard)
+        let (read_u, write_u) = crate::vfs::pipe().expect("Création pipe env -u");
+        let code_u = run_env(&["-u", "USER"], 0, write_u, 2);
+        assert_eq!(code_u, 0);
+        sys_close(write_u);
+
+        let mut output_u = [0u8; 512];
+        let nu = sys_read(read_u, &mut output_u);
+        assert!(nu > 0);
+        let out_u = core::str::from_utf8(&output_u[..nu as usize]).expect("utf8");
+        assert!(!out_u.contains("USER="));
+        assert!(out_u.contains("OS=JamboOS\n"));
+        sys_close(read_u);
     }
 }
