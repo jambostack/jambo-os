@@ -953,16 +953,17 @@ mod tests {
         assert_eq!(decoded_req.challenge_seed, 0x1337);
         assert_eq!(extract_username(&decoded_req.username), "operator");
 
-        let mut resp = AuthResponse::default();
-        resp.status = AUTH_STATUS_OK;
-        resp.user_id = 1;
-        resp.session_id = 42;
-        resp.role = UserRole::SystemOperator as u32;
-        resp.active_sessions = 3;
-        resp.registered_users = 5;
-        resp.expires_in_sec = 3600;
-        resp.session_handle = 0x10000002A;
-        resp.token_hash = [0xAB; 24];
+        let resp = AuthResponse {
+            status: AUTH_STATUS_OK,
+            user_id: 1,
+            session_id: 42,
+            role: UserRole::SystemOperator as u32,
+            active_sessions: 3,
+            registered_users: 5,
+            expires_in_sec: 3600,
+            session_handle: 0x10000002A,
+            token_hash: [0xAB; 24],
+        };
 
         let resp_bytes = resp.to_bytes();
         assert_eq!(resp_bytes.len(), 64);

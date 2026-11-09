@@ -991,16 +991,18 @@ mod tests {
         assert_eq!(decoded.value, 75);
         assert_eq!(&decoded.series_name[..8], b"cpu_load");
 
-        let mut resp = MetricsResponse::default();
-        resp.status = METRICS_STATUS_OK;
-        resp.series_count = 3;
-        resp.active_alerts = 1;
-        resp.min_val = 10;
-        resp.max_val = 90;
-        resp.avg_val = 50;
-        resp.last_val = 75;
-        resp.total_samples = 42;
-        resp.alert_triggered = 1;
+        let resp = MetricsResponse {
+            status: METRICS_STATUS_OK,
+            series_count: 3,
+            active_alerts: 1,
+            min_val: 10,
+            max_val: 90,
+            avg_val: 50,
+            last_val: 75,
+            total_samples: 42,
+            alert_triggered: 1,
+            ..Default::default()
+        };
 
         let resp_bytes = resp.to_bytes();
         assert_eq!(resp_bytes.len(), 64);

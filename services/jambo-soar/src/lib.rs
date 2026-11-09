@@ -2728,10 +2728,13 @@ mod tests {
             daemon.playbook_count, 6,
             "6 playbooks souverains de référence"
         );
-        for i in 0..daemon.playbook_count {
-            if let Some(ref pb) = daemon.playbooks[i] {
-                assert!(pb.validate_dag().is_ok());
-            }
+        for pb in daemon
+            .playbooks
+            .iter()
+            .take(daemon.playbook_count)
+            .flatten()
+        {
+            assert!(pb.validate_dag().is_ok());
         }
     }
 

@@ -2060,11 +2060,13 @@ mod tests {
         assert_eq!(decoded_req.param_u64, 42);
         assert_eq!(decoded_req.name_as_str(), "worker-service");
 
-        let mut resp = WatchdogResponse::default();
-        resp.status = 0;
-        resp.active_targets = 5;
-        resp.total_pings = 100;
-        resp.sha256_hash = [0xAB; 16];
+        let resp = WatchdogResponse {
+            status: 0,
+            active_targets: 5,
+            total_pings: 100,
+            sha256_hash: [0xAB; 16],
+            ..Default::default()
+        };
         let resp_bytes = resp.to_bytes();
         assert_eq!(resp_bytes.len(), 64);
 

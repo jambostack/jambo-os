@@ -2157,15 +2157,17 @@ mod tests {
         assert_eq!(req_dec.data_len, 11);
         assert_eq!(&req_dec.payload[..11], b"SCAN_KERNEL");
 
-        let mut resp = KdirResponse::default();
-        resp.status = KDIR_STATUS_OK;
-        resp.protection_state = KDIR_PROTECTION_SECURED;
-        resp.active_probes = 4;
-        resp.monitored_drivers = 3;
-        resp.active_threats = 0;
-        resp.audit_entries = 8;
-        resp.result_code = 100;
-        resp.digest = [0x5au8; 32];
+        let resp = KdirResponse {
+            status: KDIR_STATUS_OK,
+            protection_state: KDIR_PROTECTION_SECURED,
+            active_probes: 4,
+            monitored_drivers: 3,
+            active_threats: 0,
+            audit_entries: 8,
+            result_code: 100,
+            digest: [0x5au8; 32],
+            ..Default::default()
+        };
 
         let resp_bytes = resp.to_bytes();
         assert_eq!(resp_bytes.len(), 64);

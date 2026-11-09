@@ -1254,7 +1254,19 @@ fn build_dlp(release: bool) -> anyhow::Result<PathBuf> {
 #[allow(clippy::type_complexity)]
 fn build_coreutils(
     release: bool,
-) -> anyhow::Result<(PathBuf, PathBuf, PathBuf, PathBuf, PathBuf, PathBuf)> {
+) -> anyhow::Result<(
+    PathBuf,
+    PathBuf,
+    PathBuf,
+    PathBuf,
+    PathBuf,
+    PathBuf,
+    PathBuf,
+    PathBuf,
+    PathBuf,
+    PathBuf,
+    PathBuf,
+)> {
     let root = root_dir();
     let mut cmd = Command::new("cargo");
     cmd.current_dir(&root);
@@ -1287,6 +1299,11 @@ fn build_coreutils(
         dir.join("true"),
         dir.join("false"),
         dir.join("ls"),
+        dir.join("head"),
+        dir.join("tail"),
+        dir.join("touch"),
+        dir.join("mkdir"),
+        dir.join("rm"),
     ))
 }
 
@@ -1562,7 +1579,19 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
         itdr_bin,
         dlp_bin,
     ) = build_userland(release)?;
-    let (echo_bin, cat_bin, wc_bin, true_bin, false_bin, ls_bin) = build_coreutils(release)?;
+    let (
+        echo_bin,
+        cat_bin,
+        wc_bin,
+        true_bin,
+        false_bin,
+        ls_bin,
+        head_bin,
+        tail_bin,
+        touch_bin,
+        mkdir_bin,
+        rm_bin,
+    ) = build_coreutils(release)?;
     let installer_bin = build_installer(release)?;
     let fuzz_bin = build_fuzzer(release)?;
 
@@ -1577,6 +1606,11 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
     fs::copy(&true_bin, bin_dir.join("true"))?;
     fs::copy(&false_bin, bin_dir.join("false"))?;
     fs::copy(&ls_bin, bin_dir.join("ls"))?;
+    fs::copy(&head_bin, bin_dir.join("head"))?;
+    fs::copy(&tail_bin, bin_dir.join("tail"))?;
+    fs::copy(&touch_bin, bin_dir.join("touch"))?;
+    fs::copy(&mkdir_bin, bin_dir.join("mkdir"))?;
+    fs::copy(&rm_bin, bin_dir.join("rm"))?;
     fs::copy(&installer_bin, bin_dir.join("installer"))?;
     fs::copy(&installer_bin, bin_dir.join("jambo-installer"))?;
     fs::copy(&fuzz_bin, bin_dir.join("fuzz"))?;
@@ -1724,6 +1758,11 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
     fs::copy(&true_bin, initrd_stage.join("true"))?;
     fs::copy(&false_bin, initrd_stage.join("false"))?;
     fs::copy(&ls_bin, initrd_stage.join("ls"))?;
+    fs::copy(&head_bin, initrd_stage.join("head"))?;
+    fs::copy(&tail_bin, initrd_stage.join("tail"))?;
+    fs::copy(&touch_bin, initrd_stage.join("touch"))?;
+    fs::copy(&mkdir_bin, initrd_stage.join("mkdir"))?;
+    fs::copy(&rm_bin, initrd_stage.join("rm"))?;
     fs::copy(&installer_bin, initrd_stage.join("installer"))?;
     fs::copy(&installer_bin, initrd_stage.join("jambo-installer"))?;
     fs::copy(&fuzz_bin, initrd_stage.join("fuzz"))?;
@@ -1741,6 +1780,11 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
             "bin/true",
             "bin/false",
             "bin/ls",
+            "bin/head",
+            "bin/tail",
+            "bin/touch",
+            "bin/mkdir",
+            "bin/rm",
             "bin/installer",
             "bin/jambo-installer",
             "bin/fuzz",
@@ -1885,6 +1929,11 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
             "true",
             "false",
             "ls",
+            "head",
+            "tail",
+            "touch",
+            "mkdir",
+            "rm",
             "installer",
             "jambo-installer",
             "fuzz",

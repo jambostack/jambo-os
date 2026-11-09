@@ -345,6 +345,23 @@ impl FdTable {
         }
         Ok(st)
     }
+
+    /// Récupère les métadonnées pour un chemin donné dans la table des descripteurs
+    pub fn stat(&self, path: &str) -> Result<PosixStat, SysError> {
+        for entry in &self.entries {
+            if entry.kind != FdKind::Closed && entry.path_str() == path {
+                return Ok(PosixStat {
+                    st_mode: S_IFREG | 0o644,
+                    st_nlink: 1,
+                    st_size: entry.size as i64,
+                    st_blksize: 512,
+                    st_blocks: entry.size.div_ceil(512) as i64,
+                    ..Default::default()
+                });
+            }
+        }
+        Err(SysError::InvalidArgument)
+    }
 }
 
 impl Default for FdTable {

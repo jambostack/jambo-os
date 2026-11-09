@@ -8,31 +8,33 @@
 use crate::vfs::{with_fd_table, O_RDONLY};
 
 #[derive(Clone, Copy)]
-struct VfsFileNode {
-    path: [u8; crate::vfs::MAX_PATH_LEN],
-    path_len: usize,
-    buffer: [u8; crate::vfs::FILE_BUFFER_SIZE],
-    size: usize,
-    is_active: bool,
+pub struct VfsFileNode {
+    pub path: [u8; crate::vfs::MAX_PATH_LEN],
+    pub path_len: usize,
+    pub buffer: [u8; crate::vfs::FILE_BUFFER_SIZE],
+    pub size: usize,
+    pub is_active: bool,
+    pub is_dir: bool,
 }
 
 impl VfsFileNode {
-    const fn empty() -> Self {
+    pub const fn empty() -> Self {
         Self {
             path: [0u8; crate::vfs::MAX_PATH_LEN],
             path_len: 0,
             buffer: [0u8; crate::vfs::FILE_BUFFER_SIZE],
             size: 0,
             is_active: false,
+            is_dir: false,
         }
     }
 
-    fn path_str(&self) -> &str {
+    pub fn path_str(&self) -> &str {
         core::str::from_utf8(&self.path[..self.path_len]).unwrap_or("")
     }
 }
 
-static mut INODE_POOL: [VfsFileNode; 16] = [
+pub static mut INODE_POOL: [VfsFileNode; 32] = [
     // 0: /etc/hostname
     VfsFileNode {
         path: {
@@ -58,6 +60,7 @@ static mut INODE_POOL: [VfsFileNode; 16] = [
         },
         size: 14,
         is_active: true,
+        is_dir: false,
     },
     // 1: /etc/os-release
     VfsFileNode {
@@ -84,6 +87,7 @@ static mut INODE_POOL: [VfsFileNode; 16] = [
         },
         size: 38,
         is_active: true,
+        is_dir: false,
     },
     // 2: /etc/motd
     VfsFileNode {
@@ -110,7 +114,58 @@ static mut INODE_POOL: [VfsFileNode; 16] = [
         },
         size: 38,
         is_active: true,
+        is_dir: false,
     },
+    // 3: /etc (répertoire)
+    VfsFileNode {
+        path: {
+            let mut p = [0u8; crate::vfs::MAX_PATH_LEN];
+            let b = b"/etc";
+            let mut i = 0;
+            while i < b.len() {
+                p[i] = b[i];
+                i += 1;
+            }
+            p
+        },
+        path_len: 4,
+        buffer: [0u8; crate::vfs::FILE_BUFFER_SIZE],
+        size: 0,
+        is_active: true,
+        is_dir: true,
+    },
+    // 4: /tmp (répertoire)
+    VfsFileNode {
+        path: {
+            let mut p = [0u8; crate::vfs::MAX_PATH_LEN];
+            let b = b"/tmp";
+            let mut i = 0;
+            while i < b.len() {
+                p[i] = b[i];
+                i += 1;
+            }
+            p
+        },
+        path_len: 4,
+        buffer: [0u8; crate::vfs::FILE_BUFFER_SIZE],
+        size: 0,
+        is_active: true,
+        is_dir: true,
+    },
+    VfsFileNode::empty(),
+    VfsFileNode::empty(),
+    VfsFileNode::empty(),
+    VfsFileNode::empty(),
+    VfsFileNode::empty(),
+    VfsFileNode::empty(),
+    VfsFileNode::empty(),
+    VfsFileNode::empty(),
+    VfsFileNode::empty(),
+    VfsFileNode::empty(),
+    VfsFileNode::empty(),
+    VfsFileNode::empty(),
+    VfsFileNode::empty(),
+    VfsFileNode::empty(),
     VfsFileNode::empty(),
     VfsFileNode::empty(),
     VfsFileNode::empty(),
@@ -134,6 +189,13 @@ pub fn sys_open(path: &str, flags: i32) -> i32 {
         let pool = core::ptr::addr_of_mut!(INODE_POOL);
         for (i, node) in (*pool).iter().enumerate() {
             if node.is_active && node.path_str() == path {
+                // Rejet de l'écriture si le noeud est un répertoire (EISDIR)
+                if node.is_dir
+                    && (flags & (crate::vfs::O_WRONLY | crate::vfs::O_RDWR | crate::vfs::O_TRUNC))
+                        != 0
+                {
+                    return -1;
+                }
                 inode_idx = Some(i);
                 break;
             }
@@ -150,6 +212,7 @@ pub fn sys_open(path: &str, flags: i32) -> i32 {
                     node.size = 0;
                     node.buffer = [0u8; crate::vfs::FILE_BUFFER_SIZE];
                     node.is_active = true;
+                    node.is_dir = false;
                     inode_idx = Some(i);
                     break;
                 }
@@ -183,6 +246,96 @@ pub fn sys_open(path: &str, flags: i32) -> i32 {
             Err(_) => -1,
         },
     )
+}
+
+/// Crée un répertoire virtuel dans le pool d'inodes
+pub fn sys_mkdir_pool(path: &str, _mode: u32) -> i32 {
+    let clean_path = path.trim_end_matches('/');
+    if clean_path.is_empty() {
+        return -1;
+    }
+    // SAFETY: Accès protégé au pool d'inodes virtuel
+    unsafe {
+        let pool = core::ptr::addr_of_mut!(INODE_POOL);
+        for node in (*pool).iter() {
+            if node.is_active && node.path_str() == clean_path {
+                return -1; // EEXIST
+            }
+        }
+        for node in (*pool).iter_mut() {
+            if !node.is_active {
+                let mut p = [0u8; crate::vfs::MAX_PATH_LEN];
+                let b = clean_path.as_bytes();
+                let len = b.len().min(crate::vfs::MAX_PATH_LEN);
+                p[..len].copy_from_slice(&b[..len]);
+                node.path = p;
+                node.path_len = len;
+                node.size = 0;
+                node.buffer = [0u8; crate::vfs::FILE_BUFFER_SIZE];
+                node.is_active = true;
+                node.is_dir = true;
+                return 0;
+            }
+        }
+    }
+    -1 // ENOSPC
+}
+
+/// Supprime un fichier régulier du pool d'inodes (unlink)
+pub fn sys_unlink_pool(path: &str) -> i32 {
+    let clean_path = path.trim_end_matches('/');
+    // SAFETY: Accès protégé au pool d'inodes virtuel
+    unsafe {
+        let pool = core::ptr::addr_of_mut!(INODE_POOL);
+        for node in (*pool).iter_mut() {
+            if node.is_active && node.path_str() == clean_path {
+                if node.is_dir {
+                    return -1; // EISDIR
+                }
+                node.is_active = false;
+                node.size = 0;
+                node.path_len = 0;
+                return 0;
+            }
+        }
+    }
+    -1 // ENOENT
+}
+
+/// Supprime un répertoire vide du pool d'inodes (rmdir)
+pub fn sys_rmdir_pool(path: &str) -> i32 {
+    let clean_path = path.trim_end_matches('/');
+    // SAFETY: Accès protégé au pool d'inodes virtuel
+    unsafe {
+        let pool = core::ptr::addr_of_mut!(INODE_POOL);
+        let mut target_idx = None;
+        for (i, node) in (*pool).iter().enumerate() {
+            if node.is_active && node.path_str() == clean_path {
+                if !node.is_dir {
+                    return -1; // ENOTDIR
+                }
+                target_idx = Some(i);
+                break;
+            }
+        }
+        let idx = match target_idx {
+            Some(i) => i,
+            None => return -1, // ENOENT
+        };
+        // Vérification qu'aucun fichier actif n'a ce répertoire pour préfixe
+        for node in (*pool).iter() {
+            if node.is_active
+                && node.path_str() != clean_path
+                && node.path_str().starts_with(clean_path)
+            {
+                return -1; // ENOTEMPTY
+            }
+        }
+        (*pool)[idx].is_active = false;
+        (*pool)[idx].size = 0;
+        (*pool)[idx].path_len = 0;
+        0
+    }
 }
 
 /// Ferme un descripteur de fichier VFS et synchronise les métadonnées
@@ -678,11 +831,454 @@ pub fn run_ls(args: &[&str], out_fd: i32, _err_fd: i32) -> i32 {
         }
     }
 
+    // Affichage des entrées additionnelles créées dynamiquement dans INODE_POOL
+    // SAFETY: Lecture protégée du pool d'inodes virtuel
+    unsafe {
+        let pool = core::ptr::addr_of!(INODE_POOL);
+        for node in (*pool).iter() {
+            if !node.is_active {
+                continue;
+            }
+            let name = node.path_str();
+            let base = if let Some(last_slash) = name.rfind('/') {
+                &name[last_slash + 1..]
+            } else {
+                name
+            };
+            if base.is_empty() || SYSTEM_ENTRIES.iter().any(|e| e.name == base) {
+                continue;
+            }
+            if long_format {
+                let mode = if node.is_dir {
+                    b"drwxr-xr-x"
+                } else {
+                    b"-rw-r--r--"
+                };
+                let _ = sys_write(out_fd, mode);
+                let _ = sys_write(out_fd, b"    1 root root  ");
+                let mut s_buf = [b' '; 12];
+                let mut cur = 0;
+                cur = append_u64(&mut s_buf, cur, node.size as u64);
+                let _ = sys_write(out_fd, &s_buf[..cur]);
+                let _ = sys_write(out_fd, b" ");
+                let _ = sys_write(out_fd, base.as_bytes());
+                let _ = sys_write(out_fd, b"\n");
+            } else {
+                let _ = sys_write(out_fd, base.as_bytes());
+                let _ = sys_write(out_fd, b"  ");
+            }
+        }
+    }
+
     if !long_format {
         let _ = sys_write(out_fd, b"\n");
     }
 
     0
+}
+
+/// Parse un entier non signé depuis une tranche de chaîne de caractères
+fn parse_usize(s: &str) -> Option<usize> {
+    let mut val: usize = 0;
+    if s.is_empty() {
+        return None;
+    }
+    for b in s.bytes() {
+        if !b.is_ascii_digit() {
+            return None;
+        }
+        val = val.checked_mul(10)?.checked_add((b - b'0') as usize)?;
+    }
+    Some(val)
+}
+
+/// Exécute l'utilitaire `head` affichant le début des fichiers ou du flux standard
+pub fn run_head(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    let mut lines_limit = Some(10usize);
+    let mut bytes_limit = None;
+    let mut files_start = 0;
+
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i];
+        if arg == "-n" && i + 1 < args.len() {
+            if let Some(n) = parse_usize(args[i + 1]) {
+                lines_limit = Some(n);
+                bytes_limit = None;
+                i += 2;
+                files_start = i;
+                continue;
+            }
+        } else if let Some(rest) = arg.strip_prefix("-n") {
+            if let Some(n) = parse_usize(rest) {
+                lines_limit = Some(n);
+                bytes_limit = None;
+                i += 1;
+                files_start = i;
+                continue;
+            }
+        } else if arg == "-c" && i + 1 < args.len() {
+            if let Some(n) = parse_usize(args[i + 1]) {
+                bytes_limit = Some(n);
+                lines_limit = None;
+                i += 2;
+                files_start = i;
+                continue;
+            }
+        } else if let Some(rest) = arg.strip_prefix("-c") {
+            if let Some(n) = parse_usize(rest) {
+                bytes_limit = Some(n);
+                lines_limit = None;
+                i += 1;
+                files_start = i;
+                continue;
+            }
+        } else if arg.starts_with('-') && arg != "-" {
+            let _ = sys_write(err_fd, b"head: invalid option\n");
+            return 1;
+        } else {
+            break;
+        }
+        i += 1;
+    }
+
+    let files = &args[files_start..];
+    let mut has_error = false;
+
+    let process_stream = |fd: i32, out: i32| {
+        let mut chunk = [0u8; 512];
+        let mut lines_count = 0;
+        let mut bytes_count = 0;
+
+        loop {
+            let n = sys_read(fd, &mut chunk);
+            if n <= 0 {
+                break;
+            }
+            let slice = &chunk[..n as usize];
+
+            if let Some(max_b) = bytes_limit {
+                if bytes_count >= max_b {
+                    break;
+                }
+                let left = max_b - bytes_count;
+                let to_write = slice.len().min(left);
+                let _ = sys_write(out, &slice[..to_write]);
+                bytes_count += to_write;
+                if bytes_count >= max_b {
+                    break;
+                }
+            } else if let Some(max_l) = lines_limit {
+                if lines_count >= max_l {
+                    break;
+                }
+                let mut end_idx = 0;
+                for &b in slice {
+                    end_idx += 1;
+                    if b == b'\n' {
+                        lines_count += 1;
+                        if lines_count >= max_l {
+                            break;
+                        }
+                    }
+                }
+                let _ = sys_write(out, &slice[..end_idx]);
+                if lines_count >= max_l {
+                    break;
+                }
+            }
+        }
+    };
+
+    if files.is_empty() {
+        process_stream(in_fd, out_fd);
+        return 0;
+    }
+
+    for &path in files {
+        if path == "-" {
+            process_stream(in_fd, out_fd);
+            continue;
+        }
+        let fd = sys_open(path, O_RDONLY);
+        if fd < 0 {
+            let _ = sys_write(err_fd, b"head: cannot open '");
+            let _ = sys_write(err_fd, path.as_bytes());
+            let _ = sys_write(err_fd, b"': No such file or directory\n");
+            has_error = true;
+            continue;
+        }
+        process_stream(fd, out_fd);
+        let _ = sys_close(fd);
+    }
+
+    if has_error {
+        1
+    } else {
+        0
+    }
+}
+
+/// Exécute l'utilitaire `tail` affichant la fin des fichiers ou du flux standard
+pub fn run_tail(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    let mut lines_limit = Some(10usize);
+    let mut bytes_limit = None;
+    let mut files_start = 0;
+
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i];
+        if arg == "-n" && i + 1 < args.len() {
+            if let Some(n) = parse_usize(args[i + 1]) {
+                lines_limit = Some(n);
+                bytes_limit = None;
+                i += 2;
+                files_start = i;
+                continue;
+            }
+        } else if let Some(rest) = arg.strip_prefix("-n") {
+            if let Some(n) = parse_usize(rest) {
+                lines_limit = Some(n);
+                bytes_limit = None;
+                i += 1;
+                files_start = i;
+                continue;
+            }
+        } else if arg == "-c" && i + 1 < args.len() {
+            if let Some(n) = parse_usize(args[i + 1]) {
+                bytes_limit = Some(n);
+                lines_limit = None;
+                i += 2;
+                files_start = i;
+                continue;
+            }
+        } else if let Some(rest) = arg.strip_prefix("-c") {
+            if let Some(n) = parse_usize(rest) {
+                bytes_limit = Some(n);
+                lines_limit = None;
+                i += 1;
+                files_start = i;
+                continue;
+            }
+        } else if arg.starts_with('-') && arg != "-" {
+            let _ = sys_write(err_fd, b"tail: invalid option\n");
+            return 1;
+        } else {
+            break;
+        }
+        i += 1;
+    }
+
+    let files = &args[files_start..];
+    let mut has_error = false;
+
+    let process_stream = |fd: i32, out: i32| {
+        let mut buffer = [0u8; crate::vfs::FILE_BUFFER_SIZE];
+        let mut total = 0;
+        loop {
+            let n = sys_read(fd, &mut buffer[total..]);
+            if n <= 0 {
+                break;
+            }
+            total += n as usize;
+            if total >= buffer.len() {
+                break;
+            }
+        }
+        let content = &buffer[..total];
+
+        if let Some(max_b) = bytes_limit {
+            let start = content.len().saturating_sub(max_b);
+            let _ = sys_write(out, &content[start..]);
+        } else if let Some(max_l) = lines_limit {
+            if max_l == 0 {
+                return;
+            }
+            let mut newline_count = 0;
+            let mut start_idx = 0;
+            for (idx, &b) in content.iter().enumerate().rev() {
+                if b == b'\n' {
+                    newline_count += 1;
+                    if newline_count == max_l + 1 {
+                        start_idx = idx + 1;
+                        break;
+                    }
+                }
+            }
+            let _ = sys_write(out, &content[start_idx..]);
+        }
+    };
+
+    if files.is_empty() {
+        process_stream(in_fd, out_fd);
+        return 0;
+    }
+
+    for &path in files {
+        if path == "-" {
+            process_stream(in_fd, out_fd);
+            continue;
+        }
+        let fd = sys_open(path, O_RDONLY);
+        if fd < 0 {
+            let _ = sys_write(err_fd, b"tail: cannot open '");
+            let _ = sys_write(err_fd, path.as_bytes());
+            let _ = sys_write(err_fd, b"': No such file or directory\n");
+            has_error = true;
+            continue;
+        }
+        process_stream(fd, out_fd);
+        let _ = sys_close(fd);
+    }
+
+    if has_error {
+        1
+    } else {
+        0
+    }
+}
+
+/// Exécute l'utilitaire `touch` créant des fichiers vides ou mettant à jour les métadonnées
+pub fn run_touch(args: &[&str], err_fd: i32) -> i32 {
+    let mut paths_start = 0;
+    for (i, &arg) in args.iter().enumerate() {
+        if arg.starts_with('-') {
+            paths_start = i + 1;
+        } else {
+            break;
+        }
+    }
+    let paths = &args[paths_start..];
+    if paths.is_empty() {
+        let _ = sys_write(err_fd, b"touch: missing file operand\n");
+        return 1;
+    }
+    let mut has_error = false;
+    for &path in paths {
+        let fd = sys_open(path, crate::vfs::O_CREAT | crate::vfs::O_WRONLY);
+        if fd < 0 {
+            let _ = sys_write(err_fd, b"touch: cannot touch '");
+            let _ = sys_write(err_fd, path.as_bytes());
+            let _ = sys_write(err_fd, b"'\n");
+            has_error = true;
+        } else {
+            let _ = sys_close(fd);
+        }
+    }
+    if has_error {
+        1
+    } else {
+        0
+    }
+}
+
+/// Exécute l'utilitaire `mkdir` créant des répertoires
+pub fn run_mkdir(args: &[&str], err_fd: i32) -> i32 {
+    let mut parents = false;
+    let mut paths_start = 0;
+    for (i, &arg) in args.iter().enumerate() {
+        if arg == "-p" || arg == "--parents" {
+            parents = true;
+            paths_start = i + 1;
+        } else if arg.starts_with('-') {
+            paths_start = i + 1;
+        } else {
+            break;
+        }
+    }
+    let paths = &args[paths_start..];
+    if paths.is_empty() {
+        let _ = sys_write(err_fd, b"mkdir: missing operand\n");
+        return 1;
+    }
+    let mut has_error = false;
+    for &path in paths {
+        let res = sys_mkdir_pool(path, 0o755);
+        if res < 0 && !parents {
+            let _ = sys_write(err_fd, b"mkdir: cannot create directory '");
+            let _ = sys_write(err_fd, path.as_bytes());
+            let _ = sys_write(err_fd, b"': File or directory exists\n");
+            has_error = true;
+        }
+    }
+    if has_error {
+        1
+    } else {
+        0
+    }
+}
+
+/// Exécute l'utilitaire `rm` supprimant des fichiers ou répertoires
+pub fn run_rm(args: &[&str], err_fd: i32) -> i32 {
+    let mut force = false;
+    let mut recursive = false;
+    let mut paths_start = 0;
+
+    for (i, &arg) in args.iter().enumerate() {
+        if arg.starts_with('-') && arg != "-" {
+            for b in arg[1..].bytes() {
+                match b {
+                    b'f' => force = true,
+                    b'r' | b'R' => recursive = true,
+                    _ => {}
+                }
+            }
+            paths_start = i + 1;
+        } else {
+            break;
+        }
+    }
+
+    let paths = &args[paths_start..];
+    if paths.is_empty() {
+        if !force {
+            let _ = sys_write(err_fd, b"rm: missing operand\n");
+            return 1;
+        }
+        return 0;
+    }
+
+    let mut has_error = false;
+    for &path in paths {
+        let clean = path.trim_end_matches('/');
+        if recursive {
+            // SAFETY: Suppression récursive dans le pool d'inodes virtuel
+            unsafe {
+                let pool = core::ptr::addr_of_mut!(INODE_POOL);
+                let mut found = false;
+                for node in (*pool).iter_mut() {
+                    if node.is_active
+                        && (node.path_str() == clean || node.path_str().starts_with(clean))
+                    {
+                        node.is_active = false;
+                        node.size = 0;
+                        node.path_len = 0;
+                        found = true;
+                    }
+                }
+                if !found && !force {
+                    let _ = sys_write(err_fd, b"rm: cannot remove '");
+                    let _ = sys_write(err_fd, path.as_bytes());
+                    let _ = sys_write(err_fd, b"': No such file or directory\n");
+                    has_error = true;
+                }
+            }
+        } else {
+            let res = sys_unlink_pool(clean);
+            if res < 0 && !force {
+                let _ = sys_write(err_fd, b"rm: cannot remove '");
+                let _ = sys_write(err_fd, path.as_bytes());
+                let _ = sys_write(err_fd, b"': No such file or directory\n");
+                has_error = true;
+            }
+        }
+    }
+
+    if has_error {
+        1
+    } else {
+        0
+    }
 }
 
 #[cfg(test)]
@@ -768,5 +1364,72 @@ mod tests {
     fn test_ls_runs_successfully() {
         let code = run_ls(&["-l", "-a"], 1, 2);
         assert_eq!(code, 0);
+    }
+
+    #[test]
+    fn test_head_basic_and_options() {
+        let fd = sys_open("/tmp/head_test.txt", O_CREAT | O_WRONLY);
+        assert!(fd >= 3);
+        let content = b"line 1\nline 2\nline 3\nline 4\nline 5\n";
+        let _ = sys_write(fd, content);
+        sys_close(fd);
+
+        let code = run_head(&["-n", "3", "/tmp/head_test.txt"], 0, 1, 2);
+        assert_eq!(code, 0);
+
+        let code_bytes = run_head(&["-c", "10", "/tmp/head_test.txt"], 0, 1, 2);
+        assert_eq!(code_bytes, 0);
+    }
+
+    #[test]
+    fn test_tail_basic_and_options() {
+        let fd = sys_open("/tmp/tail_test.txt", O_CREAT | O_WRONLY);
+        assert!(fd >= 3);
+        let content = b"alpha\nbeta\ngamma\ndelta\nepsilon\n";
+        let _ = sys_write(fd, content);
+        sys_close(fd);
+
+        let code = run_tail(&["-n", "2", "/tmp/tail_test.txt"], 0, 1, 2);
+        assert_eq!(code, 0);
+
+        let code_bytes = run_tail(&["-c", "8", "/tmp/tail_test.txt"], 0, 1, 2);
+        assert_eq!(code_bytes, 0);
+    }
+
+    #[test]
+    fn test_touch_and_rm_lifecycle() {
+        let code_touch = run_touch(&["/tmp/touched_file.txt"], 2);
+        assert_eq!(code_touch, 0);
+
+        // Vérification de la présence
+        let fd = sys_open("/tmp/touched_file.txt", O_RDONLY);
+        assert!(fd >= 3);
+        sys_close(fd);
+
+        // Suppression
+        let code_rm = run_rm(&["/tmp/touched_file.txt"], 2);
+        assert_eq!(code_rm, 0);
+
+        // Fichier désormais inexistant
+        let fd_after = sys_open("/tmp/touched_file.txt", O_RDONLY);
+        assert_eq!(fd_after, -1);
+    }
+
+    #[test]
+    fn test_mkdir_and_rmdir_lifecycle() {
+        let code_mkdir = run_mkdir(&["/tmp/new_dir"], 2);
+        assert_eq!(code_mkdir, 0);
+
+        // Rejet de la création si déjà existant (sans -p)
+        let code_mkdir_dup = run_mkdir(&["/tmp/new_dir"], 2);
+        assert_eq!(code_mkdir_dup, 1);
+
+        // Succès si -p est présent
+        let code_mkdir_p = run_mkdir(&["-p", "/tmp/new_dir"], 2);
+        assert_eq!(code_mkdir_p, 0);
+
+        // Suppression avec rm -r
+        let code_rm = run_rm(&["-r", "/tmp/new_dir"], 2);
+        assert_eq!(code_rm, 0);
     }
 }

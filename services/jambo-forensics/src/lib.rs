@@ -2277,16 +2277,17 @@ mod tests {
         assert_eq!(req_dec.data_len, 11);
         assert_eq!(&req_dec.payload[..11], b"DUMP_PID_42");
 
-        let mut resp = ForensicsResponse::default();
-        resp.status = FORENSICS_STATUS_OK;
-        resp.snapshot_count = 3;
-        resp.seal_count = 2;
-        resp.custody_count = 5;
-        resp.artifact_count = 7;
-        resp.risk_score = 150;
-        resp.custody_valid = 1;
-        resp.result_code = 42;
-        resp.digest = [0x99u8; 32];
+        let resp = ForensicsResponse {
+            status: FORENSICS_STATUS_OK,
+            snapshot_count: 3,
+            seal_count: 2,
+            custody_count: 5,
+            artifact_count: 7,
+            risk_score: 150,
+            custody_valid: 1,
+            result_code: 42,
+            digest: [0x99u8; 32],
+        };
 
         let resp_bytes = resp.to_bytes();
         assert_eq!(resp_bytes.len(), 64);

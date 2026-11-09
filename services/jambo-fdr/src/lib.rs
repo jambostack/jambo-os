@@ -148,14 +148,14 @@ impl Sha256 {
         let mut g = self.state[6];
         let mut h = self.state[7];
 
-        for i in 0..64 {
+        for (i, &w_val) in w.iter().enumerate().take(64) {
             let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
             let ch = (e & f) ^ ((!e) & g);
             let temp1 = h
                 .wrapping_add(s1)
                 .wrapping_add(ch)
                 .wrapping_add(Self::K[i])
-                .wrapping_add(w[i]);
+                .wrapping_add(w_val);
             let s0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
             let maj = (a & b) ^ (a & c) ^ (b & c);
             let temp2 = s0.wrapping_add(maj);
@@ -178,6 +178,12 @@ impl Sha256 {
         self.state[5] = self.state[5].wrapping_add(f);
         self.state[6] = self.state[6].wrapping_add(g);
         self.state[7] = self.state[7].wrapping_add(h);
+    }
+}
+
+impl Default for Sha256 {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -824,34 +830,30 @@ impl JamboFdrDaemon {
         let mut threat_type = BootkitThreatType::SpiFlashModification;
         let mut golden_hash = [0u8; 32];
 
-        for probe_opt in self.probes.iter_mut() {
-            if let Some(ref mut probe) = probe_opt {
-                if probe.probe_id == probe_id {
-                    found = true;
-                    probe.last_check_timestamp = timestamp;
-                    probe.current_hash = current_digest;
-                    golden_hash = probe.golden_hash;
+        for ref mut probe in self.probes.iter_mut().flatten() {
+            if probe.probe_id == probe_id {
+                found = true;
+                probe.last_check_timestamp = timestamp;
+                probe.current_hash = current_digest;
+                golden_hash = probe.golden_hash;
 
-                    if current_digest == probe.golden_hash {
-                        probe.status = FirmwareIntegrityStatus::Intact;
-                        is_intact = true;
-                    } else {
-                        probe.status = FirmwareIntegrityStatus::Tampered;
-                        probe.tamper_count += 1;
-                        is_intact = false;
+                if current_digest == probe.golden_hash {
+                    probe.status = FirmwareIntegrityStatus::Intact;
+                    is_intact = true;
+                } else {
+                    probe.status = FirmwareIntegrityStatus::Tampered;
+                    probe.tamper_count += 1;
+                    is_intact = false;
 
-                        threat_type = match probe.fw_type {
-                            FirmwareType::UefiBiosPrimary => {
-                                BootkitThreatType::SpiFlashModification
-                            }
-                            FirmwareType::AcpiTable => BootkitThreatType::AcpiTablePoisoning,
-                            FirmwareType::OptionRomPci => BootkitThreatType::OptionRomBackdoor,
-                            FirmwareType::SmbiosTable => BootkitThreatType::SmmRootkit,
-                            _ => BootkitThreatType::SpiFlashModification,
-                        };
-                    }
-                    break;
+                    threat_type = match probe.fw_type {
+                        FirmwareType::UefiBiosPrimary => BootkitThreatType::SpiFlashModification,
+                        FirmwareType::AcpiTable => BootkitThreatType::AcpiTablePoisoning,
+                        FirmwareType::OptionRomPci => BootkitThreatType::OptionRomBackdoor,
+                        FirmwareType::SmbiosTable => BootkitThreatType::SmmRootkit,
+                        _ => BootkitThreatType::SpiFlashModification,
+                    };
                 }
+                break;
             }
         }
 
@@ -895,17 +897,15 @@ impl JamboFdrDaemon {
         let mut golden_len = 0;
         let mut found = false;
 
-        for probe_opt in self.probes.iter_mut() {
-            if let Some(ref mut probe) = probe_opt {
-                if probe.probe_id == probe_id {
-                    found = true;
-                    golden_len = probe.golden_content_len;
-                    golden_copy[..golden_len].copy_from_slice(&probe.golden_content[..golden_len]);
-                    probe.status = FirmwareIntegrityStatus::Restored;
-                    probe.current_hash = probe.golden_hash;
-                    probe.last_check_timestamp = timestamp;
-                    break;
-                }
+        for ref mut probe in self.probes.iter_mut().flatten() {
+            if probe.probe_id == probe_id {
+                found = true;
+                golden_len = probe.golden_content_len;
+                golden_copy[..golden_len].copy_from_slice(&probe.golden_content[..golden_len]);
+                probe.status = FirmwareIntegrityStatus::Restored;
+                probe.current_hash = probe.golden_hash;
+                probe.last_check_timestamp = timestamp;
+                break;
             }
         }
 
@@ -921,12 +921,10 @@ impl JamboFdrDaemon {
         let restored_bytes = golden_len;
 
         // Marque les menaces associées comme auto-restaurées et remédiées
-        for threat_opt in self.threats.iter_mut() {
-            if let Some(ref mut threat) = threat_opt {
-                if threat.probe_id == probe_id && !threat.remediated {
-                    threat.remediated = true;
-                    threat.auto_restored = true;
-                }
+        for ref mut threat in self.threats.iter_mut().flatten() {
+            if threat.probe_id == probe_id && !threat.remediated {
+                threat.remediated = true;
+                threat.auto_restored = true;
             }
         }
 
@@ -1000,9 +998,9 @@ impl JamboFdrDaemon {
     pub fn verify_tpm_quote(&self, pcr_mask: u32, expected_composite_hash: &[u8; 32]) -> bool {
         let mut hasher = Sha256::new();
 
-        for i in 0..24 {
+        for (i, pcr) in self.pcrs.iter().enumerate().take(24) {
             if (pcr_mask & (1 << i)) != 0 {
-                if let Some(ref entry) = self.pcrs[i] {
+                if let Some(ref entry) = pcr {
                     hasher.update(&entry.digest);
                 } else {
                     let zero = [0u8; 32];
@@ -1062,17 +1060,15 @@ impl JamboFdrDaemon {
         }
 
         let mut found = false;
-        for dev_opt in self.devices.iter_mut() {
-            if let Some(ref mut dev) = dev_opt {
-                if dev.device_id == device_id {
-                    found = true;
-                    if dev.status == DeviceStatus::Isolated {
-                        return Err(FdrError::DeviceAlreadyIsolated);
-                    }
-                    dev.status = DeviceStatus::Isolated;
-                    dev.isolated_timestamp = timestamp;
-                    break;
+        for ref mut dev in self.devices.iter_mut().flatten() {
+            if dev.device_id == device_id {
+                found = true;
+                if dev.status == DeviceStatus::Isolated {
+                    return Err(FdrError::DeviceAlreadyIsolated);
                 }
+                dev.status = DeviceStatus::Isolated;
+                dev.isolated_timestamp = timestamp;
+                break;
             }
         }
 
@@ -1171,26 +1167,29 @@ impl JamboFdrDaemon {
     pub fn verify_ledger_integrity(&self) -> bool {
         let mut expected_prev = [0u8; 32];
 
-        for i in 0..self.audit_count.min(self.audit_log.len()) {
-            if let Some(ref record) = self.audit_log[i] {
-                if record.prev_hash != expected_prev {
-                    return false;
-                }
-
-                let mut hasher = Sha256::new();
-                hasher.update(&record.prev_hash);
-                hasher.update(&record.timestamp.to_be_bytes());
-                hasher.update(&record.event_type);
-                hasher.update(&record.target_id.to_be_bytes());
-                hasher.update(&record.detail[..record.detail_len]);
-                let computed = hasher.finalize();
-
-                if computed != record.record_hash {
-                    return false;
-                }
-
-                expected_prev = record.record_hash;
+        for record in self
+            .audit_log
+            .iter()
+            .take(self.audit_count.min(self.audit_log.len()))
+            .flatten()
+        {
+            if record.prev_hash != expected_prev {
+                return false;
             }
+
+            let mut hasher = Sha256::new();
+            hasher.update(&record.prev_hash);
+            hasher.update(&record.timestamp.to_be_bytes());
+            hasher.update(&record.event_type);
+            hasher.update(&record.target_id.to_be_bytes());
+            hasher.update(&record.detail[..record.detail_len]);
+            let computed = hasher.finalize();
+
+            if computed != record.record_hash {
+                return false;
+            }
+
+            expected_prev = record.record_hash;
         }
 
         true
@@ -1309,18 +1308,16 @@ impl JamboFdrDaemon {
         let mut target_probe_id = None;
         let mut found = false;
 
-        for t_opt in self.threats.iter_mut() {
-            if let Some(ref mut t) = t_opt {
-                if t.threat_id == threat_id {
-                    found = true;
-                    if t.remediated {
-                        return Ok(());
-                    }
-                    target_probe_id = Some(t.probe_id);
-                    t.remediated = true;
-                    t.auto_restored = true;
-                    break;
+        for ref mut t in self.threats.iter_mut().flatten() {
+            if t.threat_id == threat_id {
+                found = true;
+                if t.remediated {
+                    return Ok(());
                 }
+                target_probe_id = Some(t.probe_id);
+                t.remediated = true;
+                t.auto_restored = true;
+                break;
             }
         }
 
@@ -1329,14 +1326,12 @@ impl JamboFdrDaemon {
         }
 
         if let Some(pid) = target_probe_id {
-            for probe_opt in self.probes.iter_mut() {
-                if let Some(ref mut p) = probe_opt {
-                    if p.probe_id == pid {
-                        p.status = FirmwareIntegrityStatus::Restored;
-                        p.current_hash = p.golden_hash;
-                        p.last_check_timestamp = timestamp;
-                        break;
-                    }
+            for ref mut p in self.probes.iter_mut().flatten() {
+                if p.probe_id == pid {
+                    p.status = FirmwareIntegrityStatus::Restored;
+                    p.current_hash = p.golden_hash;
+                    p.last_check_timestamp = timestamp;
+                    break;
                 }
             }
         }
@@ -1367,36 +1362,30 @@ impl JamboFdrDaemon {
         let mut remediated_threats = 0;
 
         // 1. Restauration O(1) des sondes firmware altérées via Dual-BIOS
-        for probe_opt in self.probes.iter_mut() {
-            if let Some(ref mut probe) = probe_opt {
-                if probe.status == FirmwareIntegrityStatus::Tampered {
-                    probe.status = FirmwareIntegrityStatus::Restored;
-                    probe.current_hash = probe.golden_hash;
-                    probe.last_check_timestamp = timestamp;
-                    restored_count += 1;
-                }
+        for ref mut probe in self.probes.iter_mut().flatten() {
+            if probe.status == FirmwareIntegrityStatus::Tampered {
+                probe.status = FirmwareIntegrityStatus::Restored;
+                probe.current_hash = probe.golden_hash;
+                probe.last_check_timestamp = timestamp;
+                restored_count += 1;
             }
         }
 
         // 2. Confinement O(1) des périphériques suspects / non approuvés
-        for dev_opt in self.devices.iter_mut() {
-            if let Some(ref mut dev) = dev_opt {
-                if dev.status == DeviceStatus::Untrusted {
-                    dev.status = DeviceStatus::Isolated;
-                    dev.isolated_timestamp = timestamp;
-                    isolated_count += 1;
-                }
+        for ref mut dev in self.devices.iter_mut().flatten() {
+            if dev.status == DeviceStatus::Untrusted {
+                dev.status = DeviceStatus::Isolated;
+                dev.isolated_timestamp = timestamp;
+                isolated_count += 1;
             }
         }
 
         // 3. Remédiation globale de toutes les menaces bootkit
-        for threat_opt in self.threats.iter_mut() {
-            if let Some(ref mut threat) = threat_opt {
-                if !threat.remediated {
-                    threat.remediated = true;
-                    threat.auto_restored = true;
-                    remediated_threats += 1;
-                }
+        for ref mut threat in self.threats.iter_mut().flatten() {
+            if !threat.remediated {
+                threat.remediated = true;
+                threat.auto_restored = true;
+                remediated_threats += 1;
             }
         }
 

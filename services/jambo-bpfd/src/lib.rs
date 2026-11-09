@@ -1861,11 +1861,13 @@ mod tests {
         assert_eq!(&decoded.hook_name[..8], b"eth0_xdp");
         assert_eq!(&decoded.packet_data[..3], &[0x12, 0x34, 0x56]);
 
-        let mut resp = BpfResponse::default();
-        resp.status = BPF_STATUS_OK;
-        resp.verdict = xdp_action::XDP_PASS as u32;
-        resp.programs_loaded = 3;
-        resp.cycles_consumed = 42;
+        let resp = BpfResponse {
+            status: BPF_STATUS_OK,
+            verdict: xdp_action::XDP_PASS as u32,
+            programs_loaded: 3,
+            cycles_consumed: 42,
+            ..Default::default()
+        };
         let resp_bytes = resp.to_bytes();
         assert_eq!(resp_bytes.len(), 64);
 

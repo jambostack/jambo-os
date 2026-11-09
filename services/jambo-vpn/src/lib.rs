@@ -2558,15 +2558,17 @@ mod tests {
         assert_eq!(decoded.dest_ip, [10, 0, 2, 15]);
         assert_eq!(decoded.payload_len, 32);
 
-        let mut resp = VpnResponse::default();
-        resp.status = VPN_STATUS_OK;
-        resp.peer_count = 2;
-        resp.handshakes = 1;
-        resp.packets_routed = 42;
-        resp.bytes_encrypted = 1024;
-        resp.peer_state = VpnPeerState::Established as u32;
-        resp.peer_endpoint = [192, 168, 1, 20];
-        resp.audit_hash = [0x7a; 32];
+        let resp = VpnResponse {
+            status: VPN_STATUS_OK,
+            peer_count: 2,
+            handshakes: 1,
+            packets_routed: 42,
+            bytes_encrypted: 1024,
+            peer_state: VpnPeerState::Established as u32,
+            peer_endpoint: [192, 168, 1, 20],
+            audit_hash: [0x7a; 32],
+            ..Default::default()
+        };
 
         let resp_bytes = resp.to_bytes();
         assert_eq!(resp_bytes.len(), 64);

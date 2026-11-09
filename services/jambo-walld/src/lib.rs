@@ -2243,13 +2243,15 @@ mod tests {
         assert_eq!(decoded.dst_ip, [10, 0, 0, 80]);
         assert_eq!(decoded.dst_port, 80);
 
-        let mut resp = WallResponse::default();
-        resp.status = 0;
-        resp.active_conntrack = 42;
-        resp.total_rules = 8;
-        resp.packets_inspected = 1000;
-        resp.packets_dropped = 5;
-        resp.auth_tag = [0xAA; 16];
+        let resp = WallResponse {
+            status: 0,
+            active_conntrack: 42,
+            total_rules: 8,
+            packets_inspected: 1000,
+            packets_dropped: 5,
+            auth_tag: [0xAA; 16],
+            ..Default::default()
+        };
         let resp_bytes = resp.to_bytes();
         assert_eq!(resp_bytes.len(), 64);
 

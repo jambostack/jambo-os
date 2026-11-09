@@ -1758,11 +1758,13 @@ mod tests {
         assert_eq!(req_dec.opcode, WasmdOpcode::RunSample as u32);
         assert_eq!(req_dec.param, 10);
 
-        let mut resp = WasmdResponse::default();
-        resp.status = WASMD_STATUS_OK;
-        resp.result = 55;
-        resp.gas_consumed = 142;
-        resp.instances_run = 1;
+        let mut resp = WasmdResponse {
+            status: WASMD_STATUS_OK,
+            result: 55,
+            gas_consumed: 142,
+            instances_run: 1,
+            ..Default::default()
+        };
         resp.set_output(b"[wasi:stdout] Fibonacci(10) compute verified.");
 
         let resp_bytes = resp.to_bytes();

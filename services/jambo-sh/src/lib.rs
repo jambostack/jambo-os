@@ -388,6 +388,11 @@ impl JamboShell {
             "clear" => self.cmd_clear(out),
             "reboot" | "poweroff" => self.cmd_reboot(out),
             "cat" | "/bin/cat" | "bin/cat" => self.cmd_cat(args, out),
+            "head" | "/bin/head" | "bin/head" => self.cmd_head(args, out),
+            "tail" | "/bin/tail" | "bin/tail" => self.cmd_tail(args, out),
+            "touch" | "/bin/touch" | "bin/touch" => self.cmd_touch(args, out),
+            "mkdir" | "/bin/mkdir" | "bin/mkdir" => self.cmd_mkdir(args, out),
+            "rm" | "/bin/rm" | "bin/rm" => self.cmd_rm(args, out),
             "wc" | "/bin/wc" | "bin/wc" => self.cmd_wc(args, out),
             "ls" | "/bin/ls" | "bin/ls" => self.cmd_ls(args, out),
             "true" | "/bin/true" | "bin/true" => (ShellStatus::Success, 0),
@@ -447,10 +452,15 @@ impl JamboShell {
   ps          - Liste les 38 processus actifs\n\
   echo <args> - Affiche le texte sur la console\n\
   cat <path>  - Affiche le contenu d'un fichier\n\
+  head [-n N] [-c N] <files> - Affiche le debut d'un fichier\n\
+  tail [-n N] [-c N] <files> - Affiche la fin d'un fichier\n\
+  touch <files> - Cree un fichier vide ou met a jour son horodatage\n\
+  mkdir [-p] <dir> - Cree un repertoire virtuel\n\
+  rm [-f] [-r] <files> - Supprime un fichier ou un repertoire\n\
   ls [-l] [-a] - Liste les fichiers et repertoires\n\
   wc [-l] [-w] [-c] <files> - Compte les lignes, mots et octets\n\
   true / false - Retourne un statut de succes (0) ou d'echec (1)\n\
-  coreutils   - Liste les 6 utilitaires Ring 3 (/bin/*)\n\
+  coreutils   - Liste les 11 utilitaires Ring 3 (/bin/*)\n\
   uname       - Affiche le nom et l'architecture du systeme\n\
   version     - Affiche les details de version du micro-noyau\n\
   uptime      - Affiche le temps d'activite du systeme\n\
@@ -544,7 +554,7 @@ impl JamboShell {
   Relocations System V: R_X86_64_RELATIVE, R_X86_64_GLOB_DAT, R_X86_64_JUMP_SLOT\n\
   Protection memoire  : W^X strict & Durcissement irreversible RELRO\n\
   GOT Capacity        : 64 entrees par processus\n\
-  Statut              : Operationnel (Jalon 6.2 v0.3.89)\n";
+  Statut              : Operationnel (v0.3.89)\n";
         let len = text.len().min(out.len());
         out[..len].copy_from_slice(&text[..len]);
         (ShellStatus::Success, len)
@@ -556,7 +566,7 @@ impl JamboShell {
   Descripteurs de base : fd 0 (stdin: ConsoleIn), fd 1 (stdout: ConsoleOut), fd 2 (stderr: ConsoleOut)\n\
   Fichiers dynamiques  : fd 3 a 31 (fichiers reguliers et canaux IPC JamboFS)\n\
   Primitives supportees: open, close, read, write, lseek, fstat\n\
-  Statut               : Operationnel (Jalon 7.1 v0.3.92)\n";
+  Statut               : Operationnel (v0.3.92)\n";
         let len = text.len().min(out.len());
         out[..len].copy_from_slice(&text[..len]);
         (ShellStatus::Success, len)
@@ -564,13 +574,13 @@ impl JamboShell {
 
     fn cmd_coreutils(&self, out: &mut [u8]) -> (ShellStatus, usize) {
         let text = b"Utilitaires Coreutils Ring 3 (services/jambo-coreutils) :\n\
-  Binaires disponibles : /bin/echo, /bin/cat, /bin/wc, /bin/true, /bin/false, /bin/ls\n\
+  Binaires disponibles : /bin/echo, /bin/cat, /bin/head, /bin/tail, /bin/touch, /bin/mkdir, /bin/rm, /bin/wc, /bin/true, /bin/false, /bin/ls (11 utilitaires)\n\
   Architecture & ABI   : System V AMD64 ELF64 (ET_EXEC / Ring 3 Userland)\n\
   Point d'entree       : _start (parsing argc/argv sur pile System V)\n\
   Terminaison          : Syscall 11 ThreadExit avec propagation code de retour POSIX\n\
   Isolation memoire    : Espace d'adressage strict (CR3 dedie), CSpace confinee\n\
   Couche I/O           : Descripteurs POSIX vfs::* (stdin:0, stdout:1, stderr:2)\n\
-  Statut               : Operationnel (Jalon 7.1 v0.3.92)\n";
+  Statut               : Operationnel (v0.3.92)\n";
         let len = text.len().min(out.len());
         out[..len].copy_from_slice(&text[..len]);
         (ShellStatus::Success, len)
@@ -1160,6 +1170,317 @@ ABI : 29 Appels Systeme (jambo-abi v0.4) avec Coreutils Ring 3, VFS POSIX & Fuzz
             out[..len].copy_from_slice(&msg[..len]);
             (ShellStatus::ExecutionFailed, len)
         }
+    }
+
+    fn cmd_head(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        let mut lines_limit = 10usize;
+        let mut bytes_limit = None;
+        let mut files_start = 0;
+
+        let mut i = 0;
+        while i < args.len() {
+            let arg = args[i];
+            if arg == "-n" && i + 1 < args.len() {
+                if let Some(n) = parse_u32(args[i + 1]) {
+                    lines_limit = n as usize;
+                    bytes_limit = None;
+                    i += 2;
+                    files_start = i;
+                    continue;
+                }
+            } else if let Some(rest) = arg.strip_prefix("-n") {
+                if let Some(n) = parse_u32(rest) {
+                    lines_limit = n as usize;
+                    bytes_limit = None;
+                    i += 1;
+                    files_start = i;
+                    continue;
+                }
+            } else if arg == "-c" && i + 1 < args.len() {
+                if let Some(n) = parse_u32(args[i + 1]) {
+                    bytes_limit = Some(n as usize);
+                    i += 2;
+                    files_start = i;
+                    continue;
+                }
+            } else if let Some(rest) = arg.strip_prefix("-c") {
+                if let Some(n) = parse_u32(rest) {
+                    bytes_limit = Some(n as usize);
+                    i += 1;
+                    files_start = i;
+                    continue;
+                }
+            } else if arg.starts_with('-') && arg != "-" {
+                let msg = b"head: invalid option\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                return (ShellStatus::ExecutionFailed, len);
+            } else {
+                break;
+            }
+            i += 1;
+        }
+
+        let paths = &args[files_start..];
+        if paths.is_empty() {
+            let msg = b"head: missing file operand\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            return (ShellStatus::ExecutionFailed, len);
+        }
+
+        let mut cursor = 0;
+        for &path in paths {
+            let fd = libjambo::coreutils::sys_open(path, libjambo::vfs::O_RDONLY);
+            if fd < 0 {
+                cursor = append_bytes(out, cursor, b"head: cannot open '");
+                cursor = append_bytes(out, cursor, path.as_bytes());
+                cursor = append_bytes(out, cursor, b"': No such file or directory\n");
+                continue;
+            }
+            let mut file_buf = [0u8; 1024];
+            let n = libjambo::coreutils::sys_read(fd, &mut file_buf);
+            let _ = libjambo::coreutils::sys_close(fd);
+            if n <= 0 {
+                continue;
+            }
+            let content = &file_buf[..n as usize];
+            if let Some(max_b) = bytes_limit {
+                let to_copy = content.len().min(max_b);
+                cursor = append_bytes(out, cursor, &content[..to_copy]);
+            } else {
+                let mut lines_count = 0;
+                let mut end_idx = 0;
+                for &b in content {
+                    end_idx += 1;
+                    if b == b'\n' {
+                        lines_count += 1;
+                        if lines_count >= lines_limit {
+                            break;
+                        }
+                    }
+                }
+                cursor = append_bytes(out, cursor, &content[..end_idx]);
+            }
+        }
+        (ShellStatus::Success, cursor)
+    }
+
+    fn cmd_tail(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        let mut lines_limit = 10usize;
+        let mut bytes_limit = None;
+        let mut files_start = 0;
+
+        let mut i = 0;
+        while i < args.len() {
+            let arg = args[i];
+            if arg == "-n" && i + 1 < args.len() {
+                if let Some(n) = parse_u32(args[i + 1]) {
+                    lines_limit = n as usize;
+                    bytes_limit = None;
+                    i += 2;
+                    files_start = i;
+                    continue;
+                }
+            } else if let Some(rest) = arg.strip_prefix("-n") {
+                if let Some(n) = parse_u32(rest) {
+                    lines_limit = n as usize;
+                    bytes_limit = None;
+                    i += 1;
+                    files_start = i;
+                    continue;
+                }
+            } else if arg == "-c" && i + 1 < args.len() {
+                if let Some(n) = parse_u32(args[i + 1]) {
+                    bytes_limit = Some(n as usize);
+                    i += 2;
+                    files_start = i;
+                    continue;
+                }
+            } else if let Some(rest) = arg.strip_prefix("-c") {
+                if let Some(n) = parse_u32(rest) {
+                    bytes_limit = Some(n as usize);
+                    i += 1;
+                    files_start = i;
+                    continue;
+                }
+            } else if arg.starts_with('-') && arg != "-" {
+                let msg = b"tail: invalid option\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                return (ShellStatus::ExecutionFailed, len);
+            } else {
+                break;
+            }
+            i += 1;
+        }
+
+        let paths = &args[files_start..];
+        if paths.is_empty() {
+            let msg = b"tail: missing file operand\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            return (ShellStatus::ExecutionFailed, len);
+        }
+
+        let mut cursor = 0;
+        for &path in paths {
+            let fd = libjambo::coreutils::sys_open(path, libjambo::vfs::O_RDONLY);
+            if fd < 0 {
+                cursor = append_bytes(out, cursor, b"tail: cannot open '");
+                cursor = append_bytes(out, cursor, path.as_bytes());
+                cursor = append_bytes(out, cursor, b"': No such file or directory\n");
+                continue;
+            }
+            let mut file_buf = [0u8; 1024];
+            let n = libjambo::coreutils::sys_read(fd, &mut file_buf);
+            let _ = libjambo::coreutils::sys_close(fd);
+            if n <= 0 {
+                continue;
+            }
+            let content = &file_buf[..n as usize];
+            if let Some(max_b) = bytes_limit {
+                let start = content.len().saturating_sub(max_b);
+                cursor = append_bytes(out, cursor, &content[start..]);
+            } else {
+                let mut newline_count = 0;
+                let mut start_idx = 0;
+                for (idx, &b) in content.iter().enumerate().rev() {
+                    if b == b'\n' {
+                        newline_count += 1;
+                        if newline_count == lines_limit + 1 {
+                            start_idx = idx + 1;
+                            break;
+                        }
+                    }
+                }
+                cursor = append_bytes(out, cursor, &content[start_idx..]);
+            }
+        }
+        (ShellStatus::Success, cursor)
+    }
+
+    fn cmd_touch(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if args.is_empty() {
+            let msg = b"touch: missing file operand\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            return (ShellStatus::ExecutionFailed, len);
+        }
+        for &path in args {
+            let fd = libjambo::coreutils::sys_open(
+                path,
+                libjambo::vfs::O_CREAT | libjambo::vfs::O_WRONLY,
+            );
+            if fd < 0 {
+                let mut cursor = append_bytes(out, 0, b"touch: cannot touch '");
+                cursor = append_bytes(out, cursor, path.as_bytes());
+                cursor = append_bytes(out, cursor, b"'\n");
+                return (ShellStatus::ExecutionFailed, cursor);
+            }
+            let _ = libjambo::coreutils::sys_close(fd);
+        }
+        (ShellStatus::Success, 0)
+    }
+
+    fn cmd_mkdir(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        let mut parents = false;
+        let mut paths_start = 0;
+        for (i, &arg) in args.iter().enumerate() {
+            if arg == "-p" || arg == "--parents" {
+                parents = true;
+                paths_start = i + 1;
+            } else if arg.starts_with('-') {
+                paths_start = i + 1;
+            } else {
+                break;
+            }
+        }
+        let paths = &args[paths_start..];
+        if paths.is_empty() {
+            let msg = b"mkdir: missing operand\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            return (ShellStatus::ExecutionFailed, len);
+        }
+        for &path in paths {
+            let res = libjambo::coreutils::sys_mkdir_pool(path, 0o755);
+            if res < 0 && !parents {
+                let mut cursor = append_bytes(out, 0, b"mkdir: cannot create directory '");
+                cursor = append_bytes(out, cursor, path.as_bytes());
+                cursor = append_bytes(out, cursor, b"': File exists\n");
+                return (ShellStatus::ExecutionFailed, cursor);
+            }
+        }
+        (ShellStatus::Success, 0)
+    }
+
+    fn cmd_rm(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        let mut force = false;
+        let mut recursive = false;
+        let mut paths_start = 0;
+
+        for (i, &arg) in args.iter().enumerate() {
+            if arg.starts_with('-') && arg != "-" {
+                for b in arg[1..].bytes() {
+                    match b {
+                        b'f' => force = true,
+                        b'r' | b'R' => recursive = true,
+                        _ => {}
+                    }
+                }
+                paths_start = i + 1;
+            } else {
+                break;
+            }
+        }
+
+        let paths = &args[paths_start..];
+        if paths.is_empty() {
+            if !force {
+                let msg = b"rm: missing operand\n";
+                let len = msg.len().min(out.len());
+                out[..len].copy_from_slice(&msg[..len]);
+                return (ShellStatus::ExecutionFailed, len);
+            }
+            return (ShellStatus::Success, 0);
+        }
+
+        for &path in paths {
+            let clean = path.trim_end_matches('/');
+            if recursive {
+                // SAFETY: Nettoyage récursif dans le pool virtuel
+                unsafe {
+                    let pool = core::ptr::addr_of_mut!(libjambo::coreutils::INODE_POOL);
+                    let mut found = false;
+                    for node in (*pool).iter_mut() {
+                        if node.is_active
+                            && (node.path_str() == clean || node.path_str().starts_with(clean))
+                        {
+                            node.is_active = false;
+                            node.size = 0;
+                            node.path_len = 0;
+                            found = true;
+                        }
+                    }
+                    if !found && !force {
+                        let mut cursor = append_bytes(out, 0, b"rm: cannot remove '");
+                        cursor = append_bytes(out, cursor, path.as_bytes());
+                        cursor = append_bytes(out, cursor, b"': No such file or directory\n");
+                        return (ShellStatus::ExecutionFailed, cursor);
+                    }
+                }
+            } else {
+                let res = libjambo::coreutils::sys_unlink_pool(clean);
+                if res < 0 && !force {
+                    let mut cursor = append_bytes(out, 0, b"rm: cannot remove '");
+                    cursor = append_bytes(out, cursor, path.as_bytes());
+                    cursor = append_bytes(out, cursor, b"': No such file or directory\n");
+                    return (ShellStatus::ExecutionFailed, cursor);
+                }
+            }
+        }
+        (ShellStatus::Success, 0)
     }
 
     fn cmd_ifconfig(&self, out: &mut [u8]) -> (ShellStatus, usize) {
@@ -11750,7 +12071,7 @@ mod tests {
     #[test]
     fn test_help_contains_power_forensics_kdir_pqc_wasm_fdr() {
         let mut shell = JamboShell::new();
-        let mut out = [0u8; 4096];
+        let mut out = [0u8; 8192];
 
         let (st, len) = shell.execute_line("help", &mut out);
         assert_eq!(st, ShellStatus::Success);
@@ -16336,5 +16657,55 @@ mod tests {
         assert_eq!(st2, ShellStatus::InvalidArgument);
         let s2 = core::str::from_utf8(&out[..len2]).unwrap();
         assert!(s2.contains("Usage: fuzz"));
+    }
+
+    #[test]
+    fn test_coreutils_11_binaries() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 1024];
+
+        let (st, len) = shell.execute_line("coreutils", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("11 utilitaires"));
+        assert!(s.contains("/bin/head"));
+        assert!(s.contains("/bin/tail"));
+        assert!(s.contains("/bin/touch"));
+        assert!(s.contains("/bin/mkdir"));
+        assert!(s.contains("/bin/rm"));
+    }
+
+    #[test]
+    fn test_touch_mkdir_rm_commands() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 1024];
+
+        // 1. mkdir
+        let (st_mkdir, _) = shell.execute_line("mkdir -p /tmp/sh_test_dir", &mut out);
+        assert_eq!(st_mkdir, ShellStatus::Success);
+
+        // 2. touch
+        let (st_touch, _) = shell.execute_line("touch /tmp/sh_test_file.txt", &mut out);
+        assert_eq!(st_touch, ShellStatus::Success);
+
+        // 3. head
+        let (st_head, len_h) = shell.execute_line("head -n 1 /etc/hostname", &mut out);
+        assert_eq!(st_head, ShellStatus::Success);
+        let s_head = core::str::from_utf8(&out[..len_h]).unwrap();
+        assert!(s_head.contains("jambo-node-01"));
+
+        // 4. tail
+        let (st_tail, len_t) = shell.execute_line("tail -n 1 /etc/hostname", &mut out);
+        assert_eq!(st_tail, ShellStatus::Success);
+        let s_tail = core::str::from_utf8(&out[..len_t]).unwrap();
+        assert!(s_tail.contains("jambo-node-01"));
+
+        // 5. rm
+        let (st_rm, _) = shell.execute_line("rm /tmp/sh_test_file.txt", &mut out);
+        assert_eq!(st_rm, ShellStatus::Success);
+
+        // 6. rm -r
+        let (st_rm_r, _) = shell.execute_line("rm -r /tmp/sh_test_dir", &mut out);
+        assert_eq!(st_rm_r, ShellStatus::Success);
     }
 }

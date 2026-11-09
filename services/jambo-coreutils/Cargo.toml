@@ -31,6 +31,26 @@ path = "src/bin/false.rs"
 name = "ls"
 path = "src/bin/ls.rs"
 
+[[bin]]
+name = "head"
+path = "src/bin/head.rs"
+
+[[bin]]
+name = "tail"
+path = "src/bin/tail.rs"
+
+[[bin]]
+name = "touch"
+path = "src/bin/touch.rs"
+
+[[bin]]
+name = "mkdir"
+path = "src/bin/mkdir.rs"
+
+[[bin]]
+name = "rm"
+path = "src/bin/rm.rs"
+
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }
 

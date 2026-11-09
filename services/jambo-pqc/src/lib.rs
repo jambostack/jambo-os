@@ -1854,14 +1854,16 @@ mod tests {
         assert_eq!(req_dec.data_len, 9);
         assert_eq!(&req_dec.payload[..9], b"HELLO_PQC");
 
-        let mut resp = PqcResponse::default();
-        resp.status = PQC_STATUS_OK;
-        resp.transition_state = PqcTransitionState::HybridPqcClassical as u32;
-        resp.active_keys = 2;
-        resp.operations_count = 5;
-        resp.audit_logs_count = 3;
-        resp.result_code = 1;
-        resp.digest = [0x7au8; 32];
+        let resp = PqcResponse {
+            status: PQC_STATUS_OK,
+            transition_state: PqcTransitionState::HybridPqcClassical as u32,
+            active_keys: 2,
+            operations_count: 5,
+            audit_logs_count: 3,
+            result_code: 1,
+            digest: [0x7au8; 32],
+            ..Default::default()
+        };
 
         let resp_bytes = resp.to_bytes();
         assert_eq!(resp_bytes.len(), 64);
