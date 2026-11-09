@@ -49,4 +49,5 @@ jambo-soar = { path = "../jambo-soar" }
 jambo-ueba = { path = "../jambo-ueba" }
 jambo-itdr = { path = "../jambo-itdr" }
 jambo-dlp = { path = "../jambo-dlp" }
+jambo-fuzz = { path = "../jambo-fuzz" }
 

@@ -48,6 +48,7 @@ members = [
     "services/jambo-dlp",
     "services/jambo-coreutils",
     "services/jambo-installer",
+    "services/jambo-fuzz",
     "xtask",
 ]
 

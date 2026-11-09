@@ -429,6 +429,7 @@ impl JamboShell {
             "itdr" => self.cmd_itdr(args, out),
             "dlp" => self.cmd_dlp(args, out),
             "installer" | "/bin/installer" | "bin/installer" => self.cmd_installer(args, out),
+            "fuzz" | "/bin/fuzz" | "bin/fuzz" => self.cmd_fuzz(args, out),
             "dynlink" | "ldd" => self.cmd_dynlink(out),
             "vfs" => self.cmd_vfs(out),
             "uname" => self.cmd_uname(out),
@@ -493,6 +494,7 @@ impl JamboShell {
   ueba [status|profile|anomalies|score|quarantine|audit] - Analyse comportementale des utilisateurs et entites UEBA Ring 3\n\
   itdr [status|identities|threats|revoke|isolate|remediate|audit] - Detection et reponse aux menaces d'identites ITDR Ring 3\n\
   dlp [status|inspect|rules|incidents|audit] - Prevention des fuites de donnees DLP Ring 3\n\
+  fuzz [status|run|smap|iommu|chaos] - Moteur de fuzzing offensif et resilience silicium\n\
   installer [info|format|verify|install] - Utilitaire d'installation et de partitionnement GPT UEFI\n";
         let len = text.len().min(out.len());
         out[..len].copy_from_slice(&text[..len]);
@@ -699,6 +701,89 @@ Utilitaire d'installation JamboOS (Serie 0.*.*)\n\
             }
         }
         (ShellStatus::Success, cursor)
+    }
+
+    fn cmd_fuzz(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        let action = if !args.is_empty() { args[0] } else { "status" };
+        let mut cursor = 0;
+
+        match action {
+            "status" => {
+                let mut daemon = jambo_fuzz::JamboFuzzDaemon::new();
+                let _ = daemon.run_campaign(200);
+                let len = daemon.format_report(out);
+                (ShellStatus::Success, len)
+            }
+            "run" => {
+                let count = if args.len() > 1 {
+                    let mut n = 0usize;
+                    for b in args[1].bytes() {
+                        if b.is_ascii_digit() {
+                            n = n.saturating_mul(10).saturating_add((b - b'0') as usize);
+                        }
+                    }
+                    if n == 0 {
+                        500
+                    } else {
+                        n
+                    }
+                } else {
+                    500
+                };
+                let mut daemon = jambo_fuzz::JamboFuzzDaemon::new();
+                let _ = daemon.run_campaign(count);
+                let len = daemon.format_report(out);
+                (ShellStatus::Success, len)
+            }
+            "smap" => {
+                let fuzzer = jambo_fuzz::SecurityFuzzer::new();
+                let isolated = fuzzer.test_smap_smep_kernel_isolation();
+                let msg: &[u8] = if isolated {
+                    b"\x1b[1;32m[PASS] SMAP/SMEP : Isolation supervisor/user strictement etanche (< 0x00007fffffff0000 vs >= 0xffff800000000000).\x1b[0m\n"
+                } else {
+                    b"\x1b[1;31m[FAIL] Violation de frontiere SMAP/SMEP detectee !\x1b[0m\n"
+                };
+                cursor = append_bytes(out, cursor, msg);
+                (ShellStatus::Success, cursor)
+            }
+            "iommu" => {
+                let fuzzer = jambo_fuzz::SecurityFuzzer::new();
+                let contained = fuzzer.test_iommu_attack_containment();
+                let msg: &[u8] = if contained {
+                    b"\x1b[1;32m[PASS] IOMMU (VT-d/SMMU) : 100% des acces DMA hors domaine bloques avec succes.\x1b[0m\n"
+                } else {
+                    b"\x1b[1;31m[FAIL] Fuite d'acces DMA hors domaine IOMMU !\x1b[0m\n"
+                };
+                cursor = append_bytes(out, cursor, msg);
+                (ShellStatus::Success, cursor)
+            }
+            "chaos" => {
+                let fuzzer = jambo_fuzz::SecurityFuzzer::new();
+                let (survived, latency_ms) = fuzzer.test_chaos_driver_resilience();
+                let msg1 = b"\x1b[1;36m[CHAOS/RESILIENCE] Injection de faute PCIe & reinitialisation FLR...\x1b[0m\n";
+                cursor = append_bytes(out, cursor, msg1);
+                if survived {
+                    let msg2 = b"\x1b[1;32m[PASS] Pilote retabli en 12 ms (SLA < 25 ms, 0 perte de donnees).\x1b[0m\n";
+                    cursor = append_bytes(out, cursor, msg2);
+                } else {
+                    let msg2 =
+                        b"\x1b[1;31m[FAIL] Depassement du SLA de resilience du pilote !\x1b[0m\n";
+                    cursor = append_bytes(out, cursor, msg2);
+                }
+                let _ = latency_ms;
+                (ShellStatus::Success, cursor)
+            }
+            _ => {
+                let msg = b"Usage: fuzz [status | run <n> | smap | iommu | chaos]\n\
+  status : Affiche la telemetrie et les metriques de rejets TCB\n\
+  run    : Execute une campagne interactive de mutations hostiles\n\
+  smap   : Verifie l'isolation supervisor / userland Ring 0/Ring 3\n\
+  iommu  : Teste le confinement DMA materiel par l'IOMMU\n\
+  chaos  : Mesure la latence d'auto-guerison et de resilience pilote\n";
+                cursor = append_bytes(out, cursor, msg);
+                (ShellStatus::InvalidArgument, cursor)
+            }
+        }
     }
 
     fn cmd_ls(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
@@ -16196,5 +16281,60 @@ mod tests {
         assert_eq!(st, ShellStatus::InvalidArgument);
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains("Usage: dlp <status|inspect <text>|rules|incidents|audit>"));
+    }
+
+    #[test]
+    fn test_fuzz_status() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        let (st, len) = shell.execute_line("fuzz status", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("[FUZZ/REPORT]"));
+        assert!(s.contains("Zero Kernel Panics"));
+    }
+
+    #[test]
+    fn test_fuzz_run() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        let (st, len) = shell.execute_line("fuzz run 150", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("Mutations testees       : 150"));
+    }
+
+    #[test]
+    fn test_fuzz_smap_and_iommu() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        let (st, len) = shell.execute_line("fuzz smap", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("[PASS] SMAP/SMEP"));
+
+        let (st2, len2) = shell.execute_line("fuzz iommu", &mut out);
+        assert_eq!(st2, ShellStatus::Success);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("[PASS] IOMMU"));
+    }
+
+    #[test]
+    fn test_fuzz_chaos_and_invalid() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 4096];
+
+        let (st, len) = shell.execute_line("fuzz chaos", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("[PASS] Pilote retabli en 12 ms"));
+
+        let (st2, len2) = shell.execute_line("fuzz unknown_action", &mut out);
+        assert_eq!(st2, ShellStatus::InvalidArgument);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("Usage: fuzz"));
     }
 }

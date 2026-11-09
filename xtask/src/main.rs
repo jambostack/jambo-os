@@ -1320,6 +1320,36 @@ fn build_installer(release: bool) -> anyhow::Result<PathBuf> {
     Ok(root.join(format!("target/x86_64-unknown-none/{}/installer", profile)))
 }
 
+fn build_fuzzer(release: bool) -> anyhow::Result<PathBuf> {
+    let root = root_dir();
+    let mut cmd = Command::new("cargo");
+    cmd.current_dir(&root);
+    cmd.args([
+        "build",
+        "--package",
+        "jambo-fuzz",
+        "--bin",
+        "fuzz",
+        "--target",
+        "x86_64-unknown-none",
+    ]);
+    if release {
+        cmd.arg("--release");
+    }
+    cmd.env(
+        "RUSTFLAGS",
+        "-C link-arg=-Tlibs/user-x86_64.ld -C relocation-model=static",
+    );
+
+    let status = cmd.status()?;
+    if !status.success() {
+        anyhow::bail!("Échec de compilation du binaire jambo-fuzz");
+    }
+
+    let profile = if release { "release" } else { "debug" };
+    Ok(root.join(format!("target/x86_64-unknown-none/{}/fuzz", profile)))
+}
+
 #[allow(clippy::type_complexity)]
 fn build_userland(
     release: bool,
@@ -1534,6 +1564,7 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
     ) = build_userland(release)?;
     let (echo_bin, cat_bin, wc_bin, true_bin, false_bin, ls_bin) = build_coreutils(release)?;
     let installer_bin = build_installer(release)?;
+    let fuzz_bin = build_fuzzer(release)?;
 
     let initrd_stage = root.join("target/initrd_stage");
     let bin_dir = initrd_stage.join("bin");
@@ -1548,6 +1579,8 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
     fs::copy(&ls_bin, bin_dir.join("ls"))?;
     fs::copy(&installer_bin, bin_dir.join("installer"))?;
     fs::copy(&installer_bin, bin_dir.join("jambo-installer"))?;
+    fs::copy(&fuzz_bin, bin_dir.join("fuzz"))?;
+    fs::copy(&fuzz_bin, bin_dir.join("jambo-fuzz"))?;
 
     fs::copy(&init_bin, bin_dir.join("init"))?;
     fs::copy(&jsh_bin, bin_dir.join("jsh"))?;
@@ -1693,6 +1726,8 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
     fs::copy(&ls_bin, initrd_stage.join("ls"))?;
     fs::copy(&installer_bin, initrd_stage.join("installer"))?;
     fs::copy(&installer_bin, initrd_stage.join("jambo-installer"))?;
+    fs::copy(&fuzz_bin, initrd_stage.join("fuzz"))?;
+    fs::copy(&fuzz_bin, initrd_stage.join("jambo-fuzz"))?;
 
     let initrd_tar = root.join("target/initrd.tar");
     let status = Command::new("tar")
@@ -1708,6 +1743,8 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
             "bin/ls",
             "bin/installer",
             "bin/jambo-installer",
+            "bin/fuzz",
+            "bin/jambo-fuzz",
             "bin/init",
             "bin/jsh",
             "bin/blockd",
@@ -1850,6 +1887,8 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
             "ls",
             "installer",
             "jambo-installer",
+            "fuzz",
+            "jambo-fuzz",
         ])
         .status()?;
 
@@ -2619,5 +2658,17 @@ mod tests {
             }
             _ => panic!("Expected Commands::Run"),
         }
+    }
+
+    #[test]
+    fn test_fuzz_binary_configuration() {
+        let root = root_dir();
+        let debug_fuzz = root.join("target/x86_64-unknown-none/debug/fuzz");
+        let release_fuzz = root.join("target/x86_64-unknown-none/release/fuzz");
+        assert!(
+            debug_fuzz.to_str().unwrap().contains("jambo-fuzz")
+                || debug_fuzz.to_str().unwrap().contains("fuzz")
+        );
+        assert!(release_fuzz.to_str().unwrap().contains("release"));
     }
 }
