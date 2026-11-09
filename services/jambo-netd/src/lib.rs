@@ -1146,6 +1146,229 @@ impl SocketTable {
         }
         None
     }
+
+    /// Recherche une socket UDP connectée correspondant exactement au 4-tuple (RFC 768)
+    pub fn find_connected_udp(
+        &self,
+        local_port: u16,
+        remote_ip: [u8; 4],
+        remote_port: u16,
+    ) -> Option<usize> {
+        for (i, slot) in self.sockets.iter().enumerate() {
+            if let Some(sock) = slot {
+                if sock.is_bound
+                    && sock.is_connected
+                    && sock.protocol == SocketProtocol::Udp
+                    && sock.local_port == local_port
+                    && sock.remote_ip == remote_ip
+                    && sock.remote_port == remote_port
+                {
+                    return Some(i);
+                }
+            }
+        }
+        None
+    }
+
+    /// Résout la socket UDP destinataire d'un datagramme entrant :
+    /// Priorité 1 : Socket connectée au 4-tuple exact
+    /// Priorité 2 : Socket en écoute liée au port local sans connexion fixée
+    pub fn find_udp(&self, local_port: u16, remote_ip: [u8; 4], remote_port: u16) -> Option<usize> {
+        if let Some(id) = self.find_connected_udp(local_port, remote_ip, remote_port) {
+            return Some(id);
+        }
+        for (i, slot) in self.sockets.iter().enumerate() {
+            if let Some(sock) = slot {
+                if sock.is_bound
+                    && !sock.is_connected
+                    && sock.protocol == SocketProtocol::Udp
+                    && sock.local_port == local_port
+                {
+                    return Some(i);
+                }
+            }
+        }
+        None
+    }
+
+    /// Déconnecte une socket UDP (dissocie l'adresse et le port distants)
+    pub fn disconnect(&mut self, id: usize) -> Result<(), SysError> {
+        if id >= 16 {
+            return Err(SysError::InvalidArgument);
+        }
+        let sock = self.sockets[id].as_mut().ok_or(SysError::InvalidArgument)?;
+        sock.is_connected = false;
+        sock.remote_ip = [0, 0, 0, 0];
+        sock.remote_port = 0;
+        Ok(())
+    }
+}
+
+// =========================================================================
+// Moteur de Filtrage d'État Conntrack (Connection Tracking Ring 3)
+// =========================================================================
+
+pub const MAX_CONNTRACK_ENTRIES: usize = 32;
+
+/// État de suivi de connexion d'un flux UDP ou TCP
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConntrackState {
+    Unused,
+    New,
+    Established,
+    Closed,
+}
+
+/// Entrée de table conntrack mémorisant un flux réseau bidirectionnel
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConntrackEntry {
+    pub state: ConntrackState,
+    pub protocol: SocketProtocol,
+    pub local_ip: [u8; 4],
+    pub remote_ip: [u8; 4],
+    pub local_port: u16,
+    pub remote_port: u16,
+    pub packets_sent: u64,
+    pub packets_recv: u64,
+    pub bytes_sent: u64,
+    pub bytes_recv: u64,
+    pub expiry_ticks: u32,
+}
+
+impl ConntrackEntry {
+    pub const fn empty() -> Self {
+        Self {
+            state: ConntrackState::Unused,
+            protocol: SocketProtocol::Udp,
+            local_ip: [0; 4],
+            remote_ip: [0; 4],
+            local_port: 0,
+            remote_port: 0,
+            packets_sent: 0,
+            packets_recv: 0,
+            bytes_sent: 0,
+            bytes_recv: 0,
+            expiry_ticks: 0,
+        }
+    }
+}
+
+/// Table de suivi d'état des flux réseau sans allocation dynamique
+pub struct ConntrackTable {
+    pub entries: [ConntrackEntry; MAX_CONNTRACK_ENTRIES],
+}
+
+impl Default for ConntrackTable {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ConntrackTable {
+    pub const fn new() -> Self {
+        Self {
+            entries: [ConntrackEntry::empty(); MAX_CONNTRACK_ENTRIES],
+        }
+    }
+
+    /// Enregistre ou met à jour un flux sortant (datagramme UDP / paquet émis)
+    pub fn track_outbound(
+        &mut self,
+        protocol: SocketProtocol,
+        local_ip: [u8; 4],
+        local_port: u16,
+        remote_ip: [u8; 4],
+        remote_port: u16,
+        bytes: usize,
+    ) -> Result<usize, SysError> {
+        // 1. Mise à jour d'un flux existant
+        for (i, entry) in self.entries.iter_mut().enumerate() {
+            if entry.state != ConntrackState::Unused
+                && entry.protocol == protocol
+                && entry.local_ip == local_ip
+                && entry.local_port == local_port
+                && entry.remote_ip == remote_ip
+                && entry.remote_port == remote_port
+            {
+                entry.packets_sent += 1;
+                entry.bytes_sent += bytes as u64;
+                entry.expiry_ticks = 300;
+                return Ok(i);
+            }
+        }
+
+        // 2. Allocation d'une nouvelle entrée
+        for (i, entry) in self.entries.iter_mut().enumerate() {
+            if entry.state == ConntrackState::Unused {
+                *entry = ConntrackEntry {
+                    state: ConntrackState::New,
+                    protocol,
+                    local_ip,
+                    remote_ip,
+                    local_port,
+                    remote_port,
+                    packets_sent: 1,
+                    packets_recv: 0,
+                    bytes_sent: bytes as u64,
+                    bytes_recv: 0,
+                    expiry_ticks: 300,
+                };
+                return Ok(i);
+            }
+        }
+
+        Err(SysError::OutOfMemory)
+    }
+
+    /// Filtre et valide un flux entrant (Stateful Inspection : autorise si flux initié)
+    pub fn filter_inbound(
+        &mut self,
+        protocol: SocketProtocol,
+        src_ip: [u8; 4],
+        src_port: u16,
+        dst_ip: [u8; 4],
+        dst_port: u16,
+        bytes: usize,
+    ) -> bool {
+        for entry in self.entries.iter_mut() {
+            if entry.state != ConntrackState::Unused
+                && entry.protocol == protocol
+                && entry.local_ip == dst_ip
+                && entry.local_port == dst_port
+                && entry.remote_ip == src_ip
+                && entry.remote_port == src_port
+            {
+                // Flux correspondant : transition vers Established et mise à jour métriques
+                entry.state = ConntrackState::Established;
+                entry.packets_recv += 1;
+                entry.bytes_recv += bytes as u64;
+                entry.expiry_ticks = 300;
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Avance le temps et purge les flux inactifs
+    pub fn tick(&mut self, elapsed_ticks: u32) {
+        for entry in self.entries.iter_mut() {
+            if entry.state != ConntrackState::Unused {
+                if entry.expiry_ticks <= elapsed_ticks {
+                    *entry = ConntrackEntry::empty();
+                } else {
+                    entry.expiry_ticks -= elapsed_ticks;
+                }
+            }
+        }
+    }
+
+    /// Compte les flux actifs
+    pub fn active_count(&self) -> usize {
+        self.entries
+            .iter()
+            .filter(|e| e.state != ConntrackState::Unused)
+            .count()
+    }
 }
 
 #[cfg(test)]
@@ -1357,5 +1580,91 @@ mod tests {
         // 6. Close
         table.close(s0).unwrap();
         assert!(table.get(s0).is_none());
+    }
+
+    #[test]
+    fn test_connected_udp_sockets_and_4tuple_dispatch() {
+        let mut table = SocketTable::new();
+
+        // Socket 0 : UDP lié au port 5000 (non connecté, écoute tous les flux vers 5000)
+        let s0 = table.alloc_socket(SocketProtocol::Udp).unwrap();
+        table.bind(s0, [10, 0, 2, 15], 5000).unwrap();
+
+        // Socket 1 : UDP lié au port 5001 et connecté à 1.1.1.1:53
+        let s1 = table.alloc_socket(SocketProtocol::Udp).unwrap();
+        table.bind(s1, [10, 0, 2, 15], 5001).unwrap();
+        table.connect(s1, [1, 1, 1, 1], 53).unwrap();
+
+        // Test résolution 4-tuple :
+        // 1. Paquet pour port 5001 venant de 1.1.1.1:53 -> doit matcher la socket connectée s1
+        assert_eq!(table.find_udp(5001, [1, 1, 1, 1], 53), Some(s1));
+
+        // 2. Paquet pour port 5001 venant d'une autre IP (ex: 8.8.8.8:53) -> s1 est connectée ailleurs, donc rejet/none
+        assert_eq!(table.find_udp(5001, [8, 8, 8, 8], 53), None);
+
+        // 3. Paquet pour port 5000 venant de n'importe où -> matche la socket non connectée s0
+        assert_eq!(table.find_udp(5000, [8, 8, 8, 8], 53), Some(s0));
+        assert_eq!(table.find_udp(5000, [1, 1, 1, 1], 53), Some(s0));
+
+        // 4. Déconnexion de s1
+        assert!(table.disconnect(s1).is_ok());
+        let sock1 = table.get(s1).unwrap();
+        assert!(!sock1.is_connected);
+    }
+
+    #[test]
+    fn test_conntrack_stateful_filtering_new_established_timeout() {
+        let mut ct = ConntrackTable::new();
+        assert_eq!(ct.active_count(), 0);
+
+        let local_ip = [10, 0, 2, 15];
+        let remote_ip = [192, 168, 1, 1];
+        let local_port = 54321;
+        let remote_port = 8080;
+
+        // 1. Un paquet entrant sans flux sortant préalable est rejeté par le pare-feu à état
+        let allowed = ct.filter_inbound(
+            SocketProtocol::Udp,
+            remote_ip,
+            remote_port,
+            local_ip,
+            local_port,
+            64,
+        );
+        assert!(!allowed);
+
+        // 2. Émission d'un datagramme sortant -> création de flux New
+        let idx = ct
+            .track_outbound(
+                SocketProtocol::Udp,
+                local_ip,
+                local_port,
+                remote_ip,
+                remote_port,
+                128,
+            )
+            .expect("track outbound");
+        assert_eq!(ct.entries[idx].state, ConntrackState::New);
+        assert_eq!(ct.entries[idx].packets_sent, 1);
+        assert_eq!(ct.entries[idx].bytes_sent, 128);
+        assert_eq!(ct.active_count(), 1);
+
+        // 3. Paquet retour légitime -> autorisé et passage à Established
+        let reply_allowed = ct.filter_inbound(
+            SocketProtocol::Udp,
+            remote_ip,
+            remote_port,
+            local_ip,
+            local_port,
+            256,
+        );
+        assert!(reply_allowed);
+        assert_eq!(ct.entries[idx].state, ConntrackState::Established);
+        assert_eq!(ct.entries[idx].packets_recv, 1);
+        assert_eq!(ct.entries[idx].bytes_recv, 256);
+
+        // 4. Écoulement du temps et purge après expiration
+        ct.tick(301);
+        assert_eq!(ct.active_count(), 0);
     }
 }

@@ -18,6 +18,8 @@ use jambo_abi::SysError;
 pub const MAX_FDS: usize = 32;
 pub const MAX_PATH_LEN: usize = 64;
 pub const FILE_BUFFER_SIZE: usize = 1024; // Tampon embarqué par descripteur
+pub const MAX_PIPES: usize = 8; // Nombre maximal de canaux pipes simultanés
+pub const PIPE_BUFFER_SIZE: usize = 1024; // Tampon circulaire par canal de pipe IPC
 
 // Drapeaux d'ouverture de fichier (flags)
 pub const O_RDONLY: i32 = 0;
@@ -54,6 +56,34 @@ pub enum FdKind {
     RegularFile,
     IpcChannel,
     Socket,
+    PipeReader,
+    PipeWriter,
+}
+
+/// Canal de communication FIFO pour pipes anonymes IPC en mémoire
+#[derive(Clone, Copy)]
+pub struct PipeChannel {
+    pub buffer: [u8; PIPE_BUFFER_SIZE],
+    pub head: usize,
+    pub tail: usize,
+    pub len: usize,
+    pub readers: u8,
+    pub writers: u8,
+    pub active: bool,
+}
+
+impl PipeChannel {
+    pub const fn empty() -> Self {
+        Self {
+            buffer: [0u8; PIPE_BUFFER_SIZE],
+            head: 0,
+            tail: 0,
+            len: 0,
+            readers: 0,
+            writers: 0,
+            active: false,
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -62,6 +92,7 @@ pub struct FdEntry {
     pub flags: i32,
     pub offset: u64,
     pub size: u64,
+    pub pipe_id: u8,
     pub path: [u8; MAX_PATH_LEN],
     pub path_len: usize,
     pub buffer: [u8; FILE_BUFFER_SIZE],
@@ -74,6 +105,7 @@ impl FdEntry {
             flags: 0,
             offset: 0,
             size: 0,
+            pipe_id: 0,
             path: [0u8; MAX_PATH_LEN],
             path_len: 0,
             buffer: [0u8; FILE_BUFFER_SIZE],
@@ -110,6 +142,7 @@ pub struct PosixStat {
 
 pub struct FdTable {
     pub entries: [FdEntry; MAX_FDS],
+    pub pipes: [PipeChannel; MAX_PIPES],
 }
 
 impl FdTable {
@@ -128,7 +161,10 @@ impl FdTable {
         entries[2].kind = FdKind::ConsoleOut;
         entries[2].flags = O_WRONLY;
 
-        Self { entries }
+        Self {
+            entries,
+            pipes: [PipeChannel::empty(); MAX_PIPES],
+        }
     }
 
     /// Alloue le plus petit descripteur de fichier disponible (fd >= 3)
@@ -145,6 +181,7 @@ impl FdTable {
                     flags,
                     offset: 0,
                     size: 0,
+                    pipe_id: 0,
                     path: path_buf,
                     path_len: len,
                     buffer: [0u8; FILE_BUFFER_SIZE],
@@ -155,15 +192,165 @@ impl FdTable {
         Err(SysError::OutOfMemory) // EMFILE : Table des descripteurs saturée
     }
 
+    /// Alloue un canal de communication IPC anonyme unidirectionnel (pipe POSIX)
+    ///
+    /// Retourne la paire `(read_fd, write_fd)` où `read_fd` permet la lecture
+    /// et `write_fd` permet l'écriture dans le tampon circulaire de 1 Kio.
+    pub fn alloc_pipe(&mut self) -> Result<(i32, i32), SysError> {
+        let mut pipe_idx = None;
+        for (i, p) in self.pipes.iter().enumerate() {
+            if !p.active {
+                pipe_idx = Some(i);
+                break;
+            }
+        }
+        let pidx = pipe_idx.ok_or(SysError::OutOfMemory)?;
+
+        let mut read_fd = None;
+        let mut write_fd = None;
+
+        for (fd, entry) in self.entries.iter().enumerate().skip(3) {
+            if entry.kind == FdKind::Closed {
+                if read_fd.is_none() {
+                    read_fd = Some(fd as i32);
+                } else if write_fd.is_none() {
+                    write_fd = Some(fd as i32);
+                    break;
+                }
+            }
+        }
+
+        let r_fd = read_fd.ok_or(SysError::OutOfMemory)?;
+        let w_fd = write_fd.ok_or(SysError::OutOfMemory)?;
+
+        self.pipes[pidx] = PipeChannel {
+            buffer: [0u8; PIPE_BUFFER_SIZE],
+            head: 0,
+            tail: 0,
+            len: 0,
+            readers: 1,
+            writers: 1,
+            active: true,
+        };
+
+        let mut r_entry = FdEntry::empty();
+        r_entry.kind = FdKind::PipeReader;
+        r_entry.flags = O_RDONLY;
+        r_entry.pipe_id = pidx as u8;
+        let r_path = b"pipe:[reader]";
+        r_entry.path[..r_path.len()].copy_from_slice(r_path);
+        r_entry.path_len = r_path.len();
+        self.entries[r_fd as usize] = r_entry;
+
+        let mut w_entry = FdEntry::empty();
+        w_entry.kind = FdKind::PipeWriter;
+        w_entry.flags = O_WRONLY;
+        w_entry.pipe_id = pidx as u8;
+        let w_path = b"pipe:[writer]";
+        w_entry.path[..w_path.len()].copy_from_slice(w_path);
+        w_entry.path_len = w_path.len();
+        self.entries[w_fd as usize] = w_entry;
+
+        Ok((r_fd, w_fd))
+    }
+
+    /// Duplique un descripteur de fichier existant vers le plus petit numéro de descripteur libre
+    pub fn dup(&mut self, oldfd: i32) -> Result<i32, SysError> {
+        if oldfd < 0 || (oldfd as usize) >= MAX_FDS {
+            return Err(SysError::InvalidArgument);
+        }
+        if self.entries[oldfd as usize].kind == FdKind::Closed {
+            return Err(SysError::InvalidArgument);
+        }
+
+        for (newfd, entry) in self.entries.iter().enumerate() {
+            if entry.kind == FdKind::Closed {
+                return self.dup2(oldfd, newfd as i32);
+            }
+        }
+        Err(SysError::OutOfMemory) // EMFILE
+    }
+
+    /// Duplique un descripteur de fichier `oldfd` vers un descripteur cible spécifique `newfd`
+    ///
+    /// Si `newfd` était préalablement ouvert, il est fermé silencieusement au préalable.
+    /// Si `oldfd == newfd`, la validité de `oldfd` est vérifiée et `newfd` est retourné sans modification.
+    pub fn dup2(&mut self, oldfd: i32, newfd: i32) -> Result<i32, SysError> {
+        if oldfd < 0 || (oldfd as usize) >= MAX_FDS || newfd < 0 || (newfd as usize) >= MAX_FDS {
+            return Err(SysError::InvalidArgument); // EBADF
+        }
+        let u_old = oldfd as usize;
+        let u_new = newfd as usize;
+
+        if self.entries[u_old].kind == FdKind::Closed {
+            return Err(SysError::InvalidArgument); // EBADF
+        }
+
+        if oldfd == newfd {
+            return Ok(newfd);
+        }
+
+        // Si newfd est ouvert, le fermer proprement
+        if self.entries[u_new].kind != FdKind::Closed {
+            let _ = self.free_fd(newfd);
+        }
+
+        let old_entry = self.entries[u_old];
+        self.entries[u_new] = old_entry;
+
+        // Mise à jour des références si descripteur de type pipe
+        match old_entry.kind {
+            FdKind::PipeReader => {
+                let pidx = old_entry.pipe_id as usize;
+                if pidx < MAX_PIPES && self.pipes[pidx].active {
+                    self.pipes[pidx].readers = self.pipes[pidx].readers.saturating_add(1);
+                }
+            }
+            FdKind::PipeWriter => {
+                let pidx = old_entry.pipe_id as usize;
+                if pidx < MAX_PIPES && self.pipes[pidx].active {
+                    self.pipes[pidx].writers = self.pipes[pidx].writers.saturating_add(1);
+                }
+            }
+            _ => {}
+        }
+
+        Ok(newfd)
+    }
+
     /// Libère un descripteur de fichier existant
     pub fn free_fd(&mut self, fd: i32) -> Result<(), SysError> {
         if fd < 0 || fd as usize >= MAX_FDS {
             return Err(SysError::InvalidArgument); // EBADF
         }
         let ufd = fd as usize;
-        if self.entries[ufd].kind == FdKind::Closed {
+        let entry = self.entries[ufd];
+        if entry.kind == FdKind::Closed {
             return Err(SysError::InvalidArgument); // EBADF
         }
+
+        match entry.kind {
+            FdKind::PipeReader => {
+                let pidx = entry.pipe_id as usize;
+                if pidx < MAX_PIPES && self.pipes[pidx].active {
+                    self.pipes[pidx].readers = self.pipes[pidx].readers.saturating_sub(1);
+                    if self.pipes[pidx].readers == 0 && self.pipes[pidx].writers == 0 {
+                        self.pipes[pidx] = PipeChannel::empty();
+                    }
+                }
+            }
+            FdKind::PipeWriter => {
+                let pidx = entry.pipe_id as usize;
+                if pidx < MAX_PIPES && self.pipes[pidx].active {
+                    self.pipes[pidx].writers = self.pipes[pidx].writers.saturating_sub(1);
+                    if self.pipes[pidx].readers == 0 && self.pipes[pidx].writers == 0 {
+                        self.pipes[pidx] = PipeChannel::empty();
+                    }
+                }
+            }
+            _ => {}
+        }
+
         self.entries[ufd] = FdEntry::empty();
         Ok(())
     }
@@ -217,9 +404,13 @@ impl FdTable {
 
         if matches!(
             entry.kind,
-            FdKind::ConsoleIn | FdKind::ConsoleOut | FdKind::Socket
+            FdKind::ConsoleIn
+                | FdKind::ConsoleOut
+                | FdKind::Socket
+                | FdKind::PipeReader
+                | FdKind::PipeWriter
         ) {
-            return Err(SysError::NotSupported); // ESPIPE : Impossible de se déplacer sur un périphérique caractère ou une socket
+            return Err(SysError::NotSupported); // ESPIPE : Impossible de se déplacer sur un périphérique caractère, socket ou pipe
         }
 
         let new_offset = match whence {
@@ -268,6 +459,27 @@ impl FdTable {
                 entry.offset += to_read as u64;
                 Ok(to_read)
             }
+            FdKind::PipeReader => {
+                let pidx = entry.pipe_id as usize;
+                if pidx >= MAX_PIPES || !self.pipes[pidx].active {
+                    return Err(SysError::InvalidArgument);
+                }
+                if buf.is_empty() {
+                    return Ok(0);
+                }
+                let pipe = &mut self.pipes[pidx];
+                if pipe.len == 0 {
+                    // Si aucun écrivain actif, EOF POSIX standard
+                    return Ok(0);
+                }
+                let to_read = buf.len().min(pipe.len);
+                for slot in buf.iter_mut().take(to_read) {
+                    *slot = pipe.buffer[pipe.head];
+                    pipe.head = (pipe.head + 1) % PIPE_BUFFER_SIZE;
+                }
+                pipe.len -= to_read;
+                Ok(to_read)
+            }
             _ => Err(SysError::InvalidArgument),
         }
     }
@@ -312,6 +524,31 @@ impl FdTable {
                 }
                 Ok(to_write)
             }
+            FdKind::PipeWriter => {
+                let pidx = entry.pipe_id as usize;
+                if pidx >= MAX_PIPES || !self.pipes[pidx].active {
+                    return Err(SysError::InvalidArgument);
+                }
+                let pipe = &mut self.pipes[pidx];
+                if pipe.readers == 0 {
+                    // SIGPIPE / EPIPE : Aucun lecteur sur le canal
+                    return Err(SysError::PeerClosed);
+                }
+                if buf.is_empty() {
+                    return Ok(0);
+                }
+                let space_left = PIPE_BUFFER_SIZE - pipe.len;
+                if space_left == 0 {
+                    return Err(SysError::OutOfMemory);
+                }
+                let to_write = buf.len().min(space_left);
+                for &b in &buf[..to_write] {
+                    pipe.buffer[pipe.tail] = b;
+                    pipe.tail = (pipe.tail + 1) % PIPE_BUFFER_SIZE;
+                }
+                pipe.len += to_write;
+                Ok(to_write)
+            }
             _ => Err(SysError::InvalidArgument),
         }
     }
@@ -340,6 +577,16 @@ impl FdTable {
                 st.st_size = entry.size as i64;
                 st.st_blksize = 512;
                 st.st_blocks = entry.size.div_ceil(512) as i64;
+            }
+            FdKind::PipeReader | FdKind::PipeWriter => {
+                st.st_mode = S_IFIFO | 0o600;
+                st.st_nlink = 1;
+                let pidx = entry.pipe_id as usize;
+                if pidx < MAX_PIPES && self.pipes[pidx].active {
+                    st.st_size = self.pipes[pidx].len as i64;
+                    st.st_blocks = self.pipes[pidx].len.div_ceil(512) as i64;
+                }
+                st.st_blksize = 512;
             }
             _ => return Err(SysError::InvalidArgument),
         }
@@ -403,6 +650,21 @@ where
     let res = unsafe { f(&mut *ptr) };
     release_vfs_lock();
     res
+}
+
+/// Duplique un descripteur existant vers le plus petit descripteur libre sur la table globale
+pub fn dup(oldfd: i32) -> Result<i32, SysError> {
+    with_fd_table(|table| table.dup(oldfd))
+}
+
+/// Duplique un descripteur vers une destination spécifique sur la table globale (redirection I/O)
+pub fn dup2(oldfd: i32, newfd: i32) -> Result<i32, SysError> {
+    with_fd_table(|table| table.dup2(oldfd, newfd))
+}
+
+/// Alloue un canal de communication IPC anonyme (pipe POSIX) sur la table globale
+pub fn pipe() -> Result<(i32, i32), SysError> {
+    with_fd_table(|table| table.alloc_pipe())
 }
 
 // ============================================================================
@@ -543,5 +805,105 @@ mod tests {
         // Stat de la socket
         let st = table.fstat(sock_fd).expect("fstat socket");
         assert_eq!(st.st_mode & S_IFMT, S_IFSOCK);
+    }
+
+    #[test]
+    fn test_vfs_pipe_lifecycle_and_io() {
+        let mut table = FdTable::new();
+
+        // 1. Allouer un pipe anonyme
+        let (rfd, wfd) = table.alloc_pipe().expect("Allouer pipe");
+        assert_eq!(rfd, 3);
+        assert_eq!(wfd, 4);
+
+        let r_entry = table.get(rfd).unwrap();
+        assert_eq!(r_entry.kind, FdKind::PipeReader);
+        assert_eq!(r_entry.flags, O_RDONLY);
+
+        let w_entry = table.get(wfd).unwrap();
+        assert_eq!(w_entry.kind, FdKind::PipeWriter);
+        assert_eq!(w_entry.flags, O_WRONLY);
+
+        // Stat sur pipe
+        let st = table.fstat(rfd).expect("fstat pipe reader");
+        assert_eq!(st.st_mode & S_IFMT, S_IFIFO);
+        assert_eq!(st.st_size, 0);
+
+        // Lseek doit échouer sur un pipe (ESPIPE)
+        assert!(table.lseek(rfd, 0, SEEK_SET).is_err());
+        assert!(table.lseek(wfd, 0, SEEK_SET).is_err());
+
+        // 2. Écriture dans le pipe
+        let msg = b"JamboOS IPC Anonymous Pipe Message";
+        let nwritten = table.write(wfd, msg).expect("Écriture pipe");
+        assert_eq!(nwritten, msg.len());
+
+        // 3. Lecture depuis le pipe
+        let mut rx_buf = [0u8; 64];
+        let nread = table.read(rfd, &mut rx_buf).expect("Lecture pipe");
+        assert_eq!(nread, msg.len());
+        assert_eq!(&rx_buf[..nread], msg);
+
+        // 4. Fermeture de l'écrivain : le lecteur doit voir EOF (0 octet lu)
+        assert!(table.free_fd(wfd).is_ok());
+        let eof_read = table.read(rfd, &mut rx_buf).expect("EOF pipe");
+        assert_eq!(eof_read, 0);
+
+        // 5. Fermeture du lecteur : le canal doit être complètement libéré
+        assert!(table.free_fd(rfd).is_ok());
+        assert!(!table.pipes[0].active);
+    }
+
+    #[test]
+    fn test_vfs_dup_and_dup2_io_redirection() {
+        let mut table = FdTable::new();
+
+        // Créer un fichier régulier cible
+        let fd_file = table
+            .alloc_fd(FdKind::RegularFile, O_RDWR, "/tmp/stdout.log")
+            .expect("alloc file");
+        assert_eq!(fd_file, 3);
+
+        // Redirection I/O : dup2(fd_file, 1) pour rediriger stdout vers /tmp/stdout.log
+        let redirected_stdout = table.dup2(fd_file, 1).expect("dup2 stdout");
+        assert_eq!(redirected_stdout, 1);
+
+        let stdout_entry = table.get(1).unwrap();
+        assert_eq!(stdout_entry.kind, FdKind::RegularFile);
+        assert_eq!(stdout_entry.path_str(), "/tmp/stdout.log");
+
+        // Écriture via fd 1 (qui pointe désormais sur le fichier régulier)
+        let msg = b"Redirection stdout reussie vers fichier";
+        let nwritten = table.write(1, msg).expect("write to redirected stdout");
+        assert_eq!(nwritten, msg.len());
+
+        let target_entry = table.get(1).unwrap();
+        assert_eq!(target_entry.size, msg.len() as u64);
+
+        // Test dup simple : dup(1) doit allouer le plus petit slot libre (slot 4)
+        let dup_fd = table.dup(1).expect("dup simple");
+        assert_eq!(dup_fd, 4);
+        assert_eq!(table.get(dup_fd).unwrap().path_str(), "/tmp/stdout.log");
+
+        // Test dup2 sur soi-même : doit renvoyer newfd sans modification
+        assert_eq!(table.dup2(dup_fd, dup_fd).unwrap(), dup_fd);
+
+        // Test dup2 invalide
+        assert!(table.dup2(-1, 5).is_err());
+        assert!(table.dup2(100, 5).is_err());
+        assert!(table.dup2(5, 100).is_err()); // Slot 5 fermé
+    }
+
+    #[test]
+    fn test_vfs_pipe_epipe_when_readers_closed() {
+        let mut table = FdTable::new();
+        let (rfd, wfd) = table.alloc_pipe().expect("alloc pipe");
+
+        // Fermer immédiatement le lecteur
+        assert!(table.free_fd(rfd).is_ok());
+
+        // Tenter d'écrire sur le pipe sans lecteur : doit retourner PeerClosed (EPIPE)
+        let res = table.write(wfd, b"broken pipe test");
+        assert_eq!(res, Err(SysError::PeerClosed));
     }
 }

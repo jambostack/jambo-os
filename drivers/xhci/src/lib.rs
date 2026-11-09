@@ -8,6 +8,7 @@
 //! directe en Ring 3.
 
 #![no_std]
+#![allow(clippy::too_many_arguments)]
 
 #[cfg(test)]
 extern crate std;
@@ -61,7 +62,70 @@ pub const TRB_COMP_NO_SLOTS_AVAILABLE: u8 = 9;
 pub const TRB_COMP_EVENT_RING_FULL: u8 = 21;
 pub const TRB_COMP_COMMAND_ABORTED: u8 = 18;
 
+// Drapeaux de contrôle TRB de transfert USB 3.0
+pub const TRB_FLAG_CYCLE: u32 = 1 << 0;
+pub const TRB_FLAG_ENT: u32 = 1 << 1; // Evaluate Next TRB
+pub const TRB_FLAG_ISP: u32 = 1 << 2; // Interrupt on Short Packet
+pub const TRB_FLAG_NSNOOP: u32 = 1 << 3; // No Snoop
+pub const TRB_FLAG_CH: u32 = 1 << 4; // Chain bit
+pub const TRB_FLAG_IOC: u32 = 1 << 5; // Interrupt On Completion
+pub const TRB_FLAG_IDT: u32 = 1 << 6; // Immediate Data
+pub const TRB_FLAG_BEI: u32 = 1 << 9; // Block Event Interrupt
+pub const TRB_FLAG_SIA: u32 = 1 << 31; // Start Isoch ASAP
+
 pub const RING_ENTRIES: usize = 32;
+pub const MAX_ENDPOINTS: usize = 8;
+
+/// État d'un transfert USB 3.0 en attente ou complété
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct TransferStatus {
+    pub trb_idx: usize,
+    pub bytes_transferred: u32,
+    pub completed: bool,
+    pub completion_code: u8,
+}
+
+/// Anneau de transfert xHCI dédié à un endpoint spécifique (Bulk ou Isochrone)
+pub struct EndpointTransferRing {
+    pub endpoint_id: u8,
+    pub ring: XhciRing,
+    pub is_isoch: bool,
+    pub active: bool,
+    pub total_bytes_transferred: u64,
+    pub last_status: TransferStatus,
+}
+
+impl Default for EndpointTransferRing {
+    fn default() -> Self {
+        Self::new(0, false)
+    }
+}
+
+impl EndpointTransferRing {
+    pub const fn new(endpoint_id: u8, is_isoch: bool) -> Self {
+        Self {
+            endpoint_id,
+            ring: XhciRing::new(),
+            is_isoch,
+            active: false,
+            total_bytes_transferred: 0,
+            last_status: TransferStatus {
+                trb_idx: 0,
+                bytes_transferred: 0,
+                completed: false,
+                completion_code: 0,
+            },
+        }
+    }
+
+    /// Réinitialise le Transfer Ring de l'endpoint
+    pub fn reset(&mut self) {
+        self.ring.reset();
+        self.active = false;
+        self.total_bytes_transferred = 0;
+        self.last_status = TransferStatus::default();
+    }
+}
 
 /// Bloc de requête de transfert TRB (16 octets, alignement matériel 16 octets).
 #[repr(C, align(16))]
@@ -79,6 +143,55 @@ impl Trb {
         let control = ((trb_type & 0x3F) << 10) | if cycle { 1 } else { 0 };
         Self {
             parameter,
+            status,
+            control,
+        }
+    }
+
+    /// Construit un TRB Normal pour transfert Bulk USB 3.0
+    #[inline]
+    pub fn normal(data_iova: u64, length: u32, cycle: bool, ioc: bool, isp: bool) -> Self {
+        let mut control = ((TRB_TYPE_NORMAL & 0x3F) << 10) | if cycle { 1 } else { 0 };
+        if ioc {
+            control |= TRB_FLAG_IOC;
+        }
+        if isp {
+            control |= TRB_FLAG_ISP;
+        }
+        let status = length & 0x1FFFF;
+        Self {
+            parameter: data_iova,
+            status,
+            control,
+        }
+    }
+
+    /// Construit un TRB Isochrone USB 3.0 avec horodatage de trame (Frame ID) ou exécution immédiate (SIA)
+    #[inline]
+    pub fn isoch(
+        data_iova: u64,
+        length: u32,
+        frame_id: u32,
+        sia: bool,
+        cycle: bool,
+        ioc: bool,
+        isp: bool,
+    ) -> Self {
+        let mut control = ((TRB_TYPE_ISOCH & 0x3F) << 10) | if cycle { 1 } else { 0 };
+        if ioc {
+            control |= TRB_FLAG_IOC;
+        }
+        if isp {
+            control |= TRB_FLAG_ISP;
+        }
+        if sia {
+            control |= TRB_FLAG_SIA;
+        } else {
+            control |= (frame_id & 0x7FF) << 20;
+        }
+        let status = length & 0x1FFFF;
+        Self {
+            parameter: data_iova,
             status,
             control,
         }
@@ -114,6 +227,12 @@ impl Trb {
     #[inline]
     pub fn completion_code(&self) -> u8 {
         ((self.status >> 24) & 0xFF) as u8
+    }
+
+    /// Extrait la longueur restante d'un Transfer Event TRB (bits 23:0 du champ status).
+    #[inline]
+    pub fn transfer_remainder(&self) -> u32 {
+        self.status & 0xFF_FFFF
     }
 
     /// Extrait l'identifiant de slot d'une commande ou d'un événement (bits 31:24 du champ control).
@@ -389,6 +508,7 @@ pub struct XhciController {
     pub max_ports: u8,
     pub doorbell_array_offset: u32,
     pub cmd_ring: XhciRing,
+    pub ep_rings: [EndpointTransferRing; MAX_ENDPOINTS],
     pub keyboard: UsbKeyboardState,
     pub mouse: UsbMouseState,
     pub ready: bool,
@@ -403,6 +523,14 @@ impl Default for XhciController {
 impl XhciController {
     /// Construit une nouvelle instance non initialisée du contrôleur xHCI.
     pub const fn new() -> Self {
+        const EMPTY_EP: EndpointTransferRing = EndpointTransferRing::new(0, false);
+        let mut ep_rings = [EMPTY_EP; MAX_ENDPOINTS];
+        let mut i = 0;
+        while i < MAX_ENDPOINTS {
+            ep_rings[i] = EndpointTransferRing::new(i as u8, false);
+            i += 1;
+        }
+
         Self {
             bar0_base: 0,
             cap_length: 0x20, // Valeur standard CAPLENGTH xHCI
@@ -410,6 +538,7 @@ impl XhciController {
             max_ports: 8,
             doorbell_array_offset: 0x2000, // Décalage Doorbell standard
             cmd_ring: XhciRing::new(),
+            ep_rings,
             keyboard: UsbKeyboardState {
                 left_ctrl: false,
                 left_shift: false,
@@ -441,6 +570,136 @@ impl XhciController {
         self.doorbell_array_offset = 0x2000;
         self.ready = true;
         Ok(())
+    }
+
+    /// Configure et active le Transfer Ring d'un endpoint (Bulk ou Isochrone).
+    pub fn configure_endpoint_ring(&mut self, ep_id: u8, is_isoch: bool) -> Result<(), SysError> {
+        if ep_id as usize >= MAX_ENDPOINTS {
+            return Err(SysError::InvalidArgument);
+        }
+        let ep = &mut self.ep_rings[ep_id as usize];
+        ep.reset();
+        ep.endpoint_id = ep_id;
+        ep.is_isoch = is_isoch;
+        ep.active = true;
+        Ok(())
+    }
+
+    /// Soumet un transfert Bulk USB 3.0 (TRB Normal) sur l'anneau de transfert de l'endpoint.
+    pub fn queue_bulk_transfer(
+        &mut self,
+        ep_id: u8,
+        data_iova: u64,
+        length: u32,
+        ioc: bool,
+        isp: bool,
+    ) -> Result<usize, SysError> {
+        if !self.ready {
+            return Err(SysError::ResourceBusy);
+        }
+        if ep_id as usize >= MAX_ENDPOINTS {
+            return Err(SysError::InvalidArgument);
+        }
+        let ep = &mut self.ep_rings[ep_id as usize];
+        if !ep.active {
+            return Err(SysError::InvalidArgument);
+        }
+
+        let cycle = ep.ring.cycle_bit;
+        let normal_trb = Trb::normal(data_iova, length, cycle, ioc, isp);
+        let idx = ep.ring.enqueue_idx;
+        let next_idx = (idx + 1) % RING_ENTRIES;
+
+        if next_idx == 0 {
+            let link = Trb::link(0, ep.ring.cycle_bit, true);
+            ep.ring.trbs[idx] = link;
+            ep.ring.cycle_bit = !ep.ring.cycle_bit;
+            ep.ring.enqueue_idx = 0;
+            return Ok(idx);
+        }
+
+        ep.ring.trbs[idx] = normal_trb;
+        ep.ring.enqueue_idx = next_idx;
+        Ok(idx)
+    }
+
+    /// Soumet un transfert Isochrone USB 3.0 sur l'anneau de transfert de l'endpoint.
+    pub fn queue_isoch_transfer(
+        &mut self,
+        ep_id: u8,
+        data_iova: u64,
+        length: u32,
+        frame_id: u32,
+        sia: bool,
+        ioc: bool,
+        isp: bool,
+    ) -> Result<usize, SysError> {
+        if !self.ready {
+            return Err(SysError::ResourceBusy);
+        }
+        if ep_id as usize >= MAX_ENDPOINTS {
+            return Err(SysError::InvalidArgument);
+        }
+        let ep = &mut self.ep_rings[ep_id as usize];
+        if !ep.active || !ep.is_isoch {
+            return Err(SysError::InvalidArgument);
+        }
+
+        let cycle = ep.ring.cycle_bit;
+        let isoch_trb = Trb::isoch(data_iova, length, frame_id, sia, cycle, ioc, isp);
+        let idx = ep.ring.enqueue_idx;
+        let next_idx = (idx + 1) % RING_ENTRIES;
+
+        if next_idx == 0 {
+            let link = Trb::link(0, ep.ring.cycle_bit, true);
+            ep.ring.trbs[idx] = link;
+            ep.ring.cycle_bit = !ep.ring.cycle_bit;
+            ep.ring.enqueue_idx = 0;
+            return Ok(idx);
+        }
+
+        ep.ring.trbs[idx] = isoch_trb;
+        ep.ring.enqueue_idx = next_idx;
+        Ok(idx)
+    }
+
+    /// Traite un événement de transfert TRB (Transfer Event) et met à jour les métriques de l'endpoint.
+    pub fn handle_transfer_event(&mut self, trb: &Trb) -> Result<TransferStatus, SysError> {
+        let ep_id = trb.endpoint_id();
+        let comp_code = trb.completion_code();
+
+        if (ep_id as usize) >= MAX_ENDPOINTS {
+            return Err(SysError::InvalidArgument);
+        }
+
+        let ep = &mut self.ep_rings[ep_id as usize];
+        if !ep.active {
+            return Err(SysError::InvalidArgument);
+        }
+
+        let remaining = trb.transfer_remainder();
+        let requested_bytes = if ep.ring.enqueue_idx > 0 {
+            ep.ring.trbs[ep.ring.enqueue_idx - 1].status & 0x1FFFF
+        } else {
+            0
+        };
+
+        let transferred = requested_bytes.saturating_sub(remaining);
+        ep.total_bytes_transferred += transferred as u64;
+
+        let status = TransferStatus {
+            trb_idx: ep.ring.enqueue_idx.saturating_sub(1),
+            bytes_transferred: transferred,
+            completed: comp_code == TRB_COMP_SUCCESS,
+            completion_code: comp_code,
+        };
+
+        ep.last_status = status;
+        if comp_code == TRB_COMP_SUCCESS {
+            Ok(status)
+        } else {
+            Err(SysError::BadAddress)
+        }
     }
 
     /// Calcule le décalage mémoire du registre Doorbell pour un slot donné.
@@ -515,9 +774,12 @@ impl XhciController {
         }
     }
 
-    /// Récupération après crash (Auto-guérison et réinitialisation de l'anneau de commande).
+    /// Récupération après crash (Auto-guérison et réinitialisation de l'anneau de commande et des endpoints).
     pub fn recover_from_crash(&mut self) -> Result<(), SysError> {
         self.cmd_ring.reset();
+        for ep in self.ep_rings.iter_mut() {
+            ep.reset();
+        }
         self.ready = true;
         Ok(())
     }
@@ -694,5 +956,77 @@ mod tests {
         // Auto-guérison après crash
         assert!(ctrl.recover_from_crash().is_ok());
         assert_eq!(ctrl.cmd_ring.enqueue_idx, 0);
+    }
+
+    #[test]
+    fn test_bulk_transfer_submission_and_event() {
+        let mut ctrl = XhciController::new();
+        ctrl.ready = true;
+
+        // Configuration d'un endpoint Bulk OUT (EP 2)
+        assert!(ctrl.configure_endpoint_ring(2, false).is_ok());
+        assert!(ctrl.ep_rings[2].active);
+        assert!(!ctrl.ep_rings[2].is_isoch);
+
+        // Soumission d'un transfert Bulk de 4096 octets
+        let data_iova = 0x2000_8000u64;
+        let trb_idx = ctrl
+            .queue_bulk_transfer(2, data_iova, 4096, true, true)
+            .expect("Queue bulk transfer");
+        assert_eq!(trb_idx, 0);
+
+        let queued_trb = ctrl.ep_rings[2].ring.trbs[0];
+        assert_eq!(queued_trb.parameter, data_iova);
+        assert_eq!(queued_trb.trb_type(), TRB_TYPE_NORMAL);
+        assert_eq!(queued_trb.status & 0x1FFFF, 4096);
+        assert!((queued_trb.control & TRB_FLAG_IOC) != 0);
+        assert!((queued_trb.control & TRB_FLAG_ISP) != 0);
+
+        // Traitement de l'événement de complétion de transfert
+        // Transfer Event TRB : endpoint 2 (bits 20:16), code SUCCESS (bits 31:24), remainder = 0
+        let event_control = ((TRB_TYPE_TRANSFER_EVENT & 0x3F) << 10) | (2 << 16) | 1;
+        let event_status = (TRB_COMP_SUCCESS as u32) << 24; // 0 octet restant
+        let event_trb = Trb {
+            parameter: data_iova,
+            status: event_status,
+            control: event_control,
+        };
+
+        let status = ctrl.handle_transfer_event(&event_trb).expect("Event ok");
+        assert!(status.completed);
+        assert_eq!(status.bytes_transferred, 4096);
+        assert_eq!(ctrl.ep_rings[2].total_bytes_transferred, 4096);
+    }
+
+    #[test]
+    fn test_isochronous_transfer_submission_with_frame_and_sia() {
+        let mut ctrl = XhciController::new();
+        ctrl.ready = true;
+
+        // Configuration d'un endpoint Isochrone IN (EP 4)
+        assert!(ctrl.configure_endpoint_ring(4, true).is_ok());
+        assert!(ctrl.ep_rings[4].active);
+        assert!(ctrl.ep_rings[4].is_isoch);
+
+        // Soumission d'un paquet isochrone avec SIA (Start Isoch ASAP)
+        let data_iova = 0x3000_0000u64;
+        let trb_idx = ctrl
+            .queue_isoch_transfer(4, data_iova, 1024, 0, true, true, false)
+            .expect("Queue isoch SIA");
+        assert_eq!(trb_idx, 0);
+
+        let isoch_trb = ctrl.ep_rings[4].ring.trbs[0];
+        assert_eq!(isoch_trb.trb_type(), TRB_TYPE_ISOCH);
+        assert!((isoch_trb.control & TRB_FLAG_SIA) != 0);
+
+        // Soumission d'un paquet isochrone calé sur un Frame ID spécifique (ex: Frame 128)
+        let trb_idx2 = ctrl
+            .queue_isoch_transfer(4, data_iova + 1024, 512, 128, false, true, false)
+            .expect("Queue isoch Frame ID");
+        assert_eq!(trb_idx2, 1);
+
+        let isoch_trb2 = ctrl.ep_rings[4].ring.trbs[1];
+        assert_eq!(isoch_trb2.trb_type(), TRB_TYPE_ISOCH);
+        assert_eq!((isoch_trb2.control >> 20) & 0x7FF, 128);
     }
 }

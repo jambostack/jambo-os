@@ -383,6 +383,33 @@ fn execute_pmm_hardening_tests() -> bool {
         );
     }
 
+    // Test 7: Durcissement anti-fragmentation et intégrité structurelle des listes libres
+    {
+        let pmm = mm::PMM.lock();
+        let total = pmm.total_pages();
+        let free = pmm.free_pages();
+        assert!(total > 0 && free <= total);
+
+        // Validation du ratio de fragmentation borné [0, 100]
+        let frag_0 = pmm.fragmentation_ratio(0);
+        assert_eq!(frag_0, 0, "Fragmentation pour ordre 0 doit être nulle");
+        let frag_4 = pmm.fragmentation_ratio(4);
+        assert!(frag_4 <= 100, "Ratio de fragmentation borné à 100%");
+
+        // Validation de comptage sans boucle infinie
+        let blocks_0 = pmm.count_free_blocks(0);
+        let blocks_1 = pmm.count_free_blocks(1);
+        kprintln!(
+            "[PMM/INFO] Blocs libres: Ordre 0 = {}, Ordre 1 = {}, Frag Ordre 4 = {}%",
+            blocks_0,
+            blocks_1,
+            frag_4
+        );
+    }
+
+    // Exécution de la suite mathématique de vérification formelle (9/9 preuves)
+    formal::run_all_formal_proofs();
+
     kprintln!("[PMM/PASS] Tests adversariaux PMM et cycle de vie VMO validés avec succès !");
     true
 }

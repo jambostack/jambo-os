@@ -568,9 +568,11 @@ impl JamboShell {
         let text = b"Virtual File System (VFS) Ring 3 & Table fd_table (libjambo::vfs) :\n\
   Capacite totale      : 32 descripteurs par processus\n\
   Descripteurs de base : fd 0 (stdin: ConsoleIn), fd 1 (stdout: ConsoleOut), fd 2 (stderr: ConsoleOut)\n\
-  Fichiers dynamiques  : fd 3 a 31 (fichiers reguliers et canaux IPC JamboFS)\n\
-  Primitives supportees: open, close, read, write, lseek, fstat\n\
-  Statut               : Operationnel (v0.3.92)\n";
+  Fichiers dynamiques  : fd 3 a 31 (fichiers reguliers, sockets reseau et pipes IPC)\n\
+  Redirection I/O      : dup, dup2 (redirection universelle de flux I/O)\n\
+  Pipes Anonymes IPC   : pipe, pipe2 (tampon circulaire FIFO 1 Kio, detection EPIPE)\n\
+  Primitives supportees: open, close, read, write, lseek, fstat, dup, dup2, pipe\n\
+  Statut               : Operationnel (Ring 3 Userland)\n";
         let len = text.len().min(out.len());
         out[..len].copy_from_slice(&text[..len]);
         (ShellStatus::Success, len)
@@ -16773,5 +16775,19 @@ mod tests {
         assert_eq!(st_rm1, ShellStatus::Success);
         let (st_rm2, _) = shell.execute_line("rm /tmp/sh_moved.txt", &mut out);
         assert_eq!(st_rm2, ShellStatus::Success);
+    }
+
+    #[test]
+    fn test_vfs_shell_command() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 1024];
+
+        let (st, len) = shell.execute_line("vfs", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        assert!(len > 0);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("Virtual File System (VFS)"));
+        assert!(s.contains("Redirection I/O"));
+        assert!(s.contains("Pipes Anonymes IPC"));
     }
 }

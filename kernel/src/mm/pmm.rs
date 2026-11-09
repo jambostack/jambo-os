@@ -12,6 +12,7 @@ pub enum PmmError {
     Misaligned,
     OutOfBounds,
     DoubleFree,
+    CorruptedList,
 }
 
 pub static HHDM_OFFSET: AtomicUsize = AtomicUsize::new(0);
@@ -153,9 +154,28 @@ impl BuddyAllocator {
         }
     }
 
+    #[inline]
+    fn is_valid_block_ptr(ptr: *mut FreeBlock) -> bool {
+        if ptr.is_null() {
+            return false;
+        }
+        let vaddr = ptr as usize;
+        let hhdm = HHDM_OFFSET.load(Ordering::Relaxed);
+        if hhdm != 0 && vaddr < hhdm {
+            return false;
+        }
+        let paddr = if hhdm != 0 { vaddr - hhdm } else { vaddr };
+        if (paddr & (PAGE_SIZE - 1)) != 0 {
+            return false;
+        }
+        let pfn = paddr / PAGE_SIZE;
+        pfn < MAX_TRACKED_PAGES
+    }
+
     unsafe fn push_block(&mut self, paddr: usize, order: usize) {
         let vaddr = phys_to_virt(paddr);
         let block_ptr = vaddr as *mut FreeBlock;
+        // SAFETY: vaddr est une adresse virtuelle valide mappée sur paddr via HHDM.
         (*block_ptr).next = self.free_lists[order];
         self.free_lists[order] = block_ptr;
     }
@@ -163,12 +183,19 @@ impl BuddyAllocator {
     unsafe fn remove_free_block(&mut self, paddr: usize, order: usize) -> bool {
         let target_ptr = phys_to_virt(paddr) as *mut FreeBlock;
         let mut curr_ptr = &mut self.free_lists[order];
-        while !(*curr_ptr).is_null() {
+        let mut steps = 0;
+        while !(*curr_ptr).is_null() && steps < MAX_TRACKED_PAGES {
             if *curr_ptr == target_ptr {
+                // SAFETY: target_ptr correspond au bloc libre recherché dans la liste chaînée.
                 *curr_ptr = (**curr_ptr).next;
                 return true;
             }
+            if !Self::is_valid_block_ptr(*curr_ptr) {
+                return false;
+            }
+            // SAFETY: *curr_ptr a été validé non-nul, aligné et dans les bornes traquées par is_valid_block_ptr.
             curr_ptr = &mut (**curr_ptr).next;
+            steps += 1;
         }
         false
     }
@@ -276,6 +303,69 @@ impl BuddyAllocator {
 
     pub fn allocated_pages(&self) -> usize {
         self.allocated_pages
+    }
+
+    /// Retourne le nombre total de pages physiques actuellement disponibles
+    pub fn free_pages(&self) -> usize {
+        self.total_pages.saturating_sub(self.allocated_pages)
+    }
+
+    /// Compte le nombre de blocs libres dans la liste chaînée d'un ordre donné
+    pub fn count_free_blocks(&self, order: usize) -> usize {
+        if order >= MAX_ORDER {
+            return 0;
+        }
+        let mut count = 0;
+        let mut curr = self.free_lists[order];
+        while !curr.is_null() && count < MAX_TRACKED_PAGES {
+            if !Self::is_valid_block_ptr(curr) {
+                break;
+            }
+            // SAFETY: curr a été formellement validé par is_valid_block_ptr.
+            curr = unsafe { (*curr).next };
+            count += 1;
+        }
+        count
+    }
+
+    /// Indique si une allocation d'ordre donné peut être satisfaite sans provoquer de fragmentation excessive
+    pub fn can_allocate(&self, order: usize) -> bool {
+        if order >= MAX_ORDER {
+            return false;
+        }
+        for list in self.free_lists.iter().take(MAX_ORDER).skip(order) {
+            if !list.is_null() {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Calcule le ratio de fragmentation externe (0 à 100 %) pour un ordre cible donné
+    ///
+    /// Représente le pourcentage de pages physiques libres indisponibles pour former
+    /// des blocs contigus de taille 2^target_order pages.
+    pub fn fragmentation_ratio(&self, target_order: usize) -> u32 {
+        if target_order >= MAX_ORDER {
+            return 100;
+        }
+        let free = self.free_pages();
+        if free == 0 {
+            return 0;
+        }
+
+        let mut usable_pages = 0;
+        for o in target_order..MAX_ORDER {
+            let blocks = self.count_free_blocks(o);
+            usable_pages += blocks * (1 << o);
+        }
+
+        if usable_pages >= free {
+            0
+        } else {
+            let fragmented_pages = free - usable_pages;
+            ((fragmented_pages as u64 * 100) / free as u64) as u32
+        }
     }
 }
 

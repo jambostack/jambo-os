@@ -31,6 +31,7 @@ pub const EBADF: i32 = 9;
 pub const ENOMEM: i32 = 12;
 pub const EFAULT: i32 = 14;
 pub const EINVAL: i32 = 22;
+pub const EPIPE: i32 = 32;
 pub const ENOSYS: i32 = 38;
 pub const ENOTSOCK: i32 = 88;
 pub const EAFNOSUPPORT: i32 = 97;
@@ -54,6 +55,7 @@ pub unsafe extern "C" fn write(fd: i32, buf: *const u8, count: usize) -> isize {
         Ok(n) => n as isize,
         Err(jambo_abi::SysError::PermissionDenied) => -EBADF as isize,
         Err(jambo_abi::SysError::OutOfMemory) => -ENOMEM as isize,
+        Err(jambo_abi::SysError::PeerClosed) => -EPIPE as isize,
         Err(_) => -EBADF as isize,
     })
 }
@@ -137,6 +139,59 @@ pub unsafe extern "C" fn fstat(fd: i32, statbuf: *mut crate::vfs::PosixStat) -> 
             0
         }
         Err(_) => -EBADF,
+    })
+}
+
+/// Duplique un descripteur de fichier ouvert vers le plus petit descripteur disponible (dup POSIX)
+#[cfg(not(test))]
+#[cfg_attr(target_os = "none", no_mangle)]
+pub extern "C" fn dup(oldfd: i32) -> i32 {
+    crate::vfs::with_fd_table(|table| match table.dup(oldfd) {
+        Ok(newfd) => newfd,
+        Err(jambo_abi::SysError::OutOfMemory) => -ENOMEM,
+        Err(_) => -EBADF,
+    })
+}
+
+/// Duplique un descripteur de fichier vers une destination spécifique (dup2 POSIX)
+#[cfg(not(test))]
+#[cfg_attr(target_os = "none", no_mangle)]
+pub extern "C" fn dup2(oldfd: i32, newfd: i32) -> i32 {
+    crate::vfs::with_fd_table(|table| match table.dup2(oldfd, newfd) {
+        Ok(fd) => fd,
+        Err(jambo_abi::SysError::OutOfMemory) => -ENOMEM,
+        Err(_) => -EBADF,
+    })
+}
+
+/// Crée un canal de communication unidirectionnel en mémoire (pipe POSIX)
+///
+/// # Safety
+/// `pipefd` doit être un pointeur valide vers un tableau de 2 entiers `i32`.
+#[cfg(not(test))]
+#[cfg_attr(target_os = "none", no_mangle)]
+pub unsafe extern "C" fn pipe(pipefd: *mut i32) -> i32 {
+    pipe2(pipefd, 0)
+}
+
+/// Crée un canal de communication unidirectionnel en mémoire avec drapeaux (pipe2 POSIX)
+///
+/// # Safety
+/// `pipefd` doit être un pointeur valide vers un tableau de 2 entiers `i32`.
+#[cfg(not(test))]
+#[cfg_attr(target_os = "none", no_mangle)]
+pub unsafe extern "C" fn pipe2(pipefd: *mut i32, _flags: i32) -> i32 {
+    if pipefd.is_null() {
+        return -EFAULT;
+    }
+    crate::vfs::with_fd_table(|table| match table.alloc_pipe() {
+        Ok((rfd, wfd)) => {
+            *pipefd = rfd;
+            *pipefd.add(1) = wfd;
+            0
+        }
+        Err(jambo_abi::SysError::OutOfMemory) => -ENOMEM,
+        Err(_) => -EINVAL,
     })
 }
 
