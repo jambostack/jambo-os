@@ -142,6 +142,23 @@ pub struct PosixStat {
     pub st_ctime: i64,
 }
 
+/// Structure de métadonnées de système de fichiers conforme POSIX `struct statvfs`
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PosixStatvfs {
+    pub f_bsize: u64,
+    pub f_frsize: u64,
+    pub f_blocks: u64,
+    pub f_bfree: u64,
+    pub f_bavail: u64,
+    pub f_files: u64,
+    pub f_ffree: u64,
+    pub f_favail: u64,
+    pub f_fsid: u64,
+    pub f_flag: u64,
+    pub f_namemax: u64,
+}
+
 // ============================================================================
 // TABLE DE DESCRIPTEURS DE FICHIERS (FdTable)
 // ============================================================================
@@ -711,6 +728,63 @@ impl FdTable {
         }
         Err(SysError::InvalidArgument)
     }
+
+    /// Interroge les métadonnées de système de fichiers associées à un descripteur ouvert (fstatvfs POSIX)
+    pub fn fstatvfs(&self, fd: i32) -> Result<PosixStatvfs, SysError> {
+        let entry = self.get(fd).ok_or(SysError::InvalidArgument)?;
+        if entry.kind == FdKind::Closed {
+            return Err(SysError::InvalidArgument);
+        }
+        self.statvfs(entry.path_str())
+    }
+
+    /// Interroge les métadonnées de système de fichiers associées à un chemin (statvfs POSIX)
+    pub fn statvfs(&self, path: &str) -> Result<PosixStatvfs, SysError> {
+        if path.starts_with("/dev") {
+            Ok(PosixStatvfs {
+                f_bsize: 4096,
+                f_frsize: 4096,
+                f_blocks: 1,
+                f_bfree: 0,
+                f_bavail: 0,
+                f_files: 16,
+                f_ffree: 8,
+                f_favail: 8,
+                f_fsid: 0x4445_5646, // "DEVF"
+                f_flag: 0,
+                f_namemax: 64,
+            })
+        } else if path.starts_with("/tmp") {
+            Ok(PosixStatvfs {
+                f_bsize: 4096,
+                f_frsize: 4096,
+                f_blocks: 256,
+                f_bfree: 254,
+                f_bavail: 254,
+                f_files: 256,
+                f_ffree: 254,
+                f_favail: 254,
+                f_fsid: 0x544D_5046, // "TMPF"
+                f_flag: 0,
+                f_namemax: 64,
+            })
+        } else {
+            // Volume persistant principal JamboFS (2048 blocs de 4 Kio = 8 Mio, 24 blocs réservés système)
+            Ok(PosixStatvfs {
+                f_bsize: 4096,
+                f_frsize: 4096,
+                f_blocks: 2048,
+                f_bfree: 2024,
+                f_bavail: 2024,
+                f_files: 1024,
+                f_ffree: 1000,
+                f_favail: 1000,
+                f_fsid: 0x5346_4F42, // "JAMBO_FS"
+                f_flag: 0,
+                f_namemax: 32,
+            })
+        }
+    }
 }
 
 impl Default for FdTable {
@@ -787,6 +861,16 @@ pub fn fchown(fd: i32, uid: u32, gid: u32) -> Result<(), SysError> {
 /// Modifie le propriétaire et le groupe associé à un chemin dans la table VFS (chown POSIX)
 pub fn chown(path: &str, uid: u32, gid: u32) -> Result<(), SysError> {
     with_fd_table(|table| table.chown(path, uid, gid))
+}
+
+/// Interroge les statistiques de système de fichiers par chemin (statvfs POSIX)
+pub fn statvfs(path: &str) -> Result<PosixStatvfs, SysError> {
+    with_fd_table(|table| table.statvfs(path))
+}
+
+/// Interroge les statistiques de système de fichiers par descripteur de fichier ouvert (fstatvfs POSIX)
+pub fn fstatvfs(fd: i32) -> Result<PosixStatvfs, SysError> {
+    with_fd_table(|table| table.fstatvfs(fd))
 }
 
 // Variables atomiques de contexte d'identité utilisateur et groupe Ring 3
@@ -1136,5 +1220,33 @@ mod tests {
         // Rétablir root pour les autres tests
         CURRENT_UID.store(0, Ordering::Relaxed);
         CURRENT_EUID.store(0, Ordering::Relaxed);
+    }
+
+    #[test]
+    fn test_vfs_statvfs_and_fstatvfs() {
+        let mut table = FdTable::new();
+        let fd = table
+            .alloc_fd(FdKind::RegularFile, O_RDWR, "/etc/hostname")
+            .expect("alloc regular file");
+
+        // statvfs sur le chemin racine JamboFS
+        let sv_root = table.statvfs("/").expect("statvfs root");
+        assert_eq!(sv_root.f_bsize, 4096);
+        assert_eq!(sv_root.f_blocks, 2048);
+        assert_eq!(sv_root.f_bfree, 2024);
+        assert_eq!(sv_root.f_fsid, 0x5346_4F42);
+
+        // fstatvfs sur le descripteur ouvert
+        let sv_fd = table.fstatvfs(fd).expect("fstatvfs");
+        assert_eq!(sv_fd.f_bsize, 4096);
+        assert_eq!(sv_fd.f_blocks, 2048);
+
+        // statvfs sur /dev
+        let sv_dev = table.statvfs("/dev/console").expect("statvfs dev");
+        assert_eq!(sv_dev.f_fsid, 0x4445_5646);
+
+        // statvfs sur /tmp
+        let sv_tmp = table.statvfs("/tmp/scratch").expect("statvfs tmp");
+        assert_eq!(sv_tmp.f_fsid, 0x544D_5046);
     }
 }

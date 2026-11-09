@@ -142,6 +142,56 @@ pub unsafe extern "C" fn fstat(fd: i32, statbuf: *mut crate::vfs::PosixStat) -> 
     })
 }
 
+/// Interroge les statistiques de système de fichiers fstatvfs
+///
+/// # Safety
+/// `statvfsbuf` doit pointer vers une zone mémoire accessible en écriture pour un `PosixStatvfs`.
+#[cfg(not(test))]
+#[cfg_attr(target_os = "none", no_mangle)]
+pub unsafe extern "C" fn fstatvfs(fd: i32, statvfsbuf: *mut crate::vfs::PosixStatvfs) -> i32 {
+    if statvfsbuf.is_null() {
+        return -EFAULT;
+    }
+    crate::vfs::with_fd_table(|table| match table.fstatvfs(fd) {
+        Ok(sv) => {
+            *statvfsbuf = sv;
+            0
+        }
+        Err(_) => -EBADF,
+    })
+}
+
+/// Interroge les statistiques de système de fichiers statvfs
+///
+/// # Safety
+/// `pathname` doit être une chaîne C valide terminée par 0 et `statvfsbuf` accessible en écriture.
+#[cfg(not(test))]
+#[cfg_attr(target_os = "none", no_mangle)]
+pub unsafe extern "C" fn statvfs(
+    pathname: *const core::ffi::c_char,
+    statvfsbuf: *mut crate::vfs::PosixStatvfs,
+) -> i32 {
+    if pathname.is_null() || statvfsbuf.is_null() {
+        return -EFAULT;
+    }
+    let mut len = 0;
+    while *pathname.add(len) != 0 && len < 256 {
+        len += 1;
+    }
+    let slice = core::slice::from_raw_parts(pathname as *const u8, len);
+    let path_str = match core::str::from_utf8(slice) {
+        Ok(s) => s,
+        Err(_) => return -EINVAL,
+    };
+    crate::vfs::with_fd_table(|table| match table.statvfs(path_str) {
+        Ok(sv) => {
+            *statvfsbuf = sv;
+            0
+        }
+        Err(_) => -ENOENT,
+    })
+}
+
 /// Duplique un descripteur de fichier ouvert vers le plus petit descripteur disponible (dup POSIX)
 #[cfg(not(test))]
 #[cfg_attr(target_os = "none", no_mangle)]

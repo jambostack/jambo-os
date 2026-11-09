@@ -510,6 +510,7 @@ impl JamboShell {
             "chown" | "/bin/chown" | "bin/chown" => self.cmd_chown(args, out),
             "id" | "/bin/id" | "bin/id" => self.cmd_id(args, out),
             "du" | "/bin/du" | "bin/du" => self.cmd_du(args, out),
+            "df" | "/bin/df" | "bin/df" => self.cmd_df(args, out),
             "export" => self.cmd_export(args, out),
             "unset" => self.cmd_unset(args, out),
             "wc" | "/bin/wc" | "bin/wc" => self.cmd_wc(args, out),
@@ -587,6 +588,8 @@ impl JamboShell {
   chmod [-R] [-v] <mode> <files> - Modifie les permissions octales de fichiers ou repertoires\n\
   chown [-R] [-v] <owner>[:<group>] <files> - Modifie le proprietaire et/ou groupe de fichiers\n\
   id [-u] [-g] [-G] [-n] - Affiche les identifiants utilisateur et groupe Ring 3\n\
+  du [-s] [-h] [-a] [-b] [-k] [-m] [path] - Calcule l'espace disque consomme (Disk Usage)\n\
+  df [-h] [-k] [-m] [-T] [-a] [-i] [-s] [path] - Affiche l'espace disque disponible (statvfs / CoW metrics)\n\
   export <K=V> - Definit une variable d'environnement dans le shell\n\
   unset <K>   - Supprime une variable d'environnement du shell\n\
   ls [-l] [-a] - Liste les fichiers et repertoires\n\
@@ -708,7 +711,7 @@ impl JamboShell {
 
     fn cmd_coreutils(&self, out: &mut [u8]) -> (ShellStatus, usize) {
         let text = b"Utilitaires Coreutils Ring 3 (services/jambo-coreutils) :\n\
-  Binaires disponibles : /bin/echo, /bin/cat, /bin/head, /bin/tail, /bin/touch, /bin/mkdir, /bin/rm, /bin/cp, /bin/mv, /bin/tee, /bin/env, /bin/grep, /bin/sort, /bin/uniq, /bin/find, /bin/chmod, /bin/chown, /bin/id, /bin/du, /bin/wc, /bin/true, /bin/false, /bin/ls (23 utilitaires)\n\
+  Binaires disponibles : /bin/echo, /bin/cat, /bin/head, /bin/tail, /bin/touch, /bin/mkdir, /bin/rm, /bin/cp, /bin/mv, /bin/tee, /bin/env, /bin/grep, /bin/sort, /bin/uniq, /bin/find, /bin/chmod, /bin/chown, /bin/id, /bin/du, /bin/df, /bin/wc, /bin/true, /bin/false, /bin/ls (24 utilitaires)\n\
   Architecture & ABI   : System V AMD64 ELF64 (ET_EXEC / Ring 3 Userland)\n\
   Point d'entree       : _start (parsing argc/argv sur pile System V)\n\
   Terminaison          : Syscall 11 ThreadExit avec propagation code de retour POSIX\n\
@@ -1824,6 +1827,26 @@ ABI : 29 Appels Systeme (jambo-abi v0.4) avec Coreutils Ring 3, VFS POSIX & Fuzz
             }
         } else {
             let msg = b"du: pipe creation failed\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
+    }
+
+    fn cmd_df(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if let Ok((r, w)) = libjambo::vfs::pipe() {
+            let code = libjambo::coreutils::run_df(args, w, w);
+            let _ = libjambo::coreutils::sys_close(w);
+            let n = libjambo::coreutils::sys_read(r, out);
+            let _ = libjambo::coreutils::sys_close(r);
+            let len = if n > 0 { n as usize } else { 0 };
+            if code == 0 {
+                (ShellStatus::Success, len)
+            } else {
+                (ShellStatus::ExecutionFailed, len)
+            }
+        } else {
+            let msg = b"df: pipe creation failed\n";
             let len = msg.len().min(out.len());
             out[..len].copy_from_slice(&msg[..len]);
             (ShellStatus::ExecutionFailed, len)
@@ -17069,7 +17092,7 @@ mod tests {
         let (st, len) = shell.execute_line("coreutils", &mut out);
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
-        assert!(s.contains("23 utilitaires"));
+        assert!(s.contains("24 utilitaires"));
         assert!(s.contains("/bin/head"));
         assert!(s.contains("/bin/tail"));
         assert!(s.contains("/bin/touch"));
@@ -17087,7 +17110,7 @@ mod tests {
         assert!(s.contains("/bin/chown"));
         assert!(s.contains("/bin/id"));
         assert!(s.contains("/bin/du"));
-        assert!(s.contains("/bin/chmod"));
+        assert!(s.contains("/bin/df"));
     }
 
     #[test]
@@ -17318,6 +17341,38 @@ mod tests {
 
         // 3. Commande du sur fichier inexistant -> ExecutionFailed
         let (st_err, _) = shell.execute_line("du /nonexistent_path_xyz", &mut out);
+        assert_eq!(st_err, ShellStatus::ExecutionFailed);
+    }
+
+    #[test]
+    fn test_df_shell_execution() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 1024];
+
+        // 1. Commande df standard
+        let (st_df, len_df) = shell.execute_line("df", &mut out);
+        assert_eq!(st_df, ShellStatus::Success);
+        let s_df = core::str::from_utf8(&out[..len_df]).unwrap();
+        assert!(s_df.contains("Filesystem"));
+        assert!(s_df.contains("/dev/nvme0n1p2"));
+        assert!(s_df.contains("devfs"));
+        assert!(s_df.contains("tmpfs"));
+
+        // 2. Commande df -h -T
+        let (st_ht, len_ht) = shell.execute_line("df -h -T", &mut out);
+        assert_eq!(st_ht, ShellStatus::Success);
+        let s_ht = core::str::from_utf8(&out[..len_ht]).unwrap();
+        assert!(s_ht.contains("Type"));
+        assert!(s_ht.contains("jambofs"));
+
+        // 3. Commande df -s --snapshots avec cible /
+        let (st_snap, len_snap) = shell.execute_line("df -s /", &mut out);
+        assert_eq!(st_snap, ShellStatus::Success);
+        let s_snap = core::str::from_utf8(&out[..len_snap]).unwrap();
+        assert!(s_snap.contains("[JamboFS CoW Snapshots] Actifs: 0/16"));
+
+        // 4. Commande df sur cible inexistante -> ExecutionFailed
+        let (st_err, _) = shell.execute_line("df /nonexistent_mnt_point", &mut out);
         assert_eq!(st_err, ShellStatus::ExecutionFailed);
     }
 }

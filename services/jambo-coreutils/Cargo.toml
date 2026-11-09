@@ -99,6 +99,10 @@ path = "src/bin/id.rs"
 name = "du"
 path = "src/bin/du.rs"
 
+[[bin]]
+name = "df"
+path = "src/bin/df.rs"
+
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }
 

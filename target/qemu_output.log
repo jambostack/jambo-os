@@ -10,7 +10,7 @@ BdsDxe: starting Boot0001 "UEFI QEMU DVD-ROM QM00005 " from PciRoot(0x0)/Pci(0x1
 ================================================================================
 [0m
 [BOOT/HHDM] Projection mémoire physique directe à : 0xffff800000000000
-[BOOT/MMAP] Détection de 42 plages de mémoire physique :
+[BOOT/MMAP] Détection de 48 plages de mémoire physique :
   [00] 0x0000000000000000 - 0x0000000000001000 |        4 Kio | Utilisable (RAM)
   [01] 0x0000000000001000 - 0x0000000000002000 |        4 Kio | Chargeur Récupérable
   [02] 0x0000000000002000 - 0x00000000000a0000 |      632 Kio | Utilisable (RAM)
@@ -20,41 +20,47 @@ BdsDxe: starting Boot0001 "UEFI QEMU DVD-ROM QM00005 " from PciRoot(0x0)/Pci(0x1
   [06] 0x000000000080b000 - 0x000000000080c000 |        4 Kio | ACPI NVS
   [07] 0x000000000080c000 - 0x0000000000810000 |       16 Kio | Utilisable (RAM)
   [08] 0x0000000000810000 - 0x0000000000900000 |      960 Kio | ACPI NVS
-  [09] 0x0000000000900000 - 0x0000000068de6000 |  1708952 Kio | Utilisable (RAM)
-  [10] 0x0000000068de6000 - 0x0000000068e16000 |      192 Kio | Chargeur Récupérable
-  [11] 0x0000000068e16000 - 0x0000000079a90000 |   274920 Kio | Noyau & Modules
-  [12] 0x0000000079a90000 - 0x0000000079a91000 |        4 Kio | Chargeur Récupérable
-  [13] 0x0000000079a91000 - 0x0000000079a92000 |        4 Kio | Utilisable (RAM)
-  [14] 0x0000000079a92000 - 0x0000000079a93000 |        4 Kio | Chargeur Récupérable
-  [15] 0x0000000079a93000 - 0x0000000079a94000 |        4 Kio | Utilisable (RAM)
-  [16] 0x0000000079a94000 - 0x0000000079a9d000 |       36 Kio | Chargeur Récupérable
-  [17] 0x0000000079a9d000 - 0x0000000079b51000 |      720 Kio | Noyau & Modules
-  [18] 0x0000000079b51000 - 0x000000007a05d000 |     5168 Kio | Chargeur Récupérable
-  [19] 0x000000007a05d000 - 0x000000007bb7d000 |    27776 Kio | Utilisable (RAM)
-  [20] 0x000000007bb7d000 - 0x000000007bba5000 |      160 Kio | Chargeur Récupérable
-  [21] 0x000000007bba5000 - 0x000000007e08d000 |    37792 Kio | Utilisable (RAM)
-  [22] 0x000000007e08d000 - 0x000000007e093000 |       24 Kio | Réservé Matériel
-  [23] 0x000000007e093000 - 0x000000007e0a5000 |       72 Kio | Utilisable (RAM)
-  [24] 0x000000007e0a5000 - 0x000000007e115000 |      448 Kio | Chargeur Récupérable
-  [25] 0x000000007e115000 - 0x000000007e120000 |       44 Kio | Réservé Matériel
-  [26] 0x000000007e120000 - 0x000000007e93f000 |     8316 Kio | Utilisable (RAM)
-  [27] 0x000000007e93f000 - 0x000000007ea00000 |      772 Kio | Réservé Matériel
-  [28] 0x000000007ea00000 - 0x000000007f4ed000 |    11188 Kio | Utilisable (RAM)
-  [29] 0x000000007f4ed000 - 0x000000007f5ed000 |     1024 Kio | Réservé Matériel
-  [30] 0x000000007f5ed000 - 0x000000007f6ed000 |     1024 Kio | Réservé Matériel
-  [31] 0x000000007f6ed000 - 0x000000007f76d000 |      512 Kio | Réservé Matériel
-  [32] 0x000000007f76d000 - 0x000000007f77f000 |       72 Kio | ACPI Récupérable
-  [33] 0x000000007f77f000 - 0x000000007f7ff000 |      512 Kio | ACPI NVS
-  [34] 0x000000007f7ff000 - 0x000000007fe00000 |     6148 Kio | Utilisable (RAM)
-  [35] 0x000000007fe00000 - 0x000000007fe47000 |      284 Kio | Chargeur Récupérable
-  [36] 0x000000007fe47000 - 0x000000007fedc000 |      596 Kio | Utilisable (RAM)
-  [37] 0x000000007fedc000 - 0x000000007ff60000 |      528 Kio | Réservé Matériel
-  [38] 0x000000007ff60000 - 0x0000000080000000 |      640 Kio | ACPI NVS
-  [39] 0x0000000080000000 - 0x00000000803e8000 |     4000 Kio | Framebuffer GOP
-  [40] 0x00000000e0000000 - 0x00000000f0000000 |   262144 Kio | Réservé Matériel
-  [41] 0x000000fd00000000 - 0x0000010000000000 | 12582912 Kio | Réservé Matériel
-[BOOT/MMAP] Mémoire totale : 14595 Mio | RAM utilisable : 1766 Mio
-[BOOT/PMM] Buddy Allocator initialisé (452170 pages physiques / 1766 Mio gérées)
+  [09] 0x0000000000900000 - 0x000000006893d000 |  1704180 Kio | Utilisable (RAM)
+  [10] 0x000000006893d000 - 0x000000006896f000 |      200 Kio | Chargeur Récupérable
+  [11] 0x000000006896f000 - 0x0000000079a88000 |   279652 Kio | Noyau & Modules
+  [12] 0x0000000079a88000 - 0x0000000079a89000 |        4 Kio | Chargeur Récupérable
+  [13] 0x0000000079a89000 - 0x0000000079a8a000 |        4 Kio | Utilisable (RAM)
+  [14] 0x0000000079a8a000 - 0x0000000079a8b000 |        4 Kio | Chargeur Récupérable
+  [15] 0x0000000079a8b000 - 0x0000000079a8c000 |        4 Kio | Utilisable (RAM)
+  [16] 0x0000000079a8c000 - 0x0000000079a95000 |       36 Kio | Chargeur Récupérable
+  [17] 0x0000000079a95000 - 0x0000000079b4a000 |      724 Kio | Noyau & Modules
+  [18] 0x0000000079b4a000 - 0x0000000079fad000 |     4492 Kio | Chargeur Récupérable
+  [19] 0x0000000079fad000 - 0x0000000079fae000 |        4 Kio | Utilisable (RAM)
+  [20] 0x0000000079fae000 - 0x000000007a05d000 |      700 Kio | Chargeur Récupérable
+  [21] 0x000000007a05d000 - 0x000000007bb7d000 |    27776 Kio | Utilisable (RAM)
+  [22] 0x000000007bb7d000 - 0x000000007bba0000 |      140 Kio | Chargeur Récupérable
+  [23] 0x000000007bba0000 - 0x000000007e089000 |    37796 Kio | Utilisable (RAM)
+  [24] 0x000000007e089000 - 0x000000007e08f000 |       24 Kio | Réservé Matériel
+  [25] 0x000000007e08f000 - 0x000000007e0a0000 |       68 Kio | Utilisable (RAM)
+  [26] 0x000000007e0a0000 - 0x000000007e110000 |      448 Kio | Chargeur Récupérable
+  [27] 0x000000007e110000 - 0x000000007e11b000 |       44 Kio | Réservé Matériel
+  [28] 0x000000007e11b000 - 0x000000007e35e000 |     2316 Kio | Utilisable (RAM)
+  [29] 0x000000007e35e000 - 0x000000007e360000 |        8 Kio | Chargeur Récupérable
+  [30] 0x000000007e360000 - 0x000000007e366000 |       24 Kio | Utilisable (RAM)
+  [31] 0x000000007e366000 - 0x000000007e368000 |        8 Kio | Chargeur Récupérable
+  [32] 0x000000007e368000 - 0x000000007e93f000 |     5980 Kio | Utilisable (RAM)
+  [33] 0x000000007e93f000 - 0x000000007ea00000 |      772 Kio | Réservé Matériel
+  [34] 0x000000007ea00000 - 0x000000007f4ed000 |    11188 Kio | Utilisable (RAM)
+  [35] 0x000000007f4ed000 - 0x000000007f5ed000 |     1024 Kio | Réservé Matériel
+  [36] 0x000000007f5ed000 - 0x000000007f6ed000 |     1024 Kio | Réservé Matériel
+  [37] 0x000000007f6ed000 - 0x000000007f76d000 |      512 Kio | Réservé Matériel
+  [38] 0x000000007f76d000 - 0x000000007f77f000 |       72 Kio | ACPI Récupérable
+  [39] 0x000000007f77f000 - 0x000000007f7ff000 |      512 Kio | ACPI NVS
+  [40] 0x000000007f7ff000 - 0x000000007fe00000 |     6148 Kio | Utilisable (RAM)
+  [41] 0x000000007fe00000 - 0x000000007fe47000 |      284 Kio | Chargeur Récupérable
+  [42] 0x000000007fe47000 - 0x000000007fedc000 |      596 Kio | Utilisable (RAM)
+  [43] 0x000000007fedc000 - 0x000000007ff60000 |      528 Kio | Réservé Matériel
+  [44] 0x000000007ff60000 - 0x0000000080000000 |      640 Kio | ACPI NVS
+  [45] 0x0000000080000000 - 0x00000000803e8000 |     4000 Kio | Framebuffer GOP
+  [46] 0x00000000e0000000 - 0x00000000f0000000 |   262144 Kio | Réservé Matériel
+  [47] 0x000000fd00000000 - 0x0000010000000000 | 12582912 Kio | Réservé Matériel
+[BOOT/MMAP] Mémoire totale : 14595 Mio | RAM utilisable : 1761 Mio
+[BOOT/PMM] Buddy Allocator initialisé (450979 pages physiques / 1761 Mio gérées)
 [HEAP/SLUB] Tas noyau actif, allocation dynamique validée (4 éléments)
 [VMM/VMO] VMO Copy-on-Write projeté avec succès dans le nouvel espace d'adressage
 [MMU/PAGING] Défaut de page (Demand Paging) intercepté et résolu avec succès
@@ -65,54 +71,54 @@ BdsDxe: starting Boot0001 "UEFI QEMU DVD-ROM QM00005 " from PciRoot(0x0)/Pci(0x1
 [CPU/APIC] Contrôleur Local APIC (xAPIC MMIO) initialisé
 [SMP] Détection de 4 cœurs logiques
 [SMP] Cœur AP #1 démarré (LAPIC ID: 1)
-[SMP] Multicœur SMP opérationnel (4 cœurs actifs sur 4)
-[SMP] Cœur AP #2 démarré (LAPIC ID: 2)
 [SMP] Cœur AP #3 démarré (LAPIC ID: 3)
+[SMP] Cœur AP #2 démarré (LAPIC ID: 2)
+[SMP] Multicœur SMP opérationnel (4 cœurs actifs sur 4)
 [SMP/AP] Cœur AP #1 a rejoint l'ordonnanceur EEVDF
-[SCHED/EEVDF] Ordonnanceur EEVDF opérationnel avec 2 threads de test en file
 [SMP/AP] Cœur AP #3 a rejoint l'ordonnanceur EEVDF
-[BOOT/MODULES] Détection de 1 module(s) d'amorçage Limine :
 [SMP/AP] Cœur AP #2 a rejoint l'ordonnanceur EEVDF
-  [00] Module '/boot/initrd.tar' | 281518080 octets (cmdline: '')
-[INITRD/TAR] Superviseur '/bin/init' extrait (0x165ac0 octets)
-[INITRD/TAR] Shell interactif '/bin/jsh' extrait (0x9cd000 octets)
-[INITRD/TAR] Démon de stockage '/bin/blockd' extrait (0x170a50 octets)
-[INITRD/TAR] Serveur de fichiers '/bin/fs' extrait (0x1d93d0 octets)
-[INITRD/TAR] Démon réseau '/bin/netd' extrait (0x195310 octets)
-[INITRD/TAR] Démon de résilience matérielle '/bin/fdr' extrait (0x19a688 octets)
-[INITRD/TAR] Démon WebAssembly & WASI '/bin/wasmd' extrait (0x174d78 octets)
-[INITRD/TAR] Démon Cryptographie Post-Quantique '/bin/pqc' extrait (0x1a7a40 octets)
-[INITRD/TAR] Démon Surveillance Intégrité Noyau & Pilotes '/bin/kdir' extrait (0x197748 octets)
-[INITRD/TAR] Démon Confinement Mémoire & Forensics Volatile '/bin/forensics' extrait (0x17b378 octets)
-[INITRD/TAR] Démon Gestion Énergie & Fréquence CPU '/bin/powerd' extrait (0x158400 octets)
-[INITRD/TAR] Démon Métrologie Système & Télémétrie '/bin/metricsd' extrait (0x1707a8 octets)
-[INITRD/TAR] Démon Sandboxing eBPF & Filtrage Réseau XDP '/bin/bpfd' extrait (0x17d250 octets)
-[INITRD/TAR] Démon Passerelle VPN WireGuard Post-Quantique '/bin/vpn' extrait (0x1a6b98 octets)
-[INITRD/TAR] Démon Identité & Jetons de Session '/bin/authd' extrait (0x181d20 octets)
-[INITRD/TAR] Démon Résolution de Noms & Découverte DNS '/bin/dnsd' extrait (0x18ddb8 octets)
-[INITRD/TAR] Démon Synchronisation Horlogère PTP/NTP '/bin/timed' extrait (0x15f490 octets)
-[INITRD/TAR] Demon Audit Cryptographique Inalterable '/bin/auditd' extrait (0x15ee70 octets)
-[INITRD/TAR] Demon Pare-Feu d'Etat & Conntrack '/bin/walld' extrait (0x17e720 octets)
-[INITRD/TAR] Demon Coffre-Fort de Secrets Distribue '/bin/vaultd' extrait (0x174ef8 octets)
-[INITRD/TAR] Demon Surveillance Vivacite & Chien de Garde '/bin/watchdogd' extrait (0x188888 octets)
-[INITRD/TAR] Demon Capture Crash Dumps ELF64 '/bin/cored' extrait (0x19f798 octets)
-[INITRD/TAR] Demon Gestionnaire Paquets CAS '/bin/pkgd' extrait (0x16e240 octets)
-[INITRD/TAR] Demon PKI Ephemere & mTLS '/bin/certd' extrait (0x176c30 octets)
-[INITRD/TAR] Demon Moteur Politiques Securite '/bin/policyd' extrait (0x17d6e8 octets)
-[INITRD/TAR] Demon Démarrage Mesuré TPM 2.0 '/bin/secboot' extrait (0x16ddf8 octets)
-[INITRD/TAR] Demon Journalisation Structuree '/bin/logd' extrait (0x1693a0 octets)
-[INITRD/TAR] Demon Gestion Cles & HKDF '/bin/kms' extrait (0x19b818 octets)
-[INITRD/TAR] Demon Attestation Distante & ZKP '/bin/attest' extrait (0x1ae3f0 octets)
-[INITRD/TAR] Demon Pare-Feu Applicatif L7 '/bin/waf' extrait (0x17e6d8 octets)
-[INITRD/TAR] Demon Moteur SIEM '/bin/siem' extrait (0x178cf8 octets)
-[INITRD/TAR] Demon Surveillance & Reponse EDR '/bin/edr' extrait (0x1a1820 octets)
-[INITRD/TAR] Demon Surveillance & Reponse NDR '/bin/ndr' extrait (0x1a91f8 octets)
-[INITRD/TAR] Demon Surveillance & Reponse XDR '/bin/xdr' extrait (0x181428 octets)
-[INITRD/TAR] Demon Surveillance & Reponse SOAR '/bin/soar' extrait (0x191b70 octets)
-[INITRD/TAR] Demon Analyse Comportementale UEBA '/bin/ueba' extrait (0x17d568 octets)
-[INITRD/TAR] Demon Detection & Reponse Menaces Identites ITDR '/bin/itdr' extrait (0x17ee30 octets)
-[INITRD/TAR] Demon Prevention Fuites Donnees DLP '/bin/dlp' extrait (0x185298 octets)
-[INITRD/TAR] Utilitaire d'installation '/bin/installer' extrait (0x1d89c8 octets)
+[SCHED/EEVDF] Ordonnanceur EEVDF opérationnel avec 2 threads de test en file
+[BOOT/MODULES] Détection de 1 module(s) d'amorçage Limine :
+  [00] Module '/boot/initrd.tar' | 286361600 octets (cmdline: '')
+[INITRD/TAR] Superviseur '/bin/init' extrait (0x16cb38 octets)
+[INITRD/TAR] Shell interactif '/bin/jsh' extrait (0x9d6fb0 octets)
+[INITRD/TAR] Démon de stockage '/bin/blockd' extrait (0x177ab8 octets)
+[INITRD/TAR] Serveur de fichiers '/bin/fs' extrait (0x1e1190 octets)
+[INITRD/TAR] Démon réseau '/bin/netd' extrait (0x19c388 octets)
+[INITRD/TAR] Démon de résilience matérielle '/bin/fdr' extrait (0x1a16f0 octets)
+[INITRD/TAR] Démon WebAssembly & WASI '/bin/wasmd' extrait (0x17bb78 octets)
+[INITRD/TAR] Démon Cryptographie Post-Quantique '/bin/pqc' extrait (0x1aeab8 octets)
+[INITRD/TAR] Démon Surveillance Intégrité Noyau & Pilotes '/bin/kdir' extrait (0x19e7b0 octets)
+[INITRD/TAR] Démon Confinement Mémoire & Forensics Volatile '/bin/forensics' extrait (0x1823e0 octets)
+[INITRD/TAR] Démon Gestion Énergie & Fréquence CPU '/bin/powerd' extrait (0x15f470 octets)
+[INITRD/TAR] Démon Métrologie Système & Télémétrie '/bin/metricsd' extrait (0x1777e8 octets)
+[INITRD/TAR] Démon Sandboxing eBPF & Filtrage Réseau XDP '/bin/bpfd' extrait (0x184080 octets)
+[INITRD/TAR] Démon Passerelle VPN WireGuard Post-Quantique '/bin/vpn' extrait (0x1adc08 octets)
+[INITRD/TAR] Démon Identité & Jetons de Session '/bin/authd' extrait (0x1888f8 octets)
+[INITRD/TAR] Démon Résolution de Noms & Découverte DNS '/bin/dnsd' extrait (0x194e28 octets)
+[INITRD/TAR] Démon Synchronisation Horlogère PTP/NTP '/bin/timed' extrait (0x1664d0 octets)
+[INITRD/TAR] Demon Audit Cryptographique Inalterable '/bin/auditd' extrait (0x165ee8 octets)
+[INITRD/TAR] Demon Pare-Feu d'Etat & Conntrack '/bin/walld' extrait (0x185550 octets)
+[INITRD/TAR] Demon Coffre-Fort de Secrets Distribue '/bin/vaultd' extrait (0x17bd28 octets)
+[INITRD/TAR] Demon Surveillance Vivacite & Chien de Garde '/bin/watchdogd' extrait (0x18f8c8 octets)
+[INITRD/TAR] Demon Capture Crash Dumps ELF64 '/bin/cored' extrait (0x1a65b8 octets)
+[INITRD/TAR] Demon Gestionnaire Paquets CAS '/bin/pkgd' extrait (0x1752b8 octets)
+[INITRD/TAR] Demon PKI Ephemere & mTLS '/bin/certd' extrait (0x17da60 octets)
+[INITRD/TAR] Demon Moteur Politiques Securite '/bin/policyd' extrait (0x184510 octets)
+[INITRD/TAR] Demon Démarrage Mesuré TPM 2.0 '/bin/secboot' extrait (0x174c30 octets)
+[INITRD/TAR] Demon Journalisation Structuree '/bin/logd' extrait (0x1701d0 octets)
+[INITRD/TAR] Demon Gestion Cles & HKDF '/bin/kms' extrait (0x1a2650 octets)
+[INITRD/TAR] Demon Attestation Distante & ZKP '/bin/attest' extrait (0x1b5220 octets)
+[INITRD/TAR] Demon Pare-Feu Applicatif L7 '/bin/waf' extrait (0x185508 octets)
+[INITRD/TAR] Demon Moteur SIEM '/bin/siem' extrait (0x17fd70 octets)
+[INITRD/TAR] Demon Surveillance & Reponse EDR '/bin/edr' extrait (0x1a8640 octets)
+[INITRD/TAR] Demon Surveillance & Reponse NDR '/bin/ndr' extrait (0x1afff0 octets)
+[INITRD/TAR] Demon Surveillance & Reponse XDR '/bin/xdr' extrait (0x188488 octets)
+[INITRD/TAR] Demon Surveillance & Reponse SOAR '/bin/soar' extrait (0x198998 octets)
+[INITRD/TAR] Demon Analyse Comportementale UEBA '/bin/ueba' extrait (0x184598 octets)
+[INITRD/TAR] Demon Detection & Reponse Menaces Identites ITDR '/bin/itdr' extrait (0x185e98 octets)
+[INITRD/TAR] Demon Prevention Fuites Donnees DLP '/bin/dlp' extrait (0x18c300 octets)
+[INITRD/TAR] Utilitaire d'installation '/bin/installer' extrait (0x1e0788 octets)
 [PROCESS] Processus utilisateur init (PID 1) initialisé avec pile System V ABI (RSP: 0x00007ffffffeff10)
 [PROCESS] Shell utilisateur interactif jsh (PID 2) initialisé avec pile System V ABI (RSP: 0x00007ffffffeff20) et enfilé
 [IPC/RENDEZVOUS] Canal IPC blockd <-> fs configuré (blockd handle: 0x100000001, fs handle: 0x100000001)
@@ -158,7 +164,7 @@ BdsDxe: starting Boot0001 "UEFI QEMU DVD-ROM QM00005 " from PciRoot(0x0)/Pci(0x1
 [SYSCALL] Cycle de vie validé : process_create (0x100000004), thread_create (0x100000005), vmo_map & thread_start
 [IPC/FUTEX] Canaux bidirectionnels (0x100000006 <-> 0x100000007), Futex et Anneaux partagés validés
 [ASYNC/IRQ] Port asynchrone (0x100000009), IRQ #48 liée (0x10000000a) et acquittement EOI validés
-[TIME/CLOCK] Horloges validées : REALTIME = 1794261576s, MONOTONIC = 4s 446947078ns
+[TIME/CLOCK] Horloges validées : REALTIME = 1794262768s, MONOTONIC = 4s 732620298ns
 [RING3/TEST] Initialisation du test de transition matérielle vers Ring 3 (Phase 39)...
 [RING3/TEST] Thread Ring 3 créé avec succès (Entry: 0x00400000, RSP: 0x00007ffffffefff0)
 [RING3/TRANSITION] Saut vers Ring 3 via enter_user_mode (IRETQ avec CS=0x23, SS=0x1B)...
@@ -168,7 +174,7 @@ BdsDxe: starting Boot0001 "UEFI QEMU DVD-ROM QM00005 " from PciRoot(0x0)/Pci(0x1
 [PREEMPT/TEST] Démarrage du test de préemption matérielle par Timer APIC (Phase 40)...
 [PREEMPT/TIMER] Timer APIC armé (vecteur 32). Activation des interruptions CPU (STI)...
 [PREEMPT/SWITCH] Bascule vers le thread de calcul non coopératif (boucle sans yield)...
-[PREEMPT/SUCCESS] Préemption matérielle réussie ! Le superviseur a repris la main après 18275 cycles de calcul du travailleur.
+[PREEMPT/SUCCESS] Préemption matérielle réussie ! Le superviseur a repris la main après 19204 cycles de calcul du travailleur.
 [PREEMPT/DONE] Ordonnancement préemptif EEVDF validé avec succès.
 [CONSOLE/TEST] Initialisation du test d'E/S console interactif (Phase 41)...
 [IOAPIC/IRQ4] Routage de l'IRQ 4 (COM1 UART) vers le vecteur IDT 36 configuré
@@ -177,25 +183,26 @@ BdsDxe: starting Boot0001 "UEFI QEMU DVD-ROM QM00005 " from PciRoot(0x0)/Pci(0x1
 [SECURITY/TEST] Validation du durcissement des frontières noyau & isolation CSpace...
 [SECURITY/PASS] Tests adversariaux et isolation CSpace validés avec succès !
 [PMM/TEST] Validation du durcissement PMM Buddy Allocator & Cycle de vie VMO...
-[PMM/INFO] Blocs libres: Ordre 0 = 2, Ordre 1 = 1, Frag Ordre 4 = 0%
+[PMM/INFO] Blocs libres: Ordre 0 = 1, Ordre 1 = 0, Frag Ordre 4 = 0%
 [FORMAL] Running Kani/Verus mathematical verification harnesses...
-  [PROOF 1/16] CSpace Anti-ABA & Use-After-Close Safety: PASSED (65536 states checked)
-  [PROOF 2/16] Paging W^X (Write XOR Execute) Memory Safety: PASSED (1048576 states checked)
-  [PROOF 3/16] Buddy Allocator Disjoint Block Invariant: PASSED (521433 states checked)
-  [PROOF 4/16] EEVDF Virtual Time Monotonicity & Starvation-Free: PASSED (131072 states checked)
-  [PROOF 5/16] Capability Derivation & Strict Rights Attenuation (No Privilege Amplification): PASSED (262144 states checked)
-  [PROOF 6/16] IPC Channel Bounded FIFO & PeerClosed Deadlock Freedom: PASSED (65536 states checked)
-  [PROOF 7/16] CoW VMO Page Deduplication & Memory Isolation Safety: PASSED (524288 states checked)
-  [PROOF 8/16] Linear Capability Transfer Conservation & Monotonic Attenuation: PASSED (131072 states checked)
-  [PROOF 9/16] Buddy Allocator Anti-Fragmentation & Free-List Integrity: PASSED (262144 states checked)
-  [PROOF 10/16] EEVDF Lag-Bounded Fairness & Anti-Starvation Guarantees: PASSED (131072 states checked)
-  [PROOF 11/16] PML4 User/Supervisor Isolation & SMAP/SMEP Boundary Safety: PASSED (262144 states checked)
-  [PROOF 12/16] Kernel Stack Guard Page & Supervisor Memory Protection Invariant: PASSED (131072 states checked)
-  [PROOF 13/16] ASID/PCID Context Isolation & TLB Invalidation Safety Invariant: PASSED (524288 states checked)
-  [PROOF 14/16] IDT Interrupt Non-Reentrancy & Deterministic TrapFrame Preservation: PASSED (1048576 states checked)
-  [PROOF 15/16] Speculative Execution Barrier Safety (LFENCE/IBPB/STIBP): PASSED (1048576 states checked)
-  [PROOF 16/16] Hardware Entropy Non-Disclosure & CSPRNG Statistical Invariant: PASSED (1048576 states checked)
-[FORMAL] 16/16 Mathematical proofs verified with 0 defects.
+  [PROOF 1/17] CSpace Anti-ABA & Use-After-Close Safety: PASSED (65536 states checked)
+  [PROOF 2/17] Paging W^X (Write XOR Execute) Memory Safety: PASSED (1048576 states checked)
+  [PROOF 3/17] Buddy Allocator Disjoint Block Invariant: PASSED (521433 states checked)
+  [PROOF 4/17] EEVDF Virtual Time Monotonicity & Starvation-Free: PASSED (131072 states checked)
+  [PROOF 5/17] Capability Derivation & Strict Rights Attenuation (No Privilege Amplification): PASSED (262144 states checked)
+  [PROOF 6/17] IPC Channel Bounded FIFO & PeerClosed Deadlock Freedom: PASSED (65536 states checked)
+  [PROOF 7/17] CoW VMO Page Deduplication & Memory Isolation Safety: PASSED (524288 states checked)
+  [PROOF 8/17] Linear Capability Transfer Conservation & Monotonic Attenuation: PASSED (131072 states checked)
+  [PROOF 9/17] Buddy Allocator Anti-Fragmentation & Free-List Integrity: PASSED (262144 states checked)
+  [PROOF 10/17] EEVDF Lag-Bounded Fairness & Anti-Starvation Guarantees: PASSED (131072 states checked)
+  [PROOF 11/17] PML4 User/Supervisor Isolation & SMAP/SMEP Boundary Safety: PASSED (262144 states checked)
+  [PROOF 12/17] Kernel Stack Guard Page & Supervisor Memory Protection Invariant: PASSED (131072 states checked)
+  [PROOF 13/17] ASID/PCID Context Isolation & TLB Invalidation Safety Invariant: PASSED (524288 states checked)
+  [PROOF 14/17] IDT Interrupt Non-Reentrancy & Deterministic TrapFrame Preservation: PASSED (1048576 states checked)
+  [PROOF 15/17] Speculative Execution Barrier Safety (LFENCE/IBPB/STIBP): PASSED (1048576 states checked)
+  [PROOF 16/17] Hardware Entropy Non-Disclosure & CSPRNG Statistical Invariant: PASSED (1048576 states checked)
+  [PROOF 17/17] IOMMU/DMAR Domain Isolation & PCIe DMA Non-Interference Invariant: PASSED (1048576 states checked)
+[FORMAL] 17/17 Mathematical proofs verified with 0 defects.
 [PMM/PASS] Tests adversariaux PMM et cycle de vie VMO validés avec succès !
 [EEVDF/TEST] Validation du durcissement EEVDF & Résilience SMP Multicœur...
 [EEVDF/PASS] Tests de durcissement EEVDF et résilience SMP validés avec succès !

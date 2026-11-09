@@ -118,6 +118,48 @@ pub enum FsOpcode {
     Write = 3,
     Stat = 4,
     Sync = 5,
+    Metrics = 6,
+}
+
+/// Métriques dynamiques du système de fichiers JamboFS (espace, blocs, snapshots CoW)
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FsMetrics {
+    pub block_size: u32,
+    pub total_blocks: u32,
+    pub allocated_blocks: u32,
+    pub free_blocks: u32,
+    pub active_snapshots: u32,
+    pub max_snapshots: u32,
+    pub generation: u64,
+    pub active_slot_b: bool,
+    pub is_4kn: bool,
+    pub _reserved: [u8; 2],
+    pub dedup_entries: u32,
+}
+
+impl FsMetrics {
+    pub fn to_bytes(&self) -> [u8; 40] {
+        let mut bytes = [0u8; 40];
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                self as *const Self as *const u8,
+                bytes.as_mut_ptr(),
+                core::mem::size_of::<Self>(),
+            );
+        }
+        bytes
+    }
+
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        if bytes.len() < core::mem::size_of::<Self>() {
+            return None;
+        }
+        unsafe {
+            let ptr = bytes.as_ptr() as *const Self;
+            Some(ptr.read_unaligned())
+        }
+    }
 }
 
 /// Requête IPC transmise au serveur JamboFS (64 octets, Fastpath sans copie)
@@ -166,6 +208,17 @@ impl FsRequest {
     pub fn new_sync(req_id: u32) -> Self {
         Self {
             opcode: FsOpcode::Sync as u32,
+            req_id,
+            offset: 0,
+            length: 0,
+            path_len: 0,
+            path: [0u8; 40],
+        }
+    }
+
+    pub fn new_metrics(req_id: u32) -> Self {
+        Self {
+            opcode: FsOpcode::Metrics as u32,
             req_id,
             offset: 0,
             length: 0,
@@ -1861,6 +1914,40 @@ impl JamboFs {
         self.bitmap.header.allocated_blocks as usize
     }
 
+    /// Retourne les métriques détaillées d'espace, de blocs et de snapshots CoW JamboFS
+    pub fn metrics(&self) -> FsMetrics {
+        FsMetrics {
+            block_size: BLOCK_SIZE as u32,
+            total_blocks: BITMAP_BLOCKS_COUNT as u32,
+            allocated_blocks: self.allocated_blocks_count() as u32,
+            free_blocks: self.free_blocks_count() as u32,
+            active_snapshots: self.snapshot_table.snapshot_count as u32,
+            max_snapshots: MAX_SNAPSHOTS as u32,
+            generation: self.active_uberblock.generation,
+            active_slot_b: self.active_slot_b,
+            is_4kn: self.is_4kn(),
+            _reserved: [0; 2],
+            dedup_entries: self.dedup_table.active_count as u32,
+        }
+    }
+
+    /// Expose les métriques du volume sous forme compatible POSIX statvfs
+    pub fn statvfs(&self) -> libjambo::vfs::PosixStatvfs {
+        libjambo::vfs::PosixStatvfs {
+            f_bsize: BLOCK_SIZE as u64,
+            f_frsize: BLOCK_SIZE as u64,
+            f_blocks: BITMAP_BLOCKS_COUNT as u64,
+            f_bfree: self.free_blocks_count() as u64,
+            f_bavail: self.free_blocks_count() as u64,
+            f_files: 1024,
+            f_ffree: (1024u64).saturating_sub(self.allocated_blocks_count() as u64),
+            f_favail: (1024u64).saturating_sub(self.allocated_blocks_count() as u64),
+            f_fsid: JAMBOFS_MAGIC & 0xFFFF_FFFF,
+            f_flag: self.flags.0 as u64,
+            f_namemax: MAX_SNAPSHOT_NAME_LEN as u64,
+        }
+    }
+
     /// Crée un instant snapshot immuable sans duplication physique de blocs (CoW)
     pub fn create_snapshot(&mut self, name: &str) -> Result<u64, FsError> {
         self.snapshot_table
@@ -2675,5 +2762,45 @@ mod tests {
         fs_4kn.geometry = libjambo::gpt::SectorGeometry::Sector4Kn;
         assert!(fs_4kn.is_4kn());
         assert_eq!(fs_4kn.geometry.sectors_per_4k_block(), 1);
+    }
+
+    #[test]
+    fn test_fs_metrics_and_statvfs() {
+        let client = BlockClient::new(libjambo::Handle(0));
+        let mut fs = JamboFs::new_fallback(client);
+
+        // 1. Métriques initiales
+        let m0 = fs.metrics();
+        assert_eq!(m0.block_size, 4096);
+        assert_eq!(m0.total_blocks, 2048);
+        assert_eq!(m0.allocated_blocks, 24);
+        assert_eq!(m0.free_blocks, 2024);
+        assert_eq!(m0.active_snapshots, 0);
+        assert_eq!(m0.max_snapshots, 16);
+        assert_eq!(m0.generation, 1);
+        assert!(!m0.active_slot_b);
+        assert!(!m0.is_4kn);
+
+        // 2. Conversion POSIX statvfs
+        let sv = fs.statvfs();
+        assert_eq!(sv.f_bsize, 4096);
+        assert_eq!(sv.f_frsize, 4096);
+        assert_eq!(sv.f_blocks, 2048);
+        assert_eq!(sv.f_bfree, 2024);
+        assert_eq!(sv.f_bavail, 2024);
+        assert_eq!(sv.f_files, 1024);
+        assert_eq!(sv.f_ffree, 1000);
+        assert_eq!(sv.f_fsid, JAMBOFS_MAGIC & 0xFFFF_FFFF);
+
+        // 3. Snapshot CoW et mise à jour dynamique des métriques
+        let snap_id = fs.create_snapshot("snap_metrics").expect("create snapshot");
+        assert!(snap_id > 0);
+        let m1 = fs.metrics();
+        assert_eq!(m1.active_snapshots, 1);
+
+        // Sérialisation IPC des métriques
+        let bytes = m1.to_bytes();
+        let parsed = FsMetrics::from_bytes(&bytes).expect("parse metrics");
+        assert_eq!(parsed, m1);
     }
 }
