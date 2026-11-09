@@ -4662,8 +4662,7 @@ pub fn run_cut(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
                 ('f', Some(val))
             } else if let Some(val) = arg.strip_prefix("--delimiter=") {
                 ('d', Some(val))
-            } else if arg.starts_with("-b") {
-                let rest = &arg[2..];
+            } else if let Some(rest) = arg.strip_prefix("-b") {
                 if !rest.is_empty() {
                     ('b', Some(rest))
                 } else if i + 1 < args.len() {
@@ -4673,8 +4672,7 @@ pub fn run_cut(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
                     let _ = sys_write(err_fd, b"cut: option requires an argument -- 'b'\n");
                     return 1;
                 }
-            } else if arg.starts_with("-c") {
-                let rest = &arg[2..];
+            } else if let Some(rest) = arg.strip_prefix("-c") {
                 if !rest.is_empty() {
                     ('c', Some(rest))
                 } else if i + 1 < args.len() {
@@ -4684,8 +4682,7 @@ pub fn run_cut(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
                     let _ = sys_write(err_fd, b"cut: option requires an argument -- 'c'\n");
                     return 1;
                 }
-            } else if arg.starts_with("-f") {
-                let rest = &arg[2..];
+            } else if let Some(rest) = arg.strip_prefix("-f") {
                 if !rest.is_empty() {
                     ('f', Some(rest))
                 } else if i + 1 < args.len() {
@@ -4695,8 +4692,7 @@ pub fn run_cut(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
                     let _ = sys_write(err_fd, b"cut: option requires an argument -- 'f'\n");
                     return 1;
                 }
-            } else if arg.starts_with("-d") {
-                let rest = &arg[2..];
+            } else if let Some(rest) = arg.strip_prefix("-d") {
                 if !rest.is_empty() {
                     ('d', Some(rest))
                 } else if i + 1 < args.len() {
@@ -4801,6 +4797,352 @@ pub fn run_cut(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
     }
 
     exit_code
+}
+
+// ============================================================================
+// Utilitaire standard POSIX `paste` (Fusion séquentielle ou parallèle de flux)
+// ============================================================================
+
+/// Délimiteur élémentaire pour `paste`
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PasteDelim {
+    Byte(u8),
+    Empty,
+}
+
+/// Analyse une spécification de délimiteurs pour `paste -d`
+pub fn parse_paste_delimiters(spec: &str, out: &mut [PasteDelim; 32]) -> usize {
+    let bytes = spec.as_bytes();
+    if bytes.is_empty() {
+        out[0] = PasteDelim::Empty;
+        return 1;
+    }
+    let mut count = 0;
+    let mut i = 0;
+    while i < bytes.len() && count < out.len() {
+        if bytes[i] == b'\\' && i + 1 < bytes.len() {
+            i += 1;
+            match bytes[i] {
+                b'n' => out[count] = PasteDelim::Byte(b'\n'),
+                b't' => out[count] = PasteDelim::Byte(b'\t'),
+                b'0' => out[count] = PasteDelim::Empty,
+                b'\\' => out[count] = PasteDelim::Byte(b'\\'),
+                other => out[count] = PasteDelim::Byte(other),
+            }
+        } else {
+            out[count] = PasteDelim::Byte(bytes[i]);
+        }
+        count += 1;
+        i += 1;
+    }
+    if count == 0 {
+        out[0] = PasteDelim::Byte(b'\t');
+        count = 1;
+    }
+    count
+}
+
+/// Lecteur de flux par ligne sans allocation dynamique sur le tas
+pub struct LineReader {
+    pub fd: i32,
+    pub buf: [u8; 512],
+    pub pos: usize,
+    pub len: usize,
+    pub eof: bool,
+}
+
+impl LineReader {
+    pub const fn new(fd: i32) -> Self {
+        Self {
+            fd,
+            buf: [0u8; 512],
+            pos: 0,
+            len: 0,
+            eof: false,
+        }
+    }
+
+    /// Lit la prochaine ligne dans `out_buf` (sans le '\n' terminal).
+    /// Retourne `Some(len)` ou `None` si la fin du flux est atteinte sans aucun octet supplémentaire.
+    pub fn read_line(&mut self, out_buf: &mut [u8]) -> Option<usize> {
+        let mut out_len = 0;
+        let mut found_any = false;
+
+        loop {
+            if self.pos >= self.len {
+                if self.eof {
+                    break;
+                }
+                let n = sys_read(self.fd, &mut self.buf);
+                if n <= 0 {
+                    self.eof = true;
+                    break;
+                }
+                self.pos = 0;
+                self.len = n as usize;
+            }
+
+            while self.pos < self.len {
+                let b = self.buf[self.pos];
+                self.pos += 1;
+                found_any = true;
+
+                if b == b'\n' {
+                    if out_len > 0 && out_buf[out_len - 1] == b'\r' {
+                        out_len -= 1;
+                    }
+                    return Some(out_len);
+                } else if out_len < out_buf.len() {
+                    out_buf[out_len] = b;
+                    out_len += 1;
+                }
+            }
+        }
+
+        if found_any || out_len > 0 {
+            if out_len > 0 && out_buf[out_len - 1] == b'\r' {
+                out_len -= 1;
+            }
+            Some(out_len)
+        } else {
+            None
+        }
+    }
+}
+
+fn write_paste_delim(out_fd: i32, delim: PasteDelim) {
+    match delim {
+        PasteDelim::Byte(b) => {
+            let _ = sys_write(out_fd, &[b]);
+        }
+        PasteDelim::Empty => {}
+    }
+}
+
+fn process_paste_serial(mut reader: LineReader, out_fd: i32, delims: &[PasteDelim]) {
+    let mut line_buf = [0u8; 512];
+    let mut first_line = true;
+    let mut delim_idx = 0;
+
+    while let Some(len) = reader.read_line(&mut line_buf) {
+        if !first_line {
+            let d = delims[delim_idx % delims.len()];
+            write_paste_delim(out_fd, d);
+            delim_idx += 1;
+        }
+        let _ = sys_write(out_fd, &line_buf[..len]);
+        first_line = false;
+    }
+
+    if !first_line {
+        let _ = sys_write(out_fd, b"\n");
+    }
+}
+
+fn process_paste_parallel(readers: &mut [LineReader], out_fd: i32, delims: &[PasteDelim]) {
+    let k = readers.len();
+    if k == 0 {
+        return;
+    }
+
+    let mut line_storage = [0u8; 16 * 256];
+    let mut line_lens = [0usize; 16];
+    let mut line_present = [false; 16];
+
+    loop {
+        let mut any_line_read = false;
+
+        for j in 0..k {
+            let slot = &mut line_storage[j * 256..(j + 1) * 256];
+            if let Some(len) = readers[j].read_line(slot) {
+                line_present[j] = true;
+                line_lens[j] = len;
+                any_line_read = true;
+            } else {
+                line_present[j] = false;
+                line_lens[j] = 0;
+            }
+        }
+
+        if !any_line_read {
+            break;
+        }
+
+        for j in 0..k {
+            if j > 0 {
+                let d = delims[(j - 1) % delims.len()];
+                write_paste_delim(out_fd, d);
+            }
+            if line_present[j] {
+                let bytes = &line_storage[j * 256..(j * 256 + line_lens[j])];
+                let _ = sys_write(out_fd, bytes);
+            }
+        }
+        let _ = sys_write(out_fd, b"\n");
+    }
+}
+
+/// Exécute l'utilitaire standard POSIX `paste` (fusion ligne à ligne de plusieurs fichiers ou flux)
+pub fn run_paste(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    let mut serial_mode = false;
+    let mut delims_storage = [PasteDelim::Byte(b'\t'); 32];
+    let mut delim_count = 1;
+    let mut file_indices = [0usize; 16];
+    let mut file_count = 0;
+
+    let mut i = 0;
+    let mut parsing_options = true;
+
+    while i < args.len() {
+        let arg = args[i];
+        if parsing_options && arg == "--" {
+            parsing_options = false;
+            i += 1;
+            continue;
+        }
+
+        if parsing_options && (arg.starts_with('-') && arg != "-") {
+            if arg == "--help" {
+                let _ = sys_write(
+                    out_fd,
+                    b"Usage: paste [OPTION]... [FILE]...\nWrite lines consisting of the sequentially corresponding lines from\neach FILE, separated by TABs, to standard output.\n\nWith no FILE, or when FILE is -, read standard input.\n\n  -d, --delimiters=LIST   reuse characters from LIST instead of TABs\n  -s, --serial            paste one file at a time instead of in parallel\n      --help              display this help and exit\n",
+                );
+                return 0;
+            }
+
+            if arg == "-s" || arg == "--serial" {
+                serial_mode = true;
+                i += 1;
+                continue;
+            }
+
+            if let Some(spec) = arg.strip_prefix("--delimiters=") {
+                delim_count = parse_paste_delimiters(spec, &mut delims_storage);
+                i += 1;
+                continue;
+            } else if let Some(rest) = arg.strip_prefix("-d") {
+                let spec = if !rest.is_empty() {
+                    rest
+                } else if i + 1 < args.len() {
+                    i += 1;
+                    args[i]
+                } else {
+                    let _ = sys_write(err_fd, b"paste: option requires an argument -- 'd'\n");
+                    return 1;
+                };
+                delim_count = parse_paste_delimiters(spec, &mut delims_storage);
+                i += 1;
+                continue;
+            } else {
+                let _ = sys_write(err_fd, b"paste: invalid option -- '");
+                let _ = sys_write(err_fd, arg.as_bytes());
+                let _ = sys_write(err_fd, b"'\n");
+                return 1;
+            }
+        } else {
+            if file_count < file_indices.len() {
+                file_indices[file_count] = i;
+                file_count += 1;
+            }
+            i += 1;
+        }
+    }
+
+    let active_delims = &delims_storage[..delim_count];
+
+    if file_count == 0 {
+        let reader = LineReader::new(in_fd);
+        if serial_mode {
+            process_paste_serial(reader, out_fd, active_delims);
+        } else {
+            let mut readers = [reader];
+            process_paste_parallel(&mut readers, out_fd, active_delims);
+        }
+        return 0;
+    }
+
+    if serial_mode {
+        let mut exit_code = 0;
+        for &idx in &file_indices[..file_count] {
+            let path = args[idx];
+            if path == "-" {
+                let reader = LineReader::new(in_fd);
+                process_paste_serial(reader, out_fd, active_delims);
+            } else {
+                let fd = sys_open(path, O_RDONLY);
+                if fd < 0 {
+                    let _ = sys_write(err_fd, b"paste: ");
+                    let _ = sys_write(err_fd, path.as_bytes());
+                    let _ = sys_write(err_fd, b": No such file or directory\n");
+                    exit_code = 1;
+                } else {
+                    let reader = LineReader::new(fd);
+                    process_paste_serial(reader, out_fd, active_delims);
+                    sys_close(fd);
+                }
+            }
+        }
+        return exit_code;
+    }
+
+    // Mode parallèle : ouverture de tous les fichiers
+    const MAX_PARALLEL_FILES: usize = 16;
+    let actual_count = file_count.min(MAX_PARALLEL_FILES);
+    let mut readers = [
+        LineReader::new(-1),
+        LineReader::new(-1),
+        LineReader::new(-1),
+        LineReader::new(-1),
+        LineReader::new(-1),
+        LineReader::new(-1),
+        LineReader::new(-1),
+        LineReader::new(-1),
+        LineReader::new(-1),
+        LineReader::new(-1),
+        LineReader::new(-1),
+        LineReader::new(-1),
+        LineReader::new(-1),
+        LineReader::new(-1),
+        LineReader::new(-1),
+        LineReader::new(-1),
+    ];
+    let mut opened_fds = [-1i32; MAX_PARALLEL_FILES];
+    let mut failed = false;
+
+    for j in 0..actual_count {
+        let path = args[file_indices[j]];
+        if path == "-" {
+            readers[j] = LineReader::new(in_fd);
+        } else {
+            let fd = sys_open(path, O_RDONLY);
+            if fd < 0 {
+                let _ = sys_write(err_fd, b"paste: ");
+                let _ = sys_write(err_fd, path.as_bytes());
+                let _ = sys_write(err_fd, b": No such file or directory\n");
+                failed = true;
+                break;
+            }
+            readers[j] = LineReader::new(fd);
+            opened_fds[j] = fd;
+        }
+    }
+
+    if !failed {
+        process_paste_parallel(&mut readers[..actual_count], out_fd, active_delims);
+    }
+
+    // Fermeture des descripteurs ouverts
+    for &fd in &opened_fds[..actual_count] {
+        if fd >= 0 {
+            sys_close(fd);
+        }
+    }
+
+    if failed {
+        1
+    } else {
+        0
+    }
 }
 
 #[cfg(test)]
@@ -5677,5 +6019,72 @@ mod tests {
         assert_eq!(code5, 1);
         sys_close(out_w5);
         sys_close(out_r5);
+    }
+
+    #[test]
+    fn test_paste_parallel_and_serial() {
+        // 1. Fusion parallèle de deux fichiers avec délimiteur par défaut TAB
+        let path1 = "/tmp/test_paste_a.txt";
+        let path2 = "/tmp/test_paste_b.txt";
+        let fd1 = sys_open(path1, O_CREAT | O_WRONLY);
+        assert!(fd1 >= 0);
+        let _ = sys_write(fd1, b"1\n2\n3\n");
+        sys_close(fd1);
+
+        let fd2 = sys_open(path2, O_CREAT | O_WRONLY);
+        assert!(fd2 >= 0);
+        let _ = sys_write(fd2, b"un\ndeux\ntrois\n");
+        sys_close(fd2);
+
+        let (out_r1, out_w1) = crate::vfs::pipe().expect("pipe paste 1");
+        let code1 = run_paste(&[path1, path2], 0, out_w1, 2);
+        assert_eq!(code1, 0);
+        sys_close(out_w1);
+
+        let mut out1 = [0u8; 256];
+        let n1 = sys_read(out_r1, &mut out1);
+        assert!(n1 > 0);
+        assert_eq!(&out1[..n1 as usize], b"1\tun\n2\tdeux\n3\ttrois\n");
+        sys_close(out_r1);
+
+        // 2. Fusion avec délimiteur personnalisé (-d ",")
+        let (out_r2, out_w2) = crate::vfs::pipe().expect("pipe paste 2");
+        let code2 = run_paste(&["-d", ",", path1, path2], 0, out_w2, 2);
+        assert_eq!(code2, 0);
+        sys_close(out_w2);
+
+        let mut out2 = [0u8; 256];
+        let n2 = sys_read(out_r2, &mut out2);
+        assert!(n2 > 0);
+        assert_eq!(&out2[..n2 as usize], b"1,un\n2,deux\n3,trois\n");
+        sys_close(out_r2);
+
+        // 3. Fusion séquentielle (-s)
+        let (out_r3, out_w3) = crate::vfs::pipe().expect("pipe paste 3");
+        let code3 = run_paste(&["-s", "-d", ":", path1], 0, out_w3, 2);
+        assert_eq!(code3, 0);
+        sys_close(out_w3);
+
+        let mut out3 = [0u8; 256];
+        let n3 = sys_read(out_r3, &mut out3);
+        assert!(n3 > 0);
+        assert_eq!(&out3[..n3 as usize], b"1:2:3\n");
+        sys_close(out_r3);
+
+        // 4. Délimiteurs multiples cycliques (-d "|-")
+        let (out_r4, out_w4) = crate::vfs::pipe().expect("pipe paste 4");
+        let code4 = run_paste(&["-s", "-d", "|-", path1], 0, out_w4, 2);
+        assert_eq!(code4, 0);
+        sys_close(out_w4);
+
+        let mut out4 = [0u8; 256];
+        let n4 = sys_read(out_r4, &mut out4);
+        assert!(n4 > 0);
+        assert_eq!(&out4[..n4 as usize], b"1|2-3\n");
+        sys_close(out_r4);
+
+        // Nettoyage fichiers de test
+        let _ = sys_unlink_pool(path1);
+        let _ = sys_unlink_pool(path2);
     }
 }

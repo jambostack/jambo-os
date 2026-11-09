@@ -630,6 +630,429 @@ impl HubPortStatusAndChange {
 }
 
 // ============================================================================
+// Descripteurs USB Standard & Décodage des Flux Isochronous et Bulk (USB 2.0 / 3.x)
+// ============================================================================
+
+pub const USB_DESC_TYPE_DEVICE: u8 = 0x01;
+pub const USB_DESC_TYPE_CONFIGURATION: u8 = 0x02;
+pub const USB_DESC_TYPE_STRING: u8 = 0x03;
+pub const USB_DESC_TYPE_INTERFACE: u8 = 0x04;
+pub const USB_DESC_TYPE_ENDPOINT: u8 = 0x05;
+pub const USB_DESC_TYPE_SS_ENDPOINT_COMPANION: u8 = 0x30;
+
+pub const USB_EP_DIR_MASK: u8 = 0x80;
+pub const USB_EP_DIR_IN: u8 = 0x80;
+pub const USB_EP_DIR_OUT: u8 = 0x00;
+
+pub const USB_EP_ATTR_TYPE_MASK: u8 = 0x03;
+pub const USB_EP_ATTR_CONTROL: u8 = 0x00;
+pub const USB_EP_ATTR_ISOCHRONOUS: u8 = 0x01;
+pub const USB_EP_ATTR_BULK: u8 = 0x02;
+pub const USB_EP_ATTR_INTERRUPT: u8 = 0x03;
+
+/// Direction de transfert d'un point d'accès USB (Endpoint Direction)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum UsbEndpointDirection {
+    #[default]
+    Out = 0,
+    In = 1,
+}
+
+/// Type de transfert de point d'accès USB (Endpoint Transfer Type)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum UsbEndpointType {
+    #[default]
+    Control = 0,
+    Isochronous = 1,
+    Bulk = 2,
+    Interrupt = 3,
+}
+
+/// Descripteur de Configuration USB Standard (RFC USB 2.0 / USB 3.2 section 9.6.3)
+#[repr(C, packed)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UsbConfigurationDescriptor {
+    pub length: u8,
+    pub descriptor_type: u8,
+    pub total_length: u16,
+    pub num_interfaces: u8,
+    pub configuration_value: u8,
+    pub configuration_string: u8,
+    pub attributes: u8,
+    pub max_power: u8,
+}
+
+impl UsbConfigurationDescriptor {
+    #[inline]
+    pub fn is_valid(&self) -> bool {
+        self.length >= 9 && self.descriptor_type == USB_DESC_TYPE_CONFIGURATION
+    }
+
+    #[inline]
+    pub fn max_power_ma(&self) -> u16 {
+        (self.max_power as u16) * 2
+    }
+}
+
+/// Descripteur d'Interface USB Standard (Section 9.6.5)
+#[repr(C, packed)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UsbInterfaceDescriptor {
+    pub length: u8,
+    pub descriptor_type: u8,
+    pub interface_number: u8,
+    pub alternate_setting: u8,
+    pub num_endpoints: u8,
+    pub interface_class: u8,
+    pub interface_subclass: u8,
+    pub interface_protocol: u8,
+    pub interface_string: u8,
+}
+
+impl UsbInterfaceDescriptor {
+    #[inline]
+    pub fn is_valid(&self) -> bool {
+        self.length >= 9 && self.descriptor_type == USB_DESC_TYPE_INTERFACE
+    }
+}
+
+/// Descripteur de Point d'Accès Endpoint USB Standard (Section 9.6.6)
+#[repr(C, packed)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UsbEndpointDescriptor {
+    pub length: u8,
+    pub descriptor_type: u8,
+    pub endpoint_address: u8,
+    pub attributes: u8,
+    pub max_packet_size: u16,
+    pub interval: u8,
+}
+
+impl UsbEndpointDescriptor {
+    #[inline]
+    pub fn is_valid(&self) -> bool {
+        self.length >= 7 && self.descriptor_type == USB_DESC_TYPE_ENDPOINT
+    }
+
+    #[inline]
+    pub fn endpoint_number(&self) -> u8 {
+        self.endpoint_address & 0x0F
+    }
+
+    #[inline]
+    pub fn direction(&self) -> UsbEndpointDirection {
+        if (self.endpoint_address & USB_EP_DIR_MASK) != 0 {
+            UsbEndpointDirection::In
+        } else {
+            UsbEndpointDirection::Out
+        }
+    }
+
+    #[inline]
+    pub fn transfer_type(&self) -> UsbEndpointType {
+        match self.attributes & USB_EP_ATTR_TYPE_MASK {
+            USB_EP_ATTR_CONTROL => UsbEndpointType::Control,
+            USB_EP_ATTR_ISOCHRONOUS => UsbEndpointType::Isochronous,
+            USB_EP_ATTR_BULK => UsbEndpointType::Bulk,
+            USB_EP_ATTR_INTERRUPT => UsbEndpointType::Interrupt,
+            _ => UsbEndpointType::Control,
+        }
+    }
+
+    #[inline]
+    pub fn packet_size(&self) -> u16 {
+        self.max_packet_size & 0x07FF
+    }
+
+    #[inline]
+    pub fn mult(&self) -> u8 {
+        ((self.max_packet_size >> 11) & 0x03) as u8
+    }
+
+    #[inline]
+    pub fn is_bulk(&self) -> bool {
+        self.transfer_type() == UsbEndpointType::Bulk
+    }
+
+    #[inline]
+    pub fn is_isochronous(&self) -> bool {
+        self.transfer_type() == UsbEndpointType::Isochronous
+    }
+}
+
+/// Descripteur SuperSpeed Endpoint Companion (USB 3.0 section 9.6.7)
+#[repr(C, packed)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UsbSsEndpointCompanionDescriptor {
+    pub length: u8,
+    pub descriptor_type: u8,
+    pub max_burst: u8,
+    pub attributes: u8,
+    pub bytes_per_interval: u16,
+}
+
+impl UsbSsEndpointCompanionDescriptor {
+    #[inline]
+    pub fn is_valid(&self) -> bool {
+        self.length >= 6 && self.descriptor_type == USB_DESC_TYPE_SS_ENDPOINT_COMPANION
+    }
+
+    #[inline]
+    pub fn max_streams(&self) -> u8 {
+        let raw = self.attributes & 0x1F;
+        if raw > 0 {
+            1 << raw
+        } else {
+            0
+        }
+    }
+
+    #[inline]
+    pub fn mult(&self) -> u8 {
+        (self.attributes & 0x03) + 1
+    }
+}
+
+/// Point d'accès USB décodé avec sémantique xHCI (Device Context Index calculé)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct UsbDecodedEndpoint {
+    pub endpoint_address: u8,
+    pub ep_number: u8,
+    pub direction: UsbEndpointDirection,
+    pub ep_type: UsbEndpointType,
+    pub max_packet_size: u16,
+    pub interval: u8,
+    pub mult: u8,
+    pub max_burst: u8,
+    pub max_streams: u8,
+    pub dci: u8,
+}
+
+impl UsbDecodedEndpoint {
+    #[inline]
+    pub fn is_bulk(&self) -> bool {
+        self.ep_type == UsbEndpointType::Bulk
+    }
+
+    #[inline]
+    pub fn is_isochronous(&self) -> bool {
+        self.ep_type == UsbEndpointType::Isochronous
+    }
+
+    #[inline]
+    pub fn is_in(&self) -> bool {
+        self.direction == UsbEndpointDirection::In
+    }
+
+    #[inline]
+    pub fn is_out(&self) -> bool {
+        self.direction == UsbEndpointDirection::Out
+    }
+}
+
+/// Interface USB décodée contenant ses endpoints associés
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct UsbDecodedInterface {
+    pub interface_number: u8,
+    pub alternate_setting: u8,
+    pub class: u8,
+    pub subclass: u8,
+    pub protocol: u8,
+    pub endpoints: [UsbDecodedEndpoint; 8],
+    pub endpoint_count: usize,
+}
+
+/// Configuration USB décodée avec arbre d'interfaces et d'endpoints
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct UsbDecodedConfiguration {
+    pub configuration_value: u8,
+    pub attributes: u8,
+    pub max_power_ma: u16,
+    pub interfaces: [UsbDecodedInterface; 4],
+    pub interface_count: usize,
+}
+
+impl UsbDecodedConfiguration {
+    pub fn total_endpoints(&self) -> usize {
+        let mut count = 0;
+        for iface in &self.interfaces[..self.interface_count] {
+            count += iface.endpoint_count;
+        }
+        count
+    }
+
+    /// Recherche la paire de points d'accès Bulk (Bulk IN, Bulk OUT)
+    pub fn find_bulk_endpoints(&self) -> (Option<UsbDecodedEndpoint>, Option<UsbDecodedEndpoint>) {
+        let mut bulk_in = None;
+        let mut bulk_out = None;
+
+        for iface in &self.interfaces[..self.interface_count] {
+            for ep in &iface.endpoints[..iface.endpoint_count] {
+                if ep.is_bulk() {
+                    if ep.is_in() && bulk_in.is_none() {
+                        bulk_in = Some(*ep);
+                    } else if ep.is_out() && bulk_out.is_none() {
+                        bulk_out = Some(*ep);
+                    }
+                }
+            }
+        }
+        (bulk_in, bulk_out)
+    }
+
+    /// Extrait les points d'accès Isochronous de la configuration
+    pub fn find_isochronous_endpoints(&self, out: &mut [UsbDecodedEndpoint; 4]) -> usize {
+        let mut count = 0;
+        for iface in &self.interfaces[..self.interface_count] {
+            for ep in &iface.endpoints[..iface.endpoint_count] {
+                if ep.is_isochronous() && count < out.len() {
+                    out[count] = *ep;
+                    count += 1;
+                }
+            }
+        }
+        count
+    }
+}
+
+/// Décodeur et analyseur de descripteurs de configuration USB sans allocation sur le tas
+pub struct UsbConfigParser;
+
+impl UsbConfigParser {
+    /// Analyse un flux d'octets de descripteur de configuration USB complet (Configuration + Interfaces + Endpoints)
+    pub fn parse_configuration(bytes: &[u8]) -> Result<UsbDecodedConfiguration, SysError> {
+        if bytes.len() < 9 {
+            return Err(SysError::InvalidArgument);
+        }
+
+        let config_len = bytes[0] as usize;
+        let config_type = bytes[1];
+        if config_len < 9 || config_type != USB_DESC_TYPE_CONFIGURATION {
+            return Err(SysError::InvalidArgument);
+        }
+
+        let total_length = u16::from_le_bytes([bytes[2], bytes[3]]) as usize;
+        if total_length < 9 || total_length > bytes.len() {
+            return Err(SysError::InvalidArgument);
+        }
+
+        let mut decoded = UsbDecodedConfiguration {
+            configuration_value: bytes[5],
+            attributes: bytes[7],
+            max_power_ma: (bytes[8] as u16) * 2,
+            interfaces: [UsbDecodedInterface::default(); 4],
+            interface_count: 0,
+        };
+
+        let mut pos = config_len;
+        let mut current_iface_idx: Option<usize> = None;
+        let mut current_ep_idx: Option<usize> = None;
+
+        while pos < total_length {
+            if pos + 2 > total_length {
+                break;
+            }
+            let desc_len = bytes[pos] as usize;
+            let desc_type = bytes[pos + 1];
+
+            if desc_len < 2 || pos + desc_len > total_length {
+                return Err(SysError::InvalidArgument);
+            }
+
+            let desc_slice = &bytes[pos..pos + desc_len];
+
+            match desc_type {
+                USB_DESC_TYPE_INTERFACE => {
+                    if desc_len >= 9 && decoded.interface_count < decoded.interfaces.len() {
+                        let idx = decoded.interface_count;
+                        decoded.interfaces[idx] = UsbDecodedInterface {
+                            interface_number: desc_slice[2],
+                            alternate_setting: desc_slice[3],
+                            class: desc_slice[5],
+                            subclass: desc_slice[6],
+                            protocol: desc_slice[7],
+                            endpoints: [UsbDecodedEndpoint::default(); 8],
+                            endpoint_count: 0,
+                        };
+                        decoded.interface_count += 1;
+                        current_iface_idx = Some(idx);
+                        current_ep_idx = None;
+                    }
+                }
+                USB_DESC_TYPE_ENDPOINT => {
+                    if desc_len >= 7 {
+                        if let Some(iface_idx) = current_iface_idx {
+                            let iface = &mut decoded.interfaces[iface_idx];
+                            if iface.endpoint_count < iface.endpoints.len() {
+                                let ep_idx = iface.endpoint_count;
+                                let ep_addr = desc_slice[2];
+                                let ep_num = ep_addr & 0x0F;
+                                let is_in = (ep_addr & USB_EP_DIR_MASK) != 0;
+                                let raw_type = desc_slice[3] & USB_EP_ATTR_TYPE_MASK;
+                                let ep_type = match raw_type {
+                                    USB_EP_ATTR_CONTROL => UsbEndpointType::Control,
+                                    USB_EP_ATTR_ISOCHRONOUS => UsbEndpointType::Isochronous,
+                                    USB_EP_ATTR_BULK => UsbEndpointType::Bulk,
+                                    USB_EP_ATTR_INTERRUPT => UsbEndpointType::Interrupt,
+                                    _ => UsbEndpointType::Control,
+                                };
+                                let max_pkt_raw =
+                                    u16::from_le_bytes([desc_slice[4], desc_slice[5]]);
+                                let pkt_size = max_pkt_raw & 0x07FF;
+                                let mult = ((max_pkt_raw >> 11) & 0x03) as u8;
+                                let interval = desc_slice[6];
+                                // Calcul du Device Context Index xHCI (DCI = 2 * ep_num + if IN 1 else 0)
+                                let dci = (ep_num * 2) + if is_in { 1 } else { 0 };
+
+                                iface.endpoints[ep_idx] = UsbDecodedEndpoint {
+                                    endpoint_address: ep_addr,
+                                    ep_number: ep_num,
+                                    direction: if is_in {
+                                        UsbEndpointDirection::In
+                                    } else {
+                                        UsbEndpointDirection::Out
+                                    },
+                                    ep_type,
+                                    max_packet_size: pkt_size,
+                                    interval,
+                                    mult,
+                                    max_burst: 0,
+                                    max_streams: 0,
+                                    dci,
+                                };
+                                iface.endpoint_count += 1;
+                                current_ep_idx = Some(ep_idx);
+                            }
+                        }
+                    }
+                }
+                USB_DESC_TYPE_SS_ENDPOINT_COMPANION if desc_len >= 6 => {
+                    if let (Some(iface_idx), Some(ep_idx)) = (current_iface_idx, current_ep_idx) {
+                        let ep = &mut decoded.interfaces[iface_idx].endpoints[ep_idx];
+                        let burst = desc_slice[2];
+                        let attr = desc_slice[3];
+                        ep.max_burst = burst;
+                        if ep.is_bulk() {
+                            let stream_shift = attr & 0x1F;
+                            if stream_shift > 0 {
+                                ep.max_streams = 1 << stream_shift;
+                            }
+                        } else if ep.is_isochronous() {
+                            ep.mult = (attr & 0x03) + 1;
+                        }
+                    }
+                }
+                _ => {}
+            }
+
+            pos += desc_len;
+        }
+
+        Ok(decoded)
+    }
+}
+
+// ============================================================================
 // USB Mass Storage Bulk-Only Transport (BOT) & Commandes SCSI Transparentes
 // ============================================================================
 
@@ -1232,6 +1655,28 @@ impl XhciController {
         ep.is_isoch = is_isoch;
         ep.active = true;
         Ok(())
+    }
+
+    /// Configure automatiquement les Transfer Rings des endpoints Bulk et Isochrone
+    /// à partir d'une configuration USB décodée par UsbConfigParser.
+    /// Retourne le nombre d'anneaux de transfert configurés.
+    pub fn configure_endpoints_from_decoded_config(
+        &mut self,
+        config: &UsbDecodedConfiguration,
+    ) -> Result<usize, SysError> {
+        let mut configured = 0;
+        for iface in &config.interfaces[..config.interface_count] {
+            for ep in &iface.endpoints[..iface.endpoint_count] {
+                if ep.is_bulk() || ep.is_isochronous() {
+                    let ep_id = ep.dci;
+                    if (ep_id as usize) < MAX_ENDPOINTS {
+                        self.configure_endpoint_ring(ep_id, ep.is_isochronous())?;
+                        configured += 1;
+                    }
+                }
+            }
+        }
+        Ok(configured)
     }
 
     /// Soumet un transfert Bulk USB 3.0 (TRB Normal) sur l'anneau de transfert de l'endpoint.
@@ -2353,5 +2798,94 @@ mod tests {
             .submit_bot_csw(&bot, 0x3000_0000, true)
             .expect("csw submit");
         assert_eq!(csw_idx, 1); // 2nd TRB on Bulk IN
+    }
+
+    #[test]
+    fn test_usb_config_descriptor_parsing_bulk_and_isoch() {
+        // Blob binaire conforme USB 3.0 / USB 2.0 (54 octets au total)
+        // [0..9]   Configuration Descriptor (total_length = 54, 2 interfaces)
+        // [9..18]  Interface 0 Descriptor (Mass Storage BOT, 2 endpoints)
+        // [18..25] Endpoint 1 Bulk OUT (addr 0x02, attr 0x02, max_packet 512)
+        // [25..32] Endpoint 1 Bulk IN  (addr 0x81, attr 0x02, max_packet 512)
+        // [32..41] Interface 1 Descriptor (Streaming Isochronous, 1 endpoint)
+        // [41..48] Endpoint 2 Isochronous IN (addr 0x82, attr 0x01, max_packet 1024, interval 1)
+        // [48..54] SuperSpeed Endpoint Companion (burst 3, mult 2)
+        let config_raw: [u8; 54] = [
+            // Configuration Descriptor (9 bytes)
+            0x09, 0x02, 54, 0x00, 0x02, 0x01, 0x00, 0xC0,
+            0x32, // Interface 0 (Mass Storage, 9 bytes)
+            0x09, 0x04, 0x00, 0x00, 0x02, 0x08, 0x06, 0x50, 0x00,
+            // Endpoint 2 Bulk OUT (7 bytes, addr 0x02)
+            0x07, 0x05, 0x02, 0x02, 0x00, 0x02, 0x00,
+            // Endpoint 1 Bulk IN (7 bytes, addr 0x81)
+            0x07, 0x05, 0x81, 0x02, 0x00, 0x02, 0x00, // Interface 1 (Streaming, 9 bytes)
+            0x09, 0x04, 0x01, 0x00, 0x01, 0x01, 0x02, 0x00, 0x00,
+            // Endpoint 2 Isochronous IN (7 bytes, addr 0x82)
+            0x07, 0x05, 0x82, 0x01, 0x00, 0x04, 0x01,
+            // SuperSpeed Companion (6 bytes, max_burst = 3, attr = 1 => mult 2)
+            0x06, 0x30, 0x03, 0x01, 0x00, 0x0C,
+        ];
+
+        let parsed = UsbConfigParser::parse_configuration(&config_raw)
+            .expect("Parsing configuration valide");
+        assert_eq!(parsed.configuration_value, 1);
+        assert_eq!(parsed.max_power_ma, 100);
+        assert_eq!(parsed.interface_count, 2);
+        assert_eq!(parsed.total_endpoints(), 3);
+
+        // Vérification Interface 0 (Mass Storage Bulk)
+        let iface0 = &parsed.interfaces[0];
+        assert_eq!(iface0.class, 0x08);
+        assert_eq!(iface0.endpoint_count, 2);
+
+        let (bulk_in, bulk_out) = parsed.find_bulk_endpoints();
+        assert!(bulk_in.is_some());
+        assert!(bulk_out.is_some());
+        let b_in = bulk_in.unwrap();
+        let b_out = bulk_out.unwrap();
+        assert_eq!(b_in.endpoint_address, 0x81);
+        assert_eq!(b_in.dci, 3); // DCI = 1*2 + 1 = 3
+        assert!(b_in.is_bulk());
+        assert!(b_in.is_in());
+        assert_eq!(b_in.max_packet_size, 512);
+
+        assert_eq!(b_out.endpoint_address, 0x02);
+        assert_eq!(b_out.dci, 4); // DCI = 2*2 + 0 = 4
+        assert!(b_out.is_bulk());
+        assert!(b_out.is_out());
+        assert_eq!(b_out.max_packet_size, 512);
+
+        // Vérification Interface 1 (Isochronous Streaming)
+        let mut isoch_eps = [UsbDecodedEndpoint::default(); 4];
+        let isoch_count = parsed.find_isochronous_endpoints(&mut isoch_eps);
+        assert_eq!(isoch_count, 1);
+        let iso_ep = isoch_eps[0];
+        assert_eq!(iso_ep.endpoint_address, 0x82);
+        assert_eq!(iso_ep.dci, 5); // DCI = 2*2 + 1 = 5
+        assert!(iso_ep.is_isochronous());
+        assert!(iso_ep.is_in());
+        assert_eq!(iso_ep.max_packet_size, 1024);
+        assert_eq!(iso_ep.max_burst, 3);
+        assert_eq!(iso_ep.mult, 2);
+
+        // Test configuration xHCI automatique
+        let mut ctrl = XhciController::new();
+        ctrl.ready = true;
+        let configured = ctrl
+            .configure_endpoints_from_decoded_config(&parsed)
+            .expect("Config controllers endpoints");
+        assert_eq!(configured, 3);
+        assert!(ctrl.ep_rings[3].active && !ctrl.ep_rings[3].is_isoch); // Bulk IN DCI 3
+        assert!(ctrl.ep_rings[4].active && !ctrl.ep_rings[4].is_isoch); // Bulk OUT DCI 4
+        assert!(ctrl.ep_rings[5].active && ctrl.ep_rings[5].is_isoch); // Isoch IN DCI 5
+
+        // Test rejet de descripteur tronqué
+        let truncated = &config_raw[..20];
+        assert!(UsbConfigParser::parse_configuration(truncated).is_err());
+
+        // Test rejet de descripteur corrompu (longueur déclarée impossible)
+        let mut corrupted = config_raw;
+        corrupted[18] = 0; // desc_len = 0
+        assert!(UsbConfigParser::parse_configuration(&corrupted).is_err());
     }
 }

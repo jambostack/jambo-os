@@ -296,6 +296,7 @@ pub enum FsError {
     CorruptedData,
     WriteConflict { expected_gen: u64, actual_gen: u64 },
     TransactionAborted,
+    ReadOnlyFileSystem,
 }
 
 /// État d'une transaction Copy-on-Write (CoW)
@@ -1175,10 +1176,12 @@ pub struct SnapshotDescriptor {
     pub snapshot_id: u64,
     pub generation: u64,
     pub root_tree_offset: u64,
+    pub isolated_tree_root: u64,
     pub root_checksum: [u8; 32],
     pub name: [u8; MAX_SNAPSHOT_NAME_LEN],
     pub name_len: usize,
     pub created_timestamp: u64,
+    pub is_read_only: bool,
     pub active: bool,
 }
 
@@ -1188,10 +1191,12 @@ impl Default for SnapshotDescriptor {
             snapshot_id: 0,
             generation: 0,
             root_tree_offset: 0,
+            isolated_tree_root: 0,
             root_checksum: [0u8; 32],
             name: [0u8; MAX_SNAPSHOT_NAME_LEN],
             name_len: 0,
             created_timestamp: 0,
+            is_read_only: true,
             active: false,
         }
     }
@@ -1200,6 +1205,98 @@ impl Default for SnapshotDescriptor {
 impl SnapshotDescriptor {
     pub fn name_str(&self) -> &str {
         core::str::from_utf8(&self.name[..self.name_len]).unwrap_or("")
+    }
+
+    /// Convertit ce descripteur en vue immuable scellée en lecture seule
+    pub fn to_readonly_view(&self) -> ReadOnlySnapshotView {
+        ReadOnlySnapshotView {
+            snapshot_id: self.snapshot_id,
+            generation: self.generation,
+            root_tree_offset: self.root_tree_offset,
+            isolated_tree_root: if self.isolated_tree_root > 0 {
+                self.isolated_tree_root
+            } else {
+                self.root_tree_offset
+            },
+            root_checksum: self.root_checksum,
+            name: self.name,
+            name_len: self.name_len,
+            created_timestamp: self.created_timestamp,
+            is_read_only: true,
+        }
+    }
+}
+
+/// Vue d'un instantané snapshot JamboFS scellé en lecture seule avec racine B-Tree isolée
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReadOnlySnapshotView {
+    pub snapshot_id: u64,
+    pub generation: u64,
+    pub root_tree_offset: u64,
+    pub isolated_tree_root: u64,
+    pub root_checksum: [u8; 32],
+    pub name: [u8; MAX_SNAPSHOT_NAME_LEN],
+    pub name_len: usize,
+    pub created_timestamp: u64,
+    pub is_read_only: bool,
+}
+
+impl ReadOnlySnapshotView {
+    pub fn name_str(&self) -> &str {
+        core::str::from_utf8(&self.name[..self.name_len]).unwrap_or("")
+    }
+
+    #[inline]
+    pub fn is_read_only(&self) -> bool {
+        true
+    }
+
+    /// Retourne l'offset physique de la racine B-Tree isolée de ce snapshot
+    #[inline]
+    pub fn root_offset(&self) -> u64 {
+        if self.isolated_tree_root > 0 {
+            self.isolated_tree_root
+        } else {
+            self.root_tree_offset
+        }
+    }
+
+    /// Vérifie l'intégrité cryptographique Merkle de la racine isolée du snapshot
+    pub fn verify_integrity(&self, client: &BlockClient) -> Result<bool, FsError> {
+        let root_lba = self.root_offset();
+        let mut buf = [0u8; BLOCK_SIZE];
+        client
+            .read_block(root_lba, &mut buf)
+            .map_err(FsError::BlockIoError)?;
+        let checksum = blake3_block_hash(&buf);
+        Ok(checksum == self.root_checksum)
+    }
+
+    /// Lecture d'un bloc de données à travers la vue immuable du snapshot
+    pub fn read_block(
+        &self,
+        client: &BlockClient,
+        block_lba: u64,
+        buf: &mut [u8; BLOCK_SIZE],
+    ) -> Result<(), FsError> {
+        client
+            .read_block(block_lba, buf)
+            .map_err(FsError::BlockIoError)
+    }
+
+    /// Tentative d'écriture interdite sur snapshot en lecture seule (EROFS)
+    pub fn write_block(
+        &self,
+        _client: &BlockClient,
+        _block_lba: u64,
+        _buf: &[u8; BLOCK_SIZE],
+    ) -> Result<(), FsError> {
+        Err(FsError::ReadOnlyFileSystem)
+    }
+
+    /// Tentative d'allocation interdite sur snapshot en lecture seule (EROFS)
+    pub fn allocate_block(&self) -> Result<u64, FsError> {
+        Err(FsError::ReadOnlyFileSystem)
     }
 }
 
@@ -1224,10 +1321,12 @@ impl SnapshotTable {
                 snapshot_id: 0,
                 generation: 0,
                 root_tree_offset: 0,
+                isolated_tree_root: 0,
                 root_checksum: [0u8; 32],
                 name: [0u8; MAX_SNAPSHOT_NAME_LEN],
                 name_len: 0,
                 created_timestamp: 0,
+                is_read_only: true,
                 active: false,
             }; MAX_SNAPSHOTS],
             next_snapshot_id: 1,
@@ -1261,6 +1360,46 @@ impl SnapshotTable {
                 entry.active = true;
                 self.snapshot_count += 1;
                 return Ok(id);
+            }
+        }
+
+        Err(FsError::BufferTooSmall)
+    }
+
+    /// Enregistre un nouvel instant snapshot avec dérivation de racine B-Tree isolée
+    pub fn create_isolated_snapshot(
+        &mut self,
+        name: &str,
+        uberblock: &Uberblock,
+        isolated_root: u64,
+        isolated_checksum: [u8; 32],
+    ) -> Result<ReadOnlySnapshotView, FsError> {
+        let name_bytes = name.as_bytes();
+        let len = name_bytes.len().min(MAX_SNAPSHOT_NAME_LEN);
+
+        for entry in self.entries.iter() {
+            if entry.active && entry.name_str() == name {
+                return Err(FsError::BufferTooSmall);
+            }
+        }
+
+        for entry in self.entries.iter_mut() {
+            if !entry.active {
+                let id = self.next_snapshot_id;
+                self.next_snapshot_id += 1;
+                entry.snapshot_id = id;
+                entry.generation = uberblock.generation;
+                entry.root_tree_offset = uberblock.root_tree_offset;
+                entry.isolated_tree_root = isolated_root;
+                entry.root_checksum = isolated_checksum;
+                entry.name = [0u8; MAX_SNAPSHOT_NAME_LEN];
+                entry.name[..len].copy_from_slice(&name_bytes[..len]);
+                entry.name_len = len;
+                entry.created_timestamp = uberblock.timestamp;
+                entry.is_read_only = true;
+                entry.active = true;
+                self.snapshot_count += 1;
+                return Ok(entry.to_readonly_view());
             }
         }
 
@@ -2273,6 +2412,67 @@ impl JamboFs {
     pub fn create_snapshot(&mut self, name: &str) -> Result<u64, FsError> {
         self.snapshot_table
             .create_snapshot(name, &self.active_uberblock)
+    }
+
+    /// Crée un instantané snapshot read-only avec dérivation de racine B-Tree isolée
+    pub fn create_isolated_snapshot(
+        &mut self,
+        name: &str,
+    ) -> Result<ReadOnlySnapshotView, FsError> {
+        // 1. Alloue un bloc physique libre pour la racine B-Tree isolée du snapshot
+        let isolated_root_lba = self.allocate_cow_block()?;
+
+        // 2. Lit la racine B-Tree courante et la copie dans le bloc isolé
+        let current_root_lba = if self.root_offset > 0 {
+            self.root_offset
+        } else {
+            self.active_uberblock.root_tree_offset
+        };
+        let mut root_buf = [0u8; BLOCK_SIZE];
+        self.client
+            .read_block(current_root_lba, &mut root_buf)
+            .map_err(FsError::BlockIoError)?;
+
+        // 3. Calcule l'empreinte cryptographique de la racine isolée
+        let isolated_checksum = blake3_block_hash(&root_buf);
+
+        // 4. Persiste la racine B-Tree dérivée isolée sur le support matériel
+        self.client
+            .write_block(isolated_root_lba, &root_buf)
+            .map_err(FsError::BlockIoError)?;
+        self.client.flush().map_err(FsError::BlockIoError)?;
+
+        // 5. Enregistre le snapshot avec racine isolée dans la table des snapshots
+        let view = self.snapshot_table.create_isolated_snapshot(
+            name,
+            &self.active_uberblock,
+            isolated_root_lba,
+            isolated_checksum,
+        )?;
+
+        // 6. Synchronise l'état global du système
+        self.sync()?;
+
+        Ok(view)
+    }
+
+    /// Ouvre un instantané snapshot en lecture seule par son identifiant
+    pub fn open_snapshot_readonly(&self, id: u64) -> Result<ReadOnlySnapshotView, FsError> {
+        match self.snapshot_table.find_by_id(id) {
+            Some(entry) => Ok(entry.to_readonly_view()),
+            None => Err(FsError::FileNotFound),
+        }
+    }
+
+    /// Ouvre un instantané snapshot en lecture seule par son nom
+    pub fn open_snapshot_readonly_by_name(
+        &self,
+        name: &str,
+    ) -> Result<ReadOnlySnapshotView, FsError> {
+        match self.snapshot_table.find_by_name(name) {
+            Some(entry) => Ok(entry.to_readonly_view()),
+            None => Err(FsError::FileNotFound),
+        }
     }
 
     /// Supprime un snapshot existant par son identifiant
@@ -3435,5 +3635,80 @@ mod tests {
         assert_eq!(ctx_abort.state, TransactionState::Aborted);
         let res_aborted = fs.write_file_transactional(&mut ctx_abort, "abort.txt", b"data");
         assert_eq!(res_aborted, Err(FsError::TransactionAborted));
+    }
+
+    #[test]
+    fn test_readonly_snapshot_isolated_btree() {
+        let dummy_client = BlockClient {
+            channel: libjambo::Handle(0),
+            vmo_ptr: core::ptr::null_mut(),
+        };
+        let mut fs = JamboFs::new_fallback(dummy_client);
+
+        // 1. Écriture initiale dans le système de fichiers actif
+        let initial_data = b"CONFIGURATION_SYSTEME_RACINE_SECURISEE_v1";
+        fs.write_file("system.conf", initial_data)
+            .expect("Écriture initiale");
+        let initial_gen = fs.active_uberblock.generation;
+        let initial_root = fs.active_uberblock.root_tree_offset;
+
+        // 2. Dérivation d'un instantané snapshot avec racine B-Tree isolée
+        let snap_view = fs
+            .create_isolated_snapshot("snap_golden_master")
+            .expect("Création snapshot isolé");
+        assert!(snap_view.is_read_only());
+        assert_eq!(snap_view.name_str(), "snap_golden_master");
+        assert_eq!(snap_view.generation, initial_gen);
+        assert_eq!(snap_view.root_tree_offset, initial_root);
+        assert!(snap_view.isolated_tree_root > 0);
+        assert_ne!(snap_view.isolated_tree_root, initial_root);
+
+        // 3. Vérification d'intégrité Merkle de la racine isolée
+        let integrity = snap_view
+            .verify_integrity(&fs.client)
+            .expect("Intégrité cryptographique vérifiée");
+        assert!(integrity);
+
+        // 4. Inviolabilité de la lecture seule (EROFS sur toute tentative de mutation)
+        let mut dummy_buf = [0u8; BLOCK_SIZE];
+        let write_attempt = snap_view.write_block(&fs.client, 100, &dummy_buf);
+        assert_eq!(write_attempt, Err(FsError::ReadOnlyFileSystem));
+
+        let alloc_attempt = snap_view.allocate_block();
+        assert_eq!(alloc_attempt, Err(FsError::ReadOnlyFileSystem));
+
+        // 5. Lecture autorisée à travers la vue snapshot
+        let read_res =
+            snap_view.read_block(&fs.client, snap_view.isolated_tree_root, &mut dummy_buf);
+        assert!(read_res.is_ok());
+
+        // 6. Écriture ultérieure sur l'arbre actif (mutation CoW / progression de génération)
+        fs.write_file("system.conf", b"MODIFICATION_POST_SNAPSHOT_v2")
+            .expect("Écriture ultérieure");
+        assert!(fs.active_uberblock.generation > initial_gen);
+
+        // 7. Isolation garantie : l'intégrité de la racine isolée du snapshot reste inviolée
+        let integrity_post = snap_view
+            .verify_integrity(&fs.client)
+            .expect("Intégrité persistante post-mutation");
+        assert!(integrity_post);
+
+        // 8. Recherche et réouverture du snapshot en lecture seule par ID et par nom
+        let opened_by_id = fs
+            .open_snapshot_readonly(snap_view.snapshot_id)
+            .expect("Ouverture snapshot par ID");
+        assert_eq!(opened_by_id.snapshot_id, snap_view.snapshot_id);
+        assert_eq!(
+            opened_by_id.isolated_tree_root,
+            snap_view.isolated_tree_root
+        );
+
+        let opened_by_name = fs
+            .open_snapshot_readonly_by_name("snap_golden_master")
+            .expect("Ouverture snapshot par nom");
+        assert_eq!(opened_by_name.snapshot_id, snap_view.snapshot_id);
+
+        let not_found = fs.open_snapshot_readonly(9999);
+        assert_eq!(not_found, Err(FsError::FileNotFound));
     }
 }

@@ -559,6 +559,7 @@ impl JamboShell {
             "vfs" => self.cmd_vfs(out),
             "uname" | "/bin/uname" | "bin/uname" => self.cmd_uname(args, out),
             "cut" | "/bin/cut" | "bin/cut" => self.cmd_cut(args, out),
+            "paste" | "/bin/paste" | "bin/paste" => self.cmd_paste(args, out),
             "version" => self.cmd_version(out),
             "uptime" => self.cmd_uptime(out),
             "caps" => self.cmd_caps(out),
@@ -713,7 +714,7 @@ impl JamboShell {
 
     fn cmd_coreutils(&self, out: &mut [u8]) -> (ShellStatus, usize) {
         let text = b"Utilitaires Coreutils Ring 3 (services/jambo-coreutils) :\n\
-  Binaires disponibles : /bin/echo, /bin/cat, /bin/head, /bin/tail, /bin/touch, /bin/mkdir, /bin/rm, /bin/cp, /bin/mv, /bin/tee, /bin/env, /bin/grep, /bin/sort, /bin/uniq, /bin/find, /bin/chmod, /bin/chown, /bin/id, /bin/du, /bin/df, /bin/uname, /bin/cut, /bin/wc, /bin/true, /bin/false, /bin/ls (26 utilitaires)\n\
+  Binaires disponibles : /bin/echo, /bin/cat, /bin/head, /bin/tail, /bin/touch, /bin/mkdir, /bin/rm, /bin/cp, /bin/mv, /bin/tee, /bin/env, /bin/grep, /bin/sort, /bin/uniq, /bin/find, /bin/chmod, /bin/chown, /bin/id, /bin/du, /bin/df, /bin/uname, /bin/cut, /bin/paste, /bin/wc, /bin/true, /bin/false, /bin/ls (27 utilitaires)\n\
   Architecture & ABI   : System V AMD64 ELF64 (ET_EXEC / Ring 3 Userland)\n\
   Point d'entree       : _start (parsing argc/argv sur pile System V)\n\
   Terminaison          : Syscall 11 ThreadExit avec propagation code de retour POSIX\n\
@@ -1097,6 +1098,26 @@ Utilitaire d'installation JamboOS (Serie 0.*.*)\n\
             }
         } else {
             let msg = b"cut: pipe creation failed\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
+    }
+
+    fn cmd_paste(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if let Ok((r, w)) = libjambo::vfs::pipe() {
+            let code = libjambo::coreutils::run_paste(args, 0, w, w);
+            let _ = libjambo::coreutils::sys_close(w);
+            let n = libjambo::coreutils::sys_read(r, out);
+            let _ = libjambo::coreutils::sys_close(r);
+            let len = if n > 0 { n as usize } else { 0 };
+            if code == 0 {
+                (ShellStatus::Success, len)
+            } else {
+                (ShellStatus::ExecutionFailed, len)
+            }
+        } else {
+            let msg = b"paste: pipe creation failed\n";
             let len = msg.len().min(out.len());
             out[..len].copy_from_slice(&msg[..len]);
             (ShellStatus::ExecutionFailed, len)
@@ -17121,8 +17142,9 @@ mod tests {
         let (st, len) = shell.execute_line("coreutils", &mut out);
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
-        assert!(s.contains("26 utilitaires"));
+        assert!(s.contains("27 utilitaires"));
         assert!(s.contains("/bin/cut"));
+        assert!(s.contains("/bin/paste"));
         assert!(s.contains("/bin/uname"));
         assert!(s.contains("/bin/head"));
         assert!(s.contains("/bin/tail"));
@@ -17477,5 +17499,47 @@ mod tests {
         assert_eq!(st_err, ShellStatus::ExecutionFailed);
 
         let _ = libjambo::coreutils::sys_unlink_pool(test_path);
+    }
+
+    #[test]
+    fn test_paste_shell_execution() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 1024];
+
+        let path1 = "/tmp/sh_paste1.txt";
+        let path2 = "/tmp/sh_paste2.txt";
+
+        let fd1 =
+            libjambo::coreutils::sys_open(path1, libjambo::vfs::O_CREAT | libjambo::vfs::O_WRONLY);
+        assert!(fd1 >= 0);
+        let _ = libjambo::coreutils::sys_write(fd1, b"alpha\nbeta\n");
+        libjambo::coreutils::sys_close(fd1);
+
+        let fd2 =
+            libjambo::coreutils::sys_open(path2, libjambo::vfs::O_CREAT | libjambo::vfs::O_WRONLY);
+        assert!(fd2 >= 0);
+        let _ = libjambo::coreutils::sys_write(fd2, b"10\n20\n");
+        libjambo::coreutils::sys_close(fd2);
+
+        // 1. Exécution via commande interne paste
+        let (st, len) =
+            shell.execute_line("paste -d : /tmp/sh_paste1.txt /tmp/sh_paste2.txt", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("alpha:10\nbeta:20\n"));
+
+        // 2. Exécution via binaire /bin/paste et mode séquentiel
+        let (st_bin, len_bin) =
+            shell.execute_line("/bin/paste -s -d , /tmp/sh_paste1.txt", &mut out);
+        assert_eq!(st_bin, ShellStatus::Success);
+        let s_bin = core::str::from_utf8(&out[..len_bin]).unwrap();
+        assert!(s_bin.contains("alpha,beta\n"));
+
+        // 3. Option invalide -> ExecutionFailed
+        let (st_err, _) = shell.execute_line("paste --invalid-flag /tmp/sh_paste1.txt", &mut out);
+        assert_eq!(st_err, ShellStatus::ExecutionFailed);
+
+        let _ = libjambo::coreutils::sys_unlink_pool(path1);
+        let _ = libjambo::coreutils::sys_unlink_pool(path2);
     }
 }

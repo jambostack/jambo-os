@@ -1817,7 +1817,7 @@ mod tests {
             sq_head: 1,
             sq_id: 1,
             command_id: cid,
-            status: ((0x00) << 1) | (phase as u16),
+            status: phase as u16,
         };
 
         // Poll de complétion
