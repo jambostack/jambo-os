@@ -294,6 +294,75 @@ pub enum FsError {
     FileNotFound,
     BufferTooSmall,
     CorruptedData,
+    WriteConflict { expected_gen: u64, actual_gen: u64 },
+    TransactionAborted,
+}
+
+/// État d'une transaction Copy-on-Write (CoW)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransactionState {
+    Active,
+    Committed,
+    Collided,
+    Aborted,
+}
+
+/// Contexte d'une transaction Copy-on-Write isolée
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TransactionContext {
+    pub txid: u64,
+    pub base_generation: u64,
+    pub state: TransactionState,
+    pub attempt: u32,
+}
+
+/// Stratégie de reprise sur collision de transaction CoW (Exponential Backoff with Jitter)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WriteConflictBackoff {
+    pub min_backoff_us: u32,
+    pub max_backoff_us: u32,
+    pub max_retries: u32,
+    pub total_collisions: u64,
+    pub total_backoff_us: u64,
+}
+
+impl Default for WriteConflictBackoff {
+    fn default() -> Self {
+        Self::new(50, 10_000, 5)
+    }
+}
+
+impl WriteConflictBackoff {
+    pub const fn new(min_backoff_us: u32, max_backoff_us: u32, max_retries: u32) -> Self {
+        Self {
+            min_backoff_us,
+            max_backoff_us,
+            max_retries,
+            total_collisions: 0,
+            total_backoff_us: 0,
+        }
+    }
+
+    /// Calcule la durée d'attente exponentielle avec jitter pseudo-aléatoire
+    pub fn compute_backoff_us(&mut self, attempt: u32, jitter_seed: u64) -> u32 {
+        let shift = attempt.min(10);
+        let base = (self.min_backoff_us as u64).saturating_mul(1u64 << shift);
+        let capped = base.min(self.max_backoff_us as u64) as u32;
+
+        let jitter = if capped > 4 {
+            let lcg = jitter_seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1);
+            (lcg % ((capped / 4) as u64)) as u32
+        } else {
+            0
+        };
+
+        let total = capped.saturating_add(jitter);
+        self.total_collisions = self.total_collisions.saturating_add(1);
+        self.total_backoff_us = self.total_backoff_us.saturating_add(total as u64);
+        total
+    }
 }
 
 /// Uberblock racine JamboFS validé atomiquement
@@ -2496,6 +2565,99 @@ impl JamboFs {
         Ok(data.len())
     }
 
+    /// Démarre une transaction Copy-on-Write isolée en capturant la génération active courante
+    pub fn begin_cow_transaction(&mut self) -> TransactionContext {
+        self.bitmap.begin_transaction();
+        TransactionContext {
+            txid: self.active_uberblock.generation + 1,
+            base_generation: self.active_uberblock.generation,
+            state: TransactionState::Active,
+            attempt: 1,
+        }
+    }
+
+    /// Annule une transaction CoW en cours et libère les allocations préliminaires
+    pub fn abort_cow_transaction(&mut self, ctx: &mut TransactionContext) {
+        ctx.state = TransactionState::Aborted;
+        self.bitmap.rollback_transaction();
+    }
+
+    /// Exécute une écriture transactionnelle CoW avec détection automatique de collision (OCC)
+    pub fn write_file_transactional(
+        &mut self,
+        ctx: &mut TransactionContext,
+        path: &str,
+        data: &[u8],
+    ) -> Result<usize, FsError> {
+        if ctx.state != TransactionState::Active {
+            return Err(FsError::TransactionAborted);
+        }
+
+        // Détection de collision : la génération active a-t-elle avancé depuis l'ouverture ?
+        if self.active_uberblock.generation != ctx.base_generation {
+            ctx.state = TransactionState::Collided;
+            self.bitmap.rollback_transaction();
+            return Err(FsError::WriteConflict {
+                expected_gen: ctx.base_generation,
+                actual_gen: self.active_uberblock.generation,
+            });
+        }
+
+        let written = self.write_file(path, data)?;
+        ctx.state = TransactionState::Committed;
+        if self.bitmap.in_transaction {
+            let _ = self.bitmap.commit_transaction(
+                &self.client,
+                self.partition_base_lba,
+                self.geometry.sectors_per_4k_block(),
+            );
+        }
+        Ok(written)
+    }
+
+    /// Exécute une écriture CoW protégée avec stratégie de reprise automatique (Write Conflict Backoff)
+    pub fn write_file_with_backoff(
+        &mut self,
+        path: &str,
+        data: &[u8],
+        backoff: &mut WriteConflictBackoff,
+    ) -> Result<usize, FsError> {
+        let mut last_conflict = None;
+
+        for attempt in 0..=backoff.max_retries {
+            let mut ctx = self.begin_cow_transaction();
+            ctx.attempt = attempt + 1;
+
+            match self.write_file_transactional(&mut ctx, path, data) {
+                Ok(bytes) => return Ok(bytes),
+                Err(FsError::WriteConflict {
+                    expected_gen,
+                    actual_gen,
+                }) => {
+                    last_conflict = Some((expected_gen, actual_gen));
+                    if attempt == backoff.max_retries {
+                        break;
+                    }
+                    let seed = self.active_uberblock.timestamp.wrapping_add(attempt as u64);
+                    let delay_us = backoff.compute_backoff_us(attempt, seed);
+                    for _ in 0..(delay_us * 10) {
+                        core::hint::spin_loop();
+                    }
+                }
+                Err(e) => return Err(e),
+            }
+        }
+
+        if let Some((expected_gen, actual_gen)) = last_conflict {
+            Err(FsError::WriteConflict {
+                expected_gen,
+                actual_gen,
+            })
+        } else {
+            Err(FsError::TransactionAborted)
+        }
+    }
+
     /// Rejoue les intentions orphelines du journal WAL (Recovery suite à une coupure électrique)
     pub fn replay_intent_log(&mut self) -> Result<usize, FsError> {
         self.wal.replay_wal(
@@ -3202,5 +3364,76 @@ mod tests {
             .expect("read raw direct");
         assert!(!is_comp);
         assert_eq!(&read_direct[..], &uncompressed_raw[..]);
+    }
+
+    #[test]
+    fn test_cow_write_conflict_detection_and_backoff_recovery() {
+        let dummy_client = BlockClient {
+            channel: libjambo::Handle(0),
+            vmo_ptr: core::ptr::null_mut(),
+        };
+        let mut fs = JamboFs::new_fallback(dummy_client);
+        let initial_gen = fs.active_uberblock.generation;
+
+        // 1. Transaction CoW réussie sans collision
+        let mut ctx1 = fs.begin_cow_transaction();
+        assert_eq!(ctx1.state, TransactionState::Active);
+        assert_eq!(ctx1.base_generation, initial_gen);
+
+        let data1 = b"Transaction CoW #1 payload data";
+        let res1 = fs.write_file_transactional(&mut ctx1, "test_tx1.txt", data1);
+        assert!(res1.is_ok());
+        assert_eq!(ctx1.state, TransactionState::Committed);
+        let gen_after_t1 = fs.active_uberblock.generation;
+        assert_eq!(gen_after_t1, initial_gen + 1);
+
+        // 2. Détection de collision concurrente (OCC Conflict)
+        // Transaction T2 démarre avec la génération courante
+        let mut ctx2 = fs.begin_cow_transaction();
+        assert_eq!(ctx2.base_generation, gen_after_t1);
+
+        // Une écriture concurrente survient entre-temps (T3 commite)
+        let _ = fs.write_file("concurrent_write.txt", b"concurrent data");
+        let gen_concurrent = fs.active_uberblock.generation;
+        assert_eq!(gen_concurrent, gen_after_t1 + 1);
+
+        // T2 tente d'écrire : une collision doit être immédiatement interceptée
+        let res2 = fs.write_file_transactional(&mut ctx2, "test_tx2.txt", b"colliding data");
+        assert_eq!(
+            res2,
+            Err(FsError::WriteConflict {
+                expected_gen: gen_after_t1,
+                actual_gen: gen_concurrent,
+            })
+        );
+        assert_eq!(ctx2.state, TransactionState::Collided);
+        assert!(!fs.bitmap.in_transaction); // Le bitmap a été rollback
+
+        // 3. Modélisation de l'Exponential Backoff avec Jitter
+        let mut backoff = WriteConflictBackoff::new(50, 1000, 4);
+        let b0 = backoff.compute_backoff_us(0, 12345);
+        let b1 = backoff.compute_backoff_us(1, 12345);
+        let b2 = backoff.compute_backoff_us(2, 12345);
+        assert!(b0 >= 50);
+        assert!(b1 >= 100);
+        assert!(b2 >= 200);
+        assert!(backoff.total_collisions == 3);
+        assert!(backoff.total_backoff_us == (b0 + b1 + b2) as u64);
+
+        // 4. Écriture avec reprise sur backoff automatique
+        let mut backoff_auto = WriteConflictBackoff::default();
+        let res_auto = fs.write_file_with_backoff(
+            "test_auto.txt",
+            b"Data persisted with backoff strategy",
+            &mut backoff_auto,
+        );
+        assert!(res_auto.is_ok());
+
+        // 5. Transaction annulée (Aborted)
+        let mut ctx_abort = fs.begin_cow_transaction();
+        fs.abort_cow_transaction(&mut ctx_abort);
+        assert_eq!(ctx_abort.state, TransactionState::Aborted);
+        let res_aborted = fs.write_file_transactional(&mut ctx_abort, "abort.txt", b"data");
+        assert_eq!(res_aborted, Err(FsError::TransactionAborted));
     }
 }

@@ -132,5 +132,10 @@ name = "uname"
 path = "src/bin/uname.rs"
 test = false
 
+[[bin]]
+name = "cut"
+path = "src/bin/cut.rs"
+test = false
+
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }

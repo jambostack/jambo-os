@@ -34,7 +34,9 @@ pub const NVME_LOG_SMART_HEALTH: u8 = 0x02;
 pub const NVME_FEAT_TEMPERATURE_THRESHOLD: u32 = 0x04;
 pub const NVME_FEAT_ASYNC_EVENT_CONFIG: u32 = 0x0B;
 
-pub const NVME_IO_FLUSH: u8 = 0x00;
+/// Commande NVM standard de vidange de cache matériel (NVMe Flush Command, opcode 0x00)
+pub const NVME_NVM_CMD_FLUSH: u8 = 0x00;
+pub const NVME_IO_FLUSH: u8 = NVME_NVM_CMD_FLUSH;
 pub const NVME_IO_WRITE: u8 = 0x01;
 pub const NVME_IO_READ: u8 = 0x02;
 pub const NVME_IO_WRITE_ZEROES: u8 = 0x08;
@@ -543,6 +545,15 @@ impl NvmeQueuePair {
     }
 }
 
+/// Métriques de vidange et synchronisation persistante NVMe (Flush Telemetry)
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct NvmeFlushMetrics {
+    pub total_flushes: u64,
+    pub flush_errors: u64,
+    pub vwc_present: bool,
+    pub last_flush_cycles: u64,
+}
+
 /// Contrôleur NVMe opérationnel en espace utilisateur.
 pub struct NvmeController {
     pub bar0_base: u64,
@@ -555,6 +566,10 @@ pub struct NvmeController {
     pub next_cid: u16,
     pub msix: NvmeMsixRing,
     pub cq_vector_map: [u8; 8],
+    pub vwc_present: bool,
+    pub flush_count: u64,
+    pub flush_errors: u64,
+    pub last_flush_cycles: u64,
 }
 
 impl Default for NvmeController {
@@ -576,6 +591,10 @@ impl NvmeController {
             next_cid: 1,
             msix: NvmeMsixRing::new(4),
             cq_vector_map: [0xFF; 8],
+            vwc_present: true,
+            flush_count: 0,
+            flush_errors: 0,
+            last_flush_cycles: 0,
         }
     }
 
@@ -786,37 +805,67 @@ impl NvmeController {
         self.write_blocks_dma(lba, count, NvmeDmaBuffer::single_page(dma_iova))
     }
 
-    /// Émet une commande de synchronisation cache matérielle (NVMe Flush).
-    pub fn flush(&mut self) -> Result<(), SysError> {
-        if !self.ready {
-            return Err(SysError::ResourceBusy);
+    /// Active ou désactive le suivi du cache d'écriture volatile (Volatile Write Cache, VWC)
+    pub fn set_vwc(&mut self, present: bool) {
+        self.vwc_present = present;
+    }
+
+    /// Indique si le contrôleur dispose d'un cache d'écriture volatile nécessitant vidange persistante
+    pub fn has_vwc(&self) -> bool {
+        self.vwc_present
+    }
+
+    /// Récupère la télémétrie des opérations de vidange persistante matérielle
+    pub fn flush_metrics(&self) -> NvmeFlushMetrics {
+        NvmeFlushMetrics {
+            total_flushes: self.flush_count,
+            flush_errors: self.flush_errors,
+            vwc_present: self.vwc_present,
+            last_flush_cycles: self.last_flush_cycles,
         }
+    }
 
-        let cmd = NvmeSubmissionEntry {
-            cdw0: NVME_IO_FLUSH as u32,
-            nsid: 1,
-            ..Default::default()
-        };
-
-        let cid = self.io_queue.submit(cmd);
-        let _ = self.io_queue.poll_completion(cid)?;
-        Ok(())
+    /// Émet une commande de synchronisation cache matérielle sur le namespace par défaut (NVMe Flush).
+    pub fn flush(&mut self) -> Result<(), SysError> {
+        self.flush_namespace(1)
     }
 
     /// Émet une commande de synchronisation cache matérielle ciblée sur un namespace spécifique.
     pub fn flush_namespace(&mut self, nsid: u32) -> Result<(), SysError> {
         if !self.ready {
+            self.flush_errors += 1;
             return Err(SysError::ResourceBusy);
         }
 
         let cmd = NvmeSubmissionEntry {
-            cdw0: NVME_IO_FLUSH as u32,
+            cdw0: NVME_NVM_CMD_FLUSH as u32,
             nsid,
             ..Default::default()
         };
 
         let cid = self.io_queue.submit(cmd);
-        let _ = self.io_queue.poll_completion(cid)?;
+        match self.io_queue.poll_completion(cid) {
+            Ok(_) => {
+                self.flush_count = self.flush_count.saturating_add(1);
+                Ok(())
+            }
+            Err(e) => {
+                self.flush_errors = self.flush_errors.saturating_add(1);
+                Err(e)
+            }
+        }
+    }
+
+    /// Émet une commande de vidange globale pour l'ensemble des namespaces actifs (NSID = 0xFFFFFFFF, NVMe 1.4 spec §5.14)
+    pub fn flush_all(&mut self) -> Result<(), SysError> {
+        self.flush_namespace(0xFFFF_FFFF)
+    }
+
+    /// Barrière matérielle de synchronisation persistante combinant vidange NVMe globale et barrière mémoire
+    pub fn flush_barrier(&mut self) -> Result<(), SysError> {
+        self.flush_all()?;
+        // SAFETY: Barrière mémoire de synchronisation pour garantir l'ordonnancement matériel
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
         Ok(())
     }
 
@@ -1730,5 +1779,50 @@ mod tests {
         // Rejet des géométries invalides
         assert!(ctrl.configure_lba_geometry(1024).is_err());
         assert!(ctrl.configure_lba_geometry(8192).is_err());
+    }
+
+    #[test]
+    fn test_nvme_flush_commands_and_metrics() {
+        let mut ctrl = NvmeController::new();
+        // Le contrôleur non prêt doit rejeter le flush
+        assert_eq!(ctrl.flush(), Err(SysError::ResourceBusy));
+        assert_eq!(ctrl.flush_metrics().flush_errors, 1);
+        assert_eq!(ctrl.flush_metrics().total_flushes, 0);
+
+        // Simulation du contrôleur prêt
+        ctrl.ready = true;
+        assert!(ctrl.has_vwc());
+        ctrl.set_vwc(false);
+        assert!(!ctrl.has_vwc());
+
+        // Soumission asynchrone d'une commande flush
+        let cid = ctrl.submit_async_flush(1).expect("submit flush");
+        let sub_entry = ctrl.io_queue.sq[0];
+        assert_eq!((sub_entry.cdw0 & 0xFF) as u8, NVME_NVM_CMD_FLUSH);
+        assert_eq!(sub_entry.nsid, 1);
+
+        // Soumission globale (tous les namespaces)
+        let _cid_all = ctrl
+            .submit_async_flush(0xFFFF_FFFF)
+            .expect("submit flush all");
+        let sub_entry_all = ctrl.io_queue.sq[1];
+        assert_eq!((sub_entry_all.cdw0 & 0xFF) as u8, NVME_NVM_CMD_FLUSH);
+        assert_eq!(sub_entry_all.nsid, 0xFFFF_FFFF);
+
+        // Simulation de complétion de la commande
+        let phase = ctrl.io_queue.cq_phase;
+        ctrl.io_queue.cq[0] = NvmeCompletionEntry {
+            dw0: 0,
+            reserved: 0,
+            sq_head: 1,
+            sq_id: 1,
+            command_id: cid,
+            status: ((0x00) << 1) | (phase as u16),
+        };
+
+        // Poll de complétion
+        let comp = ctrl.poll_async_completion(1, cid).expect("poll completion");
+        assert!(comp.is_some());
+        assert_eq!(comp.unwrap().command_id, cid);
     }
 }

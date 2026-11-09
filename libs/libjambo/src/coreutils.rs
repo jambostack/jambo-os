@@ -4455,6 +4455,354 @@ pub fn run_uname(args: &[&str], out_fd: i32, err_fd: i32) -> i32 {
     0
 }
 
+/// Intervalle de sélection pour l'utilitaire `cut` (1-based, inclusif)
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CutRange {
+    pub start: usize,
+    pub end: usize,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CutMode {
+    None,
+    Bytes,
+    Fields,
+}
+
+/// Analyse une liste de plages POSIX (ex: "1", "1,3", "2-5", "-4", "3-")
+fn parse_cut_ranges(spec: &str, out_ranges: &mut [CutRange; 32]) -> Result<usize, ()> {
+    if spec.is_empty() {
+        return Err(());
+    }
+    let mut count = 0;
+    for part in spec.split(',') {
+        if part.is_empty() || count >= out_ranges.len() {
+            return Err(());
+        }
+        if let Some(dash_idx) = part.find('-') {
+            let left = &part[..dash_idx];
+            let right = &part[dash_idx + 1..];
+            let start = if left.is_empty() {
+                1
+            } else {
+                parse_usize(left).ok_or(())?
+            };
+            let end = if right.is_empty() {
+                usize::MAX
+            } else {
+                parse_usize(right).ok_or(())?
+            };
+            if start == 0 || end == 0 || start > end {
+                return Err(());
+            }
+            out_ranges[count] = CutRange { start, end };
+            count += 1;
+        } else {
+            let val = parse_usize(part).ok_or(())?;
+            if val == 0 {
+                return Err(());
+            }
+            out_ranges[count] = CutRange {
+                start: val,
+                end: val,
+            };
+            count += 1;
+        }
+    }
+    Ok(count)
+}
+
+fn matches_cut_range(ranges: &[CutRange], idx: usize) -> bool {
+    for r in ranges {
+        if idx >= r.start && idx <= r.end {
+            return true;
+        }
+    }
+    false
+}
+
+/// Traite un flux d'octets avec l'algorithme POSIX `cut`
+fn process_cut_stream(
+    in_fd: i32,
+    out_fd: i32,
+    mode: CutMode,
+    ranges: &[CutRange],
+    delim: u8,
+    only_delimited: bool,
+) {
+    let mut chunk = [0u8; 512];
+    let mut line_buf = [0u8; 2048];
+    let mut line_len = 0;
+
+    let process_single_line = |line: &[u8]| {
+        if mode == CutMode::Bytes {
+            let mut out_buf = [0u8; 2048];
+            let mut out_len = 0;
+            for (i, &b) in line.iter().enumerate() {
+                let pos = i + 1;
+                if matches_cut_range(ranges, pos) && out_len < out_buf.len() {
+                    out_buf[out_len] = b;
+                    out_len += 1;
+                }
+            }
+            let _ = sys_write(out_fd, &out_buf[..out_len]);
+            let _ = sys_write(out_fd, b"\n");
+        } else if mode == CutMode::Fields {
+            let has_delim = line.contains(&delim);
+            if !has_delim {
+                if !only_delimited {
+                    let _ = sys_write(out_fd, line);
+                    let _ = sys_write(out_fd, b"\n");
+                }
+            } else {
+                let mut out_buf = [0u8; 2048];
+                let mut out_len = 0;
+                let mut field_idx = 1;
+                let mut first_written = false;
+                let mut start = 0;
+
+                for (idx, &b) in line.iter().enumerate() {
+                    if b == delim {
+                        let field = &line[start..idx];
+                        if matches_cut_range(ranges, field_idx) {
+                            if first_written && out_len < out_buf.len() {
+                                out_buf[out_len] = delim;
+                                out_len += 1;
+                            }
+                            let copy_sz = field.len().min(out_buf.len().saturating_sub(out_len));
+                            out_buf[out_len..out_len + copy_sz].copy_from_slice(&field[..copy_sz]);
+                            out_len += copy_sz;
+                            first_written = true;
+                        }
+                        field_idx += 1;
+                        start = idx + 1;
+                    }
+                }
+                // Dernier champ
+                let field = &line[start..];
+                if matches_cut_range(ranges, field_idx) {
+                    if first_written && out_len < out_buf.len() {
+                        out_buf[out_len] = delim;
+                        out_len += 1;
+                    }
+                    let copy_sz = field.len().min(out_buf.len().saturating_sub(out_len));
+                    out_buf[out_len..out_len + copy_sz].copy_from_slice(&field[..copy_sz]);
+                    out_len += copy_sz;
+                }
+
+                let _ = sys_write(out_fd, &out_buf[..out_len]);
+                let _ = sys_write(out_fd, b"\n");
+            }
+        }
+    };
+
+    loop {
+        let n = sys_read(in_fd, &mut chunk);
+        if n <= 0 {
+            break;
+        }
+        for &b in &chunk[..n as usize] {
+            if b == b'\n' {
+                process_single_line(&line_buf[..line_len]);
+                line_len = 0;
+            } else if line_len < line_buf.len() {
+                line_buf[line_len] = b;
+                line_len += 1;
+            }
+        }
+    }
+
+    if line_len > 0 {
+        process_single_line(&line_buf[..line_len]);
+    }
+}
+
+/// Exécute l'utilitaire standard POSIX `cut` (sélection de colonnes/champs/octets sur flux de données)
+pub fn run_cut(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    let mut mode = CutMode::None;
+    let mut ranges_storage = [CutRange { start: 0, end: 0 }; 32];
+    let mut range_count = 0;
+    let mut delim = b'\t';
+    let mut only_delimited = false;
+    let mut file_indices = [0usize; 16];
+    let mut file_count = 0;
+
+    let mut i = 0;
+    let mut parsing_options = true;
+
+    while i < args.len() {
+        let arg = args[i];
+        if parsing_options && arg == "--" {
+            parsing_options = false;
+            i += 1;
+            continue;
+        }
+
+        if parsing_options && (arg.starts_with('-') && arg != "-") {
+            if arg == "--help" {
+                let _ = sys_write(
+                    out_fd,
+                    b"Usage: cut OPTION... [FILE]...\nPrint selected parts of lines from each FILE to standard output.\n\nWith no FILE, or when FILE is -, read standard input.\n\n  -b, --bytes=LIST         select only these bytes\n  -c, --characters=LIST    select only these characters\n  -d, --delimiter=DELIM    use DELIM instead of TAB for field delimiter\n  -f, --fields=LIST        select only these fields; also print any line\n                             that contains no delimiter character, unless\n                             the -s option is specified\n  -s, --only-delimited     do not print lines not containing delimiters\n      --help               display this help and exit\n",
+                );
+                return 0;
+            }
+
+            if arg == "-s" || arg == "--only-delimited" {
+                only_delimited = true;
+                i += 1;
+                continue;
+            }
+
+            // Options avec argument : -b, -c, -f, -d
+            let (opt_char, opt_arg) = if let Some(val) = arg.strip_prefix("--bytes=") {
+                ('b', Some(val))
+            } else if let Some(val) = arg.strip_prefix("--characters=") {
+                ('c', Some(val))
+            } else if let Some(val) = arg.strip_prefix("--fields=") {
+                ('f', Some(val))
+            } else if let Some(val) = arg.strip_prefix("--delimiter=") {
+                ('d', Some(val))
+            } else if arg.starts_with("-b") {
+                let rest = &arg[2..];
+                if !rest.is_empty() {
+                    ('b', Some(rest))
+                } else if i + 1 < args.len() {
+                    i += 1;
+                    ('b', Some(args[i]))
+                } else {
+                    let _ = sys_write(err_fd, b"cut: option requires an argument -- 'b'\n");
+                    return 1;
+                }
+            } else if arg.starts_with("-c") {
+                let rest = &arg[2..];
+                if !rest.is_empty() {
+                    ('c', Some(rest))
+                } else if i + 1 < args.len() {
+                    i += 1;
+                    ('c', Some(args[i]))
+                } else {
+                    let _ = sys_write(err_fd, b"cut: option requires an argument -- 'c'\n");
+                    return 1;
+                }
+            } else if arg.starts_with("-f") {
+                let rest = &arg[2..];
+                if !rest.is_empty() {
+                    ('f', Some(rest))
+                } else if i + 1 < args.len() {
+                    i += 1;
+                    ('f', Some(args[i]))
+                } else {
+                    let _ = sys_write(err_fd, b"cut: option requires an argument -- 'f'\n");
+                    return 1;
+                }
+            } else if arg.starts_with("-d") {
+                let rest = &arg[2..];
+                if !rest.is_empty() {
+                    ('d', Some(rest))
+                } else if i + 1 < args.len() {
+                    i += 1;
+                    ('d', Some(args[i]))
+                } else {
+                    let _ = sys_write(err_fd, b"cut: option requires an argument -- 'd'\n");
+                    return 1;
+                }
+            } else {
+                let _ = sys_write(err_fd, b"cut: invalid option -- '");
+                let _ = sys_write(err_fd, arg.as_bytes());
+                let _ = sys_write(err_fd, b"'\n");
+                return 1;
+            };
+
+            match opt_char {
+                'b' | 'c' => {
+                    if mode != CutMode::None && mode != CutMode::Bytes {
+                        let _ = sys_write(err_fd, b"cut: only one type of list may be specified\n");
+                        return 1;
+                    }
+                    mode = CutMode::Bytes;
+                    let val = opt_arg.unwrap_or("");
+                    match parse_cut_ranges(val, &mut ranges_storage) {
+                        Ok(cnt) => range_count = cnt,
+                        Err(()) => {
+                            let _ = sys_write(err_fd, b"cut: invalid byte/character field list\n");
+                            return 1;
+                        }
+                    }
+                }
+                'f' => {
+                    if mode != CutMode::None && mode != CutMode::Fields {
+                        let _ = sys_write(err_fd, b"cut: only one type of list may be specified\n");
+                        return 1;
+                    }
+                    mode = CutMode::Fields;
+                    let val = opt_arg.unwrap_or("");
+                    match parse_cut_ranges(val, &mut ranges_storage) {
+                        Ok(cnt) => range_count = cnt,
+                        Err(()) => {
+                            let _ = sys_write(err_fd, b"cut: invalid field list\n");
+                            return 1;
+                        }
+                    }
+                }
+                'd' => {
+                    let val = opt_arg.unwrap_or("");
+                    let b = val.as_bytes();
+                    if b.len() != 1 {
+                        let _ =
+                            sys_write(err_fd, b"cut: the delimiter must be a single character\n");
+                        return 1;
+                    }
+                    delim = b[0];
+                }
+                _ => {}
+            }
+            i += 1;
+        } else {
+            if file_count < file_indices.len() {
+                file_indices[file_count] = i;
+                file_count += 1;
+            }
+            i += 1;
+        }
+    }
+
+    if mode == CutMode::None {
+        let _ = sys_write(
+            err_fd,
+            b"cut: you must specify a list of bytes, characters, or fields\nUsage: cut OPTION... [FILE]...\n",
+        );
+        return 1;
+    }
+
+    let active_ranges = &ranges_storage[..range_count];
+
+    if file_count == 0 {
+        process_cut_stream(in_fd, out_fd, mode, active_ranges, delim, only_delimited);
+        return 0;
+    }
+
+    let mut exit_code = 0;
+    for &idx in &file_indices[..file_count] {
+        let path = args[idx];
+        if path == "-" {
+            process_cut_stream(in_fd, out_fd, mode, active_ranges, delim, only_delimited);
+        } else {
+            let fd = sys_open(path, O_RDONLY);
+            if fd < 0 {
+                let _ = sys_write(err_fd, b"cut: ");
+                let _ = sys_write(err_fd, path.as_bytes());
+                let _ = sys_write(err_fd, b": No such file or directory\n");
+                exit_code = 1;
+            } else {
+                process_cut_stream(fd, out_fd, mode, active_ranges, delim, only_delimited);
+                sys_close(fd);
+            }
+        }
+    }
+
+    exit_code
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5248,5 +5596,86 @@ mod tests {
         let s4 = core::str::from_utf8(&out4[..n4 as usize]).unwrap();
         assert!(s4.contains("unrecognized option '-z'"));
         sys_close(r4);
+    }
+
+    #[test]
+    fn test_cut_field_and_byte_modes() {
+        // 1. Découpage par champs avec délimiteur par défaut TAB
+        let (in_r1, in_w1) = crate::vfs::pipe().expect("pipe in 1");
+        let (out_r1, out_w1) = crate::vfs::pipe().expect("pipe out 1");
+        let _ = sys_write(in_w1, b"alpha\tbeta\tgamma\tdelta\n");
+        sys_close(in_w1);
+
+        let code1 = run_cut(&["-f", "1,3"], in_r1, out_w1, 2);
+        assert_eq!(code1, 0);
+        sys_close(in_r1);
+        sys_close(out_w1);
+
+        let mut out1 = [0u8; 128];
+        let n1 = sys_read(out_r1, &mut out1);
+        assert!(n1 > 0);
+        assert_eq!(&out1[..n1 as usize], b"alpha\tgamma\n");
+        sys_close(out_r1);
+
+        // 2. Découpage par champs avec délimiteur personnalisé ':'
+        let (in_r2, in_w2) = crate::vfs::pipe().expect("pipe in 2");
+        let (out_r2, out_w2) = crate::vfs::pipe().expect("pipe out 2");
+        let _ = sys_write(
+            in_w2,
+            b"root:x:0:0:root:/root:/bin/sh\nuser:x:1000:1000:user:/home/user:/bin/sh\n",
+        );
+        sys_close(in_w2);
+
+        let code2 = run_cut(&["-d", ":", "-f", "1,3,7"], in_r2, out_w2, 2);
+        assert_eq!(code2, 0);
+        sys_close(in_r2);
+        sys_close(out_w2);
+
+        let mut out2 = [0u8; 256];
+        let n2 = sys_read(out_r2, &mut out2);
+        assert!(n2 > 0);
+        assert_eq!(&out2[..n2 as usize], b"root:0:/bin/sh\nuser:1000:/bin/sh\n");
+        sys_close(out_r2);
+
+        // 3. Découpage par octets avec plage '-b 2-5'
+        let (in_r3, in_w3) = crate::vfs::pipe().expect("pipe in 3");
+        let (out_r3, out_w3) = crate::vfs::pipe().expect("pipe out 3");
+        let _ = sys_write(in_w3, b"abcdefghij\n1234567890\n");
+        sys_close(in_w3);
+
+        let code3 = run_cut(&["-b", "2-5"], in_r3, out_w3, 2);
+        assert_eq!(code3, 0);
+        sys_close(in_r3);
+        sys_close(out_w3);
+
+        let mut out3 = [0u8; 128];
+        let n3 = sys_read(out_r3, &mut out3);
+        assert!(n3 > 0);
+        assert_eq!(&out3[..n3 as usize], b"bcde\n2345\n");
+        sys_close(out_r3);
+
+        // 4. Découpage avec option -s (suppress lines without delimiter)
+        let (in_r4, in_w4) = crate::vfs::pipe().expect("pipe in 4");
+        let (out_r4, out_w4) = crate::vfs::pipe().expect("pipe out 4");
+        let _ = sys_write(in_w4, b"has:delim\nno_delim_here\nanother:line\n");
+        sys_close(in_w4);
+
+        let code4 = run_cut(&["-d", ":", "-f", "1", "-s"], in_r4, out_w4, 2);
+        assert_eq!(code4, 0);
+        sys_close(in_r4);
+        sys_close(out_w4);
+
+        let mut out4 = [0u8; 128];
+        let n4 = sys_read(out_r4, &mut out4);
+        assert!(n4 > 0);
+        assert_eq!(&out4[..n4 as usize], b"has\nanother\n");
+        sys_close(out_r4);
+
+        // 5. Erreur : option manquante ou invalide
+        let (out_r5, out_w5) = crate::vfs::pipe().expect("pipe out 5");
+        let code5 = run_cut(&[], 0, 1, out_w5);
+        assert_eq!(code5, 1);
+        sys_close(out_w5);
+        sys_close(out_r5);
     }
 }
