@@ -563,6 +563,8 @@ impl JamboShell {
             "comm" | "/bin/comm" | "bin/comm" => self.cmd_comm(args, out),
             "tr" | "/bin/tr" | "bin/tr" => self.cmd_tr(args, out),
             "split" | "/bin/split" | "bin/split" => self.cmd_split(args, out),
+            "basename" | "/bin/basename" | "bin/basename" => self.cmd_basename(args, out),
+            "dirname" | "/bin/dirname" | "bin/dirname" => self.cmd_dirname(args, out),
             "version" => self.cmd_version(out),
             "uptime" => self.cmd_uptime(out),
             "caps" => self.cmd_caps(out),
@@ -1181,6 +1183,46 @@ Utilitaire d'installation JamboOS (Serie 0.*.*)\n\
             }
         } else {
             let msg = b"split: pipe creation failed\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
+    }
+
+    fn cmd_basename(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if let Ok((r, w)) = libjambo::vfs::pipe() {
+            let code = libjambo::coreutils::run_basename(args, w, w);
+            let _ = libjambo::coreutils::sys_close(w);
+            let n = libjambo::coreutils::sys_read(r, out);
+            let _ = libjambo::coreutils::sys_close(r);
+            let len = if n > 0 { n as usize } else { 0 };
+            if code == 0 {
+                (ShellStatus::Success, len)
+            } else {
+                (ShellStatus::ExecutionFailed, len)
+            }
+        } else {
+            let msg = b"basename: pipe creation failed\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
+    }
+
+    fn cmd_dirname(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if let Ok((r, w)) = libjambo::vfs::pipe() {
+            let code = libjambo::coreutils::run_dirname(args, w, w);
+            let _ = libjambo::coreutils::sys_close(w);
+            let n = libjambo::coreutils::sys_read(r, out);
+            let _ = libjambo::coreutils::sys_close(r);
+            let len = if n > 0 { n as usize } else { 0 };
+            if code == 0 {
+                (ShellStatus::Success, len)
+            } else {
+                (ShellStatus::ExecutionFailed, len)
+            }
+        } else {
+            let msg = b"dirname: pipe creation failed\n";
             let len = msg.len().min(out.len());
             out[..len].copy_from_slice(&msg[..len]);
             (ShellStatus::ExecutionFailed, len)
@@ -17717,5 +17759,42 @@ mod tests {
         let _ = libjambo::coreutils::sys_unlink_pool("/tmp/sh_sp_ab");
         let _ = libjambo::coreutils::sys_unlink_pool("/tmp/sh_spd_00");
         let _ = libjambo::coreutils::sys_unlink_pool("/tmp/sh_spd_01");
+    }
+
+    #[test]
+    fn test_basename_and_dirname_shell_execution() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 512];
+
+        // 1. Exécution interne de basename
+        let (st1, len1) = shell.execute_line("basename /usr/include/stdio.h .h", &mut out);
+        assert_eq!(st1, ShellStatus::Success);
+        let s1 = core::str::from_utf8(&out[..len1]).unwrap();
+        assert_eq!(s1.trim(), "stdio");
+
+        // 2. Exécution via binaire /bin/basename avec option multiple -a
+        let (st2, len2) = shell.execute_line("/bin/basename -a /usr/bin/cat /usr/bin/ls", &mut out);
+        assert_eq!(st2, ShellStatus::Success);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert_eq!(s2, "cat\nls\n");
+
+        // 3. Exécution interne de dirname
+        let (st3, len3) = shell.execute_line("dirname /usr/local/bin/jsh", &mut out);
+        assert_eq!(st3, ShellStatus::Success);
+        let s3 = core::str::from_utf8(&out[..len3]).unwrap();
+        assert_eq!(s3.trim(), "/usr/local/bin");
+
+        // 4. Exécution via binaire /bin/dirname avec plusieurs opérandes
+        let (st4, len4) =
+            shell.execute_line("/bin/dirname /etc/resolv.conf /var/log /tmp", &mut out);
+        assert_eq!(st4, ShellStatus::Success);
+        let s4 = core::str::from_utf8(&out[..len4]).unwrap();
+        assert_eq!(s4, "/etc\n/var\n/\n");
+
+        // 5. Erreurs (arguments manquants)
+        let (st5, _) = shell.execute_line("basename", &mut out);
+        assert_eq!(st5, ShellStatus::ExecutionFailed);
+        let (st6, _) = shell.execute_line("dirname", &mut out);
+        assert_eq!(st6, ShellStatus::ExecutionFailed);
     }
 }

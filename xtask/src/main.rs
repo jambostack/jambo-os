@@ -1285,6 +1285,8 @@ fn build_coreutils(
     PathBuf,
     PathBuf,
     PathBuf,
+    PathBuf,
+    PathBuf,
 )> {
     let root = root_dir();
     let mut cmd = Command::new("cargo");
@@ -1342,6 +1344,8 @@ fn build_coreutils(
         dir.join("comm"),
         dir.join("tr"),
         dir.join("split"),
+        dir.join("basename"),
+        dir.join("dirname"),
     ))
 }
 
@@ -1648,6 +1652,8 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
         comm_bin,
         tr_bin,
         split_bin,
+        basename_bin,
+        dirname_bin,
     ) = build_coreutils(release)?;
     let installer_bin = build_installer(release)?;
     let fuzz_bin = build_fuzzer(release)?;
@@ -1687,6 +1693,8 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
     fs::copy(&comm_bin, bin_dir.join("comm"))?;
     fs::copy(&tr_bin, bin_dir.join("tr"))?;
     fs::copy(&split_bin, bin_dir.join("split"))?;
+    fs::copy(&basename_bin, bin_dir.join("basename"))?;
+    fs::copy(&dirname_bin, bin_dir.join("dirname"))?;
     fs::copy(&installer_bin, bin_dir.join("installer"))?;
     fs::copy(&installer_bin, bin_dir.join("jambo-installer"))?;
     fs::copy(&fuzz_bin, bin_dir.join("fuzz"))?;
@@ -1841,6 +1849,8 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
     fs::copy(&rm_bin, initrd_stage.join("rm"))?;
     fs::copy(&cp_bin, initrd_stage.join("cp"))?;
     fs::copy(&mv_bin, initrd_stage.join("mv"))?;
+    fs::copy(&basename_bin, initrd_stage.join("basename"))?;
+    fs::copy(&dirname_bin, initrd_stage.join("dirname"))?;
     fs::copy(&installer_bin, initrd_stage.join("installer"))?;
     fs::copy(&installer_bin, initrd_stage.join("jambo-installer"))?;
     fs::copy(&fuzz_bin, initrd_stage.join("fuzz"))?;
@@ -1865,6 +1875,8 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
             "bin/rm",
             "bin/cp",
             "bin/mv",
+            "bin/basename",
+            "bin/dirname",
             "bin/installer",
             "bin/jambo-installer",
             "bin/fuzz",
@@ -2016,6 +2028,8 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
             "rm",
             "cp",
             "mv",
+            "basename",
+            "dirname",
             "installer",
             "jambo-installer",
             "fuzz",

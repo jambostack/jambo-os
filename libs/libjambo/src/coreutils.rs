@@ -6382,6 +6382,258 @@ default size is 1000 lines, and default PREFIX is 'x'.\n\n\
     0
 }
 
+/// Extrait le composant final de nom de fichier d'un chemin selon la spécification POSIX.
+///
+/// Algorithme conforme IEEE Std 1003.1-2017 :
+/// 1. Si le chemin est vide, retourne "."
+/// 2. Supprime les slashs consécutifs de fin (trailing slashes).
+/// 3. Si la chaîne résultante est vide (la chaîne initiale ne contenait que des slashs), retourne "/".
+/// 4. S'il reste des slashs, isole la portion postérieure au dernier slash.
+/// 5. Si un suffixe est fourni, qu'il est distinct de la composante restante et correspond
+///    exactement à la terminaison, supprime ce suffixe.
+pub fn posix_basename<'a>(path: &'a str, suffix: Option<&str>) -> &'a str {
+    if path.is_empty() {
+        return ".";
+    }
+
+    let bytes = path.as_bytes();
+    let mut end = bytes.len();
+
+    while end > 0 && bytes[end - 1] == b'/' {
+        end -= 1;
+    }
+
+    if end == 0 {
+        return "/";
+    }
+
+    let trimmed = &path[..end];
+    let trimmed_bytes = trimmed.as_bytes();
+
+    let mut start = end;
+    while start > 0 && trimmed_bytes[start - 1] != b'/' {
+        start -= 1;
+    }
+
+    let base = &trimmed[start..end];
+
+    if let Some(suf) = suffix {
+        if !suf.is_empty() && base.len() > suf.len() && base.ends_with(suf) {
+            return &base[..base.len() - suf.len()];
+        }
+    }
+
+    base
+}
+
+/// Extrait le répertoire parent d'un chemin selon la spécification POSIX.
+///
+/// Algorithme conforme IEEE Std 1003.1-2017 :
+/// 1. Si le chemin est vide, retourne "."
+/// 2. Supprime les slashs consécutifs de fin.
+/// 3. Si la chaîne résultante est vide (la chaîne initiale ne contenait que des slashs), retourne "/".
+/// 4. S'il ne subsiste aucun slash dans la chaîne restante, retourne "."
+/// 5. Supprime les caractères non-slash finaux.
+/// 6. Supprime les slashs consécutifs de fin résultants.
+/// 7. Si la chaîne résultante est vide, retourne "/".
+pub fn posix_dirname(path: &str) -> &str {
+    if path.is_empty() {
+        return ".";
+    }
+
+    let bytes = path.as_bytes();
+    let mut end = bytes.len();
+
+    while end > 0 && bytes[end - 1] == b'/' {
+        end -= 1;
+    }
+
+    if end == 0 {
+        return "/";
+    }
+
+    let trimmed = &path[..end];
+    let trimmed_bytes = trimmed.as_bytes();
+
+    let mut last_slash = None;
+    for (i, &b) in trimmed_bytes.iter().enumerate().rev() {
+        if b == b'/' {
+            last_slash = Some(i);
+            break;
+        }
+    }
+
+    let slash_idx = match last_slash {
+        Some(idx) => idx,
+        None => return ".",
+    };
+
+    let mut parent_end = slash_idx;
+    while parent_end > 0 && trimmed_bytes[parent_end] == b'/' {
+        parent_end -= 1;
+    }
+
+    if parent_end == 0 && trimmed_bytes[0] == b'/' {
+        return "/";
+    }
+
+    &trimmed[..=parent_end]
+}
+
+/// Exécute l'utilitaire standard POSIX `basename` (extraction canonique du nom de base)
+pub fn run_basename(args: &[&str], out_fd: i32, err_fd: i32) -> i32 {
+    let mut multiple = false;
+    let mut suffix: Option<&str> = None;
+    let mut zero_delimiter = false;
+    let mut operands: [&str; 64] = [""; 64];
+    let mut num_operands = 0;
+    let mut parsing_options = true;
+
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i];
+        if parsing_options && arg == "--" {
+            parsing_options = false;
+            i += 1;
+            continue;
+        }
+
+        if parsing_options && (arg.starts_with('-') && arg != "-") {
+            if arg == "--help" {
+                let _ = sys_write(
+                    err_fd,
+                    b"Usage: basename NAME [SUFFIX]\n\
+  or:  basename OPTION... NAME...\n\
+Print NAME with any leading directory components removed.\n\
+If specified, also remove a trailing SUFFIX.\n\n\
+  -a, --multiple       support multiple arguments and treat each as a NAME\n\
+  -s, --suffix=SUFFIX  remove a trailing SUFFIX; implies -a\n\
+  -z, --zero           end each output line with NUL, not newline\n\
+      --help           display this help and exit\n",
+                );
+                return 0;
+            } else if arg == "-a" || arg == "--multiple" {
+                multiple = true;
+            } else if arg == "-z" || arg == "--zero" {
+                zero_delimiter = true;
+            } else if arg == "-s" {
+                if i + 1 < args.len() {
+                    i += 1;
+                    suffix = Some(args[i]);
+                    multiple = true;
+                } else {
+                    let _ = sys_write(err_fd, b"basename: option requires an argument -- 's'\n");
+                    return 1;
+                }
+            } else if let Some(suf) = arg.strip_prefix("--suffix=") {
+                suffix = Some(suf);
+                multiple = true;
+            } else if let Some(suf) = arg.strip_prefix("-s") {
+                suffix = Some(suf);
+                multiple = true;
+            } else {
+                let _ = sys_write(err_fd, b"basename: invalid option '");
+                let _ = sys_write(err_fd, arg.as_bytes());
+                let _ = sys_write(err_fd, b"'\n");
+                return 1;
+            }
+        } else {
+            if num_operands < operands.len() {
+                operands[num_operands] = arg;
+                num_operands += 1;
+            }
+        }
+        i += 1;
+    }
+
+    if num_operands == 0 {
+        let _ = sys_write(err_fd, b"basename: missing operand\n");
+        return 1;
+    }
+
+    let delim = if zero_delimiter { b"\0" } else { b"\n" };
+
+    if !multiple {
+        let name = operands[0];
+        let suf = if num_operands > 1 {
+            Some(operands[1])
+        } else {
+            suffix
+        };
+        let res = posix_basename(name, suf);
+        let _ = sys_write(out_fd, res.as_bytes());
+        let _ = sys_write(out_fd, delim);
+    } else {
+        for &op in &operands[..num_operands] {
+            let res = posix_basename(op, suffix);
+            let _ = sys_write(out_fd, res.as_bytes());
+            let _ = sys_write(out_fd, delim);
+        }
+    }
+
+    0
+}
+
+/// Exécute l'utilitaire standard POSIX `dirname` (extraction canonique du répertoire parent)
+pub fn run_dirname(args: &[&str], out_fd: i32, err_fd: i32) -> i32 {
+    let mut zero_delimiter = false;
+    let mut operands: [&str; 64] = [""; 64];
+    let mut num_operands = 0;
+    let mut parsing_options = true;
+
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i];
+        if parsing_options && arg == "--" {
+            parsing_options = false;
+            i += 1;
+            continue;
+        }
+
+        if parsing_options && (arg.starts_with('-') && arg != "-") {
+            if arg == "--help" {
+                let _ = sys_write(
+                    err_fd,
+                    b"Usage: dirname [OPTION] NAME...\n\
+Output each NAME with its last non-slash component and trailing slashes removed;\n\
+if NAME contains no /'s, output '.' (meaning the current directory).\n\n\
+  -z, --zero     end each output line with NUL, not newline\n\
+      --help     display this help and exit\n",
+                );
+                return 0;
+            } else if arg == "-z" || arg == "--zero" {
+                zero_delimiter = true;
+            } else {
+                let _ = sys_write(err_fd, b"dirname: invalid option '");
+                let _ = sys_write(err_fd, arg.as_bytes());
+                let _ = sys_write(err_fd, b"'\n");
+                return 1;
+            }
+        } else {
+            if num_operands < operands.len() {
+                operands[num_operands] = arg;
+                num_operands += 1;
+            }
+        }
+        i += 1;
+    }
+
+    if num_operands == 0 {
+        let _ = sys_write(err_fd, b"dirname: missing operand\n");
+        return 1;
+    }
+
+    let delim = if zero_delimiter { b"\0" } else { b"\n" };
+
+    for &op in &operands[..num_operands] {
+        let res = posix_dirname(op);
+        let _ = sys_write(out_fd, res.as_bytes());
+        let _ = sys_write(out_fd, delim);
+    }
+
+    0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -7666,5 +7918,102 @@ mod tests {
         let _ = sys_unlink_pool("/tmp/s3_aaa");
         let _ = sys_unlink_pool("/tmp/s3_aab");
         let _ = sys_unlink_pool("/tmp/s4_aa");
+    }
+
+    #[test]
+    fn test_posix_basename_and_dirname() {
+        // 1. Tests unitaires de conformité IEEE Std 1003.1 pour posix_basename
+        assert_eq!(posix_basename("", None), ".");
+        assert_eq!(posix_basename("/", None), "/");
+        assert_eq!(posix_basename("///", None), "/");
+        assert_eq!(posix_basename("//", None), "/");
+        assert_eq!(posix_basename("/usr/", None), "usr");
+        assert_eq!(posix_basename("/usr/lib", None), "lib");
+        assert_eq!(posix_basename("/usr/lib/", None), "lib");
+        assert_eq!(posix_basename("usr", None), "usr");
+        assert_eq!(posix_basename("usr/", None), "usr");
+        assert_eq!(posix_basename("main.c", Some(".c")), "main");
+        assert_eq!(posix_basename("/src/main.c", Some(".c")), "main");
+        assert_eq!(
+            posix_basename("/archive.tar.gz", Some(".tar.gz")),
+            "archive"
+        );
+        assert_eq!(posix_basename(".c", Some(".c")), ".c");
+
+        // 2. Tests unitaires de conformité IEEE Std 1003.1 pour posix_dirname
+        assert_eq!(posix_dirname(""), ".");
+        assert_eq!(posix_dirname("/"), "/");
+        assert_eq!(posix_dirname("///"), "/");
+        assert_eq!(posix_dirname("//"), "/");
+        assert_eq!(posix_dirname("/usr/lib"), "/usr");
+        assert_eq!(posix_dirname("/usr/lib/"), "/usr");
+        assert_eq!(posix_dirname("/usr"), "/");
+        assert_eq!(posix_dirname("/usr/"), "/");
+        assert_eq!(posix_dirname("usr"), ".");
+        assert_eq!(posix_dirname("usr/"), ".");
+        assert_eq!(posix_dirname("a/b"), "a");
+        assert_eq!(posix_dirname("a/b/"), "a");
+
+        // 3. Test d'exécution run_basename via pipes
+        let (out_r1, out_w1) = crate::vfs::pipe().expect("pipe basename 1");
+        let code1 = run_basename(&["/usr/bin/sort"], out_w1, 2);
+        assert_eq!(code1, 0);
+        sys_close(out_w1);
+
+        let mut buf = [0u8; 128];
+        let n1 = sys_read(out_r1, &mut buf);
+        assert_eq!(&buf[..n1 as usize], b"sort\n");
+        sys_close(out_r1);
+
+        // Test avec suffixe
+        let (out_r2, out_w2) = crate::vfs::pipe().expect("pipe basename 2");
+        let code2 = run_basename(&["/usr/include/stdio.h", ".h"], out_w2, 2);
+        assert_eq!(code2, 0);
+        sys_close(out_w2);
+        let n2 = sys_read(out_r2, &mut buf);
+        assert_eq!(&buf[..n2 as usize], b"stdio\n");
+        sys_close(out_r2);
+
+        // Test multi-arguments avec -a -s
+        let (out_r3, out_w3) = crate::vfs::pipe().expect("pipe basename 3");
+        let code3 = run_basename(
+            &["-a", "-s", ".c", "/src/main.c", "/src/kernel.c"],
+            out_w3,
+            2,
+        );
+        assert_eq!(code3, 0);
+        sys_close(out_w3);
+        let n3 = sys_read(out_r3, &mut buf);
+        assert_eq!(&buf[..n3 as usize], b"main\nkernel\n");
+        sys_close(out_r3);
+
+        // 4. Test d'exécution run_dirname via pipes
+        let (out_r4, out_w4) = crate::vfs::pipe().expect("pipe dirname 1");
+        let code4 = run_dirname(
+            &["/usr/bin/sort", "/etc/resolv.conf", "simple.txt"],
+            out_w4,
+            2,
+        );
+        assert_eq!(code4, 0);
+        sys_close(out_w4);
+        let n4 = sys_read(out_r4, &mut buf);
+        assert_eq!(&buf[..n4 as usize], b"/usr/bin\n/etc\n.\n");
+        sys_close(out_r4);
+
+        // Test option -z
+        let (out_r5, out_w5) = crate::vfs::pipe().expect("pipe dirname 2");
+        let code5 = run_dirname(&["-z", "/var/log"], out_w5, 2);
+        assert_eq!(code5, 0);
+        sys_close(out_w5);
+        let n5 = sys_read(out_r5, &mut buf);
+        assert_eq!(&buf[..n5 as usize], b"/var\0");
+        sys_close(out_r5);
+
+        // Test sans argument (erreur)
+        let (err_r6, err_w6) = crate::vfs::pipe().expect("pipe basename err");
+        let code6 = run_basename(&[], 1, err_w6);
+        assert_eq!(code6, 1);
+        sys_close(err_w6);
+        sys_close(err_r6);
     }
 }

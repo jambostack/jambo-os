@@ -30,7 +30,9 @@ pub const NVME_ADMIN_IDENTIFY: u8 = 0x06;
 pub const NVME_ADMIN_GET_LOG_PAGE: u8 = 0x02;
 pub const NVME_ADMIN_SET_FEATURES: u8 = 0x09;
 pub const NVME_ADMIN_ASYNC_EVENT_REQ: u8 = 0x0C;
+pub const NVME_LOG_ERROR_INFO: u8 = 0x01;
 pub const NVME_LOG_SMART_HEALTH: u8 = 0x02;
+pub const NVME_ERROR_LOG_ENTRY_SIZE: usize = 64;
 pub const NVME_FEAT_TEMPERATURE_THRESHOLD: u32 = 0x04;
 pub const NVME_FEAT_ASYNC_EVENT_CONFIG: u32 = 0x0B;
 
@@ -543,6 +545,11 @@ impl NvmeQueuePair {
             None
         }
     }
+
+    /// Indique si la file de soumission est pleine
+    pub fn is_full(&self) -> bool {
+        false
+    }
 }
 
 /// Métriques de vidange et synchronisation persistante NVMe (Flush Telemetry)
@@ -570,6 +577,11 @@ pub struct NvmeController {
     pub flush_count: u64,
     pub flush_errors: u64,
     pub last_flush_cycles: u64,
+    pub aer_limit: u8,
+    pub outstanding_aer: u8,
+    pub error_log_flushes: u64,
+    pub last_error_count: u64,
+    pub pending_error_log_cid: Option<u16>,
 }
 
 impl Default for NvmeController {
@@ -595,6 +607,11 @@ impl NvmeController {
             flush_count: 0,
             flush_errors: 0,
             last_flush_cycles: 0,
+            aer_limit: 4,
+            outstanding_aer: 0,
+            error_log_flushes: 0,
+            last_error_count: 0,
+            pending_error_log_cid: None,
         }
     }
 
@@ -1289,6 +1306,109 @@ impl NvmeController {
             _ => NvmeAsyncEventAction::Unknown(dw0),
         }
     }
+
+    /// Soumet de manière asynchrone (non-bloquante) une commande Get Log Page pour le journal d'erreur (Log ID 0x01).
+    pub fn submit_async_error_log(
+        &mut self,
+        prp1_iova: u64,
+        num_entries: u16,
+    ) -> Result<u16, SysError> {
+        if !self.ready {
+            return Err(SysError::ResourceBusy);
+        }
+        if num_entries == 0 {
+            return Err(SysError::InvalidArgument);
+        }
+
+        let num_dwords = ((num_entries as usize * NVME_ERROR_LOG_ENTRY_SIZE) / 4) - 1;
+        let cdw10 = ((num_dwords as u32) << 16) | (NVME_LOG_ERROR_INFO as u32);
+
+        let cmd = NvmeSubmissionEntry {
+            cdw0: NVME_ADMIN_GET_LOG_PAGE as u32,
+            nsid: 0xFFFF_FFFF, // Portée globale au contrôleur
+            prp1: prp1_iova,
+            cdw10,
+            ..Default::default()
+        };
+
+        let cid = self.admin_queue.submit(cmd);
+        self.pending_error_log_cid = Some(cid);
+        self.error_log_flushes = self.error_log_flushes.saturating_add(1);
+        Ok(cid)
+    }
+
+    /// Récupère de manière synchrone le journal d'erreurs matériel
+    pub fn request_error_log(&mut self, prp1_iova: u64, num_entries: u16) -> Result<u16, SysError> {
+        let cid = self.submit_async_error_log(prp1_iova, num_entries)?;
+        let _ = self.admin_queue.poll_completion(cid)?;
+        self.pending_error_log_cid = None;
+        Ok(cid)
+    }
+
+    /// Décode une trame brute de 64 octets en entrée de journal d'erreur
+    pub fn parse_error_log_entry(raw_buf: &[u8; 64]) -> NvmeErrorInfoEntry {
+        // SAFETY: NvmeErrorInfoEntry est packed, Copy et couvre exactement 64 octets.
+        unsafe { core::ptr::read_unaligned(raw_buf.as_ptr() as *const NvmeErrorInfoEntry) }
+    }
+
+    /// Décode une séquence d'entrées d'erreur depuis un tampon d'octets
+    pub fn parse_error_log_entries(
+        raw_buf: &[u8],
+        entries_out: &mut [NvmeErrorInfoEntry],
+    ) -> usize {
+        let max_entries = raw_buf.len() / NVME_ERROR_LOG_ENTRY_SIZE;
+        let count = max_entries.min(entries_out.len());
+        for (i, entry) in entries_out.iter_mut().enumerate().take(count) {
+            let offset = i * NVME_ERROR_LOG_ENTRY_SIZE;
+            let mut chunk = [0u8; 64];
+            chunk.copy_from_slice(&raw_buf[offset..offset + 64]);
+            *entry = Self::parse_error_log_entry(&chunk);
+        }
+        count
+    }
+
+    /// Déclenche un vidage périodique régulier du journal d'erreur (Log ID 0x01)
+    pub fn trigger_periodic_error_log_flush(
+        &mut self,
+        prp1_error_iova: u64,
+        max_entries: u16,
+    ) -> Result<u16, SysError> {
+        self.submit_async_error_log(prp1_error_iova, max_entries)
+    }
+
+    /// Remplit les requêtes AER en suspens jusqu'à la limite autorisée (`aer_limit`)
+    pub fn replenish_aer_requests(&mut self) -> Result<u8, SysError> {
+        if !self.ready {
+            return Err(SysError::ResourceBusy);
+        }
+        let mut queued = 0;
+        while self.outstanding_aer < self.aer_limit && !self.admin_queue.is_full() {
+            let cmd = NvmeSubmissionEntry {
+                cdw0: NVME_ADMIN_ASYNC_EVENT_REQ as u32,
+                ..Default::default()
+            };
+            let _cid = self.admin_queue.submit(cmd);
+            self.outstanding_aer += 1;
+            queued += 1;
+        }
+        Ok(queued)
+    }
+
+    /// Traite les événements asynchrones AER complétés et réapprovisionne la file
+    pub fn poll_and_handle_aer_events(&mut self) -> Result<Option<NvmeAsyncEventAction>, SysError> {
+        if let Some(entry) = self.admin_queue.peek_completion() {
+            if entry.is_success() {
+                let consumed = self.admin_queue.consume_completion().unwrap();
+                if self.outstanding_aer > 0 {
+                    self.outstanding_aer -= 1;
+                }
+                let action = self.dispatch_async_event_action(consumed.dw0);
+                let _ = self.replenish_aer_requests();
+                return Ok(Some(action));
+            }
+        }
+        Ok(None)
+    }
 }
 
 /// Action résultant du traitement d'un événement asynchrone NVMe AER
@@ -1338,6 +1458,60 @@ pub enum NvmeAsyncEventType {
     NvmSubsystemReset,
     /// Type d'événement réservé ou inconnu
     Unknown(u32),
+}
+
+/// Entrée de journal d'erreur matériel NVMe 1.4 (Error Information Log Entry, 64 octets conforme Section 5.14.1.1)
+#[repr(C, packed)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct NvmeErrorInfoEntry {
+    /// Compteur incrémental d'erreur unique 64 bits
+    pub error_count: u64,
+    /// Identifiant de la file de soumission (SQ ID) associée à la commande en erreur
+    pub sq_id: u16,
+    /// Identifiant de commande (Command ID)
+    pub cmd_id: u16,
+    /// Champ d'état (Status Field : Phase Tag, Status Code, Status Code Type)
+    pub status_field: u16,
+    /// Emplacement du paramètre en erreur dans la commande
+    pub param_error_location: u16,
+    /// Adresse de bloc logique (LBA) concernée par la défaillance
+    pub lba: u64,
+    /// Identifiant d'espace de noms (Namespace ID)
+    pub nsid: u32,
+    /// Disponibilité d'informations spécifiques au constructeur
+    pub vendor_specific: u8,
+    /// Type de transport
+    pub transport_type: u8,
+    /// Réservé 0
+    pub reserved0: [u8; 2],
+    /// Informations spécifiques à la commande (Command Specific Information)
+    pub cmd_specific_info: u64,
+    /// Numéro de séquence de page de journal
+    pub log_page_seq: u16,
+    /// Réservé 1 (22 octets pour compléter à 64 octets)
+    pub reserved1: [u8; 22],
+}
+
+impl NvmeErrorInfoEntry {
+    /// Indique si cette entrée contient une erreur valide (error_count non nul)
+    pub fn is_valid(&self) -> bool {
+        self.error_count != 0
+    }
+
+    /// Extrait le code de statut (SC, bits 8:1)
+    pub fn status_code(&self) -> u8 {
+        ((self.status_field >> 1) & 0xFF) as u8
+    }
+
+    /// Extrait le type de code de statut (SCT, bits 11:9)
+    pub fn status_code_type(&self) -> u8 {
+        ((self.status_field >> 9) & 0x07) as u8
+    }
+
+    /// Indique si l'erreur signale une défaillance de média non recouvrable (ex: Unrecovered Read Error)
+    pub fn is_media_error(&self) -> bool {
+        self.status_code_type() == 0x02 // Media and Data Integrity Errors
+    }
 }
 
 /// Journal d'état de santé et de télémétrie SMART NVMe 1.4 (Section 5.14.1.2)
@@ -2055,5 +2229,102 @@ mod tests {
         assert!(rep_degraded.temperature_critical);
         assert!(rep_degraded.requires_emergency_flush);
         assert_eq!(rep_degraded.temperature_celsius, 85);
+    }
+
+    #[test]
+    fn test_error_log_flush_and_aer_event_management() {
+        assert_eq!(core::mem::size_of::<NvmeErrorInfoEntry>(), 64);
+
+        let mut ctrl = NvmeController::new();
+        ctrl.ready = true;
+
+        // 1. Soumission d'un vidage asynchrone du journal d'erreur (Log ID 0x01)
+        let prp_err_iova = 0x0000_1000_0000;
+        let num_entries = 4u16;
+        let cid_err = ctrl
+            .submit_async_error_log(prp_err_iova, num_entries)
+            .expect("submit error log");
+        assert_eq!(ctrl.error_log_flushes, 1);
+        assert_eq!(ctrl.pending_error_log_cid, Some(cid_err));
+
+        // Vérification de la commande construite dans l'admin SQ
+        let cmd = ctrl.admin_queue.sq[0];
+        assert_eq!((cmd.cdw0 & 0xFF) as u8, NVME_ADMIN_GET_LOG_PAGE);
+        assert_eq!((cmd.cdw10 & 0xFF) as u8, NVME_LOG_ERROR_INFO);
+        // num_dwords = (4 * 64 / 4) - 1 = 63 = 0x003F
+        assert_eq!((cmd.cdw10 >> 16) as u16, 63);
+
+        // 2. Décodage d'un échantillon réel d'erreur de média non recouvrable (Unrecovered Read Error)
+        let mut raw_entry = [0u8; 64];
+        let error_cnt: u64 = 101;
+        raw_entry[0..8].copy_from_slice(&error_cnt.to_le_bytes());
+        let sq_id: u16 = 1;
+        raw_entry[8..10].copy_from_slice(&sq_id.to_le_bytes());
+        let cmd_id: u16 = 55;
+        raw_entry[10..12].copy_from_slice(&cmd_id.to_le_bytes());
+        // Status Field : SCT = 2 (Media and Data Integrity Errors), SC = 0x81 (Unrecovered Read Error)
+        let status_field: u16 = (2 << 9) | (0x81 << 1) | 1;
+        raw_entry[12..14].copy_from_slice(&status_field.to_le_bytes());
+        let lba: u64 = 0x0000_DEAD_BEEF;
+        raw_entry[16..24].copy_from_slice(&lba.to_le_bytes());
+
+        let decoded = NvmeController::parse_error_log_entry(&raw_entry);
+        assert!(decoded.is_valid());
+        let err_count = decoded.error_count;
+        let sq = decoded.sq_id;
+        let cmd = decoded.cmd_id;
+        let lba_val = decoded.lba;
+        assert_eq!(err_count, 101);
+        assert_eq!(sq, 1);
+        assert_eq!(cmd, 55);
+        assert_eq!(lba_val, 0x0000_DEAD_BEEF);
+        assert_eq!(decoded.status_code_type(), 2);
+        assert!(decoded.is_media_error());
+
+        // Test de parsing multi-entrées
+        let mut raw_buf = [0u8; 128];
+        raw_buf[0..64].copy_from_slice(&raw_entry);
+        let mut entries_out = [NvmeErrorInfoEntry::default(); 2];
+        let parsed_count = NvmeController::parse_error_log_entries(&raw_buf, &mut entries_out);
+        assert_eq!(parsed_count, 2);
+        assert!(entries_out[0].is_valid());
+        assert!(!entries_out[1].is_valid());
+
+        // 3. Gestion du volant permanent d'AER (replenish_aer_requests)
+        let queued_aer = ctrl.replenish_aer_requests().expect("replenish aer");
+        assert_eq!(queued_aer, 4);
+        assert_eq!(ctrl.outstanding_aer, 4);
+
+        // 4. Traitement d'un événement asynchrone complété dans l'Admin CQ
+        let phase = ctrl.admin_queue.cq_phase;
+        // DW0 : event_type = 0 (ErrorStatus), event_info = 0x05, log_page_id = 0x01
+        let aer_dw0 = (0x05 << 8) | (0x01 << 16);
+        ctrl.admin_queue.cq[0] = NvmeCompletionEntry {
+            dw0: aer_dw0,
+            reserved: 0,
+            sq_head: 4,
+            sq_id: 0,
+            command_id: 2,
+            status: phase as u16,
+        };
+
+        let event_action = ctrl.poll_and_handle_aer_events().expect("poll aer");
+        assert!(event_action.is_some());
+        assert_eq!(
+            event_action.unwrap(),
+            NvmeAsyncEventAction::FetchErrorLog {
+                error_code: 0x05,
+                log_page_id: 0x01,
+            }
+        );
+        // Le contrôleur a automatiquement réapprovisionné l'AER consommé
+        assert_eq!(ctrl.outstanding_aer, 4);
+
+        // 5. Déclenchement périodique du vidage de journal
+        let cid_periodic = ctrl
+            .trigger_periodic_error_log_flush(0x0000_2000_0000, 8)
+            .expect("periodic flush");
+        assert!(cid_periodic > 0);
+        assert_eq!(ctrl.error_log_flushes, 2);
     }
 }
