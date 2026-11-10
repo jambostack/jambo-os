@@ -207,5 +207,10 @@ name = "cmp"
 path = "src/bin/cmp.rs"
 test = false
 
+[[bin]]
+name = "expand"
+path = "src/bin/expand.rs"
+test = false
+
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }

@@ -40,7 +40,9 @@ impl VfsFileNode {
     }
 }
 
-pub static mut INODE_POOL: [VfsFileNode; 32] = [
+pub const MAX_INODES: usize = 64;
+
+pub static mut INODE_POOL: [VfsFileNode; MAX_INODES] = [
     // 0: /etc/hostname
     VfsFileNode {
         path: {
@@ -173,6 +175,38 @@ pub static mut INODE_POOL: [VfsFileNode; 32] = [
         uid: 0,
         gid: 0,
     },
+    VfsFileNode::empty(),
+    VfsFileNode::empty(),
+    VfsFileNode::empty(),
+    VfsFileNode::empty(),
+    VfsFileNode::empty(),
+    VfsFileNode::empty(),
+    VfsFileNode::empty(),
+    VfsFileNode::empty(),
+    VfsFileNode::empty(),
+    VfsFileNode::empty(),
+    VfsFileNode::empty(),
+    VfsFileNode::empty(),
+    VfsFileNode::empty(),
+    VfsFileNode::empty(),
+    VfsFileNode::empty(),
+    VfsFileNode::empty(),
+    VfsFileNode::empty(),
+    VfsFileNode::empty(),
+    VfsFileNode::empty(),
+    VfsFileNode::empty(),
+    VfsFileNode::empty(),
+    VfsFileNode::empty(),
+    VfsFileNode::empty(),
+    VfsFileNode::empty(),
+    VfsFileNode::empty(),
+    VfsFileNode::empty(),
+    VfsFileNode::empty(),
+    VfsFileNode::empty(),
+    VfsFileNode::empty(),
+    VfsFileNode::empty(),
+    VfsFileNode::empty(),
+    VfsFileNode::empty(),
     VfsFileNode::empty(),
     VfsFileNode::empty(),
     VfsFileNode::empty(),
@@ -2434,7 +2468,7 @@ pub fn run_cp(args: &[&str], err_fd: i32) -> i32 {
         // SAFETY: Duplication arborescente depuis INODE_POOL
         unsafe {
             let pool = core::ptr::addr_of_mut!(INODE_POOL);
-            let mut snapshot: [Option<InodeSnapshotItem>; 32] = [None; 32];
+            let mut snapshot: [Option<InodeSnapshotItem>; MAX_INODES] = [None; MAX_INODES];
             for (i, node) in (*pool).iter().enumerate() {
                 if node.is_active {
                     snapshot[i] = Some((
@@ -8938,6 +8972,260 @@ Compare two files byte by byte.\n\n\
     }
 }
 
+/// Exécute l'utilitaire standard POSIX `expand` (conversion des tabulations en espaces)
+pub fn run_expand(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    let mut initial_only = false;
+    let mut tab_size: usize = 8;
+    let mut explicit_tabs = [0usize; 16];
+    let mut explicit_tab_count = 0usize;
+    let mut files = [""; 16];
+    let mut file_count = 0usize;
+    let mut parsing_options = true;
+
+    let parse_tab_list = |val: &str, tabs: &mut [usize; 16], count: &mut usize| -> bool {
+        *count = 0;
+        let mut cur = 0usize;
+        let mut has_digit = false;
+        for &b in val.as_bytes() {
+            if b.is_ascii_digit() {
+                cur = cur.wrapping_mul(10).wrapping_add((b - b'0') as usize);
+                has_digit = true;
+            } else if b == b',' || b == b' ' {
+                if has_digit && cur > 0 {
+                    if *count < tabs.len() {
+                        tabs[*count] = cur;
+                        *count += 1;
+                    }
+                    cur = 0;
+                    has_digit = false;
+                } else if has_digit && cur == 0 {
+                    return false;
+                }
+            } else {
+                return false;
+            }
+        }
+        if has_digit {
+            if cur == 0 {
+                return false;
+            }
+            if *count < tabs.len() {
+                tabs[*count] = cur;
+                *count += 1;
+            }
+        }
+        *count > 0
+    };
+
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i].trim();
+        if parsing_options && arg == "--" {
+            parsing_options = false;
+            i += 1;
+            continue;
+        }
+
+        if parsing_options && (arg.starts_with('-') && arg.len() > 1 && arg != "-") {
+            if arg == "--help" {
+                let _ = sys_write(
+                    out_fd,
+                    b"Usage: expand [OPTION]... [FILE]...\n\
+Convert tabs in each FILE to spaces, writing to standard output.\n\n\
+  -i, --initial       do not convert tabs after non blanks\n\
+  -t, --tabs=N        have tabs N characters apart, not 8\n\
+  -t, --tabs=LIST     use comma separated list of tab positions\n\
+      --help          display this help and exit\n",
+                );
+                return 0;
+            } else if arg == "-i" || arg == "--initial" {
+                initial_only = true;
+            } else if arg == "-t" || arg == "--tabs" {
+                if i + 1 < args.len() {
+                    i += 1;
+                    let val = args[i];
+                    if !parse_tab_list(val, &mut explicit_tabs, &mut explicit_tab_count) {
+                        let _ = sys_write(err_fd, b"expand: tab size contains invalid character\n");
+                        return 1;
+                    }
+                    if explicit_tab_count == 1 {
+                        tab_size = explicit_tabs[0];
+                        explicit_tab_count = 0;
+                    }
+                } else {
+                    let _ = sys_write(err_fd, b"expand: option requires an argument -- 't'\n");
+                    return 1;
+                }
+            } else if let Some(val) = arg.strip_prefix("--tabs=") {
+                if !parse_tab_list(val, &mut explicit_tabs, &mut explicit_tab_count) {
+                    let _ = sys_write(err_fd, b"expand: tab size contains invalid character\n");
+                    return 1;
+                }
+                if explicit_tab_count == 1 {
+                    tab_size = explicit_tabs[0];
+                    explicit_tab_count = 0;
+                }
+            } else if arg.starts_with("-t") && arg.len() > 2 {
+                let val = &arg[2..];
+                if !parse_tab_list(val, &mut explicit_tabs, &mut explicit_tab_count) {
+                    let _ = sys_write(err_fd, b"expand: tab size contains invalid character\n");
+                    return 1;
+                }
+                if explicit_tab_count == 1 {
+                    tab_size = explicit_tabs[0];
+                    explicit_tab_count = 0;
+                }
+            } else if arg.len() > 1 && arg[1..].bytes().all(|b| b.is_ascii_digit()) {
+                // Forme raccourcie historique : -4
+                if let Some(n) = parse_od_number(&arg[1..]) {
+                    if n > 0 {
+                        tab_size = n;
+                        explicit_tab_count = 0;
+                    } else {
+                        let _ = sys_write(err_fd, b"expand: tab size cannot be 0\n");
+                        return 1;
+                    }
+                }
+            } else {
+                let _ = sys_write(err_fd, b"expand: unrecognized option '");
+                let _ = sys_write(err_fd, arg.as_bytes());
+                let _ = sys_write(err_fd, b"'\n");
+                return 1;
+            }
+        } else {
+            if file_count < files.len() {
+                files[file_count] = arg;
+                file_count += 1;
+            }
+        }
+        i += 1;
+    }
+
+    let default_files = ["-"];
+    let files_to_process = if file_count > 0 {
+        &files[..file_count]
+    } else {
+        &default_files[..]
+    };
+
+    let next_tabstop = |col: usize, size: usize, tabs: &[usize]| -> usize {
+        if !tabs.is_empty() {
+            for &t in tabs {
+                if t > col {
+                    return t;
+                }
+            }
+            // Si on dépasse le dernier tabstop explicite, 1 espace minimum
+            col + 1
+        } else {
+            let rem = col % size;
+            col + (size - rem)
+        }
+    };
+
+    let mut exit_status = 0;
+
+    for &file in files_to_process {
+        let (fd, should_close) = if file == "-" {
+            (in_fd, false)
+        } else {
+            let fd = sys_open(file, crate::vfs::O_RDONLY);
+            if fd < 0 {
+                let _ = sys_write(err_fd, b"expand: ");
+                let _ = sys_write(err_fd, file.as_bytes());
+                let _ = sys_write(err_fd, b": No such file or directory\n");
+                exit_status = 1;
+                continue;
+            }
+            (fd, true)
+        };
+
+        let mut read_buf = [0u8; 512];
+        let mut out_chunk = [0u8; 1024];
+        let mut out_len = 0usize;
+        let mut col = 0usize;
+        let mut non_space_seen = false;
+
+        loop {
+            let n = sys_read(fd, &mut read_buf);
+            if n <= 0 {
+                break;
+            }
+
+            for &b in &read_buf[..n as usize] {
+                match b {
+                    b'\t' => {
+                        if initial_only && non_space_seen {
+                            out_chunk[out_len] = b'\t';
+                            out_len += 1;
+                            col += 1;
+                        } else {
+                            let nxt = next_tabstop(
+                                col,
+                                tab_size,
+                                if explicit_tab_count > 0 {
+                                    &explicit_tabs[..explicit_tab_count]
+                                } else {
+                                    &[]
+                                },
+                            );
+                            let spaces = nxt.saturating_sub(col);
+                            for _ in 0..spaces {
+                                if out_len >= out_chunk.len() {
+                                    let _ = sys_write(out_fd, &out_chunk[..out_len]);
+                                    out_len = 0;
+                                }
+                                out_chunk[out_len] = b' ';
+                                out_len += 1;
+                            }
+                            col = nxt;
+                        }
+                    }
+                    b'\n' => {
+                        out_chunk[out_len] = b'\n';
+                        out_len += 1;
+                        col = 0;
+                        non_space_seen = false;
+                    }
+                    b'\r' => {
+                        out_chunk[out_len] = b'\r';
+                        out_len += 1;
+                        col = 0;
+                    }
+                    0x08 => {
+                        out_chunk[out_len] = 0x08;
+                        out_len += 1;
+                        col = col.saturating_sub(1);
+                    }
+                    _ => {
+                        if b != b' ' {
+                            non_space_seen = true;
+                        }
+                        out_chunk[out_len] = b;
+                        out_len += 1;
+                        col += 1;
+                    }
+                }
+
+                if out_len >= out_chunk.len() - 32 {
+                    let _ = sys_write(out_fd, &out_chunk[..out_len]);
+                    out_len = 0;
+                }
+            }
+        }
+
+        if out_len > 0 {
+            let _ = sys_write(out_fd, &out_chunk[..out_len]);
+        }
+
+        if should_close {
+            let _ = sys_close(fd);
+        }
+    }
+
+    exit_status
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -10140,6 +10428,10 @@ mod tests {
         let n3 = sys_read(f3, &mut buf);
         assert_eq!(&buf[..n3 as usize], b"line5\n");
         sys_close(f3);
+        let _ = sys_unlink_pool(src_path);
+        let _ = sys_unlink_pool("/tmp/s1_aa");
+        let _ = sys_unlink_pool("/tmp/s1_ab");
+        let _ = sys_unlink_pool("/tmp/s1_ac");
 
         // 2. Découpage par octets (-b 5) avec suffixes numériques (-d)
         let (in_r2, in_w2) = crate::vfs::pipe().expect("pipe in split 2");
@@ -10167,6 +10459,9 @@ mod tests {
         let n2_2 = sys_read(f2_2, &mut buf);
         assert_eq!(&buf[..n2_2 as usize], b"klmno");
         sys_close(f2_2);
+        let _ = sys_unlink_pool("/tmp/s2_00");
+        let _ = sys_unlink_pool("/tmp/s2_01");
+        let _ = sys_unlink_pool("/tmp/s2_02");
 
         // 3. Longueur de suffixe (-a 3)
         let (in_r3, in_w3) = crate::vfs::pipe().expect("pipe in split 3");
@@ -10188,6 +10483,8 @@ mod tests {
         let n3_1 = sys_read(f3_1, &mut buf);
         assert_eq!(&buf[..n3_1 as usize], b"chunk2");
         sys_close(f3_1);
+        let _ = sys_unlink_pool("/tmp/s3_aaa");
+        let _ = sys_unlink_pool("/tmp/s3_aab");
 
         // 4. Découpage par taille maximale de ligne (-C 12)
         let (in_r4, in_w4) = crate::vfs::pipe().expect("pipe in split 4");
@@ -10203,6 +10500,7 @@ mod tests {
         let n4_0 = sys_read(f4_0, &mut buf);
         assert_eq!(&buf[..n4_0 as usize], b"hello\nworld\n");
         sys_close(f4_0);
+        let _ = sys_unlink_pool("/tmp/s4_aa");
 
         // 5. Erreurs d'options incompatibles
         let (out_r5, out_w5) = crate::vfs::pipe().expect("pipe out split 5");
@@ -10210,18 +10508,6 @@ mod tests {
         assert_eq!(code5, 1);
         sys_close(out_w5);
         sys_close(out_r5);
-
-        // Nettoyage des fichiers temporaires
-        let _ = sys_unlink_pool(src_path);
-        let _ = sys_unlink_pool("/tmp/s1_aa");
-        let _ = sys_unlink_pool("/tmp/s1_ab");
-        let _ = sys_unlink_pool("/tmp/s1_ac");
-        let _ = sys_unlink_pool("/tmp/s2_00");
-        let _ = sys_unlink_pool("/tmp/s2_01");
-        let _ = sys_unlink_pool("/tmp/s2_02");
-        let _ = sys_unlink_pool("/tmp/s3_aaa");
-        let _ = sys_unlink_pool("/tmp/s3_aab");
-        let _ = sys_unlink_pool("/tmp/s4_aa");
     }
 
     #[test]
@@ -10901,5 +11187,51 @@ mod tests {
         let n6 = sys_read(err_r6, &mut buf);
         sys_close(err_r6);
         assert!(n6 > 0);
+    }
+
+    #[test]
+    fn test_expand_basic_and_options() {
+        // Création d'un fichier avec tabulations
+        let fd = sys_open("/tmp/expand_input.txt", O_CREAT | O_WRONLY);
+        assert!(fd >= 0);
+        let content = b"\ta\tb\tc\n  \tfoo\tbar\n";
+        let _ = sys_write(fd, content);
+        let _ = sys_close(fd);
+
+        // Test 1 : expand par défaut (tabstops de 8)
+        let (out_r1, out_w1) = crate::vfs::pipe().unwrap();
+        let code1 = run_expand(&["/tmp/expand_input.txt"], 0, out_w1, 2);
+        sys_close(out_w1);
+        assert_eq!(code1, 0);
+
+        let mut buf = [0u8; 256];
+        let n1 = sys_read(out_r1, &mut buf);
+        sys_close(out_r1);
+        let res1 = core::str::from_utf8(&buf[..n1 as usize]).unwrap();
+        // "\ta\tb\tc\n" -> 8 spaces then 'a', then 7 spaces then 'b', then 7 spaces then 'c'
+        assert!(res1.starts_with("        a       b       c\n"));
+
+        // Test 2 : expand avec tabstop personnalisé -t 4
+        let (out_r2, out_w2) = crate::vfs::pipe().unwrap();
+        let code2 = run_expand(&["-t", "4", "/tmp/expand_input.txt"], 0, out_w2, 2);
+        sys_close(out_w2);
+        assert_eq!(code2, 0);
+
+        let n2 = sys_read(out_r2, &mut buf);
+        sys_close(out_r2);
+        let res2 = core::str::from_utf8(&buf[..n2 as usize]).unwrap();
+        assert!(res2.starts_with("    a   b   c\n"));
+
+        // Test 3 : expand avec -i (initial tabs only)
+        let (out_r3, out_w3) = crate::vfs::pipe().unwrap();
+        let code3 = run_expand(&["-i", "/tmp/expand_input.txt"], 0, out_w3, 2);
+        sys_close(out_w3);
+        assert_eq!(code3, 0);
+
+        let n3 = sys_read(out_r3, &mut buf);
+        sys_close(out_r3);
+        let res3 = core::str::from_utf8(&buf[..n3 as usize]).unwrap();
+        // La première tabulation initiale est convertie, mais \tb et \tc restent des tabulations
+        assert!(res3.starts_with("        a\tb\tc\n"));
     }
 }

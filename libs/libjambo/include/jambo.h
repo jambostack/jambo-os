@@ -314,8 +314,11 @@ typedef struct {
     int64_t  st_blksize;
     int64_t  st_blocks;
     int64_t  st_atime;
+    int64_t  st_atime_nsec;
     int64_t  st_mtime;
+    int64_t  st_mtime_nsec;
     int64_t  st_ctime;
+    int64_t  st_ctime_nsec;
 } jambo_stat_t;
 
 int open(const char *pathname, int flags, ...);

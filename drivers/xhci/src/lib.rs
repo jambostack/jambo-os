@@ -1592,19 +1592,22 @@ impl UsbKeyboardState {
     }
 }
 
-/// État de la souris USB HID conforme au Boot Protocol (Rapport de 3 à 4 octets).
+/// État de la souris USB HID (Rapports 3 octets Boot, 4 octets IntelliMouse, 5 octets Explorer 5 boutons + Molette H/V).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct UsbMouseState {
     pub left_button: bool,
     pub right_button: bool,
     pub middle_button: bool,
+    pub button4: bool, // Bouton latéral 1 (Précédent / Back)
+    pub button5: bool, // Bouton latéral 2 (Suivant / Forward)
     pub dx: i8,
     pub dy: i8,
-    pub wheel: i8,
+    pub wheel: i8,  // Molette verticale (axe Z)
+    pub hwheel: i8, // Molette horizontale (axe W / Pan / Tilt)
 }
 
 impl UsbMouseState {
-    /// Décode un rapport de souris Boot Protocol (3 ou 4 octets avec roulette).
+    /// Décode un rapport de souris standard ou étendu (3 à 5 octets).
     pub fn decode_report(&mut self, report: &[u8]) {
         if report.len() < 3 {
             return;
@@ -1614,14 +1617,191 @@ impl UsbMouseState {
         self.left_button = (buttons & (1 << 0)) != 0;
         self.right_button = (buttons & (1 << 1)) != 0;
         self.middle_button = (buttons & (1 << 2)) != 0;
+        self.button4 = (buttons & (1 << 3)) != 0;
+        self.button5 = (buttons & (1 << 4)) != 0;
 
         self.dx = report[1] as i8;
         self.dy = report[2] as i8;
 
-        if report.len() >= 4 {
+        if report.len() == 4 {
+            // Protocole IntelliMouse 4 octets standard :
             self.wheel = report[3] as i8;
+            self.hwheel = 0;
+        } else if report.len() >= 5 {
+            // Protocole étendu 5 octets (IntelliMouse Explorer avec boutons 4 & 5 et roulette horizontale/pan)
+            self.wheel = report[3] as i8;
+            self.hwheel = report[4] as i8;
         } else {
             self.wheel = 0;
+            self.hwheel = 0;
+        }
+    }
+}
+
+pub const MAX_TOUCH_CONTACTS: usize = 10;
+
+/// Contact individuel d'une surface multi-touches USB HID (Digitizer / Touchscreen / Touchpad)
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct UsbTouchContact {
+    pub contact_id: u8,
+    pub tip_switch: bool, // Contact effectif sur la surface
+    pub in_range: bool,   // Détection à proximité
+    pub confidence: bool, // Contact intentionnel validé
+    pub x: u16,           // Coordonnée absolue horizontale
+    pub y: u16,           // Coordonnée absolue verticale
+    pub pressure: u16,    // Pression mesurée (0..1023)
+    pub contact_width: u16,
+    pub contact_height: u16,
+}
+
+/// État d'une surface multi-touches USB HID
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UsbMultiTouchState {
+    pub contact_count: u8,
+    pub contacts: [UsbTouchContact; MAX_TOUCH_CONTACTS],
+    pub scan_time: u16,
+    pub button_down: bool,
+}
+
+impl Default for UsbMultiTouchState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl UsbMultiTouchState {
+    pub const fn new() -> Self {
+        const EMPTY_CONTACT: UsbTouchContact = UsbTouchContact {
+            contact_id: 0,
+            tip_switch: false,
+            in_range: false,
+            confidence: false,
+            x: 0,
+            y: 0,
+            pressure: 0,
+            contact_width: 0,
+            contact_height: 0,
+        };
+        Self {
+            contact_count: 0,
+            contacts: [EMPTY_CONTACT; MAX_TOUCH_CONTACTS],
+            scan_time: 0,
+            button_down: false,
+        }
+    }
+
+    /// Décode un rapport multi-touches conforme USB HID Digitizer (Usage Page 0x0D)
+    pub fn decode_report(&mut self, report: &[u8]) {
+        if report.len() < 2 {
+            return;
+        }
+
+        self.button_down = (report[0] & 0x01) != 0;
+        let count = (report[1] as usize).min(MAX_TOUCH_CONTACTS);
+        self.contact_count = count as u8;
+
+        for c in self.contacts.iter_mut() {
+            *c = UsbTouchContact::default();
+        }
+
+        let mut offset = 2;
+        let contact_stride = 6;
+
+        for contact in self.contacts.iter_mut().take(count) {
+            if offset + contact_stride > report.len() {
+                break;
+            }
+
+            let flags_id = report[offset];
+            let tip = (flags_id & 0x01) != 0;
+            let in_range = (flags_id & 0x02) != 0;
+            let confidence = (flags_id & 0x04) != 0;
+            let contact_id = (flags_id >> 4) & 0x0F;
+
+            let x = u16::from_le_bytes([report[offset + 1], report[offset + 2]]);
+            let y = u16::from_le_bytes([report[offset + 3], report[offset + 4]]);
+            let pressure = report[offset + 5] as u16;
+
+            *contact = UsbTouchContact {
+                contact_id,
+                tip_switch: tip,
+                in_range,
+                confidence,
+                x,
+                y,
+                pressure,
+                contact_width: 0,
+                contact_height: 0,
+            };
+
+            offset += contact_stride;
+        }
+
+        if offset + 2 <= report.len() {
+            self.scan_time = u16::from_le_bytes([report[offset], report[offset + 1]]);
+        }
+    }
+
+    /// Nombre de contacts actifs (doigts appuyés sur la surface)
+    pub fn active_contacts_count(&self) -> usize {
+        self.contacts
+            .iter()
+            .take(self.contact_count as usize)
+            .filter(|c| c.tip_switch)
+            .count()
+    }
+
+    /// Détecte un défilement / panoramique à deux doigts (Pan/Scroll)
+    pub fn detect_two_finger_scroll(&self, prev: &Self) -> Option<(i16, i16)> {
+        if self.active_contacts_count() < 2 || prev.active_contacts_count() < 2 {
+            return None;
+        }
+
+        let c1_cur = &self.contacts[0];
+        let c2_cur = &self.contacts[1];
+        let c1_prev = &prev.contacts[0];
+        let c2_prev = &prev.contacts[1];
+
+        if !c1_cur.tip_switch || !c2_cur.tip_switch || !c1_prev.tip_switch || !c2_prev.tip_switch {
+            return None;
+        }
+
+        let dx1 = c1_cur.x as i32 - c1_prev.x as i32;
+        let dy1 = c1_cur.y as i32 - c1_prev.y as i32;
+        let dx2 = c2_cur.x as i32 - c2_prev.x as i32;
+        let dy2 = c2_cur.y as i32 - c2_prev.y as i32;
+
+        if (dx1 * dx2 >= 0) && (dy1 * dy2 >= 0) {
+            let avg_dx = ((dx1 + dx2) / 2) as i16;
+            let avg_dy = ((dy1 + dy2) / 2) as i16;
+            Some((avg_dx, avg_dy))
+        } else {
+            None
+        }
+    }
+
+    /// Détecte un geste de pincement / zoom à deux doigts (Pinch/Zoom)
+    /// Valeur positive : écartement (Zoom In), valeur négative : rapprochement (Zoom Out)
+    pub fn detect_pinch_zoom(&self, prev: &Self) -> Option<i16> {
+        if self.active_contacts_count() < 2 || prev.active_contacts_count() < 2 {
+            return None;
+        }
+
+        let c1_cur = &self.contacts[0];
+        let c2_cur = &self.contacts[1];
+        let c1_prev = &prev.contacts[0];
+        let c2_prev = &prev.contacts[1];
+
+        let cur_dist =
+            (c1_cur.x as i32 - c2_cur.x as i32).abs() + (c1_cur.y as i32 - c2_cur.y as i32).abs();
+        let prev_dist = (c1_prev.x as i32 - c2_prev.x as i32).abs()
+            + (c1_prev.y as i32 - c2_prev.y as i32).abs();
+
+        let delta = (cur_dist - prev_dist) as i16;
+        if delta.abs() > 4 {
+            Some(delta)
+        } else {
+            None
         }
     }
 }
@@ -1737,6 +1917,7 @@ pub struct XhciController {
     pub hid_throttles: [Option<HidInterruptThrottleContext>; MAX_ENDPOINTS],
     pub keyboard: UsbKeyboardState,
     pub mouse: UsbMouseState,
+    pub multitouch: UsbMultiTouchState,
     pub interrupter: XhciInterrupter,
     pub port_slots: [Option<u8>; 16],
     pub ready: bool,
@@ -1786,10 +1967,14 @@ impl XhciController {
                 left_button: false,
                 right_button: false,
                 middle_button: false,
+                button4: false,
+                button5: false,
                 dx: 0,
                 dy: 0,
                 wheel: 0,
+                hwheel: 0,
             },
+            multitouch: UsbMultiTouchState::new(),
             interrupter: XhciInterrupter::new(),
             port_slots: [None; 16],
             ready: false,
@@ -2504,6 +2689,11 @@ impl XhciController {
         }
     }
 
+    /// Traite un rapport tactile / multi-touches reçu d'un numériseur HID (Digitizer / Touchscreen).
+    pub fn handle_touch_input(&mut self, report: &[u8]) {
+        self.multitouch.decode_report(report);
+    }
+
     /// Filtre et traite un rapport HID avec throttling et modération temporelle matérielle.
     /// Renvoie `Ok(true)` si le rapport a été admis et délivré, ou `Ok(false)` s'il a été modéré/bloqué.
     pub fn process_hid_interrupt_report(
@@ -2820,9 +3010,126 @@ mod tests {
         assert!(mouse.left_button);
         assert!(!mouse.right_button);
         assert!(!mouse.middle_button);
+        assert!(!mouse.button4);
+        assert!(!mouse.button5);
         assert_eq!(mouse.dx, 10);
         assert_eq!(mouse.dy, -5);
         assert_eq!(mouse.wheel, 1);
+        assert_eq!(mouse.hwheel, 0);
+    }
+
+    #[test]
+    fn test_mouse_5button_and_horizontal_wheel_decoding() {
+        let mut mouse = UsbMouseState::default();
+
+        // Rapport 5 octets : Clic Droit + Bouton 4 (Back) + Bouton 5 (Forward)
+        // dx = -12, dy = 24, wheel = -2 (scroll down), hwheel = 3 (tilt right)
+        let buttons = (1 << 1) | (1 << 3) | (1 << 4);
+        let report = [buttons, (-12i8) as u8, 24, (-2i8) as u8, 3];
+        mouse.decode_report(&report);
+
+        assert!(!mouse.left_button);
+        assert!(mouse.right_button);
+        assert!(!mouse.middle_button);
+        assert!(mouse.button4);
+        assert!(mouse.button5);
+        assert_eq!(mouse.dx, -12);
+        assert_eq!(mouse.dy, 24);
+        assert_eq!(mouse.wheel, -2);
+        assert_eq!(mouse.hwheel, 3);
+    }
+
+    #[test]
+    fn test_multitouch_digitizer_and_gestures() {
+        let mut touch = UsbMultiTouchState::new();
+
+        // Trame multi-touches : Bouton cliqué (0x01), 2 contacts
+        // Contact 0 : ID 1, Tip=1, InRange=1, X=1000, Y=2000, Pressure=250
+        // Contact 1 : ID 2, Tip=1, InRange=1, X=1500, Y=2000, Pressure=200
+        // Scan time = 12345
+        let c0_flags = 0x01 | 0x02 | (1 << 4);
+        let c1_flags = 0x01 | 0x02 | (2 << 4);
+        let report1 = [
+            0x01, // Button down
+            2,    // 2 contacts
+            c0_flags,
+            (1000u16 & 0xFF) as u8,
+            (1000u16 >> 8) as u8,
+            (2000u16 & 0xFF) as u8,
+            (2000u16 >> 8) as u8,
+            250,
+            c1_flags,
+            (1500u16 & 0xFF) as u8,
+            (1500u16 >> 8) as u8,
+            (2000u16 & 0xFF) as u8,
+            (2000u16 >> 8) as u8,
+            200,
+            (12345u16 & 0xFF) as u8,
+            (12345u16 >> 8) as u8,
+        ];
+
+        touch.decode_report(&report1);
+        assert!(touch.button_down);
+        assert_eq!(touch.contact_count, 2);
+        assert_eq!(touch.active_contacts_count(), 2);
+        assert_eq!(touch.contacts[0].contact_id, 1);
+        assert_eq!(touch.contacts[0].x, 1000);
+        assert_eq!(touch.contacts[0].y, 2000);
+        assert_eq!(touch.contacts[1].contact_id, 2);
+        assert_eq!(touch.contacts[1].x, 1500);
+        assert_eq!(touch.contacts[1].y, 2000);
+        assert_eq!(touch.scan_time, 12345);
+
+        // Déplacement simultané vers le bas (+50 sur Y) -> Pan/Scroll
+        let mut touch2 = touch;
+        let report2 = [
+            0x01,
+            2,
+            c0_flags,
+            (1000u16 & 0xFF) as u8,
+            (1000u16 >> 8) as u8,
+            (2050u16 & 0xFF) as u8,
+            (2050u16 >> 8) as u8,
+            250,
+            c1_flags,
+            (1500u16 & 0xFF) as u8,
+            (1500u16 >> 8) as u8,
+            (2050u16 & 0xFF) as u8,
+            (2050u16 >> 8) as u8,
+            200,
+            (12355u16 & 0xFF) as u8,
+            (12355u16 >> 8) as u8,
+        ];
+        touch2.decode_report(&report2);
+
+        let scroll = touch2.detect_two_finger_scroll(&touch);
+        assert_eq!(scroll, Some((0, 50)));
+
+        // Écartement horizontal (Pinch to zoom in)
+        let mut touch3 = touch;
+        let report3 = [
+            0x01,
+            2,
+            c0_flags,
+            (900u16 & 0xFF) as u8,
+            (900u16 >> 8) as u8,
+            (2000u16 & 0xFF) as u8,
+            (2000u16 >> 8) as u8,
+            250,
+            c1_flags,
+            (1600u16 & 0xFF) as u8,
+            (1600u16 >> 8) as u8,
+            (2000u16 & 0xFF) as u8,
+            (2000u16 >> 8) as u8,
+            200,
+            (12365u16 & 0xFF) as u8,
+            (12365u16 >> 8) as u8,
+        ];
+        touch3.decode_report(&report3);
+
+        let zoom = touch3.detect_pinch_zoom(&touch);
+        assert!(zoom.is_some());
+        assert!(zoom.unwrap() > 0); // Écartement (distance passe de 500 à 700)
     }
 
     #[test]

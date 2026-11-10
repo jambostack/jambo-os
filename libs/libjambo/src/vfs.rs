@@ -3,7 +3,7 @@
 //! Fournit une gestion de descripteurs de fichiers (`fd_table`) privée par processus
 //! et conforme aux spécifications POSIX.1-2008 en environnement `#![no_std]` :
 //! 1. Constantes POSIX standard d'accès aux fichiers (`O_*`, `SEEK_*`, `S_IF*`).
-//! 2. Table de descripteurs `FdTable` statique à capacité bornée (`MAX_FDS = 32`).
+//! 2. Table de descripteurs `FdTable` statique à capacité bornée (`MAX_FDS = 64`).
 //! 3. Entrées réservées `0` (stdin), `1` (stdout), `2` (stderr).
 //! 4. Descripteurs dynamiques `>= 3` pour fichiers réguliers et canaux IPC.
 //! 5. Primitives d'accès et métadonnées `PosixStat` (`fstat`, `stat`).
@@ -15,10 +15,10 @@ use jambo_abi::SysError;
 // CONSTANTES POSIX STANDARD
 // ============================================================================
 
-pub const MAX_FDS: usize = 32;
+pub const MAX_FDS: usize = 64;
 pub const MAX_PATH_LEN: usize = 64;
 pub const FILE_BUFFER_SIZE: usize = 1024; // Tampon embarqué par descripteur
-pub const MAX_PIPES: usize = 8; // Nombre maximal de canaux pipes simultanés
+pub const MAX_PIPES: usize = 16; // Nombre maximal de canaux pipes simultanés
 pub const PIPE_BUFFER_SIZE: usize = 1024; // Tampon circulaire par canal de pipe IPC
 
 // Drapeaux d'ouverture de fichier (flags)
@@ -123,7 +123,21 @@ impl FdEntry {
     }
 }
 
-/// Structure de métadonnées de fichier conforme POSIX `struct stat`
+/// Structure temporelle haute résolution POSIX (secondes et nanosecondes)
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PosixTimespec {
+    pub tv_sec: i64,
+    pub tv_nsec: i64,
+}
+
+impl PosixTimespec {
+    pub const fn new(tv_sec: i64, tv_nsec: i64) -> Self {
+        Self { tv_sec, tv_nsec }
+    }
+}
+
+/// Structure de métadonnées de fichier conforme POSIX `struct stat` avec support nanosecondes
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct PosixStat {
@@ -138,8 +152,40 @@ pub struct PosixStat {
     pub st_blksize: i64,
     pub st_blocks: i64,
     pub st_atime: i64,
+    pub st_atime_nsec: i64,
     pub st_mtime: i64,
+    pub st_mtime_nsec: i64,
     pub st_ctime: i64,
+    pub st_ctime_nsec: i64,
+}
+
+impl PosixStat {
+    /// Renvoie l'attribut temporel du dernier accès `st_atim` conforme POSIX.1-2008
+    #[inline]
+    pub fn st_atim(&self) -> PosixTimespec {
+        PosixTimespec {
+            tv_sec: self.st_atime,
+            tv_nsec: self.st_atime_nsec,
+        }
+    }
+
+    /// Renvoie l'attribut temporel de dernière modification `st_mtim` conforme POSIX.1-2008
+    #[inline]
+    pub fn st_mtim(&self) -> PosixTimespec {
+        PosixTimespec {
+            tv_sec: self.st_mtime,
+            tv_nsec: self.st_mtime_nsec,
+        }
+    }
+
+    /// Renvoie l'attribut temporel de dernier changement de métadonnées `st_ctim` conforme POSIX.1-2008
+    #[inline]
+    pub fn st_ctim(&self) -> PosixTimespec {
+        PosixTimespec {
+            tv_sec: self.st_ctime,
+            tv_nsec: self.st_ctime_nsec,
+        }
+    }
 }
 
 /// Structure de métadonnées de système de fichiers conforme POSIX `struct statvfs`
