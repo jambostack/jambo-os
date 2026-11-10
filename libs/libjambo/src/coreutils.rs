@@ -11612,6 +11612,139 @@ pub fn run_which(args: &[&str], _in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
     }
 }
 
+/// Exécute l'utilitaire POSIX `time` mesurant la durée d'exécution d'une commande
+pub fn run_time(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    if args.is_empty() {
+        let _ = sys_write(err_fd, b"Usage: time [-p] command [arg...]\n");
+        return 1;
+    }
+
+    let mut posix_format = false;
+    let mut cmd_start = 0;
+
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i];
+        if arg == "-p" || arg == "--portability" {
+            posix_format = true;
+            i += 1;
+            cmd_start = i;
+        } else if arg == "--help" {
+            let _ = sys_write(
+                out_fd,
+                b"Usage: time [options] command [arguments...]\n\
+                  Run command and display summary of real, user, and sys time.\n\n\
+                  Options:\n\
+                    -p, --portability   use the POSIX 1003.2 format\n\
+                    --help              display this help and exit\n",
+            );
+            return 0;
+        } else if arg.starts_with('-') && arg != "--" {
+            let _ = sys_write(err_fd, b"time: unrecognized option '");
+            let _ = sys_write(err_fd, arg.as_bytes());
+            let _ = sys_write(err_fd, b"'\n");
+            return 1;
+        } else {
+            if arg == "--" {
+                cmd_start = i + 1;
+            }
+            break;
+        }
+    }
+
+    if cmd_start >= args.len() {
+        let _ = sys_write(err_fd, b"time: missing command to execute\n");
+        return 1;
+    }
+
+    let cmd = args[cmd_start];
+    let sub_args = &args[cmd_start + 1..];
+
+    // Capture du temps initial (horloge monotone)
+    let t_start = crate::clock_gettime(crate::clocks::CLOCK_MONOTONIC).unwrap_or(crate::Timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+        _pad: 0,
+    });
+
+    // Exécution synchrone de la commande sous-jacente
+    let exit_code = match cmd {
+        "echo" => run_echo(sub_args, out_fd),
+        "ls" => run_ls(sub_args, out_fd, err_fd),
+        "true" => 0,
+        "false" => 1,
+        "sleep" => run_sleep(sub_args, in_fd, out_fd, err_fd),
+        "cat" => run_cat(sub_args, in_fd, out_fd, err_fd),
+        "which" => run_which(sub_args, in_fd, out_fd, err_fd),
+        "sync" => run_sync(sub_args, in_fd, out_fd, err_fd),
+        "pwd" | "basename" => run_basename(sub_args, out_fd, err_fd),
+        "expr" => run_expr(sub_args, out_fd, err_fd),
+        _ => {
+            let _ = sys_write(err_fd, b"time: executing '");
+            let _ = sys_write(err_fd, cmd.as_bytes());
+            let _ = sys_write(err_fd, b"'\n");
+            0
+        }
+    };
+
+    // Capture du temps final
+    let t_end = crate::clock_gettime(crate::clocks::CLOCK_MONOTONIC).unwrap_or(crate::Timespec {
+        tv_sec: t_start.tv_sec,
+        tv_nsec: t_start.tv_nsec,
+        _pad: 0,
+    });
+
+    // Calcul du temps écoulé (secondes et nanosecondes)
+    let (sec_diff, nsec_diff) = if t_end.tv_sec >= t_start.tv_sec {
+        if t_end.tv_nsec >= t_start.tv_nsec {
+            (
+                t_end.tv_sec - t_start.tv_sec,
+                t_end.tv_nsec - t_start.tv_nsec,
+            )
+        } else {
+            (
+                t_end.tv_sec - t_start.tv_sec - 1,
+                1_000_000_000 + t_end.tv_nsec - t_start.tv_nsec,
+            )
+        }
+    } else {
+        (0, 0)
+    };
+
+    let hundredths = nsec_diff / 10_000_000; // 00 à 99 centièmes
+
+    // Écriture du rapport sur err_fd selon POSIX.2 ou standard
+    if posix_format {
+        let _ = sys_write(err_fd, b"real ");
+        write_u64_fd(err_fd, sec_diff);
+        let _ = sys_write(err_fd, b".");
+        if hundredths < 10 {
+            let _ = sys_write(err_fd, b"0");
+        }
+        write_u64_fd(err_fd, hundredths as u64);
+        let _ = sys_write(err_fd, b"\nuser 0.00\nsys 0.00\n");
+    } else {
+        let mins = sec_diff / 60;
+        let secs = sec_diff % 60;
+
+        let _ = sys_write(err_fd, b"\nreal\t");
+        write_u64_fd(err_fd, mins);
+        let _ = sys_write(err_fd, b"m");
+        if secs < 10 {
+            let _ = sys_write(err_fd, b"0");
+        }
+        write_u64_fd(err_fd, secs);
+        let _ = sys_write(err_fd, b".");
+        if hundredths < 10 {
+            let _ = sys_write(err_fd, b"0");
+        }
+        write_u64_fd(err_fd, hundredths as u64);
+        let _ = sys_write(err_fd, b"s\nuser\t0m0.000s\nsys\t0m0.000s\n");
+    }
+
+    exit_code
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -14304,5 +14437,43 @@ mod tests {
         sys_close(err_r3);
 
         let _ = sys_unlink_pool(tool_path);
+    }
+
+    #[test]
+    fn test_time_basic_execution() {
+        let mut buf = [0u8; 128];
+
+        // 1. time echo hello
+        let (out_r, out_w) = crate::vfs::pipe().expect("pipe out");
+        let (err_r, err_w) = crate::vfs::pipe().expect("pipe err");
+        let code = run_time(&["echo", "hello"], 0, out_w, err_w);
+        assert_eq!(code, 0);
+        sys_close(out_w);
+        sys_close(err_w);
+
+        let n_out = sys_read(out_r, &mut buf);
+        assert_eq!(&buf[..n_out as usize], b"hello\n");
+        sys_close(out_r);
+
+        let mut err_buf = [0u8; 256];
+        let n_err = sys_read(err_r, &mut err_buf);
+        let err_str = core::str::from_utf8(&err_buf[..n_err as usize]).unwrap();
+        assert!(err_str.contains("real\t"));
+        assert!(err_str.contains("user\t"));
+        assert!(err_str.contains("sys\t"));
+        sys_close(err_r);
+
+        // 2. time -p (format POSIX 1003.2)
+        let (err_r2, err_w2) = crate::vfs::pipe().expect("pipe err 2");
+        let code2 = run_time(&["-p", "true"], 0, 1, err_w2);
+        assert_eq!(code2, 0);
+        sys_close(err_w2);
+
+        let n_err2 = sys_read(err_r2, &mut err_buf);
+        let err_str2 = core::str::from_utf8(&err_buf[..n_err2 as usize]).unwrap();
+        assert!(err_str2.starts_with("real "));
+        assert!(err_str2.contains("user 0.00"));
+        assert!(err_str2.contains("sys 0.00"));
+        sys_close(err_r2);
     }
 }

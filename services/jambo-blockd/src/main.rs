@@ -9,7 +9,8 @@
 
 use jambo_blockd::{
     BlockRequest, BlockResponse, ChannelMessage, UnifiedBlockStorage, BLOCK_OP_FLUSH,
-    BLOCK_OP_GET_VMO, BLOCK_OP_READ, BLOCK_OP_WRITE, SECTOR_SIZE, SHARED_VMO_ADDR, SHARED_VMO_SIZE,
+    BLOCK_OP_GET_HEALTH, BLOCK_OP_GET_VMO, BLOCK_OP_READ, BLOCK_OP_WRITE, SECTOR_SIZE,
+    SHARED_VMO_ADDR, SHARED_VMO_SIZE,
 };
 use libjambo::println;
 use virtio_drv::VirtioBlockDriver;
@@ -333,6 +334,26 @@ pub extern "C" fn _start() -> ! {
                     BLOCK_OP_FLUSH => {
                         if let Err(e) = storage.flush() {
                             status = e as i32;
+                        }
+                    }
+
+                    // Opcode 4 : Télémétrie de santé de disque (SMART / Diagnostics)
+                    BLOCK_OP_GET_HEALTH => {
+                        let health = storage.query_health_info();
+                        let h_bytes = health.to_bytes();
+                        let offset = req.buf_offset as usize;
+                        if offset + h_bytes.len() <= SHARED_VMO_SIZE {
+                            unsafe {
+                                core::ptr::copy_nonoverlapping(
+                                    h_bytes.as_ptr(),
+                                    (SHARED_VMO_ADDR + offset) as *mut u8,
+                                    h_bytes.len(),
+                                );
+                            }
+                            bytes_transferred = h_bytes.len() as u32;
+                            status = 0;
+                        } else {
+                            status = libjambo::SysError::InvalidArgument as i32;
                         }
                     }
 
