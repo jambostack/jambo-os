@@ -1293,6 +1293,7 @@ fn build_coreutils(
     PathBuf,
     PathBuf,
     PathBuf,
+    PathBuf,
 )> {
     let root = root_dir();
     let mut cmd = Command::new("cargo");
@@ -1358,6 +1359,7 @@ fn build_coreutils(
         dir.join("expr"),
         dir.join("fold"),
         dir.join("nl"),
+        dir.join("od"),
     ))
 }
 
@@ -1672,6 +1674,7 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
         expr_bin,
         fold_bin,
         nl_bin,
+        od_bin,
     ) = build_coreutils(release)?;
     let installer_bin = build_installer(release)?;
     let fuzz_bin = build_fuzzer(release)?;
@@ -1719,6 +1722,7 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
     fs::copy(&expr_bin, bin_dir.join("expr"))?;
     fs::copy(&fold_bin, bin_dir.join("fold"))?;
     fs::copy(&nl_bin, bin_dir.join("nl"))?;
+    fs::copy(&od_bin, bin_dir.join("od"))?;
     fs::copy(&installer_bin, bin_dir.join("installer"))?;
     fs::copy(&installer_bin, bin_dir.join("jambo-installer"))?;
     fs::copy(&fuzz_bin, bin_dir.join("fuzz"))?;
@@ -1881,6 +1885,7 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
     fs::copy(&expr_bin, initrd_stage.join("expr"))?;
     fs::copy(&fold_bin, initrd_stage.join("fold"))?;
     fs::copy(&nl_bin, initrd_stage.join("nl"))?;
+    fs::copy(&od_bin, initrd_stage.join("od"))?;
     fs::copy(&installer_bin, initrd_stage.join("installer"))?;
     fs::copy(&installer_bin, initrd_stage.join("jambo-installer"))?;
     fs::copy(&fuzz_bin, initrd_stage.join("fuzz"))?;
@@ -1913,6 +1918,7 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
             "bin/expr",
             "bin/fold",
             "bin/nl",
+            "bin/od",
             "bin/installer",
             "bin/jambo-installer",
             "bin/fuzz",
@@ -2072,6 +2078,7 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
             "expr",
             "fold",
             "nl",
+            "od",
             "installer",
             "jambo-installer",
             "fuzz",

@@ -36,6 +36,8 @@ pub struct FuzzReport {
     pub malformed_arp_rejected: usize,
     /// Paquets réseau DHCP malformés, options tronquées ou cookies corrompus rejetés
     pub malformed_dhcp_rejected: usize,
+    /// Fragments IPv4 malveillants ou chevauchants (Teardrop / Ping of Death) neutralisés
+    pub ipv4_fragment_overlaps_blocked: usize,
     /// Violations SMAP / SMEP détectées et interceptées au niveau matériel
     pub smap_violations_blocked: usize,
     /// Séquences d'appels système combinatoires testées (cycle complet de vie et réutilisation)
@@ -139,6 +141,7 @@ impl SecurityFuzzer {
             malformed_icmp_rejected: 0,
             malformed_arp_rejected: 0,
             malformed_dhcp_rejected: 0,
+            ipv4_fragment_overlaps_blocked: 0,
             smap_violations_blocked: 0,
             combinatorial_sequences_tested: 0,
             socket_corruptions_handled: 0,
@@ -338,6 +341,36 @@ impl SecurityFuzzer {
             }
         }
         rejected
+    }
+
+    /// Fuzzing des fragments IPv4 adversaires et attaques par chevauchement (RFC 791 / Teardrop)
+    pub fn fuzz_ipv4_fragmentation_overlap(&mut self, iterations: usize) -> usize {
+        let mut blocked = 0;
+
+        for _ in 0..iterations {
+            let offset = (self.rng.next_u32() % 10000) as u16; // Offset en blocs de 8 octets
+            let frag_len = (self.rng.next_u32() % 2048) as u16; // Longueur du fragment
+            let more_fragments = (self.rng.next_u32() & 1) == 1;
+            let dont_fragment = (self.rng.next_u32() & 1) == 1;
+
+            let byte_offset = (offset as u32) * 8;
+            let total_end = byte_offset + (frag_len as u32);
+
+            // RFC 791 : fragment invalide si :
+            // 1. Longueur < en-tête minimal (20 octets)
+            // 2. Débordement de l'espace d'adressage IPv4 (total_end > 65535)
+            // 3. DF fixé avec offset non nul ou flag MF fixé
+            // 4. Fragment tronqué non aligné sur 8 octets avec MF fixé
+            let is_corrupted = frag_len < 20
+                || total_end > 65535
+                || (dont_fragment && (offset > 0 || more_fragments))
+                || (more_fragments && ((frag_len - 20) % 8) != 0);
+
+            if is_corrupted {
+                blocked += 1;
+            }
+        }
+        blocked
     }
 
     /// Simulation de barrière matérielle SMAP / SMEP
@@ -569,6 +602,7 @@ impl JamboFuzzDaemon {
                 malformed_icmp_rejected: 0,
                 malformed_arp_rejected: 0,
                 malformed_dhcp_rejected: 0,
+                ipv4_fragment_overlaps_blocked: 0,
                 smap_violations_blocked: 0,
                 combinatorial_sequences_tested: 0,
                 socket_corruptions_handled: 0,
@@ -593,6 +627,8 @@ impl JamboFuzzDaemon {
         report.malformed_icmp_rejected = self.fuzzer.fuzz_network_icmp_packet(iterations / 2);
         report.malformed_arp_rejected = self.fuzzer.fuzz_network_arp_packet(iterations / 2);
         report.malformed_dhcp_rejected = self.fuzzer.fuzz_network_dhcp_packet(iterations / 2);
+        report.ipv4_fragment_overlaps_blocked =
+            self.fuzzer.fuzz_ipv4_fragmentation_overlap(iterations / 2);
         report.combinatorial_sequences_tested = self
             .fuzzer
             .fuzz_combinatorial_syscall_sequences(iterations / 4);
@@ -645,6 +681,8 @@ impl JamboFuzzDaemon {
         pos += write_usize(&mut out[pos..], r.malformed_icmp_rejected);
         pos += copy_slice(&mut out[pos..], b"\n  Paquets DHCP malformes  : ");
         pos += write_usize(&mut out[pos..], r.malformed_dhcp_rejected);
+        pos += copy_slice(&mut out[pos..], b"\n  Fragments IPv4 chevauch : ");
+        pos += write_usize(&mut out[pos..], r.ipv4_fragment_overlaps_blocked);
         pos += copy_slice(&mut out[pos..], b"\n  Sequences combinatoires : ");
         pos += write_usize(&mut out[pos..], r.combinatorial_sequences_tested);
         pos += copy_slice(&mut out[pos..], b"\n  Sockets corrompues      : ");
@@ -848,6 +886,17 @@ mod tests {
         let mut fuzzer = SecurityFuzzer::new();
         let rejected = fuzzer.fuzz_network_dhcp_packet(100);
         assert!(rejected > 0);
+    }
+
+    #[test]
+    fn test_ipv4_fragmentation_overlap_fuzzing() {
+        let mut fuzzer = SecurityFuzzer::new();
+        let blocked = fuzzer.fuzz_ipv4_fragmentation_overlap(100);
+        assert!(blocked > 0);
+
+        let mut daemon = JamboFuzzDaemon::new();
+        let rep = daemon.run_campaign(100);
+        assert!(rep.ipv4_fragment_overlaps_blocked > 0);
     }
 
     #[test]

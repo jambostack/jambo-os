@@ -571,6 +571,7 @@ impl JamboShell {
             "expr" | "/bin/expr" | "bin/expr" => self.cmd_expr(args, out),
             "fold" | "/bin/fold" | "bin/fold" => self.cmd_fold(args, out),
             "nl" | "/bin/nl" | "bin/nl" => self.cmd_nl(args, out),
+            "od" | "/bin/od" | "bin/od" => self.cmd_od(args, out),
             "version" => self.cmd_version(out),
             "uptime" => self.cmd_uptime(out),
             "caps" => self.cmd_caps(out),
@@ -1351,6 +1352,26 @@ Utilitaire d'installation JamboOS (Serie 0.*.*)\n\
             }
         } else {
             let msg = b"nl: pipe creation failed\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
+    }
+
+    fn cmd_od(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if let Ok((r, w)) = libjambo::vfs::pipe() {
+            let code = libjambo::coreutils::run_od(args, 0, w, w);
+            let _ = libjambo::coreutils::sys_close(w);
+            let n = libjambo::coreutils::sys_read(r, out);
+            let _ = libjambo::coreutils::sys_close(r);
+            let len = if n > 0 { n as usize } else { 0 };
+            if code == 0 {
+                (ShellStatus::Success, len)
+            } else {
+                (ShellStatus::ExecutionFailed, len)
+            }
+        } else {
+            let msg = b"od: pipe creation failed\n";
             let len = msg.len().min(out.len());
             out[..len].copy_from_slice(&msg[..len]);
             (ShellStatus::ExecutionFailed, len)
@@ -17993,5 +18014,32 @@ mod tests {
         assert_eq!(st3, ShellStatus::Success);
         let s3 = core::str::from_utf8(&out[..len3]).unwrap();
         assert!(s3.contains("0001\tpremiere ligne\n"));
+    }
+
+    #[test]
+    fn test_od_shell_execution() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 512];
+
+        // 1. Exécution interne de od sur fichier créé
+        let fd_od = libjambo::coreutils::sys_open(
+            "/tmp/test_sh_od.txt",
+            libjambo::vfs::O_CREAT | libjambo::vfs::O_WRONLY,
+        );
+        assert!(fd_od >= 0);
+        let _ = libjambo::coreutils::sys_write(fd_od, b"Jambo");
+        libjambo::coreutils::sys_close(fd_od);
+
+        let (st1, len1) = shell.execute_line("od -c /tmp/test_sh_od.txt", &mut out);
+        assert_eq!(st1, ShellStatus::Success);
+        let s1 = core::str::from_utf8(&out[..len1]).unwrap();
+        assert!(s1.contains("   J   a   m   b   o"));
+
+        // 2. Exécution via chemin absolu /bin/od avec format octal bytes
+        let (st2, len2) = shell.execute_line("/bin/od -b -A d /tmp/test_sh_od.txt", &mut out);
+        assert_eq!(st2, ShellStatus::Success);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        // 'J'=74 (0112), 'a'=97 (0141)
+        assert!(s2.contains("0000000 112 141"));
     }
 }

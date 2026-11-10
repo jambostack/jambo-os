@@ -8114,6 +8114,520 @@ pub fn run_nl(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
     }
 }
 
+/// Base de numérotation d'adresse pour l'utilitaire `od` (Octal Dump)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OdRadix {
+    Octal,
+    Decimal,
+    Hex,
+    None,
+}
+
+/// Format de représentation des données pour l'utilitaire `od`
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OdFormat {
+    Octal2,
+    Octal1,
+    Char,
+    Decimal2,
+    Hex2,
+    Hex4,
+    Decimal4,
+}
+
+/// Formate l'offset d'adresse de ligne selon la base radix
+fn format_od_offset(offset: usize, radix: OdRadix, out: &mut [u8]) -> usize {
+    match radix {
+        OdRadix::None => 0,
+        OdRadix::Octal => {
+            let mut val = offset;
+            for i in (0..7).rev() {
+                out[i] = b'0' + (val & 7) as u8;
+                val >>= 3;
+            }
+            7
+        }
+        OdRadix::Decimal => {
+            let mut val = offset;
+            for i in (0..7).rev() {
+                out[i] = b'0' + (val % 10) as u8;
+                val /= 10;
+            }
+            7
+        }
+        OdRadix::Hex => {
+            let hex_chars = b"0123456789abcdef";
+            let mut val = offset;
+            for i in (0..7).rev() {
+                out[i] = hex_chars[val & 0x0F];
+                val >>= 4;
+            }
+            7
+        }
+    }
+}
+
+/// Analyse un entier non signé avec support des préfixes 0x (hex) et 0 (octal)
+fn parse_od_number(s: &str) -> Option<usize> {
+    let trimmed = s.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if trimmed.starts_with("0x") || trimmed.starts_with("0X") {
+        let hex_str = &trimmed[2..];
+        if hex_str.is_empty() {
+            return None;
+        }
+        let mut val = 0usize;
+        for &b in hex_str.as_bytes() {
+            let digit = match b {
+                b'0'..=b'9' => (b - b'0') as usize,
+                b'a'..=b'f' => (b - b'a' + 10) as usize,
+                b'A'..=b'F' => (b - b'A' + 10) as usize,
+                _ => return None,
+            };
+            val = val.checked_mul(16)?.checked_add(digit)?;
+        }
+        Some(val)
+    } else if trimmed.starts_with('0') && trimmed.len() > 1 {
+        let mut val = 0usize;
+        for &b in &trimmed.as_bytes()[1..] {
+            if (b'0'..=b'7').contains(&b) {
+                val = val.checked_mul(8)?.checked_add((b - b'0') as usize)?;
+            } else {
+                return None;
+            }
+        }
+        Some(val)
+    } else {
+        let mut val = 0usize;
+        for &b in trimmed.as_bytes() {
+            if b.is_ascii_digit() {
+                val = val.checked_mul(10)?.checked_add((b - b'0') as usize)?;
+            } else {
+                return None;
+            }
+        }
+        Some(val)
+    }
+}
+
+/// Utilitaire POSIX standard `od` (Octal Dump)
+///
+/// Décharge les données d'un ou plusieurs fichiers (ou stdin) sous forme d'unités
+/// octales, hexadécimales, décimales ou caractères ASCII échappés selon IEEE Std 1003.1.
+pub fn run_od(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    let mut radix = OdRadix::Octal;
+    let mut format = OdFormat::Octal2;
+    let mut skip_bytes: usize = 0;
+    let mut max_bytes: Option<usize> = None;
+    let mut _verbose = false;
+
+    let mut file_args = [""; 32];
+    let mut file_count = 0;
+
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i].trim();
+        if arg == "-b" {
+            format = OdFormat::Octal1;
+            i += 1;
+        } else if arg == "-c" {
+            format = OdFormat::Char;
+            i += 1;
+        } else if arg == "-d" || arg == "-u" {
+            format = OdFormat::Decimal2;
+            i += 1;
+        } else if arg == "-o" {
+            format = OdFormat::Octal2;
+            i += 1;
+        } else if arg == "-x" || arg == "-h" {
+            format = OdFormat::Hex2;
+            i += 1;
+        } else if arg == "-v" {
+            _verbose = true;
+            i += 1;
+        } else if arg == "-A" {
+            if i + 1 < args.len() {
+                match args[i + 1].trim() {
+                    "d" => radix = OdRadix::Decimal,
+                    "o" => radix = OdRadix::Octal,
+                    "x" => radix = OdRadix::Hex,
+                    "n" => radix = OdRadix::None,
+                    other => {
+                        let _ = sys_write(err_fd, b"od: base d'adresse invalide: ");
+                        let _ = sys_write(err_fd, other.as_bytes());
+                        let _ = sys_write(err_fd, b"\n");
+                        return 1;
+                    }
+                }
+                i += 2;
+            } else {
+                let _ = sys_write(err_fd, b"od: option requiert un argument -- 'A'\n");
+                return 1;
+            }
+        } else if arg.starts_with("-A") && arg.len() == 3 {
+            match &arg[2..3] {
+                "d" => radix = OdRadix::Decimal,
+                "o" => radix = OdRadix::Octal,
+                "x" => radix = OdRadix::Hex,
+                "n" => radix = OdRadix::None,
+                other => {
+                    let _ = sys_write(err_fd, b"od: base d'adresse invalide: ");
+                    let _ = sys_write(err_fd, other.as_bytes());
+                    let _ = sys_write(err_fd, b"\n");
+                    return 1;
+                }
+            }
+            i += 1;
+        } else if arg == "-t" {
+            if i + 1 < args.len() {
+                match args[i + 1].trim() {
+                    "o1" | "b" => format = OdFormat::Octal1,
+                    "o" | "o2" => format = OdFormat::Octal2,
+                    "c" => format = OdFormat::Char,
+                    "u1" | "d1" => format = OdFormat::Octal1,
+                    "u" | "u2" | "d2" => format = OdFormat::Decimal2,
+                    "u4" | "d4" => format = OdFormat::Decimal4,
+                    "x" | "x2" => format = OdFormat::Hex2,
+                    "x4" => format = OdFormat::Hex4,
+                    other => {
+                        let _ = sys_write(err_fd, b"od: type de format invalide: ");
+                        let _ = sys_write(err_fd, other.as_bytes());
+                        let _ = sys_write(err_fd, b"\n");
+                        return 1;
+                    }
+                }
+                i += 2;
+            } else {
+                let _ = sys_write(err_fd, b"od: option requiert un argument -- 't'\n");
+                return 1;
+            }
+        } else if arg == "-j" {
+            if i + 1 < args.len() {
+                if let Some(val) = parse_od_number(args[i + 1].trim()) {
+                    skip_bytes = val;
+                } else {
+                    let _ = sys_write(err_fd, b"od: decalage invalide pour -j\n");
+                    return 1;
+                }
+                i += 2;
+            } else {
+                let _ = sys_write(err_fd, b"od: option requiert un argument -- 'j'\n");
+                return 1;
+            }
+        } else if arg == "-N" {
+            if i + 1 < args.len() {
+                if let Some(val) = parse_od_number(args[i + 1].trim()) {
+                    max_bytes = Some(val);
+                } else {
+                    let _ = sys_write(err_fd, b"od: limite invalide pour -N\n");
+                    return 1;
+                }
+                i += 2;
+            } else {
+                let _ = sys_write(err_fd, b"od: option requiert un argument -- 'N'\n");
+                return 1;
+            }
+        } else if arg.starts_with('-') && arg != "-" {
+            let _ = sys_write(err_fd, b"od: option invalide: ");
+            let _ = sys_write(err_fd, arg.as_bytes());
+            let _ = sys_write(err_fd, b"\n");
+            return 1;
+        } else {
+            if file_count < file_args.len() {
+                file_args[file_count] = arg;
+                file_count += 1;
+            }
+            i += 1;
+        }
+    }
+
+    let mut current_offset: usize = 0;
+    let mut skipped: usize = 0;
+    let mut total_emitted: usize = 0;
+
+    let mut line_buf = [0u8; 16];
+    let mut line_len = 0usize;
+
+    let emit_od_line = |bytes: &[u8], offset: usize| {
+        let mut out_scratch = [0u8; 256];
+        let mut out_len = 0usize;
+
+        // 1. Offset d'adresse
+        if radix != OdRadix::None {
+            let mut off_buf = [0u8; 7];
+            let off_len = format_od_offset(offset, radix, &mut off_buf);
+            for &b in &off_buf[..off_len] {
+                out_scratch[out_len] = b;
+                out_len += 1;
+            }
+        }
+
+        // 2. Formatage des valeurs selon le format sélectionné
+        match format {
+            OdFormat::Octal2 => {
+                let mut idx = 0;
+                while idx < bytes.len() {
+                    let b0 = bytes[idx];
+                    let b1 = if idx + 1 < bytes.len() {
+                        bytes[idx + 1]
+                    } else {
+                        0
+                    };
+                    let val = u16::from_ne_bytes([b0, b1]);
+
+                    out_scratch[out_len] = b' ';
+                    out_len += 1;
+                    let mut digits = [b'0'; 6];
+                    let mut temp = val;
+                    for d in (0..6).rev() {
+                        digits[d] = b'0' + (temp & 7) as u8;
+                        temp >>= 3;
+                    }
+                    for &d in &digits {
+                        out_scratch[out_len] = d;
+                        out_len += 1;
+                    }
+                    idx += 2;
+                }
+            }
+            OdFormat::Octal1 => {
+                for &b in bytes {
+                    out_scratch[out_len] = b' ';
+                    out_len += 1;
+                    out_scratch[out_len] = b'0' + ((b >> 6) & 7);
+                    out_scratch[out_len + 1] = b'0' + ((b >> 3) & 7);
+                    out_scratch[out_len + 2] = b'0' + (b & 7);
+                    out_len += 3;
+                }
+            }
+            OdFormat::Char => {
+                for &b in bytes {
+                    out_scratch[out_len] = b' ';
+                    out_len += 1;
+                    match b {
+                        b'\n' => {
+                            out_scratch[out_len] = b' ';
+                            out_scratch[out_len + 1] = b'\\';
+                            out_scratch[out_len + 2] = b'n';
+                            out_len += 3;
+                        }
+                        b'\t' => {
+                            out_scratch[out_len] = b' ';
+                            out_scratch[out_len + 1] = b'\\';
+                            out_scratch[out_len + 2] = b't';
+                            out_len += 3;
+                        }
+                        b'\r' => {
+                            out_scratch[out_len] = b' ';
+                            out_scratch[out_len + 1] = b'\\';
+                            out_scratch[out_len + 2] = b'r';
+                            out_len += 3;
+                        }
+                        b'\0' => {
+                            out_scratch[out_len] = b' ';
+                            out_scratch[out_len + 1] = b'\\';
+                            out_scratch[out_len + 2] = b'0';
+                            out_len += 3;
+                        }
+                        32..=126 => {
+                            out_scratch[out_len] = b' ';
+                            out_scratch[out_len + 1] = b' ';
+                            out_scratch[out_len + 2] = b;
+                            out_len += 3;
+                        }
+                        _ => {
+                            out_scratch[out_len] = b'0' + ((b >> 6) & 7);
+                            out_scratch[out_len + 1] = b'0' + ((b >> 3) & 7);
+                            out_scratch[out_len + 2] = b'0' + (b & 7);
+                            out_len += 3;
+                        }
+                    }
+                }
+            }
+            OdFormat::Decimal2 => {
+                let mut idx = 0;
+                while idx < bytes.len() {
+                    let b0 = bytes[idx];
+                    let b1 = if idx + 1 < bytes.len() {
+                        bytes[idx + 1]
+                    } else {
+                        0
+                    };
+                    let val = u16::from_ne_bytes([b0, b1]);
+
+                    out_scratch[out_len] = b' ';
+                    out_len += 1;
+                    let mut digits = [b'0'; 5];
+                    let mut temp = val;
+                    for d in (0..5).rev() {
+                        digits[d] = b'0' + (temp % 10) as u8;
+                        temp /= 10;
+                    }
+                    for &d in &digits {
+                        out_scratch[out_len] = d;
+                        out_len += 1;
+                    }
+                    idx += 2;
+                }
+            }
+            OdFormat::Hex2 => {
+                let hex_chars = b"0123456789abcdef";
+                let mut idx = 0;
+                while idx < bytes.len() {
+                    let b0 = bytes[idx];
+                    let b1 = if idx + 1 < bytes.len() {
+                        bytes[idx + 1]
+                    } else {
+                        0
+                    };
+                    let val = u16::from_ne_bytes([b0, b1]);
+
+                    out_scratch[out_len] = b' ';
+                    out_len += 1;
+                    out_scratch[out_len] = hex_chars[((val >> 12) & 0x0F) as usize];
+                    out_scratch[out_len + 1] = hex_chars[((val >> 8) & 0x0F) as usize];
+                    out_scratch[out_len + 2] = hex_chars[((val >> 4) & 0x0F) as usize];
+                    out_scratch[out_len + 3] = hex_chars[(val & 0x0F) as usize];
+                    out_len += 4;
+                    idx += 2;
+                }
+            }
+            OdFormat::Hex4 => {
+                let hex_chars = b"0123456789abcdef";
+                let mut idx = 0;
+                while idx < bytes.len() {
+                    let mut b4 = [0u8; 4];
+                    for k in 0..4 {
+                        if idx + k < bytes.len() {
+                            b4[k] = bytes[idx + k];
+                        }
+                    }
+                    let val = u32::from_ne_bytes(b4);
+
+                    out_scratch[out_len] = b' ';
+                    out_len += 1;
+                    for shift in (0..8).rev() {
+                        out_scratch[out_len] = hex_chars[((val >> (shift * 4)) & 0x0F) as usize];
+                        out_len += 1;
+                    }
+                    idx += 4;
+                }
+            }
+            OdFormat::Decimal4 => {
+                let mut idx = 0;
+                while idx < bytes.len() {
+                    let mut b4 = [0u8; 4];
+                    for k in 0..4 {
+                        if idx + k < bytes.len() {
+                            b4[k] = bytes[idx + k];
+                        }
+                    }
+                    let val = u32::from_ne_bytes(b4);
+
+                    out_scratch[out_len] = b' ';
+                    out_len += 1;
+                    let mut digits = [b'0'; 10];
+                    let mut temp = val;
+                    for d in (0..10).rev() {
+                        digits[d] = b'0' + (temp % 10) as u8;
+                        temp /= 10;
+                    }
+                    for &d in &digits {
+                        out_scratch[out_len] = d;
+                        out_len += 1;
+                    }
+                    idx += 4;
+                }
+            }
+        }
+
+        out_scratch[out_len] = b'\n';
+        out_len += 1;
+        let _ = sys_write(out_fd, &out_scratch[..out_len]);
+    };
+
+    let mut process_fd = |r_fd: i32| -> bool {
+        let mut in_chunk = [0u8; 1024];
+        loop {
+            let n = sys_read(r_fd, &mut in_chunk);
+            if n <= 0 {
+                break;
+            }
+            let read_slice = &in_chunk[..n as usize];
+            for &b in read_slice {
+                if skipped < skip_bytes {
+                    skipped += 1;
+                    continue;
+                }
+                if let Some(limit) = max_bytes {
+                    if total_emitted >= limit {
+                        return false;
+                    }
+                }
+
+                line_buf[line_len] = b;
+                line_len += 1;
+                total_emitted += 1;
+
+                if line_len == 16 {
+                    emit_od_line(&line_buf, current_offset);
+                    current_offset += 16;
+                    line_len = 0;
+                }
+            }
+        }
+        true
+    };
+
+    let mut has_err = false;
+    if file_count == 0 {
+        process_fd(in_fd);
+    } else {
+        for &path in &file_args[..file_count] {
+            if path == "-" {
+                if !process_fd(in_fd) {
+                    break;
+                }
+                continue;
+            }
+            let fd = sys_open(path, crate::vfs::O_RDONLY);
+            if fd < 0 {
+                let _ = sys_write(err_fd, b"od: ");
+                let _ = sys_write(err_fd, path.as_bytes());
+                let _ = sys_write(err_fd, b": No such file or directory\n");
+                has_err = true;
+                continue;
+            }
+            let cont = process_fd(fd);
+            let _ = sys_close(fd);
+            if !cont {
+                break;
+            }
+        }
+    }
+
+    if line_len > 0 {
+        emit_od_line(&line_buf[..line_len], current_offset);
+        current_offset += line_len;
+    }
+
+    // Affichage de l'offset final si radix != None
+    if radix != OdRadix::None && total_emitted > 0 {
+        let mut final_buf = [0u8; 8];
+        let off_len = format_od_offset(current_offset, radix, &mut final_buf[..7]);
+        final_buf[off_len] = b'\n';
+        let _ = sys_write(out_fd, &final_buf[..off_len + 1]);
+    }
+
+    if has_err {
+        1
+    } else {
+        0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -9906,6 +10420,96 @@ mod tests {
 
         let n6 = sys_read(out_r6, &mut buf);
         assert_eq!(&buf[..n6 as usize], b" 1 salut\n 2 monde\n");
+        sys_close(out_r6);
+    }
+
+    #[test]
+    fn test_od_full_suite() {
+        let mut buf = [0u8; 1024];
+
+        // 1. od -b (octal bytes)
+        let (in_r1, in_w1) = crate::vfs::pipe().expect("pipe od in 1");
+        let (out_r1, out_w1) = crate::vfs::pipe().expect("pipe od out 1");
+        let _ = sys_write(in_w1, b"ABC\n");
+        sys_close(in_w1);
+
+        let code1 = run_od(&["-b"], in_r1, out_w1, 2);
+        assert_eq!(code1, 0);
+        sys_close(in_r1);
+        sys_close(out_w1);
+
+        let n1 = sys_read(out_r1, &mut buf);
+        // 'A'=0101 (65), 'B'=0102 (66), 'C'=0103 (67), '\n'=0012 (10)
+        assert_eq!(&buf[..n1 as usize], b"0000000 101 102 103 012\n0000004\n");
+        sys_close(out_r1);
+
+        // 2. od -c (caractères ASCII et échappement \n)
+        let (in_r2, in_w2) = crate::vfs::pipe().expect("pipe od in 2");
+        let (out_r2, out_w2) = crate::vfs::pipe().expect("pipe od out 2");
+        let _ = sys_write(in_w2, b"Hi\n");
+        sys_close(in_w2);
+
+        let code2 = run_od(&["-c"], in_r2, out_w2, 2);
+        assert_eq!(code2, 0);
+        sys_close(in_r2);
+        sys_close(out_w2);
+
+        let n2 = sys_read(out_r2, &mut buf);
+        assert_eq!(&buf[..n2 as usize], b"0000000   H   i  \\n\n0000003\n");
+        sys_close(out_r2);
+
+        // 3. od -x -A n (sans adresse)
+        let (in_r3, in_w3) = crate::vfs::pipe().expect("pipe od in 3");
+        let (out_r3, out_w3) = crate::vfs::pipe().expect("pipe od out 3");
+        let _ = sys_write(in_w3, b"ABCD");
+        sys_close(in_w3);
+
+        let code3 = run_od(&["-x", "-A", "n"], in_r3, out_w3, 2);
+        assert_eq!(code3, 0);
+        sys_close(in_r3);
+        sys_close(out_w3);
+
+        let n3 = sys_read(out_r3, &mut buf);
+        // Little endian: 'A' (0x41) + 'B' (0x42) -> 0x4241 ; 'C' (0x43) + 'D' (0x44) -> 0x4443
+        assert_eq!(&buf[..n3 as usize], b" 4241 4443\n");
+        sys_close(out_r3);
+
+        // 4. od -j 2 -N 2 (skip et count)
+        let (in_r4, in_w4) = crate::vfs::pipe().expect("pipe od in 4");
+        let (out_r4, out_w4) = crate::vfs::pipe().expect("pipe od out 4");
+        let _ = sys_write(in_w4, b"012345");
+        sys_close(in_w4);
+
+        let code4 = run_od(&["-c", "-j", "2", "-N", "2", "-A", "d"], in_r4, out_w4, 2);
+        assert_eq!(code4, 0);
+        sys_close(in_r4);
+        sys_close(out_w4);
+
+        let n4 = sys_read(out_r4, &mut buf);
+        assert_eq!(&buf[..n4 as usize], b"0000000   2   3\n0000002\n");
+        sys_close(out_r4);
+
+        // 5. Option invalide
+        let (err_r5, err_w5) = crate::vfs::pipe().expect("pipe od err 5");
+        let code5 = run_od(&["-invalid"], 0, 1, err_w5);
+        assert_eq!(code5, 1);
+        sys_close(err_w5);
+        sys_close(err_r5);
+
+        // 6. Lecture via fichier VFS
+        let fd_test = sys_open("/tmp/od_test.bin", O_CREAT | O_WRONLY);
+        assert!(fd_test >= 3);
+        let _ = sys_write(fd_test, b"test");
+        sys_close(fd_test);
+
+        let (out_r6, out_w6) = crate::vfs::pipe().expect("pipe od out 6");
+        let code6 = run_od(&["-b", "/tmp/od_test.bin"], 0, out_w6, 2);
+        assert_eq!(code6, 0);
+        sys_close(out_w6);
+
+        let n6 = sys_read(out_r6, &mut buf);
+        // 't'=0164, 'e'=0145, 's'=0163, 't'=0164
+        assert_eq!(&buf[..n6 as usize], b"0000000 164 145 163 164\n0000004\n");
         sys_close(out_r6);
     }
 }

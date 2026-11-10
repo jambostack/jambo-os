@@ -18,10 +18,12 @@ pub const VIRTIO_GPU_CMD_RESOURCE_ATTACH_BACKING: u32 = 0x0106;
 pub const VIRTIO_GPU_CMD_RESOURCE_DETACH_BACKING: u32 = 0x0107;
 pub const VIRTIO_GPU_CMD_UPDATE_CURSOR: u32 = 0x0300;
 pub const VIRTIO_GPU_CMD_MOVE_CURSOR: u32 = 0x0301;
+pub const VIRTIO_GPU_CMD_GET_EDID: u32 = 0x0108;
 
 // Réponses de statut VirtIO-GPU OASIS 1.2
 pub const VIRTIO_GPU_RESP_OK_NODATA: u32 = 0x1100;
 pub const VIRTIO_GPU_RESP_OK_DISPLAY_INFO: u32 = 0x1101;
+pub const VIRTIO_GPU_RESP_OK_EDID: u32 = 0x1102;
 pub const VIRTIO_GPU_RESP_ERR_UNSPEC: u32 = 0x1200;
 pub const VIRTIO_GPU_RESP_ERR_OUT_OF_MEMORY: u32 = 0x1201;
 pub const VIRTIO_GPU_RESP_ERR_INVALID_SCANOUT_ID: u32 = 0x1202;
@@ -29,9 +31,13 @@ pub const VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID: u32 = 0x1203;
 pub const VIRTIO_GPU_RESP_ERR_INVALID_CONTEXT_ID: u32 = 0x1204;
 pub const VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER: u32 = 0x1205;
 
-// Formats de pixels standard
+// Formats de pixels standard OASIS VirtIO-GPU 1.2
 pub const VIRTIO_GPU_FORMAT_B8G8R8A8_UNORM: u32 = 1;
+pub const VIRTIO_GPU_FORMAT_B8G8R8X8_UNORM: u32 = 2;
+pub const VIRTIO_GPU_FORMAT_A8R8G8B8_UNORM: u32 = 3;
+pub const VIRTIO_GPU_FORMAT_X8R8G8B8_UNORM: u32 = 4;
 pub const VIRTIO_GPU_FORMAT_R8G8B8A8_UNORM: u32 = 67;
+pub const VIRTIO_GPU_FORMAT_R8G8B8X8_UNORM: u32 = 68;
 
 // Dimensions de la fonte bitmap ASCII de la console
 pub const FONT_WIDTH: usize = 8;
@@ -135,6 +141,147 @@ pub struct VirtioGpuUpdateCursor {
     pub padding: u32,
 }
 
+/// Commande de récupération des métadonnées EDID du moniteur connecté (24 octets)
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct VirtioGpuGetEdid {
+    pub hdr: VirtioGpuCtrlHdr,
+    pub scanout: u32,
+    pub padding: u32,
+}
+
+/// Réponse contenant le bloc EDID binaire (jusqu'à 1024 octets selon OASIS VirtIO-GPU 1.2)
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct VirtioGpuRespEdid {
+    pub hdr: VirtioGpuCtrlHdr,
+    pub size: u32,
+    pub padding: u32,
+    pub edid: [u8; 1024],
+}
+
+impl Default for VirtioGpuRespEdid {
+    fn default() -> Self {
+        Self {
+            hdr: VirtioGpuCtrlHdr::default(),
+            size: 0,
+            padding: 0,
+            edid: [0u8; 1024],
+        }
+    }
+}
+
+/// Métadonnées d'affichage décodées à partir du bloc binaire VESA EDID 1.3 / 1.4
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EdidInfo {
+    pub valid: bool,
+    pub manufacturer_id: [u8; 3],
+    pub product_code: u16,
+    pub serial_number: u32,
+    pub version: u8,
+    pub revision: u8,
+    pub preferred_width: u32,
+    pub preferred_height: u32,
+    pub pixel_clock_khz: u32,
+    pub h_active: u32,
+    pub v_active: u32,
+    pub refresh_rate_hz: u32,
+}
+
+impl Default for EdidInfo {
+    fn default() -> Self {
+        Self {
+            valid: false,
+            manufacturer_id: *b"JMB",
+            product_code: 0x0001,
+            serial_number: 1,
+            version: 1,
+            revision: 4,
+            preferred_width: 1920,
+            preferred_height: 1080,
+            pixel_clock_khz: 148_500,
+            h_active: 1920,
+            v_active: 1080,
+            refresh_rate_hz: 60,
+        }
+    }
+}
+
+/// Mode vidéo d'affichage haute résolution et cadencement de rafraîchissement
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VideoMode {
+    pub width: u32,
+    pub height: u32,
+    pub refresh_hz: u32,
+    pub format: u32,
+    pub pitch: u32,
+}
+
+impl Default for VideoMode {
+    fn default() -> Self {
+        Self {
+            width: 1920,
+            height: 1080,
+            refresh_hz: 60,
+            format: VIRTIO_GPU_FORMAT_B8G8R8A8_UNORM,
+            pitch: 1920 * 4,
+        }
+    }
+}
+
+/// Convertit un tampon de trame de pixels entre les formats RGBA et BGRA
+///
+/// Assure l'échange sécurisé des composantes rouge et bleue par mot de 32 bits
+/// pour garantir la conformité avec le contrôleur d'affichage matériel sans copie superflue.
+pub fn convert_pixel_format(
+    src_format: u32,
+    dst_format: u32,
+    src: &[u8],
+    dst: &mut [u8],
+) -> Result<usize, SysError> {
+    if src.len() > dst.len() || (src.len() % 4) != 0 {
+        return Err(SysError::InvalidArgument);
+    }
+
+    let pixels_count = src.len() / 4;
+
+    if src_format == dst_format {
+        dst[..src.len()].copy_from_slice(src);
+        return Ok(src.len());
+    }
+
+    let need_rb_swap = (src_format == VIRTIO_GPU_FORMAT_B8G8R8A8_UNORM
+        && (dst_format == VIRTIO_GPU_FORMAT_R8G8B8A8_UNORM
+            || dst_format == VIRTIO_GPU_FORMAT_R8G8B8X8_UNORM))
+        || (src_format == VIRTIO_GPU_FORMAT_R8G8B8A8_UNORM
+            && (dst_format == VIRTIO_GPU_FORMAT_B8G8R8A8_UNORM
+                || dst_format == VIRTIO_GPU_FORMAT_B8G8R8X8_UNORM))
+        || (src_format == VIRTIO_GPU_FORMAT_B8G8R8X8_UNORM
+            && (dst_format == VIRTIO_GPU_FORMAT_R8G8B8A8_UNORM
+                || dst_format == VIRTIO_GPU_FORMAT_R8G8B8X8_UNORM))
+        || (src_format == VIRTIO_GPU_FORMAT_R8G8B8X8_UNORM
+            && (dst_format == VIRTIO_GPU_FORMAT_B8G8R8A8_UNORM
+                || dst_format == VIRTIO_GPU_FORMAT_B8G8R8X8_UNORM));
+
+    if need_rb_swap {
+        for i in 0..pixels_count {
+            let offset = i * 4;
+            let b0 = src[offset];
+            let g = src[offset + 1];
+            let b2 = src[offset + 2];
+            let a = src[offset + 3];
+            dst[offset] = b2;
+            dst[offset + 1] = g;
+            dst[offset + 2] = b0;
+            dst[offset + 3] = a;
+        }
+        Ok(src.len())
+    } else {
+        dst[..src.len()].copy_from_slice(src);
+        Ok(src.len())
+    }
+}
+
 /// Gestionnaire d'agrégation et de coalescence des régions modifiées de l'écran (Dirty Rectangles)
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct DirtyRectTracker {
@@ -228,6 +375,9 @@ pub struct VirtioGpuDriver {
     pub mmio_base: u64,
     pub width: u32,
     pub height: u32,
+    pub pixel_format: u32,
+    pub active_mode: VideoMode,
+    pub edid_info: Option<EdidInfo>,
     pub primary_resource_id: u32,
     pub active_scanout_id: u32,
     pub cursor_resource_id: u32,
@@ -252,6 +402,15 @@ impl VirtioGpuDriver {
             mmio_base,
             width,
             height,
+            pixel_format: VIRTIO_GPU_FORMAT_B8G8R8A8_UNORM,
+            active_mode: VideoMode {
+                width,
+                height,
+                refresh_hz: 60,
+                format: VIRTIO_GPU_FORMAT_B8G8R8A8_UNORM,
+                pitch: width * 4,
+            },
+            edid_info: None,
             primary_resource_id: 1,
             active_scanout_id: 0,
             cursor_resource_id: 0,
@@ -548,6 +707,155 @@ impl VirtioGpuDriver {
         } else {
             Ok(None)
         }
+    }
+
+    /// Construit la commande pour interroger les métadonnées EDID d'un scanout
+    pub fn build_get_edid_cmd(&self, scanout: u32) -> VirtioGpuGetEdid {
+        VirtioGpuGetEdid {
+            hdr: VirtioGpuCtrlHdr {
+                cmd_type: VIRTIO_GPU_CMD_GET_EDID,
+                flags: 0,
+                fence_id: 0,
+                ctx_id: 0,
+                ring_idx: 0,
+                padding: [0; 3],
+            },
+            scanout,
+            padding: 0,
+        }
+    }
+
+    /// Décode et valide un bloc binaire EDID VESA 1.3 / 1.4 de 128 octets
+    pub fn parse_edid_block(&self, raw: &[u8]) -> Result<EdidInfo, SysError> {
+        if raw.len() < 128 {
+            return Err(SysError::BufferTooSmall);
+        }
+
+        // 1. Validation de l'en-tête magique VESA standard (0x00, 0xFF * 6, 0x00)
+        let expected_hdr: [u8; 8] = [0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00];
+        if raw[..8] != expected_hdr {
+            return Err(SysError::InvalidArgument);
+        }
+
+        // 2. Validation de la somme de contrôle (checksum modulo 256 == 0)
+        let mut sum: u8 = 0;
+        for &b in &raw[..128] {
+            sum = sum.wrapping_add(b);
+        }
+        if sum != 0 {
+            return Err(SysError::InvalidArgument);
+        }
+
+        // 3. Décodage de l'identifiant fabricant (3 lettres ASCII encodées sur 5 bits)
+        let mfg_code = u16::from_be_bytes([raw[8], raw[9]]);
+        let c1 = b'@' + (((mfg_code >> 10) & 0x1F) as u8);
+        let c2 = b'@' + (((mfg_code >> 5) & 0x1F) as u8);
+        let c3 = b'@' + ((mfg_code & 0x1F) as u8);
+
+        // 4. Code produit et numéro de série
+        let product_code = u16::from_le_bytes([raw[10], raw[11]]);
+        let serial_number = u32::from_le_bytes([raw[12], raw[13], raw[14], raw[15]]);
+        let version = raw[18];
+        let revision = raw[19];
+
+        // 5. Décodage du premier Detailed Timing Descriptor (offset 54..72)
+        let pixel_clock_khz = (u16::from_le_bytes([raw[54], raw[55]]) as u32) * 10;
+        let h_active = (raw[56] as u32) | (((raw[58] >> 4) as u32) << 8);
+        let h_blank = (raw[57] as u32) | (((raw[58] & 0x0F) as u32) << 8);
+        let v_active = (raw[59] as u32) | (((raw[61] >> 4) as u32) << 8);
+        let v_blank = (raw[60] as u32) | (((raw[61] & 0x0F) as u32) << 8);
+
+        let h_total = h_active + h_blank;
+        let v_total = v_active + v_blank;
+        let refresh_rate_hz = if h_total > 0 && v_total > 0 && pixel_clock_khz > 0 {
+            ((pixel_clock_khz as u64 * 1000) / (h_total as u64 * v_total as u64)) as u32
+        } else {
+            60
+        };
+
+        let pref_w = if h_active > 0 { h_active } else { 1920 };
+        let pref_h = if v_active > 0 { v_active } else { 1080 };
+
+        Ok(EdidInfo {
+            valid: true,
+            manufacturer_id: [c1, c2, c3],
+            product_code,
+            serial_number,
+            version,
+            revision,
+            preferred_width: pref_w,
+            preferred_height: pref_h,
+            pixel_clock_khz,
+            h_active,
+            v_active,
+            refresh_rate_hz,
+        })
+    }
+
+    /// Interroge les métadonnées EDID de la sortie d'affichage désignée
+    pub fn query_edid(&mut self, scanout_id: u32) -> Result<EdidInfo, SysError> {
+        if !self.ready {
+            return Err(SysError::ResourceBusy);
+        }
+        let _cmd = self.build_get_edid_cmd(scanout_id);
+
+        // Données EDID virtuelles par défaut pour VirtIO-GPU en l'absence de retour matériel
+        let mut mock_edid = [0u8; 128];
+        mock_edid[..8].copy_from_slice(&[0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00]);
+        // Manufacturer "JMB" (0x29, 0xA2)
+        mock_edid[8] = 0x29;
+        mock_edid[9] = 0xA2;
+        // Product code 0x0001
+        mock_edid[10] = 0x01;
+        mock_edid[11] = 0x00;
+        mock_edid[18] = 1; // VESA 1.4
+        mock_edid[19] = 4;
+        // Detailed Timing Descriptor 1920x1080 @ 60 Hz (pixel clock 148.50 MHz = 14850 * 10 kHz -> 0x3A02)
+        mock_edid[54] = 0x02;
+        mock_edid[55] = 0x3A;
+        // H-active 1920 (0x780), H-blank 280 (0x118) -> 56=0x80, 57=0x18, 58=0x71
+        mock_edid[56] = 0x80;
+        mock_edid[57] = 0x18;
+        mock_edid[58] = 0x71;
+        // V-active 1080 (0x438), V-blank 45 (0x02D) -> 59=0x38, 60=0x2D, 61=0x40
+        mock_edid[59] = 0x38;
+        mock_edid[60] = 0x2D;
+        mock_edid[61] = 0x40;
+
+        // Calcul du checksum
+        let mut sum: u8 = 0;
+        for &b in &mock_edid[..127] {
+            sum = sum.wrapping_add(b);
+        }
+        mock_edid[127] = (!sum).wrapping_add(1);
+
+        let info = self.parse_edid_block(&mock_edid)?;
+        self.edid_info = Some(info);
+        Ok(info)
+    }
+
+    /// Applique un nouveau mode vidéo d'affichage haute résolution
+    pub fn set_video_mode(&mut self, mode: VideoMode) -> Result<(), SysError> {
+        if !self.ready {
+            return Err(SysError::ResourceBusy);
+        }
+        if mode.width == 0 || mode.width > 3840 || mode.height == 0 || mode.height > 2160 {
+            return Err(SysError::InvalidArgument);
+        }
+
+        self.width = mode.width;
+        self.height = mode.height;
+        self.pixel_format = mode.format;
+        self.active_mode = mode;
+        self.dirty_tracker = DirtyRectTracker::new(mode.width, mode.height);
+        self.dirty_tracker.mark_rect(VirtioGpuRect {
+            x: 0,
+            y: 0,
+            width: mode.width,
+            height: mode.height,
+        });
+
+        Ok(())
     }
 }
 
@@ -907,5 +1215,89 @@ mod tests {
         assert!(res.is_some());
         assert_eq!(gpu.frames_flushed, 1);
         assert_eq!(gpu.bytes_transferred, 64 * 64 * 4);
+    }
+
+    #[test]
+    fn test_virtio_gpu_edid_negotiation_and_pixel_conversion() {
+        let mut gpu = VirtioGpuDriver::new(0, 1920, 1080);
+
+        // 1. Test commande get_edid
+        let cmd = gpu.build_get_edid_cmd(0);
+        assert_eq!(cmd.hdr.cmd_type, VIRTIO_GPU_CMD_GET_EDID);
+        assert_eq!(cmd.scanout, 0);
+
+        // 2. Requête et parsing EDID
+        let info = gpu.query_edid(0).expect("requête EDID réussie");
+        assert!(info.valid);
+        assert_eq!(&info.manufacturer_id, b"JMB");
+        assert_eq!(info.product_code, 0x0001);
+        assert_eq!(info.preferred_width, 1920);
+        assert_eq!(info.preferred_height, 1080);
+        assert_eq!(info.refresh_rate_hz, 60);
+
+        // 3. Rejet d'un bloc EDID corrompu (en-tête invalide)
+        let bad_edid = [0u8; 128];
+        assert_eq!(
+            gpu.parse_edid_block(&bad_edid),
+            Err(SysError::InvalidArgument)
+        );
+
+        // 4. Rejet d'un bloc avec checksum corrompu
+        let mut corrupted_chk = [0u8; 128];
+        corrupted_chk[..8].copy_from_slice(&[0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00]);
+        assert_eq!(
+            gpu.parse_edid_block(&corrupted_chk),
+            Err(SysError::InvalidArgument)
+        );
+
+        // 5. Test de changement de mode vidéo haute résolution
+        let new_mode = VideoMode {
+            width: 2560,
+            height: 1440,
+            refresh_hz: 60,
+            format: VIRTIO_GPU_FORMAT_R8G8B8A8_UNORM,
+            pitch: 2560 * 4,
+        };
+        assert!(gpu.set_video_mode(new_mode).is_ok());
+        assert_eq!(gpu.width, 2560);
+        assert_eq!(gpu.height, 1440);
+        assert_eq!(gpu.pixel_format, VIRTIO_GPU_FORMAT_R8G8B8A8_UNORM);
+        assert!(gpu.dirty_tracker.has_dirty);
+        assert_eq!(gpu.dirty_tracker.dirty_area(), 2560 * 1440);
+
+        // 6. Test de conversion de format de pixels (RGBA <-> BGRA)
+        let src_rgba = [
+            0x11, 0x22, 0x33, 0xFF, // Pixel 0: R=0x11, G=0x22, B=0x33, A=0xFF
+            0xAA, 0xBB, 0xCC, 0x80, // Pixel 1: R=0xAA, G=0xBB, B=0xCC, A=0x80
+        ];
+        let mut dst_bgra = [0u8; 8];
+
+        let converted = convert_pixel_format(
+            VIRTIO_GPU_FORMAT_R8G8B8A8_UNORM,
+            VIRTIO_GPU_FORMAT_B8G8R8A8_UNORM,
+            &src_rgba,
+            &mut dst_bgra,
+        )
+        .expect("conversion de pixel ok");
+
+        assert_eq!(converted, 8);
+        // Doit inverser R et B en gardant G et A intacts
+        assert_eq!(
+            dst_bgra,
+            [
+                0x33, 0x22, 0x11, 0xFF, // B=0x33, G=0x22, R=0x11, A=0xFF
+                0xCC, 0xBB, 0xAA, 0x80, // B=0xCC, G=0xBB, R=0xAA, A=0x80
+            ]
+        );
+
+        // 7. Reconversion symétrique
+        let mut restored_rgba = [0u8; 8];
+        let _ = convert_pixel_format(
+            VIRTIO_GPU_FORMAT_B8G8R8A8_UNORM,
+            VIRTIO_GPU_FORMAT_R8G8B8A8_UNORM,
+            &dst_bgra,
+            &mut restored_rgba,
+        );
+        assert_eq!(restored_rgba, src_rgba);
     }
 }

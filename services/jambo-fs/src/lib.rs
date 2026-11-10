@@ -298,6 +298,7 @@ pub enum FsError {
     TransactionAborted,
     ReadOnlyFileSystem,
     AttributeNotFound,
+    QuotaExceeded,
 }
 
 /// État d'une transaction Copy-on-Write (CoW)
@@ -2629,6 +2630,122 @@ pub fn lz4_decompress_block(src: &[u8], dst: &mut [u8; BLOCK_SIZE]) -> Result<us
     }
 }
 
+/// Limite de quota d'espace disque et d'inodes par identifiant d'utilisateur (UID)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct FsQuota {
+    pub uid: u32,
+    pub max_bytes: u64,
+    pub bytes_used: u64,
+    pub max_inodes: u32,
+    pub inodes_used: u32,
+    pub enabled: bool,
+}
+
+pub const MAX_QUOTA_ENTRIES: usize = 16;
+
+/// Table de gestion statique des quotas de stockage et limites d'inodes (zéro allocation)
+#[derive(Debug, Clone, Copy)]
+pub struct QuotaTable {
+    pub entries: [FsQuota; MAX_QUOTA_ENTRIES],
+    pub count: usize,
+}
+
+impl Default for QuotaTable {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl QuotaTable {
+    pub const fn new() -> Self {
+        Self {
+            entries: [FsQuota {
+                uid: 0,
+                max_bytes: 0,
+                bytes_used: 0,
+                max_inodes: 0,
+                inodes_used: 0,
+                enabled: false,
+            }; MAX_QUOTA_ENTRIES],
+            count: 0,
+        }
+    }
+
+    pub fn set_quota(&mut self, uid: u32, max_bytes: u64, max_inodes: u32) -> Result<(), FsError> {
+        for entry in self.entries[..self.count].iter_mut() {
+            if entry.enabled && entry.uid == uid {
+                entry.max_bytes = max_bytes;
+                entry.max_inodes = max_inodes;
+                return Ok(());
+            }
+        }
+        if self.count < MAX_QUOTA_ENTRIES {
+            self.entries[self.count] = FsQuota {
+                uid,
+                max_bytes,
+                bytes_used: 0,
+                max_inodes,
+                inodes_used: 0,
+                enabled: true,
+            };
+            self.count += 1;
+            Ok(())
+        } else {
+            Err(FsError::QuotaExceeded)
+        }
+    }
+
+    pub fn get_quota(&self, uid: u32) -> Option<FsQuota> {
+        for entry in self.entries[..self.count].iter() {
+            if entry.enabled && entry.uid == uid {
+                return Some(*entry);
+            }
+        }
+        None
+    }
+
+    pub fn check_allocation(
+        &self,
+        uid: u32,
+        additional_bytes: u64,
+        additional_inodes: u32,
+    ) -> Result<(), FsError> {
+        if let Some(quota) = self.get_quota(uid) {
+            if quota.max_bytes > 0
+                && quota.bytes_used.saturating_add(additional_bytes) > quota.max_bytes
+            {
+                return Err(FsError::QuotaExceeded);
+            }
+            if quota.max_inodes > 0
+                && quota.inodes_used.saturating_add(additional_inodes) > quota.max_inodes
+            {
+                return Err(FsError::QuotaExceeded);
+            }
+        }
+        Ok(())
+    }
+
+    pub fn record_allocation(&mut self, uid: u32, bytes: u64, inodes: u32) {
+        for entry in self.entries[..self.count].iter_mut() {
+            if entry.enabled && entry.uid == uid {
+                entry.bytes_used = entry.bytes_used.saturating_add(bytes);
+                entry.inodes_used = entry.inodes_used.saturating_add(inodes);
+                break;
+            }
+        }
+    }
+
+    pub fn record_release(&mut self, uid: u32, bytes: u64, inodes: u32) {
+        for entry in self.entries[..self.count].iter_mut() {
+            if entry.enabled && entry.uid == uid {
+                entry.bytes_used = entry.bytes_used.saturating_sub(bytes);
+                entry.inodes_used = entry.inodes_used.saturating_sub(inodes);
+                break;
+            }
+        }
+    }
+}
+
 /// Système de fichiers JamboFS transactionnel monté en espace utilisateur
 #[derive(Debug, Clone, Copy)]
 pub struct JamboFs {
@@ -2642,6 +2759,7 @@ pub struct JamboFs {
     pub dedup_table: BlockDedupTable,
     pub snapshot_table: SnapshotTable,
     pub xattr_table: XattrTable,
+    pub quota_table: QuotaTable,
     pub wal: MetadataWalManager,
     pub bitmap: CowBitmapAllocator,
 }
@@ -2744,6 +2862,7 @@ impl JamboFs {
             dedup_table: BlockDedupTable::new(),
             snapshot_table: SnapshotTable::new(),
             xattr_table: XattrTable::new(),
+            quota_table: QuotaTable::new(),
             wal: MetadataWalManager::new(),
             bitmap,
         };
@@ -2767,6 +2886,7 @@ impl JamboFs {
             dedup_table: BlockDedupTable::new(),
             snapshot_table: SnapshotTable::new(),
             xattr_table: XattrTable::new(),
+            quota_table: QuotaTable::new(),
             wal: MetadataWalManager::new(),
             bitmap: CowBitmapAllocator::new(),
         }
@@ -3674,6 +3794,37 @@ impl JamboFs {
             blocks_relocated,
             defragmented: true,
         })
+    }
+
+    /// Configure un quota d'espace disque et d'inodes pour un UID donné
+    pub fn set_quota(&mut self, uid: u32, max_bytes: u64, max_inodes: u32) -> Result<(), FsError> {
+        self.quota_table.set_quota(uid, max_bytes, max_inodes)
+    }
+
+    /// Récupère les informations de quota d'un utilisateur
+    pub fn get_quota(&self, uid: u32) -> Option<FsQuota> {
+        self.quota_table.get_quota(uid)
+    }
+
+    /// Vérifie la conformité avec les quotas avant une allocation de blocs ou d'inodes
+    pub fn check_quota(
+        &self,
+        uid: u32,
+        additional_bytes: u64,
+        additional_inodes: u32,
+    ) -> Result<(), FsError> {
+        self.quota_table
+            .check_allocation(uid, additional_bytes, additional_inodes)
+    }
+
+    /// Enregistre la consommation d'octets et d'inodes par un utilisateur
+    pub fn record_quota_alloc(&mut self, uid: u32, bytes: u64, inodes: u32) {
+        self.quota_table.record_allocation(uid, bytes, inodes);
+    }
+
+    /// Libère la consommation d'octets et d'inodes pour un utilisateur
+    pub fn record_quota_free(&mut self, uid: u32, bytes: u64, inodes: u32) {
+        self.quota_table.record_release(uid, bytes, inodes);
     }
 }
 
@@ -4715,6 +4866,57 @@ mod tests {
             fs.getxattr("etc/hostname", "user.comment", &mut val_buf),
             Err(FsError::AttributeNotFound)
         );
+
+        reset_local_ramdisk();
+    }
+
+    #[test]
+    fn test_storage_quota_and_inode_limits() {
+        let _guard = FS_TEST_LOCK.lock().unwrap();
+        reset_local_ramdisk();
+
+        let client = BlockClient::new(libjambo::Handle(0));
+        let mut fs = JamboFs::new_fallback(client);
+
+        // 1. Définition initiale d'un quota pour UID 1000 : 10000 octets et 5 inodes
+        assert!(fs.set_quota(1000, 10_000, 5).is_ok());
+        let q = fs.get_quota(1000).expect("quota UID 1000");
+        assert_eq!(q.max_bytes, 10_000);
+        assert_eq!(q.max_inodes, 5);
+        assert_eq!(q.bytes_used, 0);
+        assert_eq!(q.inodes_used, 0);
+
+        // 2. Allocation autorisée
+        assert!(fs.check_quota(1000, 4096, 1).is_ok());
+        fs.record_quota_alloc(1000, 4096, 1);
+        let q1 = fs.get_quota(1000).unwrap();
+        assert_eq!(q1.bytes_used, 4096);
+        assert_eq!(q1.inodes_used, 1);
+
+        // Deuxième allocation autorisée
+        assert!(fs.check_quota(1000, 4096, 2).is_ok());
+        fs.record_quota_alloc(1000, 4096, 2);
+        let q2 = fs.get_quota(1000).unwrap();
+        assert_eq!(q2.bytes_used, 8192);
+        assert_eq!(q2.inodes_used, 3);
+
+        // 3. Tentative de dépassement de quota d'octets : 8192 + 2048 = 10240 > 10000 -> QuotaExceeded
+        assert_eq!(fs.check_quota(1000, 2048, 1), Err(FsError::QuotaExceeded));
+
+        // 4. Tentative de dépassement de quota d'inodes : 3 + 3 = 6 > 5 -> QuotaExceeded
+        assert_eq!(fs.check_quota(1000, 512, 3), Err(FsError::QuotaExceeded));
+
+        // 5. Libération de ressources et réallocation
+        fs.record_quota_free(1000, 4096, 1);
+        let q3 = fs.get_quota(1000).unwrap();
+        assert_eq!(q3.bytes_used, 4096);
+        assert_eq!(q3.inodes_used, 2);
+
+        // L'allocation de 2048 octets est maintenant autorisée : 4096 + 2048 = 6144 <= 10000
+        assert!(fs.check_quota(1000, 2048, 1).is_ok());
+
+        // 6. Utilisateur non soumis à quota (ex: UID 0 root) -> illimité
+        assert!(fs.check_quota(0, 1_000_000, 10_000).is_ok());
 
         reset_local_ramdisk();
     }
