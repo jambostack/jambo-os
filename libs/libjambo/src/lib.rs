@@ -141,6 +141,28 @@ pub fn sys_info() -> Result<SystemInfo, SysError> {
     }
 }
 
+/// Interroge une horloge système (Syscall 24 ClockGettime)
+pub fn clock_gettime(clock_id: u32) -> Result<Timespec, SysError> {
+    let mut ts = Timespec::default();
+    // SAFETY: Appel système direct ClockGettime vers le noyau avec un pointeur valide alloué sur la pile
+    let (ret, _) = unsafe {
+        syscall6(
+            SyscallNumber::ClockGettime,
+            clock_id as u64,
+            &mut ts as *mut Timespec as u64,
+            0,
+            0,
+            0,
+            0,
+        )
+    };
+    if ret != 0 {
+        Err(SysError::InvalidArgument)
+    } else {
+        Ok(ts)
+    }
+}
+
 /// Affiche une chaîne de caractères sur la console standard
 pub fn print(s: &str) {
     let _ = console_write(s.as_bytes());

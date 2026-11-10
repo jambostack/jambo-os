@@ -217,5 +217,10 @@ name = "unexpand"
 path = "src/bin/unexpand.rs"
 test = false
 
+[[bin]]
+name = "sleep"
+path = "src/bin/sleep.rs"
+test = false
+
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }

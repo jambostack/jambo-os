@@ -1147,6 +1147,9 @@ pub const SCSI_CMD_MODE_SENSE_6: u8 = 0x1A;
 pub const SCSI_CMD_READ_CAPACITY_10: u8 = 0x25;
 pub const SCSI_CMD_READ_10: u8 = 0x28;
 pub const SCSI_CMD_WRITE_10: u8 = 0x2A;
+pub const SCSI_CMD_SYNCHRONIZE_CACHE_10: u8 = 0x35;
+pub const SCSI_CMD_SERVICE_ACTION_IN_16: u8 = 0x9E;
+pub const SCSI_SA_READ_CAPACITY_16: u8 = 0x10;
 
 /// Paquet de requête Setup standard USB (8 octets, USB 2.0 / USB 3.x)
 #[repr(C, packed)]
@@ -1324,6 +1327,11 @@ impl CommandBlockWrapper {
         self.cb_length
     }
 
+    #[inline]
+    pub fn is_data_in(&self) -> bool {
+        (self.flags & CBW_FLAG_DATA_IN) != 0
+    }
+
     /// Exporte la structure CBW sous forme de tableau d'octets contigu (31 octets)
     pub fn as_bytes(&self) -> [u8; 31] {
         let mut buf = [0u8; 31];
@@ -1380,6 +1388,17 @@ pub struct ScsiCapacity10 {
     pub block_size: u32,
     pub total_sectors: u64,
     pub total_bytes: u64,
+}
+
+/// Capacité géométrique retournée par SCSI READ CAPACITY (16) (pour supports > 2 To)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ScsiCapacity16 {
+    pub last_lba: u64,
+    pub block_size: u32,
+    pub total_sectors: u64,
+    pub total_bytes: u64,
+    pub prot_en: bool,
+    pub p_type: u8,
 }
 
 /// Gestionnaire de transport USB Mass Storage BOT
@@ -1513,6 +1532,62 @@ impl UsbMassStorageBot {
             block_size,
             total_sectors,
             total_bytes,
+        })
+    }
+
+    /// Construit un CBW pour SCSI SYNCHRONIZE CACHE (10) (vidage matériel du cache CoW)
+    pub fn build_cbw_synchronize_cache_10(
+        &mut self,
+        lba: u32,
+        block_count: u16,
+    ) -> (CommandBlockWrapper, u32) {
+        let tag = self.next_tag();
+        let mut cbw = CommandBlockWrapper::new(tag, 0, false, self.lun, 10);
+        cbw.cb[0] = SCSI_CMD_SYNCHRONIZE_CACHE_10;
+        let lba_be = lba.to_be_bytes();
+        cbw.cb[2..6].copy_from_slice(&lba_be);
+        let blocks_be = block_count.to_be_bytes();
+        cbw.cb[7..9].copy_from_slice(&blocks_be);
+        (cbw, tag)
+    }
+
+    /// Construit un CBW pour SCSI READ CAPACITY (16) (LBA 64 bits pour volumes > 2 To)
+    pub fn build_cbw_read_capacity_16(&mut self) -> (CommandBlockWrapper, u32) {
+        let tag = self.next_tag();
+        let mut cbw = CommandBlockWrapper::new(tag, 32, true, self.lun, 16);
+        cbw.cb[0] = SCSI_CMD_SERVICE_ACTION_IN_16;
+        cbw.cb[1] = SCSI_SA_READ_CAPACITY_16;
+        let alloc_len = 32u32.to_be_bytes();
+        cbw.cb[10..14].copy_from_slice(&alloc_len);
+        (cbw, tag)
+    }
+
+    /// Décode la réponse READ CAPACITY (16) (au moins 32 octets)
+    pub fn parse_read_capacity_16(&mut self, data: &[u8]) -> Option<ScsiCapacity16> {
+        if data.len() < 32 {
+            return None;
+        }
+        let last_lba = u64::from_be_bytes([
+            data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7],
+        ]);
+        let block_size = u32::from_be_bytes([data[8], data[9], data[10], data[11]]);
+        let prot_en = (data[12] & 0x01) != 0;
+        let p_type = (data[12] >> 1) & 0x07;
+
+        let total_sectors = last_lba.saturating_add(1);
+        let total_bytes = total_sectors.saturating_mul(block_size as u64);
+
+        self.sector_size = if block_size != 0 { block_size } else { 512 };
+        self.total_sectors = total_sectors;
+        self.is_ready = true;
+
+        Some(ScsiCapacity16 {
+            last_lba,
+            block_size,
+            total_sectors,
+            total_bytes,
+            prot_en,
+            p_type,
         })
     }
 
@@ -1677,6 +1752,18 @@ impl UsbMassStorageDisk {
         lba.checked_add(count as u64)
             .map(|end| end <= self.bot.total_sectors)
             .unwrap_or(false)
+    }
+
+    /// Construit un CBW pour forcer la synchronisation matérielle du cache (Barrière de persistance CoW)
+    #[inline]
+    pub fn build_sync_cache_cbw(&mut self) -> (CommandBlockWrapper, u32) {
+        self.bot.build_cbw_synchronize_cache_10(0, 0)
+    }
+
+    /// Met à jour la géométrie du disque via les données décodées de READ CAPACITY (16)
+    pub fn update_capacity_16(&mut self, cap: ScsiCapacity16) {
+        self.bot.total_sectors = cap.total_sectors;
+        self.bot.sector_size = cap.block_size;
     }
 }
 
@@ -4272,7 +4359,7 @@ mod tests {
         };
         bot.total_sectors = 15_625_000;
         bot.sector_size = 512;
-        let disk = UsbMassStorageDisk::new(bot, inq);
+        let mut disk = UsbMassStorageDisk::new(bot, inq);
         assert_eq!(disk.total_sectors(), 15_625_000);
         assert_eq!(disk.sector_size(), 512);
         assert_eq!(disk.capacity_bytes(), 15_625_000 * 512);
@@ -4280,5 +4367,38 @@ mod tests {
         assert!(disk.validate_lba_range(15_624_900, 100));
         assert!(!disk.validate_lba_range(15_625_000, 1));
         assert!(!disk.validate_lba_range(0, 0));
+
+        // 8. SCSI SYNCHRONIZE CACHE (10) (Barrière CoW)
+        let (cbw_sync, tag_sync) = disk.build_sync_cache_cbw();
+        assert_eq!(cbw_sync.cb[0], SCSI_CMD_SYNCHRONIZE_CACHE_10);
+        assert_eq!(cbw_sync.data_transfer_length(), 0);
+        assert!(!cbw_sync.is_data_in());
+        assert_eq!(cbw_sync.tag(), tag_sync);
+
+        // 9. SCSI READ CAPACITY (16) (Supports > 2 To)
+        let (cbw_cap16, tag_cap16) = bot.build_cbw_read_capacity_16();
+        assert_eq!(cbw_cap16.cb[0], SCSI_CMD_SERVICE_ACTION_IN_16);
+        assert_eq!(cbw_cap16.cb[1], SCSI_SA_READ_CAPACITY_16);
+        assert_eq!(cbw_cap16.data_transfer_length(), 32);
+        assert!(cbw_cap16.is_data_in());
+        assert_eq!(cbw_cap16.tag(), tag_cap16);
+
+        let mut cap16_buf = [0u8; 32];
+        let max_lba_val: u64 = 7_814_037_167; // Disque de 4 To (4096 octets/secteur)
+        cap16_buf[0..8].copy_from_slice(&max_lba_val.to_be_bytes());
+        cap16_buf[8..12].copy_from_slice(&4096u32.to_be_bytes());
+        cap16_buf[12] = 0x01; // prot_en = true
+
+        let cap16 = bot.parse_read_capacity_16(&cap16_buf).expect("parse cap16");
+        assert_eq!(cap16.last_lba, max_lba_val);
+        assert_eq!(cap16.block_size, 4096);
+        assert_eq!(cap16.total_sectors, max_lba_val + 1);
+        assert_eq!(cap16.total_bytes, (max_lba_val + 1) * 4096);
+        assert!(cap16.prot_en);
+
+        disk.update_capacity_16(cap16);
+        assert_eq!(disk.total_sectors(), max_lba_val + 1);
+        assert_eq!(disk.sector_size(), 4096);
+        assert_eq!(disk.capacity_bytes(), (max_lba_val + 1) * 4096);
     }
 }

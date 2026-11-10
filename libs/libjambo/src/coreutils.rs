@@ -9560,6 +9560,168 @@ Convert blanks in each FILE to tabs, writing to standard output.\n\n\
     exit_status
 }
 
+/// Analyse une chaîne d'intervalle temporel POSIX et retourne sa durée en millisecondes
+pub fn parse_interval_ms(s: &str) -> Option<u64> {
+    if s.is_empty() {
+        return None;
+    }
+    let bytes = s.as_bytes();
+    let (num_part, factor_ms): (&str, u64) = match bytes[bytes.len() - 1] {
+        b's' | b'S' => (&s[..s.len() - 1], 1_000),
+        b'm' | b'M' => (&s[..s.len() - 1], 60_000),
+        b'h' | b'H' => (&s[..s.len() - 1], 3_600_000),
+        b'd' | b'D' => (&s[..s.len() - 1], 86_400_000),
+        b'0'..=b'9' | b'.' => (s, 1_000),
+        _ => return None,
+    };
+
+    if num_part.is_empty() {
+        return None;
+    }
+
+    let mut dot_count = 0;
+    let mut dot_pos = None;
+    for (i, &b) in num_part.as_bytes().iter().enumerate() {
+        if b == b'.' {
+            dot_count += 1;
+            dot_pos = Some(i);
+        } else if !b.is_ascii_digit() {
+            return None;
+        }
+    }
+    if dot_count > 1 {
+        return None;
+    }
+
+    let (int_str, frac_str) = match dot_pos {
+        Some(pos) => (&num_part[..pos], &num_part[pos + 1..]),
+        None => (num_part, ""),
+    };
+
+    if int_str.is_empty() && frac_str.is_empty() {
+        return None;
+    }
+
+    let mut int_val: u64 = 0;
+    if !int_str.is_empty() {
+        for &b in int_str.as_bytes() {
+            int_val = int_val.checked_mul(10)?.checked_add((b - b'0') as u64)?;
+        }
+    }
+
+    let int_ms = int_val.checked_mul(factor_ms)?;
+
+    let mut frac_ms: u64 = 0;
+    if !frac_str.is_empty() {
+        let mut frac_val: u64 = 0;
+        let mut div: u64 = 1;
+        for &b in frac_str.as_bytes() {
+            if div <= 1_000_000_000 {
+                frac_val = frac_val.wrapping_mul(10).wrapping_add((b - b'0') as u64);
+                div = div.wrapping_mul(10);
+            }
+        }
+        if div > 1 {
+            frac_ms = (frac_val as u128 * factor_ms as u128 / div as u128) as u64;
+        }
+    }
+
+    int_ms.checked_add(frac_ms)
+}
+
+/// Suspend l'exécution pendant une durée donnée en millisecondes en libérant le processeur (EEVDF Yield)
+pub fn execute_sleep_ms(total_ms: u64) {
+    if total_ms == 0 {
+        return;
+    }
+
+    if let Ok(start_ts) = crate::clock_gettime(crate::clocks::CLOCK_MONOTONIC) {
+        let target_ns = (start_ts.tv_sec as u128 * 1_000_000_000 + start_ts.tv_nsec as u128)
+            .saturating_add(total_ms as u128 * 1_000_000);
+
+        let mut max_spins = 10_000_000u64;
+        let mut prev_ns = start_ts.tv_sec as u128 * 1_000_000_000 + start_ts.tv_nsec as u128;
+        let mut stuck_count = 0;
+
+        while max_spins > 0 {
+            max_spins -= 1;
+            crate::syscall_thread_yield();
+            if let Ok(cur_ts) = crate::clock_gettime(crate::clocks::CLOCK_MONOTONIC) {
+                let cur_ns = cur_ts.tv_sec as u128 * 1_000_000_000 + cur_ts.tv_nsec as u128;
+                if cur_ns >= target_ns {
+                    break;
+                }
+                if cur_ns == prev_ns {
+                    stuck_count += 1;
+                    if stuck_count > 50 {
+                        // Horloge statique (ex: environnement de test unitaire host)
+                        break;
+                    }
+                } else {
+                    stuck_count = 0;
+                    prev_ns = cur_ns;
+                }
+            } else {
+                break;
+            }
+        }
+    } else {
+        let yields = total_ms.min(10);
+        for _ in 0..yields {
+            crate::syscall_thread_yield();
+        }
+    }
+}
+
+/// Utilitaire Coreutils POSIX `sleep` : suspend l'exécution pendant NUMBER secondes ou unités spécifiées
+pub fn run_sleep(args: &[&str], _in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    if args.is_empty() {
+        let msg = b"sleep: missing operand\nTry 'sleep --help' for more information.\n";
+        let _ = sys_write(err_fd, msg);
+        return 1;
+    }
+
+    let mut total_ms: u64 = 0;
+
+    for &arg in args {
+        if arg == "--help" || arg == "-h" {
+            let help = b"Usage: sleep NUMBER[SUFFIX]...\n\
+Pause for NUMBER seconds.  SUFFIX may be 's' for seconds (the default),\n\
+'m' for minutes, 'h' for hours or 'd' for days.  Given two or more arguments,\n\
+pause for the amount of time specified by the sum of their values.\n";
+            let _ = sys_write(out_fd, help);
+            return 0;
+        }
+        if arg == "--version" || arg == "-v" {
+            let ver = b"sleep (JamboOS coreutils) 0.3.92\n";
+            let _ = sys_write(out_fd, ver);
+            return 0;
+        }
+
+        match parse_interval_ms(arg) {
+            Some(ms) => {
+                total_ms = match total_ms.checked_add(ms) {
+                    Some(sum) => sum,
+                    None => {
+                        let msg = b"sleep: time interval overflow\n";
+                        let _ = sys_write(err_fd, msg);
+                        return 1;
+                    }
+                };
+            }
+            None => {
+                let _ = sys_write(err_fd, b"sleep: invalid time interval '");
+                let _ = sys_write(err_fd, arg.as_bytes());
+                let _ = sys_write(err_fd, b"'\nTry 'sleep --help' for more information.\n");
+                return 1;
+            }
+        }
+    }
+
+    execute_sleep_ms(total_ms);
+    0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -11624,5 +11786,71 @@ mod tests {
         sys_close(out_r4);
         let res4 = core::str::from_utf8(&buf[..n4 as usize]).unwrap();
         assert!(res4.contains("Usage: unexpand"));
+    }
+
+    #[test]
+    fn test_sleep_parsing_and_options() {
+        // 1. Parsing précis des intervalles
+        assert_eq!(parse_interval_ms("1"), Some(1_000));
+        assert_eq!(parse_interval_ms("2s"), Some(2_000));
+        assert_eq!(parse_interval_ms("0.5"), Some(500));
+        assert_eq!(parse_interval_ms("1.5s"), Some(1_500));
+        assert_eq!(parse_interval_ms(".25s"), Some(250));
+        assert_eq!(parse_interval_ms("2m"), Some(120_000));
+        assert_eq!(parse_interval_ms("0.5m"), Some(30_000));
+        assert_eq!(parse_interval_ms("1h"), Some(3_600_000));
+        assert_eq!(parse_interval_ms("1d"), Some(86_400_000));
+
+        // Invalides
+        assert_eq!(parse_interval_ms(""), None);
+        assert_eq!(parse_interval_ms("foo"), None);
+        assert_eq!(parse_interval_ms("1x"), None);
+        assert_eq!(parse_interval_ms("1.2.3"), None);
+        assert_eq!(parse_interval_ms("."), None);
+
+        // 2. sleep --help
+        let (out_r1, out_w1) = crate::vfs::pipe().unwrap();
+        let code1 = run_sleep(&["--help"], 0, out_w1, 2);
+        sys_close(out_w1);
+        assert_eq!(code1, 0);
+        let mut buf = [0u8; 256];
+        let n1 = sys_read(out_r1, &mut buf);
+        sys_close(out_r1);
+        let res1 = core::str::from_utf8(&buf[..n1 as usize]).unwrap();
+        assert!(res1.contains("Usage: sleep"));
+
+        // 3. sleep --version
+        let (out_r2, out_w2) = crate::vfs::pipe().unwrap();
+        let code2 = run_sleep(&["--version"], 0, out_w2, 2);
+        sys_close(out_w2);
+        assert_eq!(code2, 0);
+        let n2 = sys_read(out_r2, &mut buf);
+        sys_close(out_r2);
+        let res2 = core::str::from_utf8(&buf[..n2 as usize]).unwrap();
+        assert!(res2.contains("sleep (JamboOS coreutils)"));
+
+        // 4. sleep sans argument (erreur opérande manquant)
+        let (err_r3, err_w3) = crate::vfs::pipe().unwrap();
+        let code3 = run_sleep(&[], 0, 1, err_w3);
+        sys_close(err_w3);
+        assert_eq!(code3, 1);
+        let n3 = sys_read(err_r3, &mut buf);
+        sys_close(err_r3);
+        let res3 = core::str::from_utf8(&buf[..n3 as usize]).unwrap();
+        assert!(res3.contains("sleep: missing operand"));
+
+        // 5. sleep avec intervalle invalide
+        let (err_r4, err_w4) = crate::vfs::pipe().unwrap();
+        let code4 = run_sleep(&["bad_val"], 0, 1, err_w4);
+        sys_close(err_w4);
+        assert_eq!(code4, 1);
+        let n4 = sys_read(err_r4, &mut buf);
+        sys_close(err_r4);
+        let res4 = core::str::from_utf8(&buf[..n4 as usize]).unwrap();
+        assert!(res4.contains("sleep: invalid time interval 'bad_val'"));
+
+        // 6. sleep valide (0.001s)
+        let code5 = run_sleep(&["0.001s"], 0, 1, 2);
+        assert_eq!(code5, 0);
     }
 }
