@@ -297,6 +297,7 @@ pub enum FsError {
     WriteConflict { expected_gen: u64, actual_gen: u64 },
     TransactionAborted,
     ReadOnlyFileSystem,
+    AttributeNotFound,
 }
 
 /// État d'une transaction Copy-on-Write (CoW)
@@ -1079,6 +1080,11 @@ impl MountFlags {
     }
 
     #[inline]
+    pub fn is_read_only(&self) -> bool {
+        (self.0 & Self::READ_ONLY.0) != 0 || !self.is_read_write()
+    }
+
+    #[inline]
     pub fn is_persistent(&self) -> bool {
         (self.0 & Self::PERSISTENT_DIRECT.0) != 0
     }
@@ -1176,6 +1182,169 @@ impl BlockDedupTable {
             }
         }
         None
+    }
+}
+
+pub const XATTR_CREATE: u32 = 1;
+pub const XATTR_REPLACE: u32 = 2;
+pub const MAX_XATTR_ENTRIES: usize = 32;
+pub const MAX_XATTR_NAME_LEN: usize = 64;
+pub const MAX_XATTR_VAL_LEN: usize = 256;
+
+/// Entrée d'attribut étendu POSIX.1e (xattr)
+#[derive(Debug, Clone, Copy)]
+pub struct XattrEntry {
+    pub active: bool,
+    pub inode_num: u64,
+    pub name: [u8; MAX_XATTR_NAME_LEN],
+    pub name_len: usize,
+    pub value: [u8; MAX_XATTR_VAL_LEN],
+    pub val_len: usize,
+}
+
+/// Table des attributs étendus POSIX.1e associés aux inodes JamboFS
+#[derive(Debug, Clone, Copy)]
+pub struct XattrTable {
+    pub entries: [XattrEntry; MAX_XATTR_ENTRIES],
+    pub active_count: usize,
+}
+
+impl Default for XattrTable {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl XattrTable {
+    pub const fn new() -> Self {
+        Self {
+            entries: [XattrEntry {
+                active: false,
+                inode_num: 0,
+                name: [0u8; MAX_XATTR_NAME_LEN],
+                name_len: 0,
+                value: [0u8; MAX_XATTR_VAL_LEN],
+                val_len: 0,
+            }; MAX_XATTR_ENTRIES],
+            active_count: 0,
+        }
+    }
+
+    /// Définit ou met à jour un attribut étendu sur un inode
+    pub fn setxattr(
+        &mut self,
+        inode_num: u64,
+        name: &str,
+        value: &[u8],
+        flags: u32,
+    ) -> Result<(), FsError> {
+        let name_bytes = name.as_bytes();
+        if name_bytes.is_empty()
+            || name_bytes.len() > MAX_XATTR_NAME_LEN
+            || value.len() > MAX_XATTR_VAL_LEN
+        {
+            return Err(FsError::BufferTooSmall);
+        }
+
+        // Vérifier si l'attribut existe déjà
+        let existing_idx = self.entries.iter().position(|e| {
+            e.active
+                && e.inode_num == inode_num
+                && e.name_len == name_bytes.len()
+                && &e.name[..e.name_len] == name_bytes
+        });
+
+        if (flags & XATTR_CREATE != 0) && existing_idx.is_some() {
+            return Err(FsError::WriteConflict {
+                expected_gen: 0,
+                actual_gen: 1,
+            });
+        }
+        if (flags & XATTR_REPLACE != 0) && existing_idx.is_none() {
+            return Err(FsError::AttributeNotFound);
+        }
+
+        if let Some(idx) = existing_idx {
+            // Mise à jour sur place
+            let entry = &mut self.entries[idx];
+            entry.value[..value.len()].copy_from_slice(value);
+            entry.val_len = value.len();
+            return Ok(());
+        }
+
+        // Recherche d'un slot libre
+        let free_idx = self.entries.iter().position(|e| !e.active);
+        match free_idx {
+            Some(idx) => {
+                let entry = &mut self.entries[idx];
+                entry.active = true;
+                entry.inode_num = inode_num;
+                entry.name[..name_bytes.len()].copy_from_slice(name_bytes);
+                entry.name_len = name_bytes.len();
+                entry.value[..value.len()].copy_from_slice(value);
+                entry.val_len = value.len();
+                self.active_count += 1;
+                Ok(())
+            }
+            None => Err(FsError::BufferTooSmall), // Table xattr saturée
+        }
+    }
+
+    /// Récupère la valeur d'un attribut étendu
+    pub fn getxattr(&self, inode_num: u64, name: &str, out: &mut [u8]) -> Result<usize, FsError> {
+        let name_bytes = name.as_bytes();
+        for entry in self.entries.iter() {
+            if entry.active
+                && entry.inode_num == inode_num
+                && entry.name_len == name_bytes.len()
+                && &entry.name[..entry.name_len] == name_bytes
+            {
+                if out.len() < entry.val_len {
+                    return Err(FsError::BufferTooSmall);
+                }
+                out[..entry.val_len].copy_from_slice(&entry.value[..entry.val_len]);
+                return Ok(entry.val_len);
+            }
+        }
+        Err(FsError::AttributeNotFound)
+    }
+
+    /// Liste tous les noms d'attributs étendus d'un inode (séparés par un octet nul `\0`)
+    pub fn listxattr(&self, inode_num: u64, out: &mut [u8]) -> Result<usize, FsError> {
+        let mut written = 0;
+        for entry in self.entries.iter() {
+            if entry.active && entry.inode_num == inode_num {
+                let need = entry.name_len + 1; // name + '\0'
+                if written + need > out.len() {
+                    return Err(FsError::BufferTooSmall);
+                }
+                out[written..written + entry.name_len]
+                    .copy_from_slice(&entry.name[..entry.name_len]);
+                out[written + entry.name_len] = 0;
+                written += need;
+            }
+        }
+        Ok(written)
+    }
+
+    /// Supprime un attribut étendu
+    pub fn removexattr(&mut self, inode_num: u64, name: &str) -> Result<(), FsError> {
+        let name_bytes = name.as_bytes();
+        for entry in self.entries.iter_mut() {
+            if entry.active
+                && entry.inode_num == inode_num
+                && entry.name_len == name_bytes.len()
+                && &entry.name[..entry.name_len] == name_bytes
+            {
+                entry.active = false;
+                entry.inode_num = 0;
+                entry.name_len = 0;
+                entry.val_len = 0;
+                self.active_count = self.active_count.saturating_sub(1);
+                return Ok(());
+            }
+        }
+        Err(FsError::AttributeNotFound)
     }
 }
 
@@ -2472,6 +2641,7 @@ pub struct JamboFs {
     pub geometry: libjambo::gpt::SectorGeometry,
     pub dedup_table: BlockDedupTable,
     pub snapshot_table: SnapshotTable,
+    pub xattr_table: XattrTable,
     pub wal: MetadataWalManager,
     pub bitmap: CowBitmapAllocator,
 }
@@ -2573,6 +2743,7 @@ impl JamboFs {
             geometry,
             dedup_table: BlockDedupTable::new(),
             snapshot_table: SnapshotTable::new(),
+            xattr_table: XattrTable::new(),
             wal: MetadataWalManager::new(),
             bitmap,
         };
@@ -2595,6 +2766,7 @@ impl JamboFs {
             geometry: libjambo::gpt::SectorGeometry::Sector512e,
             dedup_table: BlockDedupTable::new(),
             snapshot_table: SnapshotTable::new(),
+            xattr_table: XattrTable::new(),
             wal: MetadataWalManager::new(),
             bitmap: CowBitmapAllocator::new(),
         }
@@ -2787,6 +2959,59 @@ impl JamboFs {
         self.root_offset = snap.root_tree_offset;
 
         self.sync()
+    }
+
+    /// Résout un identifiant d'inode déterministe pour un chemin donné
+    pub fn resolve_inode_num(&self, path: &str) -> u64 {
+        let clean = path.strip_prefix('/').unwrap_or(path);
+        match clean {
+            "banner.txt" => 16,
+            "hostname" | "etc/hostname" => 17,
+            "os-release" | "etc/os-release" => 18,
+            _ => {
+                let mut h: u64 = 5381;
+                for &b in clean.as_bytes() {
+                    h = h.wrapping_mul(33).wrapping_add(b as u64);
+                }
+                100 + (h % 10000)
+            }
+        }
+    }
+
+    /// Définit ou modifie un attribut étendu POSIX.1e (xattr) sur un fichier
+    pub fn setxattr(
+        &mut self,
+        path: &str,
+        name: &str,
+        value: &[u8],
+        flags: u32,
+    ) -> Result<(), FsError> {
+        if self.flags.is_read_only() {
+            return Err(FsError::ReadOnlyFileSystem);
+        }
+        let ino = self.resolve_inode_num(path);
+        self.xattr_table.setxattr(ino, name, value, flags)
+    }
+
+    /// Récupère la valeur d'un attribut étendu POSIX.1e (xattr)
+    pub fn getxattr(&self, path: &str, name: &str, out: &mut [u8]) -> Result<usize, FsError> {
+        let ino = self.resolve_inode_num(path);
+        self.xattr_table.getxattr(ino, name, out)
+    }
+
+    /// Liste tous les noms d'attributs étendus définis sur un fichier (délimités par `\0`)
+    pub fn listxattr(&self, path: &str, out: &mut [u8]) -> Result<usize, FsError> {
+        let ino = self.resolve_inode_num(path);
+        self.xattr_table.listxattr(ino, out)
+    }
+
+    /// Supprime un attribut étendu d'un fichier
+    pub fn removexattr(&mut self, path: &str, name: &str) -> Result<(), FsError> {
+        if self.flags.is_read_only() {
+            return Err(FsError::ReadOnlyFileSystem);
+        }
+        let ino = self.resolve_inode_num(path);
+        self.xattr_table.removexattr(ino, name)
     }
 
     /// Écrit un bloc de 4 Kio avec déduplication CoW par empreinte BLAKE3
@@ -4406,6 +4631,90 @@ mod tests {
             .read_file("hostname", &mut read_buf)
             .expect("read post compaction");
         assert_eq!(&read_buf[..n], b"jambo-test-extent-v2\n");
+
+        reset_local_ramdisk();
+    }
+
+    #[test]
+    fn test_xattr_posix_lifecycle() {
+        let _guard = FS_TEST_LOCK.lock().unwrap();
+        reset_local_ramdisk();
+
+        let client = BlockClient::new(libjambo::Handle(0));
+        let mut fs = JamboFs::new_fallback(client);
+
+        // 1. Définition initiale d'attributs étendus
+        assert!(fs
+            .setxattr("etc/hostname", "user.comment", b"system-host", 0)
+            .is_ok());
+        assert!(fs
+            .setxattr(
+                "etc/hostname",
+                "security.selinux",
+                b"system_u:object_r:etc_t:s0",
+                0
+            )
+            .is_ok());
+
+        // 2. Lecture des attributs
+        let mut val_buf = [0u8; 128];
+        let n1 = fs
+            .getxattr("etc/hostname", "user.comment", &mut val_buf)
+            .expect("get user.comment");
+        assert_eq!(&val_buf[..n1], b"system-host");
+
+        let n2 = fs
+            .getxattr("etc/hostname", "security.selinux", &mut val_buf)
+            .expect("get security.selinux");
+        assert_eq!(&val_buf[..n2], b"system_u:object_r:etc_t:s0");
+
+        // 3. Attribut inexistant
+        assert_eq!(
+            fs.getxattr("etc/hostname", "user.nonexistent", &mut val_buf),
+            Err(FsError::AttributeNotFound)
+        );
+
+        // 4. Liste des attributs
+        let mut list_buf = [0u8; 256];
+        let list_len = fs
+            .listxattr("etc/hostname", &mut list_buf)
+            .expect("list xattr");
+        let list_str = core::str::from_utf8(&list_buf[..list_len]).unwrap();
+        assert!(list_str.contains("user.comment\0"));
+        assert!(list_str.contains("security.selinux\0"));
+
+        // 5. Test des drapeaux XATTR_CREATE et XATTR_REPLACE
+        // XATTR_CREATE doit échouer si déjà présent
+        assert!(fs
+            .setxattr("etc/hostname", "user.comment", b"new-val", XATTR_CREATE)
+            .is_err());
+
+        // XATTR_REPLACE doit réussir si présent
+        assert!(fs
+            .setxattr(
+                "etc/hostname",
+                "user.comment",
+                b"host-updated",
+                XATTR_REPLACE
+            )
+            .is_ok());
+        let n3 = fs
+            .getxattr("etc/hostname", "user.comment", &mut val_buf)
+            .unwrap();
+        assert_eq!(&val_buf[..n3], b"host-updated");
+
+        // XATTR_REPLACE doit échouer si absent
+        assert_eq!(
+            fs.setxattr("etc/hostname", "user.missing", b"val", XATTR_REPLACE),
+            Err(FsError::AttributeNotFound)
+        );
+
+        // 6. Suppression d'un attribut étendu
+        assert!(fs.removexattr("etc/hostname", "user.comment").is_ok());
+        assert_eq!(
+            fs.getxattr("etc/hostname", "user.comment", &mut val_buf),
+            Err(FsError::AttributeNotFound)
+        );
 
         reset_local_ramdisk();
     }

@@ -1292,6 +1292,7 @@ fn build_coreutils(
     PathBuf,
     PathBuf,
     PathBuf,
+    PathBuf,
 )> {
     let root = root_dir();
     let mut cmd = Command::new("cargo");
@@ -1356,6 +1357,7 @@ fn build_coreutils(
         dir.join("printf"),
         dir.join("expr"),
         dir.join("fold"),
+        dir.join("nl"),
     ))
 }
 
@@ -1669,6 +1671,7 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
         printf_bin,
         expr_bin,
         fold_bin,
+        nl_bin,
     ) = build_coreutils(release)?;
     let installer_bin = build_installer(release)?;
     let fuzz_bin = build_fuzzer(release)?;
@@ -1715,6 +1718,7 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
     fs::copy(&printf_bin, bin_dir.join("printf"))?;
     fs::copy(&expr_bin, bin_dir.join("expr"))?;
     fs::copy(&fold_bin, bin_dir.join("fold"))?;
+    fs::copy(&nl_bin, bin_dir.join("nl"))?;
     fs::copy(&installer_bin, bin_dir.join("installer"))?;
     fs::copy(&installer_bin, bin_dir.join("jambo-installer"))?;
     fs::copy(&fuzz_bin, bin_dir.join("fuzz"))?;
@@ -1876,6 +1880,7 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
     fs::copy(&printf_bin, initrd_stage.join("printf"))?;
     fs::copy(&expr_bin, initrd_stage.join("expr"))?;
     fs::copy(&fold_bin, initrd_stage.join("fold"))?;
+    fs::copy(&nl_bin, initrd_stage.join("nl"))?;
     fs::copy(&installer_bin, initrd_stage.join("installer"))?;
     fs::copy(&installer_bin, initrd_stage.join("jambo-installer"))?;
     fs::copy(&fuzz_bin, initrd_stage.join("fuzz"))?;
@@ -1907,6 +1912,7 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
             "bin/printf",
             "bin/expr",
             "bin/fold",
+            "bin/nl",
             "bin/installer",
             "bin/jambo-installer",
             "bin/fuzz",
@@ -2065,6 +2071,7 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
             "printf",
             "expr",
             "fold",
+            "nl",
             "installer",
             "jambo-installer",
             "fuzz",

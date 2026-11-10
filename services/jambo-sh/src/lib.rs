@@ -570,6 +570,7 @@ impl JamboShell {
             "printf" | "/bin/printf" | "bin/printf" => self.cmd_printf(args, out),
             "expr" | "/bin/expr" | "bin/expr" => self.cmd_expr(args, out),
             "fold" | "/bin/fold" | "bin/fold" => self.cmd_fold(args, out),
+            "nl" | "/bin/nl" | "bin/nl" => self.cmd_nl(args, out),
             "version" => self.cmd_version(out),
             "uptime" => self.cmd_uptime(out),
             "caps" => self.cmd_caps(out),
@@ -1330,6 +1331,26 @@ Utilitaire d'installation JamboOS (Serie 0.*.*)\n\
             }
         } else {
             let msg = b"fold: pipe creation failed\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
+    }
+
+    fn cmd_nl(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if let Ok((r, w)) = libjambo::vfs::pipe() {
+            let code = libjambo::coreutils::run_nl(args, 0, w, w);
+            let _ = libjambo::coreutils::sys_close(w);
+            let n = libjambo::coreutils::sys_read(r, out);
+            let _ = libjambo::coreutils::sys_close(r);
+            let len = if n > 0 { n as usize } else { 0 };
+            if code == 0 {
+                (ShellStatus::Success, len)
+            } else {
+                (ShellStatus::ExecutionFailed, len)
+            }
+        } else {
+            let msg = b"nl: pipe creation failed\n";
             let len = msg.len().min(out.len());
             out[..len].copy_from_slice(&msg[..len]);
             (ShellStatus::ExecutionFailed, len)
@@ -17931,5 +17952,46 @@ mod tests {
         // 4. Erreur argument manquant
         let (st4, _) = shell.execute_line("seq", &mut out);
         assert_eq!(st4, ShellStatus::ExecutionFailed);
+    }
+
+    #[test]
+    fn test_fold_and_nl_shell_execution() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 512];
+
+        // 1. Exécution interne de fold sur fichier créé
+        let fd_fold = libjambo::coreutils::sys_open(
+            "/tmp/test_sh_fold.txt",
+            libjambo::vfs::O_CREAT | libjambo::vfs::O_WRONLY,
+        );
+        assert!(fd_fold >= 0);
+        let _ = libjambo::coreutils::sys_write(fd_fold, b"1234567890abcdefghij\n");
+        libjambo::coreutils::sys_close(fd_fold);
+
+        let (st1, len1) = shell.execute_line("fold -w 10 /tmp/test_sh_fold.txt", &mut out);
+        assert_eq!(st1, ShellStatus::Success);
+        let s1 = core::str::from_utf8(&out[..len1]).unwrap();
+        assert_eq!(s1, "1234567890\nabcdefghij\n");
+
+        // 2. Exécution interne de nl sur fichier
+        let fd_nl = libjambo::coreutils::sys_open(
+            "/tmp/test_sh_nl.txt",
+            libjambo::vfs::O_CREAT | libjambo::vfs::O_WRONLY,
+        );
+        assert!(fd_nl >= 0);
+        let _ = libjambo::coreutils::sys_write(fd_nl, b"premiere ligne\ndeuxieme ligne\n");
+        libjambo::coreutils::sys_close(fd_nl);
+
+        let (st2, len2) = shell.execute_line("nl -w 3 -s : /tmp/test_sh_nl.txt", &mut out);
+        assert_eq!(st2, ShellStatus::Success);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("1:premiere ligne\n"));
+        assert!(s2.contains("2:deuxieme ligne\n"));
+
+        // 3. Exécution via chemin absolu /bin/nl
+        let (st3, len3) = shell.execute_line("/bin/nl -nrz -w 4 /tmp/test_sh_nl.txt", &mut out);
+        assert_eq!(st3, ShellStatus::Success);
+        let s3 = core::str::from_utf8(&out[..len3]).unwrap();
+        assert!(s3.contains("0001\tpremiere ligne\n"));
     }
 }

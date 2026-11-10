@@ -2516,6 +2516,242 @@ impl Default for BpfFilterTable {
     }
 }
 
+pub const MAX_NAT_BINDINGS: usize = 64;
+pub const NAT_EPHEMERAL_PORT_MIN: u16 = 49152;
+pub const NAT_EPHEMERAL_PORT_MAX: u16 = 65535;
+pub const NAT_DEFAULT_TIMEOUT_SECS: u64 = 300;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NatProtocol {
+    Udp,
+    Tcp,
+    Icmp,
+}
+
+/// Erreur de gestion de la table NAT
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NatError {
+    TableFull,
+    PortCollision,
+}
+
+/// Liaison de translation d'adresses et de ports réseau (NAPT RFC 3022)
+#[derive(Debug, Clone, Copy)]
+pub struct NatBinding {
+    pub active: bool,
+    pub proto: NatProtocol,
+    pub internal_ip: [u8; 4],
+    pub internal_port: u16,
+    pub external_ip: [u8; 4],
+    pub external_port: u16,
+    pub remote_ip: [u8; 4],
+    pub remote_port: u16,
+    pub is_static_dnat: bool,
+    pub last_activity_timestamp: u64,
+    pub packets_translated: u64,
+    pub bytes_translated: u64,
+}
+
+/// Table de Traduction d'Adresses Réseau NAT / Masquerading (Ring 3 IPv4/UDP/TCP)
+#[derive(Debug, Clone)]
+pub struct NatTable {
+    pub bindings: [NatBinding; MAX_NAT_BINDINGS],
+    pub active_count: usize,
+    pub next_ephemeral_port: u16,
+    pub public_ip: [u8; 4],
+    pub total_translations: u64,
+}
+
+impl Default for NatTable {
+    fn default() -> Self {
+        Self::new([10, 0, 2, 15])
+    }
+}
+
+impl NatTable {
+    pub const fn new(public_ip: [u8; 4]) -> Self {
+        Self {
+            bindings: [NatBinding {
+                active: false,
+                proto: NatProtocol::Udp,
+                internal_ip: [0; 4],
+                internal_port: 0,
+                external_ip: [0; 4],
+                external_port: 0,
+                remote_ip: [0; 4],
+                remote_port: 0,
+                is_static_dnat: false,
+                last_activity_timestamp: 0,
+                packets_translated: 0,
+                bytes_translated: 0,
+            }; MAX_NAT_BINDINGS],
+            active_count: 0,
+            next_ephemeral_port: NAT_EPHEMERAL_PORT_MIN,
+            public_ip,
+            total_translations: 0,
+        }
+    }
+
+    /// Alloue un port source externe unique pour SNAT / Masquerading
+    fn allocate_ephemeral_port(&mut self, proto: NatProtocol) -> Option<u16> {
+        let span = (NAT_EPHEMERAL_PORT_MAX - NAT_EPHEMERAL_PORT_MIN) as usize + 1;
+        for _ in 0..span {
+            let port = self.next_ephemeral_port;
+            self.next_ephemeral_port = if self.next_ephemeral_port == NAT_EPHEMERAL_PORT_MAX {
+                NAT_EPHEMERAL_PORT_MIN
+            } else {
+                self.next_ephemeral_port + 1
+            };
+
+            // Vérifie si ce port est déjà pris pour ce protocole
+            let collision = self
+                .bindings
+                .iter()
+                .any(|b| b.active && b.proto == proto && b.external_port == port);
+
+            if !collision {
+                return Some(port);
+            }
+        }
+        None
+    }
+
+    /// Translater un paquet sortant (SNAT / Masquerade)
+    /// Remplace (internal_ip, internal_port) par (public_ip, external_port)
+    pub fn translate_outbound(
+        &mut self,
+        proto: NatProtocol,
+        src_ip: [u8; 4],
+        src_port: u16,
+        dst_ip: [u8; 4],
+        dst_port: u16,
+        current_time: u64,
+        payload_len: usize,
+    ) -> Option<([u8; 4], u16)> {
+        // 1. Chercher si une liaison active existe déjà
+        for b in self.bindings.iter_mut() {
+            if b.active
+                && b.proto == proto
+                && b.internal_ip == src_ip
+                && b.internal_port == src_port
+                && b.remote_ip == dst_ip
+                && b.remote_port == dst_port
+            {
+                b.last_activity_timestamp = current_time;
+                b.packets_translated += 1;
+                b.bytes_translated += payload_len as u64;
+                self.total_translations += 1;
+                return Some((b.external_ip, b.external_port));
+            }
+        }
+
+        // 2. Allouer un port éphémère et un slot
+        let ext_port = self.allocate_ephemeral_port(proto)?;
+        let slot_idx = self.bindings.iter().position(|b| !b.active)?;
+
+        let b = &mut self.bindings[slot_idx];
+        b.active = true;
+        b.proto = proto;
+        b.internal_ip = src_ip;
+        b.internal_port = src_port;
+        b.external_ip = self.public_ip;
+        b.external_port = ext_port;
+        b.remote_ip = dst_ip;
+        b.remote_port = dst_port;
+        b.is_static_dnat = false;
+        b.last_activity_timestamp = current_time;
+        b.packets_translated = 1;
+        b.bytes_translated = payload_len as u64;
+
+        self.active_count += 1;
+        self.total_translations += 1;
+
+        Some((self.public_ip, ext_port))
+    }
+
+    /// Translater un paquet entrant (Reverse SNAT ou DNAT / Port Forwarding)
+    /// Remplace (public_ip, external_port) par (internal_ip, internal_port)
+    pub fn translate_inbound(
+        &mut self,
+        proto: NatProtocol,
+        dst_port: u16,
+        src_ip: [u8; 4],
+        src_port: u16,
+        current_time: u64,
+        payload_len: usize,
+    ) -> Option<([u8; 4], u16)> {
+        for b in self.bindings.iter_mut() {
+            if b.active && b.proto == proto && b.external_port == dst_port {
+                // Pour DNAT statique ou si les adresses distantes concordent
+                if b.is_static_dnat || (b.remote_ip == src_ip && b.remote_port == src_port) {
+                    b.last_activity_timestamp = current_time;
+                    b.packets_translated += 1;
+                    b.bytes_translated += payload_len as u64;
+                    self.total_translations += 1;
+                    return Some((b.internal_ip, b.internal_port));
+                }
+            }
+        }
+        None
+    }
+
+    /// Enregistre une règle de redirection de port statique (DNAT / Port Forwarding)
+    pub fn add_port_forward(
+        &mut self,
+        proto: NatProtocol,
+        external_port: u16,
+        internal_ip: [u8; 4],
+        internal_port: u16,
+    ) -> Result<(), NatError> {
+        // Vérifier collision
+        if self
+            .bindings
+            .iter()
+            .any(|b| b.active && b.proto == proto && b.external_port == external_port)
+        {
+            return Err(NatError::PortCollision);
+        }
+
+        let slot_idx = self
+            .bindings
+            .iter()
+            .position(|b| !b.active)
+            .ok_or(NatError::TableFull)?;
+        let b = &mut self.bindings[slot_idx];
+        b.active = true;
+        b.proto = proto;
+        b.internal_ip = internal_ip;
+        b.internal_port = internal_port;
+        b.external_ip = self.public_ip;
+        b.external_port = external_port;
+        b.remote_ip = [0; 4]; // wildcard
+        b.remote_port = 0;
+        b.is_static_dnat = true;
+        b.last_activity_timestamp = 0;
+        b.packets_translated = 0;
+        b.bytes_translated = 0;
+
+        self.active_count += 1;
+        Ok(())
+    }
+
+    /// Purge les liaisons inactives ayant dépassé le délai imparti (timeout)
+    pub fn expire_idle_bindings(&mut self, current_time: u64, timeout_secs: u64) -> usize {
+        let mut expired = 0;
+        for b in self.bindings.iter_mut() {
+            if b.active
+                && !b.is_static_dnat
+                && current_time.saturating_sub(b.last_activity_timestamp) >= timeout_secs
+            {
+                b.active = false;
+                expired += 1;
+            }
+        }
+        self.active_count = self.active_count.saturating_sub(expired);
+        expired
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3139,5 +3375,94 @@ mod tests {
 
         // 5. Après rechargement : le paquet DNS passe à nouveau
         assert_eq!(filter.evaluate_packet(&pkt_dns), BpfFilterAction::Pass);
+    }
+
+    #[test]
+    fn test_nat_table_snat_dnat_and_expiration() {
+        let mut nat = NatTable::new([10, 0, 2, 15]);
+        assert_eq!(nat.active_count, 0);
+        assert_eq!(nat.total_translations, 0);
+
+        // 1. SNAT Sortant : client local 192.168.1.50:12345 vers 8.8.8.8:53
+        let out1 = nat.translate_outbound(
+            NatProtocol::Udp,
+            [192, 168, 1, 50],
+            12345,
+            [8, 8, 8, 8],
+            53,
+            1000,
+            64,
+        );
+        assert!(out1.is_some());
+        let (pub_ip, ext_port) = out1.unwrap();
+        assert_eq!(pub_ip, [10, 0, 2, 15]);
+        assert_eq!(ext_port, NAT_EPHEMERAL_PORT_MIN);
+        assert_eq!(nat.active_count, 1);
+        assert_eq!(nat.total_translations, 1);
+
+        // 2. Deuxième paquet du même flux -> même port externe réutilisé
+        let out2 = nat.translate_outbound(
+            NatProtocol::Udp,
+            [192, 168, 1, 50],
+            12345,
+            [8, 8, 8, 8],
+            53,
+            1005,
+            128,
+        );
+        assert_eq!(out2, Some(([10, 0, 2, 15], NAT_EPHEMERAL_PORT_MIN)));
+        assert_eq!(nat.active_count, 1);
+        assert_eq!(nat.total_translations, 2);
+
+        // 3. Translation entrante (Reverse SNAT) : réponse reçue depuis 8.8.8.8:53 vers 10.0.2.15:49152
+        let in1 = nat.translate_inbound(
+            NatProtocol::Udp,
+            NAT_EPHEMERAL_PORT_MIN,
+            [8, 8, 8, 8],
+            53,
+            1006,
+            96,
+        );
+        assert_eq!(in1, Some(([192, 168, 1, 50], 12345)));
+        assert_eq!(nat.total_translations, 3);
+
+        // Réponse d'un serveur tiers non attendu -> rejet (None)
+        let in_spoofed = nat.translate_inbound(
+            NatProtocol::Udp,
+            NAT_EPHEMERAL_PORT_MIN,
+            [1, 1, 1, 1],
+            53,
+            1007,
+            96,
+        );
+        assert_eq!(in_spoofed, None);
+
+        // 4. DNAT Statique (Port Forwarding) : port externe 8080 vers serveur web 192.168.1.80:80
+        assert!(nat
+            .add_port_forward(NatProtocol::Tcp, 8080, [192, 168, 1, 80], 80)
+            .is_ok());
+        assert_eq!(nat.active_count, 2);
+
+        // Connexion entrante sur le port redirigé depuis n'importe quel client Internet
+        let dnat_in =
+            nat.translate_inbound(NatProtocol::Tcp, 8080, [203, 0, 113, 4], 54321, 1010, 40);
+        assert_eq!(dnat_in, Some(([192, 168, 1, 80], 80)));
+
+        // 5. Expiration des liaisons inactives
+        // À t = 1000 + 350 = 1350, le flux sortant (dernier t = 1006) est inactif depuis > 300s
+        let expired = nat.expire_idle_bindings(1350, 300);
+        assert_eq!(expired, 1);
+        assert_eq!(nat.active_count, 1); // La règle DNAT statique reste active
+
+        // Le port éphémère ne répond plus
+        let in_expired = nat.translate_inbound(
+            NatProtocol::Udp,
+            NAT_EPHEMERAL_PORT_MIN,
+            [8, 8, 8, 8],
+            53,
+            1351,
+            96,
+        );
+        assert_eq!(in_expired, None);
     }
 }

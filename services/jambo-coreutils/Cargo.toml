@@ -192,5 +192,10 @@ name = "fold"
 path = "src/bin/fold.rs"
 test = false
 
+[[bin]]
+name = "nl"
+path = "src/bin/nl.rs"
+test = false
+
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }

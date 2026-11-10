@@ -16,6 +16,8 @@ pub const VIRTIO_GPU_CMD_RESOURCE_FLUSH: u32 = 0x0104;
 pub const VIRTIO_GPU_CMD_TRANSFER_TO_HOST_2D: u32 = 0x0105;
 pub const VIRTIO_GPU_CMD_RESOURCE_ATTACH_BACKING: u32 = 0x0106;
 pub const VIRTIO_GPU_CMD_RESOURCE_DETACH_BACKING: u32 = 0x0107;
+pub const VIRTIO_GPU_CMD_UPDATE_CURSOR: u32 = 0x0300;
+pub const VIRTIO_GPU_CMD_MOVE_CURSOR: u32 = 0x0301;
 
 // Réponses de statut VirtIO-GPU OASIS 1.2
 pub const VIRTIO_GPU_RESP_OK_NODATA: u32 = 0x1100;
@@ -111,6 +113,116 @@ pub struct VirtioGpuMemEntry {
     pub padding: u32,
 }
 
+/// Position du curseur VirtIO-GPU (16 octets)
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct VirtioGpuCursorPos {
+    pub scanout_id: u32,
+    pub x: u32,
+    pub y: u32,
+    pub padding: u32,
+}
+
+/// Commande de mise à jour du curseur VirtIO-GPU 1.2 (56 octets)
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct VirtioGpuUpdateCursor {
+    pub hdr: VirtioGpuCtrlHdr,
+    pub pos: VirtioGpuCursorPos,
+    pub resource_id: u32,
+    pub hot_x: u32,
+    pub hot_y: u32,
+    pub padding: u32,
+}
+
+/// Gestionnaire d'agrégation et de coalescence des régions modifiées de l'écran (Dirty Rectangles)
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DirtyRectTracker {
+    pub min_x: u32,
+    pub min_y: u32,
+    pub max_x: u32,
+    pub max_y: u32,
+    pub has_dirty: bool,
+    pub screen_width: u32,
+    pub screen_height: u32,
+}
+
+impl DirtyRectTracker {
+    pub const fn new(screen_width: u32, screen_height: u32) -> Self {
+        Self {
+            min_x: 0,
+            min_y: 0,
+            max_x: 0,
+            max_y: 0,
+            has_dirty: false,
+            screen_width,
+            screen_height,
+        }
+    }
+
+    /// Marque un rectangle d'écran comme modifié
+    pub fn mark_rect(&mut self, rect: VirtioGpuRect) {
+        if rect.width == 0 || rect.height == 0 {
+            return;
+        }
+        let rx1 = rect.x.min(self.screen_width);
+        let ry1 = rect.y.min(self.screen_height);
+        let rx2 = (rect.x.saturating_add(rect.width)).min(self.screen_width);
+        let ry2 = (rect.y.saturating_add(rect.height)).min(self.screen_height);
+
+        if !self.has_dirty {
+            self.min_x = rx1;
+            self.min_y = ry1;
+            self.max_x = rx2;
+            self.max_y = ry2;
+            self.has_dirty = true;
+        } else {
+            self.min_x = self.min_x.min(rx1);
+            self.min_y = self.min_y.min(ry1);
+            self.max_x = self.max_x.max(rx2);
+            self.max_y = self.max_y.max(ry2);
+        }
+    }
+
+    /// Marque un point ou pixel individuel
+    pub fn mark_point(&mut self, x: u32, y: u32) {
+        self.mark_rect(VirtioGpuRect {
+            x,
+            y,
+            width: 1,
+            height: 1,
+        });
+    }
+
+    /// Extrait le rectangle englobant modifié et réinitialise le suivi
+    pub fn take_dirty_rect(&mut self) -> Option<VirtioGpuRect> {
+        if !self.has_dirty {
+            return None;
+        }
+        let rect = VirtioGpuRect {
+            x: self.min_x,
+            y: self.min_y,
+            width: self.max_x.saturating_sub(self.min_x),
+            height: self.max_y.saturating_sub(self.min_y),
+        };
+        self.has_dirty = false;
+        self.min_x = 0;
+        self.min_y = 0;
+        self.max_x = 0;
+        self.max_y = 0;
+        Some(rect)
+    }
+
+    /// Surface totale modifiée en pixels
+    pub const fn dirty_area(&self) -> u64 {
+        if !self.has_dirty {
+            0
+        } else {
+            ((self.max_x - self.min_x) as u64) * ((self.max_y - self.min_y) as u64)
+        }
+    }
+}
+
 /// Pilote VirtIO-GPU
 pub struct VirtioGpuDriver {
     pub mmio_base: u64,
@@ -118,6 +230,11 @@ pub struct VirtioGpuDriver {
     pub height: u32,
     pub primary_resource_id: u32,
     pub active_scanout_id: u32,
+    pub cursor_resource_id: u32,
+    pub cursor_x: u32,
+    pub cursor_y: u32,
+    pub cursor_visible: bool,
+    pub dirty_tracker: DirtyRectTracker,
     pub ready: bool,
     pub frames_flushed: u64,
     pub bytes_transferred: u64,
@@ -137,6 +254,11 @@ impl VirtioGpuDriver {
             height,
             primary_resource_id: 1,
             active_scanout_id: 0,
+            cursor_resource_id: 0,
+            cursor_x: 0,
+            cursor_y: 0,
+            cursor_visible: false,
+            dirty_tracker: DirtyRectTracker::new(width, height),
             ready: true,
             frames_flushed: 0,
             bytes_transferred: 0,
@@ -320,6 +442,112 @@ impl VirtioGpuDriver {
         }
         self.frames_flushed = self.frames_flushed.wrapping_add(1);
         Ok(())
+    }
+
+    /// Construit la commande de mise à jour du curseur
+    pub fn build_update_cursor_cmd(
+        &self,
+        resource_id: u32,
+        scanout_id: u32,
+        x: u32,
+        y: u32,
+        hot_x: u32,
+        hot_y: u32,
+    ) -> VirtioGpuUpdateCursor {
+        VirtioGpuUpdateCursor {
+            hdr: VirtioGpuCtrlHdr {
+                cmd_type: VIRTIO_GPU_CMD_UPDATE_CURSOR,
+                flags: 0,
+                fence_id: 0,
+                ctx_id: 0,
+                ring_idx: 0,
+                padding: [0; 3],
+            },
+            pos: VirtioGpuCursorPos {
+                scanout_id,
+                x,
+                y,
+                padding: 0,
+            },
+            resource_id,
+            hot_x,
+            hot_y,
+            padding: 0,
+        }
+    }
+
+    /// Construit la commande de déplacement du curseur
+    pub fn build_move_cursor_cmd(&self, scanout_id: u32, x: u32, y: u32) -> VirtioGpuUpdateCursor {
+        VirtioGpuUpdateCursor {
+            hdr: VirtioGpuCtrlHdr {
+                cmd_type: VIRTIO_GPU_CMD_MOVE_CURSOR,
+                flags: 0,
+                fence_id: 0,
+                ctx_id: 0,
+                ring_idx: 0,
+                padding: [0; 3],
+            },
+            pos: VirtioGpuCursorPos {
+                scanout_id,
+                x,
+                y,
+                padding: 0,
+            },
+            resource_id: self.cursor_resource_id,
+            hot_x: 0,
+            hot_y: 0,
+            padding: 0,
+        }
+    }
+
+    /// Met à jour la position et la forme du curseur matériel
+    pub fn update_cursor(
+        &mut self,
+        resource_id: u32,
+        x: u32,
+        y: u32,
+        hot_x: u32,
+        hot_y: u32,
+    ) -> Result<(), SysError> {
+        if !self.ready {
+            return Err(SysError::ResourceBusy);
+        }
+        self.cursor_resource_id = resource_id;
+        self.cursor_x = x.min(self.width);
+        self.cursor_y = y.min(self.height);
+        self.cursor_visible = resource_id > 0;
+        let _ = (hot_x, hot_y);
+        Ok(())
+    }
+
+    /// Déplace le curseur matériel à des coordonnées absolues
+    pub fn move_cursor(&mut self, x: u32, y: u32) -> Result<(), SysError> {
+        if !self.ready {
+            return Err(SysError::ResourceBusy);
+        }
+        self.cursor_x = x.min(self.width);
+        self.cursor_y = y.min(self.height);
+        Ok(())
+    }
+
+    /// Masque le curseur matériel
+    pub fn hide_cursor(&mut self) -> Result<(), SysError> {
+        if !self.ready {
+            return Err(SysError::ResourceBusy);
+        }
+        self.cursor_visible = false;
+        Ok(())
+    }
+
+    /// Transfère et synchronise les zones modifiées agrégées (Dirty Rectangles)
+    pub fn flush_dirty_regions(&mut self) -> Result<Option<VirtioGpuRect>, SysError> {
+        if let Some(dirty_rect) = self.dirty_tracker.take_dirty_rect() {
+            self.transfer_to_host(dirty_rect)?;
+            self.flush_screen()?;
+            Ok(Some(dirty_rect))
+        } else {
+            Ok(None)
+        }
     }
 }
 
@@ -608,5 +836,76 @@ mod tests {
             console.write_str(core::str::from_utf8(&line[..3]).unwrap());
         }
         assert_eq!(console.cursor_row, console.rows - 1);
+    }
+
+    #[test]
+    fn test_virtio_gpu_hardware_cursor_and_dirty_rect_coalescing() {
+        let mut gpu = VirtioGpuDriver::new(0, 1920, 1080);
+        assert!(!gpu.cursor_visible);
+
+        // 1. Initialisation et configuration du curseur
+        assert!(gpu.update_cursor(10, 100, 200, 0, 0).is_ok());
+        assert!(gpu.cursor_visible);
+        assert_eq!(gpu.cursor_x, 100);
+        assert_eq!(gpu.cursor_y, 200);
+
+        // 2. Déplacement du curseur
+        assert!(gpu.move_cursor(300, 400).is_ok());
+        assert_eq!(gpu.cursor_x, 300);
+        assert_eq!(gpu.cursor_y, 400);
+
+        // 3. Masquage du curseur
+        assert!(gpu.hide_cursor().is_ok());
+        assert!(!gpu.cursor_visible);
+
+        // 4. Test des commandes brutes VirtIO-GPU
+        let cmd_up = gpu.build_update_cursor_cmd(10, 0, 50, 60, 2, 2);
+        assert_eq!(cmd_up.hdr.cmd_type, VIRTIO_GPU_CMD_UPDATE_CURSOR);
+        assert_eq!(cmd_up.pos.x, 50);
+        assert_eq!(cmd_up.pos.y, 60);
+
+        let cmd_mv = gpu.build_move_cursor_cmd(0, 80, 90);
+        assert_eq!(cmd_mv.hdr.cmd_type, VIRTIO_GPU_CMD_MOVE_CURSOR);
+        assert_eq!(cmd_mv.pos.x, 80);
+        assert_eq!(cmd_mv.pos.y, 90);
+
+        // 5. Test de DirtyRectTracker
+        let mut tracker = DirtyRectTracker::new(1920, 1080);
+        assert!(!tracker.has_dirty);
+        assert_eq!(tracker.take_dirty_rect(), None);
+
+        // Marquer deux rectangles disjoints
+        tracker.mark_rect(VirtioGpuRect {
+            x: 10,
+            y: 20,
+            width: 30,
+            height: 40,
+        });
+        tracker.mark_rect(VirtioGpuRect {
+            x: 100,
+            y: 150,
+            width: 50,
+            height: 60,
+        });
+
+        assert!(tracker.has_dirty);
+        let union_rect = tracker.take_dirty_rect().expect("dirty rect présent");
+        assert_eq!(union_rect.x, 10);
+        assert_eq!(union_rect.y, 20);
+        assert_eq!(union_rect.width, (100 + 50) - 10); // 140
+        assert_eq!(union_rect.height, (150 + 60) - 20); // 190
+        assert!(!tracker.has_dirty);
+
+        // 6. Flush des zones modifiées sur le driver
+        gpu.dirty_tracker.mark_rect(VirtioGpuRect {
+            x: 0,
+            y: 0,
+            width: 64,
+            height: 64,
+        });
+        let res = gpu.flush_dirty_regions().expect("flush dirty ok");
+        assert!(res.is_some());
+        assert_eq!(gpu.frames_flushed, 1);
+        assert_eq!(gpu.bytes_transferred, 64 * 64 * 4);
     }
 }

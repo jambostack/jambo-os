@@ -7774,6 +7774,346 @@ pub fn run_fold(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
     }
 }
 
+/// Mode de numérotation pour une section de `nl` (POSIX.1-2024)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NlNumberingMode {
+    All,      // 'a' : Toutes les lignes
+    NonEmpty, // 't' : Lignes non vides uniquement (défaut corps)
+    None,     // 'n' : Aucune ligne numérotée
+}
+
+/// Format de justification du numéro de ligne
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NlFormat {
+    Left,              // 'ln' : Justifié à gauche
+    RightLeadingBlank, // 'rn' : Justifié à droite, espaces de tête (défaut)
+    RightLeadingZero,  // 'rz' : Justifié à droite, zéros de tête
+}
+
+/// Section courante du flux de texte
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NlSection {
+    Header,
+    Body,
+    Footer,
+}
+
+/// Utilitaire POSIX standard `nl` (Line Numbering Filter)
+///
+/// Numérote les lignes des fichiers passés en paramètre ou de l'entrée standard (stdin)
+/// selon les spécifications POSIX.1-2024 IEEE Std 1003.1.
+pub fn run_nl(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    let mut body_mode = NlNumberingMode::NonEmpty;
+    let mut header_mode = NlNumberingMode::None;
+    let mut footer_mode = NlNumberingMode::None;
+    let mut format = NlFormat::RightLeadingBlank;
+    let mut width: usize = 6;
+    let mut separator: &str = "\t";
+    let mut start_num: i64 = 1;
+    let mut incr: i64 = 1;
+
+    let mut file_args = [""; 32];
+    let mut file_count = 0;
+
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i].trim();
+        if arg == "-ba" || (arg == "-b" && i + 1 < args.len() && args[i + 1].trim() == "a") {
+            body_mode = NlNumberingMode::All;
+            i += if arg == "-ba" { 1 } else { 2 };
+        } else if arg == "-bt" || (arg == "-b" && i + 1 < args.len() && args[i + 1].trim() == "t") {
+            body_mode = NlNumberingMode::NonEmpty;
+            i += if arg == "-bt" { 1 } else { 2 };
+        } else if arg == "-bn" || (arg == "-b" && i + 1 < args.len() && args[i + 1].trim() == "n") {
+            body_mode = NlNumberingMode::None;
+            i += if arg == "-bn" { 1 } else { 2 };
+        } else if arg == "-ha" || (arg == "-h" && i + 1 < args.len() && args[i + 1].trim() == "a") {
+            header_mode = NlNumberingMode::All;
+            i += if arg == "-ha" { 1 } else { 2 };
+        } else if arg == "-ht" || (arg == "-h" && i + 1 < args.len() && args[i + 1].trim() == "t") {
+            header_mode = NlNumberingMode::NonEmpty;
+            i += if arg == "-ht" { 1 } else { 2 };
+        } else if arg == "-hn" || (arg == "-h" && i + 1 < args.len() && args[i + 1].trim() == "n") {
+            header_mode = NlNumberingMode::None;
+            i += if arg == "-hn" { 1 } else { 2 };
+        } else if arg == "-fa" || (arg == "-f" && i + 1 < args.len() && args[i + 1].trim() == "a") {
+            footer_mode = NlNumberingMode::All;
+            i += if arg == "-fa" { 1 } else { 2 };
+        } else if arg == "-ft" || (arg == "-f" && i + 1 < args.len() && args[i + 1].trim() == "t") {
+            footer_mode = NlNumberingMode::NonEmpty;
+            i += if arg == "-ft" { 1 } else { 2 };
+        } else if arg == "-fn" || (arg == "-f" && i + 1 < args.len() && args[i + 1].trim() == "n") {
+            footer_mode = NlNumberingMode::None;
+            i += if arg == "-fn" { 1 } else { 2 };
+        } else if arg == "-nln" || (arg == "-n" && i + 1 < args.len() && args[i + 1].trim() == "ln")
+        {
+            format = NlFormat::Left;
+            i += if arg == "-nln" { 1 } else { 2 };
+        } else if arg == "-nrn" || (arg == "-n" && i + 1 < args.len() && args[i + 1].trim() == "rn")
+        {
+            format = NlFormat::RightLeadingBlank;
+            i += if arg == "-nrn" { 1 } else { 2 };
+        } else if arg == "-nrz" || (arg == "-n" && i + 1 < args.len() && args[i + 1].trim() == "rz")
+        {
+            format = NlFormat::RightLeadingZero;
+            i += if arg == "-nrz" { 1 } else { 2 };
+        } else if arg == "-w" {
+            if i + 1 < args.len() {
+                let parsed = parse_i64(args[i + 1].trim());
+                if parsed > 0 {
+                    width = (parsed as usize).min(64);
+                } else {
+                    let _ = sys_write(err_fd, b"nl: largeur invalide\n");
+                    return 1;
+                }
+                i += 2;
+            } else {
+                let _ = sys_write(err_fd, b"nl: option requiert un argument -- 'w'\n");
+                return 1;
+            }
+        } else if arg.starts_with("-w")
+            && arg.len() > 2
+            && arg[2..].chars().all(|c| c.is_ascii_digit())
+        {
+            let parsed = parse_i64(&arg[2..]);
+            if parsed > 0 {
+                width = (parsed as usize).min(64);
+            } else {
+                let _ = sys_write(err_fd, b"nl: largeur invalide\n");
+                return 1;
+            }
+            i += 1;
+        } else if arg == "-s" {
+            if i + 1 < args.len() {
+                separator = args[i + 1];
+                i += 2;
+            } else {
+                let _ = sys_write(err_fd, b"nl: option requiert un argument -- 's'\n");
+                return 1;
+            }
+        } else if arg.starts_with("-s") && arg.len() > 2 {
+            separator = &arg[2..];
+            i += 1;
+        } else if arg == "-v" {
+            if i + 1 < args.len() {
+                start_num = parse_i64(args[i + 1].trim());
+                i += 2;
+            } else {
+                let _ = sys_write(err_fd, b"nl: option requiert un argument -- 'v'\n");
+                return 1;
+            }
+        } else if arg.starts_with("-v")
+            && arg.len() > 2
+            && (arg[2..].chars().all(|c| c.is_ascii_digit())
+                || (arg.starts_with("-v-") && arg[3..].chars().all(|c| c.is_ascii_digit())))
+        {
+            start_num = parse_i64(&arg[2..]);
+            i += 1;
+        } else if arg == "-i" {
+            if i + 1 < args.len() {
+                let parsed = parse_i64(args[i + 1].trim());
+                if parsed > 0 {
+                    incr = parsed;
+                }
+                i += 2;
+            } else {
+                let _ = sys_write(err_fd, b"nl: option requiert un argument -- 'i'\n");
+                return 1;
+            }
+        } else if arg.starts_with("-i")
+            && arg.len() > 2
+            && arg[2..].chars().all(|c| c.is_ascii_digit())
+        {
+            let parsed = parse_i64(&arg[2..]);
+            if parsed > 0 {
+                incr = parsed;
+            }
+            i += 1;
+        } else if arg == "--" {
+            i += 1;
+            while i < args.len() && file_count < file_args.len() {
+                file_args[file_count] = args[i];
+                file_count += 1;
+                i += 1;
+            }
+            break;
+        } else if arg.starts_with('-') && arg != "-" {
+            let _ = sys_write(err_fd, b"nl: option invalide: ");
+            let _ = sys_write(err_fd, arg.as_bytes());
+            let _ = sys_write(err_fd, b"\n");
+            return 1;
+        } else {
+            if file_count < file_args.len() {
+                file_args[file_count] = arg;
+                file_count += 1;
+            }
+            i += 1;
+        }
+    }
+
+    let mut current_line_num = start_num;
+    let mut current_section = NlSection::Body;
+
+    let mut nl_stream = |r_fd: i32| -> bool {
+        let mut in_chunk = [0u8; 1024];
+        let mut line_buf = [0u8; 4096];
+        let mut line_len = 0usize;
+
+        let emit_line = |line: &[u8], sect: &mut NlSection, c_num: &mut i64| {
+            // Vérifier si la ligne est un délimiteur logique POSIX
+            if line == b"\\:\\:\\:" {
+                *sect = NlSection::Header;
+                let _ = sys_write(out_fd, b"\n");
+                return;
+            } else if line == b"\\:\\:" {
+                *sect = NlSection::Body;
+                let _ = sys_write(out_fd, b"\n");
+                return;
+            } else if line == b"\\:" {
+                *sect = NlSection::Footer;
+                let _ = sys_write(out_fd, b"\n");
+                return;
+            }
+
+            let mode = match *sect {
+                NlSection::Header => header_mode,
+                NlSection::Body => body_mode,
+                NlSection::Footer => footer_mode,
+            };
+
+            let should_number = match mode {
+                NlNumberingMode::All => true,
+                NlNumberingMode::NonEmpty => !line.is_empty(),
+                NlNumberingMode::None => false,
+            };
+
+            if should_number {
+                // Formater le numéro de ligne dans un tampon fixe
+                let mut num_str_buf = [0u8; 32];
+                let mut val = *c_num;
+                let is_neg = val < 0;
+                if is_neg {
+                    val = -val;
+                }
+                let num_len = if val == 0 {
+                    num_str_buf[0] = b'0';
+                    1
+                } else {
+                    let mut temp = [0u8; 32];
+                    let mut t_len = 0;
+                    while val > 0 && t_len < temp.len() {
+                        temp[t_len] = b'0' + (val % 10) as u8;
+                        val /= 10;
+                        t_len += 1;
+                    }
+                    if is_neg && t_len < temp.len() {
+                        temp[t_len] = b'-';
+                        t_len += 1;
+                    }
+                    for idx in 0..t_len {
+                        num_str_buf[idx] = temp[t_len - 1 - idx];
+                    }
+                    t_len
+                };
+
+                let num_slice = &num_str_buf[..num_len];
+                let pad_count = width.saturating_sub(num_len);
+
+                match format {
+                    NlFormat::RightLeadingBlank => {
+                        for _ in 0..pad_count {
+                            let _ = sys_write(out_fd, b" ");
+                        }
+                        let _ = sys_write(out_fd, num_slice);
+                    }
+                    NlFormat::RightLeadingZero => {
+                        for _ in 0..pad_count {
+                            let _ = sys_write(out_fd, b"0");
+                        }
+                        let _ = sys_write(out_fd, num_slice);
+                    }
+                    NlFormat::Left => {
+                        let _ = sys_write(out_fd, num_slice);
+                        for _ in 0..pad_count {
+                            let _ = sys_write(out_fd, b" ");
+                        }
+                    }
+                }
+
+                let _ = sys_write(out_fd, separator.as_bytes());
+                *c_num += incr;
+            } else {
+                // Émettre un espacement équivalent sans numéro
+                for _ in 0..width {
+                    let _ = sys_write(out_fd, b" ");
+                }
+                let _ = sys_write(out_fd, separator.as_bytes());
+            }
+
+            let _ = sys_write(out_fd, line);
+            let _ = sys_write(out_fd, b"\n");
+        };
+
+        loop {
+            let n = sys_read(r_fd, &mut in_chunk);
+            if n <= 0 {
+                break;
+            }
+            for &b in &in_chunk[..n as usize] {
+                if b == b'\n' {
+                    emit_line(
+                        &line_buf[..line_len],
+                        &mut current_section,
+                        &mut current_line_num,
+                    );
+                    line_len = 0;
+                } else if line_len < line_buf.len() {
+                    line_buf[line_len] = b;
+                    line_len += 1;
+                }
+            }
+        }
+
+        if line_len > 0 {
+            emit_line(
+                &line_buf[..line_len],
+                &mut current_section,
+                &mut current_line_num,
+            );
+        }
+
+        true
+    };
+
+    if file_count == 0 {
+        nl_stream(in_fd);
+        0
+    } else {
+        let mut has_err = false;
+        for path in &file_args[..file_count] {
+            if *path == "-" {
+                nl_stream(in_fd);
+                continue;
+            }
+            let fd = sys_open(path, O_RDONLY);
+            if fd < 0 {
+                let _ = sys_write(err_fd, b"nl: ");
+                let _ = sys_write(err_fd, path.as_bytes());
+                let _ = sys_write(err_fd, b": No such file or directory\n");
+                has_err = true;
+                continue;
+            }
+            nl_stream(fd);
+            let _ = sys_close(fd);
+        }
+        if has_err {
+            1
+        } else {
+            0
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -9472,5 +9812,100 @@ mod tests {
         let n5 = sys_read(out_r5, &mut buf);
         assert_eq!(&buf[..n5 as usize], b"AAAABBBB\nCCCCDDDD\n");
         sys_close(out_r5);
+    }
+
+    #[test]
+    fn test_nl_lifecycle() {
+        let mut buf = [0u8; 1024];
+
+        // 1. Numérotation par défaut (lignes non vides, largeur 6, espace à droite)
+        let (in_r1, in_w1) = crate::vfs::pipe().expect("pipe nl in 1");
+        let (out_r1, out_w1) = crate::vfs::pipe().expect("pipe nl out 1");
+        let _ = sys_write(in_w1, b"ligne1\n\nligne2\n");
+        sys_close(in_w1);
+
+        let code1 = run_nl(&[], in_r1, out_w1, 2);
+        assert_eq!(code1, 0);
+        sys_close(in_r1);
+        sys_close(out_w1);
+
+        let n1 = sys_read(out_r1, &mut buf);
+        assert_eq!(
+            &buf[..n1 as usize],
+            b"     1\tligne1\n      \t\n     2\tligne2\n"
+        );
+        sys_close(out_r1);
+
+        // 2. Numérotation de toutes les lignes (-ba), séparateur personnalisé (-s ": "), largeur 3 (-w 3), start 10 (-v 10), incr 5 (-i 5)
+        let (in_r2, in_w2) = crate::vfs::pipe().expect("pipe nl in 2");
+        let (out_r2, out_w2) = crate::vfs::pipe().expect("pipe nl out 2");
+        let _ = sys_write(in_w2, b"alpha\n\nbeta\n");
+        sys_close(in_w2);
+
+        let code2 = run_nl(
+            &["-ba", "-s", ": ", "-w", "3", "-v", "10", "-i", "5"],
+            in_r2,
+            out_w2,
+            2,
+        );
+        assert_eq!(code2, 0);
+        sys_close(in_r2);
+        sys_close(out_w2);
+
+        let n2 = sys_read(out_r2, &mut buf);
+        assert_eq!(&buf[..n2 as usize], b" 10: alpha\n 15: \n 20: beta\n");
+        sys_close(out_r2);
+
+        // 3. Format zéros de tête (-nrz) et justification gauche (-nln)
+        let (in_r3, in_w3) = crate::vfs::pipe().expect("pipe nl in 3");
+        let (out_r3, out_w3) = crate::vfs::pipe().expect("pipe nl out 3");
+        let _ = sys_write(in_w3, b"un\ndeux\n");
+        sys_close(in_w3);
+
+        let code3 = run_nl(&["-nrz", "-w", "4", "-s", "|"], in_r3, out_w3, 2);
+        assert_eq!(code3, 0);
+        sys_close(in_r3);
+        sys_close(out_w3);
+
+        let n3 = sys_read(out_r3, &mut buf);
+        assert_eq!(&buf[..n3 as usize], b"0001|un\n0002|deux\n");
+        sys_close(out_r3);
+
+        // 4. Justifié à gauche (-nln)
+        let (in_r4, in_w4) = crate::vfs::pipe().expect("pipe nl in 4");
+        let (out_r4, out_w4) = crate::vfs::pipe().expect("pipe nl out 4");
+        let _ = sys_write(in_w4, b"test\n");
+        sys_close(in_w4);
+
+        let code4 = run_nl(&["-nln", "-w", "4", "-s", " "], in_r4, out_w4, 2);
+        assert_eq!(code4, 0);
+        sys_close(in_r4);
+        sys_close(out_w4);
+
+        let n4 = sys_read(out_r4, &mut buf);
+        assert_eq!(&buf[..n4 as usize], b"1    test\n");
+        sys_close(out_r4);
+
+        // 5. Option invalide
+        let (err_r5, err_w5) = crate::vfs::pipe().expect("pipe nl err 5");
+        let code5 = run_nl(&["-invalid"], 0, 1, err_w5);
+        assert_eq!(code5, 1);
+        sys_close(err_w5);
+        sys_close(err_r5);
+
+        // 6. Lecture via fichier VFS
+        let fd_test = sys_open("/tmp/nl_test.txt", O_CREAT | O_WRONLY);
+        assert!(fd_test >= 3);
+        let _ = sys_write(fd_test, b"salut\nmonde\n");
+        sys_close(fd_test);
+
+        let (out_r6, out_w6) = crate::vfs::pipe().expect("pipe nl out 6");
+        let code6 = run_nl(&["-w", "2", "-s", " ", "/tmp/nl_test.txt"], 0, out_w6, 2);
+        assert_eq!(code6, 0);
+        sys_close(out_w6);
+
+        let n6 = sys_read(out_r6, &mut buf);
+        assert_eq!(&buf[..n6 as usize], b" 1 salut\n 2 monde\n");
+        sys_close(out_r6);
     }
 }
