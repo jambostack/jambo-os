@@ -1934,6 +1934,8 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
     fs::copy(&base64_bin, initrd_stage.join("base64"))?;
     fs::copy(&sha256sum_bin, initrd_stage.join("sha256sum"))?;
     fs::copy(&sync_bin, initrd_stage.join("sync"))?;
+    fs::copy(&truncate_bin, initrd_stage.join("truncate"))?;
+    fs::copy(&hexdump_bin, initrd_stage.join("hexdump"))?;
     fs::copy(&installer_bin, initrd_stage.join("installer"))?;
     fs::copy(&installer_bin, initrd_stage.join("jambo-installer"))?;
     fs::copy(&fuzz_bin, initrd_stage.join("fuzz"))?;
@@ -1974,6 +1976,9 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
             "bin/cksum",
             "bin/base64",
             "bin/sha256sum",
+            "bin/sync",
+            "bin/truncate",
+            "bin/hexdump",
             "bin/installer",
             "bin/jambo-installer",
             "bin/fuzz",
@@ -2141,6 +2146,9 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
             "cksum",
             "base64",
             "sha256sum",
+            "sync",
+            "truncate",
+            "hexdump",
             "installer",
             "jambo-installer",
             "fuzz",

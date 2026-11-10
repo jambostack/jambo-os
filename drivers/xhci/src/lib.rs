@@ -1199,6 +1199,22 @@ pub struct ScsiDiagnosticResultsHeader {
     pub self_test_passed: bool,
 }
 
+/// Résultat d'analyse de la page SCSI Translate Address (Page 0x40 - SPC-4 Diagnostic Results)
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ScsiTranslateAddressPage {
+    /// Code de page (0x40)
+    pub page_code: u8,
+    /// Format d'adresse retourné (0x00 = Bloc LBA, 0x04 = Octets depuis index, 0x05 = Secteur physique)
+    pub address_format: u8,
+    /// LBA physique ou logique traduit (64 bits)
+    pub translated_lba: u64,
+    /// Numéro de cylindre ou tête physique (le cas échéant)
+    pub cylinder: u32,
+    pub head: u8,
+    pub sector: u32,
+}
+
 /// En-tête de réponse SCSI REPORT LUNS (SPC-4) (8 octets minimum)
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -2226,6 +2242,38 @@ impl UsbMassStorageBot {
         })
     }
 
+    /// Décode la page de diagnostic SCSI Translate Address (Page 0x40 - SPC-4 Diagnostic Results)
+    pub fn parse_translate_address_page(&self, data: &[u8]) -> Option<ScsiTranslateAddressPage> {
+        if data.len() < 14 {
+            return None;
+        }
+        let page_code = data[0];
+        if page_code != SCSI_DIAG_PAGE_TRANSLATE_ADDRESS {
+            return None;
+        }
+        let address_format = data[4] & 0x07;
+        let translated_lba = u64::from_be_bytes([
+            data[6], data[7], data[8], data[9], data[10], data[11], data[12], data[13],
+        ]);
+        let (cylinder, head, sector) = if data.len() >= 22 {
+            let cyl = u32::from_be_bytes([0, data[14], data[15], data[16]]);
+            let h = data[17];
+            let sec = u32::from_be_bytes([data[18], data[19], data[20], data[21]]);
+            (cyl, h, sec)
+        } else {
+            (0, 0, 0)
+        };
+
+        Some(ScsiTranslateAddressPage {
+            page_code,
+            address_format,
+            translated_lba,
+            cylinder,
+            head,
+            sector,
+        })
+    }
+
     /// Construit le paquet Setup pour la réinitialisation de classe BOT (Bulk-Only Mass Storage Reset)
     pub fn build_bot_reset_packet(&self, interface_number: u8) -> UsbSetupPacket {
         UsbSetupPacket::new(0x21, 0xFF, 0, interface_number as u16, 0)
@@ -2510,6 +2558,12 @@ impl UsbMassStorageDisk {
         data: &[u8],
     ) -> Option<ScsiDiagnosticResultsHeader> {
         self.bot.parse_diagnostic_results_header(data)
+    }
+
+    /// Décode la page de diagnostic SCSI Translate Address (Page 0x40 - SPC-4)
+    #[inline]
+    pub fn parse_translate_address_page(&self, data: &[u8]) -> Option<ScsiTranslateAddressPage> {
+        self.bot.parse_translate_address_page(data)
     }
 
     /// Met à jour la géométrie du disque via les données décodées de READ CAPACITY (16)
@@ -5568,5 +5622,25 @@ mod tests {
         assert_eq!(diag_hdr.page_code, SCSI_DIAG_PAGE_TRANSLATE_ADDRESS);
         assert_eq!(diag_hdr.page_length, 12);
         assert!(diag_hdr.self_test_passed);
+
+        // 18. Parsing page SCSI Translate Address (Page 0x40)
+        let mut trans_page_raw = [0u8; 22];
+        trans_page_raw[0] = SCSI_DIAG_PAGE_TRANSLATE_ADDRESS;
+        trans_page_raw[1] = 0x00; // Status OK
+        trans_page_raw[2] = 0x00;
+        trans_page_raw[3] = 18; // Page Length
+        trans_page_raw[4] = SCSI_DEFECT_FORMAT_BLOCK; // 0x00
+        trans_page_raw[6..14].copy_from_slice(&0x0003_1234_5678u64.to_be_bytes()); // Translated LBA
+        trans_page_raw[14..17].copy_from_slice(&[0x01, 0x02, 0x03]); // Cylinder
+        trans_page_raw[17] = 4; // Head
+        trans_page_raw[18..22].copy_from_slice(&128u32.to_be_bytes()); // Sector
+
+        let trans_res = disk.parse_translate_address_page(&trans_page_raw).unwrap();
+        assert_eq!(trans_res.page_code, SCSI_DIAG_PAGE_TRANSLATE_ADDRESS);
+        assert_eq!(trans_res.address_format, SCSI_DEFECT_FORMAT_BLOCK);
+        assert_eq!(trans_res.translated_lba, 0x0003_1234_5678);
+        assert_eq!(trans_res.cylinder, 0x0001_0203);
+        assert_eq!(trans_res.head, 4);
+        assert_eq!(trans_res.sector, 128);
     }
 }
