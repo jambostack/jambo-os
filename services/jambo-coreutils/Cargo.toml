@@ -227,5 +227,10 @@ name = "cksum"
 path = "src/bin/cksum.rs"
 test = false
 
+[[bin]]
+name = "base64"
+path = "src/bin/base64.rs"
+test = false
+
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }

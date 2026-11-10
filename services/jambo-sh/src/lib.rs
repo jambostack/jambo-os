@@ -577,6 +577,7 @@ impl JamboShell {
             "unexpand" | "/bin/unexpand" | "bin/unexpand" => self.cmd_unexpand(args, out),
             "sleep" | "/bin/sleep" | "bin/sleep" => self.cmd_sleep(args, out),
             "cksum" | "/bin/cksum" | "bin/cksum" => self.cmd_cksum(args, out),
+            "base64" | "/bin/base64" | "bin/base64" => self.cmd_base64(args, out),
             "version" => self.cmd_version(out),
             "uptime" => self.cmd_uptime(out),
             "caps" => self.cmd_caps(out),
@@ -1477,6 +1478,26 @@ Utilitaire d'installation JamboOS (Serie 0.*.*)\n\
             }
         } else {
             let msg = b"cksum: pipe creation failed\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
+    }
+
+    fn cmd_base64(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if let Ok((r, w)) = libjambo::vfs::pipe() {
+            let code = libjambo::coreutils::run_base64(args, 0, w, w);
+            let _ = libjambo::coreutils::sys_close(w);
+            let n = libjambo::coreutils::sys_read(r, out);
+            let _ = libjambo::coreutils::sys_close(r);
+            let len = if n > 0 { n as usize } else { 0 };
+            if code == 0 {
+                (ShellStatus::Success, len)
+            } else {
+                (ShellStatus::ExecutionFailed, len)
+            }
+        } else {
+            let msg = b"base64: pipe creation failed\n";
             let len = msg.len().min(out.len());
             out[..len].copy_from_slice(&msg[..len]);
             (ShellStatus::ExecutionFailed, len)
@@ -18296,5 +18317,51 @@ mod tests {
         assert_eq!(st3, ShellStatus::Success);
         let s3 = core::str::from_utf8(&out[..len3]).unwrap();
         assert_eq!(s3, "3015617425 6 /tmp/sh_cksum_test.txt\n");
+    }
+
+    #[test]
+    fn test_base64_shell_execution() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 1024];
+
+        // 1. base64 --help
+        let (st1, len1) = shell.execute_line("base64 --help", &mut out);
+        assert_eq!(st1, ShellStatus::Success);
+        let s1 = core::str::from_utf8(&out[..len1]).unwrap();
+        assert!(s1.contains("Usage: base64"));
+
+        // 2. /bin/base64 --version
+        let (st2, len2) = shell.execute_line("/bin/base64 --version", &mut out);
+        assert_eq!(st2, ShellStatus::Success);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("base64 (JamboOS coreutils)"));
+
+        // 3. base64 encode sur fichier créé dans VFS
+        let fd = libjambo::coreutils::sys_open(
+            "/tmp/sh_b64_test.txt",
+            libjambo::vfs::O_CREAT | libjambo::vfs::O_WRONLY | libjambo::vfs::O_TRUNC,
+        );
+        assert!(fd >= 0);
+        let _ = libjambo::coreutils::sys_write(fd, b"JamboOS BareMetal\n");
+        libjambo::coreutils::sys_close(fd);
+
+        let (st3, len3) = shell.execute_line("base64 -w0 /tmp/sh_b64_test.txt", &mut out);
+        assert_eq!(st3, ShellStatus::Success);
+        let s3 = core::str::from_utf8(&out[..len3]).unwrap();
+        assert_eq!(s3, "SmFtYm9PUyBCYXJlTWV0YWwK\n");
+
+        // 4. base64 decode sur fichier encodé
+        let fd2 = libjambo::coreutils::sys_open(
+            "/tmp/sh_b64_enc.txt",
+            libjambo::vfs::O_CREAT | libjambo::vfs::O_WRONLY | libjambo::vfs::O_TRUNC,
+        );
+        assert!(fd2 >= 0);
+        let _ = libjambo::coreutils::sys_write(fd2, b"SmFtYm9PUyBCYXJlTWV0YWwK\n");
+        libjambo::coreutils::sys_close(fd2);
+
+        let (st4, len4) = shell.execute_line("base64 -d /tmp/sh_b64_enc.txt", &mut out);
+        assert_eq!(st4, ShellStatus::Success);
+        let s4 = core::str::from_utf8(&out[..len4]).unwrap();
+        assert_eq!(s4, "JamboOS BareMetal\n");
     }
 }

@@ -1145,15 +1145,51 @@ pub const SCSI_CMD_REQUEST_SENSE: u8 = 0x03;
 pub const SCSI_CMD_INQUIRY: u8 = 0x12;
 pub const SCSI_CMD_MODE_SENSE_6: u8 = 0x1A;
 pub const SCSI_CMD_START_STOP_UNIT: u8 = 0x1B;
+pub const SCSI_CMD_PREVENT_ALLOW_MEDIUM_REMOVAL: u8 = 0x1E;
 pub const SCSI_CMD_READ_CAPACITY_10: u8 = 0x25;
 pub const SCSI_CMD_READ_10: u8 = 0x28;
 pub const SCSI_CMD_WRITE_10: u8 = 0x2A;
 pub const SCSI_CMD_SYNCHRONIZE_CACHE_10: u8 = 0x35;
 pub const SCSI_CMD_UNMAP: u8 = 0x42;
+pub const SCSI_CMD_MODE_SENSE_10: u8 = 0x5A;
 pub const SCSI_CMD_READ_16: u8 = 0x88;
 pub const SCSI_CMD_WRITE_16: u8 = 0x8E;
 pub const SCSI_CMD_SERVICE_ACTION_IN_16: u8 = 0x9E;
 pub const SCSI_SA_READ_CAPACITY_16: u8 = 0x10;
+pub const SCSI_PAGE_CACHING: u8 = 0x08;
+
+/// En-tête des paramètres retournés par SCSI MODE SENSE (6) (4 octets minimum)
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ScsiModeParameterHeader6 {
+    pub mode_data_length: u8,
+    pub medium_type: u8,
+    pub device_specific_parameter: u8,
+    pub write_protected: bool,
+    pub block_descriptor_length: u8,
+}
+
+/// En-tête des paramètres retournés par SCSI MODE SENSE (10) (8 octets minimum)
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ScsiModeParameterHeader10 {
+    pub mode_data_length: u16,
+    pub medium_type: u8,
+    pub device_specific_parameter: u8,
+    pub write_protected: bool,
+    pub long_lba: bool,
+    pub block_descriptor_length: u16,
+}
+
+/// Paramètres de la page SCSI Caching Mode Page (Page 0x08, SPC-4 / SBC-3)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ScsiCachingModePage {
+    pub page_code: u8,
+    pub page_length: u8,
+    pub write_cache_enabled: bool,
+    pub read_cache_disable: bool,
+    pub multiplication_factor: bool,
+}
 
 /// Paquet de requête Setup standard USB (8 octets, USB 2.0 / USB 3.x)
 #[repr(C, packed)]
@@ -1724,6 +1760,34 @@ impl UsbMassStorageBot {
         (cbw, tag)
     }
 
+    /// Construit un CBW pour SCSI MODE SENSE (10) (supports de grande capacité et pages étendues)
+    pub fn build_cbw_mode_sense_10(
+        &mut self,
+        page_code: u8,
+        alloc_len: u16,
+    ) -> (CommandBlockWrapper, u32) {
+        let tag = self.next_tag();
+        let mut cbw = CommandBlockWrapper::new(tag, alloc_len as u32, true, self.lun, 10);
+        cbw.cb[0] = SCSI_CMD_MODE_SENSE_10;
+        cbw.cb[2] = page_code & 0x3F;
+        let len_bytes = alloc_len.to_be_bytes();
+        cbw.cb[7] = len_bytes[0];
+        cbw.cb[8] = len_bytes[1];
+        (cbw, tag)
+    }
+
+    /// Construit un CBW pour SCSI PREVENT ALLOW MEDIUM REMOVAL (verrouillage matériel du média)
+    pub fn build_cbw_prevent_allow_medium_removal(
+        &mut self,
+        prevent: bool,
+    ) -> (CommandBlockWrapper, u32) {
+        let tag = self.next_tag();
+        let mut cbw = CommandBlockWrapper::new(tag, 0, false, self.lun, 6);
+        cbw.cb[0] = SCSI_CMD_PREVENT_ALLOW_MEDIUM_REMOVAL;
+        cbw.cb[4] = if prevent { 0x01 } else { 0x00 };
+        (cbw, tag)
+    }
+
     /// Analyse l'en-tête retourné par MODE SENSE (6) pour déterminer si le support est en lecture seule (Write-Protected)
     pub fn parse_mode_sense_6_write_protect(&self, data: &[u8]) -> bool {
         if data.len() < 4 {
@@ -1731,6 +1795,69 @@ impl UsbMassStorageBot {
         }
         // Byte 2 : Device-Specific Parameter. Bit 7 = WP (Write Protect)
         (data[2] & 0x80) != 0
+    }
+
+    /// Analyse l'en-tête complet des paramètres SCSI MODE SENSE (6)
+    pub fn parse_mode_sense_6_header(&self, data: &[u8]) -> Option<ScsiModeParameterHeader6> {
+        if data.len() < 4 {
+            return None;
+        }
+        Some(ScsiModeParameterHeader6 {
+            mode_data_length: data[0],
+            medium_type: data[1],
+            device_specific_parameter: data[2],
+            write_protected: (data[2] & 0x80) != 0,
+            block_descriptor_length: data[3],
+        })
+    }
+
+    /// Analyse l'en-tête complet des paramètres SCSI MODE SENSE (10)
+    pub fn parse_mode_sense_10_header(&self, data: &[u8]) -> Option<ScsiModeParameterHeader10> {
+        if data.len() < 8 {
+            return None;
+        }
+        let mode_data_length = u16::from_be_bytes([data[0], data[1]]);
+        let medium_type = data[2];
+        let dsp = data[3];
+        let long_lba = (data[4] & 0x01) != 0;
+        let block_descriptor_length = u16::from_be_bytes([data[6], data[7]]);
+
+        Some(ScsiModeParameterHeader10 {
+            mode_data_length,
+            medium_type,
+            device_specific_parameter: dsp,
+            write_protected: (dsp & 0x80) != 0,
+            long_lba,
+            block_descriptor_length,
+        })
+    }
+
+    /// Analyse la page de mode de mise en cache SCSI (Caching Mode Page 0x08)
+    pub fn parse_caching_page(
+        &self,
+        data: &[u8],
+        page_offset: usize,
+    ) -> Option<ScsiCachingModePage> {
+        if data.len() < page_offset + 3 {
+            return None;
+        }
+        let page_code = data[page_offset] & 0x3F;
+        if page_code != SCSI_PAGE_CACHING {
+            return None;
+        }
+        let page_length = data[page_offset + 1];
+        let flags = data[page_offset + 2];
+        let write_cache_enabled = (flags & 0x04) != 0;
+        let multiplication_factor = (flags & 0x02) != 0;
+        let read_cache_disable = (flags & 0x01) != 0;
+
+        Some(ScsiCachingModePage {
+            page_code,
+            page_length,
+            write_cache_enabled,
+            read_cache_disable,
+            multiplication_factor,
+        })
     }
 
     /// Construit le paquet Setup pour la réinitialisation de classe BOT (Bulk-Only Mass Storage Reset)
@@ -1855,6 +1982,32 @@ impl UsbMassStorageDisk {
         lba.checked_add(count as u64)
             .map(|end| end <= self.bot.total_sectors)
             .unwrap_or(false)
+    }
+
+    /// Construit un CBW pour SCSI MODE SENSE (10)
+    pub fn build_mode_sense_10_cbw(
+        &mut self,
+        page_code: u8,
+        alloc_len: u16,
+    ) -> (CommandBlockWrapper, u32) {
+        self.bot.build_cbw_mode_sense_10(page_code, alloc_len)
+    }
+
+    /// Construit un CBW pour SCSI PREVENT ALLOW MEDIUM REMOVAL (protection contre l'éjection intempestive)
+    pub fn build_prevent_allow_cbw(&mut self, prevent: bool) -> (CommandBlockWrapper, u32) {
+        self.bot.build_cbw_prevent_allow_medium_removal(prevent)
+    }
+
+    /// Indique si le disque est en mode lecture seule (Write-Protected)
+    #[inline]
+    pub fn is_write_protected(&self) -> bool {
+        self.is_write_protected
+    }
+
+    /// Met à jour l'état de protection en écriture
+    #[inline]
+    pub fn set_write_protected(&mut self, wp: bool) {
+        self.is_write_protected = wp;
     }
 
     /// Construit un CBW pour forcer la synchronisation matérielle du cache (Barrière de persistance CoW)
@@ -4667,5 +4820,69 @@ mod tests {
             u32::from_be_bytes([unmap_buf[32], unmap_buf[33], unmap_buf[34], unmap_buf[35]]);
         assert_eq!(desc1_lba, 5000);
         assert_eq!(desc1_cnt, 200);
+
+        // 13. SCSI MODE SENSE (10), PREVENT ALLOW & Caching Mode Page
+        let (cbw_prev, tag_prev) = disk.build_prevent_allow_cbw(true);
+        assert_eq!(cbw_prev.cb[0], SCSI_CMD_PREVENT_ALLOW_MEDIUM_REMOVAL);
+        assert_eq!(cbw_prev.cb[4], 0x01); // Prevent = true
+        assert_eq!(cbw_prev.tag(), tag_prev);
+        assert_eq!(cbw_prev.data_transfer_length(), 0);
+
+        let (cbw_allow, _) = disk.build_prevent_allow_cbw(false);
+        assert_eq!(cbw_allow.cb[4], 0x00); // Prevent = false (Allow removal)
+
+        let (cbw_m10, tag_m10) = disk.build_mode_sense_10_cbw(SCSI_PAGE_CACHING, 256);
+        assert_eq!(cbw_m10.cb[0], SCSI_CMD_MODE_SENSE_10);
+        assert_eq!(cbw_m10.cb[2], SCSI_PAGE_CACHING);
+        assert_eq!(cbw_m10.cb[7], 1);
+        assert_eq!(cbw_m10.cb[8], 0); // 256 = 0x0100
+        assert_eq!(cbw_m10.tag(), tag_m10);
+        assert_eq!(cbw_m10.data_transfer_length(), 256);
+
+        // Parsing MODE SENSE (6) header
+        let ms6_buf = [0x0B, 0x00, 0x80, 0x08]; // 12 octets total, WP=1, BlockDescLen=8
+        let ms6_hdr = bot
+            .parse_mode_sense_6_header(&ms6_buf)
+            .expect("parse ms6 header");
+        assert_eq!(ms6_hdr.mode_data_length, 0x0B);
+        assert!(ms6_hdr.write_protected);
+        assert_eq!(ms6_hdr.block_descriptor_length, 8);
+
+        // Parsing MODE SENSE (10) header
+        let ms10_buf = [0x00, 0x20, 0x00, 0x00, 0x01, 0x00, 0x00, 0x10]; // DataLen=32, WP=0, LongLBA=1, BDDLen=16
+        let ms10_hdr = bot
+            .parse_mode_sense_10_header(&ms10_buf)
+            .expect("parse ms10 header");
+        assert_eq!(ms10_hdr.mode_data_length, 32);
+        assert!(!ms10_hdr.write_protected);
+        assert!(ms10_hdr.long_lba);
+        assert_eq!(ms10_hdr.block_descriptor_length, 16);
+
+        // Parsing Caching Mode Page (0x08)
+        let cache_page_buf = [
+            SCSI_PAGE_CACHING,
+            0x12, // 18 octets
+            0x04, // WCE = 1 (bit 2), RCD = 0, MF = 0
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+        ];
+        let cache_page = bot
+            .parse_caching_page(&cache_page_buf, 0)
+            .expect("parse cache page");
+        assert_eq!(cache_page.page_code, SCSI_PAGE_CACHING);
+        assert_eq!(cache_page.page_length, 0x12);
+        assert!(cache_page.write_cache_enabled);
+        assert!(!cache_page.read_cache_disable);
+        assert!(!cache_page.multiplication_factor);
+
+        disk.set_write_protected(true);
+        assert!(disk.is_write_protected());
+        disk.set_write_protected(false);
+        assert!(!disk.is_write_protected());
     }
 }

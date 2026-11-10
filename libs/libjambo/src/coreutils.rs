@@ -9889,6 +9889,301 @@ pub fn run_cksum(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
     exit_code
 }
 
+// ============================================================================
+// Utilitaire POSIX / GNU coreutils : `base64` (RFC 4648 Base64 Encoding/Decoding)
+// ============================================================================
+
+pub const BASE64_ALPHABET: &[u8; 64] =
+    b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+/// Erreurs de traitement Base64 (RFC 4648)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Base64Error {
+    /// Le tampon de sortie est insuffisant pour accueillir les données
+    BufferTooSmall,
+    /// Caractère invalide rencontré dans le flux Base64
+    InvalidCharacter,
+    /// Séquence de padding '=' tronquée ou invalide
+    InvalidPadding,
+}
+
+/// Encode un slice d'octets en Base64 standard (RFC 4648)
+/// Insère des retours à la ligne après `wrap_cols` colonnes (si `wrap_cols > 0`).
+pub fn base64_encode(
+    input: &[u8],
+    out_buf: &mut [u8],
+    wrap_cols: usize,
+) -> Result<usize, Base64Error> {
+    let mut in_idx = 0;
+    let mut out_idx = 0;
+    let mut col = 0;
+
+    while in_idx < input.len() {
+        let remaining = input.len() - in_idx;
+        let (c0, c1, c2, c3) = if remaining >= 3 {
+            let b0 = input[in_idx];
+            let b1 = input[in_idx + 1];
+            let b2 = input[in_idx + 2];
+            in_idx += 3;
+            (
+                BASE64_ALPHABET[(b0 >> 2) as usize],
+                BASE64_ALPHABET[(((b0 & 0x03) << 4) | (b1 >> 4)) as usize],
+                BASE64_ALPHABET[(((b1 & 0x0F) << 2) | (b2 >> 6)) as usize],
+                BASE64_ALPHABET[(b2 & 0x3F) as usize],
+            )
+        } else if remaining == 2 {
+            let b0 = input[in_idx];
+            let b1 = input[in_idx + 1];
+            in_idx += 2;
+            (
+                BASE64_ALPHABET[(b0 >> 2) as usize],
+                BASE64_ALPHABET[(((b0 & 0x03) << 4) | (b1 >> 4)) as usize],
+                BASE64_ALPHABET[((b1 & 0x0F) << 2) as usize],
+                b'=',
+            )
+        } else {
+            let b0 = input[in_idx];
+            in_idx += 1;
+            (
+                BASE64_ALPHABET[(b0 >> 2) as usize],
+                BASE64_ALPHABET[((b0 & 0x03) << 4) as usize],
+                b'=',
+                b'=',
+            )
+        };
+
+        for &c in &[c0, c1, c2, c3] {
+            if wrap_cols > 0 && col >= wrap_cols {
+                if out_idx >= out_buf.len() {
+                    return Err(Base64Error::BufferTooSmall);
+                }
+                out_buf[out_idx] = b'\n';
+                out_idx += 1;
+                col = 0;
+            }
+            if out_idx >= out_buf.len() {
+                return Err(Base64Error::BufferTooSmall);
+            }
+            out_buf[out_idx] = c;
+            out_idx += 1;
+            col += 1;
+        }
+    }
+
+    if out_idx > 0 {
+        if out_idx >= out_buf.len() {
+            return Err(Base64Error::BufferTooSmall);
+        }
+        out_buf[out_idx] = b'\n';
+        out_idx += 1;
+    }
+
+    Ok(out_idx)
+}
+
+/// Convertit un caractère ASCII RFC 4648 en valeur 6-bit (0..63)
+/// Retourne 0xFE pour '=', 0xFD pour whitespace (\r, \n, ' ', \t), 0xFF pour invalide.
+#[inline]
+pub fn base64_char_to_val(c: u8) -> u8 {
+    match c {
+        b'A'..=b'Z' => c - b'A',
+        b'a'..=b'z' => c - b'a' + 26,
+        b'0'..=b'9' => c - b'0' + 52,
+        b'+' => 62,
+        b'/' => 63,
+        b'=' => 0xFE,
+        b'\r' | b'\n' | b' ' | b'\t' => 0xFD,
+        _ => 0xFF,
+    }
+}
+
+/// Décode un flux Base64 (RFC 4648) en octets binaires
+pub fn base64_decode(
+    input: &[u8],
+    out_buf: &mut [u8],
+    ignore_garbage: bool,
+) -> Result<usize, Base64Error> {
+    let mut out_idx = 0;
+    let mut quad = [0u8; 4];
+    let mut quad_len = 0;
+
+    for &b in input {
+        let val = base64_char_to_val(b);
+        if val == 0xFD {
+            continue;
+        }
+        if val == 0xFF {
+            if ignore_garbage {
+                continue;
+            } else {
+                return Err(Base64Error::InvalidCharacter);
+            }
+        }
+
+        quad[quad_len] = val;
+        quad_len += 1;
+
+        if quad_len == 4 {
+            let q0 = quad[0];
+            let q1 = quad[1];
+            let q2 = quad[2];
+            let q3 = quad[3];
+            quad_len = 0;
+
+            if q0 == 0xFE || q1 == 0xFE {
+                return Err(Base64Error::InvalidPadding);
+            }
+
+            if q2 == 0xFE {
+                if q3 != 0xFE {
+                    return Err(Base64Error::InvalidPadding);
+                }
+                if out_idx >= out_buf.len() {
+                    return Err(Base64Error::BufferTooSmall);
+                }
+                out_buf[out_idx] = (q0 << 2) | (q1 >> 4);
+                out_idx += 1;
+            } else if q3 == 0xFE {
+                if out_idx + 1 >= out_buf.len() {
+                    return Err(Base64Error::BufferTooSmall);
+                }
+                out_buf[out_idx] = (q0 << 2) | (q1 >> 4);
+                out_buf[out_idx + 1] = ((q1 & 0x0F) << 4) | (q2 >> 2);
+                out_idx += 2;
+            } else {
+                if out_idx + 2 >= out_buf.len() {
+                    return Err(Base64Error::BufferTooSmall);
+                }
+                out_buf[out_idx] = (q0 << 2) | (q1 >> 4);
+                out_buf[out_idx + 1] = ((q1 & 0x0F) << 4) | (q2 >> 2);
+                out_buf[out_idx + 2] = ((q2 & 0x03) << 6) | q3;
+                out_idx += 3;
+            }
+        }
+    }
+
+    if quad_len != 0 {
+        return Err(Base64Error::InvalidPadding);
+    }
+
+    Ok(out_idx)
+}
+
+/// Routine de lecture complète d'un descripteur de fichier jusqu'à EOF
+fn read_all_fd(fd: i32, out_buf: &mut [u8]) -> Result<usize, i32> {
+    let mut total = 0;
+    loop {
+        if total >= out_buf.len() {
+            break;
+        }
+        let n = sys_read(fd, &mut out_buf[total..]);
+        if n < 0 {
+            return Err(n as i32);
+        }
+        if n == 0 {
+            break;
+        }
+        total += n as usize;
+    }
+    Ok(total)
+}
+
+/// Utilitaire Coreutils POSIX / GNU `base64` : encode ou décode des données en Base64
+pub fn run_base64(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    let mut decode = false;
+    let mut ignore_garbage = false;
+    let mut wrap_cols = 76usize;
+    let mut file: Option<&str> = None;
+
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i];
+        if arg == "--help" || arg == "-h" {
+            let help = b"Usage: base64 [OPTION]... [FILE]\nBase64 encode or decode FILE, or standard input, to standard output.\n\n  -d, --decode          decode data\n  -i, --ignore-garbage  when decoding, ignore non-alphabet characters\n  -w, --wrap=COLS       wrap encoded lines after COLS character (default 76, 0 to disable)\n      --help            display this help and exit\n      --version         output version information and exit\n";
+            let _ = sys_write(out_fd, help);
+            return 0;
+        }
+        if arg == "--version" || arg == "-v" {
+            let ver = b"base64 (JamboOS coreutils) 0.1.0\n";
+            let _ = sys_write(out_fd, ver);
+            return 0;
+        }
+        if arg == "-d" || arg == "--decode" {
+            decode = true;
+        } else if arg == "-i" || arg == "--ignore-garbage" {
+            ignore_garbage = true;
+        } else if arg == "-w" || arg == "--wrap" {
+            if i + 1 < args.len() {
+                i += 1;
+                wrap_cols = parse_usize(args[i]).unwrap_or(76);
+            }
+        } else if let Some(stripped) = arg.strip_prefix("--wrap=") {
+            wrap_cols = parse_usize(stripped).unwrap_or(76);
+        } else if let Some(stripped) = arg.strip_prefix("-w") {
+            wrap_cols = parse_usize(stripped).unwrap_or(76);
+        } else if !arg.starts_with('-') || arg == "-" {
+            file = Some(arg);
+        }
+        i += 1;
+    }
+
+    let input_fd = match file {
+        None | Some("-") => in_fd,
+        Some(path) => {
+            let fd = sys_open(path, crate::vfs::O_RDONLY);
+            if fd < 0 {
+                let _ = sys_write(err_fd, b"base64: ");
+                let _ = sys_write(err_fd, path.as_bytes());
+                let _ = sys_write(err_fd, b": No such file or directory\n");
+                return 1;
+            }
+            fd
+        }
+    };
+
+    let mut in_buffer = [0u8; 8192];
+    let mut out_buffer = [0u8; 16384];
+
+    let bytes_read = match read_all_fd(input_fd, &mut in_buffer) {
+        Ok(n) => n,
+        Err(_) => {
+            let _ = sys_write(err_fd, b"base64: error reading input\n");
+            if input_fd != in_fd {
+                let _ = sys_close(input_fd);
+            }
+            return 1;
+        }
+    };
+
+    if input_fd != in_fd {
+        let _ = sys_close(input_fd);
+    }
+
+    if decode {
+        match base64_decode(&in_buffer[..bytes_read], &mut out_buffer, ignore_garbage) {
+            Ok(n) => {
+                let _ = sys_write(out_fd, &out_buffer[..n]);
+                0
+            }
+            Err(_) => {
+                let _ = sys_write(err_fd, b"base64: invalid input\n");
+                1
+            }
+        }
+    } else {
+        match base64_encode(&in_buffer[..bytes_read], &mut out_buffer, wrap_cols) {
+            Ok(n) => {
+                let _ = sys_write(out_fd, &out_buffer[..n]);
+                0
+            }
+            Err(_) => {
+                let _ = sys_write(err_fd, b"base64: error encoding data\n");
+                1
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -12061,5 +12356,97 @@ mod tests {
         sys_close(out_r2);
         let res2 = core::str::from_utf8(&buf[..n2 as usize]).unwrap();
         assert_eq!(res2, "3015617425 6\n");
+    }
+
+    #[test]
+    fn test_posix_base64() {
+        let mut out = [0u8; 128];
+
+        // 1. Vecteurs de test officiels RFC 4648 Section 10
+        let n_empty = base64_encode(b"", &mut out, 0).unwrap();
+        assert_eq!(n_empty, 0);
+
+        let n1 = base64_encode(b"f", &mut out, 0).unwrap();
+        assert_eq!(&out[..n1], b"Zg==\n");
+
+        let n2 = base64_encode(b"fo", &mut out, 0).unwrap();
+        assert_eq!(&out[..n2], b"Zm8=\n");
+
+        let n3 = base64_encode(b"foo", &mut out, 0).unwrap();
+        assert_eq!(&out[..n3], b"Zm9v\n");
+
+        let n4 = base64_encode(b"foob", &mut out, 0).unwrap();
+        assert_eq!(&out[..n4], b"Zm9vYg==\n");
+
+        let n5 = base64_encode(b"fooba", &mut out, 0).unwrap();
+        assert_eq!(&out[..n5], b"Zm9vYmE=\n");
+
+        let n6 = base64_encode(b"foobar", &mut out, 0).unwrap();
+        assert_eq!(&out[..n6], b"Zm9vYmFy\n");
+
+        // 2. Décodage inverse rigoureux
+        let mut dec = [0u8; 128];
+        let d1 = base64_decode(b"Zg==", &mut dec, false).unwrap();
+        assert_eq!(&dec[..d1], b"f");
+
+        let d2 = base64_decode(b"Zm8=", &mut dec, false).unwrap();
+        assert_eq!(&dec[..d2], b"fo");
+
+        let d3 = base64_decode(b"Zm9v", &mut dec, false).unwrap();
+        assert_eq!(&dec[..d3], b"foo");
+
+        let d4 = base64_decode(b"Zm9vYg==", &mut dec, false).unwrap();
+        assert_eq!(&dec[..d4], b"foob");
+
+        let d5 = base64_decode(b"Zm9vYmE=", &mut dec, false).unwrap();
+        assert_eq!(&dec[..d5], b"fooba");
+
+        let d6 = base64_decode(b"Zm9vYmFy", &mut dec, false).unwrap();
+        assert_eq!(&dec[..d6], b"foobar");
+
+        // 3. Décodage avec retour à la ligne et espaces
+        let d_ws = base64_decode(b"Zm9v\r\n  YmFy\n", &mut dec, false).unwrap();
+        assert_eq!(&dec[..d_ws], b"foobar");
+
+        // 4. Wrap des colonnes
+        let n_wrap = base64_encode(b"foobar", &mut out, 4).unwrap();
+        assert_eq!(&out[..n_wrap], b"Zm9v\nYmFy\n");
+
+        // 5. base64 --help
+        let (out_r1, out_w1) = crate::vfs::pipe().unwrap();
+        let code1 = run_base64(&["--help"], 0, out_w1, 2);
+        sys_close(out_w1);
+        assert_eq!(code1, 0);
+        let mut buf = [0u8; 256];
+        let n_help = sys_read(out_r1, &mut buf);
+        sys_close(out_r1);
+        let res_help = core::str::from_utf8(&buf[..n_help as usize]).unwrap();
+        assert!(res_help.contains("Usage: base64"));
+
+        // 6. Pipe encode
+        let (in_r2, in_w2) = crate::vfs::pipe().unwrap();
+        let (out_r2, out_w2) = crate::vfs::pipe().unwrap();
+        let _ = sys_write(in_w2, b"JamboOS\n");
+        sys_close(in_w2);
+        let code2 = run_base64(&["-w0"], in_r2, out_w2, 2);
+        sys_close(in_r2);
+        sys_close(out_w2);
+        assert_eq!(code2, 0);
+        let n_enc = sys_read(out_r2, &mut buf);
+        sys_close(out_r2);
+        assert_eq!(&buf[..n_enc as usize], b"SmFtYm9PUwo=\n");
+
+        // 7. Pipe decode
+        let (in_r3, in_w3) = crate::vfs::pipe().unwrap();
+        let (out_r3, out_w3) = crate::vfs::pipe().unwrap();
+        let _ = sys_write(in_w3, b"SmFtYm9PUwo=\n");
+        sys_close(in_w3);
+        let code3 = run_base64(&["-d"], in_r3, out_w3, 2);
+        sys_close(in_r3);
+        sys_close(out_w3);
+        assert_eq!(code3, 0);
+        let n_dec = sys_read(out_r3, &mut buf);
+        sys_close(out_r3);
+        assert_eq!(&buf[..n_dec as usize], b"JamboOS\n");
     }
 }
