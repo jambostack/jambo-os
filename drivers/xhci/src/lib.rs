@@ -1166,6 +1166,8 @@ pub const SCSI_CMD_RECEIVE_DIAGNOSTIC_RESULTS: u8 = 0x1C;
 pub const SCSI_CMD_SEND_DIAGNOSTIC: u8 = 0x1D;
 pub const SCSI_SA_READ_CAPACITY_16: u8 = 0x10;
 pub const SCSI_PAGE_CACHING: u8 = 0x08;
+/// Page de contrôle des exceptions d'information SCSI (Page 0x1C - Informational Exceptions Control / SMART SPC-4)
+pub const SCSI_PAGE_INFORMATIONAL_EXCEPTIONS: u8 = 0x1C;
 
 pub const SCSI_REPORT_LUNS_ALL: u8 = 0x00;
 pub const SCSI_REPORT_LUNS_WELL_KNOWN: u8 = 0x01;
@@ -1213,6 +1215,32 @@ pub struct ScsiTranslateAddressPage {
     pub cylinder: u32,
     pub head: u8,
     pub sector: u32,
+}
+
+/// Paramètres de la page SCSI Informational Exceptions Control (Page 0x1C - SMART T10 SPC-4)
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ScsiInformationalExceptionsPage {
+    /// Code de la page (0x1C)
+    pub page_code: u8,
+    /// Longueur de la page (typiquement 10 octets)
+    pub page_length: u8,
+    /// Performance bit (perf: true = temporisation autorisée)
+    pub perf: bool,
+    /// Enable Warning bit (ewasc: true = avertissements prédictifs SMART activés)
+    pub ewasc: bool,
+    /// Disable Exception Control (dexcpt: true = exceptions désactivées, false = exceptions actives)
+    pub dexcpt: bool,
+    /// Method of Reporting Informational Exceptions (MRIE) :
+    /// 0x00 = Pas de rapport, 0x01 = Asynchronous event reporting,
+    /// 0x02 = Generate unit attention, 0x03 = Conditionally generate recovered error,
+    /// 0x04 = Unconditionally generate recovered error, 0x05 = Generate sense data,
+    /// 0x06 = Only on request (polling via REQUEST SENSE).
+    pub mrie: u8,
+    /// Intervalle de scrutation/interval timer (en unités de 100 ms)
+    pub interval_timer: u32,
+    /// Compteur d'occurrences de l'événement (report count)
+    pub report_count: u32,
 }
 
 /// En-tête de réponse SCSI REPORT LUNS (SPC-4) (8 octets minimum)
@@ -2274,6 +2302,77 @@ impl UsbMassStorageBot {
         })
     }
 
+    /// Décode une page SCSI Informational Exceptions Control (Page 0x1C - SPC-4 SMART)
+    pub fn parse_informational_exceptions_page(
+        &self,
+        data: &[u8],
+        page_offset: usize,
+    ) -> Option<ScsiInformationalExceptionsPage> {
+        if data.len() < page_offset + 12 {
+            return None;
+        }
+        let page_code = data[page_offset] & 0x3F;
+        if page_code != SCSI_PAGE_INFORMATIONAL_EXCEPTIONS {
+            return None;
+        }
+        let page_length = data[page_offset + 1];
+        let byte2 = data[page_offset + 2];
+        let perf = (byte2 & 0x80) != 0;
+        let ewasc = (byte2 & 0x10) != 0;
+        let dexcpt = (byte2 & 0x08) != 0;
+        let mrie = data[page_offset + 3] & 0x0F;
+        let interval_timer = u32::from_be_bytes([
+            data[page_offset + 4],
+            data[page_offset + 5],
+            data[page_offset + 6],
+            data[page_offset + 7],
+        ]);
+        let report_count = u32::from_be_bytes([
+            data[page_offset + 8],
+            data[page_offset + 9],
+            data[page_offset + 10],
+            data[page_offset + 11],
+        ]);
+
+        Some(ScsiInformationalExceptionsPage {
+            page_code,
+            page_length,
+            perf,
+            ewasc,
+            dexcpt,
+            mrie,
+            interval_timer,
+            report_count,
+        })
+    }
+
+    /// Sérialise une page SCSI Informational Exceptions Control (Page 0x1C) dans un tampon (12 octets)
+    pub fn serialize_informational_exceptions_page(
+        page: &ScsiInformationalExceptionsPage,
+        buf: &mut [u8],
+    ) -> usize {
+        if buf.len() < 12 {
+            return 0;
+        }
+        buf[0] = SCSI_PAGE_INFORMATIONAL_EXCEPTIONS; // 0x1C
+        buf[1] = 10; // Page length (toujours 10 octets pour SPC-4 Page 0x1C)
+        let mut byte2 = 0u8;
+        if page.perf {
+            byte2 |= 0x80;
+        }
+        if page.ewasc {
+            byte2 |= 0x10;
+        }
+        if page.dexcpt {
+            byte2 |= 0x08;
+        }
+        buf[2] = byte2;
+        buf[3] = page.mrie & 0x0F;
+        buf[4..8].copy_from_slice(&page.interval_timer.to_be_bytes());
+        buf[8..12].copy_from_slice(&page.report_count.to_be_bytes());
+        12
+    }
+
     /// Construit le paquet Setup pour la réinitialisation de classe BOT (Bulk-Only Mass Storage Reset)
     pub fn build_bot_reset_packet(&self, interface_number: u8) -> UsbSetupPacket {
         UsbSetupPacket::new(0x21, 0xFF, 0, interface_number as u16, 0)
@@ -2564,6 +2663,17 @@ impl UsbMassStorageDisk {
     #[inline]
     pub fn parse_translate_address_page(&self, data: &[u8]) -> Option<ScsiTranslateAddressPage> {
         self.bot.parse_translate_address_page(data)
+    }
+
+    /// Décode la page SCSI Informational Exceptions Control (Page 0x1C - SPC-4 SMART)
+    #[inline]
+    pub fn parse_informational_exceptions_page(
+        &self,
+        data: &[u8],
+        page_offset: usize,
+    ) -> Option<ScsiInformationalExceptionsPage> {
+        self.bot
+            .parse_informational_exceptions_page(data, page_offset)
     }
 
     /// Met à jour la géométrie du disque via les données décodées de READ CAPACITY (16)
@@ -5642,5 +5752,38 @@ mod tests {
         assert_eq!(trans_res.cylinder, 0x0001_0203);
         assert_eq!(trans_res.head, 4);
         assert_eq!(trans_res.sector, 128);
+
+        // 19. Parsing et sérialisation de la page SCSI Informational Exceptions Control (Page 0x1C - SMART SPC-4)
+        let info_page = ScsiInformationalExceptionsPage {
+            page_code: SCSI_PAGE_INFORMATIONAL_EXCEPTIONS,
+            page_length: 10,
+            perf: true,
+            ewasc: true,
+            dexcpt: false,
+            mrie: 0x06,          // Only on request
+            interval_timer: 300, // 30 secondes
+            report_count: 5,
+        };
+
+        let mut raw_info = [0u8; 12];
+        let ser_len =
+            UsbMassStorageBot::serialize_informational_exceptions_page(&info_page, &mut raw_info);
+        assert_eq!(ser_len, 12);
+        assert_eq!(raw_info[0], SCSI_PAGE_INFORMATIONAL_EXCEPTIONS);
+        assert_eq!(raw_info[1], 10);
+        assert_eq!(raw_info[2], 0x90); // perf (0x80) | ewasc (0x10)
+        assert_eq!(raw_info[3], 0x06); // mrie
+
+        let parsed_info = disk
+            .parse_informational_exceptions_page(&raw_info, 0)
+            .expect("parse informational exceptions page");
+        assert_eq!(parsed_info.page_code, SCSI_PAGE_INFORMATIONAL_EXCEPTIONS);
+        assert_eq!(parsed_info.page_length, 10);
+        assert!(parsed_info.perf);
+        assert!(parsed_info.ewasc);
+        assert!(!parsed_info.dexcpt);
+        assert_eq!(parsed_info.mrie, 0x06);
+        assert_eq!(parsed_info.interval_timer, 300);
+        assert_eq!(parsed_info.report_count, 5);
     }
 }

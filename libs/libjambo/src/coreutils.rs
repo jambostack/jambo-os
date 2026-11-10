@@ -11483,6 +11483,135 @@ Options:\n\
     0
 }
 
+/// Exécute l'utilitaire `which` localisant un ou plusieurs exécutables dans le $PATH
+pub fn run_which(args: &[&str], _in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    if args.is_empty() {
+        let _ = sys_write(err_fd, b"Usage: which [-a] program ...\n");
+        return 1;
+    }
+
+    let mut show_all = false;
+    let mut progs_start = 0;
+
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i];
+        if arg == "-a" || arg == "--all" {
+            show_all = true;
+            i += 1;
+            progs_start = i;
+        } else if arg == "--help" {
+            let _ = sys_write(
+                out_fd,
+                b"Usage: which [options] [--] program [program ...]\n\
+                  Locate a program in the user's PATH.\n\n\
+                  Options:\n\
+                    -a, --all    print all matches in PATH\n\
+                    --help       display this help and exit\n",
+            );
+            return 0;
+        } else if arg.starts_with('-') && arg != "--" {
+            let _ = sys_write(err_fd, b"which: unrecognized option '");
+            let _ = sys_write(err_fd, arg.as_bytes());
+            let _ = sys_write(err_fd, b"'\n");
+            return 1;
+        } else {
+            if arg == "--" {
+                progs_start = i + 1;
+            }
+            break;
+        }
+    }
+
+    let programs = &args[progs_start..];
+    if programs.is_empty() {
+        return 1;
+    }
+
+    // Répertoire par défaut de recherche dans JamboOS
+    const SEARCH_PATHS: [&str; 3] = ["/bin", "/usr/bin", "/sbin"];
+    let mut any_missing = false;
+
+    for &prog in programs {
+        if prog.is_empty() {
+            continue;
+        }
+
+        // Si le nom contient déjà un slash '/', tester directement le chemin absolu ou relatif
+        if prog.contains('/') {
+            let fd = sys_open(prog, crate::vfs::O_RDONLY);
+            if fd >= 0 {
+                let _ = sys_close(fd);
+                let _ = sys_write(out_fd, prog.as_bytes());
+                let _ = sys_write(out_fd, b"\n");
+            } else {
+                let _ = sys_write(err_fd, b"which: no ");
+                let _ = sys_write(err_fd, prog.as_bytes());
+                let _ = sys_write(err_fd, b" in (\n");
+                for p in &SEARCH_PATHS {
+                    let _ = sys_write(err_fd, b"  ");
+                    let _ = sys_write(err_fd, p.as_bytes());
+                    let _ = sys_write(err_fd, b"\n");
+                }
+                let _ = sys_write(err_fd, b")\n");
+                any_missing = true;
+            }
+            continue;
+        }
+
+        let mut found = false;
+        let mut path_buf = [0u8; 128];
+
+        for &base in &SEARCH_PATHS {
+            // Assemblage base + "/" + prog sans allocation
+            let base_bytes = base.as_bytes();
+            let prog_bytes = prog.as_bytes();
+            if base_bytes.len() + 1 + prog_bytes.len() > path_buf.len() {
+                continue;
+            }
+
+            path_buf[..base_bytes.len()].copy_from_slice(base_bytes);
+            path_buf[base_bytes.len()] = b'/';
+            path_buf[base_bytes.len() + 1..base_bytes.len() + 1 + prog_bytes.len()]
+                .copy_from_slice(prog_bytes);
+            let total_len = base_bytes.len() + 1 + prog_bytes.len();
+
+            if let Ok(full_str) = core::str::from_utf8(&path_buf[..total_len]) {
+                let fd = sys_open(full_str, crate::vfs::O_RDONLY);
+                if fd >= 0 {
+                    let _ = sys_close(fd);
+                    let _ = sys_write(out_fd, &path_buf[..total_len]);
+                    let _ = sys_write(out_fd, b"\n");
+                    found = true;
+                    if !show_all {
+                        break;
+                    }
+                }
+            }
+        }
+
+        if !found {
+            let _ = sys_write(err_fd, b"which: no ");
+            let _ = sys_write(err_fd, prog.as_bytes());
+            let _ = sys_write(err_fd, b" in (");
+            for (idx, p) in SEARCH_PATHS.iter().enumerate() {
+                if idx > 0 {
+                    let _ = sys_write(err_fd, b":");
+                }
+                let _ = sys_write(err_fd, p.as_bytes());
+            }
+            let _ = sys_write(err_fd, b")\n");
+            any_missing = true;
+        }
+    }
+
+    if any_missing {
+        1
+    } else {
+        0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -14131,5 +14260,49 @@ mod tests {
         sys_close(out_r5);
 
         let _ = sys_unlink_pool(file_path);
+    }
+
+    #[test]
+    fn test_which_builtin_and_vfs() {
+        // 1. Créer un binaire factice dans /bin/custom_tool
+        let tool_path = "/bin/custom_tool";
+        let fd_tool = sys_open(tool_path, crate::vfs::O_CREAT | crate::vfs::O_WRONLY);
+        assert!(fd_tool >= 0);
+        let _ = sys_write(fd_tool, b"\x7FELF");
+        sys_close(fd_tool);
+
+        let mut buf = [0u8; 256];
+        let (out_r, out_w) = crate::vfs::pipe().expect("pipe which out");
+        let code = run_which(&["custom_tool"], 0, out_w, 2);
+        assert_eq!(code, 0);
+        sys_close(out_w);
+
+        let n = sys_read(out_r, &mut buf);
+        let out_str = core::str::from_utf8(&buf[..n as usize]).unwrap();
+        assert_eq!(out_str, "/bin/custom_tool\n");
+        sys_close(out_r);
+
+        // 2. Recherche avec chemin absolu
+        let (out_r2, out_w2) = crate::vfs::pipe().expect("pipe which out 2");
+        let code2 = run_which(&["/bin/custom_tool"], 0, out_w2, 2);
+        assert_eq!(code2, 0);
+        sys_close(out_w2);
+
+        let n2 = sys_read(out_r2, &mut buf);
+        assert_eq!(&buf[..n2 as usize], b"/bin/custom_tool\n");
+        sys_close(out_r2);
+
+        // 3. Outil inexistant
+        let (err_r3, err_w3) = crate::vfs::pipe().expect("pipe which err 3");
+        let code3 = run_which(&["non_existent_binary"], 0, 1, err_w3);
+        assert_eq!(code3, 1);
+        sys_close(err_w3);
+
+        let n3 = sys_read(err_r3, &mut buf);
+        let err_str = core::str::from_utf8(&buf[..n3 as usize]).unwrap();
+        assert!(err_str.contains("which: no non_existent_binary in"));
+        sys_close(err_r3);
+
+        let _ = sys_unlink_pool(tool_path);
     }
 }
