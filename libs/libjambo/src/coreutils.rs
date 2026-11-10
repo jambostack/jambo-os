@@ -602,6 +602,22 @@ pub fn sys_sync() -> i32 {
     }
 }
 
+/// Tronque ou étend un descripteur de fichier ouvert à une taille donnée (ftruncate POSIX)
+pub fn sys_ftruncate(fd: i32, length: u64) -> i32 {
+    match crate::vfs::ftruncate(fd, length) {
+        Ok(_) => 0,
+        Err(_) => -1,
+    }
+}
+
+/// Tronque ou étend un fichier par son chemin à une taille donnée (truncate POSIX)
+pub fn sys_truncate(path: &str, length: u64) -> i32 {
+    match crate::vfs::truncate(path, length) {
+        Ok(_) => 0,
+        Err(_) => -1,
+    }
+}
+
 /// Résultat du comptage pour l'utilitaire `wc`
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct WcResult {
@@ -10815,6 +10831,299 @@ License MIT or Apache-2.0.\n";
     exit_code
 }
 
+/// Mode de redimensionnement pour l'utilitaire `truncate`
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TruncateMode {
+    Absolute(u64),
+    RelativeAdd(u64),
+    RelativeSub(u64),
+    AtMost(u64),
+    AtLeast(u64),
+    RoundDown(u64),
+    RoundUp(u64),
+}
+
+/// Analyse une chaîne de taille pour `truncate` avec préfixes (+, -, <, >, /, %) et suffixes (K, M, G, B)
+pub fn parse_truncate_size(s: &str, io_blocks: bool) -> Option<TruncateMode> {
+    if s.is_empty() {
+        return None;
+    }
+    let (prefix, rest) = match s.as_bytes()[0] {
+        b'+' => ('+', &s[1..]),
+        b'-' => ('-', &s[1..]),
+        b'<' => ('<', &s[1..]),
+        b'>' => ('>', &s[1..]),
+        b'/' => ('/', &s[1..]),
+        b'%' => ('%', &s[1..]),
+        _ => ('=', s),
+    };
+    if rest.is_empty() {
+        return None;
+    }
+    let (num_part, multiplier) = if let Some(stripped) = rest.strip_suffix(['K', 'k']) {
+        (stripped, 1024u64)
+    } else if let Some(stripped) = rest.strip_suffix(['M', 'm']) {
+        (stripped, 1024 * 1024u64)
+    } else if let Some(stripped) = rest.strip_suffix(['G', 'g']) {
+        (stripped, 1024 * 1024 * 1024u64)
+    } else if let Some(stripped) = rest.strip_suffix(['B', 'b']) {
+        (stripped, 1u64)
+    } else {
+        (rest, 1u64)
+    };
+    let val: u64 = num_part.parse().ok()?;
+    let mut final_val = val.checked_mul(multiplier)?;
+    if io_blocks {
+        final_val = final_val.checked_mul(512)?;
+    }
+    match prefix {
+        '+' => Some(TruncateMode::RelativeAdd(final_val)),
+        '-' => Some(TruncateMode::RelativeSub(final_val)),
+        '<' => Some(TruncateMode::AtMost(final_val)),
+        '>' => Some(TruncateMode::AtLeast(final_val)),
+        '/' => Some(TruncateMode::RoundDown(final_val)),
+        '%' => Some(TruncateMode::RoundUp(final_val)),
+        _ => Some(TruncateMode::Absolute(final_val)),
+    }
+}
+
+/// Calcule la taille cible résultante à partir du mode et de la taille de base
+#[inline]
+pub fn compute_target_size(mode: TruncateMode, base_len: u64) -> u64 {
+    match mode {
+        TruncateMode::Absolute(v) => v,
+        TruncateMode::RelativeAdd(v) => base_len.saturating_add(v),
+        TruncateMode::RelativeSub(v) => base_len.saturating_sub(v),
+        TruncateMode::AtMost(v) => base_len.min(v),
+        TruncateMode::AtLeast(v) => base_len.max(v),
+        TruncateMode::RoundDown(v) => base_len.checked_div(v).map(|d| d * v).unwrap_or(base_len),
+        TruncateMode::RoundUp(v) => {
+            if v == 0 {
+                base_len
+            } else {
+                base_len.div_ceil(v) * v
+            }
+        }
+    }
+}
+
+/// Exécute l'utilitaire `truncate` réduisant ou étendant la taille d'un ou plusieurs fichiers (POSIX truncate)
+pub fn run_truncate(args: &[&str], _in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    let mut no_create = false;
+    let mut io_blocks = false;
+    let mut reference_file: Option<&str> = None;
+    let mut size_arg: Option<&str> = None;
+    let mut files_start = args.len();
+
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i];
+        if arg == "--help" {
+            let help = b"Usage: truncate OPTION... FILE...\n\
+Shrink or extend the size of each FILE to the specified size\n\n\
+A FILE argument that does not exist is created.\n\n\
+Mandatory arguments to long options are mandatory for short options too.\n\
+  -c, --no-create        do not create any files\n\
+  -o, --io-blocks        treat SIZE as number of IO blocks instead of bytes\n\
+  -r, --reference=RFILE  base size on RFILE\n\
+  -s, --size=SIZE        set or adjust the file size by SIZE bytes\n\
+      --help             display this help and exit\n\
+      --version          output version information and exit\n";
+            let _ = sys_write(out_fd, help);
+            return 0;
+        } else if arg == "--version" {
+            let ver = b"truncate (JamboOS coreutils) 0.1.0\n\
+Copyright (C) 2026 JamboOS Authors.\n\
+License MIT or Apache-2.0.\n";
+            let _ = sys_write(out_fd, ver);
+            return 0;
+        } else if arg == "-c" || arg == "--no-create" {
+            no_create = true;
+            i += 1;
+        } else if arg == "-o" || arg == "--io-blocks" {
+            io_blocks = true;
+            i += 1;
+        } else if let Some(rf) = arg.strip_prefix("--reference=") {
+            reference_file = Some(rf);
+            i += 1;
+        } else if arg == "-r" || arg == "--reference" {
+            if i + 1 < args.len() {
+                reference_file = Some(args[i + 1]);
+                i += 2;
+            } else {
+                let _ = sys_write(err_fd, b"truncate: option requires an argument -- 'r'\n");
+                return 1;
+            }
+        } else if let Some(sz) = arg.strip_prefix("--size=") {
+            size_arg = Some(sz);
+            i += 1;
+        } else if arg == "-s" || arg == "--size" {
+            if i + 1 < args.len() {
+                size_arg = Some(args[i + 1]);
+                i += 2;
+            } else {
+                let _ = sys_write(err_fd, b"truncate: option requires an argument -- 's'\n");
+                return 1;
+            }
+        } else if arg == "--" {
+            files_start = i + 1;
+            break;
+        } else if arg.starts_with('-') && arg.len() > 1 && !arg.starts_with("--") {
+            let mut skip_next = false;
+            let mut opt_err = false;
+            let bytes = &arg.as_bytes()[1..];
+            for (idx, &b) in bytes.iter().enumerate() {
+                match b {
+                    b'c' => no_create = true,
+                    b'o' => io_blocks = true,
+                    b'r' => {
+                        if idx + 1 < bytes.len() {
+                            reference_file = Some(&arg[1 + idx + 1..]);
+                            break;
+                        } else if i + 1 < args.len() {
+                            reference_file = Some(args[i + 1]);
+                            skip_next = true;
+                            break;
+                        } else {
+                            let _ = sys_write(
+                                err_fd,
+                                b"truncate: option requires an argument -- 'r'\n",
+                            );
+                            return 1;
+                        }
+                    }
+                    b's' => {
+                        if idx + 1 < bytes.len() {
+                            size_arg = Some(&arg[1 + idx + 1..]);
+                            break;
+                        } else if i + 1 < args.len() {
+                            size_arg = Some(args[i + 1]);
+                            skip_next = true;
+                            break;
+                        } else {
+                            let _ = sys_write(
+                                err_fd,
+                                b"truncate: option requires an argument -- 's'\n",
+                            );
+                            return 1;
+                        }
+                    }
+                    _ => {
+                        let _ = sys_write(err_fd, b"truncate: invalid option -- '");
+                        let ch = [b];
+                        let _ = sys_write(err_fd, &ch);
+                        let _ =
+                            sys_write(err_fd, b"'\nTry 'truncate --help' for more information.\n");
+                        opt_err = true;
+                        break;
+                    }
+                }
+            }
+            if opt_err {
+                return 1;
+            }
+            i += if skip_next { 2 } else { 1 };
+        } else {
+            files_start = i;
+            break;
+        }
+    }
+
+    if size_arg.is_none() && reference_file.is_none() {
+        let _ = sys_write(err_fd, b"truncate: you must specify a size with -s or -r\n");
+        return 1;
+    }
+
+    let files = if files_start < args.len() {
+        &args[files_start..]
+    } else {
+        &[]
+    };
+
+    if files.is_empty() {
+        let _ = sys_write(
+            err_fd,
+            b"truncate: missing file operand\nTry 'truncate --help' for more information.\n",
+        );
+        return 1;
+    }
+
+    let parsed_mode = if let Some(sz_str) = size_arg {
+        match parse_truncate_size(sz_str, io_blocks) {
+            Some(m) => Some(m),
+            None => {
+                let _ = sys_write(err_fd, b"truncate: invalid number: '");
+                let _ = sys_write(err_fd, sz_str.as_bytes());
+                let _ = sys_write(err_fd, b"'\n");
+                return 1;
+            }
+        }
+    } else {
+        None
+    };
+
+    let ref_size = if let Some(rf) = reference_file {
+        match crate::vfs::stat(rf) {
+            Ok(st) => Some(st.st_size as u64),
+            Err(_) => {
+                let _ = sys_write(err_fd, b"truncate: cannot stat '");
+                let _ = sys_write(err_fd, rf.as_bytes());
+                let _ = sys_write(err_fd, b"': No such file or directory\n");
+                return 1;
+            }
+        }
+    } else {
+        None
+    };
+
+    let mut exit_code = 0;
+    for &file in files {
+        let fd = sys_open(file, crate::vfs::O_RDWR);
+        let actual_fd = if fd < 0 {
+            if no_create {
+                continue;
+            }
+            let created = sys_open(file, crate::vfs::O_CREAT | crate::vfs::O_RDWR);
+            if created < 0 {
+                let _ = sys_write(err_fd, b"truncate: cannot open '");
+                let _ = sys_write(err_fd, file.as_bytes());
+                let _ = sys_write(err_fd, b"' for writing\n");
+                exit_code = 1;
+                continue;
+            }
+            created
+        } else {
+            fd
+        };
+
+        let current_size = with_fd_table(|tbl| tbl.get(actual_fd).map(|e| e.size).unwrap_or(0));
+
+        let base_size = if let Some(ref_s) = ref_size {
+            ref_s
+        } else {
+            current_size
+        };
+
+        let target_size = if let Some(mode) = parsed_mode {
+            compute_target_size(mode, base_size)
+        } else {
+            ref_size.unwrap_or_default()
+        };
+
+        let trunc_res = sys_ftruncate(actual_fd, target_size);
+        let _ = sys_close(actual_fd);
+
+        if trunc_res < 0 {
+            let _ = sys_write(err_fd, b"truncate: failed to truncate '");
+            let _ = sys_write(err_fd, file.as_bytes());
+            let _ = sys_write(err_fd, b"'\n");
+            exit_code = 1;
+        }
+    }
+
+    exit_code
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -12815,6 +13124,10 @@ mod tests {
         let n6 = sys_read(err_r6, &mut buf);
         sys_close(err_r6);
         assert!(n6 > 0);
+
+        let _ = sys_unlink_pool("/tmp/cmp1.txt");
+        let _ = sys_unlink_pool("/tmp/cmp2.txt");
+        let _ = sys_unlink_pool("/tmp/cmp3.txt");
     }
 
     #[test]
@@ -13300,6 +13613,78 @@ mod tests {
         assert!(core::str::from_utf8(&h_buf[..n6 as usize])
             .unwrap()
             .contains("Usage: sync"));
+
+        let _ = sys_unlink_pool(file_path);
+    }
+
+    #[test]
+    fn test_posix_truncate() {
+        let file_path = "/tmp/test_truncate_sample.bin";
+        let _ = sys_unlink_pool(file_path);
+
+        // 1. Création avec taille spécifiée : truncate -s 64 /tmp/...
+        let code1 = run_truncate(&["-s", "64", file_path], 0, 1, 2);
+        assert_eq!(code1, 0);
+        let fd1 = sys_open(file_path, crate::vfs::O_RDONLY);
+        assert!(fd1 >= 0);
+        let sz1 = with_fd_table(|tbl| tbl.get(fd1).map(|e| e.size).unwrap());
+        sys_close(fd1);
+        assert_eq!(sz1, 64);
+
+        // 2. Extension relative : truncate -s +36 /tmp/... (64 + 36 = 100)
+        let code2 = run_truncate(&["-s", "+36", file_path], 0, 1, 2);
+        assert_eq!(code2, 0);
+        let fd2 = sys_open(file_path, crate::vfs::O_RDONLY);
+        let sz2 = with_fd_table(|tbl| tbl.get(fd2).map(|e| e.size).unwrap());
+        sys_close(fd2);
+        assert_eq!(sz2, 100);
+
+        // 3. Réduction relative : truncate -s -50 /tmp/... (100 - 50 = 50)
+        let code3 = run_truncate(&["-s", "-50", file_path], 0, 1, 2);
+        assert_eq!(code3, 0);
+        let fd3 = sys_open(file_path, crate::vfs::O_RDONLY);
+        let sz3 = with_fd_table(|tbl| tbl.get(fd3).map(|e| e.size).unwrap());
+        sys_close(fd3);
+        assert_eq!(sz3, 50);
+
+        // 4. Suffixe multiplicateur : truncate -s 1K /tmp/... (1024)
+        let code4 = run_truncate(&["-s", "1K", file_path], 0, 1, 2);
+        assert_eq!(code4, 0);
+        let fd4 = sys_open(file_path, crate::vfs::O_RDONLY);
+        let sz4 = with_fd_table(|tbl| tbl.get(fd4).map(|e| e.size).unwrap());
+        sys_close(fd4);
+        assert_eq!(sz4, 1024);
+
+        // 5. Option -c : no-create sur fichier inexistant
+        let no_file = "/tmp/does_not_exist_truncate.txt";
+        let code5 = run_truncate(&["-c", "-s", "100", no_file], 0, 1, 2);
+        assert_eq!(code5, 0);
+        let fd_none = sys_open(no_file, crate::vfs::O_RDONLY);
+        assert_eq!(fd_none, -1);
+
+        // 6. Erreur si absence d'option -s ou -r
+        let (err_r6, err_w6) = crate::vfs::pipe().unwrap();
+        let code6 = run_truncate(&[file_path], 0, 1, err_w6);
+        sys_close(err_w6);
+        assert_eq!(code6, 1);
+        let mut err_buf = [0u8; 128];
+        let n6 = sys_read(err_r6, &mut err_buf);
+        sys_close(err_r6);
+        assert!(core::str::from_utf8(&err_buf[..n6 as usize])
+            .unwrap()
+            .contains("you must specify a size"));
+
+        // 7. --help et --version
+        let (out_r7, out_w7) = crate::vfs::pipe().unwrap();
+        let code7 = run_truncate(&["--help"], 0, out_w7, 2);
+        sys_close(out_w7);
+        assert_eq!(code7, 0);
+        let mut h_buf = [0u8; 256];
+        let n7 = sys_read(out_r7, &mut h_buf);
+        sys_close(out_r7);
+        assert!(core::str::from_utf8(&h_buf[..n7 as usize])
+            .unwrap()
+            .contains("Usage: truncate"));
 
         let _ = sys_unlink_pool(file_path);
     }

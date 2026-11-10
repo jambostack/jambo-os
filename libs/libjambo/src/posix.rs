@@ -31,6 +31,7 @@ pub const ESRCH: i32 = 3;
 pub const EINTR: i32 = 4;
 pub const EBADF: i32 = 9;
 pub const ENOMEM: i32 = 12;
+pub const EACCES: i32 = 13;
 pub const EFAULT: i32 = 14;
 pub const EINVAL: i32 = 22;
 pub const EPIPE: i32 = 32;
@@ -687,6 +688,69 @@ pub unsafe extern "C" fn statvfs(
         }
         Err(_) => -ENOENT,
     })
+}
+
+/// Force la synchronisation d'un fichier ouvert vers le stockage (fsync POSIX)
+#[cfg(not(test))]
+#[cfg_attr(target_os = "none", no_mangle)]
+pub extern "C" fn fsync(fd: i32) -> i32 {
+    match crate::vfs::fsync(fd) {
+        Ok(_) => 0,
+        Err(_) => -EBADF,
+    }
+}
+
+/// Force la synchronisation des données utiles d'un fichier ouvert vers le stockage (fdatasync POSIX)
+#[cfg(not(test))]
+#[cfg_attr(target_os = "none", no_mangle)]
+pub extern "C" fn fdatasync(fd: i32) -> i32 {
+    match crate::vfs::fdatasync(fd) {
+        Ok(_) => 0,
+        Err(_) => -EBADF,
+    }
+}
+
+/// Synchronise l'ensemble des systèmes de fichiers vers le support persistant (sync POSIX)
+#[cfg(not(test))]
+#[cfg_attr(target_os = "none", no_mangle)]
+pub extern "C" fn sync() {
+    let _ = crate::vfs::sync();
+}
+
+/// Tronque ou étend un fichier ouvert à une taille donnée (ftruncate POSIX)
+#[cfg(not(test))]
+#[cfg_attr(target_os = "none", no_mangle)]
+pub extern "C" fn ftruncate(fd: i32, length: u64) -> i32 {
+    match crate::vfs::ftruncate(fd, length) {
+        Ok(_) => 0,
+        Err(jambo_abi::SysError::PermissionDenied) => -EACCES,
+        Err(_) => -EINVAL,
+    }
+}
+
+/// Tronque ou étend un fichier par son chemin à une taille donnée (truncate POSIX)
+///
+/// # Safety
+/// `pathname` doit être une chaîne C valide terminée par 0.
+#[cfg(not(test))]
+#[cfg_attr(target_os = "none", no_mangle)]
+pub unsafe extern "C" fn truncate(pathname: *const core::ffi::c_char, length: u64) -> i32 {
+    if pathname.is_null() {
+        return -EFAULT;
+    }
+    let mut len = 0;
+    while *pathname.add(len) != 0 && len < 256 {
+        len += 1;
+    }
+    let slice = core::slice::from_raw_parts(pathname as *const u8, len);
+    let Ok(path_str) = core::str::from_utf8(slice) else {
+        return -EINVAL;
+    };
+    match crate::vfs::truncate(path_str, length) {
+        Ok(_) => 0,
+        Err(jambo_abi::SysError::PermissionDenied) => -EACCES,
+        Err(_) => -EINVAL,
+    }
 }
 
 pub const SYS_NMLN: usize = 65;

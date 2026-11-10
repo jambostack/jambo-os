@@ -15,10 +15,10 @@ use jambo_abi::SysError;
 // CONSTANTES POSIX STANDARD
 // ============================================================================
 
-pub const MAX_FDS: usize = 64;
+pub const MAX_FDS: usize = 256;
 pub const MAX_PATH_LEN: usize = 64;
 pub const FILE_BUFFER_SIZE: usize = 1024; // Tampon embarqué par descripteur
-pub const MAX_PIPES: usize = 16; // Nombre maximal de canaux pipes simultanés
+pub const MAX_PIPES: usize = 64; // Nombre maximal de canaux pipes simultanés
 pub const PIPE_BUFFER_SIZE: usize = 1024; // Tampon circulaire par canal de pipe IPC
 
 // Drapeaux d'ouverture de fichier (flags)
@@ -846,6 +846,33 @@ impl FdTable {
         self.fsync(fd)
     }
 
+    /// Tronque ou étend un fichier régulier ouvert à la longueur spécifiée (ftruncate POSIX.1-2008)
+    pub fn ftruncate(&mut self, fd: i32, length: u64) -> Result<(), SysError> {
+        let entry = self.get_mut(fd).ok_or(SysError::InvalidArgument)?;
+        if entry.kind != FdKind::RegularFile {
+            return Err(SysError::InvalidArgument);
+        }
+        let acc = entry.flags & O_ACCMODE;
+        if acc != O_WRONLY && acc != O_RDWR {
+            return Err(SysError::PermissionDenied);
+        }
+        let target_len = length as usize;
+        if target_len > FILE_BUFFER_SIZE {
+            return Err(SysError::InvalidArgument);
+        }
+        let old_len = entry.size as usize;
+        if target_len < old_len {
+            // Réduction : zérotage des octets au-delà de la nouvelle fin
+            entry.buffer[target_len..old_len].fill(0);
+        } else if target_len > old_len {
+            // Extension : zérotage des nouveaux octets (sparse / trou)
+            entry.buffer[old_len..target_len].fill(0);
+        }
+        entry.size = length;
+        // Remarque : POSIX spécifie que le pointeur de fichier (offset) n'est pas modifié par ftruncate
+        Ok(())
+    }
+
     /// Synchronise l'ensemble des systèmes de fichiers et tampons sales (sync POSIX)
     pub fn sync(&self) -> Result<(), SysError> {
         Ok(())
@@ -933,6 +960,11 @@ pub fn statvfs(path: &str) -> Result<PosixStatvfs, SysError> {
     with_fd_table(|table| table.statvfs(path))
 }
 
+/// Interroge les métadonnées de fichier par chemin (stat POSIX)
+pub fn stat(path: &str) -> Result<PosixStat, SysError> {
+    with_fd_table(|table| table.stat(path))
+}
+
 /// Interroge les statistiques de système de fichiers par descripteur de fichier ouvert (fstatvfs POSIX)
 pub fn fstatvfs(fd: i32) -> Result<PosixStatvfs, SysError> {
     with_fd_table(|table| table.fstatvfs(fd))
@@ -951,6 +983,21 @@ pub fn fdatasync(fd: i32) -> Result<(), SysError> {
 /// Synchronise l'ensemble des tampons système vers le stockage persistant (sync POSIX)
 pub fn sync() -> Result<(), SysError> {
     with_fd_table(|table| table.sync())
+}
+
+/// Tronque ou étend un descripteur de fichier ouvert à une taille donnée (ftruncate POSIX)
+pub fn ftruncate(fd: i32, length: u64) -> Result<(), SysError> {
+    with_fd_table(|table| table.ftruncate(fd, length))
+}
+
+/// Tronque ou étend un fichier par son chemin à une taille donnée (truncate POSIX)
+pub fn truncate(path: &str, length: u64) -> Result<(), SysError> {
+    with_fd_table(|table| {
+        let fd = table.alloc_fd(FdKind::RegularFile, O_WRONLY, path)?;
+        let res = table.ftruncate(fd, length);
+        let _ = table.free_fd(fd);
+        res
+    })
 }
 
 // Variables atomiques de contexte d'identité utilisateur et groupe Ring 3
@@ -1348,5 +1395,43 @@ mod tests {
         // sync global
         assert!(table.sync().is_ok());
         assert!(sync().is_ok());
+    }
+
+    #[test]
+    fn test_vfs_ftruncate_and_truncate() {
+        let mut table = FdTable::new();
+        let fd = table
+            .alloc_fd(FdKind::RegularFile, O_RDWR, "/data/test.bin")
+            .expect("alloc file");
+
+        // Écriture de 10 octets initiaux
+        let data = b"0123456789";
+        let written = table.write(fd, data).expect("write");
+        assert_eq!(written, 10);
+        assert_eq!(table.get(fd).unwrap().size, 10);
+
+        // 1. Extension avec ftruncate (de 10 à 20 octets, zérotage des 10 octets étendus)
+        assert!(table.ftruncate(fd, 20).is_ok());
+        let entry = table.get(fd).unwrap();
+        assert_eq!(entry.size, 20);
+        assert_eq!(&entry.buffer[..10], b"0123456789");
+        assert_eq!(&entry.buffer[10..20], &[0u8; 10]);
+
+        // 2. Réduction avec ftruncate (de 20 à 5 octets)
+        assert!(table.ftruncate(fd, 5).is_ok());
+        let entry2 = table.get(fd).unwrap();
+        assert_eq!(entry2.size, 5);
+        assert_eq!(&entry2.buffer[..5], b"01234");
+        // Les octets au-delà sont zérotés
+        assert_eq!(&entry2.buffer[5..10], &[0u8; 5]);
+
+        // 3. Rejet si ouvert en lecture seule (O_RDONLY)
+        let ro_fd = table
+            .alloc_fd(FdKind::RegularFile, O_RDONLY, "/data/readonly.bin")
+            .expect("alloc ro file");
+        assert_eq!(table.ftruncate(ro_fd, 0), Err(SysError::PermissionDenied));
+
+        // 4. Rejet sur type non fichier régulier
+        assert_eq!(table.ftruncate(0, 0), Err(SysError::InvalidArgument)); // stdin ConsoleIn
     }
 }

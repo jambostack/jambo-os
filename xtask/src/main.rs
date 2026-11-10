@@ -1302,6 +1302,7 @@ fn build_coreutils(
     PathBuf,
     PathBuf,
     PathBuf,
+    PathBuf,
 )> {
     let root = root_dir();
     let mut cmd = Command::new("cargo");
@@ -1376,6 +1377,7 @@ fn build_coreutils(
         dir.join("base64"),
         dir.join("sha256sum"),
         dir.join("sync"),
+        dir.join("truncate"),
     ))
 }
 
@@ -1699,6 +1701,7 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
         base64_bin,
         sha256sum_bin,
         sync_bin,
+        truncate_bin,
     ) = build_coreutils(release)?;
     let installer_bin = build_installer(release)?;
     let fuzz_bin = build_fuzzer(release)?;
@@ -1755,6 +1758,7 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
     fs::copy(&base64_bin, bin_dir.join("base64"))?;
     fs::copy(&sha256sum_bin, bin_dir.join("sha256sum"))?;
     fs::copy(&sync_bin, bin_dir.join("sync"))?;
+    fs::copy(&truncate_bin, bin_dir.join("truncate"))?;
     fs::copy(&installer_bin, bin_dir.join("installer"))?;
     fs::copy(&installer_bin, bin_dir.join("jambo-installer"))?;
     fs::copy(&fuzz_bin, bin_dir.join("fuzz"))?;

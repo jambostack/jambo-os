@@ -242,5 +242,10 @@ name = "sync"
 path = "src/bin/sync.rs"
 test = false
 
+[[bin]]
+name = "truncate"
+path = "src/bin/truncate.rs"
+test = false
+
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }

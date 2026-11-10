@@ -580,6 +580,7 @@ impl JamboShell {
             "base64" | "/bin/base64" | "bin/base64" => self.cmd_base64(args, out),
             "sha256sum" | "/bin/sha256sum" | "bin/sha256sum" => self.cmd_sha256sum(args, out),
             "sync" | "/bin/sync" | "bin/sync" => self.cmd_sync(args, out),
+            "truncate" | "/bin/truncate" | "bin/truncate" => self.cmd_truncate(args, out),
             "version" => self.cmd_version(out),
             "uptime" => self.cmd_uptime(out),
             "caps" => self.cmd_caps(out),
@@ -617,7 +618,7 @@ impl JamboShell {
   ls [-l] [-a] - Liste les fichiers et repertoires\n\
   wc [-l] [-w] [-c] <files> - Compte les lignes, mots et octets\n\
   true / false - Retourne un statut de succes (0) ou d'echec (1)\n\
-  coreutils   - Liste les 47 utilitaires Ring 3 (/bin/*)\n\
+  coreutils   - Liste les 48 utilitaires Ring 3 (/bin/*)\n\
   uname       - Affiche le nom et l'architecture du systeme\n\
   cut [-b|-c|-f] [-d] - Decoupage de colonnes et delimiteurs sur flux\n\
   version     - Affiche les details de version du micro-noyau\n\
@@ -734,7 +735,7 @@ impl JamboShell {
 
     fn cmd_coreutils(&self, out: &mut [u8]) -> (ShellStatus, usize) {
         let text = b"Utilitaires Coreutils Ring 3 (services/jambo-coreutils) :\n\
-  Binaires disponibles : /bin/echo, /bin/cat, /bin/head, /bin/tail, /bin/touch, /bin/mkdir, /bin/rm, /bin/cp, /bin/mv, /bin/tee, /bin/env, /bin/grep, /bin/sort, /bin/uniq, /bin/find, /bin/chmod, /bin/chown, /bin/id, /bin/du, /bin/df, /bin/uname, /bin/cut, /bin/paste, /bin/comm, /bin/tr, /bin/split, /bin/basename, /bin/dirname, /bin/seq, /bin/yes, /bin/printf, /bin/expr, /bin/fold, /bin/nl, /bin/od, /bin/cmp, /bin/expand, /bin/unexpand, /bin/sleep, /bin/cksum, /bin/base64, /bin/sha256sum, /bin/sync, /bin/wc, /bin/true, /bin/false, /bin/ls (47 utilitaires)\n\
+  Binaires disponibles : /bin/echo, /bin/cat, /bin/head, /bin/tail, /bin/touch, /bin/mkdir, /bin/rm, /bin/cp, /bin/mv, /bin/tee, /bin/env, /bin/grep, /bin/sort, /bin/uniq, /bin/find, /bin/chmod, /bin/chown, /bin/id, /bin/du, /bin/df, /bin/uname, /bin/cut, /bin/paste, /bin/comm, /bin/tr, /bin/split, /bin/basename, /bin/dirname, /bin/seq, /bin/yes, /bin/printf, /bin/expr, /bin/fold, /bin/nl, /bin/od, /bin/cmp, /bin/expand, /bin/unexpand, /bin/sleep, /bin/cksum, /bin/base64, /bin/sha256sum, /bin/sync, /bin/truncate, /bin/wc, /bin/true, /bin/false, /bin/ls (48 utilitaires)\n\
   Architecture & ABI   : System V AMD64 ELF64 (ET_EXEC / Ring 3 Userland)\n\
   Point d'entree       : _start (parsing argc/argv sur pile System V)\n\
   Terminaison          : Syscall 11 ThreadExit avec propagation code de retour POSIX\n\
@@ -1540,6 +1541,26 @@ Utilitaire d'installation JamboOS (Serie 0.*.*)\n\
             }
         } else {
             let msg = b"sync: pipe creation failed\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
+    }
+
+    fn cmd_truncate(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if let Ok((r, w)) = libjambo::vfs::pipe() {
+            let code = libjambo::coreutils::run_truncate(args, 0, w, w);
+            let _ = libjambo::coreutils::sys_close(w);
+            let n = libjambo::coreutils::sys_read(r, out);
+            let _ = libjambo::coreutils::sys_close(r);
+            let len = if n > 0 { n as usize } else { 0 };
+            if code == 0 {
+                (ShellStatus::Success, len)
+            } else {
+                (ShellStatus::ExecutionFailed, len)
+            }
+        } else {
+            let msg = b"truncate: pipe creation failed\n";
             let len = msg.len().min(out.len());
             out[..len].copy_from_slice(&msg[..len]);
             (ShellStatus::ExecutionFailed, len)
@@ -17565,12 +17586,13 @@ mod tests {
         let (st, len) = shell.execute_line("coreutils", &mut out);
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
-        assert!(s.contains("47 utilitaires"));
+        assert!(s.contains("48 utilitaires"));
         assert!(s.contains("/bin/sleep"));
         assert!(s.contains("/bin/cksum"));
         assert!(s.contains("/bin/base64"));
         assert!(s.contains("/bin/sha256sum"));
         assert!(s.contains("/bin/sync"));
+        assert!(s.contains("/bin/truncate"));
         assert!(s.contains("/bin/expand"));
         assert!(s.contains("/bin/unexpand"));
         assert!(s.contains("/bin/cut"));
@@ -18497,5 +18519,51 @@ mod tests {
         assert!(s5.contains("No such file or directory"));
 
         let _ = libjambo::coreutils::sys_unlink_pool("/tmp/sh_sync_test.txt");
+    }
+
+    #[test]
+    fn test_truncate_shell_execution() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 1024];
+
+        // 1. truncate --help
+        let (st1, len1) = shell.execute_line("truncate --help", &mut out);
+        assert_eq!(st1, ShellStatus::Success);
+        let s1 = core::str::from_utf8(&out[..len1]).unwrap();
+        assert!(s1.contains("Usage: truncate"));
+
+        // 2. /bin/truncate --version
+        let (st2, len2) = shell.execute_line("/bin/truncate --version", &mut out);
+        assert_eq!(st2, ShellStatus::Success);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("truncate (JamboOS coreutils)"));
+
+        // 3. truncate -s 128 /tmp/sh_trunc_test.bin
+        let (st3, _len3) = shell.execute_line("truncate -s 128 /tmp/sh_trunc_test.bin", &mut out);
+        assert_eq!(st3, ShellStatus::Success);
+        let fd3 = libjambo::coreutils::sys_open("/tmp/sh_trunc_test.bin", libjambo::vfs::O_RDONLY);
+        assert!(fd3 >= 0);
+        let sz3 = libjambo::vfs::with_fd_table(|tbl| tbl.get(fd3).map(|e| e.size).unwrap());
+        libjambo::coreutils::sys_close(fd3);
+        assert_eq!(sz3, 128);
+
+        // 4. /bin/truncate -s +64 /tmp/sh_trunc_test.bin (128 + 64 = 192)
+        let (st4, _len4) =
+            shell.execute_line("/bin/truncate -s +64 /tmp/sh_trunc_test.bin", &mut out);
+        assert_eq!(st4, ShellStatus::Success);
+        let fd4 = libjambo::coreutils::sys_open("/tmp/sh_trunc_test.bin", libjambo::vfs::O_RDONLY);
+        let sz4 = libjambo::vfs::with_fd_table(|tbl| tbl.get(fd4).map(|e| e.size).unwrap());
+        libjambo::coreutils::sys_close(fd4);
+        assert_eq!(sz4, 192);
+
+        // 5. truncate -c -s 10 sur fichier inexistant
+        let (st5, _len5) =
+            shell.execute_line("truncate -c -s 10 /tmp/sh_trunc_nonexistent.bin", &mut out);
+        assert_eq!(st5, ShellStatus::Success);
+        let fd5 =
+            libjambo::coreutils::sys_open("/tmp/sh_trunc_nonexistent.bin", libjambo::vfs::O_RDONLY);
+        assert_eq!(fd5, -1);
+
+        let _ = libjambo::coreutils::sys_unlink_pool("/tmp/sh_trunc_test.bin");
     }
 }

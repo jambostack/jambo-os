@@ -1150,6 +1150,7 @@ pub const SCSI_CMD_PREVENT_ALLOW_MEDIUM_REMOVAL: u8 = 0x1E;
 pub const SCSI_CMD_READ_CAPACITY_10: u8 = 0x25;
 pub const SCSI_CMD_READ_10: u8 = 0x28;
 pub const SCSI_CMD_WRITE_10: u8 = 0x2A;
+pub const SCSI_CMD_VERIFY_10: u8 = 0x2F;
 pub const SCSI_CMD_SYNCHRONIZE_CACHE_10: u8 = 0x35;
 pub const SCSI_CMD_READ_DEFECT_DATA_10: u8 = 0x37;
 pub const SCSI_CMD_UNMAP: u8 = 0x42;
@@ -1157,6 +1158,8 @@ pub const SCSI_CMD_MODE_SELECT_10: u8 = 0x55;
 pub const SCSI_CMD_MODE_SENSE_10: u8 = 0x5A;
 pub const SCSI_CMD_READ_16: u8 = 0x88;
 pub const SCSI_CMD_WRITE_16: u8 = 0x8E;
+pub const SCSI_CMD_VERIFY_16: u8 = 0x8F;
+pub const SCSI_CMD_SYNCHRONIZE_CACHE_16: u8 = 0x91;
 pub const SCSI_CMD_SERVICE_ACTION_IN_16: u8 = 0x9E;
 pub const SCSI_CMD_REPORT_LUNS: u8 = 0xA0;
 pub const SCSI_SA_READ_CAPACITY_16: u8 = 0x10;
@@ -2096,6 +2099,52 @@ impl UsbMassStorageBot {
         })
     }
 
+    /// Construit un CBW pour SCSI VERIFY (10) (SBC-3, Opcode 0x2F) pour vérifier l'intégrité sans transfert
+    pub fn build_cbw_verify_10(
+        &mut self,
+        lba: u32,
+        num_blocks: u16,
+        bytchk: bool,
+    ) -> (CommandBlockWrapper, u32) {
+        let tag = self.next_tag();
+        let mut cbw = CommandBlockWrapper::new(tag, 0, false, self.lun, 10);
+        cbw.cb[0] = SCSI_CMD_VERIFY_10;
+        cbw.cb[1] = if bytchk { 0x02 } else { 0x00 };
+        cbw.cb[2..6].copy_from_slice(&lba.to_be_bytes());
+        cbw.cb[7..9].copy_from_slice(&num_blocks.to_be_bytes());
+        (cbw, tag)
+    }
+
+    /// Construit un CBW pour SCSI VERIFY (16) (SBC-3, Opcode 0x8F) pour vérifier l'intégrité LBA 64 bits
+    pub fn build_cbw_verify_16(
+        &mut self,
+        lba: u64,
+        num_blocks: u32,
+        bytchk: bool,
+    ) -> (CommandBlockWrapper, u32) {
+        let tag = self.next_tag();
+        let mut cbw = CommandBlockWrapper::new(tag, 0, false, self.lun, 16);
+        cbw.cb[0] = SCSI_CMD_VERIFY_16;
+        cbw.cb[1] = if bytchk { 0x02 } else { 0x00 };
+        cbw.cb[2..10].copy_from_slice(&lba.to_be_bytes());
+        cbw.cb[10..14].copy_from_slice(&num_blocks.to_be_bytes());
+        (cbw, tag)
+    }
+
+    /// Construit un CBW pour SCSI SYNCHRONIZE CACHE (16) (SBC-3, Opcode 0x91) LBA 64-bit pour supports > 2 To
+    pub fn build_cbw_synchronize_cache_16(
+        &mut self,
+        lba: u64,
+        block_count: u32,
+    ) -> (CommandBlockWrapper, u32) {
+        let tag = self.next_tag();
+        let mut cbw = CommandBlockWrapper::new(tag, 0, false, self.lun, 16);
+        cbw.cb[0] = SCSI_CMD_SYNCHRONIZE_CACHE_16;
+        cbw.cb[2..10].copy_from_slice(&lba.to_be_bytes());
+        cbw.cb[10..14].copy_from_slice(&block_count.to_be_bytes());
+        (cbw, tag)
+    }
+
     /// Construit le paquet Setup pour la réinitialisation de classe BOT (Bulk-Only Mass Storage Reset)
     pub fn build_bot_reset_packet(&self, interface_number: u8) -> UsbSetupPacket {
         UsbSetupPacket::new(0x21, 0xFF, 0, interface_number as u16, 0)
@@ -2332,6 +2381,28 @@ impl UsbMassStorageDisk {
     ) -> (CommandBlockWrapper, u32) {
         self.bot
             .build_cbw_read_defect_data_10(plist, glist, SCSI_DEFECT_FORMAT_BLOCK, alloc_len)
+    }
+
+    /// Construit un CBW pour SCSI VERIFY (10) afin de vérifier l'intégrité de secteurs physiques
+    #[inline]
+    pub fn build_verify_10_cbw(&mut self, lba: u32, num_blocks: u16) -> (CommandBlockWrapper, u32) {
+        self.bot.build_cbw_verify_10(lba, num_blocks, false)
+    }
+
+    /// Construit un CBW pour SCSI VERIFY (16) afin de vérifier l'intégrité de secteurs 64-bit
+    #[inline]
+    pub fn build_verify_16_cbw(&mut self, lba: u64, num_blocks: u32) -> (CommandBlockWrapper, u32) {
+        self.bot.build_cbw_verify_16(lba, num_blocks, false)
+    }
+
+    /// Construit un CBW pour SCSI SYNCHRONIZE CACHE (16) pour le vidage persistant LBA 64-bit (> 2 To)
+    #[inline]
+    pub fn build_sync_cache_16_cbw(
+        &mut self,
+        lba: u64,
+        block_count: u32,
+    ) -> (CommandBlockWrapper, u32) {
+        self.bot.build_cbw_synchronize_cache_16(lba, block_count)
     }
 
     /// Met à jour la géométrie du disque via les données décodées de READ CAPACITY (16)
@@ -5309,5 +5380,56 @@ mod tests {
         assert!(dd_hdr.grown_defect_list);
         assert_eq!(dd_hdr.defect_list_format, SCSI_DEFECT_FORMAT_BLOCK);
         assert_eq!(dd_hdr.defect_list_length, 4);
+
+        // 16. SCSI VERIFY (10), VERIFY (16) & SYNCHRONIZE CACHE (16)
+        let (cbw_v10, tag_v10) = disk.build_verify_10_cbw(0x1234, 16);
+        assert_eq!(cbw_v10.cb[0], SCSI_CMD_VERIFY_10);
+        assert_eq!(cbw_v10.cb[1], 0); // bytchk = false
+        assert_eq!(
+            u32::from_be_bytes([cbw_v10.cb[2], cbw_v10.cb[3], cbw_v10.cb[4], cbw_v10.cb[5]]),
+            0x1234
+        );
+        assert_eq!(u16::from_be_bytes([cbw_v10.cb[7], cbw_v10.cb[8]]), 16);
+        assert_eq!(cbw_v10.tag(), tag_v10);
+        assert_eq!(cbw_v10.data_transfer_length(), 0);
+
+        let (cbw_v16, tag_v16) = disk.build_verify_16_cbw(0x0001_8000_0000, 128);
+        assert_eq!(cbw_v16.cb[0], SCSI_CMD_VERIFY_16);
+        assert_eq!(cbw_v16.cb[1], 0);
+        let lba16 = u64::from_be_bytes([
+            cbw_v16.cb[2],
+            cbw_v16.cb[3],
+            cbw_v16.cb[4],
+            cbw_v16.cb[5],
+            cbw_v16.cb[6],
+            cbw_v16.cb[7],
+            cbw_v16.cb[8],
+            cbw_v16.cb[9],
+        ]);
+        assert_eq!(lba16, 0x0001_8000_0000);
+        let cnt16 = u32::from_be_bytes([
+            cbw_v16.cb[10],
+            cbw_v16.cb[11],
+            cbw_v16.cb[12],
+            cbw_v16.cb[13],
+        ]);
+        assert_eq!(cnt16, 128);
+        assert_eq!(cbw_v16.tag(), tag_v16);
+
+        let (cbw_sc16, tag_sc16) = disk.build_sync_cache_16_cbw(0x0002_0000_0000, 64);
+        assert_eq!(cbw_sc16.cb[0], SCSI_CMD_SYNCHRONIZE_CACHE_16);
+        let sc_lba = u64::from_be_bytes([
+            cbw_sc16.cb[2],
+            cbw_sc16.cb[3],
+            cbw_sc16.cb[4],
+            cbw_sc16.cb[5],
+            cbw_sc16.cb[6],
+            cbw_sc16.cb[7],
+            cbw_sc16.cb[8],
+            cbw_sc16.cb[9],
+        ]);
+        assert_eq!(sc_lba, 0x0002_0000_0000);
+        assert_eq!(cbw_sc16.tag(), tag_sc16);
+        assert_eq!(cbw_sc16.data_transfer_length(), 0);
     }
 }
