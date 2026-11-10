@@ -287,5 +287,10 @@ name = "ln"
 path = "src/bin/ln.rs"
 test = false
 
+[[bin]]
+name = "mktemp"
+path = "src/bin/mktemp.rs"
+test = false
+
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }

@@ -595,6 +595,7 @@ impl JamboShell {
             "readlink" | "/bin/readlink" | "bin/readlink" => self.cmd_readlink(args, out),
             "stat" | "/bin/stat" | "bin/stat" => self.cmd_stat(args, out),
             "ln" | "/bin/ln" | "bin/ln" => self.cmd_ln(args, out),
+            "mktemp" | "/bin/mktemp" | "bin/mktemp" => self.cmd_mktemp(args, out),
             "cow" | "/bin/cow" | "bin/cow" => self.cmd_cow(args, out),
             "version" => self.cmd_version(out),
             "uptime" => self.cmd_uptime(out),
@@ -752,7 +753,7 @@ impl JamboShell {
 
     fn cmd_coreutils(&self, out: &mut [u8]) -> (ShellStatus, usize) {
         let text = b"Utilitaires Coreutils Ring 3 (services/jambo-coreutils) :\n\
-  Binaires disponibles : /bin/echo, /bin/cat, /bin/head, /bin/tail, /bin/touch, /bin/mkdir, /bin/rm, /bin/cp, /bin/mv, /bin/tee, /bin/env, /bin/grep, /bin/sort, /bin/uniq, /bin/find, /bin/chmod, /bin/chown, /bin/id, /bin/du, /bin/df, /bin/uname, /bin/cut, /bin/paste, /bin/comm, /bin/tr, /bin/split, /bin/basename, /bin/dirname, /bin/seq, /bin/yes, /bin/printf, /bin/expr, /bin/fold, /bin/nl, /bin/od, /bin/cmp, /bin/expand, /bin/unexpand, /bin/sleep, /bin/cksum, /bin/base64, /bin/sha256sum, /bin/sync, /bin/truncate, /bin/hexdump, /bin/which, /bin/time, /bin/xargs, /bin/dd, /bin/readlink, /bin/stat, /bin/ln, /bin/wc, /bin/true, /bin/false, /bin/ls (56 utilitaires)\n\
+  Binaires disponibles : /bin/echo, /bin/cat, /bin/head, /bin/tail, /bin/touch, /bin/mkdir, /bin/rm, /bin/cp, /bin/mv, /bin/tee, /bin/env, /bin/grep, /bin/sort, /bin/uniq, /bin/find, /bin/chmod, /bin/chown, /bin/id, /bin/du, /bin/df, /bin/uname, /bin/cut, /bin/paste, /bin/comm, /bin/tr, /bin/split, /bin/basename, /bin/dirname, /bin/seq, /bin/yes, /bin/printf, /bin/expr, /bin/fold, /bin/nl, /bin/od, /bin/cmp, /bin/expand, /bin/unexpand, /bin/sleep, /bin/cksum, /bin/base64, /bin/sha256sum, /bin/sync, /bin/truncate, /bin/hexdump, /bin/which, /bin/time, /bin/xargs, /bin/dd, /bin/readlink, /bin/stat, /bin/ln, /bin/mktemp, /bin/wc, /bin/true, /bin/false, /bin/ls (57 utilitaires)\n\
   Architecture & ABI   : System V AMD64 ELF64 (ET_EXEC / Ring 3 Userland)\n\
   Point d'entree       : _start (parsing argc/argv sur pile System V)\n\
   Terminaison          : Syscall 11 ThreadExit avec propagation code de retour POSIX\n\
@@ -1787,6 +1788,42 @@ Utilitaire d'installation JamboOS (Serie 0.*.*)\n\
             }
         } else {
             let msg = b"ln: pipe creation failed\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
+    }
+
+    fn cmd_mktemp(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if let (Ok((r_out, w_out)), Ok((r_err, w_err))) =
+            (libjambo::vfs::pipe(), libjambo::vfs::pipe())
+        {
+            let code = libjambo::coreutils::run_mktemp(args, 0, w_out, w_err);
+            let _ = libjambo::coreutils::sys_close(w_out);
+            let _ = libjambo::coreutils::sys_close(w_err);
+
+            let mut len = 0;
+            if code == 0 {
+                let n_out = libjambo::coreutils::sys_read(r_out, out);
+                if n_out > 0 {
+                    len = n_out as usize;
+                }
+            } else {
+                let n_err = libjambo::coreutils::sys_read(r_err, out);
+                if n_err > 0 {
+                    len = n_err as usize;
+                }
+            }
+            let _ = libjambo::coreutils::sys_close(r_out);
+            let _ = libjambo::coreutils::sys_close(r_err);
+
+            if code == 0 {
+                (ShellStatus::Success, len)
+            } else {
+                (ShellStatus::ExecutionFailed, len)
+            }
+        } else {
+            let msg = b"mktemp: pipe creation failed\n";
             let len = msg.len().min(out.len());
             out[..len].copy_from_slice(&msg[..len]);
             (ShellStatus::ExecutionFailed, len)
@@ -18103,7 +18140,7 @@ mod tests {
         let (st, len) = shell.execute_line("coreutils", &mut out);
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
-        assert!(s.contains("56 utilitaires"));
+        assert!(s.contains("57 utilitaires"));
         assert!(s.contains("/bin/sleep"));
         assert!(s.contains("/bin/cksum"));
         assert!(s.contains("/bin/base64"));
@@ -19156,16 +19193,17 @@ mod tests {
         let s4 = core::str::from_utf8(&out[..len4]).unwrap();
         assert!(s4.contains("Reserve Disponible"));
 
-        // 5. coreutils inventaire 56
+        // 5. coreutils inventaire 57
         let (st5, len5) = shell.execute_line("coreutils", &mut out);
         assert_eq!(st5, ShellStatus::Success);
         let s5 = core::str::from_utf8(&out[..len5]).unwrap();
-        assert!(s5.contains("56 utilitaires"));
+        assert!(s5.contains("57 utilitaires"));
         assert!(s5.contains("/bin/xargs"));
         assert!(s5.contains("/bin/dd"));
         assert!(s5.contains("/bin/readlink"));
         assert!(s5.contains("/bin/stat"));
         assert!(s5.contains("/bin/ln"));
+        assert!(s5.contains("/bin/mktemp"));
 
         // 6. dd shell command
         let (st6, len6) = shell.execute_line(
@@ -19221,5 +19259,13 @@ mod tests {
         let s13 = core::str::from_utf8(&out[..len13]).unwrap();
         assert!(s13.contains("/etc/hostname"));
         let _ = libjambo::coreutils::sys_unlink_pool("/tmp/sh_ln_sym.lnk");
+
+        // 11. mktemp shell command
+        let (st14, len14) = shell.execute_line("mktemp", &mut out);
+        assert_eq!(st14, ShellStatus::Success);
+        let s14 = core::str::from_utf8(&out[..len14]).unwrap();
+        assert!(s14.starts_with("/tmp/tmp."));
+        let temp_created = s14.trim_end();
+        let _ = libjambo::coreutils::sys_unlink_pool(temp_created);
     }
 }

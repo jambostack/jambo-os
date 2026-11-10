@@ -234,8 +234,11 @@ impl UnifiedBlockStorage {
                 flush_success_count: 0,
             },
             Self::Nvme(ctrl) => {
+                // Évaluation combinée des erreurs de flush PCIe et des alertes de télémétrie asynchrone (AER)
                 let health_status = if ctrl.flush_errors > 0 {
                     2 // Critique
+                } else if ctrl.aer_limit > 0 && ctrl.admin_queue.is_full() {
+                    1 // Avertissement de congestion télémétrique
                 } else {
                     0 // Nominal
                 };
@@ -316,5 +319,13 @@ mod tests {
         let h_parsed =
             DeviceHealthInfo::from_bytes(&h_bytes).expect("Désérialisation DeviceHealthInfo");
         assert_eq!(health, h_parsed);
+
+        // Simulation d'une dégradation critique suite à des erreurs de flush PCIe
+        let mut degraded_ctrl = NvmeController::new();
+        degraded_ctrl.ready = true;
+        degraded_ctrl.flush_errors = 3;
+        let degraded_storage = UnifiedBlockStorage::Nvme(degraded_ctrl);
+        let degraded_health = degraded_storage.query_health_info();
+        assert_eq!(degraded_health.health_status, 2);
     }
 }

@@ -5,7 +5,7 @@
 //! Chaque routine s'interface avec les descripteurs POSIX (`vfs::*`)
 //! sans recourir à des allocations heap obligatoires.
 
-use crate::vfs::{with_fd_table, O_APPEND, O_CREAT, O_RDONLY, O_TRUNC, O_WRONLY};
+use crate::vfs::{with_fd_table, O_APPEND, O_CREAT, O_EXCL, O_RDONLY, O_RDWR, O_TRUNC, O_WRONLY};
 
 #[derive(Clone, Copy)]
 pub struct VfsFileNode {
@@ -251,6 +251,10 @@ pub fn sys_open(path: &str, flags: i32) -> i32 {
         let pool = core::ptr::addr_of_mut!(INODE_POOL);
         for (i, node) in (*pool).iter().enumerate() {
             if node.is_active && node.path_str() == path {
+                // Si O_CREAT et O_EXCL sont tous deux spécifiés et que le fichier existe, échoue avec EEXIST
+                if (flags & crate::vfs::O_CREAT) != 0 && (flags & crate::vfs::O_EXCL) != 0 {
+                    return -1;
+                }
                 // Rejet de l'écriture si le noeud est un répertoire (EISDIR)
                 if node.is_dir
                     && (flags & (crate::vfs::O_WRONLY | crate::vfs::O_RDWR | crate::vfs::O_TRUNC))
@@ -13297,6 +13301,190 @@ pub fn run_ln(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
     }
 }
 
+/// Générateur d'identifiant déterministe pseudo-aléatoire pour les noms temporaires Ring 3
+static MKTEMP_COUNTER: core::sync::atomic::AtomicU64 =
+    core::sync::atomic::AtomicU64::new(0x1337_cafe);
+
+/// Utilitaire Coreutils POSIX `mktemp` (création atomique de fichiers et répertoires temporaires sécurisés)
+///
+/// Options supportées :
+/// - `-d`, `--directory` : crée un répertoire au lieu d'un fichier régulier (permissions 0700)
+/// - `-u`, `--dry-run`   : n'effectue aucune création sur le FS, génère et affiche uniquement le nom temporaire
+/// - `-q`, `--quiet`     : n'affiche aucun message d'erreur sur stderr en cas d'échec
+/// - `-p DIR`, `--tmpdir=DIR` : répertoire de base (défaut : `/tmp`)
+/// - `[TEMPLATE]`        : motif avec au moins 3 'X' finaux (ex: `tmp.XXXXXX`)
+pub fn run_mktemp(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    let _ = in_fd;
+    let mut directory = false;
+    let mut dry_run = false;
+    let mut quiet = false;
+    let mut base_dir: &str = "/tmp";
+    let mut template_arg: Option<&str> = None;
+
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i];
+        if arg == "-d" || arg == "--directory" {
+            directory = true;
+            i += 1;
+        } else if arg == "-u" || arg == "--dry-run" {
+            dry_run = true;
+            i += 1;
+        } else if arg == "-q" || arg == "--quiet" {
+            quiet = true;
+            i += 1;
+        } else if arg == "-p" {
+            if i + 1 < args.len() {
+                base_dir = args[i + 1];
+                i += 2;
+            } else {
+                if !quiet {
+                    let _ = sys_write(err_fd, b"mktemp: option requires an argument -- 'p'\n");
+                }
+                return 1;
+            }
+        } else if let Some(stripped) = arg.strip_prefix("--tmpdir=") {
+            base_dir = stripped;
+            i += 1;
+        } else if arg.starts_with('-') && arg.len() > 1 && !arg.starts_with("--") {
+            for b in arg[1..].bytes() {
+                match b {
+                    b'd' => directory = true,
+                    b'u' => dry_run = true,
+                    b'q' => quiet = true,
+                    _ => {}
+                }
+            }
+            i += 1;
+        } else if !arg.starts_with('-') && template_arg.is_none() {
+            template_arg = Some(arg);
+            i += 1;
+        } else {
+            i += 1;
+        }
+    }
+
+    // Détermination du gabarit (template)
+    let template = template_arg.unwrap_or("tmp.XXXXXX");
+
+    // Vérification de la présence d'au moins 3 'X' consécutifs à la fin
+    let mut x_count = 0usize;
+    for &b in template.as_bytes().iter().rev() {
+        if b == b'X' {
+            x_count += 1;
+        } else {
+            break;
+        }
+    }
+
+    if x_count < 3 {
+        if !quiet {
+            let _ = sys_write(err_fd, b"mktemp: too few X's in template '");
+            let _ = sys_write(err_fd, template.as_bytes());
+            let _ = sys_write(err_fd, b"'\n");
+        }
+        return 1;
+    }
+
+    // Constitution du chemin complet (soit absolu/relatif selon le template, soit préfixé par base_dir)
+    let mut path_buf = [0u8; crate::vfs::MAX_PATH_LEN];
+    let mut path_len = 0usize;
+
+    let has_slash = template.contains('/');
+    if !has_slash {
+        let bdir = base_dir.trim_end_matches('/');
+        let bdir_bytes = bdir.as_bytes();
+        let blen = bdir_bytes.len().min(crate::vfs::MAX_PATH_LEN);
+        path_buf[..blen].copy_from_slice(&bdir_bytes[..blen]);
+        path_len = blen;
+
+        if path_len < crate::vfs::MAX_PATH_LEN {
+            path_buf[path_len] = b'/';
+            path_len += 1;
+        }
+    }
+
+    let t_bytes = template.as_bytes();
+    let remaining = crate::vfs::MAX_PATH_LEN.saturating_sub(path_len);
+    let t_len = t_bytes.len().min(remaining);
+    path_buf[path_len..path_len + t_len].copy_from_slice(&t_bytes[..t_len]);
+    path_len += t_len;
+
+    let x_start = path_len.saturating_sub(x_count);
+
+    // Alphabet alphanumérique pour le remplacement des 'X'
+    const ALPHABET: &[u8; 62] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+
+    // Tentatives de création atomique (jusqu'à 100 essais pour garantir l'absence de collision)
+    let mut attempts = 0usize;
+    let mut success = false;
+
+    while attempts < 100 {
+        let cnt = MKTEMP_COUNTER.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        let mut seed = cnt ^ 0x5a5a_a5a5_1234_5678;
+
+        for offset in 0..x_count {
+            // Xorshift64 élémentaire pour diversifier les octets
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            let idx = (seed as usize + offset) % ALPHABET.len();
+            path_buf[x_start + offset] = ALPHABET[idx];
+        }
+
+        let cand_str = match core::str::from_utf8(&path_buf[..path_len]) {
+            Ok(s) => s,
+            Err(_) => break,
+        };
+
+        if dry_run {
+            // Dry run : on vérifie juste que le nom n'est pas déjà actif dans le pool
+            let exists = unsafe {
+                let pool = core::ptr::addr_of!(INODE_POOL);
+                (*pool)
+                    .iter()
+                    .any(|n| n.is_active && n.path_str() == cand_str)
+            };
+            if !exists {
+                success = true;
+                break;
+            }
+        } else if directory {
+            // Création de répertoire avec permissions strictes 0700
+            let res = sys_mkdir_pool(cand_str, 0o700);
+            if res == 0 {
+                success = true;
+                break;
+            }
+        } else {
+            // Création atomique de fichier avec O_CREAT | O_EXCL (mode 0600)
+            let fd = sys_open(cand_str, O_CREAT | O_EXCL | O_RDWR);
+            if fd >= 0 {
+                let _ = sys_chmod_pool(cand_str, 0o600);
+                let _ = sys_close(fd);
+                success = true;
+                break;
+            }
+        }
+
+        attempts += 1;
+    }
+
+    if !success {
+        if !quiet {
+            let _ = sys_write(err_fd, b"mktemp: failed to create file via template '");
+            let _ = sys_write(err_fd, template.as_bytes());
+            let _ = sys_write(err_fd, b"': File exists or no space left\n");
+        }
+        return 1;
+    }
+
+    // Affichage sur la sortie standard du chemin canonique généré
+    let _ = sys_write(out_fd, &path_buf[..path_len]);
+    let _ = sys_write(out_fd, b"\n");
+    0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -16293,5 +16481,76 @@ mod tests {
         // Nettoyage final
         let _ = sys_unlink_pool(sym_link);
         let _ = sys_unlink_pool(hard_link);
+    }
+
+    #[test]
+    fn test_mktemp_file_and_directory_atomic_creation() {
+        // 1. Création atomique de fichier temporaire par défaut
+        let (out_r1, out_w1) = crate::vfs::pipe().expect("pipe out 1");
+        let (err_r1, err_w1) = crate::vfs::pipe().expect("pipe err 1");
+        let code1 = run_mktemp(&[], 0, out_w1, err_w1);
+        assert_eq!(code1, 0);
+        let _ = sys_close(out_w1);
+        let _ = sys_close(err_w1);
+
+        let mut path_buf = [0u8; 64];
+        let n1 = sys_read(out_r1, &mut path_buf);
+        let _ = sys_close(out_r1);
+        let _ = sys_close(err_r1);
+        assert!(n1 > 0);
+        let path1_str = core::str::from_utf8(&path_buf[..n1 as usize])
+            .unwrap()
+            .trim_end();
+        assert!(path1_str.starts_with("/tmp/tmp."));
+
+        // Vérification que le fichier existe et a les permissions 0600
+        let stat1 = sys_stat_pool(path1_str).expect("stat temp file");
+        assert_eq!(stat1.st_mode & 0o777, 0o600);
+        assert_eq!(stat1.st_mode & crate::vfs::S_IFMT, crate::vfs::S_IFREG);
+
+        // 2. Création atomique d'un répertoire temporaire avec -d
+        let (out_r2, out_w2) = crate::vfs::pipe().expect("pipe out 2");
+        let code2 = run_mktemp(&["-d", "-p", "/tmp", "sandbox.XXXXXX"], 0, out_w2, 2);
+        assert_eq!(code2, 0);
+        let _ = sys_close(out_w2);
+
+        let mut dir_buf = [0u8; 64];
+        let n2 = sys_read(out_r2, &mut dir_buf);
+        let _ = sys_close(out_r2);
+        assert!(n2 > 0);
+        let dir_str = core::str::from_utf8(&dir_buf[..n2 as usize])
+            .unwrap()
+            .trim_end();
+        assert!(dir_str.starts_with("/tmp/sandbox."));
+
+        let stat_dir = sys_stat_pool(dir_str).expect("stat temp dir");
+        assert_eq!(stat_dir.st_mode & 0o777, 0o700);
+        assert_eq!(stat_dir.st_mode & crate::vfs::S_IFMT, crate::vfs::S_IFDIR);
+
+        // 3. Test de rejet si moins de 3 X
+        let (err_r3, err_w3) = crate::vfs::pipe().expect("pipe err 3");
+        let code3 = run_mktemp(&["bad_template.XX"], 0, 1, err_w3);
+        assert_eq!(code3, 1);
+        let _ = sys_close(err_w3);
+        let _ = sys_close(err_r3);
+
+        // 4. Test dry-run (-u)
+        let (out_r4, out_w4) = crate::vfs::pipe().expect("pipe out 4");
+        let code4 = run_mktemp(&["-u", "dryrun.XXXXXX"], 0, out_w4, 2);
+        assert_eq!(code4, 0);
+        let _ = sys_close(out_w4);
+
+        let mut dry_buf = [0u8; 64];
+        let n4 = sys_read(out_r4, &mut dry_buf);
+        let _ = sys_close(out_r4);
+        assert!(n4 > 0);
+        let dry_str = core::str::from_utf8(&dry_buf[..n4 as usize])
+            .unwrap()
+            .trim_end();
+        assert!(sys_stat_pool(dry_str).is_none()); // Le fichier n'a pas été créé sur disque !
+
+        // Nettoyage
+        let _ = sys_unlink_pool(path1_str);
+        let _ = sys_unlink_pool(dir_str);
     }
 }
