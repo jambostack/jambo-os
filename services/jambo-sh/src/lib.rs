@@ -565,6 +565,10 @@ impl JamboShell {
             "split" | "/bin/split" | "bin/split" => self.cmd_split(args, out),
             "basename" | "/bin/basename" | "bin/basename" => self.cmd_basename(args, out),
             "dirname" | "/bin/dirname" | "bin/dirname" => self.cmd_dirname(args, out),
+            "seq" | "/bin/seq" | "bin/seq" => self.cmd_seq(args, out),
+            "yes" | "/bin/yes" | "bin/yes" => self.cmd_yes(args, out),
+            "printf" | "/bin/printf" | "bin/printf" => self.cmd_printf(args, out),
+            "expr" | "/bin/expr" | "bin/expr" => self.cmd_expr(args, out),
             "version" => self.cmd_version(out),
             "uptime" => self.cmd_uptime(out),
             "caps" => self.cmd_caps(out),
@@ -1223,6 +1227,88 @@ Utilitaire d'installation JamboOS (Serie 0.*.*)\n\
             }
         } else {
             let msg = b"dirname: pipe creation failed\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
+    }
+
+    fn cmd_seq(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if let Ok((r, w)) = libjambo::vfs::pipe() {
+            let code = libjambo::coreutils::run_seq(args, w, w);
+            let _ = libjambo::coreutils::sys_close(w);
+            let n = libjambo::coreutils::sys_read(r, out);
+            let _ = libjambo::coreutils::sys_close(r);
+            let len = if n > 0 { n as usize } else { 0 };
+            if code == 0 {
+                (ShellStatus::Success, len)
+            } else {
+                (ShellStatus::ExecutionFailed, len)
+            }
+        } else {
+            let msg = b"seq: pipe creation failed\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
+    }
+
+    fn cmd_yes(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if let Ok((r, w)) = libjambo::vfs::pipe() {
+            // max_bytes borné à out.len() pour éviter la boucle infinie dans le shell
+            let code = libjambo::coreutils::run_yes(args, w, w, out.len());
+            let _ = libjambo::coreutils::sys_close(w);
+            let n = libjambo::coreutils::sys_read(r, out);
+            let _ = libjambo::coreutils::sys_close(r);
+            let len = if n > 0 { n as usize } else { 0 };
+            if code == 0 {
+                (ShellStatus::Success, len)
+            } else {
+                (ShellStatus::ExecutionFailed, len)
+            }
+        } else {
+            let msg = b"yes: pipe creation failed\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
+    }
+
+    fn cmd_printf(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if let Ok((r, w)) = libjambo::vfs::pipe() {
+            let code = libjambo::coreutils::run_printf(args, w, w);
+            let _ = libjambo::coreutils::sys_close(w);
+            let n = libjambo::coreutils::sys_read(r, out);
+            let _ = libjambo::coreutils::sys_close(r);
+            let len = if n > 0 { n as usize } else { 0 };
+            if code == 0 {
+                (ShellStatus::Success, len)
+            } else {
+                (ShellStatus::ExecutionFailed, len)
+            }
+        } else {
+            let msg = b"printf: pipe creation failed\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
+    }
+
+    fn cmd_expr(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if let Ok((r, w)) = libjambo::vfs::pipe() {
+            let code = libjambo::coreutils::run_expr(args, w, w);
+            let _ = libjambo::coreutils::sys_close(w);
+            let n = libjambo::coreutils::sys_read(r, out);
+            let _ = libjambo::coreutils::sys_close(r);
+            let len = if n > 0 { n as usize } else { 0 };
+            // expr retourne 0 (vrai), 1 (faux), 2 (erreur)
+            if code <= 1 {
+                (ShellStatus::Success, len)
+            } else {
+                (ShellStatus::ExecutionFailed, len)
+            }
+        } else {
+            let msg = b"expr: pipe creation failed\n";
             let len = msg.len().min(out.len());
             out[..len].copy_from_slice(&msg[..len]);
             (ShellStatus::ExecutionFailed, len)
@@ -17796,5 +17882,33 @@ mod tests {
         assert_eq!(st5, ShellStatus::ExecutionFailed);
         let (st6, _) = shell.execute_line("dirname", &mut out);
         assert_eq!(st6, ShellStatus::ExecutionFailed);
+    }
+
+    #[test]
+    fn test_seq_shell_execution() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 512];
+
+        // 1. Exécution interne de seq
+        let (st1, len1) = shell.execute_line("seq 3", &mut out);
+        assert_eq!(st1, ShellStatus::Success);
+        let s1 = core::str::from_utf8(&out[..len1]).unwrap();
+        assert_eq!(s1, "1\n2\n3\n");
+
+        // 2. Exécution via /bin/seq avec pas et délimiteur
+        let (st2, len2) = shell.execute_line("/bin/seq -s : 1 2 5", &mut out);
+        assert_eq!(st2, ShellStatus::Success);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert_eq!(s2, "1:3:5\n");
+
+        // 3. Exécution avec option -w (largeur égale)
+        let (st3, len3) = shell.execute_line("seq -w 8 10", &mut out);
+        assert_eq!(st3, ShellStatus::Success);
+        let s3 = core::str::from_utf8(&out[..len3]).unwrap();
+        assert_eq!(s3, "08\n09\n10\n");
+
+        // 4. Erreur argument manquant
+        let (st4, _) = shell.execute_line("seq", &mut out);
+        assert_eq!(st4, ShellStatus::ExecutionFailed);
     }
 }

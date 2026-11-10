@@ -167,5 +167,25 @@ name = "dirname"
 path = "src/bin/dirname.rs"
 test = false
 
+[[bin]]
+name = "seq"
+path = "src/bin/seq.rs"
+test = false
+
+[[bin]]
+name = "yes"
+path = "src/bin/yes.rs"
+test = false
+
+[[bin]]
+name = "printf"
+path = "src/bin/printf.rs"
+test = false
+
+[[bin]]
+name = "expr"
+path = "src/bin/expr.rs"
+test = false
+
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }

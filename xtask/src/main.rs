@@ -1287,6 +1287,10 @@ fn build_coreutils(
     PathBuf,
     PathBuf,
     PathBuf,
+    PathBuf,
+    PathBuf,
+    PathBuf,
+    PathBuf,
 )> {
     let root = root_dir();
     let mut cmd = Command::new("cargo");
@@ -1346,6 +1350,10 @@ fn build_coreutils(
         dir.join("split"),
         dir.join("basename"),
         dir.join("dirname"),
+        dir.join("seq"),
+        dir.join("yes"),
+        dir.join("printf"),
+        dir.join("expr"),
     ))
 }
 
@@ -1654,6 +1662,10 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
         split_bin,
         basename_bin,
         dirname_bin,
+        seq_bin,
+        yes_bin,
+        printf_bin,
+        expr_bin,
     ) = build_coreutils(release)?;
     let installer_bin = build_installer(release)?;
     let fuzz_bin = build_fuzzer(release)?;
@@ -1695,6 +1707,10 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
     fs::copy(&split_bin, bin_dir.join("split"))?;
     fs::copy(&basename_bin, bin_dir.join("basename"))?;
     fs::copy(&dirname_bin, bin_dir.join("dirname"))?;
+    fs::copy(&seq_bin, bin_dir.join("seq"))?;
+    fs::copy(&yes_bin, bin_dir.join("yes"))?;
+    fs::copy(&printf_bin, bin_dir.join("printf"))?;
+    fs::copy(&expr_bin, bin_dir.join("expr"))?;
     fs::copy(&installer_bin, bin_dir.join("installer"))?;
     fs::copy(&installer_bin, bin_dir.join("jambo-installer"))?;
     fs::copy(&fuzz_bin, bin_dir.join("fuzz"))?;
@@ -1851,6 +1867,10 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
     fs::copy(&mv_bin, initrd_stage.join("mv"))?;
     fs::copy(&basename_bin, initrd_stage.join("basename"))?;
     fs::copy(&dirname_bin, initrd_stage.join("dirname"))?;
+    fs::copy(&seq_bin, initrd_stage.join("seq"))?;
+    fs::copy(&yes_bin, initrd_stage.join("yes"))?;
+    fs::copy(&printf_bin, initrd_stage.join("printf"))?;
+    fs::copy(&expr_bin, initrd_stage.join("expr"))?;
     fs::copy(&installer_bin, initrd_stage.join("installer"))?;
     fs::copy(&installer_bin, initrd_stage.join("jambo-installer"))?;
     fs::copy(&fuzz_bin, initrd_stage.join("fuzz"))?;
@@ -1877,6 +1897,10 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
             "bin/mv",
             "bin/basename",
             "bin/dirname",
+            "bin/seq",
+            "bin/yes",
+            "bin/printf",
+            "bin/expr",
             "bin/installer",
             "bin/jambo-installer",
             "bin/fuzz",
@@ -2030,6 +2054,10 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
             "mv",
             "basename",
             "dirname",
+            "seq",
+            "yes",
+            "printf",
+            "expr",
             "installer",
             "jambo-installer",
             "fuzz",

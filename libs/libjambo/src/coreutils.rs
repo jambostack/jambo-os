@@ -6634,6 +6634,917 @@ if NAME contains no /'s, output '.' (meaning the current directory).\n\n\
     0
 }
 
+/// Parse un opérande numérique pour la commande `seq`.
+/// Renvoie `Some((valeur_entiere, echelle_decimale))` si valide, `None` sinon.
+fn parse_seq_operand(s: &str) -> Option<(i64, u32)> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    let (is_neg, s) = if let Some(stripped) = s.strip_prefix('-') {
+        (true, stripped)
+    } else if let Some(stripped) = s.strip_prefix('+') {
+        (false, stripped)
+    } else {
+        (false, s)
+    };
+
+    if s.is_empty() {
+        return None;
+    }
+
+    let mut dot_idx = None;
+    for (i, b) in s.bytes().enumerate() {
+        if b == b'.' {
+            if dot_idx.is_some() {
+                return None;
+            }
+            dot_idx = Some(i);
+        } else if !b.is_ascii_digit() {
+            return None;
+        }
+    }
+
+    let (int_str, frac_str, scale) = if let Some(dot) = dot_idx {
+        (&s[..dot], &s[dot + 1..], (s.len() - dot - 1) as u32)
+    } else {
+        (s, "", 0u32)
+    };
+
+    let int_val: i64 = if int_str.is_empty() {
+        0
+    } else {
+        int_str.parse().ok()?
+    };
+
+    let mut frac_val: i64 = 0;
+    if !frac_str.is_empty() {
+        frac_val = frac_str.parse().ok()?;
+    }
+
+    let mut scale_mul = 1i64;
+    for _ in 0..scale {
+        scale_mul = scale_mul.checked_mul(10)?;
+    }
+
+    let total = int_val.checked_mul(scale_mul)?.checked_add(frac_val)?;
+    let val = if is_neg { -total } else { total };
+    Some((val, scale))
+}
+
+/// Formate un nombre de séquence dans un tampon mémoire selon la largeur, le remplissage ou le motif printf.
+fn format_seq_number(
+    val: i64,
+    scale: u32,
+    min_width: usize,
+    equal_width: bool,
+    format_opt: Option<&str>,
+    buf: &mut [u8],
+) -> usize {
+    if let Some(fmt) = format_opt {
+        if let Some(percent_idx) = fmt.find('%') {
+            let prefix = &fmt[..percent_idx];
+            let rest = &fmt[percent_idx + 1..];
+
+            let mut zero_pad = false;
+            let mut width: usize = 0;
+            let mut spec_idx = 0;
+            let mut chars = rest.char_indices();
+            if let Some((_, '0')) = chars.next() {
+                zero_pad = true;
+            } else {
+                chars = rest.char_indices();
+            }
+
+            for (idx, ch) in chars {
+                if ch.is_ascii_digit() {
+                    width = width
+                        .wrapping_mul(10)
+                        .wrapping_add((ch as u8 - b'0') as usize);
+                } else {
+                    spec_idx = idx;
+                    break;
+                }
+            }
+
+            let suffix = if spec_idx < rest.len() {
+                &rest[spec_idx + 1..]
+            } else {
+                ""
+            };
+
+            let mut num_buf = [0u8; 48];
+            let num_len = format_raw_seq_number(val, scale, width, zero_pad, &mut num_buf);
+
+            let mut cur = 0;
+            for &b in prefix.as_bytes() {
+                if cur < buf.len() {
+                    buf[cur] = b;
+                    cur += 1;
+                }
+            }
+            for &b in &num_buf[..num_len] {
+                if cur < buf.len() {
+                    buf[cur] = b;
+                    cur += 1;
+                }
+            }
+            for &b in suffix.as_bytes() {
+                if cur < buf.len() {
+                    buf[cur] = b;
+                    cur += 1;
+                }
+            }
+            return cur;
+        }
+    }
+
+    format_raw_seq_number(val, scale, min_width, equal_width, buf)
+}
+
+fn format_raw_seq_number(
+    val: i64,
+    scale: u32,
+    min_width: usize,
+    pad_zeros: bool,
+    buf: &mut [u8],
+) -> usize {
+    let is_neg = val < 0;
+    let abs_val = val.unsigned_abs();
+
+    let mut scale_mul = 1u64;
+    for _ in 0..scale {
+        scale_mul = scale_mul.saturating_mul(10);
+    }
+
+    let int_part = abs_val / scale_mul;
+    let frac_part = abs_val % scale_mul;
+
+    let mut int_digits = [0u8; 24];
+    let mut int_len = 0;
+    if int_part == 0 {
+        int_digits[0] = b'0';
+        int_len = 1;
+    } else {
+        let mut tmp = int_part;
+        while tmp > 0 {
+            int_digits[int_len] = b'0' + (tmp % 10) as u8;
+            int_len += 1;
+            tmp /= 10;
+        }
+        int_digits[..int_len].reverse();
+    }
+
+    let raw_len =
+        (if is_neg { 1 } else { 0 }) + int_len + (if scale > 0 { 1 + scale as usize } else { 0 });
+    let padding = if pad_zeros && min_width > raw_len {
+        min_width - raw_len
+    } else {
+        0
+    };
+
+    let mut cursor = 0;
+    if is_neg && cursor < buf.len() {
+        buf[cursor] = b'-';
+        cursor += 1;
+    }
+
+    for _ in 0..padding {
+        if cursor < buf.len() {
+            buf[cursor] = b'0';
+            cursor += 1;
+        }
+    }
+
+    for &digit in &int_digits[..int_len] {
+        if cursor < buf.len() {
+            buf[cursor] = digit;
+            cursor += 1;
+        }
+    }
+
+    if scale > 0 && cursor < buf.len() {
+        buf[cursor] = b'.';
+        cursor += 1;
+
+        let mut frac_digits = [0u8; 24];
+        let mut frac_len = 0;
+        let mut tmp = frac_part;
+        while tmp > 0 {
+            frac_digits[frac_len] = b'0' + (tmp % 10) as u8;
+            frac_len += 1;
+            tmp /= 10;
+        }
+        frac_digits[..frac_len].reverse();
+
+        let leading_zeros = (scale as usize).saturating_sub(frac_len);
+        for _ in 0..leading_zeros {
+            if cursor < buf.len() {
+                buf[cursor] = b'0';
+                cursor += 1;
+            }
+        }
+        for &digit in &frac_digits[..frac_len] {
+            if cursor < buf.len() {
+                buf[cursor] = digit;
+                cursor += 1;
+            }
+        }
+    }
+
+    cursor
+}
+
+/// Point d'entrée pour la commande `seq` (génération de séquences numériques POSIX/GNU).
+pub fn run_seq(args: &[&str], out_fd: i32, err_fd: i32) -> i32 {
+    let mut separator = "\n";
+    let mut equal_width = false;
+    let mut format_opt: Option<&str> = None;
+    let mut operands: [&str; 4] = [""; 4];
+    let mut num_operands = 0;
+    let mut parsing_options = true;
+
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i];
+        if parsing_options && arg == "--" {
+            parsing_options = false;
+            i += 1;
+            continue;
+        }
+
+        let is_negative_number = parsing_options
+            && arg.starts_with('-')
+            && arg.len() > 1
+            && (arg.as_bytes()[1].is_ascii_digit() || arg.as_bytes()[1] == b'.');
+
+        if parsing_options && (arg.starts_with('-') && arg != "-") && !is_negative_number {
+            if arg == "--help" {
+                let _ = sys_write(
+                    err_fd,
+                    b"Usage: seq [OPTION]... LAST\n\
+  or:  seq [OPTION]... FIRST LAST\n\
+  or:  seq [OPTION]... FIRST INCREMENT LAST\n\
+Print numbers from FIRST to LAST, in steps of INCREMENT.\n\n\
+  -f, --format=FORMAT      use printf style floating-point/integer FORMAT\n\
+  -s, --separator=STRING   use STRING to separate numbers (default: \\n)\n\
+  -w, --equal-width        equalize width by padding with leading zeroes\n\
+      --help               display this help and exit\n",
+                );
+                return 0;
+            } else if arg == "-w" || arg == "--equal-width" {
+                equal_width = true;
+            } else if arg == "-s" {
+                if i + 1 < args.len() {
+                    i += 1;
+                    separator = args[i];
+                } else {
+                    let _ = sys_write(err_fd, b"seq: option requires an argument -- 's'\n");
+                    return 1;
+                }
+            } else if let Some(sep) = arg.strip_prefix("--separator=") {
+                separator = sep;
+            } else if arg == "-f" {
+                if i + 1 < args.len() {
+                    i += 1;
+                    format_opt = Some(args[i]);
+                } else {
+                    let _ = sys_write(err_fd, b"seq: option requires an argument -- 'f'\n");
+                    return 1;
+                }
+            } else if let Some(fmt) = arg.strip_prefix("--format=") {
+                format_opt = Some(fmt);
+            } else {
+                let _ = sys_write(err_fd, b"seq: invalid option '");
+                let _ = sys_write(err_fd, arg.as_bytes());
+                let _ = sys_write(err_fd, b"'\nTry 'seq --help' for more information.\n");
+                return 1;
+            }
+        } else {
+            if num_operands < operands.len() {
+                operands[num_operands] = arg;
+                num_operands += 1;
+            } else {
+                let _ = sys_write(err_fd, b"seq: extra operand '");
+                let _ = sys_write(err_fd, arg.as_bytes());
+                let _ = sys_write(err_fd, b"'\nTry 'seq --help' for more information.\n");
+                return 1;
+            }
+        }
+        i += 1;
+    }
+
+    if num_operands == 0 {
+        let _ = sys_write(
+            err_fd,
+            b"seq: missing operand\nTry 'seq --help' for more information.\n",
+        );
+        return 1;
+    }
+
+    if num_operands > 3 {
+        let _ = sys_write(err_fd, b"seq: extra operand '");
+        let _ = sys_write(err_fd, operands[3].as_bytes());
+        let _ = sys_write(err_fd, b"'\nTry 'seq --help' for more information.\n");
+        return 1;
+    }
+
+    let (first_str, inc_str, last_str) = match num_operands {
+        1 => ("1", "1", operands[0]),
+        2 => (operands[0], "1", operands[1]),
+        3 => (operands[0], operands[1], operands[2]),
+        _ => unreachable!(),
+    };
+
+    let (first_raw, scale_first) = match parse_seq_operand(first_str) {
+        Some(v) => v,
+        None => {
+            let _ = sys_write(err_fd, b"seq: invalid numerical argument: '");
+            let _ = sys_write(err_fd, first_str.as_bytes());
+            let _ = sys_write(err_fd, b"'\n");
+            return 1;
+        }
+    };
+
+    let (inc_raw, scale_inc) = match parse_seq_operand(inc_str) {
+        Some(v) => v,
+        None => {
+            let _ = sys_write(err_fd, b"seq: invalid numerical argument: '");
+            let _ = sys_write(err_fd, inc_str.as_bytes());
+            let _ = sys_write(err_fd, b"'\n");
+            return 1;
+        }
+    };
+
+    let (last_raw, scale_last) = match parse_seq_operand(last_str) {
+        Some(v) => v,
+        None => {
+            let _ = sys_write(err_fd, b"seq: invalid numerical argument: '");
+            let _ = sys_write(err_fd, last_str.as_bytes());
+            let _ = sys_write(err_fd, b"'\n");
+            return 1;
+        }
+    };
+
+    if inc_raw == 0 {
+        let _ = sys_write(err_fd, b"seq: invalid Zero increment value: '");
+        let _ = sys_write(err_fd, inc_str.as_bytes());
+        let _ = sys_write(err_fd, b"'\n");
+        return 1;
+    }
+
+    let target_scale = scale_first.max(scale_inc).max(scale_last);
+
+    let align_scale = |raw: i64, scale: u32| -> i64 {
+        let diff = target_scale - scale;
+        let mut mul = 1i64;
+        for _ in 0..diff {
+            mul = mul.saturating_mul(10);
+        }
+        raw.saturating_mul(mul)
+    };
+
+    let first_scaled = align_scale(first_raw, scale_first);
+    let inc_scaled = align_scale(inc_raw, scale_inc);
+    let last_scaled = align_scale(last_raw, scale_last);
+
+    let mut min_width = 0;
+    if equal_width {
+        let mut buf1 = [0u8; 48];
+        let mut buf2 = [0u8; 48];
+        let len1 = format_raw_seq_number(first_scaled, target_scale, 0, false, &mut buf1);
+        let len2 = format_raw_seq_number(last_scaled, target_scale, 0, false, &mut buf2);
+        min_width = len1.max(len2);
+    }
+
+    let mut cur = first_scaled;
+    let mut is_first = true;
+    loop {
+        if inc_scaled > 0 {
+            if cur > last_scaled {
+                break;
+            }
+        } else if cur < last_scaled {
+            break;
+        }
+
+        if !is_first {
+            let _ = sys_write(out_fd, separator.as_bytes());
+        }
+        is_first = false;
+
+        let mut num_buf = [0u8; 64];
+        let len = format_seq_number(
+            cur,
+            target_scale,
+            min_width,
+            equal_width,
+            format_opt,
+            &mut num_buf,
+        );
+        let _ = sys_write(out_fd, &num_buf[..len]);
+
+        let next = cur.saturating_add(inc_scaled);
+        if next == cur {
+            break;
+        }
+        cur = next;
+    }
+
+    if !is_first {
+        let _ = sys_write(out_fd, b"\n");
+    }
+
+    0
+}
+
+/// Utilitaire `yes` : émet une chaîne indéfiniment (ou jusqu'à `max_bytes`).
+///
+/// Arguments POSIX :
+/// - sans argument : émet `"y\n"` indéfiniment.
+/// - avec arguments : émet les arguments joints par un espace suivis de `\n`.
+///
+/// Le paramètre `max_bytes` borne l'émission (0 = illimité, utilisé uniquement dans les tests
+/// via un pipe borné).
+///
+/// # Erreurs
+/// Retourne 0. Ne retourne jamais sauf interruption par le consommateur du pipe.
+pub fn run_yes(args: &[&str], out_fd: i32, _err_fd: i32, max_bytes: usize) -> i32 {
+    // Construire la ligne à répéter
+    let mut line_buf = [0u8; 256];
+    let mut line_len = 0usize;
+
+    if args.is_empty() {
+        line_buf[0] = b'y';
+        line_buf[1] = b'\n';
+        line_len = 2;
+    } else {
+        for (i, arg) in args.iter().enumerate() {
+            if i > 0 && line_len < line_buf.len() - 1 {
+                line_buf[line_len] = b' ';
+                line_len += 1;
+            }
+            let bytes = arg.as_bytes();
+            let copy = bytes.len().min(line_buf.len() - line_len - 1);
+            line_buf[line_len..line_len + copy].copy_from_slice(&bytes[..copy]);
+            line_len += copy;
+        }
+        if line_len < line_buf.len() {
+            line_buf[line_len] = b'\n';
+            line_len += 1;
+        }
+    }
+
+    let line = &line_buf[..line_len];
+    let mut written = 0usize;
+
+    loop {
+        let remaining = if max_bytes == 0 {
+            line_len
+        } else {
+            let left = max_bytes.saturating_sub(written);
+            if left == 0 {
+                return 0;
+            }
+            left.min(line_len)
+        };
+
+        let chunk = &line[..remaining];
+        let n = sys_write(out_fd, chunk);
+        if n <= 0 {
+            return 0;
+        }
+        written = written.saturating_add(n as usize);
+
+        if max_bytes > 0 && written >= max_bytes {
+            return 0;
+        }
+    }
+}
+
+/// Utilitaire `printf` : formate et imprime une chaîne selon un format C-like.
+///
+/// Spécificateurs supportés : `%d`, `%i`, `%u`, `%x`, `%X`, `%o`, `%s`, `%c`, `%%`.
+/// Séquences d'échappement dans le format : `\n`, `\t`, `\r`, `\\`.
+///
+/// # Erreurs
+/// - Code 1 si aucun argument de format n'est fourni.
+pub fn run_printf(args: &[&str], out_fd: i32, err_fd: i32) -> i32 {
+    if args.is_empty() {
+        let _ = sys_write(err_fd, b"printf: format manquant\n");
+        return 1;
+    }
+
+    let fmt = args[0].as_bytes();
+    let mut arg_idx = 1usize;
+    let mut out_buf = [0u8; 1024];
+    let mut out_len = 0usize;
+
+    // Émet un octet dans le buffer de sortie
+    macro_rules! emit {
+        ($b:expr) => {
+            if out_len < out_buf.len() {
+                out_buf[out_len] = $b;
+                out_len += 1;
+            }
+        };
+    }
+
+    let mut i = 0usize;
+    while i < fmt.len() {
+        let ch = fmt[i];
+        if ch == b'\\' && i + 1 < fmt.len() {
+            i += 1;
+            match fmt[i] {
+                b'n' => emit!(b'\n'),
+                b't' => emit!(b'\t'),
+                b'r' => emit!(b'\r'),
+                b'\\' => emit!(b'\\'),
+                b'0' => emit!(b'\0'),
+                other => {
+                    emit!(b'\\');
+                    emit!(other);
+                }
+            }
+        } else if ch == b'%' && i + 1 < fmt.len() {
+            i += 1;
+            // Largeur optionnelle et flags (simplifiés)
+            let mut width = 0u32;
+            let mut zero_pad = false;
+            if fmt[i] == b'0' {
+                zero_pad = true;
+                i += 1;
+            }
+            while i < fmt.len() && fmt[i].is_ascii_digit() {
+                width = width * 10 + (fmt[i] - b'0') as u32;
+                i += 1;
+            }
+            if i >= fmt.len() {
+                break;
+            }
+            match fmt[i] {
+                b'%' => emit!(b'%'),
+                b'd' | b'i' => {
+                    let val: i64 = if arg_idx < args.len() {
+                        parse_i64(args[arg_idx])
+                    } else {
+                        0
+                    };
+                    if arg_idx < args.len() {
+                        arg_idx += 1;
+                    }
+                    let mut fbuf = [0u8; 32];
+                    let flen = fmt_i64_into_buf(&mut fbuf, val, width as usize, zero_pad);
+                    for &b in &fbuf[..flen] {
+                        emit!(b);
+                    }
+                }
+                b'u' => {
+                    let val: u64 = if arg_idx < args.len() {
+                        parse_u64(args[arg_idx])
+                    } else {
+                        0
+                    };
+                    if arg_idx < args.len() {
+                        arg_idx += 1;
+                    }
+                    let mut fbuf = [0u8; 32];
+                    let flen = fmt_u64_in_buf(&mut fbuf, val, width as usize, zero_pad, 10, false);
+                    for &b in &fbuf[..flen] {
+                        emit!(b);
+                    }
+                }
+                b'x' => {
+                    let val: u64 = if arg_idx < args.len() {
+                        parse_u64(args[arg_idx])
+                    } else {
+                        0
+                    };
+                    if arg_idx < args.len() {
+                        arg_idx += 1;
+                    }
+                    let mut fbuf = [0u8; 32];
+                    let flen = fmt_u64_in_buf(&mut fbuf, val, width as usize, zero_pad, 16, false);
+                    for &b in &fbuf[..flen] {
+                        emit!(b);
+                    }
+                }
+                b'X' => {
+                    let val: u64 = if arg_idx < args.len() {
+                        parse_u64(args[arg_idx])
+                    } else {
+                        0
+                    };
+                    if arg_idx < args.len() {
+                        arg_idx += 1;
+                    }
+                    let mut fbuf = [0u8; 32];
+                    let flen = fmt_u64_in_buf(&mut fbuf, val, width as usize, zero_pad, 16, true);
+                    for &b in &fbuf[..flen] {
+                        emit!(b);
+                    }
+                }
+                b'o' => {
+                    let val: u64 = if arg_idx < args.len() {
+                        parse_u64(args[arg_idx])
+                    } else {
+                        0
+                    };
+                    if arg_idx < args.len() {
+                        arg_idx += 1;
+                    }
+                    let mut fbuf = [0u8; 32];
+                    let flen = fmt_u64_in_buf(&mut fbuf, val, width as usize, zero_pad, 8, false);
+                    for &b in &fbuf[..flen] {
+                        emit!(b);
+                    }
+                }
+                b's' => {
+                    let s = if arg_idx < args.len() {
+                        args[arg_idx].as_bytes()
+                    } else {
+                        b""
+                    };
+                    if arg_idx < args.len() {
+                        arg_idx += 1;
+                    }
+                    for &b in s {
+                        emit!(b);
+                    }
+                }
+                b'c' => {
+                    let c = if arg_idx < args.len() && !args[arg_idx].is_empty() {
+                        args[arg_idx].as_bytes()[0]
+                    } else {
+                        0
+                    };
+                    if arg_idx < args.len() {
+                        arg_idx += 1;
+                    }
+                    emit!(c);
+                }
+                _ => {
+                    emit!(b'%');
+                    emit!(fmt[i]);
+                }
+            }
+        } else {
+            emit!(ch);
+        }
+        i += 1;
+    }
+
+    let _ = sys_write(out_fd, &out_buf[..out_len]);
+    0
+}
+
+/// Parse un entier signé depuis une chaîne ASCII (décimal, 0x hexa, 0 octal).
+fn parse_i64(s: &str) -> i64 {
+    let s = s.trim();
+    if let Some(rest) = s.strip_prefix('-') {
+        -(parse_u64(rest) as i64)
+    } else {
+        parse_u64(s) as i64
+    }
+}
+
+/// Parse un entier non signé depuis une chaîne ASCII (décimal, 0x hexa, 0 octal).
+fn parse_u64(s: &str) -> u64 {
+    let s = s.trim();
+    if s.starts_with("0x") || s.starts_with("0X") {
+        u64::from_str_radix(&s[2..], 16).unwrap_or(0)
+    } else if s.len() > 1 && s.starts_with('0') {
+        u64::from_str_radix(&s[1..], 8).unwrap_or(0)
+    } else {
+        let mut v = 0u64;
+        for b in s.bytes() {
+            if b.is_ascii_digit() {
+                v = v.saturating_mul(10).saturating_add((b - b'0') as u64);
+            }
+        }
+        v
+    }
+}
+
+/// Formate un entier signé avec largeur et padding.
+/// Formate un entier signé dans le buffer fourni ; retourne la longueur de la représentation.
+///
+/// # Safety
+/// Le buffer doit avoir une capacité d'au moins 24 octets.
+fn fmt_i64_into_buf(buf: &mut [u8; 32], val: i64, width: usize, zero_pad: bool) -> usize {
+    let negative = val < 0;
+    let abs_val = if negative {
+        (val as u64).wrapping_neg()
+    } else {
+        val as u64
+    };
+    let s = fmt_u64_into(buf, abs_val, width, zero_pad, 10, false, negative);
+    s.len()
+}
+
+/// Formate un entier non signé dans le buffer fourni ; retourne la longueur de la représentation.
+fn fmt_u64_in_buf(
+    buf: &mut [u8; 32],
+    val: u64,
+    width: usize,
+    zero_pad: bool,
+    base: u64,
+    upper: bool,
+) -> usize {
+    let s = fmt_u64_into(buf, val, width, zero_pad, base, upper, false);
+    s.len()
+}
+
+/// Conversion entière dans un buffer mutable ; retourne la tranche ASCII produite.
+fn fmt_u64_into(
+    buf: &mut [u8; 32],
+    val: u64,
+    width: usize,
+    zero_pad: bool,
+    base: u64,
+    upper: bool,
+    negative: bool,
+) -> &[u8] {
+    let digits = b"0123456789abcdef";
+    let digits_up = b"0123456789ABCDEF";
+    let digit_set = if upper { digits_up } else { digits };
+
+    // Écrire les chiffres à rebours
+    let mut tmp = [0u8; 24];
+    let mut tmp_len = 0usize;
+    let mut v = val;
+    if v == 0 {
+        tmp[0] = b'0';
+        tmp_len = 1;
+    } else {
+        while v > 0 && tmp_len < tmp.len() {
+            tmp[tmp_len] = digit_set[(v % base) as usize];
+            v /= base;
+            tmp_len += 1;
+        }
+    }
+
+    // Construire dans buf (signe + padding + chiffres)
+    let sign_len = if negative { 1 } else { 0 };
+    let num_len = tmp_len + sign_len;
+    let pad_len = width.saturating_sub(num_len);
+
+    let mut pos = 0usize;
+    if zero_pad {
+        if negative && pos < buf.len() {
+            buf[pos] = b'-';
+            pos += 1;
+        }
+        for _ in 0..pad_len {
+            if pos < buf.len() {
+                buf[pos] = b'0';
+                pos += 1;
+            }
+        }
+        if !negative {
+            // signe déjà géré
+        }
+    } else {
+        for _ in 0..pad_len {
+            if pos < buf.len() {
+                buf[pos] = b' ';
+                pos += 1;
+            }
+        }
+        if negative && pos < buf.len() {
+            buf[pos] = b'-';
+            pos += 1;
+        }
+    }
+    for k in (0..tmp_len).rev() {
+        if pos < buf.len() {
+            buf[pos] = tmp[k];
+            pos += 1;
+        }
+    }
+
+    &buf[..pos]
+}
+
+/// Utilitaire `expr` : évalue une expression arithmétique ou de comparaison POSIX.
+///
+/// Syntaxe : `expr VALEUR OP VALEUR`
+///
+/// Opérateurs arithmétiques : `+`, `-`, `*`, `/`, `%`
+/// Opérateurs de comparaison : `=`, `!=`, `<`, `<=`, `>`, `>=`
+/// Opérateurs logiques : `|`, `&`
+///
+/// # Codes de retour
+/// - 0 : résultat non-nul ou non-vide (vrai).
+/// - 1 : résultat nul ou vide (faux).
+/// - 2 : erreur de syntaxe ou division par zéro.
+pub fn run_expr(args: &[&str], out_fd: i32, err_fd: i32) -> i32 {
+    if args.len() < 3 {
+        let _ = sys_write(err_fd, b"expr: syntaxe: expr VAL OP VAL\n");
+        return 2;
+    }
+
+    let lhs_str = args[0].trim();
+    let op = args[1].trim();
+    let rhs_str = args[2].trim();
+
+    // Tente une évaluation entière
+    let lhs = parse_i64(lhs_str);
+    let rhs = parse_i64(rhs_str);
+
+    let result: i64 = match op {
+        "+" => lhs.saturating_add(rhs),
+        "-" => lhs.saturating_sub(rhs),
+        "*" => lhs.saturating_mul(rhs),
+        "/" => {
+            if rhs == 0 {
+                let _ = sys_write(err_fd, b"expr: division par zero\n");
+                return 2;
+            }
+            lhs / rhs
+        }
+        "%" => {
+            if rhs == 0 {
+                let _ = sys_write(err_fd, b"expr: division par zero\n");
+                return 2;
+            }
+            lhs % rhs
+        }
+        "=" => {
+            if lhs == rhs {
+                1
+            } else {
+                0
+            }
+        }
+        "!=" => {
+            if lhs != rhs {
+                1
+            } else {
+                0
+            }
+        }
+        "<" => {
+            if lhs < rhs {
+                1
+            } else {
+                0
+            }
+        }
+        "<=" => {
+            if lhs <= rhs {
+                1
+            } else {
+                0
+            }
+        }
+        ">" => {
+            if lhs > rhs {
+                1
+            } else {
+                0
+            }
+        }
+        ">=" => {
+            if lhs >= rhs {
+                1
+            } else {
+                0
+            }
+        }
+        "|" => {
+            if lhs != 0 {
+                lhs
+            } else {
+                rhs
+            }
+        }
+        "&" => {
+            if lhs != 0 && rhs != 0 {
+                lhs
+            } else {
+                0
+            }
+        }
+        _ => {
+            let _ = sys_write(err_fd, b"expr: operateur inconnu\n");
+            return 2;
+        }
+    };
+
+    // Émettre le résultat
+    let mut rbuf = [0u8; 32];
+    let rlen = fmt_i64_into_buf(&mut rbuf, result, 0, false);
+    let _ = sys_write(out_fd, &rbuf[..rlen]);
+    let _ = sys_write(out_fd, b"\n");
+
+    if result == 0 {
+        1
+    } else {
+        0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -8015,5 +8926,250 @@ mod tests {
         assert_eq!(code6, 1);
         sys_close(err_w6);
         sys_close(err_r6);
+    }
+
+    #[test]
+    fn test_seq_execution() {
+        let mut buf = [0u8; 256];
+
+        // 1. Séquence simple : seq 3 -> "1\n2\n3\n"
+        let (r1, w1) = crate::vfs::pipe().expect("pipe seq 1");
+        let code1 = run_seq(&["3"], w1, 2);
+        assert_eq!(code1, 0);
+        sys_close(w1);
+        let n1 = sys_read(r1, &mut buf);
+        assert_eq!(&buf[..n1 as usize], b"1\n2\n3\n");
+        sys_close(r1);
+
+        // 2. Séquence avec premier et dernier : seq 3 5 -> "3\n4\n5\n"
+        let (r2, w2) = crate::vfs::pipe().expect("pipe seq 2");
+        let code2 = run_seq(&["3", "5"], w2, 2);
+        assert_eq!(code2, 0);
+        sys_close(w2);
+        let n2 = sys_read(r2, &mut buf);
+        assert_eq!(&buf[..n2 as usize], b"3\n4\n5\n");
+        sys_close(r2);
+
+        // 3. Séquence avec pas et décroissance : seq 5 -2 1 -> "5\n3\n1\n"
+        let (r3, w3) = crate::vfs::pipe().expect("pipe seq 3");
+        let code3 = run_seq(&["5", "-2", "1"], w3, 2);
+        assert_eq!(code3, 0);
+        sys_close(w3);
+        let n3 = sys_read(r3, &mut buf);
+        assert_eq!(&buf[..n3 as usize], b"5\n3\n1\n");
+        sys_close(r3);
+
+        // 4. Séparateur personnalisé : seq -s , 1 4 -> "1,2,3,4\n"
+        let (r4, w4) = crate::vfs::pipe().expect("pipe seq 4");
+        let code4 = run_seq(&["-s", ",", "1", "4"], w4, 2);
+        assert_eq!(code4, 0);
+        sys_close(w4);
+        let n4 = sys_read(r4, &mut buf);
+        assert_eq!(&buf[..n4 as usize], b"1,2,3,4\n");
+        sys_close(r4);
+
+        // 5. Largeur égale (-w) : seq -w 8 10 -> "08\n09\n10\n"
+        let (r5, w5) = crate::vfs::pipe().expect("pipe seq 5");
+        let code5 = run_seq(&["-w", "8", "10"], w5, 2);
+        assert_eq!(code5, 0);
+        sys_close(w5);
+        let n5 = sys_read(r5, &mut buf);
+        assert_eq!(&buf[..n5 as usize], b"08\n09\n10\n");
+        sys_close(r5);
+
+        // 6. Format printf (-f) : seq -f "val=%02d" 1 3 -> "val=01\nval=02\nval=03\n"
+        let (r6, w6) = crate::vfs::pipe().expect("pipe seq 6");
+        let code6 = run_seq(&["-f", "val=%02d", "1", "3"], w6, 2);
+        assert_eq!(code6, 0);
+        sys_close(w6);
+        let n6 = sys_read(r6, &mut buf);
+        assert_eq!(&buf[..n6 as usize], b"val=01\nval=02\nval=03\n");
+        sys_close(r6);
+
+        // 7. Nombres décimaux : seq 0.5 0.5 1.5 -> "0.5\n1.0\n1.5\n"
+        let (r7, w7) = crate::vfs::pipe().expect("pipe seq 7");
+        let code7 = run_seq(&["0.5", "0.5", "1.5"], w7, 2);
+        assert_eq!(code7, 0);
+        sys_close(w7);
+        let n7 = sys_read(r7, &mut buf);
+        assert_eq!(&buf[..n7 as usize], b"0.5\n1.0\n1.5\n");
+        sys_close(r7);
+
+        // 8. Incrément zéro (erreur code 1)
+        let (err_r8, err_w8) = crate::vfs::pipe().expect("pipe seq err 1");
+        let code8 = run_seq(&["1", "0", "5"], 1, err_w8);
+        assert_eq!(code8, 1);
+        sys_close(err_w8);
+        sys_close(err_r8);
+
+        // 9. Argument manquant (erreur code 1)
+        let (err_r9, err_w9) = crate::vfs::pipe().expect("pipe seq err 2");
+        let code9 = run_seq(&[], 1, err_w9);
+        assert_eq!(code9, 1);
+        sys_close(err_w9);
+        sys_close(err_r9);
+    }
+
+    #[test]
+    fn test_yes_execution() {
+        let mut buf = [0u8; 128];
+
+        // 1. yes sans argument produit "y\n" répété
+        let (r1, w1) = crate::vfs::pipe().expect("pipe yes 1");
+        // On écrit 6 octets max dans le pipe puis on ferme pour simuler consommateur limité
+        let code1 = run_yes(&[], w1, 2, 6);
+        assert_eq!(code1, 0);
+        sys_close(w1);
+        let n1 = sys_read(r1, &mut buf);
+        assert_eq!(&buf[..n1 as usize], b"y\ny\ny\n");
+        sys_close(r1);
+
+        // 2. yes avec argument "oui" produit "oui\n" répété
+        let (r2, w2) = crate::vfs::pipe().expect("pipe yes 2");
+        let code2 = run_yes(&["oui"], w2, 2, 8);
+        assert_eq!(code2, 0);
+        sys_close(w2);
+        let n2 = sys_read(r2, &mut buf);
+        assert_eq!(&buf[..n2 as usize], b"oui\noui\n");
+        sys_close(r2);
+
+        // 3. yes avec arguments multiples produit "a b\n" répété
+        let (r3, w3) = crate::vfs::pipe().expect("pipe yes 3");
+        let code3 = run_yes(&["a", "b"], w3, 2, 8);
+        assert_eq!(code3, 0);
+        sys_close(w3);
+        let n3 = sys_read(r3, &mut buf);
+        assert_eq!(&buf[..n3 as usize], b"a b\na b\n");
+        sys_close(r3);
+    }
+
+    #[test]
+    fn test_printf_execution() {
+        let mut buf = [0u8; 256];
+
+        // 1. Format simple sans substitution
+        let (r1, w1) = crate::vfs::pipe().expect("pipe printf 1");
+        let code1 = run_printf(&["hello\\n"], w1, 2);
+        assert_eq!(code1, 0);
+        sys_close(w1);
+        let n1 = sys_read(r1, &mut buf);
+        assert_eq!(&buf[..n1 as usize], b"hello\n");
+        sys_close(r1);
+
+        // 2. Format %d entier
+        let (r2, w2) = crate::vfs::pipe().expect("pipe printf 2");
+        let code2 = run_printf(&["val=%d\\n", "42"], w2, 2);
+        assert_eq!(code2, 0);
+        sys_close(w2);
+        let n2 = sys_read(r2, &mut buf);
+        assert_eq!(&buf[..n2 as usize], b"val=42\n");
+        sys_close(r2);
+
+        // 3. Format %s chaîne
+        let (r3, w3) = crate::vfs::pipe().expect("pipe printf 3");
+        let code3 = run_printf(&["%s world\\n", "hello"], w3, 2);
+        assert_eq!(code3, 0);
+        sys_close(w3);
+        let n3 = sys_read(r3, &mut buf);
+        assert_eq!(&buf[..n3 as usize], b"hello world\n");
+        sys_close(r3);
+
+        // 4. Format %x hexadécimal
+        let (r4, w4) = crate::vfs::pipe().expect("pipe printf 4");
+        let code4 = run_printf(&["0x%x\\n", "255"], w4, 2);
+        assert_eq!(code4, 0);
+        sys_close(w4);
+        let n4 = sys_read(r4, &mut buf);
+        assert_eq!(&buf[..n4 as usize], b"0xff\n");
+        sys_close(r4);
+
+        // 5. Argument manquant (erreur code 1)
+        let (err_r5, err_w5) = crate::vfs::pipe().expect("pipe printf err");
+        let code5 = run_printf(&[], 1, err_w5);
+        assert_eq!(code5, 1);
+        sys_close(err_w5);
+        sys_close(err_r5);
+    }
+
+    #[test]
+    fn test_expr_execution() {
+        let mut buf = [0u8; 128];
+
+        // 1. Addition
+        let (r1, w1) = crate::vfs::pipe().expect("pipe expr 1");
+        let code1 = run_expr(&["3", "+", "4"], w1, 2);
+        assert_eq!(code1, 0);
+        sys_close(w1);
+        let n1 = sys_read(r1, &mut buf);
+        assert_eq!(&buf[..n1 as usize], b"7\n");
+        sys_close(r1);
+
+        // 2. Soustraction
+        let (r2, w2) = crate::vfs::pipe().expect("pipe expr 2");
+        let code2 = run_expr(&["10", "-", "3"], w2, 2);
+        assert_eq!(code2, 0);
+        sys_close(w2);
+        let n2 = sys_read(r2, &mut buf);
+        assert_eq!(&buf[..n2 as usize], b"7\n");
+        sys_close(r2);
+
+        // 3. Multiplication
+        let (r3, w3) = crate::vfs::pipe().expect("pipe expr 3");
+        let code3 = run_expr(&["6", "*", "7"], w3, 2);
+        assert_eq!(code3, 0);
+        sys_close(w3);
+        let n3 = sys_read(r3, &mut buf);
+        assert_eq!(&buf[..n3 as usize], b"42\n");
+        sys_close(r3);
+
+        // 4. Division entière
+        let (r4, w4) = crate::vfs::pipe().expect("pipe expr 4");
+        let code4 = run_expr(&["17", "/", "5"], w4, 2);
+        assert_eq!(code4, 0);
+        sys_close(w4);
+        let n4 = sys_read(r4, &mut buf);
+        assert_eq!(&buf[..n4 as usize], b"3\n");
+        sys_close(r4);
+
+        // 5. Modulo
+        let (r5, w5) = crate::vfs::pipe().expect("pipe expr 5");
+        let code5 = run_expr(&["17", "%", "5"], w5, 2);
+        assert_eq!(code5, 0);
+        sys_close(w5);
+        let n5 = sys_read(r5, &mut buf);
+        assert_eq!(&buf[..n5 as usize], b"2\n");
+        sys_close(r5);
+
+        // 6. Comparaison égalité (résultat 1 si vrai)
+        let (r6, w6) = crate::vfs::pipe().expect("pipe expr 6");
+        let code6 = run_expr(&["5", "=", "5"], w6, 2);
+        assert_eq!(code6, 0);
+        sys_close(w6);
+        let n6 = sys_read(r6, &mut buf);
+        assert_eq!(&buf[..n6 as usize], b"1\n");
+        sys_close(r6);
+
+        // 7. Comparaison inégalité (résultat 0, code 1)
+        let (r7, w7) = crate::vfs::pipe().expect("pipe expr 7");
+        let code7 = run_expr(&["3", "=", "5"], w7, 2);
+        assert_eq!(code7, 1);
+        sys_close(w7);
+        let n7 = sys_read(r7, &mut buf);
+        assert_eq!(&buf[..n7 as usize], b"0\n");
+        sys_close(r7);
+
+        // 8. Division par zéro (erreur code 2)
+        let (err_r8, err_w8) = crate::vfs::pipe().expect("pipe expr err");
+        let code8 = run_expr(&["5", "/", "0"], 1, err_w8);
+        assert_eq!(code8, 2);
+        sys_close(err_w8);
+        sys_close(err_r8);
+
+        // 9. Opérateur inconnu (erreur code 2)
+        let (err_r9, err_w9) = crate::vfs::pipe().expect("pipe expr err2");
+        let code9 = run_expr(&["5", "^", "2"], 1, err_w9);
+        assert_eq!(code9, 2);
+        sys_close(err_w9);
+        sys_close(err_r9);
     }
 }

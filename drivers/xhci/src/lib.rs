@@ -170,11 +170,12 @@ pub struct TransferStatus {
     pub completion_code: u8,
 }
 
-/// Anneau de transfert xHCI dédié à un endpoint spécifique (Bulk ou Isochrone)
+/// Anneau de transfert xHCI dédié à un endpoint spécifique (Bulk, Isochrone ou Interruption)
 pub struct EndpointTransferRing {
     pub endpoint_id: u8,
     pub ring: XhciRing,
     pub is_isoch: bool,
+    pub is_interrupt: bool,
     pub active: bool,
     pub total_bytes_transferred: u64,
     pub last_status: TransferStatus,
@@ -194,6 +195,31 @@ impl EndpointTransferRing {
             endpoint_id,
             ring: XhciRing::new(),
             is_isoch,
+            is_interrupt: false,
+            active: false,
+            total_bytes_transferred: 0,
+            last_status: TransferStatus {
+                trb_idx: 0,
+                bytes_transferred: 0,
+                completed: false,
+                completion_code: 0,
+            },
+            streams_enabled: false,
+            streams: [
+                BulkStreamRing::new(0),
+                BulkStreamRing::new(0),
+                BulkStreamRing::new(0),
+                BulkStreamRing::new(0),
+            ],
+        }
+    }
+
+    pub const fn new_interrupt(endpoint_id: u8) -> Self {
+        Self {
+            endpoint_id,
+            ring: XhciRing::new(),
+            is_isoch: false,
+            is_interrupt: true,
             active: false,
             total_bytes_transferred: 0,
             last_status: TransferStatus {
@@ -216,6 +242,7 @@ impl EndpointTransferRing {
     pub fn reset(&mut self) {
         self.ring.reset();
         self.active = false;
+        self.is_interrupt = false;
         self.total_bytes_transferred = 0;
         self.last_status = TransferStatus::default();
         self.streams_enabled = false;
@@ -787,6 +814,11 @@ impl UsbEndpointDescriptor {
     pub fn is_isochronous(&self) -> bool {
         self.transfer_type() == UsbEndpointType::Isochronous
     }
+
+    #[inline]
+    pub fn is_interrupt(&self) -> bool {
+        self.transfer_type() == UsbEndpointType::Interrupt
+    }
 }
 
 /// Descripteur SuperSpeed Endpoint Companion (USB 3.0 section 9.6.7)
@@ -846,6 +878,11 @@ impl UsbDecodedEndpoint {
     #[inline]
     pub fn is_isochronous(&self) -> bool {
         self.ep_type == UsbEndpointType::Isochronous
+    }
+
+    #[inline]
+    pub fn is_interrupt(&self) -> bool {
+        self.ep_type == UsbEndpointType::Interrupt
     }
 
     #[inline]
@@ -1428,6 +1465,22 @@ impl XhciInterrupter {
         }
         self.events_handled = self.events_handled.wrapping_add(1);
     }
+
+    /// Configure le registre de modération matérielle des interruptions IMOD (Spécification xHCI 1.2 section 5.5.2.2).
+    /// `interval_250ns` spécifie la période de modération minimale en unités de 250 nanosecondes (ex: 4000 = 1000 µs = 1 ms).
+    pub fn set_moderation(&mut self, interval_250ns: u16) {
+        self.imod = (self.imod & 0xFFFF_0000) | (interval_250ns as u32);
+    }
+
+    /// Retourne l'intervalle de modération configuré en nanosecondes.
+    pub fn moderation_interval_ns(&self) -> u32 {
+        (self.imod & 0xFFFF) * 250
+    }
+
+    /// Retourne l'intervalle de modération configuré en microsecondes.
+    pub fn moderation_interval_us(&self) -> u32 {
+        self.moderation_interval_ns() / 1000
+    }
 }
 
 /// Événement de détection à chaud (Hot-Plug) sur un port root-hub USB
@@ -1622,6 +1675,50 @@ pub struct IsochEventStatus {
 }
 
 // ============================================================================
+// Modération Matérielle et Throttling des Endpoints d'Interruption HID (Clavier / Souris)
+// ============================================================================
+
+/// Contexte de modération matérielle et de limitation de débit (throttling) pour un endpoint d'interruption HID
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HidInterruptThrottleContext {
+    pub endpoint_id: u8,
+    pub is_mouse: bool,
+    pub b_interval: u8,
+    pub min_interval_us: u32,
+    pub last_dispatched_microframe: u32,
+    pub total_interrupts: u64,
+    pub throttled_count: u64,
+    pub delivered_count: u64,
+    pub debounce_enabled: bool,
+    pub last_report: [u8; 8],
+    pub last_report_len: usize,
+}
+
+impl HidInterruptThrottleContext {
+    pub const fn new(
+        endpoint_id: u8,
+        is_mouse: bool,
+        b_interval: u8,
+        min_interval_us: u32,
+        debounce_enabled: bool,
+    ) -> Self {
+        Self {
+            endpoint_id,
+            is_mouse,
+            b_interval,
+            min_interval_us,
+            last_dispatched_microframe: 0,
+            total_interrupts: 0,
+            throttled_count: 0,
+            delivered_count: 0,
+            debounce_enabled,
+            last_report: [0u8; 8],
+            last_report_len: 0,
+        }
+    }
+}
+
+// ============================================================================
 // Contrôleur xHCI en Espace Utilisateur (Ring 3)
 // ============================================================================
 
@@ -1637,6 +1734,7 @@ pub struct XhciController {
     pub cmd_ring: XhciRing,
     pub ep_rings: [EndpointTransferRing; MAX_ENDPOINTS],
     pub isoch_streams: [Option<IsochStreamContext>; MAX_ENDPOINTS],
+    pub hid_throttles: [Option<HidInterruptThrottleContext>; MAX_ENDPOINTS],
     pub keyboard: UsbKeyboardState,
     pub mouse: UsbMouseState,
     pub interrupter: XhciInterrupter,
@@ -1672,6 +1770,7 @@ impl XhciController {
             cmd_ring: XhciRing::new(),
             ep_rings,
             isoch_streams: [None; MAX_ENDPOINTS],
+            hid_throttles: [None; MAX_ENDPOINTS],
             keyboard: UsbKeyboardState {
                 left_ctrl: false,
                 left_shift: false,
@@ -1717,11 +1816,41 @@ impl XhciController {
         ep.reset();
         ep.endpoint_id = ep_id;
         ep.is_isoch = is_isoch;
+        ep.is_interrupt = false;
         ep.active = true;
         Ok(())
     }
 
-    /// Configure automatiquement les Transfer Rings des endpoints Bulk et Isochrone
+    /// Configure et active un endpoint d'interruption HID (Clavier ou Souris) avec contexte de modération/throttling.
+    pub fn configure_hid_interrupt_endpoint(
+        &mut self,
+        ep_id: u8,
+        is_mouse: bool,
+        b_interval: u8,
+        min_interval_us: u32,
+        debounce_enabled: bool,
+    ) -> Result<(), SysError> {
+        if ep_id as usize >= MAX_ENDPOINTS {
+            return Err(SysError::InvalidArgument);
+        }
+        let ep = &mut self.ep_rings[ep_id as usize];
+        ep.reset();
+        ep.endpoint_id = ep_id;
+        ep.is_isoch = false;
+        ep.is_interrupt = true;
+        ep.active = true;
+
+        self.hid_throttles[ep_id as usize] = Some(HidInterruptThrottleContext::new(
+            ep_id,
+            is_mouse,
+            b_interval,
+            min_interval_us,
+            debounce_enabled,
+        ));
+        Ok(())
+    }
+
+    /// Configure automatiquement les Transfer Rings des endpoints Bulk, Isochrone et Interruption
     /// à partir d'une configuration USB décodée par UsbConfigParser.
     /// Retourne le nombre d'anneaux de transfert configurés.
     pub fn configure_endpoints_from_decoded_config(
@@ -1731,10 +1860,18 @@ impl XhciController {
         let mut configured = 0;
         for iface in &config.interfaces[..config.interface_count] {
             for ep in &iface.endpoints[..iface.endpoint_count] {
-                if ep.is_bulk() || ep.is_isochronous() {
+                if ep.is_bulk() || ep.is_isochronous() || ep.is_interrupt() {
                     let ep_id = ep.dci;
                     if (ep_id as usize) < MAX_ENDPOINTS {
-                        self.configure_endpoint_ring(ep_id, ep.is_isochronous())?;
+                        if ep.is_interrupt() {
+                            let is_mouse = (ep.max_packet_size & 0x07FF) <= 4;
+                            let b_interval = ep.interval;
+                            self.configure_hid_interrupt_endpoint(
+                                ep_id, is_mouse, b_interval, 1000, true,
+                            )?;
+                        } else {
+                            self.configure_endpoint_ring(ep_id, ep.is_isochronous())?;
+                        }
                         configured += 1;
                     }
                 }
@@ -2321,12 +2458,105 @@ impl XhciController {
             .push(input_ctx_iova, control_extra, TRB_TYPE_CONFIGURE_EP)
     }
 
+    /// Soumet un transfert d'interruption HID (TRB Normal avec drapeau IOC optionnel) sur l'anneau d'interruption.
+    pub fn queue_interrupt_transfer(
+        &mut self,
+        ep_id: u8,
+        data_iova: u64,
+        length: u32,
+        ioc: bool,
+    ) -> Result<usize, SysError> {
+        if !self.ready {
+            return Err(SysError::ResourceBusy);
+        }
+        if ep_id as usize >= MAX_ENDPOINTS {
+            return Err(SysError::InvalidArgument);
+        }
+        let ep = &mut self.ep_rings[ep_id as usize];
+        if !ep.active || !ep.is_interrupt {
+            return Err(SysError::ResourceBusy);
+        }
+
+        let cycle = ep.ring.cycle_bit;
+        let normal_trb = Trb::normal(data_iova, length, cycle, ioc, true);
+        let idx = ep.ring.enqueue_idx;
+        let next_idx = (idx + 1) % RING_ENTRIES;
+
+        if next_idx == 0 {
+            let link = Trb::link(0, ep.ring.cycle_bit, true);
+            ep.ring.trbs[idx] = link;
+            ep.ring.cycle_bit = !ep.ring.cycle_bit;
+            ep.ring.enqueue_idx = 0;
+            return Ok(idx);
+        }
+
+        ep.ring.trbs[idx] = normal_trb;
+        ep.ring.enqueue_idx = next_idx;
+        Ok(idx)
+    }
+
     /// Traite un rapport USB HID reçu d'un périphérique (clavier ou souris).
     pub fn handle_hid_input(&mut self, is_mouse: bool, report: &[u8]) {
         if is_mouse {
             self.mouse.decode_report(report);
         } else {
             self.keyboard.decode_report(report);
+        }
+    }
+
+    /// Filtre et traite un rapport HID avec throttling et modération temporelle matérielle.
+    /// Renvoie `Ok(true)` si le rapport a été admis et délivré, ou `Ok(false)` s'il a été modéré/bloqué.
+    pub fn process_hid_interrupt_report(
+        &mut self,
+        ep_id: u8,
+        report: &[u8],
+        current_microframe: u32,
+    ) -> Result<bool, SysError> {
+        if ep_id as usize >= MAX_ENDPOINTS {
+            return Err(SysError::InvalidArgument);
+        }
+
+        let is_mouse;
+        let should_throttle;
+
+        {
+            let throttle = match self.hid_throttles[ep_id as usize].as_mut() {
+                Some(ctx) => ctx,
+                None => return Err(SysError::InvalidArgument),
+            };
+
+            throttle.total_interrupts = throttle.total_interrupts.wrapping_add(1);
+            is_mouse = throttle.is_mouse;
+
+            let elapsed_microframes = (current_microframe
+                .wrapping_sub(throttle.last_dispatched_microframe))
+                & MFINDEX_MASK;
+            let min_microframes_required = throttle.min_interval_us / MFINDEX_MICROFRAME_US;
+
+            let is_duplicate = throttle.debounce_enabled
+                && throttle.last_report_len == report.len()
+                && throttle.last_report[..report.len().min(8)] == report[..report.len().min(8)];
+
+            if (throttle.delivered_count > 0 && elapsed_microframes < min_microframes_required)
+                || is_duplicate
+            {
+                throttle.throttled_count = throttle.throttled_count.wrapping_add(1);
+                should_throttle = true;
+            } else {
+                throttle.delivered_count = throttle.delivered_count.wrapping_add(1);
+                throttle.last_dispatched_microframe = current_microframe;
+                let copy_len = report.len().min(8);
+                throttle.last_report[..copy_len].copy_from_slice(&report[..copy_len]);
+                throttle.last_report_len = report.len();
+                should_throttle = false;
+            }
+        }
+
+        if !should_throttle {
+            self.handle_hid_input(is_mouse, report);
+            Ok(true)
+        } else {
+            Ok(false)
         }
     }
 
@@ -2345,6 +2575,9 @@ impl XhciController {
         self.cmd_ring.reset();
         for ep in self.ep_rings.iter_mut() {
             ep.reset();
+        }
+        for throttle in self.hid_throttles.iter_mut() {
+            *throttle = None;
         }
         self.ready = true;
         Ok(())
@@ -3219,5 +3452,94 @@ mod tests {
         assert_eq!(uvc_stream.media_type, IsochMediaType::VideoUvc);
         assert_eq!(uvc_stream.mult, 3);
         assert_eq!(uvc_stream.max_burst, 7);
+    }
+
+    #[test]
+    fn test_hid_interrupt_endpoints_and_hardware_throttling() {
+        let mut ctrl = XhciController::new();
+        ctrl.ready = true;
+
+        // 1. Test du registre matériel de modération IMOD
+        ctrl.interrupter.set_moderation(4000); // 4000 * 250ns = 1 ms
+        assert_eq!(ctrl.interrupter.moderation_interval_ns(), 1_000_000);
+        assert_eq!(ctrl.interrupter.moderation_interval_us(), 1000);
+
+        // 2. Configuration d'un endpoint d'interruption HID Clavier (EP 1, IN)
+        assert!(ctrl
+            .configure_hid_interrupt_endpoint(1, false, 8, 1000, true)
+            .is_ok());
+        assert!(ctrl.ep_rings[1].active);
+        assert!(ctrl.ep_rings[1].is_interrupt);
+        assert!(!ctrl.ep_rings[1].is_isoch);
+
+        // 3. Soumission d'un transfert d'interruption TRB Normal avec IOC
+        let trb_idx = ctrl
+            .queue_interrupt_transfer(1, 0x2000_1000, 8, true)
+            .expect("Queue interrupt transfer");
+        assert_eq!(trb_idx, 0);
+        let trb = ctrl.ep_rings[1].ring.trbs[0];
+        assert_eq!(trb.parameter, 0x2000_1000);
+        assert_eq!(trb.trb_type(), TRB_TYPE_NORMAL);
+        assert!((trb.control & TRB_FLAG_IOC) != 0);
+
+        // 4. Premier rapport clavier à la microtrame 0 : Touche 'A' (code 0x04)
+        let report_a = [0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00];
+        let res1 = ctrl
+            .process_hid_interrupt_report(1, &report_a, 0)
+            .expect("Process report 1");
+        assert!(res1, "Le premier rapport doit être admis et délivré");
+        assert_eq!(ctrl.keyboard.first_ascii_char(), Some('a'));
+
+        // 5. Deuxième rapport à la microtrame 2 (delta = 2 < 8 microtrames requises) : Touche 'B' (code 0x05)
+        let report_b = [0x00, 0x00, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00];
+        let res2 = ctrl
+            .process_hid_interrupt_report(1, &report_b, 2)
+            .expect("Process report 2");
+        assert!(!res2, "Le rapport trop rapide doit être modéré/throttlé");
+        // Le clavier conserve l'état antérieur
+        assert_eq!(ctrl.keyboard.first_ascii_char(), Some('a'));
+
+        // 6. Troisième rapport après écoulement du délai de throttling (microtrame 10 >= 0 + 8)
+        let res3 = ctrl
+            .process_hid_interrupt_report(1, &report_b, 10)
+            .expect("Process report 3");
+        assert!(res3, "Le rapport après le délai minimal doit être délivré");
+        assert_eq!(ctrl.keyboard.first_ascii_char(), Some('b'));
+
+        // 7. Filtrage anti-rebond matériel (debounce) sur un rapport identique à microtrame 20
+        let res4 = ctrl
+            .process_hid_interrupt_report(1, &report_b, 20)
+            .expect("Process report 4 (duplicate)");
+        assert!(
+            !res4,
+            "Le rapport identique consécutif doit être filtré par le debounce"
+        );
+
+        // 8. Vérification des statistiques de throttling
+        let throttle_kb = ctrl.hid_throttles[1].unwrap();
+        assert_eq!(throttle_kb.total_interrupts, 4);
+        assert_eq!(throttle_kb.delivered_count, 2);
+        assert_eq!(throttle_kb.throttled_count, 2);
+
+        // 9. Configuration d'un endpoint Souris HID (EP 3, IN, interval 4 microtrames, sans debounce)
+        assert!(ctrl
+            .configure_hid_interrupt_endpoint(3, true, 4, 500, false)
+            .is_ok());
+        let mouse_report = [0x01, 15, (-8i8) as u8, 1]; // Clic gauche, dx=15, dy=-8, wheel=1
+        let res_m = ctrl
+            .process_hid_interrupt_report(3, &mouse_report, 0)
+            .expect("Process mouse report");
+        assert!(res_m);
+        assert!(ctrl.mouse.left_button);
+        assert!(!ctrl.mouse.right_button);
+        assert_eq!(ctrl.mouse.dx, 15);
+        assert_eq!(ctrl.mouse.dy, -8);
+        assert_eq!(ctrl.mouse.wheel, 1);
+
+        // 10. Récupération après crash : nettoyage complet des contextes
+        assert!(ctrl.recover_from_crash().is_ok());
+        assert!(ctrl.hid_throttles[1].is_none());
+        assert!(ctrl.hid_throttles[3].is_none());
+        assert!(!ctrl.ep_rings[1].active);
     }
 }
