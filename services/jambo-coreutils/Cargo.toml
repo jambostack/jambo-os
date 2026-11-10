@@ -232,5 +232,10 @@ name = "base64"
 path = "src/bin/base64.rs"
 test = false
 
+[[bin]]
+name = "sha256sum"
+path = "src/bin/sha256sum.rs"
+test = false
+
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }

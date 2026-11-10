@@ -4899,6 +4899,11 @@ impl LineReader {
     /// Lit la prochaine ligne dans `out_buf` (sans le '\n' terminal).
     /// Retourne `Some(len)` ou `None` si la fin du flux est atteinte sans aucun octet supplémentaire.
     pub fn read_line(&mut self, out_buf: &mut [u8]) -> Option<usize> {
+        self.read_record(out_buf, b'\n')
+    }
+
+    /// Lit le prochain enregistrement délimité par `delim` dans `out_buf` (sans le délimiteur terminal).
+    pub fn read_record(&mut self, out_buf: &mut [u8], delim: u8) -> Option<usize> {
         let mut out_len = 0;
         let mut found_any = false;
 
@@ -4921,8 +4926,8 @@ impl LineReader {
                 self.pos += 1;
                 found_any = true;
 
-                if b == b'\n' {
-                    if out_len > 0 && out_buf[out_len - 1] == b'\r' {
+                if b == delim {
+                    if delim == b'\n' && out_len > 0 && out_buf[out_len - 1] == b'\r' {
                         out_len -= 1;
                     }
                     return Some(out_len);
@@ -4934,7 +4939,7 @@ impl LineReader {
         }
 
         if found_any || out_len > 0 {
-            if out_len > 0 && out_buf[out_len - 1] == b'\r' {
+            if delim == b'\n' && out_len > 0 && out_buf[out_len - 1] == b'\r' {
                 out_len -= 1;
             }
             Some(out_len)
@@ -4953,12 +4958,17 @@ fn write_paste_delim(out_fd: i32, delim: PasteDelim) {
     }
 }
 
-fn process_paste_serial(mut reader: LineReader, out_fd: i32, delims: &[PasteDelim]) {
+fn process_paste_serial(
+    mut reader: LineReader,
+    out_fd: i32,
+    delims: &[PasteDelim],
+    line_delim: u8,
+) {
     let mut line_buf = [0u8; 512];
     let mut first_line = true;
     let mut delim_idx = 0;
 
-    while let Some(len) = reader.read_line(&mut line_buf) {
+    while let Some(len) = reader.read_record(&mut line_buf, line_delim) {
         if !first_line {
             let d = delims[delim_idx % delims.len()];
             write_paste_delim(out_fd, d);
@@ -4969,11 +4979,16 @@ fn process_paste_serial(mut reader: LineReader, out_fd: i32, delims: &[PasteDeli
     }
 
     if !first_line {
-        let _ = sys_write(out_fd, b"\n");
+        let _ = sys_write(out_fd, &[line_delim]);
     }
 }
 
-fn process_paste_parallel(readers: &mut [LineReader], out_fd: i32, delims: &[PasteDelim]) {
+fn process_paste_parallel(
+    readers: &mut [LineReader],
+    out_fd: i32,
+    delims: &[PasteDelim],
+    line_delim: u8,
+) {
     let k = readers.len();
     if k == 0 {
         return;
@@ -4988,7 +5003,7 @@ fn process_paste_parallel(readers: &mut [LineReader], out_fd: i32, delims: &[Pas
 
         for j in 0..k {
             let slot = &mut line_storage[j * 256..(j + 1) * 256];
-            if let Some(len) = readers[j].read_line(slot) {
+            if let Some(len) = readers[j].read_record(slot, line_delim) {
                 line_present[j] = true;
                 line_lens[j] = len;
                 any_line_read = true;
@@ -5012,13 +5027,14 @@ fn process_paste_parallel(readers: &mut [LineReader], out_fd: i32, delims: &[Pas
                 let _ = sys_write(out_fd, bytes);
             }
         }
-        let _ = sys_write(out_fd, b"\n");
+        let _ = sys_write(out_fd, &[line_delim]);
     }
 }
 
 /// Exécute l'utilitaire standard POSIX `paste` (fusion ligne à ligne de plusieurs fichiers ou flux)
 pub fn run_paste(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
     let mut serial_mode = false;
+    let mut zero_terminated = false;
     let mut delims_storage = [PasteDelim::Byte(b'\t'); 32];
     let mut delim_count = 1;
     let mut file_indices = [0usize; 16];
@@ -5039,13 +5055,27 @@ pub fn run_paste(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
             if arg == "--help" {
                 let _ = sys_write(
                     out_fd,
-                    b"Usage: paste [OPTION]... [FILE]...\nWrite lines consisting of the sequentially corresponding lines from\neach FILE, separated by TABs, to standard output.\n\nWith no FILE, or when FILE is -, read standard input.\n\n  -d, --delimiters=LIST   reuse characters from LIST instead of TABs\n  -s, --serial            paste one file at a time instead of in parallel\n      --help              display this help and exit\n",
+                    b"Usage: paste [OPTION]... [FILE]...\nWrite lines consisting of the sequentially corresponding lines from\neach FILE, separated by TABs, to standard output.\n\nWith no FILE, or when FILE is -, read standard input.\n\n  -d, --delimiters=LIST   reuse characters from LIST instead of TABs\n  -s, --serial            paste one file at a time instead of in parallel\n  -z, --zero-terminated   line delimiter is NUL, not newline\n      --help              display this help and exit\n      --version           output version information and exit\n",
+                );
+                return 0;
+            }
+
+            if arg == "--version" {
+                let _ = sys_write(
+                    out_fd,
+                    b"paste (JamboOS coreutils) 0.1.0\nCopyright (C) 2026 JamboOS Authors.\nLicense MIT or Apache-2.0.\nThis is free software: you are free to change and redistribute it.\nThere is NO WARRANTY, to the extent permitted by law.\n",
                 );
                 return 0;
             }
 
             if arg == "-s" || arg == "--serial" {
                 serial_mode = true;
+                i += 1;
+                continue;
+            }
+
+            if arg == "-z" || arg == "--zero-terminated" {
+                zero_terminated = true;
                 i += 1;
                 continue;
             }
@@ -5083,14 +5113,15 @@ pub fn run_paste(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
     }
 
     let active_delims = &delims_storage[..delim_count];
+    let line_delim = if zero_terminated { 0u8 } else { b'\n' };
 
     if file_count == 0 {
         let reader = LineReader::new(in_fd);
         if serial_mode {
-            process_paste_serial(reader, out_fd, active_delims);
+            process_paste_serial(reader, out_fd, active_delims, line_delim);
         } else {
             let mut readers = [reader];
-            process_paste_parallel(&mut readers, out_fd, active_delims);
+            process_paste_parallel(&mut readers, out_fd, active_delims, line_delim);
         }
         return 0;
     }
@@ -5101,7 +5132,7 @@ pub fn run_paste(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
             let path = args[idx];
             if path == "-" {
                 let reader = LineReader::new(in_fd);
-                process_paste_serial(reader, out_fd, active_delims);
+                process_paste_serial(reader, out_fd, active_delims, line_delim);
             } else {
                 let fd = sys_open(path, O_RDONLY);
                 if fd < 0 {
@@ -5111,7 +5142,7 @@ pub fn run_paste(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
                     exit_code = 1;
                 } else {
                     let reader = LineReader::new(fd);
-                    process_paste_serial(reader, out_fd, active_delims);
+                    process_paste_serial(reader, out_fd, active_delims, line_delim);
                     sys_close(fd);
                 }
             }
@@ -5162,7 +5193,12 @@ pub fn run_paste(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
     }
 
     if !failed {
-        process_paste_parallel(&mut readers[..actual_count], out_fd, active_delims);
+        process_paste_parallel(
+            &mut readers[..actual_count],
+            out_fd,
+            active_delims,
+            line_delim,
+        );
     }
 
     // Fermeture des descripteurs ouverts
@@ -10184,6 +10220,474 @@ pub fn run_base64(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
     }
 }
 
+// ============================================================================
+// Utilitaire POSIX / GNU coreutils : `sha256sum` (Calcul et vérification FIPS 180-4 SHA-256)
+// ============================================================================
+
+/// Hasher cryptographique SHA-256 déterministe bare-metal (#![no_std])
+#[derive(Clone, Copy)]
+pub struct Sha256Hasher {
+    state: [u32; 8],
+    buffer: [u8; 64],
+    buffer_len: usize,
+    total_bytes: u64,
+}
+
+impl Sha256Hasher {
+    const K: [u32; 64] = [
+        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
+        0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
+        0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f,
+        0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc,
+        0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+        0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116,
+        0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
+        0xc67178f2,
+    ];
+
+    pub const fn new() -> Self {
+        Self {
+            state: [
+                0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
+                0x5be0cd19,
+            ],
+            buffer: [0u8; 64],
+            buffer_len: 0,
+            total_bytes: 0,
+        }
+    }
+
+    fn transform_block(&mut self, block: &[u8; 64]) {
+        let mut w = [0u32; 64];
+        let mut i = 0;
+        while i < 16 {
+            w[i] = u32::from_be_bytes([
+                block[i * 4],
+                block[i * 4 + 1],
+                block[i * 4 + 2],
+                block[i * 4 + 3],
+            ]);
+            i += 1;
+        }
+        while i < 64 {
+            let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);
+            let s1 = w[i - 2].rotate_right(17) ^ w[i - 2].rotate_right(19) ^ (w[i - 2] >> 10);
+            w[i] = w[i - 16]
+                .wrapping_add(s0)
+                .wrapping_add(w[i - 7])
+                .wrapping_add(s1);
+            i += 1;
+        }
+
+        let mut a = self.state[0];
+        let mut b = self.state[1];
+        let mut c = self.state[2];
+        let mut d = self.state[3];
+        let mut e = self.state[4];
+        let mut f = self.state[5];
+        let mut g = self.state[6];
+        let mut h = self.state[7];
+
+        let mut j = 0;
+        while j < 64 {
+            let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
+            let ch = (e & f) ^ ((!e) & g);
+            let temp1 = h
+                .wrapping_add(s1)
+                .wrapping_add(ch)
+                .wrapping_add(Self::K[j])
+                .wrapping_add(w[j]);
+            let s0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
+            let maj = (a & b) ^ (a & c) ^ (b & c);
+            let temp2 = s0.wrapping_add(maj);
+
+            h = g;
+            g = f;
+            f = e;
+            e = d.wrapping_add(temp1);
+            d = c;
+            c = b;
+            b = a;
+            a = temp1.wrapping_add(temp2);
+            j += 1;
+        }
+
+        self.state[0] = self.state[0].wrapping_add(a);
+        self.state[1] = self.state[1].wrapping_add(b);
+        self.state[2] = self.state[2].wrapping_add(c);
+        self.state[3] = self.state[3].wrapping_add(d);
+        self.state[4] = self.state[4].wrapping_add(e);
+        self.state[5] = self.state[5].wrapping_add(f);
+        self.state[6] = self.state[6].wrapping_add(g);
+        self.state[7] = self.state[7].wrapping_add(h);
+    }
+
+    pub fn update(&mut self, data: &[u8]) {
+        self.total_bytes = self.total_bytes.wrapping_add(data.len() as u64);
+        let mut offset = 0;
+        while offset < data.len() {
+            if self.buffer_len == 64 {
+                let blk = self.buffer;
+                self.transform_block(&blk);
+                self.buffer_len = 0;
+            }
+            let to_copy = (64 - self.buffer_len).min(data.len() - offset);
+            self.buffer[self.buffer_len..self.buffer_len + to_copy]
+                .copy_from_slice(&data[offset..offset + to_copy]);
+            self.buffer_len += to_copy;
+            offset += to_copy;
+        }
+    }
+
+    pub fn finalize(mut self) -> [u8; 32] {
+        let total_bits = self.total_bytes.wrapping_mul(8);
+        if self.buffer_len == 64 {
+            let blk = self.buffer;
+            self.transform_block(&blk);
+            self.buffer_len = 0;
+        }
+        self.buffer[self.buffer_len] = 0x80;
+        self.buffer_len += 1;
+
+        if self.buffer_len > 56 {
+            let mut i = self.buffer_len;
+            while i < 64 {
+                self.buffer[i] = 0;
+                i += 1;
+            }
+            let blk = self.buffer;
+            self.transform_block(&blk);
+            self.buffer_len = 0;
+        }
+
+        let mut i = self.buffer_len;
+        while i < 56 {
+            self.buffer[i] = 0;
+            i += 1;
+        }
+        self.buffer[56..64].copy_from_slice(&total_bits.to_be_bytes());
+        let blk = self.buffer;
+        self.transform_block(&blk);
+
+        let mut out = [0u8; 32];
+        let mut k = 0;
+        while k < 8 {
+            out[k * 4..(k + 1) * 4].copy_from_slice(&self.state[k].to_be_bytes());
+            k += 1;
+        }
+        out
+    }
+
+    pub fn hash(data: &[u8]) -> [u8; 32] {
+        let mut hasher = Self::new();
+        hasher.update(data);
+        hasher.finalize()
+    }
+}
+
+impl Default for Sha256Hasher {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Convertit un condensat SHA-256 (32 octets) en représentation hexadécimale minuscule (64 octets ASCII)
+pub fn sha256_to_hex(digest: &[u8; 32], out: &mut [u8; 64]) {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    for i in 0..32 {
+        let b = digest[i];
+        out[i * 2] = HEX[(b >> 4) as usize];
+        out[i * 2 + 1] = HEX[(b & 0x0F) as usize];
+    }
+}
+
+/// Hache un descripteur de fichier ouvert en streaming sans allocation
+fn hash_fd_sha256(fd: i32) -> Result<[u8; 32], ()> {
+    let mut hasher = Sha256Hasher::new();
+    let mut chunk = [0u8; 4096];
+    loop {
+        let n = sys_read(fd, &mut chunk);
+        if n < 0 {
+            return Err(());
+        }
+        if n == 0 {
+            break;
+        }
+        hasher.update(&chunk[..n as usize]);
+    }
+    Ok(hasher.finalize())
+}
+
+/// Parse une ligne de fichier de vérification sha256 (format GNU ou BSD)
+fn parse_sha256_check_line(line: &str) -> Option<(&str, &str)> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() || trimmed.starts_with('#') {
+        return None;
+    }
+
+    // Format BSD: SHA256 (path) = hex64
+    if let Some(rest) = trimmed.strip_prefix("SHA256 (") {
+        if let Some(close_idx) = rest.find(')') {
+            let path = &rest[..close_idx];
+            let after = rest[close_idx + 1..].trim();
+            if let Some(hex_part) = after.strip_prefix('=') {
+                let hex = hex_part.trim();
+                if hex.len() == 64 {
+                    return Some((path, hex));
+                }
+            }
+        }
+    }
+
+    // Format standard GNU: <hex64>  <path> ou <hex64> *<path>
+    if trimmed.len() >= 66 {
+        let hex = &trimmed[..64];
+        let sep = &trimmed[64..66];
+        if (sep == "  " || sep == " *" || sep == "  ")
+            && hex.as_bytes().iter().all(|b| b.is_ascii_hexdigit())
+        {
+            let path = trimmed[66..].trim();
+            if !path.is_empty() {
+                return Some((path, hex));
+            }
+        }
+    }
+
+    None
+}
+
+/// Exécute l'utilitaire Coreutils POSIX / GNU `sha256sum` (calcul et vérification SHA-256)
+pub fn run_sha256sum(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    let mut check_mode = false;
+    let mut tag_format = false;
+    let mut binary_mode = false;
+    let mut status_only = false;
+    let mut quiet = false;
+    let mut warn = false;
+    let mut file_args = [""; 64];
+    let mut file_count = 0usize;
+
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i];
+        if arg == "--help" || arg == "-h" {
+            let help = b"Usage: sha256sum [OPTION]... [FILE]...\nPrint or check SHA256 (256-bit) checksums.\n\nWith no FILE, or when FILE is -, read standard input.\n\n  -b, --binary         read in binary mode\n  -c, --check          read checksums from the FILEs and check them\n      --tag            create a BSD-style checksum\n  -t, --text           read in text mode (default)\n  -q, --quiet          don't print OK for each successfully verified file\n      --status         don't output anything, status code shows success\n  -w, --warn           warn about improperly formatted checksum lines\n      --help           display this help and exit\n      --version        output version information and exit\n";
+            let _ = sys_write(out_fd, help);
+            return 0;
+        }
+        if arg == "--version" || arg == "-v" {
+            let ver = b"sha256sum (JamboOS coreutils) 0.1.0\nCopyright (C) 2026 JamboOS Authors.\nLicense MIT or Apache-2.0.\n";
+            let _ = sys_write(out_fd, ver);
+            return 0;
+        }
+
+        if arg == "-c" || arg == "--check" {
+            check_mode = true;
+        } else if arg == "--tag" {
+            tag_format = true;
+        } else if arg == "-b" || arg == "--binary" {
+            binary_mode = true;
+        } else if arg == "-t" || arg == "--text" {
+            binary_mode = false;
+        } else if arg == "--status" {
+            status_only = true;
+        } else if arg == "-q" || arg == "--quiet" {
+            quiet = true;
+        } else if arg == "-w" || arg == "--warn" {
+            warn = true;
+        } else if (!arg.starts_with('-') || arg == "-") && file_count < file_args.len() {
+            file_args[file_count] = arg;
+            file_count += 1;
+        }
+        i += 1;
+    }
+
+    if check_mode {
+        let mut overall_success = true;
+        let mut total_verified = 0usize;
+
+        let targets: &[&str] = if file_count == 0 {
+            &["-"]
+        } else {
+            &file_args[..file_count]
+        };
+
+        for &target in targets {
+            let check_fd = if target == "-" {
+                in_fd
+            } else {
+                let fd = sys_open(target, crate::vfs::O_RDONLY);
+                if fd < 0 {
+                    if !status_only {
+                        let _ = sys_write(err_fd, b"sha256sum: ");
+                        let _ = sys_write(err_fd, target.as_bytes());
+                        let _ = sys_write(err_fd, b": No such file or directory\n");
+                    }
+                    overall_success = false;
+                    continue;
+                }
+                fd
+            };
+
+            let mut reader = LineReader::new(check_fd);
+            let mut line_buf = [0u8; 512];
+
+            while let Some(line_len) = reader.read_line(&mut line_buf) {
+                let line_str = match core::str::from_utf8(&line_buf[..line_len]) {
+                    Ok(s) => s,
+                    Err(_) => {
+                        if warn && !status_only {
+                            let _ = sys_write(
+                                err_fd,
+                                b"sha256sum: improperly formatted SHA256 checksum line\n",
+                            );
+                        }
+                        continue;
+                    }
+                };
+
+                let (path, expected_hex) = match parse_sha256_check_line(line_str) {
+                    Some(parsed) => parsed,
+                    None => {
+                        if warn
+                            && !status_only
+                            && !line_str.trim().is_empty()
+                            && !line_str.trim().starts_with('#')
+                        {
+                            let _ = sys_write(
+                                err_fd,
+                                b"sha256sum: improperly formatted SHA256 checksum line\n",
+                            );
+                        }
+                        continue;
+                    }
+                };
+
+                // Ouvrir et hacher le fichier référencé
+                let file_fd = sys_open(path, crate::vfs::O_RDONLY);
+                if file_fd < 0 {
+                    if !status_only {
+                        let _ = sys_write(err_fd, path.as_bytes());
+                        let _ = sys_write(err_fd, b": FAILED open or read\n");
+                    }
+                    overall_success = false;
+                    continue;
+                }
+
+                let hash_res = hash_fd_sha256(file_fd);
+                sys_close(file_fd);
+
+                match hash_res {
+                    Ok(digest) => {
+                        let mut calculated_hex = [0u8; 64];
+                        sha256_to_hex(&digest, &mut calculated_hex);
+
+                        let hex_matches = calculated_hex
+                            .iter()
+                            .zip(expected_hex.as_bytes().iter())
+                            .all(|(&a, &b)| a.eq_ignore_ascii_case(&b));
+
+                        if hex_matches {
+                            total_verified += 1;
+                            if !quiet && !status_only {
+                                let _ = sys_write(out_fd, path.as_bytes());
+                                let _ = sys_write(out_fd, b": OK\n");
+                            }
+                        } else {
+                            overall_success = false;
+                            if !status_only {
+                                let _ = sys_write(out_fd, path.as_bytes());
+                                let _ = sys_write(out_fd, b": FAILED\n");
+                            }
+                        }
+                    }
+                    Err(_) => {
+                        overall_success = false;
+                        if !status_only {
+                            let _ = sys_write(err_fd, path.as_bytes());
+                            let _ = sys_write(err_fd, b": FAILED open or read\n");
+                        }
+                    }
+                }
+            }
+
+            if check_fd != in_fd {
+                sys_close(check_fd);
+            }
+        }
+
+        if overall_success && total_verified > 0 {
+            0
+        } else {
+            1
+        }
+    } else {
+        let targets: &[&str] = if file_count == 0 {
+            &["-"]
+        } else {
+            &file_args[..file_count]
+        };
+
+        let mut exit_code = 0;
+
+        for &target in targets {
+            let (target_fd, display_name) = if target == "-" {
+                (in_fd, "-")
+            } else {
+                let fd = sys_open(target, crate::vfs::O_RDONLY);
+                if fd < 0 {
+                    let _ = sys_write(err_fd, b"sha256sum: ");
+                    let _ = sys_write(err_fd, target.as_bytes());
+                    let _ = sys_write(err_fd, b": No such file or directory\n");
+                    exit_code = 1;
+                    continue;
+                }
+                (fd, target)
+            };
+
+            match hash_fd_sha256(target_fd) {
+                Ok(digest) => {
+                    let mut hex_buf = [0u8; 64];
+                    sha256_to_hex(&digest, &mut hex_buf);
+
+                    if tag_format {
+                        // Format BSD: SHA256 (filename) = hex64\n
+                        let _ = sys_write(out_fd, b"SHA256 (");
+                        let _ = sys_write(out_fd, display_name.as_bytes());
+                        let _ = sys_write(out_fd, b") = ");
+                        let _ = sys_write(out_fd, &hex_buf);
+                        let _ = sys_write(out_fd, b"\n");
+                    } else {
+                        // Format GNU standard: hex64  filename\n ou hex64 *filename\n
+                        let _ = sys_write(out_fd, &hex_buf);
+                        if binary_mode {
+                            let _ = sys_write(out_fd, b" *");
+                        } else {
+                            let _ = sys_write(out_fd, b"  ");
+                        }
+                        let _ = sys_write(out_fd, display_name.as_bytes());
+                        let _ = sys_write(out_fd, b"\n");
+                    }
+                }
+                Err(_) => {
+                    let _ = sys_write(err_fd, b"sha256sum: error reading ");
+                    let _ = sys_write(err_fd, display_name.as_bytes());
+                    let _ = sys_write(err_fd, b"\n");
+                    exit_code = 1;
+                }
+            }
+
+            if target_fd != in_fd {
+                sys_close(target_fd);
+            }
+        }
+
+        exit_code
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -11121,6 +11625,45 @@ mod tests {
         assert!(n4 > 0);
         assert_eq!(&out4[..n4 as usize], b"1|2-3\n");
         sys_close(out_r4);
+
+        // 5. Délimiteur zéro-terminé (-z / --zero-terminated)
+        let path_z1 = "/tmp/test_paste_z1.txt";
+        let path_z2 = "/tmp/test_paste_z2.txt";
+        let fz1 = sys_open(path_z1, O_CREAT | O_WRONLY);
+        assert!(fz1 >= 0);
+        let _ = sys_write(fz1, b"1\x002\x003\x00");
+        sys_close(fz1);
+
+        let fz2 = sys_open(path_z2, O_CREAT | O_WRONLY);
+        assert!(fz2 >= 0);
+        let _ = sys_write(fz2, b"un\0deux\0trois\0");
+        sys_close(fz2);
+
+        let (out_r5, out_w5) = crate::vfs::pipe().expect("pipe paste 5");
+        let code5 = run_paste(&["-z", path_z1, path_z2], 0, out_w5, 2);
+        assert_eq!(code5, 0);
+        sys_close(out_w5);
+
+        let mut out5 = [0u8; 256];
+        let n5 = sys_read(out_r5, &mut out5);
+        assert!(n5 > 0);
+        assert_eq!(&out5[..n5 as usize], b"1\tun\x002\tdeux\x003\ttrois\x00");
+        sys_close(out_r5);
+
+        let _ = sys_unlink_pool(path_z1);
+        let _ = sys_unlink_pool(path_z2);
+
+        // 6. paste --version
+        let (out_r6, out_w6) = crate::vfs::pipe().expect("pipe paste 6");
+        let code6 = run_paste(&["--version"], 0, out_w6, 2);
+        assert_eq!(code6, 0);
+        sys_close(out_w6);
+        let mut out6 = [0u8; 256];
+        let n6 = sys_read(out_r6, &mut out6);
+        assert!(n6 > 0);
+        let ver_str = core::str::from_utf8(&out6[..n6 as usize]).unwrap();
+        assert!(ver_str.contains("paste (JamboOS coreutils)"));
+        sys_close(out_r6);
 
         // Nettoyage fichiers de test
         let _ = sys_unlink_pool(path1);
@@ -12448,5 +12991,127 @@ mod tests {
         let n_dec = sys_read(out_r3, &mut buf);
         sys_close(out_r3);
         assert_eq!(&buf[..n_dec as usize], b"JamboOS\n");
+    }
+
+    #[test]
+    fn test_posix_sha256sum() {
+        // 1. Vecteurs NIST connus (in-memory)
+        let empty_hash = Sha256Hasher::hash(b"");
+        let mut empty_hex = [0u8; 64];
+        sha256_to_hex(&empty_hash, &mut empty_hex);
+        assert_eq!(
+            core::str::from_utf8(&empty_hex).unwrap(),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+
+        let abc_hash = Sha256Hasher::hash(b"abc");
+        let mut abc_hex = [0u8; 64];
+        sha256_to_hex(&abc_hash, &mut abc_hex);
+        assert_eq!(
+            core::str::from_utf8(&abc_hex).unwrap(),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+
+        // 2. Calcul sha256sum sur fichier VFS
+        let file_path = "/tmp/test_sha256_data.txt";
+        let fd = sys_open(file_path, O_CREAT | O_WRONLY);
+        assert!(fd >= 0);
+        let _ = sys_write(fd, b"abc");
+        sys_close(fd);
+
+        let (out_r1, out_w1) = crate::vfs::pipe().unwrap();
+        let code1 = run_sha256sum(&[file_path], 0, out_w1, 2);
+        sys_close(out_w1);
+        assert_eq!(code1, 0);
+
+        let mut buf1 = [0u8; 256];
+        let n1 = sys_read(out_r1, &mut buf1);
+        sys_close(out_r1);
+        let s1 = core::str::from_utf8(&buf1[..n1 as usize]).unwrap();
+        assert!(s1.starts_with("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad  /tmp/test_sha256_data.txt"));
+
+        // 3. Mode BSD style --tag
+        let (out_r2, out_w2) = crate::vfs::pipe().unwrap();
+        let code2 = run_sha256sum(&["--tag", file_path], 0, out_w2, 2);
+        sys_close(out_w2);
+        assert_eq!(code2, 0);
+
+        let mut buf2 = [0u8; 256];
+        let n2 = sys_read(out_r2, &mut buf2);
+        sys_close(out_r2);
+        let s2 = core::str::from_utf8(&buf2[..n2 as usize]).unwrap();
+        assert_eq!(
+            s2,
+            "SHA256 (/tmp/test_sha256_data.txt) = ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\n"
+        );
+
+        // 4. Mode vérification (-c / --check) réussi
+        let check_file = "/tmp/test_sha256.chk";
+        let chk_fd = sys_open(check_file, O_CREAT | O_WRONLY);
+        assert!(chk_fd >= 0);
+        let _ = sys_write(chk_fd, b"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad  /tmp/test_sha256_data.txt\n");
+        sys_close(chk_fd);
+
+        let (out_r3, out_w3) = crate::vfs::pipe().unwrap();
+        let code3 = run_sha256sum(&["-c", check_file], 0, out_w3, 2);
+        sys_close(out_w3);
+        assert_eq!(code3, 0);
+
+        let mut buf3 = [0u8; 256];
+        let n3 = sys_read(out_r3, &mut buf3);
+        sys_close(out_r3);
+        let s3 = core::str::from_utf8(&buf3[..n3 as usize]).unwrap();
+        assert!(s3.contains("/tmp/test_sha256_data.txt: OK"));
+
+        // 5. Mode vérification échoué (altération des données)
+        let bad_fd = sys_open(file_path, O_CREAT | O_WRONLY);
+        assert!(bad_fd >= 0);
+        let _ = sys_write(bad_fd, b"corrupted data");
+        sys_close(bad_fd);
+
+        let (out_r4, out_w4) = crate::vfs::pipe().unwrap();
+        let code4 = run_sha256sum(&["-c", check_file], 0, out_w4, 2);
+        sys_close(out_w4);
+        assert_eq!(code4, 1);
+
+        let mut buf4 = [0u8; 256];
+        let n4 = sys_read(out_r4, &mut buf4);
+        sys_close(out_r4);
+        let s4 = core::str::from_utf8(&buf4[..n4 as usize]).unwrap();
+        assert!(s4.contains("/tmp/test_sha256_data.txt: FAILED"));
+
+        // 6. Streaming stdin
+        let (in_r5, in_w5) = crate::vfs::pipe().unwrap();
+        let (out_r5, out_w5) = crate::vfs::pipe().unwrap();
+        let _ = sys_write(in_w5, b"abc");
+        sys_close(in_w5);
+        let code5 = run_sha256sum(&["-"], in_r5, out_w5, 2);
+        sys_close(in_r5);
+        sys_close(out_w5);
+        assert_eq!(code5, 0);
+
+        let mut buf5 = [0u8; 256];
+        let n5 = sys_read(out_r5, &mut buf5);
+        sys_close(out_r5);
+        let s5 = core::str::from_utf8(&buf5[..n5 as usize]).unwrap();
+        assert!(
+            s5.starts_with("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad  -\n")
+        );
+
+        // 7. --help et --version
+        let (out_r6, out_w6) = crate::vfs::pipe().unwrap();
+        let code6 = run_sha256sum(&["--help"], 0, out_w6, 2);
+        sys_close(out_w6);
+        assert_eq!(code6, 0);
+        let mut buf6 = [0u8; 512];
+        let n6 = sys_read(out_r6, &mut buf6);
+        sys_close(out_r6);
+        assert!(core::str::from_utf8(&buf6[..n6 as usize])
+            .unwrap()
+            .contains("Usage: sha256sum"));
+
+        // Nettoyage
+        let _ = sys_unlink_pool(file_path);
+        let _ = sys_unlink_pool(check_file);
     }
 }

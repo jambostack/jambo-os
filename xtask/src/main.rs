@@ -1300,6 +1300,7 @@ fn build_coreutils(
     PathBuf,
     PathBuf,
     PathBuf,
+    PathBuf,
 )> {
     let root = root_dir();
     let mut cmd = Command::new("cargo");
@@ -1372,6 +1373,7 @@ fn build_coreutils(
         dir.join("sleep"),
         dir.join("cksum"),
         dir.join("base64"),
+        dir.join("sha256sum"),
     ))
 }
 
@@ -1693,6 +1695,7 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
         sleep_bin,
         cksum_bin,
         base64_bin,
+        sha256sum_bin,
     ) = build_coreutils(release)?;
     let installer_bin = build_installer(release)?;
     let fuzz_bin = build_fuzzer(release)?;
@@ -1747,6 +1750,7 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
     fs::copy(&sleep_bin, bin_dir.join("sleep"))?;
     fs::copy(&cksum_bin, bin_dir.join("cksum"))?;
     fs::copy(&base64_bin, bin_dir.join("base64"))?;
+    fs::copy(&sha256sum_bin, bin_dir.join("sha256sum"))?;
     fs::copy(&installer_bin, bin_dir.join("installer"))?;
     fs::copy(&installer_bin, bin_dir.join("jambo-installer"))?;
     fs::copy(&fuzz_bin, bin_dir.join("fuzz"))?;
@@ -1916,6 +1920,7 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
     fs::copy(&sleep_bin, initrd_stage.join("sleep"))?;
     fs::copy(&cksum_bin, initrd_stage.join("cksum"))?;
     fs::copy(&base64_bin, initrd_stage.join("base64"))?;
+    fs::copy(&sha256sum_bin, initrd_stage.join("sha256sum"))?;
     fs::copy(&installer_bin, initrd_stage.join("installer"))?;
     fs::copy(&installer_bin, initrd_stage.join("jambo-installer"))?;
     fs::copy(&fuzz_bin, initrd_stage.join("fuzz"))?;
@@ -1955,6 +1960,7 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
             "bin/sleep",
             "bin/cksum",
             "bin/base64",
+            "bin/sha256sum",
             "bin/installer",
             "bin/jambo-installer",
             "bin/fuzz",
@@ -2121,6 +2127,7 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
             "sleep",
             "cksum",
             "base64",
+            "sha256sum",
             "installer",
             "jambo-installer",
             "fuzz",

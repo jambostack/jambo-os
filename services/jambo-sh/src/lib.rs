@@ -578,6 +578,7 @@ impl JamboShell {
             "sleep" | "/bin/sleep" | "bin/sleep" => self.cmd_sleep(args, out),
             "cksum" | "/bin/cksum" | "bin/cksum" => self.cmd_cksum(args, out),
             "base64" | "/bin/base64" | "bin/base64" => self.cmd_base64(args, out),
+            "sha256sum" | "/bin/sha256sum" | "bin/sha256sum" => self.cmd_sha256sum(args, out),
             "version" => self.cmd_version(out),
             "uptime" => self.cmd_uptime(out),
             "caps" => self.cmd_caps(out),
@@ -732,7 +733,7 @@ impl JamboShell {
 
     fn cmd_coreutils(&self, out: &mut [u8]) -> (ShellStatus, usize) {
         let text = b"Utilitaires Coreutils Ring 3 (services/jambo-coreutils) :\n\
-  Binaires disponibles : /bin/echo, /bin/cat, /bin/head, /bin/tail, /bin/touch, /bin/mkdir, /bin/rm, /bin/cp, /bin/mv, /bin/tee, /bin/env, /bin/grep, /bin/sort, /bin/uniq, /bin/find, /bin/chmod, /bin/chown, /bin/id, /bin/du, /bin/df, /bin/uname, /bin/cut, /bin/paste, /bin/comm, /bin/tr, /bin/split, /bin/basename, /bin/dirname, /bin/seq, /bin/yes, /bin/printf, /bin/expr, /bin/fold, /bin/nl, /bin/od, /bin/cmp, /bin/expand, /bin/unexpand, /bin/sleep, /bin/wc, /bin/true, /bin/false, /bin/ls (43 utilitaires)\n\
+  Binaires disponibles : /bin/echo, /bin/cat, /bin/head, /bin/tail, /bin/touch, /bin/mkdir, /bin/rm, /bin/cp, /bin/mv, /bin/tee, /bin/env, /bin/grep, /bin/sort, /bin/uniq, /bin/find, /bin/chmod, /bin/chown, /bin/id, /bin/du, /bin/df, /bin/uname, /bin/cut, /bin/paste, /bin/comm, /bin/tr, /bin/split, /bin/basename, /bin/dirname, /bin/seq, /bin/yes, /bin/printf, /bin/expr, /bin/fold, /bin/nl, /bin/od, /bin/cmp, /bin/expand, /bin/unexpand, /bin/sleep, /bin/cksum, /bin/base64, /bin/sha256sum, /bin/wc, /bin/true, /bin/false, /bin/ls (46 utilitaires)\n\
   Architecture & ABI   : System V AMD64 ELF64 (ET_EXEC / Ring 3 Userland)\n\
   Point d'entree       : _start (parsing argc/argv sur pile System V)\n\
   Terminaison          : Syscall 11 ThreadExit avec propagation code de retour POSIX\n\
@@ -1498,6 +1499,26 @@ Utilitaire d'installation JamboOS (Serie 0.*.*)\n\
             }
         } else {
             let msg = b"base64: pipe creation failed\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
+    }
+
+    fn cmd_sha256sum(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if let Ok((r, w)) = libjambo::vfs::pipe() {
+            let code = libjambo::coreutils::run_sha256sum(args, 0, w, w);
+            let _ = libjambo::coreutils::sys_close(w);
+            let n = libjambo::coreutils::sys_read(r, out);
+            let _ = libjambo::coreutils::sys_close(r);
+            let len = if n > 0 { n as usize } else { 0 };
+            if code == 0 {
+                (ShellStatus::Success, len)
+            } else {
+                (ShellStatus::ExecutionFailed, len)
+            }
+        } else {
+            let msg = b"sha256sum: pipe creation failed\n";
             let len = msg.len().min(out.len());
             out[..len].copy_from_slice(&msg[..len]);
             (ShellStatus::ExecutionFailed, len)
@@ -17523,8 +17544,11 @@ mod tests {
         let (st, len) = shell.execute_line("coreutils", &mut out);
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
-        assert!(s.contains("43 utilitaires"));
+        assert!(s.contains("46 utilitaires"));
         assert!(s.contains("/bin/sleep"));
+        assert!(s.contains("/bin/cksum"));
+        assert!(s.contains("/bin/base64"));
+        assert!(s.contains("/bin/sha256sum"));
         assert!(s.contains("/bin/expand"));
         assert!(s.contains("/bin/unexpand"));
         assert!(s.contains("/bin/cut"));
@@ -18363,5 +18387,49 @@ mod tests {
         assert_eq!(st4, ShellStatus::Success);
         let s4 = core::str::from_utf8(&out[..len4]).unwrap();
         assert_eq!(s4, "JamboOS BareMetal\n");
+    }
+
+    #[test]
+    fn test_sha256sum_shell_execution() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 1024];
+
+        // 1. sha256sum --help
+        let (st1, len1) = shell.execute_line("sha256sum --help", &mut out);
+        assert_eq!(st1, ShellStatus::Success);
+        let s1 = core::str::from_utf8(&out[..len1]).unwrap();
+        assert!(s1.contains("Usage: sha256sum"));
+
+        // 2. /bin/sha256sum --version
+        let (st2, len2) = shell.execute_line("/bin/sha256sum --version", &mut out);
+        assert_eq!(st2, ShellStatus::Success);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("sha256sum (JamboOS coreutils)"));
+
+        // 3. sha256sum calcul standard sur fichier VFS
+        let fd = libjambo::coreutils::sys_open(
+            "/tmp/sh_sha_test.txt",
+            libjambo::vfs::O_CREAT | libjambo::vfs::O_WRONLY | libjambo::vfs::O_TRUNC,
+        );
+        assert!(fd >= 0);
+        let _ = libjambo::coreutils::sys_write(fd, b"abc");
+        libjambo::coreutils::sys_close(fd);
+
+        let (st3, len3) = shell.execute_line("sha256sum /tmp/sh_sha_test.txt", &mut out);
+        assert_eq!(st3, ShellStatus::Success);
+        let s3 = core::str::from_utf8(&out[..len3]).unwrap();
+        assert!(s3.starts_with("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad  /tmp/sh_sha_test.txt"));
+
+        // 4. sha256sum format BSD --tag
+        let (st4, len4) = shell.execute_line("/bin/sha256sum --tag /tmp/sh_sha_test.txt", &mut out);
+        assert_eq!(st4, ShellStatus::Success);
+        let s4 = core::str::from_utf8(&out[..len4]).unwrap();
+        assert_eq!(
+            s4,
+            "SHA256 (/tmp/sh_sha_test.txt) = ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\n"
+        );
+
+        // Nettoyage
+        let _ = libjambo::coreutils::sys_unlink_pool("/tmp/sh_sha_test.txt");
     }
 }

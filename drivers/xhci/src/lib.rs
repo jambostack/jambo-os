@@ -1143,6 +1143,7 @@ pub const CSW_STATUS_PHASE_ERROR: u8 = 0x02;
 pub const SCSI_CMD_TEST_UNIT_READY: u8 = 0x00;
 pub const SCSI_CMD_REQUEST_SENSE: u8 = 0x03;
 pub const SCSI_CMD_INQUIRY: u8 = 0x12;
+pub const SCSI_CMD_MODE_SELECT_6: u8 = 0x15;
 pub const SCSI_CMD_MODE_SENSE_6: u8 = 0x1A;
 pub const SCSI_CMD_START_STOP_UNIT: u8 = 0x1B;
 pub const SCSI_CMD_PREVENT_ALLOW_MEDIUM_REMOVAL: u8 = 0x1E;
@@ -1151,6 +1152,7 @@ pub const SCSI_CMD_READ_10: u8 = 0x28;
 pub const SCSI_CMD_WRITE_10: u8 = 0x2A;
 pub const SCSI_CMD_SYNCHRONIZE_CACHE_10: u8 = 0x35;
 pub const SCSI_CMD_UNMAP: u8 = 0x42;
+pub const SCSI_CMD_MODE_SELECT_10: u8 = 0x55;
 pub const SCSI_CMD_MODE_SENSE_10: u8 = 0x5A;
 pub const SCSI_CMD_READ_16: u8 = 0x88;
 pub const SCSI_CMD_WRITE_16: u8 = 0x8E;
@@ -1776,6 +1778,119 @@ impl UsbMassStorageBot {
         (cbw, tag)
     }
 
+    /// Construit un CBW pour SCSI MODE SELECT (6) (configuration des paramètres et du cache WCE)
+    pub fn build_cbw_mode_select_6(
+        &mut self,
+        pf: bool,
+        sp: bool,
+        param_len: u8,
+    ) -> (CommandBlockWrapper, u32) {
+        let tag = self.next_tag();
+        let mut cbw = CommandBlockWrapper::new(tag, param_len as u32, false, self.lun, 6);
+        cbw.cb[0] = SCSI_CMD_MODE_SELECT_6;
+        cbw.cb[1] = ((pf as u8) << 4) | (sp as u8);
+        cbw.cb[4] = param_len;
+        (cbw, tag)
+    }
+
+    /// Construit un CBW pour SCSI MODE SELECT (10) (configuration étendue de périphériques blocs)
+    pub fn build_cbw_mode_select_10(
+        &mut self,
+        pf: bool,
+        sp: bool,
+        param_len: u16,
+    ) -> (CommandBlockWrapper, u32) {
+        let tag = self.next_tag();
+        let mut cbw = CommandBlockWrapper::new(tag, param_len as u32, false, self.lun, 10);
+        cbw.cb[0] = SCSI_CMD_MODE_SELECT_10;
+        cbw.cb[1] = ((pf as u8) << 4) | (sp as u8);
+        let len_bytes = param_len.to_be_bytes();
+        cbw.cb[7] = len_bytes[0];
+        cbw.cb[8] = len_bytes[1];
+        (cbw, tag)
+    }
+
+    /// Sérialise un en-tête SCSI Mode Parameter Header (6) dans le tampon fourni (4 octets)
+    pub fn serialize_mode_select_6_header(
+        medium_type: u8,
+        dsp: u8,
+        block_desc_len: u8,
+        buf: &mut [u8],
+    ) -> usize {
+        if buf.len() < 4 {
+            return 0;
+        }
+        buf[0] = 0; // Mode Data Length réservé (défini à 0 pour MODE SELECT)
+        buf[1] = medium_type;
+        buf[2] = dsp;
+        buf[3] = block_desc_len;
+        4
+    }
+
+    /// Sérialise un en-tête SCSI Mode Parameter Header (10) dans le tampon fourni (8 octets)
+    pub fn serialize_mode_select_10_header(
+        medium_type: u8,
+        dsp: u8,
+        block_desc_len: u16,
+        buf: &mut [u8],
+    ) -> usize {
+        if buf.len() < 8 {
+            return 0;
+        }
+        buf[0] = 0; // Réservé pour MODE SELECT
+        buf[1] = 0; // Réservé pour MODE SELECT
+        buf[2] = medium_type;
+        buf[3] = dsp;
+        buf[4] = 0; // Flags réservés / DPOFUA
+        buf[5] = 0; // Réservé
+        let bdl = block_desc_len.to_be_bytes();
+        buf[6] = bdl[0];
+        buf[7] = bdl[1];
+        8
+    }
+
+    /// Sérialise une page de mode de mise en cache SCSI Caching Mode Page (Page 0x08, SPC-4 / SBC-3)
+    /// Page de 10 octets de données utiles (longueur totale 12 octets avec code et longueur).
+    pub fn serialize_caching_page(wce: bool, rcd: bool, buf: &mut [u8]) -> usize {
+        if buf.len() < 12 {
+            return 0;
+        }
+        buf[0] = SCSI_PAGE_CACHING; // 0x08
+        buf[1] = 0x0A; // 10 octets de paramètres utiles
+        let mut flags = 0u8;
+        if wce {
+            flags |= 0x04; // Write Cache Enable
+        }
+        if rcd {
+            flags |= 0x01; // Read Cache Disable
+        }
+        buf[2] = flags;
+        for b in &mut buf[3..12] {
+            *b = 0;
+        }
+        12
+    }
+
+    /// Formate la charge utile complète pour SCSI MODE SELECT (6) avec en-tête et page de cache (16 octets)
+    pub fn build_caching_mode_select_6_payload(wce: bool, rcd: bool, buf: &mut [u8]) -> usize {
+        if buf.len() < 16 {
+            return 0;
+        }
+        let h_len = Self::serialize_mode_select_6_header(0x00, 0x00, 0x00, buf);
+        let p_len = Self::serialize_caching_page(wce, rcd, &mut buf[h_len..]);
+        h_len + p_len
+    }
+
+    /// Formate la charge utile complète pour SCSI MODE SELECT (10) avec en-tête et page de cache (20 octets)
+    pub fn build_caching_mode_select_10_payload(wce: bool, rcd: bool, buf: &mut [u8]) -> usize {
+        if buf.len() < 20 {
+            return 0;
+        }
+        let h_len = Self::serialize_mode_select_10_header(0x00, 0x00, 0x00, buf);
+        let p_len = Self::serialize_caching_page(wce, rcd, &mut buf[h_len..]);
+        h_len + p_len
+    }
+
     /// Construit un CBW pour SCSI PREVENT ALLOW MEDIUM REMOVAL (verrouillage matériel du média)
     pub fn build_cbw_prevent_allow_medium_removal(
         &mut self,
@@ -1943,6 +2058,7 @@ pub struct UsbMassStorageDisk {
     pub is_write_protected: bool,
     pub is_removable: bool,
     pub mounted: bool,
+    pub write_cache_enabled: bool,
 }
 
 impl UsbMassStorageDisk {
@@ -1953,6 +2069,7 @@ impl UsbMassStorageDisk {
             is_write_protected: false,
             is_removable: inquiry.is_removable,
             mounted: false,
+            write_cache_enabled: true,
         }
     }
 
@@ -1984,6 +2101,12 @@ impl UsbMassStorageDisk {
             .unwrap_or(false)
     }
 
+    /// Construit un CBW pour SCSI TEST UNIT READY (vérifie si l'unité est prête aux transferts I/O)
+    #[inline]
+    pub fn build_test_unit_ready_cbw(&mut self) -> (CommandBlockWrapper, u32) {
+        self.bot.build_cbw_test_unit_ready()
+    }
+
     /// Construit un CBW pour SCSI MODE SENSE (10)
     pub fn build_mode_sense_10_cbw(
         &mut self,
@@ -1991,6 +2114,28 @@ impl UsbMassStorageDisk {
         alloc_len: u16,
     ) -> (CommandBlockWrapper, u32) {
         self.bot.build_cbw_mode_sense_10(page_code, alloc_len)
+    }
+
+    /// Construit un CBW pour SCSI MODE SELECT (6)
+    #[inline]
+    pub fn build_mode_select_6_cbw(
+        &mut self,
+        pf: bool,
+        sp: bool,
+        param_len: u8,
+    ) -> (CommandBlockWrapper, u32) {
+        self.bot.build_cbw_mode_select_6(pf, sp, param_len)
+    }
+
+    /// Construit un CBW pour SCSI MODE SELECT (10)
+    #[inline]
+    pub fn build_mode_select_10_cbw(
+        &mut self,
+        pf: bool,
+        sp: bool,
+        param_len: u16,
+    ) -> (CommandBlockWrapper, u32) {
+        self.bot.build_cbw_mode_select_10(pf, sp, param_len)
     }
 
     /// Construit un CBW pour SCSI PREVENT ALLOW MEDIUM REMOVAL (protection contre l'éjection intempestive)
@@ -2008,6 +2153,39 @@ impl UsbMassStorageDisk {
     #[inline]
     pub fn set_write_protected(&mut self, wp: bool) {
         self.is_write_protected = wp;
+    }
+
+    /// Indique si la mise en cache en écriture (Write Cache Enable) est active sur l'unité
+    #[inline]
+    pub fn is_write_cache_enabled(&self) -> bool {
+        self.write_cache_enabled
+    }
+
+    /// Met à jour l'état local de mise en cache en écriture
+    #[inline]
+    pub fn set_write_cache_enabled(&mut self, enabled: bool) {
+        self.write_cache_enabled = enabled;
+    }
+
+    /// Configure la politique de cache WCE (Write Cache Enable) via SCSI MODE SELECT (6).
+    /// Si WCE est désactivé (false), tout accès disque devient write-through immédiat,
+    /// immunisant l'Uberblock CoW contre les micro-coupures de courant.
+    pub fn build_configure_write_cache_cbw(
+        &mut self,
+        enable_write_cache: bool,
+        buffer: &mut [u8],
+    ) -> Option<(CommandBlockWrapper, u32, usize)> {
+        if buffer.len() < 16 {
+            return None;
+        }
+        let payload_len = UsbMassStorageBot::build_caching_mode_select_6_payload(
+            enable_write_cache,
+            false,
+            buffer,
+        );
+        let (cbw, tag) = self.build_mode_select_6_cbw(true, false, payload_len as u8);
+        self.write_cache_enabled = enable_write_cache;
+        Some((cbw, tag, payload_len))
     }
 
     /// Construit un CBW pour forcer la synchronisation matérielle du cache (Barrière de persistance CoW)
@@ -4884,5 +5062,66 @@ mod tests {
         assert!(disk.is_write_protected());
         disk.set_write_protected(false);
         assert!(!disk.is_write_protected());
+
+        // 14. SCSI TEST UNIT READY & SCSI MODE SELECT (6/10) avec contrôle de cache WCE
+        let (cbw_tur_d, tag_tur_d) = disk.build_test_unit_ready_cbw();
+        assert_eq!(cbw_tur_d.cb[0], SCSI_CMD_TEST_UNIT_READY);
+        assert_eq!(cbw_tur_d.tag(), tag_tur_d);
+        assert_eq!(cbw_tur_d.data_transfer_length(), 0);
+        assert_eq!(cbw_tur_d.flags(), CBW_FLAG_DATA_OUT);
+
+        // MODE SELECT (6) direct
+        let (cbw_ms6, tag_ms6) = bot.build_cbw_mode_select_6(true, false, 16);
+        assert_eq!(cbw_ms6.cb[0], SCSI_CMD_MODE_SELECT_6);
+        assert_eq!(cbw_ms6.cb[1], 0x10); // PF = 1 (Page Format), SP = 0
+        assert_eq!(cbw_ms6.cb[4], 16);
+        assert_eq!(cbw_ms6.flags(), CBW_FLAG_DATA_OUT);
+        assert_eq!(cbw_ms6.data_transfer_length(), 16);
+        assert_eq!(cbw_ms6.tag(), tag_ms6);
+
+        // MODE SELECT (10) direct
+        let (cbw_ms10, tag_ms10) = bot.build_cbw_mode_select_10(true, true, 20);
+        assert_eq!(cbw_ms10.cb[0], SCSI_CMD_MODE_SELECT_10);
+        assert_eq!(cbw_ms10.cb[1], 0x11); // PF = 1, SP = 1
+        assert_eq!(cbw_ms10.cb[7], 0);
+        assert_eq!(cbw_ms10.cb[8], 20);
+        assert_eq!(cbw_ms10.flags(), CBW_FLAG_DATA_OUT);
+        assert_eq!(cbw_ms10.data_transfer_length(), 20);
+        assert_eq!(cbw_ms10.tag(), tag_ms10);
+
+        // Sérialisation des en-têtes et de la page de cache
+        let mut p6_buf = [0u8; 16];
+        let p6_len =
+            UsbMassStorageBot::build_caching_mode_select_6_payload(false, true, &mut p6_buf);
+        assert_eq!(p6_len, 16);
+        assert_eq!(p6_buf[0], 0); // Réservé
+        assert_eq!(p6_buf[1], 0); // Medium type
+        assert_eq!(p6_buf[2], 0); // DSP
+        assert_eq!(p6_buf[3], 0); // Block desc len
+        assert_eq!(p6_buf[4], SCSI_PAGE_CACHING);
+        assert_eq!(p6_buf[5], 0x0A); // Page length
+        assert_eq!(p6_buf[6], 0x01); // WCE=0, RCD=1
+
+        let mut p10_buf = [0u8; 20];
+        let p10_len =
+            UsbMassStorageBot::build_caching_mode_select_10_payload(true, false, &mut p10_buf);
+        assert_eq!(p10_len, 20);
+        assert_eq!(p10_buf[0], 0);
+        assert_eq!(p10_buf[1], 0);
+        assert_eq!(p10_buf[8], SCSI_PAGE_CACHING);
+        assert_eq!(p10_buf[9], 0x0A);
+        assert_eq!(p10_buf[10], 0x04); // WCE=1, RCD=0
+
+        // Configuration du cache via UsbMassStorageDisk (désactivation WCE pour durcissement CoW)
+        assert!(disk.is_write_cache_enabled());
+        let mut cfg_buf = [0u8; 32];
+        let (cbw_cfg, tag_cfg, plen) = disk
+            .build_configure_write_cache_cbw(false, &mut cfg_buf)
+            .expect("configure write cache");
+        assert_eq!(plen, 16);
+        assert_eq!(cbw_cfg.cb[0], SCSI_CMD_MODE_SELECT_6);
+        assert_eq!(cbw_cfg.tag(), tag_cfg);
+        assert_eq!(cbw_cfg.data_transfer_length(), 16);
+        assert!(!disk.is_write_cache_enabled()); // Mise à jour vérifiée
     }
 }
