@@ -267,5 +267,10 @@ name = "xargs"
 path = "src/bin/xargs.rs"
 test = false
 
+[[bin]]
+name = "dd"
+path = "src/bin/dd.rs"
+test = false
+
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }

@@ -38,6 +38,8 @@ pub struct DeviceHealthInfo {
     pub spare_reserve_percent: u8,
     /// Température de fonctionnement en degrés Celsius (ex: 35 °C)
     pub temperature_celsius: u8,
+    /// Indicateur d'usure du support Flash (Wear Leveling Indicator, 0 à 100 % d'usure consommée)
+    pub wear_leveling_percent: u8,
     /// Capacité totale en secteurs
     pub total_sectors: u64,
     /// Total des octets écrits (ou unités de 512 Ko)
@@ -226,6 +228,7 @@ impl UnifiedBlockStorage {
                 health_status: 0, // Nominal
                 spare_reserve_percent: 100,
                 temperature_celsius: 30,
+                wear_leveling_percent: 0, // 0% usure sur disque virtuel
                 total_sectors: drv.capacity_sectors,
                 total_writes_count: 0,
                 flush_success_count: 0,
@@ -241,6 +244,7 @@ impl UnifiedBlockStorage {
                     health_status,
                     spare_reserve_percent: 98,
                     temperature_celsius: 38,
+                    wear_leveling_percent: 2, // 2% usure estimée (Wear Leveling)
                     total_sectors: ctrl.namespace_size_blocks,
                     total_writes_count: ctrl.flush_count,
                     flush_success_count: ctrl.flush_count.saturating_sub(ctrl.flush_errors),

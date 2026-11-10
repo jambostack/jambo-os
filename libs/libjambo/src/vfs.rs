@@ -985,6 +985,11 @@ pub fn sync() -> Result<(), SysError> {
     with_fd_table(|table| table.sync())
 }
 
+/// Repositionne le pointeur de fichier ouvert (lseek POSIX)
+pub fn lseek(fd: i32, offset: i64, whence: i32) -> Result<i64, SysError> {
+    with_fd_table(|table| table.lseek(fd, offset, whence))
+}
+
 /// Tronque ou étend un descripteur de fichier ouvert à une taille donnée (ftruncate POSIX)
 pub fn ftruncate(fd: i32, length: u64) -> Result<(), SysError> {
     with_fd_table(|table| table.ftruncate(fd, length))

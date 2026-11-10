@@ -610,6 +610,11 @@ pub fn sys_ftruncate(fd: i32, length: u64) -> i32 {
     }
 }
 
+/// Repositionne le pointeur de fichier ouvert (lseek POSIX)
+pub fn sys_lseek(fd: i32, offset: i64, whence: i32) -> i64 {
+    crate::vfs::lseek(fd, offset, whence).unwrap_or(-1)
+}
+
 /// Tronque ou étend un fichier par son chemin à une taille donnée (truncate POSIX)
 pub fn sys_truncate(path: &str, length: u64) -> i32 {
     match crate::vfs::truncate(path, length) {
@@ -12061,6 +12066,7 @@ pub fn run_xargs(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
             "truncate" => run_truncate(effective_sub_args, 0, out_fd, err_fd),
             "hexdump" => run_hexdump(effective_sub_args, 0, out_fd, err_fd),
             "time" => run_time(effective_sub_args, 0, out_fd, err_fd),
+            "dd" => run_dd(effective_sub_args, 0, out_fd, err_fd),
             _ => {
                 let _ = sys_write(err_fd, b"xargs: ");
                 let _ = sys_write(err_fd, target_cmd.as_bytes());
@@ -12077,6 +12083,309 @@ pub fn run_xargs(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
     }
 
     overall_exit_code
+}
+
+/// Analyse une valeur numérique avec multiplicateur POSIX pour `dd` (ex: 512, 1K, 2M, 1G, 4b)
+pub fn parse_dd_size(s: &str) -> Option<usize> {
+    if s.is_empty() {
+        return None;
+    }
+    let bytes = s.as_bytes();
+    let mut num: usize = 0;
+    let mut i = 0;
+    while i < bytes.len() && bytes[i].is_ascii_digit() {
+        num = num
+            .checked_mul(10)?
+            .checked_add((bytes[i] - b'0') as usize)?;
+        i += 1;
+    }
+    if i == 0 {
+        return None;
+    }
+    if i == bytes.len() {
+        return Some(num);
+    }
+    let suffix = &s[i..];
+    let mult: usize = match suffix {
+        "c" => 1,
+        "w" => 2,
+        "b" => 512,
+        "k" | "K" | "kb" | "KB" | "kib" | "KiB" => 1024,
+        "m" | "M" | "mb" | "MB" | "mib" | "MiB" => 1024 * 1024,
+        "g" | "G" | "gb" | "GB" | "gib" | "GiB" => 1024 * 1024 * 1024,
+        _ => return None,
+    };
+    num.checked_mul(mult)
+}
+
+/// Exécute l'utilitaire Coreutils `dd` (POSIX.1-2008 / IEEE Std 1003.1)
+/// pour la conversion, le clonage raw et les transferts de blocs bas-niveau
+pub fn run_dd(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    let mut if_path: Option<&str> = None;
+    let mut of_path: Option<&str> = None;
+    let mut bs: usize = 512;
+    let mut ibs: Option<usize> = None;
+    let mut obs: Option<usize> = None;
+    let mut count: Option<usize> = None;
+    let mut seek: usize = 0;
+    let mut skip: usize = 0;
+    let mut conv_sync = false;
+    let mut conv_fsync = false;
+    let mut status_none = false;
+
+    for &arg in args {
+        if arg == "--help" {
+            let _ = sys_write(
+                out_fd,
+                b"Usage: dd [OPERAND]...\n\
+                  Copy a file, converting and formatting according to the operands.\n\n\
+                  Operands:\n\
+                    bs=BYTES        read and write up to BYTES bytes at a time (default: 512)\n\
+                    ibs=BYTES       read up to BYTES bytes at a time (default: 512)\n\
+                    obs=BYTES       write BYTES bytes at a time (default: 512)\n\
+                    count=N         copy only N input blocks\n\
+                    if=FILE         read from FILE instead of stdin\n\
+                    of=FILE         write to FILE instead of stdout\n\
+                    seek=N          skip N obs-sized blocks at start of output\n\
+                    skip=N          skip N ibs-sized blocks at start of input\n\
+                    conv=CONVS      comma-separated list of conversions: sync, fsync\n\
+                    status=LEVEL    LEVEL of output: 'none' suppresses stats\n\
+                    --help          display this help and exit\n\
+                    --version       output version information and exit\n",
+            );
+            return 0;
+        } else if arg == "--version" {
+            let _ = sys_write(out_fd, b"dd (JamboOS Coreutils) 0.3.92\n");
+            return 0;
+        } else if let Some(val) = arg.strip_prefix("if=") {
+            if_path = Some(val);
+        } else if let Some(val) = arg.strip_prefix("of=") {
+            of_path = Some(val);
+        } else if let Some(val) = arg.strip_prefix("bs=") {
+            if let Some(v) = parse_dd_size(val) {
+                if v == 0 {
+                    let _ = sys_write(err_fd, b"dd: invalid number: '0'\n");
+                    return 1;
+                }
+                bs = v;
+            } else {
+                let _ = sys_write(err_fd, b"dd: invalid number for bs\n");
+                return 1;
+            }
+        } else if let Some(val) = arg.strip_prefix("ibs=") {
+            if let Some(v) = parse_dd_size(val) {
+                ibs = Some(v);
+            } else {
+                let _ = sys_write(err_fd, b"dd: invalid number for ibs\n");
+                return 1;
+            }
+        } else if let Some(val) = arg.strip_prefix("obs=") {
+            if let Some(v) = parse_dd_size(val) {
+                obs = Some(v);
+            } else {
+                let _ = sys_write(err_fd, b"dd: invalid number for obs\n");
+                return 1;
+            }
+        } else if let Some(val) = arg.strip_prefix("count=") {
+            if let Some(v) = parse_dd_size(val) {
+                count = Some(v);
+            } else {
+                let _ = sys_write(err_fd, b"dd: invalid number for count\n");
+                return 1;
+            }
+        } else if let Some(val) = arg.strip_prefix("seek=") {
+            if let Some(v) = parse_dd_size(val) {
+                seek = v;
+            } else {
+                let _ = sys_write(err_fd, b"dd: invalid number for seek\n");
+                return 1;
+            }
+        } else if let Some(val) = arg.strip_prefix("skip=") {
+            if let Some(v) = parse_dd_size(val) {
+                skip = v;
+            } else {
+                let _ = sys_write(err_fd, b"dd: invalid number for skip\n");
+                return 1;
+            }
+        } else if let Some(val) = arg.strip_prefix("status=") {
+            if val == "none" {
+                status_none = true;
+            }
+        } else if let Some(val) = arg.strip_prefix("conv=") {
+            for opt in val.split(',') {
+                match opt {
+                    "sync" => conv_sync = true,
+                    "fsync" => conv_fsync = true,
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    let input_bs = ibs.unwrap_or(bs);
+    let output_bs = obs.unwrap_or(bs);
+
+    // Ouverture de la source
+    let (real_in_fd, need_close_in) = match if_path {
+        Some(path) => {
+            let fd = sys_open(path, crate::vfs::O_RDONLY);
+            if fd < 0 {
+                let _ = sys_write(err_fd, b"dd: failed to open '");
+                let _ = sys_write(err_fd, path.as_bytes());
+                let _ = sys_write(err_fd, b"': No such file or directory\n");
+                return 1;
+            }
+            (fd, true)
+        }
+        None => (in_fd, false),
+    };
+
+    // Ouverture de la destination
+    let (real_out_fd, need_close_out) = match of_path {
+        Some(path) => {
+            let flags = if seek > 0 {
+                crate::vfs::O_CREAT | crate::vfs::O_WRONLY
+            } else {
+                crate::vfs::O_CREAT | crate::vfs::O_WRONLY | crate::vfs::O_TRUNC
+            };
+            let fd = sys_open(path, flags);
+            if fd < 0 {
+                if need_close_in {
+                    let _ = sys_close(real_in_fd);
+                }
+                let _ = sys_write(err_fd, b"dd: failed to open '");
+                let _ = sys_write(err_fd, path.as_bytes());
+                let _ = sys_write(err_fd, b"': Permission denied or invalid path\n");
+                return 1;
+            }
+            (fd, true)
+        }
+        None => (out_fd, false),
+    };
+
+    // Application de skip sur l'entrée
+    if skip > 0 {
+        let skip_bytes = (skip as i64).saturating_mul(input_bs as i64);
+        let seek_res = sys_lseek(real_in_fd, skip_bytes, crate::vfs::SEEK_CUR);
+        if seek_res < 0 {
+            // Repli par lecture de purge si le descripteur ne supporte pas le positionnement direct (ex: pipe)
+            let mut purge_buf = [0u8; 1024];
+            let mut remaining = skip_bytes as usize;
+            while remaining > 0 {
+                let to_purge = remaining.min(purge_buf.len());
+                let n = sys_read(real_in_fd, &mut purge_buf[..to_purge]);
+                if n <= 0 {
+                    break;
+                }
+                remaining = remaining.saturating_sub(n as usize);
+            }
+        }
+    }
+
+    // Application de seek sur la sortie
+    if seek > 0 {
+        let seek_bytes = (seek as i64).saturating_mul(output_bs as i64);
+        let _ = sys_lseek(real_out_fd, seek_bytes, crate::vfs::SEEK_SET);
+    }
+
+    // Allocation d'un tampon statique de transfert de bloc (jusqu'à 64 Kio)
+    const MAX_DD_BUF: usize = 64 * 1024;
+    let chunk_size = input_bs.min(MAX_DD_BUF);
+    let mut buffer = [0u8; MAX_DD_BUF];
+
+    let mut records_in_full = 0usize;
+    let mut records_in_partial = 0usize;
+    let mut records_out_full = 0usize;
+    let mut records_out_partial = 0usize;
+    let mut total_bytes_transferred = 0usize;
+
+    let target_blocks = count.unwrap_or(usize::MAX);
+
+    while (records_in_full + records_in_partial) < target_blocks {
+        let n_read = sys_read(real_in_fd, &mut buffer[..chunk_size]);
+        if n_read < 0 {
+            let _ = sys_write(err_fd, b"dd: error reading input\n");
+            if need_close_in {
+                let _ = sys_close(real_in_fd);
+            }
+            if need_close_out {
+                let _ = sys_close(real_out_fd);
+            }
+            return 1;
+        }
+        if n_read == 0 {
+            break; // Fin de fichier
+        }
+
+        let mut read_bytes = n_read as usize;
+        if read_bytes == input_bs {
+            records_in_full += 1;
+        } else {
+            records_in_partial += 1;
+            if conv_sync && read_bytes < input_bs {
+                // Complétion par zéros jusqu'à ibs
+                buffer[read_bytes..input_bs].fill(0);
+                read_bytes = input_bs;
+            }
+        }
+
+        // Écriture par paquets de `output_bs`
+        let mut written_offset = 0usize;
+        while written_offset < read_bytes {
+            let to_write = (read_bytes - written_offset).min(output_bs);
+            let n_written = sys_write(
+                real_out_fd,
+                &buffer[written_offset..written_offset + to_write],
+            );
+            if n_written < 0 {
+                let _ = sys_write(err_fd, b"dd: error writing output\n");
+                if need_close_in {
+                    let _ = sys_close(real_in_fd);
+                }
+                if need_close_out {
+                    let _ = sys_close(real_out_fd);
+                }
+                return 1;
+            }
+            let nw = n_written as usize;
+            if nw == output_bs {
+                records_out_full += 1;
+            } else {
+                records_out_partial += 1;
+            }
+            total_bytes_transferred += nw;
+            written_offset += nw;
+        }
+    }
+
+    if conv_fsync {
+        let _ = sys_fsync(real_out_fd);
+    }
+
+    if need_close_in {
+        let _ = sys_close(real_in_fd);
+    }
+    if need_close_out {
+        let _ = sys_close(real_out_fd);
+    }
+
+    // Affichage des statistiques sur err_fd selon POSIX
+    if !status_none {
+        write_u64_fd(err_fd, records_in_full as u64);
+        let _ = sys_write(err_fd, b"+");
+        write_u64_fd(err_fd, records_in_partial as u64);
+        let _ = sys_write(err_fd, b" records in\n");
+
+        write_u64_fd(err_fd, records_out_full as u64);
+        let _ = sys_write(err_fd, b"+");
+        write_u64_fd(err_fd, records_out_partial as u64);
+        let _ = sys_write(err_fd, b" records out\n");
+
+        write_u64_fd(err_fd, total_bytes_transferred as u64);
+        let _ = sys_write(err_fd, b" bytes copied\n");
+    }
+
+    0
 }
 
 #[cfg(test)]
@@ -14861,6 +15170,79 @@ mod tests {
             &buf[..n3 as usize],
             b"file with space.txt\nsecond file.log\n"
         );
+        sys_close(out_r3);
+    }
+
+    #[test]
+    fn test_dd_block_transfer_and_seek_skip() {
+        let mut buf = [0u8; 512];
+
+        // 1. Transfert de base via pipe avec bs=4 et count=3
+        let (in_r, in_w) = crate::vfs::pipe().expect("pipe in");
+        let (out_r, out_w) = crate::vfs::pipe().expect("pipe out");
+        let _ = sys_write(in_w, b"abcdefghijklmnopqrstuvwxyz");
+        sys_close(in_w);
+
+        let code = run_dd(&["bs=4", "count=3", "status=none"], in_r, out_w, 2);
+        assert_eq!(code, 0);
+        sys_close(in_r);
+        sys_close(out_w);
+
+        let n = sys_read(out_r, &mut buf);
+        assert_eq!(n, 12);
+        assert_eq!(&buf[..12], b"abcdefghijkl");
+        sys_close(out_r);
+
+        // 2. Transfert if / of avec fichier virtuel
+        let src_file = "/tmp/dd_src.bin";
+        let dst_file = "/tmp/dd_dst.bin";
+        let fd_src = sys_open(src_file, crate::vfs::O_CREAT | crate::vfs::O_WRONLY);
+        assert!(fd_src >= 0);
+        let _ = sys_write(fd_src, b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ");
+        sys_close(fd_src);
+
+        let code2 = run_dd(
+            &[
+                "if=/tmp/dd_src.bin",
+                "of=/tmp/dd_dst.bin",
+                "bs=8",
+                "skip=1",
+                "count=2",
+                "status=none",
+            ],
+            0,
+            1,
+            2,
+        );
+        assert_eq!(code2, 0);
+
+        let fd_dst = sys_open(dst_file, crate::vfs::O_RDONLY);
+        assert!(fd_dst >= 0);
+        let n_dst = sys_read(fd_dst, &mut buf);
+        assert_eq!(n_dst, 16);
+        assert_eq!(&buf[..16], b"89ABCDEFGHIJKLMN");
+        sys_close(fd_dst);
+
+        // 3. Option conv=sync
+        let (in_r3, in_w3) = crate::vfs::pipe().expect("pipe in 3");
+        let (out_r3, out_w3) = crate::vfs::pipe().expect("pipe out 3");
+        let _ = sys_write(in_w3, b"123");
+        sys_close(in_w3);
+
+        let code3 = run_dd(
+            &["ibs=8", "obs=8", "conv=sync", "status=none"],
+            in_r3,
+            out_w3,
+            2,
+        );
+        assert_eq!(code3, 0);
+        sys_close(in_r3);
+        sys_close(out_w3);
+
+        let n3 = sys_read(out_r3, &mut buf);
+        assert_eq!(n3, 8);
+        assert_eq!(&buf[..3], b"123");
+        assert_eq!(&buf[3..8], &[0, 0, 0, 0, 0]);
         sys_close(out_r3);
     }
 }

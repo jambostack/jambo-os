@@ -591,6 +591,7 @@ impl JamboShell {
             "which" | "/bin/which" | "bin/which" => self.cmd_which(args, out),
             "/bin/time" | "bin/time" => self.cmd_posix_time(args, out),
             "xargs" | "/bin/xargs" | "bin/xargs" => self.cmd_xargs(args, out),
+            "dd" | "/bin/dd" | "bin/dd" => self.cmd_dd(args, out),
             "version" => self.cmd_version(out),
             "uptime" => self.cmd_uptime(out),
             "caps" => self.cmd_caps(out),
@@ -746,7 +747,7 @@ impl JamboShell {
 
     fn cmd_coreutils(&self, out: &mut [u8]) -> (ShellStatus, usize) {
         let text = b"Utilitaires Coreutils Ring 3 (services/jambo-coreutils) :\n\
-  Binaires disponibles : /bin/echo, /bin/cat, /bin/head, /bin/tail, /bin/touch, /bin/mkdir, /bin/rm, /bin/cp, /bin/mv, /bin/tee, /bin/env, /bin/grep, /bin/sort, /bin/uniq, /bin/find, /bin/chmod, /bin/chown, /bin/id, /bin/du, /bin/df, /bin/uname, /bin/cut, /bin/paste, /bin/comm, /bin/tr, /bin/split, /bin/basename, /bin/dirname, /bin/seq, /bin/yes, /bin/printf, /bin/expr, /bin/fold, /bin/nl, /bin/od, /bin/cmp, /bin/expand, /bin/unexpand, /bin/sleep, /bin/cksum, /bin/base64, /bin/sha256sum, /bin/sync, /bin/truncate, /bin/hexdump, /bin/which, /bin/time, /bin/xargs, /bin/wc, /bin/true, /bin/false, /bin/ls (52 utilitaires)\n\
+  Binaires disponibles : /bin/echo, /bin/cat, /bin/head, /bin/tail, /bin/touch, /bin/mkdir, /bin/rm, /bin/cp, /bin/mv, /bin/tee, /bin/env, /bin/grep, /bin/sort, /bin/uniq, /bin/find, /bin/chmod, /bin/chown, /bin/id, /bin/du, /bin/df, /bin/uname, /bin/cut, /bin/paste, /bin/comm, /bin/tr, /bin/split, /bin/basename, /bin/dirname, /bin/seq, /bin/yes, /bin/printf, /bin/expr, /bin/fold, /bin/nl, /bin/od, /bin/cmp, /bin/expand, /bin/unexpand, /bin/sleep, /bin/cksum, /bin/base64, /bin/sha256sum, /bin/sync, /bin/truncate, /bin/hexdump, /bin/which, /bin/time, /bin/xargs, /bin/dd, /bin/wc, /bin/true, /bin/false, /bin/ls (53 utilitaires)\n\
   Architecture & ABI   : System V AMD64 ELF64 (ET_EXEC / Ring 3 Userland)\n\
   Point d'entree       : _start (parsing argc/argv sur pile System V)\n\
   Terminaison          : Syscall 11 ThreadExit avec propagation code de retour POSIX\n\
@@ -1658,6 +1659,26 @@ Utilitaire d'installation JamboOS (Serie 0.*.*)\n\
         }
     }
 
+    fn cmd_dd(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if let Ok((r, w)) = libjambo::vfs::pipe() {
+            let code = libjambo::coreutils::run_dd(args, 0, 1, w);
+            let _ = libjambo::coreutils::sys_close(w);
+            let n = libjambo::coreutils::sys_read(r, out);
+            let _ = libjambo::coreutils::sys_close(r);
+            let len = if n > 0 { n as usize } else { 0 };
+            if code == 0 {
+                (ShellStatus::Success, len)
+            } else {
+                (ShellStatus::ExecutionFailed, len)
+            }
+        } else {
+            let msg = b"dd: pipe creation failed\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
+    }
+
     fn cmd_blockd(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
         let subcmd = if args.is_empty() { "health" } else { args[0] };
         match subcmd {
@@ -1743,6 +1764,7 @@ Utilitaire d'installation JamboOS (Serie 0.*.*)\n\
             health_status: 0, // Nominal
             spare_reserve_percent: 100,
             temperature_celsius: 32,
+            wear_leveling_percent: 0,
             total_sectors: 65536,
             total_writes_count: 0,
             flush_success_count: 0,
@@ -1790,6 +1812,8 @@ Utilitaire d'installation JamboOS (Serie 0.*.*)\n\
 
         cursor = append_bytes(out, cursor, b"  Reserve Disponible : ");
         cursor = append_u64(out, cursor, h.spare_reserve_percent as u64);
+        cursor = append_bytes(out, cursor, b" %\n  Usure Flash (Wear) : ");
+        cursor = append_u64(out, cursor, h.wear_leveling_percent as u64);
         cursor = append_bytes(out, cursor, b" %\n  Temperature        : ");
         cursor = append_u64(out, cursor, h.temperature_celsius as u64);
         cursor = append_bytes(out, cursor, b" \xC2\xB0C\n  Capacite Secteurs  : ");
@@ -17824,7 +17848,7 @@ mod tests {
         let (st, len) = shell.execute_line("coreutils", &mut out);
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
-        assert!(s.contains("51 utilitaires"));
+        assert!(s.contains("53 utilitaires"));
         assert!(s.contains("/bin/sleep"));
         assert!(s.contains("/bin/cksum"));
         assert!(s.contains("/bin/base64"));
@@ -18877,11 +18901,21 @@ mod tests {
         let s4 = core::str::from_utf8(&out[..len4]).unwrap();
         assert!(s4.contains("Reserve Disponible"));
 
-        // 5. coreutils inventaire 52
+        // 5. coreutils inventaire 53
         let (st5, len5) = shell.execute_line("coreutils", &mut out);
         assert_eq!(st5, ShellStatus::Success);
         let s5 = core::str::from_utf8(&out[..len5]).unwrap();
-        assert!(s5.contains("52 utilitaires"));
+        assert!(s5.contains("53 utilitaires"));
         assert!(s5.contains("/bin/xargs"));
+        assert!(s5.contains("/bin/dd"));
+
+        // 6. dd shell command
+        let (st6, len6) = shell.execute_line(
+            "dd if=/tmp/nonexistent of=/tmp/out bs=512 status=none",
+            &mut out,
+        );
+        assert_eq!(st6, ShellStatus::ExecutionFailed);
+        let s6 = core::str::from_utf8(&out[..len6]).unwrap();
+        assert!(s6.contains("dd:"));
     }
 }
