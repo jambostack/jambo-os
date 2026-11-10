@@ -528,6 +528,58 @@ pub fn sys_get_owner_pool(path: &str) -> Option<(u32, u32)> {
     None
 }
 
+/// Lit les métadonnées de fichier PosixStat directement depuis le pool d'inodes virtuel
+pub fn sys_stat_pool(path: &str) -> Option<crate::vfs::PosixStat> {
+    let clean_path = path.trim_end_matches('/');
+    let target = if clean_path.is_empty() {
+        "/"
+    } else {
+        clean_path
+    };
+    // SAFETY: Accès protégé au pool d'inodes virtuel
+    unsafe {
+        let pool = core::ptr::addr_of!(INODE_POOL);
+        for (idx, node) in (*pool).iter().enumerate() {
+            if node.is_active {
+                let p = node.path_str();
+                if p == target
+                    || (target.starts_with('/') && p == &target[1..])
+                    || (!target.starts_with('/') && p.strip_prefix('/').unwrap_or("") == target)
+                {
+                    let file_type = if node.is_symlink {
+                        crate::vfs::S_IFLNK
+                    } else if node.is_dir {
+                        crate::vfs::S_IFDIR
+                    } else {
+                        crate::vfs::S_IFREG
+                    };
+                    let st_mode = file_type | (node.mode & 0o7777);
+                    let blocks = node.size.div_ceil(512) as i64;
+                    return Some(crate::vfs::PosixStat {
+                        st_dev: 1,
+                        st_ino: (idx + 100) as u64,
+                        st_mode,
+                        st_nlink: if node.is_dir { 2 } else { 1 },
+                        st_uid: node.uid,
+                        st_gid: node.gid,
+                        st_rdev: 0,
+                        st_size: node.size as i64,
+                        st_blksize: 512,
+                        st_blocks: blocks,
+                        st_atime: 1731276000,
+                        st_atime_nsec: 0,
+                        st_mtime: 1731276000,
+                        st_mtime_nsec: 0,
+                        st_ctime: 1731276000,
+                        st_ctime_nsec: 0,
+                    });
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Crée un lien symbolique virtuel dans le pool d'inodes (symlink)
 pub fn sys_symlink_pool(target: &str, linkpath: &str) -> i32 {
     let clean_link = linkpath.trim_end_matches('/');
@@ -3110,27 +3162,38 @@ pub fn run_chmod(args: &[&str], err_fd: i32) -> i32 {
         return 1;
     }
 
-    // Parsing du mode octal (supporte ex: 755, 0755, 644, 600, etc.)
-    let mut mode: u32 = 0;
-    for b in raw_mode.bytes() {
-        if !(b'0'..=b'7').contains(&b) {
-            let _ = sys_write(err_fd, b"chmod: invalid mode: '");
-            let _ = sys_write(err_fd, raw_mode.as_bytes());
-            let _ = sys_write(err_fd, b"'\n");
-            return 1;
+    // Parsing du mode : octal direct ou symbolique POSIX (ex: "u+x", "755", "go-w", "a=rwx")
+    let is_octal_candidate = raw_mode.bytes().all(|b| (b'0'..=b'7').contains(&b));
+    let parsed_static_mode = if is_octal_candidate {
+        let mut m: u32 = 0;
+        for b in raw_mode.bytes() {
+            m = (m << 3) | (b - b'0') as u32;
         }
-        mode = (mode << 3) | (b - b'0') as u32;
-    }
-
-    if mode > 0o7777 {
-        let _ = sys_write(err_fd, b"chmod: invalid mode: '");
-        let _ = sys_write(err_fd, raw_mode.as_bytes());
-        let _ = sys_write(err_fd, b"'\n");
-        return 1;
-    }
+        if m <= 0o7777 {
+            Some(m)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
 
     let mut has_error = false;
     for &target in files {
+        let current_target_mode = sys_get_mode_pool(target).unwrap_or(0o644);
+        let mode = match parsed_static_mode {
+            Some(m) => m,
+            None => match resolve_chmod_mode(raw_mode, current_target_mode) {
+                Some(m) => m,
+                None => {
+                    let _ = sys_write(err_fd, b"chmod: invalid mode: '");
+                    let _ = sys_write(err_fd, raw_mode.as_bytes());
+                    let _ = sys_write(err_fd, b"'\n");
+                    return 1;
+                }
+            },
+        };
+
         let res = sys_chmod_pool(target, mode);
         if res < 0 {
             let _ = sys_write(err_fd, b"chmod: cannot access '");
@@ -3149,7 +3212,13 @@ pub fn run_chmod(args: &[&str], err_fd: i32) -> i32 {
                             && (p.len() == clean.len()
                                 || p.as_bytes().get(clean.len()) == Some(&b'/'))
                         {
-                            node.mode = mode & 0o7777;
+                            let node_mode = match parsed_static_mode {
+                                Some(m) => m,
+                                None => {
+                                    resolve_chmod_mode(raw_mode, node.mode).unwrap_or(node.mode)
+                                }
+                            };
+                            node.mode = node_mode & 0o7777;
                         }
                     }
                 }
@@ -12151,6 +12220,8 @@ pub fn run_xargs(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
             "hexdump" => run_hexdump(effective_sub_args, 0, out_fd, err_fd),
             "time" => run_time(effective_sub_args, 0, out_fd, err_fd),
             "dd" => run_dd(effective_sub_args, 0, out_fd, err_fd),
+            "readlink" => run_readlink(effective_sub_args, 0, out_fd, err_fd),
+            "stat" => run_stat(effective_sub_args, 0, out_fd, err_fd),
             _ => {
                 let _ = sys_write(err_fd, b"xargs: ");
                 let _ = sys_write(err_fd, target_cmd.as_bytes());
@@ -12567,6 +12638,529 @@ pub fn run_readlink(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 
     }
 
     0
+}
+
+/// Applique une clause symbolique chmod (ex: `u+x`, `g-w`, `o=r`, `a+rx`, `+x`) sur un mode existant
+pub fn apply_symbolic_chmod_clause(current_mode: u32, clause: &str) -> Option<u32> {
+    if clause.is_empty() {
+        return None;
+    }
+
+    let bytes = clause.as_bytes();
+    let mut op_idx = None;
+    for (i, &b) in bytes.iter().enumerate() {
+        if b == b'+' || b == b'-' || b == b'=' {
+            op_idx = Some(i);
+            break;
+        }
+    }
+
+    let op_pos = op_idx?;
+    let op = bytes[op_pos];
+    let who_slice = &clause[..op_pos];
+    let perm_slice = &clause[op_pos + 1..];
+
+    // Cibles : u, g, o, a (ou vide => équivalent à a / ugo)
+    let mut target_u = false;
+    let mut target_g = false;
+    let mut target_o = false;
+
+    if who_slice.is_empty() {
+        target_u = true;
+        target_g = true;
+        target_o = true;
+    } else {
+        for b in who_slice.bytes() {
+            match b {
+                b'u' => target_u = true,
+                b'g' => target_g = true,
+                b'o' => target_o = true,
+                b'a' => {
+                    target_u = true;
+                    target_g = true;
+                    target_o = true;
+                }
+                _ => return None,
+            }
+        }
+    }
+
+    // Masque de bits de base (r=4, w=2, x=1, s/setuid=0o4000, setgid=0o2000, sticky=0o1000)
+    let mut mask_u = 0u32;
+    let mut mask_g = 0u32;
+    let mut mask_o = 0u32;
+
+    for b in perm_slice.bytes() {
+        match b {
+            b'r' => {
+                if target_u {
+                    mask_u |= 0o400;
+                }
+                if target_g {
+                    mask_g |= 0o040;
+                }
+                if target_o {
+                    mask_o |= 0o004;
+                }
+            }
+            b'w' => {
+                if target_u {
+                    mask_u |= 0o200;
+                }
+                if target_g {
+                    mask_g |= 0o020;
+                }
+                if target_o {
+                    mask_o |= 0o002;
+                }
+            }
+            b'x' => {
+                if target_u {
+                    mask_u |= 0o100;
+                }
+                if target_g {
+                    mask_g |= 0o010;
+                }
+                if target_o {
+                    mask_o |= 0o001;
+                }
+            }
+            b's' => {
+                if target_u {
+                    mask_u |= 0o4000;
+                }
+                if target_g {
+                    mask_g |= 0o2000;
+                }
+            }
+            b't' => {
+                if target_o || target_u || target_g {
+                    mask_o |= 0o1000;
+                }
+            }
+            _ => return None,
+        }
+    }
+
+    let combined_mask = mask_u | mask_g | mask_o;
+    let mut new_mode = current_mode & 0o7777;
+
+    match op {
+        b'+' => {
+            new_mode |= combined_mask;
+        }
+        b'-' => {
+            new_mode &= !combined_mask;
+        }
+        b'=' => {
+            let mut clear_mask = 0u32;
+            if target_u {
+                clear_mask |= 0o4700;
+            }
+            if target_g {
+                clear_mask |= 0o2070;
+            }
+            if target_o {
+                clear_mask |= 0o1007;
+            }
+            new_mode = (new_mode & !clear_mask) | combined_mask;
+        }
+        _ => return None,
+    }
+
+    Some(new_mode)
+}
+
+/// Résout un mode chmod soit sous forme octale (ex: "755"), soit symbolique (ex: "u+x", "a-w", "go=r")
+pub fn resolve_chmod_mode(mode_str: &str, current_mode: u32) -> Option<u32> {
+    if mode_str.is_empty() {
+        return None;
+    }
+
+    // Mode octal numérique pur
+    if mode_str.bytes().all(|b| (b'0'..=b'7').contains(&b)) {
+        let mut mode: u32 = 0;
+        for b in mode_str.bytes() {
+            mode = (mode << 3) | (b - b'0') as u32;
+        }
+        if mode <= 0o7777 {
+            return Some(mode);
+        } else {
+            return None;
+        }
+    }
+
+    // Modes symboliques séparés par virgules (ex: "u+rwx,g+rx,o-w")
+    let mut effective_mode = current_mode & 0o7777;
+    let mut has_clause = false;
+
+    for clause in mode_str.split(',') {
+        let trimmed = clause.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        effective_mode = apply_symbolic_chmod_clause(effective_mode, trimmed)?;
+        has_clause = true;
+    }
+
+    if has_clause {
+        Some(effective_mode)
+    } else {
+        None
+    }
+}
+
+/// Formate un mode numérique en chaîne de permissions POSIX type ls/stat (ex: "-rwxr-xr-x", "drwxrwxrwt")
+pub fn format_mode_permissions(mode: u32) -> [u8; 10] {
+    let mut out = [b'-'; 10];
+    let file_type = mode & crate::vfs::S_IFMT;
+    out[0] = match file_type {
+        crate::vfs::S_IFDIR => b'd',
+        crate::vfs::S_IFLNK => b'l',
+        crate::vfs::S_IFCHR => b'c',
+        crate::vfs::S_IFSOCK => b's',
+        crate::vfs::S_IFIFO => b'p',
+        _ => b'-',
+    };
+
+    // User rwx
+    if (mode & 0o400) != 0 {
+        out[1] = b'r';
+    }
+    if (mode & 0o200) != 0 {
+        out[2] = b'w';
+    }
+    if (mode & 0o4000) != 0 {
+        out[3] = if (mode & 0o100) != 0 { b's' } else { b'S' };
+    } else if (mode & 0o100) != 0 {
+        out[3] = b'x';
+    }
+
+    // Group rwx
+    if (mode & 0o040) != 0 {
+        out[4] = b'r';
+    }
+    if (mode & 0o020) != 0 {
+        out[5] = b'w';
+    }
+    if (mode & 0o2000) != 0 {
+        out[6] = if (mode & 0o010) != 0 { b's' } else { b'S' };
+    } else if (mode & 0o010) != 0 {
+        out[6] = b'x';
+    }
+
+    // Others rwx
+    if (mode & 0o004) != 0 {
+        out[7] = b'r';
+    }
+    if (mode & 0o002) != 0 {
+        out[8] = b'w';
+    }
+    if (mode & 0o1000) != 0 {
+        out[9] = if (mode & 0o001) != 0 { b't' } else { b'T' };
+    } else if (mode & 0o001) != 0 {
+        out[9] = b'x';
+    }
+
+    out
+}
+
+/// Affiche les métadonnées détaillées d'un fichier conformément à l'utilitaire POSIX `stat`
+///
+/// Options supportées :
+/// - `-c` / `--format` : Format de sortie personnalisé (ex: "%a", "%n", "%s", "%F")
+/// - `-t` / `--terse` : Sortie condensée sur une seule ligne
+/// - `-L` / `--dereference` : Déréférence les liens symboliques
+pub fn run_stat(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    let _ = in_fd;
+    let mut terse = false;
+    let mut dereference = false;
+    let mut custom_format: Option<&str> = None;
+    let mut files_start = 0;
+
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i];
+        if arg == "-t" || arg == "--terse" {
+            terse = true;
+            i += 1;
+        } else if arg == "-L" || arg == "--dereference" {
+            dereference = true;
+            i += 1;
+        } else if arg == "-c" || arg == "--format" {
+            if i + 1 < args.len() {
+                custom_format = Some(args[i + 1]);
+                i += 2;
+            } else {
+                let _ = sys_write(err_fd, b"stat: option requires an argument -- 'c'\n");
+                return 1;
+            }
+        } else if let Some(stripped) = arg.strip_prefix("--format=") {
+            custom_format = Some(stripped);
+            i += 1;
+        } else if arg.starts_with('-') && arg.len() > 1 && !arg.starts_with("--") {
+            for b in arg[1..].bytes() {
+                match b {
+                    b't' => terse = true,
+                    b'L' => dereference = true,
+                    _ => {}
+                }
+            }
+            i += 1;
+        } else {
+            files_start = i;
+            break;
+        }
+    }
+
+    let files = &args[files_start..];
+    if files.is_empty() {
+        let _ = sys_write(err_fd, b"stat: missing operand\n");
+        return 1;
+    }
+
+    let mut has_error = false;
+    let mut link_buf = [0u8; crate::vfs::MAX_PATH_LEN];
+    for &target in files {
+        // Résolution de la cible (avec déréférencement optionnel de lien)
+        let resolved_path = if dereference {
+            let n = sys_readlink_pool(target, &mut link_buf);
+            if n > 0 {
+                core::str::from_utf8(&link_buf[..n as usize]).unwrap_or(target)
+            } else {
+                target
+            }
+        } else {
+            target
+        };
+
+        let stat_opt =
+            sys_stat_pool(resolved_path).or_else(|| crate::vfs::stat(resolved_path).ok());
+
+        let st = match stat_opt {
+            Some(s) => s,
+            None => {
+                let _ = sys_write(err_fd, b"stat: cannot stat '");
+                let _ = sys_write(err_fd, target.as_bytes());
+                let _ = sys_write(err_fd, b"': No such file or directory\n");
+                has_error = true;
+                continue;
+            }
+        };
+
+        if let Some(fmt) = custom_format {
+            // Rendu de format personnalisé (ex: "%a" => octal mode, "%s" => taille, "%n" => nom)
+            let mut cursor = 0;
+            let bytes = fmt.as_bytes();
+            let mut num_buf = [0u8; 32];
+
+            while cursor < bytes.len() {
+                if bytes[cursor] == b'%' && cursor + 1 < bytes.len() {
+                    cursor += 1;
+                    match bytes[cursor] {
+                        b'n' => {
+                            let _ = sys_write(out_fd, target.as_bytes());
+                        }
+                        b's' => {
+                            let len = write_u64_decimal(st.st_size as u64, &mut num_buf);
+                            let _ = sys_write(out_fd, &num_buf[..len]);
+                        }
+                        b'b' => {
+                            let len = write_u64_decimal(st.st_blocks as u64, &mut num_buf);
+                            let _ = sys_write(out_fd, &num_buf[..len]);
+                        }
+                        b'a' => {
+                            // Mode octal (3 chiffres)
+                            let octal = (st.st_mode & 0o777) as u64;
+                            let len = write_u64_octal(octal, &mut num_buf);
+                            let _ = sys_write(out_fd, &num_buf[..len]);
+                        }
+                        b'A' => {
+                            let p = format_mode_permissions(st.st_mode);
+                            let _ = sys_write(out_fd, &p);
+                        }
+                        b'u' => {
+                            let len = write_u64_decimal(st.st_uid as u64, &mut num_buf);
+                            let _ = sys_write(out_fd, &num_buf[..len]);
+                        }
+                        b'g' => {
+                            let len = write_u64_decimal(st.st_gid as u64, &mut num_buf);
+                            let _ = sys_write(out_fd, &num_buf[..len]);
+                        }
+                        b'F' => {
+                            let kind_str: &[u8] = match st.st_mode & crate::vfs::S_IFMT {
+                                crate::vfs::S_IFDIR => b"directory",
+                                crate::vfs::S_IFLNK => b"symbolic link",
+                                crate::vfs::S_IFCHR => b"character special file",
+                                crate::vfs::S_IFSOCK => b"socket",
+                                crate::vfs::S_IFIFO => b"fifo",
+                                _ => b"regular file",
+                            };
+                            let _ = sys_write(out_fd, kind_str);
+                        }
+                        b'%' => {
+                            let _ = sys_write(out_fd, b"%");
+                        }
+                        _ => {
+                            let _ = sys_write(out_fd, &[b'%', bytes[cursor]]);
+                        }
+                    }
+                } else if bytes[cursor] == b'\\' && cursor + 1 < bytes.len() {
+                    cursor += 1;
+                    match bytes[cursor] {
+                        b'n' => {
+                            let _ = sys_write(out_fd, b"\n");
+                        }
+                        b't' => {
+                            let _ = sys_write(out_fd, b"\t");
+                        }
+                        b'\\' => {
+                            let _ = sys_write(out_fd, b"\\");
+                        }
+                        _ => {
+                            let _ = sys_write(out_fd, &[b'\\', bytes[cursor]]);
+                        }
+                    }
+                } else {
+                    let _ = sys_write(out_fd, &[bytes[cursor]]);
+                }
+                cursor += 1;
+            }
+            let _ = sys_write(out_fd, b"\n");
+        } else if terse {
+            // Format terse : name size blocks mode uid gid dev ino nlink rdev atime mtime ctime blksize
+            let mut num_buf = [0u8; 32];
+            let _ = sys_write(out_fd, target.as_bytes());
+            let _ = sys_write(out_fd, b" ");
+            let l = write_u64_decimal(st.st_size as u64, &mut num_buf);
+            let _ = sys_write(out_fd, &num_buf[..l]);
+            let _ = sys_write(out_fd, b" ");
+            let l = write_u64_decimal(st.st_blocks as u64, &mut num_buf);
+            let _ = sys_write(out_fd, &num_buf[..l]);
+            let _ = sys_write(out_fd, b" ");
+            let l = write_u64_octal(st.st_mode as u64, &mut num_buf);
+            let _ = sys_write(out_fd, &num_buf[..l]);
+            let _ = sys_write(out_fd, b" ");
+            let l = write_u64_decimal(st.st_uid as u64, &mut num_buf);
+            let _ = sys_write(out_fd, &num_buf[..l]);
+            let _ = sys_write(out_fd, b" ");
+            let l = write_u64_decimal(st.st_gid as u64, &mut num_buf);
+            let _ = sys_write(out_fd, &num_buf[..l]);
+            let _ = sys_write(out_fd, b" ");
+            let l = write_u64_decimal(st.st_dev, &mut num_buf);
+            let _ = sys_write(out_fd, &num_buf[..l]);
+            let _ = sys_write(out_fd, b" ");
+            let l = write_u64_decimal(st.st_ino, &mut num_buf);
+            let _ = sys_write(out_fd, &num_buf[..l]);
+            let _ = sys_write(out_fd, b" ");
+            let l = write_u64_decimal(st.st_nlink as u64, &mut num_buf);
+            let _ = sys_write(out_fd, &num_buf[..l]);
+            let _ = sys_write(out_fd, b" 0 ");
+            let l = write_u64_decimal(st.st_atime as u64, &mut num_buf);
+            let _ = sys_write(out_fd, &num_buf[..l]);
+            let _ = sys_write(out_fd, b" ");
+            let l = write_u64_decimal(st.st_mtime as u64, &mut num_buf);
+            let _ = sys_write(out_fd, &num_buf[..l]);
+            let _ = sys_write(out_fd, b" ");
+            let l = write_u64_decimal(st.st_ctime as u64, &mut num_buf);
+            let _ = sys_write(out_fd, &num_buf[..l]);
+            let _ = sys_write(out_fd, b" ");
+            let l = write_u64_decimal(st.st_blksize as u64, &mut num_buf);
+            let _ = sys_write(out_fd, &num_buf[..l]);
+            let _ = sys_write(out_fd, b"\n");
+        } else {
+            // Sortie standard POSIX stat verbeuse
+            let mut num_buf = [0u8; 32];
+            let _ = sys_write(out_fd, b"  File: ");
+            let _ = sys_write(out_fd, target.as_bytes());
+            let _ = sys_write(out_fd, b"\n  Size: ");
+            let l = write_u64_decimal(st.st_size as u64, &mut num_buf);
+            let _ = sys_write(out_fd, &num_buf[..l]);
+            let _ = sys_write(out_fd, b"\tBlocks: ");
+            let l = write_u64_decimal(st.st_blocks as u64, &mut num_buf);
+            let _ = sys_write(out_fd, &num_buf[..l]);
+            let _ = sys_write(out_fd, b"          IO Block: ");
+            let l = write_u64_decimal(st.st_blksize as u64, &mut num_buf);
+            let _ = sys_write(out_fd, &num_buf[..l]);
+            let _ = sys_write(out_fd, b"  ");
+            let kind_str: &[u8] = match st.st_mode & crate::vfs::S_IFMT {
+                crate::vfs::S_IFDIR => b"directory",
+                crate::vfs::S_IFLNK => b"symbolic link",
+                crate::vfs::S_IFCHR => b"character special file",
+                crate::vfs::S_IFSOCK => b"socket",
+                crate::vfs::S_IFIFO => b"fifo",
+                _ => b"regular file",
+            };
+            let _ = sys_write(out_fd, kind_str);
+            let _ = sys_write(out_fd, b"\nDevice: ");
+            let l = write_u64_decimal(st.st_dev, &mut num_buf);
+            let _ = sys_write(out_fd, &num_buf[..l]);
+            let _ = sys_write(out_fd, b"        Inode: ");
+            let l = write_u64_decimal(st.st_ino, &mut num_buf);
+            let _ = sys_write(out_fd, &num_buf[..l]);
+            let _ = sys_write(out_fd, b"       Links: ");
+            let l = write_u64_decimal(st.st_nlink as u64, &mut num_buf);
+            let _ = sys_write(out_fd, &num_buf[..l]);
+            let _ = sys_write(out_fd, b"\nAccess: (0");
+            let octal = (st.st_mode & 0o777) as u64;
+            let l = write_u64_octal(octal, &mut num_buf);
+            let _ = sys_write(out_fd, &num_buf[..l]);
+            let _ = sys_write(out_fd, b"/");
+            let p = format_mode_permissions(st.st_mode);
+            let _ = sys_write(out_fd, &p);
+            let _ = sys_write(out_fd, b")  Uid: (    ");
+            let l = write_u64_decimal(st.st_uid as u64, &mut num_buf);
+            let _ = sys_write(out_fd, &num_buf[..l]);
+            let _ = sys_write(out_fd, b"/    root)   Gid: (    ");
+            let l = write_u64_decimal(st.st_gid as u64, &mut num_buf);
+            let _ = sys_write(out_fd, &num_buf[..l]);
+            let _ = sys_write(out_fd, b"/    root)\n");
+        }
+    }
+
+    if has_error {
+        1
+    } else {
+        0
+    }
+}
+
+/// Écrit un u64 en décimal dans un tampon
+fn write_u64_decimal(mut val: u64, buf: &mut [u8; 32]) -> usize {
+    if val == 0 {
+        buf[0] = b'0';
+        return 1;
+    }
+    let mut tmp = [0u8; 32];
+    let mut len = 0;
+    while val > 0 {
+        tmp[len] = b'0' + (val % 10) as u8;
+        val /= 10;
+        len += 1;
+    }
+    for i in 0..len {
+        buf[i] = tmp[len - 1 - i];
+    }
+    len
+}
+
+/// Écrit un u64 en octal dans un tampon
+fn write_u64_octal(mut val: u64, buf: &mut [u8; 32]) -> usize {
+    if val == 0 {
+        buf[0] = b'0';
+        return 1;
+    }
+    let mut tmp = [0u8; 32];
+    let mut len = 0;
+    while val > 0 {
+        tmp[len] = b'0' + (val % 8) as u8;
+        val /= 8;
+        len += 1;
+    }
+    for i in 0..len {
+        buf[i] = tmp[len - 1 - i];
+    }
+    len
 }
 
 #[cfg(test)]
@@ -15470,5 +16064,53 @@ mod tests {
         assert_eq!(n3, 14); // "/etc/hostname\n"
         assert_eq!(&buf[..n3 as usize], b"/etc/hostname\n");
         let _ = sys_close(out_r3);
+    }
+
+    #[test]
+    fn test_stat_and_symbolic_chmod() {
+        let (out_r, out_w) = crate::vfs::pipe().expect("pipe stat");
+        let (err_r, err_w) = crate::vfs::pipe().expect("pipe err");
+
+        // 1. Test stat standard
+        let code1 = run_stat(&["/etc/hostname"], 0, out_w, err_w);
+        assert_eq!(code1, 0);
+        let _ = sys_close(out_w);
+        let _ = sys_close(err_w);
+        let mut buf = [0u8; 512];
+        let n1 = sys_read(out_r, &mut buf);
+        assert!(n1 > 0);
+        let s1 = core::str::from_utf8(&buf[..n1 as usize]).unwrap();
+        assert!(s1.contains("File: /etc/hostname"));
+        assert!(s1.contains("Size: 14"));
+        assert!(s1.contains("regular file"));
+        let _ = sys_close(out_r);
+        let _ = sys_close(err_r);
+
+        // 2. Test stat -c %a %s %n
+        let (out_r2, out_w2) = crate::vfs::pipe().expect("pipe stat 2");
+        let code2 = run_stat(&["-c", "%a %s %n", "/etc/hostname"], 0, out_w2, 2);
+        assert_eq!(code2, 0);
+        let _ = sys_close(out_w2);
+        let n2 = sys_read(out_r2, &mut buf);
+        assert!(n2 > 0);
+        let s2 = core::str::from_utf8(&buf[..n2 as usize]).unwrap();
+        assert!(s2.starts_with("644 14 /etc/hostname"));
+        let _ = sys_close(out_r2);
+
+        // 3. Test chmod symbolique ("u+x,g-w,o=r")
+        let (err_r3, err_w3) = crate::vfs::pipe().expect("pipe err 3");
+        let code3 = run_chmod(&["u+x", "/etc/hostname"], err_w3);
+        assert_eq!(code3, 0);
+        let _ = sys_close(err_w3);
+        let _ = sys_close(err_r3);
+
+        let m3 = sys_get_mode_pool("/etc/hostname").expect("mode exists");
+        assert_eq!(m3, 0o744); // 0644 | 0100 = 0744
+
+        // Rétablir les permissions d'origine
+        let code_restore = run_chmod(&["644", "/etc/hostname"], 2);
+        assert_eq!(code_restore, 0);
+        let m_restored = sys_get_mode_pool("/etc/hostname").expect("mode restored");
+        assert_eq!(m_restored, 0o644);
     }
 }

@@ -145,6 +145,38 @@ pub extern "C" fn _start() -> ! {
                         };
                     }
                 }
+            } else if opcode == FsOpcode::CowGc as u32 {
+                match fs.run_cow_garbage_collector() {
+                    Ok(report) => {
+                        resp.status = 0;
+                        resp.length = 16;
+                        resp.data[0..4]
+                            .copy_from_slice(&(report.live_blocks_scanned as u32).to_le_bytes());
+                        resp.data[4..8].copy_from_slice(
+                            &(report.orphan_blocks_reclaimed as u32).to_le_bytes(),
+                        );
+                        resp.data[8..12]
+                            .copy_from_slice(&(report.total_free_blocks as u32).to_le_bytes());
+                        resp.data[12..16]
+                            .copy_from_slice(&(report.total_allocated_blocks as u32).to_le_bytes());
+                        println("[FS] Garbage Collection CoW terminee avec succes.");
+                    }
+                    Err(err) => {
+                        resp.status = match err {
+                            jambo_fs::FsError::BlockIoError(e) => e as i32,
+                            _ => libjambo::SysError::InvalidArgument as i32,
+                        };
+                        println("[FS] Erreur lors du Garbage Collector CoW.");
+                    }
+                }
+            } else if opcode == FsOpcode::Metrics as u32 {
+                let metrics = fs.metrics();
+                resp.status = 0;
+                resp.length = 40;
+                let b = metrics.to_bytes();
+                let copy_len = b.len().min(resp.data.len());
+                resp.data[..copy_len].copy_from_slice(&b[..copy_len]);
+                println("[FS] Metriques CoW JamboFS transmises.");
             } else {
                 match fs.read_file(path_str, &mut file_buf) {
                     Ok(read_len) => {

@@ -119,6 +119,7 @@ pub enum FsOpcode {
     Stat = 4,
     Sync = 5,
     Metrics = 6,
+    CowGc = 7,
 }
 
 /// Métriques dynamiques du système de fichiers JamboFS (espace, blocs, snapshots CoW)
@@ -219,6 +220,17 @@ impl FsRequest {
     pub fn new_metrics(req_id: u32) -> Self {
         Self {
             opcode: FsOpcode::Metrics as u32,
+            req_id,
+            offset: 0,
+            length: 0,
+            path_len: 0,
+            path: [0u8; 40],
+        }
+    }
+
+    pub fn new_cow_gc(req_id: u32) -> Self {
+        Self {
+            opcode: FsOpcode::CowGc as u32,
             req_id,
             offset: 0,
             length: 0,

@@ -277,5 +277,10 @@ name = "readlink"
 path = "src/bin/readlink.rs"
 test = false
 
+[[bin]]
+name = "stat"
+path = "src/bin/stat.rs"
+test = false
+
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }
