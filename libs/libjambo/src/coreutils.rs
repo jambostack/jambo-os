@@ -13163,6 +13163,140 @@ fn write_u64_octal(mut val: u64, buf: &mut [u8; 32]) -> usize {
     len
 }
 
+/// Crée un lien matériel (hard link) dans le pool d'inodes virtuel
+pub fn sys_link_pool(target: &str, linkpath: &str) -> i32 {
+    let clean_target = target.trim_end_matches('/');
+    let clean_link = linkpath.trim_end_matches('/');
+    if clean_target.is_empty() || clean_link.is_empty() {
+        return -1;
+    }
+    // SAFETY: Accès protégé au pool d'inodes virtuel
+    unsafe {
+        let pool = core::ptr::addr_of_mut!(INODE_POOL);
+        // Vérifier que le fichier cible existe et n'est pas un répertoire
+        let mut target_idx = None;
+        for (i, node) in (*pool).iter().enumerate() {
+            if node.is_active && node.path_str() == clean_target {
+                if node.is_dir {
+                    return -1; // EPERM: Lien physique interdit sur les répertoires
+                }
+                target_idx = Some(i);
+                break;
+            }
+        }
+        let t_idx = match target_idx {
+            Some(idx) => idx,
+            None => return -1, // ENOENT
+        };
+
+        // Vérifier que linkpath n'existe pas déjà
+        for node in (*pool).iter() {
+            if node.is_active && node.path_str() == clean_link {
+                return -1; // EEXIST
+            }
+        }
+
+        // Trouver un slot libre pour le hard link (partage les mêmes données et taille)
+        for node in (*pool).iter_mut() {
+            if !node.is_active {
+                let mut p = [0u8; crate::vfs::MAX_PATH_LEN];
+                let b = clean_link.as_bytes();
+                let len = b.len().min(crate::vfs::MAX_PATH_LEN);
+                p[..len].copy_from_slice(&b[..len]);
+                node.path = p;
+                node.path_len = len;
+
+                let target_node = &(*pool)[t_idx];
+                node.buffer = target_node.buffer;
+                node.size = target_node.size;
+                node.mode = target_node.mode;
+                node.uid = target_node.uid;
+                node.gid = target_node.gid;
+                node.is_active = true;
+                node.is_dir = false;
+                node.is_symlink = false;
+                return 0;
+            }
+        }
+    }
+    -1 // ENOSPC
+}
+
+/// Utilitaire Coreutils POSIX `ln` (création de liens physiques et symboliques)
+pub fn run_ln(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    let _ = in_fd;
+    let _ = out_fd;
+    let mut symbolic = false;
+    let mut force = false;
+    let mut targets_start = 0;
+
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i];
+        if arg == "-s" || arg == "--symbolic" {
+            symbolic = true;
+            i += 1;
+        } else if arg == "-f" || arg == "--force" {
+            force = true;
+            i += 1;
+        } else if arg == "-sf" || arg == "-fs" {
+            symbolic = true;
+            force = true;
+            i += 1;
+        } else if arg.starts_with('-') && arg.len() > 1 && !arg.starts_with("--") {
+            for b in arg[1..].bytes() {
+                match b {
+                    b's' => symbolic = true,
+                    b'f' => force = true,
+                    _ => {}
+                }
+            }
+            i += 1;
+        } else {
+            targets_start = i;
+            break;
+        }
+    }
+
+    let operands = &args[targets_start..];
+    if operands.is_empty() {
+        let _ = sys_write(err_fd, b"ln: missing file operand\n");
+        return 1;
+    }
+    if operands.len() == 1 {
+        let _ = sys_write(err_fd, b"ln: missing destination file operand after '");
+        let _ = sys_write(err_fd, operands[0].as_bytes());
+        let _ = sys_write(err_fd, b"'\n");
+        return 1;
+    }
+
+    let target = operands[0];
+    let linkpath = operands[1];
+
+    if force {
+        let _ = sys_unlink_pool(linkpath);
+    }
+
+    let res = if symbolic {
+        sys_symlink_pool(target, linkpath)
+    } else {
+        sys_link_pool(target, linkpath)
+    };
+
+    if res != 0 {
+        let _ = sys_write(err_fd, b"ln: failed to create ");
+        if symbolic {
+            let _ = sys_write(err_fd, b"symbolic ");
+        }
+        let _ = sys_write(err_fd, b"link '");
+        let _ = sys_write(err_fd, linkpath.as_bytes());
+        let _ = sys_write(err_fd, b"': File exists or invalid target\n");
+        1
+    } else {
+        0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -16112,5 +16246,52 @@ mod tests {
         assert_eq!(code_restore, 0);
         let m_restored = sys_get_mode_pool("/etc/hostname").expect("mode restored");
         assert_eq!(m_restored, 0o644);
+    }
+
+    #[test]
+    fn test_ln_hard_and_symbolic_link() {
+        let target = "/etc/hostname";
+        let sym_link = "/tmp/test_ln_sym.lnk";
+        let hard_link = "/tmp/test_ln_hard.lnk";
+
+        // Nettoyage préalable
+        let _ = sys_unlink_pool(sym_link);
+        let _ = sys_unlink_pool(hard_link);
+
+        // 1. Création d'un lien symbolique via run_ln -s
+        let (err_r1, err_w1) = crate::vfs::pipe().expect("pipe err 1");
+        let code1 = run_ln(&["-s", target, sym_link], 0, 1, err_w1);
+        assert_eq!(code1, 0);
+        let _ = sys_close(err_w1);
+        let _ = sys_close(err_r1);
+
+        // Vérification avec readlink
+        let mut readlink_buf = [0u8; 64];
+        let n_link = sys_readlink_pool(sym_link, &mut readlink_buf);
+        assert!(n_link > 0);
+        assert_eq!(&readlink_buf[..n_link as usize], target.as_bytes());
+
+        // 2. Création d'un lien physique (hard link) via run_ln
+        let (err_r2, err_w2) = crate::vfs::pipe().expect("pipe err 2");
+        let code2 = run_ln(&[target, hard_link], 0, 1, err_w2);
+        assert_eq!(code2, 0);
+        let _ = sys_close(err_w2);
+        let _ = sys_close(err_r2);
+
+        // Vérification de contenu et taille identiques pour le hard link
+        let stat_target = sys_stat_pool(target).expect("stat target");
+        let stat_hard = sys_stat_pool(hard_link).expect("stat hard link");
+        assert_eq!(stat_target.st_size, stat_hard.st_size);
+        assert_eq!(stat_target.st_mode & 0o777, stat_hard.st_mode & 0o777);
+
+        // 3. Forçage avec -sf sur un lien existant
+        let code3 = run_ln(&["-sf", "/etc/os-release", sym_link], 0, 1, 2);
+        assert_eq!(code3, 0);
+        let n_link2 = sys_readlink_pool(sym_link, &mut readlink_buf);
+        assert_eq!(&readlink_buf[..n_link2 as usize], b"/etc/os-release");
+
+        // Nettoyage final
+        let _ = sys_unlink_pool(sym_link);
+        let _ = sys_unlink_pool(hard_link);
     }
 }
