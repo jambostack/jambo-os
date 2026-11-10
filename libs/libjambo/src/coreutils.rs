@@ -12679,6 +12679,7 @@ pub fn run_xargs(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
             "mktemp" => run_mktemp(effective_sub_args, 0, out_fd, err_fd),
             "rmdir" => run_rmdir(effective_sub_args, err_fd),
             "tree" => run_tree(effective_sub_args, out_fd, err_fd),
+            "realpath" => run_realpath(effective_sub_args, out_fd, err_fd),
             _ => {
                 let _ = sys_write(err_fd, b"xargs: ");
                 let _ = sys_write(err_fd, target_cmd.as_bytes());
@@ -12998,6 +12999,321 @@ pub fn run_dd(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
     }
 
     0
+}
+
+/// Résout de manière canonique et déterministe un chemin de fichier POSIX (`realpath`).
+///
+/// Traite les chemins absolus et relatifs, normalise les segments `.` et `..`,
+/// élimine les slashs multiples consécutifs, et déréférence récursivement les liens symboliques
+/// jusqu'à 32 niveaux pour prévenir les boucles infinies (`ELOOP`).
+pub fn canonicalize_path(path: &str, out: &mut [u8]) -> Result<usize, crate::SysError> {
+    if path.is_empty() {
+        return Err(crate::SysError::InvalidArgument);
+    }
+
+    // Si le chemin est relatif, préfixer par le répertoire racine ou courant "/"
+    let (mut current_path, mut current_len) = if !path.starts_with('/') {
+        let mut p = [0u8; crate::vfs::MAX_PATH_LEN];
+        p[0] = b'/';
+        let b = path.as_bytes();
+        let copy_len = b.len().min(crate::vfs::MAX_PATH_LEN - 2);
+        p[1..1 + copy_len].copy_from_slice(&b[..copy_len]);
+        (p, 1 + copy_len)
+    } else {
+        let mut p = [0u8; crate::vfs::MAX_PATH_LEN];
+        let b = path.as_bytes();
+        let copy_len = b.len().min(crate::vfs::MAX_PATH_LEN);
+        p[..copy_len].copy_from_slice(&b[..copy_len]);
+        (p, copy_len)
+    };
+
+    let mut link_hops = 0usize;
+    const MAX_SYMLINK_HOPS: usize = 32;
+
+    loop {
+        // Découpage et normalisation des segments sur une pile de composants statique
+        let cur_str = match core::str::from_utf8(&current_path[..current_len]) {
+            Ok(s) => s,
+            Err(_) => return Err(crate::SysError::InvalidArgument),
+        };
+
+        // Tableau statique de tranches de segments
+        let mut segments: [&str; 64] = [""; 64];
+        let mut seg_count = 0usize;
+
+        for part in cur_str.split('/') {
+            if part.is_empty() || part == "." {
+                continue;
+            } else if part == ".." {
+                seg_count = seg_count.saturating_sub(1);
+            } else {
+                if seg_count < segments.len() {
+                    segments[seg_count] = part;
+                    seg_count += 1;
+                } else {
+                    return Err(crate::SysError::BufferTooSmall);
+                }
+            }
+        }
+
+        // Reconstruction progressive et vérification des liens symboliques
+        let mut resolved = [0u8; crate::vfs::MAX_PATH_LEN];
+        let mut res_len = 1usize;
+        resolved[0] = b'/';
+
+        let mut encountered_symlink = false;
+
+        for (idx, seg) in segments[..seg_count].iter().enumerate() {
+            let prev_len = res_len;
+            if res_len > 1 {
+                if res_len < crate::vfs::MAX_PATH_LEN {
+                    resolved[res_len] = b'/';
+                    res_len += 1;
+                } else {
+                    return Err(crate::SysError::BufferTooSmall);
+                }
+            }
+            let seg_bytes = seg.as_bytes();
+            if res_len + seg_bytes.len() <= crate::vfs::MAX_PATH_LEN {
+                resolved[res_len..res_len + seg_bytes.len()].copy_from_slice(seg_bytes);
+                res_len += seg_bytes.len();
+            } else {
+                return Err(crate::SysError::BufferTooSmall);
+            }
+
+            // Vérifier si le chemin partiel est un lien symbolique
+            let partial_str = match core::str::from_utf8(&resolved[..res_len]) {
+                Ok(s) => s,
+                Err(_) => return Err(crate::SysError::InvalidArgument),
+            };
+
+            let mut link_buf = [0u8; crate::vfs::MAX_PATH_LEN];
+            let read_res = sys_readlink(partial_str, &mut link_buf);
+            if read_res > 0 {
+                // Lien symbolique détecté !
+                link_hops += 1;
+                if link_hops > MAX_SYMLINK_HOPS {
+                    return Err(crate::SysError::InvalidArgument); // ELOOP
+                }
+
+                let link_target = match core::str::from_utf8(&link_buf[..read_res as usize]) {
+                    Ok(s) => s,
+                    Err(_) => return Err(crate::SysError::InvalidArgument),
+                };
+
+                // Reconstruire current_path = (si cible absolue: cible, sinon: resolved[..prev_len] + "/" + cible) + reste des segments
+                let mut next_path = [0u8; crate::vfs::MAX_PATH_LEN];
+                let mut next_len;
+
+                if link_target.starts_with('/') {
+                    let tb = link_target.as_bytes();
+                    let tlen = tb.len().min(crate::vfs::MAX_PATH_LEN);
+                    next_path[..tlen].copy_from_slice(&tb[..tlen]);
+                    next_len = tlen;
+                } else {
+                    let parent_bytes = &resolved[..prev_len];
+                    next_path[..prev_len].copy_from_slice(parent_bytes);
+                    next_len = prev_len;
+                    if next_len > 0
+                        && next_path[next_len - 1] != b'/'
+                        && next_len < crate::vfs::MAX_PATH_LEN
+                    {
+                        next_path[next_len] = b'/';
+                        next_len += 1;
+                    }
+                    let tb = link_target.as_bytes();
+                    let tlen = tb.len().min(crate::vfs::MAX_PATH_LEN - next_len);
+                    next_path[next_len..next_len + tlen].copy_from_slice(&tb[..tlen]);
+                    next_len += tlen;
+                }
+
+                // Ajouter les segments restants non encore traités
+                for remaining_seg in &segments[idx + 1..seg_count] {
+                    if next_len < crate::vfs::MAX_PATH_LEN && next_path[next_len - 1] != b'/' {
+                        next_path[next_len] = b'/';
+                        next_len += 1;
+                    }
+                    let rb = remaining_seg.as_bytes();
+                    let rlen = rb.len().min(crate::vfs::MAX_PATH_LEN - next_len);
+                    next_path[next_len..next_len + rlen].copy_from_slice(&rb[..rlen]);
+                    next_len += rlen;
+                }
+
+                current_path = next_path;
+                current_len = next_len;
+                encountered_symlink = true;
+                break;
+            }
+        }
+
+        if !encountered_symlink {
+            // Aucun lien symbolique sur les segments restants, la résolution est achevée
+            if out.len() < res_len {
+                return Err(crate::SysError::InvalidArgument);
+            }
+            out[..res_len].copy_from_slice(&resolved[..res_len]);
+            return Ok(res_len);
+        }
+    }
+}
+
+/// Utilitaire Coreutils Ring 3 : `realpath` (POSIX / GNU Coreutils)
+///
+/// Résout et affiche le chemin canonique absolu de chaque fichier ou répertoire spécifié,
+/// en résolvant les liens symboliques et en supprimant les composants `.`, `..` et les slashs superflus.
+/// Supporte les options :
+/// - `-s`, `--strip`, `--no-symlinks` : Résout uniquement la syntaxe sans déréférencer les liens symboliques
+/// - `-z`, `--zero` : Termine chaque ligne de sortie par un octet NUL au lieu d'un saut de ligne
+/// - `-q`, `--quiet` : Supprime les messages d'erreur en cas de chemin inexistant ou invalide
+pub fn run_realpath(args: &[&str], out_fd: i32, err_fd: i32) -> i32 {
+    let mut zero_delimiter = false;
+    let mut quiet = false;
+    let mut no_symlinks = false;
+    let mut operands: [&str; 64] = [""; 64];
+    let mut num_operands = 0;
+    let mut parsing_options = true;
+
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i];
+        if parsing_options && arg == "--" {
+            parsing_options = false;
+            i += 1;
+            continue;
+        }
+
+        if parsing_options && (arg.starts_with('-') && arg != "-") {
+            if arg == "--help" {
+                let _ = sys_write(
+                    err_fd,
+                    b"Usage: realpath [OPTION]... FILE...\n\
+Print the resolved absolute file name; all but the last component must exist\n\n\
+  -s, --strip, --no-symlinks  don't expand symlinks\n\
+  -z, --zero                  end each output line with NUL, not newline\n\
+  -q, --quiet                 suppress most error messages\n\
+      --help                  display this help and exit\n",
+                );
+                return 0;
+            } else if arg == "-z" || arg == "--zero" {
+                zero_delimiter = true;
+            } else if arg == "-q" || arg == "--quiet" {
+                quiet = true;
+            } else if arg == "-s" || arg == "--strip" || arg == "--no-symlinks" {
+                no_symlinks = true;
+            } else if arg.starts_with('-') && !arg.starts_with("--") {
+                for b in arg[1..].bytes() {
+                    match b {
+                        b'z' => zero_delimiter = true,
+                        b'q' => quiet = true,
+                        b's' => no_symlinks = true,
+                        _ => {
+                            if !quiet {
+                                let _ = sys_write(err_fd, b"realpath: invalid option\n");
+                            }
+                            return 1;
+                        }
+                    }
+                }
+            } else {
+                if !quiet {
+                    let _ = sys_write(err_fd, b"realpath: unrecognized option '");
+                    let _ = sys_write(err_fd, arg.as_bytes());
+                    let _ = sys_write(err_fd, b"'\n");
+                }
+                return 1;
+            }
+        } else {
+            if num_operands < operands.len() {
+                operands[num_operands] = arg;
+                num_operands += 1;
+            }
+        }
+        i += 1;
+    }
+
+    if num_operands == 0 {
+        if !quiet {
+            let _ = sys_write(err_fd, b"realpath: missing operand\n");
+        }
+        return 1;
+    }
+
+    let delim = if zero_delimiter { b"\0" } else { b"\n" };
+    let mut exit_code = 0;
+
+    for &op in &operands[..num_operands] {
+        if no_symlinks {
+            // Normalisation syntaxique sans déréférencer les liens
+            let mut resolved = [0u8; crate::vfs::MAX_PATH_LEN];
+            let full_str = if op.starts_with('/') {
+                op
+            } else {
+                // Préfixer par "/" pour chemin absolu
+                resolved[0] = b'/';
+                let b = op.as_bytes();
+                let len = b.len().min(crate::vfs::MAX_PATH_LEN - 1);
+                resolved[1..1 + len].copy_from_slice(&b[..len]);
+                match core::str::from_utf8(&resolved[..1 + len]) {
+                    Ok(s) => s,
+                    Err(_) => {
+                        exit_code = 1;
+                        continue;
+                    }
+                }
+            };
+
+            let mut segments: [&str; 64] = [""; 64];
+            let mut seg_count = 0usize;
+            for part in full_str.split('/') {
+                if part.is_empty() || part == "." {
+                    continue;
+                } else if part == ".." {
+                    seg_count = seg_count.saturating_sub(1);
+                } else {
+                    if seg_count < segments.len() {
+                        segments[seg_count] = part;
+                        seg_count += 1;
+                    }
+                }
+            }
+
+            let mut out_buf = [0u8; crate::vfs::MAX_PATH_LEN];
+            let mut out_len = 1usize;
+            out_buf[0] = b'/';
+
+            for seg in &segments[..seg_count] {
+                if out_len > 1 && out_len < crate::vfs::MAX_PATH_LEN {
+                    out_buf[out_len] = b'/';
+                    out_len += 1;
+                }
+                let b = seg.as_bytes();
+                let blen = b.len().min(crate::vfs::MAX_PATH_LEN - out_len);
+                out_buf[out_len..out_len + blen].copy_from_slice(&b[..blen]);
+                out_len += blen;
+            }
+
+            let _ = sys_write(out_fd, &out_buf[..out_len]);
+            let _ = sys_write(out_fd, delim);
+        } else {
+            let mut out_buf = [0u8; crate::vfs::MAX_PATH_LEN];
+            match canonicalize_path(op, &mut out_buf) {
+                Ok(n) => {
+                    let _ = sys_write(out_fd, &out_buf[..n]);
+                    let _ = sys_write(out_fd, delim);
+                }
+                Err(_) => {
+                    if !quiet {
+                        let _ = sys_write(err_fd, b"realpath: '");
+                        let _ = sys_write(err_fd, op.as_bytes());
+                        let _ = sys_write(err_fd, b"': No such file or directory\n");
+                    }
+                    exit_code = 1;
+                }
+            }
+        }
+    }
+
+    exit_code
 }
 
 /// Utilitaire Coreutils Ring 3 : `readlink` (POSIX.1-2008)
@@ -17078,5 +17394,53 @@ mod tests {
         // Nettoyage
         let _ = sys_unlink_pool(path1_str);
         let _ = sys_unlink_pool(dir_str);
+    }
+
+    #[test]
+    fn test_realpath_canonicalization_and_symlinks() {
+        // 1. Canonicalisation d'un chemin absolu avec segments . et ..
+        let mut out_buf = [0u8; 128];
+        let n =
+            canonicalize_path("/etc/../etc/./hostname", &mut out_buf).expect("canonicalize path");
+        assert_eq!(&out_buf[..n], b"/etc/hostname");
+
+        // 2. Canonicalisation d'un chemin avec multiples slashs consécutifs
+        let n2 =
+            canonicalize_path("///etc///os-release", &mut out_buf).expect("canonicalize slashes");
+        assert_eq!(&out_buf[..n2], b"/etc/os-release");
+
+        // 3. Canonicalisation via lien symbolique dans INODE_POOL
+        let target = "/etc/hostname";
+        let symlink_path = "/tmp/test_real_symlink";
+        let _ = sys_symlink_pool(target, symlink_path);
+
+        let n3 = canonicalize_path("/tmp/test_real_symlink", &mut out_buf)
+            .expect("canonicalize symlink");
+        assert_eq!(&out_buf[..n3], b"/etc/hostname");
+
+        // 4. Test d'exécution de la commande run_realpath avec pipe
+        let (out_r, out_w) = crate::vfs::pipe().expect("pipe realpath");
+        let code = run_realpath(&["-z", "/tmp/../tmp/test_real_symlink"], out_w, 2);
+        assert_eq!(code, 0);
+        let _ = sys_close(out_w);
+
+        let mut read_buf = [0u8; 64];
+        let nr = sys_read(out_r, &mut read_buf);
+        let _ = sys_close(out_r);
+        assert_eq!(nr, 14); // "/etc/hostname\0"
+        assert_eq!(&read_buf[..nr as usize], b"/etc/hostname\0");
+
+        // 5. Test de l'option -s (--no-symlinks) : normalisation syntaxique
+        let (out_r2, out_w2) = crate::vfs::pipe().expect("pipe realpath -s");
+        let code2 = run_realpath(&["-s", "/var/log/../log/./syslog"], out_w2, 2);
+        assert_eq!(code2, 0);
+        let _ = sys_close(out_w2);
+
+        let nr2 = sys_read(out_r2, &mut read_buf);
+        let _ = sys_close(out_r2);
+        assert_eq!(&read_buf[..nr2 as usize], b"/var/log/syslog\n");
+
+        // Nettoyage
+        let _ = sys_unlink_pool(symlink_path);
     }
 }

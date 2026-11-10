@@ -307,5 +307,10 @@ name = "tree"
 path = "src/bin/tree.rs"
 test = false
 
+[[bin]]
+name = "realpath"
+path = "src/bin/realpath.rs"
+test = false
+
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }

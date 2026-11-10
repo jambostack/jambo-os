@@ -450,6 +450,24 @@ impl XhciRing {
 // Décodage Registre Port Status & Control (PORTSC)
 // ============================================================================
 
+/// Masques de bits et drapeaux de changement d'état du registre PORTSC (Section 5.4.8 de la spec xHCI 1.2)
+pub const PORTSC_CCS: u32 = 1 << 0; // Current Connect Status
+pub const PORTSC_PED: u32 = 1 << 1; // Port Enabled/Disabled
+pub const PORTSC_OCA: u32 = 1 << 3; // Over-current Active
+pub const PORTSC_PR: u32 = 1 << 4; // Port Reset
+pub const PORTSC_PP: u32 = 1 << 9; // Port Power
+pub const PORTSC_CSC: u32 = 1 << 17; // Connect Status Change (RW1C)
+pub const PORTSC_PEC: u32 = 1 << 18; // Port Enabled/Disabled Change (RW1C)
+pub const PORTSC_WRC: u32 = 1 << 19; // Warm Port Reset Change (RW1C)
+pub const PORTSC_OCC: u32 = 1 << 20; // Over-current Change (RW1C)
+pub const PORTSC_PRC: u32 = 1 << 21; // Port Reset Change (RW1C)
+pub const PORTSC_PLC: u32 = 1 << 22; // Port Link State Change (RW1C)
+pub const PORTSC_CEC: u32 = 1 << 23; // Port Config Error Change (RW1C)
+
+/// Masque RW1C (Read-Write 1 to Clear) regroupant tous les bits de changement d'état xHCI
+pub const PORTSC_ALL_CHANGES_MASK: u32 =
+    PORTSC_CSC | PORTSC_PEC | PORTSC_WRC | PORTSC_OCC | PORTSC_PRC | PORTSC_PLC | PORTSC_CEC;
+
 /// Vitesse de négociation du port USB.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UsbSpeed {
@@ -467,7 +485,7 @@ impl Default for UsbSpeed {
     }
 }
 
-/// État décodé d'un port Root-Hub xHCI.
+/// État décodé d'un port Root-Hub xHCI incluant la télémétrie des changements dynamiques (CSC/PPC/PEC/PRC).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PortStatus {
     pub connected: bool,
@@ -477,17 +495,25 @@ pub struct PortStatus {
     pub over_current: bool,
     pub speed: UsbSpeed,
     pub link_state: u8,
+    // Bits de changement d'état (Change Indicators)
+    pub change_connect: bool,      // CSC (bit 17)
+    pub change_enable: bool,       // PEC (bit 18)
+    pub change_warm_reset: bool,   // WRC (bit 19)
+    pub change_over_current: bool, // OCC (bit 20)
+    pub change_reset: bool,        // PRC (bit 21)
+    pub change_link_state: bool,   // PLC (bit 22)
+    pub change_config_error: bool, // CEC (bit 23)
 }
 
 impl PortStatus {
     /// Décode la valeur brute du registre 32 bits PORTSC.
     pub fn parse(raw: u32) -> Self {
-        let connected = (raw & (1 << 0)) != 0;
-        let enabled = (raw & (1 << 1)) != 0;
-        let over_current = (raw & (1 << 3)) != 0;
-        let reset = (raw & (1 << 4)) != 0;
+        let connected = (raw & PORTSC_CCS) != 0;
+        let enabled = (raw & PORTSC_PED) != 0;
+        let over_current = (raw & PORTSC_OCA) != 0;
+        let reset = (raw & PORTSC_PR) != 0;
         let link_state = ((raw >> 5) & 0x0F) as u8;
-        let powered = (raw & (1 << 9)) != 0;
+        let powered = (raw & PORTSC_PP) != 0;
         let speed_raw = ((raw >> 10) & 0x0F) as u8;
 
         let speed = match speed_raw {
@@ -507,7 +533,42 @@ impl PortStatus {
             over_current,
             speed,
             link_state,
+            change_connect: (raw & PORTSC_CSC) != 0,
+            change_enable: (raw & PORTSC_PEC) != 0,
+            change_warm_reset: (raw & PORTSC_WRC) != 0,
+            change_over_current: (raw & PORTSC_OCC) != 0,
+            change_reset: (raw & PORTSC_PRC) != 0,
+            change_link_state: (raw & PORTSC_PLC) != 0,
+            change_config_error: (raw & PORTSC_CEC) != 0,
         }
+    }
+
+    /// Calcule la valeur d'acquittement RW1C (Read-Write 1 to Clear) pour réinitialiser
+    /// les drapeaux de notification matérielle sans altérer les bits de contrôle d'alimentation ou de reset.
+    pub fn acknowledge_changes_mask(&self) -> u32 {
+        let mut mask = 0u32;
+        if self.change_connect {
+            mask |= PORTSC_CSC;
+        }
+        if self.change_enable {
+            mask |= PORTSC_PEC;
+        }
+        if self.change_warm_reset {
+            mask |= PORTSC_WRC;
+        }
+        if self.change_over_current {
+            mask |= PORTSC_OCC;
+        }
+        if self.change_reset {
+            mask |= PORTSC_PRC;
+        }
+        if self.change_link_state {
+            mask |= PORTSC_PLC;
+        }
+        if self.change_config_error {
+            mask |= PORTSC_CEC;
+        }
+        mask
     }
 }
 
@@ -2933,9 +2994,20 @@ impl XhciInterrupter {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PortHotPlugEvent {
     NoChange,
-    DeviceConnected { port_id: u8, speed: UsbSpeed },
-    DeviceDisconnected { port_id: u8, slot_id: Option<u8> },
-    PortResetCompleted { port_id: u8 },
+    DeviceConnected {
+        port_id: u8,
+        speed: UsbSpeed,
+        change_connect: bool,
+    },
+    DeviceDisconnected {
+        port_id: u8,
+        slot_id: Option<u8>,
+        change_connect: bool,
+    },
+    PortResetCompleted {
+        port_id: u8,
+        speed: UsbSpeed,
+    },
 }
 
 // ============================================================================
@@ -4462,7 +4534,7 @@ impl XhciController {
     }
 
     /// Traite un TRB de changement de statut de port (Port Status Change Event, Type 34)
-    /// et retourne l'événement de détection à chaud (Hot-Plug).
+    /// et retourne l'événement de détection à chaud (Hot-Plug) avec télémétrie CSC/PRC.
     pub fn handle_port_status_change_trb(
         &mut self,
         trb: &Trb,
@@ -4479,18 +4551,28 @@ impl XhciController {
 
         let status = PortStatus::parse(raw_portsc);
 
-        // Détection de connexion (CCS=1 et PED=1 ou en cours)
+        // Détection de réinitialisation terminée (PRC=1 et PR=0)
+        if status.change_reset && !status.reset && status.connected {
+            return Ok(PortHotPlugEvent::PortResetCompleted {
+                port_id,
+                speed: status.speed,
+            });
+        }
+
+        // Détection de connexion (CCS=1)
         if status.connected {
             Ok(PortHotPlugEvent::DeviceConnected {
                 port_id,
                 speed: status.speed,
+                change_connect: status.change_connect,
             })
         } else {
-            // Déconnexion détectée (Hot-Unplug)
+            // Déconnexion détectée (Hot-Unplug : CCS=0)
             let current_slot = self.port_slots[port_id as usize - 1];
             Ok(PortHotPlugEvent::DeviceDisconnected {
                 port_id,
                 slot_id: current_slot,
+                change_connect: status.change_connect,
             })
         }
     }
@@ -4964,8 +5046,8 @@ mod tests {
         assert!(ctrl.configure_endpoint_ring(1, false).is_ok());
         assert!(ctrl.ep_rings[1].active);
 
-        // 1. Événement Port Status Change : Port 1 connecté en SuperSpeed (raw PORTSC: CCS=1, PED=1, PP=1, Speed=4)
-        let raw_connect = 1 | (1 << 1) | (1 << 9) | (4 << 10);
+        // 1. Événement Port Status Change : Port 1 connecté en SuperSpeed avec CSC=1 (raw PORTSC: CCS=1, PED=1, PP=1, Speed=4, CSC=bit 17)
+        let raw_connect = 1 | (1 << 1) | (1 << 9) | (4 << 10) | PORTSC_CSC;
         let trb_connect = Trb {
             parameter: 1 << 24, // Port ID 1 dans bits 31:24
             status: (TRB_COMP_SUCCESS as u32) << 24,
@@ -4979,16 +5061,21 @@ mod tests {
             ev_connect,
             PortHotPlugEvent::DeviceConnected {
                 port_id: 1,
-                speed: UsbSpeed::SuperSpeed
+                speed: UsbSpeed::SuperSpeed,
+                change_connect: true,
             }
         );
+
+        let status_conn = PortStatus::parse(raw_connect);
+        assert!(status_conn.change_connect);
+        assert_eq!(status_conn.acknowledge_changes_mask(), PORTSC_CSC);
 
         // Attribution du slot 3 au port 1
         assert!(ctrl.bind_port_slot(1, 3).is_ok());
         assert_eq!(ctrl.port_slots[0], Some(3));
 
-        // 2. Événement Déconnexion à chaud (Hot-Unplug) : CCS=0 (déconnecté)
-        let raw_disconnect = 1 << 9; // Alim active mais CCS=0
+        // 2. Événement Déconnexion à chaud (Hot-Unplug) : CCS=0 (déconnecté) et CSC=1
+        let raw_disconnect = (1 << 9) | PORTSC_CSC; // Alim active mais CCS=0 avec bit CSC
         let trb_disconnect = Trb {
             parameter: 1 << 24, // Port ID 1
             status: (TRB_COMP_SUCCESS as u32) << 24,
@@ -5002,7 +5089,8 @@ mod tests {
             ev_disconnect,
             PortHotPlugEvent::DeviceDisconnected {
                 port_id: 1,
-                slot_id: Some(3)
+                slot_id: Some(3),
+                change_connect: true,
             }
         );
 
@@ -5011,6 +5099,24 @@ mod tests {
         assert_eq!(freed_slot, Some(3));
         assert_eq!(ctrl.port_slots[0], None);
         assert!(!ctrl.ep_rings[1].active); // Endpoint réinitialisé
+
+        // 3. Événement Réinitialisation de Port terminée (PRC=1, PR=0, CCS=1)
+        let raw_reset_done = 1 | (1 << 1) | (1 << 9) | (4 << 10) | PORTSC_PRC;
+        let trb_reset = Trb {
+            parameter: 1 << 24,
+            status: (TRB_COMP_SUCCESS as u32) << 24,
+            control: (TRB_TYPE_PORT_STATUS_CHANGE << 10) | 1,
+        };
+        let ev_reset = ctrl
+            .handle_port_status_change_trb(&trb_reset, raw_reset_done)
+            .expect("Port reset done ok");
+        assert_eq!(
+            ev_reset,
+            PortHotPlugEvent::PortResetCompleted {
+                port_id: 1,
+                speed: UsbSpeed::SuperSpeed,
+            }
+        );
     }
 
     #[test]
