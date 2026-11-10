@@ -322,5 +322,10 @@ name = "pr"
 path = "src/bin/pr.rs"
 test = false
 
+[[bin]]
+name = "column"
+path = "src/bin/column.rs"
+test = false
+
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }

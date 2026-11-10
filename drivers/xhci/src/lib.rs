@@ -525,6 +525,8 @@ pub const PORTSC_PLS_MASK: u32 = 0x0F << PORTSC_PLS_SHIFT;
 pub const PORTSC_PP: u32 = 1 << 9; // Port Power
 pub const PORTSC_SPEED_SHIFT: u32 = 10; // Port Speed Shift (bits 13:10)
 pub const PORTSC_SPEED_MASK: u32 = 0x0F << PORTSC_SPEED_SHIFT;
+pub const PORTSC_PIC_SHIFT: u32 = 14; // Port Indicator Control (bits 15:14)
+pub const PORTSC_PIC_MASK: u32 = 0x03 << PORTSC_PIC_SHIFT;
 pub const PORTSC_LWS: u32 = 1 << 16; // Port Link State Write Strobe
 pub const PORTSC_CSC: u32 = 1 << 17; // Connect Status Change (RW1C)
 pub const PORTSC_PEC: u32 = 1 << 18; // Port Enabled/Disabled Change (RW1C)
@@ -533,6 +535,12 @@ pub const PORTSC_OCC: u32 = 1 << 20; // Over-current Change (RW1C)
 pub const PORTSC_PRC: u32 = 1 << 21; // Port Reset Change (RW1C)
 pub const PORTSC_PLC: u32 = 1 << 22; // Port Link State Change (RW1C)
 pub const PORTSC_CEC: u32 = 1 << 23; // Port Config Error Change (RW1C)
+pub const PORTSC_CAS: u32 = 1 << 24; // Cold Attach Status
+pub const PORTSC_WCE: u32 = 1 << 25; // Wake on Connect Enable
+pub const PORTSC_WDE: u32 = 1 << 26; // Wake on Disconnect Enable
+pub const PORTSC_WOE: u32 = 1 << 27; // Wake on Over-current Enable
+pub const PORTSC_DR: u32 = 1 << 30; // Device Removable
+pub const PORTSC_WPR: u32 = 1 << 31; // Warm Port Reset (RW)
 
 // Valeurs du Port Link State (PLS, spec xHCI 1.2 section 5.4.8)
 pub const PLS_U0: u8 = 0; // Operational state
@@ -712,6 +720,47 @@ impl PortStatus {
     pub fn build_exit_compliance_write(raw_portsc: u32) -> u32 {
         let pp_bit = raw_portsc & PORTSC_PP;
         pp_bit | PORTSC_LWS | (((PLS_RXDETECT as u32) & 0x0F) << PORTSC_PLS_SHIFT)
+    }
+
+    /// Calcule la commande d'amorce de reprise forcée de veille (Force Port Resume - FPR, transition U3 -> Resume).
+    ///
+    /// Selon la spec xHCI 1.2 section 4.19.1.1, pour réveiller un port suspendu en U3 (PLS = 3),
+    /// le logiciel écrit la valeur PLS = 15 (Resume) dans PORTSC avec le bit LWS positionné.
+    /// Pour un port USB 2.0 (High-Speed / Full-Speed / Low-Speed), cela envoie le signal K-state de Resume
+    /// pendant au moins 20 ms. Pour un port SuperSpeed USB 3.x, cela déclenche le trainage LFPS U3 Wakeup.
+    pub fn build_force_port_resume_write(raw_portsc: u32) -> u32 {
+        let pp_bit = raw_portsc & PORTSC_PP;
+        pp_bit | PORTSC_LWS | (((PLS_RESUME as u32) & 0x0F) << PORTSC_PLS_SHIFT)
+    }
+
+    /// Calcule la commande de finalisation de reprise de veille (transition Resume -> U0 opérationnel).
+    ///
+    /// Après l'expiration du délai de reprise matérielle (ex: 20 ms pour USB 2.0 ou fin d'handshake LFPS USB 3.0),
+    /// le logiciel écrit la valeur PLS = 0 (U0) dans PORTSC avec LWS=1 pour basculer le lien en mode opérationnel actif.
+    pub fn build_complete_port_resume_write(raw_portsc: u32) -> u32 {
+        let pp_bit = raw_portsc & PORTSC_PP;
+        pp_bit | PORTSC_LWS | (((PLS_U0 as u32) & 0x0F) << PORTSC_PLS_SHIFT)
+    }
+
+    /// Évalue si la transition de reprise U3 -> U0 a dépassé le délai maximum de synchronisation (timeout).
+    ///
+    /// - `elapsed_micros` : Temps écoulé depuis le début de la séquence de reprise en microsecondes.
+    /// - `speed` : Vitesse négociée du port.
+    ///
+    /// Selon la spécification USB 2.0 / USB 3.2 et xHCI 1.2 :
+    /// - En USB 2.0 (HS/FS/LS), la séquence de signalisation Resume dure 20 ms (20 000 µs), timeout d'échec fixé à 50 ms (50 000 µs).
+    /// - En USB 3.x SuperSpeed / SuperSpeedPlus, le réveil LFPS U3 Wakeup s'effectue en moins de 10 ms (10 000 µs), timeout d'échec à 20 ms (20 000 µs).
+    pub fn is_resume_timed_out(elapsed_micros: u64, speed: UsbSpeed) -> bool {
+        match speed {
+            UsbSpeed::SuperSpeed | UsbSpeed::SuperSpeedPlus => elapsed_micros > 20_000,
+            _ => elapsed_micros > 50_000,
+        }
+    }
+
+    /// Vérifie si le lien a atteint avec succès l'état U0 opérationnel actif.
+    pub fn is_link_operational_u0(raw_portsc: u32) -> bool {
+        let pls = ((raw_portsc & PORTSC_PLS_MASK) >> PORTSC_PLS_SHIFT) as u8;
+        pls == PLS_U0 && (raw_portsc & PORTSC_PED) != 0
     }
 }
 
@@ -3158,6 +3207,10 @@ pub enum PortHotPlugEvent {
     ComplianceModeEntered {
         port_id: u8,
     },
+    PortLinkStateChanged {
+        port_id: u8,
+        link_state: u8,
+    },
 }
 
 // ============================================================================
@@ -4831,6 +4884,14 @@ impl XhciController {
             return Ok(PortHotPlugEvent::PortResetCompleted {
                 port_id,
                 speed: status.speed,
+            });
+        }
+
+        // Détection de changement d'état de lien (PLC=1, ex: reprise de veille U3 -> U0 ou U3 -> Resume)
+        if status.change_link_state {
+            return Ok(PortHotPlugEvent::PortLinkStateChanged {
+                port_id,
+                link_state: status.link_state,
             });
         }
 
@@ -6740,5 +6801,63 @@ mod tests {
         );
         assert_ne!(exit_compliance & PORTSC_PP, 0);
         assert_eq!(exit_compliance & PORTSC_ALL_CHANGES_MASK, 0);
+
+        // 22. Contrôle de Reprise de Veille Forcée (Force Port Resume FPR) et Timers U3 -> U0
+        let raw_u3_suspended =
+            PORTSC_PP | PORTSC_CCS | PORTSC_PED | ((PLS_U3 as u32) << PORTSC_PLS_SHIFT);
+        let fpr_write = PortStatus::build_force_port_resume_write(raw_u3_suspended);
+        assert_ne!(fpr_write & PORTSC_LWS, 0);
+        assert_eq!(
+            (fpr_write & PORTSC_PLS_MASK) >> PORTSC_PLS_SHIFT,
+            PLS_RESUME as u32
+        );
+        assert_ne!(fpr_write & PORTSC_PP, 0);
+        assert_eq!(fpr_write & PORTSC_ALL_CHANGES_MASK, 0);
+
+        let resume_complete_write = PortStatus::build_complete_port_resume_write(raw_u3_suspended);
+        assert_ne!(resume_complete_write & PORTSC_LWS, 0);
+        assert_eq!(
+            (resume_complete_write & PORTSC_PLS_MASK) >> PORTSC_PLS_SHIFT,
+            PLS_U0 as u32
+        );
+
+        // Validation des timeouts de reprise selon la vitesse (USB 2.0 vs SuperSpeed)
+        assert!(!PortStatus::is_resume_timed_out(
+            15_000,
+            UsbSpeed::SuperSpeed
+        ));
+        assert!(PortStatus::is_resume_timed_out(
+            25_000,
+            UsbSpeed::SuperSpeed
+        ));
+        assert!(!PortStatus::is_resume_timed_out(
+            30_000,
+            UsbSpeed::HighSpeed
+        ));
+        assert!(PortStatus::is_resume_timed_out(55_000, UsbSpeed::HighSpeed));
+
+        // Validation de l'état opérationnel U0
+        let raw_u0_active =
+            PORTSC_PP | PORTSC_CCS | PORTSC_PED | ((PLS_U0 as u32) << PORTSC_PLS_SHIFT);
+        assert!(PortStatus::is_link_operational_u0(raw_u0_active));
+        assert!(!PortStatus::is_link_operational_u0(raw_u3_suspended));
+
+        // Détection de l'événement de changement d'état de lien (PLC=1)
+        let raw_plc_event = raw_u0_active | PORTSC_PLC;
+        let trb_plc = Trb {
+            parameter: 1 << 24, // Port 1
+            status: 0,
+            control: (TRB_TYPE_PORT_STATUS_CHANGE << 10) | 1,
+        };
+        let ev_plc = ctrl
+            .handle_port_status_change_trb(&trb_plc, raw_plc_event)
+            .expect("PLC event handled");
+        assert_eq!(
+            ev_plc,
+            PortHotPlugEvent::PortLinkStateChanged {
+                port_id: 1,
+                link_state: PLS_U0,
+            }
+        );
     }
 }

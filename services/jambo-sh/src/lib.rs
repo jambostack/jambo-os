@@ -602,6 +602,7 @@ impl JamboShell {
             "realpath" | "/bin/realpath" | "bin/realpath" => self.cmd_realpath(args, out),
             "fmt" | "/bin/fmt" | "bin/fmt" => self.cmd_fmt(args, out),
             "pr" | "/bin/pr" | "bin/pr" => self.cmd_pr(args, out),
+            "column" | "/bin/column" | "bin/column" => self.cmd_column(args, out),
             "cow" | "/bin/cow" | "bin/cow" => self.cmd_cow(args, out),
             "version" => self.cmd_version(out),
             "uptime" => self.cmd_uptime(out),
@@ -643,7 +644,7 @@ impl JamboShell {
   ls [-l] [-a] - Liste les fichiers et repertoires\n\
   wc [-l] [-w] [-c] <files> - Compte les lignes, mots et octets\n\
   true / false - Retourne un statut de succes (0) ou d'echec (1)\n\
-  coreutils   - Liste les 52 utilitaires Ring 3 (/bin/*)\n\
+  coreutils   - Liste les 64 utilitaires Ring 3 (/bin/*)\n\
   uname       - Affiche le nom et l'architecture du systeme\n\
   cut [-b|-c|-f] [-d] - Decoupage de colonnes et delimiteurs sur flux\n\
   version     - Affiche les details de version du micro-noyau\n\
@@ -762,7 +763,7 @@ impl JamboShell {
 
     fn cmd_coreutils(&self, out: &mut [u8]) -> (ShellStatus, usize) {
         let text = b"Utilitaires Coreutils Ring 3 (services/jambo-coreutils) :\n\
-  Binaires disponibles : /bin/echo, /bin/cat, /bin/head, /bin/tail, /bin/touch, /bin/mkdir, /bin/rm, /bin/cp, /bin/mv, /bin/tee, /bin/env, /bin/grep, /bin/sort, /bin/uniq, /bin/find, /bin/chmod, /bin/chown, /bin/chgrp, /bin/id, /bin/du, /bin/df, /bin/uname, /bin/cut, /bin/paste, /bin/comm, /bin/tr, /bin/split, /bin/basename, /bin/dirname, /bin/seq, /bin/yes, /bin/printf, /bin/expr, /bin/fold, /bin/nl, /bin/od, /bin/cmp, /bin/expand, /bin/unexpand, /bin/sleep, /bin/cksum, /bin/base64, /bin/sha256sum, /bin/sync, /bin/truncate, /bin/hexdump, /bin/which, /bin/time, /bin/xargs, /bin/dd, /bin/readlink, /bin/stat, /bin/ln, /bin/mktemp, /bin/rmdir, /bin/tree, /bin/realpath, /bin/fmt, /bin/pr, /bin/wc, /bin/true, /bin/false, /bin/ls (63 utilitaires)\n\
+  Binaires disponibles : /bin/echo, /bin/cat, /bin/head, /bin/tail, /bin/touch, /bin/mkdir, /bin/rm, /bin/cp, /bin/mv, /bin/tee, /bin/env, /bin/grep, /bin/sort, /bin/uniq, /bin/find, /bin/chmod, /bin/chown, /bin/chgrp, /bin/id, /bin/du, /bin/df, /bin/uname, /bin/cut, /bin/paste, /bin/comm, /bin/tr, /bin/split, /bin/basename, /bin/dirname, /bin/seq, /bin/yes, /bin/printf, /bin/expr, /bin/fold, /bin/nl, /bin/od, /bin/cmp, /bin/expand, /bin/unexpand, /bin/sleep, /bin/cksum, /bin/base64, /bin/sha256sum, /bin/sync, /bin/truncate, /bin/hexdump, /bin/which, /bin/time, /bin/xargs, /bin/dd, /bin/readlink, /bin/stat, /bin/ln, /bin/mktemp, /bin/rmdir, /bin/tree, /bin/realpath, /bin/fmt, /bin/pr, /bin/column, /bin/wc, /bin/true, /bin/false, /bin/ls (64 utilitaires)\n\
   Architecture & ABI   : System V AMD64 ELF64 (ET_EXEC / Ring 3 Userland)\n\
   Point d'entree       : _start (parsing argc/argv sur pile System V)\n\
   Terminaison          : Syscall 11 ThreadExit avec propagation code de retour POSIX\n\
@@ -2013,6 +2014,42 @@ Utilitaire d'installation JamboOS (Serie 0.*.*)\n\
             }
         } else {
             let msg = b"pr: pipe creation failed\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
+    }
+
+    fn cmd_column(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if let (Ok((r_out, w_out)), Ok((r_err, w_err))) =
+            (libjambo::vfs::pipe(), libjambo::vfs::pipe())
+        {
+            let code = libjambo::coreutils::run_column(args, 0, w_out, w_err);
+            let _ = libjambo::coreutils::sys_close(w_out);
+            let _ = libjambo::coreutils::sys_close(w_err);
+
+            let mut len = 0;
+            if code == 0 {
+                let n_out = libjambo::coreutils::sys_read(r_out, out);
+                if n_out > 0 {
+                    len = n_out as usize;
+                }
+            } else {
+                let n_err = libjambo::coreutils::sys_read(r_err, out);
+                if n_err > 0 {
+                    len = n_err as usize;
+                }
+            }
+            let _ = libjambo::coreutils::sys_close(r_out);
+            let _ = libjambo::coreutils::sys_close(r_err);
+
+            if code == 0 {
+                (ShellStatus::Success, len)
+            } else {
+                (ShellStatus::ExecutionFailed, len)
+            }
+        } else {
+            let msg = b"column: pipe creation failed\n";
             let len = msg.len().min(out.len());
             out[..len].copy_from_slice(&msg[..len]);
             (ShellStatus::ExecutionFailed, len)
@@ -18349,7 +18386,7 @@ mod tests {
         let (st, len) = shell.execute_line("coreutils", &mut out);
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
-        assert!(s.contains("62 utilitaires"));
+        assert!(s.contains("64 utilitaires"));
         assert!(s.contains("/bin/sleep"));
         assert!(s.contains("/bin/cksum"));
         assert!(s.contains("/bin/base64"));
@@ -19408,11 +19445,11 @@ mod tests {
         let s4 = core::str::from_utf8(&out[..len4]).unwrap();
         assert!(s4.contains("Reserve Disponible"));
 
-        // 5. coreutils inventaire 63
+        // 5. coreutils inventaire 64
         let (st5, len5) = shell.execute_line("coreutils", &mut out);
         assert_eq!(st5, ShellStatus::Success);
         let s5 = core::str::from_utf8(&out[..len5]).unwrap();
-        assert!(s5.contains("63 utilitaires"));
+        assert!(s5.contains("64 utilitaires"));
         assert!(s5.contains("/bin/xargs"));
         assert!(s5.contains("/bin/dd"));
         assert!(s5.contains("/bin/readlink"));
@@ -19421,6 +19458,7 @@ mod tests {
         assert!(s5.contains("/bin/mktemp"));
         assert!(s5.contains("/bin/rmdir"));
         assert!(s5.contains("/bin/pr"));
+        assert!(s5.contains("/bin/column"));
 
         // 6. dd shell command
         let (st6, len6) = shell.execute_line(
@@ -19517,5 +19555,11 @@ mod tests {
         assert_eq!(st19, ShellStatus::Success);
         let s19 = core::str::from_utf8(&out[..len19]).unwrap();
         assert!(s19.contains("  jambo-node-01"));
+
+        // 17. column shell command
+        let (st20, len20) = shell.execute_line("column -t -s : /etc/hostname", &mut out);
+        assert_eq!(st20, ShellStatus::Success);
+        let s20 = core::str::from_utf8(&out[..len20]).unwrap();
+        assert!(s20.contains("jambo-node-01"));
     }
 }

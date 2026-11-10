@@ -14985,6 +14985,362 @@ Paginate or columnate FILE(s) for printing.\n\n\
     0
 }
 
+/// Structure de configuration et d'alignement pour l'utilitaire `column`
+pub struct ColumnLayoutConfig {
+    pub table_mode: bool,
+    pub fill_across: bool,
+    pub separator: [u8; 8],
+    pub separator_len: usize,
+    pub output_separator: [u8; 8],
+    pub output_separator_len: usize,
+    pub max_columns: usize,
+    pub screen_width: usize,
+}
+
+impl ColumnLayoutConfig {
+    pub const fn default() -> Self {
+        Self {
+            table_mode: false,
+            fill_across: false,
+            separator: [0u8; 8],
+            separator_len: 0,
+            output_separator: [b' ', b' ', 0, 0, 0, 0, 0, 0],
+            output_separator_len: 2,
+            max_columns: 16,
+            screen_width: 80,
+        }
+    }
+}
+
+/// Utilitaire Ring 3 : `column` (Columnate Lists / Table Formatter)
+///
+/// Formate les entrées texte en plusieurs colonnes élégamment alignées.
+/// Supporte :
+/// - `-t`, `--table` : Détermine le nombre de colonnes et crée un tableau aligné
+/// - `-s`, `--separator SEP` : Délimiteur personnalisé pour scinder les champs (par ex. `:`, `,`, `;`)
+/// - `-o`, `--output-separator STR` : Chaîne de séparation de sortie (par défaut 2 espaces)
+/// - `-x`, `--fillrows` : Remplissage des colonnes par ligne plutôt que par colonne (mode liste)
+/// - `-c`, `--columns WIDTH` : Spécifie la largeur de fenêtre/écran en caractères (défaut 80)
+pub fn run_column(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    let mut config = ColumnLayoutConfig::default();
+    let mut file_args: [&str; 16] = [""; 16];
+    let mut file_count = 0usize;
+    let mut parsing_options = true;
+
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i].trim();
+        if parsing_options && arg == "--" {
+            parsing_options = false;
+            i += 1;
+            continue;
+        }
+
+        if parsing_options && arg.starts_with('-') && arg != "-" {
+            if arg == "--help" {
+                let _ = sys_write(
+                    err_fd,
+                    b"Usage: column [OPTION]... [FILE]...\n\
+Columnate lists or format tables.\n\n\
+  -t, --table               create a table with aligned columns\n\
+  -s, --separator SEP       specify possible input delimiters\n\
+  -o, --output-separator S  columns delimiter for table output (default 2 spaces)\n\
+  -x, --fillrows            fill rows before filling columns\n\
+  -c, --columns WIDTH       output width in characters (default 80)\n\
+      --help                display this help and exit\n",
+                );
+                return 0;
+            } else if arg == "-t" || arg == "--table" {
+                config.table_mode = true;
+                i += 1;
+            } else if arg == "-x" || arg == "--fillrows" {
+                config.fill_across = true;
+                i += 1;
+            } else if arg == "-s" {
+                if i + 1 < args.len() {
+                    let sep = args[i + 1].as_bytes();
+                    let l = sep.len().min(8);
+                    config.separator[..l].copy_from_slice(&sep[..l]);
+                    config.separator_len = l;
+                    i += 2;
+                } else {
+                    let _ = sys_write(err_fd, b"column: option requires an argument -- 's'\n");
+                    return 1;
+                }
+            } else if let Some(val) = arg.strip_prefix("--separator=") {
+                let sep = val.as_bytes();
+                let l = sep.len().min(8);
+                config.separator[..l].copy_from_slice(&sep[..l]);
+                config.separator_len = l;
+                i += 1;
+            } else if arg == "-o" {
+                if i + 1 < args.len() {
+                    let sep = args[i + 1].as_bytes();
+                    let l = sep.len().min(8);
+                    config.output_separator[..l].copy_from_slice(&sep[..l]);
+                    config.output_separator_len = l;
+                    i += 2;
+                } else {
+                    let _ = sys_write(err_fd, b"column: option requires an argument -- 'o'\n");
+                    return 1;
+                }
+            } else if let Some(val) = arg.strip_prefix("--output-separator=") {
+                let sep = val.as_bytes();
+                let l = sep.len().min(8);
+                config.output_separator[..l].copy_from_slice(&sep[..l]);
+                config.output_separator_len = l;
+                i += 1;
+            } else if arg == "-c" {
+                if i + 1 < args.len() {
+                    let parsed = parse_i64(args[i + 1].trim());
+                    if parsed > 0 {
+                        config.screen_width = parsed as usize;
+                    }
+                    i += 2;
+                } else {
+                    let _ = sys_write(err_fd, b"column: option requires an argument -- 'c'\n");
+                    return 1;
+                }
+            } else if let Some(val) = arg.strip_prefix("--columns=") {
+                let parsed = parse_i64(val.trim());
+                if parsed > 0 {
+                    config.screen_width = parsed as usize;
+                }
+                i += 1;
+            } else {
+                let _ = sys_write(err_fd, b"column: unrecognized option '");
+                let _ = sys_write(err_fd, arg.as_bytes());
+                let _ = sys_write(err_fd, b"'\n");
+                return 1;
+            }
+        } else {
+            if file_count < file_args.len() {
+                file_args[file_count] = arg;
+                file_count += 1;
+            }
+            i += 1;
+        }
+    }
+
+    // Traitement du buffer d'entrée
+    let read_all_bytes = |fd: i32, dst: &mut [u8]| -> usize {
+        let mut total = 0;
+        let mut chunk = [0u8; 1024];
+        loop {
+            let n = sys_read(fd, &mut chunk);
+            if n <= 0 {
+                break;
+            }
+            let to_copy = (n as usize).min(dst.len() - total);
+            dst[total..total + to_copy].copy_from_slice(&chunk[..to_copy]);
+            total += to_copy;
+            if total >= dst.len() {
+                break;
+            }
+        }
+        total
+    };
+
+    let mut buf = [0u8; 8192];
+    let total_len = if file_count == 0 {
+        read_all_bytes(in_fd, &mut buf)
+    } else {
+        let mut pos = 0;
+        for f in &file_args[..file_count] {
+            if *f == "-" {
+                pos += read_all_bytes(in_fd, &mut buf[pos..]);
+            } else {
+                let fd = sys_open(f, crate::vfs::O_RDONLY);
+                if fd < 0 {
+                    let _ = sys_write(err_fd, b"column: cannot open '");
+                    let _ = sys_write(err_fd, f.as_bytes());
+                    let _ = sys_write(err_fd, b"': No such file or directory\n");
+                    return 1;
+                }
+                pos += read_all_bytes(fd, &mut buf[pos..]);
+                let _ = sys_close(fd);
+            }
+            if pos >= buf.len() {
+                break;
+            }
+        }
+        pos
+    };
+
+    if total_len == 0 {
+        return 0;
+    }
+
+    let raw_text = match core::str::from_utf8(&buf[..total_len]) {
+        Ok(s) => s,
+        Err(_) => {
+            let _ = sys_write(err_fd, b"column: invalid UTF-8 sequence\n");
+            return 1;
+        }
+    };
+
+    // Table Mode (-t)
+    if config.table_mode {
+        // Collecter les lignes et cellules (max 128 lignes, max 16 colonnes par ligne)
+        const MAX_ROWS: usize = 128;
+        const MAX_COLS: usize = 16;
+
+        let mut lines = [""; MAX_ROWS];
+        let mut row_count = 0usize;
+
+        for line in raw_text.lines() {
+            if row_count < MAX_ROWS {
+                lines[row_count] = line;
+                row_count += 1;
+            }
+        }
+
+        let mut col_widths = [0usize; MAX_COLS];
+        let mut num_cols = 0usize;
+
+        // Découpage et calcul des largeurs maximales de chaque colonne
+        for line in lines.iter().take(row_count) {
+            let mut col_idx = 0usize;
+
+            if config.separator_len > 0 {
+                let sep_str =
+                    core::str::from_utf8(&config.separator[..config.separator_len]).unwrap_or(" ");
+                for token in line.split(sep_str) {
+                    if col_idx < MAX_COLS {
+                        if token.len() > col_widths[col_idx] {
+                            col_widths[col_idx] = token.len();
+                        }
+                        col_idx += 1;
+                    }
+                }
+            } else {
+                // Par défaut, séparation par espaces blancs (split_whitespace)
+                for token in line.split_whitespace() {
+                    if col_idx < MAX_COLS {
+                        if token.len() > col_widths[col_idx] {
+                            col_widths[col_idx] = token.len();
+                        }
+                        col_idx += 1;
+                    }
+                }
+            }
+            if col_idx > num_cols {
+                num_cols = col_idx;
+            }
+        }
+
+        let out_sep = core::str::from_utf8(&config.output_separator[..config.output_separator_len])
+            .unwrap_or("  ");
+
+        // Formater et émettre chaque ligne
+        for line in lines.iter().take(row_count) {
+            let mut tokens = [""; MAX_COLS];
+            let mut t_count = 0usize;
+
+            if config.separator_len > 0 {
+                let sep_str =
+                    core::str::from_utf8(&config.separator[..config.separator_len]).unwrap_or(" ");
+                for token in line.split(sep_str) {
+                    if t_count < MAX_COLS {
+                        tokens[t_count] = token;
+                        t_count += 1;
+                    }
+                }
+            } else {
+                for token in line.split_whitespace() {
+                    if t_count < MAX_COLS {
+                        tokens[t_count] = token;
+                        t_count += 1;
+                    }
+                }
+            }
+
+            for (c, tok) in tokens[..t_count].iter().enumerate() {
+                let _ = sys_write(out_fd, tok.as_bytes());
+                if c + 1 < t_count {
+                    // Padding avec espaces jusqu'à la largeur max de la colonne
+                    let pad = col_widths[c].saturating_sub(tok.len());
+                    for _ in 0..pad {
+                        let _ = sys_write(out_fd, b" ");
+                    }
+                    let _ = sys_write(out_fd, out_sep.as_bytes());
+                }
+            }
+            let _ = sys_write(out_fd, b"\n");
+        }
+        return 0;
+    }
+
+    // Mode Multi-colonnes standard (non -t, pliable horizontalement -x ou verticalement)
+    const MAX_ITEMS: usize = 256;
+    let mut items = [""; MAX_ITEMS];
+    let mut item_count = 0usize;
+
+    for line in raw_text.lines() {
+        let trimmed = line.trim();
+        if !trimmed.is_empty() && item_count < MAX_ITEMS {
+            items[item_count] = trimmed;
+            item_count += 1;
+        }
+    }
+
+    if item_count == 0 {
+        return 0;
+    }
+
+    let mut max_item_len = 0usize;
+    for it in &items[..item_count] {
+        if it.len() > max_item_len {
+            max_item_len = it.len();
+        }
+    }
+
+    let col_width = max_item_len + 2; // Largeur de colonne avec 2 espaces de séparation
+    let cols = (config.screen_width / col_width.max(1)).max(1);
+
+    if config.fill_across {
+        // Mode -x : remplir d'abord la ligne
+        let mut c = 0;
+        for it in &items[..item_count] {
+            let _ = sys_write(out_fd, it.as_bytes());
+            c += 1;
+            if c >= cols {
+                let _ = sys_write(out_fd, b"\n");
+                c = 0;
+            } else {
+                let pad = col_width.saturating_sub(it.len());
+                for _ in 0..pad {
+                    let _ = sys_write(out_fd, b" ");
+                }
+            }
+        }
+        if c > 0 {
+            let _ = sys_write(out_fd, b"\n");
+        }
+    } else {
+        // Remplir verticalement colonne par colonne
+        let rows = item_count.div_ceil(cols);
+        for r in 0..rows {
+            for c in 0..cols {
+                let idx = c * rows + r;
+                if idx < item_count {
+                    let it = items[idx];
+                    let _ = sys_write(out_fd, it.as_bytes());
+                    if c + 1 < cols && (idx + rows) < item_count {
+                        let pad = col_width.saturating_sub(it.len());
+                        for _ in 0..pad {
+                            let _ = sys_write(out_fd, b" ");
+                        }
+                    }
+                }
+            }
+            let _ = sys_write(out_fd, b"\n");
+        }
+    }
+
+    0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -18251,5 +18607,52 @@ Chaque processus dispose de son propre CR3 sans aucun privilege materiel direct.
         assert!(n2 > 0);
         let res2 = core::str::from_utf8(&out_buf2[..n2 as usize]).unwrap();
         assert_eq!(res2, "    Pure Microkernel\n");
+    }
+
+    #[test]
+    fn test_column_table_and_separators() {
+        let input_table = b"NAME:ROLE:STATUS\nroot:coordinator:active\nnode1:worker:idle\n";
+
+        let (in_r, in_w) = crate::vfs::pipe().expect("pipe in");
+        let (out_r, out_w) = crate::vfs::pipe().expect("pipe out");
+
+        let _ = sys_write(in_w, input_table);
+        let _ = sys_close(in_w);
+
+        let code = run_column(&["-t", "-s", ":", "-o", " | "], in_r, out_w, 2);
+        let _ = sys_close(in_r);
+        let _ = sys_close(out_w);
+
+        assert_eq!(code, 0);
+
+        let mut out_buf = [0u8; 512];
+        let n = sys_read(out_r, &mut out_buf);
+        let _ = sys_close(out_r);
+        assert!(n > 0);
+
+        let res = core::str::from_utf8(&out_buf[..n as usize]).unwrap();
+        assert!(res.contains("NAME  | ROLE        | STATUS\n"));
+        assert!(res.contains("root  | coordinator | active\n"));
+        assert!(res.contains("node1 | worker      | idle\n"));
+
+        // Test mode horizontal fillrows (-x)
+        let input_list = b"alpha\nbeta\ngamma\ndelta\n";
+        let (in_r2, in_w2) = crate::vfs::pipe().expect("pipe in 2");
+        let (out_r2, out_w2) = crate::vfs::pipe().expect("pipe out 2");
+        let _ = sys_write(in_w2, input_list);
+        let _ = sys_close(in_w2);
+
+        let code2 = run_column(&["-x", "-c", "20"], in_r2, out_w2, 2);
+        let _ = sys_close(in_r2);
+        let _ = sys_close(out_w2);
+        assert_eq!(code2, 0);
+
+        let mut out_buf2 = [0u8; 256];
+        let n2 = sys_read(out_r2, &mut out_buf2);
+        let _ = sys_close(out_r2);
+        assert!(n2 > 0);
+        let res2 = core::str::from_utf8(&out_buf2[..n2 as usize]).unwrap();
+        assert!(res2.contains("alpha"));
+        assert!(res2.contains("beta"));
     }
 }
