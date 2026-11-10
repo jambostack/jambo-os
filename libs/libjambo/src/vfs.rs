@@ -39,6 +39,7 @@ pub const SEEK_END: i32 = 2;
 // Modes et types de fichiers (stat st_mode)
 pub const S_IFMT: u32 = 0o170000;
 pub const S_IFSOCK: u32 = 0o140000; // Socket réseau
+pub const S_IFLNK: u32 = 0o120000; // Lien symbolique
 pub const S_IFREG: u32 = 0o100000; // Fichier régulier
 pub const S_IFDIR: u32 = 0o040000; // Répertoire
 pub const S_IFCHR: u32 = 0o020000; // Périphérique caractère (console)
@@ -54,6 +55,7 @@ pub enum FdKind {
     ConsoleIn,
     ConsoleOut,
     RegularFile,
+    Symlink,
     IpcChannel,
     Socket,
     PipeReader,
@@ -651,6 +653,17 @@ impl FdTable {
                 st.st_blksize = 512;
                 st.st_blocks = entry.size.div_ceil(512) as i64;
             }
+            FdKind::Symlink => {
+                st.st_mode = if entry.mode != 0 {
+                    entry.mode
+                } else {
+                    S_IFLNK | 0o777
+                };
+                st.st_nlink = 1;
+                st.st_size = entry.size as i64;
+                st.st_blksize = 512;
+                st.st_blocks = entry.size.div_ceil(512) as i64;
+            }
             FdKind::Socket => {
                 st.st_mode = if entry.mode != 0 {
                     entry.mode
@@ -691,6 +704,7 @@ impl FdTable {
         }
         let file_type = match entry.kind {
             FdKind::RegularFile => S_IFREG,
+            FdKind::Symlink => S_IFLNK,
             FdKind::ConsoleIn | FdKind::ConsoleOut => S_IFCHR,
             FdKind::Socket => S_IFSOCK,
             FdKind::PipeReader | FdKind::PipeWriter => S_IFIFO,
@@ -718,6 +732,7 @@ impl FdTable {
             if entry.kind != FdKind::Closed && entry.path_str() == path {
                 let file_type = match entry.kind {
                     FdKind::RegularFile => S_IFREG,
+                    FdKind::Symlink => S_IFLNK,
                     FdKind::ConsoleIn | FdKind::ConsoleOut => S_IFCHR,
                     FdKind::Socket => S_IFSOCK,
                     FdKind::PipeReader | FdKind::PipeWriter => S_IFIFO,
@@ -755,10 +770,15 @@ impl FdTable {
     pub fn stat(&self, path: &str) -> Result<PosixStat, SysError> {
         for entry in &self.entries {
             if entry.kind != FdKind::Closed && entry.path_str() == path {
+                let default_mode = if entry.kind == FdKind::Symlink {
+                    S_IFLNK | 0o777
+                } else {
+                    S_IFREG | 0o644
+                };
                 let st_mode = if entry.mode != 0 {
                     entry.mode
                 } else {
-                    S_IFREG | 0o644
+                    default_mode
                 };
                 return Ok(PosixStat {
                     st_mode,
@@ -1002,6 +1022,20 @@ pub fn truncate(path: &str, length: u64) -> Result<(), SysError> {
         let res = table.ftruncate(fd, length);
         let _ = table.free_fd(fd);
         res
+    })
+}
+
+/// Lit la cible d'un lien symbolique dans le VFS (readlink POSIX)
+pub fn readlink(path: &str, buf: &mut [u8]) -> Result<usize, SysError> {
+    with_fd_table(|table| {
+        for entry in &table.entries {
+            if entry.kind == FdKind::Symlink && entry.path_str() == path {
+                let to_copy = buf.len().min(entry.size as usize);
+                buf[..to_copy].copy_from_slice(&entry.buffer[..to_copy]);
+                return Ok(to_copy);
+            }
+        }
+        Err(SysError::InvalidArgument) // ENOENT / EINVAL (pas un lien symbolique)
     })
 }
 

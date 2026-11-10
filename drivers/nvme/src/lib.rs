@@ -42,6 +42,24 @@ pub const NVME_IO_FLUSH: u8 = NVME_NVM_CMD_FLUSH;
 pub const NVME_IO_WRITE: u8 = 0x01;
 pub const NVME_IO_READ: u8 = 0x02;
 pub const NVME_IO_WRITE_ZEROES: u8 = 0x08;
+pub const NVME_IO_DATA_SET_MANAGEMENT: u8 = 0x09;
+
+/// Attributs de gestion de jeu de données NVMe (DSM - Dataset Management / TRIM / Deallocate)
+pub const NVME_DSM_ATTR_DEALLOCATE: u32 = 1 << 2; // Bit 2 : Déallocation matérielle de blocs (TRIM)
+pub const NVME_DSM_ATTR_INTEGRAL_READ: u32 = 1 << 0; // Bit 0 : Optimisation pour lecture intégrale
+pub const NVME_DSM_ATTR_INTEGRAL_WRITE: u32 = 1 << 1; // Bit 1 : Optimisation pour écriture intégrale
+
+/// Structure de plage de gestion de jeu de données NVMe (DSM Range, 16 octets, NVMe 1.4 Section 6.7)
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct NvmeDsmRange {
+    /// Attributs contextuels de gestion (lecture/écriture séquentielle, accès futur)
+    pub context_attributes: u32,
+    /// Nombre de blocs logiques dans la plage (longueur en secteurs)
+    pub length_blocks: u32,
+    /// Adresse LBA de début de la plage de blocs
+    pub starting_lba: u64,
+}
 
 pub const QUEUE_SIZE: usize = 64;
 pub const NVME_PRP_ENTRIES_MAX: usize = 512;
@@ -1026,6 +1044,54 @@ impl NvmeController {
         let cmd = NvmeSubmissionEntry {
             cdw0: NVME_IO_FLUSH as u32,
             nsid,
+            ..Default::default()
+        };
+        Ok(self.io_queue.submit(cmd))
+    }
+
+    /// Émet une commande bloquante de gestion de jeu de données NVMe (Dataset Management - DSM / TRIM)
+    ///
+    /// Permet de déallouer une ou plusieurs plages de blocs logiques (TRIM CoW physique)
+    /// ou d'optimiser les accès matériels via le bit `NVME_DSM_ATTR_DEALLOCATE`.
+    pub fn dataset_management(
+        &mut self,
+        nsid: u32,
+        ranges_buf_dma: u64,
+        num_ranges: u16,
+        attributes: u32,
+    ) -> Result<(), SysError> {
+        let cid =
+            self.submit_async_dataset_management(nsid, ranges_buf_dma, num_ranges, attributes)?;
+        let _ = self.io_queue.poll_completion(cid)?;
+        Ok(())
+    }
+
+    /// Soumet de manière asynchrone une commande NVMe Dataset Management (DSM / TRIM non-bloquant)
+    pub fn submit_async_dataset_management(
+        &mut self,
+        nsid: u32,
+        ranges_buf_dma: u64,
+        num_ranges: u16,
+        attributes: u32,
+    ) -> Result<u16, SysError> {
+        if !self.ready {
+            return Err(SysError::ResourceBusy);
+        }
+        if num_ranges == 0 || num_ranges > 256 {
+            return Err(SysError::InvalidArgument);
+        }
+
+        // CDW10: Nombre de plages - 1 (bits 07:00, 0-based)
+        let cdw10 = (num_ranges - 1) as u32;
+        // CDW11: Attributs contextuels (bit 2 = Deallocate)
+        let cdw11 = attributes;
+
+        let cmd = NvmeSubmissionEntry {
+            cdw0: NVME_IO_DATA_SET_MANAGEMENT as u32,
+            nsid,
+            prp1: ranges_buf_dma,
+            cdw10,
+            cdw11,
             ..Default::default()
         };
         Ok(self.io_queue.submit(cmd))
@@ -2326,5 +2392,47 @@ mod tests {
             .expect("periodic flush");
         assert!(cid_periodic > 0);
         assert_eq!(ctrl.error_log_flushes, 2);
+    }
+
+    #[test]
+    fn test_dataset_management_dsm_deallocate_and_async() {
+        let mut ctrl = NvmeController::new();
+        ctrl.ready = true;
+
+        let _range = NvmeDsmRange {
+            context_attributes: 0,
+            length_blocks: 128,
+            starting_lba: 0x4000,
+        };
+        assert_eq!(core::mem::size_of::<NvmeDsmRange>(), 16);
+
+        // 1. Soumission bloquante DSM avec bit DEALLOCATE (TRIM)
+        assert!(ctrl
+            .dataset_management(1, 0x1000_2000, 1, NVME_DSM_ATTR_DEALLOCATE)
+            .is_ok());
+        let cmd = ctrl.io_queue.sq[0];
+        assert_eq!((cmd.cdw0 & 0xFF) as u8, NVME_IO_DATA_SET_MANAGEMENT);
+        assert_eq!(cmd.nsid, 1);
+        assert_eq!(cmd.prp1, 0x1000_2000);
+        assert_eq!(cmd.cdw10, 0); // 1 plage - 1 = 0
+        assert_eq!(cmd.cdw11, NVME_DSM_ATTR_DEALLOCATE);
+
+        // 2. Soumission asynchrone DSM multi-plages
+        let cid_async = ctrl
+            .submit_async_dataset_management(
+                1,
+                0x2000_4000,
+                4,
+                NVME_DSM_ATTR_DEALLOCATE | NVME_DSM_ATTR_INTEGRAL_WRITE,
+            )
+            .expect("async dsm");
+        assert_eq!(cid_async, 1);
+        let cmd_async = ctrl.io_queue.sq[1];
+        assert_eq!((cmd_async.cdw0 & 0xFF) as u8, NVME_IO_DATA_SET_MANAGEMENT);
+        assert_eq!(cmd_async.cdw10, 3); // 4 plages - 1 = 3
+        assert_eq!(
+            cmd_async.cdw11,
+            NVME_DSM_ATTR_DEALLOCATE | NVME_DSM_ATTR_INTEGRAL_WRITE
+        );
     }
 }

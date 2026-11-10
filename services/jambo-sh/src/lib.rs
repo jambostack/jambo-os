@@ -592,6 +592,7 @@ impl JamboShell {
             "/bin/time" | "bin/time" => self.cmd_posix_time(args, out),
             "xargs" | "/bin/xargs" | "bin/xargs" => self.cmd_xargs(args, out),
             "dd" | "/bin/dd" | "bin/dd" => self.cmd_dd(args, out),
+            "readlink" | "/bin/readlink" | "bin/readlink" => self.cmd_readlink(args, out),
             "version" => self.cmd_version(out),
             "uptime" => self.cmd_uptime(out),
             "caps" => self.cmd_caps(out),
@@ -747,7 +748,7 @@ impl JamboShell {
 
     fn cmd_coreutils(&self, out: &mut [u8]) -> (ShellStatus, usize) {
         let text = b"Utilitaires Coreutils Ring 3 (services/jambo-coreutils) :\n\
-  Binaires disponibles : /bin/echo, /bin/cat, /bin/head, /bin/tail, /bin/touch, /bin/mkdir, /bin/rm, /bin/cp, /bin/mv, /bin/tee, /bin/env, /bin/grep, /bin/sort, /bin/uniq, /bin/find, /bin/chmod, /bin/chown, /bin/id, /bin/du, /bin/df, /bin/uname, /bin/cut, /bin/paste, /bin/comm, /bin/tr, /bin/split, /bin/basename, /bin/dirname, /bin/seq, /bin/yes, /bin/printf, /bin/expr, /bin/fold, /bin/nl, /bin/od, /bin/cmp, /bin/expand, /bin/unexpand, /bin/sleep, /bin/cksum, /bin/base64, /bin/sha256sum, /bin/sync, /bin/truncate, /bin/hexdump, /bin/which, /bin/time, /bin/xargs, /bin/dd, /bin/wc, /bin/true, /bin/false, /bin/ls (53 utilitaires)\n\
+  Binaires disponibles : /bin/echo, /bin/cat, /bin/head, /bin/tail, /bin/touch, /bin/mkdir, /bin/rm, /bin/cp, /bin/mv, /bin/tee, /bin/env, /bin/grep, /bin/sort, /bin/uniq, /bin/find, /bin/chmod, /bin/chown, /bin/id, /bin/du, /bin/df, /bin/uname, /bin/cut, /bin/paste, /bin/comm, /bin/tr, /bin/split, /bin/basename, /bin/dirname, /bin/seq, /bin/yes, /bin/printf, /bin/expr, /bin/fold, /bin/nl, /bin/od, /bin/cmp, /bin/expand, /bin/unexpand, /bin/sleep, /bin/cksum, /bin/base64, /bin/sha256sum, /bin/sync, /bin/truncate, /bin/hexdump, /bin/which, /bin/time, /bin/xargs, /bin/dd, /bin/readlink, /bin/wc, /bin/true, /bin/false, /bin/ls (54 utilitaires)\n\
   Architecture & ABI   : System V AMD64 ELF64 (ET_EXEC / Ring 3 Userland)\n\
   Point d'entree       : _start (parsing argc/argv sur pile System V)\n\
   Terminaison          : Syscall 11 ThreadExit avec propagation code de retour POSIX\n\
@@ -1673,6 +1674,52 @@ Utilitaire d'installation JamboOS (Serie 0.*.*)\n\
             }
         } else {
             let msg = b"dd: pipe creation failed\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
+    }
+
+    fn cmd_readlink(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if let Ok((r_out, w_out)) = libjambo::vfs::pipe() {
+            let (r_err, w_err) = match libjambo::vfs::pipe() {
+                Ok(p) => p,
+                Err(_) => {
+                    let _ = libjambo::coreutils::sys_close(r_out);
+                    let _ = libjambo::coreutils::sys_close(w_out);
+                    let msg = b"readlink: pipe creation failed\n";
+                    let len = msg.len().min(out.len());
+                    out[..len].copy_from_slice(&msg[..len]);
+                    return (ShellStatus::ExecutionFailed, len);
+                }
+            };
+
+            let code = libjambo::coreutils::run_readlink(args, 0, w_out, w_err);
+            let _ = libjambo::coreutils::sys_close(w_out);
+            let _ = libjambo::coreutils::sys_close(w_err);
+
+            let n_out = libjambo::coreutils::sys_read(r_out, out);
+            let _ = libjambo::coreutils::sys_close(r_out);
+
+            let len = if n_out > 0 {
+                n_out as usize
+            } else {
+                let n_err = libjambo::coreutils::sys_read(r_err, out);
+                if n_err > 0 {
+                    n_err as usize
+                } else {
+                    0
+                }
+            };
+            let _ = libjambo::coreutils::sys_close(r_err);
+
+            if code == 0 {
+                (ShellStatus::Success, len)
+            } else {
+                (ShellStatus::ExecutionFailed, len)
+            }
+        } else {
+            let msg = b"readlink: pipe creation failed\n";
             let len = msg.len().min(out.len());
             out[..len].copy_from_slice(&msg[..len]);
             (ShellStatus::ExecutionFailed, len)
@@ -17848,7 +17895,7 @@ mod tests {
         let (st, len) = shell.execute_line("coreutils", &mut out);
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
-        assert!(s.contains("53 utilitaires"));
+        assert!(s.contains("54 utilitaires"));
         assert!(s.contains("/bin/sleep"));
         assert!(s.contains("/bin/cksum"));
         assert!(s.contains("/bin/base64"));
@@ -18901,13 +18948,14 @@ mod tests {
         let s4 = core::str::from_utf8(&out[..len4]).unwrap();
         assert!(s4.contains("Reserve Disponible"));
 
-        // 5. coreutils inventaire 53
+        // 5. coreutils inventaire 54
         let (st5, len5) = shell.execute_line("coreutils", &mut out);
         assert_eq!(st5, ShellStatus::Success);
         let s5 = core::str::from_utf8(&out[..len5]).unwrap();
-        assert!(s5.contains("53 utilitaires"));
+        assert!(s5.contains("54 utilitaires"));
         assert!(s5.contains("/bin/xargs"));
         assert!(s5.contains("/bin/dd"));
+        assert!(s5.contains("/bin/readlink"));
 
         // 6. dd shell command
         let (st6, len6) = shell.execute_line(
@@ -18917,5 +18965,16 @@ mod tests {
         assert_eq!(st6, ShellStatus::ExecutionFailed);
         let s6 = core::str::from_utf8(&out[..len6]).unwrap();
         assert!(s6.contains("dd:"));
+
+        // 7. readlink shell command
+        assert_eq!(
+            libjambo::coreutils::sys_symlink_pool("/etc/hostname", "/tmp/sh_sym.lnk"),
+            0
+        );
+        let (st7, len7) = shell.execute_line("readlink /tmp/sh_sym.lnk", &mut out);
+        assert_eq!(st7, ShellStatus::Success);
+        let s7 = core::str::from_utf8(&out[..len7]).unwrap();
+        assert!(s7.contains("/etc/hostname"));
+        let _ = libjambo::coreutils::sys_unlink_pool("/tmp/sh_sym.lnk");
     }
 }

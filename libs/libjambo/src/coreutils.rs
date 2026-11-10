@@ -15,6 +15,7 @@ pub struct VfsFileNode {
     pub size: usize,
     pub is_active: bool,
     pub is_dir: bool,
+    pub is_symlink: bool,
     pub mode: u32,
     pub uid: u32,
     pub gid: u32,
@@ -29,6 +30,7 @@ impl VfsFileNode {
             size: 0,
             is_active: false,
             is_dir: false,
+            is_symlink: false,
             mode: 0o644,
             uid: 0,
             gid: 0,
@@ -69,6 +71,7 @@ pub static mut INODE_POOL: [VfsFileNode; MAX_INODES] = [
         size: 14,
         is_active: true,
         is_dir: false,
+        is_symlink: false,
         mode: 0o644,
         uid: 0,
         gid: 0,
@@ -99,6 +102,7 @@ pub static mut INODE_POOL: [VfsFileNode; MAX_INODES] = [
         size: 38,
         is_active: true,
         is_dir: false,
+        is_symlink: false,
         mode: 0o644,
         uid: 0,
         gid: 0,
@@ -129,6 +133,7 @@ pub static mut INODE_POOL: [VfsFileNode; MAX_INODES] = [
         size: 38,
         is_active: true,
         is_dir: false,
+        is_symlink: false,
         mode: 0o644,
         uid: 0,
         gid: 0,
@@ -150,6 +155,7 @@ pub static mut INODE_POOL: [VfsFileNode; MAX_INODES] = [
         size: 0,
         is_active: true,
         is_dir: true,
+        is_symlink: false,
         mode: 0o755,
         uid: 0,
         gid: 0,
@@ -171,6 +177,7 @@ pub static mut INODE_POOL: [VfsFileNode; MAX_INODES] = [
         size: 0,
         is_active: true,
         is_dir: true,
+        is_symlink: false,
         mode: 0o777,
         uid: 0,
         gid: 0,
@@ -268,6 +275,7 @@ pub fn sys_open(path: &str, flags: i32) -> i32 {
                     node.buffer = [0u8; crate::vfs::FILE_BUFFER_SIZE];
                     node.is_active = true;
                     node.is_dir = false;
+                    node.is_symlink = false;
                     node.mode = 0o644;
                     inode_idx = Some(i);
                     break;
@@ -333,6 +341,7 @@ pub fn sys_mkdir_pool(path: &str, _mode: u32) -> i32 {
                 node.buffer = [0u8; crate::vfs::FILE_BUFFER_SIZE];
                 node.is_active = true;
                 node.is_dir = true;
+                node.is_symlink = false;
                 node.mode = if _mode != 0 { _mode } else { 0o755 };
                 return 0;
             }
@@ -519,6 +528,67 @@ pub fn sys_get_owner_pool(path: &str) -> Option<(u32, u32)> {
     None
 }
 
+/// Crée un lien symbolique virtuel dans le pool d'inodes (symlink)
+pub fn sys_symlink_pool(target: &str, linkpath: &str) -> i32 {
+    let clean_link = linkpath.trim_end_matches('/');
+    if clean_link.is_empty() || target.is_empty() {
+        return -1;
+    }
+    // SAFETY: Accès protégé au pool d'inodes virtuel
+    unsafe {
+        let pool = core::ptr::addr_of_mut!(INODE_POOL);
+        for node in (*pool).iter() {
+            if node.is_active && node.path_str() == clean_link {
+                return -1; // EEXIST
+            }
+        }
+        for node in (*pool).iter_mut() {
+            if !node.is_active {
+                let mut p = [0u8; crate::vfs::MAX_PATH_LEN];
+                let b = clean_link.as_bytes();
+                let len = b.len().min(crate::vfs::MAX_PATH_LEN);
+                p[..len].copy_from_slice(&b[..len]);
+                node.path = p;
+                node.path_len = len;
+
+                let mut buf = [0u8; crate::vfs::FILE_BUFFER_SIZE];
+                let tb = target.as_bytes();
+                let tlen = tb.len().min(crate::vfs::FILE_BUFFER_SIZE);
+                buf[..tlen].copy_from_slice(&tb[..tlen]);
+                node.buffer = buf;
+                node.size = tlen;
+
+                node.is_active = true;
+                node.is_dir = false;
+                node.is_symlink = true;
+                node.mode = crate::vfs::S_IFLNK | 0o777;
+                return 0;
+            }
+        }
+    }
+    -1 // ENOSPC
+}
+
+/// Lit la cible d'un lien symbolique dans le pool d'inodes virtuel (readlink)
+pub fn sys_readlink_pool(path: &str, out: &mut [u8]) -> isize {
+    let clean = path.trim_end_matches('/');
+    // SAFETY: Accès protégé au pool d'inodes virtuel
+    unsafe {
+        let pool = core::ptr::addr_of!(INODE_POOL);
+        for node in (*pool).iter() {
+            if node.is_active && node.path_str() == clean {
+                if !node.is_symlink {
+                    return -1; // EINVAL: Pas un lien symbolique
+                }
+                let len = out.len().min(node.size);
+                out[..len].copy_from_slice(&node.buffer[..len]);
+                return len as isize;
+            }
+        }
+    }
+    -1 // ENOENT
+}
+
 /// Ferme un descripteur de fichier VFS et synchronise les métadonnées
 pub fn sys_close(fd: i32) -> i32 {
     with_fd_table(|tbl| {
@@ -619,6 +689,20 @@ pub fn sys_lseek(fd: i32, offset: i64, whence: i32) -> i64 {
 pub fn sys_truncate(path: &str, length: u64) -> i32 {
     match crate::vfs::truncate(path, length) {
         Ok(_) => 0,
+        Err(_) => -1,
+    }
+}
+
+/// Lit la destination d'un lien symbolique (readlink POSIX)
+pub fn sys_readlink(path: &str, buf: &mut [u8]) -> isize {
+    // Tente d'abord le pool d'inodes virtuel
+    let pool_res = sys_readlink_pool(path, buf);
+    if pool_res >= 0 {
+        return pool_res;
+    }
+    // Sinon consulte la table VFS globale
+    match crate::vfs::readlink(path, buf) {
+        Ok(n) => n as isize,
         Err(_) => -1,
     }
 }
@@ -12388,6 +12472,103 @@ pub fn run_dd(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
     0
 }
 
+/// Utilitaire Coreutils Ring 3 : `readlink` (POSIX.1-2008)
+///
+/// Affiche la cible d'un lien symbolique ou résout le chemin canonique.
+/// Supporte les options :
+/// - `-f` / `-e` / `-m` : Canonicalisation du chemin (suivi de liens)
+/// - `-n` : Ne pas afficher le saut de ligne final
+/// - `-q` / `-s` : Mode silencieux (supprime les messages d'erreur)
+pub fn run_readlink(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    let _ = in_fd;
+    let mut no_newline = false;
+    let mut canonicalize = false;
+    let mut quiet = false;
+    let mut file_idx = None;
+
+    for (i, &arg) in args.iter().enumerate() {
+        if arg == "-n" {
+            no_newline = true;
+        } else if arg == "-f" || arg == "-e" || arg == "-m" || arg == "--canonicalize" {
+            canonicalize = true;
+        } else if arg == "-q" || arg == "-s" || arg == "--silent" || arg == "--quiet" {
+            quiet = true;
+        } else if arg.starts_with('-') && arg.len() > 1 && !arg.starts_with("--") {
+            for b in arg[1..].bytes() {
+                match b {
+                    b'n' => no_newline = true,
+                    b'f' | b'e' | b'm' => canonicalize = true,
+                    b'q' | b's' => quiet = true,
+                    _ => {}
+                }
+            }
+        } else if file_idx.is_none() {
+            file_idx = Some(i);
+        }
+    }
+
+    let target_path = match file_idx {
+        Some(idx) => args[idx],
+        None => {
+            if !quiet {
+                let _ = sys_write(err_fd, b"readlink: missing operand\n");
+            }
+            return 1;
+        }
+    };
+
+    let mut link_target = [0u8; crate::vfs::MAX_PATH_LEN];
+    let n = sys_readlink(target_path, &mut link_target);
+    if n < 0 {
+        if canonicalize {
+            // Mode canonical : si ce n'est pas un lien symbolique, on vérifie si le fichier existe
+            // Dans le pool d'inodes virtuel
+            let clean = target_path.trim_end_matches('/');
+            let mut exists = false;
+            // SAFETY: Vérification existence dans INODE_POOL
+            unsafe {
+                let pool = core::ptr::addr_of!(INODE_POOL);
+                for node in (*pool).iter() {
+                    if node.is_active
+                        && (node.path_str() == clean
+                            || (clean.is_empty() && node.path_str() == "/"))
+                    {
+                        exists = true;
+                        break;
+                    }
+                }
+            }
+            if exists {
+                let bytes = if clean.is_empty() {
+                    b"/"
+                } else {
+                    clean.as_bytes()
+                };
+                let _ = sys_write(out_fd, bytes);
+                if !no_newline {
+                    let _ = sys_write(out_fd, b"\n");
+                }
+                return 0;
+            }
+        }
+
+        if !quiet {
+            let _ = sys_write(err_fd, b"readlink: '");
+            let _ = sys_write(err_fd, target_path.as_bytes());
+            let _ = sys_write(err_fd, b"': Invalid argument\n");
+        }
+        return 1;
+    }
+
+    let target_len = n as usize;
+    let _ = sys_write(out_fd, &link_target[..target_len]);
+    if !no_newline {
+        let _ = sys_write(out_fd, b"\n");
+    }
+
+    0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -15244,5 +15425,50 @@ mod tests {
         assert_eq!(&buf[..3], b"123");
         assert_eq!(&buf[3..8], &[0, 0, 0, 0, 0]);
         sys_close(out_r3);
+    }
+
+    #[test]
+    fn test_readlink_symlink_and_canonical() {
+        let symlink_path = "/tmp/test_symlink.lnk";
+        let target_path = "/etc/os-release";
+
+        // Création du lien symbolique virtuel
+        assert_eq!(sys_symlink_pool(target_path, symlink_path), 0);
+
+        let (out_r, out_w) = crate::vfs::pipe().expect("pipe out");
+        let (err_r, err_w) = crate::vfs::pipe().expect("pipe err");
+
+        // 1. readlink standard
+        let code = run_readlink(&[symlink_path], 0, out_w, err_w);
+        assert_eq!(code, 0);
+        let _ = sys_close(out_w);
+        let _ = sys_close(err_w);
+
+        let mut buf = [0u8; 128];
+        let n = sys_read(out_r, &mut buf);
+        assert_eq!(n, 16); // "/etc/os-release\n"
+        assert_eq!(&buf[..n as usize], b"/etc/os-release\n");
+        let _ = sys_close(out_r);
+        let _ = sys_close(err_r);
+
+        // 2. readlink -n (sans saut de ligne)
+        let (out_r2, out_w2) = crate::vfs::pipe().expect("pipe out 2");
+        let code2 = run_readlink(&["-n", symlink_path], 0, out_w2, 2);
+        assert_eq!(code2, 0);
+        let _ = sys_close(out_w2);
+        let n2 = sys_read(out_r2, &mut buf);
+        assert_eq!(n2, 15); // "/etc/os-release"
+        assert_eq!(&buf[..n2 as usize], b"/etc/os-release");
+        let _ = sys_close(out_r2);
+
+        // 3. readlink -f (canonicalisation d'un fichier régulier existant)
+        let (out_r3, out_w3) = crate::vfs::pipe().expect("pipe out 3");
+        let code3 = run_readlink(&["-f", "/etc/hostname"], 0, out_w3, 2);
+        assert_eq!(code3, 0);
+        let _ = sys_close(out_w3);
+        let n3 = sys_read(out_r3, &mut buf);
+        assert_eq!(n3, 14); // "/etc/hostname\n"
+        assert_eq!(&buf[..n3 as usize], b"/etc/hostname\n");
+        let _ = sys_close(out_r3);
     }
 }
