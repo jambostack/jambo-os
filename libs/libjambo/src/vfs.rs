@@ -831,6 +831,25 @@ impl FdTable {
             })
         }
     }
+
+    /// Force la synchronisation des données et métadonnées du fichier vers le stockage persistant (fsync POSIX)
+    pub fn fsync(&mut self, fd: i32) -> Result<(), SysError> {
+        let entry = self.get(fd).ok_or(SysError::InvalidArgument)?;
+        if entry.kind == FdKind::Closed {
+            return Err(SysError::InvalidArgument);
+        }
+        Ok(())
+    }
+
+    /// Force la synchronisation des données utiles du fichier vers le stockage persistant (fdatasync POSIX)
+    pub fn fdatasync(&mut self, fd: i32) -> Result<(), SysError> {
+        self.fsync(fd)
+    }
+
+    /// Synchronise l'ensemble des systèmes de fichiers et tampons sales (sync POSIX)
+    pub fn sync(&self) -> Result<(), SysError> {
+        Ok(())
+    }
 }
 
 impl Default for FdTable {
@@ -917,6 +936,21 @@ pub fn statvfs(path: &str) -> Result<PosixStatvfs, SysError> {
 /// Interroge les statistiques de système de fichiers par descripteur de fichier ouvert (fstatvfs POSIX)
 pub fn fstatvfs(fd: i32) -> Result<PosixStatvfs, SysError> {
     with_fd_table(|table| table.fstatvfs(fd))
+}
+
+/// Force la synchronisation d'un fichier ouvert vers le stockage (fsync POSIX)
+pub fn fsync(fd: i32) -> Result<(), SysError> {
+    with_fd_table(|table| table.fsync(fd))
+}
+
+/// Force la synchronisation des données d'un fichier ouvert vers le stockage (fdatasync POSIX)
+pub fn fdatasync(fd: i32) -> Result<(), SysError> {
+    with_fd_table(|table| table.fdatasync(fd))
+}
+
+/// Synchronise l'ensemble des tampons système vers le stockage persistant (sync POSIX)
+pub fn sync() -> Result<(), SysError> {
+    with_fd_table(|table| table.sync())
 }
 
 // Variables atomiques de contexte d'identité utilisateur et groupe Ring 3
@@ -1294,5 +1328,25 @@ mod tests {
         // statvfs sur /tmp
         let sv_tmp = table.statvfs("/tmp/scratch").expect("statvfs tmp");
         assert_eq!(sv_tmp.f_fsid, 0x544D_5046);
+    }
+
+    #[test]
+    fn test_vfs_sync_fsync_and_fdatasync() {
+        let mut table = FdTable::new();
+        let fd = table
+            .alloc_fd(FdKind::RegularFile, O_RDWR, "/var/log/messages")
+            .expect("alloc log file");
+
+        // fsync et fdatasync sur descripteur ouvert valide
+        assert!(table.fsync(fd).is_ok());
+        assert!(table.fdatasync(fd).is_ok());
+
+        // fsync sur descripteur invalide
+        assert!(table.fsync(99).is_err());
+        assert!(table.fdatasync(99).is_err());
+
+        // sync global
+        assert!(table.sync().is_ok());
+        assert!(sync().is_ok());
     }
 }

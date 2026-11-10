@@ -578,6 +578,30 @@ pub fn sys_write(fd: i32, buf: &[u8]) -> isize {
     })
 }
 
+/// Force la synchronisation des données et métadonnées d'un descripteur de fichier vers le support persistant
+pub fn sys_fsync(fd: i32) -> i32 {
+    match crate::vfs::fsync(fd) {
+        Ok(_) => 0,
+        Err(_) => -1,
+    }
+}
+
+/// Force la synchronisation des données utiles d'un descripteur de fichier vers le support persistant
+pub fn sys_fdatasync(fd: i32) -> i32 {
+    match crate::vfs::fdatasync(fd) {
+        Ok(_) => 0,
+        Err(_) => -1,
+    }
+}
+
+/// Force la synchronisation globale de tous les tampons système vers le stockage persistant
+pub fn sys_sync() -> i32 {
+    match crate::vfs::sync() {
+        Ok(_) => 0,
+        Err(_) => -1,
+    }
+}
+
 /// Résultat du comptage pour l'utilitaire `wc`
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct WcResult {
@@ -10688,6 +10712,109 @@ pub fn run_sha256sum(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32
     }
 }
 
+// ============================================================================
+// Utilitaire POSIX / GNU coreutils : `sync` (Synchronisation des écritures persistance CoW)
+// ============================================================================
+
+/// Exécute l'utilitaire Coreutils POSIX / GNU `sync` (synchronisation des caches de stockage disque)
+pub fn run_sync(args: &[&str], _in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    let mut data_only = false;
+    let mut file_system = false;
+    let mut file_args_start = args.len();
+
+    for (i, &arg) in args.iter().enumerate() {
+        if arg == "--help" {
+            let help = b"Usage: sync [OPTION] [FILE]...\n\
+Synchronize cached writes to persistent storage\n\n\
+If one or more files are specified, sync only them,\n\
+or their containing file systems.\n\n\
+  -d, --data             sync only file data, no unneeded metadata\n\
+  -f, --file-system      sync the file systems that contain the files\n\
+      --help             display this help and exit\n\
+      --version          output version information and exit\n";
+            let _ = sys_write(out_fd, help);
+            return 0;
+        } else if arg == "--version" {
+            let ver = b"sync (JamboOS coreutils) 0.1.0\n\
+Copyright (C) 2026 JamboOS Authors.\n\
+License MIT or Apache-2.0.\n";
+            let _ = sys_write(out_fd, ver);
+            return 0;
+        } else if arg == "-d" || arg == "--data" {
+            data_only = true;
+        } else if arg == "-f" || arg == "--file-system" {
+            file_system = true;
+        } else if arg == "--" {
+            file_args_start = i + 1;
+            break;
+        } else if arg.starts_with('-') && arg.len() > 1 {
+            for b in arg[1..].bytes() {
+                match b {
+                    b'd' => data_only = true,
+                    b'f' => file_system = true,
+                    _ => {
+                        let _ = sys_write(err_fd, b"sync: invalid option -- '");
+                        let ch = [b];
+                        let _ = sys_write(err_fd, &ch);
+                        let _ = sys_write(err_fd, b"'\nTry 'sync --help' for more information.\n");
+                        return 1;
+                    }
+                }
+            }
+        } else {
+            file_args_start = i;
+            break;
+        }
+    }
+
+    let files = if file_args_start < args.len() {
+        &args[file_args_start..]
+    } else {
+        &[]
+    };
+
+    if files.is_empty() {
+        // Synchronisation globale du système de fichiers
+        let res = sys_sync();
+        if res < 0 {
+            let _ = sys_write(err_fd, b"sync: error synchronizing storage\n");
+            return 1;
+        }
+        return 0;
+    }
+
+    let mut exit_code = 0;
+    for &file in files {
+        let fd = sys_open(file, O_RDONLY);
+        if fd < 0 {
+            let _ = sys_write(err_fd, b"sync: error opening '");
+            let _ = sys_write(err_fd, file.as_bytes());
+            let _ = sys_write(err_fd, b"': No such file or directory\n");
+            exit_code = 1;
+            continue;
+        }
+
+        let sync_res = if data_only {
+            sys_fdatasync(fd)
+        } else if file_system {
+            sys_sync()
+        } else {
+            sys_fsync(fd)
+        };
+
+        let _ = sys_close(fd);
+
+        if sync_res < 0 {
+            let _ = sys_write(err_fd, b"sync: error syncing '");
+            let _ = sys_write(err_fd, file.as_bytes());
+            let _ = sys_write(err_fd, b"'\n");
+            exit_code = 1;
+        }
+    }
+
+    exit_code
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -13113,5 +13240,67 @@ mod tests {
         // Nettoyage
         let _ = sys_unlink_pool(file_path);
         let _ = sys_unlink_pool(check_file);
+    }
+
+    #[test]
+    fn test_posix_sync() {
+        // 1. sync global sans arguments
+        let (out_r1, out_w1) = crate::vfs::pipe().unwrap();
+        let code1 = run_sync(&[], 0, out_w1, 2);
+        sys_close(out_w1);
+        sys_close(out_r1);
+        assert_eq!(code1, 0);
+
+        // 2. sync sur fichier VFS existant
+        let file_path = "/tmp/sync_target.dat";
+        let fd = sys_open(file_path, O_CREAT | O_WRONLY);
+        assert!(fd >= 0);
+        let _ = sys_write(fd, b"synchronize data test\n");
+        sys_close(fd);
+
+        let (out_r2, out_w2) = crate::vfs::pipe().unwrap();
+        let code2 = run_sync(&[file_path], 0, out_w2, 2);
+        sys_close(out_w2);
+        sys_close(out_r2);
+        assert_eq!(code2, 0);
+
+        // 3. sync avec options -d (fdatasync) et -f (filesystem)
+        let (out_r3, out_w3) = crate::vfs::pipe().unwrap();
+        let code3 = run_sync(&["-d", file_path], 0, out_w3, 2);
+        sys_close(out_w3);
+        sys_close(out_r3);
+        assert_eq!(code3, 0);
+
+        let (out_r4, out_w4) = crate::vfs::pipe().unwrap();
+        let code4 = run_sync(&["--file-system", file_path], 0, out_w4, 2);
+        sys_close(out_w4);
+        sys_close(out_r4);
+        assert_eq!(code4, 0);
+
+        // 4. sync sur fichier inexistant (doit retourner 1)
+        let (err_r5, err_w5) = crate::vfs::pipe().unwrap();
+        let code5 = run_sync(&["/tmp/nonexistent_file_xyz.txt"], 0, 1, err_w5);
+        sys_close(err_w5);
+        assert_eq!(code5, 1);
+        let mut err_buf = [0u8; 128];
+        let n5 = sys_read(err_r5, &mut err_buf);
+        sys_close(err_r5);
+        assert!(core::str::from_utf8(&err_buf[..n5 as usize])
+            .unwrap()
+            .contains("No such file or directory"));
+
+        // 5. sync --help et --version
+        let (out_r6, out_w6) = crate::vfs::pipe().unwrap();
+        let code6 = run_sync(&["--help"], 0, out_w6, 2);
+        sys_close(out_w6);
+        assert_eq!(code6, 0);
+        let mut h_buf = [0u8; 256];
+        let n6 = sys_read(out_r6, &mut h_buf);
+        sys_close(out_r6);
+        assert!(core::str::from_utf8(&h_buf[..n6 as usize])
+            .unwrap()
+            .contains("Usage: sync"));
+
+        let _ = sys_unlink_pool(file_path);
     }
 }

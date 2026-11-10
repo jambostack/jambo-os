@@ -1151,14 +1151,48 @@ pub const SCSI_CMD_READ_CAPACITY_10: u8 = 0x25;
 pub const SCSI_CMD_READ_10: u8 = 0x28;
 pub const SCSI_CMD_WRITE_10: u8 = 0x2A;
 pub const SCSI_CMD_SYNCHRONIZE_CACHE_10: u8 = 0x35;
+pub const SCSI_CMD_READ_DEFECT_DATA_10: u8 = 0x37;
 pub const SCSI_CMD_UNMAP: u8 = 0x42;
 pub const SCSI_CMD_MODE_SELECT_10: u8 = 0x55;
 pub const SCSI_CMD_MODE_SENSE_10: u8 = 0x5A;
 pub const SCSI_CMD_READ_16: u8 = 0x88;
 pub const SCSI_CMD_WRITE_16: u8 = 0x8E;
 pub const SCSI_CMD_SERVICE_ACTION_IN_16: u8 = 0x9E;
+pub const SCSI_CMD_REPORT_LUNS: u8 = 0xA0;
 pub const SCSI_SA_READ_CAPACITY_16: u8 = 0x10;
 pub const SCSI_PAGE_CACHING: u8 = 0x08;
+
+pub const SCSI_REPORT_LUNS_ALL: u8 = 0x00;
+pub const SCSI_REPORT_LUNS_WELL_KNOWN: u8 = 0x01;
+pub const SCSI_REPORT_LUNS_ALL_EXCEPT_WELL_KNOWN: u8 = 0x02;
+
+pub const SCSI_DEFECT_FORMAT_BLOCK: u8 = 0x00;
+pub const SCSI_DEFECT_FORMAT_BYTES_FROM_INDEX: u8 = 0x04;
+pub const SCSI_DEFECT_FORMAT_PHYSICAL_SECTOR: u8 = 0x05;
+
+/// En-tête de réponse SCSI REPORT LUNS (SPC-4) (8 octets minimum)
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ScsiReportLunsHeader {
+    /// Longueur totale de la liste de LUNs en octets (n * 8 octets)
+    pub lun_list_length: u32,
+    /// Nombre de descripteurs LUN retournés
+    pub lun_count: usize,
+}
+
+/// En-tête de réponse SCSI READ DEFECT DATA (10) (SBC-3) (4 octets minimum)
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ScsiDefectDataHeader10 {
+    /// Format de la liste de défauts (bits 0-2)
+    pub defect_list_format: u8,
+    /// Indicateur liste primaire (P) présente
+    pub primary_defect_list: bool,
+    /// Indicateur liste de croissance (G) présente
+    pub grown_defect_list: bool,
+    /// Longueur de la liste de défauts en octets
+    pub defect_list_length: u16,
+}
 
 /// En-tête des paramètres retournés par SCSI MODE SENSE (6) (4 octets minimum)
 #[repr(C)]
@@ -1975,6 +2009,93 @@ impl UsbMassStorageBot {
         })
     }
 
+    /// Construit un CBW pour SCSI REPORT LUNS (SPC-4, Opcode 0xA0) pour énumérer les LUNs disponibles
+    pub fn build_cbw_report_luns(
+        &mut self,
+        select_report: u8,
+        alloc_len: u32,
+    ) -> (CommandBlockWrapper, u32) {
+        let tag = self.next_tag();
+        let mut cbw = CommandBlockWrapper::new(tag, alloc_len, true, self.lun, 12);
+        cbw.cb[0] = SCSI_CMD_REPORT_LUNS;
+        cbw.cb[2] = select_report;
+        let len_bytes = alloc_len.to_be_bytes();
+        cbw.cb[6] = len_bytes[0];
+        cbw.cb[7] = len_bytes[1];
+        cbw.cb[8] = len_bytes[2];
+        cbw.cb[9] = len_bytes[3];
+        (cbw, tag)
+    }
+
+    /// Analyse l'en-tête retourné par SCSI REPORT LUNS (8 premiers octets)
+    pub fn parse_report_luns_header(&self, data: &[u8]) -> Option<ScsiReportLunsHeader> {
+        if data.len() < 8 {
+            return None;
+        }
+        let lun_list_length = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
+        let lun_count = (lun_list_length as usize) / 8;
+        Some(ScsiReportLunsHeader {
+            lun_list_length,
+            lun_count,
+        })
+    }
+
+    /// Extrait un LUN (64 bits) à l'indice spécifié depuis les données REPORT LUNS
+    pub fn parse_report_luns_entry(&self, data: &[u8], index: usize) -> Option<u64> {
+        let offset = 8 + index * 8;
+        if data.len() < offset + 8 {
+            return None;
+        }
+        Some(u64::from_be_bytes([
+            data[offset],
+            data[offset + 1],
+            data[offset + 2],
+            data[offset + 3],
+            data[offset + 4],
+            data[offset + 5],
+            data[offset + 6],
+            data[offset + 7],
+        ]))
+    }
+
+    /// Construit un CBW pour SCSI READ DEFECT DATA (10) (SBC-3, Opcode 0x37)
+    pub fn build_cbw_read_defect_data_10(
+        &mut self,
+        plist: bool,
+        glist: bool,
+        defect_format: u8,
+        alloc_len: u16,
+    ) -> (CommandBlockWrapper, u32) {
+        let tag = self.next_tag();
+        let mut cbw = CommandBlockWrapper::new(tag, alloc_len as u32, true, self.lun, 10);
+        cbw.cb[0] = SCSI_CMD_READ_DEFECT_DATA_10;
+        let flags = ((plist as u8) << 4) | ((glist as u8) << 3) | (defect_format & 0x07);
+        cbw.cb[2] = flags;
+        let len_bytes = alloc_len.to_be_bytes();
+        cbw.cb[7] = len_bytes[0];
+        cbw.cb[8] = len_bytes[1];
+        (cbw, tag)
+    }
+
+    /// Analyse l'en-tête de réponse SCSI READ DEFECT DATA (10) (4 octets)
+    pub fn parse_defect_data_10_header(&self, data: &[u8]) -> Option<ScsiDefectDataHeader10> {
+        if data.len() < 4 {
+            return None;
+        }
+        let flags = data[1];
+        let defect_list_format = flags & 0x07;
+        let grown_defect_list = (flags & 0x08) != 0;
+        let primary_defect_list = (flags & 0x10) != 0;
+        let defect_list_length = u16::from_be_bytes([data[2], data[3]]);
+
+        Some(ScsiDefectDataHeader10 {
+            defect_list_format,
+            primary_defect_list,
+            grown_defect_list,
+            defect_list_length,
+        })
+    }
+
     /// Construit le paquet Setup pour la réinitialisation de classe BOT (Bulk-Only Mass Storage Reset)
     pub fn build_bot_reset_packet(&self, interface_number: u8) -> UsbSetupPacket {
         UsbSetupPacket::new(0x21, 0xFF, 0, interface_number as u16, 0)
@@ -2192,6 +2313,25 @@ impl UsbMassStorageDisk {
     #[inline]
     pub fn build_sync_cache_cbw(&mut self) -> (CommandBlockWrapper, u32) {
         self.bot.build_cbw_synchronize_cache_10(0, 0)
+    }
+
+    /// Construit un CBW pour SCSI REPORT LUNS afin de détecter les unités logiques supplémentaires
+    #[inline]
+    pub fn build_report_luns_cbw(&mut self, alloc_len: u32) -> (CommandBlockWrapper, u32) {
+        self.bot
+            .build_cbw_report_luns(SCSI_REPORT_LUNS_ALL, alloc_len)
+    }
+
+    /// Construit un CBW pour SCSI READ DEFECT DATA (10) afin d'auditer l'état des secteurs défectueux
+    #[inline]
+    pub fn build_read_defect_data_cbw(
+        &mut self,
+        plist: bool,
+        glist: bool,
+        alloc_len: u16,
+    ) -> (CommandBlockWrapper, u32) {
+        self.bot
+            .build_cbw_read_defect_data_10(plist, glist, SCSI_DEFECT_FORMAT_BLOCK, alloc_len)
     }
 
     /// Met à jour la géométrie du disque via les données décodées de READ CAPACITY (16)
@@ -5123,5 +5263,51 @@ mod tests {
         assert_eq!(cbw_cfg.tag(), tag_cfg);
         assert_eq!(cbw_cfg.data_transfer_length(), 16);
         assert!(!disk.is_write_cache_enabled()); // Mise à jour vérifiée
+
+        // 15. SCSI REPORT LUNS & SCSI READ DEFECT DATA (10)
+        let (cbw_rl, tag_rl) = disk.build_report_luns_cbw(256);
+        assert_eq!(cbw_rl.cb[0], SCSI_CMD_REPORT_LUNS);
+        assert_eq!(cbw_rl.cb[2], SCSI_REPORT_LUNS_ALL);
+        assert_eq!(cbw_rl.tag(), tag_rl);
+        assert_eq!(cbw_rl.data_transfer_length(), 256);
+        assert_eq!(cbw_rl.flags(), CBW_FLAG_DATA_IN);
+
+        // Simulation de réponse REPORT LUNS avec 2 LUNs (LUN 0 et LUN 1)
+        let mut rl_resp = [0u8; 24];
+        let rl_len: u32 = 16; // 2 * 8 octets
+        rl_resp[0..4].copy_from_slice(&rl_len.to_be_bytes());
+        let lun1: u64 = 0x0001_0000_0000_0000;
+        rl_resp[16..24].copy_from_slice(&lun1.to_be_bytes());
+
+        let rl_hdr = bot
+            .parse_report_luns_header(&rl_resp)
+            .expect("parse rl header");
+        assert_eq!(rl_hdr.lun_list_length, 16);
+        assert_eq!(rl_hdr.lun_count, 2);
+        assert_eq!(bot.parse_report_luns_entry(&rl_resp, 0), Some(0));
+        assert_eq!(bot.parse_report_luns_entry(&rl_resp, 1), Some(lun1));
+        assert_eq!(bot.parse_report_luns_entry(&rl_resp, 2), None);
+
+        // READ DEFECT DATA (10)
+        let (cbw_dd, tag_dd) = disk.build_read_defect_data_cbw(true, true, 64);
+        assert_eq!(cbw_dd.cb[0], SCSI_CMD_READ_DEFECT_DATA_10);
+        assert_eq!(cbw_dd.cb[2], 0x18 | SCSI_DEFECT_FORMAT_BLOCK);
+        assert_eq!(cbw_dd.tag(), tag_dd);
+        assert_eq!(cbw_dd.data_transfer_length(), 64);
+        assert_eq!(cbw_dd.flags(), CBW_FLAG_DATA_IN);
+
+        // Simulation réponse READ DEFECT DATA (10)
+        let mut dd_resp = [0u8; 8];
+        dd_resp[0] = 0;
+        dd_resp[1] = 0x18 | SCSI_DEFECT_FORMAT_BLOCK;
+        dd_resp[2] = 0;
+        dd_resp[3] = 4;
+        let dd_hdr = bot
+            .parse_defect_data_10_header(&dd_resp)
+            .expect("parse defect header");
+        assert!(dd_hdr.primary_defect_list);
+        assert!(dd_hdr.grown_defect_list);
+        assert_eq!(dd_hdr.defect_list_format, SCSI_DEFECT_FORMAT_BLOCK);
+        assert_eq!(dd_hdr.defect_list_length, 4);
     }
 }
