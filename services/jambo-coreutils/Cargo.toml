@@ -147,5 +147,10 @@ name = "comm"
 path = "src/bin/comm.rs"
 test = false
 
+[[bin]]
+name = "tr"
+path = "src/bin/tr.rs"
+test = false
+
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }

@@ -1222,6 +1222,107 @@ impl NvmeController {
         let _ = self.admin_queue.poll_completion(cid)?;
         Ok(())
     }
+
+    /// Soumet de manière asynchrone (non-bloquante) une commande Get Log Page pour les métriques SMART/Health.
+    /// Retourne l'identifiant de commande (CID) sur la file d'administration.
+    pub fn submit_async_smart_log(&mut self, prp1_iova: u64) -> Result<u16, SysError> {
+        if !self.ready {
+            return Err(SysError::ResourceBusy);
+        }
+
+        let num_dwords = (core::mem::size_of::<NvmeSmartLog>() / 4) - 1;
+        let cdw10 = ((num_dwords as u32) << 16) | (NVME_LOG_SMART_HEALTH as u32);
+
+        let cmd = NvmeSubmissionEntry {
+            cdw0: NVME_ADMIN_GET_LOG_PAGE as u32,
+            nsid: 0xFFFF_FFFF,
+            prp1: prp1_iova,
+            cdw10,
+            ..Default::default()
+        };
+
+        let cid = self.admin_queue.submit(cmd);
+        Ok(cid)
+    }
+
+    /// Scrute de façon non-bloquante la complétion d'une requête de log SMART ou administrative.
+    pub fn poll_admin_async_completion(
+        &mut self,
+        cid: u16,
+    ) -> Result<Option<NvmeCompletionEntry>, SysError> {
+        if let Some(entry) = self.admin_queue.peek_completion() {
+            if entry.command_id == cid {
+                let consumed = self.admin_queue.consume_completion().unwrap();
+                if consumed.is_success() {
+                    return Ok(Some(consumed));
+                } else {
+                    return Err(SysError::BadAddress);
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    /// Analyse un événement asynchrone notifié (AER) et détermine l'action de télémétrie requise.
+    pub fn dispatch_async_event_action(&mut self, dw0: u32) -> NvmeAsyncEventAction {
+        let event_type = dw0 & 0x07;
+        let event_info = ((dw0 >> 8) & 0xFF) as u8;
+        let log_page_id = ((dw0 >> 16) & 0xFF) as u8;
+
+        match event_type {
+            0 => NvmeAsyncEventAction::FetchErrorLog {
+                error_code: event_info,
+                log_page_id: if log_page_id == 0 { 0x01 } else { log_page_id },
+            },
+            1 => NvmeAsyncEventAction::FetchSmartHealthLog {
+                critical_warning: event_info,
+                log_page_id: if log_page_id == 0 {
+                    NVME_LOG_SMART_HEALTH
+                } else {
+                    log_page_id
+                },
+            },
+            2 => NvmeAsyncEventAction::Notice {
+                notice_code: event_info,
+            },
+            3 => NvmeAsyncEventAction::SubsystemReset,
+            _ => NvmeAsyncEventAction::Unknown(dw0),
+        }
+    }
+}
+
+/// Action résultant du traitement d'un événement asynchrone NVMe AER
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NvmeAsyncEventAction {
+    /// Récupérer le journal d'erreur matériel (Log ID 0x01)
+    FetchErrorLog { error_code: u8, log_page_id: u8 },
+    /// Déclencher une collecte télémétrique SMART d'urgence (Log ID 0x02)
+    FetchSmartHealthLog {
+        critical_warning: u8,
+        log_page_id: u8,
+    },
+    /// Notification de statut système
+    Notice { notice_code: u8 },
+    /// Réinitialisation requise du contrôleur NVM
+    SubsystemReset,
+    /// Événement non pris en charge ou réservé
+    Unknown(u32),
+}
+
+/// Rapport d'évaluation synthétique de la télémétrie de santé SMART
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NvmeHealthReport {
+    pub is_healthy: bool,
+    pub spare_critical: bool,
+    pub temperature_critical: bool,
+    pub temperature_celsius: i16,
+    pub percentage_used: u8,
+    pub unsafe_shutdowns: u64,
+    pub media_errors: u64,
+    pub host_reads_gb: u64,
+    pub host_writes_gb: u64,
+    pub power_on_hours: u64,
+    pub requires_emergency_flush: bool,
 }
 
 /// Type d'événement asynchrone NVMe 1.4 rapporté par le contrôleur
@@ -1355,6 +1456,57 @@ impl NvmeSmartLog {
     #[inline]
     pub fn is_volatile_backup_failed(&self) -> bool {
         (self.critical_warning & 0x10) != 0
+    }
+
+    /// Convertit un champ NVMe 128-bit petit-boutiste en entier 64-bit saturé
+    #[inline]
+    pub fn u64_from_le_slice(raw: &[u8; 16]) -> u64 {
+        let lo = u64::from_le_bytes(raw[0..8].try_into().unwrap_or([0; 8]));
+        let hi = u64::from_le_bytes(raw[8..16].try_into().unwrap_or([0; 8]));
+        if hi > 0 {
+            u64::MAX
+        } else {
+            lo
+        }
+    }
+
+    /// Évalue l'état de santé global et produit un rapport télémétrique
+    pub fn evaluate_health(&self) -> NvmeHealthReport {
+        let temp_c = self.composite_temp_celsius();
+        let spare_crit = self.is_spare_critical();
+        let temp_crit = self.is_temperature_critical() || temp_c >= 75;
+        let p_used = self.percentage_used;
+        let unsafe_shut = Self::u64_from_le_slice(&self.unsafe_shutdowns);
+        let media_err = Self::u64_from_le_slice(&self.media_errors);
+        let data_read_units = Self::u64_from_le_slice(&self.data_units_read);
+        let data_written_units = Self::u64_from_le_slice(&self.data_units_written);
+        let pwr_hours = Self::u64_from_le_slice(&self.power_on_hours);
+
+        // 1 unité = 1000 blocs de 512 octets = 512 000 octets.
+        let host_reads_gb = data_read_units.saturating_mul(500) / 1_000_000;
+        let host_writes_gb = data_written_units.saturating_mul(500) / 1_000_000;
+
+        let requires_emergency = spare_crit
+            || temp_crit
+            || p_used >= 95
+            || self.is_volatile_backup_failed()
+            || self.is_read_only();
+        let healthy =
+            self.is_healthy() && !spare_crit && !temp_crit && p_used < 90 && media_err == 0;
+
+        NvmeHealthReport {
+            is_healthy: healthy,
+            spare_critical: spare_crit,
+            temperature_critical: temp_crit,
+            temperature_celsius: temp_c,
+            percentage_used: p_used,
+            unsafe_shutdowns: unsafe_shut,
+            media_errors: media_err,
+            host_reads_gb,
+            host_writes_gb,
+            power_on_hours: pwr_hours,
+            requires_emergency_flush: requires_emergency,
+        }
     }
 }
 
@@ -1824,5 +1976,84 @@ mod tests {
         let comp = ctrl.poll_async_completion(1, cid).expect("poll completion");
         assert!(comp.is_some());
         assert_eq!(comp.unwrap().command_id, cid);
+    }
+
+    #[test]
+    fn test_async_smart_telemetry_and_health_evaluation() {
+        let mut ctrl = NvmeController::new();
+        ctrl.ready = true;
+
+        // 1. Soumission asynchrone non-bloquante du log SMART/Health
+        let cid_smart = ctrl
+            .submit_async_smart_log(0x5000_0000)
+            .expect("async smart log");
+        assert_eq!(cid_smart, 0);
+
+        let sub_smart = ctrl.admin_queue.sq[0];
+        assert_eq!((sub_smart.cdw0 & 0xFF) as u8, NVME_ADMIN_GET_LOG_PAGE);
+        assert_eq!(sub_smart.nsid, 0xFFFF_FFFF);
+        assert_eq!(sub_smart.prp1, 0x5000_0000);
+        let num_dwords = (core::mem::size_of::<NvmeSmartLog>() / 4) - 1;
+        let expected_cdw10 = ((num_dwords as u32) << 16) | (NVME_LOG_SMART_HEALTH as u32);
+        assert_eq!(sub_smart.cdw10, expected_cdw10);
+
+        // 2. Simulation de complétion dans l'Admin CQ et test de poll non-bloquant
+        let phase = ctrl.admin_queue.cq_phase;
+        ctrl.admin_queue.cq[0] = NvmeCompletionEntry {
+            dw0: 0,
+            reserved: 0,
+            sq_head: 1,
+            sq_id: 0,
+            command_id: cid_smart,
+            status: phase as u16,
+        };
+
+        let poll_res = ctrl
+            .poll_admin_async_completion(cid_smart)
+            .expect("poll admin");
+        assert!(poll_res.is_some());
+        assert_eq!(poll_res.unwrap().command_id, cid_smart);
+
+        // 3. Dispatch d'action d'événement asynchrone (AER)
+        // Événement SMART critique avec log_page_id = 0x02
+        let aer_dw0_smart = 1 | (0x04 << 8) | (0x02 << 16);
+        let action = ctrl.dispatch_async_event_action(aer_dw0_smart);
+        assert_eq!(
+            action,
+            NvmeAsyncEventAction::FetchSmartHealthLog {
+                critical_warning: 0x04,
+                log_page_id: 0x02,
+            }
+        );
+
+        // Événement Notice
+        let aer_dw0_notice = 2 | (0x03 << 8);
+        assert_eq!(
+            ctrl.dispatch_async_event_action(aer_dw0_notice),
+            NvmeAsyncEventAction::Notice { notice_code: 0x03 }
+        );
+
+        // 4. Évaluation synthétique de santé SMART nominale
+        let nominal_log = NvmeSmartLog::default();
+        let rep_nominal = nominal_log.evaluate_health();
+        assert!(rep_nominal.is_healthy);
+        assert!(!rep_nominal.spare_critical);
+        assert!(!rep_nominal.temperature_critical);
+        assert!(!rep_nominal.requires_emergency_flush);
+        assert_eq!(rep_nominal.percentage_used, 1);
+        assert_eq!(rep_nominal.temperature_celsius, 37);
+
+        // 5. Évaluation de santé avec dégradation thermique et usure
+        let degraded_log = NvmeSmartLog {
+            critical_warning: 0x02, // Alerte température critique
+            percentage_used: 96,    // Usure > 95%
+            composite_temperature_kelvin: 358u16.to_le_bytes(), // 85 °C
+            ..Default::default()
+        };
+        let rep_degraded = degraded_log.evaluate_health();
+        assert!(!rep_degraded.is_healthy);
+        assert!(rep_degraded.temperature_critical);
+        assert!(rep_degraded.requires_emergency_flush);
+        assert_eq!(rep_degraded.temperature_celsius, 85);
     }
 }

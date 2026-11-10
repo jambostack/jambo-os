@@ -561,6 +561,7 @@ impl JamboShell {
             "cut" | "/bin/cut" | "bin/cut" => self.cmd_cut(args, out),
             "paste" | "/bin/paste" | "bin/paste" => self.cmd_paste(args, out),
             "comm" | "/bin/comm" | "bin/comm" => self.cmd_comm(args, out),
+            "tr" | "/bin/tr" | "bin/tr" => self.cmd_tr(args, out),
             "version" => self.cmd_version(out),
             "uptime" => self.cmd_uptime(out),
             "caps" => self.cmd_caps(out),
@@ -715,7 +716,7 @@ impl JamboShell {
 
     fn cmd_coreutils(&self, out: &mut [u8]) -> (ShellStatus, usize) {
         let text = b"Utilitaires Coreutils Ring 3 (services/jambo-coreutils) :\n\
-  Binaires disponibles : /bin/echo, /bin/cat, /bin/head, /bin/tail, /bin/touch, /bin/mkdir, /bin/rm, /bin/cp, /bin/mv, /bin/tee, /bin/env, /bin/grep, /bin/sort, /bin/uniq, /bin/find, /bin/chmod, /bin/chown, /bin/id, /bin/du, /bin/df, /bin/uname, /bin/cut, /bin/paste, /bin/comm, /bin/wc, /bin/true, /bin/false, /bin/ls (28 utilitaires)\n\
+  Binaires disponibles : /bin/echo, /bin/cat, /bin/head, /bin/tail, /bin/touch, /bin/mkdir, /bin/rm, /bin/cp, /bin/mv, /bin/tee, /bin/env, /bin/grep, /bin/sort, /bin/uniq, /bin/find, /bin/chmod, /bin/chown, /bin/id, /bin/du, /bin/df, /bin/uname, /bin/cut, /bin/paste, /bin/comm, /bin/tr, /bin/wc, /bin/true, /bin/false, /bin/ls (29 utilitaires)\n\
   Architecture & ABI   : System V AMD64 ELF64 (ET_EXEC / Ring 3 Userland)\n\
   Point d'entree       : _start (parsing argc/argv sur pile System V)\n\
   Terminaison          : Syscall 11 ThreadExit avec propagation code de retour POSIX\n\
@@ -1139,6 +1140,26 @@ Utilitaire d'installation JamboOS (Serie 0.*.*)\n\
             }
         } else {
             let msg = b"comm: pipe creation failed\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
+    }
+
+    fn cmd_tr(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if let Ok((r, w)) = libjambo::vfs::pipe() {
+            let code = libjambo::coreutils::run_tr(args, 0, w, w);
+            let _ = libjambo::coreutils::sys_close(w);
+            let n = libjambo::coreutils::sys_read(r, out);
+            let _ = libjambo::coreutils::sys_close(r);
+            let len = if n > 0 { n as usize } else { 0 };
+            if code == 0 {
+                (ShellStatus::Success, len)
+            } else {
+                (ShellStatus::ExecutionFailed, len)
+            }
+        } else {
+            let msg = b"tr: pipe creation failed\n";
             let len = msg.len().min(out.len());
             out[..len].copy_from_slice(&msg[..len]);
             (ShellStatus::ExecutionFailed, len)
@@ -17164,10 +17185,11 @@ mod tests {
         let (st, len) = shell.execute_line("coreutils", &mut out);
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
-        assert!(s.contains("28 utilitaires"));
+        assert!(s.contains("29 utilitaires"));
         assert!(s.contains("/bin/cut"));
         assert!(s.contains("/bin/paste"));
         assert!(s.contains("/bin/comm"));
+        assert!(s.contains("/bin/tr"));
         assert!(s.contains("/bin/uname"));
         assert!(s.contains("/bin/head"));
         assert!(s.contains("/bin/tail"));
@@ -17609,5 +17631,23 @@ mod tests {
 
         let _ = libjambo::coreutils::sys_unlink_pool(path1);
         let _ = libjambo::coreutils::sys_unlink_pool(path2);
+    }
+
+    #[test]
+    fn test_tr_shell_execution() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 1024];
+
+        // 1. Exécution de tr avec translation a-z vers A-Z via pipe ou argument
+        let (st, _len) = shell.execute_line("tr a-z A-Z", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+
+        // 2. Exécution via binaire /bin/tr avec suppression de chiffres
+        let (st_bin, _len_bin) = shell.execute_line("/bin/tr -d 0-9", &mut out);
+        assert_eq!(st_bin, ShellStatus::Success);
+
+        // 3. Option invalide -> ExecutionFailed
+        let (st_err, _) = shell.execute_line("tr -z", &mut out);
+        assert_eq!(st_err, ShellStatus::ExecutionFailed);
     }
 }

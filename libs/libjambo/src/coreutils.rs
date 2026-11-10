@@ -5369,6 +5369,453 @@ pub fn run_comm(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
     0
 }
 
+/// Analyse un caractère ou une séquence d'échappement pour `tr`
+fn parse_tr_char(bytes: &[u8], idx: usize) -> Result<(u8, usize), &'static str> {
+    if idx >= bytes.len() {
+        return Err("unexpected end of string");
+    }
+    if bytes[idx] == b'\\' {
+        if idx + 1 >= bytes.len() {
+            return Ok((b'\\', idx + 1));
+        }
+        match bytes[idx + 1] {
+            b'n' => Ok((b'\n', idx + 2)),
+            b't' => Ok((b'\t', idx + 2)),
+            b'r' => Ok((b'\r', idx + 2)),
+            b'a' => Ok((7, idx + 2)),
+            b'b' => Ok((8, idx + 2)),
+            b'f' => Ok((12, idx + 2)),
+            b'v' => Ok((11, idx + 2)),
+            b'\\' => Ok((b'\\', idx + 2)),
+            oct @ b'0'..=b'7' => {
+                let mut val = oct - b'0';
+                let mut pos = idx + 2;
+                let limit = (idx + 4).min(bytes.len());
+                while pos < limit && (b'0'..=b'7').contains(&bytes[pos]) {
+                    val = val.wrapping_mul(8).wrapping_add(bytes[pos] - b'0');
+                    pos += 1;
+                }
+                Ok((val, pos))
+            }
+            other => Ok((other, idx + 2)),
+        }
+    } else {
+        Ok((bytes[idx], idx + 1))
+    }
+}
+
+/// Développe une spécification d'ensemble SET pour `tr` (plages, classes POSIX, échappements, répétitions)
+fn expand_tr_spec(
+    spec: &str,
+    out: &mut [u8; 512],
+    target_len: usize,
+) -> Result<usize, &'static str> {
+    let bytes = spec.as_bytes();
+    let mut i = 0;
+    let mut out_len = 0;
+
+    #[inline]
+    fn push_byte(out: &mut [u8; 512], out_len: &mut usize, b: u8) -> Result<(), &'static str> {
+        if *out_len >= out.len() {
+            return Err("expanded set too long");
+        }
+        out[*out_len] = b;
+        *out_len += 1;
+        Ok(())
+    }
+
+    while i < bytes.len() {
+        // 1. Détection classe de caractères POSIX [:class:]
+        if bytes[i..].starts_with(b"[:") {
+            if let Some(close_idx) = bytes[i + 2..].windows(2).position(|w| w == b":]") {
+                let class_name = &bytes[i + 2..i + 2 + close_idx];
+                match class_name {
+                    b"alnum" => {
+                        for b in b'0'..=b'9' {
+                            push_byte(out, &mut out_len, b)?;
+                        }
+                        for b in b'A'..=b'Z' {
+                            push_byte(out, &mut out_len, b)?;
+                        }
+                        for b in b'a'..=b'z' {
+                            push_byte(out, &mut out_len, b)?;
+                        }
+                    }
+                    b"alpha" => {
+                        for b in b'A'..=b'Z' {
+                            push_byte(out, &mut out_len, b)?;
+                        }
+                        for b in b'a'..=b'z' {
+                            push_byte(out, &mut out_len, b)?;
+                        }
+                    }
+                    b"blank" => {
+                        push_byte(out, &mut out_len, b' ')?;
+                        push_byte(out, &mut out_len, b'\t')?;
+                    }
+                    b"cntrl" => {
+                        for b in 0..=31 {
+                            push_byte(out, &mut out_len, b)?;
+                        }
+                        push_byte(out, &mut out_len, 127)?;
+                    }
+                    b"digit" => {
+                        for b in b'0'..=b'9' {
+                            push_byte(out, &mut out_len, b)?;
+                        }
+                    }
+                    b"graph" => {
+                        for b in 33..=126 {
+                            push_byte(out, &mut out_len, b)?;
+                        }
+                    }
+                    b"lower" => {
+                        for b in b'a'..=b'z' {
+                            push_byte(out, &mut out_len, b)?;
+                        }
+                    }
+                    b"print" => {
+                        for b in 32..=126 {
+                            push_byte(out, &mut out_len, b)?;
+                        }
+                    }
+                    b"punct" => {
+                        for b in 33..=47 {
+                            push_byte(out, &mut out_len, b)?;
+                        }
+                        for b in 58..=64 {
+                            push_byte(out, &mut out_len, b)?;
+                        }
+                        for b in 91..=96 {
+                            push_byte(out, &mut out_len, b)?;
+                        }
+                        for b in 123..=126 {
+                            push_byte(out, &mut out_len, b)?;
+                        }
+                    }
+                    b"space" => {
+                        push_byte(out, &mut out_len, b' ')?;
+                        push_byte(out, &mut out_len, b'\t')?;
+                        push_byte(out, &mut out_len, b'\n')?;
+                        push_byte(out, &mut out_len, b'\r')?;
+                        push_byte(out, &mut out_len, 0x0b)?;
+                        push_byte(out, &mut out_len, 0x0c)?;
+                    }
+                    b"upper" => {
+                        for b in b'A'..=b'Z' {
+                            push_byte(out, &mut out_len, b)?;
+                        }
+                    }
+                    b"xdigit" => {
+                        for b in b'0'..=b'9' {
+                            push_byte(out, &mut out_len, b)?;
+                        }
+                        for b in b'a'..=b'f' {
+                            push_byte(out, &mut out_len, b)?;
+                        }
+                        for b in b'A'..=b'F' {
+                            push_byte(out, &mut out_len, b)?;
+                        }
+                    }
+                    _ => return Err("invalid character class"),
+                }
+                i += close_idx + 4;
+                continue;
+            }
+        }
+
+        // 2. Détection répétition [c*n] ou [c*]
+        if bytes[i] == b'[' && i + 2 < bytes.len() {
+            let c_cand = if bytes[i + 1] == b'\\' && i + 3 < bytes.len() {
+                match bytes[i + 2] {
+                    b'n' => Some((b'\n', i + 3)),
+                    b't' => Some((b'\t', i + 3)),
+                    b'r' => Some((b'\r', i + 3)),
+                    b'\\' => Some((b'\\', i + 3)),
+                    other => Some((other, i + 3)),
+                }
+            } else {
+                Some((bytes[i + 1], i + 2))
+            };
+
+            if let Some((c, next_idx)) = c_cand {
+                if next_idx < bytes.len() && bytes[next_idx] == b'*' {
+                    if let Some(close_rel) = bytes[next_idx + 1..].iter().position(|&b| b == b']') {
+                        let count_slice = &bytes[next_idx + 1..next_idx + 1 + close_rel];
+                        let count = if count_slice.is_empty() {
+                            target_len.saturating_sub(out_len).max(1)
+                        } else {
+                            let mut val: usize = 0;
+                            let is_octal = count_slice.len() > 1 && count_slice[0] == b'0';
+                            let base: usize = if is_octal { 8 } else { 10 };
+                            for &ch in count_slice {
+                                if (is_octal && (b'0'..=b'7').contains(&ch))
+                                    || (!is_octal && ch.is_ascii_digit())
+                                {
+                                    val = val
+                                        .saturating_mul(base)
+                                        .saturating_add((ch - b'0') as usize);
+                                } else {
+                                    return Err("invalid repeat count in [...]");
+                                }
+                            }
+                            val.max(1)
+                        };
+
+                        for _ in 0..count {
+                            push_byte(out, &mut out_len, c)?;
+                        }
+                        i = next_idx + 1 + close_rel + 1;
+                        continue;
+                    }
+                }
+            }
+        }
+
+        // 3. Caractère individuel ou début de plage c1-c2
+        let (c1, next_i) = parse_tr_char(bytes, i)?;
+        i = next_i;
+
+        if i < bytes.len() && bytes[i] == b'-' && i + 1 < bytes.len() {
+            let (c2, after_c2) = parse_tr_char(bytes, i + 1)?;
+            if c1 <= c2 {
+                for b in c1..=c2 {
+                    push_byte(out, &mut out_len, b)?;
+                }
+                i = after_c2;
+            } else {
+                return Err("range endpoints in reverse order");
+            }
+        } else {
+            push_byte(out, &mut out_len, c1)?;
+        }
+    }
+
+    Ok(out_len)
+}
+
+/// Exécute l'utilitaire standard POSIX `tr` (translation, suppression et compression de caractères)
+pub fn run_tr(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    let mut complement = false;
+    let mut delete = false;
+    let mut squeeze = false;
+    let mut truncate = false;
+    let mut operands: [&str; 4] = [""; 4];
+    let mut num_operands = 0;
+    let mut parsing_options = true;
+
+    let mut idx = 0;
+    while idx < args.len() {
+        let arg = args[idx];
+        if parsing_options && arg == "--" {
+            parsing_options = false;
+            idx += 1;
+            continue;
+        }
+
+        if parsing_options && (arg.starts_with('-') && arg != "-") {
+            if arg == "--help" {
+                let _ = sys_write(
+                    out_fd,
+                    b"Usage: tr [OPTION]... SET1 [SET2]\n\
+Translate, squeeze, and/or delete characters from standard input,\n\
+writing to standard output.\n\n\
+  -c, -C, --complement    use the complement of SET1\n\
+  -d, --delete            delete characters in SET1, do not translate\n\
+  -s, --squeeze-repeats   replace each sequence of a repeated character\n\
+                            that is listed in the last specified SET,\n\
+                            with a single occurrence of that character\n\
+  -t, --truncate-set1     first truncate SET1 to length of SET2\n\
+      --help              display this help and exit\n",
+                );
+                return 0;
+            } else if arg == "--complement" {
+                complement = true;
+            } else if arg == "--delete" {
+                delete = true;
+            } else if arg == "--squeeze-repeats" {
+                squeeze = true;
+            } else if arg == "--truncate-set1" {
+                truncate = true;
+            } else {
+                for &b in &arg.as_bytes()[1..] {
+                    match b {
+                        b'c' | b'C' => complement = true,
+                        b'd' => delete = true,
+                        b's' => squeeze = true,
+                        b't' => truncate = true,
+                        _ => {
+                            let _ = sys_write(err_fd, b"tr: invalid option -- '");
+                            let _ = sys_write(err_fd, &[b]);
+                            let _ = sys_write(err_fd, b"'\n");
+                            return 1;
+                        }
+                    }
+                }
+            }
+            idx += 1;
+        } else {
+            if num_operands < operands.len() {
+                operands[num_operands] = arg;
+                num_operands += 1;
+            } else {
+                let _ = sys_write(err_fd, b"tr: extra operand '");
+                let _ = sys_write(err_fd, arg.as_bytes());
+                let _ = sys_write(err_fd, b"'\n");
+                return 1;
+            }
+            idx += 1;
+        }
+    }
+
+    if num_operands == 0 {
+        let _ = sys_write(err_fd, b"tr: missing operand\n");
+        return 1;
+    }
+
+    if delete && !squeeze && num_operands > 1 {
+        let _ = sys_write(err_fd, b"tr: extra operand '");
+        let _ = sys_write(err_fd, operands[1].as_bytes());
+        let _ = sys_write(
+            err_fd,
+            b"'\nOnly one string may be given when deleting without --squeeze-repeats\n",
+        );
+        return 1;
+    }
+
+    if !delete && !squeeze && num_operands < 2 {
+        let _ = sys_write(err_fd, b"tr: missing operand after '");
+        let _ = sys_write(err_fd, operands[0].as_bytes());
+        let _ = sys_write(err_fd, b"'\nTwo strings must be given when translating\n");
+        return 1;
+    }
+
+    let mut set1 = [0u8; 512];
+    let mut set1_len = match expand_tr_spec(operands[0], &mut set1, 0) {
+        Ok(l) => l,
+        Err(e) => {
+            let _ = sys_write(err_fd, b"tr: ");
+            let _ = sys_write(err_fd, e.as_bytes());
+            let _ = sys_write(err_fd, b"\n");
+            return 1;
+        }
+    };
+
+    if complement {
+        let mut in_set = [false; 256];
+        for &b in &set1[..set1_len] {
+            in_set[b as usize] = true;
+        }
+        let mut comp = [0u8; 512];
+        let mut comp_len = 0;
+        for b in 0..=255u8 {
+            if !in_set[b as usize] {
+                comp[comp_len] = b;
+                comp_len += 1;
+            }
+        }
+        set1[..comp_len].copy_from_slice(&comp[..comp_len]);
+        set1_len = comp_len;
+    }
+
+    let mut set2 = [0u8; 512];
+    let mut set2_len = 0;
+    if num_operands >= 2 {
+        set2_len = match expand_tr_spec(operands[1], &mut set2, set1_len) {
+            Ok(l) => l,
+            Err(e) => {
+                let _ = sys_write(err_fd, b"tr: ");
+                let _ = sys_write(err_fd, e.as_bytes());
+                let _ = sys_write(err_fd, b"\n");
+                return 1;
+            }
+        };
+    }
+
+    let mut trans_map = [0u8; 256];
+    for (i, item) in trans_map.iter_mut().enumerate() {
+        *item = i as u8;
+    }
+    let mut delete_mask = [false; 256];
+    let mut squeeze_mask = [false; 256];
+
+    if delete {
+        for &b in &set1[..set1_len] {
+            delete_mask[b as usize] = true;
+        }
+        if squeeze && num_operands >= 2 {
+            for &b in &set2[..set2_len] {
+                squeeze_mask[b as usize] = true;
+            }
+        }
+    } else if num_operands >= 2 {
+        let effective_s1_len = if truncate {
+            set1_len.min(set2_len)
+        } else {
+            set1_len
+        };
+        for i in 0..effective_s1_len {
+            let s1 = set1[i];
+            let s2 = if i < set2_len {
+                set2[i]
+            } else if set2_len > 0 {
+                set2[set2_len - 1]
+            } else {
+                s1
+            };
+            trans_map[s1 as usize] = s2;
+        }
+        if squeeze {
+            for &b in &set2[..set2_len] {
+                squeeze_mask[b as usize] = true;
+            }
+        }
+    } else if squeeze && num_operands == 1 {
+        for &b in &set1[..set1_len] {
+            squeeze_mask[b as usize] = true;
+        }
+    }
+
+    let mut in_buf = [0u8; 1024];
+    let mut out_buf = [0u8; 1024];
+    let mut out_len = 0;
+    let mut last_char: Option<u8> = None;
+
+    loop {
+        let n = sys_read(in_fd, &mut in_buf);
+        if n <= 0 {
+            break;
+        }
+        for &b in &in_buf[..n as usize] {
+            if delete_mask[b as usize] {
+                continue;
+            }
+            let mapped = trans_map[b as usize];
+            if squeeze_mask[mapped as usize] {
+                if last_char == Some(mapped) {
+                    continue;
+                }
+                last_char = Some(mapped);
+            } else {
+                last_char = Some(mapped);
+            }
+
+            out_buf[out_len] = mapped;
+            out_len += 1;
+            if out_len == out_buf.len() {
+                let _ = sys_write(out_fd, &out_buf);
+                out_len = 0;
+            }
+        }
+    }
+
+    if out_len > 0 {
+        let _ = sys_write(out_fd, &out_buf[..out_len]);
+    }
+
+    0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -6409,5 +6856,134 @@ mod tests {
         // Nettoyage fichiers temporaires
         let _ = sys_unlink_pool(path1);
         let _ = sys_unlink_pool(path2);
+    }
+
+    #[test]
+    fn test_tr_utility() {
+        // 1. Translation simple de minuscules en majuscules avec plage
+        let (in_r1, in_w1) = crate::vfs::pipe().expect("pipe in tr 1");
+        let (out_r1, out_w1) = crate::vfs::pipe().expect("pipe out tr 1");
+        let _ = sys_write(in_w1, b"hello world\n");
+        sys_close(in_w1);
+
+        let code1 = run_tr(&["a-z", "A-Z"], in_r1, out_w1, 2);
+        assert_eq!(code1, 0);
+        sys_close(in_r1);
+        sys_close(out_w1);
+
+        let mut out1 = [0u8; 128];
+        let n1 = sys_read(out_r1, &mut out1);
+        assert!(n1 > 0);
+        assert_eq!(&out1[..n1 as usize], b"HELLO WORLD\n");
+        sys_close(out_r1);
+
+        // 2. Translation avec classes de caractères POSIX [:lower:] et [:upper:]
+        let (in_r2, in_w2) = crate::vfs::pipe().expect("pipe in tr 2");
+        let (out_r2, out_w2) = crate::vfs::pipe().expect("pipe out tr 2");
+        let _ = sys_write(in_w2, b"JamboOS Micro-Kernel v0.3!\n");
+        sys_close(in_w2);
+
+        let code2 = run_tr(&["[:upper:]", "[:lower:]"], in_r2, out_w2, 2);
+        assert_eq!(code2, 0);
+        sys_close(in_r2);
+        sys_close(out_w2);
+
+        let mut out2 = [0u8; 128];
+        let n2 = sys_read(out_r2, &mut out2);
+        assert!(n2 > 0);
+        assert_eq!(&out2[..n2 as usize], b"jamboos micro-kernel v0.3!\n");
+        sys_close(out_r2);
+
+        // 3. Suppression de caractères avec option -d
+        let (in_r3, in_w3) = crate::vfs::pipe().expect("pipe in tr 3");
+        let (out_r3, out_w3) = crate::vfs::pipe().expect("pipe out tr 3");
+        let _ = sys_write(in_w3, b"user42:group99:disk0\n");
+        sys_close(in_w3);
+
+        let code3 = run_tr(&["-d", "0-9"], in_r3, out_w3, 2);
+        assert_eq!(code3, 0);
+        sys_close(in_r3);
+        sys_close(out_w3);
+
+        let mut out3 = [0u8; 128];
+        let n3 = sys_read(out_r3, &mut out3);
+        assert!(n3 > 0);
+        assert_eq!(&out3[..n3 as usize], b"user:group:disk\n");
+        sys_close(out_r3);
+
+        // 4. Compression de répétitions consécutives avec -s
+        let (in_r4, in_w4) = crate::vfs::pipe().expect("pipe in tr 4");
+        let (out_r4, out_w4) = crate::vfs::pipe().expect("pipe out tr 4");
+        let _ = sys_write(in_w4, b"hello       world    foo   bar\n");
+        sys_close(in_w4);
+
+        let code4 = run_tr(&["-s", " "], in_r4, out_w4, 2);
+        assert_eq!(code4, 0);
+        sys_close(in_r4);
+        sys_close(out_w4);
+
+        let mut out4 = [0u8; 128];
+        let n4 = sys_read(out_r4, &mut out4);
+        assert!(n4 > 0);
+        assert_eq!(&out4[..n4 as usize], b"hello world foo bar\n");
+        sys_close(out_r4);
+
+        // 5. Complément avec option -c
+        let (in_r5, in_w5) = crate::vfs::pipe().expect("pipe in tr 5");
+        let (out_r5, out_w5) = crate::vfs::pipe().expect("pipe out tr 5");
+        let _ = sys_write(in_w5, b"abc 123 !@# def\n");
+        sys_close(in_w5);
+
+        let code5 = run_tr(&["-c", "[:alnum:]\n", "_"], in_r5, out_w5, 2);
+        assert_eq!(code5, 0);
+        sys_close(in_r5);
+        sys_close(out_w5);
+
+        let mut out5 = [0u8; 128];
+        let n5 = sys_read(out_r5, &mut out5);
+        assert!(n5 > 0);
+        assert_eq!(&out5[..n5 as usize], b"abc_123_____def\n");
+        sys_close(out_r5);
+
+        // 6. Troncature avec -t
+        let (in_r6, in_w6) = crate::vfs::pipe().expect("pipe in tr 6");
+        let (out_r6, out_w6) = crate::vfs::pipe().expect("pipe out tr 6");
+        let _ = sys_write(in_w6, b"12345\n");
+        sys_close(in_w6);
+
+        let code6 = run_tr(&["-t", "1-5", "abc"], in_r6, out_w6, 2);
+        assert_eq!(code6, 0);
+        sys_close(in_r6);
+        sys_close(out_w6);
+
+        let mut out6 = [0u8; 128];
+        let n6 = sys_read(out_r6, &mut out6);
+        assert!(n6 > 0);
+        assert_eq!(&out6[..n6 as usize], b"abc45\n");
+        sys_close(out_r6);
+
+        // 7. Séquences d'échappement et répétition [c*n]
+        let (in_r7, in_w7) = crate::vfs::pipe().expect("pipe in tr 7");
+        let (out_r7, out_w7) = crate::vfs::pipe().expect("pipe out tr 7");
+        let _ = sys_write(in_w7, b"line1:line2:line3\n");
+        sys_close(in_w7);
+
+        let code7 = run_tr(&[":", "\\n"], in_r7, out_w7, 2);
+        assert_eq!(code7, 0);
+        sys_close(in_r7);
+        sys_close(out_w7);
+
+        let mut out7 = [0u8; 128];
+        let n7 = sys_read(out_r7, &mut out7);
+        assert!(n7 > 0);
+        assert_eq!(&out7[..n7 as usize], b"line1\nline2\nline3\n");
+        sys_close(out_r7);
+
+        // 8. Erreur : opérande manquant
+        let (out_r8, out_w8) = crate::vfs::pipe().expect("pipe out tr 8");
+        let code8 = run_tr(&[], 0, 1, out_w8);
+        assert_eq!(code8, 1);
+        sys_close(out_w8);
+        sys_close(out_r8);
     }
 }
