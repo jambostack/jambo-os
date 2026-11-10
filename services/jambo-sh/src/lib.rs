@@ -572,6 +572,7 @@ impl JamboShell {
             "fold" | "/bin/fold" | "bin/fold" => self.cmd_fold(args, out),
             "nl" | "/bin/nl" | "bin/nl" => self.cmd_nl(args, out),
             "od" | "/bin/od" | "bin/od" => self.cmd_od(args, out),
+            "cmp" | "/bin/cmp" | "bin/cmp" => self.cmd_cmp(args, out),
             "version" => self.cmd_version(out),
             "uptime" => self.cmd_uptime(out),
             "caps" => self.cmd_caps(out),
@@ -1372,6 +1373,26 @@ Utilitaire d'installation JamboOS (Serie 0.*.*)\n\
             }
         } else {
             let msg = b"od: pipe creation failed\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
+    }
+
+    fn cmd_cmp(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if let Ok((r, w)) = libjambo::vfs::pipe() {
+            let code = libjambo::coreutils::run_cmp(args, 0, w, w);
+            let _ = libjambo::coreutils::sys_close(w);
+            let n = libjambo::coreutils::sys_read(r, out);
+            let _ = libjambo::coreutils::sys_close(r);
+            let len = if n > 0 { n as usize } else { 0 };
+            if code == 0 || code == 1 {
+                (ShellStatus::Success, len)
+            } else {
+                (ShellStatus::ExecutionFailed, len)
+            }
+        } else {
+            let msg = b"cmp: pipe creation failed\n";
             let len = msg.len().min(out.len());
             out[..len].copy_from_slice(&msg[..len]);
             (ShellStatus::ExecutionFailed, len)
@@ -18041,5 +18062,37 @@ mod tests {
         let s2 = core::str::from_utf8(&out[..len2]).unwrap();
         // 'J'=74 (0112), 'a'=97 (0141)
         assert!(s2.contains("0000000 112 141"));
+    }
+
+    #[test]
+    fn test_cmp_shell_execution() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 512];
+
+        let fd1 = libjambo::coreutils::sys_open(
+            "/tmp/sh_cmp1.txt",
+            libjambo::vfs::O_CREAT | libjambo::vfs::O_WRONLY,
+        );
+        let _ = libjambo::coreutils::sys_write(fd1, b"ABCDEF");
+        libjambo::coreutils::sys_close(fd1);
+
+        let fd2 = libjambo::coreutils::sys_open(
+            "/tmp/sh_cmp2.txt",
+            libjambo::vfs::O_CREAT | libjambo::vfs::O_WRONLY,
+        );
+        let _ = libjambo::coreutils::sys_write(fd2, b"ABCXYZ");
+        libjambo::coreutils::sys_close(fd2);
+
+        // 1. Exécution cmp avec différence
+        let (st1, len1) = shell.execute_line("cmp /tmp/sh_cmp1.txt /tmp/sh_cmp2.txt", &mut out);
+        assert_eq!(st1, ShellStatus::Success);
+        let s1 = core::str::from_utf8(&out[..len1]).unwrap();
+        assert!(s1.contains("differ: byte 4, line 1"));
+
+        // 2. Exécution /bin/cmp en mode silencieux
+        let (st2, len2) =
+            shell.execute_line("/bin/cmp -s /tmp/sh_cmp1.txt /tmp/sh_cmp2.txt", &mut out);
+        assert_eq!(st2, ShellStatus::Success);
+        assert_eq!(len2, 0);
     }
 }

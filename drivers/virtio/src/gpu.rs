@@ -857,6 +857,191 @@ impl VirtioGpuDriver {
 
         Ok(())
     }
+
+    /// Construit la commande de transfert vers l'hôte avec clôture matérielle (Fence)
+    pub fn build_transfer_to_host_cmd_with_fence(
+        &self,
+        resource_id: u32,
+        rect: VirtioGpuRect,
+        offset: u64,
+        fence_id: u64,
+    ) -> VirtioGpuTransferToHost2d {
+        VirtioGpuTransferToHost2d {
+            hdr: VirtioGpuCtrlHdr {
+                cmd_type: VIRTIO_GPU_CMD_TRANSFER_TO_HOST_2D,
+                flags: if fence_id > 0 { 1 } else { 0 },
+                fence_id,
+                ctx_id: 0,
+                ring_idx: 0,
+                padding: [0; 3],
+            },
+            rect,
+            offset,
+            resource_id,
+            padding: 0,
+        }
+    }
+
+    /// Construit la commande de flush de ressource avec clôture matérielle (Fence)
+    pub fn build_flush_cmd_with_fence(
+        &self,
+        resource_id: u32,
+        rect: VirtioGpuRect,
+        fence_id: u64,
+    ) -> VirtioGpuResourceFlush {
+        VirtioGpuResourceFlush {
+            hdr: VirtioGpuCtrlHdr {
+                cmd_type: VIRTIO_GPU_CMD_RESOURCE_FLUSH,
+                flags: if fence_id > 0 { 1 } else { 0 },
+                fence_id,
+                ctx_id: 0,
+                ring_idx: 0,
+                padding: [0; 3],
+            },
+            rect,
+            resource_id,
+            padding: 0,
+        }
+    }
+
+    /// Initialise le double buffering matériel (front buffer et back buffer)
+    pub fn init_double_buffering(
+        &mut self,
+        back_resource_id: u32,
+    ) -> Result<VirtioGpuDoubleBuffer, SysError> {
+        if !self.ready {
+            return Err(SysError::ResourceBusy);
+        }
+        if back_resource_id == 0 || back_resource_id == self.primary_resource_id {
+            return Err(SysError::InvalidArgument);
+        }
+
+        self.create_resource_2d(back_resource_id, self.pixel_format, self.width, self.height)?;
+
+        let db = VirtioGpuDoubleBuffer::new(
+            self.width,
+            self.height,
+            self.primary_resource_id,
+            back_resource_id,
+        );
+        Ok(db)
+    }
+}
+
+/// Gestionnaire de Double Buffering matériel et Page Flipping VSync VirtIO-GPU 1.2
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VirtioGpuDoubleBuffer {
+    pub front_resource_id: u32,
+    pub back_resource_id: u32,
+    pub width: u32,
+    pub height: u32,
+    pub current_fence: u64,
+    pub completed_fence: u64,
+    pub vsync_enabled: bool,
+    pub page_flips_count: u64,
+}
+
+impl VirtioGpuDoubleBuffer {
+    pub const fn new(width: u32, height: u32, front_id: u32, back_id: u32) -> Self {
+        Self {
+            front_resource_id: front_id,
+            back_resource_id: back_id,
+            width,
+            height,
+            current_fence: 0,
+            completed_fence: 0,
+            vsync_enabled: true,
+            page_flips_count: 0,
+        }
+    }
+
+    /// ID de la ressource cible pour le rendu (tampon arrière hors écran)
+    pub const fn render_target(&self) -> u32 {
+        self.back_resource_id
+    }
+
+    /// ID de la ressource projetée sur l'écran (tampon avant actif)
+    pub const fn display_target(&self) -> u32 {
+        self.front_resource_id
+    }
+
+    /// Soumet le tampon arrière vers l'hôte et exécute la bascule de page atomique (Page Flip)
+    pub fn swap_buffers(
+        &mut self,
+        driver: &mut VirtioGpuDriver,
+        dirty_rect: VirtioGpuRect,
+    ) -> Result<u64, SysError> {
+        if !driver.ready {
+            return Err(SysError::ResourceBusy);
+        }
+        if dirty_rect.width == 0 || dirty_rect.height == 0 {
+            return Err(SysError::InvalidArgument);
+        }
+        if dirty_rect.x.saturating_add(dirty_rect.width) > self.width
+            || dirty_rect.y.saturating_add(dirty_rect.height) > self.height
+        {
+            return Err(SysError::InvalidArgument);
+        }
+
+        self.current_fence = self.current_fence.wrapping_add(1);
+        let fence = self.current_fence;
+
+        // 1. Transfert de la région modifiée du back buffer vers l'hôte
+        let _xfer_cmd = driver.build_transfer_to_host_cmd_with_fence(
+            self.back_resource_id,
+            dirty_rect,
+            0,
+            fence,
+        );
+        let bytes = (dirty_rect.width as u64) * (dirty_rect.height as u64) * 4;
+        driver.bytes_transferred = driver.bytes_transferred.saturating_add(bytes);
+
+        // 2. Bascule atomique des tampons (Page Flip)
+        core::mem::swap(&mut self.front_resource_id, &mut self.back_resource_id);
+        self.page_flips_count = self.page_flips_count.wrapping_add(1);
+
+        // 3. Réassignation du scanout vers le nouveau front buffer
+        driver.set_scanout(
+            0,
+            self.front_resource_id,
+            VirtioGpuRect {
+                x: 0,
+                y: 0,
+                width: self.width,
+                height: self.height,
+            },
+        )?;
+        driver.primary_resource_id = self.front_resource_id;
+
+        // 4. Commande de synchronisation de trame VSync Flush
+        let _flush_cmd =
+            driver.build_flush_cmd_with_fence(self.front_resource_id, dirty_rect, fence);
+        driver.frames_flushed = driver.frames_flushed.wrapping_add(1);
+
+        Ok(fence)
+    }
+
+    /// Signale la complétion matérielle d'une clôture (Fence IRQ)
+    pub fn on_fence_completed(&mut self, fence_id: u64) {
+        if fence_id > self.completed_fence {
+            self.completed_fence = fence_id;
+        }
+    }
+
+    /// Indique si le pipeline graphique est synchronisé et inactif (zéro frame en vol)
+    pub const fn is_idle(&self) -> bool {
+        self.completed_fence >= self.current_fence
+    }
+
+    /// Active ou désactive la synchronisation verticale VSync
+    pub fn set_vsync(&mut self, enabled: bool) {
+        self.vsync_enabled = enabled;
+    }
+
+    /// État de la synchronisation verticale
+    pub const fn is_vsync_enabled(&self) -> bool {
+        self.vsync_enabled
+    }
 }
 
 /// Console d'affichage native 2D Ring 3 opérant sur VirtIO-GPU
@@ -1299,5 +1484,76 @@ mod tests {
             &mut restored_rgba,
         );
         assert_eq!(restored_rgba, src_rgba);
+    }
+
+    #[test]
+    fn test_double_buffering_and_fence_pipeline() {
+        let mut driver = VirtioGpuDriver::new(0x1000_0000, 1920, 1080);
+        assert!(driver.setup_primary_scanout().is_ok());
+
+        // 1. Initialisation du double buffering avec le tampon arrière ID 2
+        let mut db = driver
+            .init_double_buffering(2)
+            .expect("Init double buffering");
+
+        assert_eq!(db.display_target(), 1);
+        assert_eq!(db.render_target(), 2);
+        assert!(db.is_idle());
+        assert_eq!(db.page_flips_count, 0);
+
+        // 2. Rendu et soumission du premier frame (swap)
+        let rect1 = VirtioGpuRect {
+            x: 0,
+            y: 0,
+            width: 800,
+            height: 600,
+        };
+        let fence1 = db.swap_buffers(&mut driver, rect1).expect("Swap frame 1");
+        assert_eq!(fence1, 1);
+        assert_eq!(db.page_flips_count, 1);
+        // Après le premier swap : le tampon affiché est 2 et la cible de rendu est 1
+        assert_eq!(db.display_target(), 2);
+        assert_eq!(db.render_target(), 1);
+        assert_eq!(driver.primary_resource_id, 2);
+        assert_eq!(driver.frames_flushed, 1);
+        assert_eq!(driver.bytes_transferred, 800 * 600 * 4);
+        assert!(!db.is_idle());
+
+        // 3. Notification de complétion de la première clôture matérielle (Fence 1)
+        db.on_fence_completed(1);
+        assert!(db.is_idle());
+
+        // 4. Deuxième frame rendu sur le buffer 1
+        let rect2 = VirtioGpuRect {
+            x: 100,
+            y: 100,
+            width: 400,
+            height: 300,
+        };
+        let fence2 = db.swap_buffers(&mut driver, rect2).expect("Swap frame 2");
+        assert_eq!(fence2, 2);
+        assert_eq!(db.page_flips_count, 2);
+        // Le tampon affiché revient à 1 et la cible de rendu à 2
+        assert_eq!(db.display_target(), 1);
+        assert_eq!(db.render_target(), 2);
+        assert_eq!(driver.primary_resource_id, 1);
+        assert_eq!(driver.frames_flushed, 2);
+
+        // 5. Rejet d'un swap avec rectangle hors limites
+        let invalid_rect = VirtioGpuRect {
+            x: 1900,
+            y: 0,
+            width: 100, // 1900 + 100 = 2000 > 1920
+            height: 100,
+        };
+        assert_eq!(
+            db.swap_buffers(&mut driver, invalid_rect),
+            Err(SysError::InvalidArgument)
+        );
+
+        // 6. Test activation / désactivation VSync
+        assert!(db.is_vsync_enabled());
+        db.set_vsync(false);
+        assert!(!db.is_vsync_enabled());
     }
 }

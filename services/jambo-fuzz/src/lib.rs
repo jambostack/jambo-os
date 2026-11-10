@@ -38,6 +38,8 @@ pub struct FuzzReport {
     pub malformed_dhcp_rejected: usize,
     /// Fragments IPv4 malveillants ou chevauchants (Teardrop / Ping of Death) neutralisés
     pub ipv4_fragment_overlaps_blocked: usize,
+    /// Anomalies de drapeaux TCP et scans furtifs illégaux (NULL, XMAS, SYN-FIN RFC 793/9293) bloqués
+    pub tcp_flag_anomalies_blocked: usize,
     /// Violations SMAP / SMEP détectées et interceptées au niveau matériel
     pub smap_violations_blocked: usize,
     /// Séquences d'appels système combinatoires testées (cycle complet de vie et réutilisation)
@@ -142,6 +144,7 @@ impl SecurityFuzzer {
             malformed_arp_rejected: 0,
             malformed_dhcp_rejected: 0,
             ipv4_fragment_overlaps_blocked: 0,
+            tcp_flag_anomalies_blocked: 0,
             smap_violations_blocked: 0,
             combinatorial_sequences_tested: 0,
             socket_corruptions_handled: 0,
@@ -367,6 +370,48 @@ impl SecurityFuzzer {
                 || (more_fragments && ((frag_len - 20) % 8) != 0);
 
             if is_corrupted {
+                blocked += 1;
+            }
+        }
+        blocked
+    }
+
+    /// Fuzzing des paquets TCP adversaires et scans de ports furtifs aux flags illégaux (RFC 793 / RFC 9293)
+    pub fn fuzz_tcp_illegal_flag_anomalies(&mut self, iterations: usize) -> usize {
+        let mut blocked = 0;
+
+        for _ in 0..iterations {
+            // Combinaisons de flags TCP (8 bits: CWR, ECE, URG, ACK, PSH, RST, SYN, FIN)
+            let flags = (self.rng.next_u32() & 0xFF) as u8;
+            let data_offset = ((self.rng.next_u32() % 16) as u8) & 0x0F; // Doit être >= 5 (20 octets)
+            let window_size = self.rng.next_u32() as u16;
+            let _seq = self.rng.next_u32();
+
+            let fin = (flags & 0x01) != 0;
+            let syn = (flags & 0x02) != 0;
+            let rst = (flags & 0x04) != 0;
+            let psh = (flags & 0x08) != 0;
+            let ack = (flags & 0x10) != 0;
+            let urg = (flags & 0x20) != 0;
+
+            // Invariants RFC 793 / 9293 :
+            // 1. Data offset < 5 (en-tête TCP inférieur au minimum de 20 octets)
+            // 2. NULL Scan : aucun flag actif (flags == 0)
+            // 3. SYN + FIN simultanés (combinaison impossible du protocole)
+            // 4. SYN + RST simultanés (requête et réinitialisation contradictoires)
+            // 5. FIN + RST simultanés
+            // 6. XMAS Scan : FIN + PSH + URG sans ACK
+            // 7. PSH ou URG actifs sans le flag ACK fixé dans une session de données
+            let is_illegal = data_offset < 5
+                || flags == 0
+                || (syn && fin)
+                || (syn && rst)
+                || (fin && rst)
+                || (fin && psh && urg && !ack)
+                || (!ack && (psh || urg))
+                || (rst && window_size > 0 && (syn || fin));
+
+            if is_illegal {
                 blocked += 1;
             }
         }
@@ -603,6 +648,7 @@ impl JamboFuzzDaemon {
                 malformed_arp_rejected: 0,
                 malformed_dhcp_rejected: 0,
                 ipv4_fragment_overlaps_blocked: 0,
+                tcp_flag_anomalies_blocked: 0,
                 smap_violations_blocked: 0,
                 combinatorial_sequences_tested: 0,
                 socket_corruptions_handled: 0,
@@ -629,6 +675,8 @@ impl JamboFuzzDaemon {
         report.malformed_dhcp_rejected = self.fuzzer.fuzz_network_dhcp_packet(iterations / 2);
         report.ipv4_fragment_overlaps_blocked =
             self.fuzzer.fuzz_ipv4_fragmentation_overlap(iterations / 2);
+        report.tcp_flag_anomalies_blocked =
+            self.fuzzer.fuzz_tcp_illegal_flag_anomalies(iterations / 2);
         report.combinatorial_sequences_tested = self
             .fuzzer
             .fuzz_combinatorial_syscall_sequences(iterations / 4);
@@ -683,6 +731,8 @@ impl JamboFuzzDaemon {
         pos += write_usize(&mut out[pos..], r.malformed_dhcp_rejected);
         pos += copy_slice(&mut out[pos..], b"\n  Fragments IPv4 chevauch : ");
         pos += write_usize(&mut out[pos..], r.ipv4_fragment_overlaps_blocked);
+        pos += copy_slice(&mut out[pos..], b"\n  Anomalies flags TCP     : ");
+        pos += write_usize(&mut out[pos..], r.tcp_flag_anomalies_blocked);
         pos += copy_slice(&mut out[pos..], b"\n  Sequences combinatoires : ");
         pos += write_usize(&mut out[pos..], r.combinatorial_sequences_tested);
         pos += copy_slice(&mut out[pos..], b"\n  Sockets corrompues      : ");
@@ -913,5 +963,22 @@ mod tests {
         let rep = daemon.run_campaign(100);
         assert!(rep.cow_4kn_transactions_fuzzed > 0);
         assert!(rep.zero_kernel_panics);
+    }
+
+    #[test]
+    fn test_tcp_illegal_flag_anomalies_fuzzing() {
+        let mut fuzzer = SecurityFuzzer::new();
+        let blocked = fuzzer.fuzz_tcp_illegal_flag_anomalies(200);
+        assert!(blocked > 0);
+
+        let mut daemon = JamboFuzzDaemon::new();
+        let rep = daemon.run_campaign(100);
+        assert!(rep.tcp_flag_anomalies_blocked > 0);
+
+        let mut out = [0u8; 1024];
+        let len = daemon.format_report(&mut out);
+        assert!(len > 0);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("Anomalies flags TCP"));
     }
 }

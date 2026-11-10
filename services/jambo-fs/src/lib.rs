@@ -299,6 +299,7 @@ pub enum FsError {
     ReadOnlyFileSystem,
     AttributeNotFound,
     QuotaExceeded,
+    FileLocked,
 }
 
 /// État d'une transaction Copy-on-Write (CoW)
@@ -2746,6 +2747,214 @@ impl QuotaTable {
     }
 }
 
+/// Type de verrou de fichier POSIX (IEEE Std 1003.1 fcntl / flock)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileLockType {
+    /// Verrou de lecture partagé (plusieurs lecteurs autorisés simultanément)
+    ReadShared,
+    /// Verrou d'écriture exclusif (un seul écrivain, aucun lecteur concurrent)
+    WriteExclusive,
+    /// Déverrouillage d'une plage d'octets
+    Unlock,
+}
+
+/// Descripteur de verrou sur une plage d'octets de fichier (Byte-Range Lock)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ByteRangeLock {
+    pub lock_type: FileLockType,
+    pub start: u64,
+    pub len: u64, // 0 = jusqu'à la fin du fichier (EOF)
+    pub owner_pid: u32,
+    pub path_hash: u64,
+    pub active: bool,
+}
+
+pub const MAX_FILE_LOCKS: usize = 64;
+
+/// Table des verrous de fichiers POSIX consultatifs et obligatoires
+#[derive(Debug, Clone, Copy)]
+pub struct FileLockTable {
+    pub locks: [ByteRangeLock; MAX_FILE_LOCKS],
+    pub count: usize,
+}
+
+impl Default for FileLockTable {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl FileLockTable {
+    pub const fn new() -> Self {
+        Self {
+            locks: [ByteRangeLock {
+                lock_type: FileLockType::Unlock,
+                start: 0,
+                len: 0,
+                owner_pid: 0,
+                path_hash: 0,
+                active: false,
+            }; MAX_FILE_LOCKS],
+            count: 0,
+        }
+    }
+
+    /// Calcule le hachage déterministe FNV-1a 64-bit d'un chemin de fichier
+    pub fn hash_path(path: &str) -> u64 {
+        let mut hash = 0xcbf29ce484222325u64;
+        for &b in path.as_bytes() {
+            hash ^= b as u64;
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+        hash
+    }
+
+    /// Teste si deux plages d'octets [s1, e1) et [s2, e2) se chevauchent
+    pub fn ranges_overlap(s1: u64, l1: u64, s2: u64, l2: u64) -> bool {
+        let e1 = if l1 == 0 {
+            u64::MAX
+        } else {
+            s1.saturating_add(l1)
+        };
+        let e2 = if l2 == 0 {
+            u64::MAX
+        } else {
+            s2.saturating_add(l2)
+        };
+        s1 < e2 && s2 < e1
+    }
+
+    /// Vérifie si une acquisition de verrou entrerait en conflit avec un verrou existant
+    pub fn test_conflict(
+        &self,
+        path_hash: u64,
+        lock_type: FileLockType,
+        start: u64,
+        len: u64,
+        requester_pid: u32,
+    ) -> Option<ByteRangeLock> {
+        if lock_type == FileLockType::Unlock {
+            return None;
+        }
+
+        for lock in &self.locks[..self.count] {
+            if !lock.active || lock.path_hash != path_hash {
+                continue;
+            }
+
+            // Un processus n'entre pas en conflit avec ses propres verrous
+            if lock.owner_pid == requester_pid {
+                continue;
+            }
+
+            if Self::ranges_overlap(lock.start, lock.len, start, len) {
+                // Conflit si au moins un des deux verrous est exclusif (WriteExclusive)
+                if lock.lock_type == FileLockType::WriteExclusive
+                    || lock_type == FileLockType::WriteExclusive
+                {
+                    return Some(*lock);
+                }
+            }
+        }
+        None
+    }
+
+    /// Acquiert ou modifie un verrou POSIX sur une plage d'octets
+    pub fn acquire_lock(
+        &mut self,
+        path: &str,
+        lock_type: FileLockType,
+        start: u64,
+        len: u64,
+        owner_pid: u32,
+    ) -> Result<(), FsError> {
+        if lock_type == FileLockType::Unlock {
+            return self.release_lock(path, start, len, owner_pid);
+        }
+
+        let path_hash = Self::hash_path(path);
+
+        if self
+            .test_conflict(path_hash, lock_type, start, len, owner_pid)
+            .is_some()
+        {
+            return Err(FsError::FileLocked);
+        }
+
+        // Vérification si le même PID met à jour une plage existante identique
+        for lock in self.locks[..self.count].iter_mut() {
+            if lock.active
+                && lock.path_hash == path_hash
+                && lock.owner_pid == owner_pid
+                && lock.start == start
+                && lock.len == len
+            {
+                lock.lock_type = lock_type;
+                return Ok(());
+            }
+        }
+
+        // Recherche d'un premier slot inactif
+        let mut slot_idx = None;
+        for (idx, lock) in self.locks.iter().enumerate() {
+            if !lock.active {
+                slot_idx = Some(idx);
+                break;
+            }
+        }
+
+        if let Some(idx) = slot_idx {
+            self.locks[idx] = ByteRangeLock {
+                lock_type,
+                start,
+                len,
+                owner_pid,
+                path_hash,
+                active: true,
+            };
+            if idx >= self.count {
+                self.count = idx + 1;
+            }
+            Ok(())
+        } else {
+            Err(FsError::BufferTooSmall)
+        }
+    }
+
+    /// Déverrouille une plage d'octets pour un PID
+    pub fn release_lock(
+        &mut self,
+        path: &str,
+        start: u64,
+        len: u64,
+        owner_pid: u32,
+    ) -> Result<(), FsError> {
+        let path_hash = Self::hash_path(path);
+        for lock in self.locks.iter_mut() {
+            if lock.active
+                && lock.path_hash == path_hash
+                && lock.owner_pid == owner_pid
+                && (len == 0 || Self::ranges_overlap(lock.start, lock.len, start, len))
+            {
+                lock.active = false;
+            }
+        }
+        Ok(())
+    }
+
+    /// Libère l'ensemble des verrous détenus par un PID lors de sa terminaison
+    pub fn release_all_for_pid(&mut self, owner_pid: u32) -> usize {
+        let mut released = 0;
+        for lock in self.locks.iter_mut() {
+            if lock.active && lock.owner_pid == owner_pid {
+                lock.active = false;
+                released += 1;
+            }
+        }
+        released
+    }
+}
+
 /// Système de fichiers JamboFS transactionnel monté en espace utilisateur
 #[derive(Debug, Clone, Copy)]
 pub struct JamboFs {
@@ -2760,6 +2969,7 @@ pub struct JamboFs {
     pub snapshot_table: SnapshotTable,
     pub xattr_table: XattrTable,
     pub quota_table: QuotaTable,
+    pub lock_table: FileLockTable,
     pub wal: MetadataWalManager,
     pub bitmap: CowBitmapAllocator,
 }
@@ -2863,6 +3073,7 @@ impl JamboFs {
             snapshot_table: SnapshotTable::new(),
             xattr_table: XattrTable::new(),
             quota_table: QuotaTable::new(),
+            lock_table: FileLockTable::new(),
             wal: MetadataWalManager::new(),
             bitmap,
         };
@@ -2887,6 +3098,7 @@ impl JamboFs {
             snapshot_table: SnapshotTable::new(),
             xattr_table: XattrTable::new(),
             quota_table: QuotaTable::new(),
+            lock_table: FileLockTable::new(),
             wal: MetadataWalManager::new(),
             bitmap: CowBitmapAllocator::new(),
         }
@@ -3825,6 +4037,49 @@ impl JamboFs {
     /// Libère la consommation d'octets et d'inodes pour un utilisateur
     pub fn record_quota_free(&mut self, uid: u32, bytes: u64, inodes: u32) {
         self.quota_table.record_release(uid, bytes, inodes);
+    }
+
+    /// Acquiert ou modifie un verrou de fichier POSIX fcntl sur une plage d'octets
+    pub fn fcntl_lock(
+        &mut self,
+        path: &str,
+        lock_type: FileLockType,
+        start: u64,
+        len: u64,
+        pid: u32,
+    ) -> Result<(), FsError> {
+        self.lock_table
+            .acquire_lock(path, lock_type, start, len, pid)
+    }
+
+    /// Teste l'existence d'un verrou concurrent (F_GETLK) sur une plage d'octets
+    pub fn fcntl_getlk(
+        &self,
+        path: &str,
+        lock_type: FileLockType,
+        start: u64,
+        len: u64,
+        pid: u32,
+    ) -> Result<Option<ByteRangeLock>, FsError> {
+        let path_hash = FileLockTable::hash_path(path);
+        Ok(self
+            .lock_table
+            .test_conflict(path_hash, lock_type, start, len, pid))
+    }
+
+    /// Applique un verrou global flock (start=0, len=0) sur le fichier complet
+    pub fn flock_file(
+        &mut self,
+        path: &str,
+        lock_type: FileLockType,
+        pid: u32,
+    ) -> Result<(), FsError> {
+        self.lock_table.acquire_lock(path, lock_type, 0, 0, pid)
+    }
+
+    /// Libère l'intégralité des verrous détenus par un PID lors de sa terminaison
+    pub fn release_pid_locks(&mut self, pid: u32) -> usize {
+        self.lock_table.release_all_for_pid(pid)
     }
 }
 
@@ -4917,6 +5172,80 @@ mod tests {
 
         // 6. Utilisateur non soumis à quota (ex: UID 0 root) -> illimité
         assert!(fs.check_quota(0, 1_000_000, 10_000).is_ok());
+
+        reset_local_ramdisk();
+    }
+
+    #[test]
+    fn test_posix_file_locking_and_conflict_resolution() {
+        let _guard = FS_TEST_LOCK.lock().unwrap();
+        reset_local_ramdisk();
+
+        let client = BlockClient::new(libjambo::Handle(0));
+        let mut fs = JamboFs::new_fallback(client);
+        let path = "var/log/syslog.log";
+
+        // 1. PID 100 acquiert un verrou partagé en lecture sur [0..1024)
+        assert!(fs
+            .fcntl_lock(path, FileLockType::ReadShared, 0, 1024, 100)
+            .is_ok());
+
+        // 2. PID 200 acquiert un verrou partagé en lecture sur [512..2048) -> Autorisé
+        assert!(fs
+            .fcntl_lock(path, FileLockType::ReadShared, 512, 1536, 200)
+            .is_ok());
+
+        // 3. PID 300 tente un verrou d'écriture exclusif sur [256..768) -> Conflit FileLocked
+        assert_eq!(
+            fs.fcntl_lock(path, FileLockType::WriteExclusive, 256, 512, 300),
+            Err(FsError::FileLocked)
+        );
+
+        // 4. Test avec F_GETLK par PID 300
+        let conflict = fs
+            .fcntl_getlk(path, FileLockType::WriteExclusive, 256, 512, 300)
+            .unwrap();
+        assert!(conflict.is_some());
+        let conflict_lock = conflict.unwrap();
+        assert_eq!(conflict_lock.lock_type, FileLockType::ReadShared);
+
+        // 5. PID 300 acquiert un verrou exclusif sur une plage disjointe [4096..5120) -> Autorisé
+        assert!(fs
+            .fcntl_lock(path, FileLockType::WriteExclusive, 4096, 1024, 300)
+            .is_ok());
+
+        // 6. PID 100 et PID 200 libèrent leurs verrous
+        assert!(fs
+            .fcntl_lock(path, FileLockType::Unlock, 0, 1024, 100)
+            .is_ok());
+        assert!(fs
+            .fcntl_lock(path, FileLockType::Unlock, 512, 1536, 200)
+            .is_ok());
+
+        // 7. PID 300 peut maintenant acquérir le verrou exclusif sur [0..1024)
+        assert!(fs
+            .fcntl_lock(path, FileLockType::WriteExclusive, 0, 1024, 300)
+            .is_ok());
+
+        // 8. Test flock_file global sur un autre fichier
+        let db_path = "etc/database.db";
+        assert!(fs
+            .flock_file(db_path, FileLockType::WriteExclusive, 400)
+            .is_ok());
+        // PID 500 ne peut pas lire le fichier complet
+        assert_eq!(
+            fs.flock_file(db_path, FileLockType::ReadShared, 500),
+            Err(FsError::FileLocked)
+        );
+
+        // 9. Terminaison de PID 400 : libération automatique de tous ses verrous
+        let released = fs.release_pid_locks(400);
+        assert_eq!(released, 1);
+
+        // PID 500 peut maintenant verrouiller
+        assert!(fs
+            .flock_file(db_path, FileLockType::ReadShared, 500)
+            .is_ok());
 
         reset_local_ramdisk();
     }

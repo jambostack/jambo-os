@@ -8628,6 +8628,316 @@ pub fn run_od(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
     }
 }
 
+/// Utilitaire POSIX standard `cmp` (Compare two files byte by byte)
+///
+/// Conforme à la norme POSIX IEEE Std 1003.1-2017.
+/// Syntaxe : `cmp [-l | -s] file1 file2 [skip1 [skip2]]`
+///
+/// Codes de retour :
+/// - 0 : les fichiers sont identiques
+/// - 1 : les fichiers diffèrent (ou EOF atteint prématurément sur un fichier)
+/// - >1 (2) : erreur d'accès ou argument invalide
+pub fn run_cmp(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    let mut verbose_list = false;
+    let mut silent = false;
+    let mut operands = [""; 4];
+    let mut operand_count = 0;
+
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i].trim();
+        if arg == "-l" || arg == "--verbose" {
+            verbose_list = true;
+            silent = false;
+        } else if arg == "-s" || arg == "--quiet" || arg == "--silent" {
+            silent = true;
+            verbose_list = false;
+        } else if arg == "--help" || arg == "-h" {
+            let _ = sys_write(
+                out_fd,
+                b"Usage: cmp [-l | -s] FILE1 FILE2 [SKIP1 [SKIP2]]\n\
+Compare two files byte by byte.\n\n\
+  -l, --verbose   Output byte numbers and differing byte values\n\
+  -s, --quiet     Output nothing; yield exit status only\n\
+      --help      Display this help and exit\n",
+            );
+            return 0;
+        } else if arg.starts_with('-') && arg.len() > 1 && arg != "-" {
+            let _ = sys_write(err_fd, b"cmp: invalid option -- '");
+            let _ = sys_write(err_fd, arg.as_bytes());
+            let _ = sys_write(
+                err_fd,
+                b"'\nUsage: cmp [-l | -s] FILE1 FILE2 [SKIP1 [SKIP2]]\n",
+            );
+            return 2;
+        } else {
+            if operand_count < operands.len() {
+                operands[operand_count] = arg;
+                operand_count += 1;
+            } else {
+                let _ = sys_write(err_fd, b"cmp: extra operand\n");
+                return 2;
+            }
+        }
+        i += 1;
+    }
+
+    if operand_count < 2 {
+        let _ = sys_write(
+            err_fd,
+            b"cmp: missing operand\nUsage: cmp [-l | -s] FILE1 FILE2 [SKIP1 [SKIP2]]\n",
+        );
+        return 2;
+    }
+
+    let file1 = operands[0];
+    let file2 = operands[1];
+    let skip1 = if operand_count > 2 {
+        match parse_od_number(operands[2]) {
+            Some(v) => v,
+            None => {
+                let _ = sys_write(err_fd, b"cmp: offset skip1 invalide\n");
+                return 2;
+            }
+        }
+    } else {
+        0
+    };
+    let skip2 = if operand_count > 3 {
+        match parse_od_number(operands[3]) {
+            Some(v) => v,
+            None => {
+                let _ = sys_write(err_fd, b"cmp: offset skip2 invalide\n");
+                return 2;
+            }
+        }
+    } else {
+        0
+    };
+
+    // Ouverture file1
+    let (fd1, close_1) = if file1 == "-" {
+        (in_fd, false)
+    } else {
+        let fd = sys_open(file1, crate::vfs::O_RDONLY);
+        if fd < 0 {
+            let _ = sys_write(err_fd, b"cmp: ");
+            let _ = sys_write(err_fd, file1.as_bytes());
+            let _ = sys_write(err_fd, b": No such file or directory\n");
+            return 2;
+        }
+        (fd, true)
+    };
+
+    // Ouverture file2
+    let (fd2, close_2) = if file2 == "-" {
+        if file1 == "-" {
+            if close_1 {
+                let _ = sys_close(fd1);
+            }
+            let _ = sys_write(err_fd, b"cmp: cannot use '-' for both files\n");
+            return 2;
+        }
+        (in_fd, false)
+    } else {
+        let fd = sys_open(file2, crate::vfs::O_RDONLY);
+        if fd < 0 {
+            if close_1 {
+                let _ = sys_close(fd1);
+            }
+            let _ = sys_write(err_fd, b"cmp: ");
+            let _ = sys_write(err_fd, file2.as_bytes());
+            let _ = sys_write(err_fd, b": No such file or directory\n");
+            return 2;
+        }
+        (fd, true)
+    };
+
+    let cleanup = |f1: i32, c1: bool, f2: i32, c2: bool| {
+        if c1 {
+            let _ = sys_close(f1);
+        }
+        if c2 {
+            let _ = sys_close(f2);
+        }
+    };
+
+    // Consommation du skip1
+    let mut skipped1 = 0;
+    while skipped1 < skip1 {
+        let mut trash = [0u8; 512];
+        let to_read = (skip1 - skipped1).min(trash.len());
+        let n = sys_read(fd1, &mut trash[..to_read]);
+        if n <= 0 {
+            cleanup(fd1, close_1, fd2, close_2);
+            if !silent {
+                let _ = sys_write(err_fd, b"cmp: EOF on ");
+                let _ = sys_write(err_fd, file1.as_bytes());
+                let _ = sys_write(err_fd, b" which is empty\n");
+            }
+            return 1;
+        }
+        skipped1 += n as usize;
+    }
+
+    // Consommation du skip2
+    let mut skipped2 = 0;
+    while skipped2 < skip2 {
+        let mut trash = [0u8; 512];
+        let to_read = (skip2 - skipped2).min(trash.len());
+        let n = sys_read(fd2, &mut trash[..to_read]);
+        if n <= 0 {
+            cleanup(fd1, close_1, fd2, close_2);
+            if !silent {
+                let _ = sys_write(err_fd, b"cmp: EOF on ");
+                let _ = sys_write(err_fd, file2.as_bytes());
+                let _ = sys_write(err_fd, b" which is empty\n");
+            }
+            return 1;
+        }
+        skipped2 += n as usize;
+    }
+
+    // Comparaison octet par octet
+    let mut buf1 = [0u8; 512];
+    let mut buf2 = [0u8; 512];
+    let mut pos1 = 0usize;
+    let mut len1 = 0usize;
+    let mut pos2 = 0usize;
+    let mut len2 = 0usize;
+    let mut eof1 = false;
+    let mut eof2 = false;
+
+    let mut byte_num: usize = 1;
+    let mut line_num: usize = 1;
+    let mut diff_count: usize = 0;
+
+    let write_usize = |fd: i32, mut val: usize| {
+        if val == 0 {
+            let _ = sys_write(fd, b"0");
+            return;
+        }
+        let mut digits = [0u8; 20];
+        let mut cnt = 0;
+        while val > 0 {
+            digits[cnt] = b'0' + (val % 10) as u8;
+            val /= 10;
+            cnt += 1;
+        }
+        let mut rev = [0u8; 20];
+        for k in 0..cnt {
+            rev[k] = digits[cnt - 1 - k];
+        }
+        let _ = sys_write(fd, &rev[..cnt]);
+    };
+
+    let write_octal3 = |fd: i32, val: u8| {
+        let o1 = b'0' + ((val >> 6) & 0x07);
+        let o2 = b'0' + ((val >> 3) & 0x07);
+        let o3 = b'0' + (val & 0x07);
+        let _ = sys_write(fd, &[o1, o2, o3]);
+    };
+
+    loop {
+        if pos1 >= len1 && !eof1 {
+            let n = sys_read(fd1, &mut buf1);
+            if n <= 0 {
+                eof1 = true;
+            } else {
+                len1 = n as usize;
+                pos1 = 0;
+            }
+        }
+
+        if pos2 >= len2 && !eof2 {
+            let n = sys_read(fd2, &mut buf2);
+            if n <= 0 {
+                eof2 = true;
+            } else {
+                len2 = n as usize;
+                pos2 = 0;
+            }
+        }
+
+        if (pos1 >= len1 && eof1) || (pos2 >= len2 && eof2) {
+            break;
+        }
+
+        let b1 = buf1[pos1];
+        let b2 = buf2[pos2];
+        pos1 += 1;
+        pos2 += 1;
+
+        if b1 != b2 {
+            diff_count += 1;
+            if silent {
+                cleanup(fd1, close_1, fd2, close_2);
+                return 1;
+            }
+            if verbose_list {
+                // Format: byte_number octal_b1 octal_b2\n
+                write_usize(out_fd, byte_num);
+                let _ = sys_write(out_fd, b" ");
+                write_octal3(out_fd, b1);
+                let _ = sys_write(out_fd, b" ");
+                write_octal3(out_fd, b2);
+                let _ = sys_write(out_fd, b"\n");
+            } else {
+                // Format: file1 file2 differ: byte X, line Y\n
+                let _ = sys_write(out_fd, file1.as_bytes());
+                let _ = sys_write(out_fd, b" ");
+                let _ = sys_write(out_fd, file2.as_bytes());
+                let _ = sys_write(out_fd, b" differ: byte ");
+                write_usize(out_fd, byte_num);
+                let _ = sys_write(out_fd, b", line ");
+                write_usize(out_fd, line_num);
+                let _ = sys_write(out_fd, b"\n");
+                cleanup(fd1, close_1, fd2, close_2);
+                return 1;
+            }
+        }
+
+        if b1 == b'\n' {
+            line_num += 1;
+        }
+        byte_num += 1;
+    }
+
+    let remaining1 = (!eof1 && len1 > pos1)
+        || (pos1 >= len1 && !eof1 && {
+            let n = sys_read(fd1, &mut buf1);
+            n > 0
+        });
+    let remaining2 = (!eof2 && len2 > pos2)
+        || (pos2 >= len2 && !eof2 && {
+            let n = sys_read(fd2, &mut buf2);
+            n > 0
+        });
+
+    cleanup(fd1, close_1, fd2, close_2);
+
+    if remaining1 || remaining2 {
+        if !silent {
+            let _ = sys_write(err_fd, b"cmp: EOF on ");
+            if remaining2 {
+                let _ = sys_write(err_fd, file1.as_bytes());
+            } else {
+                let _ = sys_write(err_fd, file2.as_bytes());
+            }
+            let _ = sys_write(err_fd, b" after byte ");
+            write_usize(err_fd, byte_num - 1);
+            let _ = sys_write(err_fd, b"\n");
+        }
+        return 1;
+    }
+
+    if diff_count > 0 {
+        1
+    } else {
+        0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -10511,5 +10821,85 @@ mod tests {
         // 't'=0164, 'e'=0145, 's'=0163, 't'=0164
         assert_eq!(&buf[..n6 as usize], b"0000000 164 145 163 164\n0000004\n");
         sys_close(out_r6);
+    }
+
+    #[test]
+    fn test_cmp_utility() {
+        let mut buf = [0u8; 256];
+
+        // 1. Fichiers créés dans le VFS pour le test
+        let f1 = sys_open("/tmp/cmp1.txt", O_CREAT | O_WRONLY);
+        let _ = sys_write(f1, b"Hello World!\nLine 2\n");
+        sys_close(f1);
+
+        let f2 = sys_open("/tmp/cmp2.txt", O_CREAT | O_WRONLY);
+        let _ = sys_write(f2, b"Hello World!\nLine 2\n");
+        sys_close(f2);
+
+        let f3 = sys_open("/tmp/cmp3.txt", O_CREAT | O_WRONLY);
+        let _ = sys_write(f3, b"Hello Jambo!\nLine 2\n");
+        sys_close(f3);
+
+        // Test 1 : Fichiers identiques
+        let (out_r1, out_w1) = crate::vfs::pipe().unwrap();
+        let code1 = run_cmp(&["/tmp/cmp1.txt", "/tmp/cmp2.txt"], 0, out_w1, 2);
+        sys_close(out_w1);
+        assert_eq!(code1, 0);
+        let n1 = sys_read(out_r1, &mut buf);
+        sys_close(out_r1);
+        assert_eq!(n1, 0);
+
+        // Test 2 : Fichiers différents par défaut
+        let (out_r2, out_w2) = crate::vfs::pipe().unwrap();
+        let code2 = run_cmp(&["/tmp/cmp1.txt", "/tmp/cmp3.txt"], 0, out_w2, 2);
+        sys_close(out_w2);
+        assert_eq!(code2, 1);
+        let n2 = sys_read(out_r2, &mut buf);
+        sys_close(out_r2);
+        let msg2 = core::str::from_utf8(&buf[..n2 as usize]).unwrap();
+        assert!(msg2.contains("differ: byte 7, line 1"));
+
+        // Test 3 : Option silencieuse -s
+        let (out_r3, out_w3) = crate::vfs::pipe().unwrap();
+        let code3 = run_cmp(&["-s", "/tmp/cmp1.txt", "/tmp/cmp3.txt"], 0, out_w3, 2);
+        sys_close(out_w3);
+        assert_eq!(code3, 1);
+        let n3 = sys_read(out_r3, &mut buf);
+        sys_close(out_r3);
+        assert_eq!(n3, 0);
+
+        // Test 4 : Option verbeuse -l
+        let (out_r4, out_w4) = crate::vfs::pipe().unwrap();
+        let code4 = run_cmp(&["-l", "/tmp/cmp1.txt", "/tmp/cmp3.txt"], 0, out_w4, 2);
+        sys_close(out_w4);
+        assert_eq!(code4, 1);
+        let n4 = sys_read(out_r4, &mut buf);
+        sys_close(out_r4);
+        let msg4 = core::str::from_utf8(&buf[..n4 as usize]).unwrap();
+        // Octet 7: 'W' (0x57 = 0127) vs 'J' (0x4A = 0112)
+        assert!(msg4.contains("7 127 112"));
+
+        // Test 5 : Comparaison avec offsets (skip1 = 13, skip2 = 13 -> les deux démarrent à "Line 2\n")
+        let (out_r5, out_w5) = crate::vfs::pipe().unwrap();
+        let code5 = run_cmp(
+            &["/tmp/cmp1.txt", "/tmp/cmp3.txt", "13", "13"],
+            0,
+            out_w5,
+            2,
+        );
+        sys_close(out_w5);
+        assert_eq!(code5, 0);
+        let n5 = sys_read(out_r5, &mut buf);
+        sys_close(out_r5);
+        assert_eq!(n5, 0);
+
+        // Test 6 : Opérandes manquants -> exit code 2
+        let (err_r6, err_w6) = crate::vfs::pipe().unwrap();
+        let code6 = run_cmp(&["/tmp/cmp1.txt"], 0, 1, err_w6);
+        sys_close(err_w6);
+        assert_eq!(code6, 2);
+        let n6 = sys_read(err_r6, &mut buf);
+        sys_close(err_r6);
+        assert!(n6 > 0);
     }
 }

@@ -202,5 +202,10 @@ name = "od"
 path = "src/bin/od.rs"
 test = false
 
+[[bin]]
+name = "cmp"
+path = "src/bin/cmp.rs"
+test = false
+
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }
