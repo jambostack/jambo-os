@@ -11124,6 +11124,365 @@ License MIT or Apache-2.0.\n";
     exit_code
 }
 
+/// Mode d'affichage pour l'utilitaire `hexdump`
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HexdumpDisplayMode {
+    /// -C : Canonique hexadécimal + ASCII (16 octets par ligne)
+    Canonical,
+    /// -c : Un octet par caractère (format compatible od -c)
+    OneByteChar,
+    /// -b : Un octet en octal (format compatible od -b)
+    OneByteOctal,
+    /// -x : Deux octets en hexadécimal (format compatible od -x)
+    TwoBytesHex,
+    /// -d : Deux octets en décimal non signé (format compatible od -d)
+    TwoBytesDecimal,
+    /// -o : Deux octets en octal (format compatible od -o)
+    TwoBytesOctal,
+}
+
+/// Utilitaire Ring 3 POSIX standard `hexdump` (display file contents in hexadecimal, decimal, octal, or ascii)
+pub fn run_hexdump(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    let mut mode = HexdumpDisplayMode::Canonical;
+    let mut skip_bytes: usize = 0;
+    let mut length_limit: Option<usize> = None;
+    let mut file_args = [""; 32];
+    let mut file_count = 0;
+
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i].trim();
+        if arg == "-C" || arg == "--canonical" {
+            mode = HexdumpDisplayMode::Canonical;
+            i += 1;
+        } else if arg == "-c" || arg == "--one-byte-char" {
+            mode = HexdumpDisplayMode::OneByteChar;
+            i += 1;
+        } else if arg == "-b" || arg == "--one-byte-octal" {
+            mode = HexdumpDisplayMode::OneByteOctal;
+            i += 1;
+        } else if arg == "-x" || arg == "--two-bytes-hex" {
+            mode = HexdumpDisplayMode::TwoBytesHex;
+            i += 1;
+        } else if arg == "-d" || arg == "--two-bytes-decimal" {
+            mode = HexdumpDisplayMode::TwoBytesDecimal;
+            i += 1;
+        } else if arg == "-o" || arg == "--two-bytes-octal" {
+            mode = HexdumpDisplayMode::TwoBytesOctal;
+            i += 1;
+        } else if arg == "-v" || arg == "--no-squeezing" {
+            i += 1;
+        } else if arg == "-n" || arg == "--length" {
+            if i + 1 < args.len() {
+                if let Some(val) = parse_od_number(args[i + 1].trim()) {
+                    length_limit = Some(val);
+                } else {
+                    let _ = sys_write(err_fd, b"hexdump: invalid length argument\n");
+                    return 1;
+                }
+                i += 2;
+            } else {
+                let _ = sys_write(err_fd, b"hexdump: option requires an argument -- 'n'\n");
+                return 1;
+            }
+        } else if arg.starts_with("-n") && arg.len() > 2 {
+            if let Some(val) = parse_od_number(&arg[2..]) {
+                length_limit = Some(val);
+            } else {
+                let _ = sys_write(err_fd, b"hexdump: invalid length argument\n");
+                return 1;
+            }
+            i += 1;
+        } else if arg == "-s" || arg == "--skip" {
+            if i + 1 < args.len() {
+                if let Some(val) = parse_od_number(args[i + 1].trim()) {
+                    skip_bytes = val;
+                } else {
+                    let _ = sys_write(err_fd, b"hexdump: invalid skip offset\n");
+                    return 1;
+                }
+                i += 2;
+            } else {
+                let _ = sys_write(err_fd, b"hexdump: option requires an argument -- 's'\n");
+                return 1;
+            }
+        } else if arg.starts_with("-s") && arg.len() > 2 {
+            if let Some(val) = parse_od_number(&arg[2..]) {
+                skip_bytes = val;
+            } else {
+                let _ = sys_write(err_fd, b"hexdump: invalid skip offset\n");
+                return 1;
+            }
+            i += 1;
+        } else if arg == "-h" || arg == "--help" {
+            let help = b"Usage: hexdump [options] <file>...\n\
+Display file contents in hexadecimal, decimal, octal, or ascii.\n\n\
+Options:\n\
+  -b, --one-byte-octal      one-byte octal display\n\
+  -c, --one-byte-char       one-byte character display\n\
+  -C, --canonical           canonical hex+ASCII display\n\
+  -d, --two-bytes-decimal   two-byte decimal display\n\
+  -o, --two-bytes-octal     two-byte octal display\n\
+  -x, --two-bytes-hex       two-byte hexadecimal display\n\
+  -n, --length <length>     interpret only length bytes of input\n\
+  -s, --skip <offset>       skip offset bytes from the beginning\n\
+  -v, --no-squeezing        output identical lines\n\
+  -h, --help                display this help\n\
+  -V, --version             display version\n";
+            let _ = sys_write(out_fd, help);
+            return 0;
+        } else if arg == "-V" || arg == "--version" {
+            let _ = sys_write(out_fd, b"hexdump (JamboOS Coreutils) 0.3.92\n");
+            return 0;
+        } else if arg.starts_with('-') && arg != "-" {
+            let _ = sys_write(err_fd, b"hexdump: invalid option -- '");
+            let _ = sys_write(err_fd, arg.as_bytes());
+            let _ = sys_write(err_fd, b"'\n");
+            return 1;
+        } else {
+            if file_count < file_args.len() {
+                file_args[file_count] = arg;
+                file_count += 1;
+            }
+            i += 1;
+        }
+    }
+
+    // Si le mode n'est pas Canonique, déléguer fidèlement à run_od avec les paramètres correspondants
+    if mode != HexdumpDisplayMode::Canonical {
+        let mut od_args_buf = [""; 16];
+        let mut od_argc = 0;
+        match mode {
+            HexdumpDisplayMode::OneByteChar => {
+                od_args_buf[od_argc] = "-c";
+                od_argc += 1;
+            }
+            HexdumpDisplayMode::OneByteOctal => {
+                od_args_buf[od_argc] = "-b";
+                od_argc += 1;
+            }
+            HexdumpDisplayMode::TwoBytesHex => {
+                od_args_buf[od_argc] = "-x";
+                od_argc += 1;
+            }
+            HexdumpDisplayMode::TwoBytesDecimal => {
+                od_args_buf[od_argc] = "-d";
+                od_argc += 1;
+            }
+            HexdumpDisplayMode::TwoBytesOctal => {
+                od_args_buf[od_argc] = "-o";
+                od_argc += 1;
+            }
+            HexdumpDisplayMode::Canonical => unreachable!(),
+        }
+
+        let mut num_str_buf1 = [0u8; 32];
+        let mut num_str_buf2 = [0u8; 32];
+        if skip_bytes > 0 {
+            od_args_buf[od_argc] = "-j";
+            od_argc += 1;
+            let mut val = skip_bytes;
+            let mut pos = 0;
+            let mut digits = [0u8; 20];
+            let mut dlen = 0;
+            if val == 0 {
+                num_str_buf1[0] = b'0';
+                pos = 1;
+            } else {
+                while val > 0 {
+                    digits[dlen] = b'0' + (val % 10) as u8;
+                    val /= 10;
+                    dlen += 1;
+                }
+                for d in (0..dlen).rev() {
+                    num_str_buf1[pos] = digits[d];
+                    pos += 1;
+                }
+            }
+            od_args_buf[od_argc] = core::str::from_utf8(&num_str_buf1[..pos]).unwrap_or("0");
+            od_argc += 1;
+        }
+        if let Some(lim) = length_limit {
+            od_args_buf[od_argc] = "-N";
+            od_argc += 1;
+            let mut val = lim;
+            let mut pos = 0;
+            let mut digits = [0u8; 20];
+            let mut dlen = 0;
+            if val == 0 {
+                num_str_buf2[0] = b'0';
+                pos = 1;
+            } else {
+                while val > 0 {
+                    digits[dlen] = b'0' + (val % 10) as u8;
+                    val /= 10;
+                    dlen += 1;
+                }
+                for d in (0..dlen).rev() {
+                    num_str_buf2[pos] = digits[d];
+                    pos += 1;
+                }
+            }
+            od_args_buf[od_argc] = core::str::from_utf8(&num_str_buf2[..pos]).unwrap_or("0");
+            od_argc += 1;
+        }
+
+        for &f_arg in file_args.iter().take(file_count) {
+            if od_argc < od_args_buf.len() {
+                od_args_buf[od_argc] = f_arg;
+                od_argc += 1;
+            }
+        }
+        return run_od(&od_args_buf[..od_argc], in_fd, out_fd, err_fd);
+    }
+
+    // Traitement natif Canonique hexdump -C (format 8 chiffres hexa offset, 2 groupes de 8 octets hexa, |ASCII|)
+    let mut current_offset: usize = 0;
+    let mut skipped: usize = 0;
+    let mut total_emitted: usize = 0;
+    let mut line_buf = [0u8; 16];
+    let mut line_len = 0usize;
+
+    let hex_chars = b"0123456789abcdef";
+
+    let emit_canonical_line = |bytes: &[u8], offset: usize| {
+        let mut out_scratch = [0u8; 128];
+        let mut out_len = 0usize;
+
+        // Offset 8 chiffres hexadécimaux
+        let off_val = offset;
+        for shift in (0..8).rev() {
+            out_scratch[out_len] = hex_chars[(off_val >> (shift * 4)) & 0x0F];
+            out_len += 1;
+        }
+        out_scratch[out_len] = b' ';
+        out_scratch[out_len + 1] = b' ';
+        out_len += 2;
+
+        // 16 octets hexadécimaux (séparateur double espace après 8 octets)
+        for i in 0..16 {
+            if i < bytes.len() {
+                let b = bytes[i];
+                out_scratch[out_len] = hex_chars[((b >> 4) & 0x0F) as usize];
+                out_scratch[out_len + 1] = hex_chars[(b & 0x0F) as usize];
+                out_len += 2;
+            } else {
+                out_scratch[out_len] = b' ';
+                out_scratch[out_len + 1] = b' ';
+                out_len += 2;
+            }
+            out_scratch[out_len] = b' ';
+            out_len += 1;
+            if i == 7 {
+                out_scratch[out_len] = b' ';
+                out_len += 1;
+            }
+        }
+
+        // ASCII display |...|
+        out_scratch[out_len] = b'|';
+        out_len += 1;
+        for &b in bytes {
+            out_scratch[out_len] = if (32..=126).contains(&b) { b } else { b'.' };
+            out_len += 1;
+        }
+        out_scratch[out_len] = b'|';
+        out_scratch[out_len + 1] = b'\n';
+        out_len += 2;
+
+        let _ = sys_write(out_fd, &out_scratch[..out_len]);
+    };
+
+    let mut process_byte = |b: u8| -> bool {
+        if skipped < skip_bytes {
+            skipped += 1;
+            return true;
+        }
+        if let Some(limit) = length_limit {
+            if total_emitted >= limit {
+                return false;
+            }
+        }
+
+        line_buf[line_len] = b;
+        line_len += 1;
+        total_emitted += 1;
+
+        if line_len == 16 {
+            emit_canonical_line(&line_buf, current_offset);
+            current_offset += 16;
+            line_len = 0;
+        }
+        true
+    };
+
+    let mut file_descriptors = [0i32; 32];
+    let num_fds = if file_count == 0 {
+        file_descriptors[0] = in_fd;
+        1
+    } else {
+        let mut count = 0;
+        for &path in file_args.iter().take(file_count) {
+            if path == "-" {
+                file_descriptors[count] = in_fd;
+                count += 1;
+            } else {
+                let fd = sys_open(path, crate::vfs::O_RDONLY);
+                if fd < 0 {
+                    let _ = sys_write(err_fd, b"hexdump: cannot open file: ");
+                    let _ = sys_write(err_fd, path.as_bytes());
+                    let _ = sys_write(err_fd, b"\n");
+                    return 1;
+                }
+                file_descriptors[count] = fd;
+                count += 1;
+            }
+        }
+        count
+    };
+
+    let mut read_buf = [0u8; 512];
+    let mut continue_processing = true;
+
+    for &fd in file_descriptors.iter().take(num_fds) {
+        while continue_processing {
+            let n = sys_read(fd, &mut read_buf);
+            if n <= 0 {
+                break;
+            }
+            for &byte in &read_buf[..n as usize] {
+                if !process_byte(byte) {
+                    continue_processing = false;
+                    break;
+                }
+            }
+        }
+        if fd != in_fd {
+            let _ = sys_close(fd);
+        }
+    }
+
+    if line_len > 0 {
+        emit_canonical_line(&line_buf[..line_len], current_offset);
+        current_offset += line_len;
+    }
+
+    // Offset final si des octets ont été émis ou si skip/limit a été spécifié
+    if total_emitted > 0 || current_offset > 0 {
+        let mut out_scratch = [0u8; 16];
+        let mut out_len = 0usize;
+        for shift in (0..8).rev() {
+            out_scratch[out_len] = hex_chars[(current_offset >> (shift * 4)) & 0x0F];
+            out_len += 1;
+        }
+        out_scratch[out_len] = b'\n';
+        out_len += 1;
+        let _ = sys_write(out_fd, &out_scratch[..out_len]);
+    }
+
+    0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -13685,6 +14044,91 @@ mod tests {
         assert!(core::str::from_utf8(&h_buf[..n7 as usize])
             .unwrap()
             .contains("Usage: truncate"));
+
+        let _ = sys_unlink_pool(file_path);
+    }
+
+    #[test]
+    fn test_posix_hexdump() {
+        let mut buf = [0u8; 512];
+
+        // 1. hexdump -C (canonique hex + ASCII)
+        let (in_r1, in_w1) = crate::vfs::pipe().expect("pipe hexdump in 1");
+        let (out_r1, out_w1) = crate::vfs::pipe().expect("pipe hexdump out 1");
+        let _ = sys_write(in_w1, b"Hello World!\n");
+        sys_close(in_w1);
+
+        let code1 = run_hexdump(&["-C"], in_r1, out_w1, 2);
+        assert_eq!(code1, 0);
+        sys_close(in_r1);
+        sys_close(out_w1);
+
+        let n1 = sys_read(out_r1, &mut buf);
+        let out_str1 = core::str::from_utf8(&buf[..n1 as usize]).unwrap();
+        assert!(out_str1.starts_with("00000000  48 65 6c 6c 6f 20 57 6f  72 6c 64 21 0a"));
+        assert!(out_str1.contains("|Hello World!.|"));
+        assert!(out_str1.ends_with("0000000d\n"));
+        sys_close(out_r1);
+
+        // 2. hexdump -c (one-byte character display)
+        let (in_r2, in_w2) = crate::vfs::pipe().expect("pipe hexdump in 2");
+        let (out_r2, out_w2) = crate::vfs::pipe().expect("pipe hexdump out 2");
+        let _ = sys_write(in_w2, b"Hi\n");
+        sys_close(in_w2);
+
+        let code2 = run_hexdump(&["-c"], in_r2, out_w2, 2);
+        assert_eq!(code2, 0);
+        sys_close(in_r2);
+        sys_close(out_w2);
+
+        let n2 = sys_read(out_r2, &mut buf);
+        assert_eq!(&buf[..n2 as usize], b"0000000   H   i  \\n\n0000003\n");
+        sys_close(out_r2);
+
+        // 3. hexdump -b (one-byte octal display)
+        let (in_r3, in_w3) = crate::vfs::pipe().expect("pipe hexdump in 3");
+        let (out_r3, out_w3) = crate::vfs::pipe().expect("pipe hexdump out 3");
+        let _ = sys_write(in_w3, b"ABC\n");
+        sys_close(in_w3);
+
+        let code3 = run_hexdump(&["-b"], in_r3, out_w3, 2);
+        assert_eq!(code3, 0);
+        sys_close(in_r3);
+        sys_close(out_w3);
+
+        let n3 = sys_read(out_r3, &mut buf);
+        assert_eq!(&buf[..n3 as usize], b"0000000 101 102 103 012\n0000004\n");
+        sys_close(out_r3);
+
+        // 4. hexdump avec fichier VFS et option -n (length limit)
+        let file_path = "/tmp/test_hexdump.txt";
+        let fd_hd = sys_open(file_path, crate::vfs::O_CREAT | crate::vfs::O_WRONLY);
+        assert!(fd_hd >= 0);
+        let _ = sys_write(fd_hd, b"JamboOS System");
+        sys_close(fd_hd);
+
+        let (out_r4, out_w4) = crate::vfs::pipe().expect("pipe hexdump out 4");
+        let code4 = run_hexdump(&["-C", "-n", "7", file_path], 0, out_w4, 2);
+        assert_eq!(code4, 0);
+        sys_close(out_w4);
+
+        let n4 = sys_read(out_r4, &mut buf);
+        let out_str4 = core::str::from_utf8(&buf[..n4 as usize]).unwrap();
+        assert!(out_str4.contains("4a 61 6d 62 6f 4f 53"));
+        assert!(out_str4.contains("|JamboOS|"));
+        assert!(out_str4.ends_with("00000007\n"));
+        sys_close(out_r4);
+
+        // 5. Option --help
+        let (out_r5, out_w5) = crate::vfs::pipe().expect("pipe hexdump out 5");
+        let code5 = run_hexdump(&["--help"], 0, out_w5, 2);
+        assert_eq!(code5, 0);
+        sys_close(out_w5);
+
+        let n5 = sys_read(out_r5, &mut buf);
+        let help_str = core::str::from_utf8(&buf[..n5 as usize]).unwrap();
+        assert!(help_str.contains("Usage: hexdump"));
+        sys_close(out_r5);
 
         let _ = sys_unlink_pool(file_path);
     }

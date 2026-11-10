@@ -247,5 +247,10 @@ name = "truncate"
 path = "src/bin/truncate.rs"
 test = false
 
+[[bin]]
+name = "hexdump"
+path = "src/bin/hexdump.rs"
+test = false
+
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }

@@ -581,6 +581,7 @@ impl JamboShell {
             "sha256sum" | "/bin/sha256sum" | "bin/sha256sum" => self.cmd_sha256sum(args, out),
             "sync" | "/bin/sync" | "bin/sync" => self.cmd_sync(args, out),
             "truncate" | "/bin/truncate" | "bin/truncate" => self.cmd_truncate(args, out),
+            "hexdump" | "/bin/hexdump" | "bin/hexdump" => self.cmd_hexdump(args, out),
             "version" => self.cmd_version(out),
             "uptime" => self.cmd_uptime(out),
             "caps" => self.cmd_caps(out),
@@ -618,7 +619,7 @@ impl JamboShell {
   ls [-l] [-a] - Liste les fichiers et repertoires\n\
   wc [-l] [-w] [-c] <files> - Compte les lignes, mots et octets\n\
   true / false - Retourne un statut de succes (0) ou d'echec (1)\n\
-  coreutils   - Liste les 48 utilitaires Ring 3 (/bin/*)\n\
+  coreutils   - Liste les 49 utilitaires Ring 3 (/bin/*)\n\
   uname       - Affiche le nom et l'architecture du systeme\n\
   cut [-b|-c|-f] [-d] - Decoupage de colonnes et delimiteurs sur flux\n\
   version     - Affiche les details de version du micro-noyau\n\
@@ -735,7 +736,7 @@ impl JamboShell {
 
     fn cmd_coreutils(&self, out: &mut [u8]) -> (ShellStatus, usize) {
         let text = b"Utilitaires Coreutils Ring 3 (services/jambo-coreutils) :\n\
-  Binaires disponibles : /bin/echo, /bin/cat, /bin/head, /bin/tail, /bin/touch, /bin/mkdir, /bin/rm, /bin/cp, /bin/mv, /bin/tee, /bin/env, /bin/grep, /bin/sort, /bin/uniq, /bin/find, /bin/chmod, /bin/chown, /bin/id, /bin/du, /bin/df, /bin/uname, /bin/cut, /bin/paste, /bin/comm, /bin/tr, /bin/split, /bin/basename, /bin/dirname, /bin/seq, /bin/yes, /bin/printf, /bin/expr, /bin/fold, /bin/nl, /bin/od, /bin/cmp, /bin/expand, /bin/unexpand, /bin/sleep, /bin/cksum, /bin/base64, /bin/sha256sum, /bin/sync, /bin/truncate, /bin/wc, /bin/true, /bin/false, /bin/ls (48 utilitaires)\n\
+  Binaires disponibles : /bin/echo, /bin/cat, /bin/head, /bin/tail, /bin/touch, /bin/mkdir, /bin/rm, /bin/cp, /bin/mv, /bin/tee, /bin/env, /bin/grep, /bin/sort, /bin/uniq, /bin/find, /bin/chmod, /bin/chown, /bin/id, /bin/du, /bin/df, /bin/uname, /bin/cut, /bin/paste, /bin/comm, /bin/tr, /bin/split, /bin/basename, /bin/dirname, /bin/seq, /bin/yes, /bin/printf, /bin/expr, /bin/fold, /bin/nl, /bin/od, /bin/cmp, /bin/expand, /bin/unexpand, /bin/sleep, /bin/cksum, /bin/base64, /bin/sha256sum, /bin/sync, /bin/truncate, /bin/hexdump, /bin/wc, /bin/true, /bin/false, /bin/ls (49 utilitaires)\n\
   Architecture & ABI   : System V AMD64 ELF64 (ET_EXEC / Ring 3 Userland)\n\
   Point d'entree       : _start (parsing argc/argv sur pile System V)\n\
   Terminaison          : Syscall 11 ThreadExit avec propagation code de retour POSIX\n\
@@ -1561,6 +1562,26 @@ Utilitaire d'installation JamboOS (Serie 0.*.*)\n\
             }
         } else {
             let msg = b"truncate: pipe creation failed\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
+    }
+
+    fn cmd_hexdump(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if let Ok((r, w)) = libjambo::vfs::pipe() {
+            let code = libjambo::coreutils::run_hexdump(args, 0, w, w);
+            let _ = libjambo::coreutils::sys_close(w);
+            let n = libjambo::coreutils::sys_read(r, out);
+            let _ = libjambo::coreutils::sys_close(r);
+            let len = if n > 0 { n as usize } else { 0 };
+            if code == 0 {
+                (ShellStatus::Success, len)
+            } else {
+                (ShellStatus::ExecutionFailed, len)
+            }
+        } else {
+            let msg = b"hexdump: pipe creation failed\n";
             let len = msg.len().min(out.len());
             out[..len].copy_from_slice(&msg[..len]);
             (ShellStatus::ExecutionFailed, len)
@@ -18565,5 +18586,46 @@ mod tests {
         assert_eq!(fd5, -1);
 
         let _ = libjambo::coreutils::sys_unlink_pool("/tmp/sh_trunc_test.bin");
+    }
+
+    #[test]
+    fn test_hexdump_shell_execution() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 1024];
+
+        // 1. hexdump --help
+        let (st1, len1) = shell.execute_line("hexdump --help", &mut out);
+        assert_eq!(st1, ShellStatus::Success);
+        let s1 = core::str::from_utf8(&out[..len1]).unwrap();
+        assert!(s1.contains("Usage: hexdump"));
+
+        // 2. /bin/hexdump --version
+        let (st2, len2) = shell.execute_line("/bin/hexdump --version", &mut out);
+        assert_eq!(st2, ShellStatus::Success);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("hexdump (JamboOS Coreutils)"));
+
+        // 3. hexdump -C sur fichier VFS
+        let fd_sh = libjambo::coreutils::sys_open(
+            "/tmp/sh_hexdump_test.txt",
+            libjambo::vfs::O_CREAT | libjambo::vfs::O_WRONLY,
+        );
+        assert!(fd_sh >= 0);
+        let _ = libjambo::coreutils::sys_write(fd_sh, b"Hello Jambo\n");
+        libjambo::coreutils::sys_close(fd_sh);
+
+        let (st3, len3) = shell.execute_line("hexdump -C /tmp/sh_hexdump_test.txt", &mut out);
+        assert_eq!(st3, ShellStatus::Success);
+        let s3 = core::str::from_utf8(&out[..len3]).unwrap();
+        assert!(s3.contains("00000000  48 65 6c 6c 6f 20 4a 61  6d 62 6f 0a"));
+        assert!(s3.contains("|Hello Jambo.|"));
+
+        // 4. /bin/hexdump -c
+        let (st4, len4) = shell.execute_line("/bin/hexdump -c /tmp/sh_hexdump_test.txt", &mut out);
+        assert_eq!(st4, ShellStatus::Success);
+        let s4 = core::str::from_utf8(&out[..len4]).unwrap();
+        assert!(s4.contains("0000000"));
+
+        let _ = libjambo::coreutils::sys_unlink_pool("/tmp/sh_hexdump_test.txt");
     }
 }

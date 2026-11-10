@@ -1162,6 +1162,8 @@ pub const SCSI_CMD_VERIFY_16: u8 = 0x8F;
 pub const SCSI_CMD_SYNCHRONIZE_CACHE_16: u8 = 0x91;
 pub const SCSI_CMD_SERVICE_ACTION_IN_16: u8 = 0x9E;
 pub const SCSI_CMD_REPORT_LUNS: u8 = 0xA0;
+pub const SCSI_CMD_RECEIVE_DIAGNOSTIC_RESULTS: u8 = 0x1C;
+pub const SCSI_CMD_SEND_DIAGNOSTIC: u8 = 0x1D;
 pub const SCSI_SA_READ_CAPACITY_16: u8 = 0x10;
 pub const SCSI_PAGE_CACHING: u8 = 0x08;
 
@@ -1172,6 +1174,30 @@ pub const SCSI_REPORT_LUNS_ALL_EXCEPT_WELL_KNOWN: u8 = 0x02;
 pub const SCSI_DEFECT_FORMAT_BLOCK: u8 = 0x00;
 pub const SCSI_DEFECT_FORMAT_BYTES_FROM_INDEX: u8 = 0x04;
 pub const SCSI_DEFECT_FORMAT_PHYSICAL_SECTOR: u8 = 0x05;
+
+pub const SCSI_SELF_TEST_CODE_DEFAULT: u8 = 0x00;
+pub const SCSI_SELF_TEST_CODE_BACKGROUND_SHORT: u8 = 0x01;
+pub const SCSI_SELF_TEST_CODE_BACKGROUND_EXTENDED: u8 = 0x02;
+pub const SCSI_SELF_TEST_CODE_ABORT_BACKGROUND: u8 = 0x04;
+pub const SCSI_SELF_TEST_CODE_FOREGROUND_SHORT: u8 = 0x05;
+pub const SCSI_SELF_TEST_CODE_FOREGROUND_EXTENDED: u8 = 0x06;
+
+/// Page de diagnostic SCSI Translate Address (Page 0x40 - Diagnostic Results)
+pub const SCSI_DIAG_PAGE_TRANSLATE_ADDRESS: u8 = 0x40;
+/// Page de diagnostic SCSI Device Status (Page 0x00 - Supported Pages)
+pub const SCSI_DIAG_PAGE_SUPPORTED_PAGES: u8 = 0x00;
+
+/// En-tête de réponse SCSI RECEIVE DIAGNOSTIC RESULTS (SPC-4)
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ScsiDiagnosticResultsHeader {
+    /// Code de la page diagnostique retournée
+    pub page_code: u8,
+    /// Longueur de la page diagnostique en octets (hors en-tête de 4 octets)
+    pub page_length: u16,
+    /// Indicateur d'auto-test réussi (Self-Test OK)
+    pub self_test_passed: bool,
+}
 
 /// En-tête de réponse SCSI REPORT LUNS (SPC-4) (8 octets minimum)
 #[repr(C)]
@@ -2145,6 +2171,61 @@ impl UsbMassStorageBot {
         (cbw, tag)
     }
 
+    /// Construit un CBW pour SCSI SEND DIAGNOSTIC (SPC-4, Opcode 0x1D) pour déclencher l'auto-test matériel
+    pub fn build_cbw_send_diagnostic(
+        &mut self,
+        self_test_code: u8,
+        param_list_len: u16,
+    ) -> (CommandBlockWrapper, u32) {
+        let tag = self.next_tag();
+        let xfer_len = param_list_len as u32;
+        let mut cbw = CommandBlockWrapper::new(tag, xfer_len, false, self.lun, 6);
+        cbw.cb[0] = SCSI_CMD_SEND_DIAGNOSTIC;
+        // Byte 1: Self-Test Code (bits 7-5), SelfTest bit (bit 2 = 1 si self_test_code == 0)
+        let self_test_bit = if self_test_code == SCSI_SELF_TEST_CODE_DEFAULT {
+            0x04
+        } else {
+            0x00
+        };
+        cbw.cb[1] = ((self_test_code & 0x07) << 5) | self_test_bit;
+        cbw.cb[3..5].copy_from_slice(&param_list_len.to_be_bytes());
+        (cbw, tag)
+    }
+
+    /// Construit un CBW pour SCSI RECEIVE DIAGNOSTIC RESULTS (SPC-4, Opcode 0x1C) pour lire les diagnostics
+    pub fn build_cbw_receive_diagnostic_results(
+        &mut self,
+        pcv: bool,
+        page_code: u8,
+        alloc_len: u16,
+    ) -> (CommandBlockWrapper, u32) {
+        let tag = self.next_tag();
+        let mut cbw = CommandBlockWrapper::new(tag, alloc_len as u32, true, self.lun, 6);
+        cbw.cb[0] = SCSI_CMD_RECEIVE_DIAGNOSTIC_RESULTS;
+        cbw.cb[1] = if pcv { 0x01 } else { 0x00 };
+        cbw.cb[2] = page_code;
+        cbw.cb[3..5].copy_from_slice(&alloc_len.to_be_bytes());
+        (cbw, tag)
+    }
+
+    /// Décode l'en-tête retourné par SCSI RECEIVE DIAGNOSTIC RESULTS (SPC-4)
+    pub fn parse_diagnostic_results_header(
+        &self,
+        data: &[u8],
+    ) -> Option<ScsiDiagnosticResultsHeader> {
+        if data.len() < 4 {
+            return None;
+        }
+        let page_code = data[0];
+        let page_length = u16::from_be_bytes([data[2], data[3]]);
+        let self_test_passed = (data[1] & 0x01) == 0; // 0 = Passed, 1 = Error
+        Some(ScsiDiagnosticResultsHeader {
+            page_code,
+            page_length,
+            self_test_passed,
+        })
+    }
+
     /// Construit le paquet Setup pour la réinitialisation de classe BOT (Bulk-Only Mass Storage Reset)
     pub fn build_bot_reset_packet(&self, interface_number: u8) -> UsbSetupPacket {
         UsbSetupPacket::new(0x21, 0xFF, 0, interface_number as u16, 0)
@@ -2403,6 +2484,32 @@ impl UsbMassStorageDisk {
         block_count: u32,
     ) -> (CommandBlockWrapper, u32) {
         self.bot.build_cbw_synchronize_cache_16(lba, block_count)
+    }
+
+    /// Construit un CBW pour SCSI SEND DIAGNOSTIC afin de lancer un auto-test matériel (fond ou premier plan)
+    #[inline]
+    pub fn build_send_diagnostic_cbw(&mut self, self_test_code: u8) -> (CommandBlockWrapper, u32) {
+        self.bot.build_cbw_send_diagnostic(self_test_code, 0)
+    }
+
+    /// Construit un CBW pour SCSI RECEIVE DIAGNOSTIC RESULTS afin de collecter les résultats d'auto-test
+    #[inline]
+    pub fn build_receive_diagnostic_results_cbw(
+        &mut self,
+        page_code: u8,
+        alloc_len: u16,
+    ) -> (CommandBlockWrapper, u32) {
+        self.bot
+            .build_cbw_receive_diagnostic_results(page_code != 0, page_code, alloc_len)
+    }
+
+    /// Décode l'en-tête de résultats de diagnostic
+    #[inline]
+    pub fn parse_diagnostic_results_header(
+        &self,
+        data: &[u8],
+    ) -> Option<ScsiDiagnosticResultsHeader> {
+        self.bot.parse_diagnostic_results_header(data)
     }
 
     /// Met à jour la géométrie du disque via les données décodées de READ CAPACITY (16)
@@ -5431,5 +5538,35 @@ mod tests {
         assert_eq!(sc_lba, 0x0002_0000_0000);
         assert_eq!(cbw_sc16.tag(), tag_sc16);
         assert_eq!(cbw_sc16.data_transfer_length(), 0);
+
+        // 17. SCSI SEND DIAGNOSTIC & RECEIVE DIAGNOSTIC RESULTS
+        let (cbw_diag, tag_diag) =
+            disk.build_send_diagnostic_cbw(SCSI_SELF_TEST_CODE_BACKGROUND_SHORT);
+        assert_eq!(cbw_diag.cb[0], SCSI_CMD_SEND_DIAGNOSTIC);
+        assert_eq!(
+            cbw_diag.cb[1],
+            (SCSI_SELF_TEST_CODE_BACKGROUND_SHORT & 0x07) << 5
+        );
+        assert_eq!(cbw_diag.tag(), tag_diag);
+        assert_eq!(cbw_diag.data_transfer_length(), 0);
+
+        let (cbw_recv_diag, tag_recv_diag) =
+            disk.build_receive_diagnostic_results_cbw(SCSI_DIAG_PAGE_TRANSLATE_ADDRESS, 16);
+        assert_eq!(cbw_recv_diag.cb[0], SCSI_CMD_RECEIVE_DIAGNOSTIC_RESULTS);
+        assert_eq!(cbw_recv_diag.cb[1], 0x01); // pcv = true
+        assert_eq!(cbw_recv_diag.cb[2], SCSI_DIAG_PAGE_TRANSLATE_ADDRESS);
+        assert_eq!(
+            u16::from_be_bytes([cbw_recv_diag.cb[3], cbw_recv_diag.cb[4]]),
+            16
+        );
+        assert_eq!(cbw_recv_diag.tag(), tag_recv_diag);
+        assert_eq!(cbw_recv_diag.data_transfer_length(), 16);
+
+        // Parsing en-tête diagnostic
+        let diag_raw = [SCSI_DIAG_PAGE_TRANSLATE_ADDRESS, 0x00, 0x00, 0x0C];
+        let diag_hdr = disk.parse_diagnostic_results_header(&diag_raw).unwrap();
+        assert_eq!(diag_hdr.page_code, SCSI_DIAG_PAGE_TRANSLATE_ADDRESS);
+        assert_eq!(diag_hdr.page_length, 12);
+        assert!(diag_hdr.self_test_passed);
     }
 }
