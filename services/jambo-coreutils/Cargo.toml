@@ -252,5 +252,20 @@ name = "hexdump"
 path = "src/bin/hexdump.rs"
 test = false
 
+[[bin]]
+name = "which"
+path = "src/bin/which.rs"
+test = false
+
+[[bin]]
+name = "time"
+path = "src/bin/time.rs"
+test = false
+
+[[bin]]
+name = "xargs"
+path = "src/bin/xargs.rs"
+test = false
+
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }

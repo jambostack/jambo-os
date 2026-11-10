@@ -11745,6 +11745,340 @@ pub fn run_time(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
     exit_code
 }
 
+/// Exécute l'utilitaire POSIX `xargs` construisant et exécutant des commandes depuis l'entrée standard
+/// sans allocation dynamique (buffers statiques & pile).
+pub fn run_xargs(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    let mut null_delimiter = false; // -0, --null
+    let mut custom_delimiter: Option<u8> = None; // -d, --delimiter
+    let mut max_args: usize = usize::MAX; // -n, --max-args
+    let mut max_lines: usize = usize::MAX; // -L, --max-lines
+    let mut verbose = false; // -t, --verbose
+    let mut cmd_start = 0;
+
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i];
+        if arg == "-0" || arg == "--null" {
+            null_delimiter = true;
+            i += 1;
+            cmd_start = i;
+        } else if arg == "-t" || arg == "--verbose" {
+            verbose = true;
+            i += 1;
+            cmd_start = i;
+        } else if arg == "-r" || arg == "--no-run-if-empty" {
+            // Comportement par défaut sous JamboOS
+            i += 1;
+            cmd_start = i;
+        } else if arg == "-d" || arg == "--delimiter" {
+            if i + 1 < args.len() {
+                let delim_str = args[i + 1];
+                if let Some(b) = delim_str.bytes().next() {
+                    custom_delimiter = Some(b);
+                }
+                i += 2;
+                cmd_start = i;
+            } else {
+                let _ = sys_write(err_fd, b"xargs: option '-d' requires an argument\n");
+                return 1;
+            }
+        } else if arg.starts_with("-d") && arg.len() > 2 {
+            let b = arg.as_bytes()[2];
+            custom_delimiter = Some(b);
+            i += 1;
+            cmd_start = i;
+        } else if arg == "-n" || arg == "--max-args" {
+            if i + 1 < args.len() {
+                let mut n = 0usize;
+                for b in args[i + 1].bytes() {
+                    if b.is_ascii_digit() {
+                        n = n.saturating_mul(10).saturating_add((b - b'0') as usize);
+                    }
+                }
+                max_args = if n > 0 { n } else { 1 };
+                i += 2;
+                cmd_start = i;
+            } else {
+                let _ = sys_write(err_fd, b"xargs: option '-n' requires an argument\n");
+                return 1;
+            }
+        } else if arg.starts_with("-n") && arg.len() > 2 {
+            let mut n = 0usize;
+            for b in arg.as_bytes()[2..].iter() {
+                if b.is_ascii_digit() {
+                    n = n.saturating_mul(10).saturating_add((b - b'0') as usize);
+                }
+            }
+            max_args = if n > 0 { n } else { 1 };
+            i += 1;
+            cmd_start = i;
+        } else if arg == "-L" || arg == "--max-lines" {
+            if i + 1 < args.len() {
+                let mut l = 0usize;
+                for b in args[i + 1].bytes() {
+                    if b.is_ascii_digit() {
+                        l = l.saturating_mul(10).saturating_add((b - b'0') as usize);
+                    }
+                }
+                max_lines = if l > 0 { l } else { 1 };
+                i += 2;
+                cmd_start = i;
+            } else {
+                let _ = sys_write(err_fd, b"xargs: option '-L' requires an argument\n");
+                return 1;
+            }
+        } else if arg == "--help" {
+            let _ = sys_write(
+                out_fd,
+                b"Usage: xargs [options] [command [initial-arguments]]\n\
+                  Build and execute command lines from standard input.\n\n\
+                  Options:\n\
+                    -0, --null          items are separated by a null, not whitespace\n\
+                    -d, --delimiter C   items are separated by character C\n\
+                    -n, --max-args N    use at most N arguments per command line\n\
+                    -L, --max-lines N   use at most N non-blank input lines per command line\n\
+                    -r, --no-run-if-empty  if there are no arguments, do not run command\n\
+                    -t, --verbose       print commands before executing them\n\
+                    --help              display this help and exit\n",
+            );
+            return 0;
+        } else if arg.starts_with('-') && arg != "--" {
+            let _ = sys_write(err_fd, b"xargs: unrecognized option '");
+            let _ = sys_write(err_fd, arg.as_bytes());
+            let _ = sys_write(err_fd, b"'\n");
+            return 1;
+        } else {
+            if arg == "--" {
+                cmd_start = i + 1;
+            }
+            break;
+        }
+    }
+
+    // Commande par défaut si non spécifiée : "echo"
+    let (target_cmd, initial_args) = if cmd_start < args.len() {
+        (args[cmd_start], &args[cmd_start + 1..])
+    } else {
+        ("echo", &[][..])
+    };
+
+    // Lecture intégrale sans allocation de in_fd dans un buffer statique de 4 Kio
+    let mut input_buf = [0u8; 4096];
+    let mut total_read = 0usize;
+
+    loop {
+        if total_read >= input_buf.len() {
+            break;
+        }
+        let n = sys_read(in_fd, &mut input_buf[total_read..]);
+        if n <= 0 {
+            break;
+        }
+        total_read += n as usize;
+    }
+
+    if total_read == 0 {
+        return 0;
+    }
+
+    // Découpage en arguments selon le délimiteur configuré
+    // Stockage sans allocation : tableaux statiques de pointeurs (&str)
+    // Au maximum 64 arguments extraits depuis stdin
+    const MAX_PARSED_ARGS: usize = 64;
+    let mut parsed_args: [&str; MAX_PARSED_ARGS] = [""; MAX_PARSED_ARGS];
+    let mut parsed_count = 0usize;
+
+    let input_slice = &input_buf[..total_read];
+
+    if null_delimiter {
+        let mut start = 0usize;
+        for pos in 0..input_slice.len() {
+            if input_slice[pos] == 0 {
+                if pos > start && parsed_count < MAX_PARSED_ARGS {
+                    if let Ok(s) = core::str::from_utf8(&input_slice[start..pos]) {
+                        parsed_args[parsed_count] = s;
+                        parsed_count += 1;
+                    }
+                }
+                start = pos + 1;
+            }
+        }
+        if start < input_slice.len() && parsed_count < MAX_PARSED_ARGS {
+            if let Ok(s) = core::str::from_utf8(&input_slice[start..]) {
+                if !s.is_empty() {
+                    parsed_args[parsed_count] = s;
+                    parsed_count += 1;
+                }
+            }
+        }
+    } else if let Some(delim) = custom_delimiter {
+        let mut start = 0usize;
+        for pos in 0..input_slice.len() {
+            if input_slice[pos] == delim {
+                if pos > start && parsed_count < MAX_PARSED_ARGS {
+                    if let Ok(s) = core::str::from_utf8(&input_slice[start..pos]) {
+                        parsed_args[parsed_count] = s;
+                        parsed_count += 1;
+                    }
+                }
+                start = pos + 1;
+            }
+        }
+        if start < input_slice.len() && parsed_count < MAX_PARSED_ARGS {
+            if let Ok(s) = core::str::from_utf8(&input_slice[start..]) {
+                if !s.is_empty() {
+                    parsed_args[parsed_count] = s;
+                    parsed_count += 1;
+                }
+            }
+        }
+    } else {
+        // Délimiteur par défaut : espaces, tabulations, retours à la ligne
+        let mut in_token = false;
+        let mut token_start = 0usize;
+
+        for (pos, &b) in input_slice.iter().enumerate() {
+            let is_ws = b == b' ' || b == b'\t' || b == b'\n' || b == b'\r';
+            if !is_ws && !in_token {
+                in_token = true;
+                token_start = pos;
+            } else if is_ws && in_token {
+                in_token = false;
+                if parsed_count < MAX_PARSED_ARGS {
+                    if let Ok(s) = core::str::from_utf8(&input_slice[token_start..pos]) {
+                        parsed_args[parsed_count] = s;
+                        parsed_count += 1;
+                    }
+                }
+            }
+        }
+        if in_token && parsed_count < MAX_PARSED_ARGS {
+            if let Ok(s) = core::str::from_utf8(&input_slice[token_start..]) {
+                parsed_args[parsed_count] = s;
+                parsed_count += 1;
+            }
+        }
+    }
+
+    if parsed_count == 0 {
+        return 0;
+    }
+
+    let chunk_limit = if max_args != usize::MAX {
+        max_args
+    } else if max_lines != usize::MAX {
+        max_lines
+    } else {
+        parsed_count
+    };
+
+    let mut current_idx = 0usize;
+    let mut overall_exit_code = 0i32;
+
+    while current_idx < parsed_count {
+        let remaining = parsed_count - current_idx;
+        let batch_size = remaining.min(chunk_limit);
+        let batch_items = &parsed_args[current_idx..current_idx + batch_size];
+
+        // Assemblage des arguments de la sous-commande
+        // [initial_args..., batch_items...]
+        const MAX_CALL_ARGS: usize = 96;
+        let mut call_args: [&str; MAX_CALL_ARGS] = [""; MAX_CALL_ARGS];
+        let mut call_count = 0usize;
+
+        for &ia in initial_args {
+            if call_count < MAX_CALL_ARGS {
+                call_args[call_count] = ia;
+                call_count += 1;
+            }
+        }
+        for &bi in batch_items {
+            if call_count < MAX_CALL_ARGS {
+                call_args[call_count] = bi;
+                call_count += 1;
+            }
+        }
+
+        let effective_sub_args = &call_args[..call_count];
+
+        if verbose {
+            let _ = sys_write(err_fd, target_cmd.as_bytes());
+            for &arg in effective_sub_args {
+                let _ = sys_write(err_fd, b" ");
+                let _ = sys_write(err_fd, arg.as_bytes());
+            }
+            let _ = sys_write(err_fd, b"\n");
+        }
+
+        let code = match target_cmd {
+            "echo" => run_echo(effective_sub_args, out_fd),
+            "cat" => run_cat(effective_sub_args, 0, out_fd, err_fd),
+            "ls" => run_ls(effective_sub_args, out_fd, err_fd),
+            "true" => 0,
+            "false" => 1,
+            "sleep" => run_sleep(effective_sub_args, 0, out_fd, err_fd),
+            "which" => run_which(effective_sub_args, 0, out_fd, err_fd),
+            "sync" => run_sync(effective_sub_args, 0, out_fd, err_fd),
+            "pwd" | "basename" => run_basename(effective_sub_args, out_fd, err_fd),
+            "dirname" => run_dirname(effective_sub_args, out_fd, err_fd),
+            "expr" => run_expr(effective_sub_args, out_fd, err_fd),
+            "wc" => run_wc(effective_sub_args, 0, out_fd, err_fd),
+            "head" => run_head(effective_sub_args, 0, out_fd, err_fd),
+            "tail" => run_tail(effective_sub_args, 0, out_fd, err_fd),
+            "touch" => run_touch(effective_sub_args, err_fd),
+            "mkdir" => run_mkdir(effective_sub_args, err_fd),
+            "rm" => run_rm(effective_sub_args, err_fd),
+            "cp" => run_cp(effective_sub_args, err_fd),
+            "mv" => run_mv(effective_sub_args, err_fd),
+            "tee" => run_tee(effective_sub_args, 0, out_fd, err_fd),
+            "env" => run_env(effective_sub_args, 0, out_fd, err_fd),
+            "grep" => run_grep(effective_sub_args, 0, out_fd, err_fd),
+            "sort" => run_sort(effective_sub_args, 0, out_fd, err_fd),
+            "uniq" => run_uniq(effective_sub_args, 0, out_fd, err_fd),
+            "find" => run_find(effective_sub_args, out_fd, err_fd),
+            "chmod" => run_chmod(effective_sub_args, err_fd),
+            "chown" => run_chown(effective_sub_args, err_fd),
+            "id" => run_id(effective_sub_args, 0, out_fd, err_fd),
+            "du" => run_du(effective_sub_args, out_fd, err_fd),
+            "df" => run_df(effective_sub_args, out_fd, err_fd),
+            "uname" => run_uname(effective_sub_args, out_fd, err_fd),
+            "cut" => run_cut(effective_sub_args, 0, out_fd, err_fd),
+            "paste" => run_paste(effective_sub_args, 0, out_fd, err_fd),
+            "comm" => run_comm(effective_sub_args, 0, out_fd, err_fd),
+            "tr" => run_tr(effective_sub_args, 0, out_fd, err_fd),
+            "split" => run_split(effective_sub_args, 0, out_fd, err_fd),
+            "seq" => run_seq(effective_sub_args, out_fd, err_fd),
+            "printf" => run_printf(effective_sub_args, out_fd, err_fd),
+            "fold" => run_fold(effective_sub_args, 0, out_fd, err_fd),
+            "nl" => run_nl(effective_sub_args, 0, out_fd, err_fd),
+            "od" => run_od(effective_sub_args, 0, out_fd, err_fd),
+            "cmp" => run_cmp(effective_sub_args, 0, out_fd, err_fd),
+            "expand" => run_expand(effective_sub_args, 0, out_fd, err_fd),
+            "unexpand" => run_unexpand(effective_sub_args, 0, out_fd, err_fd),
+            "cksum" => run_cksum(effective_sub_args, 0, out_fd, err_fd),
+            "base64" => run_base64(effective_sub_args, 0, out_fd, err_fd),
+            "sha256sum" => run_sha256sum(effective_sub_args, 0, out_fd, err_fd),
+            "truncate" => run_truncate(effective_sub_args, 0, out_fd, err_fd),
+            "hexdump" => run_hexdump(effective_sub_args, 0, out_fd, err_fd),
+            "time" => run_time(effective_sub_args, 0, out_fd, err_fd),
+            _ => {
+                let _ = sys_write(err_fd, b"xargs: ");
+                let _ = sys_write(err_fd, target_cmd.as_bytes());
+                let _ = sys_write(err_fd, b": command not found\n");
+                127
+            }
+        };
+
+        if code != 0 {
+            overall_exit_code = code;
+        }
+
+        current_idx += batch_size;
+    }
+
+    overall_exit_code
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -14475,5 +14809,58 @@ mod tests {
         assert!(err_str2.contains("user 0.00"));
         assert!(err_str2.contains("sys 0.00"));
         sys_close(err_r2);
+    }
+
+    #[test]
+    fn test_xargs_basic_execution() {
+        let mut buf = [0u8; 256];
+
+        // 1. echo "foo bar baz" | xargs echo (par défaut target_cmd = echo)
+        let (in_r, in_w) = crate::vfs::pipe().expect("pipe in");
+        let (out_r, out_w) = crate::vfs::pipe().expect("pipe out");
+        let _ = sys_write(in_w, b"foo bar\nbaz\n");
+        sys_close(in_w);
+
+        let code = run_xargs(&["echo"], in_r, out_w, 2);
+        assert_eq!(code, 0);
+        sys_close(in_r);
+        sys_close(out_w);
+
+        let n = sys_read(out_r, &mut buf);
+        assert_eq!(&buf[..n as usize], b"foo bar baz\n");
+        sys_close(out_r);
+
+        // 2. xargs -n 1
+        let (in_r2, in_w2) = crate::vfs::pipe().expect("pipe in 2");
+        let (out_r2, out_w2) = crate::vfs::pipe().expect("pipe out 2");
+        let _ = sys_write(in_w2, b"a b c\n");
+        sys_close(in_w2);
+
+        let code2 = run_xargs(&["-n", "1", "echo"], in_r2, out_w2, 2);
+        assert_eq!(code2, 0);
+        sys_close(in_r2);
+        sys_close(out_w2);
+
+        let n2 = sys_read(out_r2, &mut buf);
+        assert_eq!(&buf[..n2 as usize], b"a\nb\nc\n");
+        sys_close(out_r2);
+
+        // 3. xargs -0 (null delimiter)
+        let (in_r3, in_w3) = crate::vfs::pipe().expect("pipe in 3");
+        let (out_r3, out_w3) = crate::vfs::pipe().expect("pipe out 3");
+        let _ = sys_write(in_w3, b"file with space.txt\0second file.log\0");
+        sys_close(in_w3);
+
+        let code3 = run_xargs(&["-0", "-n", "1", "echo"], in_r3, out_w3, 2);
+        assert_eq!(code3, 0);
+        sys_close(in_r3);
+        sys_close(out_w3);
+
+        let n3 = sys_read(out_r3, &mut buf);
+        assert_eq!(
+            &buf[..n3 as usize],
+            b"file with space.txt\nsecond file.log\n"
+        );
+        sys_close(out_r3);
     }
 }

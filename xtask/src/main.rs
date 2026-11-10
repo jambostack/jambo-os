@@ -1306,6 +1306,7 @@ fn build_coreutils(
     PathBuf,
     PathBuf,
     PathBuf,
+    PathBuf,
 )> {
     let root = root_dir();
     let mut cmd = Command::new("cargo");
@@ -1384,6 +1385,7 @@ fn build_coreutils(
         dir.join("hexdump"),
         dir.join("which"),
         dir.join("time"),
+        dir.join("xargs"),
     ))
 }
 
@@ -1711,6 +1713,7 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
         hexdump_bin,
         which_bin,
         time_bin,
+        xargs_bin,
     ) = build_coreutils(release)?;
     let installer_bin = build_installer(release)?;
     let fuzz_bin = build_fuzzer(release)?;
@@ -1771,6 +1774,7 @@ fn create_initrd(release: bool) -> anyhow::Result<PathBuf> {
     fs::copy(&hexdump_bin, bin_dir.join("hexdump"))?;
     fs::copy(&which_bin, bin_dir.join("which"))?;
     fs::copy(&time_bin, bin_dir.join("time"))?;
+    fs::copy(&xargs_bin, bin_dir.join("xargs"))?;
     fs::copy(&installer_bin, bin_dir.join("installer"))?;
     fs::copy(&installer_bin, bin_dir.join("jambo-installer"))?;
     fs::copy(&fuzz_bin, bin_dir.join("fuzz"))?;
