@@ -113,6 +113,11 @@ path = "src/bin/chown.rs"
 test = false
 
 [[bin]]
+name = "chgrp"
+path = "src/bin/chgrp.rs"
+test = false
+
+[[bin]]
 name = "id"
 path = "src/bin/id.rs"
 test = false

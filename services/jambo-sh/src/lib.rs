@@ -513,6 +513,7 @@ impl JamboShell {
             "find" | "/bin/find" | "bin/find" => self.cmd_find(args, out),
             "chmod" | "/bin/chmod" | "bin/chmod" => self.cmd_chmod(args, out),
             "chown" | "/bin/chown" | "bin/chown" => self.cmd_chown(args, out),
+            "chgrp" | "/bin/chgrp" | "bin/chgrp" => self.cmd_chgrp(args, out),
             "id" | "/bin/id" | "bin/id" => self.cmd_id(args, out),
             "du" | "/bin/du" | "bin/du" => self.cmd_du(args, out),
             "df" | "/bin/df" | "bin/df" => self.cmd_df(args, out),
@@ -630,6 +631,7 @@ impl JamboShell {
   find [path] [-name pat] [-type f|d] [-maxdepth N] - Recherche des fichiers\n\
   chmod [-R] [-v] <mode> <files> - Modifie les permissions octales de fichiers ou repertoires\n\
   chown [-R] [-v] <owner>[:<group>] <files> - Modifie le proprietaire et/ou groupe de fichiers\n\
+  chgrp [-R] [-v] <group> <files> - Modifie le groupe d'appartenance de fichiers ou repertoires\n\
   id [-u] [-g] [-G] [-n] - Affiche les identifiants utilisateur et groupe Ring 3\n\
   du [-s] [-h] [-a] [-b] [-k] [-m] [path] - Calcule l'espace disque consomme (Disk Usage)\n\
   df [-h] [-k] [-m] [-T] [-a] [-i] [-s] [path] - Affiche l'espace disque disponible (statvfs / CoW metrics)\n\
@@ -757,7 +759,7 @@ impl JamboShell {
 
     fn cmd_coreutils(&self, out: &mut [u8]) -> (ShellStatus, usize) {
         let text = b"Utilitaires Coreutils Ring 3 (services/jambo-coreutils) :\n\
-  Binaires disponibles : /bin/echo, /bin/cat, /bin/head, /bin/tail, /bin/touch, /bin/mkdir, /bin/rm, /bin/cp, /bin/mv, /bin/tee, /bin/env, /bin/grep, /bin/sort, /bin/uniq, /bin/find, /bin/chmod, /bin/chown, /bin/id, /bin/du, /bin/df, /bin/uname, /bin/cut, /bin/paste, /bin/comm, /bin/tr, /bin/split, /bin/basename, /bin/dirname, /bin/seq, /bin/yes, /bin/printf, /bin/expr, /bin/fold, /bin/nl, /bin/od, /bin/cmp, /bin/expand, /bin/unexpand, /bin/sleep, /bin/cksum, /bin/base64, /bin/sha256sum, /bin/sync, /bin/truncate, /bin/hexdump, /bin/which, /bin/time, /bin/xargs, /bin/dd, /bin/readlink, /bin/stat, /bin/ln, /bin/mktemp, /bin/rmdir, /bin/wc, /bin/true, /bin/false, /bin/ls (58 utilitaires)\n\
+  Binaires disponibles : /bin/echo, /bin/cat, /bin/head, /bin/tail, /bin/touch, /bin/mkdir, /bin/rm, /bin/cp, /bin/mv, /bin/tee, /bin/env, /bin/grep, /bin/sort, /bin/uniq, /bin/find, /bin/chmod, /bin/chown, /bin/chgrp, /bin/id, /bin/du, /bin/df, /bin/uname, /bin/cut, /bin/paste, /bin/comm, /bin/tr, /bin/split, /bin/basename, /bin/dirname, /bin/seq, /bin/yes, /bin/printf, /bin/expr, /bin/fold, /bin/nl, /bin/od, /bin/cmp, /bin/expand, /bin/unexpand, /bin/sleep, /bin/cksum, /bin/base64, /bin/sha256sum, /bin/sync, /bin/truncate, /bin/hexdump, /bin/which, /bin/time, /bin/xargs, /bin/dd, /bin/readlink, /bin/stat, /bin/ln, /bin/mktemp, /bin/rmdir, /bin/tree, /bin/wc, /bin/true, /bin/false, /bin/ls (60 utilitaires)\n\
   Architecture & ABI   : System V AMD64 ELF64 (ET_EXEC / Ring 3 Userland)\n\
   Point d'entree       : _start (parsing argc/argv sur pile System V)\n\
   Terminaison          : Syscall 11 ThreadExit avec propagation code de retour POSIX\n\
@@ -2910,6 +2912,26 @@ ABI : 29 Appels Systeme (jambo-abi v0.4) avec Coreutils Ring 3, VFS POSIX & Fuzz
             }
         } else {
             let msg = b"chown: pipe creation failed\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
+    }
+
+    fn cmd_chgrp(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if let Ok((r, w)) = libjambo::vfs::pipe() {
+            let code = libjambo::coreutils::run_chgrp(args, w);
+            let _ = libjambo::coreutils::sys_close(w);
+            let n = libjambo::coreutils::sys_read(r, out);
+            let _ = libjambo::coreutils::sys_close(r);
+            let len = if n > 0 { n as usize } else { 0 };
+            if code == 0 {
+                (ShellStatus::Success, len)
+            } else {
+                (ShellStatus::ExecutionFailed, len)
+            }
+        } else {
+            let msg = b"chgrp: pipe creation failed\n";
             let len = msg.len().min(out.len());
             out[..len].copy_from_slice(&msg[..len]);
             (ShellStatus::ExecutionFailed, len)
@@ -18454,6 +18476,12 @@ mod tests {
         // 2. Commande chown simple
         let (st_chown, _) = shell.execute_line("chown root:root /etc/hostname", &mut out);
         assert_eq!(st_chown, ShellStatus::Success);
+
+        // 2b. Commande chgrp simple
+        let (st_chgrp, _) = shell.execute_line("chgrp bin /etc/hostname", &mut out);
+        assert_eq!(st_chgrp, ShellStatus::Success);
+        let (st_chgrp_r, _) = shell.execute_line("chgrp root /etc/hostname", &mut out);
+        assert_eq!(st_chgrp_r, ShellStatus::Success);
 
         // 3. Commande chown erreur
         let (st_err, _) = shell.execute_line("chown root:root /nonexistent_file_xyz", &mut out);

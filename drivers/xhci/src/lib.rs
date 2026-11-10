@@ -3352,6 +3352,109 @@ impl UsbSystemControlState {
     }
 }
 
+/// Indicateurs d'état et LEDs du clavier USB HID (Usage Page 0x08 - LEDs)
+/// et commutateurs de verrouillage matériel (NumLock, CapsLock, ScrollLock, Compose, Kana, Fn-Lock).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct UsbKeyboardLedState {
+    pub num_lock: bool,
+    pub caps_lock: bool,
+    pub scroll_lock: bool,
+    pub compose: bool,
+    pub kana: bool,
+    pub fn_lock: bool,
+}
+
+impl UsbKeyboardLedState {
+    /// Masque binaire standard USB HID pour les LEDs (Bit 0: NumLock, 1: CapsLock, 2: ScrollLock, 3: Compose, 4: Kana, 5: FnLock)
+    pub const MASK_NUM_LOCK: u8 = 1 << 0;
+    pub const MASK_CAPS_LOCK: u8 = 1 << 1;
+    pub const MASK_SCROLL_LOCK: u8 = 1 << 2;
+    pub const MASK_COMPOSE: u8 = 1 << 3;
+    pub const MASK_KANA: u8 = 1 << 4;
+    pub const MASK_FN_LOCK: u8 = 1 << 5;
+
+    /// Crée un état de LEDs avec les verrous spécifiés
+    pub const fn new(num_lock: bool, caps_lock: bool, scroll_lock: bool) -> Self {
+        Self {
+            num_lock,
+            caps_lock,
+            scroll_lock,
+            compose: false,
+            kana: false,
+            fn_lock: false,
+        }
+    }
+
+    /// Décode un masque d'octets de rapport de sortie (SET_REPORT / Output Report)
+    pub fn decode_mask(&mut self, mask: u8) {
+        self.num_lock = (mask & Self::MASK_NUM_LOCK) != 0;
+        self.caps_lock = (mask & Self::MASK_CAPS_LOCK) != 0;
+        self.scroll_lock = (mask & Self::MASK_SCROLL_LOCK) != 0;
+        self.compose = (mask & Self::MASK_COMPOSE) != 0;
+        self.kana = (mask & Self::MASK_KANA) != 0;
+        self.fn_lock = (mask & Self::MASK_FN_LOCK) != 0;
+    }
+
+    /// Encode l'état des LEDs en octet de rapport de sortie pour le périphérique HID
+    pub const fn encode_mask(&self) -> u8 {
+        let mut mask = 0u8;
+        if self.num_lock {
+            mask |= Self::MASK_NUM_LOCK;
+        }
+        if self.caps_lock {
+            mask |= Self::MASK_CAPS_LOCK;
+        }
+        if self.scroll_lock {
+            mask |= Self::MASK_SCROLL_LOCK;
+        }
+        if self.compose {
+            mask |= Self::MASK_COMPOSE;
+        }
+        if self.kana {
+            mask |= Self::MASK_KANA;
+        }
+        if self.fn_lock {
+            mask |= Self::MASK_FN_LOCK;
+        }
+        mask
+    }
+
+    /// Bascule l'état d'un verrou lors d'un appui touche
+    pub fn toggle_num_lock(&mut self) -> bool {
+        self.num_lock = !self.num_lock;
+        self.num_lock
+    }
+
+    pub fn toggle_caps_lock(&mut self) -> bool {
+        self.caps_lock = !self.caps_lock;
+        self.caps_lock
+    }
+
+    pub fn toggle_scroll_lock(&mut self) -> bool {
+        self.scroll_lock = !self.scroll_lock;
+        self.scroll_lock
+    }
+
+    pub fn toggle_fn_lock(&mut self) -> bool {
+        self.fn_lock = !self.fn_lock;
+        self.fn_lock
+    }
+
+    /// Prépare le paquet SETUP USB HID pour la commande standard `SET_REPORT` (Output Report sur Endpoint 0)
+    pub fn build_set_report_setup_packet(&self, interface_id: u8) -> [u8; 8] {
+        let mut setup = [0u8; 8];
+        setup[0] = 0x21; // bmRequestType: Host to Device | Class | Interface
+        setup[1] = 0x09; // bRequest: SET_REPORT
+        setup[2] = 0x00; // wValue LSB: Report ID (0)
+        setup[3] = 0x02; // wValue MSB: Report Type = Output (0x02)
+        setup[4] = interface_id; // wIndex LSB: Interface Number
+        setup[5] = 0x00; // wIndex MSB
+        setup[6] = 0x01; // wLength LSB: 1 octet de payload
+        setup[7] = 0x00; // wLength MSB
+        setup
+    }
+}
+
 // ============================================================================
 // Gestion des Flux Isochrones et Synchronisation de Trames (Audio / Vidéo)
 // ============================================================================
@@ -5364,6 +5467,42 @@ mod tests {
         sys_ctl.decode_report(&[0x10]); // Warm Restart
         assert!(sys_ctl.warm_restart);
         assert_eq!(sys_ctl.primary_event(), Some(SystemPowerEvent::WarmRestart));
+
+        // Décodage et contrôle des indicateurs d'état et LEDs du clavier (Caps/Num/Scroll lock et Fn-Lock)
+        let mut leds = UsbKeyboardLedState::default();
+        assert_eq!(leds.encode_mask(), 0);
+
+        // Activation de NumLock
+        assert!(leds.toggle_num_lock());
+        assert_eq!(leds.encode_mask(), UsbKeyboardLedState::MASK_NUM_LOCK);
+
+        // Activation combinée CapsLock + ScrollLock + FnLock
+        leds.caps_lock = true;
+        leds.scroll_lock = true;
+        leds.fn_lock = true;
+        let expected_mask = UsbKeyboardLedState::MASK_NUM_LOCK
+            | UsbKeyboardLedState::MASK_CAPS_LOCK
+            | UsbKeyboardLedState::MASK_SCROLL_LOCK
+            | UsbKeyboardLedState::MASK_FN_LOCK;
+        assert_eq!(leds.encode_mask(), expected_mask);
+
+        // Décodage inverse
+        let mut decoded_leds = UsbKeyboardLedState::default();
+        decoded_leds.decode_mask(expected_mask);
+        assert!(decoded_leds.num_lock);
+        assert!(decoded_leds.caps_lock);
+        assert!(decoded_leds.scroll_lock);
+        assert!(decoded_leds.fn_lock);
+        assert!(!decoded_leds.compose);
+        assert!(!decoded_leds.kana);
+
+        // Génération du paquet SETUP USB SET_REPORT
+        let setup_pkt = leds.build_set_report_setup_packet(0);
+        assert_eq!(setup_pkt[0], 0x21); // Class request
+        assert_eq!(setup_pkt[1], 0x09); // SET_REPORT
+        assert_eq!(setup_pkt[3], 0x02); // Output Report
+        assert_eq!(setup_pkt[4], 0x00); // Interface 0
+        assert_eq!(setup_pkt[6], 0x01); // 1 byte
     }
 
     #[test]

@@ -3771,6 +3771,117 @@ fn write_u32(fd: i32, mut val: u32) {
     let _ = sys_write(fd, &buf[idx..]);
 }
 
+/// Exécute l'utilitaire `chgrp` pour modifier le groupe d'appartenance de fichiers ou répertoires
+pub fn run_chgrp(args: &[&str], err_fd: i32) -> i32 {
+    let mut recursive = false;
+    let mut verbose = false;
+    let mut group_str: Option<&str> = None;
+    let mut files_start = 0;
+
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i];
+        if arg == "-R" || arg == "--recursive" {
+            recursive = true;
+            i += 1;
+        } else if arg == "-v" || arg == "--verbose" {
+            verbose = true;
+            i += 1;
+        } else if arg.starts_with('-') && !arg.chars().skip(1).all(|c| c.is_ascii_digit()) {
+            let _ = sys_write(err_fd, b"chgrp: unrecognized option '");
+            let _ = sys_write(err_fd, arg.as_bytes());
+            let _ = sys_write(err_fd, b"'\n");
+            return 1;
+        } else if group_str.is_none() {
+            group_str = Some(arg);
+            files_start = i + 1;
+            break;
+        } else {
+            i += 1;
+        }
+    }
+
+    let raw_spec = match group_str {
+        Some(s) => s,
+        None => {
+            let _ = sys_write(err_fd, b"chgrp: missing operand\n");
+            return 1;
+        }
+    };
+
+    let target_gid = match resolve_user_or_group(raw_spec) {
+        Some(gid) => gid,
+        None => {
+            let _ = sys_write(err_fd, b"chgrp: invalid group: '");
+            let _ = sys_write(err_fd, raw_spec.as_bytes());
+            let _ = sys_write(err_fd, b"'\n");
+            return 1;
+        }
+    };
+
+    let files = &args[files_start..];
+    if files.is_empty() {
+        let _ = sys_write(err_fd, b"chgrp: missing operand after '");
+        let _ = sys_write(err_fd, raw_spec.as_bytes());
+        let _ = sys_write(err_fd, b"'\n");
+        return 1;
+    }
+
+    let mut has_error = false;
+    for &target in files {
+        let (current_uid, _current_gid) = match sys_get_owner_pool(target) {
+            Some(pair) => pair,
+            None => {
+                let _ = sys_write(err_fd, b"chgrp: cannot access '");
+                let _ = sys_write(err_fd, target.as_bytes());
+                let _ = sys_write(err_fd, b"': No such file or directory\n");
+                has_error = true;
+                continue;
+            }
+        };
+
+        let res = sys_chown_pool(target, current_uid, target_gid);
+        if res < 0 {
+            let _ = sys_write(err_fd, b"chgrp: cannot access '");
+            let _ = sys_write(err_fd, target.as_bytes());
+            let _ = sys_write(err_fd, b"': No such file or directory\n");
+            has_error = true;
+        } else {
+            if recursive {
+                let clean = target.trim_end_matches('/');
+                // SAFETY: Accès protégé au pool d'inodes virtuel
+                unsafe {
+                    let pool = core::ptr::addr_of_mut!(INODE_POOL);
+                    for node in (*pool).iter_mut() {
+                        if node.is_active {
+                            let p = node.path_str();
+                            if p.starts_with(clean)
+                                && (p.len() == clean.len()
+                                    || p.as_bytes().get(clean.len()) == Some(&b'/'))
+                            {
+                                node.gid = target_gid;
+                            }
+                        }
+                    }
+                }
+            }
+            if verbose {
+                let _ = sys_write(err_fd, b"group of '");
+                let _ = sys_write(err_fd, target.as_bytes());
+                let _ = sys_write(err_fd, b"' retained as ");
+                let _ = sys_write(err_fd, raw_spec.as_bytes());
+                let _ = sys_write(err_fd, b"\n");
+            }
+        }
+    }
+
+    if has_error {
+        1
+    } else {
+        0
+    }
+}
+
 /// Exécute l'utilitaire `id` affichant les identités utilisateur et groupe Ring 3
 pub fn run_id(args: &[&str], _in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
     let mut user_only = false;
@@ -12537,6 +12648,7 @@ pub fn run_xargs(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
             "find" => run_find(effective_sub_args, out_fd, err_fd),
             "chmod" => run_chmod(effective_sub_args, err_fd),
             "chown" => run_chown(effective_sub_args, err_fd),
+            "chgrp" => run_chgrp(effective_sub_args, err_fd),
             "id" => run_id(effective_sub_args, 0, out_fd, err_fd),
             "du" => run_du(effective_sub_args, out_fd, err_fd),
             "df" => run_df(effective_sub_args, out_fd, err_fd),
@@ -14446,6 +14558,39 @@ mod tests {
         sys_close(r3);
         assert_eq!(sys_get_owner_pool("/etc"), Some((1000, 0)));
         assert_eq!(sys_get_owner_pool("/etc/hostname"), Some((1000, 0)));
+
+        // Rétablissement en root:root
+        let _ = sys_chown_pool("/etc/hostname", 0, 0);
+        let _ = sys_chown_pool("/etc/os-release", 0, 0);
+        let _ = sys_chown_pool("/etc", 0, 0);
+
+        // 4b. chgrp simple, verbose (-v) et récursif (-R)
+        let (rg1, wg1) = crate::vfs::pipe().expect("pipe chgrp 1");
+        let code_g1 = run_chgrp(&["bin", "/etc/hostname"], wg1);
+        assert_eq!(code_g1, 0);
+        sys_close(wg1);
+        sys_close(rg1);
+        assert_eq!(sys_get_owner_pool("/etc/hostname"), Some((0, 2)));
+
+        let (rg2, wg2) = crate::vfs::pipe().expect("pipe chgrp 2");
+        let code_g2 = run_chgrp(&["-v", "root", "/etc/hostname"], wg2);
+        assert_eq!(code_g2, 0);
+        sys_close(wg2);
+        let mut out_g2 = [0u8; 128];
+        let ng2 = sys_read(rg2, &mut out_g2);
+        assert!(ng2 > 0);
+        let sg2 = core::str::from_utf8(&out_g2[..ng2 as usize]).unwrap();
+        assert!(sg2.contains("group of '/etc/hostname' retained as root"));
+        sys_close(rg2);
+        assert_eq!(sys_get_owner_pool("/etc/hostname"), Some((0, 0)));
+
+        let (rg3, wg3) = crate::vfs::pipe().expect("pipe chgrp 3");
+        let code_g3 = run_chgrp(&["-R", "1000", "/etc"], wg3);
+        assert_eq!(code_g3, 0);
+        sys_close(wg3);
+        sys_close(rg3);
+        assert_eq!(sys_get_owner_pool("/etc"), Some((0, 1000)));
+        assert_eq!(sys_get_owner_pool("/etc/hostname"), Some((0, 1000)));
 
         // Rétablissement en root:root
         let _ = sys_chown_pool("/etc/hostname", 0, 0);
