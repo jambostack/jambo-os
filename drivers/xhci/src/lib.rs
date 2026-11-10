@@ -3292,6 +3292,66 @@ impl UsbConsumerControlState {
     }
 }
 
+/// Événement du bouton d'alimentation ou de mise en veille ACPI / HID
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SystemPowerEvent {
+    PowerDown,
+    Sleep,
+    WakeUp,
+    ColdRestart,
+    WarmRestart,
+    D3Hot,
+    D3Cold,
+}
+
+/// État des commutateurs d'alimentation et touches système ACPI HID (Usage Page 0x01 - Generic Desktop: System Controls)
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct UsbSystemControlState {
+    pub power_down: bool,
+    pub sleep: bool,
+    pub wake_up: bool,
+    pub cold_restart: bool,
+    pub warm_restart: bool,
+    pub dock: bool,
+}
+
+impl UsbSystemControlState {
+    /// Décode un masque binaire de contrôle d'alimentation système (Usage 0x81 à 0x86)
+    pub fn decode_mask(&mut self, mask: u8) {
+        self.power_down = (mask & (1 << 0)) != 0;
+        self.sleep = (mask & (1 << 1)) != 0;
+        self.wake_up = (mask & (1 << 2)) != 0;
+        self.cold_restart = (mask & (1 << 3)) != 0;
+        self.warm_restart = (mask & (1 << 4)) != 0;
+        self.dock = (mask & (1 << 5)) != 0;
+    }
+
+    /// Décode un rapport binaire HID System Control
+    pub fn decode_report(&mut self, report: &[u8]) {
+        if report.is_empty() {
+            return;
+        }
+        self.decode_mask(report[0]);
+    }
+
+    /// Convertit l'état actif en événement système ACPI prioritaire
+    pub fn primary_event(&self) -> Option<SystemPowerEvent> {
+        if self.power_down {
+            Some(SystemPowerEvent::PowerDown)
+        } else if self.cold_restart {
+            Some(SystemPowerEvent::ColdRestart)
+        } else if self.warm_restart {
+            Some(SystemPowerEvent::WarmRestart)
+        } else if self.sleep {
+            Some(SystemPowerEvent::Sleep)
+        } else if self.wake_up {
+            Some(SystemPowerEvent::WakeUp)
+        } else {
+            None
+        }
+    }
+}
+
 // ============================================================================
 // Gestion des Flux Isochrones et Synchronisation de Trames (Audio / Vidéo)
 // ============================================================================
@@ -5282,6 +5342,28 @@ mod tests {
         assert!(consumer.volume_increment);
         assert!(consumer.mute);
         assert!(!consumer.play_pause);
+
+        // Décodage System Controls (Touches marche/arrêt et veille ACPI)
+        let mut sys_ctl = UsbSystemControlState::default();
+        sys_ctl.decode_report(&[0x01]); // Power Down
+        assert!(sys_ctl.power_down);
+        assert_eq!(sys_ctl.primary_event(), Some(SystemPowerEvent::PowerDown));
+
+        sys_ctl.decode_report(&[0x02]); // Sleep
+        assert!(sys_ctl.sleep);
+        assert_eq!(sys_ctl.primary_event(), Some(SystemPowerEvent::Sleep));
+
+        sys_ctl.decode_report(&[0x04]); // Wake Up
+        assert!(sys_ctl.wake_up);
+        assert_eq!(sys_ctl.primary_event(), Some(SystemPowerEvent::WakeUp));
+
+        sys_ctl.decode_report(&[0x08]); // Cold Restart
+        assert!(sys_ctl.cold_restart);
+        assert_eq!(sys_ctl.primary_event(), Some(SystemPowerEvent::ColdRestart));
+
+        sys_ctl.decode_report(&[0x10]); // Warm Restart
+        assert!(sys_ctl.warm_restart);
+        assert_eq!(sys_ctl.primary_event(), Some(SystemPowerEvent::WarmRestart));
     }
 
     #[test]

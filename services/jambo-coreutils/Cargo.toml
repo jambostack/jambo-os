@@ -297,5 +297,10 @@ name = "rmdir"
 path = "src/bin/rmdir.rs"
 test = false
 
+[[bin]]
+name = "tree"
+path = "src/bin/tree.rs"
+test = false
+
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }

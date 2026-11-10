@@ -2519,6 +2519,240 @@ pub fn run_rmdir(args: &[&str], err_fd: i32) -> i32 {
     }
 }
 
+/// Exécute l'utilitaire `tree` pour afficher l'arborescence hiérarchique des répertoires et fichiers
+pub fn run_tree(args: &[&str], out_fd: i32, err_fd: i32) -> i32 {
+    let mut show_all = false; // -a
+    let mut dirs_only = false; // -d
+    let mut full_path = false; // -f
+    let mut max_depth: Option<usize> = None; // -L level
+    let mut target_dir = ".";
+
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i];
+        if arg == "-a" || arg == "--all" {
+            show_all = true;
+            i += 1;
+        } else if arg == "-d" {
+            dirs_only = true;
+            i += 1;
+        } else if arg == "-f" {
+            full_path = true;
+            i += 1;
+        } else if arg == "-L" {
+            if i + 1 < args.len() {
+                if let Some(level) = parse_usize(args[i + 1]) {
+                    max_depth = Some(level);
+                    i += 2;
+                } else {
+                    let _ = sys_write(err_fd, b"tree: Invalid level, must be greater than 0.\n");
+                    return 1;
+                }
+            } else {
+                let _ = sys_write(err_fd, b"tree: -L requires an integer parameter.\n");
+                return 1;
+            }
+        } else if arg.starts_with('-') && arg.len() > 1 {
+            for b in arg[1..].bytes() {
+                match b {
+                    b'a' => show_all = true,
+                    b'd' => dirs_only = true,
+                    b'f' => full_path = true,
+                    _ => {}
+                }
+            }
+            i += 1;
+        } else {
+            target_dir = arg;
+            i += 1;
+        }
+    }
+
+    let root_path = if target_dir == "." { "/" } else { target_dir };
+
+    // Vérifier si le chemin racine existe
+    let stat = match sys_stat_pool(root_path) {
+        Some(st) => st,
+        None => {
+            let _ = sys_write(err_fd, target_dir.as_bytes());
+            let _ = sys_write(err_fd, b" [error opening dir]\n");
+            return 1;
+        }
+    };
+
+    let _ = sys_write(out_fd, target_dir.as_bytes());
+    let _ = sys_write(out_fd, b"\n");
+
+    if (stat.st_mode & crate::vfs::S_IFMT) != crate::vfs::S_IFDIR {
+        let _ = sys_write(out_fd, b"\n0 directories, 1 file\n");
+        return 0;
+    }
+
+    #[derive(Clone, Copy)]
+    struct TreeNode<'a> {
+        path: &'a str,
+        is_dir: bool,
+    }
+
+    let mut nodes: [TreeNode<'static>; 64] = [TreeNode {
+        path: "",
+        is_dir: false,
+    }; 64];
+    let mut node_count = 0;
+
+    let base_entries = [
+        TreeNode {
+            path: "/bin",
+            is_dir: true,
+        },
+        TreeNode {
+            path: "/dev",
+            is_dir: true,
+        },
+        TreeNode {
+            path: "/etc",
+            is_dir: true,
+        },
+        TreeNode {
+            path: "/tmp",
+            is_dir: true,
+        },
+        TreeNode {
+            path: "/etc/hostname",
+            is_dir: false,
+        },
+        TreeNode {
+            path: "/etc/os-release",
+            is_dir: false,
+        },
+        TreeNode {
+            path: "/etc/motd",
+            is_dir: false,
+        },
+        TreeNode {
+            path: "/etc/inittab",
+            is_dir: false,
+        },
+    ];
+
+    for e in &base_entries {
+        if node_count < nodes.len() {
+            nodes[node_count] = *e;
+            node_count += 1;
+        }
+    }
+
+    // SAFETY: Lecture protégée d'INODE_POOL
+    unsafe {
+        let pool = core::ptr::addr_of!(INODE_POOL);
+        for vfs_node in (*pool).iter() {
+            if !vfs_node.is_active {
+                continue;
+            }
+            let p = vfs_node.path_str();
+            if p.is_empty() || p == "/" {
+                continue;
+            }
+            let mut exists = false;
+            for n in &nodes[..node_count] {
+                if n.path == p {
+                    exists = true;
+                    break;
+                }
+            }
+            if !exists && node_count < nodes.len() {
+                nodes[node_count] = TreeNode {
+                    path: p,
+                    is_dir: vfs_node.is_dir,
+                };
+                node_count += 1;
+            }
+        }
+    }
+
+    let mut dir_count = 0usize;
+    let mut file_count = 0usize;
+
+    for item in &nodes[..node_count] {
+        let p = item.path;
+        if root_path != "/" && !p.starts_with(root_path) {
+            continue;
+        }
+
+        let rel = if root_path == "/" {
+            p.trim_start_matches('/')
+        } else if let Some(stripped) = p.strip_prefix(root_path) {
+            let s = stripped.trim_start_matches('/');
+            if s.is_empty() {
+                continue;
+            }
+            s
+        } else {
+            continue;
+        };
+
+        let depth = rel.split('/').count();
+        if let Some(max_l) = max_depth {
+            if depth > max_l {
+                continue;
+            }
+        }
+
+        if dirs_only && !item.is_dir {
+            continue;
+        }
+
+        let base_name = if let Some(idx) = rel.rfind('/') {
+            &rel[idx + 1..]
+        } else {
+            rel
+        };
+
+        if !show_all && base_name.starts_with('.') {
+            continue;
+        }
+
+        // Indentation arborescente visuelle
+        for _ in 1..depth {
+            let _ = sys_write(out_fd, b"|   ");
+        }
+        let _ = sys_write(out_fd, b"`-- ");
+
+        if full_path {
+            let _ = sys_write(out_fd, p.as_bytes());
+        } else {
+            let _ = sys_write(out_fd, base_name.as_bytes());
+        }
+        let _ = sys_write(out_fd, b"\n");
+
+        if item.is_dir {
+            dir_count += 1;
+        } else {
+            file_count += 1;
+        }
+    }
+
+    let _ = sys_write(out_fd, b"\n");
+    let mut num_buf = [0u8; 16];
+    let d_len = append_u64(&mut num_buf, 0, dir_count as u64);
+    let _ = sys_write(out_fd, &num_buf[..d_len]);
+    if dir_count == 1 {
+        let _ = sys_write(out_fd, b" directory, ");
+    } else {
+        let _ = sys_write(out_fd, b" directories, ");
+    }
+
+    let f_len = append_u64(&mut num_buf, 0, file_count as u64);
+    let _ = sys_write(out_fd, &num_buf[..f_len]);
+    if file_count == 1 {
+        let _ = sys_write(out_fd, b" file\n");
+    } else {
+        let _ = sys_write(out_fd, b" files\n");
+    }
+
+    0
+}
+
 /// Exécute l'utilitaire `rm` supprimant des fichiers ou répertoires
 pub fn run_rm(args: &[&str], err_fd: i32) -> i32 {
     let mut force = false;
@@ -12332,6 +12566,7 @@ pub fn run_xargs(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
             "ln" => run_ln(effective_sub_args, 0, out_fd, err_fd),
             "mktemp" => run_mktemp(effective_sub_args, 0, out_fd, err_fd),
             "rmdir" => run_rmdir(effective_sub_args, err_fd),
+            "tree" => run_tree(effective_sub_args, out_fd, err_fd),
             _ => {
                 let _ = sys_write(err_fd, b"xargs: ");
                 let _ = sys_write(err_fd, target_cmd.as_bytes());
@@ -13765,6 +14000,22 @@ mod tests {
         // Désormais rmdir -p réussit à vider et supprimer child puis parent
         let code_rmdir_parents = run_rmdir(&["-p", "/tmp/parent_dir/child_dir"], 2);
         assert_eq!(code_rmdir_parents, 0);
+
+        // Test de l'utilitaire `tree`
+        let (out_r_tree, out_w_tree) = crate::vfs::pipe().expect("pipe tree");
+        let code_tree = run_tree(&["-L", "2", "/etc"], out_w_tree, 2);
+        assert_eq!(code_tree, 0);
+        let _ = sys_close(out_w_tree);
+
+        let mut tree_buf = [0u8; 512];
+        let n_tree = sys_read(out_r_tree, &mut tree_buf);
+        let _ = sys_close(out_r_tree);
+        assert!(n_tree > 0);
+        let tree_out = core::str::from_utf8(&tree_buf[..n_tree as usize]).unwrap();
+        assert!(tree_out.contains("/etc"));
+        assert!(tree_out.contains("hostname"));
+        assert!(tree_out.contains("os-release"));
+        assert!(tree_out.contains("directories") || tree_out.contains("files"));
     }
 
     #[test]

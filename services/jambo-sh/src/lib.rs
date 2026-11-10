@@ -597,6 +597,7 @@ impl JamboShell {
             "ln" | "/bin/ln" | "bin/ln" => self.cmd_ln(args, out),
             "mktemp" | "/bin/mktemp" | "bin/mktemp" => self.cmd_mktemp(args, out),
             "rmdir" | "/bin/rmdir" | "bin/rmdir" => self.cmd_rmdir(args, out),
+            "tree" | "/bin/tree" | "bin/tree" => self.cmd_tree(args, out),
             "cow" | "/bin/cow" | "bin/cow" => self.cmd_cow(args, out),
             "version" => self.cmd_version(out),
             "uptime" => self.cmd_uptime(out),
@@ -617,6 +618,7 @@ impl JamboShell {
   touch <files> - Cree un fichier vide ou met a jour son horodatage\n\
   mkdir [-p] <dir> - Cree un repertoire virtuel\n\
   rmdir [-p] [-v] <dirs> - Supprime un repertoire vide\n\
+  tree [-a] [-d] [-f] [-L N] [dir] - Affiche l'arborescence hierarchique des dossiers et fichiers\n\
   rm [-f] [-r] <files> - Supprime un fichier ou un repertoire\n\
   cp [-r] <src> <dst> - Copie un fichier ou un repertoire\n\
   mv <src> <dst> - Deplace ou renomme un fichier ou un repertoire\n\
@@ -1862,6 +1864,42 @@ Utilitaire d'installation JamboOS (Serie 0.*.*)\n\
             }
         } else {
             let msg = b"rmdir: pipe creation failed\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
+    }
+
+    fn cmd_tree(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if let (Ok((r_out, w_out)), Ok((r_err, w_err))) =
+            (libjambo::vfs::pipe(), libjambo::vfs::pipe())
+        {
+            let code = libjambo::coreutils::run_tree(args, w_out, w_err);
+            let _ = libjambo::coreutils::sys_close(w_out);
+            let _ = libjambo::coreutils::sys_close(w_err);
+
+            let mut len = 0;
+            if code == 0 {
+                let n_out = libjambo::coreutils::sys_read(r_out, out);
+                if n_out > 0 {
+                    len = n_out as usize;
+                }
+            } else {
+                let n_err = libjambo::coreutils::sys_read(r_err, out);
+                if n_err > 0 {
+                    len = n_err as usize;
+                }
+            }
+            let _ = libjambo::coreutils::sys_close(r_out);
+            let _ = libjambo::coreutils::sys_close(r_err);
+
+            if code == 0 {
+                (ShellStatus::Success, len)
+            } else {
+                (ShellStatus::ExecutionFailed, len)
+            }
+        } else {
+            let msg = b"tree: pipe creation failed\n";
             let len = msg.len().min(out.len());
             out[..len].copy_from_slice(&msg[..len]);
             (ShellStatus::ExecutionFailed, len)
@@ -19313,5 +19351,13 @@ mod tests {
         assert_eq!(st15, ShellStatus::Success);
         let fd_after_rmdir = libjambo::coreutils::sys_open("/tmp/sh_rmdir_test", 0);
         assert_eq!(fd_after_rmdir, -1);
+
+        // 13. tree shell command
+        let (st16, len16) = shell.execute_line("tree -L 2 /etc", &mut out);
+        assert_eq!(st16, ShellStatus::Success);
+        let s16 = core::str::from_utf8(&out[..len16]).unwrap();
+        assert!(s16.contains("/etc"));
+        assert!(s16.contains("hostname"));
+        assert!(s16.contains("directories") || s16.contains("files"));
     }
 }
