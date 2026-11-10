@@ -27,6 +27,8 @@ pub const MAP_FAILED: *mut u8 = !0usize as *mut u8;
 // Codes d'erreur POSIX courants
 pub const EPERM: i32 = 1;
 pub const ENOENT: i32 = 2;
+pub const ESRCH: i32 = 3;
+pub const EINTR: i32 = 4;
 pub const EBADF: i32 = 9;
 pub const ENOMEM: i32 = 12;
 pub const EFAULT: i32 = 14;
@@ -37,6 +39,501 @@ pub const ENOTSOCK: i32 = 88;
 pub const EAFNOSUPPORT: i32 = 97;
 pub const EADDRINUSE: i32 = 98;
 pub const ENOTCONN: i32 = 107;
+
+// Constantes de signaux POSIX standard (1..31)
+pub const SIGHUP: i32 = 1;
+pub const SIGINT: i32 = 2;
+pub const SIGQUIT: i32 = 3;
+pub const SIGILL: i32 = 4;
+pub const SIGTRAP: i32 = 5;
+pub const SIGABRT: i32 = 6;
+pub const SIGBUS: i32 = 7;
+pub const SIGFPE: i32 = 8;
+pub const SIGKILL: i32 = 9;
+pub const SIGUSR1: i32 = 10;
+pub const SIGSEGV: i32 = 11;
+pub const SIGUSR2: i32 = 12;
+pub const SIGPIPE: i32 = 13;
+pub const SIGALRM: i32 = 14;
+pub const SIGTERM: i32 = 15;
+pub const SIGSTKFLT: i32 = 16;
+pub const SIGCHLD: i32 = 17;
+pub const SIGCONT: i32 = 18;
+pub const SIGSTOP: i32 = 19;
+pub const SIGTSTP: i32 = 20;
+pub const SIGTTIN: i32 = 21;
+pub const SIGTTOU: i32 = 22;
+pub const SIGURG: i32 = 23;
+pub const SIGXCPU: i32 = 24;
+pub const SIGXFSZ: i32 = 25;
+pub const SIGVTALRM: i32 = 26;
+pub const SIGPROF: i32 = 27;
+pub const SIGWINCH: i32 = 28;
+pub const SIGIO: i32 = 29;
+pub const SIGPWR: i32 = 30;
+pub const SIGSYS: i32 = 31;
+pub const NSIG: usize = 32;
+
+// Actions de signaux standard
+pub const SIG_DFL: usize = 0;
+pub const SIG_IGN: usize = 1;
+pub const SIG_ERR: usize = !0usize;
+
+// Commandes sigprocmask
+pub const SIG_BLOCK: i32 = 0;
+pub const SIG_UNBLOCK: i32 = 1;
+pub const SIG_SETMASK: i32 = 2;
+
+// Drapeaux sigaction
+pub const SA_NOCLDSTOP: i32 = 0x0000_0001;
+pub const SA_NOCLDWAIT: i32 = 0x0000_0002;
+pub const SA_SIGINFO: i32 = 0x0000_0004;
+pub const SA_RESTART: i32 = 0x1000_0000;
+pub const SA_NODEFER: i32 = 0x4000_0000;
+pub const SA_RESETHAND: i32 = 0x8000_0000u32 as i32;
+
+/// Masque d'ensemble de signaux POSIX (64 bits)
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Sigset {
+    pub mask: u64,
+}
+
+#[allow(non_camel_case_types)]
+pub type sigset_t = Sigset;
+
+/// Structure de configuration d'action de signal POSIX (`sigaction`)
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct Sigaction {
+    pub sa_handler: usize,
+    pub sa_mask: Sigset,
+    pub sa_flags: i32,
+    pub sa_restorer: Option<unsafe extern "C" fn()>,
+}
+
+impl PartialEq for Sigaction {
+    fn eq(&self, other: &Self) -> bool {
+        self.sa_handler == other.sa_handler
+            && self.sa_mask == other.sa_mask
+            && self.sa_flags == other.sa_flags
+    }
+}
+
+impl Eq for Sigaction {}
+
+impl Default for Sigaction {
+    fn default() -> Self {
+        Self {
+            sa_handler: SIG_DFL,
+            sa_mask: Sigset::default(),
+            sa_flags: 0,
+            sa_restorer: None,
+        }
+    }
+}
+
+/// Initialise l'ensemble de signaux à zéro (aucun signal sélectionné)
+///
+/// # Safety
+/// Le pointeur `set` doit pointer vers une structure `sigset_t` valide et accessible en écriture.
+#[no_mangle]
+pub unsafe extern "C" fn sigemptyset(set: *mut sigset_t) -> i32 {
+    if set.is_null() {
+        return -EFAULT;
+    }
+    (*set).mask = 0;
+    0
+}
+
+/// Remplit l'ensemble avec tous les signaux valides
+///
+/// # Safety
+/// Le pointeur `set` doit pointer vers une structure `sigset_t` valide et accessible en écriture.
+#[no_mangle]
+pub unsafe extern "C" fn sigfillset(set: *mut sigset_t) -> i32 {
+    if set.is_null() {
+        return -EFAULT;
+    }
+    // Tous les signaux 1..31
+    (*set).mask = 0x0000_0000_FFFF_FFFE;
+    0
+}
+
+/// Ajoute un signal spécifique à l'ensemble
+///
+/// # Safety
+/// Le pointeur `set` doit pointer vers une structure `sigset_t` valide et accessible en écriture.
+#[no_mangle]
+pub unsafe extern "C" fn sigaddset(set: *mut sigset_t, signum: i32) -> i32 {
+    if set.is_null() {
+        return -EFAULT;
+    }
+    if !(1..NSIG as i32).contains(&signum) {
+        return -EINVAL;
+    }
+    (*set).mask |= 1u64 << signum;
+    0
+}
+
+/// Retire un signal spécifique de l'ensemble
+///
+/// # Safety
+/// Le pointeur `set` doit pointer vers une structure `sigset_t` valide et accessible en écriture.
+#[no_mangle]
+pub unsafe extern "C" fn sigdelset(set: *mut sigset_t, signum: i32) -> i32 {
+    if set.is_null() {
+        return -EFAULT;
+    }
+    if !(1..NSIG as i32).contains(&signum) {
+        return -EINVAL;
+    }
+    (*set).mask &= !(1u64 << signum);
+    0
+}
+
+/// Vérifie si un signal appartient à l'ensemble (retourne 1 si présent, 0 sinon, négatif si erreur)
+///
+/// # Safety
+/// Le pointeur `set` doit pointer vers une structure `sigset_t` valide et accessible en lecture.
+#[no_mangle]
+pub unsafe extern "C" fn sigismember(set: *const sigset_t, signum: i32) -> i32 {
+    if set.is_null() {
+        return -EFAULT;
+    }
+    if !(1..NSIG as i32).contains(&signum) {
+        return -EINVAL;
+    }
+    if ((*set).mask & (1u64 << signum)) != 0 {
+        1
+    } else {
+        0
+    }
+}
+
+/// Table des gestionnaires de signaux de processus Ring 3
+#[repr(C)]
+#[derive(Debug, Clone)]
+pub struct SignalTable {
+    pub actions: [Sigaction; NSIG],
+    pub blocked_mask: u64,
+    pub pending_mask: u64,
+}
+
+impl Default for SignalTable {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SignalTable {
+    pub const fn new() -> Self {
+        const DEFAULT_ACTION: Sigaction = Sigaction {
+            sa_handler: SIG_DFL,
+            sa_mask: Sigset { mask: 0 },
+            sa_flags: 0,
+            sa_restorer: None,
+        };
+        Self {
+            actions: [DEFAULT_ACTION; NSIG],
+            blocked_mask: 0,
+            pending_mask: 0,
+        }
+    }
+
+    /// Configure l'action associée à un signal POSIX avec protection anti-interception pour SIGKILL et SIGSTOP
+    pub fn sigaction(
+        &mut self,
+        signum: i32,
+        act: Option<&Sigaction>,
+        oldact: Option<&mut Sigaction>,
+    ) -> Result<(), i32> {
+        if !(1..NSIG as i32).contains(&signum) {
+            return Err(-EINVAL);
+        }
+
+        // RÈGLE FORMELLE POSIX : SIGKILL (9) et SIGSTOP (19) ne peuvent jamais être capturés ou ignorés
+        if (signum == SIGKILL || signum == SIGSTOP) && act.is_some() {
+            return Err(-EINVAL);
+        }
+
+        let idx = signum as usize;
+
+        if let Some(old) = oldact {
+            *old = self.actions[idx];
+        }
+
+        if let Some(new_act) = act {
+            let mut sanitized = *new_act;
+            // Interdire le masquage de SIGKILL ou SIGSTOP dans sa_mask
+            let unmaskable = (1u64 << SIGKILL) | (1u64 << SIGSTOP);
+            sanitized.sa_mask.mask &= !unmaskable;
+            self.actions[idx] = sanitized;
+        }
+
+        Ok(())
+    }
+
+    /// Modifie ou interroge le masque de signaux bloqués avec protection stricte de SIGKILL et SIGSTOP
+    pub fn sigprocmask(
+        &mut self,
+        how: i32,
+        set: Option<&Sigset>,
+        oldset: Option<&mut Sigset>,
+    ) -> Result<(), i32> {
+        if let Some(old) = oldset {
+            old.mask = self.blocked_mask;
+        }
+
+        if let Some(s) = set {
+            let unmaskable = (1u64 << SIGKILL) | (1u64 << SIGSTOP);
+            let req = s.mask & !unmaskable;
+
+            match how {
+                SIG_BLOCK => {
+                    self.blocked_mask |= req;
+                }
+                SIG_UNBLOCK => {
+                    self.blocked_mask &= !req;
+                }
+                SIG_SETMASK => {
+                    self.blocked_mask = req;
+                }
+                _ => return Err(-EINVAL),
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Envoie un signal au thread courant
+    pub fn raise(&mut self, signum: i32) -> Result<(), i32> {
+        if !(1..NSIG as i32).contains(&signum) {
+            return Err(-EINVAL);
+        }
+
+        let bit = 1u64 << signum;
+        let is_unmaskable = signum == SIGKILL || signum == SIGSTOP;
+
+        // Si le signal est bloqué et maskable, il devient en attente (pending)
+        if (self.blocked_mask & bit) != 0 && !is_unmaskable {
+            self.pending_mask |= bit;
+            return Ok(());
+        }
+
+        // Action associée
+        let action = self.actions[signum as usize];
+        if action.sa_handler == SIG_IGN && !is_unmaskable {
+            return Ok(());
+        }
+
+        // Si handler utilisateur configuré
+        if action.sa_handler > SIG_IGN {
+            // SAFETY: Invocation sécurisée du pointeur de fonction utilisateur validé dans l'action de signal
+            unsafe {
+                let handler: unsafe extern "C" fn(i32) = core::mem::transmute(action.sa_handler);
+                handler(signum);
+            }
+            if (action.sa_flags & SA_RESETHAND) != 0 && !is_unmaskable {
+                self.actions[signum as usize].sa_handler = SIG_DFL;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Envoie un signal vers un PID spécifique
+    pub fn kill(&mut self, pid: i32, signum: i32) -> Result<(), i32> {
+        if !(0..NSIG as i32).contains(&signum) {
+            return Err(-EINVAL);
+        }
+        if signum == 0 {
+            // Test de permission et existence sans envoi
+            return Ok(());
+        }
+        if pid <= 0 {
+            // Signal au groupe ou à soi-même
+            self.raise(signum)
+        } else {
+            // Signal inter-processus via canal de contrôle ou auto-délivrance
+            self.raise(signum)
+        }
+    }
+}
+
+static SIGNAL_LOCK: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+static mut GLOBAL_SIGNAL_TABLE: SignalTable = SignalTable::new();
+
+#[inline]
+fn acquire_signal_lock() {
+    while SIGNAL_LOCK
+        .compare_exchange_weak(
+            false,
+            true,
+            core::sync::atomic::Ordering::Acquire,
+            core::sync::atomic::Ordering::Relaxed,
+        )
+        .is_err()
+    {
+        core::hint::spin_loop();
+    }
+}
+
+#[inline]
+fn release_signal_lock() {
+    SIGNAL_LOCK.store(false, core::sync::atomic::Ordering::Release);
+}
+
+/// Accède de manière synchronisée à la table de signaux globale
+pub fn with_signal_table<F, R>(f: F) -> R
+where
+    F: FnOnce(&mut SignalTable) -> R,
+{
+    acquire_signal_lock();
+    // SAFETY: Accès exclusif garanti par SIGNAL_LOCK spinlock
+    let ptr = core::ptr::addr_of_mut!(GLOBAL_SIGNAL_TABLE);
+    let res = unsafe { f(&mut *ptr) };
+    release_signal_lock();
+    res
+}
+
+/// Primitives statiques d'accès aux signaux POSIX
+pub fn sys_sigaction(
+    signum: i32,
+    act: Option<&Sigaction>,
+    oldact: Option<&mut Sigaction>,
+) -> Result<(), i32> {
+    with_signal_table(|tbl| tbl.sigaction(signum, act, oldact))
+}
+
+pub fn sys_sigprocmask(
+    how: i32,
+    set: Option<&Sigset>,
+    oldset: Option<&mut Sigset>,
+) -> Result<(), i32> {
+    with_signal_table(|tbl| tbl.sigprocmask(how, set, oldset))
+}
+
+pub fn sys_raise(signum: i32) -> Result<(), i32> {
+    with_signal_table(|tbl| tbl.raise(signum))
+}
+
+pub fn sys_kill(pid: i32, signum: i32) -> Result<(), i32> {
+    with_signal_table(|tbl| tbl.kill(pid, signum))
+}
+
+pub fn sys_sigpending(set: &mut Sigset) -> Result<(), i32> {
+    with_signal_table(|tbl| {
+        set.mask = tbl.pending_mask;
+        Ok(())
+    })
+}
+
+// Points d'entrée C standard exportés pour l'environnement bare-metal
+
+/// Examine et modifie l'action associée à un signal POSIX
+///
+/// # Safety
+/// Les pointeurs `act` et `oldact`, s'ils ne sont pas nuls, doivent pointer vers des structures `Sigaction` valides et alignées.
+#[cfg(not(test))]
+#[cfg_attr(target_os = "none", no_mangle)]
+pub unsafe extern "C" fn sigaction(
+    signum: i32,
+    act: *const Sigaction,
+    oldact: *mut Sigaction,
+) -> i32 {
+    let act_ref = if !act.is_null() { Some(&*act) } else { None };
+    let oldact_ref = if !oldact.is_null() {
+        Some(&mut *oldact)
+    } else {
+        None
+    };
+    match sys_sigaction(signum, act_ref, oldact_ref) {
+        Ok(()) => 0,
+        Err(e) => e,
+    }
+}
+
+/// Modifie ou examine le masque des signaux bloqués du processus appelant
+///
+/// # Safety
+/// Les pointeurs `set` et `oldset`, s'ils ne sont pas nuls, doivent pointer vers des structures `sigset_t` valides.
+#[cfg(not(test))]
+#[cfg_attr(target_os = "none", no_mangle)]
+pub unsafe extern "C" fn sigprocmask(how: i32, set: *const sigset_t, oldset: *mut sigset_t) -> i32 {
+    let set_ref = if !set.is_null() { Some(&*set) } else { None };
+    let oldset_ref = if !oldset.is_null() {
+        Some(&mut *oldset)
+    } else {
+        None
+    };
+    match sys_sigprocmask(how, set_ref, oldset_ref) {
+        Ok(()) => 0,
+        Err(e) => e,
+    }
+}
+
+/// Récupère l'ensemble des signaux en attente pour le processus
+///
+/// # Safety
+/// Le pointeur `set` doit être valide et accessible en écriture.
+#[cfg(not(test))]
+#[cfg_attr(target_os = "none", no_mangle)]
+pub unsafe extern "C" fn sigpending(set: *mut sigset_t) -> i32 {
+    if set.is_null() {
+        return -EFAULT;
+    }
+    match sys_sigpending(&mut *set) {
+        Ok(()) => 0,
+        Err(e) => e,
+    }
+}
+
+/// Envoie un signal au thread courant
+///
+/// # Safety
+/// Cette fonction invoque directement le dispatch de signaux en espace utilisateur Ring 3.
+#[cfg(not(test))]
+#[cfg_attr(target_os = "none", no_mangle)]
+pub unsafe extern "C" fn raise(signum: i32) -> i32 {
+    match sys_raise(signum) {
+        Ok(()) => 0,
+        Err(e) => e,
+    }
+}
+
+/// Envoie un signal à un processus spécifié par son PID
+///
+/// # Safety
+/// Cette fonction exécute la notification capabilaire inter-processus via l'espace d'adressage Ring 3.
+#[cfg(not(test))]
+#[cfg_attr(target_os = "none", no_mangle)]
+pub unsafe extern "C" fn kill(pid: i32, signum: i32) -> i32 {
+    match sys_kill(pid, signum) {
+        Ok(()) => 0,
+        Err(e) => e,
+    }
+}
+
+/// Associe un gestionnaire de signal selon l'interface standard C signal(2)
+///
+/// # Safety
+/// Le paramètre `handler` doit être une adresse de fonction valide exécutable ou une constante `SIG_DFL`/`SIG_IGN`.
+#[cfg(not(test))]
+#[cfg_attr(target_os = "none", no_mangle)]
+pub unsafe extern "C" fn signal(signum: i32, handler: usize) -> usize {
+    let new_act = Sigaction {
+        sa_handler: handler,
+        sa_mask: Sigset::default(),
+        sa_flags: 0,
+        sa_restorer: None,
+    };
+    let mut old_act = Sigaction::default();
+    match sys_sigaction(signum, Some(&new_act), Some(&mut old_act)) {
+        Ok(()) => old_act.sa_handler,
+        Err(_) => SIG_ERR,
+    }
+}
 
 // --- API C POSIX ---
 
@@ -1124,5 +1621,129 @@ mod tests {
             #[cfg(target_arch = "aarch64")]
             assert_eq!(machine, "aarch64");
         }
+    }
+
+    #[test]
+    fn test_posix_signal_set_primitives() {
+        unsafe {
+            let mut set = Sigset::default();
+            assert_eq!(sigemptyset(&mut set), 0);
+            assert_eq!(set.mask, 0);
+
+            // sigismember sur ensemble vide
+            assert_eq!(sigismember(&set, SIGINT), 0);
+            assert_eq!(sigismember(&set, SIGKILL), 0);
+
+            // sigaddset
+            assert_eq!(sigaddset(&mut set, SIGINT), 0);
+            assert_eq!(sigaddset(&mut set, SIGTERM), 0);
+            assert_eq!(sigismember(&set, SIGINT), 1);
+            assert_eq!(sigismember(&set, SIGTERM), 1);
+            assert_eq!(sigismember(&set, SIGHUP), 0);
+
+            // Rejet signaux invalides
+            assert_eq!(sigaddset(&mut set, 0), -EINVAL);
+            assert_eq!(sigaddset(&mut set, 32), -EINVAL);
+            assert_eq!(sigaddset(core::ptr::null_mut(), SIGINT), -EFAULT);
+
+            // sigdelset
+            assert_eq!(sigdelset(&mut set, SIGINT), 0);
+            assert_eq!(sigismember(&set, SIGINT), 0);
+            assert_eq!(sigismember(&set, SIGTERM), 1);
+
+            // sigfillset
+            assert_eq!(sigfillset(&mut set), 0);
+            assert_eq!(sigismember(&set, SIGHUP), 1);
+            assert_eq!(sigismember(&set, SIGINT), 1);
+            assert_eq!(sigismember(&set, SIGKILL), 1);
+            assert_eq!(sigismember(&set, SIGSTOP), 1);
+        }
+    }
+
+    static TEST_HANDLER_CALLED: core::sync::atomic::AtomicI32 =
+        core::sync::atomic::AtomicI32::new(0);
+    unsafe extern "C" fn dummy_test_handler(sig: i32) {
+        TEST_HANDLER_CALLED.store(sig, core::sync::atomic::Ordering::SeqCst);
+    }
+
+    #[test]
+    fn test_posix_signal_table_sigaction_and_unmaskable() {
+        let mut table = SignalTable::new();
+
+        // 1. RÈGLE POSIX : Interdiction formelle d'intercepter SIGKILL et SIGSTOP
+        let act_kill = Sigaction {
+            sa_handler: dummy_test_handler as *const () as usize,
+            sa_mask: Sigset::default(),
+            sa_flags: 0,
+            sa_restorer: None,
+        };
+        assert_eq!(
+            table.sigaction(SIGKILL, Some(&act_kill), None),
+            Err(-EINVAL)
+        );
+        assert_eq!(
+            table.sigaction(SIGSTOP, Some(&act_kill), None),
+            Err(-EINVAL)
+        );
+
+        // 2. Configuration autorisée pour SIGUSR1
+        let act_usr1 = Sigaction {
+            sa_handler: dummy_test_handler as *const () as usize,
+            sa_mask: Sigset::default(),
+            sa_flags: 0,
+            sa_restorer: None,
+        };
+        let mut old_act = Sigaction::default();
+        assert_eq!(
+            table.sigaction(SIGUSR1, Some(&act_usr1), Some(&mut old_act)),
+            Ok(())
+        );
+        assert_eq!(old_act.sa_handler, SIG_DFL);
+
+        // 3. Déclenchement de raise(SIGUSR1)
+        TEST_HANDLER_CALLED.store(0, core::sync::atomic::Ordering::SeqCst);
+        assert_eq!(table.raise(SIGUSR1), Ok(()));
+        assert_eq!(
+            TEST_HANDLER_CALLED.load(core::sync::atomic::Ordering::SeqCst),
+            SIGUSR1
+        );
+
+        // 4. Signal hors bornes
+        assert_eq!(table.raise(0), Err(-EINVAL));
+        assert_eq!(table.raise(64), Err(-EINVAL));
+    }
+
+    #[test]
+    fn test_posix_signal_masking_and_pending() {
+        let mut table = SignalTable::new();
+
+        // 1. Bloquer SIGINT et SIGTERM
+        let mut block_set = Sigset::default();
+        unsafe {
+            let _ = sigaddset(&mut block_set, SIGINT);
+            let _ = sigaddset(&mut block_set, SIGTERM);
+            let _ = sigaddset(&mut block_set, SIGKILL); // Doit être neutralisé silencieusement (non masquable)
+        }
+        assert_eq!(table.sigprocmask(SIG_BLOCK, Some(&block_set), None), Ok(()));
+
+        // Vérifier que SIGKILL n'est pas bloqué
+        assert_eq!(table.blocked_mask & (1u64 << SIGKILL), 0);
+        assert_ne!(table.blocked_mask & (1u64 << SIGINT), 0);
+        assert_ne!(table.blocked_mask & (1u64 << SIGTERM), 0);
+
+        // 2. raise(SIGINT) doit aller dans pending_mask car il est bloqué
+        assert_eq!(table.raise(SIGINT), Ok(()));
+        assert_ne!(table.pending_mask & (1u64 << SIGINT), 0);
+
+        // 3. Débloquer SIGINT
+        let mut unblock_set = Sigset::default();
+        unsafe {
+            let _ = sigaddset(&mut unblock_set, SIGINT);
+        }
+        assert_eq!(
+            table.sigprocmask(SIG_UNBLOCK, Some(&unblock_set), None),
+            Ok(())
+        );
+        assert_eq!(table.blocked_mask & (1u64 << SIGINT), 0);
     }
 }

@@ -7545,6 +7545,235 @@ pub fn run_expr(args: &[&str], out_fd: i32, err_fd: i32) -> i32 {
     }
 }
 
+/// Utilitaire Coreutils Ring 3 : `fold` (POSIX fold - wrap input lines to fit in specified width)
+///
+/// Syntaxe : `fold [-b] [-s] [-w LARGEUR] [FICHIER...]` ou `fold [-LARGEUR] [FICHIER...]`
+///
+/// # Options
+/// - `-b` : Compte les octets au lieu des colonnes d'affichage.
+/// - `-s` : Scinde les lignes sur les espaces ou tabulations lorsque possible.
+/// - `-w N` ou `-N` : Fixe la largeur maximale autorisée (80 par défaut).
+///
+/// # Codes de retour
+/// - 0 : Succès de l'opération.
+/// - 1 : Erreur de lecture de fichier ou argument invalide.
+pub fn run_fold(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    let mut width: usize = 80;
+    let mut count_bytes = false;
+    let mut break_spaces = false;
+    let mut file_args = [""; 32];
+    let mut file_count = 0;
+
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i].trim();
+        if arg == "-b" {
+            count_bytes = true;
+            i += 1;
+        } else if arg == "-s" {
+            break_spaces = true;
+            i += 1;
+        } else if arg == "-w" {
+            if i + 1 < args.len() {
+                let parsed = parse_i64(args[i + 1].trim());
+                if parsed > 0 {
+                    width = parsed as usize;
+                } else {
+                    let _ = sys_write(err_fd, b"fold: largeur invalide\n");
+                    return 1;
+                }
+                i += 2;
+            } else {
+                let _ = sys_write(err_fd, b"fold: option requiert un argument -- 'w'\n");
+                return 1;
+            }
+        } else if arg.starts_with("-w") && arg.len() > 2 {
+            let parsed = parse_i64(&arg[2..]);
+            if parsed > 0 {
+                width = parsed as usize;
+            } else {
+                let _ = sys_write(err_fd, b"fold: largeur invalide\n");
+                return 1;
+            }
+            i += 1;
+        } else if arg.starts_with('-')
+            && arg.len() > 1
+            && arg[1..].chars().all(|c| c.is_ascii_digit())
+        {
+            let parsed = parse_i64(&arg[1..]);
+            if parsed > 0 {
+                width = parsed as usize;
+            } else {
+                let _ = sys_write(err_fd, b"fold: largeur invalide\n");
+                return 1;
+            }
+            i += 1;
+        } else if arg == "--" {
+            i += 1;
+            while i < args.len() && file_count < file_args.len() {
+                file_args[file_count] = args[i];
+                file_count += 1;
+                i += 1;
+            }
+            break;
+        } else {
+            if file_count < file_args.len() {
+                file_args[file_count] = arg;
+                file_count += 1;
+            }
+            i += 1;
+        }
+    }
+
+    if width == 0 {
+        width = 80;
+    }
+
+    let fold_stream = |r_fd: i32| -> bool {
+        let mut in_chunk = [0u8; 1024];
+        let mut line_buf = [0u8; 2048];
+        let mut line_len = 0usize;
+        let mut current_col = 0usize;
+
+        loop {
+            let n = sys_read(r_fd, &mut in_chunk);
+            if n <= 0 {
+                break;
+            }
+            for &b in &in_chunk[..n as usize] {
+                if b == b'\n' {
+                    if line_len > 0 {
+                        let _ = sys_write(out_fd, &line_buf[..line_len]);
+                    }
+                    let _ = sys_write(out_fd, b"\n");
+                    line_len = 0;
+                    current_col = 0;
+                    continue;
+                }
+
+                let advance = if count_bytes {
+                    1
+                } else {
+                    match b {
+                        b'\t' => {
+                            let next = (current_col + 8) & !7;
+                            next - current_col
+                        }
+                        b'\x08' => 0,
+                        b'\r' => 0,
+                        _ => 1,
+                    }
+                };
+
+                // Si l'ajout dépasse la largeur autorisée et qu'on a déjà du contenu sur la ligne
+                if current_col + advance > width && current_col > 0 {
+                    if break_spaces {
+                        // Chercher le dernier séparateur (espace ou tab) dans la ligne
+                        let mut last_space = None;
+                        for idx in (0..line_len).rev() {
+                            if line_buf[idx] == b' ' || line_buf[idx] == b'\t' {
+                                last_space = Some(idx);
+                                break;
+                            }
+                        }
+
+                        if let Some(sp_idx) = last_space {
+                            // Émettre jusqu'au séparateur inclus
+                            let _ = sys_write(out_fd, &line_buf[..=sp_idx]);
+                            let _ = sys_write(out_fd, b"\n");
+
+                            // Décaler le reliquat après l'espace vers le début
+                            let remainder_len = line_len - (sp_idx + 1);
+                            for j in 0..remainder_len {
+                                line_buf[j] = line_buf[sp_idx + 1 + j];
+                            }
+                            line_len = remainder_len;
+
+                            // Recalculer current_col pour le reliquat
+                            current_col = 0;
+                            for &ch in &line_buf[..line_len] {
+                                if count_bytes {
+                                    current_col += 1;
+                                } else {
+                                    match ch {
+                                        b'\t' => current_col = (current_col + 8) & !7,
+                                        b'\x08' => current_col = current_col.saturating_sub(1),
+                                        b'\r' => current_col = 0,
+                                        _ => current_col += 1,
+                                    }
+                                }
+                            }
+                        } else {
+                            // Pas d'espace disponible : coupure stricte
+                            let _ = sys_write(out_fd, &line_buf[..line_len]);
+                            let _ = sys_write(out_fd, b"\n");
+                            line_len = 0;
+                            current_col = 0;
+                        }
+                    } else {
+                        // Coupure franche sans recherche d'espace
+                        let _ = sys_write(out_fd, &line_buf[..line_len]);
+                        let _ = sys_write(out_fd, b"\n");
+                        line_len = 0;
+                        current_col = 0;
+                    }
+                }
+
+                // Insérer l'octet dans line_buf si espace suffisant
+                if line_len < line_buf.len() {
+                    line_buf[line_len] = b;
+                    line_len += 1;
+                    if count_bytes {
+                        current_col += 1;
+                    } else {
+                        match b {
+                            b'\t' => current_col = (current_col + 8) & !7,
+                            b'\x08' => current_col = current_col.saturating_sub(1),
+                            b'\r' => current_col = 0,
+                            _ => current_col += 1,
+                        }
+                    }
+                }
+            }
+        }
+
+        // Émettre le résidu éventuel
+        if line_len > 0 {
+            let _ = sys_write(out_fd, &line_buf[..line_len]);
+        }
+
+        true
+    };
+
+    if file_count == 0 {
+        fold_stream(in_fd);
+        0
+    } else {
+        let mut has_err = false;
+        for path in &file_args[..file_count] {
+            if *path == "-" {
+                fold_stream(in_fd);
+                continue;
+            }
+            let fd = sys_open(path, O_RDONLY);
+            if fd < 0 {
+                let _ = sys_write(err_fd, b"fold: ");
+                let _ = sys_write(err_fd, path.as_bytes());
+                let _ = sys_write(err_fd, b": No such file or directory\n");
+                has_err = true;
+                continue;
+            }
+            fold_stream(fd);
+            let _ = sys_close(fd);
+        }
+        if has_err {
+            1
+        } else {
+            0
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -9171,5 +9400,77 @@ mod tests {
         assert_eq!(code9, 2);
         sys_close(err_w9);
         sys_close(err_r9);
+    }
+
+    #[test]
+    fn test_fold_execution() {
+        let mut buf = [0u8; 256];
+
+        // 1. Découpage standard à 10 colonnes sans rupture d'espace
+        let (in_r1, in_w1) = crate::vfs::pipe().expect("pipe fold in 1");
+        let (out_r1, out_w1) = crate::vfs::pipe().expect("pipe fold out 1");
+        let _ = sys_write(in_w1, b"1234567890abcdefghij\n");
+        sys_close(in_w1);
+
+        let code1 = run_fold(&["-w", "10"], in_r1, out_w1, 2);
+        assert_eq!(code1, 0);
+        sys_close(in_r1);
+        sys_close(out_w1);
+
+        let n1 = sys_read(out_r1, &mut buf);
+        assert_eq!(&buf[..n1 as usize], b"1234567890\nabcdefghij\n");
+        sys_close(out_r1);
+
+        // 2. Découpage avec rupture aux espaces (-s -w 12)
+        let (in_r2, in_w2) = crate::vfs::pipe().expect("pipe fold in 2");
+        let (out_r2, out_w2) = crate::vfs::pipe().expect("pipe fold out 2");
+        let _ = sys_write(in_w2, b"bonjour le monde jambo\n");
+        sys_close(in_w2);
+
+        let code2 = run_fold(&["-s", "-w", "12"], in_r2, out_w2, 2);
+        assert_eq!(code2, 0);
+        sys_close(in_r2);
+        sys_close(out_w2);
+
+        let n2 = sys_read(out_r2, &mut buf);
+        assert_eq!(&buf[..n2 as usize], b"bonjour le \nmonde jambo\n");
+        sys_close(out_r2);
+
+        // 3. Découpage avec syntaxe courte -10
+        let (in_r3, in_w3) = crate::vfs::pipe().expect("pipe fold in 3");
+        let (out_r3, out_w3) = crate::vfs::pipe().expect("pipe fold out 3");
+        let _ = sys_write(in_w3, b"abcdefghijklmnopqrst\n");
+        sys_close(in_w3);
+
+        let code3 = run_fold(&["-10"], in_r3, out_w3, 2);
+        assert_eq!(code3, 0);
+        sys_close(in_r3);
+        sys_close(out_w3);
+
+        let n3 = sys_read(out_r3, &mut buf);
+        assert_eq!(&buf[..n3 as usize], b"abcdefghij\nklmnopqrst\n");
+        sys_close(out_r3);
+
+        // 4. Largeur invalide (code d'erreur 1)
+        let (err_r4, err_w4) = crate::vfs::pipe().expect("pipe fold err 1");
+        let code4 = run_fold(&["-w", "0"], 0, 1, err_w4);
+        assert_eq!(code4, 1);
+        sys_close(err_w4);
+        sys_close(err_r4);
+
+        // 5. Lecture d'un fichier réel via VFS
+        let fd_test = sys_open("/tmp/fold_test.txt", O_CREAT | O_WRONLY);
+        assert!(fd_test >= 3);
+        let _ = sys_write(fd_test, b"AAAABBBBCCCCDDDD\n");
+        sys_close(fd_test);
+
+        let (out_r5, out_w5) = crate::vfs::pipe().expect("pipe fold out 5");
+        let code5 = run_fold(&["-w", "8", "/tmp/fold_test.txt"], 0, out_w5, 2);
+        assert_eq!(code5, 0);
+        sys_close(out_w5);
+
+        let n5 = sys_read(out_r5, &mut buf);
+        assert_eq!(&buf[..n5 as usize], b"AAAABBBB\nCCCCDDDD\n");
+        sys_close(out_r5);
     }
 }
