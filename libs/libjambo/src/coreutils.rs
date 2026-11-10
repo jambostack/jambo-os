@@ -9722,6 +9722,173 @@ pause for the amount of time specified by the sum of their values.\n";
     0
 }
 
+/// Table précalculée pour le CRC POSIX standard IEEE 1003.1 (polynôme 0x04C11DB7)
+pub const POSIX_CRC_TABLE: [u32; 256] = {
+    let mut table = [0u32; 256];
+    let mut i = 0usize;
+    while i < 256 {
+        let mut crc = (i as u32) << 24;
+        let mut bit = 0;
+        while bit < 8 {
+            if (crc & 0x8000_0000) != 0 {
+                crc = (crc << 1) ^ 0x04C1_1DB7;
+            } else {
+                crc <<= 1;
+            }
+            bit += 1;
+        }
+        table[i] = crc;
+        i += 1;
+    }
+    table
+};
+
+/// Structure de calcul incrémental du CRC-32 et comptage d'octets POSIX cksum
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PosixCksum {
+    pub crc: u32,
+    pub total_bytes: u64,
+}
+
+impl Default for PosixCksum {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl PosixCksum {
+    pub const fn new() -> Self {
+        Self {
+            crc: 0,
+            total_bytes: 0,
+        }
+    }
+
+    /// Met à jour l'état CRC avec un bloc d'octets
+    pub fn update(&mut self, data: &[u8]) {
+        self.total_bytes = self.total_bytes.saturating_add(data.len() as u64);
+        for &b in data {
+            let idx = (((self.crc >> 24) ^ (b as u32)) & 0xFF) as usize;
+            self.crc = (self.crc << 8) ^ POSIX_CRC_TABLE[idx];
+        }
+    }
+
+    /// Finalise le calcul POSIX en intégrant la longueur en octets et en inversant les bits
+    pub fn finalize(mut self) -> (u32, u64) {
+        let mut len = self.total_bytes;
+        while len > 0 {
+            let b = (len & 0xFF) as u8;
+            let idx = (((self.crc >> 24) ^ (b as u32)) & 0xFF) as usize;
+            self.crc = (self.crc << 8) ^ POSIX_CRC_TABLE[idx];
+            len >>= 8;
+        }
+        (!self.crc, self.total_bytes)
+    }
+}
+
+/// Calcule la somme de contrôle POSIX `cksum` sur un descripteur de fichier ouvert
+fn cksum_fd(fd: i32) -> Result<(u32, u64), i32> {
+    let mut cksum = PosixCksum::new();
+    let mut buf = [0u8; 1024];
+    loop {
+        let n = sys_read(fd, &mut buf);
+        if n < 0 {
+            return Err(n as i32);
+        }
+        if n == 0 {
+            break;
+        }
+        cksum.update(&buf[..n as usize]);
+    }
+    Ok(cksum.finalize())
+}
+
+/// Utilitaire Coreutils POSIX `cksum` : calcule la somme de contrôle CRC POSIX et le compte d'octets
+pub fn run_cksum(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    let mut files = [""; 64];
+    let mut file_count = 0usize;
+
+    for &arg in args {
+        if arg == "--help" || arg == "-h" {
+            let help = b"Usage: cksum [FILE]...\n  or:  cksum [OPTION]\nPrint CRC checksum and byte counts of each FILE.\n\n      --help     display this help and exit\n      --version  output version information and exit\n";
+            let _ = sys_write(out_fd, help);
+            return 0;
+        }
+        if arg == "--version" || arg == "-v" {
+            let ver = b"cksum (JamboOS coreutils) 0.1.0\n";
+            let _ = sys_write(out_fd, ver);
+            return 0;
+        }
+        if file_count < files.len() {
+            files[file_count] = arg;
+            file_count += 1;
+        }
+    }
+
+    if file_count == 0 {
+        match cksum_fd(in_fd) {
+            Ok((crc, len)) => {
+                write_u64_fd(out_fd, crc as u64);
+                let _ = sys_write(out_fd, b" ");
+                write_u64_fd(out_fd, len);
+                let _ = sys_write(out_fd, b"\n");
+                return 0;
+            }
+            Err(_) => {
+                let _ = sys_write(err_fd, b"cksum: error reading standard input\n");
+                return 1;
+            }
+        }
+    }
+
+    let mut exit_code = 0;
+    for &file in &files[..file_count] {
+        if file == "-" {
+            match cksum_fd(in_fd) {
+                Ok((crc, len)) => {
+                    write_u64_fd(out_fd, crc as u64);
+                    let _ = sys_write(out_fd, b" ");
+                    write_u64_fd(out_fd, len);
+                    let _ = sys_write(out_fd, b"\n");
+                }
+                Err(_) => {
+                    let _ = sys_write(err_fd, b"cksum: error reading standard input\n");
+                    exit_code = 1;
+                }
+            }
+        } else {
+            let fd = sys_open(file, crate::vfs::O_RDONLY);
+            if fd < 0 {
+                let _ = sys_write(err_fd, b"cksum: ");
+                let _ = sys_write(err_fd, file.as_bytes());
+                let _ = sys_write(err_fd, b": No such file or directory\n");
+                exit_code = 1;
+                continue;
+            }
+            match cksum_fd(fd) {
+                Ok((crc, len)) => {
+                    let _ = sys_close(fd);
+                    write_u64_fd(out_fd, crc as u64);
+                    let _ = sys_write(out_fd, b" ");
+                    write_u64_fd(out_fd, len);
+                    let _ = sys_write(out_fd, b" ");
+                    let _ = sys_write(out_fd, file.as_bytes());
+                    let _ = sys_write(out_fd, b"\n");
+                }
+                Err(_) => {
+                    let _ = sys_close(fd);
+                    let _ = sys_write(err_fd, b"cksum: error reading ");
+                    let _ = sys_write(err_fd, file.as_bytes());
+                    let _ = sys_write(err_fd, b"\n");
+                    exit_code = 1;
+                }
+            }
+        }
+    }
+
+    exit_code
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -11852,5 +12019,47 @@ mod tests {
         // 6. sleep valide (0.001s)
         let code5 = run_sleep(&["0.001s"], 0, 1, 2);
         assert_eq!(code5, 0);
+    }
+
+    #[test]
+    fn test_posix_cksum() {
+        // 1. Chaîne vide
+        let mut cksum_empty = PosixCksum::new();
+        cksum_empty.update(b"");
+        let (crc0, len0) = cksum_empty.finalize();
+        assert_eq!(crc0, 4294967295);
+        assert_eq!(len0, 0);
+
+        // 2. Chaîne "hello\n"
+        let mut cksum_hello = PosixCksum::new();
+        cksum_hello.update(b"hello\n");
+        let (crc_h, len_h) = cksum_hello.finalize();
+        assert_eq!(crc_h, 3015617425);
+        assert_eq!(len_h, 6);
+
+        // 3. cksum --help
+        let (out_r1, out_w1) = crate::vfs::pipe().unwrap();
+        let code1 = run_cksum(&["--help"], 0, out_w1, 2);
+        sys_close(out_w1);
+        assert_eq!(code1, 0);
+        let mut buf = [0u8; 256];
+        let n1 = sys_read(out_r1, &mut buf);
+        sys_close(out_r1);
+        let res1 = core::str::from_utf8(&buf[..n1 as usize]).unwrap();
+        assert!(res1.contains("Usage: cksum"));
+
+        // 4. cksum standard input via pipe
+        let (in_r2, in_w2) = crate::vfs::pipe().unwrap();
+        let (out_r2, out_w2) = crate::vfs::pipe().unwrap();
+        let _ = sys_write(in_w2, b"hello\n");
+        sys_close(in_w2);
+        let code2 = run_cksum(&[], in_r2, out_w2, 2);
+        sys_close(in_r2);
+        sys_close(out_w2);
+        assert_eq!(code2, 0);
+        let n2 = sys_read(out_r2, &mut buf);
+        sys_close(out_r2);
+        let res2 = core::str::from_utf8(&buf[..n2 as usize]).unwrap();
+        assert_eq!(res2, "3015617425 6\n");
     }
 }

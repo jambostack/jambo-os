@@ -222,5 +222,10 @@ name = "sleep"
 path = "src/bin/sleep.rs"
 test = false
 
+[[bin]]
+name = "cksum"
+path = "src/bin/cksum.rs"
+test = false
+
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }

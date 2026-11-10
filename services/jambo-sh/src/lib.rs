@@ -576,6 +576,7 @@ impl JamboShell {
             "expand" | "/bin/expand" | "bin/expand" => self.cmd_expand(args, out),
             "unexpand" | "/bin/unexpand" | "bin/unexpand" => self.cmd_unexpand(args, out),
             "sleep" | "/bin/sleep" | "bin/sleep" => self.cmd_sleep(args, out),
+            "cksum" | "/bin/cksum" | "bin/cksum" => self.cmd_cksum(args, out),
             "version" => self.cmd_version(out),
             "uptime" => self.cmd_uptime(out),
             "caps" => self.cmd_caps(out),
@@ -1456,6 +1457,26 @@ Utilitaire d'installation JamboOS (Serie 0.*.*)\n\
             }
         } else {
             let msg = b"sleep: pipe creation failed\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
+    }
+
+    fn cmd_cksum(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if let Ok((r, w)) = libjambo::vfs::pipe() {
+            let code = libjambo::coreutils::run_cksum(args, 0, w, w);
+            let _ = libjambo::coreutils::sys_close(w);
+            let n = libjambo::coreutils::sys_read(r, out);
+            let _ = libjambo::coreutils::sys_close(r);
+            let len = if n > 0 { n as usize } else { 0 };
+            if code == 0 {
+                (ShellStatus::Success, len)
+            } else {
+                (ShellStatus::ExecutionFailed, len)
+            }
+        } else {
+            let msg = b"cksum: pipe creation failed\n";
             let len = msg.len().min(out.len());
             out[..len].copy_from_slice(&msg[..len]);
             (ShellStatus::ExecutionFailed, len)
@@ -18243,5 +18264,37 @@ mod tests {
         assert_eq!(st4, ShellStatus::ExecutionFailed);
         let s4 = core::str::from_utf8(&out[..len4]).unwrap();
         assert!(s4.contains("missing operand"));
+    }
+
+    #[test]
+    fn test_cksum_shell_execution() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 1024];
+
+        // 1. cksum --help
+        let (st1, len1) = shell.execute_line("cksum --help", &mut out);
+        assert_eq!(st1, ShellStatus::Success);
+        let s1 = core::str::from_utf8(&out[..len1]).unwrap();
+        assert!(s1.contains("Usage: cksum"));
+
+        // 2. /bin/cksum --version
+        let (st2, len2) = shell.execute_line("/bin/cksum --version", &mut out);
+        assert_eq!(st2, ShellStatus::Success);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert!(s2.contains("cksum (JamboOS coreutils)"));
+
+        // 3. cksum sur fichier créé dans VFS
+        let fd = libjambo::coreutils::sys_open(
+            "/tmp/sh_cksum_test.txt",
+            libjambo::vfs::O_CREAT | libjambo::vfs::O_WRONLY | libjambo::vfs::O_TRUNC,
+        );
+        assert!(fd >= 0);
+        let _ = libjambo::coreutils::sys_write(fd, b"hello\n");
+        libjambo::coreutils::sys_close(fd);
+
+        let (st3, len3) = shell.execute_line("cksum /tmp/sh_cksum_test.txt", &mut out);
+        assert_eq!(st3, ShellStatus::Success);
+        let s3 = core::str::from_utf8(&out[..len3]).unwrap();
+        assert_eq!(s3, "3015617425 6 /tmp/sh_cksum_test.txt\n");
     }
 }

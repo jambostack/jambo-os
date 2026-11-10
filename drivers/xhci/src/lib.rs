@@ -1144,10 +1144,14 @@ pub const SCSI_CMD_TEST_UNIT_READY: u8 = 0x00;
 pub const SCSI_CMD_REQUEST_SENSE: u8 = 0x03;
 pub const SCSI_CMD_INQUIRY: u8 = 0x12;
 pub const SCSI_CMD_MODE_SENSE_6: u8 = 0x1A;
+pub const SCSI_CMD_START_STOP_UNIT: u8 = 0x1B;
 pub const SCSI_CMD_READ_CAPACITY_10: u8 = 0x25;
 pub const SCSI_CMD_READ_10: u8 = 0x28;
 pub const SCSI_CMD_WRITE_10: u8 = 0x2A;
 pub const SCSI_CMD_SYNCHRONIZE_CACHE_10: u8 = 0x35;
+pub const SCSI_CMD_UNMAP: u8 = 0x42;
+pub const SCSI_CMD_READ_16: u8 = 0x88;
+pub const SCSI_CMD_WRITE_16: u8 = 0x8E;
 pub const SCSI_CMD_SERVICE_ACTION_IN_16: u8 = 0x9E;
 pub const SCSI_SA_READ_CAPACITY_16: u8 = 0x10;
 
@@ -1551,6 +1555,83 @@ impl UsbMassStorageBot {
         (cbw, tag)
     }
 
+    /// Construit un CBW pour SCSI READ (16) (Adressage LBA 64-bit et gros transferts)
+    pub fn build_cbw_read_16(&mut self, lba: u64, block_count: u32) -> (CommandBlockWrapper, u32) {
+        let tag = self.next_tag();
+        let byte_len = (block_count as u64).saturating_mul(self.sector_size as u64);
+        let transfer_len = if byte_len > u32::MAX as u64 {
+            u32::MAX
+        } else {
+            byte_len as u32
+        };
+        let mut cbw = CommandBlockWrapper::new(tag, transfer_len, true, self.lun, 16);
+        cbw.cb[0] = SCSI_CMD_READ_16;
+        cbw.cb[1] = 0; // Flags / DPO / FUA
+        cbw.cb[2..10].copy_from_slice(&lba.to_be_bytes());
+        cbw.cb[10..14].copy_from_slice(&block_count.to_be_bytes());
+        cbw.cb[14] = 0; // Group number
+        cbw.cb[15] = 0; // Control
+        (cbw, tag)
+    }
+
+    /// Construit un CBW pour SCSI WRITE (16) (Adressage LBA 64-bit et gros transferts)
+    pub fn build_cbw_write_16(&mut self, lba: u64, block_count: u32) -> (CommandBlockWrapper, u32) {
+        let tag = self.next_tag();
+        let byte_len = (block_count as u64).saturating_mul(self.sector_size as u64);
+        let transfer_len = if byte_len > u32::MAX as u64 {
+            u32::MAX
+        } else {
+            byte_len as u32
+        };
+        let mut cbw = CommandBlockWrapper::new(tag, transfer_len, false, self.lun, 16);
+        cbw.cb[0] = SCSI_CMD_WRITE_16;
+        cbw.cb[1] = 0;
+        cbw.cb[2..10].copy_from_slice(&lba.to_be_bytes());
+        cbw.cb[10..14].copy_from_slice(&block_count.to_be_bytes());
+        cbw.cb[14] = 0;
+        cbw.cb[15] = 0;
+        (cbw, tag)
+    }
+
+    /// Construit un CBW pour SCSI START STOP UNIT (0x1B) (Gestion d'énergie, spin-down et éjection)
+    pub fn build_cbw_start_stop_unit(
+        &mut self,
+        immed: bool,
+        load_eject: bool,
+        start: bool,
+    ) -> (CommandBlockWrapper, u32) {
+        let tag = self.next_tag();
+        let mut cbw = CommandBlockWrapper::new(tag, 0, false, self.lun, 6);
+        cbw.cb[0] = SCSI_CMD_START_STOP_UNIT;
+        cbw.cb[1] = if immed { 0x01 } else { 0x00 };
+        cbw.cb[2] = 0;
+        cbw.cb[3] = 0;
+        let mut action_byte = 0u8;
+        if load_eject {
+            action_byte |= 0x02; // Bit 1: LOEJ (Load/Eject)
+        }
+        if start {
+            action_byte |= 0x01; // Bit 0: START
+        }
+        cbw.cb[4] = action_byte;
+        cbw.cb[5] = 0; // Control
+        (cbw, tag)
+    }
+
+    /// Construit un CBW pour SCSI UNMAP (0x42) (Désallocation de blocs / TRIM CoW)
+    pub fn build_cbw_unmap(&mut self, parameter_list_length: u16) -> (CommandBlockWrapper, u32) {
+        let tag = self.next_tag();
+        let mut cbw =
+            CommandBlockWrapper::new(tag, parameter_list_length as u32, false, self.lun, 10);
+        cbw.cb[0] = SCSI_CMD_UNMAP;
+        cbw.cb[1] = 0; // Anchor = 0
+        cbw.cb[2..6].fill(0);
+        cbw.cb[6] = 0; // Group number
+        cbw.cb[7..9].copy_from_slice(&parameter_list_length.to_be_bytes());
+        cbw.cb[9] = 0; // Control
+        (cbw, tag)
+    }
+
     /// Construit un CBW pour SCSI READ CAPACITY (16) (LBA 64 bits pour volumes > 2 To)
     pub fn build_cbw_read_capacity_16(&mut self) -> (CommandBlockWrapper, u32) {
         let tag = self.next_tag();
@@ -1705,6 +1786,28 @@ impl UsbMassStorageBot {
     }
 }
 
+/// Descripteur de bloc SCSI UNMAP (16 octets selon spécification T10 SBC-3)
+#[repr(C, packed)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ScsiUnmapBlockDescriptor {
+    /// Premier bloc LBA à déallouer
+    pub unmap_lba: u64,
+    /// Nombre de blocs logiques consécutifs
+    pub num_blocks: u32,
+    /// Champ réservé (0)
+    pub reserved: u32,
+}
+
+impl ScsiUnmapBlockDescriptor {
+    pub const fn new(lba: u64, num_blocks: u32) -> Self {
+        Self {
+            unmap_lba: lba,
+            num_blocks,
+            reserved: 0,
+        }
+    }
+}
+
 /// Disque de stockage de masse USB géré (USB Mass Storage Drive)
 #[derive(Debug, Clone, Copy)]
 pub struct UsbMassStorageDisk {
@@ -1764,6 +1867,64 @@ impl UsbMassStorageDisk {
     pub fn update_capacity_16(&mut self, cap: ScsiCapacity16) {
         self.bot.total_sectors = cap.total_sectors;
         self.bot.sector_size = cap.block_size;
+    }
+
+    /// Construit le CBW optimal pour une lecture (READ 10 ou READ 16 selon LBA et capacité)
+    pub fn build_read_cbw(&mut self, lba: u64, count: u32) -> (CommandBlockWrapper, u32) {
+        if lba <= 0xFFFF_FFFF && count <= 0xFFFF && self.bot.total_sectors <= 0x1_0000_0000 {
+            self.bot.build_cbw_read_10(lba as u32, count as u16)
+        } else {
+            self.bot.build_cbw_read_16(lba, count)
+        }
+    }
+
+    /// Construit le CBW optimal pour une écriture (WRITE 10 ou WRITE 16 selon LBA et capacité)
+    pub fn build_write_cbw(&mut self, lba: u64, count: u32) -> (CommandBlockWrapper, u32) {
+        if lba <= 0xFFFF_FFFF && count <= 0xFFFF && self.bot.total_sectors <= 0x1_0000_0000 {
+            self.bot.build_cbw_write_10(lba as u32, count as u16)
+        } else {
+            self.bot.build_cbw_write_16(lba, count)
+        }
+    }
+
+    /// Construit un CBW pour démarrer ou arrêter l'unité (spin-up / spin-down / éjection)
+    pub fn build_start_stop_cbw(&mut self, start: bool, eject: bool) -> (CommandBlockWrapper, u32) {
+        self.bot.build_cbw_start_stop_unit(false, eject, start)
+    }
+
+    /// Construit un CBW pour SCSI UNMAP et sérialise la liste de descripteurs dans le buffer de données fourni
+    pub fn build_unmap_cbw(
+        &mut self,
+        descriptors: &[ScsiUnmapBlockDescriptor],
+        out_buf: &mut [u8],
+    ) -> Result<(CommandBlockWrapper, u32, usize), SysError> {
+        let count = descriptors.len();
+        let desc_data_len = (count * 16) as u16;
+        let data_len = 6 + desc_data_len; // 8 octets d'en-tête - 2 octets du premier champ
+        let total_param_len = 8 + (count * 16);
+
+        if out_buf.len() < total_param_len {
+            return Err(SysError::BufferTooSmall);
+        }
+
+        // UNMAP Data Length (Big-Endian, octets 0..2)
+        out_buf[0..2].copy_from_slice(&data_len.to_be_bytes());
+        // UNMAP Block Descriptor Data Length (Big-Endian, octets 2..4)
+        out_buf[2..4].copy_from_slice(&desc_data_len.to_be_bytes());
+        // Reserved (octets 4..8)
+        out_buf[4..8].fill(0);
+
+        // Copie des descripteurs
+        let mut offset = 8;
+        for desc in descriptors {
+            out_buf[offset..offset + 8].copy_from_slice(&desc.unmap_lba.to_be_bytes());
+            out_buf[offset + 8..offset + 12].copy_from_slice(&desc.num_blocks.to_be_bytes());
+            out_buf[offset + 12..offset + 16].fill(0);
+            offset += 16;
+        }
+
+        let (cbw, tag) = self.bot.build_cbw_unmap(total_param_len as u16);
+        Ok((cbw, tag, total_param_len))
     }
 }
 
@@ -4400,5 +4561,111 @@ mod tests {
         assert_eq!(disk.total_sectors(), max_lba_val + 1);
         assert_eq!(disk.sector_size(), 4096);
         assert_eq!(disk.capacity_bytes(), (max_lba_val + 1) * 4096);
+
+        // 10. SCSI READ (16) et WRITE (16) (Adressage 64-bit)
+        let lba_64: u64 = 5_000_000_000;
+        let (cbw_r16, tag_r16) = disk.build_read_cbw(lba_64, 64);
+        assert_eq!(cbw_r16.cb[0], SCSI_CMD_READ_16);
+        assert_eq!(cbw_r16.data_transfer_length(), 64 * 4096);
+        assert!(cbw_r16.is_data_in());
+        assert_eq!(cbw_r16.tag(), tag_r16);
+        let extracted_lba = u64::from_be_bytes([
+            cbw_r16.cb[2],
+            cbw_r16.cb[3],
+            cbw_r16.cb[4],
+            cbw_r16.cb[5],
+            cbw_r16.cb[6],
+            cbw_r16.cb[7],
+            cbw_r16.cb[8],
+            cbw_r16.cb[9],
+        ]);
+        assert_eq!(extracted_lba, lba_64);
+        let extracted_blocks = u32::from_be_bytes([
+            cbw_r16.cb[10],
+            cbw_r16.cb[11],
+            cbw_r16.cb[12],
+            cbw_r16.cb[13],
+        ]);
+        assert_eq!(extracted_blocks, 64);
+
+        let (cbw_w16, tag_w16) = disk.build_write_cbw(lba_64, 128);
+        assert_eq!(cbw_w16.cb[0], SCSI_CMD_WRITE_16);
+        assert_eq!(cbw_w16.data_transfer_length(), 128 * 4096);
+        assert!(!cbw_w16.is_data_in());
+        assert_eq!(cbw_w16.tag(), tag_w16);
+
+        // Disque standard 32-bit (<= 2 To) -> bascule vers READ (10) / WRITE (10)
+        bot.total_sectors = 1_000_000;
+        bot.sector_size = 512;
+        let mut disk_small = UsbMassStorageDisk::new(bot, inq);
+        let (cbw_r10, _) = disk_small.build_read_cbw(100, 16);
+        assert_eq!(cbw_r10.cb[0], SCSI_CMD_READ_10);
+        let (cbw_w10, _) = disk_small.build_write_cbw(100, 16);
+        assert_eq!(cbw_w10.cb[0], SCSI_CMD_WRITE_10);
+
+        // 11. SCSI START STOP UNIT (Gestion d'énergie et éjection)
+        let (cbw_stop, _) = disk.build_start_stop_cbw(false, false);
+        assert_eq!(cbw_stop.cb[0], SCSI_CMD_START_STOP_UNIT);
+        assert_eq!(cbw_stop.cb[4], 0x00); // Stop, no eject
+        assert_eq!(cbw_stop.data_transfer_length(), 0);
+
+        let (cbw_eject, _) = disk.build_start_stop_cbw(false, true);
+        assert_eq!(cbw_eject.cb[0], SCSI_CMD_START_STOP_UNIT);
+        assert_eq!(cbw_eject.cb[4], 0x02); // LOEJ = 1, START = 0 (Eject)
+
+        let (cbw_start, _) = disk.build_start_stop_cbw(true, false);
+        assert_eq!(cbw_start.cb[4], 0x01); // START = 1 (Spin up)
+
+        // 12. SCSI UNMAP (TRIM / Déallocation CoW)
+        let unmap_descs = [
+            ScsiUnmapBlockDescriptor::new(1000, 50),
+            ScsiUnmapBlockDescriptor::new(5000, 200),
+        ];
+        let mut unmap_buf = [0u8; 64];
+        let (cbw_unmap, tag_unmap, total_bytes) = disk
+            .build_unmap_cbw(&unmap_descs, &mut unmap_buf)
+            .expect("build unmap cbw");
+        assert_eq!(cbw_unmap.cb[0], SCSI_CMD_UNMAP);
+        assert_eq!(cbw_unmap.tag(), tag_unmap);
+        assert_eq!(total_bytes, 8 + 2 * 16); // 40 octets
+        assert_eq!(cbw_unmap.data_transfer_length(), 40);
+
+        // Vérification de l'en-tête UNMAP
+        let unmap_data_len = u16::from_be_bytes([unmap_buf[0], unmap_buf[1]]);
+        let unmap_desc_len = u16::from_be_bytes([unmap_buf[2], unmap_buf[3]]);
+        assert_eq!(unmap_data_len, 38);
+        assert_eq!(unmap_desc_len, 32);
+
+        // Vérification du descripteur 0
+        let desc0_lba = u64::from_be_bytes([
+            unmap_buf[8],
+            unmap_buf[9],
+            unmap_buf[10],
+            unmap_buf[11],
+            unmap_buf[12],
+            unmap_buf[13],
+            unmap_buf[14],
+            unmap_buf[15],
+        ]);
+        let desc0_cnt =
+            u32::from_be_bytes([unmap_buf[16], unmap_buf[17], unmap_buf[18], unmap_buf[19]]);
+        assert_eq!(desc0_lba, 1000);
+        assert_eq!(desc0_cnt, 50);
+
+        // Vérification du descripteur 1
+        let desc1_lba = u64::from_be_bytes([
+            unmap_buf[24],
+            unmap_buf[25],
+            unmap_buf[26],
+            unmap_buf[27],
+            unmap_buf[28],
+            unmap_buf[29],
+            unmap_buf[30],
+            unmap_buf[31],
+        ]);
+        let desc1_cnt =
+            u32::from_be_bytes([unmap_buf[32], unmap_buf[33], unmap_buf[34], unmap_buf[35]]);
+        assert_eq!(desc1_lba, 5000);
+        assert_eq!(desc1_cnt, 200);
     }
 }
