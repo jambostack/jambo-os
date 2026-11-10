@@ -562,6 +562,7 @@ impl JamboShell {
             "paste" | "/bin/paste" | "bin/paste" => self.cmd_paste(args, out),
             "comm" | "/bin/comm" | "bin/comm" => self.cmd_comm(args, out),
             "tr" | "/bin/tr" | "bin/tr" => self.cmd_tr(args, out),
+            "split" | "/bin/split" | "bin/split" => self.cmd_split(args, out),
             "version" => self.cmd_version(out),
             "uptime" => self.cmd_uptime(out),
             "caps" => self.cmd_caps(out),
@@ -1160,6 +1161,26 @@ Utilitaire d'installation JamboOS (Serie 0.*.*)\n\
             }
         } else {
             let msg = b"tr: pipe creation failed\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
+    }
+
+    fn cmd_split(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if let Ok((r, w)) = libjambo::vfs::pipe() {
+            let code = libjambo::coreutils::run_split(args, 0, 1, w);
+            let _ = libjambo::coreutils::sys_close(w);
+            let n = libjambo::coreutils::sys_read(r, out);
+            let _ = libjambo::coreutils::sys_close(r);
+            let len = if n > 0 { n as usize } else { 0 };
+            if code == 0 {
+                (ShellStatus::Success, len)
+            } else {
+                (ShellStatus::ExecutionFailed, len)
+            }
+        } else {
+            let msg = b"split: pipe creation failed\n";
             let len = msg.len().min(out.len());
             out[..len].copy_from_slice(&msg[..len]);
             (ShellStatus::ExecutionFailed, len)
@@ -17649,5 +17670,52 @@ mod tests {
         // 3. Option invalide -> ExecutionFailed
         let (st_err, _) = shell.execute_line("tr -z", &mut out);
         assert_eq!(st_err, ShellStatus::ExecutionFailed);
+    }
+
+    #[test]
+    fn test_split_shell_execution() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 1024];
+
+        let path = "/tmp/sh_split_src.txt";
+        let fd =
+            libjambo::coreutils::sys_open(path, libjambo::vfs::O_CREAT | libjambo::vfs::O_WRONLY);
+        assert!(fd >= 0);
+        let _ = libjambo::coreutils::sys_write(fd, b"part1\npart2\npart3\npart4\n");
+        libjambo::coreutils::sys_close(fd);
+
+        // 1. Exécution de split avec découpage par lignes (-l 2)
+        let (st, _) = shell.execute_line("split -l 2 /tmp/sh_split_src.txt /tmp/sh_sp_", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+
+        let f_aa = libjambo::coreutils::sys_open("/tmp/sh_sp_aa", libjambo::vfs::O_RDONLY);
+        assert!(f_aa >= 0);
+        let mut b = [0u8; 32];
+        let n = libjambo::coreutils::sys_read(f_aa, &mut b);
+        assert_eq!(&b[..n as usize], b"part1\npart2\n");
+        libjambo::coreutils::sys_close(f_aa);
+
+        // 2. Exécution via binaire /bin/split avec suffixes numériques (-d)
+        let (st_bin, _) = shell.execute_line(
+            "/bin/split -l 2 -d /tmp/sh_split_src.txt /tmp/sh_spd_",
+            &mut out,
+        );
+        assert_eq!(st_bin, ShellStatus::Success);
+
+        let f_00 = libjambo::coreutils::sys_open("/tmp/sh_spd_00", libjambo::vfs::O_RDONLY);
+        assert!(f_00 >= 0);
+        let n_00 = libjambo::coreutils::sys_read(f_00, &mut b);
+        assert_eq!(&b[..n_00 as usize], b"part1\npart2\n");
+        libjambo::coreutils::sys_close(f_00);
+
+        // 3. Option invalide -> ExecutionFailed
+        let (st_err, _) = shell.execute_line("split -z", &mut out);
+        assert_eq!(st_err, ShellStatus::ExecutionFailed);
+
+        let _ = libjambo::coreutils::sys_unlink_pool(path);
+        let _ = libjambo::coreutils::sys_unlink_pool("/tmp/sh_sp_aa");
+        let _ = libjambo::coreutils::sys_unlink_pool("/tmp/sh_sp_ab");
+        let _ = libjambo::coreutils::sys_unlink_pool("/tmp/sh_spd_00");
+        let _ = libjambo::coreutils::sys_unlink_pool("/tmp/sh_spd_01");
     }
 }

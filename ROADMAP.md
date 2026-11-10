@@ -132,22 +132,23 @@ flowchart LR
      * Suite de tests unitaires hôte portée à **105 tests validés sur 105** (plus 213 tests dans `jambo-sh`).
 
 ---
-* **Objectif** : Implémenter les utilitaires fondamentaux POSIX (`echo`, `cat`, `wc`, `true`, `false`, `ls`) sous forme de binaires Ring 3 `#![no_std]`, avec support du passage d'arguments System V ABI (`[argc][argv]`) et intégration capabilaire dans le shell `jsh`.
+* **Objectif** : Implémenter les utilitaires fondamentaux POSIX (30 utilitaires : `echo`, `cat`, `wc`, `true`, `false`, `ls`, `head`, `tail`, `touch`, `mkdir`, `rm`, `cp`, `mv`, `tee`, `env`, `grep`, `sort`, `uniq`, `find`, `chmod`, `chown`, `id`, `du`, `df`, `uname`, `cut`, `paste`, `comm`, `tr`, `split`) sous forme de binaires Ring 3 `#![no_std]`, avec support du passage d'arguments System V ABI (`[argc][argv]`) et intégration capabilaire dans le shell `jsh`.
 * **Livrables techniques validés** :
   1. **Moteur Logique Coreutils (`libs/libjambo/src/coreutils.rs`)** :
-     * Logique modulaire `#![no_std]` zéro-allocation pour `run_echo`, `run_cat`, `run_wc`, `run_true`, `run_false`, `run_ls`.
+     * Logique modulaire `#![no_std]` zéro-allocation pour l'ensemble des 30 utilitaires POSIX dont `run_split` (découpage par lignes `-l`, octets `-b`, lignes bornées `-C`, suffixes numériques `-d` et alphabétiques, longueur `-a`).
      * Cache virtuel d'inodes et persistance en mémoire (`INODE_POOL`) avec support des fichiers `/etc/hostname`, `/etc/os-release`, `/etc/motd` et fichiers créés avec `O_CREAT`.
-     * Suite de tests unitaires automatisés portée à **21/21 tests passés avec succès** dans `libjambo`.
+     * Suite de tests unitaires automatisés portée à **66/66 tests passés avec succès** dans `libjambo`.
   2. **Crate Binaires Ring 3 (`services/jambo-coreutils`)** :
-     * 6 cibles binaires Ring 3 (`echo`, `cat`, `wc`, `true`, `false`, `ls`) compilées avec le linker script `libs/user-x86_64.ld`.
+     * 30 cibles binaires Ring 3 compilées avec le linker script `libs/user-x86_64.ld`.
      * Décodage sécurisé de la pile System V ABI (`parse_stack_args`) et terminaison capabilaire via `SyscallNumber::ThreadExit`.
   3. **Shell Introspectif `jsh` (`services/jambo-sh`)** :
-     * Exécution transparente des commandes avec ou sans préfixe `/bin/` (`cat`, `bin/cat`, `/bin/cat`).
-     * Commande introspective `coreutils` détaillant les métadonnées et la conformité POSIX des utilitaires.
-     * Synchronisation de la bannière et des commandes d'inspection à `v0.3.91`.
+     * Exécution transparente des commandes avec ou sans préfixe `/bin/` (`cat`, `bin/cat`, `/bin/cat`, `split`, `/bin/split`).
+     * Commande introspective `coreutils` détaillant les métadonnées et la conformité POSIX des 30 utilitaires.
+     * Suite de tests unitaires shell portée à **232 tests passés avec succès**.
   4. **Micro-Noyau & Distribution `xtask`** :
-     * Synchronisation du kernel et de xtask à `v0.3.91`.
-     * Automatisation du packaging des binaires dans `/bin` au sein de `jambo-initrd.tar` et `disk.raw`.
+     * Preuve Formelle 23 validée : Isolation DMAR/IOMMU et intégrité DMA zéro-copie des transferts réseau VirtIO-Net (23/23 preuves formelles au vert).
+     * Rechargement dynamique à chaud des règles de filtrage réseau BPF eBPF/XDP dans `jambo-netd`.
+     * Automatisation du packaging des 30 binaires dans `/bin` au sein de `jambo-initrd.tar` et `disk.raw`.
 
 ---
 

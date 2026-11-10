@@ -14,11 +14,11 @@
 
 use jambo_netd::{
     forge_arp_proxy_reply, forge_arp_reply, forge_icmp_echo_reply, forge_icmp_echo_request,
-    syscall_thread_yield, ArpPacket, ChannelMessage, EthernetHeader, IcmpHeader, IcmpPingTracker,
-    Ipv4Header, NetOpcode, NetRequest, NetResponse, ProxyArpTable, ARP_OPCODE_REQUEST,
-    DEFAULT_GATEWAY, DEFAULT_GATEWAY_MAC, DEFAULT_IPV4, DEFAULT_NETMASK, ETHERTYPE_ARP,
-    ETHERTYPE_IPV4, ICMP_TYPE_ECHO_REPLY, ICMP_TYPE_ECHO_REQUEST, IP_PROTO_ICMP,
-    MAX_FASTPATH_BYTES,
+    syscall_thread_yield, ArpPacket, BpfFilterAction, BpfFilterRule, BpfFilterTable,
+    ChannelMessage, EthernetHeader, IcmpHeader, IcmpPingTracker, Ipv4Header, NetOpcode, NetRequest,
+    NetResponse, ProxyArpTable, ARP_OPCODE_REQUEST, DEFAULT_GATEWAY, DEFAULT_GATEWAY_MAC,
+    DEFAULT_IPV4, DEFAULT_NETMASK, ETHERTYPE_ARP, ETHERTYPE_IPV4, ICMP_TYPE_ECHO_REPLY,
+    ICMP_TYPE_ECHO_REQUEST, IP_PROTO_ICMP, MAX_FASTPATH_BYTES,
 };
 use libjambo::{print, println};
 use virtio_drv::VirtioNetDriver;
@@ -274,6 +274,8 @@ pub extern "C" fn _start() -> ! {
         ping_seq = ping_seq.wrapping_add(1);
     }
 
+    let mut bpf_filter = BpfFilterTable::new();
+
     // 5. Boucle événementielle de service Ring 3
     loop {
         ping_ticks = ping_ticks.wrapping_add(1);
@@ -281,6 +283,11 @@ pub extern "C" fn _start() -> ! {
         // A. Scruter l'arrivée de paquets réseau entrants sur Virtqueue 0
         if let Ok(Some(rx_len)) = driver.poll_receive(&mut rx_buf) {
             if rx_len >= 14 {
+                // Filtrage dynamique BPF eBPF / XDP avant aiguillage protocolaire
+                if bpf_filter.evaluate_packet(&rx_buf[..rx_len]) == BpfFilterAction::Drop {
+                    continue;
+                }
+
                 if let Some(eth) = EthernetHeader::from_bytes(&rx_buf[..14]) {
                     let ethertype = eth.ethertype();
 
@@ -425,6 +432,49 @@ pub extern "C" fn _start() -> ! {
                     }
                     x if x == NetOpcode::PollRx as u32 => {
                         resp.status = 0;
+                    }
+                    x if x == NetOpcode::ReloadBpfFilter as u32 => {
+                        if req.payload_len >= 8 {
+                            let proto = req.payload[0];
+                            let dst_port = u16::from_be_bytes([req.payload[1], req.payload[2]]);
+                            let action_raw = req.payload[3];
+                            let action = if action_raw == 1 {
+                                BpfFilterAction::Drop
+                            } else {
+                                BpfFilterAction::Pass
+                            };
+                            let src_ip = [
+                                req.payload[4],
+                                req.payload[5],
+                                req.payload[6],
+                                req.payload[7],
+                            ];
+                            let rule = BpfFilterRule::new(
+                                bpf_filter.rule_count as u32 + 1,
+                                proto,
+                                src_ip,
+                                if src_ip == [0, 0, 0, 0] {
+                                    [0; 4]
+                                } else {
+                                    [255; 4]
+                                },
+                                dst_port,
+                                action,
+                            );
+                            let _ = bpf_filter.add_rule(rule);
+                        } else if req.payload_len == 0 {
+                            bpf_filter.clear_rules();
+                        }
+                        resp.status = 0;
+                        resp.packets_rx = bpf_filter.total_passed;
+                        resp.packets_tx = bpf_filter.total_dropped;
+                        resp.rtt_ms = bpf_filter.generation;
+                    }
+                    x if x == NetOpcode::GetFilterStats as u32 => {
+                        resp.status = 0;
+                        resp.packets_rx = bpf_filter.total_passed;
+                        resp.packets_tx = bpf_filter.total_dropped;
+                        resp.rtt_ms = bpf_filter.generation;
                     }
                     _ => {
                         resp.status = libjambo::SysError::NotSupported as u32;

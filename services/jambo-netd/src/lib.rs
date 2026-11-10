@@ -548,6 +548,8 @@ pub enum NetOpcode {
     GetInfo = 1,
     SendPing = 2,
     PollRx = 3,
+    ReloadBpfFilter = 4,
+    GetFilterStats = 5,
 }
 
 /// Requête IPC transmise à `jambo-netd`
@@ -2288,6 +2290,232 @@ pub fn parse_dns_response(packet: &[u8], expected_txid: u16) -> Result<[u8; 4], 
     Err(SysError::InvalidArgument)
 }
 
+// ============================================================================
+// SOUS-SYSTÈME DE FILTRAGE RÉSEAU BPF & RECHARGEMENT DYNAMIQUE
+// ============================================================================
+
+/// Action de filtrage BPF
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BpfFilterAction {
+    Pass = 0,
+    Drop = 1,
+}
+
+/// Règle de filtrage réseau BPF
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BpfFilterRule {
+    pub id: u32,
+    pub proto: u8,
+    pub _pad: [u8; 3],
+    pub src_ip: [u8; 4],
+    pub src_mask: [u8; 4],
+    pub dst_ip: [u8; 4],
+    pub dst_mask: [u8; 4],
+    pub src_port: u16,
+    pub dst_port: u16,
+    pub action: BpfFilterAction,
+    pub is_active: bool,
+    pub _reserved: [u8; 6],
+    pub hit_count: u64,
+}
+
+impl BpfFilterRule {
+    pub const fn empty() -> Self {
+        Self {
+            id: 0,
+            proto: 0,
+            _pad: [0; 3],
+            src_ip: [0; 4],
+            src_mask: [0; 4],
+            dst_ip: [0; 4],
+            dst_mask: [0; 4],
+            src_port: 0,
+            dst_port: 0,
+            action: BpfFilterAction::Pass,
+            is_active: false,
+            _reserved: [0; 6],
+            hit_count: 0,
+        }
+    }
+
+    pub const fn new(
+        id: u32,
+        proto: u8,
+        src_ip: [u8; 4],
+        src_mask: [u8; 4],
+        dst_port: u16,
+        action: BpfFilterAction,
+    ) -> Self {
+        Self {
+            id,
+            proto,
+            _pad: [0; 3],
+            src_ip,
+            src_mask,
+            dst_ip: [0; 4],
+            dst_mask: [0; 4],
+            src_port: 0,
+            dst_port,
+            action,
+            is_active: true,
+            _reserved: [0; 6],
+            hit_count: 0,
+        }
+    }
+
+    pub fn matches(&self, proto: u8, src: [u8; 4], dst: [u8; 4], src_p: u16, dst_p: u16) -> bool {
+        if !self.is_active {
+            return false;
+        }
+        if self.proto != 0 && self.proto != proto {
+            return false;
+        }
+        for i in 0..4 {
+            if (src[i] & self.src_mask[i]) != (self.src_ip[i] & self.src_mask[i]) {
+                return false;
+            }
+            if (dst[i] & self.dst_mask[i]) != (self.dst_ip[i] & self.dst_mask[i]) {
+                return false;
+            }
+        }
+        if self.src_port != 0 && self.src_port != src_p {
+            return false;
+        }
+        if self.dst_port != 0 && self.dst_port != dst_p {
+            return false;
+        }
+        true
+    }
+}
+
+pub const MAX_BPF_RULES: usize = 16;
+
+/// Table de filtrage réseau eBPF avec support du rechargement dynamique à chaud
+#[derive(Debug, Clone, Copy)]
+pub struct BpfFilterTable {
+    pub rules: [BpfFilterRule; MAX_BPF_RULES],
+    pub rule_count: usize,
+    pub generation: u32,
+    pub total_evaluated: u64,
+    pub total_passed: u64,
+    pub total_dropped: u64,
+}
+
+impl BpfFilterTable {
+    pub const fn new() -> Self {
+        Self {
+            rules: [BpfFilterRule::empty(); MAX_BPF_RULES],
+            rule_count: 0,
+            generation: 1,
+            total_evaluated: 0,
+            total_passed: 0,
+            total_dropped: 0,
+        }
+    }
+
+    /// Rechargement dynamique et atomique des règles de filtrage (sans interruption de service)
+    pub fn reload_rules(&mut self, new_rules: &[BpfFilterRule]) -> usize {
+        let count = new_rules.len().min(MAX_BPF_RULES);
+        for i in 0..count {
+            self.rules[i] = new_rules[i];
+            self.rules[i].hit_count = 0;
+            self.rules[i].is_active = true;
+        }
+        for item in self.rules[count..MAX_BPF_RULES].iter_mut() {
+            *item = BpfFilterRule::empty();
+        }
+        self.rule_count = count;
+        self.generation = self.generation.wrapping_add(1);
+        count
+    }
+
+    /// Ajout d'une règle individuelle
+    pub fn add_rule(&mut self, rule: BpfFilterRule) -> Result<usize, SysError> {
+        if self.rule_count >= MAX_BPF_RULES {
+            return Err(SysError::OutOfMemory);
+        }
+        let idx = self.rule_count;
+        self.rules[idx] = rule;
+        self.rules[idx].is_active = true;
+        self.rule_count += 1;
+        self.generation = self.generation.wrapping_add(1);
+        Ok(idx)
+    }
+
+    /// Réinitialisation des règles (politique par défaut Pass-All)
+    pub fn clear_rules(&mut self) {
+        for r in self.rules.iter_mut() {
+            *r = BpfFilterRule::empty();
+        }
+        self.rule_count = 0;
+        self.generation = self.generation.wrapping_add(1);
+    }
+
+    /// Évalue un paquet Ethernet brut selon les règles BPF actives
+    pub fn evaluate_packet(&mut self, packet: &[u8]) -> BpfFilterAction {
+        self.total_evaluated += 1;
+
+        if packet.len() < 14 {
+            self.total_passed += 1;
+            return BpfFilterAction::Pass;
+        }
+
+        let ethertype = u16::from_be_bytes([packet[12], packet[13]]);
+        if ethertype != ETHERTYPE_IPV4 || packet.len() < 14 + 20 {
+            self.total_passed += 1;
+            return BpfFilterAction::Pass;
+        }
+
+        let ip_bytes = &packet[14..];
+        let ihl = ((ip_bytes[0] & 0x0F) * 4) as usize;
+        if ihl < 20 || packet.len() < 14 + ihl {
+            self.total_passed += 1;
+            return BpfFilterAction::Pass;
+        }
+
+        let proto = ip_bytes[9];
+        let src_ip = [ip_bytes[12], ip_bytes[13], ip_bytes[14], ip_bytes[15]];
+        let dst_ip = [ip_bytes[16], ip_bytes[17], ip_bytes[18], ip_bytes[19]];
+
+        let mut src_port = 0u16;
+        let mut dst_port = 0u16;
+
+        if (proto == IP_PROTO_TCP || proto == IP_PROTO_UDP) && packet.len() >= 14 + ihl + 4 {
+            let l4 = &packet[14 + ihl..];
+            src_port = u16::from_be_bytes([l4[0], l4[1]]);
+            dst_port = u16::from_be_bytes([l4[2], l4[3]]);
+        }
+
+        for i in 0..self.rule_count {
+            let rule = &mut self.rules[i];
+            if rule.matches(proto, src_ip, dst_ip, src_port, dst_port) {
+                rule.hit_count += 1;
+                match rule.action {
+                    BpfFilterAction::Pass => {
+                        self.total_passed += 1;
+                        return BpfFilterAction::Pass;
+                    }
+                    BpfFilterAction::Drop => {
+                        self.total_dropped += 1;
+                        return BpfFilterAction::Drop;
+                    }
+                }
+            }
+        }
+
+        self.total_passed += 1;
+        BpfFilterAction::Pass
+    }
+}
+
+impl Default for BpfFilterTable {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2851,5 +3079,65 @@ mod tests {
         let expired = tracker.expire_older_than(1100, 50);
         assert_eq!(expired, 1);
         assert_eq!(tracker.metrics.packets_lost, 1);
+    }
+
+    #[test]
+    fn test_bpf_filter_table_dynamic_reload_and_filtering() {
+        let mut filter = BpfFilterTable::new();
+        assert_eq!(filter.generation, 1);
+        assert_eq!(filter.rule_count, 0);
+
+        // Forge un paquet UDP vers 10.0.2.15 port 53 (DNS)
+        let mut pkt_dns = [0u8; 42];
+        // Ethernet header (14 bytes)
+        pkt_dns[0..6].copy_from_slice(&[0x52, 0x54, 0x00, 0x12, 0x34, 0x56]);
+        pkt_dns[6..12].copy_from_slice(&[0x00, 0x11, 0x22, 0x33, 0x44, 0x55]);
+        pkt_dns[12..14].copy_from_slice(&0x0800u16.to_be_bytes()); // IPv4
+                                                                   // IPv4 header (20 bytes)
+        pkt_dns[14] = 0x45; // Version 4, IHL 5
+        pkt_dns[23] = IP_PROTO_UDP; // Proto UDP
+        pkt_dns[26..30].copy_from_slice(&[10, 0, 2, 2]); // src_ip
+        pkt_dns[30..34].copy_from_slice(&[10, 0, 2, 15]); // dst_ip
+                                                          // UDP header (8 bytes)
+        pkt_dns[34..36].copy_from_slice(&5353u16.to_be_bytes()); // src_port
+        pkt_dns[36..38].copy_from_slice(&53u16.to_be_bytes()); // dst_port = 53
+
+        // 1. Initialement sans règles : Pass
+        assert_eq!(filter.evaluate_packet(&pkt_dns), BpfFilterAction::Pass);
+        assert_eq!(filter.total_passed, 1);
+        assert_eq!(filter.total_dropped, 0);
+
+        // 2. Ajout d'une règle de blocage UDP port 53
+        let rule_block_dns = BpfFilterRule::new(
+            1,
+            IP_PROTO_UDP,
+            [0, 0, 0, 0],
+            [0, 0, 0, 0],
+            53,
+            BpfFilterAction::Drop,
+        );
+        filter.add_rule(rule_block_dns).expect("add rule");
+        assert_eq!(filter.rule_count, 1);
+        assert_eq!(filter.generation, 2);
+
+        // 3. Évaluation après règle : doit être DROP
+        assert_eq!(filter.evaluate_packet(&pkt_dns), BpfFilterAction::Drop);
+        assert_eq!(filter.total_dropped, 1);
+        assert_eq!(filter.rules[0].hit_count, 1);
+
+        // Paquet sur un autre port (ex: UDP 123 NTP) : doit PASS
+        let mut pkt_ntp = pkt_dns;
+        pkt_ntp[36..38].copy_from_slice(&123u16.to_be_bytes());
+        assert_eq!(filter.evaluate_packet(&pkt_ntp), BpfFilterAction::Pass);
+
+        // 4. Rechargement dynamique (remplacement par politique autorisant tout)
+        let empty_rules: [BpfFilterRule; 0] = [];
+        let reloaded = filter.reload_rules(&empty_rules);
+        assert_eq!(reloaded, 0);
+        assert_eq!(filter.generation, 3);
+        assert_eq!(filter.rule_count, 0);
+
+        // 5. Après rechargement : le paquet DNS passe à nouveau
+        assert_eq!(filter.evaluate_packet(&pkt_dns), BpfFilterAction::Pass);
     }
 }

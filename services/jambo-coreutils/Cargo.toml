@@ -152,5 +152,10 @@ name = "tr"
 path = "src/bin/tr.rs"
 test = false
 
+[[bin]]
+name = "split"
+path = "src/bin/split.rs"
+test = false
+
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }

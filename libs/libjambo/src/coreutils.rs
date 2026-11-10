@@ -5816,6 +5816,572 @@ writing to standard output.\n\n\
     0
 }
 
+/// Parse une taille spécifiée pour split (ex: "1024", "10k", "2m", "5b")
+fn parse_split_size(s: &str) -> Option<usize> {
+    if s.is_empty() {
+        return None;
+    }
+    let bytes = s.as_bytes();
+    let mut num: usize = 0;
+    let mut i = 0;
+    while i < bytes.len() && bytes[i].is_ascii_digit() {
+        num = num
+            .checked_mul(10)?
+            .checked_add((bytes[i] - b'0') as usize)?;
+        i += 1;
+    }
+    if i == 0 {
+        return None;
+    }
+    if i == bytes.len() {
+        return Some(num);
+    }
+    let suffix = &s[i..];
+    let mult: usize = match suffix {
+        "b" => 512,
+        "k" | "K" | "kb" | "KB" | "kib" | "KiB" => 1024,
+        "m" | "M" | "mb" | "MB" | "mib" | "MiB" => 1024 * 1024,
+        _ => return None,
+    };
+    num.checked_mul(mult)
+}
+
+/// Génère un suffixe de découpage pour `split` (alphabétique ou numérique)
+fn generate_split_suffix(idx: usize, len: usize, numeric: bool, out: &mut [u8]) -> bool {
+    if len == 0 || len > out.len() {
+        return false;
+    }
+    if numeric {
+        let mut val = idx;
+        for i in (0..len).rev() {
+            out[i] = b'0' + (val % 10) as u8;
+            val /= 10;
+        }
+        val == 0
+    } else {
+        let mut val = idx;
+        for i in (0..len).rev() {
+            out[i] = b'a' + (val % 26) as u8;
+            val /= 26;
+        }
+        val == 0
+    }
+}
+
+/// Mode de découpage pour `split`
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SplitMode {
+    Lines(usize),
+    Bytes(usize),
+    LineBytes(usize),
+}
+
+/// Gestionnaire d'écriture des fichiers de sortie partitionnés pour `split`
+struct SplitWriter<'a> {
+    prefix: &'a str,
+    suffix_len: usize,
+    numeric: bool,
+    numeric_from: usize,
+    chunk_idx: usize,
+    current_fd: i32,
+    err_fd: i32,
+}
+
+impl<'a> SplitWriter<'a> {
+    fn new(
+        prefix: &'a str,
+        suffix_len: usize,
+        numeric: bool,
+        numeric_from: usize,
+        err_fd: i32,
+    ) -> Self {
+        Self {
+            prefix,
+            suffix_len,
+            numeric,
+            numeric_from,
+            chunk_idx: 0,
+            current_fd: -1,
+            err_fd,
+        }
+    }
+
+    fn ensure_open(&mut self) -> Result<i32, ()> {
+        if self.current_fd >= 0 {
+            return Ok(self.current_fd);
+        }
+        let total_idx = if self.numeric {
+            self.numeric_from.checked_add(self.chunk_idx).ok_or(())?
+        } else {
+            self.chunk_idx
+        };
+
+        let mut suffix_buf = [0u8; 32];
+        if !generate_split_suffix(
+            total_idx,
+            self.suffix_len,
+            self.numeric,
+            &mut suffix_buf[..self.suffix_len],
+        ) {
+            let _ = sys_write(self.err_fd, b"split: output file suffixes exhausted\n");
+            return Err(());
+        }
+
+        let mut path_buf = [0u8; 128];
+        let prefix_bytes = self.prefix.as_bytes();
+        if prefix_bytes.len() + self.suffix_len >= path_buf.len() {
+            let _ = sys_write(self.err_fd, b"split: output path too long\n");
+            return Err(());
+        }
+        path_buf[..prefix_bytes.len()].copy_from_slice(prefix_bytes);
+        path_buf[prefix_bytes.len()..prefix_bytes.len() + self.suffix_len]
+            .copy_from_slice(&suffix_buf[..self.suffix_len]);
+        let total_path_len = prefix_bytes.len() + self.suffix_len;
+
+        let path_str = match core::str::from_utf8(&path_buf[..total_path_len]) {
+            Ok(s) => s,
+            Err(_) => {
+                let _ = sys_write(self.err_fd, b"split: invalid filename encoding\n");
+                return Err(());
+            }
+        };
+
+        let new_fd = sys_open(path_str, O_CREAT | O_WRONLY | O_TRUNC);
+        if new_fd < 0 {
+            let _ = sys_write(self.err_fd, b"split: cannot open '");
+            let _ = sys_write(self.err_fd, path_str.as_bytes());
+            let _ = sys_write(self.err_fd, b"' for writing\n");
+            return Err(());
+        }
+
+        self.current_fd = new_fd;
+        self.chunk_idx += 1;
+        Ok(new_fd)
+    }
+
+    fn close_current(&mut self) {
+        if self.current_fd >= 0 {
+            sys_close(self.current_fd);
+            self.current_fd = -1;
+        }
+    }
+}
+
+/// Exécute l'utilitaire standard POSIX `split` (découpage de fichiers en morceaux par lignes ou octets)
+pub fn run_split(args: &[&str], in_fd: i32, _out_fd: i32, err_fd: i32) -> i32 {
+    let mut mode: Option<SplitMode> = None;
+    let mut suffix_len: usize = 2;
+    let mut numeric = false;
+    let mut numeric_from: usize = 0;
+    let mut input_file: Option<&str> = None;
+    let mut prefix: &str = "x";
+    let mut parsing_options = true;
+    let mut operands: [&str; 2] = [""; 2];
+    let mut num_operands = 0;
+
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i];
+        if parsing_options && arg == "--" {
+            parsing_options = false;
+            i += 1;
+            continue;
+        }
+
+        if parsing_options && (arg.starts_with('-') && arg != "-") {
+            if arg == "--help" {
+                let _ = sys_write(
+                    err_fd,
+                    b"Usage: split [OPTION]... [INPUT [PREFIX]]\n\
+Output pieces of INPUT to PREFIXaa, PREFIXab, ...;\n\
+default size is 1000 lines, and default PREFIX is 'x'.\n\n\
+  -a, --suffix-length=N   generate suffixes of length N (default 2)\n\
+  -b, --bytes=SIZE        put SIZE bytes per output file\n\
+  -C, --line-bytes=SIZE   put at most SIZE bytes of lines per output file\n\
+  -d, --numeric-suffixes[=FROM]  use numeric suffixes instead of alphabetic\n\
+  -l, --lines=NUMBER      put NUMBER lines per output file (default 1000)\n\
+      --help              display this help and exit\n",
+                );
+                return 0;
+            } else if arg == "-d" || arg == "--numeric-suffixes" {
+                numeric = true;
+            } else if let Some(from_str) = arg.strip_prefix("--numeric-suffixes=") {
+                numeric = true;
+                if let Some(val) = parse_split_size(from_str) {
+                    numeric_from = val;
+                } else {
+                    let _ = sys_write(err_fd, b"split: invalid numeric suffix start\n");
+                    return 1;
+                }
+            } else if arg == "-a" || arg == "--suffix-length" {
+                i += 1;
+                if i >= args.len() {
+                    let _ = sys_write(err_fd, b"split: option requires an argument -- 'a'\n");
+                    return 1;
+                }
+                if let Some(val) = parse_split_size(args[i]) {
+                    if val == 0 {
+                        let _ = sys_write(err_fd, b"split: invalid suffix length: '0'\n");
+                        return 1;
+                    }
+                    suffix_len = val;
+                } else {
+                    let _ = sys_write(err_fd, b"split: invalid suffix length\n");
+                    return 1;
+                }
+            } else if let Some(val_str) = arg.strip_prefix("-a") {
+                if let Some(val) = parse_split_size(val_str) {
+                    if val == 0 {
+                        let _ = sys_write(err_fd, b"split: invalid suffix length: '0'\n");
+                        return 1;
+                    }
+                    suffix_len = val;
+                } else {
+                    let _ = sys_write(err_fd, b"split: invalid suffix length\n");
+                    return 1;
+                }
+            } else if let Some(val_str) = arg.strip_prefix("--suffix-length=") {
+                if let Some(val) = parse_split_size(val_str) {
+                    if val == 0 {
+                        let _ = sys_write(err_fd, b"split: invalid suffix length: '0'\n");
+                        return 1;
+                    }
+                    suffix_len = val;
+                } else {
+                    let _ = sys_write(err_fd, b"split: invalid suffix length\n");
+                    return 1;
+                }
+            } else if arg == "-b" || arg == "--bytes" {
+                if mode.is_some() {
+                    let _ = sys_write(err_fd, b"split: cannot split in more than one way\n");
+                    return 1;
+                }
+                i += 1;
+                if i >= args.len() {
+                    let _ = sys_write(err_fd, b"split: option requires an argument -- 'b'\n");
+                    return 1;
+                }
+                if let Some(val) = parse_split_size(args[i]) {
+                    if val == 0 {
+                        let _ = sys_write(err_fd, b"split: invalid number of bytes: '0'\n");
+                        return 1;
+                    }
+                    mode = Some(SplitMode::Bytes(val));
+                } else {
+                    let _ = sys_write(err_fd, b"split: invalid number of bytes\n");
+                    return 1;
+                }
+            } else if let Some(val_str) = arg.strip_prefix("-b") {
+                if mode.is_some() {
+                    let _ = sys_write(err_fd, b"split: cannot split in more than one way\n");
+                    return 1;
+                }
+                if let Some(val) = parse_split_size(val_str) {
+                    if val == 0 {
+                        let _ = sys_write(err_fd, b"split: invalid number of bytes: '0'\n");
+                        return 1;
+                    }
+                    mode = Some(SplitMode::Bytes(val));
+                } else {
+                    let _ = sys_write(err_fd, b"split: invalid number of bytes\n");
+                    return 1;
+                }
+            } else if let Some(val_str) = arg.strip_prefix("--bytes=") {
+                if mode.is_some() {
+                    let _ = sys_write(err_fd, b"split: cannot split in more than one way\n");
+                    return 1;
+                }
+                if let Some(val) = parse_split_size(val_str) {
+                    if val == 0 {
+                        let _ = sys_write(err_fd, b"split: invalid number of bytes: '0'\n");
+                        return 1;
+                    }
+                    mode = Some(SplitMode::Bytes(val));
+                } else {
+                    let _ = sys_write(err_fd, b"split: invalid number of bytes\n");
+                    return 1;
+                }
+            } else if arg == "-l" || arg == "--lines" {
+                if mode.is_some() {
+                    let _ = sys_write(err_fd, b"split: cannot split in more than one way\n");
+                    return 1;
+                }
+                i += 1;
+                if i >= args.len() {
+                    let _ = sys_write(err_fd, b"split: option requires an argument -- 'l'\n");
+                    return 1;
+                }
+                if let Some(val) = parse_split_size(args[i]) {
+                    if val == 0 {
+                        let _ = sys_write(err_fd, b"split: invalid number of lines: '0'\n");
+                        return 1;
+                    }
+                    mode = Some(SplitMode::Lines(val));
+                } else {
+                    let _ = sys_write(err_fd, b"split: invalid number of lines\n");
+                    return 1;
+                }
+            } else if let Some(val_str) = arg.strip_prefix("-l") {
+                if mode.is_some() {
+                    let _ = sys_write(err_fd, b"split: cannot split in more than one way\n");
+                    return 1;
+                }
+                if let Some(val) = parse_split_size(val_str) {
+                    if val == 0 {
+                        let _ = sys_write(err_fd, b"split: invalid number of lines: '0'\n");
+                        return 1;
+                    }
+                    mode = Some(SplitMode::Lines(val));
+                } else {
+                    let _ = sys_write(err_fd, b"split: invalid number of lines\n");
+                    return 1;
+                }
+            } else if let Some(val_str) = arg.strip_prefix("--lines=") {
+                if mode.is_some() {
+                    let _ = sys_write(err_fd, b"split: cannot split in more than one way\n");
+                    return 1;
+                }
+                if let Some(val) = parse_split_size(val_str) {
+                    if val == 0 {
+                        let _ = sys_write(err_fd, b"split: invalid number of lines: '0'\n");
+                        return 1;
+                    }
+                    mode = Some(SplitMode::Lines(val));
+                } else {
+                    let _ = sys_write(err_fd, b"split: invalid number of lines\n");
+                    return 1;
+                }
+            } else if arg == "-C" || arg == "--line-bytes" {
+                if mode.is_some() {
+                    let _ = sys_write(err_fd, b"split: cannot split in more than one way\n");
+                    return 1;
+                }
+                i += 1;
+                if i >= args.len() {
+                    let _ = sys_write(err_fd, b"split: option requires an argument -- 'C'\n");
+                    return 1;
+                }
+                if let Some(val) = parse_split_size(args[i]) {
+                    if val == 0 {
+                        let _ = sys_write(err_fd, b"split: invalid number of bytes: '0'\n");
+                        return 1;
+                    }
+                    mode = Some(SplitMode::LineBytes(val));
+                } else {
+                    let _ = sys_write(err_fd, b"split: invalid number of bytes\n");
+                    return 1;
+                }
+            } else if let Some(val_str) = arg.strip_prefix("-C") {
+                if mode.is_some() {
+                    let _ = sys_write(err_fd, b"split: cannot split in more than one way\n");
+                    return 1;
+                }
+                if let Some(val) = parse_split_size(val_str) {
+                    if val == 0 {
+                        let _ = sys_write(err_fd, b"split: invalid number of bytes: '0'\n");
+                        return 1;
+                    }
+                    mode = Some(SplitMode::LineBytes(val));
+                } else {
+                    let _ = sys_write(err_fd, b"split: invalid number of bytes\n");
+                    return 1;
+                }
+            } else if let Some(val_str) = arg.strip_prefix("--line-bytes=") {
+                if mode.is_some() {
+                    let _ = sys_write(err_fd, b"split: cannot split in more than one way\n");
+                    return 1;
+                }
+                if let Some(val) = parse_split_size(val_str) {
+                    if val == 0 {
+                        let _ = sys_write(err_fd, b"split: invalid number of bytes: '0'\n");
+                        return 1;
+                    }
+                    mode = Some(SplitMode::LineBytes(val));
+                } else {
+                    let _ = sys_write(err_fd, b"split: invalid number of bytes\n");
+                    return 1;
+                }
+            } else {
+                let _ = sys_write(err_fd, b"split: invalid option -- '");
+                let _ = sys_write(err_fd, arg.as_bytes());
+                let _ = sys_write(err_fd, b"'\n");
+                return 1;
+            }
+            i += 1;
+        } else {
+            if num_operands < operands.len() {
+                operands[num_operands] = arg;
+                num_operands += 1;
+            } else {
+                let _ = sys_write(err_fd, b"split: extra operand '");
+                let _ = sys_write(err_fd, arg.as_bytes());
+                let _ = sys_write(err_fd, b"'\n");
+                return 1;
+            }
+            i += 1;
+        }
+    }
+
+    if num_operands >= 1 {
+        input_file = Some(operands[0]);
+    }
+    if num_operands >= 2 {
+        prefix = operands[1];
+    }
+
+    let effective_mode = mode.unwrap_or(SplitMode::Lines(1000));
+
+    let (src_fd, need_close_src) = match input_file {
+        None => (in_fd, false),
+        Some("-") => (in_fd, false),
+        Some(path) => {
+            let fd = sys_open(path, O_RDONLY);
+            if fd < 0 {
+                let _ = sys_write(err_fd, b"split: cannot open '");
+                let _ = sys_write(err_fd, path.as_bytes());
+                let _ = sys_write(err_fd, b"' for reading: No such file or directory\n");
+                return 1;
+            }
+            (fd, true)
+        }
+    };
+
+    let mut writer = SplitWriter::new(prefix, suffix_len, numeric, numeric_from, err_fd);
+    let mut in_buf = [0u8; 1024];
+
+    match effective_mode {
+        SplitMode::Bytes(chunk_size) => {
+            let mut chunk_written = 0;
+            loop {
+                let n = sys_read(src_fd, &mut in_buf);
+                if n <= 0 {
+                    break;
+                }
+                let mut offset = 0;
+                let len = n as usize;
+                while offset < len {
+                    let out_f = match writer.ensure_open() {
+                        Ok(fd) => fd,
+                        Err(_) => {
+                            if need_close_src {
+                                sys_close(src_fd);
+                            }
+                            return 1;
+                        }
+                    };
+                    let remaining_in_chunk = chunk_size - chunk_written;
+                    let to_write = core::cmp::min(len - offset, remaining_in_chunk);
+                    let _ = sys_write(out_f, &in_buf[offset..offset + to_write]);
+                    chunk_written += to_write;
+                    offset += to_write;
+
+                    if chunk_written >= chunk_size {
+                        writer.close_current();
+                        chunk_written = 0;
+                    }
+                }
+            }
+            writer.close_current();
+        }
+        SplitMode::Lines(lines_limit) => {
+            let mut current_lines = 0;
+            loop {
+                let n = sys_read(src_fd, &mut in_buf);
+                if n <= 0 {
+                    break;
+                }
+                let mut start = 0;
+                let len = n as usize;
+                for idx in 0..len {
+                    if in_buf[idx] == b'\n' {
+                        let out_f = match writer.ensure_open() {
+                            Ok(fd) => fd,
+                            Err(_) => {
+                                if need_close_src {
+                                    sys_close(src_fd);
+                                }
+                                return 1;
+                            }
+                        };
+                        let _ = sys_write(out_f, &in_buf[start..=idx]);
+                        start = idx + 1;
+                        current_lines += 1;
+                        if current_lines >= lines_limit {
+                            writer.close_current();
+                            current_lines = 0;
+                        }
+                    }
+                }
+                if start < len {
+                    let out_f = match writer.ensure_open() {
+                        Ok(fd) => fd,
+                        Err(_) => {
+                            if need_close_src {
+                                sys_close(src_fd);
+                            }
+                            return 1;
+                        }
+                    };
+                    let _ = sys_write(out_f, &in_buf[start..len]);
+                }
+            }
+            writer.close_current();
+        }
+        SplitMode::LineBytes(max_line_bytes) => {
+            let mut line_buf = [0u8; 2048];
+            let mut line_len = 0;
+            let mut current_chunk_bytes = 0;
+
+            loop {
+                let n = sys_read(src_fd, &mut in_buf);
+                if n <= 0 {
+                    break;
+                }
+                for &b in &in_buf[..n as usize] {
+                    if line_len < line_buf.len() {
+                        line_buf[line_len] = b;
+                        line_len += 1;
+                    }
+                    if b == b'\n' || line_len == max_line_bytes {
+                        if current_chunk_bytes > 0
+                            && current_chunk_bytes + line_len > max_line_bytes
+                        {
+                            writer.close_current();
+                            current_chunk_bytes = 0;
+                        }
+                        let out_f = match writer.ensure_open() {
+                            Ok(fd) => fd,
+                            Err(_) => {
+                                if need_close_src {
+                                    sys_close(src_fd);
+                                }
+                                return 1;
+                            }
+                        };
+                        let _ = sys_write(out_f, &line_buf[..line_len]);
+                        current_chunk_bytes += line_len;
+                        line_len = 0;
+                    }
+                }
+            }
+            if line_len > 0 {
+                if current_chunk_bytes > 0 && current_chunk_bytes + line_len > max_line_bytes {
+                    writer.close_current();
+                }
+                if let Ok(out_f) = writer.ensure_open() {
+                    let _ = sys_write(out_f, &line_buf[..line_len]);
+                }
+            }
+            writer.close_current();
+        }
+    }
+
+    if need_close_src {
+        sys_close(src_fd);
+    }
+    0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -6985,5 +7551,120 @@ mod tests {
         assert_eq!(code8, 1);
         sys_close(out_w8);
         sys_close(out_r8);
+    }
+
+    #[test]
+    fn test_split_utility() {
+        // 1. Découpage par lignes (-l 2)
+        let src_path = "/tmp/split_src1.txt";
+        let src_fd = sys_open(src_path, O_CREAT | O_WRONLY | O_TRUNC);
+        assert!(src_fd >= 3);
+        let _ = sys_write(src_fd, b"line1\nline2\nline3\nline4\nline5\n");
+        sys_close(src_fd);
+
+        let code1 = run_split(&["-l", "2", src_path, "/tmp/s1_"], 0, 1, 2);
+        assert_eq!(code1, 0);
+
+        // Doit avoir créé /tmp/s1_aa (line1, line2), /tmp/s1_ab (line3, line4), /tmp/s1_ac (line5)
+        let mut buf = [0u8; 64];
+        let f1 = sys_open("/tmp/s1_aa", O_RDONLY);
+        assert!(f1 >= 3);
+        let n1 = sys_read(f1, &mut buf);
+        assert_eq!(&buf[..n1 as usize], b"line1\nline2\n");
+        sys_close(f1);
+
+        let f2 = sys_open("/tmp/s1_ab", O_RDONLY);
+        assert!(f2 >= 3);
+        let n2 = sys_read(f2, &mut buf);
+        assert_eq!(&buf[..n2 as usize], b"line3\nline4\n");
+        sys_close(f2);
+
+        let f3 = sys_open("/tmp/s1_ac", O_RDONLY);
+        assert!(f3 >= 3);
+        let n3 = sys_read(f3, &mut buf);
+        assert_eq!(&buf[..n3 as usize], b"line5\n");
+        sys_close(f3);
+
+        // 2. Découpage par octets (-b 5) avec suffixes numériques (-d)
+        let (in_r2, in_w2) = crate::vfs::pipe().expect("pipe in split 2");
+        let _ = sys_write(in_w2, b"abcdefghijklmno"); // 15 octets -> 3 chunks de 5 octets
+        sys_close(in_w2);
+
+        let code2 = run_split(&["-b", "5", "-d", "-", "/tmp/s2_"], in_r2, 1, 2);
+        assert_eq!(code2, 0);
+        sys_close(in_r2);
+
+        let f2_0 = sys_open("/tmp/s2_00", O_RDONLY);
+        assert!(f2_0 >= 3);
+        let n2_0 = sys_read(f2_0, &mut buf);
+        assert_eq!(&buf[..n2_0 as usize], b"abcde");
+        sys_close(f2_0);
+
+        let f2_1 = sys_open("/tmp/s2_01", O_RDONLY);
+        assert!(f2_1 >= 3);
+        let n2_1 = sys_read(f2_1, &mut buf);
+        assert_eq!(&buf[..n2_1 as usize], b"fghij");
+        sys_close(f2_1);
+
+        let f2_2 = sys_open("/tmp/s2_02", O_RDONLY);
+        assert!(f2_2 >= 3);
+        let n2_2 = sys_read(f2_2, &mut buf);
+        assert_eq!(&buf[..n2_2 as usize], b"klmno");
+        sys_close(f2_2);
+
+        // 3. Longueur de suffixe (-a 3)
+        let (in_r3, in_w3) = crate::vfs::pipe().expect("pipe in split 3");
+        let _ = sys_write(in_w3, b"chunk1chunk2");
+        sys_close(in_w3);
+
+        let code3 = run_split(&["-b", "6", "-a", "3", "-", "/tmp/s3_"], in_r3, 1, 2);
+        assert_eq!(code3, 0);
+        sys_close(in_r3);
+
+        let f3_0 = sys_open("/tmp/s3_aaa", O_RDONLY);
+        assert!(f3_0 >= 3);
+        let n3_0 = sys_read(f3_0, &mut buf);
+        assert_eq!(&buf[..n3_0 as usize], b"chunk1");
+        sys_close(f3_0);
+
+        let f3_1 = sys_open("/tmp/s3_aab", O_RDONLY);
+        assert!(f3_1 >= 3);
+        let n3_1 = sys_read(f3_1, &mut buf);
+        assert_eq!(&buf[..n3_1 as usize], b"chunk2");
+        sys_close(f3_1);
+
+        // 4. Découpage par taille maximale de ligne (-C 12)
+        let (in_r4, in_w4) = crate::vfs::pipe().expect("pipe in split 4");
+        let _ = sys_write(in_w4, b"hello\nworld\nthis is long\n");
+        sys_close(in_w4);
+
+        let code4 = run_split(&["-C", "12", "-", "/tmp/s4_"], in_r4, 1, 2);
+        assert_eq!(code4, 0);
+        sys_close(in_r4);
+
+        let f4_0 = sys_open("/tmp/s4_aa", O_RDONLY);
+        assert!(f4_0 >= 3);
+        let n4_0 = sys_read(f4_0, &mut buf);
+        assert_eq!(&buf[..n4_0 as usize], b"hello\nworld\n");
+        sys_close(f4_0);
+
+        // 5. Erreurs d'options incompatibles
+        let (out_r5, out_w5) = crate::vfs::pipe().expect("pipe out split 5");
+        let code5 = run_split(&["-l", "5", "-b", "10"], 0, 1, out_w5);
+        assert_eq!(code5, 1);
+        sys_close(out_w5);
+        sys_close(out_r5);
+
+        // Nettoyage des fichiers temporaires
+        let _ = sys_unlink_pool(src_path);
+        let _ = sys_unlink_pool("/tmp/s1_aa");
+        let _ = sys_unlink_pool("/tmp/s1_ab");
+        let _ = sys_unlink_pool("/tmp/s1_ac");
+        let _ = sys_unlink_pool("/tmp/s2_00");
+        let _ = sys_unlink_pool("/tmp/s2_01");
+        let _ = sys_unlink_pool("/tmp/s2_02");
+        let _ = sys_unlink_pool("/tmp/s3_aaa");
+        let _ = sys_unlink_pool("/tmp/s3_aab");
+        let _ = sys_unlink_pool("/tmp/s4_aa");
     }
 }
