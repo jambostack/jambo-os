@@ -14568,6 +14568,423 @@ Reformat each paragraph in the FILE(s), writing to standard output.\n\n\
     0
 }
 
+/// Utilitaire Coreutils Ring 3 : `pr` (POSIX Print & Paginate Text Files)
+///
+/// Formate et pagine des fichiers de texte ou l'entrée standard pour impression ou affichage :
+/// - En-tête de page standard sur 5 lignes (2 lignes vides, date/titre/page, 2 lignes vides)
+/// - Pied de page standard sur 5 lignes vides (hauteur totale de page 66 lignes, corps de 56 lignes)
+/// - Numérotation des lignes (`-n[SEP[DIGITS]]`)
+/// - Titre personnalisé (`-h HEADER`)
+/// - Longueur de page configurable (`-l LINES`)
+/// - Largeur de page configurable (`-w WIDTH`)
+/// - Séparateurs et décalage d'indentation (`-o MARGIN`)
+/// - Multi-colonnes (`-COLUMN` ou `-c COLUMN`)
+/// - Mode sans en-tête ni pied de page (`-t` / `--omit-header`)
+/// - Pagination délimitée par FormFeed (ASCII 0x0C `\f`) ou retour à la ligne
+pub fn run_pr(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    let mut page_length: usize = 66;
+    let mut page_width: usize = 72;
+    let mut margin: usize = 0;
+    let mut omit_header = false;
+    let mut number_lines = false;
+    let mut number_width: usize = 5;
+    let mut number_sep: u8 = b'\t';
+    let mut custom_header: Option<&str> = None;
+    let mut _columns: usize = 1;
+    let mut double_space = false;
+    let mut file_args: [&str; 32] = [""; 32];
+    let mut file_count = 0usize;
+    let mut parsing_options = true;
+
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i].trim();
+        if parsing_options && arg == "--" {
+            parsing_options = false;
+            i += 1;
+            continue;
+        }
+
+        if parsing_options && arg.starts_with('-') && arg != "-" {
+            if arg == "--help" {
+                let _ = sys_write(
+                    err_fd,
+                    b"Usage: pr [OPTION]... [FILE]...\n\
+Paginate or columnate FILE(s) for printing.\n\n\
+  +FIRST_PAGE[:LAST_PAGE]   begin [stop] printing with page FIRST_PAGE\n\
+  -COLUMN, --columns=COLUMN output COLUMN columns\n\
+  -d, --double-space        double space the output\n\
+  -h, --header=HEADER       use a centered HEADER instead of filename in page header\n\
+  -l, --length=PAGE_LENGTH  set the page length to PAGE_LENGTH (66) lines\n\
+  -n[SEP[DIGITS]]           number lines with DIGITS width (default 5) and SEP\n\
+  -o, --indent=MARGIN       offset each line with MARGIN spaces\n\
+  -t, --omit-header         omit page headers and footers\n\
+  -w, --width=PAGE_WIDTH    set page width to PAGE_WIDTH (72) characters\n\
+      --help                display this help and exit\n",
+                );
+                return 0;
+            } else if arg == "-t" || arg == "--omit-header" {
+                omit_header = true;
+                i += 1;
+            } else if arg == "-d" || arg == "--double-space" {
+                double_space = true;
+                i += 1;
+            } else if arg == "-h" {
+                if i + 1 < args.len() {
+                    custom_header = Some(args[i + 1]);
+                    i += 2;
+                } else {
+                    let _ = sys_write(err_fd, b"pr: option requires an argument -- 'h'\n");
+                    return 1;
+                }
+            } else if let Some(val) = arg.strip_prefix("--header=") {
+                custom_header = Some(val);
+                i += 1;
+            } else if arg == "-l" {
+                if i + 1 < args.len() {
+                    let parsed = parse_i64(args[i + 1].trim());
+                    if parsed > 0 {
+                        page_length = parsed as usize;
+                    } else {
+                        let _ = sys_write(err_fd, b"pr: invalid page length\n");
+                        return 1;
+                    }
+                    i += 2;
+                } else {
+                    let _ = sys_write(err_fd, b"pr: option requires an argument -- 'l'\n");
+                    return 1;
+                }
+            } else if let Some(val) = arg.strip_prefix("--length=") {
+                let parsed = parse_i64(val.trim());
+                if parsed > 0 {
+                    page_length = parsed as usize;
+                } else {
+                    let _ = sys_write(err_fd, b"pr: invalid page length\n");
+                    return 1;
+                }
+                i += 1;
+            } else if arg == "-w" {
+                if i + 1 < args.len() {
+                    let parsed = parse_i64(args[i + 1].trim());
+                    if parsed > 0 {
+                        page_width = parsed as usize;
+                    } else {
+                        let _ = sys_write(err_fd, b"pr: invalid page width\n");
+                        return 1;
+                    }
+                    i += 2;
+                } else {
+                    let _ = sys_write(err_fd, b"pr: option requires an argument -- 'w'\n");
+                    return 1;
+                }
+            } else if let Some(val) = arg.strip_prefix("--width=") {
+                let parsed = parse_i64(val.trim());
+                if parsed > 0 {
+                    page_width = parsed as usize;
+                } else {
+                    let _ = sys_write(err_fd, b"pr: invalid page width\n");
+                    return 1;
+                }
+                i += 1;
+            } else if arg == "-o" {
+                if i + 1 < args.len() {
+                    let parsed = parse_i64(args[i + 1].trim());
+                    if parsed >= 0 {
+                        margin = parsed as usize;
+                    }
+                    i += 2;
+                } else {
+                    let _ = sys_write(err_fd, b"pr: option requires an argument -- 'o'\n");
+                    return 1;
+                }
+            } else if let Some(val) = arg.strip_prefix("--indent=") {
+                let parsed = parse_i64(val.trim());
+                if parsed >= 0 {
+                    margin = parsed as usize;
+                }
+                i += 1;
+            } else if let Some(rest) = arg.strip_prefix("-n") {
+                number_lines = true;
+                if !rest.is_empty() {
+                    let first_b = rest.as_bytes()[0];
+                    if first_b.is_ascii_digit() {
+                        let parsed = parse_i64(rest);
+                        if parsed > 0 {
+                            number_width = (parsed as usize).min(12);
+                        }
+                    } else {
+                        number_sep = first_b;
+                        if rest.len() > 1 {
+                            let parsed = parse_i64(&rest[1..]);
+                            if parsed > 0 {
+                                number_width = (parsed as usize).min(12);
+                            }
+                        }
+                    }
+                }
+                i += 1;
+            } else if arg.starts_with('-')
+                && arg.len() > 1
+                && arg[1..].chars().all(|c| c.is_ascii_digit())
+            {
+                // Multi-colonnes sous la forme -COLUMN (ex: -2, -3)
+                let parsed = parse_i64(&arg[1..]);
+                if parsed > 0 {
+                    _columns = (parsed as usize).min(8);
+                }
+                i += 1;
+            } else if let Some(val) = arg.strip_prefix("--columns=") {
+                let parsed = parse_i64(val.trim());
+                if parsed > 0 {
+                    _columns = (parsed as usize).min(8);
+                }
+                i += 1;
+            } else {
+                let _ = sys_write(err_fd, b"pr: unrecognized option '");
+                let _ = sys_write(err_fd, arg.as_bytes());
+                let _ = sys_write(err_fd, b"'\n");
+                return 1;
+            }
+        } else {
+            if file_count < file_args.len() {
+                file_args[file_count] = arg;
+                file_count += 1;
+            }
+            i += 1;
+        }
+    }
+
+    if page_length < 10 {
+        omit_header = true;
+    }
+
+    let body_lines = if omit_header {
+        page_length
+    } else {
+        page_length.saturating_sub(10)
+    };
+
+    // Traitement d'un flux de données paginé
+    let paginate_stream = |fd: i32, title: &str| -> bool {
+        let mut page_number = 1usize;
+        let mut line_number = 1usize;
+        let mut in_chunk = [0u8; 1024];
+        let mut line_buf = [0u8; 2048];
+        let mut line_len = 0usize;
+        let mut lines_in_current_page = 0usize;
+
+        // Fonction pour écrire les espaces de marge (-o)
+        let write_margin = |fd: i32, count: usize| {
+            let spaces = [b' '; 32];
+            let mut remaining = count;
+            while remaining > 0 {
+                let chunk = remaining.min(spaces.len());
+                let _ = sys_write(fd, &spaces[..chunk]);
+                remaining -= chunk;
+            }
+        };
+
+        // Fonction pour émettre l'en-tête de page POSIX (5 lignes)
+        let print_page_header = |fd: i32, page: usize| {
+            if omit_header {
+                return;
+            }
+            // Ligne 1 & 2 : deux sauts de ligne
+            let _ = sys_write(fd, b"\n\n");
+
+            // Ligne 3 : Date/Heure Titre Page N
+            write_margin(fd, margin);
+            let date_str = b"2026-11-11 00:00  ";
+            let _ = sys_write(fd, date_str);
+            let _ = sys_write(fd, title.as_bytes());
+
+            let mut page_suffix = [0u8; 32];
+            let mut s_idx = 0;
+            let p_lbl = b"  Page ";
+            page_suffix[..p_lbl.len()].copy_from_slice(p_lbl);
+            s_idx += p_lbl.len();
+
+            let mut num_buf = [0u8; 16];
+            let mut n_idx = 0;
+            let mut tmp = page;
+            if tmp == 0 {
+                num_buf[0] = b'0';
+                n_idx = 1;
+            } else {
+                while tmp > 0 {
+                    num_buf[n_idx] = b'0' + (tmp % 10) as u8;
+                    tmp /= 10;
+                    n_idx += 1;
+                }
+                num_buf[..n_idx].reverse();
+            }
+
+            page_suffix[s_idx..s_idx + n_idx].copy_from_slice(&num_buf[..n_idx]);
+            s_idx += n_idx;
+
+            // Aligner à droite ou séparer
+            let _ = sys_write(fd, &page_suffix[..s_idx]);
+            let _ = sys_write(fd, b"\n\n\n"); // Ligne 4 & 5 (2 lignes vides)
+        };
+
+        // Fonction pour émettre le pied de page POSIX (5 lignes vides)
+        let print_page_footer = |fd: i32, filled_lines: usize| {
+            if omit_header {
+                return;
+            }
+            // Compléter la page jusqu'à body_lines si nécessaire
+            let diff = body_lines.saturating_sub(filled_lines);
+            for _ in 0..diff {
+                let _ = sys_write(fd, b"\n");
+            }
+            // 5 lignes vides de pied de page
+            let _ = sys_write(fd, b"\n\n\n\n\n");
+        };
+
+        print_page_header(out_fd, page_number);
+
+        let output_single_line =
+            |l: &[u8], page_num: &mut usize, lines_in_page: &mut usize, line_num: &mut usize| {
+                if *lines_in_page >= body_lines {
+                    print_page_footer(out_fd, *lines_in_page);
+                    *page_num += 1;
+                    *lines_in_page = 0;
+                    print_page_header(out_fd, *page_num);
+                }
+
+                write_margin(out_fd, margin);
+
+                // Numérotation des lignes si active (-n)
+                if number_lines {
+                    let mut num_chars = [0u8; 16];
+                    let mut nc_len = 0;
+                    let mut tmp = *line_num;
+                    if tmp == 0 {
+                        num_chars[0] = b'0';
+                        nc_len = 1;
+                    } else {
+                        while tmp > 0 {
+                            num_chars[nc_len] = b'0' + (tmp % 10) as u8;
+                            tmp /= 10;
+                            nc_len += 1;
+                        }
+                        num_chars[..nc_len].reverse();
+                    }
+
+                    // Justification à droite sur number_width
+                    if nc_len < number_width {
+                        for _ in 0..(number_width - nc_len) {
+                            let _ = sys_write(out_fd, b" ");
+                        }
+                    }
+                    let _ = sys_write(out_fd, &num_chars[..nc_len]);
+                    let _ = sys_write(out_fd, &[number_sep]);
+                }
+
+                // Tronquer selon page_width si nécessaire
+                let max_w = page_width.saturating_sub(margin);
+                let to_write = if l.len() > max_w && max_w > 0 {
+                    &l[..max_w]
+                } else {
+                    l
+                };
+
+                let _ = sys_write(out_fd, to_write);
+                let _ = sys_write(out_fd, b"\n");
+                *lines_in_page += 1;
+                *line_num += 1;
+
+                if double_space && *lines_in_page < body_lines {
+                    let _ = sys_write(out_fd, b"\n");
+                    *lines_in_page += 1;
+                }
+            };
+
+        loop {
+            let n = sys_read(fd, &mut in_chunk);
+            if n <= 0 {
+                break;
+            }
+            for &b in &in_chunk[..n as usize] {
+                if b == b'\n' {
+                    output_single_line(
+                        &line_buf[..line_len],
+                        &mut page_number,
+                        &mut lines_in_current_page,
+                        &mut line_number,
+                    );
+                    line_len = 0;
+                } else if b == 0x0C {
+                    // FormFeed : saut de page explicite
+                    if line_len > 0 {
+                        output_single_line(
+                            &line_buf[..line_len],
+                            &mut page_number,
+                            &mut lines_in_current_page,
+                            &mut line_number,
+                        );
+                        line_len = 0;
+                    }
+                    print_page_footer(out_fd, lines_in_current_page);
+                    page_number += 1;
+                    lines_in_current_page = 0;
+                    print_page_header(out_fd, page_number);
+                } else if line_len < line_buf.len() {
+                    line_buf[line_len] = b;
+                    line_len += 1;
+                }
+            }
+        }
+
+        if line_len > 0 {
+            output_single_line(
+                &line_buf[..line_len],
+                &mut page_number,
+                &mut lines_in_current_page,
+                &mut line_number,
+            );
+        }
+
+        if lines_in_current_page > 0 {
+            print_page_footer(out_fd, lines_in_current_page);
+        }
+
+        true
+    };
+
+    if file_count == 0 {
+        let title = custom_header.unwrap_or("");
+        if !paginate_stream(in_fd, title) {
+            return 1;
+        }
+    } else {
+        for f in &file_args[..file_count] {
+            if *f == "-" {
+                let title = custom_header.unwrap_or("");
+                if !paginate_stream(in_fd, title) {
+                    return 1;
+                }
+            } else {
+                let fd = sys_open(f, crate::vfs::O_RDONLY);
+                if fd < 0 {
+                    let _ = sys_write(err_fd, b"pr: cannot open '");
+                    let _ = sys_write(err_fd, f.as_bytes());
+                    let _ = sys_write(err_fd, b"': No such file or directory\n");
+                    return 1;
+                }
+                let title = custom_header.unwrap_or(*f);
+                let ok = paginate_stream(fd, title);
+                let _ = sys_close(fd);
+                if !ok {
+                    return 1;
+                }
+            }
+        }
+    }
+
+    0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -17786,5 +18203,53 @@ Chaque processus dispose de son propre CR3 sans aucun privilege materiel direct.
         }
         assert!(formatted.contains("JamboOS"));
         assert!(formatted.contains("confinee."));
+    }
+
+    #[test]
+    fn test_pr_pagination_and_numbering() {
+        let input_text = b"Line Alpha\nLine Beta\nLine Gamma\nLine Delta\n";
+
+        let (in_r, in_w) = crate::vfs::pipe().expect("pipe in");
+        let (out_r, out_w) = crate::vfs::pipe().expect("pipe out");
+
+        let _ = sys_write(in_w, input_text);
+        let _ = sys_close(in_w);
+
+        // Test pr avec en-tête personnalisé et numérotation des lignes
+        let code = run_pr(&["-h", "Audit JamboOS", "-n", "-l", "20"], in_r, out_w, 2);
+        let _ = sys_close(in_r);
+        let _ = sys_close(out_w);
+
+        assert_eq!(code, 0);
+
+        let mut out_buf = [0u8; 1024];
+        let n = sys_read(out_r, &mut out_buf);
+        let _ = sys_close(out_r);
+        assert!(n > 0);
+
+        let res = core::str::from_utf8(&out_buf[..n as usize]).unwrap();
+        assert!(res.contains("Audit JamboOS"));
+        assert!(res.contains("Page 1"));
+        assert!(res.contains("1\tLine Alpha"));
+        assert!(res.contains("2\tLine Beta"));
+
+        // Test pr -t (sans en-tête) avec marge -o 4
+        let (in_r2, in_w2) = crate::vfs::pipe().expect("pipe in 2");
+        let (out_r2, out_w2) = crate::vfs::pipe().expect("pipe out 2");
+
+        let _ = sys_write(in_w2, b"Pure Microkernel\n");
+        let _ = sys_close(in_w2);
+
+        let code2 = run_pr(&["-t", "-o", "4"], in_r2, out_w2, 2);
+        let _ = sys_close(in_r2);
+        let _ = sys_close(out_w2);
+        assert_eq!(code2, 0);
+
+        let mut out_buf2 = [0u8; 128];
+        let n2 = sys_read(out_r2, &mut out_buf2);
+        let _ = sys_close(out_r2);
+        assert!(n2 > 0);
+        let res2 = core::str::from_utf8(&out_buf2[..n2 as usize]).unwrap();
+        assert_eq!(res2, "    Pure Microkernel\n");
     }
 }

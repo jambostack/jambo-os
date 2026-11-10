@@ -685,6 +685,34 @@ impl PortStatus {
         // Ne jamais réécrire les bits RW1C ni PR
         val
     }
+
+    /// Calcule la valeur d'écriture pour acquitter une condition de surintensité (OCC - Over-Current Change, bit 20).
+    ///
+    /// Conserve le statut d'alimentation (PP) et écrit 1 sur OCC pour acquitter l'interruption matérielle,
+    /// tout en maintenant à 0 les autres drapeaux RW1C pour éviter d'effacer les événements concurrents.
+    pub fn build_over_current_ack_write(raw_portsc: u32) -> u32 {
+        let pp_bit = raw_portsc & PORTSC_PP;
+        pp_bit | PORTSC_OCC
+    }
+
+    /// Vérifie si le port est actuellement dans un état de surintensité active (OCA, bit 3)
+    /// ou si un changement de surintensité non acquitté est en attente (OCC, bit 20).
+    pub fn is_over_current_active(raw_portsc: u32) -> bool {
+        (raw_portsc & PORTSC_OCA) != 0 || (raw_portsc & PORTSC_OCC) != 0
+    }
+
+    /// Vérifie si l'état de lien actuel du port correspond au mode de conformité (Compliance Mode, PLS = 10).
+    pub fn is_compliance_mode(raw_portsc: u32) -> bool {
+        ((raw_portsc & PORTSC_PLS_MASK) >> PORTSC_PLS_SHIFT) as u8 == PLS_COMPLIANCE_MODE
+    }
+
+    /// Calcule la commande de récupération pour forcer la sortie du mode de conformité (Compliance Mode)
+    /// vers l'état RxDetect (PLS 5) ou Disabled (PLS 4) avec assertion du strobe LWS,
+    /// permettant au lien SuperSpeed de tenter une nouvelle séquence de synchronisation et de training.
+    pub fn build_exit_compliance_write(raw_portsc: u32) -> u32 {
+        let pp_bit = raw_portsc & PORTSC_PP;
+        pp_bit | PORTSC_LWS | (((PLS_RXDETECT as u32) & 0x0F) << PORTSC_PLS_SHIFT)
+    }
 }
 
 // ============================================================================
@@ -3123,6 +3151,13 @@ pub enum PortHotPlugEvent {
         port_id: u8,
         speed: UsbSpeed,
     },
+    PortOverCurrentDetected {
+        port_id: u8,
+        active: bool,
+    },
+    ComplianceModeEntered {
+        port_id: u8,
+    },
 }
 
 // ============================================================================
@@ -4777,6 +4812,19 @@ impl XhciController {
         }
 
         let status = PortStatus::parse(raw_portsc);
+
+        // Détection de condition de surintensité (OCA active ou OCC changé)
+        if status.over_current || status.change_over_current {
+            return Ok(PortHotPlugEvent::PortOverCurrentDetected {
+                port_id,
+                active: status.over_current,
+            });
+        }
+
+        // Détection de basculement en mode de conformité (Compliance Mode)
+        if status.link_state == PLS_COMPLIANCE_MODE {
+            return Ok(PortHotPlugEvent::ComplianceModeEntered { port_id });
+        }
 
         // Détection de réinitialisation terminée (PRC=1 et PR=0)
         if status.change_reset && !status.reset && status.connected {
@@ -6657,5 +6705,40 @@ mod tests {
         let write_power_up = PortStatus::build_port_power_write(write_power_down, true);
         assert_ne!(write_power_up & PORTSC_PP, 0);
         assert_eq!(write_power_up & PORTSC_ALL_CHANGES_MASK, 0);
+
+        // 21. Détection de surintensité (OCA / OCC) et Sortie du mode de conformité (Compliance Mode)
+        let raw_overcurrent = PORTSC_PP | PORTSC_OCA | PORTSC_OCC;
+        assert!(PortStatus::is_over_current_active(raw_overcurrent));
+        let ack_occ = PortStatus::build_over_current_ack_write(raw_overcurrent);
+        assert_ne!(ack_occ & PORTSC_OCC, 0);
+        assert_ne!(ack_occ & PORTSC_PP, 0);
+        assert_eq!(ack_occ & PORTSC_CSC, 0);
+
+        let trb_oc = Trb {
+            parameter: 1 << 24, // Port 1
+            status: 0,
+            control: (TRB_TYPE_PORT_STATUS_CHANGE << 10) | 1,
+        };
+        let ev_oc = ctrl
+            .handle_port_status_change_trb(&trb_oc, raw_overcurrent)
+            .expect("Over-current event handled");
+        assert_eq!(
+            ev_oc,
+            PortHotPlugEvent::PortOverCurrentDetected {
+                port_id: 1,
+                active: true,
+            }
+        );
+
+        let raw_compliance = PORTSC_PP | ((PLS_COMPLIANCE_MODE as u32) << PORTSC_PLS_SHIFT);
+        assert!(PortStatus::is_compliance_mode(raw_compliance));
+        let exit_compliance = PortStatus::build_exit_compliance_write(raw_compliance);
+        assert_ne!(exit_compliance & PORTSC_LWS, 0);
+        assert_eq!(
+            (exit_compliance & PORTSC_PLS_MASK) >> PORTSC_PLS_SHIFT,
+            PLS_RXDETECT as u32
+        );
+        assert_ne!(exit_compliance & PORTSC_PP, 0);
+        assert_eq!(exit_compliance & PORTSC_ALL_CHANGES_MASK, 0);
     }
 }

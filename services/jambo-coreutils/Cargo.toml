@@ -317,5 +317,10 @@ name = "fmt"
 path = "src/bin/fmt.rs"
 test = false
 
+[[bin]]
+name = "pr"
+path = "src/bin/pr.rs"
+test = false
+
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }
