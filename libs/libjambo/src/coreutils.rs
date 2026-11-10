@@ -9226,6 +9226,340 @@ Convert tabs in each FILE to spaces, writing to standard output.\n\n\
     exit_status
 }
 
+/// Exécute l'utilitaire standard POSIX `unexpand` (conversion des espaces en tabulations)
+pub fn run_unexpand(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    let mut convert_all = false;
+    let mut tab_size: usize = 8;
+    let mut explicit_tabs = [0usize; 16];
+    let mut explicit_tab_count = 0usize;
+    let mut files = [""; 16];
+    let mut file_count = 0usize;
+    let mut parsing_options = true;
+
+    let parse_tab_list = |val: &str, tabs: &mut [usize; 16], count: &mut usize| -> bool {
+        *count = 0;
+        let mut cur = 0usize;
+        let mut has_digit = false;
+        for &b in val.as_bytes() {
+            if b.is_ascii_digit() {
+                cur = cur.wrapping_mul(10).wrapping_add((b - b'0') as usize);
+                has_digit = true;
+            } else if b == b',' || b == b' ' {
+                if has_digit && cur > 0 {
+                    if *count < tabs.len() {
+                        tabs[*count] = cur;
+                        *count += 1;
+                    }
+                    cur = 0;
+                    has_digit = false;
+                } else if has_digit && cur == 0 {
+                    return false;
+                }
+            } else {
+                return false;
+            }
+        }
+        if has_digit {
+            if cur == 0 {
+                return false;
+            }
+            if *count < tabs.len() {
+                tabs[*count] = cur;
+                *count += 1;
+            }
+        }
+        *count > 0
+    };
+
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i].trim();
+        if parsing_options && arg == "--" {
+            parsing_options = false;
+            i += 1;
+            continue;
+        }
+
+        if parsing_options && (arg.starts_with('-') && arg.len() > 1 && arg != "-") {
+            if arg == "--help" {
+                let _ = sys_write(
+                    out_fd,
+                    b"Usage: unexpand [OPTION]... [FILE]...\n\
+Convert blanks in each FILE to tabs, writing to standard output.\n\n\
+  -a, --all           convert all blanks, instead of just initial blanks\n\
+      --first-only    convert only leading sequences of blanks (overrides -a)\n\
+  -t, --tabs=N        have tabs N characters apart instead of 8 (enables -a)\n\
+  -t, --tabs=LIST     use comma separated list of tab positions (enables -a)\n\
+      --help          display this help and exit\n",
+                );
+                return 0;
+            } else if arg == "-a" || arg == "--all" {
+                convert_all = true;
+            } else if arg == "--first-only" {
+                convert_all = false;
+            } else if arg == "-t" || arg == "--tabs" {
+                if i + 1 < args.len() {
+                    i += 1;
+                    let val = args[i];
+                    if !parse_tab_list(val, &mut explicit_tabs, &mut explicit_tab_count) {
+                        let _ =
+                            sys_write(err_fd, b"unexpand: tab size contains invalid character\n");
+                        return 1;
+                    }
+                    convert_all = true;
+                    if explicit_tab_count == 1 {
+                        tab_size = explicit_tabs[0];
+                        explicit_tab_count = 0;
+                    }
+                } else {
+                    let _ = sys_write(err_fd, b"unexpand: option requires an argument -- 't'\n");
+                    return 1;
+                }
+            } else if let Some(val) = arg.strip_prefix("--tabs=") {
+                if !parse_tab_list(val, &mut explicit_tabs, &mut explicit_tab_count) {
+                    let _ = sys_write(err_fd, b"unexpand: tab size contains invalid character\n");
+                    return 1;
+                }
+                convert_all = true;
+                if explicit_tab_count == 1 {
+                    tab_size = explicit_tabs[0];
+                    explicit_tab_count = 0;
+                }
+            } else if arg.starts_with("-t") && arg.len() > 2 {
+                let val = &arg[2..];
+                if !parse_tab_list(val, &mut explicit_tabs, &mut explicit_tab_count) {
+                    let _ = sys_write(err_fd, b"unexpand: tab size contains invalid character\n");
+                    return 1;
+                }
+                convert_all = true;
+                if explicit_tab_count == 1 {
+                    tab_size = explicit_tabs[0];
+                    explicit_tab_count = 0;
+                }
+            } else if arg.len() > 1 && arg[1..].bytes().all(|b| b.is_ascii_digit()) {
+                if let Some(n) = parse_od_number(&arg[1..]) {
+                    if n > 0 {
+                        tab_size = n;
+                        explicit_tab_count = 0;
+                        convert_all = true;
+                    } else {
+                        let _ = sys_write(err_fd, b"unexpand: tab size cannot be 0\n");
+                        return 1;
+                    }
+                }
+            } else {
+                let _ = sys_write(err_fd, b"unexpand: unrecognized option '");
+                let _ = sys_write(err_fd, arg.as_bytes());
+                let _ = sys_write(err_fd, b"'\n");
+                return 1;
+            }
+        } else {
+            if file_count < files.len() {
+                files[file_count] = arg;
+                file_count += 1;
+            }
+        }
+        i += 1;
+    }
+
+    let default_files = ["-"];
+    let files_to_process = if file_count > 0 {
+        &files[..file_count]
+    } else {
+        &default_files[..]
+    };
+
+    let next_tabstop = |col: usize, size: usize, tabs: &[usize]| -> usize {
+        if !tabs.is_empty() {
+            for &t in tabs {
+                if t > col {
+                    return t;
+                }
+            }
+            col + 1
+        } else {
+            let rem = col % size;
+            col + (size - rem)
+        }
+    };
+
+    let is_tabstop = |col: usize, size: usize, tabs: &[usize]| -> bool {
+        if !tabs.is_empty() {
+            tabs.contains(&col)
+        } else {
+            col > 0 && col.is_multiple_of(size)
+        }
+    };
+
+    let mut exit_status = 0;
+
+    for &file in files_to_process {
+        let (fd, should_close) = if file == "-" {
+            (in_fd, false)
+        } else {
+            let fd = sys_open(file, crate::vfs::O_RDONLY);
+            if fd < 0 {
+                let _ = sys_write(err_fd, b"unexpand: ");
+                let _ = sys_write(err_fd, file.as_bytes());
+                let _ = sys_write(err_fd, b": No such file or directory\n");
+                exit_status = 1;
+                continue;
+            }
+            (fd, true)
+        };
+
+        let mut read_buf = [0u8; 512];
+        let mut out_chunk = [0u8; 1024];
+        let mut out_len = 0usize;
+        let mut col = 0usize;
+        let mut pending_spaces = 0usize;
+        let mut leading = true;
+
+        let tabs_slice = if explicit_tab_count > 0 {
+            &explicit_tabs[..explicit_tab_count]
+        } else {
+            &[]
+        };
+
+        loop {
+            let n = sys_read(fd, &mut read_buf);
+            if n <= 0 {
+                break;
+            }
+
+            for &b in &read_buf[..n as usize] {
+                match b {
+                    b' ' => {
+                        pending_spaces += 1;
+                        col += 1;
+                        if is_tabstop(col, tab_size, tabs_slice)
+                            && (convert_all || leading)
+                            && (pending_spaces > 1 || leading)
+                        {
+                            if out_len >= out_chunk.len() {
+                                let _ = sys_write(out_fd, &out_chunk[..out_len]);
+                                out_len = 0;
+                            }
+                            out_chunk[out_len] = b'\t';
+                            out_len += 1;
+                            pending_spaces = 0;
+                        }
+                    }
+                    b'\t' => {
+                        let next_col = next_tabstop(col, tab_size, tabs_slice);
+                        col = next_col;
+                        pending_spaces = 0;
+                        if out_len >= out_chunk.len() {
+                            let _ = sys_write(out_fd, &out_chunk[..out_len]);
+                            out_len = 0;
+                        }
+                        out_chunk[out_len] = b'\t';
+                        out_len += 1;
+                    }
+                    b'\n' => {
+                        for _ in 0..pending_spaces {
+                            if out_len >= out_chunk.len() {
+                                let _ = sys_write(out_fd, &out_chunk[..out_len]);
+                                out_len = 0;
+                            }
+                            out_chunk[out_len] = b' ';
+                            out_len += 1;
+                        }
+                        pending_spaces = 0;
+                        if out_len >= out_chunk.len() {
+                            let _ = sys_write(out_fd, &out_chunk[..out_len]);
+                            out_len = 0;
+                        }
+                        out_chunk[out_len] = b'\n';
+                        out_len += 1;
+                        col = 0;
+                        leading = true;
+                    }
+                    b'\r' => {
+                        for _ in 0..pending_spaces {
+                            if out_len >= out_chunk.len() {
+                                let _ = sys_write(out_fd, &out_chunk[..out_len]);
+                                out_len = 0;
+                            }
+                            out_chunk[out_len] = b' ';
+                            out_len += 1;
+                        }
+                        pending_spaces = 0;
+                        if out_len >= out_chunk.len() {
+                            let _ = sys_write(out_fd, &out_chunk[..out_len]);
+                            out_len = 0;
+                        }
+                        out_chunk[out_len] = b'\r';
+                        out_len += 1;
+                        col = 0;
+                    }
+                    0x08 => {
+                        for _ in 0..pending_spaces {
+                            if out_len >= out_chunk.len() {
+                                let _ = sys_write(out_fd, &out_chunk[..out_len]);
+                                out_len = 0;
+                            }
+                            out_chunk[out_len] = b' ';
+                            out_len += 1;
+                        }
+                        pending_spaces = 0;
+                        if out_len >= out_chunk.len() {
+                            let _ = sys_write(out_fd, &out_chunk[..out_len]);
+                            out_len = 0;
+                        }
+                        out_chunk[out_len] = 0x08;
+                        out_len += 1;
+                        col = col.saturating_sub(1);
+                    }
+                    _ => {
+                        leading = false;
+                        for _ in 0..pending_spaces {
+                            if out_len >= out_chunk.len() {
+                                let _ = sys_write(out_fd, &out_chunk[..out_len]);
+                                out_len = 0;
+                            }
+                            out_chunk[out_len] = b' ';
+                            out_len += 1;
+                        }
+                        pending_spaces = 0;
+                        if out_len >= out_chunk.len() {
+                            let _ = sys_write(out_fd, &out_chunk[..out_len]);
+                            out_len = 0;
+                        }
+                        out_chunk[out_len] = b;
+                        out_len += 1;
+                        col += 1;
+                    }
+                }
+
+                if out_len >= out_chunk.len() - 32 {
+                    let _ = sys_write(out_fd, &out_chunk[..out_len]);
+                    out_len = 0;
+                }
+            }
+        }
+
+        for _ in 0..pending_spaces {
+            if out_len >= out_chunk.len() {
+                let _ = sys_write(out_fd, &out_chunk[..out_len]);
+                out_len = 0;
+            }
+            out_chunk[out_len] = b' ';
+            out_len += 1;
+        }
+
+        if out_len > 0 {
+            let _ = sys_write(out_fd, &out_chunk[..out_len]);
+        }
+
+        if should_close {
+            let _ = sys_close(fd);
+        }
+    }
+
+    exit_status
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -11233,5 +11567,62 @@ mod tests {
         let res3 = core::str::from_utf8(&buf[..n3 as usize]).unwrap();
         // La première tabulation initiale est convertie, mais \tb et \tc restent des tabulations
         assert!(res3.starts_with("        a\tb\tc\n"));
+    }
+
+    #[test]
+    fn test_unexpand_basic_and_options() {
+        let fd = sys_open("/tmp/unexpand_input.txt", O_CREAT | O_WRONLY);
+        assert!(fd >= 0);
+        let content = b"        leading word        middle word\n    four spaces\n";
+        let _ = sys_write(fd, content);
+        let _ = sys_close(fd);
+
+        // Test 1 : unexpand par défaut (seulement leading whitespace, tabstops de 8)
+        let (out_r1, out_w1) = crate::vfs::pipe().unwrap();
+        let code1 = run_unexpand(&["/tmp/unexpand_input.txt"], 0, out_w1, 2);
+        sys_close(out_w1);
+        assert_eq!(code1, 0);
+
+        let mut buf = [0u8; 256];
+        let n1 = sys_read(out_r1, &mut buf);
+        sys_close(out_r1);
+        let res1 = core::str::from_utf8(&buf[..n1 as usize]).unwrap();
+        // 8 espaces initiaux convertis en '\t', mais les 8 espaces du milieu restent des espaces
+        assert!(res1.starts_with("\tleading word        middle word\n"));
+
+        // Test 2 : unexpand -a (tous les espaces alignés sur les tabstops sont convertis)
+        let (out_r2, out_w2) = crate::vfs::pipe().unwrap();
+        let code2 = run_unexpand(&["-a", "/tmp/unexpand_input.txt"], 0, out_w2, 2);
+        sys_close(out_w2);
+        assert_eq!(code2, 0);
+
+        let n2 = sys_read(out_r2, &mut buf);
+        sys_close(out_r2);
+        let res2 = core::str::from_utf8(&buf[..n2 as usize]).unwrap();
+        // Avec -a, tant les espaces initiaux que les espaces au milieu alignés sur tabstops sont convertis
+        assert!(res2.contains("\tleading word"));
+        assert!(res2.contains("leading word\t    middle word\n"));
+
+        // Test 3 : unexpand -t 4 (tabstop à 4 colonnes, implique -a)
+        let (out_r3, out_w3) = crate::vfs::pipe().unwrap();
+        let code3 = run_unexpand(&["-t", "4", "/tmp/unexpand_input.txt"], 0, out_w3, 2);
+        sys_close(out_w3);
+        assert_eq!(code3, 0);
+
+        let n3 = sys_read(out_r3, &mut buf);
+        sys_close(out_r3);
+        let res3 = core::str::from_utf8(&buf[..n3 as usize]).unwrap();
+        // 4 spaces -> \t
+        assert!(res3.contains("\tfour spaces\n"));
+
+        // Test 4 : unexpand --help
+        let (out_r4, out_w4) = crate::vfs::pipe().unwrap();
+        let code4 = run_unexpand(&["--help"], 0, out_w4, 2);
+        sys_close(out_w4);
+        assert_eq!(code4, 0);
+        let n4 = sys_read(out_r4, &mut buf);
+        sys_close(out_r4);
+        let res4 = core::str::from_utf8(&buf[..n4 as usize]).unwrap();
+        assert!(res4.contains("Usage: unexpand"));
     }
 }

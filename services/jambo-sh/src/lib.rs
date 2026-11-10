@@ -573,6 +573,8 @@ impl JamboShell {
             "nl" | "/bin/nl" | "bin/nl" => self.cmd_nl(args, out),
             "od" | "/bin/od" | "bin/od" => self.cmd_od(args, out),
             "cmp" | "/bin/cmp" | "bin/cmp" => self.cmd_cmp(args, out),
+            "expand" | "/bin/expand" | "bin/expand" => self.cmd_expand(args, out),
+            "unexpand" | "/bin/unexpand" | "bin/unexpand" => self.cmd_unexpand(args, out),
             "version" => self.cmd_version(out),
             "uptime" => self.cmd_uptime(out),
             "caps" => self.cmd_caps(out),
@@ -1393,6 +1395,46 @@ Utilitaire d'installation JamboOS (Serie 0.*.*)\n\
             }
         } else {
             let msg = b"cmp: pipe creation failed\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
+    }
+
+    fn cmd_expand(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if let Ok((r, w)) = libjambo::vfs::pipe() {
+            let code = libjambo::coreutils::run_expand(args, 0, w, w);
+            let _ = libjambo::coreutils::sys_close(w);
+            let n = libjambo::coreutils::sys_read(r, out);
+            let _ = libjambo::coreutils::sys_close(r);
+            let len = if n > 0 { n as usize } else { 0 };
+            if code == 0 {
+                (ShellStatus::Success, len)
+            } else {
+                (ShellStatus::ExecutionFailed, len)
+            }
+        } else {
+            let msg = b"expand: pipe creation failed\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
+    }
+
+    fn cmd_unexpand(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if let Ok((r, w)) = libjambo::vfs::pipe() {
+            let code = libjambo::coreutils::run_unexpand(args, 0, w, w);
+            let _ = libjambo::coreutils::sys_close(w);
+            let n = libjambo::coreutils::sys_read(r, out);
+            let _ = libjambo::coreutils::sys_close(r);
+            let len = if n > 0 { n as usize } else { 0 };
+            if code == 0 {
+                (ShellStatus::Success, len)
+            } else {
+                (ShellStatus::ExecutionFailed, len)
+            }
+        } else {
+            let msg = b"unexpand: pipe creation failed\n";
             let len = msg.len().min(out.len());
             out[..len].copy_from_slice(&msg[..len]);
             (ShellStatus::ExecutionFailed, len)
@@ -18094,5 +18136,59 @@ mod tests {
             shell.execute_line("/bin/cmp -s /tmp/sh_cmp1.txt /tmp/sh_cmp2.txt", &mut out);
         assert_eq!(st2, ShellStatus::Success);
         assert_eq!(len2, 0);
+    }
+
+    #[test]
+    fn test_expand_and_unexpand_shell_execution() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 512];
+
+        // 1. Test expand dans le shell
+        let fd1 = libjambo::coreutils::sys_open(
+            "/tmp/sh_expand.txt",
+            libjambo::vfs::O_CREAT | libjambo::vfs::O_WRONLY,
+        );
+        assert!(fd1 >= 0);
+        let _ = libjambo::coreutils::sys_write(fd1, b"a\tb\n");
+        libjambo::coreutils::sys_close(fd1);
+
+        let (st1, len1) = shell.execute_line("expand /tmp/sh_expand.txt", &mut out);
+        assert_eq!(st1, ShellStatus::Success);
+        let s1 = core::str::from_utf8(&out[..len1]).unwrap();
+        assert_eq!(s1, "a       b\n");
+
+        // 2. Test /bin/expand avec option -t
+        let (st2, len2) = shell.execute_line("/bin/expand -t 4 /tmp/sh_expand.txt", &mut out);
+        assert_eq!(st2, ShellStatus::Success);
+        let s2 = core::str::from_utf8(&out[..len2]).unwrap();
+        assert_eq!(s2, "a   b\n");
+
+        // 3. Test unexpand dans le shell
+        let fd2 = libjambo::coreutils::sys_open(
+            "/tmp/sh_unexpand.txt",
+            libjambo::vfs::O_CREAT | libjambo::vfs::O_WRONLY,
+        );
+        assert!(fd2 >= 0);
+        let _ = libjambo::coreutils::sys_write(fd2, b"        leading\n");
+        libjambo::coreutils::sys_close(fd2);
+
+        let (st3, len3) = shell.execute_line("unexpand /tmp/sh_unexpand.txt", &mut out);
+        assert_eq!(st3, ShellStatus::Success);
+        let s3 = core::str::from_utf8(&out[..len3]).unwrap();
+        assert_eq!(s3, "\tleading\n");
+
+        // 4. Test /bin/unexpand avec option -t 4
+        let fd3 = libjambo::coreutils::sys_open(
+            "/tmp/sh_unexp4.txt",
+            libjambo::vfs::O_CREAT | libjambo::vfs::O_WRONLY,
+        );
+        assert!(fd3 >= 0);
+        let _ = libjambo::coreutils::sys_write(fd3, b"    four spaces\n");
+        libjambo::coreutils::sys_close(fd3);
+
+        let (st4, len4) = shell.execute_line("/bin/unexpand -t 4 /tmp/sh_unexp4.txt", &mut out);
+        assert_eq!(st4, ShellStatus::Success);
+        let s4 = core::str::from_utf8(&out[..len4]).unwrap();
+        assert_eq!(s4, "\tfour spaces\n");
     }
 }

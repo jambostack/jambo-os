@@ -908,6 +908,34 @@ pub struct UsbDecodedInterface {
     pub endpoint_count: usize,
 }
 
+impl UsbDecodedInterface {
+    /// Indique si l'interface correspond à la classe USB Mass Storage avec transport Bulk-Only Transport (BOT)
+    pub fn is_mass_storage_bot(&self) -> bool {
+        self.class == 0x08
+            && (self.subclass == 0x06 || self.subclass == 0x05 || self.subclass == 0x01)
+            && self.protocol == 0x50
+    }
+
+    /// Détecte la paire d'endpoints Bulk IN et Bulk OUT pour l'interface de stockage
+    pub fn find_bot_endpoints(&self) -> Option<(u8, u8)> {
+        let mut bulk_in = None;
+        let mut bulk_out = None;
+        for ep in &self.endpoints[..self.endpoint_count] {
+            if ep.is_bulk() {
+                if ep.is_in() && bulk_in.is_none() {
+                    bulk_in = Some(ep.ep_number);
+                } else if ep.is_out() && bulk_out.is_none() {
+                    bulk_out = Some(ep.ep_number);
+                }
+            }
+        }
+        match (bulk_in, bulk_out) {
+            (Some(i), Some(o)) => Some((i, o)),
+            _ => None,
+        }
+    }
+}
+
 /// Configuration USB décodée avec arbre d'interfaces et d'endpoints
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct UsbDecodedConfiguration {
@@ -1115,9 +1143,126 @@ pub const CSW_STATUS_PHASE_ERROR: u8 = 0x02;
 pub const SCSI_CMD_TEST_UNIT_READY: u8 = 0x00;
 pub const SCSI_CMD_REQUEST_SENSE: u8 = 0x03;
 pub const SCSI_CMD_INQUIRY: u8 = 0x12;
+pub const SCSI_CMD_MODE_SENSE_6: u8 = 0x1A;
 pub const SCSI_CMD_READ_CAPACITY_10: u8 = 0x25;
 pub const SCSI_CMD_READ_10: u8 = 0x28;
 pub const SCSI_CMD_WRITE_10: u8 = 0x2A;
+
+/// Paquet de requête Setup standard USB (8 octets, USB 2.0 / USB 3.x)
+#[repr(C, packed)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct UsbSetupPacket {
+    pub request_type: u8,
+    pub request: u8,
+    pub value: u16,
+    pub index: u16,
+    pub length: u16,
+}
+
+impl UsbSetupPacket {
+    pub fn new(request_type: u8, request: u8, value: u16, index: u16, length: u16) -> Self {
+        Self {
+            request_type,
+            request,
+            value,
+            index,
+            length,
+        }
+    }
+
+    #[inline]
+    pub fn request_type(&self) -> u8 {
+        self.request_type
+    }
+
+    #[inline]
+    pub fn request(&self) -> u8 {
+        self.request
+    }
+
+    #[inline]
+    pub fn value(&self) -> u16 {
+        self.value
+    }
+
+    #[inline]
+    pub fn index(&self) -> u16 {
+        self.index
+    }
+
+    #[inline]
+    pub fn length(&self) -> u16 {
+        self.length
+    }
+
+    /// Convertit le paquet de contrôle en mot de 64 bits pour les champs TRB Setup Stage
+    pub fn to_raw_u64(&self) -> u64 {
+        let b = [
+            self.request_type,
+            self.request,
+            (self.value & 0xFF) as u8,
+            ((self.value >> 8) & 0xFF) as u8,
+            (self.index & 0xFF) as u8,
+            ((self.index >> 8) & 0xFF) as u8,
+            (self.length & 0xFF) as u8,
+            ((self.length >> 8) & 0xFF) as u8,
+        ];
+        u64::from_le_bytes(b)
+    }
+}
+
+/// Étape de la procédure de réinitialisation et de recouvrement d'erreur BOT (Bulk-Only Reset Recovery)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UsbBotResetStep {
+    Step1MassStorageReset,
+    Step2ClearHaltIn,
+    Step3ClearHaltOut,
+    Completed,
+}
+
+/// Erreurs de transport USB Mass Storage BOT
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UsbBotError {
+    InvalidSignature,
+    TagMismatch,
+    PhaseError,
+    CommandFailed { residue: u32 },
+    ResidueOverflow,
+    DeviceNotReady,
+    WriteProtected,
+}
+
+/// Données décodées de requête SCSI REQUEST SENSE (18 octets standard)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ScsiSenseData {
+    pub response_code: u8,
+    pub sense_key: u8,
+    pub asc: u8,
+    pub ascq: u8,
+    pub information: u32,
+}
+
+impl ScsiSenseData {
+    #[inline]
+    pub fn is_valid(&self) -> bool {
+        (self.response_code & 0x70) == 0x70
+    }
+
+    #[inline]
+    pub fn is_unit_attention(&self) -> bool {
+        (self.sense_key & 0x0F) == 0x06
+    }
+
+    #[inline]
+    pub fn is_not_ready(&self) -> bool {
+        (self.sense_key & 0x0F) == 0x02
+    }
+
+    #[inline]
+    pub fn is_write_protected(&self) -> bool {
+        (self.sense_key & 0x0F) == 0x07 || (self.asc == 0x27 && self.ascq == 0x00)
+    }
+}
 
 /// Command Block Wrapper (31 octets, USB Mass Storage Class BOT RFC 1.0)
 #[repr(C, packed)]
@@ -1382,6 +1527,156 @@ impl UsbMassStorageBot {
         } else {
             Err(SysError::BadAddress)
         }
+    }
+
+    /// Construit un CBW pour SCSI REQUEST SENSE (18 octets attendus)
+    pub fn build_cbw_request_sense(&mut self) -> (CommandBlockWrapper, u32) {
+        let tag = self.next_tag();
+        let mut cbw = CommandBlockWrapper::new(tag, 18, true, self.lun, 6);
+        cbw.cb[0] = SCSI_CMD_REQUEST_SENSE;
+        cbw.cb[4] = 18; // Allocation length
+        (cbw, tag)
+    }
+
+    /// Décode les données reçues en réponse à SCSI REQUEST SENSE (18 octets)
+    pub fn parse_request_sense_response(&self, data: &[u8]) -> Option<ScsiSenseData> {
+        if data.len() < 18 {
+            return None;
+        }
+        let response_code = data[0] & 0x7F;
+        let sense_key = data[2] & 0x0F;
+        let info = u32::from_be_bytes([data[3], data[4], data[5], data[6]]);
+        let asc = data[12];
+        let ascq = data[13];
+
+        Some(ScsiSenseData {
+            response_code,
+            sense_key,
+            asc,
+            ascq,
+            information: info,
+        })
+    }
+
+    /// Construit un CBW pour SCSI MODE SENSE (6) (détection d'écriture protégée / cache)
+    pub fn build_cbw_mode_sense_6(&mut self, page_code: u8) -> (CommandBlockWrapper, u32) {
+        let tag = self.next_tag();
+        let mut cbw = CommandBlockWrapper::new(tag, 192, true, self.lun, 6);
+        cbw.cb[0] = SCSI_CMD_MODE_SENSE_6;
+        cbw.cb[2] = page_code & 0x3F;
+        cbw.cb[4] = 192; // Allocation length
+        (cbw, tag)
+    }
+
+    /// Analyse l'en-tête retourné par MODE SENSE (6) pour déterminer si le support est en lecture seule (Write-Protected)
+    pub fn parse_mode_sense_6_write_protect(&self, data: &[u8]) -> bool {
+        if data.len() < 4 {
+            return false;
+        }
+        // Byte 2 : Device-Specific Parameter. Bit 7 = WP (Write Protect)
+        (data[2] & 0x80) != 0
+    }
+
+    /// Construit le paquet Setup pour la réinitialisation de classe BOT (Bulk-Only Mass Storage Reset)
+    pub fn build_bot_reset_packet(&self, interface_number: u8) -> UsbSetupPacket {
+        UsbSetupPacket::new(0x21, 0xFF, 0, interface_number as u16, 0)
+    }
+
+    /// Construit le paquet Setup standard Clear Feature (ENDPOINT_HALT) pour débloquer un endpoint après STALL
+    pub fn build_clear_feature_halt_packet(&self, is_in: bool) -> UsbSetupPacket {
+        let ep_addr = if is_in {
+            self.bulk_in_ep | 0x80
+        } else {
+            self.bulk_out_ep
+        };
+        UsbSetupPacket::new(0x02, 0x01, 0x0000, ep_addr as u16, 0)
+    }
+
+    /// Fait progresser l'automate de réinitialisation BOT vers l'étape suivante
+    pub fn advance_reset_recovery(&mut self, step: UsbBotResetStep) -> UsbBotResetStep {
+        match step {
+            UsbBotResetStep::Step1MassStorageReset => UsbBotResetStep::Step2ClearHaltIn,
+            UsbBotResetStep::Step2ClearHaltIn => UsbBotResetStep::Step3ClearHaltOut,
+            UsbBotResetStep::Step3ClearHaltOut => UsbBotResetStep::Completed,
+            UsbBotResetStep::Completed => UsbBotResetStep::Completed,
+        }
+    }
+
+    /// Vérification complète et rigoureuse d'un CSW selon la spécification USB BOT 1.0 (Section 6.3)
+    pub fn verify_csw_full(
+        &self,
+        expected_tag: u32,
+        expected_transfer_len: u32,
+        data: &[u8],
+    ) -> Result<u32, UsbBotError> {
+        let csw = CommandStatusWrapper::from_bytes(data).ok_or(UsbBotError::InvalidSignature)?;
+        if csw.signature != CSW_SIGNATURE {
+            return Err(UsbBotError::InvalidSignature);
+        }
+        if csw.tag != expected_tag {
+            return Err(UsbBotError::TagMismatch);
+        }
+        if csw.data_residue > expected_transfer_len {
+            return Err(UsbBotError::ResidueOverflow);
+        }
+        match csw.status {
+            CSW_STATUS_PASSED => Ok(csw.data_residue),
+            CSW_STATUS_FAILED => Err(UsbBotError::CommandFailed {
+                residue: csw.data_residue,
+            }),
+            CSW_STATUS_PHASE_ERROR => Err(UsbBotError::PhaseError),
+            _ => Err(UsbBotError::PhaseError),
+        }
+    }
+}
+
+/// Disque de stockage de masse USB géré (USB Mass Storage Drive)
+#[derive(Debug, Clone, Copy)]
+pub struct UsbMassStorageDisk {
+    pub bot: UsbMassStorageBot,
+    pub inquiry: ScsiInquiryInfo,
+    pub is_write_protected: bool,
+    pub is_removable: bool,
+    pub mounted: bool,
+}
+
+impl UsbMassStorageDisk {
+    pub fn new(bot: UsbMassStorageBot, inquiry: ScsiInquiryInfo) -> Self {
+        Self {
+            bot,
+            inquiry,
+            is_write_protected: false,
+            is_removable: inquiry.is_removable,
+            mounted: false,
+        }
+    }
+
+    /// Capacité totale en octets
+    #[inline]
+    pub fn capacity_bytes(&self) -> u64 {
+        self.bot.total_sectors * (self.bot.sector_size as u64)
+    }
+
+    /// Taille de secteur physique/logique
+    #[inline]
+    pub fn sector_size(&self) -> u32 {
+        self.bot.sector_size
+    }
+
+    /// Nombre total de secteurs
+    #[inline]
+    pub fn total_sectors(&self) -> u64 {
+        self.bot.total_sectors
+    }
+
+    /// Vérifie si l'adresse de bloc LBA et le compte de secteurs sont dans les limites du disque
+    pub fn validate_lba_range(&self, lba: u64, count: u32) -> bool {
+        if count == 0 {
+            return false;
+        }
+        lba.checked_add(count as u64)
+            .map(|end| end <= self.bot.total_sectors)
+            .unwrap_or(false)
     }
 }
 
@@ -3848,5 +4143,142 @@ mod tests {
         assert!(ctrl.hid_throttles[1].is_none());
         assert!(ctrl.hid_throttles[3].is_none());
         assert!(!ctrl.ep_rings[1].active);
+    }
+
+    #[test]
+    fn test_usb_mass_storage_bot_full_transport_and_recovery() {
+        let mut iface = UsbDecodedInterface {
+            interface_number: 0,
+            alternate_setting: 0,
+            class: 0x08,    // Mass Storage
+            subclass: 0x06, // SCSI Transparent
+            protocol: 0x50, // Bulk-Only Transport
+            endpoints: [UsbDecodedEndpoint::default(); 8],
+            endpoint_count: 2,
+        };
+        iface.endpoints[0] = UsbDecodedEndpoint {
+            endpoint_address: 0x81,
+            ep_number: 1,
+            direction: UsbEndpointDirection::In,
+            ep_type: UsbEndpointType::Bulk,
+            max_packet_size: 512,
+            interval: 0,
+            mult: 0,
+            max_burst: 0,
+            max_streams: 0,
+            dci: 3,
+        };
+        iface.endpoints[1] = UsbDecodedEndpoint {
+            endpoint_address: 0x02,
+            ep_number: 2,
+            direction: UsbEndpointDirection::Out,
+            ep_type: UsbEndpointType::Bulk,
+            max_packet_size: 512,
+            interval: 0,
+            mult: 0,
+            max_burst: 0,
+            max_streams: 0,
+            dci: 4,
+        };
+
+        // 1. Détection d'interface BOT et extraction d'endpoints
+        assert!(iface.is_mass_storage_bot());
+        let (in_ep, out_ep) = iface.find_bot_endpoints().expect("find bot endpoints");
+        assert_eq!(in_ep, 1);
+        assert_eq!(out_ep, 2);
+
+        let mut bot = UsbMassStorageBot::new(1, in_ep, out_ep);
+
+        // 2. Requête Setup BOT Reset et Clear Feature
+        let reset_pkt = bot.build_bot_reset_packet(0);
+        assert_eq!(reset_pkt.request_type(), 0x21);
+        assert_eq!(reset_pkt.request(), 0xFF);
+        assert_eq!(reset_pkt.value(), 0);
+        assert_eq!(reset_pkt.index(), 0);
+
+        let clear_halt_in = bot.build_clear_feature_halt_packet(true);
+        assert_eq!(clear_halt_in.request_type(), 0x02);
+        assert_eq!(clear_halt_in.request(), 0x01);
+        assert_eq!(clear_halt_in.value(), 0x0000);
+        assert_eq!(clear_halt_in.index(), 0x81);
+
+        // 3. Automate de récupération après erreur
+        let mut step = UsbBotResetStep::Step1MassStorageReset;
+        step = bot.advance_reset_recovery(step);
+        assert_eq!(step, UsbBotResetStep::Step2ClearHaltIn);
+        step = bot.advance_reset_recovery(step);
+        assert_eq!(step, UsbBotResetStep::Step3ClearHaltOut);
+        step = bot.advance_reset_recovery(step);
+        assert_eq!(step, UsbBotResetStep::Completed);
+
+        // 4. SCSI REQUEST SENSE
+        let (cbw_sense, tag_sense) = bot.build_cbw_request_sense();
+        assert_eq!(cbw_sense.cb[0], SCSI_CMD_REQUEST_SENSE);
+        assert_eq!(cbw_sense.data_transfer_length(), 18);
+
+        let mut sense_buf = [0u8; 18];
+        sense_buf[0] = 0x70; // Current error, fixed format
+        sense_buf[2] = 0x02; // NOT READY
+        sense_buf[12] = 0x3A; // MEDIUM NOT PRESENT
+        sense_buf[13] = 0x00;
+
+        let sense = bot
+            .parse_request_sense_response(&sense_buf)
+            .expect("parse sense");
+        assert!(sense.is_valid());
+        assert!(sense.is_not_ready());
+        assert_eq!(sense.asc, 0x3A);
+
+        // 5. SCSI MODE SENSE (6) & Write Protect
+        let (cbw_mode, _) = bot.build_cbw_mode_sense_6(0x3F);
+        assert_eq!(cbw_mode.cb[0], SCSI_CMD_MODE_SENSE_6);
+
+        let mode_buf_ro = [0x03, 0x00, 0x80, 0x00]; // WP bit = 1
+        assert!(bot.parse_mode_sense_6_write_protect(&mode_buf_ro));
+
+        let mode_buf_rw = [0x03, 0x00, 0x00, 0x00]; // WP bit = 0
+        assert!(!bot.parse_mode_sense_6_write_protect(&mode_buf_rw));
+
+        // 6. Validation CSW complète (Spécification RFC BOT 1.0)
+        let mut valid_csw = [0u8; 13];
+        valid_csw[0..4].copy_from_slice(&CSW_SIGNATURE.to_le_bytes());
+        valid_csw[4..8].copy_from_slice(&tag_sense.to_le_bytes());
+        valid_csw[8..12].copy_from_slice(&0u32.to_le_bytes()); // residue = 0
+        valid_csw[12] = CSW_STATUS_PASSED;
+
+        let residue = bot
+            .verify_csw_full(tag_sense, 18, &valid_csw)
+            .expect("verify csw passed");
+        assert_eq!(residue, 0);
+
+        // Test Tag Mismatch
+        let bad_tag_res = bot.verify_csw_full(tag_sense + 1, 18, &valid_csw);
+        assert_eq!(bad_tag_res, Err(UsbBotError::TagMismatch));
+
+        // Test Phase Error
+        valid_csw[12] = CSW_STATUS_PHASE_ERROR;
+        assert_eq!(
+            bot.verify_csw_full(tag_sense, 18, &valid_csw),
+            Err(UsbBotError::PhaseError)
+        );
+
+        // 7. UsbMassStorageDisk
+        let inq = ScsiInquiryInfo {
+            peripheral_device_type: 0,
+            is_removable: true,
+            vendor_id: *b"KINGSTON",
+            product_id: *b"DATATRAVELER 3.0",
+            product_rev: *b"PMAP",
+        };
+        bot.total_sectors = 15_625_000;
+        bot.sector_size = 512;
+        let disk = UsbMassStorageDisk::new(bot, inq);
+        assert_eq!(disk.total_sectors(), 15_625_000);
+        assert_eq!(disk.sector_size(), 512);
+        assert_eq!(disk.capacity_bytes(), 15_625_000 * 512);
+        assert!(disk.validate_lba_range(0, 100));
+        assert!(disk.validate_lba_range(15_624_900, 100));
+        assert!(!disk.validate_lba_range(15_625_000, 1));
+        assert!(!disk.validate_lba_range(0, 0));
     }
 }
