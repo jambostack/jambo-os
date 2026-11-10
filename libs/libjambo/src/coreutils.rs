@@ -14254,6 +14254,320 @@ pub fn run_mktemp(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
     0
 }
 
+/// Utilitaire Coreutils Ring 3 : `fmt` (POSIX / GNU Coreutils)
+///
+/// Formateur de paragraphes et de flux de texte sans césure arbitraire.
+/// Reconditionne le texte en regroupant les mots pour respecter une largeur de ligne maximale (`-w` / `--width`),
+/// avec préservation de l'indentation de préfixe (`-p` / `--prefix`) et gestion des paragraphes séparés par des lignes vides.
+///
+/// # Options supportées :
+/// - `-w N`, `--width=N`, `-N` : Fixe la largeur maximale de ligne (75 caractères par défaut).
+/// - `-p STR`, `--prefix=STR` : Ne reformate que les lignes débutant par le préfixe spécifié.
+/// - `-s`, `--split-only` : Ne fusionne pas les lignes courtes, coupe seulement les lignes trop longues.
+/// - `--help` : Affiche l'aide d'utilisation.
+pub fn run_fmt(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    let mut width: usize = 75;
+    let mut split_only = false;
+    let mut prefix_opt: Option<&str> = None;
+    let mut file_args: [&str; 32] = [""; 32];
+    let mut file_count = 0usize;
+    let mut parsing_options = true;
+
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i].trim();
+        if parsing_options && arg == "--" {
+            parsing_options = false;
+            i += 1;
+            continue;
+        }
+
+        if parsing_options && arg.starts_with('-') && arg != "-" {
+            if arg == "--help" {
+                let _ = sys_write(
+                    err_fd,
+                    b"Usage: fmt [-WIDTH] [OPTION]... [FILE]...\n\
+Reformat each paragraph in the FILE(s), writing to standard output.\n\n\
+  -s, --split-only          split long lines, but do not refill\n\
+  -w, --width=WIDTH         maximum line width (default of 75 columns)\n\
+  -p, --prefix=STRING       reformat only lines beginning with STRING\n\
+      --help                display this help and exit\n",
+                );
+                return 0;
+            } else if arg == "-s" || arg == "--split-only" {
+                split_only = true;
+                i += 1;
+            } else if arg == "-w" {
+                if i + 1 < args.len() {
+                    let parsed = parse_i64(args[i + 1].trim());
+                    if parsed > 0 {
+                        width = parsed as usize;
+                    } else {
+                        let _ = sys_write(err_fd, b"fmt: invalid width\n");
+                        return 1;
+                    }
+                    i += 2;
+                } else {
+                    let _ = sys_write(err_fd, b"fmt: option requires an argument -- 'w'\n");
+                    return 1;
+                }
+            } else if let Some(val) = arg.strip_prefix("--width=") {
+                let parsed = parse_i64(val.trim());
+                if parsed > 0 {
+                    width = parsed as usize;
+                } else {
+                    let _ = sys_write(err_fd, b"fmt: invalid width\n");
+                    return 1;
+                }
+                i += 1;
+            } else if arg.starts_with("-w") && arg.len() > 2 {
+                let parsed = parse_i64(&arg[2..]);
+                if parsed > 0 {
+                    width = parsed as usize;
+                } else {
+                    let _ = sys_write(err_fd, b"fmt: invalid width\n");
+                    return 1;
+                }
+                i += 1;
+            } else if arg == "-p" {
+                if i + 1 < args.len() {
+                    prefix_opt = Some(args[i + 1]);
+                    i += 2;
+                } else {
+                    let _ = sys_write(err_fd, b"fmt: option requires an argument -- 'p'\n");
+                    return 1;
+                }
+            } else if let Some(val) = arg.strip_prefix("--prefix=") {
+                prefix_opt = Some(val);
+                i += 1;
+            } else if arg.starts_with('-')
+                && arg.len() > 1
+                && arg[1..].chars().all(|c| c.is_ascii_digit())
+            {
+                let parsed = parse_i64(&arg[1..]);
+                if parsed > 0 {
+                    width = parsed as usize;
+                } else {
+                    let _ = sys_write(err_fd, b"fmt: invalid width\n");
+                    return 1;
+                }
+                i += 1;
+            } else {
+                let _ = sys_write(err_fd, b"fmt: unrecognized option '");
+                let _ = sys_write(err_fd, arg.as_bytes());
+                let _ = sys_write(err_fd, b"'\n");
+                return 1;
+            }
+        } else {
+            if file_count < file_args.len() {
+                file_args[file_count] = arg;
+                file_count += 1;
+            }
+            i += 1;
+        }
+    }
+
+    if width == 0 {
+        width = 75;
+    }
+
+    // Fonction auxiliaire pour formater le flux d'un descripteur de fichier
+    let fmt_fd_stream = |fd: i32| -> bool {
+        let mut in_chunk = [0u8; 1024];
+        let mut line_buf = [0u8; 2048];
+        let mut line_len = 0usize;
+
+        // État de reformatage de paragraphe (quand split_only est faux)
+        let mut current_line_len = 0usize;
+        let mut current_line = [0u8; 256];
+
+        let flush_reformat_line = |out_len: &mut usize, buf: &mut [u8]| {
+            if *out_len > 0 {
+                let _ = sys_write(out_fd, &buf[..*out_len]);
+                let _ = sys_write(out_fd, b"\n");
+                *out_len = 0;
+            }
+        };
+
+        let process_line = |l: &[u8], cur_len: &mut usize, cur_buf: &mut [u8; 256]| {
+            let is_empty = l.iter().all(|&c| c == b' ' || c == b'\t');
+            if is_empty {
+                // Fin de paragraphe : flush la ligne accumulée
+                if *cur_len > 0 {
+                    let _ = sys_write(out_fd, &cur_buf[..*cur_len]);
+                    let _ = sys_write(out_fd, b"\n");
+                    *cur_len = 0;
+                }
+                let _ = sys_write(out_fd, b"\n");
+                return;
+            }
+
+            if let Some(prefix) = prefix_opt {
+                if !l.starts_with(prefix.as_bytes()) {
+                    // La ligne ne correspond pas au préfixe demandé, on l'émet intacte
+                    if *cur_len > 0 {
+                        let _ = sys_write(out_fd, &cur_buf[..*cur_len]);
+                        let _ = sys_write(out_fd, b"\n");
+                        *cur_len = 0;
+                    }
+                    let _ = sys_write(out_fd, l);
+                    let _ = sys_write(out_fd, b"\n");
+                    return;
+                }
+            }
+
+            if split_only {
+                // Mode split-only : ne fusionne pas les lignes courtes, coupe uniquement les mots qui dépassent width
+                let mut col = 0usize;
+                let mut word_start = None;
+                let mut line_out = [0u8; 256];
+                let mut out_idx = 0usize;
+
+                let mut w_i = 0;
+                while w_i <= l.len() {
+                    let is_space = if w_i < l.len() {
+                        l[w_i] == b' ' || l[w_i] == b'\t'
+                    } else {
+                        true
+                    };
+
+                    if !is_space && word_start.is_none() {
+                        word_start = Some(w_i);
+                    } else if is_space && word_start.is_some() {
+                        let ws = word_start.unwrap();
+                        let word = &l[ws..w_i];
+                        word_start = None;
+
+                        if out_idx > 0 && col + 1 + word.len() > width {
+                            // Coupure de ligne
+                            let _ = sys_write(out_fd, &line_out[..out_idx]);
+                            let _ = sys_write(out_fd, b"\n");
+                            out_idx = 0;
+                            col = 0;
+                        }
+
+                        if out_idx > 0 && out_idx < line_out.len() {
+                            line_out[out_idx] = b' ';
+                            out_idx += 1;
+                            col += 1;
+                        }
+
+                        let copy_len = word.len().min(line_out.len().saturating_sub(out_idx));
+                        line_out[out_idx..out_idx + copy_len].copy_from_slice(&word[..copy_len]);
+                        out_idx += copy_len;
+                        col += copy_len;
+                    }
+                    w_i += 1;
+                }
+
+                if out_idx > 0 {
+                    let _ = sys_write(out_fd, &line_out[..out_idx]);
+                    let _ = sys_write(out_fd, b"\n");
+                }
+            } else {
+                // Mode reformatage standard : assemble les mots en lignes continues de largeur `width`
+                let mut word_start = None;
+                let mut w_i = 0;
+                while w_i <= l.len() {
+                    let is_space = if w_i < l.len() {
+                        l[w_i] == b' ' || l[w_i] == b'\t'
+                    } else {
+                        true
+                    };
+
+                    if !is_space && word_start.is_none() {
+                        word_start = Some(w_i);
+                    } else if is_space && word_start.is_some() {
+                        let ws = word_start.unwrap();
+                        let word = &l[ws..w_i];
+                        word_start = None;
+
+                        // Vérifier si le mot tient sur la ligne en cours
+                        let extra_space = if *cur_len > 0 { 1 } else { 0 };
+                        if *cur_len > 0 && *cur_len + extra_space + word.len() > width {
+                            // Émettre la ligne pleine
+                            let _ = sys_write(out_fd, &cur_buf[..*cur_len]);
+                            let _ = sys_write(out_fd, b"\n");
+                            *cur_len = 0;
+                        }
+
+                        if *cur_len > 0 && *cur_len < cur_buf.len() {
+                            cur_buf[*cur_len] = b' ';
+                            *cur_len += 1;
+                        }
+
+                        let copy_len = word.len().min(cur_buf.len().saturating_sub(*cur_len));
+                        cur_buf[*cur_len..*cur_len + copy_len].copy_from_slice(&word[..copy_len]);
+                        *cur_len += copy_len;
+                    }
+                    w_i += 1;
+                }
+            }
+        };
+
+        loop {
+            let n = sys_read(fd, &mut in_chunk);
+            if n <= 0 {
+                break;
+            }
+            for &b in &in_chunk[..n as usize] {
+                if b == b'\n' {
+                    process_line(
+                        &line_buf[..line_len],
+                        &mut current_line_len,
+                        &mut current_line,
+                    );
+                    line_len = 0;
+                } else if line_len < line_buf.len() {
+                    line_buf[line_len] = b;
+                    line_len += 1;
+                }
+            }
+        }
+
+        if line_len > 0 {
+            process_line(
+                &line_buf[..line_len],
+                &mut current_line_len,
+                &mut current_line,
+            );
+        }
+
+        flush_reformat_line(&mut current_line_len, &mut current_line);
+        true
+    };
+
+    if file_count == 0 {
+        // Lecture depuis l'entrée standard
+        if !fmt_fd_stream(in_fd) {
+            return 1;
+        }
+    } else {
+        for f in &file_args[..file_count] {
+            if *f == "-" {
+                if !fmt_fd_stream(in_fd) {
+                    return 1;
+                }
+            } else {
+                let fd = sys_open(f, crate::vfs::O_RDONLY);
+                if fd < 0 {
+                    let _ = sys_write(err_fd, b"fmt: cannot open '");
+                    let _ = sys_write(err_fd, f.as_bytes());
+                    let _ = sys_write(err_fd, b"': No such file or directory\n");
+                    return 1;
+                }
+                let ok = fmt_fd_stream(fd);
+                let _ = sys_close(fd);
+                if !ok {
+                    return 1;
+                }
+            }
+        }
+    }
+
+    0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -17442,5 +17756,35 @@ mod tests {
 
         // Nettoyage
         let _ = sys_unlink_pool(symlink_path);
+    }
+
+    #[test]
+    fn test_fmt_word_wrapping_and_paragraphs() {
+        let text = b"Le noyau JamboOS execute tous ses microservices Ring 3 de maniere strictement confinee.\n\
+Chaque processus dispose de son propre CR3 sans aucun privilege materiel direct.\n";
+
+        let (in_r, in_w) = crate::vfs::pipe().expect("pipe in");
+        let (out_r, out_w) = crate::vfs::pipe().expect("pipe out");
+
+        let _ = sys_write(in_w, text);
+        let _ = sys_close(in_w);
+
+        let code = run_fmt(&["-w", "40"], in_r, out_w, 2);
+        let _ = sys_close(in_r);
+        let _ = sys_close(out_w);
+
+        assert_eq!(code, 0);
+
+        let mut out_buf = [0u8; 512];
+        let n = sys_read(out_r, &mut out_buf);
+        let _ = sys_close(out_r);
+        assert!(n > 0);
+
+        let formatted = core::str::from_utf8(&out_buf[..n as usize]).unwrap();
+        for line in formatted.lines() {
+            assert!(line.len() <= 40, "Line exceeds width: '{}'", line);
+        }
+        assert!(formatted.contains("JamboOS"));
+        assert!(formatted.contains("confinee."));
     }
 }

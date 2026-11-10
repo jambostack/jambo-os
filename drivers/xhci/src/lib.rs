@@ -354,6 +354,71 @@ impl Trb {
         }
     }
 
+    /// Construit un TRB Setup Stage pour transfert de contrôle xHCI (Endpoint 0).
+    /// `setup` contient les 8 octets du paquet USB Setup (bmRequestType, bRequest, wValue, wIndex, wLength).
+    /// `trt` spécifie le Transfer Type : 0 = No Data Stage, 2 = OUT Data Stage, 3 = IN Data Stage.
+    #[inline]
+    pub fn setup_stage(setup: &UsbSetupPacket, trt: u32, cycle: bool) -> Self {
+        let mut control = ((TRB_TYPE_SETUP_STAGE & 0x3F) << 10) | if cycle { 1 } else { 0 };
+        control |= TRB_FLAG_IDT; // Les 8 octets de setup sont toujours stockés en direct dans parameter
+        control |= (trt & 0x03) << 16; // Bits TRT (Transfer Type) : bits 17:16
+
+        Self {
+            parameter: setup.to_raw_u64(),
+            status: 8, // Longueur fixe du setup packet : 8 octets
+            control,
+        }
+    }
+
+    /// Construit un TRB Data Stage pour transfert de contrôle xHCI.
+    /// `data_iova` : adresse physique du buffer mémoire.
+    /// `length` : taille du transfert en octets.
+    /// `is_in` : vrai pour IN (Device to Host), faux pour OUT.
+    #[inline]
+    pub fn data_stage(
+        data_iova: u64,
+        length: u32,
+        is_in: bool,
+        cycle: bool,
+        ioc: bool,
+        isp: bool,
+    ) -> Self {
+        let mut control = ((TRB_TYPE_DATA_STAGE & 0x3F) << 10) | if cycle { 1 } else { 0 };
+        if is_in {
+            control |= 1 << 16; // Bit DIR (Direction) : 1 = IN, 0 = OUT
+        }
+        if ioc {
+            control |= TRB_FLAG_IOC;
+        }
+        if isp {
+            control |= TRB_FLAG_ISP;
+        }
+        let status = length & 0x1FFFF;
+        Self {
+            parameter: data_iova,
+            status,
+            control,
+        }
+    }
+
+    /// Construit un TRB Status Stage pour transfert de contrôle xHCI.
+    /// `is_in` : vrai pour un handshake IN (après un OUT data ou sans données), faux pour OUT.
+    #[inline]
+    pub fn status_stage(is_in: bool, cycle: bool, ioc: bool) -> Self {
+        let mut control = ((TRB_TYPE_STATUS_STAGE & 0x3F) << 10) | if cycle { 1 } else { 0 };
+        if is_in {
+            control |= 1 << 16; // Bit DIR : 1 = IN, 0 = OUT
+        }
+        if ioc {
+            control |= TRB_FLAG_IOC;
+        }
+        Self {
+            parameter: 0,
+            status: 0,
+            control,
+        }
+    }
+
     /// Indique si le bit de cycle (Cycle Bit - C) est actif.
     #[inline]
     pub fn cycle_bit(&self) -> bool {
@@ -455,7 +520,12 @@ pub const PORTSC_CCS: u32 = 1 << 0; // Current Connect Status
 pub const PORTSC_PED: u32 = 1 << 1; // Port Enabled/Disabled
 pub const PORTSC_OCA: u32 = 1 << 3; // Over-current Active
 pub const PORTSC_PR: u32 = 1 << 4; // Port Reset
+pub const PORTSC_PLS_SHIFT: u32 = 5; // Port Link State Shift (bits 8:5)
+pub const PORTSC_PLS_MASK: u32 = 0x0F << PORTSC_PLS_SHIFT;
 pub const PORTSC_PP: u32 = 1 << 9; // Port Power
+pub const PORTSC_SPEED_SHIFT: u32 = 10; // Port Speed Shift (bits 13:10)
+pub const PORTSC_SPEED_MASK: u32 = 0x0F << PORTSC_SPEED_SHIFT;
+pub const PORTSC_LWS: u32 = 1 << 16; // Port Link State Write Strobe
 pub const PORTSC_CSC: u32 = 1 << 17; // Connect Status Change (RW1C)
 pub const PORTSC_PEC: u32 = 1 << 18; // Port Enabled/Disabled Change (RW1C)
 pub const PORTSC_WRC: u32 = 1 << 19; // Warm Port Reset Change (RW1C)
@@ -463,6 +533,21 @@ pub const PORTSC_OCC: u32 = 1 << 20; // Over-current Change (RW1C)
 pub const PORTSC_PRC: u32 = 1 << 21; // Port Reset Change (RW1C)
 pub const PORTSC_PLC: u32 = 1 << 22; // Port Link State Change (RW1C)
 pub const PORTSC_CEC: u32 = 1 << 23; // Port Config Error Change (RW1C)
+
+// Valeurs du Port Link State (PLS, spec xHCI 1.2 section 5.4.8)
+pub const PLS_U0: u8 = 0; // Operational state
+pub const PLS_U1: u8 = 1; // Low power standby state 1
+pub const PLS_U2: u8 = 2; // Low power standby state 2
+pub const PLS_U3: u8 = 3; // Suspend state
+pub const PLS_DISABLED: u8 = 4; // Port disabled
+pub const PLS_RXDETECT: u8 = 5; // Receiver detection
+pub const PLS_INACTIVE: u8 = 6; // Port inactive
+pub const PLS_POLLING: u8 = 7; // Link polling
+pub const PLS_RECOVERY: u8 = 8; // Link recovery
+pub const PLS_HOT_RESET: u8 = 9; // Hot reset
+pub const PLS_COMPLIANCE_MODE: u8 = 10; // Compliance mode
+pub const PLS_TEST_MODE: u8 = 11; // Test mode
+pub const PLS_RESUME: u8 = 15; // Resume state
 
 /// Masque RW1C (Read-Write 1 to Clear) regroupant tous les bits de changement d'état xHCI
 pub const PORTSC_ALL_CHANGES_MASK: u32 =
@@ -569,6 +654,36 @@ impl PortStatus {
             mask |= PORTSC_CEC;
         }
         mask
+    }
+
+    /// Calcule la nouvelle valeur 32 bits de PORTSC pour initier une transition d'état de lien de port
+    /// (ex: U3 Suspend, Resume U0, RxDetect) selon la spécification xHCI 1.2.
+    ///
+    /// Conserve les bits d'état stables (PP), positionne le bit stroboscopique LWS (Port Link State Write Strobe),
+    /// affecte le champ PLS (bits 8:5) et efface les bits RW1C pour éviter un acquittement accidentel.
+    pub fn build_port_link_state_write(raw_portsc: u32, target_pls: u8) -> u32 {
+        // Préserve le bit PP (Port Power)
+        let pp_bit = raw_portsc & PORTSC_PP;
+        // Efface les bits RW1C (changes), le bit de reset PR, le strobe LWS et l'ancien PLS
+        let preserved = pp_bit;
+        // Positionne LWS et le nouveau PLS
+        preserved | PORTSC_LWS | (((target_pls as u32) & 0x0F) << PORTSC_PLS_SHIFT)
+    }
+
+    /// Calcule la valeur 32 bits de PORTSC pour commuter l'alimentation du port (Port Power Down ou Power Up).
+    /// Si `power_on` est vrai, positionne le bit PP (1 << 9). Si faux, le bit PP est effacé (Power Down).
+    /// Tous les bits RW1C sont masqués (mis à zéro) afin de préserver les interruptions en cours.
+    pub fn build_port_power_write(raw_portsc: u32, power_on: bool) -> u32 {
+        let mut val = 0u32;
+        if power_on {
+            val |= PORTSC_PP;
+        }
+        // Préserver le PLS actuel s'il était alimenté, sinon RxDetect / Disabled
+        if power_on {
+            val |= raw_portsc & PORTSC_PLS_MASK;
+        }
+        // Ne jamais réécrire les bits RW1C ni PR
+        val
     }
 }
 
@@ -4401,6 +4516,118 @@ impl XhciController {
         Ok(idx)
     }
 
+    /// Soumet un transfert de contrôle asynchrone complet en 2 ou 3 étapes sur un endpoint de contrôle (Endpoint 0).
+    ///
+    /// Génère :
+    /// 1. Un TRB `Setup Stage` encapsulant le paquet de requête USB `setup`.
+    /// 2. Zéro ou un TRB `Data Stage` si `data_length > 0` pointant vers `data_iova` avec direction IN/OUT.
+    /// 3. Un TRB `Status Stage` avec la direction opposée et drapeau d'interruption `ioc`.
+    ///
+    /// Renvoie l'indice du premier TRB inséré sur l'anneau de transfert de l'endpoint.
+    pub fn queue_control_transfer(
+        &mut self,
+        ep_id: u8,
+        setup: &UsbSetupPacket,
+        data_iova: u64,
+        data_length: u32,
+        is_in: bool,
+        ioc: bool,
+    ) -> Result<usize, SysError> {
+        if !self.ready {
+            return Err(SysError::ResourceBusy);
+        }
+        if ep_id as usize >= MAX_ENDPOINTS {
+            return Err(SysError::InvalidArgument);
+        }
+        let ep = &mut self.ep_rings[ep_id as usize];
+        if !ep.active {
+            return Err(SysError::ResourceBusy);
+        }
+
+        let first_idx = ep.ring.enqueue_idx;
+        let trt = if data_length == 0 {
+            0 // No data stage
+        } else if is_in {
+            3 // IN data stage
+        } else {
+            2 // OUT data stage
+        };
+
+        // 1. Setup Stage TRB
+        let setup_trb = Trb::setup_stage(setup, trt, ep.ring.cycle_bit);
+        let s_idx = ep.ring.enqueue_idx;
+        let s_next = (s_idx + 1) % RING_ENTRIES;
+        if s_next == 0 {
+            let link = Trb::link(0, ep.ring.cycle_bit, true);
+            ep.ring.trbs[s_idx] = link;
+            ep.ring.cycle_bit = !ep.ring.cycle_bit;
+            ep.ring.enqueue_idx = 0;
+            // Réinsère setup en tête
+            let s2_idx = ep.ring.enqueue_idx;
+            let setup_trb2 = Trb::setup_stage(setup, trt, ep.ring.cycle_bit);
+            ep.ring.trbs[s2_idx] = setup_trb2;
+            ep.ring.enqueue_idx = (s2_idx + 1) % RING_ENTRIES;
+        } else {
+            ep.ring.trbs[s_idx] = setup_trb;
+            ep.ring.enqueue_idx = s_next;
+        }
+
+        // 2. Data Stage TRB (si transfert de données)
+        if data_length > 0 {
+            let data_trb = Trb::data_stage(
+                data_iova,
+                data_length,
+                is_in,
+                ep.ring.cycle_bit,
+                false,
+                true,
+            );
+            let d_idx = ep.ring.enqueue_idx;
+            let d_next = (d_idx + 1) % RING_ENTRIES;
+            if d_next == 0 {
+                let link = Trb::link(0, ep.ring.cycle_bit, true);
+                ep.ring.trbs[d_idx] = link;
+                ep.ring.cycle_bit = !ep.ring.cycle_bit;
+                ep.ring.enqueue_idx = 0;
+                let d2_idx = ep.ring.enqueue_idx;
+                let data_trb2 = Trb::data_stage(
+                    data_iova,
+                    data_length,
+                    is_in,
+                    ep.ring.cycle_bit,
+                    false,
+                    true,
+                );
+                ep.ring.trbs[d2_idx] = data_trb2;
+                ep.ring.enqueue_idx = (d2_idx + 1) % RING_ENTRIES;
+            } else {
+                ep.ring.trbs[d_idx] = data_trb;
+                ep.ring.enqueue_idx = d_next;
+            }
+        }
+
+        // 3. Status Stage TRB (direction opposée aux données, ou IN si pas de données)
+        let status_is_in = if data_length == 0 { true } else { !is_in };
+        let status_trb = Trb::status_stage(status_is_in, ep.ring.cycle_bit, ioc);
+        let st_idx = ep.ring.enqueue_idx;
+        let st_next = (st_idx + 1) % RING_ENTRIES;
+        if st_next == 0 {
+            let link = Trb::link(0, ep.ring.cycle_bit, true);
+            ep.ring.trbs[st_idx] = link;
+            ep.ring.cycle_bit = !ep.ring.cycle_bit;
+            ep.ring.enqueue_idx = 0;
+            let st2_idx = ep.ring.enqueue_idx;
+            let status_trb2 = Trb::status_stage(status_is_in, ep.ring.cycle_bit, ioc);
+            ep.ring.trbs[st2_idx] = status_trb2;
+            ep.ring.enqueue_idx = (st2_idx + 1) % RING_ENTRIES;
+        } else {
+            ep.ring.trbs[st_idx] = status_trb;
+            ep.ring.enqueue_idx = st_next;
+        }
+
+        Ok(first_idx)
+    }
+
     /// Traite un rapport USB HID reçu d'un périphérique (clavier ou souris).
     pub fn handle_hid_input(&mut self, is_mouse: bool, report: &[u8]) {
         if is_mouse {
@@ -6376,5 +6603,59 @@ mod tests {
         assert_eq!(parsed_info.mrie, 0x06);
         assert_eq!(parsed_info.interval_timer, 300);
         assert_eq!(parsed_info.report_count, 5);
+
+        // 20. Transferts de Contrôle Asynchrones & Transitions d'Énergie de Port (Suspend / Resume / Power Down)
+        let setup_pkt = UsbSetupPacket::new(0x80, 0x06, 0x0100, 0, 18); // GET_DESCRIPTOR (Device)
+        assert_eq!(setup_pkt.request_type(), 0x80);
+        assert_eq!(setup_pkt.request(), 0x06);
+        assert_eq!(setup_pkt.length(), 18);
+
+        let mut ctrl = XhciController::new();
+        ctrl.ready = true;
+
+        // Configuration d'un Endpoint de contrôle (Endpoint 0)
+        assert!(ctrl.configure_endpoint_ring(0, false).is_ok());
+        let q_ctrl_idx = ctrl
+            .queue_control_transfer(0, &setup_pkt, 0x8000_0000, 18, true, true)
+            .expect("queue control transfer");
+        assert_eq!(q_ctrl_idx, 0);
+
+        let ep0 = &ctrl.ep_rings[0];
+        // TRB Setup Stage : Type=2, IDT=1, TRT=3 (IN Data Stage)
+        assert_eq!(ep0.ring.trbs[0].trb_type(), TRB_TYPE_SETUP_STAGE);
+        assert_eq!(ep0.ring.trbs[0].status, 8);
+        assert_ne!(ep0.ring.trbs[0].control & TRB_FLAG_IDT, 0);
+        assert_eq!((ep0.ring.trbs[0].control >> 16) & 0x03, 3);
+
+        // TRB Data Stage : Type=3, Length=18, DIR=IN (bit 16 = 1), ISP=1
+        assert_eq!(ep0.ring.trbs[1].trb_type(), TRB_TYPE_DATA_STAGE);
+        assert_eq!(ep0.ring.trbs[1].parameter, 0x8000_0000);
+        assert_eq!(ep0.ring.trbs[1].status & 0x1FFFF, 18);
+        assert_ne!(ep0.ring.trbs[1].control & (1 << 16), 0);
+        assert_ne!(ep0.ring.trbs[1].control & TRB_FLAG_ISP, 0);
+
+        // TRB Status Stage : Type=4, DIR=OUT (bit 16 = 0), IOC=1
+        assert_eq!(ep0.ring.trbs[2].trb_type(), TRB_TYPE_STATUS_STAGE);
+        assert_eq!(ep0.ring.trbs[2].control & (1 << 16), 0);
+        assert_ne!(ep0.ring.trbs[2].control & TRB_FLAG_IOC, 0);
+
+        // Transitions d'alimentation et d'état de lien de port xHCI
+        let raw_operational = 1 | (1 << 1) | (1 << 9) | ((PLS_U0 as u32) << PORTSC_PLS_SHIFT);
+        let write_suspend = PortStatus::build_port_link_state_write(raw_operational, PLS_U3);
+        assert_ne!(write_suspend & PORTSC_LWS, 0);
+        assert_eq!(
+            (write_suspend & PORTSC_PLS_MASK) >> PORTSC_PLS_SHIFT,
+            PLS_U3 as u32
+        );
+        assert_ne!(write_suspend & PORTSC_PP, 0);
+        assert_eq!(write_suspend & PORTSC_ALL_CHANGES_MASK, 0);
+
+        let write_power_down = PortStatus::build_port_power_write(raw_operational, false);
+        assert_eq!(write_power_down & PORTSC_PP, 0);
+        assert_eq!(write_power_down & PORTSC_ALL_CHANGES_MASK, 0);
+
+        let write_power_up = PortStatus::build_port_power_write(write_power_down, true);
+        assert_ne!(write_power_up & PORTSC_PP, 0);
+        assert_eq!(write_power_up & PORTSC_ALL_CHANGES_MASK, 0);
     }
 }
