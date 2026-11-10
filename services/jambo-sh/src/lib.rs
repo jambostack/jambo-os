@@ -560,6 +560,7 @@ impl JamboShell {
             "uname" | "/bin/uname" | "bin/uname" => self.cmd_uname(args, out),
             "cut" | "/bin/cut" | "bin/cut" => self.cmd_cut(args, out),
             "paste" | "/bin/paste" | "bin/paste" => self.cmd_paste(args, out),
+            "comm" | "/bin/comm" | "bin/comm" => self.cmd_comm(args, out),
             "version" => self.cmd_version(out),
             "uptime" => self.cmd_uptime(out),
             "caps" => self.cmd_caps(out),
@@ -714,7 +715,7 @@ impl JamboShell {
 
     fn cmd_coreutils(&self, out: &mut [u8]) -> (ShellStatus, usize) {
         let text = b"Utilitaires Coreutils Ring 3 (services/jambo-coreutils) :\n\
-  Binaires disponibles : /bin/echo, /bin/cat, /bin/head, /bin/tail, /bin/touch, /bin/mkdir, /bin/rm, /bin/cp, /bin/mv, /bin/tee, /bin/env, /bin/grep, /bin/sort, /bin/uniq, /bin/find, /bin/chmod, /bin/chown, /bin/id, /bin/du, /bin/df, /bin/uname, /bin/cut, /bin/paste, /bin/wc, /bin/true, /bin/false, /bin/ls (27 utilitaires)\n\
+  Binaires disponibles : /bin/echo, /bin/cat, /bin/head, /bin/tail, /bin/touch, /bin/mkdir, /bin/rm, /bin/cp, /bin/mv, /bin/tee, /bin/env, /bin/grep, /bin/sort, /bin/uniq, /bin/find, /bin/chmod, /bin/chown, /bin/id, /bin/du, /bin/df, /bin/uname, /bin/cut, /bin/paste, /bin/comm, /bin/wc, /bin/true, /bin/false, /bin/ls (28 utilitaires)\n\
   Architecture & ABI   : System V AMD64 ELF64 (ET_EXEC / Ring 3 Userland)\n\
   Point d'entree       : _start (parsing argc/argv sur pile System V)\n\
   Terminaison          : Syscall 11 ThreadExit avec propagation code de retour POSIX\n\
@@ -1118,6 +1119,26 @@ Utilitaire d'installation JamboOS (Serie 0.*.*)\n\
             }
         } else {
             let msg = b"paste: pipe creation failed\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
+    }
+
+    fn cmd_comm(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if let Ok((r, w)) = libjambo::vfs::pipe() {
+            let code = libjambo::coreutils::run_comm(args, 0, w, w);
+            let _ = libjambo::coreutils::sys_close(w);
+            let n = libjambo::coreutils::sys_read(r, out);
+            let _ = libjambo::coreutils::sys_close(r);
+            let len = if n > 0 { n as usize } else { 0 };
+            if code == 0 {
+                (ShellStatus::Success, len)
+            } else {
+                (ShellStatus::ExecutionFailed, len)
+            }
+        } else {
+            let msg = b"comm: pipe creation failed\n";
             let len = msg.len().min(out.len());
             out[..len].copy_from_slice(&msg[..len]);
             (ShellStatus::ExecutionFailed, len)
@@ -13530,9 +13551,10 @@ mod tests {
         let s_err = core::str::from_utf8(&out[..len_err]).unwrap();
         assert!(s_err.contains("auth: failed to revoke session 99"));
 
-        // 4. Revocation sans argument revoque la session 1 par defaut sur un shell frais
-        let mut shell2 = JamboShell::new();
-        let (st2, len2) = shell2.execute_line("auth revoke", &mut out);
+        // 4. Revocation sans argument revoque la session 1 par defaut sur un daemon auth réinitialisé
+        shell.auth_daemon = JamboAuthDaemon::new();
+        shell.auth_daemon.init_defaults();
+        let (st2, len2) = shell.execute_line("auth revoke", &mut out);
         assert_eq!(st2, ShellStatus::Success);
         let s2 = core::str::from_utf8(&out[..len2]).unwrap();
         assert!(s2.contains("[AUTH] Atomically Revoking Session 1..."));
@@ -17142,9 +17164,10 @@ mod tests {
         let (st, len) = shell.execute_line("coreutils", &mut out);
         assert_eq!(st, ShellStatus::Success);
         let s = core::str::from_utf8(&out[..len]).unwrap();
-        assert!(s.contains("27 utilitaires"));
+        assert!(s.contains("28 utilitaires"));
         assert!(s.contains("/bin/cut"));
         assert!(s.contains("/bin/paste"));
+        assert!(s.contains("/bin/comm"));
         assert!(s.contains("/bin/uname"));
         assert!(s.contains("/bin/head"));
         assert!(s.contains("/bin/tail"));
@@ -17537,6 +17560,51 @@ mod tests {
 
         // 3. Option invalide -> ExecutionFailed
         let (st_err, _) = shell.execute_line("paste --invalid-flag /tmp/sh_paste1.txt", &mut out);
+        assert_eq!(st_err, ShellStatus::ExecutionFailed);
+
+        let _ = libjambo::coreutils::sys_unlink_pool(path1);
+        let _ = libjambo::coreutils::sys_unlink_pool(path2);
+    }
+
+    #[test]
+    fn test_comm_shell_execution() {
+        let mut shell = JamboShell::new();
+        let mut out = [0u8; 1024];
+
+        let path1 = "/tmp/sh_comm1.txt";
+        let path2 = "/tmp/sh_comm2.txt";
+
+        let fd1 =
+            libjambo::coreutils::sys_open(path1, libjambo::vfs::O_CREAT | libjambo::vfs::O_WRONLY);
+        assert!(fd1 >= 0);
+        let _ = libjambo::coreutils::sys_write(fd1, b"apple\nbanana\ncherry\n");
+        libjambo::coreutils::sys_close(fd1);
+
+        let fd2 =
+            libjambo::coreutils::sys_open(path2, libjambo::vfs::O_CREAT | libjambo::vfs::O_WRONLY);
+        assert!(fd2 >= 0);
+        let _ = libjambo::coreutils::sys_write(fd2, b"banana\ncherry\ndate\n");
+        libjambo::coreutils::sys_close(fd2);
+
+        // 1. Exécution via commande interne comm avec suppression colonnes 1 et 2 (-12)
+        let (st, len) =
+            shell.execute_line("comm -12 /tmp/sh_comm1.txt /tmp/sh_comm2.txt", &mut out);
+        assert_eq!(st, ShellStatus::Success);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert_eq!(s, "banana\ncherry\n");
+
+        // 2. Exécution via binaire /bin/comm avec délimiteur personnalisé
+        let (st_bin, len_bin) = shell.execute_line(
+            "/bin/comm --output-delimiter=| /tmp/sh_comm1.txt /tmp/sh_comm2.txt",
+            &mut out,
+        );
+        assert_eq!(st_bin, ShellStatus::Success);
+        let s_bin = core::str::from_utf8(&out[..len_bin]).unwrap();
+        assert!(s_bin.contains("apple\n||banana\n||cherry\n|date\n"));
+
+        // 3. Option invalide -> ExecutionFailed
+        let (st_err, _) =
+            shell.execute_line("comm -9 /tmp/sh_comm1.txt /tmp/sh_comm2.txt", &mut out);
         assert_eq!(st_err, ShellStatus::ExecutionFailed);
 
         let _ = libjambo::coreutils::sys_unlink_pool(path1);

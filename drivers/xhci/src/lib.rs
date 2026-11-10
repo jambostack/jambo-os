@@ -48,6 +48,11 @@ pub const TRB_TYPE_HOST_CONTROLLER_EVENT: u32 = 37;
 pub const TRB_TYPE_DEVICE_NOTIFICATION: u32 = 38;
 pub const TRB_TYPE_MFINDEX_WRAP: u32 = 39;
 
+// Registres xHCI Runtime & Synchronisation Microtrames (MFINDEX)
+pub const REG_MFINDEX_OFFSET: usize = 0x0000;
+pub const MFINDEX_MASK: u32 = 0x3FFF; // 14 bits (0..16383 microframes)
+pub const MFINDEX_MICROFRAME_US: u32 = 125; // 125 us par microframe USB
+
 // Codes de complétion TRB standard
 pub const TRB_COMP_INVALID: u8 = 0;
 pub const TRB_COMP_SUCCESS: u8 = 1;
@@ -59,8 +64,12 @@ pub const TRB_COMP_STALL_ERROR: u8 = 6;
 pub const TRB_COMP_RESOURCE_ERROR: u8 = 7;
 pub const TRB_COMP_BANDWIDTH_ERROR: u8 = 8;
 pub const TRB_COMP_NO_SLOTS_AVAILABLE: u8 = 9;
-pub const TRB_COMP_EVENT_RING_FULL: u8 = 21;
+pub const TRB_COMP_RING_UNDERRUN: u8 = 15;
+pub const TRB_COMP_RING_OVERRUN: u8 = 16;
 pub const TRB_COMP_COMMAND_ABORTED: u8 = 18;
+pub const TRB_COMP_EVENT_RING_FULL: u8 = 21;
+pub const TRB_COMP_MISSED_SERVICE_ERROR: u8 = 31;
+pub const TRB_COMP_ISOCH_BUFFER_OVERRUN: u8 = 33;
 
 // Drapeaux de contrôle TRB de transfert USB 3.0
 pub const TRB_FLAG_CYCLE: u32 = 1 << 0;
@@ -1565,6 +1574,54 @@ impl UsbMouseState {
 }
 
 // ============================================================================
+// Gestion des Flux Isochrones et Synchronisation de Trames (Audio / Vidéo)
+// ============================================================================
+
+/// Type de flux multimédia isochrone temps réel
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IsochMediaType {
+    AudioPcm,
+    VideoUvc,
+    GenericStream,
+}
+
+/// Contexte de synchronisation et de métriques d'un flux Isochrone xHCI
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IsochStreamContext {
+    pub endpoint_id: u8,
+    pub media_type: IsochMediaType,
+    pub interval_microframes: u32,
+    pub max_packet_size: u32,
+    pub mult: u8,
+    pub max_burst: u8,
+    pub last_scheduled_frame_id: u32,
+    pub synced_packets: u64,
+    pub dropped_packets: u64,
+    pub total_bytes: u64,
+}
+
+/// Résultat de la planification d'un paquet isochrone synchronisé
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IsochScheduleResult {
+    pub trb_idx: usize,
+    pub frame_id: u32,
+    pub is_sia: bool,
+    pub scheduled_microframe: u32,
+}
+
+/// Résultat du traitement d'un événement de transfert Isochrone
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IsochEventStatus {
+    pub trb_idx: usize,
+    pub bytes_transferred: u32,
+    pub completed: bool,
+    pub missed_service: bool,
+    pub buffer_overrun: bool,
+    pub ring_underrun: bool,
+    pub completion_code: u8,
+}
+
+// ============================================================================
 // Contrôleur xHCI en Espace Utilisateur (Ring 3)
 // ============================================================================
 
@@ -1575,8 +1632,11 @@ pub struct XhciController {
     pub max_slots: u8,
     pub max_ports: u8,
     pub doorbell_array_offset: u32,
+    pub runtime_offset: u32,
+    pub mfindex: u32,
     pub cmd_ring: XhciRing,
     pub ep_rings: [EndpointTransferRing; MAX_ENDPOINTS],
+    pub isoch_streams: [Option<IsochStreamContext>; MAX_ENDPOINTS],
     pub keyboard: UsbKeyboardState,
     pub mouse: UsbMouseState,
     pub interrupter: XhciInterrupter,
@@ -1607,8 +1667,11 @@ impl XhciController {
             max_slots: 16,
             max_ports: 8,
             doorbell_array_offset: 0x2000, // Décalage Doorbell standard
+            runtime_offset: 0x1000,        // Décalage RTSOFF standard
+            mfindex: 0,
             cmd_ring: XhciRing::new(),
             ep_rings,
+            isoch_streams: [None; MAX_ENDPOINTS],
             keyboard: UsbKeyboardState {
                 left_ctrl: false,
                 left_shift: false,
@@ -1640,6 +1703,7 @@ impl XhciController {
         self.bar0_base = bar0.base_address;
         self.cap_length = 0x20;
         self.doorbell_array_offset = 0x2000;
+        self.runtime_offset = 0x1000;
         self.ready = true;
         Ok(())
     }
@@ -2029,6 +2093,178 @@ impl XhciController {
             Ok(status)
         } else {
             Err(SysError::BadAddress)
+        }
+    }
+
+    /// Lit la valeur courante du registre de microtrame MFINDEX (14 bits)
+    #[inline]
+    pub fn read_mfindex(&self) -> u32 {
+        self.mfindex & MFINDEX_MASK
+    }
+
+    /// Retourne le numéro de trame (Frame ID) USB courant [0..2047] dérivé de MFINDEX (microframe >> 3)
+    #[inline]
+    pub fn current_frame_id(&self) -> u32 {
+        (self.read_mfindex() >> 3) & 0x7FF
+    }
+
+    /// Avance le compteur de microtrames de `microframes` et signale si un bouclage (wrap-around) a eu lieu
+    pub fn step_mfindex(&mut self, microframes: u32) -> (u32, bool) {
+        let old = self.mfindex;
+        let sum = old + microframes;
+        let new = sum & MFINDEX_MASK;
+        let wrapped = sum > MFINDEX_MASK;
+        self.mfindex = new;
+        (new, wrapped)
+    }
+
+    /// Construit un TRB d'événement de bouclage de microtrame (MFINDEX Wrap Event, type 39)
+    #[inline]
+    pub fn create_mfindex_wrap_trb(&self) -> Trb {
+        Trb {
+            parameter: 0,
+            status: 0,
+            control: ((TRB_TYPE_MFINDEX_WRAP & 0x3F) << 10) | 1,
+        }
+    }
+
+    /// Enregistre et initialise un flux isochrone temps réel (Audio / Vidéo / Streaming) sur un endpoint dédié
+    pub fn register_isoch_stream(
+        &mut self,
+        ep_id: u8,
+        media_type: IsochMediaType,
+        interval: u8,
+        max_packet_size: u32,
+        mult: u8,
+        max_burst: u8,
+    ) -> Result<(), SysError> {
+        if ep_id as usize >= MAX_ENDPOINTS {
+            return Err(SysError::InvalidArgument);
+        }
+        self.configure_endpoint_ring(ep_id, true)?;
+
+        let interval_microframes = 1u32 << interval.saturating_sub(1).min(15);
+        let stream_ctx = IsochStreamContext {
+            endpoint_id: ep_id,
+            media_type,
+            interval_microframes,
+            max_packet_size,
+            mult: mult.clamp(1, 3),
+            max_burst: max_burst.min(15),
+            last_scheduled_frame_id: self.current_frame_id(),
+            synced_packets: 0,
+            dropped_packets: 0,
+            total_bytes: 0,
+        };
+        self.isoch_streams[ep_id as usize] = Some(stream_ctx);
+        Ok(())
+    }
+
+    /// Planifie l'envoi ou la réception d'un paquet isochrone synchronisé avec l'horloge MFINDEX
+    pub fn schedule_isoch_packet(
+        &mut self,
+        ep_id: u8,
+        data_iova: u64,
+        length: u32,
+        target_frame_id: Option<u32>,
+        ioc: bool,
+        isp: bool,
+    ) -> Result<IsochScheduleResult, SysError> {
+        if !self.ready {
+            return Err(SysError::ResourceBusy);
+        }
+        if ep_id as usize >= MAX_ENDPOINTS {
+            return Err(SysError::InvalidArgument);
+        }
+
+        let is_sia;
+        let fid;
+        let cur_frame = self.current_frame_id();
+
+        if let Some(target) = target_frame_id {
+            let target_fid = target & 0x7FF;
+            // Vérification de la fenêtre temporelle dans l'anneau modulo 2048 :
+            // Si la trame cible est déjà écoulée de plus de 1024 trames en arrière, elle est en retard critique
+            let delta = target_fid.wrapping_sub(cur_frame) & 0x7FF;
+            if delta > 1024 && delta != 0 {
+                if let Some(stream) = &mut self.isoch_streams[ep_id as usize] {
+                    stream.dropped_packets += 1;
+                }
+                return Err(SysError::ResourceBusy); // Fenêtre temporelle dépassée (missed service)
+            }
+            is_sia = false;
+            fid = target_fid;
+        } else {
+            is_sia = true;
+            fid = (cur_frame + 4) & 0x7FF; // 4 trames d'avance par défaut
+        }
+
+        let trb_idx = self.queue_isoch_transfer(ep_id, data_iova, length, fid, is_sia, ioc, isp)?;
+
+        if let Some(stream) = &mut self.isoch_streams[ep_id as usize] {
+            stream.last_scheduled_frame_id = fid;
+        }
+
+        Ok(IsochScheduleResult {
+            trb_idx,
+            frame_id: fid,
+            is_sia,
+            scheduled_microframe: self.read_mfindex(),
+        })
+    }
+
+    /// Traite un événement de transfert Isochrone et met à jour les métriques de gigue et de synchronisation
+    pub fn handle_isoch_transfer_event(&mut self, trb: &Trb) -> Result<IsochEventStatus, SysError> {
+        let ep_id = trb.endpoint_id();
+        let comp_code = trb.completion_code();
+
+        if (ep_id as usize) >= MAX_ENDPOINTS {
+            return Err(SysError::InvalidArgument);
+        }
+
+        let ep = &mut self.ep_rings[ep_id as usize];
+        if !ep.active || !ep.is_isoch {
+            return Err(SysError::InvalidArgument);
+        }
+
+        let remaining = trb.transfer_remainder();
+        let requested_bytes = if ep.ring.enqueue_idx > 0 {
+            ep.ring.trbs[ep.ring.enqueue_idx - 1].status & 0x1FFFF
+        } else {
+            0
+        };
+
+        let transferred = requested_bytes.saturating_sub(remaining);
+        ep.total_bytes_transferred += transferred as u64;
+
+        let missed = comp_code == TRB_COMP_MISSED_SERVICE_ERROR;
+        let overrun = comp_code == TRB_COMP_ISOCH_BUFFER_OVERRUN;
+        let underrun = comp_code == TRB_COMP_RING_UNDERRUN;
+        let success = comp_code == TRB_COMP_SUCCESS;
+
+        if let Some(stream) = &mut self.isoch_streams[ep_id as usize] {
+            if success {
+                stream.synced_packets += 1;
+                stream.total_bytes += transferred as u64;
+            } else if missed || overrun || underrun {
+                stream.dropped_packets += 1;
+            }
+        }
+
+        let status = IsochEventStatus {
+            trb_idx: ep.ring.enqueue_idx.saturating_sub(1),
+            bytes_transferred: transferred,
+            completed: success,
+            missed_service: missed,
+            buffer_overrun: overrun,
+            ring_underrun: underrun,
+            completion_code: comp_code,
+        };
+
+        if success {
+            Ok(status)
+        } else {
+            Err(SysError::ResourceBusy)
         }
     }
 
@@ -2887,5 +3123,101 @@ mod tests {
         let mut corrupted = config_raw;
         corrupted[18] = 0; // desc_len = 0
         assert!(UsbConfigParser::parse_configuration(&corrupted).is_err());
+    }
+
+    #[test]
+    fn test_xhci_mfindex_and_isoch_audio_video_synchronization() {
+        let mut ctrl = XhciController::new();
+        ctrl.ready = true;
+
+        // 1. Test du registre MFINDEX et de la conversion en Frame ID USB
+        assert_eq!(ctrl.read_mfindex(), 0);
+        assert_eq!(ctrl.current_frame_id(), 0);
+
+        // 8 microtrames de 125 us = 1 trame (1 ms)
+        let (mf1, wrap1) = ctrl.step_mfindex(8);
+        assert_eq!(mf1, 8);
+        assert!(!wrap1);
+        assert_eq!(ctrl.current_frame_id(), 1);
+
+        // Avance jusqu'à la limite du masque 14 bits (16383)
+        let (mf2, wrap2) = ctrl.step_mfindex(16375);
+        assert_eq!(mf2, 16383);
+        assert!(!wrap2);
+        assert_eq!(ctrl.current_frame_id(), 2047);
+
+        // Bouclage (Wrap-around) modulo 16384
+        let (mf3, wrap3) = ctrl.step_mfindex(1);
+        assert_eq!(mf3, 0);
+        assert!(wrap3);
+        assert_eq!(ctrl.current_frame_id(), 0);
+
+        // Génération du TRB MFINDEX Wrap Event
+        let wrap_trb = ctrl.create_mfindex_wrap_trb();
+        assert_eq!(wrap_trb.trb_type(), TRB_TYPE_MFINDEX_WRAP);
+
+        // 2. Enregistrement d'un flux audio PCM (EP 4, interval = 1 ms, 192 bytes/packet)
+        assert!(ctrl
+            .register_isoch_stream(4, IsochMediaType::AudioPcm, 1, 192, 1, 0)
+            .is_ok());
+        let audio_stream = ctrl.isoch_streams[4].unwrap();
+        assert_eq!(audio_stream.media_type, IsochMediaType::AudioPcm);
+        assert_eq!(audio_stream.interval_microframes, 1);
+        assert_eq!(audio_stream.max_packet_size, 192);
+
+        // 3. Planification synchronisée avec Target Frame ID (+8 ms dans le futur)
+        let cur_fid = ctrl.current_frame_id();
+        let target_fid = (cur_fid + 8) & 0x7FF;
+        let res1 = ctrl
+            .schedule_isoch_packet(4, 0x1000_2000, 192, Some(target_fid), true, false)
+            .expect("Schedule isoch audio packet");
+        assert_eq!(res1.frame_id, target_fid);
+        assert!(!res1.is_sia);
+
+        // 4. Planification avec Start Isoch ASAP (SIA)
+        let res2 = ctrl
+            .schedule_isoch_packet(4, 0x1000_20C0, 192, None, true, false)
+            .expect("Schedule isoch ASAP");
+        assert!(res2.is_sia);
+
+        // 5. Détection de paquet périmé (target frame déjà passée dans le passé critique)
+        let expired_fid = cur_fid.wrapping_sub(20) & 0x7FF;
+        let expired_res =
+            ctrl.schedule_isoch_packet(4, 0x1000_3000, 192, Some(expired_fid), true, false);
+        assert_eq!(expired_res, Err(SysError::ResourceBusy));
+        assert_eq!(ctrl.isoch_streams[4].unwrap().dropped_packets, 1);
+
+        // 6. Traitement d'un événement de transfert Isochrone réussi
+        let success_event = Trb {
+            parameter: 0x1000_2000,
+            status: (TRB_COMP_SUCCESS as u32) << 24, // 0 bytes remainder
+            control: (4u32 << 16) | (TRB_TYPE_TRANSFER_EVENT << 10),
+        };
+        let ev_status = ctrl
+            .handle_isoch_transfer_event(&success_event)
+            .expect("Isoch transfer event success");
+        assert!(ev_status.completed);
+        assert_eq!(ev_status.bytes_transferred, 192);
+        assert_eq!(ctrl.isoch_streams[4].unwrap().synced_packets, 1);
+        assert_eq!(ctrl.isoch_streams[4].unwrap().total_bytes, 192);
+
+        // 7. Traitement d'un événement d'échec Missed Service Error (0x1F)
+        let missed_event = Trb {
+            parameter: 0x1000_3000,
+            status: (TRB_COMP_MISSED_SERVICE_ERROR as u32) << 24,
+            control: (4u32 << 16) | (TRB_TYPE_TRANSFER_EVENT << 10),
+        };
+        let missed_res = ctrl.handle_isoch_transfer_event(&missed_event);
+        assert_eq!(missed_res, Err(SysError::ResourceBusy));
+        assert_eq!(ctrl.isoch_streams[4].unwrap().dropped_packets, 2);
+
+        // 8. Enregistrement d'un flux vidéo UVC (EP 6, mult=3, burst=7, 1024 bytes)
+        assert!(ctrl
+            .register_isoch_stream(6, IsochMediaType::VideoUvc, 3, 1024, 3, 7)
+            .is_ok());
+        let uvc_stream = ctrl.isoch_streams[6].unwrap();
+        assert_eq!(uvc_stream.media_type, IsochMediaType::VideoUvc);
+        assert_eq!(uvc_stream.mult, 3);
+        assert_eq!(uvc_stream.max_burst, 7);
     }
 }

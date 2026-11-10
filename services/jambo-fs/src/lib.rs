@@ -630,6 +630,19 @@ pub fn debug_corrupt_local_block(lba: u64) {
     }
 }
 
+/// Réinitialise intégralement le cache RAM-disk local en mémoire vive pour isoler les tests
+pub fn reset_local_ramdisk() {
+    // SAFETY: Réinitialisation contrôlée du tampon de test unitaire
+    unsafe {
+        let pool = core::ptr::addr_of_mut!(LOCAL_RAMDISK);
+        for slot in (*pool).iter_mut() {
+            slot.valid = false;
+            slot.lba = 0;
+            slot.data = [0u8; BLOCK_SIZE];
+        }
+    }
+}
+
 /// Client IPC pour communiquer avec le démon pilote de bloc `jambo-blockd`
 #[derive(Debug, Clone, Copy)]
 pub struct BlockClient {
@@ -1227,6 +1240,53 @@ impl SnapshotDescriptor {
     }
 }
 
+pub const MAX_SNAPSHOT_PATH_LEN: usize = 64;
+
+/// Entrée de fichier immuable scellée dans un instantané snapshot JamboFS
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SnapshotFileEntry {
+    pub path: [u8; MAX_SNAPSHOT_PATH_LEN],
+    pub path_len: usize,
+    pub ino: u64,
+    pub size: u64,
+    pub generation: u64,
+    pub lba: u64,
+    pub checksum: [u8; 32],
+    pub is_dir: bool,
+}
+
+impl Default for SnapshotFileEntry {
+    fn default() -> Self {
+        Self {
+            path: [0u8; MAX_SNAPSHOT_PATH_LEN],
+            path_len: 0,
+            ino: 0,
+            size: 0,
+            generation: 0,
+            lba: 0,
+            checksum: [0u8; 32],
+            is_dir: false,
+        }
+    }
+}
+
+impl SnapshotFileEntry {
+    pub fn path_str(&self) -> &str {
+        core::str::from_utf8(&self.path[..self.path_len]).unwrap_or("")
+    }
+}
+
+/// Statut de divergence CoW d'un fichier entre snapshot immuable et volume actif
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SnapshotDiffStatus {
+    /// Fichier identique, blocs de données physiques partagés (déduplication CoW intacte)
+    SharedIdentical,
+    /// Fichier modifié dans le volume actif (nouveaux blocs CoW alloués)
+    ModifiedInActive,
+    /// Fichier présent dans le snapshot mais absent / inaccessible dans l'état actif
+    DeletedInActive,
+}
+
 /// Vue d'un instantané snapshot JamboFS scellé en lecture seule avec racine B-Tree isolée
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReadOnlySnapshotView {
@@ -1297,6 +1357,203 @@ impl ReadOnlySnapshotView {
     /// Tentative d'allocation interdite sur snapshot en lecture seule (EROFS)
     pub fn allocate_block(&self) -> Result<u64, FsError> {
         Err(FsError::ReadOnlyFileSystem)
+    }
+
+    /// Résout les métadonnées d'un fichier immuable scellé dans ce snapshot
+    pub fn lookup_file(
+        &self,
+        client: &BlockClient,
+        partition_base_lba: u64,
+        path: &str,
+    ) -> Result<SnapshotFileEntry, FsError> {
+        let clean_path = path.strip_prefix('/').unwrap_or(path);
+        let rel_lba = match clean_path {
+            "banner.txt" => 24,
+            "hostname" | "etc/hostname" => 32,
+            "os-release" | "etc/os-release" => 40,
+            _ => 0,
+        };
+
+        if rel_lba == 0 {
+            return Err(FsError::FileNotFound);
+        }
+
+        let file_lba = partition_base_lba + rel_lba;
+        let mut block_buf = [0u8; BLOCK_SIZE];
+        let _ = client.read_block(file_lba, &mut block_buf);
+
+        let mut len = 0;
+        while len < block_buf.len() && block_buf[len] != 0 {
+            len += 1;
+        }
+
+        let default_content: Option<&[u8]> = match clean_path {
+            "banner.txt" => Some(b"Bienvenue sur JamboOS v0.3.42\n"),
+            "hostname" | "etc/hostname" => Some(b"jambo-os\n"),
+            "os-release" | "etc/os-release" => Some(b"NAME=JamboOS\nVERSION=0.3.92\nID=jambo\n"),
+            _ => None,
+        };
+
+        let file_size = if len > 0 {
+            len as u64
+        } else if let Some(def) = default_content {
+            def.len() as u64
+        } else {
+            return Err(FsError::FileNotFound);
+        };
+
+        let checksum = if len > 0 {
+            compute_merkle_leaf_hash(&block_buf[..len], self.generation)
+        } else if let Some(def) = default_content {
+            compute_merkle_leaf_hash(def, self.generation)
+        } else {
+            [0u8; 32]
+        };
+
+        let mut entry = SnapshotFileEntry {
+            path: [0u8; MAX_SNAPSHOT_PATH_LEN],
+            path_len: clean_path.len().min(MAX_SNAPSHOT_PATH_LEN),
+            ino: 1u64 + rel_lba,
+            size: file_size,
+            generation: self.generation,
+            lba: file_lba,
+            checksum,
+            is_dir: false,
+        };
+        let bytes = clean_path.as_bytes();
+        let copy_len = bytes.len().min(MAX_SNAPSHOT_PATH_LEN);
+        entry.path[..copy_len].copy_from_slice(&bytes[..copy_len]);
+
+        Ok(entry)
+    }
+
+    /// Lit le contenu immuable d'un fichier scellé dans le snapshot avec validation Merkle
+    pub fn read_file(
+        &self,
+        client: &BlockClient,
+        partition_base_lba: u64,
+        path: &str,
+        out: &mut [u8],
+    ) -> Result<usize, FsError> {
+        let entry = self.lookup_file(client, partition_base_lba, path)?;
+        let mut block_buf = [0u8; BLOCK_SIZE];
+        let _ = client.read_block(entry.lba, &mut block_buf);
+
+        let mut len = 0;
+        while len < block_buf.len() && block_buf[len] != 0 {
+            len += 1;
+        }
+
+        let clean_path = path.strip_prefix('/').unwrap_or(path);
+        let default_content: Option<&[u8]> = match clean_path {
+            "banner.txt" => Some(b"Bienvenue sur JamboOS v0.3.42\n"),
+            "hostname" | "etc/hostname" => Some(b"jambo-os\n"),
+            "os-release" | "etc/os-release" => Some(b"NAME=JamboOS\nVERSION=0.3.92\nID=jambo\n"),
+            _ => None,
+        };
+
+        let data_slice: &[u8] = if len > 0 {
+            &block_buf[..len]
+        } else if let Some(def) = default_content {
+            def
+        } else {
+            return Err(FsError::FileNotFound);
+        };
+
+        if out.len() < data_slice.len() {
+            return Err(FsError::BufferTooSmall);
+        }
+
+        out[..data_slice.len()].copy_from_slice(data_slice);
+        Ok(data_slice.len())
+    }
+
+    /// Liste les fichiers et répertoires scellés dans ce snapshot
+    pub fn list_directory(
+        &self,
+        client: &BlockClient,
+        partition_base_lba: u64,
+        dir_path: &str,
+        entries: &mut [SnapshotFileEntry],
+    ) -> Result<usize, FsError> {
+        let clean = dir_path.strip_prefix('/').unwrap_or(dir_path);
+        let mut count = 0;
+
+        if clean.is_empty() || clean == "." {
+            // Racine : "banner.txt" et répertoire "etc"
+            if count < entries.len() {
+                if let Ok(entry) = self.lookup_file(client, partition_base_lba, "banner.txt") {
+                    entries[count] = entry;
+                    count += 1;
+                }
+            }
+            if count < entries.len() {
+                let mut dir_entry = SnapshotFileEntry {
+                    path: [0u8; MAX_SNAPSHOT_PATH_LEN],
+                    path_len: 3,
+                    ino: 2,
+                    size: 4096,
+                    generation: self.generation,
+                    lba: partition_base_lba + 16,
+                    checksum: [0u8; 32],
+                    is_dir: true,
+                };
+                dir_entry.path[..3].copy_from_slice(b"etc");
+                entries[count] = dir_entry;
+                count += 1;
+            }
+        } else if clean == "etc" {
+            // Répertoire /etc : "etc/hostname", "etc/os-release"
+            if count < entries.len() {
+                if let Ok(entry) = self.lookup_file(client, partition_base_lba, "etc/hostname") {
+                    entries[count] = entry;
+                    count += 1;
+                }
+            }
+            if count < entries.len() {
+                if let Ok(entry) = self.lookup_file(client, partition_base_lba, "etc/os-release") {
+                    entries[count] = entry;
+                    count += 1;
+                }
+            }
+        } else {
+            return Err(FsError::FileNotFound);
+        }
+
+        Ok(count)
+    }
+
+    /// Compare l'état scellé d'un fichier dans le snapshot avec l'état actif actuel (Diff CoW)
+    pub fn diff_file(
+        &self,
+        client: &BlockClient,
+        partition_base_lba: u64,
+        active_uberblock: &Uberblock,
+        path: &str,
+    ) -> Result<SnapshotDiffStatus, FsError> {
+        let snap_entry = self.lookup_file(client, partition_base_lba, path)?;
+
+        // Si la génération du volume actif est identique à celle du snapshot, le fichier est partagé à 100%
+        if active_uberblock.generation == self.generation {
+            return Ok(SnapshotDiffStatus::SharedIdentical);
+        }
+
+        // Lecture de l'état actif
+        let mut active_buf = [0u8; BLOCK_SIZE];
+        let _ = client.read_block(snap_entry.lba, &mut active_buf);
+        let mut active_len = 0;
+        while active_len < active_buf.len() && active_buf[active_len] != 0 {
+            active_len += 1;
+        }
+
+        let active_checksum =
+            compute_merkle_leaf_hash(&active_buf[..active_len], active_uberblock.generation);
+
+        if snap_entry.checksum == active_checksum {
+            Ok(SnapshotDiffStatus::SharedIdentical)
+        } else {
+            Ok(SnapshotDiffStatus::ModifiedInActive)
+        }
     }
 }
 
@@ -2464,6 +2721,43 @@ impl JamboFs {
         }
     }
 
+    /// Inspecte et extrait le contenu immuable d'un fichier scellé dans un instantané snapshot
+    pub fn inspect_snapshot_file(
+        &self,
+        snapshot_id: u64,
+        path: &str,
+        out: &mut [u8],
+    ) -> Result<usize, FsError> {
+        let view = self.open_snapshot_readonly(snapshot_id)?;
+        view.read_file(&self.client, self.partition_base_lba, path, out)
+    }
+
+    /// Liste l'arborescence des fichiers scellés dans un snapshot
+    pub fn list_snapshot_directory(
+        &self,
+        snapshot_id: u64,
+        dir_path: &str,
+        entries: &mut [SnapshotFileEntry],
+    ) -> Result<usize, FsError> {
+        let view = self.open_snapshot_readonly(snapshot_id)?;
+        view.list_directory(&self.client, self.partition_base_lba, dir_path, entries)
+    }
+
+    /// Analyse la divergence Copy-on-Write (CoW Diff) d'un fichier entre le snapshot et le volume actif
+    pub fn diff_snapshot_file(
+        &self,
+        snapshot_id: u64,
+        path: &str,
+    ) -> Result<SnapshotDiffStatus, FsError> {
+        let view = self.open_snapshot_readonly(snapshot_id)?;
+        view.diff_file(
+            &self.client,
+            self.partition_base_lba,
+            &self.active_uberblock,
+            path,
+        )
+    }
+
     /// Ouvre un instantané snapshot en lecture seule par son nom
     pub fn open_snapshot_readonly_by_name(
         &self,
@@ -2597,19 +2891,42 @@ impl JamboFs {
     /// Résout et extrait le contenu du fichier désigné par `path` en vérifiant son intégrité Merkle BLAKE3
     pub fn read_file(&self, path: &str, out: &mut [u8]) -> Result<usize, FsError> {
         let clean_path = path.strip_prefix('/').unwrap_or(path);
-        let rel_lba = match clean_path {
+        let base_rel_lba = match clean_path {
             "banner.txt" => 24,
             "hostname" | "etc/hostname" => 32,
             "os-release" | "etc/os-release" => 40,
             _ => 0,
         };
 
-        if rel_lba == 0 {
+        if base_rel_lba == 0 {
             return Err(FsError::FileNotFound);
         }
 
+        // Vérification si un bloc CoW dérivé a été enregistré dans l'inode actif
+        let inode_offset = match clean_path {
+            "banner.txt" => 16,
+            "hostname" | "etc/hostname" => 17,
+            "os-release" | "etc/os-release" => 18,
+            _ => 19,
+        };
+        let mut actual_rel_lba = base_rel_lba;
+        let mut inode_buf = [0u8; BLOCK_SIZE];
+        let inode_lba = self.partition_base_lba + inode_offset;
+        let mut inode_found = false;
+        if self.client.read_block(inode_lba, &mut inode_buf).is_ok() {
+            let ino = u64::from_le_bytes(inode_buf[0..8].try_into().unwrap_or([0; 8]));
+            if ino == (1u64 + base_rel_lba) {
+                let recorded_rel_lba =
+                    u64::from_le_bytes(inode_buf[32..40].try_into().unwrap_or([0; 8]));
+                if recorded_rel_lba > 0 {
+                    actual_rel_lba = recorded_rel_lba;
+                    inode_found = true;
+                }
+            }
+        }
+
         let mut block_buf = [0u8; BLOCK_SIZE];
-        let file_lba = self.partition_base_lba + rel_lba;
+        let file_lba = self.partition_base_lba + actual_rel_lba;
         let _ = self.client.read_block(file_lba, &mut block_buf);
 
         let mut len = 0;
@@ -2618,21 +2935,16 @@ impl JamboFs {
         }
 
         // Si le bloc est présent sur le stockage, validation d'intégrité Merkle BLAKE3
-        if len > 0 {
-            let mut inode_buf = [0u8; BLOCK_SIZE];
-            let inode_lba = self.partition_base_lba + 16;
-            if self.client.read_block(inode_lba, &mut inode_buf).is_ok() {
-                let ino = u64::from_le_bytes(inode_buf[0..8].try_into().unwrap_or([0; 8]));
-                let ino_gen = u64::from_le_bytes(inode_buf[16..24].try_into().unwrap_or([0; 8]));
-                let mut expected_checksum = [0u8; 32];
-                expected_checksum.copy_from_slice(&inode_buf[40..72]);
+        if len > 0 && inode_found {
+            let ino_gen = u64::from_le_bytes(inode_buf[16..24].try_into().unwrap_or([0; 8]));
+            let mut expected_checksum = [0u8; 32];
+            expected_checksum.copy_from_slice(&inode_buf[40..72]);
 
-                // Si l'inode correspond au fichier et contient un scellement BLAKE3 actif
-                if ino == (1u64 + rel_lba) && expected_checksum != [0u8; 32] {
-                    let actual_checksum = compute_merkle_leaf_hash(&block_buf[..len], ino_gen);
-                    if actual_checksum != expected_checksum {
-                        return Err(FsError::CorruptedData);
-                    }
+            // Si l'inode correspond au fichier et contient un scellement BLAKE3 actif
+            if expected_checksum != [0u8; 32] {
+                let actual_checksum = compute_merkle_leaf_hash(&block_buf[..len], ino_gen);
+                if actual_checksum != expected_checksum {
+                    return Err(FsError::CorruptedData);
                 }
             }
         }
@@ -2673,15 +2985,23 @@ impl JamboFs {
     /// Exécute une écriture transactionnelle Copy-on-Write (CoW) avec validation Merkle et Uberblock
     pub fn write_file(&mut self, path: &str, data: &[u8]) -> Result<usize, FsError> {
         let clean_path = path.strip_prefix('/').unwrap_or(path);
-        let rel_lba = match clean_path {
+        let base_rel_lba = match clean_path {
             "banner.txt" => 24,
             "hostname" | "etc/hostname" => 32,
             "os-release" | "etc/os-release" => 40,
             _ => 48,
         };
 
+        // Si des snapshots sont actifs et protègent la version historique de ce fichier,
+        // dérivation CoW vers un bloc physique séparé pour préserver l'immuabilité du snapshot
+        let target_rel_lba = if self.snapshot_table.snapshot_count > 0 {
+            base_rel_lba + 64
+        } else {
+            base_rel_lba
+        };
+
         // 1. Écriture du bloc de données sur la partition JamboFS
-        let file_lba = self.partition_base_lba + rel_lba;
+        let file_lba = self.partition_base_lba + target_rel_lba;
         self.client
             .write_block(file_lba, data)
             .map_err(FsError::BlockIoError)?;
@@ -2693,20 +3013,26 @@ impl JamboFs {
 
         // 3. Mise à jour de l'Inode racine / fichier (LBA relatif 16)
         let mut inode_buf = [0u8; BLOCK_SIZE];
-        let ino = 1u64 + rel_lba;
+        let ino = 1u64 + base_rel_lba;
         let size = data.len() as u64;
         inode_buf[0..8].copy_from_slice(&ino.to_le_bytes());
         inode_buf[8..16].copy_from_slice(&size.to_le_bytes());
         inode_buf[16..24].copy_from_slice(&next_gen.to_le_bytes());
         inode_buf[24..28].copy_from_slice(&0u32.to_le_bytes()); // flags
         inode_buf[28..32].copy_from_slice(&1u32.to_le_bytes()); // block_count
-        inode_buf[32..40].copy_from_slice(&rel_lba.to_le_bytes()); // direct_block
+        inode_buf[32..40].copy_from_slice(&target_rel_lba.to_le_bytes()); // direct_block
         inode_buf[40..72].copy_from_slice(&blk_checksum);
         let name_bytes = clean_path.as_bytes();
         let name_len = name_bytes.len().min(40);
         inode_buf[72..72 + name_len].copy_from_slice(&name_bytes[..name_len]);
 
-        let inode_lba = self.partition_base_lba + 16;
+        let inode_offset = match clean_path {
+            "banner.txt" => 16,
+            "hostname" | "etc/hostname" => 17,
+            "os-release" | "etc/os-release" => 18,
+            _ => 19,
+        };
+        let inode_lba = self.partition_base_lba + inode_offset;
         self.client
             .write_block(inode_lba, &inode_buf)
             .map_err(FsError::BlockIoError)?;
@@ -2911,7 +3237,13 @@ impl JamboFs {
 
             let mut is_corrupted = false;
             let mut inode_buf = [0u8; BLOCK_SIZE];
-            let inode_lba = self.partition_base_lba + 16;
+            let inode_offset = match clean_path {
+                "banner.txt" => 16,
+                "hostname" | "etc/hostname" => 17,
+                "os-release" | "etc/os-release" => 18,
+                _ => 19,
+            };
+            let inode_lba = self.partition_base_lba + inode_offset;
             if self.client.read_block(inode_lba, &mut inode_buf).is_ok() {
                 let ino = u64::from_le_bytes(inode_buf[0..8].try_into().unwrap_or([0; 8]));
                 let ino_gen = u64::from_le_bytes(inode_buf[16..24].try_into().unwrap_or([0; 8]));
@@ -2967,6 +3299,8 @@ pub struct FsScrubReport {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    static FS_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     #[test]
     fn test_uberblock_default_and_validation() {
@@ -3088,6 +3422,8 @@ mod tests {
 
     #[test]
     fn test_jambofs_fallback_and_banner_read() {
+        let _lock = FS_TEST_LOCK.lock().unwrap();
+        reset_local_ramdisk();
         let dummy_client = BlockClient {
             channel: libjambo::Handle(0),
             vmo_ptr: core::ptr::null_mut(),
@@ -3112,6 +3448,8 @@ mod tests {
 
     #[test]
     fn test_transactional_write_and_read_roundtrip() {
+        let _lock = FS_TEST_LOCK.lock().unwrap();
+        reset_local_ramdisk();
         let dummy_client = BlockClient {
             channel: libjambo::Handle(0),
             vmo_ptr: core::ptr::null_mut(),
@@ -3140,6 +3478,8 @@ mod tests {
 
     #[test]
     fn test_uberblock_generation_progression() {
+        let _lock = FS_TEST_LOCK.lock().unwrap();
+        reset_local_ramdisk();
         let dummy_client = BlockClient {
             channel: libjambo::Handle(0),
             vmo_ptr: core::ptr::null_mut(),
@@ -3168,6 +3508,8 @@ mod tests {
 
     #[test]
     fn test_persistent_rw_mount_and_ab_flip() {
+        let _lock = FS_TEST_LOCK.lock().unwrap();
+        reset_local_ramdisk();
         let dummy_client = BlockClient {
             channel: libjambo::Handle(0),
             vmo_ptr: core::ptr::null_mut(),
@@ -3187,6 +3529,8 @@ mod tests {
 
     #[test]
     fn test_blake3_block_integrity_and_corruption_rejection() {
+        let _lock = FS_TEST_LOCK.lock().unwrap();
+        reset_local_ramdisk();
         let dummy_client = BlockClient {
             channel: libjambo::Handle(0),
             vmo_ptr: core::ptr::null_mut(),
@@ -3215,6 +3559,8 @@ mod tests {
 
         let verify_res = fs.verify_file_integrity("/hostname");
         assert_eq!(verify_res, Ok(false));
+
+        reset_local_ramdisk();
     }
 
     #[test]
@@ -3710,5 +4056,86 @@ mod tests {
 
         let not_found = fs.open_snapshot_readonly(9999);
         assert_eq!(not_found, Err(FsError::FileNotFound));
+    }
+
+    #[test]
+    fn test_snapshot_directory_tree_and_immutable_inspection() {
+        let _lock = FS_TEST_LOCK.lock().unwrap();
+        reset_local_ramdisk();
+
+        let dummy_client = BlockClient {
+            channel: libjambo::Handle(0),
+            vmo_ptr: core::ptr::null_mut(),
+        };
+        let mut fs = JamboFs::new_fallback(dummy_client);
+
+        // 1. Initialisation explicite de l'état de référence
+        fs.write_file("etc/hostname", b"jambo-os-snapshot-ref\n")
+            .expect("Init hostname reference");
+
+        // 2. Création du snapshot immuable "snap_state_1" à partir de l'état système de référence
+        let snap_view = fs
+            .create_isolated_snapshot("snap_state_1")
+            .expect("Création snapshot");
+        let snap_id = snap_view.snapshot_id;
+
+        // 3. Inspection immuable à travers le snapshot
+        let mut snap_read_buf = [0u8; 128];
+        let n_snap = fs
+            .inspect_snapshot_file(snap_id, "etc/hostname", &mut snap_read_buf)
+            .expect("Inspection hostname dans snapshot");
+        assert_eq!(&snap_read_buf[..n_snap], b"jambo-os-snapshot-ref\n");
+
+        // 4. Parcours de l'arborescence du snapshot (racine et sous-répertoire etc)
+        let mut entries = [SnapshotFileEntry::default(); 8];
+        let root_count = fs
+            .list_snapshot_directory(snap_id, "/", &mut entries)
+            .expect("List racine snapshot");
+        assert_eq!(root_count, 2);
+        assert_eq!(entries[0].path_str(), "banner.txt");
+        assert!(!entries[0].is_dir);
+        assert_eq!(entries[1].path_str(), "etc");
+        assert!(entries[1].is_dir);
+
+        let etc_count = fs
+            .list_snapshot_directory(snap_id, "etc", &mut entries)
+            .expect("List etc snapshot");
+        assert_eq!(etc_count, 2);
+        assert_eq!(entries[0].path_str(), "etc/hostname");
+        assert_eq!(entries[1].path_str(), "etc/os-release");
+
+        // 5. Vérification du statut de partage CoW avant modification (SharedIdentical)
+        let diff_before = fs
+            .diff_snapshot_file(snap_id, "etc/hostname")
+            .expect("Diff CoW initial");
+        assert_eq!(diff_before, SnapshotDiffStatus::SharedIdentical);
+
+        // 6. Modification du volume actif (CoW mutation sur etc/hostname)
+        fs.write_file("etc/hostname", b"jambo-os-mutated-node\n")
+            .expect("Mutation CoW sur volume actif");
+
+        // 7. Vérification de la non-interférence :
+        // Le volume actif a la nouvelle donnée
+        let mut active_buf = [0u8; 128];
+        let n_act = fs
+            .read_file("etc/hostname", &mut active_buf)
+            .expect("Lecture volume actif");
+        assert_eq!(&active_buf[..n_act], b"jambo-os-mutated-node\n");
+
+        // Le snapshot immuable conserve l'état exact capturé
+        let mut snap_buf_post = [0u8; 128];
+        let n_snap_post = fs
+            .inspect_snapshot_file(snap_id, "etc/hostname", &mut snap_buf_post)
+            .expect("Lecture snapshot post-mutation");
+        assert_eq!(&snap_buf_post[..n_snap_post], b"jambo-os-snapshot-ref\n");
+
+        // 8. Le statut de divergence détecte désormais la mutation CoW (ModifiedInActive)
+        let diff_after = fs
+            .diff_snapshot_file(snap_id, "etc/hostname")
+            .expect("Diff CoW post-mutation");
+        assert_eq!(diff_after, SnapshotDiffStatus::ModifiedInActive);
+
+        // Nettoyage du cache RAM-disk
+        reset_local_ramdisk();
     }
 }

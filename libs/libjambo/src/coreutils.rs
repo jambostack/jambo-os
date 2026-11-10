@@ -5145,6 +5145,230 @@ pub fn run_paste(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
     }
 }
 
+/// Exécute l'utilitaire standard POSIX `comm` (comparaison ligne à ligne de deux flux triés)
+pub fn run_comm(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    let mut suppress_col1 = false;
+    let mut suppress_col2 = false;
+    let mut suppress_col3 = false;
+    let mut _check_order = false;
+    let mut output_delimiter = "\t";
+    let mut file1_arg: Option<&str> = None;
+    let mut file2_arg: Option<&str> = None;
+    let mut parsing_options = true;
+
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i];
+        if parsing_options && arg == "--" {
+            parsing_options = false;
+            i += 1;
+            continue;
+        }
+
+        if parsing_options && (arg.starts_with('-') && arg != "-") {
+            if arg == "--help" {
+                let _ = sys_write(
+                    out_fd,
+                    b"Usage: comm [OPTION]... FILE1 FILE2\nCompare sorted files FILE1 and FILE2 line by line.\n\nWhen FILE1 or FILE2 (not both) is -, read standard input.\n\n  -1                      suppress column 1 (lines unique to FILE1)\n  -2                      suppress column 2 (lines unique to FILE2)\n  -3                      suppress column 3 (lines that appear in both files)\n      --check-order       check that the input is correctly sorted\n      --nocheck-order     do not check that the input is correctly sorted\n      --output-delimiter=STR  separate columns with STR\n      --help              display this help and exit\n",
+                );
+                return 0;
+            }
+
+            if arg == "--check-order" {
+                _check_order = true;
+                i += 1;
+                continue;
+            }
+            if arg == "--nocheck-order" {
+                _check_order = false;
+                i += 1;
+                continue;
+            }
+
+            if let Some(delim) = arg.strip_prefix("--output-delimiter=") {
+                output_delimiter = delim;
+                i += 1;
+                continue;
+            } else if arg == "--output-delimiter" {
+                if i + 1 < args.len() {
+                    i += 1;
+                    output_delimiter = args[i];
+                    i += 1;
+                    continue;
+                } else {
+                    let _ = sys_write(
+                        err_fd,
+                        b"comm: option '--output-delimiter' requires an argument\n",
+                    );
+                    return 1;
+                }
+            }
+
+            // Drapeaux courts combinés : -1, -2, -3, -12, etc.
+            let mut valid_short = true;
+            for &b in &arg.as_bytes()[1..] {
+                match b {
+                    b'1' => suppress_col1 = true,
+                    b'2' => suppress_col2 = true,
+                    b'3' => suppress_col3 = true,
+                    _ => {
+                        valid_short = false;
+                        break;
+                    }
+                }
+            }
+
+            if valid_short && arg.len() > 1 {
+                i += 1;
+                continue;
+            } else {
+                let _ = sys_write(err_fd, b"comm: invalid option -- '");
+                let _ = sys_write(err_fd, arg.as_bytes());
+                let _ = sys_write(err_fd, b"'\n");
+                return 1;
+            }
+        } else {
+            if file1_arg.is_none() {
+                file1_arg = Some(arg);
+            } else if file2_arg.is_none() {
+                file2_arg = Some(arg);
+            } else {
+                let _ = sys_write(err_fd, b"comm: extra operand '");
+                let _ = sys_write(err_fd, arg.as_bytes());
+                let _ = sys_write(err_fd, b"'\n");
+                return 1;
+            }
+            i += 1;
+        }
+    }
+
+    let (path1, path2) = match (file1_arg, file2_arg) {
+        (Some(p1), Some(p2)) => (p1, p2),
+        (Some(_), None) | (None, None) => {
+            let _ = sys_write(err_fd, b"comm: missing operand\n");
+            return 1;
+        }
+        (None, Some(_)) => unreachable!(),
+    };
+
+    if path1 == "-" && path2 == "-" {
+        let _ = sys_write(err_fd, b"comm: both files cannot be standard input\n");
+        return 1;
+    }
+
+    let (fd1, need_close1) = if path1 == "-" {
+        (in_fd, false)
+    } else {
+        let fd = sys_open(path1, O_RDONLY);
+        if fd < 0 {
+            let _ = sys_write(err_fd, b"comm: ");
+            let _ = sys_write(err_fd, path1.as_bytes());
+            let _ = sys_write(err_fd, b": No such file or directory\n");
+            return 1;
+        }
+        (fd, true)
+    };
+
+    let (fd2, need_close2) = if path2 == "-" {
+        (in_fd, false)
+    } else {
+        let fd = sys_open(path2, O_RDONLY);
+        if fd < 0 {
+            if need_close1 {
+                sys_close(fd1);
+            }
+            let _ = sys_write(err_fd, b"comm: ");
+            let _ = sys_write(err_fd, path2.as_bytes());
+            let _ = sys_write(err_fd, b": No such file or directory\n");
+            return 1;
+        }
+        (fd, true)
+    };
+
+    let mut reader1 = LineReader::new(fd1);
+    let mut reader2 = LineReader::new(fd2);
+
+    let mut buf1 = [0u8; 2048];
+    let mut buf2 = [0u8; 2048];
+
+    let mut line1_opt = reader1.read_line(&mut buf1);
+    let mut line2_opt = reader2.read_line(&mut buf2);
+
+    let delim_bytes = output_delimiter.as_bytes();
+
+    let emit_col1 = |fd: i32, slice: &[u8]| {
+        if !suppress_col1 {
+            let _ = sys_write(fd, slice);
+            let _ = sys_write(fd, b"\n");
+        }
+    };
+
+    let emit_col2 = |fd: i32, slice: &[u8]| {
+        if !suppress_col2 {
+            if !suppress_col1 {
+                let _ = sys_write(fd, delim_bytes);
+            }
+            let _ = sys_write(fd, slice);
+            let _ = sys_write(fd, b"\n");
+        }
+    };
+
+    let emit_col3 = |fd: i32, slice: &[u8]| {
+        if !suppress_col3 {
+            if !suppress_col1 {
+                let _ = sys_write(fd, delim_bytes);
+            }
+            if !suppress_col2 {
+                let _ = sys_write(fd, delim_bytes);
+            }
+            let _ = sys_write(fd, slice);
+            let _ = sys_write(fd, b"\n");
+        }
+    };
+
+    while let (Some(l1), Some(l2)) = (line1_opt, line2_opt) {
+        let s1 = &buf1[..l1];
+        let s2 = &buf2[..l2];
+
+        match s1.cmp(s2) {
+            core::cmp::Ordering::Less => {
+                emit_col1(out_fd, s1);
+                line1_opt = reader1.read_line(&mut buf1);
+            }
+            core::cmp::Ordering::Greater => {
+                emit_col2(out_fd, s2);
+                line2_opt = reader2.read_line(&mut buf2);
+            }
+            core::cmp::Ordering::Equal => {
+                emit_col3(out_fd, s1);
+                line1_opt = reader1.read_line(&mut buf1);
+                line2_opt = reader2.read_line(&mut buf2);
+            }
+        }
+    }
+
+    while let Some(l1) = line1_opt {
+        let s1 = &buf1[..l1];
+        emit_col1(out_fd, s1);
+        line1_opt = reader1.read_line(&mut buf1);
+    }
+
+    while let Some(l2) = line2_opt {
+        let s2 = &buf2[..l2];
+        emit_col2(out_fd, s2);
+        line2_opt = reader2.read_line(&mut buf2);
+    }
+
+    if need_close1 {
+        sys_close(fd1);
+    }
+    if need_close2 {
+        sys_close(fd2);
+    }
+
+    0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -6084,6 +6308,105 @@ mod tests {
         sys_close(out_r4);
 
         // Nettoyage fichiers de test
+        let _ = sys_unlink_pool(path1);
+        let _ = sys_unlink_pool(path2);
+    }
+
+    #[test]
+    fn test_comm_utility() {
+        let path1 = "/tmp/test_comm_1.txt";
+        let path2 = "/tmp/test_comm_2.txt";
+
+        // file1 : a, b, c, d
+        let fd1 = sys_open(path1, O_CREAT | O_WRONLY);
+        assert!(fd1 >= 0);
+        let _ = sys_write(fd1, b"apple\nbanana\ncherry\ndate\n");
+        sys_close(fd1);
+
+        // file2 : banana, cherry, elderberry, fig
+        let fd2 = sys_open(path2, O_CREAT | O_WRONLY);
+        assert!(fd2 >= 0);
+        let _ = sys_write(fd2, b"banana\ncherry\nelderberry\nfig\n");
+        sys_close(fd2);
+
+        // 1. comm standard (3 colonnes délimitées par \t)
+        // Col 1 (unique file1): apple, date
+        // Col 2 (unique file2): elderberry, fig
+        // Col 3 (communes): banana, cherry
+        let (out_r1, out_w1) = crate::vfs::pipe().expect("pipe comm 1");
+        let code1 = run_comm(&[path1, path2], 0, out_w1, 2);
+        assert_eq!(code1, 0);
+        sys_close(out_w1);
+
+        let mut out1 = [0u8; 512];
+        let n1 = sys_read(out_r1, &mut out1);
+        assert!(n1 > 0);
+        let s1 = core::str::from_utf8(&out1[..n1 as usize]).unwrap();
+        let expected1 = "apple\n\t\tbanana\n\t\tcherry\ndate\n\telderberry\n\tfig\n";
+        assert_eq!(s1, expected1);
+        sys_close(out_r1);
+
+        // 2. comm avec suppression colonne 1 (-1) -> colonnes 2 et 3
+        // Col 2 n'a pas de préfixe, Col 3 a 1 \t
+        let (out_r2, out_w2) = crate::vfs::pipe().expect("pipe comm 2");
+        let code2 = run_comm(&["-1", path1, path2], 0, out_w2, 2);
+        assert_eq!(code2, 0);
+        sys_close(out_w2);
+
+        let mut out2 = [0u8; 512];
+        let n2 = sys_read(out_r2, &mut out2);
+        assert!(n2 > 0);
+        let s2 = core::str::from_utf8(&out2[..n2 as usize]).unwrap();
+        let expected2 = "\tbanana\n\tcherry\nelderberry\nfig\n";
+        assert_eq!(s2, expected2);
+        sys_close(out_r2);
+
+        // 3. comm avec suppression colonnes 1 et 2 (-12) -> lignes communes seules, zéro préfixe
+        let (out_r3, out_w3) = crate::vfs::pipe().expect("pipe comm 3");
+        let code3 = run_comm(&["-12", path1, path2], 0, out_w3, 2);
+        assert_eq!(code3, 0);
+        sys_close(out_w3);
+
+        let mut out3 = [0u8; 512];
+        let n3 = sys_read(out_r3, &mut out3);
+        assert!(n3 > 0);
+        let s3 = core::str::from_utf8(&out3[..n3 as usize]).unwrap();
+        let expected3 = "banana\ncherry\n";
+        assert_eq!(s3, expected3);
+        sys_close(out_r3);
+
+        // 4. comm avec délimiteur personnalisé (--output-delimiter="|")
+        let (out_r4, out_w4) = crate::vfs::pipe().expect("pipe comm 4");
+        let code4 = run_comm(&["--output-delimiter=|", path1, path2], 0, out_w4, 2);
+        assert_eq!(code4, 0);
+        sys_close(out_w4);
+
+        let mut out4 = [0u8; 512];
+        let n4 = sys_read(out_r4, &mut out4);
+        assert!(n4 > 0);
+        let s4 = core::str::from_utf8(&out4[..n4 as usize]).unwrap();
+        let expected4 = "apple\n||banana\n||cherry\ndate\n|elderberry\n|fig\n";
+        assert_eq!(s4, expected4);
+        sys_close(out_r4);
+
+        // 5. comm avec entrée stdin (-)
+        let (in_r5, in_w5) = crate::vfs::pipe().expect("pipe in comm 5");
+        let (out_r5, out_w5) = crate::vfs::pipe().expect("pipe out comm 5");
+        let _ = sys_write(in_w5, b"apple\nbanana\n");
+        sys_close(in_w5);
+
+        let code5 = run_comm(&["-12", "-", path2], in_r5, out_w5, 2);
+        assert_eq!(code5, 0);
+        sys_close(in_r5);
+        sys_close(out_w5);
+
+        let mut out5 = [0u8; 128];
+        let n5 = sys_read(out_r5, &mut out5);
+        assert!(n5 > 0);
+        assert_eq!(&out5[..n5 as usize], b"banana\n");
+        sys_close(out_r5);
+
+        // Nettoyage fichiers temporaires
         let _ = sys_unlink_pool(path1);
         let _ = sys_unlink_pool(path2);
     }
