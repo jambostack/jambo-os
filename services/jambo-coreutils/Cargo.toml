@@ -292,5 +292,10 @@ name = "mktemp"
 path = "src/bin/mktemp.rs"
 test = false
 
+[[bin]]
+name = "rmdir"
+path = "src/bin/rmdir.rs"
+test = false
+
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }

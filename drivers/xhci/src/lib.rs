@@ -674,7 +674,14 @@ pub const USB_DESC_TYPE_CONFIGURATION: u8 = 0x02;
 pub const USB_DESC_TYPE_STRING: u8 = 0x03;
 pub const USB_DESC_TYPE_INTERFACE: u8 = 0x04;
 pub const USB_DESC_TYPE_ENDPOINT: u8 = 0x05;
+pub const USB_DESC_TYPE_HID: u8 = 0x21;
+pub const USB_DESC_TYPE_HID_REPORT: u8 = 0x22;
 pub const USB_DESC_TYPE_SS_ENDPOINT_COMPANION: u8 = 0x30;
+
+pub const USB_CLASS_HID: u8 = 0x03;
+pub const USB_SUBCLASS_BOOT_INTERFACE: u8 = 0x01;
+pub const USB_PROTOCOL_KEYBOARD: u8 = 0x01;
+pub const USB_PROTOCOL_MOUSE: u8 = 0x02;
 
 pub const USB_EP_DIR_MASK: u8 = 0x80;
 pub const USB_EP_DIR_IN: u8 = 0x80;
@@ -854,6 +861,26 @@ impl UsbSsEndpointCompanionDescriptor {
     }
 }
 
+/// Descripteur fonctionnel USB HID Standard (USB HID Spec 1.11 Section 6.2.1)
+#[repr(C, packed)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UsbHidDescriptor {
+    pub length: u8,
+    pub descriptor_type: u8,
+    pub bcd_hid: u16,
+    pub country_code: u8,
+    pub num_descriptors: u8,
+    pub report_descriptor_type: u8,
+    pub report_descriptor_length: u16,
+}
+
+impl UsbHidDescriptor {
+    #[inline]
+    pub fn is_valid(&self) -> bool {
+        self.length >= 9 && self.descriptor_type == USB_DESC_TYPE_HID
+    }
+}
+
 /// Point d'accès USB décodé avec sémantique xHCI (Device Context Index calculé)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct UsbDecodedEndpoint {
@@ -904,11 +931,34 @@ pub struct UsbDecodedInterface {
     pub class: u8,
     pub subclass: u8,
     pub protocol: u8,
+    pub hid_descriptor: Option<UsbHidDescriptor>,
     pub endpoints: [UsbDecodedEndpoint; 8],
     pub endpoint_count: usize,
 }
 
 impl UsbDecodedInterface {
+    /// Indique si l'interface correspond à la classe USB HID
+    #[inline]
+    pub fn is_hid(&self) -> bool {
+        self.class == USB_CLASS_HID
+    }
+
+    /// Indique si l'interface est un clavier HID Boot Protocol
+    #[inline]
+    pub fn is_hid_keyboard(&self) -> bool {
+        self.is_hid()
+            && self.subclass == USB_SUBCLASS_BOOT_INTERFACE
+            && self.protocol == USB_PROTOCOL_KEYBOARD
+    }
+
+    /// Indique si l'interface est une souris HID Boot Protocol
+    #[inline]
+    pub fn is_hid_mouse(&self) -> bool {
+        self.is_hid()
+            && self.subclass == USB_SUBCLASS_BOOT_INTERFACE
+            && self.protocol == USB_PROTOCOL_MOUSE
+    }
+
     /// Indique si l'interface correspond à la classe USB Mass Storage avec transport Bulk-Only Transport (BOT)
     pub fn is_mass_storage_bot(&self) -> bool {
         self.class == 0x08
@@ -987,6 +1037,25 @@ impl UsbDecodedConfiguration {
         }
         count
     }
+
+    /// Extrait les interfaces HID et leurs points d'accès Interruption IN associés
+    pub fn find_hid_endpoints(
+        &self,
+        out: &mut [(UsbDecodedInterface, UsbDecodedEndpoint); 4],
+    ) -> usize {
+        let mut count = 0;
+        for iface in &self.interfaces[..self.interface_count] {
+            if iface.is_hid() {
+                for ep in &iface.endpoints[..iface.endpoint_count] {
+                    if ep.is_interrupt() && ep.is_in() && count < out.len() {
+                        out[count] = (*iface, *ep);
+                        count += 1;
+                    }
+                }
+            }
+        }
+        count
+    }
 }
 
 /// Décodeur et analyseur de descripteurs de configuration USB sans allocation sur le tas
@@ -1045,12 +1114,33 @@ impl UsbConfigParser {
                             class: desc_slice[5],
                             subclass: desc_slice[6],
                             protocol: desc_slice[7],
+                            hid_descriptor: None,
                             endpoints: [UsbDecodedEndpoint::default(); 8],
                             endpoint_count: 0,
                         };
                         decoded.interface_count += 1;
                         current_iface_idx = Some(idx);
                         current_ep_idx = None;
+                    }
+                }
+                USB_DESC_TYPE_HID if desc_len >= 9 => {
+                    if let Some(iface_idx) = current_iface_idx {
+                        let bcd_hid = u16::from_le_bytes([desc_slice[2], desc_slice[3]]);
+                        let country_code = desc_slice[4];
+                        let num_descriptors = desc_slice[5];
+                        let report_descriptor_type = desc_slice[6];
+                        let report_descriptor_length =
+                            u16::from_le_bytes([desc_slice[7], desc_slice[8]]);
+
+                        decoded.interfaces[iface_idx].hid_descriptor = Some(UsbHidDescriptor {
+                            length: desc_len as u8,
+                            descriptor_type: desc_type,
+                            bcd_hid,
+                            country_code,
+                            num_descriptors,
+                            report_descriptor_type,
+                            report_descriptor_length,
+                        });
                     }
                 }
                 USB_DESC_TYPE_ENDPOINT => {
@@ -3162,6 +3252,46 @@ impl UsbMultiTouchState {
     }
 }
 
+/// État des touches de contrôle multimédia / consommateur HID (Usage Page 0x0C - Consumer Controls)
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct UsbConsumerControlState {
+    pub play_pause: bool,
+    pub scan_next_track: bool,
+    pub scan_previous_track: bool,
+    pub stop: bool,
+    pub volume_increment: bool,
+    pub volume_decrement: bool,
+    pub mute: bool,
+    pub bass_boost: bool,
+}
+
+impl UsbConsumerControlState {
+    /// Décode un masque d'octets de touches multimédia standard (Usage Page 0x0C)
+    pub fn decode_mask(&mut self, mask: u16) {
+        self.play_pause = (mask & (1 << 0)) != 0;
+        self.scan_next_track = (mask & (1 << 1)) != 0;
+        self.scan_previous_track = (mask & (1 << 2)) != 0;
+        self.stop = (mask & (1 << 3)) != 0;
+        self.volume_increment = (mask & (1 << 4)) != 0;
+        self.volume_decrement = (mask & (1 << 5)) != 0;
+        self.mute = (mask & (1 << 6)) != 0;
+        self.bass_boost = (mask & (1 << 7)) != 0;
+    }
+
+    /// Décode un rapport binaire HID Consumer Control
+    pub fn decode_report(&mut self, report: &[u8]) {
+        if report.is_empty() {
+            return;
+        }
+        let raw = if report.len() >= 2 {
+            u16::from_le_bytes([report[0], report[1]])
+        } else {
+            report[0] as u16
+        };
+        self.decode_mask(raw);
+    }
+}
+
 // ============================================================================
 // Gestion des Flux Isochrones et Synchronisation de Trames (Audio / Vidéo)
 // ============================================================================
@@ -5022,6 +5152,139 @@ mod tests {
     }
 
     #[test]
+    fn test_usb_config_descriptor_parsing_hid_composite() {
+        // Blob binaire pour périphérique composite Clavier Boot + Souris Multimédia
+        // Total : 9 (Config) + 9 (Interface 0 KB) + 9 (HID Desc KB) + 7 (EP 1 IN) + 9 (Interface 1 Mouse) + 9 (HID Desc Mouse) + 7 (EP 2 IN) = 59 octets
+        let config_raw: [u8; 59] = [
+            // Configuration Descriptor (9 bytes)
+            0x09,
+            0x02,
+            59,
+            0x00,
+            0x02,
+            0x01,
+            0x00,
+            0xA0,
+            0x32,
+            // Interface 0 Descriptor (HID Keyboard, 9 bytes)
+            0x09,
+            0x04,
+            0x00,
+            0x00,
+            0x01,
+            USB_CLASS_HID,
+            USB_SUBCLASS_BOOT_INTERFACE,
+            USB_PROTOCOL_KEYBOARD,
+            0x00,
+            // HID Descriptor Interface 0 (9 bytes)
+            0x09,
+            USB_DESC_TYPE_HID,
+            0x11,
+            0x01,
+            0x00,
+            0x01,
+            USB_DESC_TYPE_HID_REPORT,
+            65,
+            0x00,
+            // Endpoint 1 Interrupt IN (7 bytes, addr 0x81, interval 10ms)
+            0x07,
+            USB_DESC_TYPE_ENDPOINT,
+            0x81,
+            USB_EP_ATTR_INTERRUPT,
+            0x08,
+            0x00,
+            10,
+            // Interface 1 Descriptor (HID Mouse, 9 bytes)
+            0x09,
+            0x04,
+            0x01,
+            0x00,
+            0x01,
+            USB_CLASS_HID,
+            USB_SUBCLASS_BOOT_INTERFACE,
+            USB_PROTOCOL_MOUSE,
+            0x00,
+            // HID Descriptor Interface 1 (9 bytes)
+            0x09,
+            USB_DESC_TYPE_HID,
+            0x11,
+            0x01,
+            0x00,
+            0x01,
+            USB_DESC_TYPE_HID_REPORT,
+            52,
+            0x00,
+            // Endpoint 2 Interrupt IN (7 bytes, addr 0x82, interval 8ms)
+            0x07,
+            USB_DESC_TYPE_ENDPOINT,
+            0x82,
+            USB_EP_ATTR_INTERRUPT,
+            0x08,
+            0x00,
+            8,
+        ];
+
+        let parsed = UsbConfigParser::parse_configuration(&config_raw)
+            .expect("Parsing configuration HID valide");
+        assert_eq!(parsed.configuration_value, 1);
+        assert_eq!(parsed.interface_count, 2);
+        assert_eq!(parsed.total_endpoints(), 2);
+
+        // Interface 0 (Clavier)
+        let iface0 = &parsed.interfaces[0];
+        assert!(iface0.is_hid());
+        assert!(iface0.is_hid_keyboard());
+        assert!(!iface0.is_hid_mouse());
+        let hid0 = iface0.hid_descriptor.expect("HID descriptor iface 0");
+        let bcd0 = hid0.bcd_hid;
+        let rpt_len0 = hid0.report_descriptor_length;
+        assert_eq!(bcd0, 0x0111);
+        assert_eq!(rpt_len0, 65);
+        assert_eq!(iface0.endpoint_count, 1);
+        let ep0 = &iface0.endpoints[0];
+        assert!(ep0.is_interrupt());
+        assert!(ep0.is_in());
+        assert_eq!(ep0.dci, 3); // 1*2 + 1 = 3
+
+        // Interface 1 (Souris)
+        let iface1 = &parsed.interfaces[1];
+        assert!(iface1.is_hid());
+        assert!(!iface1.is_hid_keyboard());
+        assert!(iface1.is_hid_mouse());
+        let hid1 = iface1.hid_descriptor.expect("HID descriptor iface 1");
+        let bcd1 = hid1.bcd_hid;
+        let rpt_len1 = hid1.report_descriptor_length;
+        assert_eq!(bcd1, 0x0111);
+        assert_eq!(rpt_len1, 52);
+        assert_eq!(iface1.endpoint_count, 1);
+        let ep1 = &iface1.endpoints[0];
+        assert!(ep1.is_interrupt());
+        assert!(ep1.is_in());
+        assert_eq!(ep1.dci, 5); // 2*2 + 1 = 5
+
+        // find_hid_endpoints
+        let mut hid_eps = [(
+            UsbDecodedInterface::default(),
+            UsbDecodedEndpoint::default(),
+        ); 4];
+        let hid_count = parsed.find_hid_endpoints(&mut hid_eps);
+        assert_eq!(hid_count, 2);
+        assert_eq!(hid_eps[0].1.dci, 3);
+        assert_eq!(hid_eps[1].1.dci, 5);
+
+        // Décodage Consumer Controls multimédia
+        let mut consumer = UsbConsumerControlState::default();
+        consumer.decode_report(&[0x01, 0x00]); // Play/Pause
+        assert!(consumer.play_pause);
+        assert!(!consumer.mute);
+
+        consumer.decode_report(&[0x50, 0x00]); // Volume Up (bit 4) | Mute (bit 6)
+        assert!(consumer.volume_increment);
+        assert!(consumer.mute);
+        assert!(!consumer.play_pause);
+    }
+
+    #[test]
     fn test_xhci_mfindex_and_isoch_audio_video_synchronization() {
         let mut ctrl = XhciController::new();
         ctrl.ready = true;
@@ -5214,6 +5477,7 @@ mod tests {
             class: 0x08,    // Mass Storage
             subclass: 0x06, // SCSI Transparent
             protocol: 0x50, // Bulk-Only Transport
+            hid_descriptor: None,
             endpoints: [UsbDecodedEndpoint::default(); 8],
             endpoint_count: 2,
         };

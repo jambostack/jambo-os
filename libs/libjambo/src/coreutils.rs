@@ -395,13 +395,15 @@ pub fn sys_rmdir_pool(path: &str) -> i32 {
             Some(i) => i,
             None => return -1, // ENOENT
         };
-        // Vérification qu'aucun fichier actif n'a ce répertoire pour préfixe
+        // Vérification qu'aucun fichier ou sous-répertoire actif n'a ce répertoire pour parent
         for node in (*pool).iter() {
-            if node.is_active
-                && node.path_str() != clean_path
-                && node.path_str().starts_with(clean_path)
-            {
-                return -1; // ENOTEMPTY
+            if node.is_active && node.path_str() != clean_path {
+                let p = node.path_str();
+                if let Some(rest) = p.strip_prefix(clean_path) {
+                    if rest.starts_with('/') {
+                        return -1; // ENOTEMPTY
+                    }
+                }
             }
         }
         (*pool)[idx].is_active = false;
@@ -2401,7 +2403,20 @@ pub fn run_mkdir(args: &[&str], err_fd: i32) -> i32 {
     }
     let mut has_error = false;
     for &path in paths {
-        let res = sys_mkdir_pool(path, 0o755);
+        let clean = path.trim_end_matches('/');
+        if parents {
+            // Création récursive de chaque composant parent
+            let mut start = if clean.starts_with('/') { 1 } else { 0 };
+            while let Some(pos) = clean[start..].find('/') {
+                let sub_idx = start + pos;
+                let sub_path = &clean[..sub_idx];
+                if !sub_path.is_empty() {
+                    let _ = sys_mkdir_pool(sub_path, 0o755);
+                }
+                start = sub_idx + 1;
+            }
+        }
+        let res = sys_mkdir_pool(clean, 0o755);
         if res < 0 && !parents {
             let _ = sys_write(err_fd, b"mkdir: cannot create directory '");
             let _ = sys_write(err_fd, path.as_bytes());
@@ -2409,6 +2424,94 @@ pub fn run_mkdir(args: &[&str], err_fd: i32) -> i32 {
             has_error = true;
         }
     }
+    if has_error {
+        1
+    } else {
+        0
+    }
+}
+
+/// Exécute l'utilitaire `rmdir` supprimant des répertoires vides
+pub fn run_rmdir(args: &[&str], err_fd: i32) -> i32 {
+    let mut ignore_fail_on_non_empty = false;
+    let mut parents = false;
+    let mut verbose = false;
+    let mut paths_start = 0;
+
+    for (i, &arg) in args.iter().enumerate() {
+        if arg == "-p" || arg == "--parents" {
+            parents = true;
+            paths_start = i + 1;
+        } else if arg == "-v" || arg == "--verbose" {
+            verbose = true;
+            paths_start = i + 1;
+        } else if arg == "--ignore-fail-on-non-empty" {
+            ignore_fail_on_non_empty = true;
+            paths_start = i + 1;
+        } else if arg.starts_with('-') && arg != "-" {
+            for b in arg[1..].bytes() {
+                match b {
+                    b'p' => parents = true,
+                    b'v' => verbose = true,
+                    _ => {}
+                }
+            }
+            paths_start = i + 1;
+        } else {
+            break;
+        }
+    }
+
+    let paths = &args[paths_start..];
+    if paths.is_empty() {
+        let _ = sys_write(err_fd, b"rmdir: missing operand\n");
+        return 1;
+    }
+
+    let mut has_error = false;
+    for &path in paths {
+        let mut cur = path.trim_end_matches('/');
+        if cur.is_empty() {
+            let _ = sys_write(
+                err_fd,
+                b"rmdir: cannot remove '/': Device or resource busy\n",
+            );
+            has_error = true;
+            continue;
+        }
+
+        loop {
+            let res = sys_rmdir_pool(cur);
+            if res < 0 {
+                if !ignore_fail_on_non_empty {
+                    let _ = sys_write(err_fd, b"rmdir: failed to remove '");
+                    let _ = sys_write(err_fd, cur.as_bytes());
+                    let _ = sys_write(err_fd, b"': Directory not empty or not found\n");
+                    has_error = true;
+                }
+                break;
+            } else if verbose {
+                let _ = sys_write(1, b"rmdir: removing directory, '");
+                let _ = sys_write(1, cur.as_bytes());
+                let _ = sys_write(1, b"'\n");
+            }
+
+            if parents {
+                if let Some(pos) = cur.rfind('/') {
+                    let parent = &cur[..pos];
+                    if parent.is_empty() || parent == "/tmp" || parent == "/etc" || parent == "/" {
+                        break;
+                    }
+                    cur = parent;
+                } else {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+    }
+
     if has_error {
         1
     } else {
@@ -12226,6 +12329,9 @@ pub fn run_xargs(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
             "dd" => run_dd(effective_sub_args, 0, out_fd, err_fd),
             "readlink" => run_readlink(effective_sub_args, 0, out_fd, err_fd),
             "stat" => run_stat(effective_sub_args, 0, out_fd, err_fd),
+            "ln" => run_ln(effective_sub_args, 0, out_fd, err_fd),
+            "mktemp" => run_mktemp(effective_sub_args, 0, out_fd, err_fd),
+            "rmdir" => run_rmdir(effective_sub_args, err_fd),
             _ => {
                 let _ = sys_write(err_fd, b"xargs: ");
                 let _ = sys_write(err_fd, target_cmd.as_bytes());
@@ -13632,9 +13738,33 @@ mod tests {
         let code_mkdir_p = run_mkdir(&["-p", "/tmp/new_dir"], 2);
         assert_eq!(code_mkdir_p, 0);
 
-        // Suppression avec rm -r
-        let code_rm = run_rm(&["-r", "/tmp/new_dir"], 2);
-        assert_eq!(code_rm, 0);
+        // Test de suppression avec l'utilitaire rmdir
+        let code_rmdir = run_rmdir(&["/tmp/new_dir"], 2);
+        assert_eq!(code_rmdir, 0);
+
+        // Tentative de rmdir sur répertoire inexistant
+        let code_rmdir_nonexistent = run_rmdir(&["/tmp/new_dir"], 2);
+        assert_eq!(code_rmdir_nonexistent, 1);
+
+        // Test rmdir -p (hiérarchie imbriquée)
+        let code_mkdir_nested = run_mkdir(&["-p", "/tmp/parent_dir/child_dir"], 2);
+        assert_eq!(code_mkdir_nested, 0);
+
+        // Création d'un fichier dans le sous-répertoire : rmdir doit refuser car non vide
+        let fd_file = sys_open("/tmp/parent_dir/child_dir/file.txt", O_CREAT | O_WRONLY);
+        assert!(fd_file >= 3);
+        sys_close(fd_file);
+
+        let code_rmdir_not_empty = run_rmdir(&["/tmp/parent_dir/child_dir"], 2);
+        assert_eq!(code_rmdir_not_empty, 1);
+
+        // Suppression du fichier
+        let code_rm_file = run_rm(&["/tmp/parent_dir/child_dir/file.txt"], 2);
+        assert_eq!(code_rm_file, 0);
+
+        // Désormais rmdir -p réussit à vider et supprimer child puis parent
+        let code_rmdir_parents = run_rmdir(&["-p", "/tmp/parent_dir/child_dir"], 2);
+        assert_eq!(code_rmdir_parents, 0);
     }
 
     #[test]
