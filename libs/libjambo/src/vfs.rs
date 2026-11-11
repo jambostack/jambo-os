@@ -1185,6 +1185,23 @@ pub fn setgroups(list: &[u32]) -> Result<(), SysError> {
     Ok(())
 }
 
+static HOSTID: AtomicU32 = AtomicU32::new(0x007F0101); // 127.0.1.1 en hexadécimal déterministe
+
+/// Retourne l'identifiant numérique 32-bit unique du système hôte (POSIX gethostid)
+pub fn gethostid() -> u32 {
+    HOSTID.load(Ordering::Relaxed)
+}
+
+/// Configure l'identifiant numérique de l'hôte (POSIX sethostid, privilège root requis)
+pub fn sethostid(new_id: u32) -> Result<(), SysError> {
+    let euid = geteuid();
+    if euid != 0 {
+        return Err(SysError::PermissionDenied);
+    }
+    HOSTID.store(new_id, Ordering::Relaxed);
+    Ok(())
+}
+
 // ============================================================================
 // TESTS UNITAIRES
 // ============================================================================
@@ -1589,5 +1606,13 @@ mod tests {
 
         // Reset à [0]
         assert!(setgroups(&[0]).is_ok());
+
+        // 6. Test POSIX gethostid et sethostid
+        let hid = gethostid();
+        assert_eq!(hid, 0x007F0101);
+        assert!(sethostid(0xDEADBEEF).is_ok());
+        assert_eq!(gethostid(), 0xDEADBEEF);
+        // Reset à l'identifiant par défaut
+        assert!(sethostid(0x007F0101).is_ok());
     }
 }

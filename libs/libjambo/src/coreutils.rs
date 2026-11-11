@@ -13386,6 +13386,7 @@ pub fn execute_coreutils_command(
         "logname" => run_logname(args, in_fd, out_fd, err_fd),
         "tty" => run_tty(args, in_fd, out_fd, err_fd),
         "groups" => run_groups(args, in_fd, out_fd, err_fd),
+        "hostid" => run_hostid(args, out_fd, err_fd),
         _ => {
             let _ = sys_write(err_fd, cmd.as_bytes());
             let _ = sys_write(err_fd, b": command not found\n");
@@ -14748,6 +14749,7 @@ pub fn run_xargs(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
             "logname" => run_logname(effective_sub_args, 0, out_fd, err_fd),
             "tty" => run_tty(effective_sub_args, 0, out_fd, err_fd),
             "groups" => run_groups(effective_sub_args, 0, out_fd, err_fd),
+            "hostid" => run_hostid(effective_sub_args, out_fd, err_fd),
             _ => {
                 let _ = sys_write(err_fd, b"xargs: ");
                 let _ = sys_write(err_fd, target_cmd.as_bytes());
@@ -19938,6 +19940,54 @@ the current process (which may differ if the groups database has changed).\n\n\
     }
 }
 
+/// Utilitaire Coreutils Ring 3 : `hostid` (POSIX / Single UNIX Specification hostid)
+///
+/// Affiche l'identifiant numérique hexadécimal 32-bit unique de la machine hôte.
+/// Format canonique POSIX / GNU coreutils : 8 chiffres hexadécimaux minuscules terminés par un saut de ligne.
+pub fn run_hostid(args: &[&str], out_fd: i32, err_fd: i32) -> i32 {
+    if let Some(&arg) = args.first() {
+        if arg == "--help" {
+            let _ = sys_write(
+                out_fd,
+                b"Usage: hostid [OPTION]...\n\
+Print the numeric identifier (in hexadecimal) for the current host.\n\n\
+      --help     display this help and exit\n\
+      --version  output version information and exit\n",
+            );
+            return 0;
+        } else if arg == "--version" {
+            let _ = sys_write(out_fd, b"hostid (jambo-coreutils) 0.1.0\n");
+            return 0;
+        } else if arg.starts_with('-') && arg != "-" {
+            let _ = sys_write(err_fd, b"hostid: unrecognized option '");
+            let _ = sys_write(err_fd, arg.as_bytes());
+            let _ = sys_write(err_fd, b"'\nTry 'hostid --help' for more information.\n");
+            return 1;
+        } else {
+            let _ = sys_write(err_fd, b"hostid: extra operand '");
+            let _ = sys_write(err_fd, arg.as_bytes());
+            let _ = sys_write(err_fd, b"'\nTry 'hostid --help' for more information.\n");
+            return 1;
+        }
+    }
+
+    let hid = crate::vfs::gethostid();
+    let mut hex_buf = [b'0'; 9]; // 8 hex chars + '\n'
+    hex_buf[8] = b'\n';
+
+    const HEX_CHARS: &[u8; 16] = b"0123456789abcdef";
+    let mut val = hid;
+    let mut i = 8usize;
+    while i > 0 {
+        i -= 1;
+        hex_buf[i] = HEX_CHARS[(val & 0x0F) as usize];
+        val >>= 4;
+    }
+
+    let _ = sys_write(out_fd, &hex_buf);
+    0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -24289,5 +24339,34 @@ Chaque processus dispose de son propre CR3 sans aucun privilege materiel direct.
         assert!(core::str::from_utf8(&bufg4[..ng4 as usize])
             .unwrap()
             .contains("groups"));
+
+        // 12. Test run_hostid
+        let (out_rh1, out_wh1) = crate::vfs::pipe().unwrap();
+        let code_h1 = run_hostid(&[], out_wh1, 2);
+        sys_close(out_wh1);
+        assert_eq!(code_h1, 0);
+        let mut bufh1 = [0u8; 64];
+        let nh1 = sys_read(out_rh1, &mut bufh1);
+        sys_close(out_rh1);
+        assert_eq!(
+            core::str::from_utf8(&bufh1[..nh1 as usize]).unwrap(),
+            "007f0101\n"
+        );
+
+        // Options --version et --help
+        let (out_rh2, out_wh2) = crate::vfs::pipe().unwrap();
+        let code_h2 = run_hostid(&["--version"], out_wh2, 2);
+        sys_close(out_wh2);
+        assert_eq!(code_h2, 0);
+        let mut bufh2 = [0u8; 64];
+        let nh2 = sys_read(out_rh2, &mut bufh2);
+        sys_close(out_rh2);
+        assert!(core::str::from_utf8(&bufh2[..nh2 as usize])
+            .unwrap()
+            .contains("hostid"));
+
+        // Extra operand
+        let code_h3 = run_hostid(&["extra"], 1, 2);
+        assert_eq!(code_h3, 1);
     }
 }

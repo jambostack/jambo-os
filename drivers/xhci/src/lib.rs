@@ -304,6 +304,7 @@ pub const XHCI_EXT_CAP_EXTENDED_POWER_MGMT_LPM: u8 = 15;
 pub const XHCI_EXT_CAP_EXTENDED_MESSAGE_INTERRUPT: u8 = 17;
 pub const XHCI_EXT_CAP_SECONDARY_BANDWIDTH: u8 = 18;
 pub const XHCI_EXT_CAP_PORT_PROTOCOL_HIERARCHY: u8 = 19;
+pub const XHCI_EXT_CAP_EXTENDED_CAPABILITY_TABLE: u8 = 20;
 
 /// Masques de registres USB Legacy Support (xHCI 1.2 Section 7.1)
 /// Registre USBLEGSUP (Offset 0x00)
@@ -1411,6 +1412,189 @@ impl XhciSubsystemHierarchy {
                 r.is_active = true;
                 return true;
             }
+        }
+        false
+    }
+}
+
+/// Entrée individuelle de pointeur de capacité étendue xHCI (§7.12)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XhciExtendedCapPointerEntry {
+    /// Identifiant de capacité xHCI (bits 7:0)
+    pub cap_id: u8,
+    /// Offset relatif en dwords vers la capacité (bits 15:8)
+    pub offset_dwords: u8,
+    /// Drapeaux / propriétés de la capacité (bits 31:16)
+    pub flags: u16,
+    /// Capacité présente et valide dans la table
+    pub is_valid: bool,
+}
+
+impl XhciExtendedCapPointerEntry {
+    /// Crée une entrée de pointeur de capacité
+    pub const fn new(cap_id: u8, offset_dwords: u8, flags: u16) -> Self {
+        Self {
+            cap_id,
+            offset_dwords,
+            flags,
+            is_valid: true,
+        }
+    }
+
+    /// Encode l'entrée en mot 32-bit MMIO
+    pub const fn encode_u32(&self) -> u32 {
+        (self.cap_id as u32)
+            | ((self.offset_dwords as u32) << 8)
+            | ((self.flags as u32) << 16)
+            | (if self.is_valid { 1 << 31 } else { 0 })
+    }
+
+    /// Décode un mot 32-bit MMIO en entrée de pointeur
+    pub const fn decode_u32(val: u32) -> Self {
+        let cap_id = (val & 0xFF) as u8;
+        let offset_dwords = ((val >> 8) & 0xFF) as u8;
+        let flags = ((val >> 16) & 0x7FFF) as u16;
+        let is_valid = (val & (1 << 31)) != 0;
+        Self {
+            cap_id,
+            offset_dwords,
+            flags,
+            is_valid,
+        }
+    }
+}
+
+/// Capacité Étendue xHCI 1.2 §7.12 : Extended Capability Descriptor Tables & USB Capability Pointers
+///
+/// Modélise la table d'indexation accélérée des capacités étendues de l'hôte xHCI 1.2,
+/// permettant un parcours direct O(1) de l'ensemble des descripteurs de capacités sans
+/// traverser séquentiellement la liste chaînée MMIO.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XhciExtendedCapabilityTable {
+    /// Pointeur dword vers la prochaine capacité étendue
+    pub next_ptr_dwords: u8,
+    /// Nombre d'entrées de pointeurs présentes dans la table (1..=16)
+    pub entry_count: u8,
+    /// Table statique des descripteurs de pointeurs (jusqu'à 16 entrées)
+    pub entries: [XhciExtendedCapPointerEntry; 16],
+    /// Masque de contrôle global d'accès direct
+    pub table_control: u16,
+}
+
+impl Default for XhciExtendedCapabilityTable {
+    fn default() -> Self {
+        Self::new(4)
+    }
+}
+
+impl XhciExtendedCapabilityTable {
+    /// Crée une nouvelle table de descripteurs pour `count` entrées (max 16)
+    pub const fn new(count: u8) -> Self {
+        let c = if count > 16 {
+            16
+        } else if count == 0 {
+            1
+        } else {
+            count
+        };
+
+        let mut entries = [XhciExtendedCapPointerEntry::new(0, 0, 0); 16];
+        let mut i = 0usize;
+        while i < (c as usize) {
+            let cap_id = match i {
+                0 => XHCI_EXT_CAP_USB_LEGACY_SUPPORT,
+                1 => XHCI_EXT_CAP_SUPPORTED_PROTOCOL,
+                2 => XHCI_EXT_CAP_EXTENDED_POWER_MGMT,
+                3 => XHCI_EXT_CAP_USB_DEBUG_CAPABILITY,
+                4 => XHCI_EXT_CAP_EXTENDED_POWER_MGMT_LPM,
+                5 => XHCI_EXT_CAP_EXTENDED_MESSAGE_INTERRUPT,
+                6 => XHCI_EXT_CAP_SECONDARY_BANDWIDTH,
+                7 => XHCI_EXT_CAP_PORT_PROTOCOL_HIERARCHY,
+                _ => (i + 1) as u8,
+            };
+            entries[i] = XhciExtendedCapPointerEntry::new(cap_id, ((i + 1) * 4) as u8, 0x01);
+            i += 1;
+        }
+
+        Self {
+            next_ptr_dwords: 0,
+            entry_count: c,
+            entries,
+            table_control: 0,
+        }
+    }
+
+    /// Décode une table de descripteurs à partir d'un buffer de dwords MMIO
+    pub fn parse(dwords: &[u32]) -> Option<Self> {
+        if dwords.len() < 2 {
+            return None;
+        }
+        let cap_id = (dwords[0] & 0xFF) as u8;
+        if cap_id != XHCI_EXT_CAP_EXTENDED_CAPABILITY_TABLE {
+            return None;
+        }
+        let next_ptr = ((dwords[0] >> 8) & 0xFF) as u8;
+        let entry_count = (((dwords[0] >> 16) & 0xFF) as u8).min(16);
+        let table_ctrl = ((dwords[0] >> 24) & 0xFF) as u16;
+
+        let mut table = Self::new(entry_count);
+        table.next_ptr_dwords = next_ptr;
+        table.table_control = table_ctrl;
+
+        let mut entry_idx = 0usize;
+        let mut dw_idx = 1usize;
+        while dw_idx < dwords.len() && entry_idx < (entry_count as usize) {
+            let entry = XhciExtendedCapPointerEntry::decode_u32(dwords[dw_idx]);
+            table.entries[entry_idx] = entry;
+            entry_idx += 1;
+            dw_idx += 1;
+        }
+
+        Some(table)
+    }
+
+    /// Encode la structure en un tableau de mots MMIO (1 header + jusqu'à 16 entrées)
+    pub fn encode(&self) -> ([u32; 17], usize) {
+        let mut dwords = [0u32; 17];
+        dwords[0] = (XHCI_EXT_CAP_EXTENDED_CAPABILITY_TABLE as u32)
+            | ((self.next_ptr_dwords as u32) << 8)
+            | ((self.entry_count as u32) << 16)
+            | (((self.table_control as u32) & 0xFF) << 24);
+
+        let mut i = 0usize;
+        while i < (self.entry_count as usize) {
+            dwords[1 + i] = self.entries[i].encode_u32();
+            i += 1;
+        }
+
+        (dwords, 1 + (self.entry_count as usize))
+    }
+
+    /// Recherche l'offset dword d'une capacité par son Cap ID
+    pub fn find_offset_for_cap(&self, cap_id: u8) -> Option<u8> {
+        for e in &self.entries[..self.entry_count as usize] {
+            if e.cap_id == cap_id && e.is_valid {
+                return Some(e.offset_dwords);
+            }
+        }
+        None
+    }
+
+    /// Ajoute ou met à jour une entrée de pointeur de capacité
+    pub fn set_entry(&mut self, cap_id: u8, offset_dwords: u8, flags: u16) -> bool {
+        for e in self.entries[..self.entry_count as usize].iter_mut() {
+            if e.cap_id == cap_id {
+                e.offset_dwords = offset_dwords;
+                e.flags = flags;
+                e.is_valid = true;
+                return true;
+            }
+        }
+        if (self.entry_count as usize) < 16 {
+            let idx = self.entry_count as usize;
+            self.entries[idx] = XhciExtendedCapPointerEntry::new(cap_id, offset_dwords, flags);
+            self.entry_count += 1;
+            return true;
         }
         false
     }
@@ -9800,6 +9984,56 @@ mod tests {
         assert_eq!(
             parsed_h.find_protocol_for_port(3),
             Some(XhciPortProtocolType::Usb4)
+        );
+
+        // 21. xHCI 1.2 §7.12 Extended Capability Descriptor Tables & USB Capability Pointers
+        let mut cap_table = XhciExtendedCapabilityTable::new(5);
+        assert_eq!(cap_table.entry_count, 5);
+        assert_eq!(
+            cap_table.find_offset_for_cap(XHCI_EXT_CAP_USB_LEGACY_SUPPORT),
+            Some(4)
+        );
+        assert_eq!(
+            cap_table.find_offset_for_cap(XHCI_EXT_CAP_SUPPORTED_PROTOCOL),
+            Some(8)
+        );
+        assert_eq!(
+            cap_table.find_offset_for_cap(XHCI_EXT_CAP_EXTENDED_POWER_MGMT),
+            Some(12)
+        );
+
+        // Mise à jour et insertion d'une nouvelle capacité
+        assert!(cap_table.set_entry(XHCI_EXT_CAP_LOCAL_MEMORY, 36, 0x05));
+        assert_eq!(cap_table.entry_count, 6);
+        assert_eq!(
+            cap_table.find_offset_for_cap(XHCI_EXT_CAP_LOCAL_MEMORY),
+            Some(36)
+        );
+
+        // Encodage et décodage MMIO
+        cap_table.next_ptr_dwords = 32;
+        cap_table.table_control = 0x55;
+        let (encoded_tbl, len_tbl) = cap_table.encode();
+        assert_eq!(len_tbl, 7); // 1 header + 6 entrées
+        assert_eq!(
+            encoded_tbl[0] & 0xFF,
+            XHCI_EXT_CAP_EXTENDED_CAPABILITY_TABLE as u32
+        );
+        assert_eq!((encoded_tbl[0] >> 8) & 0xFF, 32);
+        assert_eq!((encoded_tbl[0] >> 16) & 0xFF, 6);
+        assert_eq!((encoded_tbl[0] >> 24) & 0xFF, 0x55);
+
+        let parsed_tbl = XhciExtendedCapabilityTable::parse(&encoded_tbl[..len_tbl]).unwrap();
+        assert_eq!(parsed_tbl.next_ptr_dwords, 32);
+        assert_eq!(parsed_tbl.entry_count, 6);
+        assert_eq!(parsed_tbl.table_control, 0x55);
+        assert_eq!(
+            parsed_tbl.find_offset_for_cap(XHCI_EXT_CAP_USB_LEGACY_SUPPORT),
+            Some(4)
+        );
+        assert_eq!(
+            parsed_tbl.find_offset_for_cap(XHCI_EXT_CAP_LOCAL_MEMORY),
+            Some(36)
         );
     }
 }

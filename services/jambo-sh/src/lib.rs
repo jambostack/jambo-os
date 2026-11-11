@@ -619,6 +619,7 @@ impl JamboShell {
             "logname" | "/bin/logname" | "bin/logname" => self.cmd_logname(args, out),
             "tty" | "/bin/tty" | "bin/tty" => self.cmd_tty(args, out),
             "groups" | "/bin/groups" | "bin/groups" => self.cmd_groups(args, out),
+            "hostid" | "/bin/hostid" | "bin/hostid" => self.cmd_hostid(args, out),
             "cow" | "/bin/cow" | "bin/cow" => self.cmd_cow(args, out),
             "version" => self.cmd_version(out),
             "uptime" => self.cmd_uptime(out),
@@ -2656,6 +2657,43 @@ Utilitaire d'installation JamboOS (Serie 0.*.*)\n\
             (status, len)
         } else {
             let msg = b"groups: pipe creation failed\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
+    }
+
+    fn cmd_hostid(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if let (Ok((r_out, w_out)), Ok((r_err, w_err))) =
+            (libjambo::vfs::pipe(), libjambo::vfs::pipe())
+        {
+            let code = libjambo::coreutils::run_hostid(args, w_out, w_err);
+            let _ = libjambo::coreutils::sys_close(w_out);
+            let _ = libjambo::coreutils::sys_close(w_err);
+
+            let mut len = 0;
+            if code == 0 {
+                let n_out = libjambo::coreutils::sys_read(r_out, out);
+                if n_out > 0 {
+                    len = n_out as usize;
+                }
+            } else {
+                let n_err = libjambo::coreutils::sys_read(r_err, out);
+                if n_err > 0 {
+                    len = n_err as usize;
+                }
+            }
+            let _ = libjambo::coreutils::sys_close(r_out);
+            let _ = libjambo::coreutils::sys_close(r_err);
+
+            let status = if code == 0 {
+                ShellStatus::Success
+            } else {
+                ShellStatus::ExecutionFailed
+            };
+            (status, len)
+        } else {
+            let msg = b"hostid: pipe creation failed\n";
             let len = msg.len().min(out.len());
             out[..len].copy_from_slice(&msg[..len]);
             (ShellStatus::ExecutionFailed, len)
@@ -20311,5 +20349,19 @@ mod tests {
 
         let (st46, _len46) = shell.execute_line("groups unknown_user", &mut out);
         assert_eq!(st46, ShellStatus::ExecutionFailed);
+
+        // 33. hostid shell command
+        let (st47, len47) = shell.execute_line("hostid", &mut out);
+        assert_eq!(st47, ShellStatus::Success);
+        let s47 = core::str::from_utf8(&out[..len47]).unwrap();
+        assert_eq!(s47, "007f0101\n");
+
+        let (st48, len48) = shell.execute_line("hostid --version", &mut out);
+        assert_eq!(st48, ShellStatus::Success);
+        let s48 = core::str::from_utf8(&out[..len48]).unwrap();
+        assert!(s48.contains("hostid"));
+
+        let (st49, _len49) = shell.execute_line("hostid extra_operand", &mut out);
+        assert_eq!(st49, ShellStatus::ExecutionFailed);
     }
 }
