@@ -711,6 +711,142 @@ impl XhciLocalMemory {
     }
 }
 
+/// Capacité Étendue xHCI Message Signaled Interrupts Extended (MSI-X / xHCI 1.2 section 7.6)
+///
+/// Permet au contrôleur xHCI de configurer et découpler les vecteurs d'interruption
+/// MSI-X dédiés pour les anneaux d'événements de transfert et de commandes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XhciExtendedMessageInterrupt {
+    /// Pointeur dword vers la prochaine capacité étendue (0 = fin de liste)
+    pub next_ptr_dwords: u8,
+    /// Indique si les interruptions MSI-X étendues sont activées
+    pub enabled: bool,
+    /// Numéro de BAR PCI contenant la table MSI-X
+    pub table_bar: u8,
+    /// Offset en dwords dans le BAR pour la table MSI-X
+    pub table_offset_dwords: u32,
+    /// Nombre de vecteurs d'interruption supportés
+    pub table_size: u16,
+    /// Numéro de BAR PCI contenant le PBA (Pending Bit Array)
+    pub pba_bar: u8,
+    /// Offset en dwords dans le BAR pour le PBA
+    pub pba_offset_dwords: u32,
+}
+
+impl XhciExtendedMessageInterrupt {
+    /// Parse les 4 dwords d'une capacité étendue Extended Message Interrupt (MSI-X)
+    pub const fn parse(dwords: &[u32; 4]) -> Self {
+        let dw0 = dwords[0];
+        let dw1 = dwords[1];
+        let dw2 = dwords[2];
+        let dw3 = dwords[3];
+
+        let next_ptr_dwords = ((dw0 >> 8) & 0xFF) as u8;
+        let enabled = (dw0 & (1 << 31)) != 0;
+        let table_size = (dw1 & 0x7FF) as u16 + 1; // N - 1 encodé sur bits [10:0]
+        let table_bar = (dw2 & 0x07) as u8;
+        let table_offset_dwords = (dw2 >> 3) & 0x1FFF_FFFF;
+        let pba_bar = (dw3 & 0x07) as u8;
+        let pba_offset_dwords = (dw3 >> 3) & 0x1FFF_FFFF;
+
+        Self {
+            next_ptr_dwords,
+            enabled,
+            table_bar,
+            table_offset_dwords,
+            table_size,
+            pba_bar,
+            pba_offset_dwords,
+        }
+    }
+
+    /// Encode les 4 dwords de la structure Extended Message Interrupt
+    pub const fn encode(&self) -> [u32; 4] {
+        let dw0 = (XHCI_EXT_CAP_EXTENDED_MESSAGE_INTERRUPT as u32)
+            | ((self.next_ptr_dwords as u32) << 8)
+            | if self.enabled { 1 << 31 } else { 0 };
+        let dw1 = ((self.table_size.saturating_sub(1)) & 0x7FF) as u32;
+        let dw2 =
+            ((self.table_bar & 0x07) as u32) | ((self.table_offset_dwords & 0x1FFF_FFFF) << 3);
+        let dw3 = ((self.pba_bar & 0x07) as u32) | ((self.pba_offset_dwords & 0x1FFF_FFFF) << 3);
+        [dw0, dw1, dw2, dw3]
+    }
+
+    /// Calcule l'offset absolu en octets de la table MSI-X
+    pub const fn table_offset_bytes(&self) -> u64 {
+        (self.table_offset_dwords as u64) * 4
+    }
+
+    /// Calcule l'offset absolu en octets du PBA
+    pub const fn pba_offset_bytes(&self) -> u64 {
+        (self.pba_offset_dwords as u64) * 4
+    }
+}
+
+/// Gestionnaire de routage et découplage des vecteurs d'interruption MSI-X pour xHCI.
+///
+/// Permet d'associer des vecteurs d'interruption distincts pour les événements
+/// de transfert de données (endpoints USB) et les événements de gestion de commandes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XhciMsixRouter {
+    /// Vecteur CPU assigné aux événements de commandes (Command Completion)
+    pub cmd_vector: u8,
+    /// Vecteur CPU assigné aux événements de transfert (Transfer Events / Bulk / Isochronous)
+    pub transfer_vector: u8,
+    /// Masque de routage actif
+    pub enabled: bool,
+    /// Compteur d'interruptions de commandes reçues
+    pub cmd_interrupts: u64,
+    /// Compteur d'interruptions de transfert reçues
+    pub transfer_interrupts: u64,
+}
+
+impl Default for XhciMsixRouter {
+    fn default() -> Self {
+        Self::new(48, 49)
+    }
+}
+
+impl XhciMsixRouter {
+    /// Crée un routeur découplé pour xHCI avec vecteurs séparés
+    pub const fn new(cmd_vector: u8, transfer_vector: u8) -> Self {
+        Self {
+            cmd_vector,
+            transfer_vector,
+            enabled: false,
+            cmd_interrupts: 0,
+            transfer_interrupts: 0,
+        }
+    }
+
+    /// Active le routage découplé
+    pub fn enable(&mut self) {
+        self.enabled = true;
+    }
+
+    /// Désactive le routage découplé
+    pub fn disable(&mut self) {
+        self.enabled = false;
+    }
+
+    /// Déroute un vecteur d'interruption reçu vers la catégorie appropriée :
+    /// `Some(true)` pour transfert, `Some(false)` pour commande, `None` si inconnu.
+    pub fn route_interrupt(&mut self, vector: u8) -> Option<bool> {
+        if !self.enabled {
+            return None;
+        }
+        if vector == self.transfer_vector {
+            self.transfer_interrupts = self.transfer_interrupts.saturating_add(1);
+            Some(true)
+        } else if vector == self.cmd_vector {
+            self.cmd_interrupts = self.cmd_interrupts.saturating_add(1);
+            Some(false)
+        } else {
+            None
+        }
+    }
+}
+
 /// Anneau de transfert xHCI dédié à un flux Bulk spécifique (Block Stream / UAS)
 pub struct BulkStreamRing {
     pub stream_id: u16,
@@ -6037,6 +6173,20 @@ impl XhciController {
         XhciLocalMemory::parse(&[dw0, dw1])
     }
 
+    /// Lit et décode une capacité Extended Message Interrupt (MSI-X / xHCI 1.2 section 7.6)
+    /// à partir de son adresse MMIO de base.
+    ///
+    /// # Safety
+    ///
+    /// Effectue 4 lectures volatiles MMIO 32-bit alignées sur l'espace BAR0 du contrôleur xHCI.
+    pub fn read_extended_message_interrupt(&self, cap_addr: u64) -> XhciExtendedMessageInterrupt {
+        let dw0 = unsafe { core::ptr::read_volatile(cap_addr as *const u32) };
+        let dw1 = unsafe { core::ptr::read_volatile((cap_addr + 4) as *const u32) };
+        let dw2 = unsafe { core::ptr::read_volatile((cap_addr + 8) as *const u32) };
+        let dw3 = unsafe { core::ptr::read_volatile((cap_addr + 12) as *const u32) };
+        XhciExtendedMessageInterrupt::parse(&[dw0, dw1, dw2, dw3])
+    }
+
     /// Émet une commande Evaluate Context sur le Command Ring.
     pub fn evaluate_context(
         &mut self,
@@ -8543,5 +8693,44 @@ mod tests {
         assert_eq!(loc.size_bytes(), 64 * 1024);
         assert_eq!(loc.offset_bytes(), 256);
         assert_eq!(loc.encode(), loc_dwords);
+
+        // 13. Extended Message Interrupt (MSI-X) Capability (xHCI 1.2 section 7.6)
+        // Table: BAR 0, offset 0x2000 (2048 dwords = 8192 octets), 32 vecteurs (N-1 = 31)
+        // PBA: BAR 0, offset 0x3000 (3072 dwords = 12288 octets)
+        let msix_dwords: [u32; 4] = [
+            (1 << 31) | (8 << 8) | (XHCI_EXT_CAP_EXTENDED_MESSAGE_INTERRUPT as u32), // enabled, next=8
+            31,          // table_size = 32
+            (2048 << 3), // BAR 0, offset 2048 dwords
+            (3072 << 3), // BAR 0, offset 3072 dwords
+        ];
+        let msix_cap = XhciExtendedMessageInterrupt::parse(&msix_dwords);
+        assert!(msix_cap.enabled);
+        assert_eq!(msix_cap.next_ptr_dwords, 8);
+        assert_eq!(msix_cap.table_size, 32);
+        assert_eq!(msix_cap.table_bar, 0);
+        assert_eq!(msix_cap.table_offset_dwords, 2048);
+        assert_eq!(msix_cap.table_offset_bytes(), 8192);
+        assert_eq!(msix_cap.pba_bar, 0);
+        assert_eq!(msix_cap.pba_offset_dwords, 3072);
+        assert_eq!(msix_cap.pba_offset_bytes(), 12288);
+        assert_eq!(msix_cap.encode(), msix_dwords);
+
+        // 14. XhciMsixRouter découplage des vecteurs commande & transfert
+        let mut router = XhciMsixRouter::new(50, 51);
+        assert!(!router.enabled);
+        assert_eq!(router.route_interrupt(50), None);
+
+        router.enable();
+        assert!(router.enabled);
+        assert_eq!(router.route_interrupt(50), Some(false)); // Commande
+        assert_eq!(router.route_interrupt(51), Some(true)); // Transfert
+        assert_eq!(router.route_interrupt(51), Some(true)); // Transfert
+        assert_eq!(router.route_interrupt(52), None); // Vecteur inconnu
+
+        assert_eq!(router.cmd_interrupts, 1);
+        assert_eq!(router.transfer_interrupts, 2);
+
+        router.disable();
+        assert_eq!(router.route_interrupt(50), None);
     }
 }

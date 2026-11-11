@@ -382,7 +382,7 @@ name = "nice"
 path = "src/bin/nice.rs"
 test = false
 
-# 74 utilitaires Ring 3
+# 75 utilitaires Ring 3
 
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }
