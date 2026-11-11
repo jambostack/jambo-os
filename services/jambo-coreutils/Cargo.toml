@@ -497,7 +497,12 @@ name = "sum"
 path = "src/bin/sum.rs"
 test = false
 
-# 98 utilitaires Ring 3
+[[bin]]
+name = "fnv1asum"
+path = "src/bin/fnv1asum.rs"
+test = false
+
+# 99 utilitaires Ring 3
 
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }

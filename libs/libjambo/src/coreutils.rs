@@ -22463,6 +22463,92 @@ pub fn run_sum(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
     exit_code
 }
 
+/// Utilitaire Coreutils POSIX `cksum` / `sum` / `md5sum` (calcul de hachage 64-bit FNV-1a non cryptographique)
+///
+/// Syntax standard :
+/// `fnv1asum [OPTION]... [FILE]...`
+/// Calcule l'empreinte Fowler-Noll-Vo 64-bit (FNV-1a) de chaque fichier ou de l'entrée standard.
+pub fn run_fnv1asum(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    let mut files_storage: [&str; 64] = [""; 64];
+    let mut files_count = 0usize;
+
+    for &arg in args {
+        if arg == "--help" {
+            let _ = sys_write(
+                out_fd,
+                b"Usage: fnv1asum [FILE]...\nPrint 64-bit FNV-1a checksums for each FILE.\n\nOptions:\n      --help      display this help and exit\n      --version   output version information and exit\n",
+            );
+            return 0;
+        } else if arg == "--version" {
+            let _ = sys_write(out_fd, b"fnv1asum (jambo-coreutils) 0.1.0\n");
+            return 0;
+        } else if (!arg.starts_with('-') || arg == "-") && files_count < files_storage.len() {
+            files_storage[files_count] = arg;
+            files_count += 1;
+        }
+    }
+
+    if files_count == 0 {
+        files_storage[0] = "-";
+        files_count = 1;
+    }
+
+    let mut exit_code = 0;
+    let mut read_buf = [0u8; 1024];
+    const FNV_OFFSET_BASIS_64: u64 = 0xcbf29ce484222325;
+    const FNV_PRIME_64: u64 = 0x100000001b3;
+
+    for &file in files_storage.iter().take(files_count) {
+        let (fd, need_close) = if file == "-" {
+            (in_fd, false)
+        } else {
+            let opened = sys_open(file, 0);
+            if opened < 0 {
+                let _ = sys_write(err_fd, b"fnv1asum: '");
+                let _ = sys_write(err_fd, file.as_bytes());
+                let _ = sys_write(err_fd, b"': No such file or directory\n");
+                exit_code = 1;
+                continue;
+            }
+            (opened, true)
+        };
+
+        let mut hash: u64 = FNV_OFFSET_BASIS_64;
+
+        loop {
+            let n = sys_read(fd, &mut read_buf);
+            if n <= 0 {
+                break;
+            }
+            let bytes = &read_buf[..n as usize];
+            for &byte in bytes {
+                hash ^= byte as u64;
+                hash = hash.wrapping_mul(FNV_PRIME_64);
+            }
+        }
+
+        if need_close {
+            sys_close(fd);
+        }
+
+        // Format hexadécimal 16 caractères minuscules
+        let hex_digits = b"0123456789abcdef";
+        let mut hex_buf = [0u8; 16];
+        for (i, item) in hex_buf.iter_mut().enumerate() {
+            let shift = (15 - i) * 4;
+            let nibble = ((hash >> shift) & 0x0F) as usize;
+            *item = hex_digits[nibble];
+        }
+
+        let _ = sys_write(out_fd, &hex_buf);
+        let _ = sys_write(out_fd, b"  ");
+        let _ = sys_write(out_fd, file.as_bytes());
+        let _ = sys_write(out_fd, b"\n");
+    }
+
+    exit_code
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -27409,5 +27495,27 @@ Chaque processus dispose de son propre CR3 sans aucun privilege materiel direct.
         assert!(s_sysv.contains("/tmp/test_sum_file.txt"));
 
         let _ = run_unlink(&["/tmp/test_sum_file.txt"], 1, 2);
+
+        // 30. Test run_fnv1asum
+        assert_eq!(run_fnv1asum(&["--help"], 0, 1, 2), 0);
+        assert_eq!(run_fnv1asum(&["--version"], 0, 1, 2), 0);
+
+        let fnv_f = sys_open("/tmp/test_fnv_file.txt", O_CREAT | O_WRONLY);
+        assert!(fnv_f >= 3);
+        let _ = sys_write(fnv_f, b"hello fnv\n");
+        sys_close(fnv_f);
+
+        let (out_r_fnv, out_w_fnv) = crate::vfs::pipe().unwrap();
+        let code_fnv = run_fnv1asum(&["/tmp/test_fnv_file.txt"], 0, out_w_fnv, 2);
+        sys_close(out_w_fnv);
+        assert_eq!(code_fnv, 0);
+
+        let mut buf_fnv = [0u8; 64];
+        let n_fnv = sys_read(out_r_fnv, &mut buf_fnv);
+        sys_close(out_r_fnv);
+        let s_fnv = core::str::from_utf8(&buf_fnv[..n_fnv as usize]).unwrap();
+        assert!(s_fnv.contains("/tmp/test_fnv_file.txt"));
+
+        let _ = run_unlink(&["/tmp/test_fnv_file.txt"], 1, 2);
     }
 }

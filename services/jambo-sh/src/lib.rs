@@ -637,6 +637,7 @@ impl JamboShell {
             "link" | "/bin/link" | "bin/link" => self.cmd_link(args, out),
             "unlink" | "/bin/unlink" | "bin/unlink" => self.cmd_unlink(args, out),
             "sum" | "/bin/sum" | "bin/sum" => self.cmd_sum(args, out),
+            "fnv1asum" | "/bin/fnv1asum" | "bin/fnv1asum" => self.cmd_fnv1asum(args, out),
             "cow" | "/bin/cow" | "bin/cow" => self.cmd_cow(args, out),
             "version" => self.cmd_version(out),
             "uptime" => self.cmd_uptime(out),
@@ -3349,6 +3350,44 @@ Utilitaire d'installation JamboOS (Serie 0.*.*)\n\
             (status, len)
         } else {
             let msg = b"sum: pipe creation failed\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
+    }
+
+    fn cmd_fnv1asum(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if let (Ok((r_out, w_out)), Ok((r_err, w_err))) =
+            (libjambo::vfs::pipe(), libjambo::vfs::pipe())
+        {
+            let code = libjambo::coreutils::run_fnv1asum(args, 0, w_out, w_err);
+            let _ = libjambo::coreutils::sys_close(w_out);
+            let _ = libjambo::coreutils::sys_close(w_err);
+
+            let mut len = 0;
+            if code == 0 {
+                let n_out = libjambo::coreutils::sys_read(r_out, out);
+                if n_out > 0 {
+                    len = n_out as usize;
+                }
+            } else {
+                let n_err = libjambo::coreutils::sys_read(r_err, out);
+                if n_err > 0 {
+                    len = n_err as usize;
+                }
+            }
+
+            let _ = libjambo::coreutils::sys_close(r_out);
+            let _ = libjambo::coreutils::sys_close(r_err);
+
+            let status = if code == 0 {
+                ShellStatus::Success
+            } else {
+                ShellStatus::ExecutionFailed
+            };
+            (status, len)
+        } else {
+            let msg = b"fnv1asum: pipe creation failed\n";
             let len = msg.len().min(out.len());
             out[..len].copy_from_slice(&msg[..len]);
             (ShellStatus::ExecutionFailed, len)
@@ -21285,5 +21324,16 @@ mod tests {
         assert_eq!(st102, ShellStatus::Success);
         let s102 = core::str::from_utf8(&out[..len102]).unwrap();
         assert!(s102.contains("sum (jambo-coreutils)"));
+
+        // 51. fnv1asum shell command
+        let (st103, len103) = shell.execute_line("fnv1asum --help", &mut out);
+        assert_eq!(st103, ShellStatus::Success);
+        let s103 = core::str::from_utf8(&out[..len103]).unwrap();
+        assert!(s103.contains("Usage: fnv1asum"));
+
+        let (st104, len104) = shell.execute_line("fnv1asum --version", &mut out);
+        assert_eq!(st104, ShellStatus::Success);
+        let s104 = core::str::from_utf8(&out[..len104]).unwrap();
+        assert!(s104.contains("fnv1asum (jambo-coreutils)"));
     }
 }

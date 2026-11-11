@@ -322,6 +322,7 @@ pub const XHCI_EXT_CAP_EXTENDED_PORT_STATUS_CONTROL: u8 = 34;
 pub const XHCI_EXT_CAP_FIRMWARE_DEBUG_TRACE: u8 = 35;
 pub const XHCI_EXT_CAP_OFFLOAD_BUFFER_MANAGEMENT: u8 = 36;
 pub const XHCI_EXT_CAP_HOST_CONTROLLER_SYSTEM_POWER: u8 = 37;
+pub const XHCI_EXT_CAP_ROOT_HUB_TOPOLOGY_DESCRIPTOR: u8 = 38;
 
 /// Masques de registres USB Legacy Support (xHCI 1.2 Section 7.1)
 /// Registre USBLEGSUP (Offset 0x00)
@@ -3639,6 +3640,108 @@ impl XhciHostControllerSystemPower {
     /// Configure la minuterie de suspension automatique
     pub fn set_auto_suspend_ms(&mut self, ms: u16) {
         self.auto_suspend_ms = ms;
+    }
+}
+
+/// Capacité Étendue xHCI Root Hub Topology Descriptor (RHTD / xHCI 1.2 §7.30)
+///
+/// Modélise la description topologique matérielle du concentrateur racine (Root Hub),
+/// incluant le nombre total de ports exposés, le partitionnement USB 2.0 vs USB 3.x/USB4,
+/// les masques de tiers de routage et les caractéristiques d'alimentation gérées par le contrôleur.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XhciRootHubTopologyDescriptor {
+    /// Pointeur dword vers la prochaine capacité étendue (0 = fin de liste)
+    pub next_ptr_dwords: u8,
+    /// Sous-système topologique actif et validé par le contrôleur matériel (bit 0)
+    pub enabled: bool,
+    /// Support du routage multi-tier USB (bit 1)
+    pub multi_tier_routing: bool,
+    /// Nombre de ports descendants USB 2.0 (High-Speed / Full-Speed / Low-Speed) (bits 8..=15)
+    pub usb2_port_count: u8,
+    /// Nombre de ports descendants USB 3.x / USB4 (SuperSpeed / SuperSpeedPlus) (bits 16..=23)
+    pub usb3_port_count: u8,
+    /// Registre de statut matériel de topologie (DWORD 2)
+    pub status: u32,
+    /// Masque de routage des ports amont/aval (DWORD 3 [15:0])
+    pub routing_mask: u16,
+    /// Puissance maximale par port en unités de 2 mA (DWORD 3 [31:16], ex: 250 = 500 mA, 450 = 900 mA)
+    pub max_port_power_2ma: u16,
+}
+
+impl XhciRootHubTopologyDescriptor {
+    /// Crée une nouvelle description topologique Root Hub
+    pub const fn new(usb2_ports: u8, usb3_ports: u8) -> Self {
+        Self {
+            next_ptr_dwords: 0,
+            enabled: false,
+            multi_tier_routing: false,
+            usb2_port_count: usb2_ports,
+            usb3_port_count: usb3_ports,
+            status: 0,
+            routing_mask: 0xFFFF,
+            max_port_power_2ma: 450, // 900 mA par défaut pour SuperSpeed
+        }
+    }
+
+    /// Parse les 4 dwords MMIO d'une capacité étendue RHTD (§7.30)
+    pub const fn parse(dwords: &[u32; 4]) -> Option<Self> {
+        let cap_id = (dwords[0] & 0xFF) as u8;
+        if cap_id != XHCI_EXT_CAP_ROOT_HUB_TOPOLOGY_DESCRIPTOR {
+            return None;
+        }
+
+        let next_ptr = ((dwords[0] >> 8) & 0xFF) as u8;
+        let ctrl = dwords[1];
+        let enabled = (ctrl & 0x01) != 0;
+        let multi_tier_routing = (ctrl & 0x02) != 0;
+        let usb2_port_count = ((ctrl >> 8) & 0xFF) as u8;
+        let usb3_port_count = ((ctrl >> 16) & 0xFF) as u8;
+        let status = dwords[2];
+        let routing_mask = (dwords[3] & 0xFFFF) as u16;
+        let max_port_power_2ma = ((dwords[3] >> 16) & 0xFFFF) as u16;
+
+        Some(Self {
+            next_ptr_dwords: next_ptr,
+            enabled,
+            multi_tier_routing,
+            usb2_port_count,
+            usb3_port_count,
+            status,
+            routing_mask,
+            max_port_power_2ma,
+        })
+    }
+
+    /// Encode la capacité étendue en 4 mots dwords MMIO 32-bit
+    pub const fn encode(&self) -> [u32; 4] {
+        let dw0 = (XHCI_EXT_CAP_ROOT_HUB_TOPOLOGY_DESCRIPTOR as u32)
+            | ((self.next_ptr_dwords as u32) << 8);
+        let mut ctrl = (((self.usb2_port_count as u32) & 0xFF) << 8)
+            | (((self.usb3_port_count as u32) & 0xFF) << 16);
+        if self.enabled {
+            ctrl |= 0x01;
+        }
+        if self.multi_tier_routing {
+            ctrl |= 0x02;
+        }
+        let dw2 = self.status;
+        let dw3 = (self.routing_mask as u32) | (((self.max_port_power_2ma as u32) & 0xFFFF) << 16);
+        [dw0, ctrl, dw2, dw3]
+    }
+
+    /// Active ou désactive le décodage topologique matériel
+    pub fn set_enabled(&mut self, enable: bool) {
+        self.enabled = enable;
+    }
+
+    /// Active ou désactive le support du routage multi-tier
+    pub fn set_multi_tier_routing(&mut self, enable: bool) {
+        self.multi_tier_routing = enable;
+    }
+
+    /// Configure la puissance électrique maximale par port
+    pub fn set_max_port_power_2ma(&mut self, power_2ma: u16) {
+        self.max_port_power_2ma = power_2ma;
     }
 }
 
@@ -12761,5 +12864,44 @@ mod tests {
         assert_eq!(parsed_hc_sp.status, 0x0000_CAFE);
         assert_eq!(parsed_hc_sp.wake_mask, 0x00FF);
         assert_eq!(parsed_hc_sp.auto_suspend_ms, 500);
+
+        // 28. Test XhciRootHubTopologyDescriptor
+        let mut rhtd = XhciRootHubTopologyDescriptor::new(4, 4);
+        assert_eq!(rhtd.usb2_port_count, 4);
+        assert_eq!(rhtd.usb3_port_count, 4);
+        assert_eq!(rhtd.routing_mask, 0xFFFF);
+        assert_eq!(rhtd.max_port_power_2ma, 450);
+        assert!(!rhtd.enabled);
+        assert!(!rhtd.multi_tier_routing);
+
+        rhtd.set_enabled(true);
+        rhtd.set_multi_tier_routing(true);
+        rhtd.set_max_port_power_2ma(750); // 1.5A
+        rhtd.next_ptr_dwords = 52;
+        rhtd.status = 0x0004_BEEF;
+
+        let encoded_rhtd = rhtd.encode();
+        assert_eq!(
+            encoded_rhtd[0] & 0xFF,
+            XHCI_EXT_CAP_ROOT_HUB_TOPOLOGY_DESCRIPTOR as u32
+        );
+        assert_eq!((encoded_rhtd[0] >> 8) & 0xFF, 52);
+        assert_eq!(encoded_rhtd[1] & 0x01, 1);
+        assert_eq!(encoded_rhtd[1] & 0x02, 2);
+        assert_eq!((encoded_rhtd[1] >> 8) & 0xFF, 4);
+        assert_eq!((encoded_rhtd[1] >> 16) & 0xFF, 4);
+        assert_eq!(encoded_rhtd[2], 0x0004_BEEF);
+        assert_eq!(encoded_rhtd[3] & 0xFFFF, 0xFFFF);
+        assert_eq!((encoded_rhtd[3] >> 16) & 0xFFFF, 750);
+
+        let parsed_rhtd = XhciRootHubTopologyDescriptor::parse(&encoded_rhtd).unwrap();
+        assert_eq!(parsed_rhtd.next_ptr_dwords, 52);
+        assert!(parsed_rhtd.enabled);
+        assert!(parsed_rhtd.multi_tier_routing);
+        assert_eq!(parsed_rhtd.usb2_port_count, 4);
+        assert_eq!(parsed_rhtd.usb3_port_count, 4);
+        assert_eq!(parsed_rhtd.status, 0x0004_BEEF);
+        assert_eq!(parsed_rhtd.routing_mask, 0xFFFF);
+        assert_eq!(parsed_rhtd.max_port_power_2ma, 750);
     }
 }
