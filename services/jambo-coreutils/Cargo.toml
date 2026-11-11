@@ -472,7 +472,12 @@ name = "look"
 path = "src/bin/look.rs"
 test = false
 
-# 93 utilitaires Ring 3
+[[bin]]
+name = "colrm"
+path = "src/bin/colrm.rs"
+test = false
+
+# 94 utilitaires Ring 3
 
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }

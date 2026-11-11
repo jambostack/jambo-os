@@ -22014,6 +22014,124 @@ pub fn run_look(args: &[&str], out_fd: i32, err_fd: i32) -> i32 {
     }
 }
 
+/// Exécute l'utilitaire Coreutils POSIX `colrm` (suppression de colonnes sélectionnées d'un flux)
+///
+/// Usage : `colrm [start [stop]]`
+/// - Sans arguments : recopie l'entrée standard vers la sortie standard sans modification.
+/// - Avec 1 argument `start` (1-indexed) : supprime toutes les colonnes à partir de la colonne `start` jusqu'à la fin de la ligne.
+/// - Avec 2 arguments `start stop` : supprime les colonnes comprises entre `start` et `stop` inclusivement.
+pub fn run_colrm(args: &[&str], out_fd: i32, err_fd: i32) -> i32 {
+    let mut start_col: Option<usize> = None;
+    let mut stop_col: Option<usize> = None;
+
+    let mut i = 0usize;
+    while i < args.len() {
+        let arg = args[i];
+        if arg == "--help" {
+            let _ = sys_write(
+                out_fd,
+                b"Usage: colrm [start [stop]]\nRemove selected columns from lines of a file or standard input.\n\nOptions:\n      --help     display this help and exit\n      --version  output version information and exit\n",
+            );
+            return 0;
+        } else if arg == "--version" {
+            let _ = sys_write(out_fd, b"colrm (jambo-coreutils) 0.1.0\n");
+            return 0;
+        } else if start_col.is_none() {
+            if let Some(val) = parse_positive_usize(arg) {
+                if val == 0 {
+                    let _ = sys_write(err_fd, b"colrm: column numbers must be greater than zero\n");
+                    return 1;
+                }
+                start_col = Some(val);
+            } else {
+                let _ = sys_write(err_fd, b"colrm: invalid column number\n");
+                return 1;
+            }
+        } else if stop_col.is_none() {
+            if let Some(val) = parse_positive_usize(arg) {
+                if val == 0 {
+                    let _ = sys_write(err_fd, b"colrm: column numbers must be greater than zero\n");
+                    return 1;
+                }
+                stop_col = Some(val);
+            } else {
+                let _ = sys_write(err_fd, b"colrm: invalid column number\n");
+                return 1;
+            }
+        } else {
+            let _ = sys_write(err_fd, b"colrm: too many arguments\n");
+            return 1;
+        }
+        i += 1;
+    }
+
+    if let (Some(start), Some(stop)) = (start_col, stop_col) {
+        if start > stop {
+            let _ = sys_write(err_fd, b"colrm: start column is greater than stop column\n");
+            return 1;
+        }
+    }
+
+    let mut in_buf = [0u8; 1024];
+    let mut out_line = [0u8; 1024];
+    let mut out_len = 0usize;
+    let mut col_index = 1usize; // colonnes numérotées à partir de 1
+
+    loop {
+        let n = sys_read(0, &mut in_buf); // stdin = 0
+        if n <= 0 {
+            break;
+        }
+
+        for &b in &in_buf[..n as usize] {
+            if b == b'\n' {
+                if out_len > 0 {
+                    let _ = sys_write(out_fd, &out_line[..out_len]);
+                    out_len = 0;
+                }
+                let _ = sys_write(out_fd, b"\n");
+                col_index = 1;
+            } else {
+                let keep = match (start_col, stop_col) {
+                    (None, _) => true,
+                    (Some(start), None) => col_index < start,
+                    (Some(start), Some(stop)) => col_index < start || col_index > stop,
+                };
+
+                if keep {
+                    if out_len >= out_line.len() {
+                        let _ = sys_write(out_fd, &out_line[..out_len]);
+                        out_len = 0;
+                    }
+                    out_line[out_len] = b;
+                    out_len += 1;
+                }
+                col_index += 1;
+            }
+        }
+    }
+
+    if out_len > 0 {
+        let _ = sys_write(out_fd, &out_line[..out_len]);
+    }
+
+    0
+}
+
+fn parse_positive_usize(s: &str) -> Option<usize> {
+    if s.is_empty() {
+        return None;
+    }
+    let mut val = 0usize;
+    for &b in s.as_bytes() {
+        if !b.is_ascii_digit() {
+            return None;
+        }
+        val = val.checked_mul(10)?.checked_add((b - b'0') as usize)?;
+    }
+    Some(val)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -26849,5 +26967,12 @@ Chaque processus dispose de son propre CR3 sans aucun privilege materiel direct.
 
         // Nettoyage
         let _ = run_rm(&["/tmp/test_look_dict.txt"], 2);
+
+        // 25. Test run_colrm
+        // Test colrm sans argument
+        assert_eq!(run_colrm(&["--help"], 1, 2), 0);
+        assert_eq!(run_colrm(&["--version"], 1, 2), 0);
+        assert_eq!(run_colrm(&["0"], 1, 2), 1);
+        assert_eq!(run_colrm(&["5", "3"], 1, 2), 1);
     }
 }

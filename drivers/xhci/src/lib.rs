@@ -317,6 +317,7 @@ pub const XHCI_EXT_CAP_EXTENDED_ENERGY_EFFICIENT_USB: u8 = 29;
 pub const XHCI_EXT_CAP_OPTICAL_LOGICAL_LINK: u8 = 30;
 pub const XHCI_EXT_CAP_DBC_TELEMETRY: u8 = 31;
 pub const XHCI_EXT_CAP_SUBLINK_SPEED_ROUTING: u8 = 32;
+pub const XHCI_EXT_CAP_EXTENDED_MESSAGE_INTERRUPT_VECTOR: u8 = 33;
 
 /// Masques de registres USB Legacy Support (xHCI 1.2 Section 7.1)
 /// Registre USBLEGSUP (Offset 0x00)
@@ -3111,6 +3112,121 @@ impl XhciSublinkSpeedRouting {
     /// Vérifie si le lien opère en mode symétrique
     pub const fn is_symmetric(&self) -> bool {
         self.upstream_sublink_rate == self.downstream_sublink_rate
+    }
+}
+
+/// Capacité Étendue xHCI Extended Message Interrupt Vector Table (MIVT / xHCI 1.2 §7.25)
+///
+/// Permet l'assignation granulaire des vecteurs d'interruption MSI-X étendus
+/// et le masquage individuel par interrupteur xHCI (jusqu'à 2048 interrupteurs).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XhciExtendedMessageInterruptVector {
+    /// Pointeur dword vers la prochaine capacité étendue (0 = fin de liste)
+    pub next_ptr_dwords: u8,
+    /// Fonctionnalité MIVT activée globalement
+    pub enabled: bool,
+    /// Nombre d'entrées de table de vecteurs supportées
+    pub table_size: u16,
+    /// Index d'interrupteur primaire configuré
+    pub primary_interrupter_index: u16,
+    /// Masque d'interruption global
+    pub global_mask: bool,
+    /// Registre de contrôle brut (DWORD 1)
+    pub control: u32,
+    /// Registre d'offset de table BIR/Offset (DWORD 2)
+    pub table_offset_bir: u32,
+}
+
+impl XhciExtendedMessageInterruptVector {
+    /// Crée une nouvelle configuration MIVT avec la taille de table spécifiée
+    pub const fn new(table_size: u16, primary_interrupter: u16) -> Self {
+        Self {
+            next_ptr_dwords: 0,
+            enabled: false,
+            table_size,
+            primary_interrupter_index: primary_interrupter,
+            global_mask: false,
+            control: 0,
+            table_offset_bir: 0, // BIR 0, offset 0 par défaut
+        }
+    }
+
+    /// Parse les 4 dwords MMIO d'une capacité étendue MIVT (§7.25)
+    pub const fn parse(dwords: &[u32; 4]) -> Option<Self> {
+        let cap_id = (dwords[0] & 0xFF) as u8;
+        if cap_id != XHCI_EXT_CAP_EXTENDED_MESSAGE_INTERRUPT_VECTOR {
+            return None;
+        }
+
+        let next_ptr = ((dwords[0] >> 8) & 0xFF) as u8;
+        let ctrl = dwords[1];
+        let enabled = (ctrl & 0x01) != 0;
+        let global_mask = (ctrl & 0x02) != 0;
+        let table_size = ((ctrl >> 16) & 0x07FF) as u16; // 11 bits (jusqu'à 2048)
+
+        let offset_bir = dwords[2];
+        let primary_interrupter = (dwords[3] & 0x07FF) as u16;
+
+        Some(Self {
+            next_ptr_dwords: next_ptr,
+            enabled,
+            table_size: if table_size == 0 { 1 } else { table_size },
+            primary_interrupter_index: primary_interrupter,
+            global_mask,
+            control: ctrl,
+            table_offset_bir: offset_bir,
+        })
+    }
+
+    /// Encode la capacité étendue en 4 mots dwords MMIO 32-bit
+    pub const fn encode(&self) -> [u32; 4] {
+        let dw0 = (XHCI_EXT_CAP_EXTENDED_MESSAGE_INTERRUPT_VECTOR as u32)
+            | ((self.next_ptr_dwords as u32) << 8);
+        let mut ctrl = (self.control & !0x07FF_0003) | (((self.table_size & 0x07FF) as u32) << 16);
+        if self.enabled {
+            ctrl |= 0x01;
+        }
+        if self.global_mask {
+            ctrl |= 0x02;
+        }
+        let dw2 = self.table_offset_bir;
+        let dw3 = (self.primary_interrupter_index & 0x07FF) as u32;
+        [dw0, ctrl, dw2, dw3]
+    }
+
+    /// Active ou désactive le routage d'interruption MIVT
+    pub fn set_enabled(&mut self, enable: bool) {
+        self.enabled = enable;
+        if enable {
+            self.control |= 0x01;
+        } else {
+            self.control &= !0x01;
+        }
+    }
+
+    /// Active ou désactive le masque global d'interruption
+    pub fn set_global_mask(&mut self, mask: bool) {
+        self.global_mask = mask;
+        if mask {
+            self.control |= 0x02;
+        } else {
+            self.control &= !0x02;
+        }
+    }
+
+    /// Configure l'interrupteur primaire
+    pub fn set_primary_interrupter(&mut self, index: u16) {
+        self.primary_interrupter_index = index & 0x07FF;
+    }
+
+    /// Retourne le Base Address Register (BIR) utilisé par la table (bits [2:0])
+    pub const fn bir(&self) -> u8 {
+        (self.table_offset_bir & 0x07) as u8
+    }
+
+    /// Retourne l'offset d'alignement de la table dans le BAR (bits [31:3] alignés sur 8 octets)
+    pub const fn table_offset(&self) -> u32 {
+        self.table_offset_bir & !0x07
     }
 }
 
@@ -12052,5 +12168,42 @@ mod tests {
         assert_eq!(parsed_ssrc.upstream_sublink_rate, 100);
         assert_eq!(parsed_ssrc.downstream_sublink_rate, 200);
         assert!(!parsed_ssrc.is_symmetric());
+
+        // 23. Test XhciExtendedMessageInterruptVector
+        let mut mivt = XhciExtendedMessageInterruptVector::new(128, 0);
+        assert_eq!(mivt.table_size, 128);
+        assert_eq!(mivt.primary_interrupter_index, 0);
+        assert!(!mivt.enabled);
+        assert!(!mivt.global_mask);
+
+        mivt.set_enabled(true);
+        mivt.set_global_mask(true);
+        mivt.set_primary_interrupter(42);
+        mivt.next_ptr_dwords = 28;
+        mivt.table_offset_bir = 0x0000_1004; // offset 0x1000, BIR 4
+
+        assert_eq!(mivt.bir(), 4);
+        assert_eq!(mivt.table_offset(), 0x1000);
+
+        let encoded_mivt = mivt.encode();
+        assert_eq!(
+            encoded_mivt[0] & 0xFF,
+            XHCI_EXT_CAP_EXTENDED_MESSAGE_INTERRUPT_VECTOR as u32
+        );
+        assert_eq!((encoded_mivt[0] >> 8) & 0xFF, 28);
+        assert_eq!(encoded_mivt[1] & 0x01, 1);
+        assert_eq!(encoded_mivt[1] & 0x02, 2);
+        assert_eq!((encoded_mivt[1] >> 16) & 0x07FF, 128);
+        assert_eq!(encoded_mivt[2], 0x0000_1004);
+        assert_eq!(encoded_mivt[3] & 0x07FF, 42);
+
+        let parsed_mivt = XhciExtendedMessageInterruptVector::parse(&encoded_mivt).unwrap();
+        assert_eq!(parsed_mivt.next_ptr_dwords, 28);
+        assert!(parsed_mivt.enabled);
+        assert!(parsed_mivt.global_mask);
+        assert_eq!(parsed_mivt.table_size, 128);
+        assert_eq!(parsed_mivt.primary_interrupter_index, 42);
+        assert_eq!(parsed_mivt.bir(), 4);
+        assert_eq!(parsed_mivt.table_offset(), 0x1000);
     }
 }
