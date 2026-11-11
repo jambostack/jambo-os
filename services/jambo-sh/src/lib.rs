@@ -626,6 +626,7 @@ impl JamboShell {
             "who" | "/bin/who" | "bin/who" => self.cmd_who(args, out),
             "nohup" | "/bin/nohup" | "bin/nohup" => self.cmd_nohup(args, out),
             "pathchk" | "/bin/pathchk" | "bin/pathchk" => self.cmd_pathchk(args, out),
+            "stty" | "/bin/stty" | "bin/stty" => self.cmd_stty(args, out),
             "cow" | "/bin/cow" | "bin/cow" => self.cmd_cow(args, out),
             "version" => self.cmd_version(out),
             "uptime" => self.cmd_uptime(out),
@@ -2922,6 +2923,43 @@ Utilitaire d'installation JamboOS (Serie 0.*.*)\n\
             (status, len)
         } else {
             let msg = b"pathchk: pipe creation failed\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
+    }
+
+    fn cmd_stty(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if let (Ok((r_out, w_out)), Ok((r_err, w_err))) =
+            (libjambo::vfs::pipe(), libjambo::vfs::pipe())
+        {
+            let code = libjambo::coreutils::run_stty(args, 0, w_out, w_err);
+            let _ = libjambo::coreutils::sys_close(w_out);
+            let _ = libjambo::coreutils::sys_close(w_err);
+
+            let mut len = 0;
+            if code == 0 {
+                let n_out = libjambo::coreutils::sys_read(r_out, out);
+                if n_out > 0 {
+                    len = n_out as usize;
+                }
+            } else {
+                let n_err = libjambo::coreutils::sys_read(r_err, out);
+                if n_err > 0 {
+                    len = n_err as usize;
+                }
+            }
+            let _ = libjambo::coreutils::sys_close(r_out);
+            let _ = libjambo::coreutils::sys_close(r_err);
+
+            let status = if code == 0 {
+                ShellStatus::Success
+            } else {
+                ShellStatus::ExecutionFailed
+            };
+            (status, len)
+        } else {
+            let msg = b"stty: pipe creation failed\n";
             let len = msg.len().min(out.len());
             out[..len].copy_from_slice(&msg[..len]);
             (ShellStatus::ExecutionFailed, len)
@@ -20698,5 +20736,34 @@ mod tests {
 
         let (st72, _len72) = shell.execute_line("pathchk -p 'invalid space.txt'", &mut out);
         assert_eq!(st72, ShellStatus::ExecutionFailed);
+
+        // 40. stty shell command
+        let (st73, len73) = shell.execute_line("stty", &mut out);
+        assert_eq!(st73, ShellStatus::Success);
+        let s73 = core::str::from_utf8(&out[..len73]).unwrap();
+        assert!(s73.contains("speed 38400 baud"));
+
+        let (st74, len74) = shell.execute_line("stty size", &mut out);
+        assert_eq!(st74, ShellStatus::Success);
+        let s74 = core::str::from_utf8(&out[..len74]).unwrap();
+        assert_eq!(s74, "25 80\n");
+
+        let (st75, len75) = shell.execute_line("stty -a", &mut out);
+        assert_eq!(st75, ShellStatus::Success);
+        let s75 = core::str::from_utf8(&out[..len75]).unwrap();
+        assert!(s75.contains("rows 25; columns 80"));
+
+        let (st76, len76) = shell.execute_line("stty --version", &mut out);
+        assert_eq!(st76, ShellStatus::Success);
+        let s76 = core::str::from_utf8(&out[..len76]).unwrap();
+        assert!(s76.contains("stty (jambo-coreutils)"));
+
+        let (st77, len77) = shell.execute_line("stty --help", &mut out);
+        assert_eq!(st77, ShellStatus::Success);
+        let s77 = core::str::from_utf8(&out[..len77]).unwrap();
+        assert!(s77.contains("Usage: stty"));
+
+        let (st78, _len78) = shell.execute_line("stty invalid_param", &mut out);
+        assert_eq!(st78, ShellStatus::ExecutionFailed);
     }
 }

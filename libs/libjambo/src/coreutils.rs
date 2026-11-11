@@ -13393,6 +13393,7 @@ pub fn execute_coreutils_command(
         "who" => run_who(args, out_fd, err_fd),
         "nohup" => run_nohup(args, in_fd, out_fd, err_fd),
         "pathchk" => run_pathchk(args, out_fd, err_fd),
+        "stty" => run_stty(args, in_fd, out_fd, err_fd),
         _ => {
             let _ = sys_write(err_fd, cmd.as_bytes());
             let _ = sys_write(err_fd, b": command not found\n");
@@ -14762,6 +14763,7 @@ pub fn run_xargs(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
             "who" => run_who(effective_sub_args, out_fd, err_fd),
             "nohup" => run_nohup(effective_sub_args, 0, out_fd, err_fd),
             "pathchk" => run_pathchk(effective_sub_args, out_fd, err_fd),
+            "stty" => run_stty(effective_sub_args, 0, out_fd, err_fd),
             _ => {
                 let _ = sys_write(err_fd, b"xargs: ");
                 let _ = sys_write(err_fd, target_cmd.as_bytes());
@@ -20495,6 +20497,296 @@ pub fn run_pathchk(args: &[&str], out_fd: i32, err_fd: i32) -> i32 {
     }
 }
 
+// ============================================================================
+// Utilitaire POSIX / GNU coreutils : `stty` (Print or change terminal characteristics)
+// ============================================================================
+
+/// Configuration et attributs de terminal gérés par `stty`
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SttyTerminalSettings {
+    /// Vitesse de transmission (Baud rate : ex 38400, 115200)
+    pub speed: u32,
+    /// Mode écho des caractères saisis
+    pub echo: bool,
+    /// Mode canonique (saisie ligne par ligne avec tampon d'édition)
+    pub icanon: bool,
+    /// Traitement des signaux d'interruption (INTR, QUIT, SUSP)
+    pub isig: bool,
+    /// Conversion CR -> NL en entrée
+    pub icrnl: bool,
+    /// Conversion NL -> CR-NL en sortie
+    pub onlcr: bool,
+    /// Nombre de colonnes de la fenêtre terminal
+    pub cols: u16,
+    /// Nombre de lignes de la fenêtre terminal
+    pub rows: u16,
+}
+
+impl SttyTerminalSettings {
+    /// Paramètres par défaut de terminal POSIX JamboOS
+    pub const fn default_settings() -> Self {
+        Self {
+            speed: 38400,
+            echo: true,
+            icanon: true,
+            isig: true,
+            icrnl: true,
+            onlcr: true,
+            cols: 80,
+            rows: 25,
+        }
+    }
+
+    /// Applique un mode prédéfini (ex: "raw", "sane")
+    pub fn apply_mode(&mut self, mode: &str) -> bool {
+        match mode {
+            "sane" => {
+                *self = Self::default_settings();
+                true
+            }
+            "raw" => {
+                self.echo = false;
+                self.icanon = false;
+                self.isig = false;
+                self.icrnl = false;
+                self.onlcr = false;
+                true
+            }
+            "echo" => {
+                self.echo = true;
+                true
+            }
+            "-echo" => {
+                self.echo = false;
+                true
+            }
+            "icanon" => {
+                self.icanon = true;
+                true
+            }
+            "-icanon" => {
+                self.icanon = false;
+                true
+            }
+            "isig" => {
+                self.isig = true;
+                true
+            }
+            "-isig" => {
+                self.isig = false;
+                true
+            }
+            _ => false,
+        }
+    }
+}
+
+/// Exécute l'utilitaire Coreutils POSIX / GNU `stty` (inspection et configuration de terminal interactif)
+///
+/// Options et arguments supportés :
+/// - `-a`, `--all` : Affiche tous les paramètres actuels sous forme lisible
+/// - `-g`, `--save` : Affiche les paramètres actuels dans un format réinjectable
+/// - `size` : Affiche les dimensions du terminal (lignes colonnes)
+/// - `sane` : Réinitialise les modes vers les valeurs standard saines
+/// - `raw` : Bascule en mode brut non canonique sans écho
+/// - `echo` / `-echo` : Active ou désactive l'écho
+/// - `icanon` / `-icanon` : Active ou désactive le mode canonique
+/// - `isig` / `-isig` : Active ou désactive les signaux d'interruption
+/// - `cols N`, `columns N` : Configure le nombre de colonnes
+/// - `rows N` : Configure le nombre de lignes
+/// - `speed N` : Configure la vitesse en bauds
+/// - `--help` : Affiche l'aide
+/// - `--version` : Affiche la version
+///
+/// Codes de retour :
+/// - 0 en cas de succès
+/// - 1 si le descripteur d'entrée n'est pas un terminal (ENOTTY) ou argument invalide
+pub fn run_stty(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    for &arg in args {
+        if arg == "--help" {
+            let _ = sys_write(
+                out_fd,
+                b"Usage: stty [OPTION]... [SETTING]...\nPrint or change terminal characteristics.\n\n  -a, --all          print all current settings in human-readable form\n  -g, --save         print all current settings in a stty-readable form\n      --help         display this help and exit\n      --version      output version information and exit\n\nSpecial settings:\n  sane               reset all modes to reasonable values\n  raw                disable echo, icanon, isig, translations\n  echo / -echo       enable or disable input echoing\n  icanon / -icanon   enable or disable line-buffered canonical mode\n  isig / -isig       enable or disable interrupt signals\n  size               print terminal rows and columns\n  cols / rows N      set terminal dimensions\n",
+            );
+            return 0;
+        } else if arg == "--version" {
+            let _ = sys_write(out_fd, b"stty (jambo-coreutils) 0.1.0\n");
+            return 0;
+        }
+    }
+
+    // Vérifie que l'entrée standard est bien un terminal interactif
+    if !crate::vfs::isatty(in_fd) {
+        let _ = sys_write(
+            err_fd,
+            b"stty: standard input: Inappropriate ioctl for device\n",
+        );
+        return 1;
+    }
+
+    let mut settings = SttyTerminalSettings::default_settings();
+
+    // Mode sans arguments : affichage synthétique standard
+    if args.is_empty() {
+        let _ = sys_write(out_fd, b"speed 38400 baud; line = 0;\n");
+        let _ = sys_write(out_fd, b"-brkint -imaxbel\n");
+        return 0;
+    }
+
+    let mut show_all = false;
+    let mut show_save = false;
+    let mut show_size = false;
+
+    let mut idx = 0;
+    while idx < args.len() {
+        let arg = args[idx];
+        match arg {
+            "-a" | "--all" => {
+                show_all = true;
+                idx += 1;
+            }
+            "-g" | "--save" => {
+                show_save = true;
+                idx += 1;
+            }
+            "size" => {
+                show_size = true;
+                idx += 1;
+            }
+            "cols" | "columns" => {
+                if idx + 1 < args.len() {
+                    if let Some(c) = parse_u16_arg(args[idx + 1]) {
+                        settings.cols = c;
+                    }
+                    idx += 2;
+                } else {
+                    let _ = sys_write(err_fd, b"stty: missing argument to 'cols'\n");
+                    return 1;
+                }
+            }
+            "rows" => {
+                if idx + 1 < args.len() {
+                    if let Some(r) = parse_u16_arg(args[idx + 1]) {
+                        settings.rows = r;
+                    }
+                    idx += 2;
+                } else {
+                    let _ = sys_write(err_fd, b"stty: missing argument to 'rows'\n");
+                    return 1;
+                }
+            }
+            "speed" => {
+                if idx + 1 < args.len() {
+                    if let Some(s) = parse_u32_arg(args[idx + 1]) {
+                        settings.speed = s;
+                    }
+                    idx += 2;
+                } else {
+                    let _ = sys_write(err_fd, b"stty: missing argument to 'speed'\n");
+                    return 1;
+                }
+            }
+            mode if settings.apply_mode(mode) => {
+                idx += 1;
+            }
+            unknown => {
+                let _ = sys_write(err_fd, b"stty: invalid argument '");
+                let _ = sys_write(err_fd, unknown.as_bytes());
+                let _ = sys_write(err_fd, b"'\nTry 'stty --help' for more information.\n");
+                return 1;
+            }
+        }
+    }
+
+    if show_size {
+        write_u64_fd(out_fd, settings.rows as u64);
+        let _ = sys_write(out_fd, b" ");
+        write_u64_fd(out_fd, settings.cols as u64);
+        let _ = sys_write(out_fd, b"\n");
+        return 0;
+    }
+
+    if show_save {
+        // Format stty -g: flags sérialisés en hexadécimal
+        let flags: u32 = (if settings.echo { 1 } else { 0 })
+            | (if settings.icanon { 2 } else { 0 })
+            | (if settings.isig { 4 } else { 0 })
+            | (if settings.icrnl { 8 } else { 0 })
+            | (if settings.onlcr { 16 } else { 0 });
+        let _ = sys_write(out_fd, b"500:5:cbd:8a3b:");
+        write_u64_fd(out_fd, flags as u64);
+        let _ = sys_write(out_fd, b":\n");
+        return 0;
+    }
+
+    if show_all {
+        let _ = sys_write(out_fd, b"speed ");
+        write_u64_fd(out_fd, settings.speed as u64);
+        let _ = sys_write(out_fd, b" baud; rows ");
+        write_u64_fd(out_fd, settings.rows as u64);
+        let _ = sys_write(out_fd, b"; columns ");
+        write_u64_fd(out_fd, settings.cols as u64);
+        let _ = sys_write(out_fd, b"; line = 0;\n");
+
+        let _ = sys_write(
+            out_fd,
+            if settings.icanon {
+                b"icanon "
+            } else {
+                b"-icanon "
+            },
+        );
+        let _ = sys_write(out_fd, if settings.echo { b"echo " } else { b"-echo " });
+        let _ = sys_write(out_fd, if settings.isig { b"isig " } else { b"-isig " });
+        let _ = sys_write(
+            out_fd,
+            if settings.icrnl {
+                b"icrnl "
+            } else {
+                b"-icrnl "
+            },
+        );
+        let _ = sys_write(
+            out_fd,
+            if settings.onlcr {
+                b"onlcr\n"
+            } else {
+                b"-onlcr\n"
+            },
+        );
+    }
+
+    0
+}
+
+fn parse_u16_arg(s: &str) -> Option<u16> {
+    let mut val: u16 = 0;
+    if s.is_empty() {
+        return None;
+    }
+    for &b in s.as_bytes() {
+        if !b.is_ascii_digit() {
+            return None;
+        }
+        val = val.checked_mul(10)?.checked_add((b - b'0') as u16)?;
+    }
+    Some(val)
+}
+
+fn parse_u32_arg(s: &str) -> Option<u32> {
+    let mut val: u32 = 0;
+    if s.is_empty() {
+        return None;
+    }
+    for &b in s.as_bytes() {
+        if !b.is_ascii_digit() {
+            return None;
+        }
+        val = val.checked_mul(10)?.checked_add((b - b'0') as u32)?;
+    }
+    Some(val)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -25114,5 +25406,73 @@ Chaque processus dispose de son propre CR3 sans aucun privilege materiel direct.
         // Option invalide
         let code_chk8 = run_pathchk(&["-z", "foo"], 1, 2);
         assert_eq!(code_chk8, 1);
+
+        // 19. Test run_stty
+        // Sans argument sur tty (0 = ConsoleIn)
+        let (out_rstty1, out_wstty1) = crate::vfs::pipe().unwrap();
+        let code_stty1 = run_stty(&[], 0, out_wstty1, 2);
+        sys_close(out_wstty1);
+        assert_eq!(code_stty1, 0);
+        let mut buf_stty1 = [0u8; 64];
+        let n_stty1 = sys_read(out_rstty1, &mut buf_stty1);
+        sys_close(out_rstty1);
+        assert!(core::str::from_utf8(&buf_stty1[..n_stty1 as usize])
+            .unwrap()
+            .contains("speed 38400 baud"));
+
+        // Sur un pipe non-tty -> code 1 (Inappropriate ioctl)
+        let (pipe_in, pipe_out) = crate::vfs::pipe().unwrap();
+        let code_stty2 = run_stty(&[], pipe_in, 1, 2);
+        assert_eq!(code_stty2, 1);
+        sys_close(pipe_in);
+        sys_close(pipe_out);
+
+        // Option size
+        let (out_rstty3, out_wstty3) = crate::vfs::pipe().unwrap();
+        let code_stty3 = run_stty(&["size"], 0, out_wstty3, 2);
+        sys_close(out_wstty3);
+        assert_eq!(code_stty3, 0);
+        let mut buf_stty3 = [0u8; 32];
+        let n_stty3 = sys_read(out_rstty3, &mut buf_stty3);
+        sys_close(out_rstty3);
+        assert_eq!(
+            core::str::from_utf8(&buf_stty3[..n_stty3 as usize]).unwrap(),
+            "25 80\n"
+        );
+
+        // Option -a / --all
+        let (out_rstty4, out_wstty4) = crate::vfs::pipe().unwrap();
+        let code_stty4 = run_stty(&["-a"], 0, out_wstty4, 2);
+        sys_close(out_wstty4);
+        assert_eq!(code_stty4, 0);
+        let mut buf_stty4 = [0u8; 128];
+        let n_stty4 = sys_read(out_rstty4, &mut buf_stty4);
+        sys_close(out_rstty4);
+        let s_stty4 = core::str::from_utf8(&buf_stty4[..n_stty4 as usize]).unwrap();
+        assert!(s_stty4.contains("rows 25; columns 80"));
+        assert!(s_stty4.contains("icanon echo isig"));
+
+        // Configuration raw et size
+        let (out_rstty5, out_wstty5) = crate::vfs::pipe().unwrap();
+        let code_stty5 = run_stty(&["raw", "-a"], 0, out_wstty5, 2);
+        sys_close(out_wstty5);
+        assert_eq!(code_stty5, 0);
+        let mut buf_stty5 = [0u8; 128];
+        let n_stty5 = sys_read(out_rstty5, &mut buf_stty5);
+        sys_close(out_rstty5);
+        let s_stty5 = core::str::from_utf8(&buf_stty5[..n_stty5 as usize]).unwrap();
+        assert!(s_stty5.contains("-icanon -echo -isig"));
+
+        // Option --version & --help
+        let (out_rstty6, out_wstty6) = crate::vfs::pipe().unwrap();
+        let code_stty6 = run_stty(&["--version"], 0, out_wstty6, 2);
+        sys_close(out_wstty6);
+        assert_eq!(code_stty6, 0);
+        let mut buf_stty6 = [0u8; 64];
+        let n_stty6 = sys_read(out_rstty6, &mut buf_stty6);
+        sys_close(out_rstty6);
+        assert!(core::str::from_utf8(&buf_stty6[..n_stty6 as usize])
+            .unwrap()
+            .contains("stty (jambo-coreutils)"));
     }
 }

@@ -311,6 +311,7 @@ pub const XHCI_EXT_CAP_CONTROLLER_CAPABILITY_CONTEXT: u8 = 23;
 pub const XHCI_EXT_CAP_BANDWIDTH_NEGOTIATION: u8 = 24;
 pub const XHCI_EXT_CAP_LATENCY_TOLERANCE_MESSAGING: u8 = 25;
 pub const XHCI_EXT_CAP_ENDPOINT_POLLING_OVERRIDE: u8 = 26;
+pub const XHCI_EXT_CAP_INTERRUPTER_MODERATION_OVERRIDE: u8 = 27;
 
 /// Masques de registres USB Legacy Support (xHCI 1.2 Section 7.1)
 /// Registre USBLEGSUP (Offset 0x00)
@@ -2345,6 +2346,136 @@ impl XhciEndpointStreamOverride {
             1
         } else {
             1 << (self.max_primary_streams as u32)
+        }
+    }
+}
+
+/// Capacité Étendue xHCI Interrupter Moderation & Vector Override (xHCI 1.2 §7.19)
+///
+/// Permet de surcharger dynamiquement le vecteur d'interruption et le taux de modération
+/// matérielle IMOD (Intervalle en unités de 250 ns et compteur de décrémentation)
+/// par interrupteur xHCI ou vecteur étendu sans reconfiguration complète du contrôleur.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XhciInterrupterModerationOverride {
+    /// Pointeur dword vers la prochaine capacité étendue (0 = fin de liste)
+    pub next_ptr_dwords: u8,
+    /// Activation de la surcharge matérielle de modération
+    pub enabled: bool,
+    /// Index de l'interrupteur xHCI ciblé (0..=1023)
+    pub interrupter_idx: u16,
+    /// Vecteur MSI-X étendu assigné (0..=2047)
+    pub msix_vector: u16,
+    /// Intervalle de modération IMOD en unités de 250 ns (0..=65535)
+    pub moderation_interval_250ns: u16,
+    /// Compteur matériel IMOD (temps restant avant interruption active en 250 ns)
+    pub moderation_counter_250ns: u16,
+    /// Registre de contrôle brut MMIO (Dword 1)
+    pub override_control: u32,
+    /// Registre de statut brut MMIO (Dword 2)
+    pub override_status: u32,
+}
+
+impl XhciInterrupterModerationOverride {
+    /// Crée une instance avec valeurs par défaut
+    pub const fn new(interrupter_idx: u16, msix_vector: u16, imod_interval_250ns: u16) -> Self {
+        Self {
+            next_ptr_dwords: 0,
+            enabled: false,
+            interrupter_idx,
+            msix_vector,
+            moderation_interval_250ns: imod_interval_250ns,
+            moderation_counter_250ns: 0,
+            override_control: 0,
+            override_status: 0,
+        }
+    }
+
+    /// Décode la capacité étendue depuis 4 dwords MMIO
+    pub fn parse(dwords: &[u32]) -> Option<Self> {
+        if dwords.len() < 4 {
+            return None;
+        }
+        let cap_id = (dwords[0] & 0xFF) as u8;
+        if cap_id != XHCI_EXT_CAP_INTERRUPTER_MODERATION_OVERRIDE {
+            return None;
+        }
+        let next_ptr = ((dwords[0] >> 8) & 0xFF) as u8;
+        let interrupter = ((dwords[0] >> 16) & 0x03FF) as u16;
+
+        let ctrl = dwords[1];
+        let sts = dwords[2];
+        let imod_dw = dwords[3];
+
+        let enabled = (ctrl & 0x01) != 0;
+        let vector = ((ctrl >> 16) & 0x07FF) as u16;
+        let interval = (imod_dw & 0xFFFF) as u16;
+        let counter = ((imod_dw >> 16) & 0xFFFF) as u16;
+
+        Some(Self {
+            next_ptr_dwords: next_ptr,
+            enabled,
+            interrupter_idx: interrupter,
+            msix_vector: vector,
+            moderation_interval_250ns: interval,
+            moderation_counter_250ns: counter,
+            override_control: ctrl,
+            override_status: sts,
+        })
+    }
+
+    /// Encode en 4 mots dwords MMIO 32-bit
+    pub const fn encode(&self) -> [u32; 4] {
+        let dw0 = (XHCI_EXT_CAP_INTERRUPTER_MODERATION_OVERRIDE as u32)
+            | ((self.next_ptr_dwords as u32) << 8)
+            | (((self.interrupter_idx & 0x03FF) as u32) << 16);
+        let ctrl_flags = (self.override_control & !0x07FF_0001)
+            | (if self.enabled { 1 } else { 0 })
+            | (((self.msix_vector & 0x07FF) as u32) << 16);
+        let dw1 = ctrl_flags;
+        let dw2 = self.override_status;
+        let dw3 = (self.moderation_interval_250ns as u32)
+            | ((self.moderation_counter_250ns as u32) << 16);
+        [dw0, dw1, dw2, dw3]
+    }
+
+    /// Active ou désactive la surcharge matérielle
+    pub fn set_enabled(&mut self, enable: bool) {
+        self.enabled = enable;
+        if enable {
+            self.override_control |= 0x01;
+        } else {
+            self.override_control &= !0x01;
+        }
+    }
+
+    /// Configure l'intervalle de modération en tranches de 250 ns
+    pub fn set_moderation_interval(&mut self, interval_250ns: u16) {
+        self.moderation_interval_250ns = interval_250ns;
+    }
+
+    /// Configure le vecteur MSI-X (0..=2047)
+    pub fn set_msix_vector(&mut self, vector: u16) {
+        let v = vector.min(2047);
+        self.msix_vector = v;
+        self.override_control = (self.override_control & !(0x07FF << 16)) | ((v as u32) << 16);
+    }
+
+    /// Calcule l'intervalle de modération en nanosecondes (interval * 250 ns)
+    pub const fn moderation_interval_ns(&self) -> u64 {
+        (self.moderation_interval_250ns as u64) * 250
+    }
+
+    /// Calcule l'intervalle de modération en microsecondes
+    pub const fn moderation_interval_us(&self) -> u64 {
+        self.moderation_interval_ns() / 1000
+    }
+
+    /// Calcule le taux maximal théorique d'interruptions par seconde (si interval > 0)
+    pub const fn max_interrupts_per_sec(&self) -> u64 {
+        let ns = self.moderation_interval_ns();
+        match 1_000_000_000u64.checked_div(ns) {
+            Some(rate) => rate,
+            None => 4_000_000, // Taux maximal non bridé (fréquence 4 MHz à 250 ns)
         }
     }
 }
@@ -11027,5 +11158,50 @@ mod tests {
         assert_eq!(parsed_ovr.stream_status, 0xABCD);
         assert_eq!(parsed_ovr.compute_period_us(), 500);
         assert_eq!(parsed_ovr.max_streams_count(), 16);
+
+        // 39. Test Capacité Étendue Interrupter Moderation & Vector Overrides (§7.19)
+        let mut imod_ovr = XhciInterrupterModerationOverride::new(5, 64, 4000);
+        assert_eq!(imod_ovr.interrupter_idx, 5);
+        assert_eq!(imod_ovr.msix_vector, 64);
+        assert_eq!(imod_ovr.moderation_interval_250ns, 4000);
+        assert!(!imod_ovr.enabled);
+        assert_eq!(imod_ovr.moderation_interval_ns(), 1_000_000); // 4000 * 250 ns = 1 ms
+        assert_eq!(imod_ovr.moderation_interval_us(), 1000);
+        assert_eq!(imod_ovr.max_interrupts_per_sec(), 1000);
+
+        imod_ovr.set_enabled(true);
+        assert!(imod_ovr.enabled);
+        imod_ovr.set_msix_vector(128);
+        assert_eq!(imod_ovr.msix_vector, 128);
+        imod_ovr.set_moderation_interval(2000); // 500 µs -> 2000 ints/sec
+        assert_eq!(imod_ovr.moderation_interval_us(), 500);
+        assert_eq!(imod_ovr.max_interrupts_per_sec(), 2000);
+
+        imod_ovr.next_ptr_dwords = 48;
+        imod_ovr.override_status = 0x55AA;
+        imod_ovr.moderation_counter_250ns = 500;
+        let encoded_imod = imod_ovr.encode();
+        assert_eq!(
+            encoded_imod[0] & 0xFF,
+            XHCI_EXT_CAP_INTERRUPTER_MODERATION_OVERRIDE as u32
+        );
+        assert_eq!((encoded_imod[0] >> 8) & 0xFF, 48);
+        assert_eq!((encoded_imod[0] >> 16) & 0x03FF, 5);
+        assert_eq!(encoded_imod[1] & 0x01, 1);
+        assert_eq!((encoded_imod[1] >> 16) & 0x07FF, 128);
+        assert_eq!(encoded_imod[2], 0x55AA);
+        assert_eq!(encoded_imod[3] & 0xFFFF, 2000);
+        assert_eq!((encoded_imod[3] >> 16) & 0xFFFF, 500);
+
+        let parsed_imod = XhciInterrupterModerationOverride::parse(&encoded_imod).unwrap();
+        assert_eq!(parsed_imod.next_ptr_dwords, 48);
+        assert_eq!(parsed_imod.interrupter_idx, 5);
+        assert_eq!(parsed_imod.msix_vector, 128);
+        assert_eq!(parsed_imod.moderation_interval_250ns, 2000);
+        assert_eq!(parsed_imod.moderation_counter_250ns, 500);
+        assert!(parsed_imod.enabled);
+        assert_eq!(parsed_imod.override_status, 0x55AA);
+        assert_eq!(parsed_imod.moderation_interval_us(), 500);
+        assert_eq!(parsed_imod.max_interrupts_per_sec(), 2000);
     }
 }

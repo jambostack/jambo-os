@@ -442,7 +442,12 @@ name = "pathchk"
 path = "src/bin/pathchk.rs"
 test = false
 
-# 87 utilitaires Ring 3
+[[bin]]
+name = "stty"
+path = "src/bin/stty.rs"
+test = false
+
+# 88 utilitaires Ring 3
 
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }
