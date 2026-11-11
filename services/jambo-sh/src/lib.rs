@@ -639,6 +639,7 @@ impl JamboShell {
             "sum" | "/bin/sum" | "bin/sum" => self.cmd_sum(args, out),
             "fnv1asum" | "/bin/fnv1asum" | "bin/fnv1asum" => self.cmd_fnv1asum(args, out),
             "uuidgen" | "/bin/uuidgen" | "bin/uuidgen" => self.cmd_uuidgen(args, out),
+            "getconf" | "/bin/getconf" | "bin/getconf" => self.cmd_getconf(args, out),
             "cow" | "/bin/cow" | "bin/cow" => self.cmd_cow(args, out),
             "version" => self.cmd_version(out),
             "uptime" => self.cmd_uptime(out),
@@ -3422,6 +3423,39 @@ Utilitaire d'installation JamboOS (Serie 0.*.*)\n\
             (status, len)
         } else {
             let msg = b"uuidgen: pipe creation failed\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
+    }
+
+    fn cmd_getconf(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if let Ok((r_pipe, w_pipe)) = libjambo::vfs::pipe() {
+            let code = libjambo::coreutils::run_getconf(args, w_pipe, w_pipe);
+            let _ = libjambo::coreutils::sys_close(w_pipe);
+
+            let mut total_read = 0;
+            loop {
+                if total_read >= out.len() {
+                    break;
+                }
+                let n = libjambo::coreutils::sys_read(r_pipe, &mut out[total_read..]);
+                if n <= 0 {
+                    break;
+                }
+                total_read += n as usize;
+            }
+            let _ = libjambo::coreutils::sys_close(r_pipe);
+
+            let len = total_read.min(out.len());
+            let status = if code == 0 {
+                ShellStatus::Success
+            } else {
+                ShellStatus::ExecutionFailed
+            };
+            (status, len)
+        } else {
+            let msg = b"getconf: pipe creation failed\n";
             let len = msg.len().min(out.len());
             out[..len].copy_from_slice(&msg[..len]);
             (ShellStatus::ExecutionFailed, len)
@@ -21390,5 +21424,27 @@ mod tests {
         assert_eq!(&s107[18..19], "-");
         assert_eq!(&s107[23..24], "-");
         assert_eq!(&s107[14..15], "4"); // UUID v4
+
+        // 53. getconf shell command
+        let (st108, len108) = shell.execute_line("getconf --help", &mut out);
+        assert_eq!(st108, ShellStatus::Success);
+        let s108 = core::str::from_utf8(&out[..len108]).unwrap();
+        assert!(s108.contains("Usage: getconf"));
+
+        let (st109, len109) = shell.execute_line("getconf --version", &mut out);
+        assert_eq!(st109, ShellStatus::Success);
+        let s109 = core::str::from_utf8(&out[..len109]).unwrap();
+        assert!(s109.contains("getconf (jambo-coreutils)"));
+
+        let (st110, len110) = shell.execute_line("getconf PAGE_SIZE", &mut out);
+        assert_eq!(st110, ShellStatus::Success);
+        let s110 = core::str::from_utf8(&out[..len110]).unwrap();
+        assert_eq!(s110, "4096\n");
+
+        let (st111, len111) = shell.execute_line("getconf -a", &mut out);
+        assert_eq!(st111, ShellStatus::Success);
+        let s111 = core::str::from_utf8(&out[..len111]).unwrap();
+        assert!(s111.contains("PAGE_SIZE: 4096"));
+        assert!(s111.contains("OPEN_MAX: 1024"));
     }
 }

@@ -324,6 +324,7 @@ pub const XHCI_EXT_CAP_OFFLOAD_BUFFER_MANAGEMENT: u8 = 36;
 pub const XHCI_EXT_CAP_HOST_CONTROLLER_SYSTEM_POWER: u8 = 37;
 pub const XHCI_EXT_CAP_ROOT_HUB_TOPOLOGY_DESCRIPTOR: u8 = 38;
 pub const XHCI_EXT_CAP_USB4_PCIE_TUNNELING: u8 = 39;
+pub const XHCI_EXT_CAP_USB4_DISPLAYPORT_TUNNELING: u8 = 40;
 
 /// Masques de registres USB Legacy Support (xHCI 1.2 Section 7.1)
 /// Registre USBLEGSUP (Offset 0x00)
@@ -3851,6 +3852,115 @@ impl XhciUsb4PcieTunneling {
     pub fn set_bandwidth(&mut self, upstream_mbps: u16, downstream_mbps: u16) {
         self.upstream_bandwidth_mbps = upstream_mbps;
         self.downstream_bandwidth_mbps = downstream_mbps;
+    }
+}
+
+/// Capacité Étendue xHCI USB4 DisplayPort Tunneling (§7.32 / USB4 & DP Alt Mode v2.1)
+///
+/// Modélise l'encapsulation et le transport de flux vidéo DisplayPort (SST/MST)
+/// au travers de la fabrique de paquets USB4 du contrôleur xHCI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XhciUsb4DisplayPortTunneling {
+    /// Pointeur dword vers la prochaine capacité étendue
+    pub next_ptr_dwords: u8,
+    /// Tunneling DisplayPort activé (bit 0 du registre de contrôle DWORD 1)
+    pub enabled: bool,
+    /// Support Multi-Stream Transport (MST) (bit 1)
+    pub mst_supported: bool,
+    /// Nombre d'adaptateurs DisplayPort OUT/IN configurés (bits 8..=15)
+    pub adapter_count: u8,
+    /// Taux de liaison DisplayPort (RBR=1, HBR=2, HBR2=3, HBR3=4, UHBR10=5, UHBR20=6) (bits 16..=19)
+    pub dp_link_rate: u8,
+    /// Nombre de voies vidéo actives (x1=1, x2=2, x4=4) (bits 20..=23)
+    pub lane_count: u8,
+    /// Statut matériel de la liaison DisplayPort (DWORD 2)
+    pub status: u32,
+    /// Bande passante vidéo allouée en Mbit/s (DWORD 3 [15:0])
+    pub allocated_bandwidth_mbps: u16,
+    /// Résolution maximale supportée (bpp / bits par pixel) (DWORD 3 [31:16])
+    pub max_color_depth_bpp: u16,
+}
+
+impl XhciUsb4DisplayPortTunneling {
+    /// Crée une nouvelle capacité de tunnellisation DisplayPort USB4
+    pub const fn new(adapter_count: u8, dp_link_rate: u8, lane_count: u8) -> Self {
+        Self {
+            next_ptr_dwords: 0,
+            enabled: false,
+            mst_supported: false,
+            adapter_count,
+            dp_link_rate,
+            lane_count,
+            status: 0,
+            allocated_bandwidth_mbps: 21600, // 21.6 Gbps (DP HBR3)
+            max_color_depth_bpp: 30,         // 10-bit HDR (30 bpp)
+        }
+    }
+
+    /// Parse les 4 dwords MMIO d'une capacité étendue USB4 DisplayPort Tunneling (§7.32)
+    pub const fn parse(dwords: &[u32; 4]) -> Option<Self> {
+        let cap_id = (dwords[0] & 0xFF) as u8;
+        if cap_id != XHCI_EXT_CAP_USB4_DISPLAYPORT_TUNNELING {
+            return None;
+        }
+
+        let next_ptr = ((dwords[0] >> 8) & 0xFF) as u8;
+        let ctrl = dwords[1];
+        let enabled = (ctrl & 0x01) != 0;
+        let mst_supported = (ctrl & 0x02) != 0;
+        let adapter_count = ((ctrl >> 8) & 0xFF) as u8;
+        let dp_link_rate = ((ctrl >> 16) & 0x0F) as u8;
+        let lane_count = ((ctrl >> 20) & 0x0F) as u8;
+        let status = dwords[2];
+        let allocated_bandwidth_mbps = (dwords[3] & 0xFFFF) as u16;
+        let max_color_depth_bpp = ((dwords[3] >> 16) & 0xFFFF) as u16;
+
+        Some(Self {
+            next_ptr_dwords: next_ptr,
+            enabled,
+            mst_supported,
+            adapter_count,
+            dp_link_rate,
+            lane_count,
+            status,
+            allocated_bandwidth_mbps,
+            max_color_depth_bpp,
+        })
+    }
+
+    /// Encode la capacité étendue en 4 mots dwords MMIO 32-bit
+    pub const fn encode(&self) -> [u32; 4] {
+        let dw0 =
+            (XHCI_EXT_CAP_USB4_DISPLAYPORT_TUNNELING as u32) | ((self.next_ptr_dwords as u32) << 8);
+        let mut ctrl = (((self.adapter_count as u32) & 0xFF) << 8)
+            | (((self.dp_link_rate as u32) & 0x0F) << 16)
+            | (((self.lane_count as u32) & 0x0F) << 20);
+        if self.enabled {
+            ctrl |= 0x01;
+        }
+        if self.mst_supported {
+            ctrl |= 0x02;
+        }
+        let dw2 = self.status;
+        let dw3 = (self.allocated_bandwidth_mbps as u32)
+            | (((self.max_color_depth_bpp as u32) & 0xFFFF) << 16);
+        [dw0, ctrl, dw2, dw3]
+    }
+
+    /// Active ou désactive le tunnel DisplayPort
+    pub fn set_enabled(&mut self, enable: bool) {
+        self.enabled = enable;
+    }
+
+    /// Active ou désactive le support Multi-Stream Transport (MST)
+    pub fn set_mst_supported(&mut self, supported: bool) {
+        self.mst_supported = supported;
+    }
+
+    /// Configure la bande passante allouée (Mbit/s) et la profondeur de couleur
+    pub fn set_display_config(&mut self, bandwidth_mbps: u16, color_depth_bpp: u16) {
+        self.allocated_bandwidth_mbps = bandwidth_mbps;
+        self.max_color_depth_bpp = color_depth_bpp;
     }
 }
 
@@ -13054,5 +13164,47 @@ mod tests {
         assert_eq!(parsed_usb4.status, 0x0008_FEED);
         assert_eq!(parsed_usb4.upstream_bandwidth_mbps, 31500);
         assert_eq!(parsed_usb4.downstream_bandwidth_mbps, 15750);
+
+        // 30. Test XhciUsb4DisplayPortTunneling
+        let mut usb4_dp = XhciUsb4DisplayPortTunneling::new(1, 4, 4); // 1 adaptateur, HBR3, 4 lanes
+        assert_eq!(usb4_dp.adapter_count, 1);
+        assert_eq!(usb4_dp.dp_link_rate, 4);
+        assert_eq!(usb4_dp.lane_count, 4);
+        assert_eq!(usb4_dp.allocated_bandwidth_mbps, 21600);
+        assert_eq!(usb4_dp.max_color_depth_bpp, 30);
+        assert!(!usb4_dp.enabled);
+        assert!(!usb4_dp.mst_supported);
+
+        usb4_dp.set_enabled(true);
+        usb4_dp.set_mst_supported(true);
+        usb4_dp.set_display_config(32400, 36); // UHBR10 32.4 Gbps, 12-bit HDR
+        usb4_dp.next_ptr_dwords = 60;
+        usb4_dp.status = 0x0001_CAFE;
+
+        let encoded_dp = usb4_dp.encode();
+        assert_eq!(
+            encoded_dp[0] & 0xFF,
+            XHCI_EXT_CAP_USB4_DISPLAYPORT_TUNNELING as u32
+        );
+        assert_eq!((encoded_dp[0] >> 8) & 0xFF, 60);
+        assert_eq!(encoded_dp[1] & 0x01, 1);
+        assert_eq!(encoded_dp[1] & 0x02, 2);
+        assert_eq!((encoded_dp[1] >> 8) & 0xFF, 1);
+        assert_eq!((encoded_dp[1] >> 16) & 0x0F, 4);
+        assert_eq!((encoded_dp[1] >> 20) & 0x0F, 4);
+        assert_eq!(encoded_dp[2], 0x0001_CAFE);
+        assert_eq!(encoded_dp[3] & 0xFFFF, 32400);
+        assert_eq!((encoded_dp[3] >> 16) & 0xFFFF, 36);
+
+        let parsed_dp = XhciUsb4DisplayPortTunneling::parse(&encoded_dp).unwrap();
+        assert_eq!(parsed_dp.next_ptr_dwords, 60);
+        assert!(parsed_dp.enabled);
+        assert!(parsed_dp.mst_supported);
+        assert_eq!(parsed_dp.adapter_count, 1);
+        assert_eq!(parsed_dp.dp_link_rate, 4);
+        assert_eq!(parsed_dp.lane_count, 4);
+        assert_eq!(parsed_dp.status, 0x0001_CAFE);
+        assert_eq!(parsed_dp.allocated_bandwidth_mbps, 32400);
+        assert_eq!(parsed_dp.max_color_depth_bpp, 36);
     }
 }

@@ -507,7 +507,12 @@ name = "uuidgen"
 path = "src/bin/uuidgen.rs"
 test = false
 
-# 100 utilitaires Ring 3
+[[bin]]
+name = "getconf"
+path = "src/bin/getconf.rs"
+test = false
+
+# 101 utilitaires Ring 3
 
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }

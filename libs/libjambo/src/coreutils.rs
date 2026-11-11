@@ -22662,6 +22662,150 @@ pub fn run_uuidgen(args: &[&str], out_fd: i32, err_fd: i32) -> i32 {
     0
 }
 
+/// Variables et limites de configuration système POSIX supportées par `getconf`
+pub struct PosixSysconfVar {
+    pub name: &'static str,
+    pub val_str: &'static str,
+    pub val_int: i64,
+}
+
+pub static POSIX_CONF_VARS: &[PosixSysconfVar] = &[
+    PosixSysconfVar {
+        name: "PAGE_SIZE",
+        val_str: "4096",
+        val_int: 4096,
+    },
+    PosixSysconfVar {
+        name: "PAGESIZE",
+        val_str: "4096",
+        val_int: 4096,
+    },
+    PosixSysconfVar {
+        name: "OPEN_MAX",
+        val_str: "1024",
+        val_int: 1024,
+    },
+    PosixSysconfVar {
+        name: "PATH_MAX",
+        val_str: "4096",
+        val_int: 4096,
+    },
+    PosixSysconfVar {
+        name: "NAME_MAX",
+        val_str: "255",
+        val_int: 255,
+    },
+    PosixSysconfVar {
+        name: "LINE_MAX",
+        val_str: "2048",
+        val_int: 2048,
+    },
+    PosixSysconfVar {
+        name: "ARG_MAX",
+        val_str: "131072",
+        val_int: 131072,
+    },
+    PosixSysconfVar {
+        name: "HOST_NAME_MAX",
+        val_str: "64",
+        val_int: 64,
+    },
+    PosixSysconfVar {
+        name: "LOGIN_NAME_MAX",
+        val_str: "32",
+        val_int: 32,
+    },
+    PosixSysconfVar {
+        name: "TTY_NAME_MAX",
+        val_str: "32",
+        val_int: 32,
+    },
+    PosixSysconfVar {
+        name: "_POSIX_VERSION",
+        val_str: "200809L",
+        val_int: 200809,
+    },
+    PosixSysconfVar {
+        name: "NGROUPS_MAX",
+        val_str: "32",
+        val_int: 32,
+    },
+    PosixSysconfVar {
+        name: "STREAM_MAX",
+        val_str: "16",
+        val_int: 16,
+    },
+    PosixSysconfVar {
+        name: "CLK_TCK",
+        val_str: "100",
+        val_int: 100,
+    },
+];
+
+/// Exécute l'utilitaire Coreutils POSIX `getconf`
+///
+/// Permet d'interroger les paramètres système configurables et limites POSIX.
+pub fn run_getconf(args: &[&str], out_fd: i32, err_fd: i32) -> i32 {
+    let mut list_all = false;
+
+    let mut i = 0;
+    let mut var_requested: Option<&str> = None;
+
+    while i < args.len() {
+        let arg = args[i];
+        if arg == "--help" {
+            let _ = sys_write(
+                out_fd,
+                b"Usage: getconf [OPTION]... [VAR_NAME]\nGet system configuration variables.\n\nOptions:\n  -a, --all      display all configuration variables\n      --help     display this help and exit\n      --version  output version information and exit\n",
+            );
+            return 0;
+        } else if arg == "--version" {
+            let _ = sys_write(out_fd, b"getconf (jambo-coreutils) 0.1.0\n");
+            return 0;
+        } else if arg == "-a" || arg == "--all" {
+            list_all = true;
+        } else if arg.starts_with('-') {
+            let _ = sys_write(err_fd, b"getconf: unrecognized option '");
+            let _ = sys_write(err_fd, arg.as_bytes());
+            let _ = sys_write(err_fd, b"'\nTry 'getconf --help' for more information.\n");
+            return 1;
+        } else if var_requested.is_none() {
+            var_requested = Some(arg);
+        }
+        i += 1;
+    }
+
+    if list_all {
+        for entry in POSIX_CONF_VARS {
+            let _ = sys_write(out_fd, entry.name.as_bytes());
+            let _ = sys_write(out_fd, b": ");
+            let _ = sys_write(out_fd, entry.val_str.as_bytes());
+            let _ = sys_write(out_fd, b"\n");
+        }
+        return 0;
+    }
+
+    if let Some(target) = var_requested {
+        for entry in POSIX_CONF_VARS {
+            if entry.name.eq_ignore_ascii_case(target) {
+                let _ = sys_write(out_fd, entry.val_str.as_bytes());
+                let _ = sys_write(out_fd, b"\n");
+                return 0;
+            }
+        }
+        let _ = sys_write(err_fd, b"getconf: Unrecognized variable '");
+        let _ = sys_write(err_fd, target.as_bytes());
+        let _ = sys_write(err_fd, b"'\n");
+        return 1;
+    }
+
+    let _ = sys_write(
+        err_fd,
+        b"getconf: missing variable name\nTry 'getconf --help' for more information.\n",
+    );
+    1
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -27656,5 +27800,32 @@ Chaque processus dispose de son propre CR3 sans aucun privilege materiel direct.
             assert_eq!(&line[14..15], "4"); // version 4
         }
         assert_eq!(line_count, 2);
+
+        // 32. Test run_getconf
+        assert_eq!(run_getconf(&["--help"], 1, 2), 0);
+        assert_eq!(run_getconf(&["--version"], 1, 2), 0);
+
+        let (out_r_gc, out_w_gc) = crate::vfs::pipe().unwrap();
+        let code_gc = run_getconf(&["PAGE_SIZE"], out_w_gc, 2);
+        sys_close(out_w_gc);
+        assert_eq!(code_gc, 0);
+
+        let mut buf_gc = [0u8; 32];
+        let n_gc = sys_read(out_r_gc, &mut buf_gc);
+        sys_close(out_r_gc);
+        assert_eq!(&buf_gc[..n_gc as usize], b"4096\n");
+
+        let (out_r_all, out_w_all) = crate::vfs::pipe().unwrap();
+        let code_all = run_getconf(&["-a"], out_w_all, 2);
+        sys_close(out_w_all);
+        assert_eq!(code_all, 0);
+
+        let mut buf_all = [0u8; 512];
+        let n_all = sys_read(out_r_all, &mut buf_all);
+        sys_close(out_r_all);
+        let s_all = core::str::from_utf8(&buf_all[..n_all as usize]).unwrap();
+        assert!(s_all.contains("PAGE_SIZE: 4096"));
+        assert!(s_all.contains("OPEN_MAX: 1024"));
+        assert!(s_all.contains("PATH_MAX: 4096"));
     }
 }
