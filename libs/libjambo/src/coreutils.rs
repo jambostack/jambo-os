@@ -18945,6 +18945,324 @@ pub fn run_crc64(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
 // Utilitaire POSIX / GNU coreutils : `factor` (Décomposition en facteurs premiers)
 // ============================================================================
 
+/// Convertit un timestamp Unix (secondes, nanosecondes) en date et heure UTC décomposées
+pub fn unix_nanos_to_datetime(sec: i64, nsec: i64) -> (i32, u32, u32, u32, u32, u32, u32) {
+    let mut days = sec / 86400;
+    let mut rem_sec = sec % 86400;
+    if rem_sec < 0 {
+        rem_sec += 86400;
+        days -= 1;
+    }
+
+    let hour = (rem_sec / 3600) as u32;
+    let min = ((rem_sec % 3600) / 60) as u32;
+    let second = (rem_sec % 60) as u32;
+    let nanos = (nsec.max(0) % 1_000_000_000) as u32;
+
+    // Calcul civil grégorien (algorithme déterministe bare-metal)
+    let z = days + 719468;
+    let era = if z >= 0 { z } else { z - 146096 } / 146097;
+    let doe = (z - era * 146097) as u32;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let mut y = (yoe as i32) + (era as i32) * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    if m <= 2 {
+        y += 1;
+    }
+
+    (y, m, d, hour, min, second, nanos)
+}
+
+/// Formate un timestamp haute précision (nanoseconde) selon le format spécifié
+pub fn format_timestamp(
+    sec: i64,
+    nsec: i64,
+    mode_iso: bool,
+    mode_relative: bool,
+    mode_monotonic: bool,
+    out: &mut [u8],
+) -> usize {
+    if mode_relative {
+        // Format relatif : +SS.NNNNNNNNNs
+        let mut idx = 0;
+        if idx < out.len() {
+            out[idx] = b'+';
+            idx += 1;
+        }
+        let sec_u = sec.unsigned_abs();
+        let mut tmp_sec = [0u8; 20];
+        let mut s_idx = 0;
+        let mut val = sec_u;
+        if val == 0 {
+            tmp_sec[s_idx] = b'0';
+            s_idx += 1;
+        } else {
+            while val > 0 && s_idx < tmp_sec.len() {
+                tmp_sec[s_idx] = b'0' + (val % 10) as u8;
+                s_idx += 1;
+                val /= 10;
+            }
+        }
+        while s_idx > 0 && idx < out.len() {
+            s_idx -= 1;
+            out[idx] = tmp_sec[s_idx];
+            idx += 1;
+        }
+        if idx < out.len() {
+            out[idx] = b'.';
+            idx += 1;
+        }
+        let mut nano_digits = [0u8; 9];
+        let mut n = (nsec.max(0) % 1_000_000_000) as u32;
+        for i in 0..9 {
+            nano_digits[8 - i] = b'0' + (n % 10) as u8;
+            n /= 10;
+        }
+        for b in nano_digits {
+            if idx < out.len() {
+                out[idx] = b;
+                idx += 1;
+            }
+        }
+        if idx < out.len() {
+            out[idx] = b's';
+            idx += 1;
+        }
+        return idx;
+    }
+
+    if mode_monotonic {
+        // Format monotone raw : SS.NNNNNNNNN
+        let mut idx = 0;
+        let sec_u = sec.unsigned_abs();
+        let mut tmp_sec = [0u8; 20];
+        let mut s_idx = 0;
+        let mut val = sec_u;
+        if val == 0 {
+            tmp_sec[s_idx] = b'0';
+            s_idx += 1;
+        } else {
+            while val > 0 && s_idx < tmp_sec.len() {
+                tmp_sec[s_idx] = b'0' + (val % 10) as u8;
+                s_idx += 1;
+                val /= 10;
+            }
+        }
+        while s_idx > 0 && idx < out.len() {
+            s_idx -= 1;
+            out[idx] = tmp_sec[s_idx];
+            idx += 1;
+        }
+        if idx < out.len() {
+            out[idx] = b'.';
+            idx += 1;
+        }
+        let mut nano_digits = [0u8; 9];
+        let mut n = (nsec.max(0) % 1_000_000_000) as u32;
+        for i in 0..9 {
+            nano_digits[8 - i] = b'0' + (n % 10) as u8;
+            n /= 10;
+        }
+        for b in nano_digits {
+            if idx < out.len() {
+                out[idx] = b;
+                idx += 1;
+            }
+        }
+        return idx;
+    }
+
+    // Format ISO 8601 complet ou standard syslog/ts (YYYY-MM-DDTHH:MM:SS.NNNNNNNNNZ)
+    let (year, month, day, hour, min, second, nanos) = unix_nanos_to_datetime(sec, nsec);
+    let mut idx = 0;
+
+    let append_2 = |val: u32, buf: &mut [u8], i: &mut usize| {
+        if *i + 1 < buf.len() {
+            buf[*i] = b'0' + ((val / 10) % 10) as u8;
+            buf[*i + 1] = b'0' + (val % 10) as u8;
+            *i += 2;
+        }
+    };
+
+    let append_4 = |val: i32, buf: &mut [u8], i: &mut usize| {
+        let v = val.max(0) as u32;
+        if *i + 3 < buf.len() {
+            buf[*i] = b'0' + ((v / 1000) % 10) as u8;
+            buf[*i + 1] = b'0' + ((v / 100) % 10) as u8;
+            buf[*i + 2] = b'0' + ((v / 10) % 10) as u8;
+            buf[*i + 3] = b'0' + (v % 10) as u8;
+            *i += 4;
+        }
+    };
+
+    append_4(year, out, &mut idx);
+    if idx < out.len() {
+        out[idx] = b'-';
+        idx += 1;
+    }
+    append_2(month, out, &mut idx);
+    if idx < out.len() {
+        out[idx] = b'-';
+        idx += 1;
+    }
+    append_2(day, out, &mut idx);
+    if idx < out.len() {
+        out[idx] = if mode_iso { b'T' } else { b' ' };
+        idx += 1;
+    }
+    append_2(hour, out, &mut idx);
+    if idx < out.len() {
+        out[idx] = b':';
+        idx += 1;
+    }
+    append_2(min, out, &mut idx);
+    if idx < out.len() {
+        out[idx] = b':';
+        idx += 1;
+    }
+    append_2(second, out, &mut idx);
+    if idx < out.len() {
+        out[idx] = b'.';
+        idx += 1;
+    }
+
+    let mut nano_digits = [0u8; 9];
+    let mut n = nanos;
+    for i in 0..9 {
+        nano_digits[8 - i] = b'0' + (n % 10) as u8;
+        n /= 10;
+    }
+    for b in nano_digits {
+        if idx < out.len() {
+            out[idx] = b;
+            idx += 1;
+        }
+    }
+
+    if mode_iso && idx < out.len() {
+        out[idx] = b'Z';
+        idx += 1;
+    }
+
+    idx
+}
+
+/// Exécute l'utilitaire Coreutils POSIX / GNU `ts` (Timestamping haute précision de flux)
+pub fn run_ts(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    let mut mode_iso = false;
+    let mut mode_relative = false;
+    let mut mode_monotonic = false;
+
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i];
+        if arg == "-h" || arg == "--help" {
+            let help = b"Usage: ts [-i|-s|-m] [format]\n\
+Timestamp standard input or files with high-precision nanosecond timestamps.\n\n\
+Options:\n\
+  -i, --iso          Format timestamp as ISO 8601 (YYYY-MM-DDTHH:MM:SS.NNNNNNNNNZ)\n\
+  -s, --rel, -r      Format relative time since program start (+SS.NNNNNNNNNs)\n\
+  -m, --monotonic    Output monotonic clock seconds and nanoseconds\n\
+      --help         Display this help and exit\n\
+      --version      Output version information and exit\n";
+            let _ = sys_write(out_fd, help);
+            return 0;
+        } else if arg == "--version" {
+            let ver = b"ts (JamboOS coreutils) 0.1.0\n\
+Copyright (C) 2026 ASSOGBA Prudence Dieudonne\n\
+License GPLv3+: GNU GPL version 3 or later <https://gnu.org/licenses/gpl.html>.\n\
+This is free software: you are free to change and redistribute it.\n\
+There is NO WARRANTY, to the extent permitted by law.\n";
+            let _ = sys_write(out_fd, ver);
+            return 0;
+        } else if arg == "-i" || arg == "--iso" {
+            mode_iso = true;
+        } else if arg == "-s" || arg == "--rel" || arg == "-r" {
+            mode_relative = true;
+        } else if arg == "-m" || arg == "--monotonic" {
+            mode_monotonic = true;
+        } else if arg == "--" {
+            break;
+        } else if arg.starts_with('-') {
+            let _ = sys_write(err_fd, b"ts: unrecognized option '");
+            let _ = sys_write(err_fd, arg.as_bytes());
+            let _ = sys_write(err_fd, b"'\n");
+            return 1;
+        } else {
+            // Reste des arguments
+            break;
+        }
+        i += 1;
+    }
+
+    let clock_id = if mode_monotonic {
+        crate::clocks::CLOCK_MONOTONIC
+    } else {
+        crate::clocks::CLOCK_REALTIME
+    };
+
+    let start_ts = crate::clock_gettime(clock_id).unwrap_or(crate::Timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+        _pad: 0,
+    });
+
+    let mut buf = [0u8; 1024];
+    let mut ts_buf = [0u8; 64];
+    let mut at_line_start = true;
+
+    loop {
+        let n = sys_read(in_fd, &mut buf);
+        if n <= 0 {
+            break;
+        }
+        let chunk = &buf[..n as usize];
+
+        for &b in chunk {
+            if at_line_start {
+                let now = crate::clock_gettime(clock_id).unwrap_or(start_ts);
+                let (sec, nsec) = if mode_relative {
+                    let mut s = now.tv_sec as i64 - start_ts.tv_sec as i64;
+                    let mut ns = now.tv_nsec as i64 - start_ts.tv_nsec as i64;
+                    if ns < 0 {
+                        s -= 1;
+                        ns += 1_000_000_000;
+                    }
+                    (s, ns)
+                } else {
+                    (now.tv_sec as i64, now.tv_nsec as i64)
+                };
+
+                let len = format_timestamp(
+                    sec,
+                    nsec,
+                    mode_iso,
+                    mode_relative,
+                    mode_monotonic,
+                    &mut ts_buf,
+                );
+                let _ = sys_write(out_fd, &ts_buf[..len]);
+                let _ = sys_write(out_fd, b" ");
+                at_line_start = false;
+            }
+
+            let _ = sys_write(out_fd, &[b]);
+            if b == b'\n' {
+                at_line_start = true;
+            }
+        }
+    }
+
+    0
+}
+
+// ============================================================================
+// Utilitaire POSIX / GNU coreutils : `factor` (Décomposition en facteurs premiers)
+// ============================================================================
+
 /// Décompose un entier 64 bits en facteurs premiers.
 /// Remplit `factors` avec la liste ordonnée des facteurs premiers et retourne leur nombre.
 pub fn factorize_u64(mut n: u64, factors: &mut [u64; 64]) -> usize {
@@ -19483,6 +19801,7 @@ pub fn execute_coreutils_command(
         "cksum" => run_cksum(args, in_fd, out_fd, err_fd),
         "crc32" => run_crc32(args, in_fd, out_fd, err_fd),
         "crc64" => run_crc64(args, in_fd, out_fd, err_fd),
+        "ts" => run_ts(args, in_fd, out_fd, err_fd),
         "base64" => run_base64(args, in_fd, out_fd, err_fd),
         "base32" => run_base32(args, in_fd, out_fd, err_fd),
         "base32hex" => run_base32hex(args, in_fd, out_fd, err_fd),
@@ -20868,6 +21187,7 @@ pub fn run_xargs(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
             "cksum" => run_cksum(effective_sub_args, 0, out_fd, err_fd),
             "crc32" => run_crc32(effective_sub_args, 0, out_fd, err_fd),
             "crc64" => run_crc64(effective_sub_args, 0, out_fd, err_fd),
+            "ts" => run_ts(effective_sub_args, 0, out_fd, err_fd),
             "factor" => run_factor(effective_sub_args, 0, out_fd, err_fd),
             "base64" => run_base64(effective_sub_args, 0, out_fd, err_fd),
             "base32" => run_base32(effective_sub_args, 0, out_fd, err_fd),
@@ -34429,6 +34749,71 @@ Chaque processus dispose de son propre CR3 sans aucun privilege materiel direct.
 
         let _ = sys_unlink_pool(file_path);
         let _ = sys_unlink_pool(check_file);
+    }
+
+    #[test]
+    fn test_posix_ts() {
+        // 1. Test unix_nanos_to_datetime
+        // 2026-11-12 00:00:00 UTC = 1794441600 (approximatif ou calcul exact)
+        // 0 sec = 1970-01-01 00:00:00
+        let (y0, m0, d0, h0, min0, s0, n0) = unix_nanos_to_datetime(0, 500_000_000);
+        assert_eq!(y0, 1970);
+        assert_eq!(m0, 1);
+        assert_eq!(d0, 1);
+        assert_eq!(h0, 0);
+        assert_eq!(min0, 0);
+        assert_eq!(s0, 0);
+        assert_eq!(n0, 500_000_000);
+
+        // 2. Test format_timestamp
+        let mut out = [0u8; 64];
+        let len_iso = format_timestamp(0, 123_456_789, true, false, false, &mut out);
+        assert_eq!(
+            core::str::from_utf8(&out[..len_iso]).unwrap(),
+            "1970-01-01T00:00:00.123456789Z"
+        );
+
+        let len_rel = format_timestamp(42, 987_654_321, false, true, false, &mut out);
+        assert_eq!(
+            core::str::from_utf8(&out[..len_rel]).unwrap(),
+            "+42.987654321s"
+        );
+
+        let len_mono = format_timestamp(105, 500_000, false, false, true, &mut out);
+        assert_eq!(
+            core::str::from_utf8(&out[..len_mono]).unwrap(),
+            "105.000500000"
+        );
+
+        // 3. Test exécution run_ts sur pipe
+        let (in_r, in_w) = crate::vfs::pipe().unwrap();
+        let (out_r, out_w) = crate::vfs::pipe().unwrap();
+        let _ = sys_write(in_w, b"First line\nSecond line\n");
+        sys_close(in_w);
+
+        let code = run_ts(&["-s"], in_r, out_w, 2);
+        sys_close(in_r);
+        sys_close(out_w);
+        assert_eq!(code, 0);
+
+        let mut buf = [0u8; 512];
+        let n = sys_read(out_r, &mut buf);
+        sys_close(out_r);
+        let s = core::str::from_utf8(&buf[..n as usize]).unwrap();
+        assert!(s.contains("First line\n"));
+        assert!(s.contains("Second line\n"));
+        assert!(s.contains("+0."));
+
+        // 4. Test run_ts --help et --version
+        let (out_r2, out_w2) = crate::vfs::pipe().unwrap();
+        assert_eq!(run_ts(&["--help"], 0, out_w2, 2), 0);
+        sys_close(out_w2);
+        let mut buf2 = [0u8; 512];
+        let n2 = sys_read(out_r2, &mut buf2);
+        sys_close(out_r2);
+        assert!(core::str::from_utf8(&buf2[..n2 as usize])
+            .unwrap()
+            .contains("Usage: ts"));
     }
 
     #[test]

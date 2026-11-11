@@ -617,7 +617,12 @@ name = "crc64"
 path = "src/bin/crc64.rs"
 test = false
 
-# 122 utilitaires Ring 3
+[[bin]]
+name = "ts"
+path = "src/bin/ts.rs"
+test = false
+
+# 123 utilitaires Ring 3
 
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }

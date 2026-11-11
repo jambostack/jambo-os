@@ -632,6 +632,7 @@ impl JamboShell {
             }
             "crc32" | "/bin/crc32" | "bin/crc32" => self.cmd_crc32(args, out),
             "crc64" | "/bin/crc64" | "bin/crc64" => self.cmd_crc64(args, out),
+            "ts" | "/bin/ts" | "bin/ts" => self.cmd_ts(args, out),
             "factor" | "/bin/factor" | "bin/factor" => self.cmd_factor(args, out),
             "timeout" | "/bin/timeout" | "bin/timeout" => self.cmd_timeout(args, out),
             "nice" | "/bin/nice" | "bin/nice" => self.cmd_nice(args, out),
@@ -2810,6 +2811,43 @@ Utilitaire d'installation JamboOS (Serie 0.*.*)\n\
             (status, len)
         } else {
             let msg = b"crc64: pipe creation failed\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
+    }
+
+    fn cmd_ts(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if let (Ok((r_out, w_out)), Ok((r_err, w_err))) =
+            (libjambo::vfs::pipe(), libjambo::vfs::pipe())
+        {
+            let code = libjambo::coreutils::run_ts(args, 0, w_out, w_err);
+            let _ = libjambo::coreutils::sys_close(w_out);
+            let _ = libjambo::coreutils::sys_close(w_err);
+
+            let mut len = 0;
+            if code == 0 {
+                let n_out = libjambo::coreutils::sys_read(r_out, out);
+                if n_out > 0 {
+                    len = n_out as usize;
+                }
+            } else {
+                let n_err = libjambo::coreutils::sys_read(r_err, out);
+                if n_err > 0 {
+                    len = n_err as usize;
+                }
+            }
+            let _ = libjambo::coreutils::sys_close(r_out);
+            let _ = libjambo::coreutils::sys_close(r_err);
+
+            let status = if code == 0 {
+                ShellStatus::Success
+            } else {
+                ShellStatus::ExecutionFailed
+            };
+            (status, len)
+        } else {
+            let msg = b"ts: pipe creation failed\n";
             let len = msg.len().min(out.len());
             out[..len].copy_from_slice(&msg[..len]);
             (ShellStatus::ExecutionFailed, len)
@@ -22072,5 +22110,16 @@ mod tests {
         assert_eq!(st138, ShellStatus::Success);
         let s138 = core::str::from_utf8(&out[..len138]).unwrap();
         assert!(s138.contains("/etc/hostname"));
+
+        // 62. ts shell command
+        let (st139, len139) = shell.execute_line("ts --help", &mut out);
+        assert_eq!(st139, ShellStatus::Success);
+        let s139 = core::str::from_utf8(&out[..len139]).unwrap();
+        assert!(s139.contains("Usage: ts"));
+
+        let (st140, len140) = shell.execute_line("ts --version", &mut out);
+        assert_eq!(st140, ShellStatus::Success);
+        let s140 = core::str::from_utf8(&out[..len140]).unwrap();
+        assert!(s140.contains("ts (JamboOS coreutils)"));
     }
 }
