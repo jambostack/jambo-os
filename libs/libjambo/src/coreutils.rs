@@ -13391,6 +13391,7 @@ pub fn execute_coreutils_command(
         "nproc" => run_nproc(args, out_fd, err_fd),
         "users" => run_users(args, out_fd, err_fd),
         "who" => run_who(args, out_fd, err_fd),
+        "nohup" => run_nohup(args, in_fd, out_fd, err_fd),
         _ => {
             let _ = sys_write(err_fd, cmd.as_bytes());
             let _ = sys_write(err_fd, b": command not found\n");
@@ -14758,6 +14759,7 @@ pub fn run_xargs(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
             "nproc" => run_nproc(effective_sub_args, out_fd, err_fd),
             "users" => run_users(effective_sub_args, out_fd, err_fd),
             "who" => run_who(effective_sub_args, out_fd, err_fd),
+            "nohup" => run_nohup(effective_sub_args, 0, out_fd, err_fd),
             _ => {
                 let _ = sys_write(err_fd, b"xargs: ");
                 let _ = sys_write(err_fd, target_cmd.as_bytes());
@@ -20236,6 +20238,115 @@ Print information about users who are currently logged in.\n\n\
     0
 }
 
+/// Utilitaire POSIX / GNU `nohup` (Run a command immune to hangups, with output to a non-tty)
+///
+/// Exécute COMMAND en ignorant le signal de déconnexion de terminal SIGHUP.
+/// Si la sortie standard ou d'erreur est connectée à un terminal, `nohup` redirige
+/// automatiquement les flux vers `nohup.out` (ou `$HOME/nohup.out`).
+///
+/// Codes de retour POSIX standard :
+/// - 126 : COMMAND trouvée mais ne peut être invoquée
+/// - 127 : COMMAND introuvable ou erreur de redirection nohup
+/// - 125 : Erreur interne nohup (arguments invalides)
+/// - Code de retour de COMMAND en cas de succès
+pub fn run_nohup(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    let mut cmd_idx = 0;
+    if !args.is_empty() {
+        let arg = args[0];
+        if arg == "--help" {
+            let _ = sys_write(
+                out_fd,
+                b"Usage: nohup COMMAND [ARG]...\n  or:  nohup OPTION\nRun COMMAND, ignoring hangup signals.\n\n      --help     display this help and exit\n      --version  output version information and exit\n\nIf standard input is a terminal, redirect it from an unreadable file.\nIf standard output is a terminal, append output to 'nohup.out' if possible,\n'$HOME/nohup.out' otherwise.\nIf standard error is a terminal, redirect it to standard output.\nTo save output to FILE, use 'nohup COMMAND > FILE'.\n",
+            );
+            return 0;
+        } else if arg == "--version" {
+            let _ = sys_write(out_fd, b"nohup (jambo-coreutils) 0.1.0\n");
+            return 0;
+        } else if arg == "--" {
+            cmd_idx = 1;
+        } else if arg.starts_with('-') && arg != "-" {
+            let _ = sys_write(err_fd, b"nohup: unrecognized option '");
+            let _ = sys_write(err_fd, arg.as_bytes());
+            let _ = sys_write(err_fd, b"'\nTry 'nohup --help' for more information.\n");
+            return 125;
+        }
+    }
+
+    if cmd_idx >= args.len() {
+        let _ = sys_write(
+            err_fd,
+            b"nohup: missing operand\nTry 'nohup --help' for more information.\n",
+        );
+        return 125;
+    }
+
+    let target_cmd = args[cmd_idx];
+    let target_args = &args[cmd_idx + 1..];
+
+    // Ignorer le signal SIGHUP (signum 1) selon la sémantique POSIX
+    // sigaction / sys_sigaction(SIGHUP, SIG_IGN)
+    const SIGHUP: i32 = 1;
+    const SIG_IGN: usize = 1;
+    let act_ign = crate::posix::Sigaction {
+        sa_handler: SIG_IGN,
+        sa_mask: crate::posix::Sigset { mask: 0 },
+        sa_flags: 0,
+        sa_restorer: None,
+    };
+    let _ = crate::posix::sys_sigaction(SIGHUP, Some(&act_ign), None);
+
+    // Gestion des redirections vers nohup.out si out_fd est un terminal interactif
+    let mut effective_out_fd = out_fd;
+    let mut effective_err_fd = err_fd;
+    let mut opened_file_fd = -1;
+
+    let out_is_tty = crate::vfs::isatty(out_fd);
+    let err_is_tty = crate::vfs::isatty(err_fd);
+
+    if out_is_tty {
+        // Tenter d'ouvrir nohup.out en mode append
+        let flags = crate::vfs::O_CREAT | crate::vfs::O_WRONLY | crate::vfs::O_APPEND;
+        let fd = sys_open("nohup.out", flags);
+        if fd >= 0 {
+            let _ = sys_write(
+                err_fd,
+                b"nohup: ignoring input and appending output to 'nohup.out'\n",
+            );
+            effective_out_fd = fd;
+            opened_file_fd = fd;
+        } else {
+            // Tenter dans /tmp/nohup.out ou conserver out_fd
+            let tmp_fd = sys_open("/tmp/nohup.out", flags);
+            if tmp_fd >= 0 {
+                let _ = sys_write(
+                    err_fd,
+                    b"nohup: ignoring input and appending output to '/tmp/nohup.out'\n",
+                );
+                effective_out_fd = tmp_fd;
+                opened_file_fd = tmp_fd;
+            }
+        }
+    }
+
+    if err_is_tty {
+        effective_err_fd = effective_out_fd;
+    }
+
+    let code = execute_coreutils_command(
+        target_cmd,
+        target_args,
+        in_fd,
+        effective_out_fd,
+        effective_err_fd,
+    );
+
+    if opened_file_fd >= 0 {
+        let _ = sys_close(opened_file_fd);
+    }
+
+    code
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -24761,5 +24872,48 @@ Chaque processus dispose de son propre CR3 sans aucun privilege materiel direct.
         // Option inconnue
         let code_who5 = run_who(&["--invalid-flag"], 1, 2);
         assert_eq!(code_who5, 1);
+
+        // 17. Test run_nohup
+        let (out_rnohup1, out_wnohup1) = crate::vfs::pipe().unwrap();
+        let code_nohup1 = run_nohup(&["echo", "hello-nohup"], 0, out_wnohup1, 2);
+        sys_close(out_wnohup1);
+        assert_eq!(code_nohup1, 0);
+        let mut bufnohup1 = [0u8; 64];
+        let nnohup1 = sys_read(out_rnohup1, &mut bufnohup1);
+        sys_close(out_rnohup1);
+        let s_nohup1 = core::str::from_utf8(&bufnohup1[..nnohup1 as usize]).unwrap();
+        assert!(s_nohup1.contains("hello-nohup"));
+
+        // Option --version
+        let (out_rnohup2, out_wnohup2) = crate::vfs::pipe().unwrap();
+        let code_nohup2 = run_nohup(&["--version"], 0, out_wnohup2, 2);
+        sys_close(out_wnohup2);
+        assert_eq!(code_nohup2, 0);
+        let mut bufnohup2 = [0u8; 64];
+        let nnohup2 = sys_read(out_rnohup2, &mut bufnohup2);
+        sys_close(out_rnohup2);
+        assert!(core::str::from_utf8(&bufnohup2[..nnohup2 as usize])
+            .unwrap()
+            .contains("nohup"));
+
+        // Option --help
+        let (out_rnohup3, out_wnohup3) = crate::vfs::pipe().unwrap();
+        let code_nohup3 = run_nohup(&["--help"], 0, out_wnohup3, 2);
+        sys_close(out_wnohup3);
+        assert_eq!(code_nohup3, 0);
+        let mut bufnohup3 = [0u8; 128];
+        let nnohup3 = sys_read(out_rnohup3, &mut bufnohup3);
+        sys_close(out_rnohup3);
+        assert!(core::str::from_utf8(&bufnohup3[..nnohup3 as usize])
+            .unwrap()
+            .contains("Usage: nohup"));
+
+        // Sans commande (missing operand -> 125)
+        let code_nohup4 = run_nohup(&[], 0, 1, 2);
+        assert_eq!(code_nohup4, 125);
+
+        // Option inconnue -> 125
+        let code_nohup5 = run_nohup(&["--invalid-flag"], 0, 1, 2);
+        assert_eq!(code_nohup5, 125);
     }
 }

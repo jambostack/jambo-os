@@ -432,7 +432,12 @@ name = "who"
 path = "src/bin/who.rs"
 test = false
 
-# 85 utilitaires Ring 3
+[[bin]]
+name = "nohup"
+path = "src/bin/nohup.rs"
+test = false
+
+# 86 utilitaires Ring 3
 
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }

@@ -309,6 +309,7 @@ pub const XHCI_EXT_CAP_DEVICE_VIRTUALIZATION: u8 = 21;
 pub const XHCI_EXT_CAP_HUB_VIRTUALIZATION: u8 = 22;
 pub const XHCI_EXT_CAP_CONTROLLER_CAPABILITY_CONTEXT: u8 = 23;
 pub const XHCI_EXT_CAP_BANDWIDTH_NEGOTIATION: u8 = 24;
+pub const XHCI_EXT_CAP_LATENCY_TOLERANCE_MESSAGING: u8 = 25;
 
 /// Masques de registres USB Legacy Support (xHCI 1.2 Section 7.1)
 /// Registre USBLEGSUP (Offset 0x00)
@@ -2063,6 +2064,139 @@ impl XhciBandwidthNegotiation {
         self.allocated_bw_kb_per_uframe = self
             .allocated_bw_kb_per_uframe
             .saturating_sub(kb_per_uframe);
+    }
+}
+
+/// Capacité Étendue xHCI USB Latency Tolerance Messaging (LTM / xHCI 1.2 §7.17)
+///
+/// Permet la gestion fine de la tolérance à la latence (LTM) pour les périphériques SuperSpeed / SuperSpeedPlus.
+/// Définit les valeurs de latence maximale acceptables (BELT - Best Effort Latency Tolerance)
+/// pour optimiser les transitions d'états d'alimentation basse consommation C-states et U-states.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XhciLatencyToleranceMessaging {
+    /// Pointeur dword vers la prochaine capacité étendue (0 = fin de liste)
+    pub next_ptr_dwords: u8,
+    /// LTM activé au niveau du contrôleur hôte
+    pub enabled: bool,
+    /// Nombre de ports prenant en charge LTM (1..=64)
+    pub ltm_port_count: u8,
+    /// Échelle de tolérance de latence (0 = 1 ns, 1 = 32 ns, 2 = 1024 ns, 3 = 32768 ns, etc.)
+    pub latency_tolerance_scale: u8,
+    /// Registre de contrôle LTM
+    pub ltm_control: u32,
+    /// Registre de statut LTM
+    pub ltm_status: u32,
+    /// Valeur maximale de tolérance de latence (BELT en unités d'échelle)
+    pub max_belt_latency: u16,
+}
+
+impl XhciLatencyToleranceMessaging {
+    /// Crée un nouveau contexte LTM initialisé
+    pub const fn new(port_count: u8, tolerance_scale: u8) -> Self {
+        let ports = if port_count == 0 {
+            1
+        } else if port_count > 64 {
+            64
+        } else {
+            port_count
+        };
+        let scale = if tolerance_scale > 7 {
+            7
+        } else {
+            tolerance_scale
+        };
+        Self {
+            next_ptr_dwords: 0,
+            enabled: false,
+            ltm_port_count: ports,
+            latency_tolerance_scale: scale,
+            ltm_control: 0,
+            ltm_status: 0,
+            max_belt_latency: 0,
+        }
+    }
+
+    /// Décode le contexte LTM à partir de 4 dwords MMIO
+    pub fn parse(dwords: &[u32]) -> Option<Self> {
+        if dwords.len() < 4 {
+            return None;
+        }
+        let cap_id = (dwords[0] & 0xFF) as u8;
+        if cap_id != XHCI_EXT_CAP_LATENCY_TOLERANCE_MESSAGING {
+            return None;
+        }
+        let next_ptr = ((dwords[0] >> 8) & 0xFF) as u8;
+        let ports = (((dwords[0] >> 16) & 0xFF) as u8).clamp(1, 64);
+        let scale = (((dwords[0] >> 24) & 0x07) as u8).min(7);
+
+        let ctrl = dwords[1];
+        let sts = dwords[2];
+        let belt = (dwords[3] & 0xFFFF) as u16;
+        let enabled = (ctrl & 0x01) != 0;
+
+        Some(Self {
+            next_ptr_dwords: next_ptr,
+            enabled,
+            ltm_port_count: ports,
+            latency_tolerance_scale: scale,
+            ltm_control: ctrl,
+            ltm_status: sts,
+            max_belt_latency: belt,
+        })
+    }
+
+    /// Encode le contexte LTM en 4 mots dwords MMIO 32-bit
+    pub const fn encode(&self) -> [u32; 4] {
+        let dw0 = (XHCI_EXT_CAP_LATENCY_TOLERANCE_MESSAGING as u32)
+            | ((self.next_ptr_dwords as u32) << 8)
+            | ((self.ltm_port_count as u32) << 16)
+            | (((self.latency_tolerance_scale & 0x07) as u32) << 24);
+        let dw1 = (self.ltm_control & !0x01) | (if self.enabled { 1 } else { 0 });
+        let dw2 = self.ltm_status;
+        let dw3 = self.max_belt_latency as u32;
+        [dw0, dw1, dw2, dw3]
+    }
+
+    /// Active ou désactive le moteur Latency Tolerance Messaging
+    pub fn set_enabled(&mut self, enable: bool) {
+        self.enabled = enable;
+        if enable {
+            self.ltm_control |= 0x01;
+        } else {
+            self.ltm_control &= !0x01;
+        }
+    }
+
+    /// Vérifie si un port LTM (1-based) est valide
+    pub const fn is_ltm_port_valid(&self, port_num: u8) -> bool {
+        self.enabled && port_num >= 1 && port_num <= self.ltm_port_count
+    }
+
+    /// Configure la valeur BELT maximale
+    pub fn set_max_belt_latency(&mut self, belt: u16) {
+        self.max_belt_latency = belt;
+    }
+
+    /// Calcule la latence en nanosecondes selon l'échelle LTM standard USB 3.0 / xHCI 1.2
+    /// Échelle :
+    /// - 0 : 1 ns * belt
+    /// - 1 : 32 ns * belt
+    /// - 2 : 1 024 ns * belt
+    /// - 3 : 32 768 ns * belt
+    /// - 4 : 1 048 576 ns * belt
+    /// - 5 : 33 554 432 ns * belt
+    /// - Autres : non défini / saturé
+    pub const fn compute_latency_ns(&self) -> u64 {
+        let belt = self.max_belt_latency as u64;
+        match self.latency_tolerance_scale {
+            0 => belt,
+            1 => belt.saturating_mul(32),
+            2 => belt.saturating_mul(1024),
+            3 => belt.saturating_mul(32768),
+            4 => belt.saturating_mul(1048576),
+            5 => belt.saturating_mul(33554432),
+            _ => belt.saturating_mul(1073741824),
+        }
     }
 }
 
@@ -10661,5 +10795,47 @@ mod tests {
         assert!(parsed_bw.enabled);
         assert_eq!(parsed_bw.bw_status, 0xCAFE);
         assert_eq!(parsed_bw.allocated_bw_kb_per_uframe, 300);
+
+        // 26. xHCI 1.2 §7.17 USB Latency Tolerance Messaging (LTM Extensions)
+        let mut ltm = XhciLatencyToleranceMessaging::new(8, 2);
+        assert_eq!(ltm.ltm_port_count, 8);
+        assert_eq!(ltm.latency_tolerance_scale, 2);
+        assert!(!ltm.enabled);
+        assert!(!ltm.is_ltm_port_valid(1));
+
+        ltm.set_enabled(true);
+        assert!(ltm.enabled);
+        assert!(ltm.is_ltm_port_valid(1));
+        assert!(ltm.is_ltm_port_valid(8));
+        assert!(!ltm.is_ltm_port_valid(0)); // port 0 invalide
+        assert!(!ltm.is_ltm_port_valid(9)); // hors limite
+
+        ltm.set_max_belt_latency(50);
+        assert_eq!(ltm.max_belt_latency, 50);
+        // Scale 2 = 1024 ns, 50 * 1024 = 51 200 ns
+        assert_eq!(ltm.compute_latency_ns(), 51_200);
+
+        ltm.next_ptr_dwords = 32;
+        ltm.ltm_status = 0x1234;
+        let encoded_ltm = ltm.encode();
+        assert_eq!(
+            encoded_ltm[0] & 0xFF,
+            XHCI_EXT_CAP_LATENCY_TOLERANCE_MESSAGING as u32
+        );
+        assert_eq!((encoded_ltm[0] >> 8) & 0xFF, 32);
+        assert_eq!((encoded_ltm[0] >> 16) & 0xFF, 8);
+        assert_eq!((encoded_ltm[0] >> 24) & 0xFF, 2);
+        assert_eq!(encoded_ltm[1] & 0x01, 1);
+        assert_eq!(encoded_ltm[2], 0x1234);
+        assert_eq!(encoded_ltm[3], 50);
+
+        let parsed_ltm = XhciLatencyToleranceMessaging::parse(&encoded_ltm).unwrap();
+        assert_eq!(parsed_ltm.next_ptr_dwords, 32);
+        assert_eq!(parsed_ltm.ltm_port_count, 8);
+        assert_eq!(parsed_ltm.latency_tolerance_scale, 2);
+        assert!(parsed_ltm.enabled);
+        assert_eq!(parsed_ltm.ltm_status, 0x1234);
+        assert_eq!(parsed_ltm.max_belt_latency, 50);
+        assert_eq!(parsed_ltm.compute_latency_ns(), 51_200);
     }
 }

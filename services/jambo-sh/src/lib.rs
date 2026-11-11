@@ -624,6 +624,7 @@ impl JamboShell {
             "nproc" | "/bin/nproc" | "bin/nproc" => self.cmd_nproc(args, out),
             "users" | "/bin/users" | "bin/users" => self.cmd_users(args, out),
             "who" | "/bin/who" | "bin/who" => self.cmd_who(args, out),
+            "nohup" | "/bin/nohup" | "bin/nohup" => self.cmd_nohup(args, out),
             "cow" | "/bin/cow" | "bin/cow" => self.cmd_cow(args, out),
             "version" => self.cmd_version(out),
             "uptime" => self.cmd_uptime(out),
@@ -2846,6 +2847,43 @@ Utilitaire d'installation JamboOS (Serie 0.*.*)\n\
             (status, len)
         } else {
             let msg = b"who: pipe creation failed\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
+    }
+
+    fn cmd_nohup(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if let (Ok((r_out, w_out)), Ok((r_err, w_err))) =
+            (libjambo::vfs::pipe(), libjambo::vfs::pipe())
+        {
+            let code = libjambo::coreutils::run_nohup(args, 0, w_out, w_err);
+            let _ = libjambo::coreutils::sys_close(w_out);
+            let _ = libjambo::coreutils::sys_close(w_err);
+
+            let mut len = 0;
+            if code == 0 {
+                let n_out = libjambo::coreutils::sys_read(r_out, out);
+                if n_out > 0 {
+                    len = n_out as usize;
+                }
+            } else {
+                let n_err = libjambo::coreutils::sys_read(r_err, out);
+                if n_err > 0 {
+                    len = n_err as usize;
+                }
+            }
+            let _ = libjambo::coreutils::sys_close(r_out);
+            let _ = libjambo::coreutils::sys_close(r_err);
+
+            let status = if code == 0 {
+                ShellStatus::Success
+            } else {
+                ShellStatus::ExecutionFailed
+            };
+            (status, len)
+        } else {
+            let msg = b"nohup: pipe creation failed\n";
             let len = msg.len().min(out.len());
             out[..len].copy_from_slice(&msg[..len]);
             (ShellStatus::ExecutionFailed, len)
@@ -20580,5 +20618,27 @@ mod tests {
 
         let (st62, _len62) = shell.execute_line("who --invalid-flag", &mut out);
         assert_eq!(st62, ShellStatus::ExecutionFailed);
+
+        // 38. nohup shell command
+        let (st63, len63) = shell.execute_line("nohup echo hello-jsh-nohup", &mut out);
+        assert_eq!(st63, ShellStatus::Success);
+        let s63 = core::str::from_utf8(&out[..len63]).unwrap();
+        assert!(s63.contains("hello-jsh-nohup"));
+
+        let (st64, len64) = shell.execute_line("nohup --version", &mut out);
+        assert_eq!(st64, ShellStatus::Success);
+        let s64 = core::str::from_utf8(&out[..len64]).unwrap();
+        assert!(s64.contains("nohup"));
+
+        let (st65, len65) = shell.execute_line("nohup --help", &mut out);
+        assert_eq!(st65, ShellStatus::Success);
+        let s65 = core::str::from_utf8(&out[..len65]).unwrap();
+        assert!(s65.contains("Usage: nohup"));
+
+        let (st66, _len66) = shell.execute_line("nohup", &mut out);
+        assert_eq!(st66, ShellStatus::ExecutionFailed);
+
+        let (st67, _len67) = shell.execute_line("nohup --invalid-flag", &mut out);
+        assert_eq!(st67, ShellStatus::ExecutionFailed);
     }
 }
