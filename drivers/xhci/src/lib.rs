@@ -354,6 +354,8 @@ pub const XHCI_EXT_CAP_USB4_HOST_TO_HOST_PACKET_TUNNELING: u8 = 55;
 pub const XHCI_EXT_CAP_USB4_HOST_INTERFACE_DISCOVERY: u8 = 56;
 /// Capacité étendue xHCI 1.2 / USB4 Sleep and Wake Notification Capability (§7.49)
 pub const XHCI_EXT_CAP_USB4_SLEEP_WAKE_NOTIFICATION: u8 = 57;
+/// Capacité étendue xHCI 1.2 / USB4 PCIe Adapter Configuration Interface (§7.50)
+pub const XHCI_EXT_CAP_USB4_PCIE_ADAPTER_CONFIGURATION_INTERFACE: u8 = 58;
 
 /// Masques de registres USB Legacy Support (xHCI 1.2 Section 7.1)
 /// Registre USBLEGSUP (Offset 0x00)
@@ -6011,6 +6013,120 @@ impl XhciUsb4SleepWakeNotification {
     /// Incrémente le compteur d'événements de réveil reçus
     pub fn record_wake_event(&mut self) {
         self.wake_event_counter = self.wake_event_counter.wrapping_add(1);
+    }
+}
+
+/// Capacité Étendue xHCI 1.2 / USB4 PCIe Adapter Configuration Interface (§7.50)
+///
+/// Permet la gestion déterministe et le contrôle direct des registres de configuration
+/// des adaptateurs PCIe (PCIe Adapters) intégrés dans les routeurs USB4 hôtes et cibles.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XhciUsb4PcieAdapterConfigInterface {
+    /// Pointeur dword vers la prochaine capacité étendue (0 = fin de liste)
+    pub next_ptr_dwords: u8,
+    /// Fonctionnalité activée dans le contrôleur (bit 0)
+    pub enabled: bool,
+    /// Génération d'interruptions d'événement d'adaptateur PCIe activée (bit 1)
+    pub irq_enabled: bool,
+    /// Index ou numéro de l'adaptateur PCIe USB4 cible (bits 8..15)
+    pub adapter_index: u8,
+    /// Vitesse PCIe négociée (Link Speed: 1=Gen1 2.5GT/s, 2=Gen2 5.0GT/s, 3=Gen3 8.0GT/s, 4=Gen4 16.0GT/s)
+    pub link_speed_gen: u8,
+    /// Largeur de lien PCIe négociée (Link Width: 1=x1, 2=x2, 4=x4, 8=x8, 16=x16)
+    pub link_width: u8,
+    /// Registre de contrôle et de statut d'adaptateur PCIe USB4
+    pub adapter_status: u32,
+    /// Compteur total d'interruptions et d'événements de tunneling PCIe reçus
+    pub event_counter: u32,
+}
+
+impl XhciUsb4PcieAdapterConfigInterface {
+    /// Crée une nouvelle interface de configuration d'adaptateur PCIe USB4
+    pub const fn new(adapter_index: u8, link_speed_gen: u8, link_width: u8) -> Self {
+        Self {
+            next_ptr_dwords: 0,
+            enabled: false,
+            irq_enabled: false,
+            adapter_index,
+            link_speed_gen: link_speed_gen & 0x07,
+            link_width: link_width & 0x1F,
+            adapter_status: 0,
+            event_counter: 0,
+        }
+    }
+
+    /// Parse les 4 dwords MMIO d'une capacité étendue USB4 PCIe Adapter Configuration Interface (§7.50)
+    pub const fn parse(dwords: &[u32; 4]) -> Option<Self> {
+        let cap_id = (dwords[0] & 0xFF) as u8;
+        if cap_id != XHCI_EXT_CAP_USB4_PCIE_ADAPTER_CONFIGURATION_INTERFACE {
+            return None;
+        }
+
+        let next_ptr = ((dwords[0] >> 8) & 0xFF) as u8;
+        let ctrl = dwords[1];
+        let enabled = (ctrl & 0x01) != 0;
+        let irq_enabled = (ctrl & 0x02) != 0;
+        let adapter_index = ((ctrl >> 8) & 0xFF) as u8;
+        let link_speed_gen = ((ctrl >> 16) & 0x07) as u8;
+        let link_width = ((ctrl >> 20) & 0x1F) as u8;
+
+        let adapter_status = dwords[2];
+        let event_counter = dwords[3];
+
+        Some(Self {
+            next_ptr_dwords: next_ptr,
+            enabled,
+            irq_enabled,
+            adapter_index,
+            link_speed_gen,
+            link_width,
+            adapter_status,
+            event_counter,
+        })
+    }
+
+    /// Encode la capacité étendue en 4 mots dwords MMIO 32-bit
+    pub const fn encode(&self) -> [u32; 4] {
+        let dw0 = (XHCI_EXT_CAP_USB4_PCIE_ADAPTER_CONFIGURATION_INTERFACE as u32)
+            | ((self.next_ptr_dwords as u32) << 8);
+        let mut ctrl = ((self.adapter_index as u32) << 8)
+            | (((self.link_speed_gen as u32) & 0x07) << 16)
+            | (((self.link_width as u32) & 0x1F) << 20);
+        if self.enabled {
+            ctrl |= 0x01;
+        }
+        if self.irq_enabled {
+            ctrl |= 0x02;
+        }
+        let dw2 = self.adapter_status;
+        let dw3 = self.event_counter;
+        [dw0, ctrl, dw2, dw3]
+    }
+
+    /// Active ou désactive l'interface d'adaptateur PCIe
+    pub fn enable(&mut self, enable: bool) {
+        self.enabled = enable;
+    }
+
+    /// Active ou désactive les interruptions matérielles sur événement PCIe
+    pub fn configure_irq(&mut self, enable: bool) {
+        self.irq_enabled = enable;
+    }
+
+    /// Configure la vitesse de lien PCIe Gen
+    pub fn set_link_speed(&mut self, gen: u8) {
+        self.link_speed_gen = gen & 0x07;
+    }
+
+    /// Configure la largeur de lien PCIe (x1, x2, x4, x8, x16)
+    pub fn set_link_width(&mut self, width: u8) {
+        self.link_width = width & 0x1F;
+    }
+
+    /// Enregistre un événement de statut ou d'interruption
+    pub fn record_event(&mut self, status_bits: u32) {
+        self.adapter_status |= status_bits;
+        self.event_counter = self.event_counter.wrapping_add(1);
     }
 }
 
@@ -15993,5 +16109,47 @@ mod tests {
         assert_eq!(parsed_slp.wake_source_mask, 0x00FF);
         assert_eq!(parsed_slp.wake_event_counter, 2);
         assert_eq!(parsed_slp.power_status, 0xAA55_CC33);
+
+        // Test USB4 PCIe Adapter Configuration Interface (§7.50)
+        let mut pcie = XhciUsb4PcieAdapterConfigInterface::new(3, 4, 16);
+        assert_eq!(pcie.adapter_index, 3);
+        assert_eq!(pcie.link_speed_gen, 4);
+        assert_eq!(pcie.link_width, 16);
+        assert_eq!(pcie.event_counter, 0);
+        assert_eq!(pcie.adapter_status, 0);
+        assert!(!pcie.enabled);
+        assert!(!pcie.irq_enabled);
+
+        pcie.enable(true);
+        pcie.configure_irq(true);
+        pcie.set_link_speed(3);
+        pcie.set_link_width(8);
+        pcie.record_event(0x0001);
+        pcie.record_event(0x0002);
+        pcie.next_ptr_dwords = 68;
+
+        let encoded_pcie = pcie.encode();
+        assert_eq!(
+            encoded_pcie[0] & 0xFF,
+            XHCI_EXT_CAP_USB4_PCIE_ADAPTER_CONFIGURATION_INTERFACE as u32
+        );
+        assert_eq!((encoded_pcie[0] >> 8) & 0xFF, 68);
+        assert_eq!(encoded_pcie[1] & 0x01, 1); // enabled
+        assert_eq!(encoded_pcie[1] & 0x02, 2); // irq_enabled
+        assert_eq!((encoded_pcie[1] >> 8) & 0xFF, 3); // adapter_index
+        assert_eq!((encoded_pcie[1] >> 16) & 0x07, 3); // link_speed_gen 3
+        assert_eq!((encoded_pcie[1] >> 20) & 0x1F, 8); // link_width 8
+        assert_eq!(encoded_pcie[2], 0x0003); // adapter_status
+        assert_eq!(encoded_pcie[3], 2); // 2 events
+
+        let parsed_pcie = XhciUsb4PcieAdapterConfigInterface::parse(&encoded_pcie).unwrap();
+        assert_eq!(parsed_pcie.next_ptr_dwords, 68);
+        assert!(parsed_pcie.enabled);
+        assert!(parsed_pcie.irq_enabled);
+        assert_eq!(parsed_pcie.adapter_index, 3);
+        assert_eq!(parsed_pcie.link_speed_gen, 3);
+        assert_eq!(parsed_pcie.link_width, 8);
+        assert_eq!(parsed_pcie.adapter_status, 0x0003);
+        assert_eq!(parsed_pcie.event_counter, 2);
     }
 }

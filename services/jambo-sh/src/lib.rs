@@ -618,6 +618,9 @@ impl JamboShell {
             "sha3_512sum" | "/bin/sha3_512sum" | "bin/sha3_512sum" => {
                 self.cmd_sha3_512sum(args, out)
             }
+            "sha3_224sum" | "/bin/sha3_224sum" | "bin/sha3_224sum" => {
+                self.cmd_sha3_224sum(args, out)
+            }
             "crc32" | "/bin/crc32" | "bin/crc32" => self.cmd_crc32(args, out),
             "factor" | "/bin/factor" | "bin/factor" => self.cmd_factor(args, out),
             "timeout" | "/bin/timeout" | "bin/timeout" => self.cmd_timeout(args, out),
@@ -2575,6 +2578,43 @@ Utilitaire d'installation JamboOS (Serie 0.*.*)\n\
             (status, len)
         } else {
             let msg = b"sha3_512sum: pipe creation failed\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
+    }
+
+    fn cmd_sha3_224sum(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if let (Ok((r_out, w_out)), Ok((r_err, w_err))) =
+            (libjambo::vfs::pipe(), libjambo::vfs::pipe())
+        {
+            let code = libjambo::coreutils::run_sha3_224sum(args, 0, w_out, w_err);
+            let _ = libjambo::coreutils::sys_close(w_out);
+            let _ = libjambo::coreutils::sys_close(w_err);
+
+            let mut len = 0;
+            if code == 0 {
+                let n_out = libjambo::coreutils::sys_read(r_out, out);
+                if n_out > 0 {
+                    len = n_out as usize;
+                }
+            } else {
+                let n_err = libjambo::coreutils::sys_read(r_err, out);
+                if n_err > 0 {
+                    len = n_err as usize;
+                }
+            }
+            let _ = libjambo::coreutils::sys_close(r_out);
+            let _ = libjambo::coreutils::sys_close(r_err);
+
+            let status = if code == 0 {
+                ShellStatus::Success
+            } else {
+                ShellStatus::ExecutionFailed
+            };
+            (status, len)
+        } else {
+            let msg = b"sha3_224sum: pipe creation failed\n";
             let len = msg.len().min(out.len());
             out[..len].copy_from_slice(&msg[..len]);
             (ShellStatus::ExecutionFailed, len)
@@ -21794,5 +21834,21 @@ mod tests {
         assert_eq!(st123, ShellStatus::Success);
         let s123 = core::str::from_utf8(&out[..len123]).unwrap();
         assert!(s123.contains("/etc/hostname"));
+
+        // 57. sha3_224sum shell command
+        let (st124, len124) = shell.execute_line("sha3_224sum --help", &mut out);
+        assert_eq!(st124, ShellStatus::Success);
+        let s124 = core::str::from_utf8(&out[..len124]).unwrap();
+        assert!(s124.contains("Usage: sha3_224sum"));
+
+        let (st125, len125) = shell.execute_line("sha3_224sum --version", &mut out);
+        assert_eq!(st125, ShellStatus::Success);
+        let s125 = core::str::from_utf8(&out[..len125]).unwrap();
+        assert!(s125.contains("sha3_224sum (JamboOS coreutils)"));
+
+        let (st126, len126) = shell.execute_line("sha3_224sum /etc/hostname", &mut out);
+        assert_eq!(st126, ShellStatus::Success);
+        let s126 = core::str::from_utf8(&out[..len126]).unwrap();
+        assert!(s126.contains("/etc/hostname"));
     }
 }
