@@ -358,6 +358,8 @@ pub const XHCI_EXT_CAP_USB4_SLEEP_WAKE_NOTIFICATION: u8 = 57;
 pub const XHCI_EXT_CAP_USB4_PCIE_ADAPTER_CONFIGURATION_INTERFACE: u8 = 58;
 /// Capacité étendue xHCI 1.2 / USB4 DP Adapter Configuration Interface (§7.51)
 pub const XHCI_EXT_CAP_USB4_DP_ADAPTER_CONFIGURATION_INTERFACE: u8 = 59;
+/// Capacité étendue xHCI 1.2 / USB4 USB3 Adapter Configuration Interface (§7.52)
+pub const XHCI_EXT_CAP_USB4_USB3_ADAPTER_CONFIGURATION_INTERFACE: u8 = 60;
 
 /// Masques de registres USB Legacy Support (xHCI 1.2 Section 7.1)
 /// Registre USBLEGSUP (Offset 0x00)
@@ -6237,6 +6239,139 @@ impl XhciUsb4DpAdapterConfigInterface {
     /// Configure le nombre de voies DP (Lane Count: 1, 2, 4)
     pub fn set_lane_count(&mut self, lanes: u8) {
         self.lane_count = lanes & 0x07;
+    }
+
+    /// Enregistre un événement de statut ou d'interruption
+    pub fn record_event(&mut self, status_bits: u32) {
+        self.adapter_status |= status_bits;
+        self.event_counter = self.event_counter.wrapping_add(1);
+    }
+}
+
+/// Capacité étendue xHCI 1.2 / USB4 USB3 Adapter Configuration Interface (§7.52, Cap ID 60)
+///
+/// Permet la gestion déterministe et le contrôle direct des registres de configuration
+/// des adaptateurs USB3 SuperSpeed (USB3 Downstream / Upstream Adapters) intégrés dans les routeurs USB4.
+/// Gère la négociation SuperSpeed (Gen1 5Gbps, Gen2 10Gbps, Gen2x2 20Gbps), les états de lien U1/U2/U3
+/// et le contrôle de flux de paquets USB3 tunnelisés.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XhciUsb4Usb3AdapterConfigInterface {
+    /// Pointeur dword vers la prochaine capacité étendue (0 = fin de liste)
+    pub next_ptr_dwords: u8,
+    /// Fonctionnalité de tunneling USB3 activée dans l'adaptateur (bit 0)
+    pub enabled: bool,
+    /// Génération d'interruptions d'événement d'adaptateur USB3 activée (bit 1)
+    pub irq_enabled: bool,
+    /// Support de faible consommation LPM U1/U2 activé (bit 2)
+    pub lpm_u1_u2_enabled: bool,
+    /// Support USB 3.2 Gen2x2 dual-lane activé (bit 3)
+    pub dual_lane_enabled: bool,
+    /// Index ou numéro de l'adaptateur USB3 USB4 cible (bits 8..15)
+    pub adapter_index: u8,
+    /// Vitesse USB3 négociée (Speed: 1=Gen1x1 5Gbps, 2=Gen2x1 10Gbps, 3=Gen1x2 10Gbps, 4=Gen2x2 20Gbps)
+    pub usb3_speed: u8,
+    /// Nombre de voies USB3 actives (Lane Count: 1=Single Lane, 2=Dual Lane)
+    pub lane_count: u8,
+    /// Registre de contrôle et de statut d'adaptateur USB3 USB4 (DWORD 2)
+    pub adapter_status: u32,
+    /// Compteur total d'interruptions et d'événements de tunneling USB3 reçus (DWORD 3)
+    pub event_counter: u32,
+}
+
+impl XhciUsb4Usb3AdapterConfigInterface {
+    /// Crée une nouvelle interface de configuration d'adaptateur USB3 USB4
+    pub const fn new(adapter_index: u8, usb3_speed: u8, lane_count: u8) -> Self {
+        Self {
+            next_ptr_dwords: 0,
+            enabled: false,
+            irq_enabled: false,
+            lpm_u1_u2_enabled: true,
+            dual_lane_enabled: lane_count >= 2,
+            adapter_index,
+            usb3_speed: usb3_speed & 0x07,
+            lane_count: lane_count & 0x07,
+            adapter_status: 0,
+            event_counter: 0,
+        }
+    }
+
+    /// Parse les 4 dwords MMIO d'une capacité étendue USB4 USB3 Adapter Configuration Interface (§7.52)
+    pub const fn parse(dwords: &[u32; 4]) -> Option<Self> {
+        let cap_id = (dwords[0] & 0xFF) as u8;
+        if cap_id != XHCI_EXT_CAP_USB4_USB3_ADAPTER_CONFIGURATION_INTERFACE {
+            return None;
+        }
+
+        let next_ptr = ((dwords[0] >> 8) & 0xFF) as u8;
+        let ctrl = dwords[1];
+        let enabled = (ctrl & 0x01) != 0;
+        let irq_enabled = (ctrl & 0x02) != 0;
+        let lpm_u1_u2_enabled = (ctrl & 0x04) != 0;
+        let dual_lane_enabled = (ctrl & 0x08) != 0;
+        let adapter_index = ((ctrl >> 8) & 0xFF) as u8;
+        let usb3_speed = ((ctrl >> 16) & 0x07) as u8;
+        let lane_count = ((ctrl >> 20) & 0x07) as u8;
+
+        let adapter_status = dwords[2];
+        let event_counter = dwords[3];
+
+        Some(Self {
+            next_ptr_dwords: next_ptr,
+            enabled,
+            irq_enabled,
+            lpm_u1_u2_enabled,
+            dual_lane_enabled,
+            adapter_index,
+            usb3_speed,
+            lane_count,
+            adapter_status,
+            event_counter,
+        })
+    }
+
+    /// Encode la capacité étendue en 4 mots dwords MMIO 32-bit
+    pub const fn encode(&self) -> [u32; 4] {
+        let dw0 = (XHCI_EXT_CAP_USB4_USB3_ADAPTER_CONFIGURATION_INTERFACE as u32)
+            | ((self.next_ptr_dwords as u32) << 8);
+        let mut ctrl = ((self.adapter_index as u32) << 8)
+            | (((self.usb3_speed as u32) & 0x07) << 16)
+            | (((self.lane_count as u32) & 0x07) << 20);
+        if self.enabled {
+            ctrl |= 0x01;
+        }
+        if self.irq_enabled {
+            ctrl |= 0x02;
+        }
+        if self.lpm_u1_u2_enabled {
+            ctrl |= 0x04;
+        }
+        if self.dual_lane_enabled {
+            ctrl |= 0x08;
+        }
+        let dw2 = self.adapter_status;
+        let dw3 = self.event_counter;
+        [dw0, ctrl, dw2, dw3]
+    }
+
+    /// Active ou désactive le tunneling de l'adaptateur USB3
+    pub fn enable(&mut self, enable: bool) {
+        self.enabled = enable;
+    }
+
+    /// Active ou désactive les interruptions matérielles sur événement USB3
+    pub fn configure_irq(&mut self, enable: bool) {
+        self.irq_enabled = enable;
+    }
+
+    /// Configure la vitesse négociée USB3 (1=Gen1x1 5G, 2=Gen2x1 10G, 3=Gen1x2 10G, 4=Gen2x2 20G)
+    pub fn set_usb3_speed(&mut self, speed: u8) {
+        self.usb3_speed = speed & 0x07;
+    }
+
+    /// Configure le nombre de voies actives (1=single, 2=dual)
+    pub fn set_lane_count(&mut self, lanes: u8) {
+        self.lane_count = lanes & 0x07;
+        self.dual_lane_enabled = self.lane_count >= 2;
     }
 
     /// Enregistre un événement de statut ou d'interruption
@@ -16309,5 +16444,54 @@ mod tests {
         assert_eq!(parsed_dp.lane_count, 2);
         assert_eq!(parsed_dp.adapter_status, 0x000C);
         assert_eq!(parsed_dp.event_counter, 2);
+
+        // Test USB4 USB3 Adapter Configuration Interface (§7.52)
+        let mut usb3_ad = XhciUsb4Usb3AdapterConfigInterface::new(5, 4, 2);
+        assert_eq!(usb3_ad.adapter_index, 5);
+        assert_eq!(usb3_ad.usb3_speed, 4); // Gen2x2 20Gbps
+        assert_eq!(usb3_ad.lane_count, 2); // Dual-lane
+        assert!(usb3_ad.dual_lane_enabled);
+        assert!(usb3_ad.lpm_u1_u2_enabled);
+        assert_eq!(usb3_ad.event_counter, 0);
+        assert_eq!(usb3_ad.adapter_status, 0);
+        assert!(!usb3_ad.enabled);
+        assert!(!usb3_ad.irq_enabled);
+
+        usb3_ad.enable(true);
+        usb3_ad.configure_irq(true);
+        usb3_ad.set_usb3_speed(2); // Gen2x1 10Gbps
+        usb3_ad.set_lane_count(1); // Single lane
+        assert!(!usb3_ad.dual_lane_enabled);
+        usb3_ad.record_event(0x0001);
+        usb3_ad.record_event(0x0010);
+        usb3_ad.next_ptr_dwords = 80;
+
+        let encoded_usb3 = usb3_ad.encode();
+        assert_eq!(
+            encoded_usb3[0] & 0xFF,
+            XHCI_EXT_CAP_USB4_USB3_ADAPTER_CONFIGURATION_INTERFACE as u32
+        );
+        assert_eq!((encoded_usb3[0] >> 8) & 0xFF, 80);
+        assert_eq!(encoded_usb3[1] & 0x01, 1); // enabled
+        assert_eq!(encoded_usb3[1] & 0x02, 2); // irq_enabled
+        assert_eq!(encoded_usb3[1] & 0x04, 4); // lpm_u1_u2_enabled
+        assert_eq!(encoded_usb3[1] & 0x08, 0); // dual_lane_enabled false
+        assert_eq!((encoded_usb3[1] >> 8) & 0xFF, 5); // adapter_index 5
+        assert_eq!((encoded_usb3[1] >> 16) & 0x07, 2); // usb3_speed 2
+        assert_eq!((encoded_usb3[1] >> 20) & 0x07, 1); // lane_count 1
+        assert_eq!(encoded_usb3[2], 0x0011); // adapter_status
+        assert_eq!(encoded_usb3[3], 2); // 2 events
+
+        let parsed_usb3 = XhciUsb4Usb3AdapterConfigInterface::parse(&encoded_usb3).unwrap();
+        assert_eq!(parsed_usb3.next_ptr_dwords, 80);
+        assert!(parsed_usb3.enabled);
+        assert!(parsed_usb3.irq_enabled);
+        assert!(parsed_usb3.lpm_u1_u2_enabled);
+        assert!(!parsed_usb3.dual_lane_enabled);
+        assert_eq!(parsed_usb3.adapter_index, 5);
+        assert_eq!(parsed_usb3.usb3_speed, 2);
+        assert_eq!(parsed_usb3.lane_count, 1);
+        assert_eq!(parsed_usb3.adapter_status, 0x0011);
+        assert_eq!(parsed_usb3.event_counter, 2);
     }
 }

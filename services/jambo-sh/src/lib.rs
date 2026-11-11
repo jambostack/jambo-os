@@ -624,6 +624,12 @@ impl JamboShell {
             "sha3_384sum" | "/bin/sha3_384sum" | "bin/sha3_384sum" => {
                 self.cmd_sha3_384sum(args, out)
             }
+            "shake128sum" | "/bin/shake128sum" | "bin/shake128sum" => {
+                self.cmd_shake128sum(args, out)
+            }
+            "shake256sum" | "/bin/shake256sum" | "bin/shake256sum" => {
+                self.cmd_shake256sum(args, out)
+            }
             "crc32" | "/bin/crc32" | "bin/crc32" => self.cmd_crc32(args, out),
             "factor" | "/bin/factor" | "bin/factor" => self.cmd_factor(args, out),
             "timeout" | "/bin/timeout" | "bin/timeout" => self.cmd_timeout(args, out),
@@ -2655,6 +2661,80 @@ Utilitaire d'installation JamboOS (Serie 0.*.*)\n\
             (status, len)
         } else {
             let msg = b"sha3_384sum: pipe creation failed\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
+    }
+
+    fn cmd_shake128sum(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if let (Ok((r_out, w_out)), Ok((r_err, w_err))) =
+            (libjambo::vfs::pipe(), libjambo::vfs::pipe())
+        {
+            let code = libjambo::coreutils::run_shake128sum(args, 0, w_out, w_err);
+            let _ = libjambo::coreutils::sys_close(w_out);
+            let _ = libjambo::coreutils::sys_close(w_err);
+
+            let mut len = 0;
+            if code == 0 {
+                let n_out = libjambo::coreutils::sys_read(r_out, out);
+                if n_out > 0 {
+                    len = n_out as usize;
+                }
+            } else {
+                let n_err = libjambo::coreutils::sys_read(r_err, out);
+                if n_err > 0 {
+                    len = n_err as usize;
+                }
+            }
+            let _ = libjambo::coreutils::sys_close(r_out);
+            let _ = libjambo::coreutils::sys_close(r_err);
+
+            let status = if code == 0 {
+                ShellStatus::Success
+            } else {
+                ShellStatus::ExecutionFailed
+            };
+            (status, len)
+        } else {
+            let msg = b"shake128sum: pipe creation failed\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
+    }
+
+    fn cmd_shake256sum(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if let (Ok((r_out, w_out)), Ok((r_err, w_err))) =
+            (libjambo::vfs::pipe(), libjambo::vfs::pipe())
+        {
+            let code = libjambo::coreutils::run_shake256sum(args, 0, w_out, w_err);
+            let _ = libjambo::coreutils::sys_close(w_out);
+            let _ = libjambo::coreutils::sys_close(w_err);
+
+            let mut len = 0;
+            if code == 0 {
+                let n_out = libjambo::coreutils::sys_read(r_out, out);
+                if n_out > 0 {
+                    len = n_out as usize;
+                }
+            } else {
+                let n_err = libjambo::coreutils::sys_read(r_err, out);
+                if n_err > 0 {
+                    len = n_err as usize;
+                }
+            }
+            let _ = libjambo::coreutils::sys_close(r_out);
+            let _ = libjambo::coreutils::sys_close(r_err);
+
+            let status = if code == 0 {
+                ShellStatus::Success
+            } else {
+                ShellStatus::ExecutionFailed
+            };
+            (status, len)
+        } else {
+            let msg = b"shake256sum: pipe creation failed\n";
             let len = msg.len().min(out.len());
             out[..len].copy_from_slice(&msg[..len]);
             (ShellStatus::ExecutionFailed, len)
@@ -21906,5 +21986,37 @@ mod tests {
         assert_eq!(st129, ShellStatus::Success);
         let s129 = core::str::from_utf8(&out[..len129]).unwrap();
         assert!(s129.contains("/etc/hostname"));
+
+        // 59. shake128sum shell command
+        let (st130, len130) = shell.execute_line("shake128sum --help", &mut out);
+        assert_eq!(st130, ShellStatus::Success);
+        let s130 = core::str::from_utf8(&out[..len130]).unwrap();
+        assert!(s130.contains("Usage: shake128sum"));
+
+        let (st131, len131) = shell.execute_line("shake128sum --version", &mut out);
+        assert_eq!(st131, ShellStatus::Success);
+        let s131 = core::str::from_utf8(&out[..len131]).unwrap();
+        assert!(s131.contains("shake128sum (JamboOS coreutils)"));
+
+        let (st132, len132) = shell.execute_line("shake128sum /etc/hostname", &mut out);
+        assert_eq!(st132, ShellStatus::Success);
+        let s132 = core::str::from_utf8(&out[..len132]).unwrap();
+        assert!(s132.contains("/etc/hostname"));
+
+        // 60. shake256sum shell command
+        let (st133, len133) = shell.execute_line("shake256sum --help", &mut out);
+        assert_eq!(st133, ShellStatus::Success);
+        let s133 = core::str::from_utf8(&out[..len133]).unwrap();
+        assert!(s133.contains("Usage: shake256sum"));
+
+        let (st134, len134) = shell.execute_line("shake256sum --version", &mut out);
+        assert_eq!(st134, ShellStatus::Success);
+        let s134 = core::str::from_utf8(&out[..len134]).unwrap();
+        assert!(s134.contains("shake256sum (JamboOS coreutils)"));
+
+        let (st135, len135) = shell.execute_line("shake256sum /etc/hostname", &mut out);
+        assert_eq!(st135, ShellStatus::Success);
+        let s135 = core::str::from_utf8(&out[..len135]).unwrap();
+        assert!(s135.contains("/etc/hostname"));
     }
 }
