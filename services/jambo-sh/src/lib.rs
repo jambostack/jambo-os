@@ -622,6 +622,7 @@ impl JamboShell {
             "hostid" | "/bin/hostid" | "bin/hostid" => self.cmd_hostid(args, out),
             "arch" | "/bin/arch" | "bin/arch" => self.cmd_arch(args, out),
             "nproc" | "/bin/nproc" | "bin/nproc" => self.cmd_nproc(args, out),
+            "users" | "/bin/users" | "bin/users" => self.cmd_users(args, out),
             "cow" | "/bin/cow" | "bin/cow" => self.cmd_cow(args, out),
             "version" => self.cmd_version(out),
             "uptime" => self.cmd_uptime(out),
@@ -2770,6 +2771,43 @@ Utilitaire d'installation JamboOS (Serie 0.*.*)\n\
             (status, len)
         } else {
             let msg = b"nproc: pipe creation failed\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
+    }
+
+    fn cmd_users(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if let (Ok((r_out, w_out)), Ok((r_err, w_err))) =
+            (libjambo::vfs::pipe(), libjambo::vfs::pipe())
+        {
+            let code = libjambo::coreutils::run_users(args, w_out, w_err);
+            let _ = libjambo::coreutils::sys_close(w_out);
+            let _ = libjambo::coreutils::sys_close(w_err);
+
+            let mut len = 0;
+            if code == 0 {
+                let n_out = libjambo::coreutils::sys_read(r_out, out);
+                if n_out > 0 {
+                    len = n_out as usize;
+                }
+            } else {
+                let n_err = libjambo::coreutils::sys_read(r_err, out);
+                if n_err > 0 {
+                    len = n_err as usize;
+                }
+            }
+            let _ = libjambo::coreutils::sys_close(r_out);
+            let _ = libjambo::coreutils::sys_close(r_err);
+
+            let status = if code == 0 {
+                ShellStatus::Success
+            } else {
+                ShellStatus::ExecutionFailed
+            };
+            (status, len)
+        } else {
+            let msg = b"users: pipe creation failed\n";
             let len = msg.len().min(out.len());
             out[..len].copy_from_slice(&msg[..len]);
             (ShellStatus::ExecutionFailed, len)
@@ -20470,5 +20508,19 @@ mod tests {
 
         let (st55, _len55) = shell.execute_line("nproc extra_operand", &mut out);
         assert_eq!(st55, ShellStatus::ExecutionFailed);
+
+        // 36. users shell command
+        let (st56, len56) = shell.execute_line("users", &mut out);
+        assert_eq!(st56, ShellStatus::Success);
+        let s56 = core::str::from_utf8(&out[..len56]).unwrap();
+        assert_eq!(s56, "root\n");
+
+        let (st57, len57) = shell.execute_line("users --version", &mut out);
+        assert_eq!(st57, ShellStatus::Success);
+        let s57 = core::str::from_utf8(&out[..len57]).unwrap();
+        assert!(s57.contains("users"));
+
+        let (st58, _len58) = shell.execute_line("users extra_operand", &mut out);
+        assert_eq!(st58, ShellStatus::ExecutionFailed);
     }
 }

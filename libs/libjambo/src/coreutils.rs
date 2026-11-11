@@ -13389,6 +13389,7 @@ pub fn execute_coreutils_command(
         "hostid" => run_hostid(args, out_fd, err_fd),
         "arch" => run_arch(args, out_fd, err_fd),
         "nproc" => run_nproc(args, out_fd, err_fd),
+        "users" => run_users(args, out_fd, err_fd),
         _ => {
             let _ = sys_write(err_fd, cmd.as_bytes());
             let _ = sys_write(err_fd, b": command not found\n");
@@ -14754,6 +14755,7 @@ pub fn run_xargs(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
             "hostid" => run_hostid(effective_sub_args, out_fd, err_fd),
             "arch" => run_arch(effective_sub_args, out_fd, err_fd),
             "nproc" => run_nproc(effective_sub_args, out_fd, err_fd),
+            "users" => run_users(effective_sub_args, out_fd, err_fd),
             _ => {
                 let _ = sys_write(err_fd, b"xargs: ");
                 let _ = sys_write(err_fd, target_cmd.as_bytes());
@@ -20106,6 +20108,46 @@ Print the number of processing units available.\n\n\
     0
 }
 
+/// Utilitaire POSIX / GNU `users` (Print login names of users currently logged in)
+///
+/// Dans le cadre du micro-noyau et de la session Ring 3 POSIX, renvoie la liste
+/// des noms d'utilisateurs connectés (ex: "root\n" ou "user\n" selon euid).
+pub fn run_users(args: &[&str], out_fd: i32, err_fd: i32) -> i32 {
+    if let Some(&arg) = args.first() {
+        if arg == "--help" {
+            let _ = sys_write(
+                out_fd,
+                b"Usage: users [OPTION]... [FILE]\n\
+Output who is currently logged in according to FILE.\n\
+If FILE is not specified, current active users are printed.\n\n\
+      --help        display this help and exit\n\
+      --version     output version information and exit\n",
+            );
+            return 0;
+        } else if arg == "--version" {
+            let _ = sys_write(out_fd, b"users (jambo-coreutils) 0.1.0\n");
+            return 0;
+        } else if arg.starts_with('-') && arg != "-" {
+            let _ = sys_write(err_fd, b"users: unrecognized option '");
+            let _ = sys_write(err_fd, arg.as_bytes());
+            let _ = sys_write(err_fd, b"'\nTry 'users --help' for more information.\n");
+            return 1;
+        } else {
+            // Ignorer un fichier utmp optionnel ou signaler
+            let _ = sys_write(err_fd, b"users: extra operand '");
+            let _ = sys_write(err_fd, arg.as_bytes());
+            let _ = sys_write(err_fd, b"'\nTry 'users --help' for more information.\n");
+            return 1;
+        }
+    }
+
+    let euid = crate::vfs::geteuid();
+    let name = if euid == 0 { "root" } else { "user" };
+    let _ = sys_write(out_fd, name.as_bytes());
+    let _ = sys_write(out_fd, b"\n");
+    0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -24552,5 +24594,34 @@ Chaque processus dispose de son propre CR3 sans aucun privilege materiel direct.
         // Extra operand
         let code_n4 = run_nproc(&["extra"], 1, 2);
         assert_eq!(code_n4, 1);
+
+        // 15. Test run_users
+        let (out_ru1, out_wu1) = crate::vfs::pipe().unwrap();
+        let code_u1 = run_users(&[], out_wu1, 2);
+        sys_close(out_wu1);
+        assert_eq!(code_u1, 0);
+        let mut bufu1 = [0u8; 64];
+        let nu1 = sys_read(out_ru1, &mut bufu1);
+        sys_close(out_ru1);
+        assert_eq!(
+            core::str::from_utf8(&bufu1[..nu1 as usize]).unwrap(),
+            "root\n"
+        );
+
+        // Option --version
+        let (out_ru2, out_wu2) = crate::vfs::pipe().unwrap();
+        let code_u2 = run_users(&["--version"], out_wu2, 2);
+        sys_close(out_wu2);
+        assert_eq!(code_u2, 0);
+        let mut bufu2 = [0u8; 64];
+        let nu2 = sys_read(out_ru2, &mut bufu2);
+        sys_close(out_ru2);
+        assert!(core::str::from_utf8(&bufu2[..nu2 as usize])
+            .unwrap()
+            .contains("users"));
+
+        // Extra operand
+        let code_u3 = run_users(&["extra"], 1, 2);
+        assert_eq!(code_u3, 1);
     }
 }

@@ -307,6 +307,7 @@ pub const XHCI_EXT_CAP_PORT_PROTOCOL_HIERARCHY: u8 = 19;
 pub const XHCI_EXT_CAP_EXTENDED_CAPABILITY_TABLE: u8 = 20;
 pub const XHCI_EXT_CAP_DEVICE_VIRTUALIZATION: u8 = 21;
 pub const XHCI_EXT_CAP_HUB_VIRTUALIZATION: u8 = 22;
+pub const XHCI_EXT_CAP_CONTROLLER_CAPABILITY_CONTEXT: u8 = 23;
 
 /// Masques de registres USB Legacy Support (xHCI 1.2 Section 7.1)
 /// Registre USBLEGSUP (Offset 0x00)
@@ -1807,6 +1808,123 @@ impl XhciHubVirtualization {
     /// Vérifie si un numéro de port downstream donné (1-based) est valide et routable
     pub const fn is_downstream_port_valid(&self, port_idx: u8) -> bool {
         self.enabled && port_idx > 0 && port_idx <= self.num_downstream_ports
+    }
+}
+
+/// Capacité Étendue xHCI 1.2 §7.15 : USB Controller Capability Context Structure
+///
+/// Modélise la structure de contexte de capacité de contrôleur xHCI et les descripteurs
+/// étendus du Root Hub (Root Hub Descriptor Extensions).
+/// Permet l'exposition précise des paramètres de topologie du concentrateur racine,
+/// le support du partitionnement matériel multi-ports, des descripteurs de puissance par port,
+/// et les extensions d'identification de topologie USB 2.0 / USB 3.x / USB4.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XhciControllerCapabilityContext {
+    /// Pointeur dword vers la prochaine capacité étendue (0 = fin de liste)
+    pub next_ptr_dwords: u8,
+    /// Indique si les extensions du descripteur Root Hub sont activées
+    pub enabled: bool,
+    /// Nombre total de ports racine (Root Ports) supervisés (0..=255)
+    pub root_port_count: u8,
+    /// Nombre de descripteurs de sous-ensembles de ports (Root Hub Partitions)
+    pub partition_count: u8,
+    /// Registre de contrôle des capacités du contrôleur (CTRL_CAP_CTRL)
+    pub cap_control: u32,
+    /// Registre de statut et caractéristiques Root Hub (CTRL_CAP_STS)
+    pub cap_status: u32,
+    /// Masque de configuration d'alimentation et de signalisation Root Hub
+    pub root_hub_power_flags: u16,
+}
+
+impl Default for XhciControllerCapabilityContext {
+    fn default() -> Self {
+        Self::new(4, 1)
+    }
+}
+
+impl XhciControllerCapabilityContext {
+    /// Crée un nouveau contexte de capacité de contrôleur xHCI 1.2 §7.15
+    pub const fn new(root_port_count: u8, partition_count: u8) -> Self {
+        let partitions = if partition_count == 0 {
+            1
+        } else {
+            partition_count
+        };
+        Self {
+            next_ptr_dwords: 0,
+            enabled: false,
+            root_port_count,
+            partition_count: partitions,
+            cap_control: 0,
+            cap_status: 0,
+            root_hub_power_flags: 0,
+        }
+    }
+
+    /// Décode le contexte de capacité de contrôleur à partir de 4 dwords MMIO
+    pub fn parse(dwords: &[u32]) -> Option<Self> {
+        if dwords.len() < 4 {
+            return None;
+        }
+        let cap_id = (dwords[0] & 0xFF) as u8;
+        if cap_id != XHCI_EXT_CAP_CONTROLLER_CAPABILITY_CONTEXT {
+            return None;
+        }
+        let next_ptr = ((dwords[0] >> 8) & 0xFF) as u8;
+        let root_port_count = ((dwords[0] >> 16) & 0xFF) as u8;
+        let partition_count = (((dwords[0] >> 24) & 0xFF) as u8).max(1);
+
+        let ctrl = dwords[1];
+        let sts = dwords[2];
+        let pwr = (dwords[3] & 0xFFFF) as u16;
+        let enabled = (ctrl & 0x01) != 0;
+
+        Some(Self {
+            next_ptr_dwords: next_ptr,
+            enabled,
+            root_port_count,
+            partition_count,
+            cap_control: ctrl,
+            cap_status: sts,
+            root_hub_power_flags: pwr,
+        })
+    }
+
+    /// Encode le contexte de capacité de contrôleur en 4 mots dwords MMIO 32-bit
+    pub const fn encode(&self) -> [u32; 4] {
+        let dw0 = (XHCI_EXT_CAP_CONTROLLER_CAPABILITY_CONTEXT as u32)
+            | ((self.next_ptr_dwords as u32) << 8)
+            | ((self.root_port_count as u32) << 16)
+            | ((self.partition_count as u32) << 24);
+        let dw1 = (self.cap_control & !0x01) | (if self.enabled { 1 } else { 0 });
+        let dw2 = self.cap_status;
+        let dw3 = self.root_hub_power_flags as u32;
+        [dw0, dw1, dw2, dw3]
+    }
+
+    /// Active ou désactive le contexte d'extension Root Hub
+    pub fn set_enabled(&mut self, enable: bool) {
+        self.enabled = enable;
+        if enable {
+            self.cap_control |= 0x01;
+        } else {
+            self.cap_control &= !0x01;
+        }
+    }
+
+    /// Vérifie si un numéro de port racine (1-based) est valide dans le descripteur Root Hub
+    pub const fn is_root_port_valid(&self, port_idx: u8) -> bool {
+        self.enabled && port_idx > 0 && port_idx <= self.root_port_count
+    }
+
+    /// Vérifie si une partition matérielle Root Hub (0-based) est valide
+    pub const fn is_partition_valid(&self, partition_idx: u8) -> bool {
+        partition_idx < self.partition_count
+    }
+
+    /// Définit les drapeaux de gestion d'énergie Root Hub
+    pub fn set_power_flags(&mut self, flags: u16) {
+        self.root_hub_power_flags = flags;
     }
 }
 
@@ -10317,5 +10435,48 @@ mod tests {
         assert_eq!(parsed_hv.assigned_secondary_id, 3);
         assert!(parsed_hv.enabled);
         assert_eq!(parsed_hv.hub_status, 0x5678);
+
+        // 24. xHCI 1.2 §7.15 Controller Capability Context & Root Hub Descriptor Extensions
+        let mut ctrl_cap = XhciControllerCapabilityContext::new(16, 4);
+        assert_eq!(ctrl_cap.root_port_count, 16);
+        assert_eq!(ctrl_cap.partition_count, 4);
+        assert!(!ctrl_cap.enabled);
+        assert!(!ctrl_cap.is_root_port_valid(1));
+
+        ctrl_cap.set_enabled(true);
+        assert!(ctrl_cap.enabled);
+        assert!(ctrl_cap.is_root_port_valid(1));
+        assert!(ctrl_cap.is_root_port_valid(16));
+        assert!(!ctrl_cap.is_root_port_valid(0)); // port 0 invalide
+        assert!(!ctrl_cap.is_root_port_valid(17)); // hors limite
+
+        assert!(ctrl_cap.is_partition_valid(0));
+        assert!(ctrl_cap.is_partition_valid(3));
+        assert!(!ctrl_cap.is_partition_valid(4));
+
+        ctrl_cap.set_power_flags(0x00A5);
+        assert_eq!(ctrl_cap.root_hub_power_flags, 0x00A5);
+
+        ctrl_cap.next_ptr_dwords = 24;
+        ctrl_cap.cap_status = 0x9ABC;
+        let encoded_cc = ctrl_cap.encode();
+        assert_eq!(
+            encoded_cc[0] & 0xFF,
+            XHCI_EXT_CAP_CONTROLLER_CAPABILITY_CONTEXT as u32
+        );
+        assert_eq!((encoded_cc[0] >> 8) & 0xFF, 24);
+        assert_eq!((encoded_cc[0] >> 16) & 0xFF, 16);
+        assert_eq!((encoded_cc[0] >> 24) & 0xFF, 4);
+        assert_eq!(encoded_cc[1] & 0x01, 1);
+        assert_eq!(encoded_cc[2], 0x9ABC);
+        assert_eq!(encoded_cc[3], 0x00A5);
+
+        let parsed_cc = XhciControllerCapabilityContext::parse(&encoded_cc).unwrap();
+        assert_eq!(parsed_cc.next_ptr_dwords, 24);
+        assert_eq!(parsed_cc.root_port_count, 16);
+        assert_eq!(parsed_cc.partition_count, 4);
+        assert!(parsed_cc.enabled);
+        assert_eq!(parsed_cc.cap_status, 0x9ABC);
+        assert_eq!(parsed_cc.root_hub_power_flags, 0x00A5);
     }
 }

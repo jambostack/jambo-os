@@ -422,7 +422,12 @@ name = "nproc"
 path = "src/bin/nproc.rs"
 test = false
 
-# 83 utilitaires Ring 3
+[[bin]]
+name = "users"
+path = "src/bin/users.rs"
+test = false
+
+# 84 utilitaires Ring 3
 
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }
