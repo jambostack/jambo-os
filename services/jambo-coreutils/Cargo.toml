@@ -342,5 +342,10 @@ name = "csplit"
 path = "src/bin/csplit.rs"
 test = false
 
+[[bin]]
+name = "join"
+path = "src/bin/join.rs"
+test = false
+
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }

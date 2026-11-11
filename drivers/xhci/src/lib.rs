@@ -637,6 +637,89 @@ impl PortLinkInfo {
     }
 }
 
+// ============================================================================
+// Registre PORTHLPMC (Port Hardware LPM Control) - xHCI 1.2 section 5.4.11
+// ============================================================================
+
+// Bits HLE (Hardware LPM Enable, bit 0) : active le contrôle matériel LPM
+// Bits L1Timeout (bits 15:8) : délai d'inactivité avant transition L1 (unité = 128 μs)
+// Bits BESLD (Best Effort Service Latency Deep, bits 11:8) : latence de service optimale profonde
+// Bits HirdBesl (HIRD/BESL, bits 7:4) : valeur HIRD/BESL pour LPM L1
+// Bits L1DS (L1 Device Slot, bits 23:16) : slot de périphérique pour LPM L1
+// Bits HLE (Hardware LPM Enable, bit 0)
+
+/// Hardware LPM Enable (HLE, bit 0 de PORTHLPMC) : active la gestion matérielle de l'état de lien L1
+pub const PORTHLPMC_HLE_BIT: u32 = 1 << 0;
+
+/// Décalage et masque HIRD/BESL (bits 5:2 de PORTHLPMC) : valeur HIRD ou BESL pour la négociation LPM L1
+pub const PORTHLPMC_HIRD_BESL_SHIFT: u32 = 2;
+pub const PORTHLPMC_HIRD_BESL_MASK: u32 = 0xF << PORTHLPMC_HIRD_BESL_SHIFT;
+
+/// Décalage et masque L1 Timeout (bits 15:8 de PORTHLPMC) : délai d'inactivité avant transition L1, en unités de 128 μs
+pub const PORTHLPMC_L1_TIMEOUT_SHIFT: u32 = 8;
+pub const PORTHLPMC_L1_TIMEOUT_MASK: u32 = 0xFF << PORTHLPMC_L1_TIMEOUT_SHIFT;
+
+/// Décalage et masque Best Effort Service Latency Deep (bits 19:16 de PORTHLPMC) : latence BESLD pour LPM
+pub const PORTHLPMC_BEST_EFFORT_SVC_LATENCY_SHIFT: u32 = 16;
+pub const PORTHLPMC_BEST_EFFORT_SVC_LATENCY_MASK: u32 =
+    0xF << PORTHLPMC_BEST_EFFORT_SVC_LATENCY_SHIFT;
+
+/// Paramètres de contrôle matériel USB 3.1 LPM décodés depuis le registre PORTHLPMC (section 5.4.11).
+///
+/// Ce registre contrôle la gestion automatique des transitions de lien L1 (USB 2.0 LPM) par le
+/// matériel xHCI, permettant de réduire la consommation énergétique sans intervention logicielle
+/// pour chaque transition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct PortHlpmc {
+    /// Active la gestion matérielle LPM (Hardware LPM Enable, bit 0)
+    pub hle_enabled: bool,
+    /// Valeur HIRD/BESL négociée pour la transition L1 (bits 5:2, 4 bits)
+    pub hird_besl: u8,
+    /// Délai d'inactivité avant transition automatique en L1 (bits 15:8), en unités de 128 μs
+    pub l1_timeout_128us: u8,
+    /// Latence de service optimale profonde BESLD (bits 19:16, 4 bits)
+    pub best_effort_latency: u8,
+}
+
+impl PortHlpmc {
+    /// Décode la valeur brute 32-bit lue depuis le registre PORTHLPMC.
+    pub const fn parse(raw: u32) -> Self {
+        let hle_enabled = (raw & PORTHLPMC_HLE_BIT) != 0;
+        let hird_besl = ((raw & PORTHLPMC_HIRD_BESL_MASK) >> PORTHLPMC_HIRD_BESL_SHIFT) as u8;
+        let l1_timeout_128us =
+            ((raw & PORTHLPMC_L1_TIMEOUT_MASK) >> PORTHLPMC_L1_TIMEOUT_SHIFT) as u8;
+        let best_effort_latency = ((raw & PORTHLPMC_BEST_EFFORT_SVC_LATENCY_MASK)
+            >> PORTHLPMC_BEST_EFFORT_SVC_LATENCY_SHIFT) as u8;
+        Self {
+            hle_enabled,
+            hird_besl,
+            l1_timeout_128us,
+            best_effort_latency,
+        }
+    }
+
+    /// Encode la structure en valeur de registre PORTHLPMC 32-bit.
+    pub const fn encode(&self) -> u32 {
+        let hle = if self.hle_enabled {
+            PORTHLPMC_HLE_BIT
+        } else {
+            0
+        };
+        let hird =
+            ((self.hird_besl as u32) << PORTHLPMC_HIRD_BESL_SHIFT) & PORTHLPMC_HIRD_BESL_MASK;
+        let timeout = ((self.l1_timeout_128us as u32) << PORTHLPMC_L1_TIMEOUT_SHIFT)
+            & PORTHLPMC_L1_TIMEOUT_MASK;
+        let besld = ((self.best_effort_latency as u32) << PORTHLPMC_BEST_EFFORT_SVC_LATENCY_SHIFT)
+            & PORTHLPMC_BEST_EFFORT_SVC_LATENCY_MASK;
+        hle | hird | timeout | besld
+    }
+
+    /// Retourne le délai d'inactivité L1 en microsecondes (l1_timeout_128us × 128).
+    pub const fn l1_timeout_us(&self) -> u32 {
+        self.l1_timeout_128us as u32 * 128
+    }
+}
+
 /// Masque RW1C (Read-Write 1 to Clear) regroupant tous les bits de changement d'état xHCI
 pub const PORTSC_ALL_CHANGES_MASK: u32 =
     PORTSC_CSC | PORTSC_PEC | PORTSC_WRC | PORTSC_OCC | PORTSC_PRC | PORTSC_PLC | PORTSC_CEC;
@@ -5016,6 +5099,72 @@ impl XhciController {
         Ok(())
     }
 
+    /// Calcule l'adresse MMIO du registre PORTHLPMC pour le port donné (1-based).
+    ///
+    /// Selon la spec xHCI 1.2, les registres de port commencent à `op_base + 0x400`,
+    /// chaque groupe de port occupe 0x10 octets, et PORTHLPMC est à l'offset 0x0C.
+    ///
+    /// # Panics
+    ///
+    /// Panique si `port_id == 0` (les ports sont numérotés à partir de 1).
+    #[inline]
+    fn porthlpmc_addr(&self, port_id: u8) -> u64 {
+        debug_assert!(port_id >= 1, "port_id est 1-based (>= 1)");
+        let op_base = self.bar0_base + self.cap_length as u64;
+        op_base + 0x400 + (port_id as u64 - 1) * 0x10 + 0x0C
+    }
+
+    /// Lit le registre PORTHLPMC du port spécifié et retourne les paramètres LPM décodés.
+    ///
+    /// # Safety (contrat SAFETY interne)
+    ///
+    /// Cette fonction effectue une lecture volatile MMIO. L'appelant doit s'assurer que
+    /// `bar0_base` pointe vers un espace MMIO xHCI valide et mappé, et que `port_id` est
+    /// un numéro de port valide pour ce contrôleur (1 ≤ port_id ≤ max_ports).
+    pub fn read_port_hlpmc(&self, port: u8) -> PortHlpmc {
+        if port == 0 || port > self.max_ports {
+            return PortHlpmc::default();
+        }
+        let addr = self.porthlpmc_addr(port);
+        // SAFETY: bar0_base est initialisé via init() depuis un BAR PCI valide et mappé
+        // en MMIO. L'adresse calculée pointe vers le registre PORTHLPMC du port demandé,
+        // dans l'espace opérationnel xHCI. La lecture volatile garantit l'absence de
+        // réordonnancement par le compilateur.
+        let raw = unsafe { core::ptr::read_volatile(addr as *const u32) };
+        PortHlpmc::parse(raw)
+    }
+
+    /// Configure la gestion matérielle LPM (Link Power Management) USB 3.1 sur un port xHCI.
+    ///
+    /// Active ou désactive le Hardware LPM Enable (HLE) et règle le délai d'inactivité
+    /// avant transition automatique en état L1 (`l1_timeout_128us` × 128 μs).
+    ///
+    /// # Errors
+    ///
+    /// Retourne [`SysError::InvalidArgument`] si `port` est hors de la plage valide.
+    pub fn configure_port_lpm(
+        &mut self,
+        port: u8,
+        enable: bool,
+        l1_timeout_128us: u8,
+    ) -> Result<(), SysError> {
+        if port == 0 || port > self.max_ports {
+            return Err(SysError::InvalidArgument);
+        }
+        let addr = self.porthlpmc_addr(port);
+        // SAFETY: bar0_base est initialisé via init() depuis un BAR PCI valide et mappé
+        // en MMIO. L'adresse calculée pointe vers le registre PORTHLPMC du port demandé.
+        // La lecture-modification-écriture volatile garantit la cohérence avec le matériel.
+        let raw = unsafe { core::ptr::read_volatile(addr as *const u32) };
+        let mut hlpmc = PortHlpmc::parse(raw);
+        hlpmc.hle_enabled = enable;
+        hlpmc.l1_timeout_128us = l1_timeout_128us;
+        // SAFETY: même contrat que la lecture ci-dessus. L'écriture volatile dans le
+        // registre PORTHLPMC est atomique au sens matériel (registre 32-bit aligné).
+        unsafe { core::ptr::write_volatile(addr as *mut u32, hlpmc.encode()) };
+        Ok(())
+    }
+
     /// Traite un TRB de changement de statut de port (Port Status Change Event, Type 34)
     /// et retourne l'événement de détection à chaud (Hot-Plug) avec télémétrie CSC/PRC.
     pub fn handle_port_status_change_trb(
@@ -7087,5 +7236,70 @@ mod tests {
         assert_eq!(li.to_raw(), raw_li);
         assert!(!li.is_degraded(10));
         assert!(li.is_degraded(5));
+    }
+
+    #[test]
+    fn test_porthlpmc_lpm_control() {
+        // 1. Vérification du round-trip parse/encode avec tous les champs
+        let hlpmc_full = PortHlpmc {
+            hle_enabled: true,
+            hird_besl: 0xA,           // 4 bits, valeur 10
+            l1_timeout_128us: 0x5,    // délai = 5 × 128 = 640 μs
+            best_effort_latency: 0x3, // BESLD = 3
+        };
+        let encoded = hlpmc_full.encode();
+        let decoded = PortHlpmc::parse(encoded);
+        assert_eq!(decoded, hlpmc_full, "round-trip parse/encode PORTHLPMC");
+
+        // 2. Vérification du calcul de timeout en μs
+        assert_eq!(hlpmc_full.l1_timeout_us(), 640);
+
+        let hlpmc_zero = PortHlpmc {
+            hle_enabled: false,
+            hird_besl: 0,
+            l1_timeout_128us: 0,
+            best_effort_latency: 0,
+        };
+        assert_eq!(hlpmc_zero.encode(), 0);
+        assert_eq!(hlpmc_zero.l1_timeout_us(), 0);
+
+        // 3. Vérification des masques de bits individuels
+        // HLE seul (bit 0)
+        let raw_hle = PORTHLPMC_HLE_BIT;
+        let parsed_hle = PortHlpmc::parse(raw_hle);
+        assert!(parsed_hle.hle_enabled);
+        assert_eq!(parsed_hle.hird_besl, 0);
+        assert_eq!(parsed_hle.l1_timeout_128us, 0);
+        assert_eq!(parsed_hle.best_effort_latency, 0);
+
+        // HIRD/BESL = 0xF (bits 5:2 = 0b111100 = 0x3C)
+        let raw_hird = 0xF << PORTHLPMC_HIRD_BESL_SHIFT;
+        let parsed_hird = PortHlpmc::parse(raw_hird);
+        assert!(!parsed_hird.hle_enabled);
+        assert_eq!(parsed_hird.hird_besl, 0xF);
+
+        // L1 Timeout = 0xFF (bits 15:8)
+        let raw_timeout = 0xFF << PORTHLPMC_L1_TIMEOUT_SHIFT;
+        let parsed_timeout = PortHlpmc::parse(raw_timeout);
+        assert_eq!(parsed_timeout.l1_timeout_128us, 0xFF);
+        assert_eq!(parsed_timeout.l1_timeout_us(), 0xFF * 128);
+
+        // BESLD = 0xF (bits 19:16)
+        let raw_besld = 0xF << PORTHLPMC_BEST_EFFORT_SVC_LATENCY_SHIFT;
+        let parsed_besld = PortHlpmc::parse(raw_besld);
+        assert_eq!(parsed_besld.best_effort_latency, 0xF);
+
+        // 4. Vérification de configure_port_lpm : port hors plage → erreur
+        let mut ctrl = XhciController::new();
+        // Port 0 est invalide
+        assert!(ctrl.configure_port_lpm(0, true, 5).is_err());
+        // Port > max_ports (8 par défaut) est invalide
+        assert!(ctrl.configure_port_lpm(9, true, 5).is_err());
+
+        // 5. read_port_hlpmc sur port invalide retourne la valeur par défaut
+        let default_hlpmc = ctrl.read_port_hlpmc(0);
+        assert_eq!(default_hlpmc, PortHlpmc::default());
+        let default_hlpmc2 = ctrl.read_port_hlpmc(9);
+        assert_eq!(default_hlpmc2, PortHlpmc::default());
     }
 }

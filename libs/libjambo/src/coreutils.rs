@@ -16554,6 +16554,627 @@ and output byte counts of each piece to standard output.\n\n\
     }
 }
 
+/// Extrait le champ N (1-indexé) d'une ligne découpée selon le séparateur `sep`.
+///
+/// Retourne une tranche de `line` pointant sur les octets du champ, ou `None` si le champ
+/// N n'existe pas dans la ligne.
+fn join_get_field(line: &[u8], field: usize, sep: u8) -> Option<&[u8]> {
+    let mut current = 1usize;
+    let mut start = 0usize;
+    let mut i = 0usize;
+
+    while i <= line.len() {
+        let at_sep = i < line.len() && line[i] == sep;
+        let at_end = i == line.len();
+
+        if at_sep || at_end {
+            if current == field {
+                return Some(&line[start..i]);
+            }
+            current += 1;
+            start = i + 1;
+        }
+
+        i += 1;
+    }
+    None
+}
+
+/// Représentation de la spécification de format de sortie `-o`
+#[derive(Copy, Clone)]
+struct JoinFormatField {
+    /// 1 = fichier 1, 2 = fichier 2, 0 = champ de jointure
+    file: u8,
+    /// Numéro de champ (1-indexé)
+    field: usize,
+}
+
+/// Émet une ligne jointe selon la configuration de format.
+///
+/// `join_key` est le champ clé commun (déjà décodé).
+/// `line1` et `line2` sont les octets bruts des lignes (sans `\n`).
+/// `format_fields` : si vide, le format POSIX par défaut est utilisé.
+#[allow(clippy::too_many_arguments)]
+fn join_emit_line(
+    out_fd: i32,
+    join_key: &[u8],
+    line1: &[u8],
+    line2: &[u8],
+    field1: usize,
+    field2: usize,
+    sep: u8,
+    empty: &[u8],
+    format_fields: &[JoinFormatField],
+    format_len: usize,
+) {
+    let sep_slice = &[sep][..];
+
+    if format_len == 0 {
+        // Format POSIX par défaut : clé, puis champs non-clé de file1, puis file2
+        let _ = sys_write(out_fd, join_key);
+
+        // Champs de la ligne 1 (hors champ clé)
+        let mut fi = 1usize;
+        let mut pos = 0usize;
+        while pos <= line1.len() {
+            let sep_pos = line1[pos..].iter().position(|&b| b == sep);
+            let end = sep_pos.map_or(line1.len(), |p| pos + p);
+            let slice = &line1[pos..end];
+            if fi != field1 {
+                let _ = sys_write(out_fd, sep_slice);
+                if slice.is_empty() {
+                    let _ = sys_write(out_fd, empty);
+                } else {
+                    let _ = sys_write(out_fd, slice);
+                }
+            }
+            fi += 1;
+            if end == line1.len() {
+                break;
+            }
+            pos = end + 1;
+        }
+
+        // Champs de la ligne 2 (hors champ clé)
+        let mut fi2 = 1usize;
+        let mut pos2 = 0usize;
+        while pos2 <= line2.len() {
+            let sep_pos = line2[pos2..].iter().position(|&b| b == sep);
+            let end = sep_pos.map_or(line2.len(), |p| pos2 + p);
+            let slice = &line2[pos2..end];
+            if fi2 != field2 {
+                let _ = sys_write(out_fd, sep_slice);
+                if slice.is_empty() {
+                    let _ = sys_write(out_fd, empty);
+                } else {
+                    let _ = sys_write(out_fd, slice);
+                }
+            }
+            fi2 += 1;
+            if end == line2.len() {
+                break;
+            }
+            pos2 = end + 1;
+        }
+
+        let _ = sys_write(out_fd, b"\n");
+        return;
+    }
+
+    // Format personnalisé
+    for (idx, ff) in format_fields.iter().take(format_len).enumerate() {
+        if idx > 0 {
+            let _ = sys_write(out_fd, sep_slice);
+        }
+        if ff.file == 0 {
+            let _ = sys_write(out_fd, join_key);
+        } else {
+            let line = if ff.file == 1 { line1 } else { line2 };
+            let field_ref = if ff.file == 1 { field1 } else { field2 };
+            let _ = field_ref; // utilisé pour clarté
+            let val = join_get_field(line, ff.field, sep);
+            match val {
+                Some(v) if !v.is_empty() => {
+                    let _ = sys_write(out_fd, v);
+                }
+                _ => {
+                    let _ = sys_write(out_fd, empty);
+                }
+            }
+        }
+    }
+    let _ = sys_write(out_fd, b"\n");
+}
+
+/// Émet une ligne non-matchée (pour `-a` ou `-v`) en respectant le format de sortie.
+#[allow(clippy::too_many_arguments)]
+fn join_emit_unmatched(
+    out_fd: i32,
+    line: &[u8],
+    file_num: u8,
+    key_field: usize,
+    sep: u8,
+    empty: &[u8],
+    format_fields: &[JoinFormatField],
+    format_len: usize,
+) {
+    if format_len == 0 {
+        // Sortie brute de la ligne non-matchée
+        let _ = sys_write(out_fd, line);
+        let _ = sys_write(out_fd, b"\n");
+        return;
+    }
+
+    let sep_slice = &[sep][..];
+    for (idx, ff) in format_fields.iter().take(format_len).enumerate() {
+        if idx > 0 {
+            let _ = sys_write(out_fd, sep_slice);
+        }
+        if ff.file == file_num {
+            let val = join_get_field(line, ff.field, sep);
+            match val {
+                Some(v) if !v.is_empty() => {
+                    let _ = sys_write(out_fd, v);
+                }
+                _ => {
+                    let _ = sys_write(out_fd, empty);
+                }
+            }
+        } else if ff.file == 0 {
+            // Champ clé : provient de la ligne non-matchée
+            let val = join_get_field(line, key_field, sep);
+            match val {
+                Some(v) if !v.is_empty() => {
+                    let _ = sys_write(out_fd, v);
+                }
+                _ => {
+                    let _ = sys_write(out_fd, empty);
+                }
+            }
+        } else {
+            let _ = sys_write(out_fd, empty);
+        }
+    }
+    let _ = sys_write(out_fd, b"\n");
+}
+
+/// Compare deux clés en ignorant la casse si `ignore_case` est vrai.
+fn join_cmp_keys(a: &[u8], b: &[u8], ignore_case: bool) -> core::cmp::Ordering {
+    if !ignore_case {
+        return a.cmp(b);
+    }
+    let len = a.len().min(b.len());
+    for i in 0..len {
+        let ca = a[i].to_ascii_lowercase();
+        let cb = b[i].to_ascii_lowercase();
+        match ca.cmp(&cb) {
+            core::cmp::Ordering::Equal => {}
+            other => return other,
+        }
+    }
+    a.len().cmp(&b.len())
+}
+
+/// Exécute l'utilitaire standard POSIX `join` (fusion de deux fichiers triés sur un champ commun)
+///
+/// Options supportées :
+/// - `-1 N` : Champ de jointure dans le fichier 1 (défaut : 1)
+/// - `-2 N` : Champ de jointure dans le fichier 2 (défaut : 1)
+/// - `-t C` : Séparateur de champ (défaut : blanc, avec contraction de blancs consécutifs)
+/// - `-a N` : Affiche également les lignes non-matchées du fichier N (1 ou 2)
+/// - `-e STRING` : Remplace les champs manquants par `STRING`
+/// - `-o FORMAT` : Format de sortie (liste de `0`, `1.N`, `2.N` séparés par virgules ou espaces)
+/// - `-i` : Comparaison insensible à la casse
+/// - `-v N` : Affiche uniquement les lignes non-matchées du fichier N (supprime les lignes jointes)
+/// - `--help` : Affiche l'aide
+pub fn run_join(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    let mut field1 = 1usize;
+    let mut field2 = 1usize;
+    let mut sep: Option<u8> = None; // None = blanc (whitespace)
+    let mut unmatched1 = false;
+    let mut unmatched2 = false;
+    let mut only_unmatched1 = false;
+    let mut only_unmatched2 = false;
+    let mut ignore_case = false;
+    let mut empty: &[u8] = b"";
+    let mut format_fields = [JoinFormatField { file: 0, field: 0 }; 32];
+    let mut format_len = 0usize;
+    let mut file1_arg: Option<&str> = None;
+    let mut file2_arg: Option<&str> = None;
+
+    let mut i = 0usize;
+    while i < args.len() {
+        let arg = args[i];
+        match arg {
+            "--help" => {
+                let _ = sys_write(
+                    out_fd,
+                    b"Usage: join [OPTION]... FILE1 FILE2\n\
+For each pair of input lines with identical join fields, write a line to\n\
+standard output. The default join field is the first, delimited by blanks.\n\n\
+  -1 FIELD        join on this FIELD of file 1\n\
+  -2 FIELD        join on this FIELD of file 2\n\
+  -a FILENUM      print unpairable lines coming from file FILENUM\n\
+  -e EMPTY        replace missing input fields with EMPTY\n\
+  -i              ignore differences in case when comparing fields\n\
+  -o FORMAT       obey FORMAT while constructing output line\n\
+  -t CHAR         use CHAR as input and output field separator\n\
+  -v FILENUM      like -a FILENUM, but suppress joined output lines\n\
+      --help      display this help and exit\n",
+                );
+                return 0;
+            }
+            "-i" => {
+                ignore_case = true;
+                i += 1;
+            }
+            "-1" => {
+                if i + 1 >= args.len() {
+                    let _ = sys_write(err_fd, b"join: option requires an argument -- '1'\n");
+                    return 1;
+                }
+                i += 1;
+                match args[i].parse::<usize>() {
+                    Ok(n) if n >= 1 => {
+                        field1 = n;
+                    }
+                    _ => {
+                        let _ = sys_write(err_fd, b"join: invalid field number\n");
+                        return 1;
+                    }
+                }
+                i += 1;
+            }
+            "-2" => {
+                if i + 1 >= args.len() {
+                    let _ = sys_write(err_fd, b"join: option requires an argument -- '2'\n");
+                    return 1;
+                }
+                i += 1;
+                match args[i].parse::<usize>() {
+                    Ok(n) if n >= 1 => {
+                        field2 = n;
+                    }
+                    _ => {
+                        let _ = sys_write(err_fd, b"join: invalid field number\n");
+                        return 1;
+                    }
+                }
+                i += 1;
+            }
+            "-t" => {
+                if i + 1 >= args.len() {
+                    let _ = sys_write(err_fd, b"join: option requires an argument -- 't'\n");
+                    return 1;
+                }
+                i += 1;
+                let t = args[i].as_bytes();
+                if t.is_empty() {
+                    let _ = sys_write(err_fd, b"join: empty field separator\n");
+                    return 1;
+                }
+                sep = Some(t[0]);
+                i += 1;
+            }
+            "-a" => {
+                if i + 1 >= args.len() {
+                    let _ = sys_write(err_fd, b"join: option requires an argument -- 'a'\n");
+                    return 1;
+                }
+                i += 1;
+                match args[i] {
+                    "1" => unmatched1 = true,
+                    "2" => unmatched2 = true,
+                    _ => {
+                        let _ = sys_write(err_fd, b"join: invalid file number\n");
+                        return 1;
+                    }
+                }
+                i += 1;
+            }
+            "-v" => {
+                if i + 1 >= args.len() {
+                    let _ = sys_write(err_fd, b"join: option requires an argument -- 'v'\n");
+                    return 1;
+                }
+                i += 1;
+                match args[i] {
+                    "1" => {
+                        only_unmatched1 = true;
+                        unmatched1 = true;
+                    }
+                    "2" => {
+                        only_unmatched2 = true;
+                        unmatched2 = true;
+                    }
+                    _ => {
+                        let _ = sys_write(err_fd, b"join: invalid file number\n");
+                        return 1;
+                    }
+                }
+                i += 1;
+            }
+            "-e" => {
+                if i + 1 >= args.len() {
+                    let _ = sys_write(err_fd, b"join: option requires an argument -- 'e'\n");
+                    return 1;
+                }
+                i += 1;
+                empty = args[i].as_bytes();
+                i += 1;
+            }
+            "-o" => {
+                if i + 1 >= args.len() {
+                    let _ = sys_write(err_fd, b"join: option requires an argument -- 'o'\n");
+                    return 1;
+                }
+                i += 1;
+                // Analyser le format : "0,1.1,2.2" ou "0 1.1 2.2"
+                let fmt_str = args[i].as_bytes();
+                let mut fi = 0usize;
+                while fi < fmt_str.len() {
+                    // Sauter les séparateurs (virgule ou espace)
+                    while fi < fmt_str.len() && (fmt_str[fi] == b',' || fmt_str[fi] == b' ') {
+                        fi += 1;
+                    }
+                    if fi >= fmt_str.len() {
+                        break;
+                    }
+                    // Lire le token
+                    let start = fi;
+                    while fi < fmt_str.len() && fmt_str[fi] != b',' && fmt_str[fi] != b' ' {
+                        fi += 1;
+                    }
+                    let token = &fmt_str[start..fi];
+                    if token == b"0" {
+                        if format_len < format_fields.len() {
+                            format_fields[format_len] = JoinFormatField { file: 0, field: 0 };
+                            format_len += 1;
+                        }
+                    } else if token.len() >= 3
+                        && (token[0] == b'1' || token[0] == b'2')
+                        && token[1] == b'.'
+                    {
+                        let file_n = token[0] - b'0';
+                        let mut fnum = 0usize;
+                        let mut ok = true;
+                        for &b in &token[2..] {
+                            if b.is_ascii_digit() {
+                                fnum = fnum.wrapping_mul(10).wrapping_add((b - b'0') as usize);
+                            } else {
+                                ok = false;
+                                break;
+                            }
+                        }
+                        if ok && fnum >= 1 && format_len < format_fields.len() {
+                            format_fields[format_len] = JoinFormatField {
+                                file: file_n,
+                                field: fnum,
+                            };
+                            format_len += 1;
+                        } else if !ok {
+                            let _ = sys_write(err_fd, b"join: invalid format token\n");
+                            return 1;
+                        }
+                    } else {
+                        let _ = sys_write(err_fd, b"join: invalid format token\n");
+                        return 1;
+                    }
+                }
+                i += 1;
+            }
+            "--" => {
+                i += 1;
+                // Le reste sont des fichiers
+                while i < args.len() {
+                    if file1_arg.is_none() {
+                        file1_arg = Some(args[i]);
+                    } else if file2_arg.is_none() {
+                        file2_arg = Some(args[i]);
+                    }
+                    i += 1;
+                }
+            }
+            _ if arg.starts_with('-') && arg.len() > 1 => {
+                let _ = sys_write(err_fd, b"join: unrecognized option '");
+                let _ = sys_write(err_fd, arg.as_bytes());
+                let _ = sys_write(err_fd, b"'\n");
+                return 1;
+            }
+            _ => {
+                if file1_arg.is_none() {
+                    file1_arg = Some(arg);
+                } else if file2_arg.is_none() {
+                    file2_arg = Some(arg);
+                } else {
+                    let _ = sys_write(err_fd, b"join: extra operand '");
+                    let _ = sys_write(err_fd, arg.as_bytes());
+                    let _ = sys_write(err_fd, b"'\n");
+                    return 1;
+                }
+                i += 1;
+            }
+        }
+    }
+
+    let (path1, path2) = match (file1_arg, file2_arg) {
+        (Some(p1), Some(p2)) => (p1, p2),
+        _ => {
+            let _ = sys_write(
+                err_fd,
+                b"join: missing operand\nTry 'join --help' for more information.\n",
+            );
+            return 1;
+        }
+    };
+
+    if path1 == "-" && path2 == "-" {
+        let _ = sys_write(err_fd, b"join: both files cannot be standard input\n");
+        return 1;
+    }
+
+    let sep_byte = sep.unwrap_or(b' ');
+
+    let (fd1, close1) = if path1 == "-" {
+        (in_fd, false)
+    } else {
+        let fd = sys_open(path1, O_RDONLY);
+        if fd < 0 {
+            let _ = sys_write(err_fd, b"join: ");
+            let _ = sys_write(err_fd, path1.as_bytes());
+            let _ = sys_write(err_fd, b": No such file or directory\n");
+            return 1;
+        }
+        (fd, true)
+    };
+
+    let (fd2, close2) = if path2 == "-" {
+        (in_fd, false)
+    } else {
+        let fd = sys_open(path2, O_RDONLY);
+        if fd < 0 {
+            if close1 {
+                let _ = sys_close(fd1);
+            }
+            let _ = sys_write(err_fd, b"join: ");
+            let _ = sys_write(err_fd, path2.as_bytes());
+            let _ = sys_write(err_fd, b": No such file or directory\n");
+            return 1;
+        }
+        (fd, true)
+    };
+
+    let suppress_joined = only_unmatched1 || only_unmatched2;
+
+    let mut reader1 = LineReader::new(fd1);
+    let mut reader2 = LineReader::new(fd2);
+
+    let mut buf1 = [0u8; 4096];
+    let mut buf2 = [0u8; 4096];
+    let mut key1_buf = [0u8; 512];
+    let mut key2_buf = [0u8; 512];
+
+    let mut line1_opt = reader1.read_line(&mut buf1);
+    let mut line2_opt = reader2.read_line(&mut buf2);
+
+    loop {
+        match (line1_opt, line2_opt) {
+            (None, None) => break,
+            (Some(len1), None) => {
+                // Lignes restantes du fichier 1 non-matchées
+                if unmatched1 {
+                    join_emit_unmatched(
+                        out_fd,
+                        &buf1[..len1],
+                        1,
+                        field1,
+                        sep_byte,
+                        empty,
+                        &format_fields,
+                        format_len,
+                    );
+                }
+                line1_opt = reader1.read_line(&mut buf1);
+            }
+            (None, Some(len2)) => {
+                // Lignes restantes du fichier 2 non-matchées
+                if unmatched2 {
+                    join_emit_unmatched(
+                        out_fd,
+                        &buf2[..len2],
+                        2,
+                        field2,
+                        sep_byte,
+                        empty,
+                        &format_fields,
+                        format_len,
+                    );
+                }
+                line2_opt = reader2.read_line(&mut buf2);
+            }
+            (Some(len1), Some(len2)) => {
+                let l1 = &buf1[..len1];
+                let l2 = &buf2[..len2];
+
+                // Extraire la clé de chaque ligne
+                let k1_raw = join_get_field(l1, field1, sep_byte).unwrap_or(b"");
+                let k2_raw = join_get_field(l2, field2, sep_byte).unwrap_or(b"");
+
+                let k1_len = k1_raw.len().min(key1_buf.len());
+                key1_buf[..k1_len].copy_from_slice(&k1_raw[..k1_len]);
+                let k1 = &key1_buf[..k1_len];
+
+                let k2_len = k2_raw.len().min(key2_buf.len());
+                key2_buf[..k2_len].copy_from_slice(&k2_raw[..k2_len]);
+                let k2 = &key2_buf[..k2_len];
+
+                match join_cmp_keys(k1, k2, ignore_case) {
+                    core::cmp::Ordering::Less => {
+                        // Ligne 1 non-matchée
+                        if unmatched1 {
+                            join_emit_unmatched(
+                                out_fd,
+                                l1,
+                                1,
+                                field1,
+                                sep_byte,
+                                empty,
+                                &format_fields,
+                                format_len,
+                            );
+                        }
+                        line1_opt = reader1.read_line(&mut buf1);
+                    }
+                    core::cmp::Ordering::Greater => {
+                        // Ligne 2 non-matchée
+                        if unmatched2 {
+                            join_emit_unmatched(
+                                out_fd,
+                                l2,
+                                2,
+                                field2,
+                                sep_byte,
+                                empty,
+                                &format_fields,
+                                format_len,
+                            );
+                        }
+                        line2_opt = reader2.read_line(&mut buf2);
+                    }
+                    core::cmp::Ordering::Equal => {
+                        // Correspondance : émettre la ligne jointe
+                        if !suppress_joined {
+                            join_emit_line(
+                                out_fd,
+                                k1,
+                                l1,
+                                l2,
+                                field1,
+                                field2,
+                                sep_byte,
+                                empty,
+                                &format_fields,
+                                format_len,
+                            );
+                        }
+                        line1_opt = reader1.read_line(&mut buf1);
+                        line2_opt = reader2.read_line(&mut buf2);
+                    }
+                }
+            }
+        }
+    }
+
+    if close1 {
+        let _ = sys_close(fd1);
+    }
+    if close2 {
+        let _ = sys_close(fd2);
+    }
+
+    0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -20027,5 +20648,102 @@ Chaque processus dispose de son propre CR3 sans aucun privilege materiel direct.
         let _ = sys_close(fd_cs1);
         let _ = sys_unlink_pool("/tmp/test_cs_01");
         assert_eq!(&cs1_buf[..n_cs1 as usize], b"SECTION 2\nGamma\nDelta\n");
+    }
+
+    #[test]
+    fn test_run_join() {
+        use crate::vfs::pipe;
+
+        // Préparer deux fichiers triés avec un champ clé commun
+        // fichier1 : "1 alpha\n2 beta\n3 gamma\n"
+        // fichier2 : "1 un\n2 deux\n4 quatre\n"
+        let path1 = "/tmp/join_test_f1.txt";
+        let path2 = "/tmp/join_test_f2.txt";
+
+        let fd1w = sys_open(path1, O_CREAT | O_WRONLY | crate::vfs::O_TRUNC);
+        assert!(fd1w >= 0);
+        let _ = sys_write(fd1w, b"1 alpha\n2 beta\n3 gamma\n");
+        let _ = sys_close(fd1w);
+
+        let fd2w = sys_open(path2, O_CREAT | O_WRONLY | crate::vfs::O_TRUNC);
+        assert!(fd2w >= 0);
+        let _ = sys_write(fd2w, b"1 un\n2 deux\n4 quatre\n");
+        let _ = sys_close(fd2w);
+
+        // Test 1 : jointure de base (champ 1 = blanc)
+        let (out_r, out_w) = pipe().expect("pipe join out");
+        let code = run_join(&[path1, path2], 0, out_w, 2);
+        let _ = sys_close(out_w);
+        assert_eq!(code, 0);
+
+        let mut jbuf = [0u8; 256];
+        let n = sys_read(out_r, &mut jbuf);
+        let _ = sys_close(out_r);
+        assert!(n > 0);
+        let result = core::str::from_utf8(&jbuf[..n as usize]).unwrap();
+        // Lignes jointes attendues : "1 alpha un\n2 beta deux\n"
+        assert!(result.contains("1 alpha un"), "got: {result}");
+        assert!(result.contains("2 beta deux"), "got: {result}");
+        // La clé 3 (fichier1) et 4 (fichier2) ne doivent pas apparaître
+        assert!(!result.contains("gamma"), "got: {result}");
+        assert!(!result.contains("quatre"), "got: {result}");
+
+        // Test 2 : `-a 1` — afficher aussi les lignes non-matchées du fichier 1
+        let (out_r2, out_w2) = pipe().expect("pipe join out2");
+        let code2 = run_join(&["-a", "1", path1, path2], 0, out_w2, 2);
+        let _ = sys_close(out_w2);
+        assert_eq!(code2, 0);
+
+        let mut jbuf2 = [0u8; 256];
+        let n2 = sys_read(out_r2, &mut jbuf2);
+        let _ = sys_close(out_r2);
+        assert!(n2 > 0);
+        let result2 = core::str::from_utf8(&jbuf2[..n2 as usize]).unwrap();
+        assert!(result2.contains("3 gamma"), "got: {result2}");
+
+        // Test 3 : `-v 2` — uniquement les lignes non-matchées du fichier 2
+        let (out_r3, out_w3) = pipe().expect("pipe join out3");
+        let code3 = run_join(&["-v", "2", path1, path2], 0, out_w3, 2);
+        let _ = sys_close(out_w3);
+        assert_eq!(code3, 0);
+
+        let mut jbuf3 = [0u8; 256];
+        let n3 = sys_read(out_r3, &mut jbuf3);
+        let _ = sys_close(out_r3);
+        assert!(n3 > 0);
+        let result3 = core::str::from_utf8(&jbuf3[..n3 as usize]).unwrap();
+        assert!(result3.contains("4 quatre"), "got: {result3}");
+        assert!(!result3.contains("alpha"), "got: {result3}");
+
+        // Test 4 : `-t :` avec séparateur personnalisé
+        let path3 = "/tmp/join_test_f3.txt";
+        let path4 = "/tmp/join_test_f4.txt";
+        let fd3w = sys_open(path3, O_CREAT | O_WRONLY | crate::vfs::O_TRUNC);
+        assert!(fd3w >= 0);
+        let _ = sys_write(fd3w, b"a:Alice\nb:Bob\n");
+        let _ = sys_close(fd3w);
+        let fd4w = sys_open(path4, O_CREAT | O_WRONLY | crate::vfs::O_TRUNC);
+        assert!(fd4w >= 0);
+        let _ = sys_write(fd4w, b"a:Paris\nb:Lyon\n");
+        let _ = sys_close(fd4w);
+
+        let (out_r4, out_w4) = pipe().expect("pipe join out4");
+        let code4 = run_join(&["-t", ":", path3, path4], 0, out_w4, 2);
+        let _ = sys_close(out_w4);
+        assert_eq!(code4, 0);
+
+        let mut jbuf4 = [0u8; 256];
+        let n4 = sys_read(out_r4, &mut jbuf4);
+        let _ = sys_close(out_r4);
+        assert!(n4 > 0);
+        let result4 = core::str::from_utf8(&jbuf4[..n4 as usize]).unwrap();
+        assert!(result4.contains("a:Alice:Paris"), "got: {result4}");
+        assert!(result4.contains("b:Bob:Lyon"), "got: {result4}");
+
+        // Nettoyage
+        let _ = sys_unlink_pool(path1);
+        let _ = sys_unlink_pool(path2);
+        let _ = sys_unlink_pool(path3);
+        let _ = sys_unlink_pool(path4);
     }
 }
