@@ -397,7 +397,12 @@ name = "logname"
 path = "src/bin/logname.rs"
 test = false
 
-# 78 utilitaires Ring 3
+[[bin]]
+name = "tty"
+path = "src/bin/tty.rs"
+test = false
+
+# 79 utilitaires Ring 3
 
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }

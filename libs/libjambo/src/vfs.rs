@@ -1039,6 +1039,47 @@ pub fn readlink(path: &str, buf: &mut [u8]) -> Result<usize, SysError> {
     })
 }
 
+/// Vérifie si un descripteur de fichier ouvert est associé à un terminal interactif (isatty POSIX)
+pub fn isatty(fd: i32) -> bool {
+    with_fd_table(|table| match table.get(fd) {
+        Some(entry) => {
+            entry.kind == FdKind::ConsoleIn
+                || entry.kind == FdKind::ConsoleOut
+                || entry.path_str().starts_with("/dev/tty")
+                || entry.path_str() == "/dev/console"
+        }
+        None => false,
+    })
+}
+
+/// Retourne le nom de fichier du terminal associé au descripteur de fichier (ttyname_r POSIX)
+pub fn ttyname_r(fd: i32, buf: &mut [u8]) -> Result<usize, SysError> {
+    with_fd_table(|table| match table.get(fd) {
+        Some(entry) => {
+            if entry.kind == FdKind::ConsoleIn
+                || entry.kind == FdKind::ConsoleOut
+                || entry.path_str().starts_with("/dev/tty")
+                || entry.path_str() == "/dev/console"
+            {
+                let name = if entry.path_len > 0 && entry.path_str().starts_with("/dev/tty") {
+                    entry.path_str()
+                } else {
+                    "/dev/tty1"
+                };
+                let bytes = name.as_bytes();
+                if buf.len() < bytes.len() {
+                    return Err(SysError::BufferTooSmall);
+                }
+                buf[..bytes.len()].copy_from_slice(bytes);
+                Ok(bytes.len())
+            } else {
+                Err(SysError::NotSupported) // ENOTTY
+            }
+        }
+        None => Err(SysError::InvalidArgument), // EBADF
+    })
+}
+
 // Variables atomiques de contexte d'identité utilisateur et groupe Ring 3
 static CURRENT_UID: AtomicU32 = AtomicU32::new(0);
 static CURRENT_GID: AtomicU32 = AtomicU32::new(0);

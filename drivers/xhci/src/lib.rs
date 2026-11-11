@@ -302,6 +302,7 @@ pub const XHCI_EXT_CAP_LOCAL_MEMORY: u8 = 5;
 pub const XHCI_EXT_CAP_USB_DEBUG_CAPABILITY: u8 = 10;
 pub const XHCI_EXT_CAP_EXTENDED_POWER_MGMT_LPM: u8 = 15;
 pub const XHCI_EXT_CAP_EXTENDED_MESSAGE_INTERRUPT: u8 = 17;
+pub const XHCI_EXT_CAP_SECONDARY_BANDWIDTH: u8 = 18;
 
 /// Masques de registres USB Legacy Support (xHCI 1.2 Section 7.1)
 /// Registre USBLEGSUP (Offset 0x00)
@@ -1007,6 +1008,174 @@ impl XhciMsixRoutingTable {
         } else {
             false
         }
+    }
+}
+
+/// Structure de bande passante par domaine/protocole xHCI 1.2 §7.10
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XhciDomainBandwidth {
+    /// Identifiant du domaine ou port (1..255)
+    pub domain_id: u8,
+    /// Pourcentage ou bande passante allouée en Mb/s
+    pub allocated_mbps: u32,
+    /// Bande passante maximale réservable en Mb/s
+    pub max_mbps: u32,
+    /// Indique si la bande passante est active/engagée
+    pub active: bool,
+}
+
+impl XhciDomainBandwidth {
+    /// Crée un domaine de bande passante avec allocation maximale
+    pub const fn new(domain_id: u8, max_mbps: u32) -> Self {
+        Self {
+            domain_id,
+            allocated_mbps: 0,
+            max_mbps,
+            active: false,
+        }
+    }
+
+    /// Réserve une quantité de bande passante en Mb/s
+    pub fn reserve(&mut self, mbps: u32) -> bool {
+        if self.allocated_mbps.saturating_add(mbps) <= self.max_mbps {
+            self.allocated_mbps += mbps;
+            self.active = true;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Libère une quantité de bande passante en Mb/s
+    pub fn release(&mut self, mbps: u32) {
+        self.allocated_mbps = self.allocated_mbps.saturating_sub(mbps);
+        if self.allocated_mbps == 0 {
+            self.active = false;
+        }
+    }
+
+    /// Bande passante restante disponible
+    pub const fn available_mbps(&self) -> u32 {
+        self.max_mbps.saturating_sub(self.allocated_mbps)
+    }
+}
+
+/// Capacité Étendue xHCI 1.2 §7.10 : Bande Passante Secondaire (Secondary Bandwidth / Inter-Host USB Bridge)
+///
+/// Modélise le partage et l'arbitrage de débit USB 3.x inter-hôtes ou multi-domaines,
+/// permettant la coexistence équitable et le pontage sans interférence de contention de bus.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XhciSecondaryBandwidth {
+    /// Pointeur dword vers la prochaine capacité étendue
+    pub next_ptr_dwords: u8,
+    /// Nombre de domaines de bande passante gérés (1..8)
+    pub num_domains: u8,
+    /// Table statique des domaines de bande passante
+    pub domains: [XhciDomainBandwidth; 8],
+    /// Mode pont inter-hôtes activé (Inter-Host Bridge Enable)
+    pub inter_host_bridge_enabled: bool,
+    /// Débit total agrégé de la structure en Mb/s
+    pub total_bus_mbps: u32,
+}
+
+impl Default for XhciSecondaryBandwidth {
+    fn default() -> Self {
+        Self::new(4, 10000) // SuperSpeed 10 Gbps (10 000 Mb/s) par défaut
+    }
+}
+
+impl XhciSecondaryBandwidth {
+    /// Initialise une nouvelle capacité de bande passante secondaire
+    pub const fn new(num_domains: u8, total_bus_mbps: u32) -> Self {
+        let n = if num_domains > 8 {
+            8
+        } else if num_domains == 0 {
+            1
+        } else {
+            num_domains
+        };
+
+        let mut domains = [XhciDomainBandwidth::new(0, 0); 8];
+        let share_mbps = total_bus_mbps / (n as u32);
+        let mut i = 0usize;
+        while i < (n as usize) {
+            domains[i] = XhciDomainBandwidth::new((i + 1) as u8, share_mbps);
+            i += 1;
+        }
+
+        Self {
+            next_ptr_dwords: 0,
+            num_domains: n,
+            domains,
+            inter_host_bridge_enabled: false,
+            total_bus_mbps,
+        }
+    }
+
+    /// Parse les registres MMIO de la capacité étendue Secondary Bandwidth
+    ///
+    /// - `dwords[0]`: CapID [7:0], NextPtr [15:8], NumDomains [23:16], BridgeEnable [31]
+    /// - `dwords[1]`: Total Bus Bandwidth (Mb/s)
+    pub fn parse(dwords: &[u32; 2]) -> Self {
+        let cap_id = (dwords[0] & 0xFF) as u8;
+        let next_ptr = ((dwords[0] >> 8) & 0xFF) as u8;
+        let num_domains = ((dwords[0] >> 16) & 0xFF) as u8;
+        let bridge_enabled = (dwords[0] & (1 << 31)) != 0;
+        let total_mbps = dwords[1];
+
+        let _ = cap_id;
+        let mut cap = Self::new(num_domains, total_mbps);
+        cap.next_ptr_dwords = next_ptr;
+        cap.inter_host_bridge_enabled = bridge_enabled;
+        cap
+    }
+
+    /// Encode la capacité en 2 dwords MMIO
+    pub const fn encode(&self) -> [u32; 2] {
+        let dw0 = (XHCI_EXT_CAP_SECONDARY_BANDWIDTH as u32)
+            | ((self.next_ptr_dwords as u32) << 8)
+            | ((self.num_domains as u32) << 16)
+            | (if self.inter_host_bridge_enabled {
+                1 << 31
+            } else {
+                0
+            });
+        let dw1 = self.total_bus_mbps;
+        [dw0, dw1]
+    }
+
+    /// Active ou désactive le mode pont inter-hôte USB
+    pub fn set_inter_host_bridge(&mut self, enable: bool) {
+        self.inter_host_bridge_enabled = enable;
+    }
+
+    /// Réserve de la bande passante sur un domaine particulier
+    pub fn reserve_domain_bandwidth(&mut self, domain_id: u8, mbps: u32) -> bool {
+        for d in self.domains[..self.num_domains as usize].iter_mut() {
+            if d.domain_id == domain_id {
+                return d.reserve(mbps);
+            }
+        }
+        false
+    }
+
+    /// Libère de la bande passante sur un domaine particulier
+    pub fn release_domain_bandwidth(&mut self, domain_id: u8, mbps: u32) {
+        for d in self.domains[..self.num_domains as usize].iter_mut() {
+            if d.domain_id == domain_id {
+                d.release(mbps);
+                return;
+            }
+        }
+    }
+
+    /// Calcule la somme de la bande passante actuellement allouée sur tous les domaines
+    pub fn total_allocated_mbps(&self) -> u32 {
+        let mut total = 0u32;
+        for d in &self.domains[..self.num_domains as usize] {
+            total = total.saturating_add(d.allocated_mbps);
+        }
+        total
     }
 }
 
@@ -9296,5 +9465,55 @@ mod tests {
         assert!(!routing_table.is_interrupter_deliverable(0));
         routing_table.set_function_mask(false);
         assert!(routing_table.is_interrupter_deliverable(0));
+
+        // 19. xHCI 1.2 §7.10 Secondary Bandwidth Capability (Inter-Host USB Bridge)
+        let mut sec_bw = XhciSecondaryBandwidth::new(4, 10000);
+        assert_eq!(sec_bw.num_domains, 4);
+        assert_eq!(sec_bw.total_bus_mbps, 10000);
+        assert!(!sec_bw.inter_host_bridge_enabled);
+        assert_eq!(sec_bw.domains[0].max_mbps, 2500);
+        assert_eq!(sec_bw.domains[0].available_mbps(), 2500);
+
+        // Réservation de bande passante sur les domaines
+        assert!(sec_bw.reserve_domain_bandwidth(1, 1500));
+        assert_eq!(sec_bw.domains[0].available_mbps(), 1000);
+        assert_eq!(sec_bw.domains[0].allocated_mbps, 1500);
+        assert!(sec_bw.domains[0].active);
+
+        // Saturation au-delà de la capacité maximale
+        assert!(!sec_bw.reserve_domain_bandwidth(1, 1500)); // 1500 + 1500 = 3000 > 2500
+        assert_eq!(sec_bw.domains[0].available_mbps(), 1000);
+
+        // Domaine 2
+        assert!(sec_bw.reserve_domain_bandwidth(2, 2000));
+        assert_eq!(sec_bw.total_allocated_mbps(), 3500);
+
+        // Libération
+        sec_bw.release_domain_bandwidth(1, 500);
+        assert_eq!(sec_bw.domains[0].allocated_mbps, 1000);
+        assert_eq!(sec_bw.domains[0].available_mbps(), 1500);
+        assert_eq!(sec_bw.total_allocated_mbps(), 3000);
+
+        // Pont inter-hôte USB
+        sec_bw.set_inter_host_bridge(true);
+        assert!(sec_bw.inter_host_bridge_enabled);
+
+        // Encodage / Décodage MMIO
+        sec_bw.next_ptr_dwords = 20;
+        let encoded_bw = sec_bw.encode();
+        assert_eq!(
+            encoded_bw[0] & 0xFF,
+            XHCI_EXT_CAP_SECONDARY_BANDWIDTH as u32
+        );
+        assert_eq!((encoded_bw[0] >> 8) & 0xFF, 20);
+        assert_eq!((encoded_bw[0] >> 16) & 0xFF, 4);
+        assert_ne!(encoded_bw[0] & (1 << 31), 0);
+        assert_eq!(encoded_bw[1], 10000);
+
+        let parsed_bw = XhciSecondaryBandwidth::parse(&encoded_bw);
+        assert_eq!(parsed_bw.next_ptr_dwords, 20);
+        assert_eq!(parsed_bw.num_domains, 4);
+        assert!(parsed_bw.inter_host_bridge_enabled);
+        assert_eq!(parsed_bw.total_bus_mbps, 10000);
     }
 }

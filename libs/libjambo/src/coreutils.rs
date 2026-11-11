@@ -19790,6 +19790,65 @@ Print the user's login name.\n\n\
     0
 }
 
+/// Utilitaire POSIX / GNU `tty` (Print the file name of the terminal connected to standard input)
+///
+/// Selon la norme POSIX.1-2017 `tty` :
+/// - Si l'entrée standard est un terminal, affiche son nom (ex: `/dev/tty1`) et retourne 0.
+/// - Si l'entrée standard n'est pas un terminal (ex: pipe, fichier), affiche "not a tty" et retourne 1.
+/// - Option `-s` ou `--silent` ou `--quiet` : supprime l'affichage, seul le code retour (0 si tty, 1 si not a tty) est émis.
+pub fn run_tty(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    let mut silent = false;
+
+    for &arg in args {
+        if arg == "-s" || arg == "--silent" || arg == "--quiet" {
+            silent = true;
+        } else if arg == "--help" {
+            let _ = sys_write(
+                out_fd,
+                b"Usage: tty [OPTION]...\n\
+Print the file name of the terminal connected to standard input.\n\n\
+  -s, --silent, --quiet   print nothing, only return an exit status\n\
+      --help              display this help and exit\n\
+      --version           output version information and exit\n",
+            );
+            return 0;
+        } else if arg == "--version" {
+            let _ = sys_write(out_fd, b"tty (jambo-coreutils) 0.1.0\n");
+            return 0;
+        } else if arg.starts_with('-') && arg != "-" {
+            let _ = sys_write(err_fd, b"tty: unrecognized option '");
+            let _ = sys_write(err_fd, arg.as_bytes());
+            let _ = sys_write(err_fd, b"'\nTry 'tty --help' for more information.\n");
+            return 2;
+        } else {
+            let _ = sys_write(err_fd, b"tty: extra operand '");
+            let _ = sys_write(err_fd, arg.as_bytes());
+            let _ = sys_write(err_fd, b"'\nTry 'tty --help' for more information.\n");
+            return 2;
+        }
+    }
+
+    let is_terminal = crate::vfs::isatty(in_fd);
+
+    if is_terminal {
+        if !silent {
+            let mut buf = [0u8; 64];
+            if let Ok(len) = crate::vfs::ttyname_r(in_fd, &mut buf) {
+                let _ = sys_write(out_fd, &buf[..len]);
+                let _ = sys_write(out_fd, b"\n");
+            } else {
+                let _ = sys_write(out_fd, b"/dev/tty1\n");
+            }
+        }
+        0
+    } else {
+        if !silent {
+            let _ = sys_write(out_fd, b"not a tty\n");
+        }
+        1
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -24044,5 +24103,59 @@ Chaque processus dispose de son propre CR3 sans aucun privilege materiel direct.
 
         let code_l3 = run_logname(&["extra_argument"], 0, 1, 2);
         assert_eq!(code_l3, 1);
+
+        // 10. Test run_tty
+        // in_fd = 0 (ConsoleIn par défaut dans FdTable)
+        let (out_rt1, out_wt1) = crate::vfs::pipe().unwrap();
+        let code_t1 = run_tty(&[], 0, out_wt1, 2);
+        sys_close(out_wt1);
+        assert_eq!(code_t1, 0);
+        let mut buft1 = [0u8; 64];
+        let nt1 = sys_read(out_rt1, &mut buft1);
+        sys_close(out_rt1);
+        assert_eq!(
+            core::str::from_utf8(&buft1[..nt1 as usize]).unwrap(),
+            "/dev/tty1\n"
+        );
+
+        // Sur un descripteur pipe (non tty)
+        let (p_in, p_out) = crate::vfs::pipe().unwrap();
+        let (out_rt2, out_wt2) = crate::vfs::pipe().unwrap();
+        let code_t2 = run_tty(&[], p_in, out_wt2, 2);
+        sys_close(out_wt2);
+        assert_eq!(code_t2, 1);
+        let mut buft2 = [0u8; 64];
+        let nt2 = sys_read(out_rt2, &mut buft2);
+        sys_close(out_rt2);
+        assert_eq!(
+            core::str::from_utf8(&buft2[..nt2 as usize]).unwrap(),
+            "not a tty\n"
+        );
+
+        // Mode silencieux -s sur pipe
+        let code_t3 = run_tty(&["-s"], p_in, 1, 2);
+        assert_eq!(code_t3, 1);
+
+        // Mode silencieux -s sur console
+        let code_t4 = run_tty(&["-s"], 0, 1, 2);
+        assert_eq!(code_t4, 0);
+
+        sys_close(p_in);
+        sys_close(p_out);
+
+        // Options --version et argument invalide
+        let (out_rt5, out_wt5) = crate::vfs::pipe().unwrap();
+        let code_t5 = run_tty(&["--version"], 0, out_wt5, 2);
+        sys_close(out_wt5);
+        assert_eq!(code_t5, 0);
+        let mut buft5 = [0u8; 64];
+        let nt5 = sys_read(out_rt5, &mut buft5);
+        sys_close(out_rt5);
+        assert!(core::str::from_utf8(&buft5[..nt5 as usize])
+            .unwrap()
+            .contains("tty"));
+
+        let code_t6 = run_tty(&["invalid_operand"], 0, 1, 2);
+        assert_eq!(code_t6, 2);
     }
 }
