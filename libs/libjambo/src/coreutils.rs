@@ -14472,6 +14472,521 @@ pub fn run_b3sum(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
 }
 
 // ============================================================================
+// Utilitaire POSIX / GNU coreutils : `sha3sum` (Calcul et vérification FIPS 202 SHA3-256)
+// ============================================================================
+
+/// Hasher cryptographique SHA3-256 déterministe bare-metal (#![no_std], FIPS 202 Keccak-p[1600, 24])
+#[derive(Clone, Copy)]
+pub struct Sha3_256Hasher {
+    state: [u64; 25],
+    buffer: [u8; 136],
+    buffer_len: usize,
+    total_bytes: u64,
+}
+
+impl Sha3_256Hasher {
+    pub const RATE: usize = 136; // 1088 bits / 8
+
+    const RC: [u64; 24] = [
+        0x0000000000000001,
+        0x0000000000008082,
+        0x800000000000808a,
+        0x8000000080008000,
+        0x000000000000808b,
+        0x0000000080000001,
+        0x8000000080008081,
+        0x8000000000008009,
+        0x000000000000008a,
+        0x0000000000000088,
+        0x0000000080008009,
+        0x000000008000000a,
+        0x000000008000808b,
+        0x800000000000008b,
+        0x8000000000008089,
+        0x8000000000008003,
+        0x8000000000008002,
+        0x8000000000000080,
+        0x000000000000800a,
+        0x800000008000000a,
+        0x8000000080008081,
+        0x8000000000008080,
+        0x0000000080000001,
+        0x8000000080008008,
+    ];
+
+    const RHO: [[u32; 5]; 5] = [
+        [0, 36, 3, 41, 18],
+        [1, 44, 10, 45, 2],
+        [62, 6, 43, 15, 61],
+        [28, 55, 25, 21, 56],
+        [27, 20, 39, 8, 14],
+    ];
+
+    pub const fn new() -> Self {
+        Self {
+            state: [0u64; 25],
+            buffer: [0u8; 136],
+            buffer_len: 0,
+            total_bytes: 0,
+        }
+    }
+
+    fn keccak_f1600(a: &mut [u64; 25]) {
+        for round in 0..24 {
+            // Theta
+            let mut c = [0u64; 5];
+            for x in 0..5 {
+                c[x] = a[x] ^ a[x + 5] ^ a[x + 10] ^ a[x + 15] ^ a[x + 20];
+            }
+            let mut d = [0u64; 5];
+            for x in 0..5 {
+                d[x] = c[(x + 4) % 5] ^ c[(x + 1) % 5].rotate_left(1);
+            }
+            for x in 0..5 {
+                for y in 0..5 {
+                    a[x + y * 5] ^= d[x];
+                }
+            }
+
+            // Rho and Pi
+            let mut b = [0u64; 25];
+            for x in 0..5 {
+                for y in 0..5 {
+                    let rot = Self::RHO[x][y];
+                    let nx = y;
+                    let ny = (2 * x + 3 * y) % 5;
+                    b[nx + ny * 5] = a[x + y * 5].rotate_left(rot);
+                }
+            }
+
+            // Chi
+            for x in 0..5 {
+                for y in 0..5 {
+                    a[x + y * 5] =
+                        b[x + y * 5] ^ ((!b[((x + 1) % 5) + y * 5]) & b[((x + 2) % 5) + y * 5]);
+                }
+            }
+
+            // Iota
+            a[0] ^= Self::RC[round];
+        }
+    }
+
+    fn absorb_block(&mut self, block: &[u8; 136]) {
+        for i in 0..17 {
+            let word = u64::from_le_bytes([
+                block[i * 8],
+                block[i * 8 + 1],
+                block[i * 8 + 2],
+                block[i * 8 + 3],
+                block[i * 8 + 4],
+                block[i * 8 + 5],
+                block[i * 8 + 6],
+                block[i * 8 + 7],
+            ]);
+            self.state[i] ^= word;
+        }
+        Self::keccak_f1600(&mut self.state);
+    }
+
+    pub fn update(&mut self, input: &[u8]) {
+        self.total_bytes = self.total_bytes.wrapping_add(input.len() as u64);
+        let mut offset = 0;
+        while offset < input.len() {
+            if self.buffer_len == Self::RATE {
+                let blk = self.buffer;
+                self.absorb_block(&blk);
+                self.buffer_len = 0;
+            }
+            let to_copy = (Self::RATE - self.buffer_len).min(input.len() - offset);
+            self.buffer[self.buffer_len..self.buffer_len + to_copy]
+                .copy_from_slice(&input[offset..offset + to_copy]);
+            self.buffer_len += to_copy;
+            offset += to_copy;
+        }
+    }
+
+    pub fn finalize(mut self) -> [u8; 32] {
+        // FIPS 202 SHA3-256 padding: 0x06 ... 0x80
+        let pad_len = Self::RATE - self.buffer_len;
+        if pad_len == 1 {
+            self.buffer[self.buffer_len] = 0x86;
+        } else {
+            self.buffer[self.buffer_len] = 0x06;
+            for i in (self.buffer_len + 1)..(Self::RATE - 1) {
+                self.buffer[i] = 0x00;
+            }
+            self.buffer[Self::RATE - 1] = 0x80;
+        }
+        let blk = self.buffer;
+        self.absorb_block(&blk);
+
+        let mut out = [0u8; 32];
+        for i in 0..4 {
+            out[i * 8..(i + 1) * 8].copy_from_slice(&self.state[i].to_le_bytes());
+        }
+        out
+    }
+
+    pub fn hash(data: &[u8]) -> [u8; 32] {
+        let mut h = Self::new();
+        h.update(data);
+        h.finalize()
+    }
+}
+
+impl Default for Sha3_256Hasher {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Convertit un digest SHA3-256 32 octets en représentation hexadécimale ASCII (64 octets)
+pub fn sha3_256_to_hex(digest: &[u8; 32], out: &mut [u8; 64]) {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    for i in 0..32 {
+        let b = digest[i];
+        out[i * 2] = HEX[(b >> 4) as usize];
+        out[i * 2 + 1] = HEX[(b & 0x0F) as usize];
+    }
+}
+
+/// Hache un descripteur de fichier en streaming avec SHA3-256 sans allocation
+fn hash_fd_sha3_256(fd: i32) -> Result<[u8; 32], ()> {
+    let mut hasher = Sha3_256Hasher::new();
+    let mut buf = [0u8; 1024];
+    loop {
+        let n = sys_read(fd, &mut buf);
+        if n < 0 {
+            return Err(());
+        }
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n as usize]);
+    }
+    Ok(hasher.finalize())
+}
+
+/// Parse une ligne de fichier de vérification sha3_256 (format GNU ou BSD)
+fn parse_sha3_256_check_line(line: &str) -> Option<(&str, &str)> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() || trimmed.starts_with('#') {
+        return None;
+    }
+
+    // Format BSD: SHA3_256 (path) = hex64
+    if let Some(rest) = trimmed.strip_prefix("SHA3_256 (") {
+        if let Some(paren_idx) = rest.find(") = ") {
+            let path = &rest[..paren_idx];
+            let hex = &rest[paren_idx + 4..];
+            if hex.len() == 64 && hex.chars().all(|c| c.is_ascii_hexdigit()) {
+                return Some((path, hex));
+            }
+        }
+    }
+
+    // Format GNU: hex64 [* ]path
+    if trimmed.len() >= 66 {
+        let hex = &trimmed[..64];
+        let sep = &trimmed[64..66];
+        if (sep == "  " || sep == " *" || sep == "  ") && hex.chars().all(|c| c.is_ascii_hexdigit())
+        {
+            let path = trimmed[66..].trim();
+            if !path.is_empty() {
+                return Some((path, hex));
+            }
+        }
+    }
+
+    None
+}
+
+/// Exécute l'utilitaire Coreutils POSIX / NIST FIPS 202 `sha3sum` (calcul et vérification SHA3-256)
+pub fn run_sha3sum(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    let mut check_mode = false;
+    let mut tag_mode = false;
+    let mut quiet = false;
+    let mut status_only = false;
+    let mut warn = false;
+    let mut files = [""; 16];
+    let mut file_count = 0;
+
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i];
+        if arg == "--help" {
+            let help = b"Usage: sha3sum [OPTION]... [FILE]...\nPrint or check SHA3-256 (256-bit) checksums.\n\nWith no FILE, or when FILE is -, read standard input.\n\n  -b, --binary         read in binary mode\n  -c, --check          read checksums from the FILEs and check them\n      --tag            create a BSD-style checksum\n  -t, --text           read in text mode (default)\n  -q, --quiet          don't print OK for each successfully verified file\n      --status         don't output anything, status code shows success\n  -w, --warn           warn about improperly formatted checksum lines\n      --help           display this help and exit\n      --version        output version information and exit\n";
+            let _ = sys_write(out_fd, help);
+            return 0;
+        } else if arg == "--version" {
+            let ver = b"sha3sum (JamboOS coreutils) 0.1.0\nCopyright (C) 2026 JamboOS Authors.\nLicense MIT or Apache-2.0.\n";
+            let _ = sys_write(out_fd, ver);
+            return 0;
+        } else if arg == "-c" || arg == "--check" {
+            check_mode = true;
+        } else if arg == "--tag" {
+            tag_mode = true;
+        } else if arg == "-q" || arg == "--quiet" {
+            quiet = true;
+        } else if arg == "--status" {
+            status_only = true;
+        } else if arg == "-w" || arg == "--warn" {
+            warn = true;
+        } else if arg == "-b" || arg == "--binary" || arg == "-t" || arg == "--text" {
+            // Ignoré sous POSIX/Unix
+        } else if (!arg.starts_with('-') || arg == "-") && file_count < files.len() {
+            files[file_count] = arg;
+            file_count += 1;
+        }
+        i += 1;
+    }
+
+    if file_count == 0 {
+        files[0] = "-";
+        file_count = 1;
+    }
+
+    if check_mode {
+        let mut exit_code = 0;
+        let mut total_failed = 0;
+        let mut properly_formatted_lines = 0;
+
+        for &check_file in &files[..file_count] {
+            let check_fd = if check_file == "-" {
+                in_fd
+            } else {
+                sys_open(check_file, O_RDONLY)
+            };
+
+            if check_fd < 0 {
+                let _ = sys_write(err_fd, b"sha3sum: ");
+                let _ = sys_write(err_fd, check_file.as_bytes());
+                let _ = sys_write(err_fd, b": No such file or directory\n");
+                exit_code = 1;
+                continue;
+            }
+
+            let mut line_buf = [0u8; 1024];
+            let mut line_len = 0;
+            let mut byte = [0u8; 1];
+
+            loop {
+                let n = sys_read(check_fd, &mut byte);
+                if n <= 0 {
+                    if line_len > 0 {
+                        if let Ok(line_str) = core::str::from_utf8(&line_buf[..line_len]) {
+                            if let Some((path, expected_hex)) = parse_sha3_256_check_line(line_str)
+                            {
+                                properly_formatted_lines += 1;
+                                let file_fd = if path == "-" {
+                                    in_fd
+                                } else {
+                                    sys_open(path, O_RDONLY)
+                                };
+                                if file_fd >= 0 {
+                                    match hash_fd_sha3_256(file_fd) {
+                                        Ok(digest) => {
+                                            let mut calculated_hex = [0u8; 64];
+                                            sha3_256_to_hex(&digest, &mut calculated_hex);
+                                            let matches = calculated_hex
+                                                .iter()
+                                                .zip(expected_hex.as_bytes().iter())
+                                                .all(|(a, b)| a.eq_ignore_ascii_case(b));
+
+                                            if matches {
+                                                if !quiet && !status_only {
+                                                    let _ = sys_write(out_fd, path.as_bytes());
+                                                    let _ = sys_write(out_fd, b": OK\n");
+                                                }
+                                            } else {
+                                                total_failed += 1;
+                                                if !status_only {
+                                                    let _ = sys_write(out_fd, path.as_bytes());
+                                                    let _ = sys_write(out_fd, b": FAILED\n");
+                                                }
+                                            }
+                                        }
+                                        Err(_) => {
+                                            total_failed += 1;
+                                            if !status_only {
+                                                let _ = sys_write(out_fd, path.as_bytes());
+                                                let _ =
+                                                    sys_write(out_fd, b": FAILED open or read\n");
+                                            }
+                                        }
+                                    }
+                                    if file_fd != in_fd {
+                                        sys_close(file_fd);
+                                    }
+                                } else {
+                                    total_failed += 1;
+                                    if !status_only {
+                                        let _ = sys_write(out_fd, path.as_bytes());
+                                        let _ = sys_write(out_fd, b": FAILED open or read\n");
+                                    }
+                                }
+                            } else if warn && !status_only {
+                                let _ = sys_write(
+                                    err_fd,
+                                    b"sha3sum: improperly formatted SHA3-256 checksum line\n",
+                                );
+                            }
+                        }
+                    }
+                    break;
+                }
+
+                if byte[0] == b'\n' {
+                    if let Ok(line_str) = core::str::from_utf8(&line_buf[..line_len]) {
+                        match parse_sha3_256_check_line(line_str) {
+                            Some((path, expected_hex)) => {
+                                properly_formatted_lines += 1;
+                                let file_fd = if path == "-" {
+                                    in_fd
+                                } else {
+                                    sys_open(path, O_RDONLY)
+                                };
+                                if file_fd >= 0 {
+                                    match hash_fd_sha3_256(file_fd) {
+                                        Ok(digest) => {
+                                            let mut calculated_hex = [0u8; 64];
+                                            sha3_256_to_hex(&digest, &mut calculated_hex);
+                                            let matches = calculated_hex
+                                                .iter()
+                                                .zip(expected_hex.as_bytes().iter())
+                                                .all(|(a, b)| a.eq_ignore_ascii_case(b));
+
+                                            if matches {
+                                                if !quiet && !status_only {
+                                                    let _ = sys_write(out_fd, path.as_bytes());
+                                                    let _ = sys_write(out_fd, b": OK\n");
+                                                }
+                                            } else {
+                                                total_failed += 1;
+                                                if !status_only {
+                                                    let _ = sys_write(out_fd, path.as_bytes());
+                                                    let _ = sys_write(out_fd, b": FAILED\n");
+                                                }
+                                            }
+                                        }
+                                        Err(_) => {
+                                            total_failed += 1;
+                                            if !status_only {
+                                                let _ = sys_write(out_fd, path.as_bytes());
+                                                let _ =
+                                                    sys_write(out_fd, b": FAILED open or read\n");
+                                            }
+                                        }
+                                    }
+                                    if file_fd != in_fd {
+                                        sys_close(file_fd);
+                                    }
+                                } else {
+                                    total_failed += 1;
+                                    if !status_only {
+                                        let _ = sys_write(out_fd, path.as_bytes());
+                                        let _ = sys_write(out_fd, b": FAILED open or read\n");
+                                    }
+                                }
+                            }
+                            None => {
+                                if warn && !status_only {
+                                    let _ = sys_write(
+                                        err_fd,
+                                        b"sha3sum: improperly formatted SHA3-256 checksum line\n",
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    line_len = 0;
+                } else if line_len < line_buf.len() {
+                    line_buf[line_len] = byte[0];
+                    line_len += 1;
+                }
+            }
+
+            if check_fd != in_fd {
+                sys_close(check_fd);
+            }
+        }
+
+        if properly_formatted_lines == 0 {
+            if !status_only {
+                let _ = sys_write(
+                    err_fd,
+                    b"sha3sum: no properly formatted SHA3-256 checksum lines found\n",
+                );
+            }
+            return 1;
+        }
+
+        if total_failed > 0 {
+            if !status_only {
+                let _ = sys_write(
+                    err_fd,
+                    b"sha3sum: WARNING: computed checksums did NOT match\n",
+                );
+            }
+            return 1;
+        }
+
+        exit_code
+    } else {
+        let mut exit_code = 0;
+
+        for &file in &files[..file_count] {
+            let (target_fd, display_name) = if file == "-" {
+                (in_fd, "-")
+            } else {
+                let fd = sys_open(file, O_RDONLY);
+                if fd < 0 {
+                    let _ = sys_write(err_fd, b"sha3sum: ");
+                    let _ = sys_write(err_fd, file.as_bytes());
+                    let _ = sys_write(err_fd, b": No such file or directory\n");
+                    exit_code = 1;
+                    continue;
+                }
+                (fd, file)
+            };
+
+            match hash_fd_sha3_256(target_fd) {
+                Ok(digest) => {
+                    let mut hex = [0u8; 64];
+                    sha3_256_to_hex(&digest, &mut hex);
+
+                    if tag_mode {
+                        let _ = sys_write(out_fd, b"SHA3_256 (");
+                        let _ = sys_write(out_fd, display_name.as_bytes());
+                        let _ = sys_write(out_fd, b") = ");
+                        let _ = sys_write(out_fd, &hex);
+                        let _ = sys_write(out_fd, b"\n");
+                    } else {
+                        let _ = sys_write(out_fd, &hex);
+                        let _ = sys_write(out_fd, b"  ");
+                        let _ = sys_write(out_fd, display_name.as_bytes());
+                        let _ = sys_write(out_fd, b"\n");
+                    }
+                }
+                Err(_) => {
+                    let _ = sys_write(err_fd, b"sha3sum: error reading ");
+                    let _ = sys_write(err_fd, display_name.as_bytes());
+                    let _ = sys_write(err_fd, b"\n");
+                    exit_code = 1;
+                }
+            }
+
+            if target_fd != in_fd {
+                sys_close(target_fd);
+            }
+        }
+
+        exit_code
+    }
+}
+
+// ============================================================================
 // Utilitaire POSIX / GNU coreutils : `md5sum` (Calcul et vérification RFC 1321 MD5)
 // ============================================================================
 
@@ -32725,5 +33240,80 @@ Chaque processus dispose de son propre CR3 sans aucun privilege materiel direct.
 
         assert_eq!(run_b3sum(&["--help"], 0, 1, 2), 0);
         assert_eq!(run_b3sum(&["--version"], 0, 1, 2), 0);
+
+        // 48. Test run_sha3sum (FIPS 202 SHA3-256 cryptographic checksums)
+        let empty_sha3 = Sha3_256Hasher::hash(b"");
+        let mut empty_sha3_hex = [0u8; 64];
+        sha3_256_to_hex(&empty_sha3, &mut empty_sha3_hex);
+        assert_eq!(
+            core::str::from_utf8(&empty_sha3_hex).unwrap(),
+            "a7ffc6f8bf1ed76651c14756a061d662f580ff4de43b49fa82d80a4b80f8434a"
+        );
+
+        let abc_sha3 = Sha3_256Hasher::hash(b"abc");
+        let mut abc_sha3_hex = [0u8; 64];
+        sha3_256_to_hex(&abc_sha3, &mut abc_sha3_hex);
+        assert_eq!(
+            core::str::from_utf8(&abc_sha3_hex).unwrap(),
+            "3a985da74fe225b2045c172d6bd390bd855f086e3e9d525b46bfe24511431532"
+        );
+
+        let file_sha3 = "/tmp/test_sha3_data.txt";
+        let fd_sha3 = sys_open(file_sha3, O_CREAT | O_WRONLY);
+        assert!(fd_sha3 >= 0);
+        let _ = sys_write(fd_sha3, b"Hello JamboOS FIPS 202 SHA3-256\n");
+        sys_close(fd_sha3);
+
+        let (out_r_sha3_1, out_w_sha3_1) = crate::vfs::pipe().unwrap();
+        let code_sha3_1 = run_sha3sum(&[file_sha3], 0, out_w_sha3_1, 2);
+        sys_close(out_w_sha3_1);
+        assert_eq!(code_sha3_1, 0);
+
+        let mut sha3_out_buf = [0u8; 256];
+        let n_sha3_1 = sys_read(out_r_sha3_1, &mut sha3_out_buf);
+        sys_close(out_r_sha3_1);
+        assert!(n_sha3_1 > 0);
+        let s_sha3_1 = core::str::from_utf8(&sha3_out_buf[..n_sha3_1 as usize]).unwrap();
+        assert!(s_sha3_1.starts_with(
+            "e51d79998fa8d551000f3ec79e3a2f076735d2e93b568d9094e2483f3254e550  /tmp/test_sha3_data.txt\n"
+        ));
+
+        let (out_r_sha3_2, out_w_sha3_2) = crate::vfs::pipe().unwrap();
+        let code_sha3_2 = run_sha3sum(&["--tag", file_sha3], 0, out_w_sha3_2, 2);
+        sys_close(out_w_sha3_2);
+        assert_eq!(code_sha3_2, 0);
+
+        let n_sha3_2 = sys_read(out_r_sha3_2, &mut sha3_out_buf);
+        sys_close(out_r_sha3_2);
+        assert!(n_sha3_2 > 0);
+        let s_sha3_2 = core::str::from_utf8(&sha3_out_buf[..n_sha3_2 as usize]).unwrap();
+        assert_eq!(
+            s_sha3_2,
+            "SHA3_256 (/tmp/test_sha3_data.txt) = e51d79998fa8d551000f3ec79e3a2f076735d2e93b568d9094e2483f3254e550\n"
+        );
+
+        // Test vérification -c
+        let check_sha3 = "/tmp/test_sha3.check";
+        let cfd_sha3 = sys_open(check_sha3, O_CREAT | O_WRONLY);
+        assert!(cfd_sha3 >= 0);
+        let _ = sys_write(
+            cfd_sha3,
+            b"e51d79998fa8d551000f3ec79e3a2f076735d2e93b568d9094e2483f3254e550  /tmp/test_sha3_data.txt\n",
+        );
+        sys_close(cfd_sha3);
+
+        let (out_r_sha3_3, out_w_sha3_3) = crate::vfs::pipe().unwrap();
+        let code_sha3_3 = run_sha3sum(&["-c", check_sha3], 0, out_w_sha3_3, 2);
+        sys_close(out_w_sha3_3);
+        assert_eq!(code_sha3_3, 0);
+
+        let n_sha3_3 = sys_read(out_r_sha3_3, &mut sha3_out_buf);
+        sys_close(out_r_sha3_3);
+        assert!(n_sha3_3 > 0);
+        let s_sha3_3 = core::str::from_utf8(&sha3_out_buf[..n_sha3_3 as usize]).unwrap();
+        assert_eq!(s_sha3_3, "/tmp/test_sha3_data.txt: OK\n");
+
+        assert_eq!(run_sha3sum(&["--help"], 0, 1, 2), 0);
+        assert_eq!(run_sha3sum(&["--version"], 0, 1, 2), 0);
     }
 }

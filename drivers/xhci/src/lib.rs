@@ -350,6 +350,8 @@ pub const XHCI_EXT_CAP_USB4_ROUTER_OPERATIONS: u8 = 53;
 pub const XHCI_EXT_CAP_USB4_PROTOCOL_TUNNELING_STATS: u8 = 54;
 /// Capacité étendue xHCI 1.2 / USB4 Host-to-Host Packet Tunneling Interface (§7.47)
 pub const XHCI_EXT_CAP_USB4_HOST_TO_HOST_PACKET_TUNNELING: u8 = 55;
+/// Capacité étendue xHCI 1.2 / USB4 Host Interface Discovery and Notification Capability (§7.48)
+pub const XHCI_EXT_CAP_USB4_HOST_INTERFACE_DISCOVERY: u8 = 56;
 
 /// Masques de registres USB Legacy Support (xHCI 1.2 Section 7.1)
 /// Registre USBLEGSUP (Offset 0x00)
@@ -5775,6 +5777,115 @@ impl XhciUsb4HostToHostPacketTunneling {
     /// Réceptionne une trame H2H
     pub fn receive_frame(&mut self) {
         self.rx_frame_count = self.rx_frame_count.wrapping_add(1);
+    }
+}
+
+/// Capacité Étendue xHCI USB4 Host Interface Discovery and Notification Capability (§7.48 / Cap ID 56)
+///
+/// Permet la découverte dynamique des interfaces de contrôle hôte USB4 et la notification
+/// asynchrone des événements de topologie inter-domaines et des changements de configuration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XhciUsb4HostInterfaceDiscovery {
+    /// Pointeur dword vers la prochaine capacité étendue
+    pub next_ptr_dwords: u8,
+    /// Découverte hôte activée
+    pub enabled: bool,
+    /// Interruptions matérielles sur événement de découverte activées
+    pub irq_enabled: bool,
+    /// Identifiant de version du protocole de découverte (1 = USB4 v1, 2 = USB4 v2)
+    pub protocol_version: u8,
+    /// Nombre d'interfaces hôtes découvertes
+    pub discovered_interfaces: u8,
+    /// Masque de notification d'événements de topologie
+    pub notification_mask: u16,
+    /// Compteur total d'événements de notification reçus
+    pub notification_counter: u32,
+    /// Registre de statut d'interface de découverte
+    pub discovery_status: u32,
+}
+
+impl XhciUsb4HostInterfaceDiscovery {
+    /// Crée une nouvelle instance de découverte d'interface hôte USB4
+    pub const fn new(protocol_version: u8, notification_mask: u16) -> Self {
+        Self {
+            next_ptr_dwords: 0,
+            enabled: false,
+            irq_enabled: false,
+            protocol_version: protocol_version & 0x0F,
+            discovered_interfaces: 0,
+            notification_mask,
+            notification_counter: 0,
+            discovery_status: 0,
+        }
+    }
+
+    /// Parse les 4 dwords MMIO d'une capacité étendue USB4 Host Interface Discovery (§7.48)
+    pub const fn parse(dwords: &[u32; 4]) -> Option<Self> {
+        let cap_id = (dwords[0] & 0xFF) as u8;
+        if cap_id != XHCI_EXT_CAP_USB4_HOST_INTERFACE_DISCOVERY {
+            return None;
+        }
+
+        let next_ptr = ((dwords[0] >> 8) & 0xFF) as u8;
+        let ctrl = dwords[1];
+        let enabled = (ctrl & 0x01) != 0;
+        let irq_enabled = (ctrl & 0x02) != 0;
+        let protocol_version = ((ctrl >> 8) & 0x0F) as u8;
+        let discovered_interfaces = ((ctrl >> 16) & 0xFF) as u8;
+        let notification_mask = (ctrl >> 24) as u16 | (((dwords[0] >> 16) & 0xFF) << 8) as u16;
+
+        let notification_counter = dwords[2];
+        let discovery_status = dwords[3];
+
+        Some(Self {
+            next_ptr_dwords: next_ptr,
+            enabled,
+            irq_enabled,
+            protocol_version,
+            discovered_interfaces,
+            notification_mask,
+            notification_counter,
+            discovery_status,
+        })
+    }
+
+    /// Encode la capacité étendue en 4 mots dwords MMIO 32-bit
+    pub const fn encode(&self) -> [u32; 4] {
+        let dw0 = (XHCI_EXT_CAP_USB4_HOST_INTERFACE_DISCOVERY as u32)
+            | ((self.next_ptr_dwords as u32) << 8)
+            | (((self.notification_mask >> 8) as u32 & 0xFF) << 16);
+        let mut ctrl = ((self.protocol_version as u32 & 0x0F) << 8)
+            | ((self.discovered_interfaces as u32 & 0xFF) << 16)
+            | (((self.notification_mask & 0xFF) as u32) << 24);
+        if self.enabled {
+            ctrl |= 0x01;
+        }
+        if self.irq_enabled {
+            ctrl |= 0x02;
+        }
+        let dw2 = self.notification_counter;
+        let dw3 = self.discovery_status;
+        [dw0, ctrl, dw2, dw3]
+    }
+
+    /// Active ou désactive l'interface de découverte
+    pub fn enable_discovery(&mut self, enable: bool) {
+        self.enabled = enable;
+    }
+
+    /// Active ou désactive les interruptions matérielles
+    pub fn configure_irq(&mut self, enable: bool) {
+        self.irq_enabled = enable;
+    }
+
+    /// Enregistre une interface hôte découverte
+    pub fn register_interface(&mut self) {
+        self.discovered_interfaces = self.discovered_interfaces.saturating_add(1);
+    }
+
+    /// Incrémente le compteur de notifications
+    pub fn record_notification(&mut self) {
+        self.notification_counter = self.notification_counter.wrapping_add(1);
     }
 }
 
@@ -15670,5 +15781,47 @@ mod tests {
         assert_eq!(parsed_h2h.max_packet_size, 2048);
         assert_eq!(parsed_h2h.tx_frame_count, 2);
         assert_eq!(parsed_h2h.rx_frame_count, 1);
+
+        // Test USB4 Host Interface Discovery (§7.48)
+        let mut disc = XhciUsb4HostInterfaceDiscovery::new(2, 0x1234);
+        assert_eq!(disc.protocol_version, 2);
+        assert_eq!(disc.notification_mask, 0x1234);
+        assert_eq!(disc.discovered_interfaces, 0);
+        assert_eq!(disc.notification_counter, 0);
+        assert!(!disc.enabled);
+        assert!(!disc.irq_enabled);
+
+        disc.enable_discovery(true);
+        disc.configure_irq(true);
+        disc.register_interface();
+        disc.register_interface();
+        disc.record_notification();
+        disc.next_ptr_dwords = 60;
+        disc.discovery_status = 0xCAFE_BABE;
+
+        let encoded_disc = disc.encode();
+        assert_eq!(
+            encoded_disc[0] & 0xFF,
+            XHCI_EXT_CAP_USB4_HOST_INTERFACE_DISCOVERY as u32
+        );
+        assert_eq!((encoded_disc[0] >> 8) & 0xFF, 60);
+        assert_eq!((encoded_disc[0] >> 16) & 0xFF, 0x12);
+        assert_eq!(encoded_disc[1] & 0x01, 1); // enabled
+        assert_eq!(encoded_disc[1] & 0x02, 2); // irq_enabled
+        assert_eq!((encoded_disc[1] >> 8) & 0x0F, 2); // version 2
+        assert_eq!((encoded_disc[1] >> 16) & 0xFF, 2); // 2 interfaces
+        assert_eq!((encoded_disc[1] >> 24) & 0xFF, 0x34);
+        assert_eq!(encoded_disc[2], 1); // 1 notification
+        assert_eq!(encoded_disc[3], 0xCAFE_BABE);
+
+        let parsed_disc = XhciUsb4HostInterfaceDiscovery::parse(&encoded_disc).unwrap();
+        assert_eq!(parsed_disc.next_ptr_dwords, 60);
+        assert!(parsed_disc.enabled);
+        assert!(parsed_disc.irq_enabled);
+        assert_eq!(parsed_disc.protocol_version, 2);
+        assert_eq!(parsed_disc.discovered_interfaces, 2);
+        assert_eq!(parsed_disc.notification_mask, 0x1234);
+        assert_eq!(parsed_disc.notification_counter, 1);
+        assert_eq!(parsed_disc.discovery_status, 0xCAFE_BABE);
     }
 }
