@@ -306,6 +306,7 @@ pub const XHCI_EXT_CAP_SECONDARY_BANDWIDTH: u8 = 18;
 pub const XHCI_EXT_CAP_PORT_PROTOCOL_HIERARCHY: u8 = 19;
 pub const XHCI_EXT_CAP_EXTENDED_CAPABILITY_TABLE: u8 = 20;
 pub const XHCI_EXT_CAP_DEVICE_VIRTUALIZATION: u8 = 21;
+pub const XHCI_EXT_CAP_HUB_VIRTUALIZATION: u8 = 22;
 
 /// Masques de registres USB Legacy Support (xHCI 1.2 Section 7.1)
 /// Registre USBLEGSUP (Offset 0x00)
@@ -1702,6 +1703,110 @@ impl XhciDeviceVirtualization {
     /// Vérifie si un slot de périphérique virtuel donné est éligible à l'assignation
     pub const fn is_slot_assignable(&self, slot_id: u8) -> bool {
         self.enabled && slot_id > 0 && slot_id <= self.num_virtual_device_slots
+    }
+}
+
+/// Capacité Étendue xHCI 1.2 §7.14 : USB Shared USB Device / Hub Virtualization Architecture
+///
+/// Modélise la virtualisation matérielle des concentrateurs (Hubs) USB et le partage
+/// direct de périphériques USB (Shared USB Device / Virtual Hub) entre le contrôleur hôte
+/// primaire et les contrôleurs hôtes secondaires (Secondary Host Controller Interface).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XhciHubVirtualization {
+    /// Pointeur dword vers la prochaine capacité étendue (0 = fin de liste)
+    pub next_ptr_dwords: u8,
+    /// Indique si la virtualisation des hubs USB est matériellement activée
+    pub enabled: bool,
+    /// Nombre de ports downstream virtualisés pour ce hub virtuel (0..=127)
+    pub num_downstream_ports: u8,
+    /// Identifiant de contrôleur secondaire propriétaire / assigné (0 = contrôleur primaire)
+    pub assigned_secondary_id: u8,
+    /// Registre de contrôle matériel du hub virtuel (VHUBCTRL)
+    pub hub_control: u32,
+    /// Registre de statut matériel et drapeaux d'état de routage (VHUBSTS)
+    pub hub_status: u32,
+}
+
+impl Default for XhciHubVirtualization {
+    fn default() -> Self {
+        Self::new(4, 0)
+    }
+}
+
+impl XhciHubVirtualization {
+    /// Crée une nouvelle structure de virtualisation de concentrateur xHCI 1.2 §7.14
+    pub const fn new(num_downstream_ports: u8, assigned_secondary_id: u8) -> Self {
+        let ports = if num_downstream_ports > 127 {
+            127
+        } else {
+            num_downstream_ports
+        };
+        Self {
+            next_ptr_dwords: 0,
+            enabled: false,
+            num_downstream_ports: ports,
+            assigned_secondary_id,
+            hub_control: 0,
+            hub_status: 0,
+        }
+    }
+
+    /// Décode la capacité Hub Virtualization à partir de 3 dwords MMIO
+    pub fn parse(dwords: &[u32]) -> Option<Self> {
+        if dwords.len() < 3 {
+            return None;
+        }
+        let cap_id = (dwords[0] & 0xFF) as u8;
+        if cap_id != XHCI_EXT_CAP_HUB_VIRTUALIZATION {
+            return None;
+        }
+        let next_ptr = ((dwords[0] >> 8) & 0xFF) as u8;
+        let ports = (((dwords[0] >> 16) & 0xFF) as u8).min(127);
+        let sec_id = ((dwords[0] >> 24) & 0xFF) as u8;
+
+        let hctrl = dwords[1];
+        let hsts = dwords[2];
+        let enabled = (hctrl & 0x01) != 0;
+
+        Some(Self {
+            next_ptr_dwords: next_ptr,
+            enabled,
+            num_downstream_ports: ports,
+            assigned_secondary_id: sec_id,
+            hub_control: hctrl,
+            hub_status: hsts,
+        })
+    }
+
+    /// Encode la capacité en 3 mots dwords MMIO 32-bit
+    pub const fn encode(&self) -> [u32; 3] {
+        let dw0 = (XHCI_EXT_CAP_HUB_VIRTUALIZATION as u32)
+            | ((self.next_ptr_dwords as u32) << 8)
+            | ((self.num_downstream_ports as u32) << 16)
+            | ((self.assigned_secondary_id as u32) << 24);
+        let dw1 = (self.hub_control & !0x01) | (if self.enabled { 1 } else { 0 });
+        let dw2 = self.hub_status;
+        [dw0, dw1, dw2]
+    }
+
+    /// Active ou désactive la virtualisation du hub USB
+    pub fn set_enabled(&mut self, enable: bool) {
+        self.enabled = enable;
+        if enable {
+            self.hub_control |= 0x01;
+        } else {
+            self.hub_control &= !0x01;
+        }
+    }
+
+    /// Assigne ce hub virtuel à un contrôleur secondaire donné
+    pub fn assign_secondary_controller(&mut self, secondary_id: u8) {
+        self.assigned_secondary_id = secondary_id;
+    }
+
+    /// Vérifie si un numéro de port downstream donné (1-based) est valide et routable
+    pub const fn is_downstream_port_valid(&self, port_idx: u8) -> bool {
+        self.enabled && port_idx > 0 && port_idx <= self.num_downstream_ports
     }
 }
 
@@ -10178,5 +10283,39 @@ mod tests {
         assert_eq!(parsed_dv.num_virtual_device_slots, 32);
         assert!(parsed_dv.enabled);
         assert_eq!(parsed_dv.virt_status, 0x1234);
+
+        // 23. xHCI 1.2 §7.14 USB Shared USB Device / Hub Virtualization Architecture
+        let mut hub_virt = XhciHubVirtualization::new(8, 2);
+        assert_eq!(hub_virt.num_downstream_ports, 8);
+        assert_eq!(hub_virt.assigned_secondary_id, 2);
+        assert!(!hub_virt.enabled);
+        assert!(!hub_virt.is_downstream_port_valid(1));
+
+        hub_virt.set_enabled(true);
+        assert!(hub_virt.enabled);
+        assert!(hub_virt.is_downstream_port_valid(1));
+        assert!(hub_virt.is_downstream_port_valid(8));
+        assert!(!hub_virt.is_downstream_port_valid(0)); // port 0 invalide
+        assert!(!hub_virt.is_downstream_port_valid(9)); // hors limite
+
+        hub_virt.assign_secondary_controller(3);
+        assert_eq!(hub_virt.assigned_secondary_id, 3);
+
+        hub_virt.next_ptr_dwords = 20;
+        hub_virt.hub_status = 0x5678;
+        let encoded_hv = hub_virt.encode();
+        assert_eq!(encoded_hv[0] & 0xFF, XHCI_EXT_CAP_HUB_VIRTUALIZATION as u32);
+        assert_eq!((encoded_hv[0] >> 8) & 0xFF, 20);
+        assert_eq!((encoded_hv[0] >> 16) & 0xFF, 8);
+        assert_eq!((encoded_hv[0] >> 24) & 0xFF, 3);
+        assert_eq!(encoded_hv[1] & 0x01, 1);
+        assert_eq!(encoded_hv[2], 0x5678);
+
+        let parsed_hv = XhciHubVirtualization::parse(&encoded_hv).unwrap();
+        assert_eq!(parsed_hv.next_ptr_dwords, 20);
+        assert_eq!(parsed_hv.num_downstream_ports, 8);
+        assert_eq!(parsed_hv.assigned_secondary_id, 3);
+        assert!(parsed_hv.enabled);
+        assert_eq!(parsed_hv.hub_status, 0x5678);
     }
 }

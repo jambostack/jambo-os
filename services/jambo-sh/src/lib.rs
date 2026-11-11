@@ -621,6 +621,7 @@ impl JamboShell {
             "groups" | "/bin/groups" | "bin/groups" => self.cmd_groups(args, out),
             "hostid" | "/bin/hostid" | "bin/hostid" => self.cmd_hostid(args, out),
             "arch" | "/bin/arch" | "bin/arch" => self.cmd_arch(args, out),
+            "nproc" | "/bin/nproc" | "bin/nproc" => self.cmd_nproc(args, out),
             "cow" | "/bin/cow" | "bin/cow" => self.cmd_cow(args, out),
             "version" => self.cmd_version(out),
             "uptime" => self.cmd_uptime(out),
@@ -2732,6 +2733,43 @@ Utilitaire d'installation JamboOS (Serie 0.*.*)\n\
             (status, len)
         } else {
             let msg = b"arch: pipe creation failed\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
+    }
+
+    fn cmd_nproc(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if let (Ok((r_out, w_out)), Ok((r_err, w_err))) =
+            (libjambo::vfs::pipe(), libjambo::vfs::pipe())
+        {
+            let code = libjambo::coreutils::run_nproc(args, w_out, w_err);
+            let _ = libjambo::coreutils::sys_close(w_out);
+            let _ = libjambo::coreutils::sys_close(w_err);
+
+            let mut len = 0;
+            if code == 0 {
+                let n_out = libjambo::coreutils::sys_read(r_out, out);
+                if n_out > 0 {
+                    len = n_out as usize;
+                }
+            } else {
+                let n_err = libjambo::coreutils::sys_read(r_err, out);
+                if n_err > 0 {
+                    len = n_err as usize;
+                }
+            }
+            let _ = libjambo::coreutils::sys_close(r_out);
+            let _ = libjambo::coreutils::sys_close(r_err);
+
+            let status = if code == 0 {
+                ShellStatus::Success
+            } else {
+                ShellStatus::ExecutionFailed
+            };
+            (status, len)
+        } else {
+            let msg = b"nproc: pipe creation failed\n";
             let len = msg.len().min(out.len());
             out[..len].copy_from_slice(&msg[..len]);
             (ShellStatus::ExecutionFailed, len)
@@ -20418,5 +20456,19 @@ mod tests {
 
         let (st52, _len52) = shell.execute_line("arch extra_operand", &mut out);
         assert_eq!(st52, ShellStatus::ExecutionFailed);
+
+        // 35. nproc shell command
+        let (st53, len53) = shell.execute_line("nproc", &mut out);
+        assert_eq!(st53, ShellStatus::Success);
+        let s53 = core::str::from_utf8(&out[..len53]).unwrap();
+        assert_eq!(s53, "1\n");
+
+        let (st54, len54) = shell.execute_line("nproc --version", &mut out);
+        assert_eq!(st54, ShellStatus::Success);
+        let s54 = core::str::from_utf8(&out[..len54]).unwrap();
+        assert!(s54.contains("nproc"));
+
+        let (st55, _len55) = shell.execute_line("nproc extra_operand", &mut out);
+        assert_eq!(st55, ShellStatus::ExecutionFailed);
     }
 }

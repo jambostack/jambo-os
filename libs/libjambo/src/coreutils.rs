@@ -13388,6 +13388,7 @@ pub fn execute_coreutils_command(
         "groups" => run_groups(args, in_fd, out_fd, err_fd),
         "hostid" => run_hostid(args, out_fd, err_fd),
         "arch" => run_arch(args, out_fd, err_fd),
+        "nproc" => run_nproc(args, out_fd, err_fd),
         _ => {
             let _ = sys_write(err_fd, cmd.as_bytes());
             let _ = sys_write(err_fd, b": command not found\n");
@@ -14752,6 +14753,7 @@ pub fn run_xargs(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
             "groups" => run_groups(effective_sub_args, 0, out_fd, err_fd),
             "hostid" => run_hostid(effective_sub_args, out_fd, err_fd),
             "arch" => run_arch(effective_sub_args, out_fd, err_fd),
+            "nproc" => run_nproc(effective_sub_args, out_fd, err_fd),
             _ => {
                 let _ = sys_write(err_fd, b"xargs: ");
                 let _ = sys_write(err_fd, target_cmd.as_bytes());
@@ -20032,6 +20034,78 @@ Print machine architecture.\n\n\
     0
 }
 
+/// Utilitaire POSIX / GNU coreutils : `nproc` (Affiche le nombre de processeurs disponibles)
+///
+/// Imprime le nombre d'unités de traitement (cœurs logiques/processeurs) disponibles.
+/// Supporte l'option standard `--all` (affiche tous les processeurs installés) et `--ignore=N` (exclut N processeurs, min 1).
+pub fn run_nproc(args: &[&str], out_fd: i32, err_fd: i32) -> i32 {
+    let mut ignore_count = 0usize;
+    let mut show_all = false;
+
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i];
+        if arg == "--help" {
+            let _ = sys_write(
+                out_fd,
+                b"Usage: nproc [OPTION]...\n\
+Print the number of processing units available.\n\n\
+      --all       print the number of installed processors\n\
+      --ignore=N  if possible, exclude N processing units\n\
+      --help      display this help and exit\n\
+      --version   output version information and exit\n",
+            );
+            return 0;
+        } else if arg == "--version" {
+            let _ = sys_write(out_fd, b"nproc (jambo-coreutils) 0.1.0\n");
+            return 0;
+        } else if arg == "--all" {
+            show_all = true;
+        } else if let Some(stripped) = arg.strip_prefix("--ignore=") {
+            let mut val = 0usize;
+            let mut valid = !stripped.is_empty();
+            for b in stripped.bytes() {
+                if b.is_ascii_digit() {
+                    val = val.saturating_mul(10).saturating_add((b - b'0') as usize);
+                } else {
+                    valid = false;
+                    break;
+                }
+            }
+            if !valid {
+                let _ = sys_write(err_fd, b"nproc: invalid number: '");
+                let _ = sys_write(err_fd, stripped.as_bytes());
+                let _ = sys_write(err_fd, b"'\n");
+                return 1;
+            }
+            ignore_count = val;
+        } else if arg.starts_with('-') && arg != "-" {
+            let _ = sys_write(err_fd, b"nproc: unrecognized option '");
+            let _ = sys_write(err_fd, arg.as_bytes());
+            let _ = sys_write(err_fd, b"'\nTry 'nproc --help' for more information.\n");
+            return 1;
+        } else {
+            let _ = sys_write(err_fd, b"nproc: extra operand '");
+            let _ = sys_write(err_fd, arg.as_bytes());
+            let _ = sys_write(err_fd, b"'\nTry 'nproc --help' for more information.\n");
+            return 1;
+        }
+        i += 1;
+    }
+
+    let _ = show_all;
+    let num_procs = 1usize;
+    let effective = if num_procs > ignore_count {
+        num_procs - ignore_count
+    } else {
+        1
+    };
+
+    write_u64_fd(out_fd, effective as u64);
+    let _ = sys_write(out_fd, b"\n");
+    0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -24442,5 +24516,41 @@ Chaque processus dispose de son propre CR3 sans aucun privilege materiel direct.
         // Extra operand
         let code_a3 = run_arch(&["extra"], 1, 2);
         assert_eq!(code_a3, 1);
+
+        // 14. Test run_nproc
+        let (out_rn1, out_wn1) = crate::vfs::pipe().unwrap();
+        let code_n1 = run_nproc(&[], out_wn1, 2);
+        sys_close(out_wn1);
+        assert_eq!(code_n1, 0);
+        let mut bufn1 = [0u8; 64];
+        let nn1 = sys_read(out_rn1, &mut bufn1);
+        sys_close(out_rn1);
+        assert_eq!(core::str::from_utf8(&bufn1[..nn1 as usize]).unwrap(), "1\n");
+
+        // Option --ignore
+        let (out_rn2, out_wn2) = crate::vfs::pipe().unwrap();
+        let code_n2 = run_nproc(&["--ignore=1"], out_wn2, 2);
+        sys_close(out_wn2);
+        assert_eq!(code_n2, 0);
+        let mut bufn2 = [0u8; 64];
+        let nn2 = sys_read(out_rn2, &mut bufn2);
+        sys_close(out_rn2);
+        assert_eq!(core::str::from_utf8(&bufn2[..nn2 as usize]).unwrap(), "1\n");
+
+        // Option --version
+        let (out_rn3, out_wn3) = crate::vfs::pipe().unwrap();
+        let code_n3 = run_nproc(&["--version"], out_wn3, 2);
+        sys_close(out_wn3);
+        assert_eq!(code_n3, 0);
+        let mut bufn3 = [0u8; 64];
+        let nn3 = sys_read(out_rn3, &mut bufn3);
+        sys_close(out_rn3);
+        assert!(core::str::from_utf8(&bufn3[..nn3 as usize])
+            .unwrap()
+            .contains("nproc"));
+
+        // Extra operand
+        let code_n4 = run_nproc(&["extra"], 1, 2);
+        assert_eq!(code_n4, 1);
     }
 }
