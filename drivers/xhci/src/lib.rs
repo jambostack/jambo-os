@@ -626,6 +626,91 @@ pub struct XhciPortProtocolInfo {
     pub is_usb2: bool,
 }
 
+/// Capacité Étendue xHCI I/O Virtualization (xHCI 1.2 Section 7.4)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XhciIoVirtualization {
+    /// Pointeur dword vers la prochaine capacité étendue (0 = fin de liste)
+    pub next_ptr_dwords: u8,
+    /// Nombre de fonctions virtuelles (VF) supportées
+    pub num_vfs: u16,
+}
+
+impl XhciIoVirtualization {
+    /// Parse les 2 premiers dwords d'une capacité étendue I/O Virtualization
+    pub const fn parse(dwords: &[u32; 2]) -> Self {
+        let dw0 = dwords[0];
+        let dw1 = dwords[1];
+        let next_ptr_dwords = ((dw0 >> 8) & 0xFF) as u8;
+        let num_vfs = (dw1 & 0xFFFF) as u16;
+        Self {
+            next_ptr_dwords,
+            num_vfs,
+        }
+    }
+
+    /// Encode les 2 dwords de la structure I/O Virtualization
+    pub const fn encode(&self) -> [u32; 2] {
+        let dw0 = (XHCI_EXT_CAP_IO_VIRTUALIZATION as u32) | ((self.next_ptr_dwords as u32) << 8);
+        let dw1 = self.num_vfs as u32;
+        [dw0, dw1]
+    }
+}
+
+/// Capacité Étendue xHCI Local Memory (xHCI 1.2 Section 7.5)
+///
+/// Permet à l'hôte d'identifier et d'exploiter la mémoire SRAM/RAM locale du contrôleur
+/// pour stocker les anneaux de transfert, contextes ou buffers de paquets sans passer
+/// par le bus PCIe système hôte (gain de latence et bande passante).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XhciLocalMemory {
+    /// Pointeur dword vers la prochaine capacité étendue (0 = fin de liste)
+    pub next_ptr_dwords: u8,
+    /// Numéro de BAR PCI contenant la mémoire locale (0..=5)
+    pub bar_index: u8,
+    /// Offset en dwords dans le BAR
+    pub mem_offset_dwords: u32,
+    /// Taille de la mémoire locale en Kio (kilooctets)
+    pub size_kib: u32,
+}
+
+impl XhciLocalMemory {
+    /// Parse les 2 premiers dwords de la capacité Local Memory
+    pub const fn parse(dwords: &[u32; 2]) -> Self {
+        let dw0 = dwords[0];
+        let dw1 = dwords[1];
+        let next_ptr_dwords = ((dw0 >> 8) & 0xFF) as u8;
+        let bar_index = ((dw0 >> 16) & 0x07) as u8;
+        let mem_offset_dwords = (dw0 >> 19) & 0x1FFF;
+        let size_kib = dw1;
+        Self {
+            next_ptr_dwords,
+            bar_index,
+            mem_offset_dwords,
+            size_kib,
+        }
+    }
+
+    /// Encode les 2 dwords de la structure Local Memory
+    pub const fn encode(&self) -> [u32; 2] {
+        let dw0 = (XHCI_EXT_CAP_LOCAL_MEMORY as u32)
+            | ((self.next_ptr_dwords as u32) << 8)
+            | (((self.bar_index & 0x07) as u32) << 16)
+            | ((self.mem_offset_dwords & 0x1FFF) << 19);
+        let dw1 = self.size_kib;
+        [dw0, dw1]
+    }
+
+    /// Retourne la taille en octets de la mémoire locale xHCI
+    pub const fn size_bytes(&self) -> u64 {
+        (self.size_kib as u64) * 1024
+    }
+
+    /// Retourne l'offset en octets par rapport à la base du BAR
+    pub const fn offset_bytes(&self) -> u64 {
+        (self.mem_offset_dwords as u64) * 4
+    }
+}
+
 /// Anneau de transfert xHCI dédié à un flux Bulk spécifique (Block Stream / UAS)
 pub struct BulkStreamRing {
     pub stream_id: u16,
@@ -5928,6 +6013,30 @@ impl XhciController {
         None
     }
 
+    /// Lit et décode une capacité I/O Virtualization (xHCI 1.2 section 7.4)
+    /// à partir de son adresse MMIO de base.
+    ///
+    /// # Safety
+    ///
+    /// Effectue 2 lectures volatiles MMIO 32-bit alignées sur l'espace BAR0 du contrôleur xHCI.
+    pub fn read_io_virtualization(&self, cap_addr: u64) -> XhciIoVirtualization {
+        let dw0 = unsafe { core::ptr::read_volatile(cap_addr as *const u32) };
+        let dw1 = unsafe { core::ptr::read_volatile((cap_addr + 4) as *const u32) };
+        XhciIoVirtualization::parse(&[dw0, dw1])
+    }
+
+    /// Lit et décode une capacité Local Memory (xHCI 1.2 section 7.5)
+    /// à partir de son adresse MMIO de base.
+    ///
+    /// # Safety
+    ///
+    /// Effectue 2 lectures volatiles MMIO 32-bit alignées sur l'espace BAR0 du contrôleur xHCI.
+    pub fn read_local_memory(&self, cap_addr: u64) -> XhciLocalMemory {
+        let dw0 = unsafe { core::ptr::read_volatile(cap_addr as *const u32) };
+        let dw1 = unsafe { core::ptr::read_volatile((cap_addr + 4) as *const u32) };
+        XhciLocalMemory::parse(&[dw0, dw1])
+    }
+
     /// Émet une commande Evaluate Context sur le Command Ring.
     pub fn evaluate_context(
         &mut self,
@@ -8409,5 +8518,30 @@ mod tests {
 
         let p4_info = XhciController::query_port_protocol(&protocols, 4);
         assert_eq!(p4_info, None);
+
+        // 11. I/O Virtualization Capability (xHCI 1.2 section 7.4)
+        let iov_dwords: [u32; 2] = [
+            (4 << 8) | (XHCI_EXT_CAP_IO_VIRTUALIZATION as u32), // next=4
+            16,                                                 // num_vfs = 16
+        ];
+        let iov = XhciIoVirtualization::parse(&iov_dwords);
+        assert_eq!(iov.next_ptr_dwords, 4);
+        assert_eq!(iov.num_vfs, 16);
+        assert_eq!(iov.encode(), iov_dwords);
+
+        // 12. Local Memory Capability (xHCI 1.2 section 7.5)
+        // BAR 2, offset 0x40 (64 dwords = 256 octets), size 64 KiB
+        let loc_dwords: [u32; 2] = [
+            ((64 & 0x1FFF) << 19) | ((2 & 0x07) << 16) | (XHCI_EXT_CAP_LOCAL_MEMORY as u32),
+            64, // 64 KiB
+        ];
+        let loc = XhciLocalMemory::parse(&loc_dwords);
+        assert_eq!(loc.next_ptr_dwords, 0);
+        assert_eq!(loc.bar_index, 2);
+        assert_eq!(loc.mem_offset_dwords, 64);
+        assert_eq!(loc.size_kib, 64);
+        assert_eq!(loc.size_bytes(), 64 * 1024);
+        assert_eq!(loc.offset_bytes(), 256);
+        assert_eq!(loc.encode(), loc_dwords);
     }
 }

@@ -372,5 +372,17 @@ name = "factor"
 path = "src/bin/factor.rs"
 test = false
 
+[[bin]]
+name = "timeout"
+path = "src/bin/timeout.rs"
+test = false
+
+[[bin]]
+name = "nice"
+path = "src/bin/nice.rs"
+test = false
+
+# 74 utilitaires Ring 3
+
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }

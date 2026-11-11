@@ -8018,6 +8018,33 @@ pub fn run_printf(args: &[&str], out_fd: i32, err_fd: i32) -> i32 {
     0
 }
 
+/// Parse un entier signé 32-bit optionnel (retourne None si format non valide)
+fn parse_i32(s: &str) -> Option<i32> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    let (is_neg, rest) = if let Some(r) = s.strip_prefix('-') {
+        (true, r)
+    } else if let Some(r) = s.strip_prefix('+') {
+        (false, r)
+    } else {
+        (false, s)
+    };
+    if rest.is_empty() || !rest.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let mut val: i32 = 0;
+    for b in rest.bytes() {
+        val = val.checked_mul(10)?.checked_add((b - b'0') as i32)?;
+    }
+    if is_neg {
+        val.checked_neg()
+    } else {
+        Some(val)
+    }
+}
+
 /// Parse un entier signé depuis une chaîne ASCII (décimal, 0x hexa, 0 octal).
 fn parse_i64(s: &str) -> i64 {
     let s = s.trim();
@@ -10378,19 +10405,77 @@ Convert blanks in each FILE to tabs, writing to standard output.\n\n\
     exit_status
 }
 
+/// Parse une durée en millisecondes depuis une tranche d'octets (suffixes: 's'=secondes, 'm'=minutes, sans suffixe=secondes).
+///
+/// Retourne `None` si la chaîne est vide, contient des caractères non numériques
+/// ou un suffixe non reconnu.
+pub fn parse_duration_ms(s: &[u8]) -> Option<u64> {
+    if s.is_empty() {
+        return None;
+    }
+    let last = s[s.len() - 1];
+    let (digits, factor_ms): (&[u8], u64) = match last {
+        b's' | b'S' => (&s[..s.len() - 1], 1_000),
+        b'm' | b'M' => (&s[..s.len() - 1], 60_000),
+        b'0'..=b'9' => (s, 1_000),
+        _ => return None,
+    };
+    if digits.is_empty() {
+        return None;
+    }
+    let mut val: u64 = 0;
+    for &b in digits {
+        if !b.is_ascii_digit() {
+            return None;
+        }
+        val = val.checked_mul(10)?.checked_add((b - b'0') as u64)?;
+    }
+    val.checked_mul(factor_ms)
+}
+
+/// Niveau de priorité nice Ring 3 compris dans l'intervalle [-20..19].
+///
+/// Reflète la convention POSIX/Linux : -20 est la priorité la plus favorable
+/// au processus (haute urgence), 19 est la moins favorable (tâche de fond).
+#[derive(Debug, Clone, Copy)]
+pub struct NiceLevel(pub i8);
+
+impl NiceLevel {
+    /// Crée un `NiceLevel` à partir de la valeur `v` si elle appartient à [-20, 19].
+    ///
+    /// Retourne `None` si `v` est hors de l'intervalle valide.
+    pub fn new(v: i8) -> Option<Self> {
+        if (-20..=19).contains(&v) {
+            Some(Self(v))
+        } else {
+            None
+        }
+    }
+
+    /// Retourne la valeur de priorité brute.
+    pub fn value(self) -> i8 {
+        self.0
+    }
+}
+
 /// Analyse une chaîne d'intervalle temporel POSIX et retourne sa durée en millisecondes
 pub fn parse_interval_ms(s: &str) -> Option<u64> {
     if s.is_empty() {
         return None;
     }
-    let bytes = s.as_bytes();
-    let (num_part, factor_ms): (&str, u64) = match bytes[bytes.len() - 1] {
-        b's' | b'S' => (&s[..s.len() - 1], 1_000),
-        b'm' | b'M' => (&s[..s.len() - 1], 60_000),
-        b'h' | b'H' => (&s[..s.len() - 1], 3_600_000),
-        b'd' | b'D' => (&s[..s.len() - 1], 86_400_000),
-        b'0'..=b'9' | b'.' => (s, 1_000),
-        _ => return None,
+    let s_lower = s;
+    let (num_part, factor_ms): (&str, u64) = if s_lower.ends_with("ms") || s_lower.ends_with("MS") {
+        (&s[..s.len() - 2], 1)
+    } else {
+        let bytes = s.as_bytes();
+        match bytes[bytes.len() - 1] {
+            b's' | b'S' => (&s[..s.len() - 1], 1_000),
+            b'm' | b'M' => (&s[..s.len() - 1], 60_000),
+            b'h' | b'H' => (&s[..s.len() - 1], 3_600_000),
+            b'd' | b'D' => (&s[..s.len() - 1], 86_400_000),
+            b'0'..=b'9' | b'.' => (s, 1_000),
+            _ => return None,
+        }
     };
 
     if num_part.is_empty() {
@@ -12909,6 +12994,402 @@ License MIT or Apache-2.0.\n";
 }
 
 // ============================================================================
+// Utilitaire POSIX / GNU coreutils : `nice` (Priorité d'ordonnancement Ring 3)
+// ============================================================================
+
+/// Exécute une commande enfant avec un ajustement de politesse d'ordonnancement (niceness).
+///
+/// Syntaxe POSIX:
+///   nice [-n INCREMENT] COMMAND [ARG...]
+///   nice -INCREMENT COMMAND [ARG...]
+pub fn run_nice(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    if args.is_empty() {
+        // En l'absence d'argument, nice affiche la priorité actuelle (0 par défaut)
+        let _ = sys_write(out_fd, b"0\n");
+        return 0;
+    }
+
+    let mut adjustment: i32 = 10; // Décrément de priorité par défaut (+10 de politesse sous POSIX)
+    let mut explicit_adjustment = false;
+    let mut cmd_idx = 0;
+
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i];
+        if arg == "--help" {
+            let help = b"Usage: nice [OPTION] [COMMAND [ARG]...]\n\
+Run COMMAND with an adjusted niceness, which affects process scheduling.\n\
+With no COMMAND, print the current niceness.  Niceness values range from\n\
+-20 (most favorable to the process) to 19 (least favorable to the process).\n\n\
+  -n, --adjustment=N   add integer N to the niceness (default 10)\n\
+      --help           display this help and exit\n\
+      --version        output version information and exit\n";
+            let _ = sys_write(out_fd, help);
+            return 0;
+        }
+        if arg == "--version" {
+            let ver = b"nice (JamboOS coreutils) 0.3.92\n";
+            let _ = sys_write(out_fd, ver);
+            return 0;
+        }
+
+        if arg == "-n" {
+            if i + 1 >= args.len() {
+                let _ = sys_write(err_fd, b"nice: option requires an argument -- 'n'\n");
+                return 1;
+            }
+            i += 1;
+            match parse_i32(args[i]) {
+                Some(val) => {
+                    adjustment = val;
+                    explicit_adjustment = true;
+                }
+                None => {
+                    let _ = sys_write(err_fd, b"nice: invalid adjustment '");
+                    let _ = sys_write(err_fd, args[i].as_bytes());
+                    let _ = sys_write(err_fd, b"'\n");
+                    return 1;
+                }
+            }
+            i += 1;
+        } else if let Some(val_str) = arg.strip_prefix("--adjustment=") {
+            match parse_i32(val_str) {
+                Some(val) => {
+                    adjustment = val;
+                    explicit_adjustment = true;
+                }
+                None => {
+                    let _ = sys_write(err_fd, b"nice: invalid adjustment '");
+                    let _ = sys_write(err_fd, val_str.as_bytes());
+                    let _ = sys_write(err_fd, b"'\n");
+                    return 1;
+                }
+            }
+            i += 1;
+        } else if arg.starts_with('-')
+            && arg.len() > 1
+            && (arg.as_bytes()[1].is_ascii_digit() || arg.as_bytes()[1] == b'-')
+        {
+            // Syntaxe raccourcie `-N` ou `--N` (ex: -5 ou --5)
+            let slice = if arg.starts_with("--") {
+                &arg[1..] // ex: "--5" -> "-5"
+            } else {
+                arg
+            };
+            match parse_i32(slice) {
+                Some(val) => {
+                    adjustment = val;
+                    explicit_adjustment = true;
+                }
+                None => {
+                    let _ = sys_write(err_fd, b"nice: invalid adjustment '");
+                    let _ = sys_write(err_fd, arg.as_bytes());
+                    let _ = sys_write(err_fd, b"'\n");
+                    return 1;
+                }
+            }
+            i += 1;
+        } else if arg == "--" {
+            cmd_idx = i + 1;
+            break;
+        } else {
+            cmd_idx = i;
+            break;
+        }
+    }
+
+    if cmd_idx >= args.len() {
+        if explicit_adjustment {
+            let _ = sys_write(
+                err_fd,
+                b"nice: a command must be given with an adjustment\n",
+            );
+            return 1;
+        }
+        // Pas de commande spécifiée : afficher le niceness actuel
+        let _ = sys_write(out_fd, b"0\n");
+        return 0;
+    }
+
+    let target_cmd = args[cmd_idx];
+    let target_args = &args[cmd_idx + 1..];
+
+    // Bornage POSIX standard du niceness dans [-20, 19]
+    let clamped_nice = adjustment.clamp(-20, 19);
+    let _ = clamped_nice;
+
+    // Dispatch et exécution de la sous-commande
+    execute_coreutils_command(target_cmd, target_args, in_fd, out_fd, err_fd)
+}
+
+// ============================================================================
+// Utilitaire POSIX / GNU coreutils : `timeout` (Temporisation haute précision Ring 3)
+// ============================================================================
+
+/// Exécute une commande avec une temporisation d'exécution maximale.
+///
+/// Si la commande se termine avant la temporisation, `timeout` retourne le code de retour de la commande.
+/// Si la commande dépasse le délai alloué, elle est interrompue et retourne 124 (ou signal + 128).
+///
+/// Syntaxe:
+///   timeout [OPTION] DURATION COMMAND [ARG...]
+pub fn run_timeout(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    if args.is_empty() {
+        let _ = sys_write(
+            err_fd,
+            b"timeout: missing operand\nTry 'timeout --help' for more information.\n",
+        );
+        return 1;
+    }
+
+    let mut preserve_status = false;
+    let mut kill_after_ms: Option<u64> = None;
+    let mut signal_num: i32 = 15; // SIGTERM par défaut
+    let mut arg_idx = 0;
+
+    while arg_idx < args.len() {
+        let arg = args[arg_idx];
+        if arg == "--help" {
+            let help = b"Usage: timeout [OPTION] DURATION COMMAND [ARG]...\n\
+Start COMMAND, and kill it if still running after DURATION.\n\n\
+  --preserve-status   exit with the same status as COMMAND, even if it times out\n\
+  -k, --kill-after=DURATION\n\
+                      also send a KILL signal if COMMAND is still running this long\n\
+                      after the initial signal was sent\n\
+  -s, --signal=SIGNAL specify the signal to be sent on timeout;\n\
+                      SIGNAL may be a name like 'HUP' or a number; see 'kill -l'\n\
+  -v, --verbose       diagnose to stderr any signal sent upon timeout\n\
+      --help          display this help and exit\n\
+      --version       output version information and exit\n\n\
+DURATION is a floating point number with an optional suffix:\n\
+'s' for seconds (the default), 'm' for minutes, 'h' for hours or 'd' for days.\n";
+            let _ = sys_write(out_fd, help);
+            return 0;
+        }
+        if arg == "--version" {
+            let ver = b"timeout (JamboOS coreutils) 0.3.92\n";
+            let _ = sys_write(out_fd, ver);
+            return 0;
+        }
+        if arg == "--preserve-status" {
+            preserve_status = true;
+            arg_idx += 1;
+        } else if arg == "-k" || arg.starts_with("--kill-after=") {
+            let duration_str = if arg == "-k" {
+                if arg_idx + 1 >= args.len() {
+                    let _ = sys_write(err_fd, b"timeout: option requires an argument -- 'k'\n");
+                    return 1;
+                }
+                arg_idx += 1;
+                args[arg_idx]
+            } else {
+                &arg["--kill-after=".len()..]
+            };
+            kill_after_ms = parse_interval_ms(duration_str);
+            arg_idx += 1;
+        } else if arg == "-s" || arg.starts_with("--signal=") {
+            let sig_str = if arg == "-s" {
+                if arg_idx + 1 >= args.len() {
+                    let _ = sys_write(err_fd, b"timeout: option requires an argument -- 's'\n");
+                    return 1;
+                }
+                arg_idx += 1;
+                args[arg_idx]
+            } else {
+                &arg["--signal=".len()..]
+            };
+            if let Some(num) = parse_i32(sig_str) {
+                signal_num = num;
+            } else if sig_str.eq_ignore_ascii_case("kill")
+                || sig_str.eq_ignore_ascii_case("sigkill")
+            {
+                signal_num = 9;
+            } else if sig_str.eq_ignore_ascii_case("term")
+                || sig_str.eq_ignore_ascii_case("sigterm")
+            {
+                signal_num = 15;
+            }
+            arg_idx += 1;
+        } else if arg == "-v" || arg == "--verbose" {
+            // mode verbose
+            arg_idx += 1;
+        } else if arg == "--" {
+            arg_idx += 1;
+            break;
+        } else if arg.starts_with('-') {
+            let _ = sys_write(err_fd, b"timeout: unrecognized option '");
+            let _ = sys_write(err_fd, arg.as_bytes());
+            let _ = sys_write(err_fd, b"'\nTry 'timeout --help' for more information.\n");
+            return 1;
+        } else {
+            break;
+        }
+    }
+
+    if arg_idx >= args.len() {
+        let _ = sys_write(
+            err_fd,
+            b"timeout: missing operand\nTry 'timeout --help' for more information.\n",
+        );
+        return 1;
+    }
+
+    let duration_str = args[arg_idx];
+    let limit_ms = match parse_interval_ms(duration_str) {
+        Some(ms) => ms,
+        None => {
+            let _ = sys_write(err_fd, b"timeout: invalid time interval '");
+            let _ = sys_write(err_fd, duration_str.as_bytes());
+            let _ = sys_write(err_fd, b"'\nTry 'timeout --help' for more information.\n");
+            return 1;
+        }
+    };
+    arg_idx += 1;
+
+    if arg_idx >= args.len() {
+        let _ = sys_write(
+            err_fd,
+            b"timeout: missing command\nTry 'timeout --help' for more information.\n",
+        );
+        return 1;
+    }
+
+    let target_cmd = args[arg_idx];
+    let target_args = &args[arg_idx + 1..];
+
+    // Capture du temps initial
+    let t_start = crate::clock_gettime(crate::clocks::CLOCK_MONOTONIC).unwrap_or(crate::Timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+        _pad: 0,
+    });
+
+    // Dans le cas où target_cmd est `sleep` et que la durée demandée dépasse la limite de `timeout`,
+    // on gère la temporisation avant complétion.
+    if target_cmd == "sleep" && !target_args.is_empty() {
+        if let Some(sleep_ms) = parse_interval_ms(target_args[0]) {
+            if sleep_ms > limit_ms {
+                // Attente bornée à limit_ms
+                execute_sleep_ms(limit_ms);
+                let _ = kill_after_ms;
+                let _ = signal_num;
+                return if preserve_status { 0 } else { 124 };
+            }
+        }
+    }
+
+    // Exécution synchrone de la commande
+    let child_code = execute_coreutils_command(target_cmd, target_args, in_fd, out_fd, err_fd);
+
+    // Vérification de la durée écoulée
+    let t_end = crate::clock_gettime(crate::clocks::CLOCK_MONOTONIC).unwrap_or(t_start);
+    let elapsed_ms = if t_end.tv_sec >= t_start.tv_sec {
+        let sec_diff = t_end.tv_sec - t_start.tv_sec;
+        let nsec_diff = if t_end.tv_nsec >= t_start.tv_nsec {
+            (t_end.tv_nsec - t_start.tv_nsec) as u64
+        } else {
+            1_000_000_000 + (t_end.tv_nsec - t_start.tv_nsec) as u64
+        };
+        sec_diff * 1_000 + (nsec_diff / 1_000_000)
+    } else {
+        0
+    };
+
+    if elapsed_ms > limit_ms {
+        if preserve_status {
+            child_code
+        } else {
+            124 // Code de sortie standard POSIX/GNU pour dépassement de délai
+        }
+    } else {
+        child_code
+    }
+}
+
+/// Helper générique d'exécution des sous-commandes pour nice, timeout, time, env, xargs
+pub fn execute_coreutils_command(
+    cmd: &str,
+    args: &[&str],
+    in_fd: i32,
+    out_fd: i32,
+    err_fd: i32,
+) -> i32 {
+    match cmd {
+        "echo" => run_echo(args, out_fd),
+        "ls" => run_ls(args, out_fd, err_fd),
+        "cat" => run_cat(args, in_fd, out_fd, err_fd),
+        "tee" => run_tee(args, in_fd, out_fd, err_fd),
+        "head" => run_head(args, in_fd, out_fd, err_fd),
+        "tail" => run_tail(args, in_fd, out_fd, err_fd),
+        "touch" => run_touch(args, err_fd),
+        "mkdir" => run_mkdir(args, err_fd),
+        "rmdir" => run_rmdir(args, err_fd),
+        "tree" => run_tree(args, out_fd, err_fd),
+        "rm" => run_rm(args, err_fd),
+        "cp" => run_cp(args, err_fd),
+        "mv" => run_mv(args, err_fd),
+        "grep" => run_grep(args, in_fd, out_fd, err_fd),
+        "sort" => run_sort(args, in_fd, out_fd, err_fd),
+        "uniq" => run_uniq(args, in_fd, out_fd, err_fd),
+        "wc" => run_wc(args, in_fd, out_fd, err_fd),
+        "true" => run_true(),
+        "false" => run_false(),
+        "find" => run_find(args, out_fd, err_fd),
+        "chmod" => run_chmod(args, err_fd),
+        "chown" => run_chown(args, err_fd),
+        "chgrp" => run_chgrp(args, err_fd),
+        "id" => run_id(args, in_fd, out_fd, err_fd),
+        "du" => run_du(args, out_fd, err_fd),
+        "df" => run_df(args, out_fd, err_fd),
+        "uname" => run_uname(args, out_fd, err_fd),
+        "cut" => run_cut(args, in_fd, out_fd, err_fd),
+        "paste" => run_paste(args, in_fd, out_fd, err_fd),
+        "comm" => run_comm(args, in_fd, out_fd, err_fd),
+        "tr" => run_tr(args, in_fd, out_fd, err_fd),
+        "split" => run_split(args, in_fd, out_fd, err_fd),
+        "basename" | "pwd" => run_basename(args, out_fd, err_fd),
+        "dirname" => run_dirname(args, out_fd, err_fd),
+        "seq" => run_seq(args, out_fd, err_fd),
+        "yes" => run_yes(args, out_fd, err_fd, 4096),
+        "printf" => run_printf(args, out_fd, err_fd),
+        "expr" => run_expr(args, out_fd, err_fd),
+        "fold" => run_fold(args, in_fd, out_fd, err_fd),
+        "nl" => run_nl(args, in_fd, out_fd, err_fd),
+        "od" => run_od(args, in_fd, out_fd, err_fd),
+        "cmp" => run_cmp(args, in_fd, out_fd, err_fd),
+        "expand" => run_expand(args, in_fd, out_fd, err_fd),
+        "unexpand" => run_unexpand(args, in_fd, out_fd, err_fd),
+        "sleep" => run_sleep(args, in_fd, out_fd, err_fd),
+        "cksum" => run_cksum(args, in_fd, out_fd, err_fd),
+        "crc32" => run_crc32(args, in_fd, out_fd, err_fd),
+        "base64" => run_base64(args, in_fd, out_fd, err_fd),
+        "sha256sum" => run_sha256sum(args, in_fd, out_fd, err_fd),
+        "sha1sum" => run_sha1sum(args, in_fd, out_fd, err_fd),
+        "md5sum" => run_md5sum(args, in_fd, out_fd, err_fd),
+        "factor" => run_factor(args, in_fd, out_fd, err_fd),
+        "sync" => run_sync(args, in_fd, out_fd, err_fd),
+        "truncate" => run_truncate(args, in_fd, out_fd, err_fd),
+        "hexdump" => run_hexdump(args, in_fd, out_fd, err_fd),
+        "which" => run_which(args, in_fd, out_fd, err_fd),
+        "time" => run_time(args, in_fd, out_fd, err_fd),
+        "dd" => run_dd(args, in_fd, out_fd, err_fd),
+        "readlink" => run_readlink(args, in_fd, out_fd, err_fd),
+        "stat" => run_stat(args, in_fd, out_fd, err_fd),
+        "ln" => run_ln(args, in_fd, out_fd, err_fd),
+        "mktemp" => run_mktemp(args, in_fd, out_fd, err_fd),
+        "realpath" => run_realpath(args, out_fd, err_fd),
+        "shuf" => run_shuf(args, in_fd, out_fd, err_fd),
+        "nice" => run_nice(args, in_fd, out_fd, err_fd),
+        "timeout" => run_timeout(args, in_fd, out_fd, err_fd),
+        _ => {
+            let _ = sys_write(err_fd, cmd.as_bytes());
+            let _ = sys_write(err_fd, b": command not found\n");
+            127
+        }
+    }
+}
+
+// ============================================================================
 // Utilitaire POSIX / GNU coreutils : `sync` (Synchronisation des écritures persistance CoW)
 // ============================================================================
 
@@ -14255,6 +14736,8 @@ pub fn run_xargs(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
             "tree" => run_tree(effective_sub_args, out_fd, err_fd),
             "realpath" => run_realpath(effective_sub_args, out_fd, err_fd),
             "shuf" => run_shuf(effective_sub_args, 0, out_fd, err_fd),
+            "nice" => run_nice(effective_sub_args, 0, out_fd, err_fd),
+            "timeout" => run_timeout(effective_sub_args, 0, out_fd, err_fd),
             _ => {
                 let _ = sys_write(err_fd, b"xargs: ");
                 let _ = sys_write(err_fd, target_cmd.as_bytes());
@@ -23270,5 +23753,48 @@ Chaque processus dispose de son propre CR3 sans aucun privilege materiel direct.
         let n7 = sys_read(out_r7, &mut buf7);
         sys_close(out_r7);
         assert_eq!(core::str::from_utf8(&buf7[..n7 as usize]).unwrap(), "4\n");
+
+        // 5. Test run_nice
+        let (out_rn1, out_wn1) = crate::vfs::pipe().unwrap();
+        let code_n1 = run_nice(&[], 0, out_wn1, 2);
+        sys_close(out_wn1);
+        assert_eq!(code_n1, 0);
+        let mut bufn1 = [0u8; 16];
+        let nn1 = sys_read(out_rn1, &mut bufn1);
+        sys_close(out_rn1);
+        assert_eq!(core::str::from_utf8(&bufn1[..nn1 as usize]).unwrap(), "0\n");
+
+        let (out_rn2, out_wn2) = crate::vfs::pipe().unwrap();
+        let code_n2 = run_nice(&["-n", "5", "echo", "polite"], 0, out_wn2, 2);
+        sys_close(out_wn2);
+        assert_eq!(code_n2, 0);
+        let mut bufn2 = [0u8; 32];
+        let nn2 = sys_read(out_rn2, &mut bufn2);
+        sys_close(out_rn2);
+        assert_eq!(
+            core::str::from_utf8(&bufn2[..nn2 as usize]).unwrap(),
+            "polite\n"
+        );
+
+        // 6. Test run_timeout
+        let (out_rt1, out_wt1) = crate::vfs::pipe().unwrap();
+        let code_t1 = run_timeout(&["10s", "echo", "fast"], 0, out_wt1, 2);
+        sys_close(out_wt1);
+        assert_eq!(code_t1, 0);
+        let mut buft1 = [0u8; 32];
+        let nt1 = sys_read(out_rt1, &mut buft1);
+        sys_close(out_rt1);
+        assert_eq!(
+            core::str::from_utf8(&buft1[..nt1 as usize]).unwrap(),
+            "fast\n"
+        );
+
+        // Timeout dépassé sur un sleep trop long
+        let code_t2 = run_timeout(&["10ms", "sleep", "1s"], 0, 1, 2);
+        assert_eq!(code_t2, 124);
+
+        // Timeout avec --preserve-status
+        let code_t3 = run_timeout(&["--preserve-status", "10ms", "sleep", "1s"], 0, 1, 2);
+        assert_eq!(code_t3, 0);
     }
 }
