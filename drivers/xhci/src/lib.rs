@@ -320,6 +320,7 @@ pub const XHCI_EXT_CAP_SUBLINK_SPEED_ROUTING: u8 = 32;
 pub const XHCI_EXT_CAP_EXTENDED_MESSAGE_INTERRUPT_VECTOR: u8 = 33;
 pub const XHCI_EXT_CAP_EXTENDED_PORT_STATUS_CONTROL: u8 = 34;
 pub const XHCI_EXT_CAP_FIRMWARE_DEBUG_TRACE: u8 = 35;
+pub const XHCI_EXT_CAP_OFFLOAD_BUFFER_MANAGEMENT: u8 = 36;
 
 /// Masques de registres USB Legacy Support (xHCI 1.2 Section 7.1)
 /// Registre USBLEGSUP (Offset 0x00)
@@ -3431,6 +3432,105 @@ impl XhciFirmwareDebugTrace {
     pub fn set_subsystem_mask(&mut self, mask: u16) {
         self.subsystem_mask = mask;
         self.control = (self.control & !0xFFFF_0000) | (((mask as u32) & 0xFFFF) << 16);
+    }
+}
+
+/// Capacité Étendue xHCI Offload Buffer Management (OBM / xHCI 1.2 §7.28)
+///
+/// Permet la gestion matérielle des tampons de déchargement DMA directs
+/// pour les flux isochrones et flux de données audio/vidéo haute performance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XhciOffloadBufferManagement {
+    /// Pointeur dword vers la prochaine capacité étendue (0 = fin de liste)
+    pub next_ptr_dwords: u8,
+    /// Fonctionnalité de déchargement de tampon activée
+    pub enabled: bool,
+    /// Nombre d'anneaux de tampons de déchargement alloués (bits 8..=15)
+    pub buffer_ring_count: u8,
+    /// Seuil de filigrane d'interruption DMA en Kio (bits 16..=31)
+    pub watermark_threshold_kb: u16,
+    /// Registre de contrôle brut (DWORD 1)
+    pub control: u32,
+    /// Registre d'état du moteur de déchargement (DWORD 2)
+    pub status: u32,
+    /// Alignement de bloc en octets (DWORD 3 [15:0])
+    pub block_alignment: u16,
+    /// Taille maximale de segment DMA allouable en Kio (DWORD 3 [31:16])
+    pub max_segment_kb: u16,
+}
+
+impl XhciOffloadBufferManagement {
+    /// Crée une nouvelle configuration Offload Buffer Management
+    pub const fn new(buffer_ring_count: u8, max_segment_kb: u16) -> Self {
+        Self {
+            next_ptr_dwords: 0,
+            enabled: false,
+            buffer_ring_count,
+            watermark_threshold_kb: 64,
+            control: 0,
+            status: 0,
+            block_alignment: 4096, // Pages de 4 Kio standard
+            max_segment_kb,
+        }
+    }
+
+    /// Parse les 4 dwords MMIO d'une capacité étendue OBM (§7.28)
+    pub const fn parse(dwords: &[u32; 4]) -> Option<Self> {
+        let cap_id = (dwords[0] & 0xFF) as u8;
+        if cap_id != XHCI_EXT_CAP_OFFLOAD_BUFFER_MANAGEMENT {
+            return None;
+        }
+
+        let next_ptr = ((dwords[0] >> 8) & 0xFF) as u8;
+        let ctrl = dwords[1];
+        let enabled = (ctrl & 0x01) != 0;
+        let buffer_ring_count = ((ctrl >> 8) & 0xFF) as u8;
+        let watermark_threshold_kb = ((ctrl >> 16) & 0xFFFF) as u16;
+        let status = dwords[2];
+        let block_alignment = (dwords[3] & 0xFFFF) as u16;
+        let max_segment_kb = ((dwords[3] >> 16) & 0xFFFF) as u16;
+
+        Some(Self {
+            next_ptr_dwords: next_ptr,
+            enabled,
+            buffer_ring_count,
+            watermark_threshold_kb,
+            control: ctrl,
+            status,
+            block_alignment,
+            max_segment_kb,
+        })
+    }
+
+    /// Encode la capacité étendue en 4 mots dwords MMIO 32-bit
+    pub const fn encode(&self) -> [u32; 4] {
+        let dw0 =
+            (XHCI_EXT_CAP_OFFLOAD_BUFFER_MANAGEMENT as u32) | ((self.next_ptr_dwords as u32) << 8);
+        let mut ctrl = (self.control & !0xFFFF_FF01)
+            | (((self.buffer_ring_count as u32) & 0xFF) << 8)
+            | (((self.watermark_threshold_kb as u32) & 0xFFFF) << 16);
+        if self.enabled {
+            ctrl |= 0x01;
+        }
+        let dw2 = self.status;
+        let dw3 = (self.block_alignment as u32) | (((self.max_segment_kb as u32) & 0xFFFF) << 16);
+        [dw0, ctrl, dw2, dw3]
+    }
+
+    /// Active ou désactive le déchargement de tampons
+    pub fn set_enabled(&mut self, enable: bool) {
+        self.enabled = enable;
+        if enable {
+            self.control |= 0x01;
+        } else {
+            self.control &= !0x01;
+        }
+    }
+
+    /// Configure le seuil de filigrane d'alerte en Kio
+    pub fn set_watermark_threshold(&mut self, threshold_kb: u16) {
+        self.watermark_threshold_kb = threshold_kb;
+        self.control = (self.control & !0xFFFF_0000) | (((threshold_kb as u32) & 0xFFFF) << 16);
     }
 }
 
@@ -12478,5 +12578,40 @@ mod tests {
         assert_eq!(parsed_fdt.status, 0x0002_0000);
         assert_eq!(parsed_fdt.buffer_size_kb, 64);
         assert_eq!(parsed_fdt.trace_counter, 500);
+
+        // 26. Test XhciOffloadBufferManagement
+        let mut obm = XhciOffloadBufferManagement::new(8, 2048);
+        assert_eq!(obm.buffer_ring_count, 8);
+        assert_eq!(obm.max_segment_kb, 2048);
+        assert_eq!(obm.block_alignment, 4096);
+        assert_eq!(obm.watermark_threshold_kb, 64);
+        assert!(!obm.enabled);
+
+        obm.set_enabled(true);
+        obm.set_watermark_threshold(128);
+        obm.next_ptr_dwords = 44;
+        obm.status = 0x0001_8000;
+
+        let encoded_obm = obm.encode();
+        assert_eq!(
+            encoded_obm[0] & 0xFF,
+            XHCI_EXT_CAP_OFFLOAD_BUFFER_MANAGEMENT as u32
+        );
+        assert_eq!((encoded_obm[0] >> 8) & 0xFF, 44);
+        assert_eq!(encoded_obm[1] & 0x01, 1);
+        assert_eq!((encoded_obm[1] >> 8) & 0xFF, 8);
+        assert_eq!((encoded_obm[1] >> 16) & 0xFFFF, 128);
+        assert_eq!(encoded_obm[2], 0x0001_8000);
+        assert_eq!(encoded_obm[3] & 0xFFFF, 4096);
+        assert_eq!((encoded_obm[3] >> 16) & 0xFFFF, 2048);
+
+        let parsed_obm = XhciOffloadBufferManagement::parse(&encoded_obm).unwrap();
+        assert_eq!(parsed_obm.next_ptr_dwords, 44);
+        assert!(parsed_obm.enabled);
+        assert_eq!(parsed_obm.buffer_ring_count, 8);
+        assert_eq!(parsed_obm.watermark_threshold_kb, 128);
+        assert_eq!(parsed_obm.status, 0x0001_8000);
+        assert_eq!(parsed_obm.block_alignment, 4096);
+        assert_eq!(parsed_obm.max_segment_kb, 2048);
     }
 }

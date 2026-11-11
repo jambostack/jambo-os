@@ -22295,6 +22295,51 @@ pub fn run_link(args: &[&str], out_fd: i32, err_fd: i32) -> i32 {
     }
 }
 
+/// Utilitaire Coreutils POSIX `unlink` (suppression directe d'un lien physique ou d'un fichier)
+///
+/// Syntax standard :
+/// `unlink FILE`
+pub fn run_unlink(args: &[&str], out_fd: i32, err_fd: i32) -> i32 {
+    if args.is_empty() {
+        let _ = sys_write(
+            err_fd,
+            b"unlink: missing operand\nTry 'unlink --help' for more information.\n",
+        );
+        return 1;
+    }
+
+    if args.len() == 1 {
+        if args[0] == "--help" {
+            let _ = sys_write(
+                out_fd,
+                b"Usage: unlink FILE\nCall the unlink function to remove the specified FILE.\n\nOptions:\n      --help     display this help and exit\n      --version  output version information and exit\n",
+            );
+            return 0;
+        } else if args[0] == "--version" {
+            let _ = sys_write(out_fd, b"unlink (jambo-coreutils) 0.1.0\n");
+            return 0;
+        }
+    }
+
+    if args.len() > 1 {
+        let _ = sys_write(err_fd, b"unlink: extra operand '");
+        let _ = sys_write(err_fd, args[1].as_bytes());
+        let _ = sys_write(err_fd, b"'\nTry 'unlink --help' for more information.\n");
+        return 1;
+    }
+
+    let file_to_remove = args[0];
+    let res = sys_unlink_pool(file_to_remove);
+    if res != 0 {
+        let _ = sys_write(err_fd, b"unlink: cannot unlink '");
+        let _ = sys_write(err_fd, file_to_remove.as_bytes());
+        let _ = sys_write(err_fd, b"': No such file or directory\n");
+        1
+    } else {
+        0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -27191,5 +27236,21 @@ Chaque processus dispose de son propre CR3 sans aucun privilege materiel direct.
         assert_eq!(&chk_buf[..n_chk as usize], b"link test payload");
 
         let _ = run_rm(&["/tmp/test_link_orig.txt", "/tmp/test_link_dest.txt"], 2);
+
+        // 28. Test run_unlink
+        assert_eq!(run_unlink(&["--help"], 1, 2), 0);
+        assert_eq!(run_unlink(&["--version"], 1, 2), 0);
+        assert_eq!(run_unlink(&[], 1, 2), 1);
+        assert_eq!(run_unlink(&["f1", "f2"], 1, 2), 1);
+
+        let unlink_f = sys_open("/tmp/test_unlink_file.txt", O_CREAT | O_WRONLY);
+        assert!(unlink_f >= 3);
+        let _ = sys_write(unlink_f, b"to be unlinked");
+        sys_close(unlink_f);
+
+        assert_eq!(run_unlink(&["/tmp/test_unlink_file.txt"], 1, 2), 0);
+        let check_del = sys_open("/tmp/test_unlink_file.txt", 0);
+        assert!(check_del < 0);
+        assert_eq!(run_unlink(&["/tmp/test_unlink_file.txt"], 1, 2), 1);
     }
 }
