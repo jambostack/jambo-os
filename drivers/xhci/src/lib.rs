@@ -327,6 +327,7 @@ pub const XHCI_EXT_CAP_USB4_PCIE_TUNNELING: u8 = 39;
 pub const XHCI_EXT_CAP_USB4_DISPLAYPORT_TUNNELING: u8 = 40;
 pub const XHCI_EXT_CAP_USB4_HOST_INTERFACE_MANAGEMENT: u8 = 41;
 pub const XHCI_EXT_CAP_USB4_ROUTER_CONFIGURATION: u8 = 42;
+pub const XHCI_EXT_CAP_USB4_TIME_SYNCHRONIZATION_UNIT: u8 = 43;
 
 /// Masques de registres USB Legacy Support (xHCI 1.2 Section 7.1)
 /// Registre USBLEGSUP (Offset 0x00)
@@ -4186,6 +4187,112 @@ impl XhciUsb4RouterConfiguration {
     pub fn update_active_topology(&mut self, active_adapters: u16, total_bw_gbps: u16) {
         self.active_adapters = active_adapters;
         self.total_bandwidth_gbps = total_bw_gbps;
+    }
+}
+
+/// Capacité Étendue xHCI USB4 Time Synchronization Unit / TMU Management (§7.35 / USB4 Spec TMU)
+///
+/// Modélise l'unité de synchronisation temporelle (TMU) matérielle du routeur USB4,
+/// permettant la distribution d'une horloge grandmaster déterministe, le calcul du temps
+/// de propagation (propagation delay) entre routeurs et adaptateurs, et la synchronisation
+/// temporelle sub-nanoseconde (mode High Accuracy / Low Accuracy).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XhciUsb4TimeSyncUnit {
+    /// Pointeur dword vers la prochaine capacité étendue
+    pub next_ptr_dwords: u8,
+    /// Unité TMU activée et synchronisée (bit 0 de TMU_CTRL DWORD 1)
+    pub enabled: bool,
+    /// Mode Haute Précision activé (HiFi / High Accuracy mode) (bit 1)
+    pub high_accuracy_mode: bool,
+    /// Rôle de l'horloge : false = Follower (esclave), true = Grandmaster (maître) (bit 2)
+    pub is_grandmaster: bool,
+    /// Fréquence de rafraîchissement des paquets de synchronisation temporelle (bits 8..=11, en ms)
+    pub sync_interval_ms: u8,
+    /// Délai de propagation moyen mesuré en nanosecondes (bits 16..=31 de DWORD 1)
+    pub propagation_delay_ns: u16,
+    /// Statut matériel de la synchronisation temporelle (DWORD 2)
+    pub status: u32,
+    /// Horloge de référence haute précision USB4 TMU (partie basse 32-bit en ns, DWORD 3)
+    pub reference_time_lo: u32,
+}
+
+impl XhciUsb4TimeSyncUnit {
+    /// Crée une nouvelle capacité TMU USB4
+    pub const fn new(is_grandmaster: bool, sync_interval_ms: u8) -> Self {
+        Self {
+            next_ptr_dwords: 0,
+            enabled: false,
+            high_accuracy_mode: true,
+            is_grandmaster,
+            sync_interval_ms,
+            propagation_delay_ns: 25, // 25 ns nominal pour liens internes USB4
+            status: 0,
+            reference_time_lo: 0,
+        }
+    }
+
+    /// Parse les 4 dwords MMIO d'une capacité étendue USB4 Time Synchronization Unit (§7.35)
+    pub const fn parse(dwords: &[u32; 4]) -> Option<Self> {
+        let cap_id = (dwords[0] & 0xFF) as u8;
+        if cap_id != XHCI_EXT_CAP_USB4_TIME_SYNCHRONIZATION_UNIT {
+            return None;
+        }
+
+        let next_ptr = ((dwords[0] >> 8) & 0xFF) as u8;
+        let ctrl = dwords[1];
+        let enabled = (ctrl & 0x01) != 0;
+        let high_accuracy_mode = (ctrl & 0x02) != 0;
+        let is_grandmaster = (ctrl & 0x04) != 0;
+        let sync_interval_ms = ((ctrl >> 8) & 0x0F) as u8;
+        let propagation_delay_ns = ((ctrl >> 16) & 0xFFFF) as u16;
+        let status = dwords[2];
+        let reference_time_lo = dwords[3];
+
+        Some(Self {
+            next_ptr_dwords: next_ptr,
+            enabled,
+            high_accuracy_mode,
+            is_grandmaster,
+            sync_interval_ms,
+            propagation_delay_ns,
+            status,
+            reference_time_lo,
+        })
+    }
+
+    /// Encode la capacité étendue en 4 mots dwords MMIO 32-bit
+    pub const fn encode(&self) -> [u32; 4] {
+        let dw0 = (XHCI_EXT_CAP_USB4_TIME_SYNCHRONIZATION_UNIT as u32)
+            | ((self.next_ptr_dwords as u32) << 8);
+        let mut ctrl = (((self.sync_interval_ms as u32) & 0x0F) << 8)
+            | (((self.propagation_delay_ns as u32) & 0xFFFF) << 16);
+        if self.enabled {
+            ctrl |= 0x01;
+        }
+        if self.high_accuracy_mode {
+            ctrl |= 0x02;
+        }
+        if self.is_grandmaster {
+            ctrl |= 0x04;
+        }
+        let dw2 = self.status;
+        let dw3 = self.reference_time_lo;
+        [dw0, ctrl, dw2, dw3]
+    }
+
+    /// Active ou désactive l'unité TMU
+    pub fn set_enabled(&mut self, enable: bool) {
+        self.enabled = enable;
+    }
+
+    /// Règle le délai de propagation mesuré
+    pub fn update_propagation_delay(&mut self, delay_ns: u16) {
+        self.propagation_delay_ns = delay_ns;
+    }
+
+    /// Met à jour l'horloge de référence
+    pub fn set_reference_time(&mut self, time_lo: u32) {
+        self.reference_time_lo = time_lo;
     }
 }
 
@@ -13516,5 +13623,43 @@ mod tests {
         assert_eq!(parsed_router.status, 0x0003_FEED);
         assert_eq!(parsed_router.total_bandwidth_gbps, 120);
         assert_eq!(parsed_router.active_adapters, 12);
+
+        // 33. Test XhciUsb4TimeSyncUnit
+        let mut usb4_tmu = XhciUsb4TimeSyncUnit::new(true, 4); // Grandmaster, sync 4ms
+        assert!(usb4_tmu.is_grandmaster);
+        assert_eq!(usb4_tmu.sync_interval_ms, 4);
+        assert_eq!(usb4_tmu.propagation_delay_ns, 25);
+        assert!(usb4_tmu.high_accuracy_mode);
+        assert!(!usb4_tmu.enabled);
+
+        usb4_tmu.set_enabled(true);
+        usb4_tmu.update_propagation_delay(38);
+        usb4_tmu.set_reference_time(0x1234_5678);
+        usb4_tmu.next_ptr_dwords = 72;
+        usb4_tmu.status = 0x0004_CAFE;
+
+        let encoded_tmu = usb4_tmu.encode();
+        assert_eq!(
+            encoded_tmu[0] & 0xFF,
+            XHCI_EXT_CAP_USB4_TIME_SYNCHRONIZATION_UNIT as u32
+        );
+        assert_eq!((encoded_tmu[0] >> 8) & 0xFF, 72);
+        assert_eq!(encoded_tmu[1] & 0x01, 1);
+        assert_eq!(encoded_tmu[1] & 0x02, 2);
+        assert_eq!(encoded_tmu[1] & 0x04, 4);
+        assert_eq!((encoded_tmu[1] >> 8) & 0x0F, 4);
+        assert_eq!((encoded_tmu[1] >> 16) & 0xFFFF, 38);
+        assert_eq!(encoded_tmu[2], 0x0004_CAFE);
+        assert_eq!(encoded_tmu[3], 0x1234_5678);
+
+        let parsed_tmu = XhciUsb4TimeSyncUnit::parse(&encoded_tmu).unwrap();
+        assert_eq!(parsed_tmu.next_ptr_dwords, 72);
+        assert!(parsed_tmu.enabled);
+        assert!(parsed_tmu.high_accuracy_mode);
+        assert!(parsed_tmu.is_grandmaster);
+        assert_eq!(parsed_tmu.sync_interval_ms, 4);
+        assert_eq!(parsed_tmu.propagation_delay_ns, 38);
+        assert_eq!(parsed_tmu.status, 0x0004_CAFE);
+        assert_eq!(parsed_tmu.reference_time_lo, 0x1234_5678);
     }
 }

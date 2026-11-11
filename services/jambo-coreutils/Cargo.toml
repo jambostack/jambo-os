@@ -522,7 +522,12 @@ name = "write"
 path = "src/bin/write.rs"
 test = false
 
-# 103 utilitaires Ring 3
+[[bin]]
+name = "ptx"
+path = "src/bin/ptx.rs"
+test = false
+
+# 104 utilitaires Ring 3
 
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }
