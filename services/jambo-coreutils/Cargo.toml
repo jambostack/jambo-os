@@ -612,7 +612,12 @@ name = "shake256sum"
 path = "src/bin/shake256sum.rs"
 test = false
 
-# 121 utilitaires Ring 3
+[[bin]]
+name = "crc64"
+path = "src/bin/crc64.rs"
+test = false
+
+# 122 utilitaires Ring 3
 
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }

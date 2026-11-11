@@ -360,6 +360,8 @@ pub const XHCI_EXT_CAP_USB4_PCIE_ADAPTER_CONFIGURATION_INTERFACE: u8 = 58;
 pub const XHCI_EXT_CAP_USB4_DP_ADAPTER_CONFIGURATION_INTERFACE: u8 = 59;
 /// Capacité étendue xHCI 1.2 / USB4 USB3 Adapter Configuration Interface (§7.52)
 pub const XHCI_EXT_CAP_USB4_USB3_ADAPTER_CONFIGURATION_INTERFACE: u8 = 60;
+/// Capacité étendue xHCI 1.2 / USB4 USB3 Port Capability Interface (§7.53)
+pub const XHCI_EXT_CAP_USB4_USB3_PORT_CAPABILITY_INTERFACE: u8 = 61;
 
 /// Masques de registres USB Legacy Support (xHCI 1.2 Section 7.1)
 /// Registre USBLEGSUP (Offset 0x00)
@@ -6378,6 +6380,125 @@ impl XhciUsb4Usb3AdapterConfigInterface {
     pub fn record_event(&mut self, status_bits: u32) {
         self.adapter_status |= status_bits;
         self.event_counter = self.event_counter.wrapping_add(1);
+    }
+}
+
+/// Capacité étendue xHCI 1.2 / USB4 USB3 Port Capability Interface (§7.53, Cap ID 61)
+///
+/// Permet la découverte fine des fonctionnalités matérielles des ports USB3 tunnelisés
+/// au sein du routeur USB4 : cartographie des ports physiques (Root Hub Port Mapping),
+/// statut de liaison SuperSpeed / SuperSpeedPlus, support du Link Power Management (U1/U2/U3)
+/// et configuration du partage de bande passante tunnelisée USB3.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XhciUsb4Usb3PortCapabilityInterface {
+    /// Pointeur dword vers la prochaine capacité étendue (0 = fin de liste)
+    pub next_ptr_dwords: u8,
+    /// Fonctionnalité de port USB3 activée (bit 0)
+    pub port_enabled: bool,
+    /// Support SuperSpeedPlus (Gen2 10G/Gen2x2 20G) présent (bit 1)
+    pub ssp_supported: bool,
+    /// Support de la négociation d'état d'alimentation U1/U2 LPM présent (bit 2)
+    pub lpm_capable: bool,
+    /// Port raccordé en interne au Root Hub xHCI (Internal Root Port) (bit 3)
+    pub internal_root_port: bool,
+    /// Identifiant ou numéro du port USB3 du routeur USB4 (bits 8..15)
+    pub port_number: u8,
+    /// Vitesse maximale négociée ou prise en charge (bits 16..18 : 1=5G, 2=10G, 3=10G dual-lane, 4=20G)
+    pub max_speed_tier: u8,
+    /// Masque de configuration et de statut du port USB3 USB4 (DWORD 2)
+    pub port_status: u32,
+    /// Compteur total d'événements et de changements d'état du port (DWORD 3)
+    pub port_event_counter: u32,
+}
+
+impl XhciUsb4Usb3PortCapabilityInterface {
+    /// Crée une nouvelle interface de capacité de port USB3 USB4
+    pub const fn new(port_number: u8, max_speed_tier: u8, ssp: bool, lpm: bool) -> Self {
+        Self {
+            next_ptr_dwords: 0,
+            port_enabled: false,
+            ssp_supported: ssp,
+            lpm_capable: lpm,
+            internal_root_port: true,
+            port_number,
+            max_speed_tier: max_speed_tier & 0x07,
+            port_status: 0,
+            port_event_counter: 0,
+        }
+    }
+
+    /// Parse les 4 dwords MMIO d'une capacité étendue USB4 USB3 Port Capability Interface (§7.53)
+    pub const fn parse(dwords: &[u32; 4]) -> Option<Self> {
+        let cap_id = (dwords[0] & 0xFF) as u8;
+        if cap_id != XHCI_EXT_CAP_USB4_USB3_PORT_CAPABILITY_INTERFACE {
+            return None;
+        }
+
+        let next_ptr = ((dwords[0] >> 8) & 0xFF) as u8;
+        let ctrl = dwords[1];
+        let port_enabled = (ctrl & 0x01) != 0;
+        let ssp_supported = (ctrl & 0x02) != 0;
+        let lpm_capable = (ctrl & 0x04) != 0;
+        let internal_root_port = (ctrl & 0x08) != 0;
+        let port_number = ((ctrl >> 8) & 0xFF) as u8;
+        let max_speed_tier = ((ctrl >> 16) & 0x07) as u8;
+
+        let port_status = dwords[2];
+        let port_event_counter = dwords[3];
+
+        Some(Self {
+            next_ptr_dwords: next_ptr,
+            port_enabled,
+            ssp_supported,
+            lpm_capable,
+            internal_root_port,
+            port_number,
+            max_speed_tier,
+            port_status,
+            port_event_counter,
+        })
+    }
+
+    /// Encode la capacité étendue en 4 mots dwords MMIO 32-bit
+    pub const fn encode(&self) -> [u32; 4] {
+        let dw0 = (XHCI_EXT_CAP_USB4_USB3_PORT_CAPABILITY_INTERFACE as u32)
+            | ((self.next_ptr_dwords as u32) << 8);
+        let mut ctrl =
+            ((self.port_number as u32) << 8) | (((self.max_speed_tier as u32) & 0x07) << 16);
+        if self.port_enabled {
+            ctrl |= 0x01;
+        }
+        if self.ssp_supported {
+            ctrl |= 0x02;
+        }
+        if self.lpm_capable {
+            ctrl |= 0x04;
+        }
+        if self.internal_root_port {
+            ctrl |= 0x08;
+        }
+        let dw2 = self.port_status;
+        let dw3 = self.port_event_counter;
+        [dw0, ctrl, dw2, dw3]
+    }
+
+    /// Active ou désactive le port USB3
+    pub fn enable_port(&mut self, enable: bool) {
+        self.port_enabled = enable;
+    }
+
+    /// Configure la vitesse maximale supportée par le port
+    pub fn set_max_speed_tier(&mut self, tier: u8) {
+        self.max_speed_tier = tier & 0x07;
+        if self.max_speed_tier >= 2 {
+            self.ssp_supported = true;
+        }
+    }
+
+    /// Enregistre un événement de statut ou de changement de lien sur le port
+    pub fn record_port_event(&mut self, status_bits: u32) {
+        self.port_status |= status_bits;
+        self.port_event_counter = self.port_event_counter.wrapping_add(1);
     }
 }
 
@@ -16493,5 +16614,47 @@ mod tests {
         assert_eq!(parsed_usb3.lane_count, 1);
         assert_eq!(parsed_usb3.adapter_status, 0x0011);
         assert_eq!(parsed_usb3.event_counter, 2);
+
+        // Test USB4 USB3 Port Capability Interface (§7.53)
+        let mut usb3_port = XhciUsb4Usb3PortCapabilityInterface::new(3, 1, false, true);
+        assert_eq!(usb3_port.port_number, 3);
+        assert_eq!(usb3_port.max_speed_tier, 1);
+        assert!(!usb3_port.ssp_supported);
+        assert!(usb3_port.lpm_capable);
+        assert!(usb3_port.internal_root_port);
+        assert!(!usb3_port.port_enabled);
+
+        usb3_port.enable_port(true);
+        usb3_port.set_max_speed_tier(4); // 20Gbps (Gen2x2)
+        assert!(usb3_port.ssp_supported);
+        usb3_port.record_port_event(0x0004);
+        usb3_port.record_port_event(0x0040);
+        usb3_port.next_ptr_dwords = 92;
+
+        let encoded_port = usb3_port.encode();
+        assert_eq!(
+            encoded_port[0] & 0xFF,
+            XHCI_EXT_CAP_USB4_USB3_PORT_CAPABILITY_INTERFACE as u32
+        );
+        assert_eq!((encoded_port[0] >> 8) & 0xFF, 92);
+        assert_eq!(encoded_port[1] & 0x01, 1); // port_enabled
+        assert_eq!(encoded_port[1] & 0x02, 2); // ssp_supported
+        assert_eq!(encoded_port[1] & 0x04, 4); // lpm_capable
+        assert_eq!(encoded_port[1] & 0x08, 8); // internal_root_port
+        assert_eq!((encoded_port[1] >> 8) & 0xFF, 3); // port_number 3
+        assert_eq!((encoded_port[1] >> 16) & 0x07, 4); // max_speed_tier 4
+        assert_eq!(encoded_port[2], 0x0044); // port_status
+        assert_eq!(encoded_port[3], 2); // 2 events
+
+        let parsed_port = XhciUsb4Usb3PortCapabilityInterface::parse(&encoded_port).unwrap();
+        assert_eq!(parsed_port.next_ptr_dwords, 92);
+        assert!(parsed_port.port_enabled);
+        assert!(parsed_port.ssp_supported);
+        assert!(parsed_port.lpm_capable);
+        assert!(parsed_port.internal_root_port);
+        assert_eq!(parsed_port.port_number, 3);
+        assert_eq!(parsed_port.max_speed_tier, 4);
+        assert_eq!(parsed_port.port_status, 0x0044);
+        assert_eq!(parsed_port.port_event_counter, 2);
     }
 }

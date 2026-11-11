@@ -631,6 +631,7 @@ impl JamboShell {
                 self.cmd_shake256sum(args, out)
             }
             "crc32" | "/bin/crc32" | "bin/crc32" => self.cmd_crc32(args, out),
+            "crc64" | "/bin/crc64" | "bin/crc64" => self.cmd_crc64(args, out),
             "factor" | "/bin/factor" | "bin/factor" => self.cmd_factor(args, out),
             "timeout" | "/bin/timeout" | "bin/timeout" => self.cmd_timeout(args, out),
             "nice" | "/bin/nice" | "bin/nice" => self.cmd_nice(args, out),
@@ -2772,6 +2773,43 @@ Utilitaire d'installation JamboOS (Serie 0.*.*)\n\
             (status, len)
         } else {
             let msg = b"crc32: pipe creation failed\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
+    }
+
+    fn cmd_crc64(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if let (Ok((r_out, w_out)), Ok((r_err, w_err))) =
+            (libjambo::vfs::pipe(), libjambo::vfs::pipe())
+        {
+            let code = libjambo::coreutils::run_crc64(args, 0, w_out, w_err);
+            let _ = libjambo::coreutils::sys_close(w_out);
+            let _ = libjambo::coreutils::sys_close(w_err);
+
+            let mut len = 0;
+            if code == 0 {
+                let n_out = libjambo::coreutils::sys_read(r_out, out);
+                if n_out > 0 {
+                    len = n_out as usize;
+                }
+            } else {
+                let n_err = libjambo::coreutils::sys_read(r_err, out);
+                if n_err > 0 {
+                    len = n_err as usize;
+                }
+            }
+            let _ = libjambo::coreutils::sys_close(r_out);
+            let _ = libjambo::coreutils::sys_close(r_err);
+
+            let status = if code == 0 {
+                ShellStatus::Success
+            } else {
+                ShellStatus::ExecutionFailed
+            };
+            (status, len)
+        } else {
+            let msg = b"crc64: pipe creation failed\n";
             let len = msg.len().min(out.len());
             out[..len].copy_from_slice(&msg[..len]);
             (ShellStatus::ExecutionFailed, len)
@@ -22018,5 +22056,21 @@ mod tests {
         assert_eq!(st135, ShellStatus::Success);
         let s135 = core::str::from_utf8(&out[..len135]).unwrap();
         assert!(s135.contains("/etc/hostname"));
+
+        // 61. crc64 shell command
+        let (st136, len136) = shell.execute_line("crc64 --help", &mut out);
+        assert_eq!(st136, ShellStatus::Success);
+        let s136 = core::str::from_utf8(&out[..len136]).unwrap();
+        assert!(s136.contains("Usage: crc64"));
+
+        let (st137, len137) = shell.execute_line("crc64 --version", &mut out);
+        assert_eq!(st137, ShellStatus::Success);
+        let s137 = core::str::from_utf8(&out[..len137]).unwrap();
+        assert!(s137.contains("crc64 (JamboOS coreutils)"));
+
+        let (st138, len138) = shell.execute_line("crc64 /etc/hostname", &mut out);
+        assert_eq!(st138, ShellStatus::Success);
+        let s138 = core::str::from_utf8(&out[..len138]).unwrap();
+        assert!(s138.contains("/etc/hostname"));
     }
 }
