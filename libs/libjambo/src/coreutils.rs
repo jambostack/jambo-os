@@ -14241,6 +14241,7 @@ pub fn execute_coreutils_command(
         "banner" => run_banner(args, out_fd, err_fd),
         "cal" => run_cal(args, out_fd, err_fd),
         "units" => run_units(args, out_fd, err_fd),
+        "dircolors" => run_dircolors(args, in_fd, out_fd, err_fd),
         _ => {
             let _ = sys_write(err_fd, cmd.as_bytes());
             let _ = sys_write(err_fd, b": command not found\n");
@@ -15615,6 +15616,7 @@ pub fn run_xargs(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
             "pathchk" => run_pathchk(effective_sub_args, out_fd, err_fd),
             "stty" => run_stty(effective_sub_args, 0, out_fd, err_fd),
             "tsort" => run_tsort(effective_sub_args, 0, out_fd, err_fd),
+            "dircolors" => run_dircolors(effective_sub_args, 0, out_fd, err_fd),
             _ => {
                 let _ = sys_write(err_fd, b"xargs: ");
                 let _ = sys_write(err_fd, target_cmd.as_bytes());
@@ -24612,6 +24614,141 @@ pub fn run_shred(args: &[&str], _in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
     }
 }
 
+// ============================================================================
+// Utilitaire POSIX / GNU coreutils : `dircolors` (Configuration des couleurs de ls)
+// ============================================================================
+
+/// Configuration standard dircolors compacte pour JamboOS (< 512 octets pour compatibilité FIFO/Pipes POSIX)
+const DEFAULT_LS_COLORS: &str = "rs=0:di=01;34:ln=01;36:mh=00:pi=40;33:so=01;35:do=01;35:bd=40;33;01:cd=40;33;01:or=40;31;01:mi=00:su=37;41:sg=30;43:ca=00:tw=30;42:ow=34;42:st=37;44:ex=01;32:*.tar=01;31:*.tgz=01;31:*.zip=01;31:*.gz=01;31:*.xz=01;31:*.bz2=01;31:*.deb=01;31:*.rpm=01;31:*.jpg=01;35:*.png=01;35:*.gif=01;35:*.svg=01;35:*.mp4=01;35:*.mkv=01;35:*.mp3=00;36:*.wav=00;36:*.flac=00;36:";
+
+/// Utilitaire Coreutils POSIX / GNU `dircolors` : génère des commandes shell d'assignation pour `LS_COLORS`
+pub fn run_dircolors(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    let mut bourne_shell = true;
+    let mut print_database = false;
+    let mut file: Option<&str> = None;
+
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i];
+        if arg == "--help" || arg == "-h" {
+            let help = b"Usage: dircolors [OPTION]... [FILE]\nOutput commands to set the LS_COLORS environment variable.\n\nDetermine format of output:\n  -b, --sh, --bourne-shell    output Bourne shell code to set LS_COLORS\n  -c, --csh, --c-shell        output C shell code to set LS_COLORS\n  -p, --print-database        output defaults\n      --help                  display this help and exit\n      --version               output version information and exit\n\nIf FILE is specified, read it to determine which colors to use for which\nfile types and extensions.  Otherwise, a precompiled database is used.\n";
+            let _ = sys_write(out_fd, help);
+            return 0;
+        }
+        if arg == "--version" || arg == "-v" {
+            let ver = b"dircolors (JamboOS coreutils) 0.1.0\n";
+            let _ = sys_write(out_fd, ver);
+            return 0;
+        }
+        if arg == "-b" || arg == "--sh" || arg == "--bourne-shell" {
+            bourne_shell = true;
+        } else if arg == "-c" || arg == "--csh" || arg == "--c-shell" {
+            bourne_shell = false;
+        } else if arg == "-p" || arg == "--print-database" {
+            print_database = true;
+        } else if !arg.starts_with('-') && file.is_none() {
+            file = Some(arg);
+        } else {
+            let _ = sys_write(err_fd, b"dircolors: unrecognized option '");
+            let _ = sys_write(err_fd, arg.as_bytes());
+            let _ = sys_write(err_fd, b"'\nTry 'dircolors --help' for more information.\n");
+            return 1;
+        }
+        i += 1;
+    }
+
+    if print_database {
+        // Affiche la configuration standard brute
+        let _ = sys_write(out_fd, b"# Configuration standard dircolors pour JamboOS\n");
+        let _ = sys_write(out_fd, b"DIR 01;34\nLINK 01;36\nFIFO 40;33\nSOCK 01;35\nDOOR 01;35\nBLK 40;33;01\nCHR 40;33;01\nORPHAN 40;31;01\nSETUID 37;41\nSETGID 30;43\nSTICKY_OTHER_WRITABLE 30;42\nOTHER_WRITABLE 34;42\nSTICKY 37;44\nEXEC 01;32\n");
+        return 0;
+    }
+
+    // Gestion du fichier de configuration ou fallback vers chaîne standard
+    let mut custom_ls_colors_buf = [0u8; 1024];
+    let mut custom_len = 0;
+
+    if let Some(path) = file {
+        let fd = if path == "-" {
+            in_fd
+        } else {
+            sys_open(path, crate::vfs::O_RDONLY)
+        };
+
+        if fd < 0 {
+            let _ = sys_write(err_fd, b"dircolors: cannot open '");
+            let _ = sys_write(err_fd, path.as_bytes());
+            let _ = sys_write(err_fd, b"': No such file or directory\n");
+            return 1;
+        }
+
+        let mut read_buf = [0u8; 1024];
+        let n = sys_read(fd, &mut read_buf);
+        if path != "-" {
+            sys_close(fd);
+        }
+
+        if n > 0 {
+            let text = core::str::from_utf8(&read_buf[..n as usize]).unwrap_or("");
+            for line in text.lines() {
+                let trimmed = line.trim();
+                if trimmed.is_empty() || trimmed.starts_with('#') {
+                    continue;
+                }
+                let mut parts = trimmed.split_whitespace();
+                if let (Some(key), Some(val)) = (parts.next(), parts.next()) {
+                    let code = match key {
+                        "DIR" => "di=",
+                        "LINK" => "ln=",
+                        "FIFO" => "pi=",
+                        "SOCK" => "so=",
+                        "EXEC" => "ex=",
+                        k if k.starts_with('.') => {
+                            // Extension
+                            let entry = [b'*', 0];
+                            let _ = entry;
+                            ""
+                        }
+                        _ => "",
+                    };
+                    if !code.is_empty()
+                        && custom_len + code.len() + val.len() + 1 < custom_ls_colors_buf.len()
+                    {
+                        for b in code.bytes() {
+                            custom_ls_colors_buf[custom_len] = b;
+                            custom_len += 1;
+                        }
+                        for b in val.bytes() {
+                            custom_ls_colors_buf[custom_len] = b;
+                            custom_len += 1;
+                        }
+                        custom_ls_colors_buf[custom_len] = b':';
+                        custom_len += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    let colors_str = if custom_len > 0 {
+        core::str::from_utf8(&custom_ls_colors_buf[..custom_len]).unwrap_or(DEFAULT_LS_COLORS)
+    } else {
+        DEFAULT_LS_COLORS
+    };
+
+    if bourne_shell {
+        let _ = sys_write(out_fd, b"LS_COLORS='");
+        let _ = sys_write(out_fd, colors_str.as_bytes());
+        let _ = sys_write(out_fd, b"';\nexport LS_COLORS\n");
+    } else {
+        let _ = sys_write(out_fd, b"setenv LS_COLORS '");
+        let _ = sys_write(out_fd, colors_str.as_bytes());
+        let _ = sys_write(out_fd, b"'\n");
+    }
+
+    0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -29919,5 +30056,44 @@ Chaque processus dispose de son propre CR3 sans aucun privilege materiel direct.
         let n_b32 = sys_read(out_r_b32, &mut buf_b32);
         sys_close(out_r_b32);
         assert_eq!(&buf_b32[..n_b32 as usize], b"NBSWY3DPEB3W64TMMQ======\n");
+
+        // 40. Test run_dircolors (POSIX / GNU LS_COLORS generator)
+        assert_eq!(run_dircolors(&["--help"], 0, 1, 2), 0);
+        assert_eq!(run_dircolors(&["--version"], 0, 1, 2), 0);
+
+        let (out_r_dc_sh, out_w_dc_sh) = crate::vfs::pipe().unwrap();
+        let code_dc_sh = run_dircolors(&["-b"], 0, out_w_dc_sh, 2);
+        sys_close(out_w_dc_sh);
+        assert_eq!(code_dc_sh, 0);
+
+        let mut buf_dc_sh = [0u8; 2048];
+        let n_dc_sh = sys_read(out_r_dc_sh, &mut buf_dc_sh);
+        sys_close(out_r_dc_sh);
+        let out_str_sh = core::str::from_utf8(&buf_dc_sh[..n_dc_sh as usize]).unwrap();
+        assert!(out_str_sh.starts_with("LS_COLORS='"));
+        assert!(out_str_sh.ends_with("';\nexport LS_COLORS\n"));
+
+        let (out_r_dc_csh, out_w_dc_csh) = crate::vfs::pipe().unwrap();
+        let code_dc_csh = run_dircolors(&["-c"], 0, out_w_dc_csh, 2);
+        sys_close(out_w_dc_csh);
+        assert_eq!(code_dc_csh, 0);
+
+        let mut buf_dc_csh = [0u8; 2048];
+        let n_dc_csh = sys_read(out_r_dc_csh, &mut buf_dc_csh);
+        sys_close(out_r_dc_csh);
+        let out_str_csh = core::str::from_utf8(&buf_dc_csh[..n_dc_csh as usize]).unwrap();
+        assert!(out_str_csh.starts_with("setenv LS_COLORS '"));
+        assert!(out_str_csh.ends_with("'\n"));
+
+        let (out_r_dc_p, out_w_dc_p) = crate::vfs::pipe().unwrap();
+        let code_dc_p = run_dircolors(&["-p"], 0, out_w_dc_p, 2);
+        sys_close(out_w_dc_p);
+        assert_eq!(code_dc_p, 0);
+
+        let mut buf_dc_p = [0u8; 256];
+        let n_dc_p = sys_read(out_r_dc_p, &mut buf_dc_p);
+        sys_close(out_r_dc_p);
+        let out_str_p = core::str::from_utf8(&buf_dc_p[..n_dc_p as usize]).unwrap();
+        assert!(out_str_p.contains("DIR 01;34"));
     }
 }

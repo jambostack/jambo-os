@@ -335,6 +335,8 @@ pub const XHCI_EXT_CAP_USB4_DP_ALT_MODE_CONFIGURATION: u8 = 45;
 pub const XHCI_EXT_CAP_USB4_SECURITY_CONFIGURATION: u8 = 46;
 /// Capacité étendue xHCI 1.2 / USB4 Inter-Domain Transport Interface Capability (§7.39)
 pub const XHCI_EXT_CAP_USB4_INTER_DOMAIN_TRANSPORT: u8 = 47;
+/// Capacité étendue xHCI 1.2 / USB4 PCIe Tunneling Adapter Configuration Interface (§7.40)
+pub const XHCI_EXT_CAP_USB4_PCIE_ADAPTER_CONFIGURATION: u8 = 48;
 
 /// Masques de registres USB Legacy Support (xHCI 1.2 Section 7.1)
 /// Registre USBLEGSUP (Offset 0x00)
@@ -4781,6 +4783,139 @@ impl XhciUsb4InterDomainTransport {
     pub fn configure_channels(&mut self, max_pkt: u16, channels: u8) {
         self.max_packet_size = max_pkt;
         self.channel_count = channels;
+    }
+}
+
+/// Capacité Étendue xHCI 1.2 / USB4 PCIe Tunneling Adapter Configuration Interface (§7.40 / Cap ID 48)
+///
+/// Modélise le contrôle matériel fin et la négociation de chaque adaptateur PCIe tunnelisé (Downstream / Upstream)
+/// au travers du routeur USB4 : routage des interruptions MSI/MSI-X virtuelles, gestion de l'état ASPM L1/L2,
+/// crédits de flux de paquets TLP et politique d'allocation de liens PCIe Gen3/Gen4/Gen5.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XhciUsb4PcieAdapterConfig {
+    /// Pointeur dword vers la prochaine capacité étendue (0 = fin de liste)
+    pub next_ptr_dwords: u8,
+    /// Adaptateur PCIe activé et lié au tunnel USB4 (bit 0 de DWORD 1)
+    pub adapter_enabled: bool,
+    /// Support de la virtualisation d'interruptions MSI/MSI-X PCIe (bit 1)
+    pub msi_virtualization_supported: bool,
+    /// Gestion de l'alimentation active ASPM L1.1/L1.2 activée (bit 2)
+    pub aspm_l1_enabled: bool,
+    /// Filtre TLP pour la sécurité DMA PCIe activé (bit 3)
+    pub tlp_filtering_enabled: bool,
+    /// Numéro d'adaptateur physique PCIe dans le routeur USB4 (bits 8..=15)
+    pub adapter_num: u8,
+    /// Numéro de routeur USB4 hôte ou périphérique (bits 16..=23)
+    pub router_id: u8,
+    /// Crédits de buffer de paquets TLP disponibles (bits 24..=31)
+    pub tlp_buffer_credits: u8,
+    /// Registre de statut matériel PCIe Adapter (DWORD 2)
+    pub status: u32,
+    /// Bande passante garantie allouée en Mbit/s (DWORD 3 [15:0])
+    pub guaranteed_bandwidth_mbps: u16,
+    /// Débit de négociation PCIe maximal supporté (DWORD 3 [23:16] : Gen1=1, Gen2=2, Gen3=3, Gen4=4, Gen5=5)
+    pub max_link_gen: u8,
+    /// Largeur de lien PCIe maximale autorisée (DWORD 3 [31:24] : x1=1, x2=2, x4=4, x8=8, x16=16)
+    pub max_link_width: u8,
+}
+
+impl XhciUsb4PcieAdapterConfig {
+    /// Crée une nouvelle capacité USB4 PCIe Adapter Configuration (§7.40)
+    pub const fn new(adapter_num: u8, router_id: u8, max_link_gen: u8, max_link_width: u8) -> Self {
+        Self {
+            next_ptr_dwords: 0,
+            adapter_enabled: false,
+            msi_virtualization_supported: true,
+            aspm_l1_enabled: false,
+            tlp_filtering_enabled: true,
+            adapter_num,
+            router_id,
+            tlp_buffer_credits: 64, // 64 crédits TLP initiaux
+            status: 0,
+            guaranteed_bandwidth_mbps: 16000, // 16 Gbps par défaut (Gen4 x1)
+            max_link_gen,
+            max_link_width,
+        }
+    }
+
+    /// Parse les 4 dwords MMIO d'une capacité étendue USB4 PCIe Adapter Configuration (§7.40)
+    pub const fn parse(dwords: &[u32; 4]) -> Option<Self> {
+        let cap_id = (dwords[0] & 0xFF) as u8;
+        if cap_id != XHCI_EXT_CAP_USB4_PCIE_ADAPTER_CONFIGURATION {
+            return None;
+        }
+
+        let next_ptr = ((dwords[0] >> 8) & 0xFF) as u8;
+        let ctrl = dwords[1];
+        let adapter_enabled = (ctrl & 0x01) != 0;
+        let msi_virtualization_supported = (ctrl & 0x02) != 0;
+        let aspm_l1_enabled = (ctrl & 0x04) != 0;
+        let tlp_filtering_enabled = (ctrl & 0x08) != 0;
+        let adapter_num = ((ctrl >> 8) & 0xFF) as u8;
+        let router_id = ((ctrl >> 16) & 0xFF) as u8;
+        let tlp_buffer_credits = ((ctrl >> 24) & 0xFF) as u8;
+
+        let status = dwords[2];
+        let guaranteed_bandwidth_mbps = (dwords[3] & 0xFFFF) as u16;
+        let max_link_gen = ((dwords[3] >> 16) & 0xFF) as u8;
+        let max_link_width = ((dwords[3] >> 24) & 0xFF) as u8;
+
+        Some(Self {
+            next_ptr_dwords: next_ptr,
+            adapter_enabled,
+            msi_virtualization_supported,
+            aspm_l1_enabled,
+            tlp_filtering_enabled,
+            adapter_num,
+            router_id,
+            tlp_buffer_credits,
+            status,
+            guaranteed_bandwidth_mbps,
+            max_link_gen,
+            max_link_width,
+        })
+    }
+
+    /// Encode la capacité étendue en 4 mots dwords MMIO 32-bit
+    pub const fn encode(&self) -> [u32; 4] {
+        let dw0 = (XHCI_EXT_CAP_USB4_PCIE_ADAPTER_CONFIGURATION as u32)
+            | ((self.next_ptr_dwords as u32) << 8);
+        let mut ctrl = ((self.adapter_num as u32) << 8)
+            | ((self.router_id as u32) << 16)
+            | ((self.tlp_buffer_credits as u32) << 24);
+        if self.adapter_enabled {
+            ctrl |= 0x01;
+        }
+        if self.msi_virtualization_supported {
+            ctrl |= 0x02;
+        }
+        if self.aspm_l1_enabled {
+            ctrl |= 0x04;
+        }
+        if self.tlp_filtering_enabled {
+            ctrl |= 0x08;
+        }
+        let dw2 = self.status;
+        let dw3 = (self.guaranteed_bandwidth_mbps as u32)
+            | (((self.max_link_gen as u32) & 0xFF) << 16)
+            | (((self.max_link_width as u32) & 0xFF) << 24);
+        [dw0, ctrl, dw2, dw3]
+    }
+
+    /// Active ou désactive l'adaptateur PCIe tunnelisé
+    pub fn set_adapter_enabled(&mut self, enable: bool) {
+        self.adapter_enabled = enable;
+    }
+
+    /// Active ou désactive l'état d'économie d'énergie ASPM L1
+    pub fn set_aspm_l1_enabled(&mut self, enable: bool) {
+        self.aspm_l1_enabled = enable;
+    }
+
+    /// Configure la bande passante garantie et le crédit de paquets TLP
+    pub fn configure_bandwidth_credits(&mut self, bw_mbps: u16, credits: u8) {
+        self.guaranteed_bandwidth_mbps = bw_mbps;
+        self.tlp_buffer_credits = credits;
     }
 }
 
@@ -14311,5 +14446,56 @@ mod tests {
         assert_eq!(parsed_sec.domain_id, 3);
         assert_eq!(parsed_sec.status, 0x0007_BEEF);
         assert_eq!(parsed_sec.session_token, 0xA5A5_5A5A);
+
+        // Test Capacité Étendue xHCI 1.2 / USB4 PCIe Adapter Configuration (§7.40)
+        let mut usb4_pcie_cfg = XhciUsb4PcieAdapterConfig::new(3, 1, 4, 8);
+        assert_eq!(usb4_pcie_cfg.adapter_num, 3);
+        assert_eq!(usb4_pcie_cfg.router_id, 1);
+        assert_eq!(usb4_pcie_cfg.max_link_gen, 4);
+        assert_eq!(usb4_pcie_cfg.max_link_width, 8);
+        assert_eq!(usb4_pcie_cfg.guaranteed_bandwidth_mbps, 16000);
+        assert_eq!(usb4_pcie_cfg.tlp_buffer_credits, 64);
+        assert!(!usb4_pcie_cfg.adapter_enabled);
+        assert!(usb4_pcie_cfg.msi_virtualization_supported);
+        assert!(!usb4_pcie_cfg.aspm_l1_enabled);
+        assert!(usb4_pcie_cfg.tlp_filtering_enabled);
+
+        usb4_pcie_cfg.set_adapter_enabled(true);
+        usb4_pcie_cfg.set_aspm_l1_enabled(true);
+        usb4_pcie_cfg.configure_bandwidth_credits(32000, 128);
+        usb4_pcie_cfg.next_ptr_dwords = 92;
+        usb4_pcie_cfg.status = 0x55AA_1234;
+
+        let encoded_pcfg = usb4_pcie_cfg.encode();
+        assert_eq!(
+            encoded_pcfg[0] & 0xFF,
+            XHCI_EXT_CAP_USB4_PCIE_ADAPTER_CONFIGURATION as u32
+        );
+        assert_eq!((encoded_pcfg[0] >> 8) & 0xFF, 92);
+        assert_eq!(encoded_pcfg[1] & 0x01, 1); // enabled
+        assert_eq!(encoded_pcfg[1] & 0x02, 2); // msi virt
+        assert_eq!(encoded_pcfg[1] & 0x04, 4); // aspm l1
+        assert_eq!(encoded_pcfg[1] & 0x08, 8); // tlp filter
+        assert_eq!((encoded_pcfg[1] >> 8) & 0xFF, 3); // adapter_num
+        assert_eq!((encoded_pcfg[1] >> 16) & 0xFF, 1); // router_id
+        assert_eq!((encoded_pcfg[1] >> 24) & 0xFF, 128); // tlp credits
+        assert_eq!(encoded_pcfg[2], 0x55AA_1234);
+        assert_eq!(encoded_pcfg[3] & 0xFFFF, 32000);
+        assert_eq!((encoded_pcfg[3] >> 16) & 0xFF, 4);
+        assert_eq!((encoded_pcfg[3] >> 24) & 0xFF, 8);
+
+        let parsed_pcfg = XhciUsb4PcieAdapterConfig::parse(&encoded_pcfg).unwrap();
+        assert_eq!(parsed_pcfg.next_ptr_dwords, 92);
+        assert!(parsed_pcfg.adapter_enabled);
+        assert!(parsed_pcfg.msi_virtualization_supported);
+        assert!(parsed_pcfg.aspm_l1_enabled);
+        assert!(parsed_pcfg.tlp_filtering_enabled);
+        assert_eq!(parsed_pcfg.adapter_num, 3);
+        assert_eq!(parsed_pcfg.router_id, 1);
+        assert_eq!(parsed_pcfg.tlp_buffer_credits, 128);
+        assert_eq!(parsed_pcfg.status, 0x55AA_1234);
+        assert_eq!(parsed_pcfg.guaranteed_bandwidth_mbps, 32000);
+        assert_eq!(parsed_pcfg.max_link_gen, 4);
+        assert_eq!(parsed_pcfg.max_link_width, 8);
     }
 }

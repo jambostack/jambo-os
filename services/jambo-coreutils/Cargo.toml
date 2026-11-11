@@ -547,7 +547,12 @@ name = "basenc"
 path = "src/bin/basenc.rs"
 test = false
 
-# 108 utilitaires Ring 3
+[[bin]]
+name = "dircolors"
+path = "src/bin/dircolors.rs"
+test = false
+
+# 109 utilitaires Ring 3
 
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }
