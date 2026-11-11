@@ -11339,6 +11339,454 @@ pub fn run_sha256sum(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32
 }
 
 // ============================================================================
+// Utilitaire POSIX / GNU coreutils : `md5sum` (Calcul et vérification RFC 1321 MD5)
+// ============================================================================
+
+/// Hasher cryptographique MD5 déterministe bare-metal (#![no_std], RFC 1321)
+#[derive(Clone, Copy)]
+pub struct Md5Hasher {
+    state: [u32; 4],
+    buffer: [u8; 64],
+    buffer_len: usize,
+    total_bytes: u64,
+}
+
+impl Md5Hasher {
+    /// Constantes d'arrondi sine-based T[i] = floor(abs(sin(i + 1)) * 2^32)
+    const T: [u32; 64] = [
+        0xd76aa478, 0xe8c7b756, 0x242070db, 0xc1bdceee, 0xf57c0faf, 0x4787c62a, 0xa8304613,
+        0xfd469501, 0x698098d8, 0x8b44f7af, 0xffff5bb1, 0x895cd7be, 0x6b901122, 0xfd987193,
+        0xa679438e, 0x49b40821, 0xf61e2562, 0xc040b340, 0x265e5a51, 0xe9b6c7aa, 0xd62f105d,
+        0x02441453, 0xd8a1e681, 0xe7d3fbc8, 0x21e1cde6, 0xc33707d6, 0xf4d50d87, 0x455a14ed,
+        0xa9e3e905, 0xfcefa3f8, 0x676f02d9, 0x8d2a4c8a, 0xfffa3942, 0x8771f681, 0x6d9d6122,
+        0xfde5380c, 0xa4beea44, 0x4bdecfa9, 0xf6bb4b60, 0xbebfbc70, 0x289b7ec6, 0xeaa127fa,
+        0xd4ef3085, 0x04881d05, 0xd9d4d039, 0xe6db99e5, 0x1fa27cf8, 0xc4ac5665, 0xf4292244,
+        0x432aff97, 0xab9423a7, 0xfc93a039, 0x655b59c3, 0x8f0ccc92, 0xffeff47d, 0x85845dd1,
+        0x6fa87e4f, 0xfe2ce6e0, 0xa3014314, 0x4e0811a1, 0xf7537e82, 0xbd3af235, 0x2ad7d2bb,
+        0xeb86d391,
+    ];
+
+    /// Décalages de rotation par passe
+    const S: [u32; 64] = [
+        7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 5, 9, 14, 20, 5, 9, 14, 20, 5,
+        9, 14, 20, 5, 9, 14, 20, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 6, 10,
+        15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21,
+    ];
+
+    pub const fn new() -> Self {
+        Self {
+            state: [0x67452301, 0xefcdab89, 0x98badcfe, 0x10325476],
+            buffer: [0u8; 64],
+            buffer_len: 0,
+            total_bytes: 0,
+        }
+    }
+
+    fn transform_block(&mut self, block: &[u8; 64]) {
+        let mut m = [0u32; 16];
+        let mut i = 0;
+        while i < 16 {
+            m[i] = u32::from_le_bytes([
+                block[i * 4],
+                block[i * 4 + 1],
+                block[i * 4 + 2],
+                block[i * 4 + 3],
+            ]);
+            i += 1;
+        }
+
+        let mut a = self.state[0];
+        let mut b = self.state[1];
+        let mut c = self.state[2];
+        let mut d = self.state[3];
+
+        let mut j = 0;
+        while j < 64 {
+            let (f, g) = if j < 16 {
+                ((b & c) | ((!b) & d), j)
+            } else if j < 32 {
+                ((d & b) | ((!d) & c), (5 * j + 1) % 16)
+            } else if j < 48 {
+                (b ^ c ^ d, (3 * j + 5) % 16)
+            } else {
+                (c ^ (b | (!d)), (7 * j) % 16)
+            };
+
+            let temp = f
+                .wrapping_add(a)
+                .wrapping_add(Self::T[j])
+                .wrapping_add(m[g]);
+            a = d;
+            d = c;
+            c = b;
+            b = b.wrapping_add(temp.rotate_left(Self::S[j]));
+            j += 1;
+        }
+
+        self.state[0] = self.state[0].wrapping_add(a);
+        self.state[1] = self.state[1].wrapping_add(b);
+        self.state[2] = self.state[2].wrapping_add(c);
+        self.state[3] = self.state[3].wrapping_add(d);
+    }
+
+    pub fn update(&mut self, data: &[u8]) {
+        self.total_bytes = self.total_bytes.wrapping_add(data.len() as u64);
+        let mut offset = 0;
+        while offset < data.len() {
+            if self.buffer_len == 64 {
+                let blk = self.buffer;
+                self.transform_block(&blk);
+                self.buffer_len = 0;
+            }
+            let to_copy = (64 - self.buffer_len).min(data.len() - offset);
+            self.buffer[self.buffer_len..self.buffer_len + to_copy]
+                .copy_from_slice(&data[offset..offset + to_copy]);
+            self.buffer_len += to_copy;
+            offset += to_copy;
+        }
+    }
+
+    pub fn finalize(mut self) -> [u8; 16] {
+        let total_bits = self.total_bytes.wrapping_mul(8);
+        if self.buffer_len == 64 {
+            let blk = self.buffer;
+            self.transform_block(&blk);
+            self.buffer_len = 0;
+        }
+        self.buffer[self.buffer_len] = 0x80;
+        self.buffer_len += 1;
+
+        if self.buffer_len > 56 {
+            let mut i = self.buffer_len;
+            while i < 64 {
+                self.buffer[i] = 0;
+                i += 1;
+            }
+            let blk = self.buffer;
+            self.transform_block(&blk);
+            self.buffer_len = 0;
+        }
+
+        let mut i = self.buffer_len;
+        while i < 56 {
+            self.buffer[i] = 0;
+            i += 1;
+        }
+        self.buffer[56..64].copy_from_slice(&total_bits.to_le_bytes());
+        let blk = self.buffer;
+        self.transform_block(&blk);
+
+        let mut out = [0u8; 16];
+        let mut k = 0;
+        while k < 4 {
+            out[k * 4..(k + 1) * 4].copy_from_slice(&self.state[k].to_le_bytes());
+            k += 1;
+        }
+        out
+    }
+
+    pub fn hash(data: &[u8]) -> [u8; 16] {
+        let mut hasher = Self::new();
+        hasher.update(data);
+        hasher.finalize()
+    }
+}
+
+impl Default for Md5Hasher {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Convertit un condensat MD5 (16 octets) en représentation hexadécimale minuscule (32 octets ASCII)
+pub fn md5_to_hex(digest: &[u8; 16], out: &mut [u8; 32]) {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    for i in 0..16 {
+        let b = digest[i];
+        out[i * 2] = HEX[(b >> 4) as usize];
+        out[i * 2 + 1] = HEX[(b & 0x0F) as usize];
+    }
+}
+
+/// Hache un descripteur de fichier ouvert en streaming MD5 sans allocation
+fn hash_fd_md5(fd: i32) -> Result<[u8; 16], ()> {
+    let mut hasher = Md5Hasher::new();
+    let mut chunk = [0u8; 4096];
+    loop {
+        let n = sys_read(fd, &mut chunk);
+        if n < 0 {
+            return Err(());
+        }
+        if n == 0 {
+            break;
+        }
+        hasher.update(&chunk[..n as usize]);
+    }
+    Ok(hasher.finalize())
+}
+
+/// Parse une ligne de fichier de vérification md5 (format GNU ou BSD)
+fn parse_md5_check_line(line: &str) -> Option<(&str, &str)> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() || trimmed.starts_with('#') {
+        return None;
+    }
+
+    // Format BSD: MD5 (path) = hex32
+    if let Some(rest) = trimmed.strip_prefix("MD5 (") {
+        if let Some(close_idx) = rest.find(')') {
+            let path = &rest[..close_idx];
+            let after = rest[close_idx + 1..].trim();
+            if let Some(hex_part) = after.strip_prefix('=') {
+                let hex = hex_part.trim();
+                if hex.len() == 32 {
+                    return Some((path, hex));
+                }
+            }
+        }
+    }
+
+    // Format standard GNU: <hex32>  <path> ou <hex32> *<path>
+    if trimmed.len() >= 34 {
+        let hex = &trimmed[..32];
+        let sep = &trimmed[32..34];
+        if (sep == "  " || sep == " *" || sep == "  ")
+            && hex.as_bytes().iter().all(|b| b.is_ascii_hexdigit())
+        {
+            let path = trimmed[34..].trim();
+            if !path.is_empty() {
+                return Some((path, hex));
+            }
+        }
+    }
+
+    None
+}
+
+/// Exécute l'utilitaire Coreutils POSIX / GNU `md5sum` (calcul et vérification MD5)
+pub fn run_md5sum(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    let mut check_mode = false;
+    let mut tag_format = false;
+    let mut binary_mode = false;
+    let mut status_only = false;
+    let mut quiet = false;
+    let mut warn = false;
+    let mut file_args = [""; 64];
+    let mut file_count = 0usize;
+
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i];
+        if arg == "--help" || arg == "-h" {
+            let help = b"Usage: md5sum [OPTION]... [FILE]...\nPrint or check MD5 (128-bit) checksums.\n\nWith no FILE, or when FILE is -, read standard input.\n\n  -b, --binary         read in binary mode\n  -c, --check          read checksums from the FILEs and check them\n      --tag            create a BSD-style checksum\n  -t, --text           read in text mode (default)\n  -q, --quiet          don't print OK for each successfully verified file\n      --status         don't output anything, status code shows success\n  -w, --warn           warn about improperly formatted checksum lines\n      --help           display this help and exit\n      --version        output version information and exit\n";
+            let _ = sys_write(out_fd, help);
+            return 0;
+        }
+        if arg == "--version" || arg == "-v" {
+            let ver = b"md5sum (JamboOS coreutils) 0.1.0\nCopyright (C) 2026 JamboOS Authors.\nLicense MIT or Apache-2.0.\n";
+            let _ = sys_write(out_fd, ver);
+            return 0;
+        }
+
+        if arg == "-c" || arg == "--check" {
+            check_mode = true;
+        } else if arg == "--tag" {
+            tag_format = true;
+        } else if arg == "-b" || arg == "--binary" {
+            binary_mode = true;
+        } else if arg == "-t" || arg == "--text" {
+            binary_mode = false;
+        } else if arg == "--status" {
+            status_only = true;
+        } else if arg == "-q" || arg == "--quiet" {
+            quiet = true;
+        } else if arg == "-w" || arg == "--warn" {
+            warn = true;
+        } else if (!arg.starts_with('-') || arg == "-") && file_count < file_args.len() {
+            file_args[file_count] = arg;
+            file_count += 1;
+        }
+        i += 1;
+    }
+
+    if check_mode {
+        let mut overall_success = true;
+        let mut total_verified = 0usize;
+
+        let targets: &[&str] = if file_count == 0 {
+            &["-"]
+        } else {
+            &file_args[..file_count]
+        };
+
+        for &target in targets {
+            let check_fd = if target == "-" {
+                in_fd
+            } else {
+                let fd = sys_open(target, crate::vfs::O_RDONLY);
+                if fd < 0 {
+                    if !status_only {
+                        let _ = sys_write(err_fd, b"md5sum: ");
+                        let _ = sys_write(err_fd, target.as_bytes());
+                        let _ = sys_write(err_fd, b": No such file or directory\n");
+                    }
+                    overall_success = false;
+                    continue;
+                }
+                fd
+            };
+
+            let mut reader = LineReader::new(check_fd);
+            let mut line_buf = [0u8; 512];
+
+            while let Some(line_len) = reader.read_line(&mut line_buf) {
+                let line_str = match core::str::from_utf8(&line_buf[..line_len]) {
+                    Ok(s) => s,
+                    Err(_) => {
+                        if warn && !status_only {
+                            let _ = sys_write(
+                                err_fd,
+                                b"md5sum: improperly formatted MD5 checksum line\n",
+                            );
+                        }
+                        continue;
+                    }
+                };
+
+                let (path, expected_hex) = match parse_md5_check_line(line_str) {
+                    Some(parsed) => parsed,
+                    None => {
+                        if warn && !status_only {
+                            let _ = sys_write(
+                                err_fd,
+                                b"md5sum: improperly formatted MD5 checksum line\n",
+                            );
+                        }
+                        continue;
+                    }
+                };
+
+                let file_fd = sys_open(path, crate::vfs::O_RDONLY);
+                if file_fd < 0 {
+                    if !status_only {
+                        let _ = sys_write(err_fd, path.as_bytes());
+                        let _ = sys_write(err_fd, b": FAILED open or read\n");
+                    }
+                    overall_success = false;
+                    continue;
+                }
+
+                let hash_res = hash_fd_md5(file_fd);
+                sys_close(file_fd);
+
+                match hash_res {
+                    Ok(digest) => {
+                        let mut calculated_hex = [0u8; 32];
+                        md5_to_hex(&digest, &mut calculated_hex);
+
+                        let hex_matches = calculated_hex
+                            .iter()
+                            .zip(expected_hex.as_bytes().iter())
+                            .all(|(&a, &b)| a.eq_ignore_ascii_case(&b));
+
+                        if hex_matches {
+                            total_verified += 1;
+                            if !quiet && !status_only {
+                                let _ = sys_write(out_fd, path.as_bytes());
+                                let _ = sys_write(out_fd, b": OK\n");
+                            }
+                        } else {
+                            overall_success = false;
+                            if !status_only {
+                                let _ = sys_write(out_fd, path.as_bytes());
+                                let _ = sys_write(out_fd, b": FAILED\n");
+                            }
+                        }
+                    }
+                    Err(_) => {
+                        overall_success = false;
+                        if !status_only {
+                            let _ = sys_write(err_fd, path.as_bytes());
+                            let _ = sys_write(err_fd, b": FAILED open or read\n");
+                        }
+                    }
+                }
+            }
+
+            if check_fd != in_fd {
+                sys_close(check_fd);
+            }
+        }
+
+        if overall_success && total_verified > 0 {
+            0
+        } else {
+            1
+        }
+    } else {
+        let targets: &[&str] = if file_count == 0 {
+            &["-"]
+        } else {
+            &file_args[..file_count]
+        };
+
+        let mut exit_code = 0;
+
+        for &target in targets {
+            let (target_fd, display_name) = if target == "-" {
+                (in_fd, "-")
+            } else {
+                let fd = sys_open(target, crate::vfs::O_RDONLY);
+                if fd < 0 {
+                    let _ = sys_write(err_fd, b"md5sum: ");
+                    let _ = sys_write(err_fd, target.as_bytes());
+                    let _ = sys_write(err_fd, b": No such file or directory\n");
+                    exit_code = 1;
+                    continue;
+                }
+                (fd, target)
+            };
+
+            match hash_fd_md5(target_fd) {
+                Ok(digest) => {
+                    let mut hex_buf = [0u8; 32];
+                    md5_to_hex(&digest, &mut hex_buf);
+
+                    if tag_format {
+                        let _ = sys_write(out_fd, b"MD5 (");
+                        let _ = sys_write(out_fd, display_name.as_bytes());
+                        let _ = sys_write(out_fd, b") = ");
+                        let _ = sys_write(out_fd, &hex_buf);
+                        let _ = sys_write(out_fd, b"\n");
+                    } else {
+                        let _ = sys_write(out_fd, &hex_buf);
+                        if binary_mode {
+                            let _ = sys_write(out_fd, b" *");
+                        } else {
+                            let _ = sys_write(out_fd, b"  ");
+                        }
+                        let _ = sys_write(out_fd, display_name.as_bytes());
+                        let _ = sys_write(out_fd, b"\n");
+                    }
+                }
+                Err(_) => {
+                    let _ = sys_write(err_fd, b"md5sum: error reading ");
+                    let _ = sys_write(err_fd, display_name.as_bytes());
+                    let _ = sys_write(err_fd, b"\n");
+                    exit_code = 1;
+                }
+            }
+
+            if target_fd != in_fd {
+                sys_close(target_fd);
+            }
+        }
+
+        exit_code
+    }
+}
+
+// ============================================================================
 // Utilitaire POSIX / GNU coreutils : `sync` (Synchronisation des écritures persistance CoW)
 // ============================================================================
 
@@ -12669,6 +13117,7 @@ pub fn run_xargs(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
             "cksum" => run_cksum(effective_sub_args, 0, out_fd, err_fd),
             "base64" => run_base64(effective_sub_args, 0, out_fd, err_fd),
             "sha256sum" => run_sha256sum(effective_sub_args, 0, out_fd, err_fd),
+            "md5sum" => run_md5sum(effective_sub_args, 0, out_fd, err_fd),
             "truncate" => run_truncate(effective_sub_args, 0, out_fd, err_fd),
             "hexdump" => run_hexdump(effective_sub_args, 0, out_fd, err_fd),
             "time" => run_time(effective_sub_args, 0, out_fd, err_fd),
@@ -21239,5 +21688,143 @@ Chaque processus dispose de son propre CR3 sans aucun privilege materiel direct.
 
         let _ = sys_unlink_pool(in_file);
         let _ = sys_unlink_pool(out_file);
+    }
+
+    #[test]
+    fn test_posix_md5sum() {
+        // 1. Vecteurs RFC 1321
+        let digest_empty = Md5Hasher::hash(b"");
+        let mut hex_empty = [0u8; 32];
+        md5_to_hex(&digest_empty, &mut hex_empty);
+        assert_eq!(
+            core::str::from_utf8(&hex_empty).unwrap(),
+            "d41d8cd98f00b204e9800998ecf8427e"
+        );
+
+        let digest_a = Md5Hasher::hash(b"a");
+        let mut hex_a = [0u8; 32];
+        md5_to_hex(&digest_a, &mut hex_a);
+        assert_eq!(
+            core::str::from_utf8(&hex_a).unwrap(),
+            "0cc175b9c0f1b6a831c399e269772661"
+        );
+
+        let digest_abc = Md5Hasher::hash(b"abc");
+        let mut hex_abc = [0u8; 32];
+        md5_to_hex(&digest_abc, &mut hex_abc);
+        assert_eq!(
+            core::str::from_utf8(&hex_abc).unwrap(),
+            "900150983cd24fb0d6963f7d28e17f72"
+        );
+
+        let digest_msg = Md5Hasher::hash(b"message digest");
+        let mut hex_msg = [0u8; 32];
+        md5_to_hex(&digest_msg, &mut hex_msg);
+        assert_eq!(
+            core::str::from_utf8(&hex_msg).unwrap(),
+            "f96b697d7cb7938d525a2f31aaf161d0"
+        );
+
+        // 2. Calcul md5sum sur fichier VFS
+        let file_path = "/tmp/test_md5_data.txt";
+        let fd = sys_open(file_path, O_CREAT | O_WRONLY);
+        assert!(fd >= 0);
+        let _ = sys_write(fd, b"abc");
+        sys_close(fd);
+
+        let (out_r1, out_w1) = crate::vfs::pipe().unwrap();
+        let code1 = run_md5sum(&[file_path], 0, out_w1, 2);
+        sys_close(out_w1);
+        assert_eq!(code1, 0);
+
+        let mut buf1 = [0u8; 256];
+        let n1 = sys_read(out_r1, &mut buf1);
+        sys_close(out_r1);
+        let s1 = core::str::from_utf8(&buf1[..n1 as usize]).unwrap();
+        assert!(s1.starts_with("900150983cd24fb0d6963f7d28e17f72  /tmp/test_md5_data.txt"));
+
+        // 3. Mode BSD style --tag
+        let (out_r2, out_w2) = crate::vfs::pipe().unwrap();
+        let code2 = run_md5sum(&["--tag", file_path], 0, out_w2, 2);
+        sys_close(out_w2);
+        assert_eq!(code2, 0);
+
+        let mut buf2 = [0u8; 256];
+        let n2 = sys_read(out_r2, &mut buf2);
+        sys_close(out_r2);
+        let s2 = core::str::from_utf8(&buf2[..n2 as usize]).unwrap();
+        assert_eq!(
+            s2,
+            "MD5 (/tmp/test_md5_data.txt) = 900150983cd24fb0d6963f7d28e17f72\n"
+        );
+
+        // 4. Mode vérification (-c / --check) réussi
+        let check_file = "/tmp/test_md5.chk";
+        let chk_fd = sys_open(check_file, O_CREAT | O_WRONLY);
+        assert!(chk_fd >= 0);
+        let _ = sys_write(
+            chk_fd,
+            b"900150983cd24fb0d6963f7d28e17f72  /tmp/test_md5_data.txt\n",
+        );
+        sys_close(chk_fd);
+
+        let (out_r3, out_w3) = crate::vfs::pipe().unwrap();
+        let code3 = run_md5sum(&["-c", check_file], 0, out_w3, 2);
+        sys_close(out_w3);
+        assert_eq!(code3, 0);
+
+        let mut buf3 = [0u8; 256];
+        let n3 = sys_read(out_r3, &mut buf3);
+        sys_close(out_r3);
+        let s3 = core::str::from_utf8(&buf3[..n3 as usize]).unwrap();
+        assert!(s3.contains("/tmp/test_md5_data.txt: OK"));
+
+        // 5. Mode vérification échoué (altération)
+        let bad_fd = sys_open(file_path, O_CREAT | O_WRONLY);
+        assert!(bad_fd >= 0);
+        let _ = sys_write(bad_fd, b"corrupted data");
+        sys_close(bad_fd);
+
+        let (out_r4, out_w4) = crate::vfs::pipe().unwrap();
+        let code4 = run_md5sum(&["-c", check_file], 0, out_w4, 2);
+        sys_close(out_w4);
+        assert_eq!(code4, 1);
+
+        let mut buf4 = [0u8; 256];
+        let n4 = sys_read(out_r4, &mut buf4);
+        sys_close(out_r4);
+        let s4 = core::str::from_utf8(&buf4[..n4 as usize]).unwrap();
+        assert!(s4.contains("/tmp/test_md5_data.txt: FAILED"));
+
+        // 6. Streaming stdin
+        let (in_r5, in_w5) = crate::vfs::pipe().unwrap();
+        let (out_r5, out_w5) = crate::vfs::pipe().unwrap();
+        let _ = sys_write(in_w5, b"abc");
+        sys_close(in_w5);
+        let code5 = run_md5sum(&["-"], in_r5, out_w5, 2);
+        sys_close(in_r5);
+        sys_close(out_w5);
+        assert_eq!(code5, 0);
+
+        let mut buf5 = [0u8; 256];
+        let n5 = sys_read(out_r5, &mut buf5);
+        sys_close(out_r5);
+        let s5 = core::str::from_utf8(&buf5[..n5 as usize]).unwrap();
+        assert!(s5.starts_with("900150983cd24fb0d6963f7d28e17f72  -\n"));
+
+        // 7. --help et --version
+        let (out_r6, out_w6) = crate::vfs::pipe().unwrap();
+        let code6 = run_md5sum(&["--help"], 0, out_w6, 2);
+        sys_close(out_w6);
+        assert_eq!(code6, 0);
+        let mut buf6 = [0u8; 512];
+        let n6 = sys_read(out_r6, &mut buf6);
+        sys_close(out_r6);
+        assert!(core::str::from_utf8(&buf6[..n6 as usize])
+            .unwrap()
+            .contains("Usage: md5sum"));
+
+        let _ = sys_unlink_pool(file_path);
+        let _ = sys_unlink_pool(check_file);
     }
 }

@@ -122,6 +122,261 @@ impl StreamContext {
     }
 }
 
+// ============================================================================
+// Contextes de Slot, d'Endpoint et d'Entrée xHCI 1.2 (Sections 6.2 & 6.2.5)
+// ============================================================================
+
+/// Contexte de Slot xHCI 32 octets (xHCI 1.2 Section 6.2.2)
+#[repr(C, align(32))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct SlotContext {
+    /// dword 0: Route String (19:0), Speed (23:20), MTT (25), Hub (26), Context Entries (31:27)
+    pub info1: u32,
+    /// dword 1: Max Exit Latency (15:0), Root Hub Port Number (23:16), Number of Ports (31:24)
+    pub info2: u32,
+    /// dword 2: TT Hub Slot ID (7:0), TT Port Number (15:8), TTT (17:16), Interrupter Target (31:22)
+    pub tt_info: u32,
+    /// dword 3: USB Device Address (7:0), Slot State (31:27)
+    pub state_info: u32,
+    pub reserved: [u32; 4],
+}
+
+impl SlotContext {
+    pub const fn new(entries: u8, speed: u8, root_port: u8) -> Self {
+        let info1 = ((entries as u32 & 0x1F) << 27) | ((speed as u32 & 0x0F) << 20);
+        let info2 = (root_port as u32 & 0xFF) << 16;
+        Self {
+            info1,
+            info2,
+            tt_info: 0,
+            state_info: 0,
+            reserved: [0; 4],
+        }
+    }
+
+    pub fn context_entries(&self) -> u8 {
+        ((self.info1 >> 27) & 0x1F) as u8
+    }
+
+    pub fn speed(&self) -> u8 {
+        ((self.info1 >> 20) & 0x0F) as u8
+    }
+
+    pub fn root_hub_port(&self) -> u8 {
+        ((self.info2 >> 16) & 0xFF) as u8
+    }
+
+    pub fn device_address(&self) -> u8 {
+        (self.state_info & 0xFF) as u8
+    }
+
+    pub fn slot_state(&self) -> u8 {
+        ((self.state_info >> 27) & 0x1F) as u8
+    }
+
+    pub fn set_device_address(&mut self, addr: u8) {
+        self.state_info = (self.state_info & !0xFF) | (addr as u32);
+    }
+
+    pub fn set_slot_state(&mut self, state: u8) {
+        self.state_info = (self.state_info & !(0x1F << 27)) | ((state as u32 & 0x1F) << 27);
+    }
+}
+
+/// Contexte de Point d'Accès (Endpoint Context) xHCI 32 octets (xHCI 1.2 Section 6.2.3)
+#[repr(C, align(32))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct EndpointContext {
+    /// dword 0: EP State (2:0), Mult (9:8), Max Primary Streams (14:10), Linear Stream Array (15), Interval (23:16), Max ESIT Payload Hi (31:24)
+    pub ep_info1: u32,
+    /// dword 1: Force Event (0), Error Count (2:1), EP Type (5:3), Host Initiate Disable (7), Max Packet Size (31:16)
+    pub ep_info2: u32,
+    /// dwords 2 & 3: TR Dequeue Pointer (63:4) + DCS (0)
+    pub tr_dequeue_ptr: u64,
+    /// dword 4: Average TRB Length (15:0), Max ESIT Payload Low (31:16)
+    pub tx_info: u32,
+    pub reserved: [u32; 3],
+}
+
+impl EndpointContext {
+    /// Construit un contexte d'endpoint configuré
+    pub const fn new(
+        ep_type: u8,
+        max_packet_size: u16,
+        tr_dequeue_ptr: u64,
+        interval: u8,
+        cerr: u8,
+    ) -> Self {
+        let ep_info1 = (interval as u32) << 16;
+        let ep_info2 = ((max_packet_size as u32) << 16)
+            | ((ep_type as u32 & 0x07) << 3)
+            | ((cerr as u32 & 0x03) << 1);
+        Self {
+            ep_info1,
+            ep_info2,
+            tr_dequeue_ptr: tr_dequeue_ptr | 1, // Cycle bit DCS = 1
+            tx_info: 0x0000_0008,               // Average TRB Length = 8 bytes
+            reserved: [0; 3],
+        }
+    }
+
+    pub fn ep_state(&self) -> u8 {
+        (self.ep_info1 & 0x07) as u8
+    }
+
+    pub fn ep_type(&self) -> u8 {
+        ((self.ep_info2 >> 3) & 0x07) as u8
+    }
+
+    pub fn max_packet_size(&self) -> u16 {
+        ((self.ep_info2 >> 16) & 0xFFFF) as u16
+    }
+
+    pub fn error_count(&self) -> u8 {
+        ((self.ep_info2 >> 1) & 0x03) as u8
+    }
+
+    pub fn interval(&self) -> u8 {
+        ((self.ep_info1 >> 16) & 0xFF) as u8
+    }
+
+    pub fn dequeue_ptr(&self) -> u64 {
+        self.tr_dequeue_ptr & !0x0F
+    }
+
+    pub fn dequeue_cycle_state(&self) -> bool {
+        (self.tr_dequeue_ptr & 1) != 0
+    }
+}
+
+/// Contexte de Contrôle d'Entrée xHCI (Input Control Context) 32 octets (xHCI 1.2 Section 6.2.5.1)
+#[repr(C, align(32))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct InputControlContext {
+    /// Drop Context Flags : A[1] pour EP0, A[n] pour EP n
+    pub drop_flags: u32,
+    /// Add Context Flags : A[0] pour Slot Context, A[1] pour EP0, A[n] pour EP n
+    pub add_flags: u32,
+    pub reserved: [u32; 6],
+}
+
+impl InputControlContext {
+    pub const fn new() -> Self {
+        Self {
+            drop_flags: 0,
+            add_flags: 0,
+            reserved: [0; 6],
+        }
+    }
+
+    /// Active l'ajout du contexte de slot (bit 0)
+    pub fn enable_slot(&mut self) {
+        self.add_flags |= 1 << 0;
+    }
+
+    /// Active l'ajout d'un point d'accès dci (1..31)
+    pub fn enable_endpoint(&mut self, dci: u8) {
+        if dci < 32 {
+            self.add_flags |= 1 << dci;
+        }
+    }
+
+    /// Marque la désactivation d'un point d'accès dci (1..31)
+    pub fn drop_endpoint(&mut self, dci: u8) {
+        if dci < 32 {
+            self.drop_flags |= 1 << dci;
+        }
+    }
+}
+
+// ============================================================================
+// Capacités Étendues xHCI 1.2 Extended Capabilities (xHCI 1.2 Section 7)
+// ============================================================================
+
+/// Identifiants standard de capacités étendues xHCI (Section 7.1)
+pub const XHCI_EXT_CAP_USB_LEGACY_SUPPORT: u8 = 1;
+pub const XHCI_EXT_CAP_SUPPORTED_PROTOCOL: u8 = 2;
+pub const XHCI_EXT_CAP_EXTENDED_POWER_MGMT: u8 = 3;
+pub const XHCI_EXT_CAP_IO_VIRTUALIZATION: u8 = 4;
+pub const XHCI_EXT_CAP_LOCAL_MEMORY: u8 = 5;
+pub const XHCI_EXT_CAP_USB_DEBUG_CAPABILITY: u8 = 10;
+pub const XHCI_EXT_CAP_EXTENDED_MESSAGE_INTERRUPT: u8 = 17;
+
+/// Structure de parsing d'en-tête de capacité étendue xHCI (Section 7.0)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XhciExtendedCapHeader {
+    /// Capability ID (bits 7:0)
+    pub cap_id: u8,
+    /// Next Capability Pointer in dwords (bits 15:8, 0 = dernier élément)
+    pub next_dwords: u8,
+    /// Capability-specific register (bits 31:16)
+    pub specific: u16,
+}
+
+impl XhciExtendedCapHeader {
+    pub const fn parse(raw: u32) -> Self {
+        Self {
+            cap_id: (raw & 0xFF) as u8,
+            next_dwords: ((raw >> 8) & 0xFF) as u8,
+            specific: ((raw >> 16) & 0xFFFF) as u16,
+        }
+    }
+
+    pub const fn encode(&self) -> u32 {
+        (self.cap_id as u32) | ((self.next_dwords as u32) << 8) | ((self.specific as u32) << 16)
+    }
+}
+
+/// Capacité Étendue Supported Protocol (USB 2.0 / USB 3.x) - xHCI 1.2 Section 7.2
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XhciSupportedProtocol {
+    pub major_rev: u8,
+    pub minor_rev: u8,
+    pub name_string: [u8; 4],
+    pub compatible_port_offset: u8,
+    pub compatible_port_count: u8,
+    pub protocol_defined: u16,
+}
+
+impl XhciSupportedProtocol {
+    pub const fn parse(dwords: &[u32; 3]) -> Self {
+        let dw0 = dwords[0];
+        let dw1 = dwords[1];
+        let dw2 = dwords[2];
+
+        let minor_rev = ((dw0 >> 16) & 0xFF) as u8;
+        let major_rev = ((dw0 >> 24) & 0xFF) as u8;
+
+        let name_string = [
+            (dw1 & 0xFF) as u8,
+            ((dw1 >> 8) & 0xFF) as u8,
+            ((dw1 >> 16) & 0xFF) as u8,
+            ((dw1 >> 24) & 0xFF) as u8,
+        ];
+
+        let compatible_port_offset = (dw2 & 0xFF) as u8;
+        let compatible_port_count = ((dw2 >> 8) & 0xFF) as u8;
+        let protocol_defined = ((dw2 >> 16) & 0xFFFF) as u16;
+
+        Self {
+            major_rev,
+            minor_rev,
+            name_string,
+            compatible_port_offset,
+            compatible_port_count,
+            protocol_defined,
+        }
+    }
+
+    pub fn is_usb3(&self) -> bool {
+        self.major_rev == 3 && &self.name_string == b"USB "
+    }
+
+    pub fn is_usb2(&self) -> bool {
+        self.major_rev == 2 && &self.name_string == b"USB "
+    }
+}
+
 /// Anneau de transfert xHCI dédié à un flux Bulk spécifique (Block Stream / UAS)
 pub struct BulkStreamRing {
     pub stream_id: u16,
@@ -5308,6 +5563,64 @@ impl XhciController {
         Ok(())
     }
 
+    /// Calcule l'adresse MMIO d'une capacité étendue xHCI (Extended Capability) à partir
+    /// de l'adresse de base BAR0 et du décalage (en dwords) spécifié dans HCCPARAMS1 (bits 31:16).
+    #[inline]
+    pub fn ext_cap_addr(&self, xecp_dwords: u16) -> u64 {
+        self.bar0_base + ((xecp_dwords as u64) << 2)
+    }
+
+    /// Émet une commande Evaluate Context sur le Command Ring.
+    pub fn evaluate_context(
+        &mut self,
+        input_ctx_iova: u64,
+        slot_id: u8,
+    ) -> Result<usize, SysError> {
+        if !self.ready {
+            return Err(SysError::ResourceBusy);
+        }
+        let control_extra = (slot_id as u32) << 24;
+        self.cmd_ring
+            .push(input_ctx_iova, control_extra, TRB_TYPE_EVALUATE_CONTEXT)
+    }
+
+    /// Émet une commande Reset Endpoint sur le Command Ring.
+    pub fn reset_endpoint(
+        &mut self,
+        slot_id: u8,
+        ep_dci: u8,
+        preserve_state: bool,
+    ) -> Result<usize, SysError> {
+        if !self.ready {
+            return Err(SysError::ResourceBusy);
+        }
+        if ep_dci == 0 || ep_dci > 31 {
+            return Err(SysError::InvalidArgument);
+        }
+        let control_extra = ((slot_id as u32) << 24)
+            | ((ep_dci as u32) << 16)
+            | if preserve_state { 1 << 9 } else { 0 };
+        self.cmd_ring.push(0, control_extra, TRB_TYPE_RESET_EP)
+    }
+
+    /// Émet une commande Stop Endpoint sur le Command Ring.
+    pub fn stop_endpoint(
+        &mut self,
+        slot_id: u8,
+        ep_dci: u8,
+        suspend: bool,
+    ) -> Result<usize, SysError> {
+        if !self.ready {
+            return Err(SysError::ResourceBusy);
+        }
+        if ep_dci == 0 || ep_dci > 31 {
+            return Err(SysError::InvalidArgument);
+        }
+        let control_extra =
+            ((slot_id as u32) << 24) | ((ep_dci as u32) << 16) | if suspend { 1 << 23 } else { 0 };
+        self.cmd_ring.push(0, control_extra, TRB_TYPE_STOP_EP)
+    }
+
     /// Traite un TRB de changement de statut de port (Port Status Change Event, Type 34)
     /// et retourne l'événement de détection à chaud (Hot-Plug) avec télémétrie CSC/PRC.
     pub fn handle_port_status_change_trb(
@@ -7546,5 +7859,96 @@ mod tests {
         assert_eq!(ctrl.read_port_pmsc(0), 0);
         assert_eq!(ctrl.read_port_pmsc(9), 0);
         assert_eq!(ctrl.read_port_pmsc_typed(0), PortPmsc::default());
+    }
+
+    #[test]
+    fn test_xhci_contexts_and_extended_capabilities() {
+        // 1. Validation de SlotContext (32 octets, aligné 32)
+        assert_eq!(core::mem::size_of::<SlotContext>(), 32);
+        assert_eq!(core::mem::align_of::<SlotContext>(), 32);
+
+        let mut slot = SlotContext::new(4, 4, 1); // 4 context entries, speed = 4 (SuperSpeed), root_port = 1
+        assert_eq!(slot.context_entries(), 4);
+        assert_eq!(slot.speed(), 4);
+        assert_eq!(slot.root_hub_port(), 1);
+        assert_eq!(slot.device_address(), 0);
+        assert_eq!(slot.slot_state(), 0);
+
+        slot.set_device_address(3);
+        slot.set_slot_state(1); // Default/Addressed
+        assert_eq!(slot.device_address(), 3);
+        assert_eq!(slot.slot_state(), 1);
+
+        // 2. Validation d'EndpointContext (32 octets, aligné 32)
+        assert_eq!(core::mem::size_of::<EndpointContext>(), 32);
+        assert_eq!(core::mem::align_of::<EndpointContext>(), 32);
+
+        let ep_ctx = EndpointContext::new(2, 1024, 0x1000_8000, 0, 3); // Bulk OUT (type=2), MPS=1024, ring=0x1000_8000, CERR=3
+        assert_eq!(ep_ctx.ep_type(), 2);
+        assert_eq!(ep_ctx.max_packet_size(), 1024);
+        assert_eq!(ep_ctx.error_count(), 3);
+        assert_eq!(ep_ctx.interval(), 0);
+        assert_eq!(ep_ctx.dequeue_ptr(), 0x1000_8000);
+        assert!(ep_ctx.dequeue_cycle_state());
+
+        // 3. Validation d'InputControlContext (32 octets, aligné 32)
+        assert_eq!(core::mem::size_of::<InputControlContext>(), 32);
+        assert_eq!(core::mem::align_of::<InputControlContext>(), 32);
+
+        let mut icc = InputControlContext::new();
+        icc.enable_slot();
+        icc.enable_endpoint(1); // EP0
+        icc.enable_endpoint(2); // EP1 OUT
+        icc.drop_endpoint(3); // EP1 IN
+        assert_eq!(icc.add_flags, 0b111); // bits 0, 1, 2
+        assert_eq!(icc.drop_flags, 1 << 3);
+
+        // 4. Extended Capabilities Header parsing
+        // Raw: cap_id = 2 (Supported Protocol), next = 8 dwords, specific = 0x0000
+        let raw_hdr: u32 = 2 | (8 << 8);
+        let parsed_hdr = XhciExtendedCapHeader::parse(raw_hdr);
+        assert_eq!(parsed_hdr.cap_id, XHCI_EXT_CAP_SUPPORTED_PROTOCOL);
+        assert_eq!(parsed_hdr.next_dwords, 8);
+        assert_eq!(parsed_hdr.encode(), raw_hdr);
+
+        // 5. Supported Protocol Capability parsing (USB 3.0)
+        let proto_dwords: [u32; 3] = [
+            (3 << 24) | 2, // major=3, minor=0, cap_id=2
+            u32::from_le_bytes(*b"USB "),
+            (4 << 8) | 1, // 4 ports starting at port 1
+        ];
+        let proto = XhciSupportedProtocol::parse(&proto_dwords);
+        assert_eq!(proto.major_rev, 3);
+        assert_eq!(proto.minor_rev, 0);
+        assert_eq!(&proto.name_string, b"USB ");
+        assert_eq!(proto.compatible_port_offset, 1);
+        assert_eq!(proto.compatible_port_count, 4);
+        assert!(proto.is_usb3());
+        assert!(!proto.is_usb2());
+
+        // 6. Extended Capability Address calculation
+        let mut ctrl = XhciController::new();
+        ctrl.bar0_base = 0xFE80_0000;
+        ctrl.ready = true;
+        // xecp = 0x2000 dwords = 0x8000 octets
+        assert_eq!(ctrl.ext_cap_addr(0x2000), 0xFE80_0000 + (0x2000 << 2));
+
+        // 7. Command Ring: evaluate_context, reset_endpoint, stop_endpoint
+        let eval_idx = ctrl.evaluate_context(0x2000_1000, 1).unwrap();
+        assert_eq!(
+            ctrl.cmd_ring.trbs[eval_idx].trb_type(),
+            TRB_TYPE_EVALUATE_CONTEXT
+        );
+        assert_eq!(ctrl.cmd_ring.trbs[eval_idx].parameter, 0x2000_1000);
+        assert_eq!(ctrl.cmd_ring.trbs[eval_idx].status >> 24, 1); // slot_id
+
+        let rst_idx = ctrl.reset_endpoint(1, 2, false).unwrap();
+        assert_eq!(ctrl.cmd_ring.trbs[rst_idx].trb_type(), TRB_TYPE_RESET_EP);
+        assert_eq!(ctrl.cmd_ring.trbs[rst_idx].status >> 24, 1); // slot_id
+        assert_eq!((ctrl.cmd_ring.trbs[rst_idx].status >> 16) & 0xFF, 2); // ep_dci
+
+        let stop_idx = ctrl.stop_endpoint(1, 2, true).unwrap();
+        assert_eq!(ctrl.cmd_ring.trbs[stop_idx].trb_type(), TRB_TYPE_STOP_EP);
+        assert_ne!(ctrl.cmd_ring.trbs[stop_idx].status & (1 << 23), 0); // suspend
     }
 }

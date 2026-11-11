@@ -608,6 +608,7 @@ impl JamboShell {
             "csplit" | "/bin/csplit" | "bin/csplit" => self.cmd_csplit(args, out),
             "join" | "/bin/join" | "bin/join" => self.cmd_join(args, out),
             "shuf" | "/bin/shuf" | "bin/shuf" => self.cmd_shuf(args, out),
+            "md5sum" | "/bin/md5sum" | "bin/md5sum" => self.cmd_md5sum(args, out),
             "cow" | "/bin/cow" | "bin/cow" => self.cmd_cow(args, out),
             "version" => self.cmd_version(out),
             "uptime" => self.cmd_uptime(out),
@@ -768,13 +769,13 @@ impl JamboShell {
 
     fn cmd_coreutils(&self, out: &mut [u8]) -> (ShellStatus, usize) {
         let text = b"Utilitaires Coreutils Ring 3 (services/jambo-coreutils) :\n\
-  Binaires disponibles : /bin/echo, /bin/cat, /bin/head, /bin/tail, /bin/touch, /bin/mkdir, /bin/rm, /bin/cp, /bin/mv, /bin/tee, /bin/env, /bin/grep, /bin/sort, /bin/uniq, /bin/find, /bin/chmod, /bin/chown, /bin/chgrp, /bin/id, /bin/du, /bin/df, /bin/uname, /bin/cut, /bin/paste, /bin/comm, /bin/tr, /bin/split, /bin/basename, /bin/dirname, /bin/seq, /bin/yes, /bin/printf, /bin/expr, /bin/fold, /bin/nl, /bin/od, /bin/cmp, /bin/expand, /bin/unexpand, /bin/sleep, /bin/cksum, /bin/base64, /bin/sha256sum, /bin/sync, /bin/truncate, /bin/hexdump, /bin/which, /bin/time, /bin/xargs, /bin/dd, /bin/readlink, /bin/stat, /bin/ln, /bin/mktemp, /bin/rmdir, /bin/tree, /bin/realpath, /bin/fmt, /bin/pr, /bin/column, /bin/tabs, /bin/tac, /bin/csplit, /bin/join, /bin/shuf, /bin/wc, /bin/true, /bin/false, /bin/ls (69 utilitaires)\n\
+  Binaires disponibles : /bin/echo, /bin/cat, /bin/head, /bin/tail, /bin/touch, /bin/mkdir, /bin/rm, /bin/cp, /bin/mv, /bin/tee, /bin/env, /bin/grep, /bin/sort, /bin/uniq, /bin/find, /bin/chmod, /bin/chown, /bin/chgrp, /bin/id, /bin/du, /bin/df, /bin/uname, /bin/cut, /bin/paste, /bin/comm, /bin/tr, /bin/split, /bin/basename, /bin/dirname, /bin/seq, /bin/yes, /bin/printf, /bin/expr, /bin/fold, /bin/nl, /bin/od, /bin/cmp, /bin/expand, /bin/unexpand, /bin/sleep, /bin/cksum, /bin/base64, /bin/sha256sum, /bin/md5sum, /bin/sync, /bin/truncate, /bin/hexdump, /bin/which, /bin/time, /bin/xargs, /bin/dd, /bin/readlink, /bin/stat, /bin/ln, /bin/mktemp, /bin/rmdir, /bin/tree, /bin/realpath, /bin/fmt, /bin/pr, /bin/column, /bin/tabs, /bin/tac, /bin/csplit, /bin/join, /bin/shuf, /bin/wc, /bin/true, /bin/false, /bin/ls (70 utilitaires)\n\
   Architecture & ABI   : System V AMD64 ELF64 (ET_EXEC / Ring 3 Userland)\n\
   Point d'entree       : _start (parsing argc/argv sur pile System V)\n\
   Terminaison          : Syscall 11 ThreadExit avec propagation code de retour POSIX\n\
   Isolation memoire    : Espace d'adressage strict (CR3 dedie), CSpace confinee\n\
   Couche I/O           : Descripteurs POSIX vfs::* (stdin:0, stdout:1, stderr:2)\n\
-  Statut               : Operationnel (v0.3.92)\n";
+  Statut               : Operationnel (v0.3.93)\n";
         let len = text.len().min(out.len());
         out[..len].copy_from_slice(&text[..len]);
         (ShellStatus::Success, len)
@@ -2238,6 +2239,43 @@ Utilitaire d'installation JamboOS (Serie 0.*.*)\n\
             (status, len)
         } else {
             let msg = b"shuf: pipe creation failed\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
+    }
+
+    fn cmd_md5sum(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if let (Ok((r_out, w_out)), Ok((r_err, w_err))) =
+            (libjambo::vfs::pipe(), libjambo::vfs::pipe())
+        {
+            let code = libjambo::coreutils::run_md5sum(args, 0, w_out, w_err);
+            let _ = libjambo::coreutils::sys_close(w_out);
+            let _ = libjambo::coreutils::sys_close(w_err);
+
+            let mut len = 0;
+            if code == 0 {
+                let n_out = libjambo::coreutils::sys_read(r_out, out);
+                if n_out > 0 {
+                    len = n_out as usize;
+                }
+            } else {
+                let n_err = libjambo::coreutils::sys_read(r_err, out);
+                if n_err > 0 {
+                    len = n_err as usize;
+                }
+            }
+            let _ = libjambo::coreutils::sys_close(r_out);
+            let _ = libjambo::coreutils::sys_close(r_err);
+
+            let status = if code == 0 {
+                ShellStatus::Success
+            } else {
+                ShellStatus::ExecutionFailed
+            };
+            (status, len)
+        } else {
+            let msg = b"md5sum: pipe creation failed\n";
             let len = msg.len().min(out.len());
             out[..len].copy_from_slice(&msg[..len]);
             (ShellStatus::ExecutionFailed, len)
@@ -19633,11 +19671,11 @@ mod tests {
         let s4 = core::str::from_utf8(&out[..len4]).unwrap();
         assert!(s4.contains("Reserve Disponible"));
 
-        // 5. coreutils inventaire 67
+        // 5. coreutils inventaire 70
         let (st5, len5) = shell.execute_line("coreutils", &mut out);
         assert_eq!(st5, ShellStatus::Success);
         let s5 = core::str::from_utf8(&out[..len5]).unwrap();
-        assert!(s5.contains("69 utilitaires"));
+        assert!(s5.contains("70 utilitaires"));
         assert!(s5.contains("/bin/xargs"));
         assert!(s5.contains("/bin/dd"));
         assert!(s5.contains("/bin/readlink"));
@@ -19645,6 +19683,7 @@ mod tests {
         assert!(s5.contains("/bin/ln"));
         assert!(s5.contains("/bin/mktemp"));
         assert!(s5.contains("/bin/rmdir"));
+        assert!(s5.contains("/bin/md5sum"));
         assert!(s5.contains("/bin/pr"));
         assert!(s5.contains("/bin/column"));
         assert!(s5.contains("/bin/tabs"));
@@ -19777,5 +19816,11 @@ mod tests {
         assert_eq!(st24, ShellStatus::Success);
         let s24 = core::str::from_utf8(&out[..len24]).unwrap();
         assert_eq!(s24.lines().count(), 2);
+
+        // 22. md5sum shell command
+        let (st25, len25) = shell.execute_line("md5sum /etc/hostname", &mut out);
+        assert_eq!(st25, ShellStatus::Success);
+        let s25 = core::str::from_utf8(&out[..len25]).unwrap();
+        assert!(s25.contains("/etc/hostname"));
     }
 }
