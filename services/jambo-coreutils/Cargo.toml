@@ -552,7 +552,12 @@ name = "dircolors"
 path = "src/bin/dircolors.rs"
 test = false
 
-# 109 utilitaires Ring 3
+[[bin]]
+name = "stdbuf"
+path = "src/bin/stdbuf.rs"
+test = false
+
+# 110 utilitaires Ring 3
 
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }

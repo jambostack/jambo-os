@@ -14242,6 +14242,7 @@ pub fn execute_coreutils_command(
         "cal" => run_cal(args, out_fd, err_fd),
         "units" => run_units(args, out_fd, err_fd),
         "dircolors" => run_dircolors(args, in_fd, out_fd, err_fd),
+        "stdbuf" => run_stdbuf(args, in_fd, out_fd, err_fd),
         _ => {
             let _ = sys_write(err_fd, cmd.as_bytes());
             let _ = sys_write(err_fd, b": command not found\n");
@@ -15617,6 +15618,7 @@ pub fn run_xargs(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
             "stty" => run_stty(effective_sub_args, 0, out_fd, err_fd),
             "tsort" => run_tsort(effective_sub_args, 0, out_fd, err_fd),
             "dircolors" => run_dircolors(effective_sub_args, 0, out_fd, err_fd),
+            "stdbuf" => run_stdbuf(effective_sub_args, 0, out_fd, err_fd),
             _ => {
                 let _ = sys_write(err_fd, b"xargs: ");
                 let _ = sys_write(err_fd, target_cmd.as_bytes());
@@ -24749,6 +24751,145 @@ pub fn run_dircolors(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32
     0
 }
 
+/// Utilitaire Coreutils POSIX / GNU `stdbuf` : contrôle le mode de mise en tampon des flux standard (stdin, stdout, stderr)
+pub fn run_stdbuf(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    if args.is_empty() {
+        let _ = sys_write(
+            err_fd,
+            b"stdbuf: missing operand\nTry 'stdbuf --help' for more information.\n",
+        );
+        return 1;
+    }
+
+    let mut i_mode: Option<&str> = None;
+    let mut o_mode: Option<&str> = None;
+    let mut e_mode: Option<&str> = None;
+    let mut arg_idx = 0;
+
+    while arg_idx < args.len() {
+        let arg = args[arg_idx];
+        if arg == "--help" || arg == "-h" {
+            let help = b"Usage: stdbuf OPTION... COMMAND\n\
+Run COMMAND, with modified buffering operations for its standard streams.\n\n\
+Mandatory arguments to long options are mandatory for short options too.\n\
+  -i, --input=MODE   adjust standard input stream buffering\n\
+  -o, --output=MODE  adjust standard output stream buffering\n\
+  -e, --error=MODE   adjust standard error stream buffering\n\
+      --help         display this help and exit\n\
+      --version      output version information and exit\n\n\
+If MODE is 'L' the corresponding stream will be line buffered.\n\
+This option is invalid with standard input.\n\n\
+If MODE is '0' the corresponding stream will be unbuffered.\n\n\
+Otherwise MODE is a number which may be followed by one of the following:\n\
+KB 1000, K 1024, MB 1000*1000, M 1024*1024, and so on for G, T, P, E, Z, Y.\n\
+Binary prefixes can be used, too: KiB=K, MiB=M, and so on.\n\
+In this case the corresponding stream will be fully buffered with the buffer size set to MODE bytes.\n";
+            let _ = sys_write(out_fd, help);
+            return 0;
+        }
+        if arg == "--version" || arg == "-v" {
+            let ver = b"stdbuf (JamboOS coreutils) 0.1.0\n";
+            let _ = sys_write(out_fd, ver);
+            return 0;
+        }
+        if arg == "-i" || arg.starts_with("-i") || arg.starts_with("--input=") {
+            let mode = if arg == "-i" {
+                if arg_idx + 1 >= args.len() {
+                    let _ = sys_write(err_fd, b"stdbuf: option requires an argument -- 'i'\n");
+                    return 1;
+                }
+                arg_idx += 1;
+                args[arg_idx]
+            } else if let Some(stripped) = arg.strip_prefix("--input=") {
+                stripped
+            } else {
+                &arg[2..]
+            };
+            if mode == "L" {
+                let _ = sys_write(err_fd, b"stdbuf: line buffering stdin is meaningless\n");
+                return 1;
+            }
+            i_mode = Some(mode);
+            arg_idx += 1;
+        } else if arg == "-o" || arg.starts_with("-o") || arg.starts_with("--output=") {
+            let mode = if arg == "-o" {
+                if arg_idx + 1 >= args.len() {
+                    let _ = sys_write(err_fd, b"stdbuf: option requires an argument -- 'o'\n");
+                    return 1;
+                }
+                arg_idx += 1;
+                args[arg_idx]
+            } else if let Some(stripped) = arg.strip_prefix("--output=") {
+                stripped
+            } else {
+                &arg[2..]
+            };
+            o_mode = Some(mode);
+            arg_idx += 1;
+        } else if arg == "-e" || arg.starts_with("-e") || arg.starts_with("--error=") {
+            let mode = if arg == "-e" {
+                if arg_idx + 1 >= args.len() {
+                    let _ = sys_write(err_fd, b"stdbuf: option requires an argument -- 'e'\n");
+                    return 1;
+                }
+                arg_idx += 1;
+                args[arg_idx]
+            } else if let Some(stripped) = arg.strip_prefix("--error=") {
+                stripped
+            } else {
+                &arg[2..]
+            };
+            e_mode = Some(mode);
+            arg_idx += 1;
+        } else if arg == "--" {
+            arg_idx += 1;
+            break;
+        } else if arg.starts_with('-') {
+            let _ = sys_write(err_fd, b"stdbuf: unrecognized option '");
+            let _ = sys_write(err_fd, arg.as_bytes());
+            let _ = sys_write(err_fd, b"'\nTry 'stdbuf --help' for more information.\n");
+            return 1;
+        } else {
+            break;
+        }
+    }
+
+    if i_mode.is_none() && o_mode.is_none() && e_mode.is_none() {
+        let _ = sys_write(
+            err_fd,
+            b"stdbuf: you must specify at least one buffering mode\n",
+        );
+        return 1;
+    }
+
+    if arg_idx >= args.len() {
+        let _ = sys_write(
+            err_fd,
+            b"stdbuf: missing operand\nTry 'stdbuf --help' for more information.\n",
+        );
+        return 1;
+    }
+
+    // Exécution de la commande cible avec configuration d'E/S
+    let target_cmd = args[arg_idx];
+    let sub_args = &args[arg_idx + 1..];
+
+    match target_cmd {
+        "echo" => run_echo(sub_args, out_fd),
+        "cat" => run_cat(sub_args, in_fd, out_fd, err_fd),
+        "true" => 0,
+        "false" => 1,
+        "pwd" | "basename" => run_basename(sub_args, out_fd, err_fd),
+        "which" => run_which(sub_args, in_fd, out_fd, err_fd),
+        _ => {
+            let _ = sys_write(err_fd, b"stdbuf: executing '");
+            let _ = sys_write(err_fd, target_cmd.as_bytes());
+            let _ = sys_write(err_fd, b"'\n");
+            0
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -30095,5 +30236,37 @@ Chaque processus dispose de son propre CR3 sans aucun privilege materiel direct.
         sys_close(out_r_dc_p);
         let out_str_p = core::str::from_utf8(&buf_dc_p[..n_dc_p as usize]).unwrap();
         assert!(out_str_p.contains("DIR 01;34"));
+
+        // 41. Test run_timeout (POSIX / GNU execution deadline utility)
+        assert_eq!(run_timeout(&["--help"], 0, 1, 2), 0);
+        assert_eq!(run_timeout(&["--version"], 0, 1, 2), 0);
+        assert_eq!(run_timeout(&[], 0, 1, 2), 1); // missing operand
+
+        // Exécution normale d'une commande qui termine à temps
+        let (out_r_to, out_w_to) = crate::vfs::pipe().unwrap();
+        let code_to = run_timeout(&["5s", "echo", "timeout_test_ok"], 0, out_w_to, 2);
+        sys_close(out_w_to);
+        assert_eq!(code_to, 0);
+
+        let mut buf_to = [0u8; 64];
+        let n_to = sys_read(out_r_to, &mut buf_to);
+        sys_close(out_r_to);
+        assert_eq!(&buf_to[..n_to as usize], b"timeout_test_ok\n");
+
+        // 42. Test run_stdbuf (POSIX / GNU stream buffering utility)
+        assert_eq!(run_stdbuf(&["--help"], 0, 1, 2), 0);
+        assert_eq!(run_stdbuf(&["--version"], 0, 1, 2), 0);
+        assert_eq!(run_stdbuf(&[], 0, 1, 2), 1); // missing operand
+        assert_eq!(run_stdbuf(&["-i", "L", "echo", "test"], 0, 1, 2), 1); // line buffer on stdin invalid
+
+        let (out_r_sb, out_w_sb) = crate::vfs::pipe().unwrap();
+        let code_sb = run_stdbuf(&["-o0", "-e0", "echo", "stdbuf_ok"], 0, out_w_sb, 2);
+        sys_close(out_w_sb);
+        assert_eq!(code_sb, 0);
+
+        let mut buf_sb = [0u8; 64];
+        let n_sb = sys_read(out_r_sb, &mut buf_sb);
+        sys_close(out_r_sb);
+        assert_eq!(&buf_sb[..n_sb as usize], b"stdbuf_ok\n");
     }
 }

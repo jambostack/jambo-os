@@ -337,6 +337,7 @@ pub const XHCI_EXT_CAP_USB4_SECURITY_CONFIGURATION: u8 = 46;
 pub const XHCI_EXT_CAP_USB4_INTER_DOMAIN_TRANSPORT: u8 = 47;
 /// Capacité étendue xHCI 1.2 / USB4 PCIe Tunneling Adapter Configuration Interface (§7.40)
 pub const XHCI_EXT_CAP_USB4_PCIE_ADAPTER_CONFIGURATION: u8 = 48;
+pub const XHCI_EXT_CAP_USB4_DP_ADAPTER_CONFIGURATION: u8 = 49;
 
 /// Masques de registres USB Legacy Support (xHCI 1.2 Section 7.1)
 /// Registre USBLEGSUP (Offset 0x00)
@@ -4916,6 +4917,154 @@ impl XhciUsb4PcieAdapterConfig {
     pub fn configure_bandwidth_credits(&mut self, bw_mbps: u16, credits: u8) {
         self.guaranteed_bandwidth_mbps = bw_mbps;
         self.tlp_buffer_credits = credits;
+    }
+}
+
+/// Capacité Étendue xHCI 1.2 / USB4 DisplayPort Adapter Configuration (§7.41, Cap ID 49)
+///
+/// Contrôle les adaptateurs DisplayPort (IN / OUT) tunnelisés à travers les routeurs USB4 :
+/// - Négociation de débit DP (RBR 1.62 Gbps, HBR 2.7 Gbps, HBR2 5.4 Gbps, HBR3 8.1 Gbps, UHBR10/13.5/20 Gbps)
+/// - Gestion de flux vidéo MST (Multi-Stream Transport) et cryptage HDCP 2.2 / 2.3
+/// - Allocation dynamique de bande passante vidéo et canal auxiliaire DP AUX tunnelisé
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XhciUsb4DpAdapterConfig {
+    /// Pointeur dword vers la prochaine capacité étendue (0 = fin de liste)
+    pub next_ptr_dwords: u8,
+    /// Adaptateur vidéo DP activé (bit 0)
+    pub adapter_enabled: bool,
+    /// Support Multi-Stream Transport (MST) actif (bit 1)
+    pub mst_supported: bool,
+    /// Tunneling du canal auxiliaire DP AUX activé (bit 2)
+    pub dp_aux_tunneling_enabled: bool,
+    /// Protection de contenu HDCP 2.2/2.3 activée (bit 3)
+    pub hdcp_enabled: bool,
+    /// Adaptateur est une source (DP IN) ou un récepteur (DP OUT) : true = DP IN, false = DP OUT (bit 4)
+    pub is_dp_in_adapter: bool,
+    /// Numéro d'adaptateur DP physique dans le routeur USB4 (bits 8..=15)
+    pub adapter_num: u8,
+    /// Numéro de routeur USB4 hébergeant l'adaptateur (bits 16..=23)
+    pub router_id: u8,
+    /// Nombre de lanes physiques DP allouées (1, 2 ou 4) (bits 24..=31)
+    pub lane_count: u8,
+    /// Registre de statut matériel et d'état du lien DP (DWORD 2)
+    pub status: u32,
+    /// Bande passante vidéo allouée en Mbit/s (DWORD 3 [15:0])
+    pub video_bandwidth_mbps: u16,
+    /// Débit de lien DisplayPort négocié : 1=RBR, 2=HBR, 3=HBR2, 4=HBR3, 5=UHBR10, 6=UHBR20 (DWORD 3 [23:16])
+    pub max_link_rate: u8,
+    /// Profondeur de couleur maximale en bits par composante : 6, 8, 10, 12, 16 bpc (DWORD 3 [31:24])
+    pub color_depth_bpc: u8,
+}
+
+impl XhciUsb4DpAdapterConfig {
+    /// Crée une nouvelle capacité USB4 DisplayPort Adapter Configuration (§7.41)
+    pub const fn new(
+        adapter_num: u8,
+        router_id: u8,
+        is_dp_in: bool,
+        lane_count: u8,
+        max_link_rate: u8,
+    ) -> Self {
+        Self {
+            next_ptr_dwords: 0,
+            adapter_enabled: false,
+            mst_supported: true,
+            dp_aux_tunneling_enabled: true,
+            hdcp_enabled: false,
+            is_dp_in_adapter: is_dp_in,
+            adapter_num,
+            router_id,
+            lane_count,
+            status: 0,
+            video_bandwidth_mbps: 21600, // 21.6 Gbps (HBR2 x4) par défaut
+            max_link_rate,
+            color_depth_bpc: 8, // 8-bit par canal par défaut
+        }
+    }
+
+    /// Parse les 4 dwords MMIO d'une capacité étendue USB4 DisplayPort Adapter Configuration (§7.41)
+    pub const fn parse(dwords: &[u32; 4]) -> Option<Self> {
+        let cap_id = (dwords[0] & 0xFF) as u8;
+        if cap_id != XHCI_EXT_CAP_USB4_DP_ADAPTER_CONFIGURATION {
+            return None;
+        }
+
+        let next_ptr = ((dwords[0] >> 8) & 0xFF) as u8;
+        let ctrl = dwords[1];
+        let adapter_enabled = (ctrl & 0x01) != 0;
+        let mst_supported = (ctrl & 0x02) != 0;
+        let dp_aux_tunneling_enabled = (ctrl & 0x04) != 0;
+        let hdcp_enabled = (ctrl & 0x08) != 0;
+        let is_dp_in_adapter = (ctrl & 0x10) != 0;
+        let adapter_num = ((ctrl >> 8) & 0xFF) as u8;
+        let router_id = ((ctrl >> 16) & 0xFF) as u8;
+        let lane_count = ((ctrl >> 24) & 0xFF) as u8;
+
+        let status = dwords[2];
+        let video_bandwidth_mbps = (dwords[3] & 0xFFFF) as u16;
+        let max_link_rate = ((dwords[3] >> 16) & 0xFF) as u8;
+        let color_depth_bpc = ((dwords[3] >> 24) & 0xFF) as u8;
+
+        Some(Self {
+            next_ptr_dwords: next_ptr,
+            adapter_enabled,
+            mst_supported,
+            dp_aux_tunneling_enabled,
+            hdcp_enabled,
+            is_dp_in_adapter,
+            adapter_num,
+            router_id,
+            lane_count,
+            status,
+            video_bandwidth_mbps,
+            max_link_rate,
+            color_depth_bpc,
+        })
+    }
+
+    /// Encode la capacité étendue en 4 mots dwords MMIO 32-bit
+    pub const fn encode(&self) -> [u32; 4] {
+        let dw0 = (XHCI_EXT_CAP_USB4_DP_ADAPTER_CONFIGURATION as u32)
+            | ((self.next_ptr_dwords as u32) << 8);
+        let mut ctrl = ((self.adapter_num as u32) << 8)
+            | ((self.router_id as u32) << 16)
+            | ((self.lane_count as u32) << 24);
+        if self.adapter_enabled {
+            ctrl |= 0x01;
+        }
+        if self.mst_supported {
+            ctrl |= 0x02;
+        }
+        if self.dp_aux_tunneling_enabled {
+            ctrl |= 0x04;
+        }
+        if self.hdcp_enabled {
+            ctrl |= 0x08;
+        }
+        if self.is_dp_in_adapter {
+            ctrl |= 0x10;
+        }
+        let dw2 = self.status;
+        let dw3 = (self.video_bandwidth_mbps as u32)
+            | (((self.max_link_rate as u32) & 0xFF) << 16)
+            | (((self.color_depth_bpc as u32) & 0xFF) << 24);
+        [dw0, ctrl, dw2, dw3]
+    }
+
+    /// Active ou désactive l'adaptateur DisplayPort
+    pub fn set_adapter_enabled(&mut self, enable: bool) {
+        self.adapter_enabled = enable;
+    }
+
+    /// Active ou désactive la protection HDCP
+    pub fn set_hdcp_enabled(&mut self, enable: bool) {
+        self.hdcp_enabled = enable;
+    }
+
+    /// Configure la bande passante vidéo et la profondeur de couleur
+    pub fn configure_video_stream(&mut self, bw_mbps: u16, bpc: u8) {
+        self.video_bandwidth_mbps = bw_mbps;
+        self.color_depth_bpc = bpc;
     }
 }
 
@@ -14497,5 +14646,59 @@ mod tests {
         assert_eq!(parsed_pcfg.guaranteed_bandwidth_mbps, 32000);
         assert_eq!(parsed_pcfg.max_link_gen, 4);
         assert_eq!(parsed_pcfg.max_link_width, 8);
+
+        // Test Capacité Étendue xHCI 1.2 / USB4 DisplayPort Adapter Configuration (§7.41)
+        let mut usb4_dp_cfg = XhciUsb4DpAdapterConfig::new(2, 1, true, 4, 4);
+        assert_eq!(usb4_dp_cfg.adapter_num, 2);
+        assert_eq!(usb4_dp_cfg.router_id, 1);
+        assert!(usb4_dp_cfg.is_dp_in_adapter);
+        assert_eq!(usb4_dp_cfg.lane_count, 4);
+        assert_eq!(usb4_dp_cfg.max_link_rate, 4);
+        assert_eq!(usb4_dp_cfg.video_bandwidth_mbps, 21600);
+        assert_eq!(usb4_dp_cfg.color_depth_bpc, 8);
+        assert!(!usb4_dp_cfg.adapter_enabled);
+        assert!(usb4_dp_cfg.mst_supported);
+        assert!(usb4_dp_cfg.dp_aux_tunneling_enabled);
+        assert!(!usb4_dp_cfg.hdcp_enabled);
+
+        usb4_dp_cfg.set_adapter_enabled(true);
+        usb4_dp_cfg.set_hdcp_enabled(true);
+        usb4_dp_cfg.configure_video_stream(32400, 10);
+        usb4_dp_cfg.next_ptr_dwords = 96;
+        usb4_dp_cfg.status = 0x1234_ABCD;
+
+        let encoded_dp_cfg = usb4_dp_cfg.encode();
+        assert_eq!(
+            encoded_dp_cfg[0] & 0xFF,
+            XHCI_EXT_CAP_USB4_DP_ADAPTER_CONFIGURATION as u32
+        );
+        assert_eq!((encoded_dp_cfg[0] >> 8) & 0xFF, 96);
+        assert_eq!(encoded_dp_cfg[1] & 0x01, 1); // enabled
+        assert_eq!(encoded_dp_cfg[1] & 0x02, 2); // mst
+        assert_eq!(encoded_dp_cfg[1] & 0x04, 4); // aux
+        assert_eq!(encoded_dp_cfg[1] & 0x08, 8); // hdcp
+        assert_eq!(encoded_dp_cfg[1] & 0x10, 0x10); // dp_in
+        assert_eq!((encoded_dp_cfg[1] >> 8) & 0xFF, 2); // adapter_num
+        assert_eq!((encoded_dp_cfg[1] >> 16) & 0xFF, 1); // router_id
+        assert_eq!((encoded_dp_cfg[1] >> 24) & 0xFF, 4); // lane_count
+        assert_eq!(encoded_dp_cfg[2], 0x1234_ABCD);
+        assert_eq!(encoded_dp_cfg[3] & 0xFFFF, 32400);
+        assert_eq!((encoded_dp_cfg[3] >> 16) & 0xFF, 4);
+        assert_eq!((encoded_dp_cfg[3] >> 24) & 0xFF, 10);
+
+        let parsed_dp_cfg = XhciUsb4DpAdapterConfig::parse(&encoded_dp_cfg).unwrap();
+        assert_eq!(parsed_dp_cfg.next_ptr_dwords, 96);
+        assert!(parsed_dp_cfg.adapter_enabled);
+        assert!(parsed_dp_cfg.mst_supported);
+        assert!(parsed_dp_cfg.dp_aux_tunneling_enabled);
+        assert!(parsed_dp_cfg.hdcp_enabled);
+        assert!(parsed_dp_cfg.is_dp_in_adapter);
+        assert_eq!(parsed_dp_cfg.adapter_num, 2);
+        assert_eq!(parsed_dp_cfg.router_id, 1);
+        assert_eq!(parsed_dp_cfg.lane_count, 4);
+        assert_eq!(parsed_dp_cfg.status, 0x1234_ABCD);
+        assert_eq!(parsed_dp_cfg.video_bandwidth_mbps, 32400);
+        assert_eq!(parsed_dp_cfg.max_link_rate, 4);
+        assert_eq!(parsed_dp_cfg.color_depth_bpc, 10);
     }
 }
