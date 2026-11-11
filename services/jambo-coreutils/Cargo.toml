@@ -512,7 +512,12 @@ name = "getconf"
 path = "src/bin/getconf.rs"
 test = false
 
-# 101 utilitaires Ring 3
+[[bin]]
+name = "mesg"
+path = "src/bin/mesg.rs"
+test = false
+
+# 102 utilitaires Ring 3
 
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }

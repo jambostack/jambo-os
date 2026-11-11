@@ -325,6 +325,7 @@ pub const XHCI_EXT_CAP_HOST_CONTROLLER_SYSTEM_POWER: u8 = 37;
 pub const XHCI_EXT_CAP_ROOT_HUB_TOPOLOGY_DESCRIPTOR: u8 = 38;
 pub const XHCI_EXT_CAP_USB4_PCIE_TUNNELING: u8 = 39;
 pub const XHCI_EXT_CAP_USB4_DISPLAYPORT_TUNNELING: u8 = 40;
+pub const XHCI_EXT_CAP_USB4_HOST_INTERFACE_MANAGEMENT: u8 = 41;
 
 /// Masques de registres USB Legacy Support (xHCI 1.2 Section 7.1)
 /// Registre USBLEGSUP (Offset 0x00)
@@ -3961,6 +3962,116 @@ impl XhciUsb4DisplayPortTunneling {
     pub fn set_display_config(&mut self, bandwidth_mbps: u16, color_depth_bpp: u16) {
         self.allocated_bandwidth_mbps = bandwidth_mbps;
         self.max_color_depth_bpp = color_depth_bpp;
+    }
+}
+
+/// Capacité Étendue xHCI USB4 Host Interface Management / Inter-Domain (§7.33 / USB4 Router & D2D)
+///
+/// Modélise la gestion de l'interface hôte du routeur USB4 (Host Interface)
+/// et les liens de communication inter-domaines (Host-to-Host / Inter-Domain networking).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XhciUsb4HostInterfaceManagement {
+    /// Pointeur dword vers la prochaine capacité étendue
+    pub next_ptr_dwords: u8,
+    /// Interface hôte USB4 activée (bit 0 du registre de contrôle DWORD 1)
+    pub enabled: bool,
+    /// Support de communication inter-domaine activé (bit 1)
+    pub interdomain_enabled: bool,
+    /// Identifiant de domaine hôte local (bits 8..=15)
+    pub local_domain_id: u8,
+    /// Identifiant de domaine pair distant connecté (bits 16..=23)
+    pub peer_domain_id: u8,
+    /// Taux de liaison USB4 négocié (Gen2x1=1, Gen2x2=2, Gen3x1=3, Gen3x2=4, Gen4=5) (bits 24..=27)
+    pub link_speed_gen: u8,
+    /// Statut matériel de l'interface d'inter-domaine (DWORD 2)
+    pub status: u32,
+    /// MTU maximal des paquets réseau inter-domaine en octets (DWORD 3 [15:0])
+    pub max_mtu_bytes: u16,
+    /// Débit maximal de transfert inter-domaine en Mbit/s (DWORD 3 [31:16])
+    pub max_bandwidth_mbps: u16,
+}
+
+impl XhciUsb4HostInterfaceManagement {
+    /// Crée une nouvelle capacité de gestion d'interface hôte USB4 / Inter-Domain
+    pub const fn new(local_domain_id: u8, link_speed_gen: u8) -> Self {
+        Self {
+            next_ptr_dwords: 0,
+            enabled: false,
+            interdomain_enabled: false,
+            local_domain_id,
+            peer_domain_id: 0,
+            link_speed_gen,
+            status: 0,
+            max_mtu_bytes: 4096,       // MTU 4096 octets standard USB4 Net
+            max_bandwidth_mbps: 40000, // 40 Gbps Gen3x2
+        }
+    }
+
+    /// Parse les 4 dwords MMIO d'une capacité étendue USB4 Host Interface Management (§7.33)
+    pub const fn parse(dwords: &[u32; 4]) -> Option<Self> {
+        let cap_id = (dwords[0] & 0xFF) as u8;
+        if cap_id != XHCI_EXT_CAP_USB4_HOST_INTERFACE_MANAGEMENT {
+            return None;
+        }
+
+        let next_ptr = ((dwords[0] >> 8) & 0xFF) as u8;
+        let ctrl = dwords[1];
+        let enabled = (ctrl & 0x01) != 0;
+        let interdomain_enabled = (ctrl & 0x02) != 0;
+        let local_domain_id = ((ctrl >> 8) & 0xFF) as u8;
+        let peer_domain_id = ((ctrl >> 16) & 0xFF) as u8;
+        let link_speed_gen = ((ctrl >> 24) & 0x0F) as u8;
+        let status = dwords[2];
+        let max_mtu_bytes = (dwords[3] & 0xFFFF) as u16;
+        let max_bandwidth_mbps = ((dwords[3] >> 16) & 0xFFFF) as u16;
+
+        Some(Self {
+            next_ptr_dwords: next_ptr,
+            enabled,
+            interdomain_enabled,
+            local_domain_id,
+            peer_domain_id,
+            link_speed_gen,
+            status,
+            max_mtu_bytes,
+            max_bandwidth_mbps,
+        })
+    }
+
+    /// Encode la capacité étendue en 4 mots dwords MMIO 32-bit
+    pub const fn encode(&self) -> [u32; 4] {
+        let dw0 = (XHCI_EXT_CAP_USB4_HOST_INTERFACE_MANAGEMENT as u32)
+            | ((self.next_ptr_dwords as u32) << 8);
+        let mut ctrl = (((self.local_domain_id as u32) & 0xFF) << 8)
+            | (((self.peer_domain_id as u32) & 0xFF) << 16)
+            | (((self.link_speed_gen as u32) & 0x0F) << 24);
+        if self.enabled {
+            ctrl |= 0x01;
+        }
+        if self.interdomain_enabled {
+            ctrl |= 0x02;
+        }
+        let dw2 = self.status;
+        let dw3 = (self.max_mtu_bytes as u32) | (((self.max_bandwidth_mbps as u32) & 0xFFFF) << 16);
+        [dw0, ctrl, dw2, dw3]
+    }
+
+    /// Active ou désactive l'interface hôte
+    pub fn set_enabled(&mut self, enable: bool) {
+        self.enabled = enable;
+    }
+
+    /// Active ou désactive la liaison inter-domaine
+    pub fn set_interdomain_enabled(&mut self, enable: bool) {
+        self.interdomain_enabled = enable;
+    }
+
+    /// Établit la liaison avec un domaine distant
+    pub fn establish_peer_link(&mut self, peer_id: u8, mtu_bytes: u16, bandwidth_mbps: u16) {
+        self.peer_domain_id = peer_id;
+        self.max_mtu_bytes = mtu_bytes;
+        self.max_bandwidth_mbps = bandwidth_mbps;
+        self.interdomain_enabled = true;
     }
 }
 
@@ -13206,5 +13317,46 @@ mod tests {
         assert_eq!(parsed_dp.status, 0x0001_CAFE);
         assert_eq!(parsed_dp.allocated_bandwidth_mbps, 32400);
         assert_eq!(parsed_dp.max_color_depth_bpp, 36);
+
+        // 31. Test XhciUsb4HostInterfaceManagement
+        let mut usb4_hi = XhciUsb4HostInterfaceManagement::new(1, 4); // Domain 1, Gen3x2
+        assert_eq!(usb4_hi.local_domain_id, 1);
+        assert_eq!(usb4_hi.link_speed_gen, 4);
+        assert_eq!(usb4_hi.peer_domain_id, 0);
+        assert_eq!(usb4_hi.max_mtu_bytes, 4096);
+        assert_eq!(usb4_hi.max_bandwidth_mbps, 40000);
+        assert!(!usb4_hi.enabled);
+        assert!(!usb4_hi.interdomain_enabled);
+
+        usb4_hi.set_enabled(true);
+        usb4_hi.establish_peer_link(2, 8192, 40000); // Peer Domain 2, MTU 8192 (Jumbo), 40 Gbps
+        usb4_hi.next_ptr_dwords = 64;
+        usb4_hi.status = 0x0002_BEEF;
+
+        let encoded_hi = usb4_hi.encode();
+        assert_eq!(
+            encoded_hi[0] & 0xFF,
+            XHCI_EXT_CAP_USB4_HOST_INTERFACE_MANAGEMENT as u32
+        );
+        assert_eq!((encoded_hi[0] >> 8) & 0xFF, 64);
+        assert_eq!(encoded_hi[1] & 0x01, 1);
+        assert_eq!(encoded_hi[1] & 0x02, 2);
+        assert_eq!((encoded_hi[1] >> 8) & 0xFF, 1); // local domain
+        assert_eq!((encoded_hi[1] >> 16) & 0xFF, 2); // peer domain
+        assert_eq!((encoded_hi[1] >> 24) & 0x0F, 4); // link gen
+        assert_eq!(encoded_hi[2], 0x0002_BEEF);
+        assert_eq!(encoded_hi[3] & 0xFFFF, 8192);
+        assert_eq!((encoded_hi[3] >> 16) & 0xFFFF, 40000);
+
+        let parsed_hi = XhciUsb4HostInterfaceManagement::parse(&encoded_hi).unwrap();
+        assert_eq!(parsed_hi.next_ptr_dwords, 64);
+        assert!(parsed_hi.enabled);
+        assert!(parsed_hi.interdomain_enabled);
+        assert_eq!(parsed_hi.local_domain_id, 1);
+        assert_eq!(parsed_hi.peer_domain_id, 2);
+        assert_eq!(parsed_hi.link_speed_gen, 4);
+        assert_eq!(parsed_hi.status, 0x0002_BEEF);
+        assert_eq!(parsed_hi.max_mtu_bytes, 8192);
+        assert_eq!(parsed_hi.max_bandwidth_mbps, 40000);
     }
 }

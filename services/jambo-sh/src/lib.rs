@@ -640,6 +640,7 @@ impl JamboShell {
             "fnv1asum" | "/bin/fnv1asum" | "bin/fnv1asum" => self.cmd_fnv1asum(args, out),
             "uuidgen" | "/bin/uuidgen" | "bin/uuidgen" => self.cmd_uuidgen(args, out),
             "getconf" | "/bin/getconf" | "bin/getconf" => self.cmd_getconf(args, out),
+            "mesg" | "/bin/mesg" | "bin/mesg" => self.cmd_mesg(args, out),
             "cow" | "/bin/cow" | "bin/cow" => self.cmd_cow(args, out),
             "version" => self.cmd_version(out),
             "uptime" => self.cmd_uptime(out),
@@ -3456,6 +3457,40 @@ Utilitaire d'installation JamboOS (Serie 0.*.*)\n\
             (status, len)
         } else {
             let msg = b"getconf: pipe creation failed\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
+    }
+
+    fn cmd_mesg(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if let Ok((r_pipe, w_pipe)) = libjambo::vfs::pipe() {
+            // Dans le shell, stdin est connecté au terminal (fd 0)
+            let code = libjambo::coreutils::run_mesg(args, 0, w_pipe, w_pipe);
+            let _ = libjambo::coreutils::sys_close(w_pipe);
+
+            let mut total_read = 0;
+            loop {
+                if total_read >= out.len() {
+                    break;
+                }
+                let n = libjambo::coreutils::sys_read(r_pipe, &mut out[total_read..]);
+                if n <= 0 {
+                    break;
+                }
+                total_read += n as usize;
+            }
+            let _ = libjambo::coreutils::sys_close(r_pipe);
+
+            let len = total_read.min(out.len());
+            let status = if code == 0 {
+                ShellStatus::Success
+            } else {
+                ShellStatus::ExecutionFailed
+            };
+            (status, len)
+        } else {
+            let msg = b"mesg: pipe creation failed\n";
             let len = msg.len().min(out.len());
             out[..len].copy_from_slice(&msg[..len]);
             (ShellStatus::ExecutionFailed, len)
@@ -21446,5 +21481,32 @@ mod tests {
         let s111 = core::str::from_utf8(&out[..len111]).unwrap();
         assert!(s111.contains("PAGE_SIZE: 4096"));
         assert!(s111.contains("OPEN_MAX: 1024"));
+
+        // 54. mesg shell command
+        let (st112, len112) = shell.execute_line("mesg --help", &mut out);
+        assert_eq!(st112, ShellStatus::Success);
+        let s112 = core::str::from_utf8(&out[..len112]).unwrap();
+        assert!(s112.contains("Usage: mesg"));
+
+        let (st113, len113) = shell.execute_line("mesg --version", &mut out);
+        assert_eq!(st113, ShellStatus::Success);
+        let s113 = core::str::from_utf8(&out[..len113]).unwrap();
+        assert!(s113.contains("mesg (jambo-coreutils)"));
+
+        let (st114, _len114) = shell.execute_line("mesg y", &mut out);
+        assert_eq!(st114, ShellStatus::Success);
+
+        let (st115, len115) = shell.execute_line("mesg", &mut out);
+        assert_eq!(st115, ShellStatus::Success);
+        let s115 = core::str::from_utf8(&out[..len115]).unwrap();
+        assert_eq!(s115, "is y\n");
+
+        let (st116, _len116) = shell.execute_line("mesg n", &mut out);
+        assert_eq!(st116, ShellStatus::Success);
+
+        let (st117, len117) = shell.execute_line("mesg", &mut out);
+        assert_eq!(st117, ShellStatus::ExecutionFailed);
+        let s117 = core::str::from_utf8(&out[..len117]).unwrap();
+        assert_eq!(s117, "is n\n");
     }
 }

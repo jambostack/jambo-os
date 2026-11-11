@@ -22806,6 +22806,82 @@ pub fn run_getconf(args: &[&str], out_fd: i32, err_fd: i32) -> i32 {
     1
 }
 
+/// Exécute l'utilitaire Coreutils POSIX `mesg`
+///
+/// Contrôle ou affiche le droit d'écriture sur le terminal pour les autres utilisateurs (talk, write) :
+/// - `mesg` sans argument : affiche 'is y' (exit 0) ou 'is n' (exit 1).
+/// - `mesg y` : autorise les messages (permissions 0620 / crw--w----), exit 0.
+/// - `mesg n` : interdit les messages (permissions 0600 / crw-------), exit 0.
+/// - Si stdin/stdout n'est pas un terminal : erreur et exit 2.
+pub fn run_mesg(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    let mut verbose = false;
+    let mut operand: Option<&str> = None;
+
+    for &arg in args {
+        if arg == "--help" {
+            let _ = sys_write(
+                out_fd,
+                b"Usage: mesg [OPTION]... [y|n]\nControl write access to your terminal.\n\nOptions:\n  -v, --verbose  explain what is being done\n      --help     display this help and exit\n      --version  output version information and exit\n",
+            );
+            return 0;
+        } else if arg == "--version" {
+            let _ = sys_write(out_fd, b"mesg (jambo-coreutils) 0.1.0\n");
+            return 0;
+        } else if arg == "-v" || arg == "--verbose" {
+            verbose = true;
+        } else if arg.starts_with('-') {
+            let _ = sys_write(err_fd, b"mesg: unrecognized option '");
+            let _ = sys_write(err_fd, arg.as_bytes());
+            let _ = sys_write(err_fd, b"'\nTry 'mesg --help' for more information.\n");
+            return 2;
+        } else if operand.is_none() {
+            operand = Some(arg);
+        } else {
+            let _ = sys_write(err_fd, b"mesg: extra operand '");
+            let _ = sys_write(err_fd, arg.as_bytes());
+            let _ = sys_write(err_fd, b"'\nTry 'mesg --help' for more information.\n");
+            return 2;
+        }
+    }
+
+    if !crate::vfs::isatty(in_fd) {
+        let _ = sys_write(err_fd, b"mesg: tty device required\n");
+        return 2;
+    }
+
+    match operand {
+        None => {
+            if crate::vfs::get_terminal_messages_allowed() {
+                let _ = sys_write(out_fd, b"is y\n");
+                0
+            } else {
+                let _ = sys_write(out_fd, b"is n\n");
+                1
+            }
+        }
+        Some("y") | Some("Y") => {
+            crate::vfs::set_terminal_messages_allowed(true);
+            if verbose {
+                let _ = sys_write(out_fd, b"mesg: write access allowed\n");
+            }
+            0
+        }
+        Some("n") | Some("N") => {
+            crate::vfs::set_terminal_messages_allowed(false);
+            if verbose {
+                let _ = sys_write(out_fd, b"mesg: write access denied\n");
+            }
+            0
+        }
+        Some(other) => {
+            let _ = sys_write(err_fd, b"mesg: invalid argument '");
+            let _ = sys_write(err_fd, other.as_bytes());
+            let _ = sys_write(err_fd, b"'\nTry 'mesg --help' for more information.\n");
+            2
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -27827,5 +27903,50 @@ Chaque processus dispose de son propre CR3 sans aucun privilege materiel direct.
         assert!(s_all.contains("PAGE_SIZE: 4096"));
         assert!(s_all.contains("OPEN_MAX: 1024"));
         assert!(s_all.contains("PATH_MAX: 4096"));
+
+        // 33. Test run_mesg
+        assert_eq!(run_mesg(&["--help"], 0, 1, 2), 0);
+        assert_eq!(run_mesg(&["--version"], 0, 1, 2), 0);
+
+        // mesg requiert un tty (fd 0 est tty console, un pipe ne l'est pas)
+        let (p_in, p_out) = crate::vfs::pipe().unwrap();
+        assert_eq!(run_mesg(&[], p_in, 1, 2), 2);
+        sys_close(p_in);
+        sys_close(p_out);
+
+        // Sur le descripteur console standard (in_fd=0)
+        crate::vfs::set_terminal_messages_allowed(true);
+        let (out_r_m1, out_w_m1) = crate::vfs::pipe().unwrap();
+        let code_m1 = run_mesg(&[], 0, out_w_m1, 2);
+        sys_close(out_w_m1);
+        assert_eq!(code_m1, 0);
+        let mut buf_m1 = [0u8; 16];
+        let n_m1 = sys_read(out_r_m1, &mut buf_m1);
+        sys_close(out_r_m1);
+        assert_eq!(&buf_m1[..n_m1 as usize], b"is y\n");
+
+        // Désactivation des messages avec 'mesg n'
+        assert_eq!(run_mesg(&["n"], 0, 1, 2), 0);
+        assert!(!crate::vfs::get_terminal_messages_allowed());
+
+        let (out_r_m2, out_w_m2) = crate::vfs::pipe().unwrap();
+        let code_m2 = run_mesg(&[], 0, out_w_m2, 2);
+        sys_close(out_w_m2);
+        assert_eq!(code_m2, 1);
+        let mut buf_m2 = [0u8; 16];
+        let n_m2 = sys_read(out_r_m2, &mut buf_m2);
+        sys_close(out_r_m2);
+        assert_eq!(&buf_m2[..n_m2 as usize], b"is n\n");
+
+        // Réactivation avec 'mesg y' et verbose
+        let (out_r_m3, out_w_m3) = crate::vfs::pipe().unwrap();
+        assert_eq!(run_mesg(&["-v", "y"], 0, out_w_m3, 2), 0);
+        sys_close(out_w_m3);
+        assert!(crate::vfs::get_terminal_messages_allowed());
+        let mut buf_m3 = [0u8; 64];
+        let n_m3 = sys_read(out_r_m3, &mut buf_m3);
+        sys_close(out_r_m3);
+        let s_m3 = core::str::from_utf8(&buf_m3[..n_m3 as usize]).unwrap();
+        assert!(s_m3.contains("write access allowed"));
     }
 }

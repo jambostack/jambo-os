@@ -1086,6 +1086,19 @@ static CURRENT_GID: AtomicU32 = AtomicU32::new(0);
 static CURRENT_EUID: AtomicU32 = AtomicU32::new(0);
 static CURRENT_EGID: AtomicU32 = AtomicU32::new(0);
 
+// État atomique de permission d'écriture sur le terminal courant (POSIX mesg : true = y (0620), false = n (0600))
+static TERMINAL_WRITE_MESSAGES_ALLOWED: AtomicBool = AtomicBool::new(true);
+
+/// Retourne l'état d'autorisation de messages du terminal (POSIX mesg)
+pub fn get_terminal_messages_allowed() -> bool {
+    TERMINAL_WRITE_MESSAGES_ALLOWED.load(Ordering::Relaxed)
+}
+
+/// Modifie l'état d'autorisation de messages du terminal (POSIX mesg)
+pub fn set_terminal_messages_allowed(allowed: bool) {
+    TERMINAL_WRITE_MESSAGES_ALLOWED.store(allowed, Ordering::Relaxed);
+}
+
 /// Retourne l'identifiant utilisateur réel (UID) du processus courant
 pub fn getuid() -> u32 {
     CURRENT_UID.load(Ordering::Relaxed)
