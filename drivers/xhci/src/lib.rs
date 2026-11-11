@@ -364,6 +364,8 @@ pub const XHCI_EXT_CAP_USB4_USB3_ADAPTER_CONFIGURATION_INTERFACE: u8 = 60;
 pub const XHCI_EXT_CAP_USB4_USB3_PORT_CAPABILITY_INTERFACE: u8 = 61;
 /// Capacité étendue xHCI 1.2 / USB4 USB3 Port Capability Interface v2 / Configuration avancée (§7.54)
 pub const XHCI_EXT_CAP_USB4_USB3_PORT_CAPABILITY_INTERFACE_V2: u8 = 62;
+/// Capacité étendue xHCI 1.2 / USB4 Flow Control Configuration Interface v2 (§7.55)
+pub const XHCI_EXT_CAP_USB4_FLOW_CONTROL_CONFIGURATION_INTERFACE_V2: u8 = 63;
 
 /// Masques de registres USB Legacy Support (xHCI 1.2 Section 7.1)
 /// Registre USBLEGSUP (Offset 0x00)
@@ -6621,6 +6623,127 @@ impl XhciUsb4Usb3PortCapabilityInterfaceV2 {
     pub fn record_link_error(&mut self, error_flags: u32) {
         self.port_status_v2 |= error_flags;
         self.link_error_counter = self.link_error_counter.wrapping_add(1);
+    }
+}
+
+/// Capacité étendue xHCI 1.2 / USB4 Flow Control Configuration Interface v2 (§7.55, Cap ID 63)
+///
+/// Assure la gestion et la modélisation du contrôle de flux point-à-point et de bout-en-bout
+/// dans le routeur USB4 (génération v2 / USB4 2.0 80 Gbps PAM3). Fournit l'arbitrage
+/// de crédits par classe de trafic (PCIe, DP, USB3, HI), la détection de backpressure,
+/// ainsi que la régulation de débit adaptative contre la congestion des adaptateurs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XhciUsb4FlowControlConfigInterfaceV2 {
+    /// Pointeur dword vers la prochaine capacité étendue (0 = fin de liste)
+    pub next_ptr_dwords: u8,
+    /// Contrôle de flux v2 actif (bit 0)
+    pub enabled: bool,
+    /// Interruptions matérielles de congestion/seuil activées (bit 1)
+    pub irq_enabled: bool,
+    /// Mode d'arbitrage de crédits pondéré actif (Weighted Fair Queuing / Round Robin) (bit 2)
+    pub wfq_arbitration_enabled: bool,
+    /// Régulation de débit adaptative v2 activée (bit 3)
+    pub adaptive_rate_limit_enabled: bool,
+    /// Identifiant de l'adaptateur ou du port cible (bits 8..15)
+    pub adapter_index: u8,
+    /// Priorité de classe de trafic (bits 16..18 : 0=Host, 1=USB3, 2=DP, 3=PCIe, 4=HiPriority)
+    pub traffic_class: u8,
+    /// Seuil de crédits disponibles ou alloués (DWORD 2)
+    pub credit_threshold: u32,
+    /// Compteur d'événements de congestion ou de backpressure (DWORD 3)
+    pub backpressure_events: u32,
+}
+
+impl XhciUsb4FlowControlConfigInterfaceV2 {
+    /// Crée une nouvelle interface de contrôle de flux USB4 v2
+    pub const fn new(adapter_index: u8, traffic_class: u8, wfq: bool, adaptive_rate: bool) -> Self {
+        Self {
+            next_ptr_dwords: 0,
+            enabled: false,
+            irq_enabled: false,
+            wfq_arbitration_enabled: wfq,
+            adaptive_rate_limit_enabled: adaptive_rate,
+            adapter_index,
+            traffic_class: traffic_class & 0x07,
+            credit_threshold: 0,
+            backpressure_events: 0,
+        }
+    }
+
+    /// Parse les 4 dwords MMIO d'une capacité étendue USB4 Flow Control Configuration Interface v2 (§7.55)
+    pub const fn parse(dwords: &[u32; 4]) -> Option<Self> {
+        let cap_id = (dwords[0] & 0xFF) as u8;
+        if cap_id != XHCI_EXT_CAP_USB4_FLOW_CONTROL_CONFIGURATION_INTERFACE_V2 {
+            return None;
+        }
+
+        let next_ptr = ((dwords[0] >> 8) & 0xFF) as u8;
+        let ctrl = dwords[1];
+        let enabled = (ctrl & 0x01) != 0;
+        let irq_enabled = (ctrl & 0x02) != 0;
+        let wfq_arbitration_enabled = (ctrl & 0x04) != 0;
+        let adaptive_rate_limit_enabled = (ctrl & 0x08) != 0;
+        let adapter_index = ((ctrl >> 8) & 0xFF) as u8;
+        let traffic_class = ((ctrl >> 16) & 0x07) as u8;
+
+        let credit_threshold = dwords[2];
+        let backpressure_events = dwords[3];
+
+        Some(Self {
+            next_ptr_dwords: next_ptr,
+            enabled,
+            irq_enabled,
+            wfq_arbitration_enabled,
+            adaptive_rate_limit_enabled,
+            adapter_index,
+            traffic_class,
+            credit_threshold,
+            backpressure_events,
+        })
+    }
+
+    /// Encode la capacité étendue v2 en 4 mots dwords MMIO 32-bit
+    pub const fn encode(&self) -> [u32; 4] {
+        let dw0 = (XHCI_EXT_CAP_USB4_FLOW_CONTROL_CONFIGURATION_INTERFACE_V2 as u32)
+            | ((self.next_ptr_dwords as u32) << 8);
+        let mut ctrl =
+            ((self.adapter_index as u32) << 8) | (((self.traffic_class as u32) & 0x07) << 16);
+        if self.enabled {
+            ctrl |= 0x01;
+        }
+        if self.irq_enabled {
+            ctrl |= 0x02;
+        }
+        if self.wfq_arbitration_enabled {
+            ctrl |= 0x04;
+        }
+        if self.adaptive_rate_limit_enabled {
+            ctrl |= 0x08;
+        }
+        let dw2 = self.credit_threshold;
+        let dw3 = self.backpressure_events;
+        [dw0, ctrl, dw2, dw3]
+    }
+
+    /// Active ou désactive le module de contrôle de flux
+    pub fn enable(&mut self, enable: bool) {
+        self.enabled = enable;
+    }
+
+    /// Active ou désactive les interruptions de congestion
+    pub fn enable_irq(&mut self, enable: bool) {
+        self.irq_enabled = enable;
+    }
+
+    /// Met à jour la classe de trafic
+    pub fn set_traffic_class(&mut self, traffic_class: u8) {
+        self.traffic_class = traffic_class & 0x07;
+    }
+
+    /// Enregistre un événement de backpressure et ajuste les crédits
+    pub fn record_backpressure(&mut self, threshold_adjust: u32) {
+        self.credit_threshold = self.credit_threshold.saturating_add(threshold_adjust);
+        self.backpressure_events = self.backpressure_events.wrapping_add(1);
     }
 }
 
@@ -16820,5 +16943,47 @@ mod tests {
         assert_eq!(parsed_port_v2.max_speed_tier, 3);
         assert_eq!(parsed_port_v2.port_status_v2, 0x0022);
         assert_eq!(parsed_port_v2.link_error_counter, 2);
+
+        // Test USB4 Flow Control Configuration Interface v2 (§7.55, Cap ID 63)
+        let mut fc_v2 = XhciUsb4FlowControlConfigInterfaceV2::new(12, 3, true, true);
+        assert_eq!(fc_v2.adapter_index, 12);
+        assert_eq!(fc_v2.traffic_class, 3);
+        assert!(fc_v2.wfq_arbitration_enabled);
+        assert!(fc_v2.adaptive_rate_limit_enabled);
+        assert!(!fc_v2.enabled);
+        assert!(!fc_v2.irq_enabled);
+
+        fc_v2.enable(true);
+        fc_v2.enable_irq(true);
+        fc_v2.set_traffic_class(4);
+        fc_v2.record_backpressure(500);
+        fc_v2.record_backpressure(250);
+        fc_v2.next_ptr_dwords = 116;
+
+        let encoded_fc_v2 = fc_v2.encode();
+        assert_eq!(
+            encoded_fc_v2[0] & 0xFF,
+            XHCI_EXT_CAP_USB4_FLOW_CONTROL_CONFIGURATION_INTERFACE_V2 as u32
+        );
+        assert_eq!((encoded_fc_v2[0] >> 8) & 0xFF, 116);
+        assert_eq!(encoded_fc_v2[1] & 0x01, 1); // enabled
+        assert_eq!(encoded_fc_v2[1] & 0x02, 2); // irq_enabled
+        assert_eq!(encoded_fc_v2[1] & 0x04, 4); // wfq_arbitration_enabled
+        assert_eq!(encoded_fc_v2[1] & 0x08, 8); // adaptive_rate_limit_enabled
+        assert_eq!((encoded_fc_v2[1] >> 8) & 0xFF, 12); // adapter_index 12
+        assert_eq!((encoded_fc_v2[1] >> 16) & 0x07, 4); // traffic_class 4
+        assert_eq!(encoded_fc_v2[2], 750); // credit_threshold
+        assert_eq!(encoded_fc_v2[3], 2); // backpressure_events
+
+        let parsed_fc_v2 = XhciUsb4FlowControlConfigInterfaceV2::parse(&encoded_fc_v2).unwrap();
+        assert_eq!(parsed_fc_v2.next_ptr_dwords, 116);
+        assert!(parsed_fc_v2.enabled);
+        assert!(parsed_fc_v2.irq_enabled);
+        assert!(parsed_fc_v2.wfq_arbitration_enabled);
+        assert!(parsed_fc_v2.adaptive_rate_limit_enabled);
+        assert_eq!(parsed_fc_v2.adapter_index, 12);
+        assert_eq!(parsed_fc_v2.traffic_class, 4);
+        assert_eq!(parsed_fc_v2.credit_threshold, 750);
+        assert_eq!(parsed_fc_v2.backpressure_events, 2);
     }
 }

@@ -622,7 +622,12 @@ name = "ts"
 path = "src/bin/ts.rs"
 test = false
 
-# 123 utilitaires Ring 3
+[[bin]]
+name = "sponge"
+path = "src/bin/sponge.rs"
+test = false
+
+# 124 utilitaires Ring 3
 
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }

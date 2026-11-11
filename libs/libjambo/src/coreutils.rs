@@ -19259,6 +19259,149 @@ There is NO WARRANTY, to the extent permitted by law.\n";
     0
 }
 
+/// Exécute l'utilitaire Coreutils / moreutils `sponge` (écriture différée et tamponnée sur pipe)
+///
+/// Absorbe l'intégralité du flux d'entrée standard (`in_fd`) dans un tampon en mémoire
+/// (avec repli sur fichier temporaire anonyme si la taille dépasse le tampon résident),
+/// puis écrit la totalité des données reçues dans le fichier cible spécifié en argument
+/// (ou `out_fd` par défaut). Permet de lire et d'écrire dans le même fichier au sein d'un même pipeline
+/// (ex: `cat file.txt | sort | sponge file.txt`).
+pub fn run_sponge(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    let mut append_mode = false;
+    let mut target_file: Option<&str> = None;
+
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i];
+        if arg == "-h" || arg == "--help" {
+            let help = b"Usage: sponge [-a] [file]\n\
+Soak up standard input and write to a file.\n\n\
+Options:\n\
+  -a, --append   Append to file instead of overwriting\n\
+      --help     Display this help and exit\n\
+      --version  Output version information and exit\n";
+            let _ = sys_write(out_fd, help);
+            return 0;
+        } else if arg == "--version" {
+            let ver = b"sponge (JamboOS coreutils) 0.1.0\n\
+Copyright (C) 2026 ASSOGBA Prudence Dieudonne\n\
+License GPLv3+: GNU GPL version 3 or later <https://gnu.org/licenses/gpl.html>.\n\
+This is free software: you are free to change and redistribute it.\n\
+There is NO WARRANTY, to the extent permitted by law.\n";
+            let _ = sys_write(out_fd, ver);
+            return 0;
+        } else if arg == "-a" || arg == "--append" {
+            append_mode = true;
+        } else if arg == "--" {
+            if i + 1 < args.len() {
+                target_file = Some(args[i + 1]);
+            }
+            break;
+        } else if arg.starts_with('-') && arg != "-" {
+            let _ = sys_write(err_fd, b"sponge: unrecognized option '");
+            let _ = sys_write(err_fd, arg.as_bytes());
+            let _ = sys_write(err_fd, b"'\n");
+            return 1;
+        } else {
+            target_file = Some(arg);
+            break;
+        }
+        i += 1;
+    }
+
+    // Tampon mémoire statique de premier niveau pour absorber jusqu'à 64 Kio
+    // sans nécessiter d'allocation dynamique
+    const RESIDENT_BUF_SIZE: usize = 65536;
+    let mut resident_buf = [0u8; RESIDENT_BUF_SIZE];
+    let mut total_read = 0usize;
+    let mut overflow_fd: Option<i32> = None;
+    let overflow_tmp_path = "/tmp/.sponge_overflow.tmp";
+
+    loop {
+        if total_read < RESIDENT_BUF_SIZE {
+            let n = sys_read(in_fd, &mut resident_buf[total_read..]);
+            if n <= 0 {
+                break;
+            }
+            total_read += n as usize;
+        } else {
+            // Débordement : création d'un fichier de repli temporaire
+            if overflow_fd.is_none() {
+                let ofd = sys_open(overflow_tmp_path, O_CREAT | O_WRONLY | O_TRUNC);
+                if ofd < 0 {
+                    let _ = sys_write(err_fd, b"sponge: error creating overflow buffer\n");
+                    return 1;
+                }
+                overflow_fd = Some(ofd);
+            }
+
+            let mut overflow_chunk = [0u8; 4096];
+            let n = sys_read(in_fd, &mut overflow_chunk);
+            if n <= 0 {
+                break;
+            }
+            if let Some(ofd) = overflow_fd {
+                let _ = sys_write(ofd, &overflow_chunk[..n as usize]);
+            }
+            total_read += n as usize;
+        }
+    }
+
+    if let Some(ofd) = overflow_fd {
+        sys_close(ofd);
+    }
+
+    // Détermination du descripteur de destination
+    let dest_fd = if let Some(path) = target_file {
+        let flags = if append_mode {
+            O_CREAT | O_WRONLY | O_APPEND
+        } else {
+            O_CREAT | O_WRONLY | O_TRUNC
+        };
+        let fd = sys_open(path, flags);
+        if fd < 0 {
+            let _ = sys_write(err_fd, b"sponge: cannot open '");
+            let _ = sys_write(err_fd, path.as_bytes());
+            let _ = sys_write(err_fd, b"'\n");
+            if overflow_fd.is_some() {
+                let _ = sys_unlink_pool(overflow_tmp_path);
+            }
+            return 1;
+        }
+        fd
+    } else {
+        out_fd
+    };
+
+    // Restitution des données absorbées vers la destination
+    let resident_to_write = core::cmp::min(total_read, RESIDENT_BUF_SIZE);
+    if resident_to_write > 0 {
+        let _ = sys_write(dest_fd, &resident_buf[..resident_to_write]);
+    }
+
+    if overflow_fd.is_some() {
+        let rofd = sys_open(overflow_tmp_path, O_RDONLY);
+        if rofd >= 0 {
+            let mut read_chunk = [0u8; 4096];
+            loop {
+                let n = sys_read(rofd, &mut read_chunk);
+                if n <= 0 {
+                    break;
+                }
+                let _ = sys_write(dest_fd, &read_chunk[..n as usize]);
+            }
+            sys_close(rofd);
+        }
+        let _ = sys_unlink_pool(overflow_tmp_path);
+    }
+
+    if target_file.is_some() {
+        sys_close(dest_fd);
+    }
+
+    0
+}
+
 // ============================================================================
 // Utilitaire POSIX / GNU coreutils : `factor` (Décomposition en facteurs premiers)
 // ============================================================================
@@ -19802,6 +19945,7 @@ pub fn execute_coreutils_command(
         "crc32" => run_crc32(args, in_fd, out_fd, err_fd),
         "crc64" => run_crc64(args, in_fd, out_fd, err_fd),
         "ts" => run_ts(args, in_fd, out_fd, err_fd),
+        "sponge" => run_sponge(args, in_fd, out_fd, err_fd),
         "base64" => run_base64(args, in_fd, out_fd, err_fd),
         "base32" => run_base32(args, in_fd, out_fd, err_fd),
         "base32hex" => run_base32hex(args, in_fd, out_fd, err_fd),
@@ -21188,6 +21332,7 @@ pub fn run_xargs(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
             "crc32" => run_crc32(effective_sub_args, 0, out_fd, err_fd),
             "crc64" => run_crc64(effective_sub_args, 0, out_fd, err_fd),
             "ts" => run_ts(effective_sub_args, 0, out_fd, err_fd),
+            "sponge" => run_sponge(effective_sub_args, 0, out_fd, err_fd),
             "factor" => run_factor(effective_sub_args, 0, out_fd, err_fd),
             "base64" => run_base64(effective_sub_args, 0, out_fd, err_fd),
             "base32" => run_base32(effective_sub_args, 0, out_fd, err_fd),
@@ -36789,5 +36934,51 @@ Chaque processus dispose de son propre CR3 sans aucun privilege materiel direct.
 
         let code_shake256_4 = run_shake256sum(&["--version"], 0, 1, 2);
         assert_eq!(code_shake256_4, 0);
+
+        // 54. Test run_sponge (tamponnage et écriture différée sur pipe et fichier)
+        let file_sponge = "/tmp/test_sponge_target.txt";
+        let (in_r_sp1, in_w_sp1) = crate::vfs::pipe().unwrap();
+        let _ = sys_write(in_w_sp1, b"Ligne 1 de sponge\nLigne 2 de sponge\n");
+        sys_close(in_w_sp1);
+
+        let code_sp1 = run_sponge(&[file_sponge], in_r_sp1, 1, 2);
+        sys_close(in_r_sp1);
+        assert_eq!(code_sp1, 0);
+
+        let fd_sp_check = sys_open(file_sponge, O_RDONLY);
+        assert!(fd_sp_check >= 0);
+        let mut sponge_read_buf = [0u8; 128];
+        let n_sp = sys_read(fd_sp_check, &mut sponge_read_buf);
+        sys_close(fd_sp_check);
+        assert_eq!(
+            core::str::from_utf8(&sponge_read_buf[..n_sp as usize]).unwrap(),
+            "Ligne 1 de sponge\nLigne 2 de sponge\n"
+        );
+
+        // Test mode append (-a)
+        let (in_r_sp2, in_w_sp2) = crate::vfs::pipe().unwrap();
+        let _ = sys_write(in_w_sp2, b"Ligne 3 append\n");
+        sys_close(in_w_sp2);
+
+        let code_sp2 = run_sponge(&["-a", file_sponge], in_r_sp2, 1, 2);
+        sys_close(in_r_sp2);
+        assert_eq!(code_sp2, 0);
+
+        let fd_sp_check2 = sys_open(file_sponge, O_RDONLY);
+        assert!(fd_sp_check2 >= 0);
+        let n_sp2 = sys_read(fd_sp_check2, &mut sponge_read_buf);
+        sys_close(fd_sp_check2);
+        assert_eq!(
+            core::str::from_utf8(&sponge_read_buf[..n_sp2 as usize]).unwrap(),
+            "Ligne 1 de sponge\nLigne 2 de sponge\nLigne 3 append\n"
+        );
+
+        // Test option --help et --version
+        let (_out_r_sp_h, out_w_sp_h) = crate::vfs::pipe().unwrap();
+        assert_eq!(run_sponge(&["--help"], 0, out_w_sp_h, 2), 0);
+        sys_close(out_w_sp_h);
+        sys_close(_out_r_sp_h);
+
+        assert_eq!(run_sponge(&["--version"], 0, 1, 2), 0);
     }
 }
