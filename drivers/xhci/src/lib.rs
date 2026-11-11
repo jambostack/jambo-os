@@ -323,6 +323,7 @@ pub const XHCI_EXT_CAP_FIRMWARE_DEBUG_TRACE: u8 = 35;
 pub const XHCI_EXT_CAP_OFFLOAD_BUFFER_MANAGEMENT: u8 = 36;
 pub const XHCI_EXT_CAP_HOST_CONTROLLER_SYSTEM_POWER: u8 = 37;
 pub const XHCI_EXT_CAP_ROOT_HUB_TOPOLOGY_DESCRIPTOR: u8 = 38;
+pub const XHCI_EXT_CAP_USB4_PCIE_TUNNELING: u8 = 39;
 
 /// Masques de registres USB Legacy Support (xHCI 1.2 Section 7.1)
 /// Registre USBLEGSUP (Offset 0x00)
@@ -3742,6 +3743,114 @@ impl XhciRootHubTopologyDescriptor {
     /// Configure la puissance électrique maximale par port
     pub fn set_max_port_power_2ma(&mut self, power_2ma: u16) {
         self.max_port_power_2ma = power_2ma;
+    }
+}
+
+/// Capacité Étendue xHCI USB4 PCIe Tunneling (§7.31 / USB4 Specification v1.0/v2.0)
+///
+/// Modélise la négociation matérielle d'encapsulation de paquets PCIe Gen3/Gen4 au travers
+/// des routeurs de tunnellisation USB4 et xHCI hôte.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XhciUsb4PcieTunneling {
+    /// Pointeur dword vers la prochaine capacité étendue
+    pub next_ptr_dwords: u8,
+    /// Tunneling PCIe activé (bit 0 du registre de contrôle DWORD 1)
+    pub enabled: bool,
+    /// Support de l'asymétrie de bande passante USB4 (bit 1)
+    pub asymmetric_bandwidth_supported: bool,
+    /// Nombre d'adaptateurs PCIe tunnelisés configurés (bits 8..=15)
+    pub adapter_count: u8,
+    /// Vitesse de négociation PCIe (Gen1=1, Gen2=2, Gen3=3, Gen4=4) (bits 16..=19)
+    pub link_speed_gen: u8,
+    /// Largeur de lien PCIe négociée (x1=1, x2=2, x4=4, x8=8, x16=16) (bits 20..=24)
+    pub link_width: u8,
+    /// Statut matériel de tunnellisation (DWORD 2)
+    pub status: u32,
+    /// Bande passante allouée en amont (Mbit/s) (DWORD 3 [15:0])
+    pub upstream_bandwidth_mbps: u16,
+    /// Bande passante allouée en aval (Mbit/s) (DWORD 3 [31:16])
+    pub downstream_bandwidth_mbps: u16,
+}
+
+impl XhciUsb4PcieTunneling {
+    /// Crée une nouvelle capacité de tunnellisation PCIe USB4
+    pub const fn new(adapter_count: u8, link_speed_gen: u8, link_width: u8) -> Self {
+        Self {
+            next_ptr_dwords: 0,
+            enabled: false,
+            asymmetric_bandwidth_supported: false,
+            adapter_count,
+            link_speed_gen,
+            link_width,
+            status: 0,
+            upstream_bandwidth_mbps: 10000,   // 10 Gbit/s par défaut
+            downstream_bandwidth_mbps: 10000, // 10 Gbit/s par défaut
+        }
+    }
+
+    /// Parse les 4 dwords MMIO d'une capacité étendue USB4 PCIe Tunneling (§7.31)
+    pub const fn parse(dwords: &[u32; 4]) -> Option<Self> {
+        let cap_id = (dwords[0] & 0xFF) as u8;
+        if cap_id != XHCI_EXT_CAP_USB4_PCIE_TUNNELING {
+            return None;
+        }
+
+        let next_ptr = ((dwords[0] >> 8) & 0xFF) as u8;
+        let ctrl = dwords[1];
+        let enabled = (ctrl & 0x01) != 0;
+        let asymmetric_bandwidth_supported = (ctrl & 0x02) != 0;
+        let adapter_count = ((ctrl >> 8) & 0xFF) as u8;
+        let link_speed_gen = ((ctrl >> 16) & 0x0F) as u8;
+        let link_width = ((ctrl >> 20) & 0x1F) as u8;
+        let status = dwords[2];
+        let upstream_bandwidth_mbps = (dwords[3] & 0xFFFF) as u16;
+        let downstream_bandwidth_mbps = ((dwords[3] >> 16) & 0xFFFF) as u16;
+
+        Some(Self {
+            next_ptr_dwords: next_ptr,
+            enabled,
+            asymmetric_bandwidth_supported,
+            adapter_count,
+            link_speed_gen,
+            link_width,
+            status,
+            upstream_bandwidth_mbps,
+            downstream_bandwidth_mbps,
+        })
+    }
+
+    /// Encode la capacité étendue en 4 mots dwords MMIO 32-bit
+    pub const fn encode(&self) -> [u32; 4] {
+        let dw0 = (XHCI_EXT_CAP_USB4_PCIE_TUNNELING as u32) | ((self.next_ptr_dwords as u32) << 8);
+        let mut ctrl = (((self.adapter_count as u32) & 0xFF) << 8)
+            | (((self.link_speed_gen as u32) & 0x0F) << 16)
+            | (((self.link_width as u32) & 0x1F) << 20);
+        if self.enabled {
+            ctrl |= 0x01;
+        }
+        if self.asymmetric_bandwidth_supported {
+            ctrl |= 0x02;
+        }
+        let dw2 = self.status;
+        let dw3 = (self.upstream_bandwidth_mbps as u32)
+            | (((self.downstream_bandwidth_mbps as u32) & 0xFFFF) << 16);
+        [dw0, ctrl, dw2, dw3]
+    }
+
+    /// Active ou désactive le tunnel PCIe
+    pub fn set_enabled(&mut self, enable: bool) {
+        self.enabled = enable;
+    }
+
+    /// Active ou désactive le support d'allocation asymétrique
+    pub fn set_asymmetric_bandwidth_supported(&mut self, supported: bool) {
+        self.asymmetric_bandwidth_supported = supported;
+    }
+
+    /// Configure les bandes passantes allouées (Mbit/s)
+    pub fn set_bandwidth(&mut self, upstream_mbps: u16, downstream_mbps: u16) {
+        self.upstream_bandwidth_mbps = upstream_mbps;
+        self.downstream_bandwidth_mbps = downstream_mbps;
     }
 }
 
@@ -12903,5 +13012,47 @@ mod tests {
         assert_eq!(parsed_rhtd.status, 0x0004_BEEF);
         assert_eq!(parsed_rhtd.routing_mask, 0xFFFF);
         assert_eq!(parsed_rhtd.max_port_power_2ma, 750);
+
+        // 29. Test XhciUsb4PcieTunneling
+        let mut usb4_pt = XhciUsb4PcieTunneling::new(2, 4, 4); // 2 adaptateurs, Gen4, x4
+        assert_eq!(usb4_pt.adapter_count, 2);
+        assert_eq!(usb4_pt.link_speed_gen, 4);
+        assert_eq!(usb4_pt.link_width, 4);
+        assert_eq!(usb4_pt.upstream_bandwidth_mbps, 10000);
+        assert_eq!(usb4_pt.downstream_bandwidth_mbps, 10000);
+        assert!(!usb4_pt.enabled);
+        assert!(!usb4_pt.asymmetric_bandwidth_supported);
+
+        usb4_pt.set_enabled(true);
+        usb4_pt.set_asymmetric_bandwidth_supported(true);
+        usb4_pt.set_bandwidth(31500, 15750); // 31.5 Gbps up, 15.75 Gbps down
+        usb4_pt.next_ptr_dwords = 56;
+        usb4_pt.status = 0x0008_FEED;
+
+        let encoded_usb4 = usb4_pt.encode();
+        assert_eq!(
+            encoded_usb4[0] & 0xFF,
+            XHCI_EXT_CAP_USB4_PCIE_TUNNELING as u32
+        );
+        assert_eq!((encoded_usb4[0] >> 8) & 0xFF, 56);
+        assert_eq!(encoded_usb4[1] & 0x01, 1);
+        assert_eq!(encoded_usb4[1] & 0x02, 2);
+        assert_eq!((encoded_usb4[1] >> 8) & 0xFF, 2);
+        assert_eq!((encoded_usb4[1] >> 16) & 0x0F, 4);
+        assert_eq!((encoded_usb4[1] >> 20) & 0x1F, 4);
+        assert_eq!(encoded_usb4[2], 0x0008_FEED);
+        assert_eq!(encoded_usb4[3] & 0xFFFF, 31500);
+        assert_eq!((encoded_usb4[3] >> 16) & 0xFFFF, 15750);
+
+        let parsed_usb4 = XhciUsb4PcieTunneling::parse(&encoded_usb4).unwrap();
+        assert_eq!(parsed_usb4.next_ptr_dwords, 56);
+        assert!(parsed_usb4.enabled);
+        assert!(parsed_usb4.asymmetric_bandwidth_supported);
+        assert_eq!(parsed_usb4.adapter_count, 2);
+        assert_eq!(parsed_usb4.link_speed_gen, 4);
+        assert_eq!(parsed_usb4.link_width, 4);
+        assert_eq!(parsed_usb4.status, 0x0008_FEED);
+        assert_eq!(parsed_usb4.upstream_bandwidth_mbps, 31500);
+        assert_eq!(parsed_usb4.downstream_bandwidth_mbps, 15750);
     }
 }

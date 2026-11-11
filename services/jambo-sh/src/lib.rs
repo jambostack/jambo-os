@@ -638,6 +638,7 @@ impl JamboShell {
             "unlink" | "/bin/unlink" | "bin/unlink" => self.cmd_unlink(args, out),
             "sum" | "/bin/sum" | "bin/sum" => self.cmd_sum(args, out),
             "fnv1asum" | "/bin/fnv1asum" | "bin/fnv1asum" => self.cmd_fnv1asum(args, out),
+            "uuidgen" | "/bin/uuidgen" | "bin/uuidgen" => self.cmd_uuidgen(args, out),
             "cow" | "/bin/cow" | "bin/cow" => self.cmd_cow(args, out),
             "version" => self.cmd_version(out),
             "uptime" => self.cmd_uptime(out),
@@ -3388,6 +3389,39 @@ Utilitaire d'installation JamboOS (Serie 0.*.*)\n\
             (status, len)
         } else {
             let msg = b"fnv1asum: pipe creation failed\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
+    }
+
+    fn cmd_uuidgen(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if let Ok((r_pipe, w_pipe)) = libjambo::vfs::pipe() {
+            let code = libjambo::coreutils::run_uuidgen(args, w_pipe, w_pipe);
+            let _ = libjambo::coreutils::sys_close(w_pipe);
+
+            let mut total_read = 0;
+            loop {
+                if total_read >= out.len() {
+                    break;
+                }
+                let n = libjambo::coreutils::sys_read(r_pipe, &mut out[total_read..]);
+                if n <= 0 {
+                    break;
+                }
+                total_read += n as usize;
+            }
+            let _ = libjambo::coreutils::sys_close(r_pipe);
+
+            let len = total_read.min(out.len());
+            let status = if code == 0 {
+                ShellStatus::Success
+            } else {
+                ShellStatus::ExecutionFailed
+            };
+            (status, len)
+        } else {
+            let msg = b"uuidgen: pipe creation failed\n";
             let len = msg.len().min(out.len());
             out[..len].copy_from_slice(&msg[..len]);
             (ShellStatus::ExecutionFailed, len)
@@ -21335,5 +21369,26 @@ mod tests {
         assert_eq!(st104, ShellStatus::Success);
         let s104 = core::str::from_utf8(&out[..len104]).unwrap();
         assert!(s104.contains("fnv1asum (jambo-coreutils)"));
+
+        // 52. uuidgen shell command
+        let (st105, len105) = shell.execute_line("uuidgen --help", &mut out);
+        assert_eq!(st105, ShellStatus::Success);
+        let s105 = core::str::from_utf8(&out[..len105]).unwrap();
+        assert!(s105.contains("Usage: uuidgen"));
+
+        let (st106, len106) = shell.execute_line("uuidgen --version", &mut out);
+        assert_eq!(st106, ShellStatus::Success);
+        let s106 = core::str::from_utf8(&out[..len106]).unwrap();
+        assert!(s106.contains("uuidgen (jambo-coreutils)"));
+
+        let (st107, len107) = shell.execute_line("uuidgen -n 1", &mut out);
+        assert_eq!(st107, ShellStatus::Success);
+        assert_eq!(len107, 37); // 36 hex + '-' + '\n'
+        let s107 = core::str::from_utf8(&out[..len107]).unwrap();
+        assert_eq!(&s107[8..9], "-");
+        assert_eq!(&s107[13..14], "-");
+        assert_eq!(&s107[18..19], "-");
+        assert_eq!(&s107[23..24], "-");
+        assert_eq!(&s107[14..15], "4"); // UUID v4
     }
 }

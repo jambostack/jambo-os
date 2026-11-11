@@ -22549,6 +22549,119 @@ pub fn run_fnv1asum(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 
     exit_code
 }
 
+/// Utilitaire Coreutils POSIX / BSD `hostid` / `uuidgen` / `machine-id` (génération déterministe d'identifiant unique UUID v4)
+///
+/// Syntax standard :
+/// `uuidgen [OPTION]...`
+/// Génère et affiche un identifiant universellement unique (UUID) au format RFC 4122 (8-4-4-4-12 hex).
+pub fn run_uuidgen(args: &[&str], out_fd: i32, err_fd: i32) -> i32 {
+    let mut uppercase = false;
+    let mut count: usize = 1;
+
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i];
+        if arg == "--help" {
+            let _ = sys_write(
+                out_fd,
+                b"Usage: uuidgen [OPTION]...\nCreate a new UUID value (RFC 4122 variant).\n\nOptions:\n  -u, --uppercase     output uppercase UUID\n  -n, --count <N>     output N UUIDs\n      --help          display this help and exit\n      --version       output version information and exit\n",
+            );
+            return 0;
+        } else if arg == "--version" {
+            let _ = sys_write(out_fd, b"uuidgen (jambo-coreutils) 0.1.0\n");
+            return 0;
+        } else if arg == "-u" || arg == "--uppercase" {
+            uppercase = true;
+        } else if arg == "-n" || arg == "--count" {
+            if i + 1 < args.len() {
+                i += 1;
+                let parsed = args[i].parse::<usize>().unwrap_or(1);
+                count = if parsed == 0 { 1 } else { parsed.min(64) };
+            }
+        } else if let Some(stripped) = arg.strip_prefix("-n") {
+            let parsed = stripped.parse::<usize>().unwrap_or(1);
+            count = if parsed == 0 { 1 } else { parsed.min(64) };
+        } else if arg.starts_with('-') {
+            let _ = sys_write(err_fd, b"uuidgen: unrecognized option '");
+            let _ = sys_write(err_fd, arg.as_bytes());
+            let _ = sys_write(err_fd, b"'\nTry 'uuidgen --help' for more information.\n");
+            return 1;
+        }
+        i += 1;
+    }
+
+    // Graine pseudo-aléatoire basée sur l'horloge système et le compteur d'états
+    let mut seed: u64 = crate::clock_gettime(crate::clocks::CLOCK_MONOTONIC)
+        .map(|ts| ts.tv_sec ^ ((ts.tv_nsec as u64) << 32) ^ 0x9E3779B97F4A7C15)
+        .unwrap_or(0xC4CEB9FE1A85EC53);
+    if seed == 0 {
+        seed = 0xC4CEB9FE1A85EC53;
+    }
+
+    let hex_digits = if uppercase {
+        b"0123456789ABCDEF"
+    } else {
+        b"0123456789abcdef"
+    };
+
+    let mut line_buf = [0u8; 37]; // 36 chars + '\n'
+    line_buf[36] = b'\n';
+    line_buf[8] = b'-';
+    line_buf[13] = b'-';
+    line_buf[18] = b'-';
+    line_buf[23] = b'-';
+
+    for n in 0..count {
+        // Générateur Xorshift64Star
+        let mut raw_bytes = [0u8; 16];
+        for half in 0..2 {
+            seed ^= seed >> 12;
+            seed ^= seed << 25;
+            seed ^= seed >> 27;
+            let val = seed
+                .wrapping_mul(0x2545F4914F6CDD1D)
+                .wrapping_add((n * 2 + half) as u64);
+            let bytes = val.to_le_bytes();
+            raw_bytes[half * 8..(half + 1) * 8].copy_from_slice(&bytes);
+        }
+
+        // RFC 4122 v4 : version 4 (bits 4..7 de l'octet 6 = 0100b)
+        raw_bytes[6] = (raw_bytes[6] & 0x0F) | 0x40;
+        // RFC 4122 v4 : variant 1 (bits 6..7 de l'octet 8 = 10b)
+        raw_bytes[8] = (raw_bytes[8] & 0x3F) | 0x80;
+
+        // Projection hexadécimale 8-4-4-4-12
+        let byte_indices = [
+            (0, 0),
+            (1, 2),
+            (2, 4),
+            (3, 6), // 8 hex
+            (4, 9),
+            (5, 11), // 4 hex
+            (6, 14),
+            (7, 16), // 4 hex
+            (8, 19),
+            (9, 21), // 4 hex
+            (10, 24),
+            (11, 26),
+            (12, 28),
+            (13, 30),
+            (14, 32),
+            (15, 34), // 12 hex
+        ];
+
+        for &(byte_idx, out_idx) in &byte_indices {
+            let b = raw_bytes[byte_idx];
+            line_buf[out_idx] = hex_digits[((b >> 4) & 0x0F) as usize];
+            line_buf[out_idx + 1] = hex_digits[(b & 0x0F) as usize];
+        }
+
+        let _ = sys_write(out_fd, &line_buf);
+    }
+
+    0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -27517,5 +27630,31 @@ Chaque processus dispose de son propre CR3 sans aucun privilege materiel direct.
         assert!(s_fnv.contains("/tmp/test_fnv_file.txt"));
 
         let _ = run_unlink(&["/tmp/test_fnv_file.txt"], 1, 2);
+
+        // 31. Test run_uuidgen
+        assert_eq!(run_uuidgen(&["--help"], 1, 2), 0);
+        assert_eq!(run_uuidgen(&["--version"], 1, 2), 0);
+
+        let (out_r_uuid, out_w_uuid) = crate::vfs::pipe().unwrap();
+        let code_uuid = run_uuidgen(&["-n", "2"], out_w_uuid, 2);
+        sys_close(out_w_uuid);
+        assert_eq!(code_uuid, 0);
+
+        let mut buf_uuid = [0u8; 128];
+        let n_uuid = sys_read(out_r_uuid, &mut buf_uuid);
+        sys_close(out_r_uuid);
+        assert_eq!(n_uuid, 74); // 2 * 37 octets
+        let s_uuid = core::str::from_utf8(&buf_uuid[..n_uuid as usize]).unwrap();
+        let mut line_count = 0;
+        for line in s_uuid.lines() {
+            line_count += 1;
+            assert_eq!(line.len(), 36);
+            assert_eq!(&line[8..9], "-");
+            assert_eq!(&line[13..14], "-");
+            assert_eq!(&line[18..19], "-");
+            assert_eq!(&line[23..24], "-");
+            assert_eq!(&line[14..15], "4"); // version 4
+        }
+        assert_eq!(line_count, 2);
     }
 }

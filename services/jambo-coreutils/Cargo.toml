@@ -502,7 +502,12 @@ name = "fnv1asum"
 path = "src/bin/fnv1asum.rs"
 test = false
 
-# 99 utilitaires Ring 3
+[[bin]]
+name = "uuidgen"
+path = "src/bin/uuidgen.rs"
+test = false
+
+# 100 utilitaires Ring 3
 
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }
