@@ -8146,27 +8146,159 @@ fn fmt_u64_into(
     &buf[..pos]
 }
 
-/// Utilitaire `expr` : évalue une expression arithmétique ou de comparaison POSIX.
+/// Utilitaire `expr` : évalue une expression arithmétique, de comparaison ou de manipulation de chaînes POSIX.
 ///
-/// Syntaxe : `expr VALEUR OP VALEUR`
+/// Syntaxe : `expr VALEUR OP VALEUR` ou `expr match CHAÎNE MOTIF` ou `expr substr CHAÎNE POS LONG`
+/// ou `expr length CHAÎNE` ou `expr index CHAÎNE CARACTÈRES`
 ///
 /// Opérateurs arithmétiques : `+`, `-`, `*`, `/`, `%`
 /// Opérateurs de comparaison : `=`, `!=`, `<`, `<=`, `>`, `>=`
 /// Opérateurs logiques : `|`, `&`
+/// Opérateurs de chaîne et motif : `length`, `substr`, `index`, `match`, `:`
 ///
 /// # Codes de retour
 /// - 0 : résultat non-nul ou non-vide (vrai).
 /// - 1 : résultat nul ou vide (faux).
 /// - 2 : erreur de syntaxe ou division par zéro.
 pub fn run_expr(args: &[&str], out_fd: i32, err_fd: i32) -> i32 {
+    if args.is_empty() {
+        let _ = sys_write(err_fd, b"expr: syntax error: missing operand\n");
+        return 2;
+    }
+
+    if args.len() == 1 {
+        let a = args[0];
+        if a == "--help" || a == "-h" {
+            let help = b"Usage: expr EXPRESSION\n\
+Print the value of EXPRESSION to standard output.\n\n\
+  ARG1 | ARG2       ARG1 if it is neither null nor 0, otherwise ARG2\n\
+  ARG1 & ARG2       ARG1 if neither argument is null or 0, otherwise 0\n\
+  ARG1 < ARG2       ARG1 is less than ARG2\n\
+  ARG1 <= ARG2      ARG1 is less than or equal to ARG2\n\
+  ARG1 = ARG2       ARG1 is equal to ARG2\n\
+  ARG1 != ARG2      ARG1 is unequal to ARG2\n\
+  ARG1 >= ARG2      ARG1 is greater than or equal to ARG2\n\
+  ARG1 > ARG2       ARG1 is greater than ARG2\n\
+  ARG1 + ARG2       arithmetic sum of ARG1 and ARG2\n\
+  ARG1 - ARG2       arithmetic difference of ARG1 and ARG2\n\
+  ARG1 * ARG2       arithmetic product of ARG1 and ARG2\n\
+  ARG1 / ARG2       arithmetic quotient of ARG1 divided by ARG2\n\
+  ARG1 % ARG2       arithmetic remainder of ARG1 divided by ARG2\n\
+  ARG1 : PATTERN    anchored pattern match of PATTERN in ARG1\n\
+  match STR PATTERN anchored pattern match\n\
+  substr STR POS L  substring of STR, POS counted from 1\n\
+  index STR CHARS   index in STR where any CHARS is found, or 0\n\
+  length STR        length of STR\n";
+            let _ = sys_write(out_fd, help);
+            return 0;
+        }
+        if a == "--version" || a == "-v" {
+            let ver = b"expr (JamboOS coreutils) 0.1.0\n\
+Copyright (C) 2026 JamboOS Authors.\n\
+License MIT or Apache-2.0.\n";
+            let _ = sys_write(out_fd, ver);
+            return 0;
+        }
+        let _ = sys_write(out_fd, a.as_bytes());
+        let _ = sys_write(out_fd, b"\n");
+        return if a.is_empty() || a == "0" { 1 } else { 0 };
+    }
+
+    // Gestion des mots-clés unaires/spéciaux : `length STR`
+    if args.len() == 2 && args[0] == "length" {
+        let len = args[1].len();
+        let mut rbuf = [0u8; 32];
+        let rlen = fmt_u64_in_buf(&mut rbuf, len as u64, 0, false, 10, false);
+        let _ = sys_write(out_fd, &rbuf[..rlen]);
+        let _ = sys_write(out_fd, b"\n");
+        return if len == 0 { 1 } else { 0 };
+    }
+
+    // Gestion de `substr STR POS LENGTH`
+    if args.len() == 4 && args[0] == "substr" {
+        let s = args[1];
+        let pos = parse_u64(args[2]);
+        let len = parse_u64(args[3]) as usize;
+        if pos == 0 || pos as usize > s.len() || len == 0 {
+            let _ = sys_write(out_fd, b"\n");
+            return 1;
+        }
+        let start = (pos as usize) - 1;
+        let end = (start + len).min(s.len());
+        let sub = &s[start..end];
+        let _ = sys_write(out_fd, sub.as_bytes());
+        let _ = sys_write(out_fd, b"\n");
+        return if sub.is_empty() { 1 } else { 0 };
+    }
+
+    // Gestion de `index STR CHARS`
+    if args.len() == 3 && args[0] == "index" {
+        let s = args[1];
+        let chars = args[2];
+        let mut idx = 0usize;
+        for (i, b) in s.bytes().enumerate() {
+            if chars.bytes().any(|c| c == b) {
+                idx = i + 1;
+                break;
+            }
+        }
+        let mut rbuf = [0u8; 32];
+        let rlen = fmt_u64_in_buf(&mut rbuf, idx as u64, 0, false, 10, false);
+        let _ = sys_write(out_fd, &rbuf[..rlen]);
+        let _ = sys_write(out_fd, b"\n");
+        return if idx == 0 { 1 } else { 0 };
+    }
+
+    // Gestion de `match STR PATTERN`
+    if args.len() == 3 && args[0] == "match" {
+        let s = args[1];
+        let pat = args[2];
+        let matched_len = if let Some(subpat) = pat.strip_prefix('^') {
+            if s.starts_with(subpat) {
+                subpat.len()
+            } else {
+                0
+            }
+        } else if s.starts_with(pat) {
+            pat.len()
+        } else {
+            0
+        };
+        let mut rbuf = [0u8; 32];
+        let rlen = fmt_u64_in_buf(&mut rbuf, matched_len as u64, 0, false, 10, false);
+        let _ = sys_write(out_fd, &rbuf[..rlen]);
+        let _ = sys_write(out_fd, b"\n");
+        return if matched_len == 0 { 1 } else { 0 };
+    }
+
     if args.len() < 3 {
-        let _ = sys_write(err_fd, b"expr: syntaxe: expr VAL OP VAL\n");
+        let _ = sys_write(err_fd, b"expr: syntax error\n");
         return 2;
     }
 
     let lhs_str = args[0].trim();
     let op = args[1].trim();
     let rhs_str = args[2].trim();
+
+    // Gestion de l'opérateur motif POSIX `:` (ex: `expr STR : PATTERN`)
+    if op == ":" {
+        let matched_len = if let Some(subpat) = rhs_str.strip_prefix('^') {
+            if lhs_str.starts_with(subpat) {
+                subpat.len()
+            } else {
+                0
+            }
+        } else if lhs_str.starts_with(rhs_str) {
+            rhs_str.len()
+        } else {
+            0
+        };
+        let mut rbuf = [0u8; 32];
+        let rlen = fmt_u64_in_buf(&mut rbuf, matched_len as u64, 0, false, 10, false);
+        let _ = sys_write(out_fd, &rbuf[..rlen]);
+        let _ = sys_write(out_fd, b"\n");
+        return if matched_len == 0 { 1 } else { 0 };
+    }
 
     // Tente une évaluation entière
     let lhs = parse_i64(lhs_str);
@@ -12605,6 +12737,178 @@ License MIT or Apache-2.0.\n";
 }
 
 // ============================================================================
+// Utilitaire POSIX / GNU coreutils : `factor` (Décomposition en facteurs premiers)
+// ============================================================================
+
+/// Décompose un entier 64 bits en facteurs premiers.
+/// Remplit `factors` avec la liste ordonnée des facteurs premiers et retourne leur nombre.
+pub fn factorize_u64(mut n: u64, factors: &mut [u64; 64]) -> usize {
+    if n <= 1 {
+        return 0;
+    }
+    let mut count = 0;
+
+    // Facteurs 2
+    while (n & 1) == 0 && count < factors.len() {
+        factors[count] = 2;
+        count += 1;
+        n >>= 1;
+    }
+
+    // Facteurs impairs >= 3
+    let mut d = 3u64;
+    while d.saturating_mul(d) <= n && count < factors.len() {
+        if n.is_multiple_of(d) {
+            factors[count] = d;
+            count += 1;
+            n /= d;
+        } else {
+            d += 2;
+        }
+    }
+
+    // Dernier facteur premier restant
+    if n > 1 && count < factors.len() {
+        factors[count] = n;
+        count += 1;
+    }
+
+    count
+}
+
+/// Affiche la décomposition en facteurs d'un nombre donné sur `out_fd` : `N: p1 p2 p3...\n`
+fn print_factorization(n: u64, out_fd: i32) {
+    let mut buf = [0u8; 32];
+    let n_len = fmt_u64_in_buf(&mut buf, n, 0, false, 10, false);
+    let _ = sys_write(out_fd, &buf[..n_len]);
+    let _ = sys_write(out_fd, b":");
+
+    let mut factors = [0u64; 64];
+    let factor_count = factorize_u64(n, &mut factors);
+
+    for &f in &factors[..factor_count] {
+        let _ = sys_write(out_fd, b" ");
+        let mut f_buf = [0u8; 32];
+        let f_len = fmt_u64_in_buf(&mut f_buf, f, 0, false, 10, false);
+        let _ = sys_write(out_fd, &f_buf[..f_len]);
+    }
+    let _ = sys_write(out_fd, b"\n");
+}
+
+/// Exécute l'utilitaire Coreutils POSIX / GNU `factor` (décomposition en facteurs premiers)
+///
+/// Syntaxe : `factor [NOMBRE...]`
+/// Sans argument, lit les nombres séparés par des espaces ou sauts de ligne depuis `in_fd`.
+pub fn run_factor(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    let mut num_args = [""; 64];
+    let mut num_count = 0usize;
+
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i];
+        if arg == "--help" || arg == "-h" {
+            let help = b"Usage: factor [NUMBER]...\n\
+Print the prime factors of each specified integer NUMBER.\n\
+If each NUMBER is omitted, read them from standard input.\n\n\
+  -h, --help     display this help and exit\n\
+  -v, --version  output version information and exit\n";
+            let _ = sys_write(out_fd, help);
+            return 0;
+        }
+        if arg == "--version" || arg == "-v" {
+            let ver = b"factor (JamboOS coreutils) 0.1.0\n\
+Copyright (C) 2026 JamboOS Authors.\n\
+License MIT or Apache-2.0.\n";
+            let _ = sys_write(out_fd, ver);
+            return 0;
+        }
+        if (!arg.starts_with('-') || arg.len() > 1 && arg.as_bytes()[1].is_ascii_digit())
+            && num_count < num_args.len()
+        {
+            num_args[num_count] = arg;
+            num_count += 1;
+        }
+        i += 1;
+    }
+
+    if num_count > 0 {
+        let mut exit_code = 0;
+        for &num_str in &num_args[..num_count] {
+            let trimmed = num_str.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if !trimmed.bytes().all(|b| b.is_ascii_digit()) {
+                let _ = sys_write(err_fd, b"factor: '");
+                let _ = sys_write(err_fd, trimmed.as_bytes());
+                let _ = sys_write(err_fd, b"' is not a valid positive integer\n");
+                exit_code = 1;
+                continue;
+            }
+            let n = parse_u64(trimmed);
+            print_factorization(n, out_fd);
+        }
+        return exit_code;
+    }
+
+    // Lecture depuis in_fd
+    let mut read_buf = [0u8; 4096];
+    let mut token_buf = [0u8; 64];
+    let mut token_len = 0usize;
+    let mut exit_code = 0;
+
+    loop {
+        let n = sys_read(in_fd, &mut read_buf);
+        if n <= 0 {
+            break;
+        }
+        for &b in &read_buf[..n as usize] {
+            if b.is_ascii_whitespace() {
+                if token_len > 0 {
+                    if let Ok(s) = core::str::from_utf8(&token_buf[..token_len]) {
+                        let trimmed = s.trim();
+                        if !trimmed.is_empty() {
+                            if trimmed.bytes().all(|c| c.is_ascii_digit()) {
+                                let val = parse_u64(trimmed);
+                                print_factorization(val, out_fd);
+                            } else {
+                                let _ = sys_write(err_fd, b"factor: '");
+                                let _ = sys_write(err_fd, trimmed.as_bytes());
+                                let _ = sys_write(err_fd, b"' is not a valid positive integer\n");
+                                exit_code = 1;
+                            }
+                        }
+                    }
+                    token_len = 0;
+                }
+            } else if token_len < token_buf.len() {
+                token_buf[token_len] = b;
+                token_len += 1;
+            }
+        }
+    }
+
+    if token_len > 0 {
+        if let Ok(s) = core::str::from_utf8(&token_buf[..token_len]) {
+            let trimmed = s.trim();
+            if !trimmed.is_empty() {
+                if trimmed.bytes().all(|c| c.is_ascii_digit()) {
+                    let val = parse_u64(trimmed);
+                    print_factorization(val, out_fd);
+                } else {
+                    let _ = sys_write(err_fd, b"factor: '");
+                    let _ = sys_write(err_fd, trimmed.as_bytes());
+                    let _ = sys_write(err_fd, b"' is not a valid positive integer\n");
+                    exit_code = 1;
+                }
+            }
+        }
+    }
+
+    exit_code
+}
+
+// ============================================================================
 // Utilitaire POSIX / GNU coreutils : `sync` (Synchronisation des écritures persistance CoW)
 // ============================================================================
 
@@ -13934,6 +14238,7 @@ pub fn run_xargs(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
             "unexpand" => run_unexpand(effective_sub_args, 0, out_fd, err_fd),
             "cksum" => run_cksum(effective_sub_args, 0, out_fd, err_fd),
             "crc32" => run_crc32(effective_sub_args, 0, out_fd, err_fd),
+            "factor" => run_factor(effective_sub_args, 0, out_fd, err_fd),
             "base64" => run_base64(effective_sub_args, 0, out_fd, err_fd),
             "sha256sum" => run_sha256sum(effective_sub_args, 0, out_fd, err_fd),
             "sha1sum" => run_sha1sum(effective_sub_args, 0, out_fd, err_fd),
@@ -22860,5 +23165,110 @@ Chaque processus dispose de son propre CR3 sans aucun privilege materiel direct.
 
         let _ = sys_unlink_pool(file_path);
         let _ = sys_unlink_pool(check_file);
+    }
+
+    #[test]
+    fn test_factor_and_expr_string_extensions() {
+        // 1. Test factorize_u64
+        let mut factors = [0u64; 64];
+        let c1 = factorize_u64(1, &mut factors);
+        assert_eq!(c1, 0);
+
+        let c2 = factorize_u64(13, &mut factors);
+        assert_eq!(c2, 1);
+        assert_eq!(factors[0], 13);
+
+        let c3 = factorize_u64(42, &mut factors);
+        assert_eq!(c3, 3);
+        assert_eq!(&factors[..3], &[2, 3, 7]);
+
+        let c4 = factorize_u64(360, &mut factors);
+        assert_eq!(c4, 6);
+        assert_eq!(&factors[..6], &[2, 2, 2, 3, 3, 5]);
+
+        // 2. Test run_factor avec arguments
+        let (out_r1, out_w1) = crate::vfs::pipe().unwrap();
+        let code1 = run_factor(&["42", "13", "360"], 0, out_w1, 2);
+        sys_close(out_w1);
+        assert_eq!(code1, 0);
+
+        let mut buf1 = [0u8; 256];
+        let n1 = sys_read(out_r1, &mut buf1);
+        sys_close(out_r1);
+        let s1 = core::str::from_utf8(&buf1[..n1 as usize]).unwrap();
+        assert!(s1.contains("42: 2 3 7\n"));
+        assert!(s1.contains("13: 13\n"));
+        assert!(s1.contains("360: 2 2 2 3 3 5\n"));
+
+        // 3. Test run_factor via stdin
+        let (in_r2, in_w2) = crate::vfs::pipe().unwrap();
+        let (out_r2, out_w2) = crate::vfs::pipe().unwrap();
+        let _ = sys_write(in_w2, b"100 77\n");
+        sys_close(in_w2);
+
+        let code2 = run_factor(&[], in_r2, out_w2, 2);
+        sys_close(in_r2);
+        sys_close(out_w2);
+        assert_eq!(code2, 0);
+
+        let mut buf2 = [0u8; 256];
+        let n2 = sys_read(out_r2, &mut buf2);
+        sys_close(out_r2);
+        let s2 = core::str::from_utf8(&buf2[..n2 as usize]).unwrap();
+        assert!(s2.contains("100: 2 2 5 5\n"));
+        assert!(s2.contains("77: 7 11\n"));
+
+        // 4. Test run_expr extensions de chaînes et motifs
+        // length
+        let (out_r3, out_w3) = crate::vfs::pipe().unwrap();
+        let code3 = run_expr(&["length", "jambo-os"], out_w3, 2);
+        sys_close(out_w3);
+        assert_eq!(code3, 0);
+        let mut buf3 = [0u8; 32];
+        let n3 = sys_read(out_r3, &mut buf3);
+        sys_close(out_r3);
+        assert_eq!(core::str::from_utf8(&buf3[..n3 as usize]).unwrap(), "8\n");
+
+        // substr
+        let (out_r4, out_w4) = crate::vfs::pipe().unwrap();
+        let code4 = run_expr(&["substr", "jambo-os", "1", "5"], out_w4, 2);
+        sys_close(out_w4);
+        assert_eq!(code4, 0);
+        let mut buf4 = [0u8; 32];
+        let n4 = sys_read(out_r4, &mut buf4);
+        sys_close(out_r4);
+        assert_eq!(
+            core::str::from_utf8(&buf4[..n4 as usize]).unwrap(),
+            "jambo\n"
+        );
+
+        // index
+        let (out_r5, out_w5) = crate::vfs::pipe().unwrap();
+        let code5 = run_expr(&["index", "jambo-os", "-"], out_w5, 2);
+        sys_close(out_w5);
+        assert_eq!(code5, 0);
+        let mut buf5 = [0u8; 32];
+        let n5 = sys_read(out_r5, &mut buf5);
+        sys_close(out_r5);
+        assert_eq!(core::str::from_utf8(&buf5[..n5 as usize]).unwrap(), "6\n");
+
+        // match / :
+        let (out_r6, out_w6) = crate::vfs::pipe().unwrap();
+        let code6 = run_expr(&["match", "jambo-os", "jambo"], out_w6, 2);
+        sys_close(out_w6);
+        assert_eq!(code6, 0);
+        let mut buf6 = [0u8; 32];
+        let n6 = sys_read(out_r6, &mut buf6);
+        sys_close(out_r6);
+        assert_eq!(core::str::from_utf8(&buf6[..n6 as usize]).unwrap(), "5\n");
+
+        let (out_r7, out_w7) = crate::vfs::pipe().unwrap();
+        let code7 = run_expr(&["jambo-os", ":", "jamb"], out_w7, 2);
+        sys_close(out_w7);
+        assert_eq!(code7, 0);
+        let mut buf7 = [0u8; 32];
+        let n7 = sys_read(out_r7, &mut buf7);
+        sys_close(out_r7);
+        assert_eq!(core::str::from_utf8(&buf7[..n7 as usize]).unwrap(), "4\n");
     }
 }

@@ -367,5 +367,10 @@ name = "crc32"
 path = "src/bin/crc32.rs"
 test = false
 
+[[bin]]
+name = "factor"
+path = "src/bin/factor.rs"
+test = false
+
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }

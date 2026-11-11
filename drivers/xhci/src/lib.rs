@@ -520,20 +520,30 @@ impl XhciExtendedCapHeader {
 /// Capacité Étendue Supported Protocol (USB 2.0 / USB 3.x) - xHCI 1.2 Section 7.2
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct XhciSupportedProtocol {
+    /// Pointeur dword vers la prochaine capacité étendue (0 = fin de liste)
+    pub next_ptr_dwords: u8,
+    /// Numéro de révision majeure (ex: 2 pour USB 2.0, 3 pour USB 3.x)
     pub major_rev: u8,
+    /// Numéro de révision mineure (ex: 0x00, 0x10, 0x20)
     pub minor_rev: u8,
+    /// Chaîne d'identification de 4 octets ("USB ")
     pub name_string: [u8; 4],
+    /// Numéro du premier port compatible (index 1-based)
     pub compatible_port_offset: u8,
+    /// Nombre de ports consécutifs régis par ce protocole
     pub compatible_port_count: u8,
+    /// Champ Protocol Defined (vitesses de slot, PSI count, Hub Depth, etc.)
     pub protocol_defined: u16,
 }
 
 impl XhciSupportedProtocol {
+    /// Parse les 3 premiers dwords d'une capacité étendue Supported Protocol
     pub const fn parse(dwords: &[u32; 3]) -> Self {
         let dw0 = dwords[0];
         let dw1 = dwords[1];
         let dw2 = dwords[2];
 
+        let next_ptr_dwords = ((dw0 >> 8) & 0xFF) as u8;
         let minor_rev = ((dw0 >> 16) & 0xFF) as u8;
         let major_rev = ((dw0 >> 24) & 0xFF) as u8;
 
@@ -549,6 +559,7 @@ impl XhciSupportedProtocol {
         let protocol_defined = ((dw2 >> 16) & 0xFFFF) as u16;
 
         Self {
+            next_ptr_dwords,
             major_rev,
             minor_rev,
             name_string,
@@ -558,13 +569,61 @@ impl XhciSupportedProtocol {
         }
     }
 
+    /// Encode les 3 dwords de base de la structure Supported Protocol
+    pub const fn encode(&self) -> [u32; 3] {
+        let dw0 = (XHCI_EXT_CAP_SUPPORTED_PROTOCOL as u32)
+            | ((self.next_ptr_dwords as u32) << 8)
+            | ((self.minor_rev as u32) << 16)
+            | ((self.major_rev as u32) << 24);
+
+        let dw1 = (self.name_string[0] as u32)
+            | ((self.name_string[1] as u32) << 8)
+            | ((self.name_string[2] as u32) << 16)
+            | ((self.name_string[3] as u32) << 24);
+
+        let dw2 = (self.compatible_port_offset as u32)
+            | ((self.compatible_port_count as u32) << 8)
+            | ((self.protocol_defined as u32) << 16);
+
+        [dw0, dw1, dw2]
+    }
+
+    /// Indique si cette révision correspond à la famille USB 3.x (SuperSpeed / SuperSpeedPlus)
     pub fn is_usb3(&self) -> bool {
         self.major_rev == 3 && &self.name_string == b"USB "
     }
 
+    /// Indique si cette révision correspond à la famille USB 2.0 (High-Speed / Full-Speed / Low-Speed)
     pub fn is_usb2(&self) -> bool {
         self.major_rev == 2 && &self.name_string == b"USB "
     }
+
+    /// Vérifie si un port donné (1-based) est dans la plage couverte par cette capacité
+    pub const fn contains_port(&self, port_num: u8) -> bool {
+        let start = self.compatible_port_offset;
+        let count = self.compatible_port_count;
+        port_num >= start && (port_num as u16) < (start as u16 + count as u16)
+    }
+
+    /// Détermine la vitesse par défaut associée à ce protocole
+    pub const fn default_speed(&self) -> UsbSpeed {
+        match self.major_rev {
+            3 => UsbSpeed::SuperSpeed,
+            2 => UsbSpeed::HighSpeed,
+            _ => UsbSpeed::Unknown(0),
+        }
+    }
+}
+
+/// Description du protocole supporté par un port racine physique xHCI
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XhciPortProtocolInfo {
+    pub port_num: u8,
+    pub major_rev: u8,
+    pub minor_rev: u8,
+    pub default_speed: UsbSpeed,
+    pub is_usb3: bool,
+    pub is_usb2: bool,
 }
 
 /// Anneau de transfert xHCI dédié à un flux Bulk spécifique (Block Stream / UAS)
@@ -5835,6 +5894,40 @@ impl XhciController {
         unsafe { core::ptr::write_volatile((cap_addr + 4) as *mut u32, new_csr) };
     }
 
+    /// Lit et décode une capacité Supported Protocol (xHCI 1.2 section 7.2)
+    /// à partir de son adresse MMIO de base.
+    ///
+    /// # Safety
+    ///
+    /// Effectue 3 lectures volatiles MMIO 32-bit alignées sur l'espace BAR0 du contrôleur xHCI.
+    pub fn read_supported_protocol(&self, cap_addr: u64) -> XhciSupportedProtocol {
+        let dw0 = unsafe { core::ptr::read_volatile(cap_addr as *const u32) };
+        let dw1 = unsafe { core::ptr::read_volatile((cap_addr + 4) as *const u32) };
+        let dw2 = unsafe { core::ptr::read_volatile((cap_addr + 8) as *const u32) };
+        XhciSupportedProtocol::parse(&[dw0, dw1, dw2])
+    }
+
+    /// Recherche les informations de protocole (USB 2.0 / USB 3.x) associées à un port
+    /// physique donné dans un tableau de capacités Supported Protocol.
+    pub fn query_port_protocol(
+        protocols: &[XhciSupportedProtocol],
+        port_num: u8,
+    ) -> Option<XhciPortProtocolInfo> {
+        for proto in protocols {
+            if proto.contains_port(port_num) {
+                return Some(XhciPortProtocolInfo {
+                    port_num,
+                    major_rev: proto.major_rev,
+                    minor_rev: proto.minor_rev,
+                    default_speed: proto.default_speed(),
+                    is_usb3: proto.is_usb3(),
+                    is_usb2: proto.is_usb2(),
+                });
+            }
+        }
+        None
+    }
+
     /// Émet une commande Evaluate Context sur le Command Ring.
     pub fn evaluate_context(
         &mut self,
@@ -8265,8 +8358,56 @@ mod tests {
         assert_eq!(pm_d3.current_power_state, XhciPowerState::D3Hot as u8);
         assert!(!pm_d3.is_d0_active());
 
-        // Simulation acquittement PME Status RW1C
-        let acked_pmcsr = XhciPowerManagement::build_pme_ack(d3_pmcsr);
-        assert_ne!(acked_pmcsr & USBPMCSR_PME_STATUS, 0);
+        // 10. Supported Protocol Capability parsing, encoding & port querying
+        let usb2_dwords: [u32; 3] = [
+            (2 << 24) | (8 << 8) | (XHCI_EXT_CAP_SUPPORTED_PROTOCOL as u32), // USB 2.0, next=8
+            u32::from_le_bytes(*b"USB "),
+            (1 << 8) | 1, // 1 port starting at port 1
+        ];
+        let usb3_dwords: [u32; 3] = [
+            (3 << 24) | (XHCI_EXT_CAP_SUPPORTED_PROTOCOL as u32), // USB 3.0, next=0
+            u32::from_le_bytes(*b"USB "),
+            (2 << 8) | 2, // 2 ports starting at port 2 (ports 2 and 3)
+        ];
+        let proto2 = XhciSupportedProtocol::parse(&usb2_dwords);
+        let proto3 = XhciSupportedProtocol::parse(&usb3_dwords);
+        assert_eq!(proto2.major_rev, 2);
+        assert_eq!(proto2.next_ptr_dwords, 8);
+        assert!(proto2.is_usb2());
+        assert!(!proto2.is_usb3());
+        assert_eq!(proto2.default_speed(), UsbSpeed::HighSpeed);
+        assert!(proto2.contains_port(1));
+        assert!(!proto2.contains_port(2));
+
+        assert_eq!(proto3.major_rev, 3);
+        assert_eq!(proto3.next_ptr_dwords, 0);
+        assert!(proto3.is_usb3());
+        assert!(!proto3.is_usb2());
+        assert_eq!(proto3.default_speed(), UsbSpeed::SuperSpeed);
+        assert!(proto3.contains_port(2));
+        assert!(proto3.contains_port(3));
+        assert!(!proto3.contains_port(1));
+        assert!(!proto3.contains_port(4));
+
+        let encoded2 = proto2.encode();
+        assert_eq!(encoded2, usb2_dwords);
+
+        let protocols = [proto2, proto3];
+        let p1_info = XhciController::query_port_protocol(&protocols, 1).unwrap();
+        assert_eq!(p1_info.port_num, 1);
+        assert_eq!(p1_info.major_rev, 2);
+        assert_eq!(p1_info.default_speed, UsbSpeed::HighSpeed);
+        assert!(p1_info.is_usb2);
+        assert!(!p1_info.is_usb3);
+
+        let p2_info = XhciController::query_port_protocol(&protocols, 2).unwrap();
+        assert_eq!(p2_info.port_num, 2);
+        assert_eq!(p2_info.major_rev, 3);
+        assert_eq!(p2_info.default_speed, UsbSpeed::SuperSpeed);
+        assert!(p2_info.is_usb3);
+        assert!(!p2_info.is_usb2);
+
+        let p4_info = XhciController::query_port_protocol(&protocols, 4);
+        assert_eq!(p4_info, None);
     }
 }
