@@ -344,6 +344,8 @@ pub const XHCI_EXT_CAP_USB4_BUFFER_ALLOCATION_INTERFACE: u8 = 50;
 pub const XHCI_EXT_CAP_USB4_OPTICAL_INTERFACE_MANAGEMENT: u8 = 51;
 /// Capacité étendue xHCI 1.2 / USB4 Inter-Domain DMA Transport Capability (§7.44)
 pub const XHCI_EXT_CAP_USB4_INTER_DOMAIN_DMA: u8 = 52;
+/// Capacité étendue xHCI 1.2 / USB4 Router Operations and Configuration Interface (§7.45)
+pub const XHCI_EXT_CAP_USB4_ROUTER_OPERATIONS: u8 = 53;
 
 /// Masques de registres USB Legacy Support (xHCI 1.2 Section 7.1)
 /// Registre USBLEGSUP (Offset 0x00)
@@ -5443,6 +5445,122 @@ impl XhciUsb4InterDomainDma {
     /// Simule un transfert DMA de descripteur terminé
     pub fn record_tx_completion(&mut self) {
         self.tx_completed_count = self.tx_completed_count.wrapping_add(1);
+    }
+}
+
+/// Capacité Étendue xHCI 1.2 / USB4 Router Operations and Configuration Interface (§7.45)
+///
+/// Supervise la topologie du routeur USB4 local, le contrôle d'énergie des liens haut débit,
+/// les notifications d'événements de déconnexion/reconnexion à chaud et la gestion du domaine CM (Connection Manager).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XhciUsb4RouterOperations {
+    /// Pointeur dword vers la prochaine capacité étendue (0 = fin de liste)
+    pub next_ptr_dwords: u8,
+    /// Interface de configuration du routeur activée
+    pub enabled: bool,
+    /// Mode interruption / notification asynchrone activé (Hot-Plug & Link Event IRQ)
+    pub irq_enabled: bool,
+    /// Indique si ce contrôleur agit en tant que Connection Manager (CM) maître
+    pub connection_manager_active: bool,
+    /// Identifiant unique du routeur USB4 (0..=63)
+    pub router_id: u8,
+    /// Nombre total de ports de tunneling exposés par ce routeur (ex: 8)
+    pub num_tunneling_adapters: u8,
+    /// État d'énergie du routeur (0: D0 normal, 1: D1 veille légère, 2: D2 veille profonde, 3: D3 éteint)
+    pub power_state: u8,
+    /// Registre d'état matériel du routeur
+    pub status: u32,
+    /// Compteur d'événements de lien traités (plug, unplug, renegotiation)
+    pub event_counter: u32,
+}
+
+impl XhciUsb4RouterOperations {
+    /// Initialise une nouvelle capacité USB4 Router Operations
+    pub const fn new(router_id: u8, num_tunneling_adapters: u8) -> Self {
+        Self {
+            next_ptr_dwords: 0,
+            enabled: false,
+            irq_enabled: false,
+            connection_manager_active: true,
+            router_id,
+            num_tunneling_adapters,
+            power_state: 0, // D0
+            status: 0,
+            event_counter: 0,
+        }
+    }
+
+    /// Parse les 4 dwords MMIO d'une capacité étendue USB4 Router Operations (§7.45)
+    pub const fn parse(dwords: &[u32; 4]) -> Option<Self> {
+        let cap_id = (dwords[0] & 0xFF) as u8;
+        if cap_id != XHCI_EXT_CAP_USB4_ROUTER_OPERATIONS {
+            return None;
+        }
+
+        let next_ptr = ((dwords[0] >> 8) & 0xFF) as u8;
+        let ctrl = dwords[1];
+        let enabled = (ctrl & 0x01) != 0;
+        let irq_enabled = (ctrl & 0x02) != 0;
+        let connection_manager_active = (ctrl & 0x04) != 0;
+        let router_id = ((ctrl >> 8) & 0x3F) as u8;
+        let num_tunneling_adapters = ((ctrl >> 16) & 0xFF) as u8;
+        let power_state = ((ctrl >> 24) & 0x03) as u8;
+
+        let status = dwords[2];
+        let event_counter = dwords[3];
+
+        Some(Self {
+            next_ptr_dwords: next_ptr,
+            enabled,
+            irq_enabled,
+            connection_manager_active,
+            router_id,
+            num_tunneling_adapters,
+            power_state,
+            status,
+            event_counter,
+        })
+    }
+
+    /// Encode la capacité étendue en 4 mots dwords MMIO 32-bit
+    pub const fn encode(&self) -> [u32; 4] {
+        let dw0 =
+            (XHCI_EXT_CAP_USB4_ROUTER_OPERATIONS as u32) | ((self.next_ptr_dwords as u32) << 8);
+        let mut ctrl = ((self.router_id as u32 & 0x3F) << 8)
+            | ((self.num_tunneling_adapters as u32 & 0xFF) << 16)
+            | ((self.power_state as u32 & 0x03) << 24);
+        if self.enabled {
+            ctrl |= 0x01;
+        }
+        if self.irq_enabled {
+            ctrl |= 0x02;
+        }
+        if self.connection_manager_active {
+            ctrl |= 0x04;
+        }
+        let dw2 = self.status;
+        let dw3 = self.event_counter;
+        [dw0, ctrl, dw2, dw3]
+    }
+
+    /// Active ou désactive le module d'opérations du routeur
+    pub fn enable_router(&mut self, enable: bool) {
+        self.enabled = enable;
+    }
+
+    /// Active ou désactive les interruptions matérielles du routeur
+    pub fn configure_irq(&mut self, enable: bool) {
+        self.irq_enabled = enable;
+    }
+
+    /// Définit le niveau d'énergie (D0..D3)
+    pub fn set_power_state(&mut self, pstate: u8) {
+        self.power_state = pstate & 0x03;
+    }
+
+    /// Incrémente le compteur d'événements du routeur
+    pub fn record_event(&mut self) {
+        self.event_counter = self.event_counter.wrapping_add(1);
     }
 }
 
@@ -15214,5 +15332,50 @@ mod tests {
         assert_eq!(parsed_dma.status, 0x1234_5678);
         assert_eq!(parsed_dma.ring_depth, 64);
         assert_eq!(parsed_dma.tx_completed_count, 2);
+
+        // Test USB4 Router Operations and Configuration Interface (§7.45)
+        let mut router_ops = XhciUsb4RouterOperations::new(5, 8);
+        assert_eq!(router_ops.router_id, 5);
+        assert_eq!(router_ops.num_tunneling_adapters, 8);
+        assert_eq!(router_ops.power_state, 0);
+        assert!(!router_ops.enabled);
+        assert!(!router_ops.irq_enabled);
+        assert!(router_ops.connection_manager_active);
+        assert_eq!(router_ops.event_counter, 0);
+
+        router_ops.enable_router(true);
+        router_ops.configure_irq(true);
+        router_ops.set_power_state(2); // D2
+        router_ops.record_event();
+        router_ops.record_event();
+        router_ops.record_event();
+        router_ops.next_ptr_dwords = 64;
+        router_ops.status = 0x8765_4321;
+
+        let encoded_router = router_ops.encode();
+        assert_eq!(
+            encoded_router[0] & 0xFF,
+            XHCI_EXT_CAP_USB4_ROUTER_OPERATIONS as u32
+        );
+        assert_eq!((encoded_router[0] >> 8) & 0xFF, 64);
+        assert_eq!(encoded_router[1] & 0x01, 1); // enabled
+        assert_eq!(encoded_router[1] & 0x02, 2); // irq_enabled
+        assert_eq!(encoded_router[1] & 0x04, 4); // CM active
+        assert_eq!((encoded_router[1] >> 8) & 0x3F, 5); // router_id
+        assert_eq!((encoded_router[1] >> 16) & 0xFF, 8); // num_tunneling_adapters
+        assert_eq!((encoded_router[1] >> 24) & 0x03, 2); // power_state D2
+        assert_eq!(encoded_router[2], 0x8765_4321);
+        assert_eq!(encoded_router[3], 3); // 3 events
+
+        let parsed_router = XhciUsb4RouterOperations::parse(&encoded_router).unwrap();
+        assert_eq!(parsed_router.next_ptr_dwords, 64);
+        assert!(parsed_router.enabled);
+        assert!(parsed_router.irq_enabled);
+        assert!(parsed_router.connection_manager_active);
+        assert_eq!(parsed_router.router_id, 5);
+        assert_eq!(parsed_router.num_tunneling_adapters, 8);
+        assert_eq!(parsed_router.power_state, 2);
+        assert_eq!(parsed_router.status, 0x8765_4321);
+        assert_eq!(parsed_router.event_counter, 3);
     }
 }

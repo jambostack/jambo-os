@@ -20,26 +20,26 @@ BdsDxe: starting Boot0001 "UEFI QEMU DVD-ROM QM00005 " from PciRoot(0x0)/Pci(0x1
   [06] 0x000000000080b000 - 0x000000000080c000 |        4 Kio | ACPI NVS
   [07] 0x000000000080c000 - 0x0000000000810000 |       16 Kio | Utilisable (RAM)
   [08] 0x0000000000810000 - 0x0000000000900000 |      960 Kio | ACPI NVS
-  [09] 0x0000000000900000 - 0x00000000557b3000 |  1391308 Kio | Utilisable (RAM)
-  [10] 0x00000000557b3000 - 0x00000000557e5000 |      200 Kio | Chargeur Récupérable
-  [11] 0x00000000557e5000 - 0x00000000798eb000 |   590872 Kio | Noyau & Modules
-  [12] 0x00000000798eb000 - 0x00000000798ec000 |        4 Kio | Chargeur Récupérable
-  [13] 0x00000000798ec000 - 0x00000000798ed000 |        4 Kio | Utilisable (RAM)
-  [14] 0x00000000798ed000 - 0x00000000798ee000 |        4 Kio | Chargeur Récupérable
-  [15] 0x00000000798ee000 - 0x00000000798ef000 |        4 Kio | Utilisable (RAM)
-  [16] 0x00000000798ef000 - 0x00000000798f8000 |       36 Kio | Chargeur Récupérable
-  [17] 0x00000000798f8000 - 0x0000000079a20000 |     1184 Kio | Noyau & Modules
-  [18] 0x0000000079a20000 - 0x0000000079fac000 |     5680 Kio | Chargeur Récupérable
-  [19] 0x0000000079fac000 - 0x0000000079fad000 |        4 Kio | Utilisable (RAM)
-  [20] 0x0000000079fad000 - 0x000000007a05d000 |      704 Kio | Chargeur Récupérable
+  [09] 0x0000000000900000 - 0x0000000055322000 |  1386632 Kio | Utilisable (RAM)
+  [10] 0x0000000055322000 - 0x0000000055354000 |      200 Kio | Chargeur Récupérable
+  [11] 0x0000000055354000 - 0x00000000798e4000 |   595520 Kio | Noyau & Modules
+  [12] 0x00000000798e4000 - 0x00000000798e5000 |        4 Kio | Chargeur Récupérable
+  [13] 0x00000000798e5000 - 0x00000000798e6000 |        4 Kio | Utilisable (RAM)
+  [14] 0x00000000798e6000 - 0x00000000798e7000 |        4 Kio | Chargeur Récupérable
+  [15] 0x00000000798e7000 - 0x00000000798e8000 |        4 Kio | Utilisable (RAM)
+  [16] 0x00000000798e8000 - 0x00000000798f1000 |       36 Kio | Chargeur Récupérable
+  [17] 0x00000000798f1000 - 0x0000000079a1b000 |     1192 Kio | Noyau & Modules
+  [18] 0x0000000079a1b000 - 0x0000000079fab000 |     5696 Kio | Chargeur Récupérable
+  [19] 0x0000000079fab000 - 0x0000000079fac000 |        4 Kio | Utilisable (RAM)
+  [20] 0x0000000079fac000 - 0x000000007a05d000 |      708 Kio | Chargeur Récupérable
   [21] 0x000000007a05d000 - 0x000000007bb7d000 |    27776 Kio | Utilisable (RAM)
   [22] 0x000000007bb7d000 - 0x000000007bba3000 |      152 Kio | Chargeur Récupérable
-  [23] 0x000000007bba3000 - 0x000000007e08d000 |    37800 Kio | Utilisable (RAM)
-  [24] 0x000000007e08d000 - 0x000000007e093000 |       24 Kio | Réservé Matériel
-  [25] 0x000000007e093000 - 0x000000007e0a3000 |       64 Kio | Utilisable (RAM)
-  [26] 0x000000007e0a3000 - 0x000000007e113000 |      448 Kio | Chargeur Récupérable
-  [27] 0x000000007e113000 - 0x000000007e11e000 |       44 Kio | Réservé Matériel
-  [28] 0x000000007e11e000 - 0x000000007e93f000 |     8324 Kio | Utilisable (RAM)
+  [23] 0x000000007bba3000 - 0x000000007e08e000 |    37804 Kio | Utilisable (RAM)
+  [24] 0x000000007e08e000 - 0x000000007e094000 |       24 Kio | Réservé Matériel
+  [25] 0x000000007e094000 - 0x000000007e0a3000 |       60 Kio | Utilisable (RAM)
+  [26] 0x000000007e0a3000 - 0x000000007e112000 |      444 Kio | Chargeur Récupérable
+  [27] 0x000000007e112000 - 0x000000007e11d000 |       44 Kio | Réservé Matériel
+  [28] 0x000000007e11d000 - 0x000000007e93f000 |     8328 Kio | Utilisable (RAM)
   [29] 0x000000007e93f000 - 0x000000007ea00000 |      772 Kio | Réservé Matériel
   [30] 0x000000007ea00000 - 0x000000007f4ed000 |    11188 Kio | Utilisable (RAM)
   [31] 0x000000007f4ed000 - 0x000000007f5ed000 |     1024 Kio | Réservé Matériel
@@ -55,8 +55,8 @@ BdsDxe: starting Boot0001 "UEFI QEMU DVD-ROM QM00005 " from PciRoot(0x0)/Pci(0x1
   [41] 0x0000000080000000 - 0x00000000803e8000 |     4000 Kio | Framebuffer GOP
   [42] 0x00000000e0000000 - 0x00000000f0000000 |   262144 Kio | Réservé Matériel
   [43] 0x000000fd00000000 - 0x0000010000000000 | 12582912 Kio | Réservé Matériel
-[BOOT/MMAP] Mémoire totale : 14595 Mio | RAM utilisable : 1456 Mio
-[BOOT/PMM] Buddy Allocator initialisé (372762 pages physiques / 1456 Mio gérées)
+[BOOT/MMAP] Mémoire totale : 14595 Mio | RAM utilisable : 1451 Mio
+[BOOT/PMM] Buddy Allocator initialisé (371594 pages physiques / 1451 Mio gérées)
 [HEAP/SLUB] Tas noyau actif, allocation dynamique validée (4 éléments)
 [VMM/VMO] VMO Copy-on-Write projeté avec succès dans le nouvel espace d'adressage
 [MMU/PAGING] Défaut de page (Demand Paging) intercepté et résolu avec succès
@@ -66,55 +66,55 @@ BdsDxe: starting Boot0001 "UEFI QEMU DVD-ROM QM00005 " from PciRoot(0x0)/Pci(0x1
 [CPU/PIC] Contrôleur hérité PIC 8259 masqué
 [CPU/APIC] Contrôleur Local APIC (xAPIC MMIO) initialisé
 [SMP] Détection de 4 cœurs logiques
-[SMP] Cœur AP #1 démarré (LAPIC ID: 1)
-[SMP] Multicœur SMP opérationnel (4 cœurs actifs sur 4)
-[SMP] Cœur AP #3 démarré (LAPIC ID: 3)
 [SMP] Cœur AP #2 démarré (LAPIC ID: 2)
-[SMP/AP] Cœur AP #1 a rejoint l'ordonnanceur EEVDF
+[SMP] Multicœur SMP opérationnel (4 cœurs actifs sur 4)
+[SMP] Cœur AP #1 démarré (LAPIC ID: 1)
+[SMP] Cœur AP #3 démarré (LAPIC ID: 3)
+[SMP/AP] Cœur AP #2 a rejoint l'ordonnanceur EEVDF
 [SMP/AP] Cœur AP #3 a rejoint l'ordonnanceur EEVDF
 [SCHED/EEVDF] Ordonnanceur EEVDF opérationnel avec 2 threads de test en file
-[SMP/AP] Cœur AP #2 a rejoint l'ordonnanceur EEVDF
 [BOOT/MODULES] Détection de 1 module(s) d'amorçage Limine :
-  [00] Module '/boot/initrd.tar' | 605050880 octets (cmdline: '')
-[INITRD/TAR] Superviseur '/bin/init' extrait (0x2e7190 octets)
-[INITRD/TAR] Shell interactif '/bin/jsh' extrait (0xc3bf68 octets)
-[INITRD/TAR] Démon de stockage '/bin/blockd' extrait (0x29c8b0 octets)
-[INITRD/TAR] Serveur de fichiers '/bin/fs' extrait (0x310790 octets)
-[INITRD/TAR] Démon réseau '/bin/netd' extrait (0x2c81d0 octets)
-[INITRD/TAR] Démon de résilience matérielle '/bin/fdr' extrait (0x2b6ce0 octets)
-[INITRD/TAR] Démon WebAssembly & WASI '/bin/wasmd' extrait (0x2927d8 octets)
-[INITRD/TAR] Démon Cryptographie Post-Quantique '/bin/pqc' extrait (0x2c3cc0 octets)
-[INITRD/TAR] Démon Surveillance Intégrité Noyau & Pilotes '/bin/kdir' extrait (0x2b5398 octets)
-[INITRD/TAR] Démon Confinement Mémoire & Forensics Volatile '/bin/forensics' extrait (0x298548 octets)
-[INITRD/TAR] Démon Gestion Énergie & Fréquence CPU '/bin/powerd' extrait (0x277468 octets)
-[INITRD/TAR] Démon Métrologie Système & Télémétrie '/bin/metricsd' extrait (0x28ecb0 octets)
-[INITRD/TAR] Démon Sandboxing eBPF & Filtrage Réseau XDP '/bin/bpfd' extrait (0x29ab80 octets)
-[INITRD/TAR] Démon Passerelle VPN WireGuard Post-Quantique '/bin/vpn' extrait (0x2bf5d8 octets)
-[INITRD/TAR] Démon Identité & Jetons de Session '/bin/authd' extrait (0x2a0290 octets)
-[INITRD/TAR] Démon Résolution de Noms & Découverte DNS '/bin/dnsd' extrait (0x2abbd0 octets)
-[INITRD/TAR] Démon Synchronisation Horlogère PTP/NTP '/bin/timed' extrait (0x27e158 octets)
-[INITRD/TAR] Demon Audit Cryptographique Inalterable '/bin/auditd' extrait (0x27cb28 octets)
-[INITRD/TAR] Demon Pare-Feu d'Etat & Conntrack '/bin/walld' extrait (0x29a900 octets)
-[INITRD/TAR] Demon Coffre-Fort de Secrets Distribue '/bin/vaultd' extrait (0x292fc8 octets)
-[INITRD/TAR] Demon Surveillance Vivacite & Chien de Garde '/bin/watchdogd' extrait (0x2a46a0 octets)
-[INITRD/TAR] Demon Capture Crash Dumps ELF64 '/bin/cored' extrait (0x2bb0e8 octets)
-[INITRD/TAR] Demon Gestionnaire Paquets CAS '/bin/pkgd' extrait (0x28c1a0 octets)
-[INITRD/TAR] Demon PKI Ephemere & mTLS '/bin/certd' extrait (0x294448 octets)
-[INITRD/TAR] Demon Moteur Politiques Securite '/bin/policyd' extrait (0x29b650 octets)
-[INITRD/TAR] Demon Démarrage Mesuré TPM 2.0 '/bin/secboot' extrait (0x28a338 octets)
-[INITRD/TAR] Demon Journalisation Structuree '/bin/logd' extrait (0x287488 octets)
-[INITRD/TAR] Demon Gestion Cles & HKDF '/bin/kms' extrait (0x2b67e8 octets)
-[INITRD/TAR] Demon Attestation Distante & ZKP '/bin/attest' extrait (0x2ca448 octets)
-[INITRD/TAR] Demon Pare-Feu Applicatif L7 '/bin/waf' extrait (0x29b560 octets)
-[INITRD/TAR] Demon Moteur SIEM '/bin/siem' extrait (0x293580 octets)
-[INITRD/TAR] Demon Surveillance & Reponse EDR '/bin/edr' extrait (0x2b8340 octets)
-[INITRD/TAR] Demon Surveillance & Reponse NDR '/bin/ndr' extrait (0x2c4f08 octets)
-[INITRD/TAR] Demon Surveillance & Reponse XDR '/bin/xdr' extrait (0x29bf78 octets)
-[INITRD/TAR] Demon Surveillance & Reponse SOAR '/bin/soar' extrait (0x2acc08 octets)
-[INITRD/TAR] Demon Analyse Comportementale UEBA '/bin/ueba' extrait (0x299500 octets)
-[INITRD/TAR] Demon Detection & Reponse Menaces Identites ITDR '/bin/itdr' extrait (0x29d058 octets)
-[INITRD/TAR] Demon Prevention Fuites Donnees DLP '/bin/dlp' extrait (0x29f9f0 octets)
-[INITRD/TAR] Utilitaire d'installation '/bin/installer' extrait (0x312a28 octets)
+[SMP/AP] Cœur AP #1 a rejoint l'ordonnanceur EEVDF
+  [00] Module '/boot/initrd.tar' | 609812480 octets (cmdline: '')
+[INITRD/TAR] Superviseur '/bin/init' extrait (0x2ed690 octets)
+[INITRD/TAR] Shell interactif '/bin/jsh' extrait (0xc481a0 octets)
+[INITRD/TAR] Démon de stockage '/bin/blockd' extrait (0x2a21e8 octets)
+[INITRD/TAR] Serveur de fichiers '/bin/fs' extrait (0x3160c8 octets)
+[INITRD/TAR] Démon réseau '/bin/netd' extrait (0x2cdb08 octets)
+[INITRD/TAR] Démon de résilience matérielle '/bin/fdr' extrait (0x2bc618 octets)
+[INITRD/TAR] Démon WebAssembly & WASI '/bin/wasmd' extrait (0x298110 octets)
+[INITRD/TAR] Démon Cryptographie Post-Quantique '/bin/pqc' extrait (0x2c95f0 octets)
+[INITRD/TAR] Démon Surveillance Intégrité Noyau & Pilotes '/bin/kdir' extrait (0x2bacc8 octets)
+[INITRD/TAR] Démon Confinement Mémoire & Forensics Volatile '/bin/forensics' extrait (0x29de78 octets)
+[INITRD/TAR] Démon Gestion Énergie & Fréquence CPU '/bin/powerd' extrait (0x27cda0 octets)
+[INITRD/TAR] Démon Métrologie Système & Télémétrie '/bin/metricsd' extrait (0x2945e0 octets)
+[INITRD/TAR] Démon Sandboxing eBPF & Filtrage Réseau XDP '/bin/bpfd' extrait (0x2a04b0 octets)
+[INITRD/TAR] Démon Passerelle VPN WireGuard Post-Quantique '/bin/vpn' extrait (0x2c4f08 octets)
+[INITRD/TAR] Démon Identité & Jetons de Session '/bin/authd' extrait (0x2a5bc8 octets)
+[INITRD/TAR] Démon Résolution de Noms & Découverte DNS '/bin/dnsd' extrait (0x2b1508 octets)
+[INITRD/TAR] Démon Synchronisation Horlogère PTP/NTP '/bin/timed' extrait (0x283a88 octets)
+[INITRD/TAR] Demon Audit Cryptographique Inalterable '/bin/auditd' extrait (0x282460 octets)
+[INITRD/TAR] Demon Pare-Feu d'Etat & Conntrack '/bin/walld' extrait (0x2a0238 octets)
+[INITRD/TAR] Demon Coffre-Fort de Secrets Distribue '/bin/vaultd' extrait (0x2988f8 octets)
+[INITRD/TAR] Demon Surveillance Vivacite & Chien de Garde '/bin/watchdogd' extrait (0x2a9fd0 octets)
+[INITRD/TAR] Demon Capture Crash Dumps ELF64 '/bin/cored' extrait (0x2c0a18 octets)
+[INITRD/TAR] Demon Gestionnaire Paquets CAS '/bin/pkgd' extrait (0x291ad8 octets)
+[INITRD/TAR] Demon PKI Ephemere & mTLS '/bin/certd' extrait (0x299d78 octets)
+[INITRD/TAR] Demon Moteur Politiques Securite '/bin/policyd' extrait (0x2a0f88 octets)
+[INITRD/TAR] Demon Démarrage Mesuré TPM 2.0 '/bin/secboot' extrait (0x28fc70 octets)
+[INITRD/TAR] Demon Journalisation Structuree '/bin/logd' extrait (0x28cdc0 octets)
+[INITRD/TAR] Demon Gestion Cles & HKDF '/bin/kms' extrait (0x2bc120 octets)
+[INITRD/TAR] Demon Attestation Distante & ZKP '/bin/attest' extrait (0x2cfd80 octets)
+[INITRD/TAR] Demon Pare-Feu Applicatif L7 '/bin/waf' extrait (0x2a0e98 octets)
+[INITRD/TAR] Demon Moteur SIEM '/bin/siem' extrait (0x298eb0 octets)
+[INITRD/TAR] Demon Surveillance & Reponse EDR '/bin/edr' extrait (0x2bdc78 octets)
+[INITRD/TAR] Demon Surveillance & Reponse NDR '/bin/ndr' extrait (0x2ca840 octets)
+[INITRD/TAR] Demon Surveillance & Reponse XDR '/bin/xdr' extrait (0x2a18a8 octets)
+[INITRD/TAR] Demon Surveillance & Reponse SOAR '/bin/soar' extrait (0x2b2540 octets)
+[INITRD/TAR] Demon Analyse Comportementale UEBA '/bin/ueba' extrait (0x29ee38 octets)
+[INITRD/TAR] Demon Detection & Reponse Menaces Identites ITDR '/bin/itdr' extrait (0x2a2990 octets)
+[INITRD/TAR] Demon Prevention Fuites Donnees DLP '/bin/dlp' extrait (0x2a5320 octets)
+[INITRD/TAR] Utilitaire d'installation '/bin/installer' extrait (0x318350 octets)
 [PROCESS] Processus utilisateur init (PID 1) initialisé avec pile System V ABI (RSP: 0x00007ffffffeff10)
 [PROCESS] Shell utilisateur interactif jsh (PID 2) initialisé avec pile System V ABI (RSP: 0x00007ffffffeff20) et enfilé
 [IPC/RENDEZVOUS] Canal IPC blockd <-> fs configuré (blockd handle: 0x100000001, fs handle: 0x100000001)
@@ -160,7 +160,7 @@ BdsDxe: starting Boot0001 "UEFI QEMU DVD-ROM QM00005 " from PciRoot(0x0)/Pci(0x1
 [SYSCALL] Cycle de vie validé : process_create (0x100000004), thread_create (0x100000005), vmo_map & thread_start
 [IPC/FUTEX] Canaux bidirectionnels (0x100000006 <-> 0x100000007), Futex et Anneaux partagés validés
 [ASYNC/IRQ] Port asynchrone (0x100000009), IRQ #48 liée (0x10000000a) et acquittement EOI validés
-[TIME/CLOCK] Horloges validées : REALTIME = 1794415200s, MONOTONIC = 4s 43979618ns
+[TIME/CLOCK] Horloges validées : REALTIME = 1794416493s, MONOTONIC = 5s 158095292ns
 [RING3/TEST] Initialisation du test de transition matérielle vers Ring 3 (Phase 39)...
 [RING3/TEST] Thread Ring 3 créé avec succès (Entry: 0x00400000, RSP: 0x00007ffffffefff0)
 [RING3/TRANSITION] Saut vers Ring 3 via enter_user_mode (IRETQ avec CS=0x23, SS=0x1B)...
@@ -170,7 +170,7 @@ BdsDxe: starting Boot0001 "UEFI QEMU DVD-ROM QM00005 " from PciRoot(0x0)/Pci(0x1
 [PREEMPT/TEST] Démarrage du test de préemption matérielle par Timer APIC (Phase 40)...
 [PREEMPT/TIMER] Timer APIC armé (vecteur 32). Activation des interruptions CPU (STI)...
 [PREEMPT/SWITCH] Bascule vers le thread de calcul non coopératif (boucle sans yield)...
-[PREEMPT/SUCCESS] Préemption matérielle réussie ! Le superviseur a repris la main après 17904 cycles de calcul du travailleur.
+[PREEMPT/SUCCESS] Préemption matérielle réussie ! Le superviseur a repris la main après 19000 cycles de calcul du travailleur.
 [PREEMPT/DONE] Ordonnancement préemptif EEVDF validé avec succès.
 [CONSOLE/TEST] Initialisation du test d'E/S console interactif (Phase 41)...
 [IOAPIC/IRQ4] Routage de l'IRQ 4 (COM1 UART) vers le vecteur IDT 36 configuré
@@ -179,7 +179,7 @@ BdsDxe: starting Boot0001 "UEFI QEMU DVD-ROM QM00005 " from PciRoot(0x0)/Pci(0x1
 [SECURITY/TEST] Validation du durcissement des frontières noyau & isolation CSpace...
 [SECURITY/PASS] Tests adversariaux et isolation CSpace validés avec succès !
 [PMM/TEST] Validation du durcissement PMM Buddy Allocator & Cycle de vie VMO...
-[PMM/INFO] Blocs libres: Ordre 0 = 1, Ordre 1 = 1, Frag Ordre 4 = 0%
+[PMM/INFO] Blocs libres: Ordre 0 = 1, Ordre 1 = 0, Frag Ordre 4 = 0%
 [FORMAL] Running Kani/Verus mathematical verification harnesses...
   [PROOF 1/51] CSpace Anti-ABA & Use-After-Close Safety: PASSED (65536 states checked)
   [PROOF 2/51] Paging W^X (Write XOR Execute) Memory Safety: PASSED (1048576 states checked)
@@ -281,9 +281,10 @@ BdsDxe: starting Boot0001 "UEFI QEMU DVD-ROM QM00005 " from PciRoot(0x0)/Pci(0x1
   [PROOF 98/99] xHCI USB4 PCIe Adapter Config §7.40, dircolors & 109 Coreutils Invariant: PASSED (1048576 states checked)
   [PROOF 99/100] xHCI USB4 DP Adapter Config §7.41, stdbuf & 110 Coreutils Invariant: PASSED (1048576 states checked)
   [PROOF 100/101] xHCI USB4 Buffer Alloc §7.42, uptime & 111 Coreutils Invariant: PASSED (1048576 states checked)
-  [PROOF 101/102] xHCI USB4 Optical §7.43, sha224sum & 112 Coreutils Invariant: PASSED (1048576 states checked)
-  [PROOF 102/102] xHCI USB4 Inter-Domain DMA §7.44, sha384sum & 113 Coreutils Invariant: PASSED (1048576 states checked)
-[FORMAL] 102/102 Mathematical proofs verified with 0 defects.
+  [PROOF 101/103] xHCI USB4 Optical §7.43, sha224sum & 112 Coreutils Invariant: PASSED (1048576 states checked)
+  [PROOF 102/103] xHCI USB4 Inter-Domain DMA §7.44, sha384sum & 113 Coreutils Invariant: PASSED (1048576 states checked)
+  [PROOF 103/103] xHCI USB4 Router Operations §7.45, sha512sum & 114 Coreutils Invariant: PASSED (1048576 states checked)
+[FORMAL] 103/103 Mathematical proofs verified with 0 defects.
 [PMM/PASS] Tests adversariaux PMM et cycle de vie VMO validés avec succès !
 [EEVDF/TEST] Validation du durcissement EEVDF & Résilience SMP Multicœur...
 [EEVDF/PASS] Tests de durcissement EEVDF et résilience SMP validés avec succès !
