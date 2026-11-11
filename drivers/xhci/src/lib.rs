@@ -308,6 +308,7 @@ pub const XHCI_EXT_CAP_EXTENDED_CAPABILITY_TABLE: u8 = 20;
 pub const XHCI_EXT_CAP_DEVICE_VIRTUALIZATION: u8 = 21;
 pub const XHCI_EXT_CAP_HUB_VIRTUALIZATION: u8 = 22;
 pub const XHCI_EXT_CAP_CONTROLLER_CAPABILITY_CONTEXT: u8 = 23;
+pub const XHCI_EXT_CAP_BANDWIDTH_NEGOTIATION: u8 = 24;
 
 /// Masques de registres USB Legacy Support (xHCI 1.2 Section 7.1)
 /// Registre USBLEGSUP (Offset 0x00)
@@ -1925,6 +1926,143 @@ impl XhciControllerCapabilityContext {
     /// Définit les drapeaux de gestion d'énergie Root Hub
     pub fn set_power_flags(&mut self, flags: u16) {
         self.root_hub_power_flags = flags;
+    }
+}
+
+/// Capacité Étendue xHCI 1.2 §7.16 : USB Extended TDM / Bandwidth Negotiation Context Structure
+///
+/// Modélise les mécanismes d'allocation de bande passante déterministe et de multiplexage
+/// temporel (TDM) pour flux périodiques USB (isochrones / interrupt), garantissant la
+/// réservation prédictible de créneaux et l'arbitrage sans famine de bande passante.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XhciBandwidthNegotiation {
+    /// Déplacement du pointeur vers la capacité étendue suivante (en dwords)
+    pub next_ptr_dwords: u8,
+    /// Activation globale de la négociation matérielle de bande passante
+    pub enabled: bool,
+    /// Nombre de canaux TDM périodiques supportés par le contrôleur (1..=64)
+    pub tdm_channel_count: u8,
+    /// Pourcentage maximal de bande passante allouable aux flux isochrones (1..=100)
+    pub max_isochronous_bw_percent: u8,
+    /// Registre de contrôle de négociation de bande passante (BW_NEG_CTRL)
+    pub bw_control: u32,
+    /// Registre d'état et drapeaux d'arbitrage de bande passante (BW_NEG_STS)
+    pub bw_status: u32,
+    /// Bande passante actuellement allouée en kilobits par micro-trame (125 µs)
+    pub allocated_bw_kb_per_uframe: u16,
+}
+
+impl Default for XhciBandwidthNegotiation {
+    fn default() -> Self {
+        Self::new(8, 80)
+    }
+}
+
+impl XhciBandwidthNegotiation {
+    /// Crée une nouvelle structure de négociation de bande passante xHCI 1.2 §7.16
+    pub const fn new(tdm_channel_count: u8, max_isochronous_bw_percent: u8) -> Self {
+        let channels = if tdm_channel_count == 0 {
+            1
+        } else if tdm_channel_count > 64 {
+            64
+        } else {
+            tdm_channel_count
+        };
+        let max_pct = if max_isochronous_bw_percent == 0 {
+            1
+        } else if max_isochronous_bw_percent > 100 {
+            100
+        } else {
+            max_isochronous_bw_percent
+        };
+        Self {
+            next_ptr_dwords: 0,
+            enabled: false,
+            tdm_channel_count: channels,
+            max_isochronous_bw_percent: max_pct,
+            bw_control: 0,
+            bw_status: 0,
+            allocated_bw_kb_per_uframe: 0,
+        }
+    }
+
+    /// Décode le contexte de négociation de bande passante à partir de 4 dwords MMIO
+    pub fn parse(dwords: &[u32]) -> Option<Self> {
+        if dwords.len() < 4 {
+            return None;
+        }
+        let cap_id = (dwords[0] & 0xFF) as u8;
+        if cap_id != XHCI_EXT_CAP_BANDWIDTH_NEGOTIATION {
+            return None;
+        }
+        let next_ptr = ((dwords[0] >> 8) & 0xFF) as u8;
+        let tdm_channels = (((dwords[0] >> 16) & 0xFF) as u8).clamp(1, 64);
+        let max_pct = (((dwords[0] >> 24) & 0xFF) as u8).clamp(1, 100);
+
+        let ctrl = dwords[1];
+        let sts = dwords[2];
+        let alloc_bw = (dwords[3] & 0xFFFF) as u16;
+        let enabled = (ctrl & 0x01) != 0;
+
+        Some(Self {
+            next_ptr_dwords: next_ptr,
+            enabled,
+            tdm_channel_count: tdm_channels,
+            max_isochronous_bw_percent: max_pct,
+            bw_control: ctrl,
+            bw_status: sts,
+            allocated_bw_kb_per_uframe: alloc_bw,
+        })
+    }
+
+    /// Encode le contexte de négociation de bande passante en 4 mots dwords MMIO 32-bit
+    pub const fn encode(&self) -> [u32; 4] {
+        let dw0 = (XHCI_EXT_CAP_BANDWIDTH_NEGOTIATION as u32)
+            | ((self.next_ptr_dwords as u32) << 8)
+            | ((self.tdm_channel_count as u32) << 16)
+            | ((self.max_isochronous_bw_percent as u32) << 24);
+        let dw1 = (self.bw_control & !0x01) | (if self.enabled { 1 } else { 0 });
+        let dw2 = self.bw_status;
+        let dw3 = self.allocated_bw_kb_per_uframe as u32;
+        [dw0, dw1, dw2, dw3]
+    }
+
+    /// Active ou désactive le moteur de négociation TDM / Bandwidth
+    pub fn set_enabled(&mut self, enable: bool) {
+        self.enabled = enable;
+        if enable {
+            self.bw_control |= 0x01;
+        } else {
+            self.bw_control &= !0x01;
+        }
+    }
+
+    /// Vérifie si un canal TDM périodique (0-based) est valide
+    pub const fn is_tdm_channel_valid(&self, channel_idx: u8) -> bool {
+        self.enabled && channel_idx < self.tdm_channel_count
+    }
+
+    /// Tente d'allouer une tranche de bande passante en kb/µframe
+    pub fn allocate_bandwidth(&mut self, kb_per_uframe: u16, max_limit: u16) -> bool {
+        if !self.enabled {
+            return false;
+        }
+        let effective_limit =
+            ((max_limit as u32) * (self.max_isochronous_bw_percent as u32) / 100) as u16;
+        if let Some(new_total) = self.allocated_bw_kb_per_uframe.checked_add(kb_per_uframe) {
+            if new_total <= effective_limit {
+                self.allocated_bw_kb_per_uframe = new_total;
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Libère une tranche de bande passante précédemment allouée
+    pub fn release_bandwidth(&mut self, kb_per_uframe: u16) {
+        self.allocated_bw_kb_per_uframe = self
+            .allocated_bw_kb_per_uframe
+            .saturating_sub(kb_per_uframe);
     }
 }
 
@@ -10478,5 +10616,50 @@ mod tests {
         assert!(parsed_cc.enabled);
         assert_eq!(parsed_cc.cap_status, 0x9ABC);
         assert_eq!(parsed_cc.root_hub_power_flags, 0x00A5);
+
+        // 25. xHCI 1.2 §7.16 USB Extended TDM / Bandwidth Negotiation Context Structure
+        let mut bw_neg = XhciBandwidthNegotiation::new(16, 75);
+        assert_eq!(bw_neg.tdm_channel_count, 16);
+        assert_eq!(bw_neg.max_isochronous_bw_percent, 75);
+        assert!(!bw_neg.enabled);
+        assert!(!bw_neg.is_tdm_channel_valid(0)); // désactivé
+
+        bw_neg.set_enabled(true);
+        assert!(bw_neg.enabled);
+        assert!(bw_neg.is_tdm_channel_valid(0));
+        assert!(bw_neg.is_tdm_channel_valid(15));
+        assert!(!bw_neg.is_tdm_channel_valid(16)); // hors limite
+
+        // Allocation de bande passante (max 1000 kb/µframe, 75% = 750 kb/µframe)
+        assert!(bw_neg.allocate_bandwidth(500, 1000));
+        assert_eq!(bw_neg.allocated_bw_kb_per_uframe, 500);
+        // Tenter d'allouer 300 (total 800 > 750) -> doit échouer
+        assert!(!bw_neg.allocate_bandwidth(300, 1000));
+        assert_eq!(bw_neg.allocated_bw_kb_per_uframe, 500);
+        // Libérer 200
+        bw_neg.release_bandwidth(200);
+        assert_eq!(bw_neg.allocated_bw_kb_per_uframe, 300);
+
+        bw_neg.next_ptr_dwords = 28;
+        bw_neg.bw_status = 0xCAFE;
+        let encoded_bw = bw_neg.encode();
+        assert_eq!(
+            encoded_bw[0] & 0xFF,
+            XHCI_EXT_CAP_BANDWIDTH_NEGOTIATION as u32
+        );
+        assert_eq!((encoded_bw[0] >> 8) & 0xFF, 28);
+        assert_eq!((encoded_bw[0] >> 16) & 0xFF, 16);
+        assert_eq!((encoded_bw[0] >> 24) & 0xFF, 75);
+        assert_eq!(encoded_bw[1] & 0x01, 1);
+        assert_eq!(encoded_bw[2], 0xCAFE);
+        assert_eq!(encoded_bw[3], 300);
+
+        let parsed_bw = XhciBandwidthNegotiation::parse(&encoded_bw).unwrap();
+        assert_eq!(parsed_bw.next_ptr_dwords, 28);
+        assert_eq!(parsed_bw.tdm_channel_count, 16);
+        assert_eq!(parsed_bw.max_isochronous_bw_percent, 75);
+        assert!(parsed_bw.enabled);
+        assert_eq!(parsed_bw.bw_status, 0xCAFE);
+        assert_eq!(parsed_bw.allocated_bw_kb_per_uframe, 300);
     }
 }

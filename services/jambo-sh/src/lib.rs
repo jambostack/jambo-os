@@ -623,6 +623,7 @@ impl JamboShell {
             "arch" | "/bin/arch" | "bin/arch" => self.cmd_arch(args, out),
             "nproc" | "/bin/nproc" | "bin/nproc" => self.cmd_nproc(args, out),
             "users" | "/bin/users" | "bin/users" => self.cmd_users(args, out),
+            "who" | "/bin/who" | "bin/who" => self.cmd_who(args, out),
             "cow" | "/bin/cow" | "bin/cow" => self.cmd_cow(args, out),
             "version" => self.cmd_version(out),
             "uptime" => self.cmd_uptime(out),
@@ -2808,6 +2809,43 @@ Utilitaire d'installation JamboOS (Serie 0.*.*)\n\
             (status, len)
         } else {
             let msg = b"users: pipe creation failed\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
+    }
+
+    fn cmd_who(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if let (Ok((r_out, w_out)), Ok((r_err, w_err))) =
+            (libjambo::vfs::pipe(), libjambo::vfs::pipe())
+        {
+            let code = libjambo::coreutils::run_who(args, w_out, w_err);
+            let _ = libjambo::coreutils::sys_close(w_out);
+            let _ = libjambo::coreutils::sys_close(w_err);
+
+            let mut len = 0;
+            if code == 0 {
+                let n_out = libjambo::coreutils::sys_read(r_out, out);
+                if n_out > 0 {
+                    len = n_out as usize;
+                }
+            } else {
+                let n_err = libjambo::coreutils::sys_read(r_err, out);
+                if n_err > 0 {
+                    len = n_err as usize;
+                }
+            }
+            let _ = libjambo::coreutils::sys_close(r_out);
+            let _ = libjambo::coreutils::sys_close(r_err);
+
+            let status = if code == 0 {
+                ShellStatus::Success
+            } else {
+                ShellStatus::ExecutionFailed
+            };
+            (status, len)
+        } else {
+            let msg = b"who: pipe creation failed\n";
             let len = msg.len().min(out.len());
             out[..len].copy_from_slice(&msg[..len]);
             (ShellStatus::ExecutionFailed, len)
@@ -20522,5 +20560,25 @@ mod tests {
 
         let (st58, _len58) = shell.execute_line("users extra_operand", &mut out);
         assert_eq!(st58, ShellStatus::ExecutionFailed);
+
+        // 37. who shell command
+        let (st59, len59) = shell.execute_line("who", &mut out);
+        assert_eq!(st59, ShellStatus::Success);
+        let s59 = core::str::from_utf8(&out[..len59]).unwrap();
+        assert!(s59.contains("root"));
+        assert!(s59.contains("console"));
+
+        let (st60, len60) = shell.execute_line("who -q", &mut out);
+        assert_eq!(st60, ShellStatus::Success);
+        let s60 = core::str::from_utf8(&out[..len60]).unwrap();
+        assert!(s60.contains("root\n# users=1\n"));
+
+        let (st61, len61) = shell.execute_line("who --version", &mut out);
+        assert_eq!(st61, ShellStatus::Success);
+        let s61 = core::str::from_utf8(&out[..len61]).unwrap();
+        assert!(s61.contains("who"));
+
+        let (st62, _len62) = shell.execute_line("who --invalid-flag", &mut out);
+        assert_eq!(st62, ShellStatus::ExecutionFailed);
     }
 }
