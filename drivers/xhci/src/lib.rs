@@ -586,6 +586,68 @@ pub const PORTPMSC_HIRD_MASK: u32 = 0x0F << PORTPMSC_HIRD_SHIFT;
 /// Remote Wakeup Enable pour USB 2.0 L1 (bit 8)
 pub const PORTPMSC_RWE: u32 = 1 << 8;
 
+/// Représentation typée du registre PORTPMSC (USB 3.0 Link Power Management / U1 / U2 / TPP)
+/// conformément aux sections 5.4.9 / 5.4.12 de la spécification xHCI 1.2.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct PortPmsc {
+    /// Délai d'inactivité avant transition U0 -> U1 (bits 7:0, en microsecondes ; 0 = désactivé, 0xFF = infini)
+    pub u1_timeout: u8,
+    /// Délai d'inactivité avant transition U1 -> U2 (bits 15:8, en pas de 256 µs ; 0 = désactivé, 0xFF = infini)
+    pub u2_timeout: u8,
+    /// Force Link PM Accept (FLA, bit 16) : force l'acceptation des requêtes de veille U1/U2 du périphérique
+    pub force_link_pm_accept: bool,
+    /// Transfer Packet Pending Timeout (TPP, bits 23:17, 7 bits)
+    pub tpp_timeout: u8,
+}
+
+impl PortPmsc {
+    /// Décode une valeur brute 32-bit lue depuis le registre PORTPMSC USB 3.0
+    pub const fn parse(raw: u32) -> Self {
+        let u1_timeout = ((raw & PORTPMSC_U1_TIMEOUT_MASK) >> PORTPMSC_U1_TIMEOUT_SHIFT) as u8;
+        let u2_timeout = ((raw & PORTPMSC_U2_TIMEOUT_MASK) >> PORTPMSC_U2_TIMEOUT_SHIFT) as u8;
+        let force_link_pm_accept = (raw & PORTPMSC_FLA) != 0;
+        let tpp_timeout =
+            ((raw & PORTPMSC_USB3_TPP_TIMEOUT_MASK) >> PORTPMSC_USB3_TPP_TIMEOUT_SHIFT) as u8;
+
+        Self {
+            u1_timeout,
+            u2_timeout,
+            force_link_pm_accept,
+            tpp_timeout,
+        }
+    }
+
+    /// Encode les champs en valeur brute 32-bit pour écriture dans le registre PORTPMSC USB 3.0
+    pub const fn encode(&self) -> u32 {
+        let mut val = (self.u1_timeout as u32) << PORTPMSC_U1_TIMEOUT_SHIFT;
+        val |= (self.u2_timeout as u32) << PORTPMSC_U2_TIMEOUT_SHIFT;
+        if self.force_link_pm_accept {
+            val |= PORTPMSC_FLA;
+        }
+        val |= ((self.tpp_timeout & 0x7F) as u32) << PORTPMSC_USB3_TPP_TIMEOUT_SHIFT;
+        val
+    }
+
+    /// Vérifie si les timers configurés respectent la conformité USB-IF / xHCI 1.2
+    ///
+    /// - U1: 0..=127 µs ou 0xFF (infini / désactivé)
+    /// - U2: 0..=254 (× 256 µs) ou 0xFF (infini / désactivé)
+    pub const fn is_valid_usb_if(&self) -> bool {
+        (self.u1_timeout <= 127 || self.u1_timeout == 0xFF)
+            && (self.u2_timeout <= 254 || self.u2_timeout == 0xFF)
+    }
+
+    /// Calcule le délai de transition U2 en microsecondes (u2_timeout × 256 µs).
+    /// Retourne `None` si u2_timeout est 0xFF (infini) ou 0 (désactivé).
+    pub const fn u2_timeout_us(&self) -> Option<u32> {
+        if self.u2_timeout == 0 || self.u2_timeout == 0xFF {
+            None
+        } else {
+            Some((self.u2_timeout as u32) * 256)
+        }
+    }
+}
+
 // ============================================================================
 // Registre PORTLI (Port Link Info) - xHCI 1.2 section 5.4.10
 // ============================================================================
@@ -5099,6 +5161,87 @@ impl XhciController {
         Ok(())
     }
 
+    /// Calcule l'adresse MMIO du registre PORTPMSC (Port Power Management Status & Control)
+    /// pour le port donné (1-based).
+    ///
+    /// Selon la spec xHCI 1.2 section 5.4.9 / 5.4.12, les registres de port commencent à `op_base + 0x400`,
+    /// chaque groupe de port occupe 0x10 octets :
+    /// - PORTSC : offset +0x00
+    /// - PORTPMSC : offset +0x04
+    /// - PORTLI : offset +0x08
+    /// - PORTHLPMC : offset +0x0C
+    ///
+    /// # Panics
+    ///
+    /// Panique si `port_id == 0` (les ports sont numérotés à partir de 1).
+    #[inline]
+    pub fn portpmsc_addr(&self, port_id: u8) -> u64 {
+        debug_assert!(port_id >= 1, "port_id est 1-based (>= 1)");
+        let op_base = self.bar0_base + self.cap_length as u64;
+        op_base + 0x400 + (port_id as u64 - 1) * 0x10 + 0x04
+    }
+
+    /// Lit le registre PORTPMSC du port spécifié et retourne sa valeur brute 32-bit.
+    ///
+    /// # Safety (contrat SAFETY interne)
+    ///
+    /// Cette fonction effectue une lecture volatile MMIO. L'appelant doit s'assurer que
+    /// `bar0_base` pointe vers un espace MMIO xHCI valide et mappé, et que `port` est
+    /// un numéro de port valide pour ce contrôleur (1 ≤ port ≤ max_ports).
+    pub fn read_port_pmsc(&self, port: u8) -> u32 {
+        if port == 0 || port > self.max_ports {
+            return 0;
+        }
+        let addr = self.portpmsc_addr(port);
+        // SAFETY: bar0_base est initialisé via init() depuis un BAR PCI valide et mappé en MMIO.
+        // L'adresse calculée pointe vers le registre PORTPMSC du port demandé dans l'espace opérationnel xHCI.
+        unsafe { core::ptr::read_volatile(addr as *const u32) }
+    }
+
+    /// Lit le registre PORTPMSC et retourne une structure typée `PortPmsc`.
+    pub fn read_port_pmsc_typed(&self, port: u8) -> PortPmsc {
+        PortPmsc::parse(self.read_port_pmsc(port))
+    }
+
+    /// Configure les timers d'inactivité USB 3.0 U1/U2 et le flag Force Link PM Accept (FLA) sur un port xHCI.
+    ///
+    /// Selon la spec xHCI 1.2 section 5.4.9.1 :
+    /// - `u1_timeout` : Délai d'inactivité avant transition U0 -> U1 (0 = désactivé, 1..=127 µs, 0xFF = infini).
+    /// - `u2_timeout` : Délai d'inactivité avant transition U1 -> U2 (0 = désactivé, 1..=254 × 256 µs, 0xFF = infini).
+    /// - `fla` : Force Link PM Accept, oblige l'acceptation des requêtes de veille U1/U2 initiées par le périphérique.
+    ///
+    /// # Errors
+    ///
+    /// Retourne [`SysError::InvalidArgument`] si `port` est hors de la plage valide (port == 0 ou > max_ports)
+    /// ou si les seuils de timeout ne respectent pas la conformité USB-IF / xHCI 1.2.
+    pub fn configure_port_u1_u2(
+        &mut self,
+        port: u8,
+        u1_timeout: u8,
+        u2_timeout: u8,
+        fla: bool,
+    ) -> Result<(), SysError> {
+        if port == 0 || port > self.max_ports {
+            return Err(SysError::InvalidArgument);
+        }
+        if !PortStatus::validate_u1_u2_timers(u1_timeout, u2_timeout) {
+            return Err(SysError::InvalidArgument);
+        }
+
+        let addr = self.portpmsc_addr(port);
+        // SAFETY: bar0_base est initialisé depuis un BAR PCI mappé en MMIO.
+        // Lecture volatile préalable pour préserver les bits spécifiques au port (par ex. TPP).
+        let current_raw = unsafe { core::ptr::read_volatile(addr as *const u32) };
+        let mut pmsc = PortPmsc::parse(current_raw);
+        pmsc.u1_timeout = u1_timeout;
+        pmsc.u2_timeout = u2_timeout;
+        pmsc.force_link_pm_accept = fla;
+
+        // SAFETY: écriture volatile 32-bit atomique dans le registre PORTPMSC.
+        unsafe { core::ptr::write_volatile(addr as *mut u32, pmsc.encode()) };
+        Ok(())
+    }
+
     /// Calcule l'adresse MMIO du registre PORTHLPMC pour le port donné (1-based).
     ///
     /// Selon la spec xHCI 1.2, les registres de port commencent à `op_base + 0x400`,
@@ -7301,5 +7444,107 @@ mod tests {
         assert_eq!(default_hlpmc, PortHlpmc::default());
         let default_hlpmc2 = ctrl.read_port_hlpmc(9);
         assert_eq!(default_hlpmc2, PortHlpmc::default());
+    }
+
+    #[test]
+    fn test_portpmsc_u1_u2_power_management_and_mmio() {
+        // 1. Structure PortPmsc : round-trip parse / encode
+        let pmsc = PortPmsc {
+            u1_timeout: 45,
+            u2_timeout: 120,
+            force_link_pm_accept: true,
+            tpp_timeout: 33,
+        };
+        let encoded = pmsc.encode();
+        let decoded = PortPmsc::parse(encoded);
+        assert_eq!(decoded, pmsc, "round-trip PortPmsc parse/encode");
+
+        // 2. Vérification des masques et bits individuels
+        assert_eq!(encoded & PORTPMSC_U1_TIMEOUT_MASK, 45);
+        assert_eq!(
+            (encoded & PORTPMSC_U2_TIMEOUT_MASK) >> PORTPMSC_U2_TIMEOUT_SHIFT,
+            120
+        );
+        assert_ne!(encoded & PORTPMSC_FLA, 0);
+        assert_eq!(
+            (encoded & PORTPMSC_USB3_TPP_TIMEOUT_MASK) >> PORTPMSC_USB3_TPP_TIMEOUT_SHIFT,
+            33
+        );
+
+        // 3. Validation de conformité USB-IF / xHCI 1.2
+        assert!(pmsc.is_valid_usb_if());
+        let valid_edge = PortPmsc {
+            u1_timeout: 127,
+            u2_timeout: 254,
+            force_link_pm_accept: false,
+            tpp_timeout: 127,
+        };
+        assert!(valid_edge.is_valid_usb_if());
+
+        let valid_infinite = PortPmsc {
+            u1_timeout: 0xFF,
+            u2_timeout: 0xFF,
+            force_link_pm_accept: false,
+            tpp_timeout: 0,
+        };
+        assert!(valid_infinite.is_valid_usb_if());
+        assert_eq!(valid_infinite.u2_timeout_us(), None);
+
+        let invalid_u1 = PortPmsc {
+            u1_timeout: 128,
+            u2_timeout: 50,
+            force_link_pm_accept: false,
+            tpp_timeout: 0,
+        };
+        assert!(!invalid_u1.is_valid_usb_if());
+
+        let invalid_u2 = PortPmsc {
+            u1_timeout: 10,
+            u2_timeout: 255, // 0xFF est infini, mais > 254 et != 0xFF n'existe pas en u8, testons via PortStatus
+            force_link_pm_accept: false,
+            tpp_timeout: 0,
+        };
+        // 0xFF est valide (infini)
+        assert!(invalid_u2.is_valid_usb_if());
+
+        // Calcul de délai U2 en µs
+        assert_eq!(pmsc.u2_timeout_us(), Some(120 * 256));
+        let pmsc_zero = PortPmsc::default();
+        assert_eq!(pmsc_zero.u2_timeout_us(), None);
+
+        // 4. Calcul d'adresse MMIO portpmsc_addr
+        let mut ctrl = XhciController::new();
+        ctrl.bar0_base = 0x8000_0000;
+        ctrl.cap_length = 0x20;
+        let op_base = 0x8000_0000 + 0x20; // 0x8000_0020
+
+        // Port 1: op_base + 0x400 + 0*0x10 + 0x04 = op_base + 0x404
+        assert_eq!(ctrl.portpmsc_addr(1), op_base + 0x404);
+        // Port 2: op_base + 0x400 + 1*0x10 + 0x04 = op_base + 0x414
+        assert_eq!(ctrl.portpmsc_addr(2), op_base + 0x414);
+        // Port 8: op_base + 0x400 + 7*0x10 + 0x04 = op_base + 0x474
+        assert_eq!(ctrl.portpmsc_addr(8), op_base + 0x474);
+
+        // 5. Validation de configure_port_u1_u2 (vérification des arguments)
+        // Port 0 est invalide
+        assert_eq!(
+            ctrl.configure_port_u1_u2(0, 10, 20, true),
+            Err(SysError::InvalidArgument)
+        );
+        // Port > max_ports est invalide
+        assert_eq!(
+            ctrl.configure_port_u1_u2(9, 10, 20, true),
+            Err(SysError::InvalidArgument)
+        );
+        // U1 timeout non conforme (> 127 et != 0xFF)
+        assert_eq!(
+            ctrl.configure_port_u1_u2(1, 130, 20, true),
+            Err(SysError::InvalidArgument)
+        );
+
+        // 6. read_port_pmsc sur port hors limites retourne 0
+        assert_eq!(ctrl.read_port_pmsc(0), 0);
+        assert_eq!(ctrl.read_port_pmsc(9), 0);
+        assert_eq!(ctrl.read_port_pmsc_typed(0), PortPmsc::default());
     }
 }

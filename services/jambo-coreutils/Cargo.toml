@@ -347,5 +347,10 @@ name = "join"
 path = "src/bin/join.rs"
 test = false
 
+[[bin]]
+name = "shuf"
+path = "src/bin/shuf.rs"
+test = false
+
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }

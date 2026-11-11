@@ -12680,6 +12680,7 @@ pub fn run_xargs(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
             "rmdir" => run_rmdir(effective_sub_args, err_fd),
             "tree" => run_tree(effective_sub_args, out_fd, err_fd),
             "realpath" => run_realpath(effective_sub_args, out_fd, err_fd),
+            "shuf" => run_shuf(effective_sub_args, 0, out_fd, err_fd),
             _ => {
                 let _ = sys_write(err_fd, b"xargs: ");
                 let _ = sys_write(err_fd, target_cmd.as_bytes());
@@ -17175,6 +17176,394 @@ standard output. The default join field is the first, delimited by blanks.\n\n\
     0
 }
 
+/// Générateur congruentiel linéaire / Xorshift64 bare-metal pour le brassage sans float ni dépendance externe.
+pub struct Xorshift64Rng {
+    state: u64,
+}
+
+impl Xorshift64Rng {
+    /// Initialise le générateur avec une graine non nulle (par défaut dérivée du timer ou constante).
+    pub fn new(seed: u64) -> Self {
+        let actual_seed = if seed == 0 { 0x853c49e6748fea9b } else { seed };
+        Self { state: actual_seed }
+    }
+
+    /// Génère le prochain entier 64-bit pseudo-aléatoire via xorshift64.
+    pub fn next_u64(&mut self) -> u64 {
+        let mut x = self.state;
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        self.state = x;
+        x
+    }
+
+    /// Génère un entier non signé dans l'intervalle semi-ouvert `[0, upper)`.
+    pub fn gen_range(&mut self, upper: usize) -> usize {
+        if upper <= 1 {
+            return 0;
+        }
+        (self.next_u64() % (upper as u64)) as usize
+    }
+}
+
+/// Exécute l'utilitaire GNU/POSIX `shuf` (mélange aléatoire de lignes de texte / Fisher-Yates).
+///
+/// Supporte les options :
+/// - `-e, --echo` : traite chaque argument restant comme une ligne d'entrée
+/// - `-i, --input-range=LO-HI` : traite chaque nombre de LO à HI inclus comme ligne d'entrée
+/// - `-n, --head-count=COUNT` : affiche au maximum COUNT lignes
+/// - `-r, --repeat` : autorise la répétition des lignes (échantillonnage avec remise)
+/// - `-o, --output=FILE` : écrit le résultat dans FILE au lieu de stdout
+/// - `--help` : affiche l'aide et quitte
+pub fn run_shuf(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    let mut echo_mode = false;
+    let mut input_range: Option<(u64, u64)> = None;
+    let mut head_count: Option<usize> = None;
+    let mut repeat_mode = false;
+    let mut output_file: Option<&str> = None;
+    let mut input_file: Option<&str> = None;
+    let mut positional_args: [&str; 256] = [""; 256];
+    let mut positional_count = 0usize;
+
+    let mut i = 0usize;
+    let mut end_of_options = false;
+
+    while i < args.len() {
+        let arg = args[i];
+        if !end_of_options && arg == "--" {
+            end_of_options = true;
+            i += 1;
+            continue;
+        }
+
+        if !end_of_options && (arg.starts_with('-') && arg != "-") {
+            if arg == "--help" {
+                let _ = sys_write(
+                    out_fd,
+                    b"Usage: shuf [OPTION]... [FILE]\n\
+  or:  shuf -e [OPTION]... [ARG]...\n\
+  or:  shuf -i LO-HI [OPTION]...\n\
+Write a random permutation of the input lines to standard output.\n\n\
+  -e, --echo                treat each ARG as an input line\n\
+  -i, --input-range=LO-HI   treat each number LO through HI as an input line\n\
+  -n, --head-count=COUNT    output at most COUNT lines\n\
+  -o, --output=FILE         write result to FILE instead of standard output\n\
+  -r, --repeat              output lines can be repeated\n\
+      --help                display this help and exit\n",
+                );
+                return 0;
+            } else if arg == "-e" || arg == "--echo" {
+                echo_mode = true;
+                i += 1;
+            } else if arg == "-r" || arg == "--repeat" {
+                repeat_mode = true;
+                i += 1;
+            } else if arg == "-o" {
+                if i + 1 >= args.len() {
+                    let _ = sys_write(err_fd, b"shuf: option requires an argument -- 'o'\n");
+                    return 1;
+                }
+                output_file = Some(args[i + 1]);
+                i += 2;
+            } else if let Some(val) = arg.strip_prefix("--output=") {
+                output_file = Some(val);
+                i += 1;
+            } else if arg == "-n" {
+                if i + 1 >= args.len() {
+                    let _ = sys_write(err_fd, b"shuf: option requires an argument -- 'n'\n");
+                    return 1;
+                }
+                match args[i + 1].parse::<usize>() {
+                    Ok(c) => head_count = Some(c),
+                    Err(_) => {
+                        let _ = sys_write(err_fd, b"shuf: invalid line count: '");
+                        let _ = sys_write(err_fd, args[i + 1].as_bytes());
+                        let _ = sys_write(err_fd, b"'\n");
+                        return 1;
+                    }
+                }
+                i += 2;
+            } else if let Some(val) = arg.strip_prefix("--head-count=") {
+                match val.parse::<usize>() {
+                    Ok(c) => head_count = Some(c),
+                    Err(_) => {
+                        let _ = sys_write(err_fd, b"shuf: invalid line count: '");
+                        let _ = sys_write(err_fd, val.as_bytes());
+                        let _ = sys_write(err_fd, b"'\n");
+                        return 1;
+                    }
+                }
+                i += 1;
+            } else if arg == "-i" {
+                if i + 1 >= args.len() {
+                    let _ = sys_write(err_fd, b"shuf: option requires an argument -- 'i'\n");
+                    return 1;
+                }
+                let range_str = args[i + 1];
+                match parse_shuf_range(range_str) {
+                    Some(pair) => input_range = Some(pair),
+                    None => {
+                        let _ = sys_write(err_fd, b"shuf: invalid input range: '");
+                        let _ = sys_write(err_fd, range_str.as_bytes());
+                        let _ = sys_write(err_fd, b"'\n");
+                        return 1;
+                    }
+                }
+                i += 2;
+            } else if let Some(range_str) = arg.strip_prefix("--input-range=") {
+                match parse_shuf_range(range_str) {
+                    Some(pair) => input_range = Some(pair),
+                    None => {
+                        let _ = sys_write(err_fd, b"shuf: invalid input range: '");
+                        let _ = sys_write(err_fd, range_str.as_bytes());
+                        let _ = sys_write(err_fd, b"'\n");
+                        return 1;
+                    }
+                }
+                i += 1;
+            } else {
+                let _ = sys_write(err_fd, b"shuf: unrecognized option '");
+                let _ = sys_write(err_fd, arg.as_bytes());
+                let _ = sys_write(err_fd, b"'\n");
+                return 1;
+            }
+        } else {
+            if positional_count < positional_args.len() {
+                positional_args[positional_count] = arg;
+                positional_count += 1;
+            }
+            i += 1;
+        }
+    }
+
+    if echo_mode && input_range.is_some() {
+        let _ = sys_write(err_fd, b"shuf: cannot combine -e and -i options\n");
+        return 1;
+    }
+
+    // Gestion du fichier de sortie (-o)
+    let (dest_fd, should_close_dest) = if let Some(out_path) = output_file {
+        let fd = sys_open(
+            out_path,
+            crate::vfs::O_CREAT | crate::vfs::O_WRONLY | crate::vfs::O_TRUNC,
+        );
+        if fd < 0 {
+            let _ = sys_write(err_fd, b"shuf: failed to open output file: ");
+            let _ = sys_write(err_fd, out_path.as_bytes());
+            let _ = sys_write(err_fd, b"\n");
+            return 1;
+        }
+        (fd, true)
+    } else {
+        (out_fd, false)
+    };
+
+    // Initialisation RNG avec horloge si disponible
+    let seed = crate::clock_gettime(crate::clocks::CLOCK_MONOTONIC)
+        .map(|ts| ts.tv_sec ^ ((ts.tv_nsec as u64) << 32) ^ 0xdeadbeefc001cafe)
+        .unwrap_or(0x517cc1b727220a95);
+    let mut rng = Xorshift64Rng::new(seed);
+
+    let mut line_ptrs: [(*const u8, usize); 1024] = [(core::ptr::null(), 0); 1024];
+    let mut line_count = 0usize;
+
+    // Buffer statique de 16 Ko pour les lectures de fichier ou stdin
+    static mut SHUF_READ_BUF: [u8; 16384] = [0u8; 16384];
+
+    let status = (|| -> i32 {
+        if echo_mode {
+            // Traiter chaque argument positionnel comme une ligne
+            for &item in &positional_args[..positional_count] {
+                if line_count < line_ptrs.len() {
+                    line_ptrs[line_count] = (item.as_ptr(), item.len());
+                    line_count += 1;
+                }
+            }
+        } else if let Some((lo, hi)) = input_range {
+            if positional_count > 0 {
+                let _ = sys_write(err_fd, b"shuf: extra operand '");
+                let _ = sys_write(err_fd, positional_args[0].as_bytes());
+                let _ = sys_write(err_fd, b"'\n");
+                return 1;
+            }
+
+            if lo > hi {
+                let _ = sys_write(err_fd, b"shuf: invalid input range\n");
+                return 1;
+            }
+
+            // Génération directe depuis l'intervalle numérique [lo, hi]
+            let total_range = (hi - lo + 1) as usize;
+            let mut num_buf = [0u8; 32];
+
+            if repeat_mode {
+                let max_lines = head_count.unwrap_or(total_range);
+                for _ in 0..max_lines {
+                    let rand_offset = rng.next_u64() % (hi - lo + 1);
+                    let val = lo + rand_offset;
+                    let len = write_u64_decimal(val, &mut num_buf);
+                    let _ = sys_write(dest_fd, &num_buf[..len]);
+                    let _ = sys_write(dest_fd, b"\n");
+                }
+                return 0;
+            } else {
+                // Créer la liste des entiers et mélanger
+                const MAX_INT_RANGE: usize = 1024;
+                let actual_total = total_range.min(MAX_INT_RANGE);
+                let mut int_items = [0u64; MAX_INT_RANGE];
+                for (idx, item) in int_items.iter_mut().enumerate().take(actual_total) {
+                    *item = lo + (idx as u64);
+                }
+
+                // Fisher-Yates shuffle
+                if actual_total > 1 {
+                    for j in (1..actual_total).rev() {
+                        let k = rng.gen_range(j + 1);
+                        int_items.swap(j, k);
+                    }
+                }
+
+                let max_output = head_count.unwrap_or(actual_total).min(actual_total);
+                for &item in int_items.iter().take(max_output) {
+                    let len = write_u64_decimal(item, &mut num_buf);
+                    let _ = sys_write(dest_fd, &num_buf[..len]);
+                    let _ = sys_write(dest_fd, b"\n");
+                }
+                return 0;
+            }
+        } else {
+            // Lecture stdin ou fichier unique
+            if positional_count > 1 {
+                let _ = sys_write(err_fd, b"shuf: extra operand '");
+                let _ = sys_write(err_fd, positional_args[1].as_bytes());
+                let _ = sys_write(err_fd, b"'\n");
+                return 1;
+            }
+            if positional_count == 1 {
+                input_file = Some(positional_args[0]);
+            }
+
+            let (src_fd, should_close_src) = if let Some(path) = input_file {
+                if path == "-" {
+                    (in_fd, false)
+                } else {
+                    let fd = sys_open(path, crate::vfs::O_RDONLY);
+                    if fd < 0 {
+                        let _ = sys_write(err_fd, b"shuf: ");
+                        let _ = sys_write(err_fd, path.as_bytes());
+                        let _ = sys_write(err_fd, b": No such file or directory\n");
+                        return 1;
+                    }
+                    (fd, true)
+                }
+            } else {
+                (in_fd, false)
+            };
+
+            let buf: &mut [u8] = unsafe {
+                core::slice::from_raw_parts_mut(
+                    core::ptr::addr_of_mut!(SHUF_READ_BUF) as *mut u8,
+                    16384,
+                )
+            };
+            let total_bytes = match read_all_fd(src_fd, buf) {
+                Ok(n) => n,
+                Err(_) => {
+                    if should_close_src {
+                        let _ = sys_close(src_fd);
+                    }
+                    let _ = sys_write(err_fd, b"shuf: read error\n");
+                    return 1;
+                }
+            };
+            if should_close_src {
+                let _ = sys_close(src_fd);
+            }
+
+            // Découpage en lignes
+            let mut line_start = 0usize;
+            let mut cur = 0usize;
+            while cur < total_bytes {
+                if buf[cur] == b'\n' {
+                    if line_count < line_ptrs.len() {
+                        line_ptrs[line_count] =
+                            (unsafe { buf.as_ptr().add(line_start) }, cur - line_start);
+                        line_count += 1;
+                    }
+                    line_start = cur + 1;
+                }
+                cur += 1;
+            }
+            if line_start < total_bytes && line_count < line_ptrs.len() {
+                line_ptrs[line_count] = (
+                    unsafe { buf.as_ptr().add(line_start) },
+                    total_bytes - line_start,
+                );
+                line_count += 1;
+            }
+        }
+
+        if line_count == 0 {
+            return 0;
+        }
+
+        if repeat_mode {
+            let count_to_print = head_count.unwrap_or(line_count);
+            for _ in 0..count_to_print {
+                let rand_idx = rng.gen_range(line_count);
+                let (ptr, len) = line_ptrs[rand_idx];
+                if !ptr.is_null() && len > 0 {
+                    let slice = unsafe { core::slice::from_raw_parts(ptr, len) };
+                    let _ = sys_write(dest_fd, slice);
+                }
+                let _ = sys_write(dest_fd, b"\n");
+            }
+            return 0;
+        }
+
+        // Fisher-Yates shuffle in-situ
+        if line_count > 1 {
+            for j in (1..line_count).rev() {
+                let k = rng.gen_range(j + 1);
+                line_ptrs.swap(j, k);
+            }
+        }
+
+        let to_emit = match head_count {
+            Some(hc) => hc.min(line_count),
+            None => line_count,
+        };
+
+        for &(ptr, len) in line_ptrs.iter().take(to_emit) {
+            if !ptr.is_null() && len > 0 {
+                let slice = unsafe { core::slice::from_raw_parts(ptr, len) };
+                let _ = sys_write(dest_fd, slice);
+            }
+            let _ = sys_write(dest_fd, b"\n");
+        }
+
+        0
+    })();
+
+    if should_close_dest {
+        let _ = sys_close(dest_fd);
+    }
+
+    status
+}
+
+/// Parse une chaîne d'intervalle "LO-HI" en deux entiers (u64, u64).
+fn parse_shuf_range(s: &str) -> Option<(u64, u64)> {
+    let bytes = s.as_bytes();
+    let dash_idx = bytes.iter().position(|&b| b == b'-')?;
+    let lo_str = &s[..dash_idx];
+    let hi_str = &s[dash_idx + 1..];
+    let lo = lo_str.parse::<u64>().ok()?;
+    let hi = hi_str.parse::<u64>().ok()?;
+    Some((lo, hi))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -20745,5 +21134,110 @@ Chaque processus dispose de son propre CR3 sans aucun privilege materiel direct.
         let _ = sys_unlink_pool(path2);
         let _ = sys_unlink_pool(path3);
         let _ = sys_unlink_pool(path4);
+    }
+
+    #[test]
+    fn test_run_shuf() {
+        // Test 1: --help
+        let (out_r1, out_w1) = crate::vfs::pipe().expect("pipe shuf out1");
+        let code1 = run_shuf(&["--help"], 0, out_w1, 2);
+        let _ = sys_close(out_w1);
+        assert_eq!(code1, 0);
+        let mut buf1 = [0u8; 512];
+        let n1 = sys_read(out_r1, &mut buf1);
+        let _ = sys_close(out_r1);
+        assert!(n1 > 0);
+        let res1 = core::str::from_utf8(&buf1[..n1 as usize]).unwrap();
+        assert!(res1.contains("Usage: shuf"));
+
+        // Test 2: -e (echo mode) avec tous les éléments présents
+        let (out_r2, out_w2) = crate::vfs::pipe().expect("pipe shuf out2");
+        let code2 = run_shuf(&["-e", "alpha", "beta", "gamma"], 0, out_w2, 2);
+        let _ = sys_close(out_w2);
+        assert_eq!(code2, 0);
+        let mut buf2 = [0u8; 256];
+        let n2 = sys_read(out_r2, &mut buf2);
+        let _ = sys_close(out_r2);
+        assert!(n2 > 0);
+        let res2 = core::str::from_utf8(&buf2[..n2 as usize]).unwrap();
+        assert!(res2.contains("alpha\n"));
+        assert!(res2.contains("beta\n"));
+        assert!(res2.contains("gamma\n"));
+
+        // Test 3: -e avec -n 2 (head-count)
+        let (out_r3, out_w3) = crate::vfs::pipe().expect("pipe shuf out3");
+        let code3 = run_shuf(
+            &["-e", "-n", "2", "one", "two", "three", "four"],
+            0,
+            out_w3,
+            2,
+        );
+        let _ = sys_close(out_w3);
+        assert_eq!(code3, 0);
+        let mut buf3 = [0u8; 256];
+        let n3 = sys_read(out_r3, &mut buf3);
+        let _ = sys_close(out_r3);
+        assert!(n3 > 0);
+        let res3 = core::str::from_utf8(&buf3[..n3 as usize]).unwrap();
+        let line_count3 = res3.lines().count();
+        assert_eq!(line_count3, 2);
+
+        // Test 4: -i input-range (1-5)
+        let (out_r4, out_w4) = crate::vfs::pipe().expect("pipe shuf out4");
+        let code4 = run_shuf(&["-i", "10-14"], 0, out_w4, 2);
+        let _ = sys_close(out_w4);
+        assert_eq!(code4, 0);
+        let mut buf4 = [0u8; 256];
+        let n4 = sys_read(out_r4, &mut buf4);
+        let _ = sys_close(out_r4);
+        assert!(n4 > 0);
+        let res4 = core::str::from_utf8(&buf4[..n4 as usize]).unwrap();
+        for num in 10..=14 {
+            let mut num_str = [0u8; 32];
+            let len = write_u64_decimal(num, &mut num_str);
+            let s = core::str::from_utf8(&num_str[..len]).unwrap();
+            assert!(res4.contains(s), "missing {num} in {res4}");
+        }
+
+        // Test 5: -r repeat avec -n 5 sur -e
+        let (out_r5, out_w5) = crate::vfs::pipe().expect("pipe shuf out5");
+        let code5 = run_shuf(&["-e", "-r", "-n", "5", "solo"], 0, out_w5, 2);
+        let _ = sys_close(out_w5);
+        assert_eq!(code5, 0);
+        let mut buf5 = [0u8; 256];
+        let n5 = sys_read(out_r5, &mut buf5);
+        let _ = sys_close(out_r5);
+        assert!(n5 > 0);
+        let res5 = core::str::from_utf8(&buf5[..n5 as usize]).unwrap();
+        assert_eq!(res5.lines().count(), 5);
+        for line in res5.lines() {
+            assert_eq!(line, "solo");
+        }
+
+        // Test 6: Fichier d'entrée et option -o output
+        let in_file = "/tmp/shuf_in.txt";
+        let out_file = "/tmp/shuf_out.txt";
+        let fdw = sys_open(in_file, O_CREAT | O_WRONLY | crate::vfs::O_TRUNC);
+        assert!(fdw >= 0);
+        let _ = sys_write(fdw, b"pomme\npoire\nbanane\ncerise\n");
+        let _ = sys_close(fdw);
+
+        let code6 = run_shuf(&["-o", out_file, in_file], 0, 1, 2);
+        assert_eq!(code6, 0);
+
+        let fdr = sys_open(out_file, crate::vfs::O_RDONLY);
+        assert!(fdr >= 0);
+        let mut buf6 = [0u8; 256];
+        let n6 = sys_read(fdr, &mut buf6);
+        let _ = sys_close(fdr);
+        assert!(n6 > 0);
+        let res6 = core::str::from_utf8(&buf6[..n6 as usize]).unwrap();
+        assert!(res6.contains("pomme\n"));
+        assert!(res6.contains("poire\n"));
+        assert!(res6.contains("banane\n"));
+        assert!(res6.contains("cerise\n"));
+
+        let _ = sys_unlink_pool(in_file);
+        let _ = sys_unlink_pool(out_file);
     }
 }
