@@ -13394,6 +13394,7 @@ pub fn execute_coreutils_command(
         "nohup" => run_nohup(args, in_fd, out_fd, err_fd),
         "pathchk" => run_pathchk(args, out_fd, err_fd),
         "stty" => run_stty(args, in_fd, out_fd, err_fd),
+        "tsort" => run_tsort(args, in_fd, out_fd, err_fd),
         _ => {
             let _ = sys_write(err_fd, cmd.as_bytes());
             let _ = sys_write(err_fd, b": command not found\n");
@@ -14764,6 +14765,7 @@ pub fn run_xargs(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
             "nohup" => run_nohup(effective_sub_args, 0, out_fd, err_fd),
             "pathchk" => run_pathchk(effective_sub_args, out_fd, err_fd),
             "stty" => run_stty(effective_sub_args, 0, out_fd, err_fd),
+            "tsort" => run_tsort(effective_sub_args, 0, out_fd, err_fd),
             _ => {
                 let _ = sys_write(err_fd, b"xargs: ");
                 let _ = sys_write(err_fd, target_cmd.as_bytes());
@@ -20787,6 +20789,287 @@ fn parse_u32_arg(s: &str) -> Option<u32> {
     Some(val)
 }
 
+// ============================================================================
+// Utilitaire POSIX / GNU coreutils : `tsort` (Topological Sort)
+// ============================================================================
+
+/// Représentation d'un graphe orienté pour le tri topologique de Kahn (sans allocation dynamique)
+pub struct TsortGraph {
+    /// Noms des sommets (jusqu'à 64 sommets distincts)
+    pub nodes: [Option<[u8; 32]>; 64],
+    pub node_lens: [usize; 64],
+    pub node_count: usize,
+    /// Degré entrant de chaque sommet
+    pub in_degrees: [usize; 64],
+    /// Matrice d'adjacence booléenne [from][to]
+    pub adj_matrix: [[bool; 64]; 64],
+}
+
+impl Default for TsortGraph {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl TsortGraph {
+    /// Crée un nouveau graphe vide
+    pub const fn new() -> Self {
+        Self {
+            nodes: [None; 64],
+            node_lens: [0; 64],
+            node_count: 0,
+            in_degrees: [0; 64],
+            adj_matrix: [[false; 64]; 64],
+        }
+    }
+
+    /// Récupère ou insère un identifiant de sommet (nom de 1 à 32 octets)
+    pub fn get_or_insert_node(&mut self, name: &[u8]) -> Option<usize> {
+        let name_slice = if name.len() > 32 { &name[..32] } else { name };
+        for i in 0..self.node_count {
+            if self.node_lens[i] == name_slice.len() {
+                if let Some(existing) = self.nodes[i] {
+                    if &existing[..name_slice.len()] == name_slice {
+                        return Some(i);
+                    }
+                }
+            }
+        }
+
+        if self.node_count >= 64 {
+            return None; // Capacité maximale atteinte
+        }
+
+        let idx = self.node_count;
+        let mut storage = [0u8; 32];
+        storage[..name_slice.len()].copy_from_slice(name_slice);
+        self.nodes[idx] = Some(storage);
+        self.node_lens[idx] = name_slice.len();
+        self.node_count += 1;
+        Some(idx)
+    }
+
+    /// Ajoute une dépendance orientée (arc `u -> v`)
+    pub fn add_edge(&mut self, u: usize, v: usize) {
+        if u < 64 && v < 64 && u != v && !self.adj_matrix[u][v] {
+            self.adj_matrix[u][v] = true;
+            self.in_degrees[v] += 1;
+        }
+    }
+
+    /// Effectue le tri topologique via l'algorithme de Kahn
+    /// Retourne le nombre d'éléments ordonnés ou None si cycle détecté
+    pub fn topological_sort(&mut self, result_indices: &mut [usize; 64]) -> Result<usize, usize> {
+        let mut degrees = self.in_degrees;
+        let mut queue = [0usize; 64];
+        let mut q_head = 0;
+        let mut q_tail = 0;
+
+        // Enfiler tous les sommets de degré entrant 0 dans l'ordre d'insertion
+        for (i, &deg) in degrees.iter().enumerate().take(self.node_count) {
+            if deg == 0 {
+                queue[q_tail] = i;
+                q_tail += 1;
+            }
+        }
+
+        let mut sorted_count = 0;
+        while q_head < q_tail {
+            let u = queue[q_head];
+            q_head += 1;
+            result_indices[sorted_count] = u;
+            sorted_count += 1;
+
+            for v in 0..self.node_count {
+                if self.adj_matrix[u][v] {
+                    degrees[v] -= 1;
+                    if degrees[v] == 0 {
+                        queue[q_tail] = v;
+                        q_tail += 1;
+                    }
+                }
+            }
+        }
+
+        if sorted_count == self.node_count {
+            Ok(sorted_count)
+        } else {
+            Err(sorted_count) // Cycle détecté
+        }
+    }
+}
+
+/// Exécute l'utilitaire Coreutils POSIX / GNU `tsort` (Topological Sort)
+/// Lit des paires de chaînes séparées par des espaces ou retours à la ligne
+/// (u v représentant la contrainte ordonnée u avant v).
+pub fn run_tsort(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    let mut file_path: Option<&str> = None;
+
+    for &arg in args {
+        match arg {
+            "--help" => {
+                let _ = sys_write(
+                    out_fd,
+                    b"Usage: tsort [OPTION] [FILE]\nWrite totally ordered list consistent with the partial ordering in FILE.\n\n      --help     display this help and exit\n      --version  output version information and exit\n\nWith no FILE, or when FILE is -, read standard input.\n",
+                );
+                return 0;
+            }
+            "--version" => {
+                let _ = sys_write(out_fd, b"tsort (jambo-coreutils) 0.1.0\n");
+                return 0;
+            }
+            "-" => {
+                file_path = None;
+            }
+            s if s.starts_with('-') => {
+                let _ = sys_write(err_fd, b"tsort: unrecognized option '");
+                let _ = sys_write(err_fd, s.as_bytes());
+                let _ = sys_write(err_fd, b"'\nTry 'tsort --help' for more information.\n");
+                return 1;
+            }
+            s => {
+                if file_path.is_none() {
+                    file_path = Some(s);
+                } else {
+                    let _ = sys_write(err_fd, b"tsort: extra operand '");
+                    let _ = sys_write(err_fd, s.as_bytes());
+                    let _ = sys_write(err_fd, b"'\n");
+                    return 1;
+                }
+            }
+        }
+    }
+
+    let fd = match file_path {
+        Some(path) => {
+            let res = sys_open(path, O_RDONLY);
+            if res < 0 {
+                let _ = sys_write(err_fd, b"tsort: ");
+                let _ = sys_write(err_fd, path.as_bytes());
+                let _ = sys_write(err_fd, b": No such file or directory\n");
+                return 1;
+            }
+            res
+        }
+        None => in_fd,
+    };
+
+    let mut graph = TsortGraph::new();
+    let mut pending_item: Option<[u8; 32]> = None;
+    let mut pending_len: usize = 0;
+
+    let mut buf = [0u8; 512];
+    let mut token_buf = [0u8; 32];
+    let mut token_len = 0usize;
+
+    loop {
+        let n = sys_read(fd, &mut buf);
+        if n <= 0 {
+            break;
+        }
+
+        for &b in &buf[..n as usize] {
+            if b.is_ascii_whitespace() {
+                if token_len > 0 {
+                    let token = &token_buf[..token_len];
+                    if let Some(prev) = pending_item {
+                        let prev_token = &prev[..pending_len];
+                        let u = match graph.get_or_insert_node(prev_token) {
+                            Some(idx) => idx,
+                            None => {
+                                let _ =
+                                    sys_write(err_fd, b"tsort: node capacity exceeded (max 64)\n");
+                                if file_path.is_some() {
+                                    sys_close(fd);
+                                }
+                                return 1;
+                            }
+                        };
+                        let v = match graph.get_or_insert_node(token) {
+                            Some(idx) => idx,
+                            None => {
+                                let _ =
+                                    sys_write(err_fd, b"tsort: node capacity exceeded (max 64)\n");
+                                if file_path.is_some() {
+                                    sys_close(fd);
+                                }
+                                return 1;
+                            }
+                        };
+                        graph.add_edge(u, v);
+                        pending_item = None;
+                        pending_len = 0;
+                    } else {
+                        let mut item = [0u8; 32];
+                        let copy_len = token_len.min(32);
+                        item[..copy_len].copy_from_slice(&token[..copy_len]);
+                        pending_item = Some(item);
+                        pending_len = copy_len;
+                    }
+                    token_len = 0;
+                }
+            } else if token_len < 32 {
+                token_buf[token_len] = b;
+                token_len += 1;
+            }
+        }
+    }
+
+    if token_len > 0 {
+        let token = &token_buf[..token_len];
+        if let Some(prev) = pending_item {
+            let prev_token = &prev[..pending_len];
+            if let (Some(u), Some(v)) = (
+                graph.get_or_insert_node(prev_token),
+                graph.get_or_insert_node(token),
+            ) {
+                graph.add_edge(u, v);
+            }
+            pending_item = None;
+        } else {
+            let mut item = [0u8; 32];
+            let copy_len = token_len.min(32);
+            item[..copy_len].copy_from_slice(&token[..copy_len]);
+            pending_item = Some(item);
+        }
+    }
+
+    if file_path.is_some() {
+        sys_close(fd);
+    }
+
+    if pending_item.is_some() {
+        let _ = sys_write(err_fd, b"tsort: input contains an odd number of tokens\n");
+        return 1;
+    }
+
+    let mut result = [0usize; 64];
+    match graph.topological_sort(&mut result) {
+        Ok(count) => {
+            for &u in result.iter().take(count) {
+                if let Some(name) = graph.nodes[u] {
+                    let len = graph.node_lens[u];
+                    let _ = sys_write(out_fd, &name[..len]);
+                    let _ = sys_write(out_fd, b"\n");
+                }
+            }
+            0
+        }
+        Err(partial) => {
+            // Afficher ce qui a pu être résolu, puis signaler le cycle
+            for &u in result.iter().take(partial) {
+                if let Some(name) = graph.nodes[u] {
+                    let len = graph.node_lens[u];
+                    let _ = sys_write(out_fd, &name[..len]);
+                    let _ = sys_write(out_fd, b"\n");
+                }
+            }
+            let _ = sys_write(err_fd, b"tsort: input contains a cycle\n");
+            1
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -25474,5 +25757,38 @@ Chaque processus dispose de son propre CR3 sans aucun privilege materiel direct.
         assert!(core::str::from_utf8(&buf_stty6[..n_stty6 as usize])
             .unwrap()
             .contains("stty (jambo-coreutils)"));
+
+        // 20. Test run_tsort
+        let (in_r_tsort, in_w_tsort) = crate::vfs::pipe().unwrap();
+        let input_pairs = b"A B\nB C\nC D\n";
+        sys_write(in_w_tsort, input_pairs);
+        sys_close(in_w_tsort);
+
+        let (out_r_tsort, out_w_tsort) = crate::vfs::pipe().unwrap();
+        let code_tsort = run_tsort(&[], in_r_tsort, out_w_tsort, 2);
+        sys_close(in_r_tsort);
+        sys_close(out_w_tsort);
+        assert_eq!(code_tsort, 0);
+
+        let mut buf_tsort = [0u8; 128];
+        let n_tsort = sys_read(out_r_tsort, &mut buf_tsort);
+        sys_close(out_r_tsort);
+        let s_tsort = core::str::from_utf8(&buf_tsort[..n_tsort as usize]).unwrap();
+        assert_eq!(s_tsort, "A\nB\nC\nD\n");
+
+        // Test cycle dans tsort
+        let (in_r_cyc, in_w_cyc) = crate::vfs::pipe().unwrap();
+        let input_cycle = b"X Y\nY X\n";
+        sys_write(in_w_cyc, input_cycle);
+        sys_close(in_w_cyc);
+
+        let (out_r_cyc, out_w_cyc) = crate::vfs::pipe().unwrap();
+        let code_cyc = run_tsort(&[], in_r_cyc, out_w_cyc, 2);
+        sys_close(in_r_cyc);
+        sys_close(out_w_cyc);
+        let mut buf_cyc = [0u8; 64];
+        let _ = sys_read(out_r_cyc, &mut buf_cyc);
+        sys_close(out_r_cyc);
+        assert_eq!(code_cyc, 1);
     }
 }

@@ -447,7 +447,12 @@ name = "stty"
 path = "src/bin/stty.rs"
 test = false
 
-# 88 utilitaires Ring 3
+[[bin]]
+name = "tsort"
+path = "src/bin/tsort.rs"
+test = false
+
+# 89 utilitaires Ring 3
 
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }

@@ -627,6 +627,7 @@ impl JamboShell {
             "nohup" | "/bin/nohup" | "bin/nohup" => self.cmd_nohup(args, out),
             "pathchk" | "/bin/pathchk" | "bin/pathchk" => self.cmd_pathchk(args, out),
             "stty" | "/bin/stty" | "bin/stty" => self.cmd_stty(args, out),
+            "tsort" | "/bin/tsort" | "bin/tsort" => self.cmd_tsort(args, out),
             "cow" | "/bin/cow" | "bin/cow" => self.cmd_cow(args, out),
             "version" => self.cmd_version(out),
             "uptime" => self.cmd_uptime(out),
@@ -2960,6 +2961,43 @@ Utilitaire d'installation JamboOS (Serie 0.*.*)\n\
             (status, len)
         } else {
             let msg = b"stty: pipe creation failed\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
+    }
+
+    fn cmd_tsort(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if let (Ok((r_out, w_out)), Ok((r_err, w_err))) =
+            (libjambo::vfs::pipe(), libjambo::vfs::pipe())
+        {
+            let code = libjambo::coreutils::run_tsort(args, 0, w_out, w_err);
+            let _ = libjambo::coreutils::sys_close(w_out);
+            let _ = libjambo::coreutils::sys_close(w_err);
+
+            let mut len = 0;
+            if code == 0 {
+                let n_out = libjambo::coreutils::sys_read(r_out, out);
+                if n_out > 0 {
+                    len = n_out as usize;
+                }
+            } else {
+                let n_err = libjambo::coreutils::sys_read(r_err, out);
+                if n_err > 0 {
+                    len = n_err as usize;
+                }
+            }
+            let _ = libjambo::coreutils::sys_close(r_out);
+            let _ = libjambo::coreutils::sys_close(r_err);
+
+            let status = if code == 0 {
+                ShellStatus::Success
+            } else {
+                ShellStatus::ExecutionFailed
+            };
+            (status, len)
+        } else {
+            let msg = b"tsort: pipe creation failed\n";
             let len = msg.len().min(out.len());
             out[..len].copy_from_slice(&msg[..len]);
             (ShellStatus::ExecutionFailed, len)
@@ -20765,5 +20803,19 @@ mod tests {
 
         let (st78, _len78) = shell.execute_line("stty invalid_param", &mut out);
         assert_eq!(st78, ShellStatus::ExecutionFailed);
+
+        // 41. tsort shell command
+        let (st79, len79) = shell.execute_line("tsort --help", &mut out);
+        assert_eq!(st79, ShellStatus::Success);
+        let s79 = core::str::from_utf8(&out[..len79]).unwrap();
+        assert!(s79.contains("Usage: tsort"));
+
+        let (st80, len80) = shell.execute_line("tsort --version", &mut out);
+        assert_eq!(st80, ShellStatus::Success);
+        let s80 = core::str::from_utf8(&out[..len80]).unwrap();
+        assert!(s80.contains("tsort (jambo-coreutils)"));
+
+        let (st81, _len81) = shell.execute_line("tsort /nonexistent_file_xyz", &mut out);
+        assert_eq!(st81, ShellStatus::ExecutionFailed);
     }
 }

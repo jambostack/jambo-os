@@ -312,6 +312,7 @@ pub const XHCI_EXT_CAP_BANDWIDTH_NEGOTIATION: u8 = 24;
 pub const XHCI_EXT_CAP_LATENCY_TOLERANCE_MESSAGING: u8 = 25;
 pub const XHCI_EXT_CAP_ENDPOINT_POLLING_OVERRIDE: u8 = 26;
 pub const XHCI_EXT_CAP_INTERRUPTER_MODERATION_OVERRIDE: u8 = 27;
+pub const XHCI_EXT_CAP_PORT_SPEED_MAPPING_OVERRIDE: u8 = 28;
 
 /// Masques de registres USB Legacy Support (xHCI 1.2 Section 7.1)
 /// Registre USBLEGSUP (Offset 0x00)
@@ -2476,6 +2477,159 @@ impl XhciInterrupterModerationOverride {
         match 1_000_000_000u64.checked_div(ns) {
             Some(rate) => rate,
             None => 4_000_000, // Taux maximal non bridé (fréquence 4 MHz à 250 ns)
+        }
+    }
+}
+
+/// Capacité Étendue xHCI USB Protocol Speed Identification & Port Speed Mapping Overrides (xHCI 1.2 §7.20)
+///
+/// Permet de surcharger dynamiquement le mappage des vitesses USB (PSI - Protocol Speed ID)
+/// pour chaque port physique ou racine USB (Full-Speed 12 Mbps, High-Speed 480 Mbps,
+/// SuperSpeed Gen1x1 5 Gbps, Gen1x2 / Gen2x1 10 Gbps, Gen2x2 20 Gbps) avec contrôle duplex (Rx/Tx).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XhciPortSpeedMappingOverride {
+    /// Pointeur dword vers la prochaine capacité étendue (0 = fin de liste)
+    pub next_ptr_dwords: u8,
+    /// Activation de la surcharge matérielle de vitesse (Override Enable)
+    pub enabled: bool,
+    /// Identifiant de port physique xHCI (1..=255)
+    pub port_num: u8,
+    /// Protocole USB associé (USB 2.0 = 2, USB 3.x = 3, USB4 = 4)
+    pub protocol_revision: u8,
+    /// Protocol Speed ID ciblé (PSI 1..=15)
+    pub speed_id: u8,
+    /// Multiplicateur de débit (Bit Rate Exponent: 0=Bps, 1=Kbps, 2=Mbps, 3=Gbps)
+    pub exponent: u8,
+    /// Valeur mantisse de débit (Bit Rate Mantissa, 16 bits)
+    pub mantissa: u16,
+    /// Mode Full-Duplex (true) ou Half-Duplex (false)
+    pub full_duplex: bool,
+    /// Registre de contrôle brut MMIO (Dword 1)
+    pub override_control: u32,
+    /// Registre de statut brut MMIO (Dword 2)
+    pub override_status: u32,
+}
+
+impl XhciPortSpeedMappingOverride {
+    /// Crée une nouvelle surcharge de vitesse de port
+    pub const fn new(
+        port_num: u8,
+        speed_id: u8,
+        mantissa: u16,
+        exponent: u8,
+        full_duplex: bool,
+    ) -> Self {
+        let p = if port_num == 0 { 1 } else { port_num };
+        let sid = if speed_id == 0 {
+            1
+        } else if speed_id > 15 {
+            15
+        } else {
+            speed_id
+        };
+        let exp = if exponent > 3 { 3 } else { exponent };
+        Self {
+            next_ptr_dwords: 0,
+            enabled: false,
+            port_num: p,
+            protocol_revision: 3, // USB 3.x par défaut
+            speed_id: sid,
+            exponent: exp,
+            mantissa,
+            full_duplex,
+            override_control: 0,
+            override_status: 0,
+        }
+    }
+
+    /// Décode la capacité étendue depuis 4 dwords MMIO
+    pub fn parse(dwords: &[u32]) -> Option<Self> {
+        if dwords.len() < 4 {
+            return None;
+        }
+        let cap_id = (dwords[0] & 0xFF) as u8;
+        if cap_id != XHCI_EXT_CAP_PORT_SPEED_MAPPING_OVERRIDE {
+            return None;
+        }
+        let next_ptr = ((dwords[0] >> 8) & 0xFF) as u8;
+        let port = ((dwords[0] >> 16) & 0xFF) as u8;
+        let proto = ((dwords[0] >> 24) & 0xFF) as u8;
+
+        let ctrl = dwords[1];
+        let sts = dwords[2];
+        let speed_dw = dwords[3];
+
+        let enabled = (ctrl & 0x01) != 0;
+        let sid = ((ctrl >> 8) & 0x0F) as u8;
+        let fduplex = ((ctrl >> 12) & 0x01) != 0;
+        let exp = ((speed_dw >> 16) & 0x03) as u8;
+        let mant = (speed_dw & 0xFFFF) as u16;
+
+        Some(Self {
+            next_ptr_dwords: next_ptr,
+            enabled,
+            port_num: if port == 0 { 1 } else { port },
+            protocol_revision: proto,
+            speed_id: if sid == 0 { 1 } else { sid },
+            exponent: exp,
+            mantissa: mant,
+            full_duplex: fduplex,
+            override_control: ctrl,
+            override_status: sts,
+        })
+    }
+
+    /// Encode la capacité étendue en 4 mots dwords MMIO 32-bit
+    pub const fn encode(&self) -> [u32; 4] {
+        let dw0 = (XHCI_EXT_CAP_PORT_SPEED_MAPPING_OVERRIDE as u32)
+            | ((self.next_ptr_dwords as u32) << 8)
+            | ((self.port_num as u32) << 16)
+            | ((self.protocol_revision as u32) << 24);
+        let ctrl_flags = (self.override_control & !0x0000_1F01)
+            | (if self.enabled { 1 } else { 0 })
+            | (((self.speed_id & 0x0F) as u32) << 8)
+            | (if self.full_duplex { 1 << 12 } else { 0 });
+        let dw1 = ctrl_flags;
+        let dw2 = self.override_status;
+        let dw3 = (self.mantissa as u32) | (((self.exponent & 0x03) as u32) << 16);
+        [dw0, dw1, dw2, dw3]
+    }
+
+    /// Active ou désactive la surcharge matérielle de vitesse
+    pub fn set_enabled(&mut self, enable: bool) {
+        self.enabled = enable;
+        if enable {
+            self.override_control |= 0x01;
+        } else {
+            self.override_control &= !0x01;
+        }
+    }
+
+    /// Configure le débit (mantisse et exposant 0=Bps, 1=Kbps, 2=Mbps, 3=Gbps)
+    pub fn set_bitrate(&mut self, mantissa: u16, exponent: u8) {
+        self.mantissa = mantissa;
+        self.exponent = exponent.min(3);
+    }
+
+    /// Configure le mode Full Duplex
+    pub fn set_full_duplex(&mut self, full_duplex: bool) {
+        self.full_duplex = full_duplex;
+        if full_duplex {
+            self.override_control |= 1 << 12;
+        } else {
+            self.override_control &= !(1 << 12);
+        }
+    }
+
+    /// Calcule le débit binaire théorique en Mégabits par seconde (Mbps)
+    pub const fn bitrate_mbps(&self) -> u64 {
+        let m = self.mantissa as u64;
+        match self.exponent {
+            0 => m / 1_000_000,
+            1 => m / 1_000,
+            2 => m,
+            3 => m.saturating_mul(1000),
+            _ => m,
         }
     }
 }
@@ -11203,5 +11357,54 @@ mod tests {
         assert_eq!(parsed_imod.override_status, 0x55AA);
         assert_eq!(parsed_imod.moderation_interval_us(), 500);
         assert_eq!(parsed_imod.max_interrupts_per_sec(), 2000);
+
+        // 40. Test Capacité Étendue Port Speed Mapping Overrides (§7.20)
+        let mut ps_ovr = XhciPortSpeedMappingOverride::new(2, 4, 10, 3, true); // Port 2, PSI 4, 10 Gbps SuperSpeed+
+        assert_eq!(ps_ovr.port_num, 2);
+        assert_eq!(ps_ovr.speed_id, 4);
+        assert_eq!(ps_ovr.mantissa, 10);
+        assert_eq!(ps_ovr.exponent, 3);
+        assert!(ps_ovr.full_duplex);
+        assert_eq!(ps_ovr.bitrate_mbps(), 10_000); // 10 * 1000 = 10 000 Mbps
+        assert!(!ps_ovr.enabled);
+
+        ps_ovr.set_enabled(true);
+        assert!(ps_ovr.enabled);
+        ps_ovr.set_bitrate(480, 2); // 480 Mbps
+        assert_eq!(ps_ovr.bitrate_mbps(), 480);
+        ps_ovr.set_full_duplex(false);
+        assert!(!ps_ovr.full_duplex);
+
+        ps_ovr.next_ptr_dwords = 32;
+        ps_ovr.override_status = 0x1234_5678;
+        ps_ovr.set_bitrate(5, 3); // 5 Gbps
+        ps_ovr.set_full_duplex(true);
+
+        let encoded_ps = ps_ovr.encode();
+        assert_eq!(
+            encoded_ps[0] & 0xFF,
+            XHCI_EXT_CAP_PORT_SPEED_MAPPING_OVERRIDE as u32
+        );
+        assert_eq!((encoded_ps[0] >> 8) & 0xFF, 32);
+        assert_eq!((encoded_ps[0] >> 16) & 0xFF, 2);
+        assert_eq!((encoded_ps[0] >> 24) & 0xFF, 3);
+        assert_eq!(encoded_ps[1] & 0x01, 1);
+        assert_eq!((encoded_ps[1] >> 8) & 0x0F, 4);
+        assert_eq!((encoded_ps[1] >> 12) & 0x01, 1);
+        assert_eq!(encoded_ps[2], 0x1234_5678);
+        assert_eq!(encoded_ps[3] & 0xFFFF, 5);
+        assert_eq!((encoded_ps[3] >> 16) & 0x03, 3);
+
+        let parsed_ps = XhciPortSpeedMappingOverride::parse(&encoded_ps).unwrap();
+        assert_eq!(parsed_ps.next_ptr_dwords, 32);
+        assert_eq!(parsed_ps.port_num, 2);
+        assert_eq!(parsed_ps.protocol_revision, 3);
+        assert_eq!(parsed_ps.speed_id, 4);
+        assert_eq!(parsed_ps.mantissa, 5);
+        assert_eq!(parsed_ps.exponent, 3);
+        assert!(parsed_ps.full_duplex);
+        assert!(parsed_ps.enabled);
+        assert_eq!(parsed_ps.override_status, 0x1234_5678);
+        assert_eq!(parsed_ps.bitrate_mbps(), 5000);
     }
 }
