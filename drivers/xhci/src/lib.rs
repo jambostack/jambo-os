@@ -305,6 +305,7 @@ pub const XHCI_EXT_CAP_EXTENDED_MESSAGE_INTERRUPT: u8 = 17;
 pub const XHCI_EXT_CAP_SECONDARY_BANDWIDTH: u8 = 18;
 pub const XHCI_EXT_CAP_PORT_PROTOCOL_HIERARCHY: u8 = 19;
 pub const XHCI_EXT_CAP_EXTENDED_CAPABILITY_TABLE: u8 = 20;
+pub const XHCI_EXT_CAP_DEVICE_VIRTUALIZATION: u8 = 21;
 
 /// Masques de registres USB Legacy Support (xHCI 1.2 Section 7.1)
 /// Registre USBLEGSUP (Offset 0x00)
@@ -1597,6 +1598,110 @@ impl XhciExtendedCapabilityTable {
             return true;
         }
         false
+    }
+}
+
+/// Capacité Étendue xHCI 1.2 §7.13 : USB Device Virtualization & Secondary Host Controller Interface
+///
+/// Permet l'assignation directe, le partitionnement et le multiplexage matériel sécurisé
+/// des fonctions USB xHCI entre partitions hôtes, machines virtuelles invitées ou conteneurs
+/// de micro-noyau sans recours à l'émulation logicielle en Ring 0.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XhciDeviceVirtualization {
+    /// Pointeur dword vers la prochaine capacité étendue (0 = fin de liste)
+    pub next_ptr_dwords: u8,
+    /// Indique si la virtualisation de périphériques USB est matériellement activée
+    pub enabled: bool,
+    /// Nombre de contrôleurs hôtes secondaires (SHCI / Virtual Functions) supportés (0..=16)
+    pub num_secondary_controllers: u8,
+    /// Nombre de slots de périphériques réservés/alloués à la virtualisation (0..=255)
+    pub num_virtual_device_slots: u8,
+    /// Registre de contrôle matériel de virtualisation (VCTRL)
+    pub virt_control: u32,
+    /// Registre de statut matériel de virtualisation (VSTS)
+    pub virt_status: u32,
+}
+
+impl Default for XhciDeviceVirtualization {
+    fn default() -> Self {
+        Self::new(2, 16)
+    }
+}
+
+impl XhciDeviceVirtualization {
+    /// Crée une nouvelle structure de virtualisation de périphériques xHCI 1.2 §7.13
+    pub const fn new(num_secondary_controllers: u8, num_virtual_device_slots: u8) -> Self {
+        let sec = if num_secondary_controllers > 16 {
+            16
+        } else {
+            num_secondary_controllers
+        };
+        Self {
+            next_ptr_dwords: 0,
+            enabled: false,
+            num_secondary_controllers: sec,
+            num_virtual_device_slots,
+            virt_control: 0,
+            virt_status: 0,
+        }
+    }
+
+    /// Décode la capacité Device Virtualization à partir de 3 dwords MMIO
+    pub fn parse(dwords: &[u32]) -> Option<Self> {
+        if dwords.len() < 3 {
+            return None;
+        }
+        let cap_id = (dwords[0] & 0xFF) as u8;
+        if cap_id != XHCI_EXT_CAP_DEVICE_VIRTUALIZATION {
+            return None;
+        }
+        let next_ptr = ((dwords[0] >> 8) & 0xFF) as u8;
+        let num_sec = (((dwords[0] >> 16) & 0xFF) as u8).min(16);
+        let num_slots = ((dwords[0] >> 24) & 0xFF) as u8;
+
+        let vctrl = dwords[1];
+        let vsts = dwords[2];
+        let enabled = (vctrl & 0x01) != 0;
+
+        Some(Self {
+            next_ptr_dwords: next_ptr,
+            enabled,
+            num_secondary_controllers: num_sec,
+            num_virtual_device_slots: num_slots,
+            virt_control: vctrl,
+            virt_status: vsts,
+        })
+    }
+
+    /// Encode la capacité en 3 mots dwords MMIO 32-bit
+    pub const fn encode(&self) -> [u32; 3] {
+        let dw0 = (XHCI_EXT_CAP_DEVICE_VIRTUALIZATION as u32)
+            | ((self.next_ptr_dwords as u32) << 8)
+            | ((self.num_secondary_controllers as u32) << 16)
+            | ((self.num_virtual_device_slots as u32) << 24);
+        let dw1 = (self.virt_control & !0x01) | (if self.enabled { 1 } else { 0 });
+        let dw2 = self.virt_status;
+        [dw0, dw1, dw2]
+    }
+
+    /// Active ou désactive la virtualisation xHCI matérielle
+    pub fn set_enabled(&mut self, enable: bool) {
+        self.enabled = enable;
+        if enable {
+            self.virt_control |= 0x01;
+        } else {
+            self.virt_control &= !0x01;
+        }
+    }
+
+    /// Vérifie si un index de contrôleur secondaire donné est valide
+    pub const fn is_secondary_controller_valid(&self, index: u8) -> bool {
+        index < self.num_secondary_controllers
+    }
+
+    /// Vérifie si un slot de périphérique virtuel donné est éligible à l'assignation
+    pub const fn is_slot_assignable(&self, slot_id: u8) -> bool {
+        self.enabled && slot_id > 0 && slot_id <= self.num_virtual_device_slots
     }
 }
 
@@ -10035,5 +10140,43 @@ mod tests {
             parsed_tbl.find_offset_for_cap(XHCI_EXT_CAP_LOCAL_MEMORY),
             Some(36)
         );
+
+        // 22. xHCI 1.2 §7.13 USB Device Virtualization & Secondary Host Controller Interface
+        let mut dev_virt = XhciDeviceVirtualization::new(4, 32);
+        assert_eq!(dev_virt.num_secondary_controllers, 4);
+        assert_eq!(dev_virt.num_virtual_device_slots, 32);
+        assert!(!dev_virt.enabled);
+        assert!(!dev_virt.is_slot_assignable(1)); // désactivé initialement
+
+        dev_virt.set_enabled(true);
+        assert!(dev_virt.enabled);
+        assert!(dev_virt.is_slot_assignable(1));
+        assert!(dev_virt.is_slot_assignable(32));
+        assert!(!dev_virt.is_slot_assignable(0)); // slot 0 réservé
+        assert!(!dev_virt.is_slot_assignable(33)); // hors limite
+
+        assert!(dev_virt.is_secondary_controller_valid(0));
+        assert!(dev_virt.is_secondary_controller_valid(3));
+        assert!(!dev_virt.is_secondary_controller_valid(4));
+
+        dev_virt.next_ptr_dwords = 16;
+        dev_virt.virt_status = 0x1234;
+        let encoded_dv = dev_virt.encode();
+        assert_eq!(
+            encoded_dv[0] & 0xFF,
+            XHCI_EXT_CAP_DEVICE_VIRTUALIZATION as u32
+        );
+        assert_eq!((encoded_dv[0] >> 8) & 0xFF, 16);
+        assert_eq!((encoded_dv[0] >> 16) & 0xFF, 4);
+        assert_eq!((encoded_dv[0] >> 24) & 0xFF, 32);
+        assert_eq!(encoded_dv[1] & 0x01, 1);
+        assert_eq!(encoded_dv[2], 0x1234);
+
+        let parsed_dv = XhciDeviceVirtualization::parse(&encoded_dv).unwrap();
+        assert_eq!(parsed_dv.next_ptr_dwords, 16);
+        assert_eq!(parsed_dv.num_secondary_controllers, 4);
+        assert_eq!(parsed_dv.num_virtual_device_slots, 32);
+        assert!(parsed_dv.enabled);
+        assert_eq!(parsed_dv.virt_status, 0x1234);
     }
 }

@@ -412,7 +412,12 @@ name = "hostid"
 path = "src/bin/hostid.rs"
 test = false
 
-# 81 utilitaires Ring 3
+[[bin]]
+name = "arch"
+path = "src/bin/arch.rs"
+test = false
+
+# 82 utilitaires Ring 3
 
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }

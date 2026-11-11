@@ -620,6 +620,7 @@ impl JamboShell {
             "tty" | "/bin/tty" | "bin/tty" => self.cmd_tty(args, out),
             "groups" | "/bin/groups" | "bin/groups" => self.cmd_groups(args, out),
             "hostid" | "/bin/hostid" | "bin/hostid" => self.cmd_hostid(args, out),
+            "arch" | "/bin/arch" | "bin/arch" => self.cmd_arch(args, out),
             "cow" | "/bin/cow" | "bin/cow" => self.cmd_cow(args, out),
             "version" => self.cmd_version(out),
             "uptime" => self.cmd_uptime(out),
@@ -2694,6 +2695,43 @@ Utilitaire d'installation JamboOS (Serie 0.*.*)\n\
             (status, len)
         } else {
             let msg = b"hostid: pipe creation failed\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
+    }
+
+    fn cmd_arch(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if let (Ok((r_out, w_out)), Ok((r_err, w_err))) =
+            (libjambo::vfs::pipe(), libjambo::vfs::pipe())
+        {
+            let code = libjambo::coreutils::run_arch(args, w_out, w_err);
+            let _ = libjambo::coreutils::sys_close(w_out);
+            let _ = libjambo::coreutils::sys_close(w_err);
+
+            let mut len = 0;
+            if code == 0 {
+                let n_out = libjambo::coreutils::sys_read(r_out, out);
+                if n_out > 0 {
+                    len = n_out as usize;
+                }
+            } else {
+                let n_err = libjambo::coreutils::sys_read(r_err, out);
+                if n_err > 0 {
+                    len = n_err as usize;
+                }
+            }
+            let _ = libjambo::coreutils::sys_close(r_out);
+            let _ = libjambo::coreutils::sys_close(r_err);
+
+            let status = if code == 0 {
+                ShellStatus::Success
+            } else {
+                ShellStatus::ExecutionFailed
+            };
+            (status, len)
+        } else {
+            let msg = b"arch: pipe creation failed\n";
             let len = msg.len().min(out.len());
             out[..len].copy_from_slice(&msg[..len]);
             (ShellStatus::ExecutionFailed, len)
@@ -20363,5 +20401,22 @@ mod tests {
 
         let (st49, _len49) = shell.execute_line("hostid extra_operand", &mut out);
         assert_eq!(st49, ShellStatus::ExecutionFailed);
+
+        // 34. arch shell command
+        let (st50, len50) = shell.execute_line("arch", &mut out);
+        assert_eq!(st50, ShellStatus::Success);
+        let s50 = core::str::from_utf8(&out[..len50]).unwrap();
+        #[cfg(target_arch = "x86_64")]
+        assert_eq!(s50, "x86_64\n");
+        #[cfg(target_arch = "aarch64")]
+        assert_eq!(s50, "aarch64\n");
+
+        let (st51, len51) = shell.execute_line("arch --version", &mut out);
+        assert_eq!(st51, ShellStatus::Success);
+        let s51 = core::str::from_utf8(&out[..len51]).unwrap();
+        assert!(s51.contains("arch"));
+
+        let (st52, _len52) = shell.execute_line("arch extra_operand", &mut out);
+        assert_eq!(st52, ShellStatus::ExecutionFailed);
     }
 }

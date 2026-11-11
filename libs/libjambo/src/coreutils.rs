@@ -13387,6 +13387,7 @@ pub fn execute_coreutils_command(
         "tty" => run_tty(args, in_fd, out_fd, err_fd),
         "groups" => run_groups(args, in_fd, out_fd, err_fd),
         "hostid" => run_hostid(args, out_fd, err_fd),
+        "arch" => run_arch(args, out_fd, err_fd),
         _ => {
             let _ = sys_write(err_fd, cmd.as_bytes());
             let _ = sys_write(err_fd, b": command not found\n");
@@ -14750,6 +14751,7 @@ pub fn run_xargs(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
             "tty" => run_tty(effective_sub_args, 0, out_fd, err_fd),
             "groups" => run_groups(effective_sub_args, 0, out_fd, err_fd),
             "hostid" => run_hostid(effective_sub_args, out_fd, err_fd),
+            "arch" => run_arch(effective_sub_args, out_fd, err_fd),
             _ => {
                 let _ = sys_write(err_fd, b"xargs: ");
                 let _ = sys_write(err_fd, target_cmd.as_bytes());
@@ -19988,6 +19990,48 @@ Print the numeric identifier (in hexadecimal) for the current host.\n\n\
     0
 }
 
+/// Utilitaire POSIX / GNU coreutils : `arch` (Affiche l'architecture matérielle de la machine)
+///
+/// Équivalent canonique POSIX et GNU coreutils de `uname -m`.
+/// Affiche la chaîne d'architecture machine normalisée (`x86_64`, `aarch64`, etc.) terminée par `\n`.
+pub fn run_arch(args: &[&str], out_fd: i32, err_fd: i32) -> i32 {
+    if let Some(&arg) = args.first() {
+        if arg == "--help" {
+            let _ = sys_write(
+                out_fd,
+                b"Usage: arch [OPTION]...\n\
+Print machine architecture.\n\n\
+      --help     display this help and exit\n\
+      --version  output version information and exit\n",
+            );
+            return 0;
+        } else if arg == "--version" {
+            let _ = sys_write(out_fd, b"arch (jambo-coreutils) 0.1.0\n");
+            return 0;
+        } else if arg.starts_with('-') && arg != "-" {
+            let _ = sys_write(err_fd, b"arch: unrecognized option '");
+            let _ = sys_write(err_fd, arg.as_bytes());
+            let _ = sys_write(err_fd, b"'\nTry 'arch --help' for more information.\n");
+            return 1;
+        } else {
+            let _ = sys_write(err_fd, b"arch: extra operand '");
+            let _ = sys_write(err_fd, arg.as_bytes());
+            let _ = sys_write(err_fd, b"'\nTry 'arch --help' for more information.\n");
+            return 1;
+        }
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    let arch_name = b"x86_64\n";
+    #[cfg(target_arch = "aarch64")]
+    let arch_name = b"aarch64\n";
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    let arch_name = b"unknown\n";
+
+    let _ = sys_write(out_fd, arch_name);
+    0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -24368,5 +24412,35 @@ Chaque processus dispose de son propre CR3 sans aucun privilege materiel direct.
         // Extra operand
         let code_h3 = run_hostid(&["extra"], 1, 2);
         assert_eq!(code_h3, 1);
+
+        // 13. Test run_arch
+        let (out_ra1, out_wa1) = crate::vfs::pipe().unwrap();
+        let code_a1 = run_arch(&[], out_wa1, 2);
+        sys_close(out_wa1);
+        assert_eq!(code_a1, 0);
+        let mut bufa1 = [0u8; 64];
+        let na1 = sys_read(out_ra1, &mut bufa1);
+        sys_close(out_ra1);
+        let arch_str = core::str::from_utf8(&bufa1[..na1 as usize]).unwrap();
+        #[cfg(target_arch = "x86_64")]
+        assert_eq!(arch_str, "x86_64\n");
+        #[cfg(target_arch = "aarch64")]
+        assert_eq!(arch_str, "aarch64\n");
+
+        // Options --version et --help
+        let (out_ra2, out_wa2) = crate::vfs::pipe().unwrap();
+        let code_a2 = run_arch(&["--version"], out_wa2, 2);
+        sys_close(out_wa2);
+        assert_eq!(code_a2, 0);
+        let mut bufa2 = [0u8; 64];
+        let na2 = sys_read(out_ra2, &mut bufa2);
+        sys_close(out_ra2);
+        assert!(core::str::from_utf8(&bufa2[..na2 as usize])
+            .unwrap()
+            .contains("arch"));
+
+        // Extra operand
+        let code_a3 = run_arch(&["extra"], 1, 2);
+        assert_eq!(code_a3, 1);
     }
 }
