@@ -1128,6 +1128,63 @@ pub fn setgid(gid: u32) -> Result<(), SysError> {
     Ok(())
 }
 
+/// Capacité maximale des groupes supplémentaires par processus (POSIX NGROUPS_MAX)
+pub const NGROUPS_MAX: usize = 16;
+static SUPPLEMENTARY_GROUPS: [AtomicU32; NGROUPS_MAX] = [
+    AtomicU32::new(0),
+    AtomicU32::new(0),
+    AtomicU32::new(0),
+    AtomicU32::new(0),
+    AtomicU32::new(0),
+    AtomicU32::new(0),
+    AtomicU32::new(0),
+    AtomicU32::new(0),
+    AtomicU32::new(0),
+    AtomicU32::new(0),
+    AtomicU32::new(0),
+    AtomicU32::new(0),
+    AtomicU32::new(0),
+    AtomicU32::new(0),
+    AtomicU32::new(0),
+    AtomicU32::new(0),
+];
+static SUPPLEMENTARY_GROUPS_COUNT: AtomicU32 = AtomicU32::new(1);
+
+/// Retourne la liste des identifiants de groupe supplémentaires (POSIX getgroups)
+///
+/// Si `list` est vide (taille 0), retourne simplement le nombre total de groupes.
+/// Sinon remplit `list` jusqu'à concurrence de sa taille et retourne le nombre écrit.
+pub fn getgroups(size: usize, list: &mut [u32]) -> Result<usize, SysError> {
+    let count = SUPPLEMENTARY_GROUPS_COUNT.load(Ordering::Relaxed) as usize;
+    if size == 0 {
+        return Ok(count);
+    }
+    if size < count {
+        return Err(SysError::InvalidArgument);
+    }
+    let to_copy = count.min(list.len());
+    for i in 0..to_copy {
+        list[i] = SUPPLEMENTARY_GROUPS[i].load(Ordering::Relaxed);
+    }
+    Ok(to_copy)
+}
+
+/// Définit la liste des groupes supplémentaires (POSIX setgroups, root requis)
+pub fn setgroups(list: &[u32]) -> Result<(), SysError> {
+    let euid = geteuid();
+    if euid != 0 {
+        return Err(SysError::PermissionDenied);
+    }
+    if list.len() > NGROUPS_MAX {
+        return Err(SysError::InvalidArgument);
+    }
+    for i in 0..list.len() {
+        SUPPLEMENTARY_GROUPS[i].store(list[i], Ordering::Relaxed);
+    }
+    SUPPLEMENTARY_GROUPS_COUNT.store(list.len() as u32, Ordering::Relaxed);
+    Ok(())
+}
+
 // ============================================================================
 // TESTS UNITAIRES
 // ============================================================================
@@ -1513,5 +1570,24 @@ mod tests {
 
         // 4. Rejet sur type non fichier régulier
         assert_eq!(table.ftruncate(0, 0), Err(SysError::InvalidArgument)); // stdin ConsoleIn
+
+        // 5. Test POSIX getgroups et setgroups
+        let mut grp_buf = [0u32; 16];
+        let n = getgroups(16, &mut grp_buf).expect("getgroups initial");
+        assert!(n >= 1);
+        assert_eq!(grp_buf[0], 0);
+
+        // Configuration de groupes supplémentaires
+        assert!(setgroups(&[0, 10, 100, 1000]).is_ok());
+        let n2 = getgroups(16, &mut grp_buf).expect("getgroups updated");
+        assert_eq!(n2, 4);
+        assert_eq!(&grp_buf[..4], &[0, 10, 100, 1000]);
+
+        // Taille 0 retourne le count sans modifier le buffer
+        let count_only = getgroups(0, &mut []).expect("getgroups count");
+        assert_eq!(count_only, 4);
+
+        // Reset à [0]
+        assert!(setgroups(&[0]).is_ok());
     }
 }

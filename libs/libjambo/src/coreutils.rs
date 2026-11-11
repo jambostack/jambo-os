@@ -13381,6 +13381,11 @@ pub fn execute_coreutils_command(
         "shuf" => run_shuf(args, in_fd, out_fd, err_fd),
         "nice" => run_nice(args, in_fd, out_fd, err_fd),
         "timeout" => run_timeout(args, in_fd, out_fd, err_fd),
+        "whoami" => run_whoami(args, in_fd, out_fd, err_fd),
+        "printenv" => run_printenv(args, in_fd, out_fd, err_fd),
+        "logname" => run_logname(args, in_fd, out_fd, err_fd),
+        "tty" => run_tty(args, in_fd, out_fd, err_fd),
+        "groups" => run_groups(args, in_fd, out_fd, err_fd),
         _ => {
             let _ = sys_write(err_fd, cmd.as_bytes());
             let _ = sys_write(err_fd, b": command not found\n");
@@ -14738,6 +14743,11 @@ pub fn run_xargs(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
             "shuf" => run_shuf(effective_sub_args, 0, out_fd, err_fd),
             "nice" => run_nice(effective_sub_args, 0, out_fd, err_fd),
             "timeout" => run_timeout(effective_sub_args, 0, out_fd, err_fd),
+            "whoami" => run_whoami(effective_sub_args, 0, out_fd, err_fd),
+            "printenv" => run_printenv(effective_sub_args, 0, out_fd, err_fd),
+            "logname" => run_logname(effective_sub_args, 0, out_fd, err_fd),
+            "tty" => run_tty(effective_sub_args, 0, out_fd, err_fd),
+            "groups" => run_groups(effective_sub_args, 0, out_fd, err_fd),
             _ => {
                 let _ = sys_write(err_fd, b"xargs: ");
                 let _ = sys_write(err_fd, target_cmd.as_bytes());
@@ -19849,6 +19859,85 @@ Print the file name of the terminal connected to standard input.\n\n\
     }
 }
 
+/// Exécute l'utilitaire POSIX `groups` affichant les appartenances de groupes Ring 3
+///
+/// Selon la norme POSIX / coreutils :
+/// - Sans argument : affiche la liste des groupes de l'utilisateur courant séparés par un espace.
+/// - Avec arguments : affiche les groupes pour chaque utilisateur spécifié sous la forme `user : group1 group2 ...`.
+pub fn run_groups(args: &[&str], _in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    let mut users: [&str; 16] = [""; 16];
+    let mut user_count = 0usize;
+
+    for &arg in args {
+        if arg == "--help" {
+            let _ = sys_write(
+                out_fd,
+                b"Usage: groups [OPTION]... [USERNAME]...\n\
+Print group memberships for each USERNAME or, if no USERNAME is specified, for\n\
+the current process (which may differ if the groups database has changed).\n\n\
+      --help     display this help and exit\n\
+      --version  output version information and exit\n",
+            );
+            return 0;
+        } else if arg == "--version" {
+            let _ = sys_write(out_fd, b"groups (jambo-coreutils) 0.1.0\n");
+            return 0;
+        } else if arg.starts_with('-') && arg != "-" {
+            let _ = sys_write(err_fd, b"groups: unrecognized option '");
+            let _ = sys_write(err_fd, arg.as_bytes());
+            let _ = sys_write(err_fd, b"'\nTry 'groups --help' for more information.\n");
+            return 1;
+        } else {
+            if user_count < users.len() {
+                users[user_count] = arg;
+                user_count += 1;
+            }
+        }
+    }
+
+    if user_count == 0 {
+        // Affiche les groupes du processus courant
+        let mut grps = [0u32; 16];
+        let count = crate::vfs::getgroups(16, &mut grps).unwrap_or_default();
+        let gid = crate::vfs::getgid();
+
+        // Le groupe primaire est toujours affiché en premier
+        let primary_name = if gid == 0 { "root" } else { "user" };
+        let _ = sys_write(out_fd, primary_name.as_bytes());
+
+        // Groupes secondaires
+        for &g in grps.iter().take(count) {
+            if g != gid {
+                let _ = sys_write(out_fd, b" ");
+                if g == 0 {
+                    let _ = sys_write(out_fd, b"root");
+                } else if g == 1000 {
+                    let _ = sys_write(out_fd, b"user");
+                } else {
+                    write_u32(out_fd, g);
+                }
+            }
+        }
+        let _ = sys_write(out_fd, b"\n");
+        0
+    } else {
+        let mut exit_code = 0;
+        for &u in users.iter().take(user_count) {
+            if u == "root" {
+                let _ = sys_write(out_fd, b"root : root\n");
+            } else if u == "user" {
+                let _ = sys_write(out_fd, b"user : user\n");
+            } else {
+                let _ = sys_write(err_fd, b"groups: '");
+                let _ = sys_write(err_fd, u.as_bytes());
+                let _ = sys_write(err_fd, b"': no such user\n");
+                exit_code = 1;
+            }
+        }
+        exit_code
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -24157,5 +24246,48 @@ Chaque processus dispose de son propre CR3 sans aucun privilege materiel direct.
 
         let code_t6 = run_tty(&["invalid_operand"], 0, 1, 2);
         assert_eq!(code_t6, 2);
+
+        // 11. Test run_groups
+        // Sans argument : groupes de l'utilisateur courant (root par défaut)
+        let (out_rg1, out_wg1) = crate::vfs::pipe().unwrap();
+        let code_g1 = run_groups(&[], 0, out_wg1, 2);
+        sys_close(out_wg1);
+        assert_eq!(code_g1, 0);
+        let mut bufg1 = [0u8; 64];
+        let ng1 = sys_read(out_rg1, &mut bufg1);
+        sys_close(out_rg1);
+        assert_eq!(
+            core::str::from_utf8(&bufg1[..ng1 as usize]).unwrap(),
+            "root\n"
+        );
+
+        // Avec argument "root"
+        let (out_rg2, out_wg2) = crate::vfs::pipe().unwrap();
+        let code_g2 = run_groups(&["root"], 0, out_wg2, 2);
+        sys_close(out_wg2);
+        assert_eq!(code_g2, 0);
+        let mut bufg2 = [0u8; 64];
+        let ng2 = sys_read(out_rg2, &mut bufg2);
+        sys_close(out_rg2);
+        assert_eq!(
+            core::str::from_utf8(&bufg2[..ng2 as usize]).unwrap(),
+            "root : root\n"
+        );
+
+        // Avec utilisateur inexistant
+        let code_g3 = run_groups(&["unknown_user_999"], 0, 1, 2);
+        assert_eq!(code_g3, 1);
+
+        // Options --version
+        let (out_rg4, out_wg4) = crate::vfs::pipe().unwrap();
+        let code_g4 = run_groups(&["--version"], 0, out_wg4, 2);
+        sys_close(out_wg4);
+        assert_eq!(code_g4, 0);
+        let mut bufg4 = [0u8; 64];
+        let ng4 = sys_read(out_rg4, &mut bufg4);
+        sys_close(out_rg4);
+        assert!(core::str::from_utf8(&bufg4[..ng4 as usize])
+            .unwrap()
+            .contains("groups"));
     }
 }

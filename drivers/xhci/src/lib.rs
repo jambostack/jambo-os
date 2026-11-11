@@ -303,6 +303,7 @@ pub const XHCI_EXT_CAP_USB_DEBUG_CAPABILITY: u8 = 10;
 pub const XHCI_EXT_CAP_EXTENDED_POWER_MGMT_LPM: u8 = 15;
 pub const XHCI_EXT_CAP_EXTENDED_MESSAGE_INTERRUPT: u8 = 17;
 pub const XHCI_EXT_CAP_SECONDARY_BANDWIDTH: u8 = 18;
+pub const XHCI_EXT_CAP_PORT_PROTOCOL_HIERARCHY: u8 = 19;
 
 /// Masques de registres USB Legacy Support (xHCI 1.2 Section 7.1)
 /// Registre USBLEGSUP (Offset 0x00)
@@ -1176,6 +1177,242 @@ impl XhciSecondaryBandwidth {
             total = total.saturating_add(d.allocated_mbps);
         }
         total
+    }
+}
+
+/// Type de protocole de port USB dans la hiérarchie (§7.11)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum XhciPortProtocolType {
+    /// Port USB 2.0 (Low-Speed, Full-Speed, High-Speed)
+    Usb2,
+    /// Port USB 3.x Gen 1 (SuperSpeed 5 Gbps)
+    Usb3Gen1,
+    /// Port USB 3.x Gen 2 (SuperSpeedPlus 10 Gbps)
+    Usb3Gen2,
+    /// Port USB4 / Gen 3x2 (SuperSpeedPlus 20/40 Gbps)
+    Usb4,
+    /// Protocole inconnu ou personnalisé
+    Unknown(u8),
+}
+
+impl XhciPortProtocolType {
+    /// Convertit un code de protocole brut 4 bits en type énuméré
+    pub const fn from_raw(val: u8) -> Self {
+        match val & 0x0F {
+            0 => Self::Usb2,
+            1 => Self::Usb3Gen1,
+            2 => Self::Usb3Gen2,
+            3 => Self::Usb4,
+            other => Self::Unknown(other),
+        }
+    }
+
+    /// Convertit le type de protocole en code 4 bits
+    pub const fn to_raw(&self) -> u8 {
+        match self {
+            Self::Usb2 => 0,
+            Self::Usb3Gen1 => 1,
+            Self::Usb3Gen2 => 2,
+            Self::Usb4 => 3,
+            Self::Unknown(v) => *v & 0x0F,
+        }
+    }
+}
+
+/// Entrée de mappage de route d'un port USB (§7.11)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XhciPortRouteEntry {
+    /// Numéro logique du port physique xHCI (1..=255)
+    pub port_id: u8,
+    /// Type de protocole assigné
+    pub protocol: XhciPortProtocolType,
+    /// Identifiant du hub racine ou contrôleur parent (Root Tier / Hub Depth)
+    pub tier_level: u8,
+    /// Port actif et routable
+    pub is_active: bool,
+}
+
+impl XhciPortRouteEntry {
+    /// Crée une entrée de route de port par défaut
+    pub const fn new(port_id: u8, protocol: XhciPortProtocolType, tier_level: u8) -> Self {
+        Self {
+            port_id,
+            protocol,
+            tier_level,
+            is_active: true,
+        }
+    }
+
+    /// Encode l'entrée de port en un mot 16-bit :
+    /// - [7:0] : Port ID
+    /// - [11:8] : Protocol Type (4 bits)
+    /// - [14:12] : Tier Level (3 bits)
+    /// - [15] : Active flag
+    pub const fn encode_u16(&self) -> u16 {
+        (self.port_id as u16)
+            | (((self.protocol.to_raw() as u16) & 0x0F) << 8)
+            | (((self.tier_level as u16) & 0x07) << 12)
+            | (if self.is_active { 1 << 15 } else { 0 })
+    }
+
+    /// Décode une entrée 16-bit
+    pub const fn decode_u16(val: u16) -> Self {
+        let port_id = (val & 0xFF) as u8;
+        let protocol = XhciPortProtocolType::from_raw(((val >> 8) & 0x0F) as u8);
+        let tier_level = ((val >> 12) & 0x07) as u8;
+        let is_active = (val & (1 << 15)) != 0;
+        Self {
+            port_id,
+            protocol,
+            tier_level,
+            is_active,
+        }
+    }
+}
+
+/// Capacité Étendue xHCI 1.2 §7.11 : USB Subsystem Hierarchy & Port Protocol Route Maps
+///
+/// Fournit la cartographie hiérarchique de routage des ports USB du sous-système xHCI,
+/// permettant l'association déterministe entre ports physiques, protocoles pris en charge
+/// et niveaux de hiérarchie (Root Ports, Tier 1 Hub, Multi-Root Bridges).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XhciSubsystemHierarchy {
+    /// Pointeur dword vers la prochaine capacité étendue
+    pub next_ptr_dwords: u8,
+    /// Nombre de ports cartographiés dans cette instance (1..=16)
+    pub port_count: u8,
+    /// Table statique de mappage de route des ports (jusqu'à 16 ports)
+    pub routes: [XhciPortRouteEntry; 16],
+    /// Masque de routage haute vitesse / compatibilité USB4
+    pub routing_control: u16,
+}
+
+impl Default for XhciSubsystemHierarchy {
+    fn default() -> Self {
+        Self::new(4)
+    }
+}
+
+impl XhciSubsystemHierarchy {
+    /// Crée une nouvelle structure de hiérarchie pour `count` ports (max 16)
+    pub const fn new(count: u8) -> Self {
+        let c = if count > 16 {
+            16
+        } else if count == 0 {
+            1
+        } else {
+            count
+        };
+
+        let mut routes = [XhciPortRouteEntry::new(0, XhciPortProtocolType::Usb2, 0); 16];
+        let mut i = 0usize;
+        while i < (c as usize) {
+            let proto = if (i % 2) == 0 {
+                XhciPortProtocolType::Usb3Gen2
+            } else {
+                XhciPortProtocolType::Usb2
+            };
+            routes[i] = XhciPortRouteEntry::new((i + 1) as u8, proto, 0);
+            i += 1;
+        }
+
+        Self {
+            next_ptr_dwords: 0,
+            port_count: c,
+            routes,
+            routing_control: 0,
+        }
+    }
+
+    /// Décode la capacité depuis les dwords MMIO :
+    /// - `dwords[0]` : CapID [7:0], NextPtr [15:8], PortCount [23:16], RoutingCtrl [31:24] (partiel)
+    /// - `dwords[1..=8]` : Paires de routes de ports encodées en 16 bits chacune (2 routes par dword)
+    pub fn parse(dwords: &[u32]) -> Option<Self> {
+        if dwords.len() < 2 {
+            return None;
+        }
+        let cap_id = (dwords[0] & 0xFF) as u8;
+        if cap_id != XHCI_EXT_CAP_PORT_PROTOCOL_HIERARCHY {
+            return None;
+        }
+        let next_ptr = ((dwords[0] >> 8) & 0xFF) as u8;
+        let port_count = (((dwords[0] >> 16) & 0xFF) as u8).min(16);
+        let routing_ctrl = ((dwords[0] >> 24) & 0xFF) as u16;
+
+        let mut cap = Self::new(port_count);
+        cap.next_ptr_dwords = next_ptr;
+        cap.routing_control = routing_ctrl;
+
+        let mut route_idx = 0usize;
+        let mut dw_idx = 1usize;
+        while dw_idx < dwords.len() && route_idx < (port_count as usize) {
+            let dw = dwords[dw_idx];
+            let r0 = XhciPortRouteEntry::decode_u16((dw & 0xFFFF) as u16);
+            cap.routes[route_idx] = r0;
+            route_idx += 1;
+
+            if route_idx < (port_count as usize) {
+                let r1 = XhciPortRouteEntry::decode_u16(((dw >> 16) & 0xFFFF) as u16);
+                cap.routes[route_idx] = r1;
+                route_idx += 1;
+            }
+            dw_idx += 1;
+        }
+
+        Some(cap)
+    }
+
+    /// Encode la capacité en un tableau de dwords MMIO (taille variable selon port_count)
+    /// Retourne un tableau fixe de 9 dwords maximum (1 header + 8 dwords pour 16 routes)
+    pub fn encode(&self) -> ([u32; 9], usize) {
+        let mut dwords = [0u32; 9];
+        dwords[0] = (XHCI_EXT_CAP_PORT_PROTOCOL_HIERARCHY as u32)
+            | ((self.next_ptr_dwords as u32) << 8)
+            | ((self.port_count as u32) << 16)
+            | (((self.routing_control as u32) & 0xFF) << 24);
+
+        let pairs = (self.port_count as usize).div_ceil(2);
+        let mut i = 0usize;
+        while i < pairs {
+            let r0 = self.routes[i * 2].encode_u16() as u32;
+            let r1 = if (i * 2 + 1) < (self.port_count as usize) {
+                self.routes[i * 2 + 1].encode_u16() as u32
+            } else {
+                0
+            };
+            dwords[1 + i] = r0 | (r1 << 16);
+            i += 1;
+        }
+
+        (dwords, 1 + pairs)
+    }
+
+    /// Recherche le type de protocole assigné à un port physique
+    pub fn find_protocol_for_port(&self, port_id: u8) -> Option<XhciPortProtocolType> {
+        for r in &self.routes[..self.port_count as usize] {
+            if r.port_id == port_id && r.is_active {
+                return Some(r.protocol);
+            }
+        }
+        None
+    }
+
+    /// Associe un nouveau protocole à un port spécifique
+    pub fn set_port_route(
+        &mut self,
+        port_id: u8,
+        protocol: XhciPortProtocolType,
+        tier: u8,
+    ) -> bool {
+        for r in self.routes[..self.port_count as usize].iter_mut() {
+            if r.port_id == port_id {
+                r.protocol = protocol;
+                r.tier_level = tier;
+                r.is_active = true;
+                return true;
+            }
+        }
+        false
     }
 }
 
@@ -9515,5 +9752,54 @@ mod tests {
         assert_eq!(parsed_bw.num_domains, 4);
         assert!(parsed_bw.inter_host_bridge_enabled);
         assert_eq!(parsed_bw.total_bus_mbps, 10000);
+
+        // 20. xHCI 1.2 §7.11 USB Subsystem Hierarchy & Port Protocol Route Maps
+        let mut hierarchy = XhciSubsystemHierarchy::new(6);
+        assert_eq!(hierarchy.port_count, 6);
+        assert_eq!(
+            hierarchy.find_protocol_for_port(1),
+            Some(XhciPortProtocolType::Usb3Gen2)
+        );
+        assert_eq!(
+            hierarchy.find_protocol_for_port(2),
+            Some(XhciPortProtocolType::Usb2)
+        );
+
+        // Modification de route de port
+        assert!(hierarchy.set_port_route(3, XhciPortProtocolType::Usb4, 1));
+        assert_eq!(
+            hierarchy.find_protocol_for_port(3),
+            Some(XhciPortProtocolType::Usb4)
+        );
+
+        // Encodage et décodage MMIO
+        hierarchy.next_ptr_dwords = 24;
+        hierarchy.routing_control = 0xAA;
+        let (encoded_h, len_dwords) = hierarchy.encode();
+        assert_eq!(len_dwords, 4); // 1 header + 3 dwords pour 6 routes (2 par dword)
+        assert_eq!(
+            encoded_h[0] & 0xFF,
+            XHCI_EXT_CAP_PORT_PROTOCOL_HIERARCHY as u32
+        );
+        assert_eq!((encoded_h[0] >> 8) & 0xFF, 24);
+        assert_eq!((encoded_h[0] >> 16) & 0xFF, 6);
+        assert_eq!((encoded_h[0] >> 24) & 0xFF, 0xAA);
+
+        let parsed_h = XhciSubsystemHierarchy::parse(&encoded_h[..len_dwords]).unwrap();
+        assert_eq!(parsed_h.next_ptr_dwords, 24);
+        assert_eq!(parsed_h.port_count, 6);
+        assert_eq!(parsed_h.routing_control, 0xAA);
+        assert_eq!(
+            parsed_h.find_protocol_for_port(1),
+            Some(XhciPortProtocolType::Usb3Gen2)
+        );
+        assert_eq!(
+            parsed_h.find_protocol_for_port(2),
+            Some(XhciPortProtocolType::Usb2)
+        );
+        assert_eq!(
+            parsed_h.find_protocol_for_port(3),
+            Some(XhciPortProtocolType::Usb4)
+        );
     }
 }

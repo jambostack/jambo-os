@@ -618,6 +618,7 @@ impl JamboShell {
             "printenv" | "/bin/printenv" | "bin/printenv" => self.cmd_printenv(args, out),
             "logname" | "/bin/logname" | "bin/logname" => self.cmd_logname(args, out),
             "tty" | "/bin/tty" | "bin/tty" => self.cmd_tty(args, out),
+            "groups" | "/bin/groups" | "bin/groups" => self.cmd_groups(args, out),
             "cow" | "/bin/cow" | "bin/cow" => self.cmd_cow(args, out),
             "version" => self.cmd_version(out),
             "uptime" => self.cmd_uptime(out),
@@ -2618,6 +2619,43 @@ Utilitaire d'installation JamboOS (Serie 0.*.*)\n\
             (status, len)
         } else {
             let msg = b"tty: pipe creation failed\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
+    }
+
+    fn cmd_groups(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if let (Ok((r_out, w_out)), Ok((r_err, w_err))) =
+            (libjambo::vfs::pipe(), libjambo::vfs::pipe())
+        {
+            let code = libjambo::coreutils::run_groups(args, 0, w_out, w_err);
+            let _ = libjambo::coreutils::sys_close(w_out);
+            let _ = libjambo::coreutils::sys_close(w_err);
+
+            let mut len = 0;
+            if code == 0 {
+                let n_out = libjambo::coreutils::sys_read(r_out, out);
+                if n_out > 0 {
+                    len = n_out as usize;
+                }
+            } else {
+                let n_err = libjambo::coreutils::sys_read(r_err, out);
+                if n_err > 0 {
+                    len = n_err as usize;
+                }
+            }
+            let _ = libjambo::coreutils::sys_close(r_out);
+            let _ = libjambo::coreutils::sys_close(r_err);
+
+            let status = if code == 0 {
+                ShellStatus::Success
+            } else {
+                ShellStatus::ExecutionFailed
+            };
+            (status, len)
+        } else {
+            let msg = b"groups: pipe creation failed\n";
             let len = msg.len().min(out.len());
             out[..len].copy_from_slice(&msg[..len]);
             (ShellStatus::ExecutionFailed, len)
@@ -20254,5 +20292,24 @@ mod tests {
 
         let (st42, _len42) = shell.execute_line("tty extra_operand", &mut out);
         assert_eq!(st42, ShellStatus::ExecutionFailed);
+
+        // 32. groups shell command
+        let (st43, len43) = shell.execute_line("groups", &mut out);
+        assert_eq!(st43, ShellStatus::Success);
+        let s43 = core::str::from_utf8(&out[..len43]).unwrap();
+        assert_eq!(s43, "root\n");
+
+        let (st44, len44) = shell.execute_line("groups --version", &mut out);
+        assert_eq!(st44, ShellStatus::Success);
+        let s44 = core::str::from_utf8(&out[..len44]).unwrap();
+        assert!(s44.contains("groups"));
+
+        let (st45, len45) = shell.execute_line("groups root", &mut out);
+        assert_eq!(st45, ShellStatus::Success);
+        let s45 = core::str::from_utf8(&out[..len45]).unwrap();
+        assert_eq!(s45, "root : root\n");
+
+        let (st46, _len46) = shell.execute_line("groups unknown_user", &mut out);
+        assert_eq!(st46, ShellStatus::ExecutionFailed);
     }
 }

@@ -402,7 +402,12 @@ name = "tty"
 path = "src/bin/tty.rs"
 test = false
 
-# 79 utilitaires Ring 3
+[[bin]]
+name = "groups"
+path = "src/bin/groups.rs"
+test = false
+
+# 80 utilitaires Ring 3
 
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }
