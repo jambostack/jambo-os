@@ -332,5 +332,10 @@ name = "tabs"
 path = "src/bin/tabs.rs"
 test = false
 
+[[bin]]
+name = "tac"
+path = "src/bin/tac.rs"
+test = false
+
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }

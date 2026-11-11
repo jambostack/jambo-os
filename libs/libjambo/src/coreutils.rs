@@ -15604,6 +15604,371 @@ TABLIST may be a comma-separated or space-separated list of column numbers.\n",
     0
 }
 
+/// Configuration et options d'inversion pour l'utilitaire `tac`
+#[derive(Debug, Clone, Copy)]
+pub struct TacConfig<'a> {
+    /// Séparateur personnalisé d'enregistrements (défaut : `\n`)
+    pub separator: &'a [u8],
+    /// Placer le séparateur avant le contenu de l'enregistrement (`-b`, `--before`)
+    pub before: bool,
+    /// Interpréter le séparateur comme une expression rationnelle / motif regex (`-r`, `--regex`)
+    pub is_regex: bool,
+}
+
+impl<'a> Default for TacConfig<'a> {
+    fn default() -> Self {
+        Self {
+            separator: b"\n",
+            before: false,
+            is_regex: false,
+        }
+    }
+}
+
+/// Vérifie si une portion de tranche correspond à un motif de séparateur (littéral ou regex simplifié)
+fn match_separator(slice: &[u8], sep: &[u8], is_regex: bool) -> Option<usize> {
+    if sep.is_empty() {
+        return None;
+    }
+    if !is_regex {
+        if slice.starts_with(sep) {
+            Some(sep.len())
+        } else {
+            None
+        }
+    } else {
+        // Mode Regex simplifié sans allocation :
+        // Supporte : motifs littéraux, '.' (tout caractère), '\n', '\t', '\s' (espace/tab),
+        // '*' (répétition 0+ du token précédent), '+' (répétition 1+ du token précédent).
+        let match_single_token = |token: u8, b: u8| -> bool {
+            match token {
+                b'.' => true,
+                b'n' => b == b'\n',
+                b't' => b == b'\t',
+                b's' => b == b' ' || b == b'\t' || b == b'\n',
+                other => other == b,
+            }
+        };
+
+        let mut s_idx = 0;
+        let mut p_idx = 0;
+
+        while p_idx < sep.len() {
+            let mut is_escaped = false;
+            let mut token = sep[p_idx];
+            if token == b'\\' && p_idx + 1 < sep.len() {
+                is_escaped = true;
+                p_idx += 1;
+                token = sep[p_idx];
+            }
+            p_idx += 1;
+
+            let modifier = if p_idx < sep.len() && (sep[p_idx] == b'*' || sep[p_idx] == b'+') {
+                let m = sep[p_idx];
+                p_idx += 1;
+                m
+            } else {
+                b'1'
+            };
+
+            match modifier {
+                b'*' => {
+                    while s_idx < slice.len() {
+                        let matches = if is_escaped {
+                            match token {
+                                b'n' => slice[s_idx] == b'\n',
+                                b't' => slice[s_idx] == b'\t',
+                                b's' => slice[s_idx] == b' ' || slice[s_idx] == b'\t',
+                                c => slice[s_idx] == c,
+                            }
+                        } else {
+                            match_single_token(token, slice[s_idx])
+                        };
+                        if matches {
+                            s_idx += 1;
+                        } else {
+                            break;
+                        }
+                    }
+                }
+                b'+' => {
+                    let mut count = 0;
+                    while s_idx < slice.len() {
+                        let matches = if is_escaped {
+                            match token {
+                                b'n' => slice[s_idx] == b'\n',
+                                b't' => slice[s_idx] == b'\t',
+                                b's' => slice[s_idx] == b' ' || slice[s_idx] == b'\t',
+                                c => slice[s_idx] == c,
+                            }
+                        } else {
+                            match_single_token(token, slice[s_idx])
+                        };
+                        if matches {
+                            count += 1;
+                            s_idx += 1;
+                        } else {
+                            break;
+                        }
+                    }
+                    if count == 0 {
+                        return None;
+                    }
+                }
+                _ => {
+                    if s_idx >= slice.len() {
+                        return None;
+                    }
+                    let matches = if is_escaped {
+                        match token {
+                            b'n' => slice[s_idx] == b'\n',
+                            b't' => slice[s_idx] == b'\t',
+                            b's' => slice[s_idx] == b' ' || slice[s_idx] == b'\t',
+                            c => slice[s_idx] == c,
+                        }
+                    } else {
+                        match_single_token(token, slice[s_idx])
+                    };
+                    if !matches {
+                        return None;
+                    }
+                    s_idx += 1;
+                }
+            }
+        }
+        Some(s_idx)
+    }
+}
+
+/// Inverse et émet les enregistrements d'un flux d'octets en mémoire selon la configuration `tac`.
+pub fn process_tac_buffer(buffer: &[u8], config: &TacConfig, out_fd: i32) {
+    if buffer.is_empty() {
+        return;
+    }
+
+    // Index des séparateurs trouvés dans buffer
+    // Pour une conformité no_std stricte sans allocation dynamique de vecteurs non bornés,
+    // on gère jusqu'à 1024 enregistrements par bloc.
+    const MAX_RECORDS: usize = 1024;
+    let mut record_starts = [0usize; MAX_RECORDS];
+    let mut record_ends = [0usize; MAX_RECORDS];
+    let mut count = 0usize;
+
+    let sep = config.separator;
+    let is_regex = config.is_regex;
+    let before = config.before;
+
+    let mut cur_start = 0usize;
+    let mut i = 0usize;
+
+    while i < buffer.len() {
+        if let Some(sep_len) = match_separator(&buffer[i..], sep, is_regex) {
+            let sep_len = sep_len.max(1);
+            if before {
+                // Le séparateur est au début de l'enregistrement : [i .. prochain séparateur]
+                if count == 0 && i > 0 {
+                    // Préambule avant le tout premier séparateur
+                    record_starts[count] = 0;
+                    record_ends[count] = i;
+                    count += 1;
+                }
+                cur_start = i;
+                i += sep_len;
+                // Trouver la fin de cet enregistrement (jusqu'au prochain séparateur ou EOF)
+                let mut next_i = i;
+                while next_i < buffer.len() {
+                    if match_separator(&buffer[next_i..], sep, is_regex).is_some() {
+                        break;
+                    }
+                    next_i += 1;
+                }
+                if count < MAX_RECORDS {
+                    record_starts[count] = cur_start;
+                    record_ends[count] = next_i;
+                    count += 1;
+                }
+                i = next_i;
+                continue;
+            } else {
+                // Le séparateur est à la fin de l'enregistrement : [cur_start .. i + sep_len]
+                if count < MAX_RECORDS {
+                    record_starts[count] = cur_start;
+                    record_ends[count] = i + sep_len;
+                    count += 1;
+                }
+                i += sep_len;
+                cur_start = i;
+                continue;
+            }
+        }
+        i += 1;
+    }
+
+    if !before && cur_start < buffer.len() && count < MAX_RECORDS {
+        // Enregistrement final sans terminateur
+        record_starts[count] = cur_start;
+        record_ends[count] = buffer.len();
+        count += 1;
+    }
+
+    // Émission en ordre inversé (du dernier enregistrement au premier)
+    let mut rec_idx = count;
+    while rec_idx > 0 {
+        rec_idx -= 1;
+        let st = record_starts[rec_idx];
+        let en = record_ends[rec_idx];
+        if en > st {
+            let _ = sys_write(out_fd, &buffer[st..en]);
+        }
+    }
+}
+
+/// Lit entièrement un descripteur dans un tampon et effectue l'inversion `tac`.
+fn tac_stream(in_fd: i32, out_fd: i32, config: &TacConfig) -> i32 {
+    let mut file_buf = [0u8; 16384];
+    let mut total_read = 0usize;
+
+    loop {
+        let n = sys_read(in_fd, &mut file_buf[total_read..]);
+        if n <= 0 {
+            break;
+        }
+        total_read += n as usize;
+        if total_read >= file_buf.len() {
+            break;
+        }
+    }
+
+    process_tac_buffer(&file_buf[..total_read], config, out_fd);
+    0
+}
+
+/// Utilitaire Ring 3 : `tac` (Concatenate and Print Files in Reverse Order)
+///
+/// Spécification POSIX / GNU Coreutils :
+/// - `-b`, `--before` : Attache le séparateur avant le contenu plutôt qu'après
+/// - `-r`, `--regex` : Interprète le séparateur comme une expression rationnelle
+/// - `-s SEP`, `--separator=SEP` : Utilise SEP comme séparateur de lignes/enregistrements au lieu du saut de ligne
+/// - `--help` : Affiche l'aide utilisateur
+/// - `[FILE...]` : Fichiers d'entrée (ou stdin si `-` ou absent)
+pub fn run_tac(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    let mut before = false;
+    let mut is_regex = false;
+    let mut separator: &[u8] = b"\n";
+    let mut files: [&str; 16] = [""; 16];
+    let mut file_count = 0usize;
+
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i].trim();
+        if arg == "--help" {
+            let _ = sys_write(
+                err_fd,
+                b"Usage: tac [OPTION]... [FILE]...\n\
+Write each FILE to standard output, last line first.\n\n\
+  -b, --before             attach the separator before instead of after\n\
+  -r, --regex              interpret the separator as a regular expression\n\
+  -s, --separator=STRING   use STRING as the separator instead of newline\n\
+      --help               display this help and exit\n",
+            );
+            return 0;
+        }
+
+        if arg == "-b" || arg == "--before" {
+            before = true;
+            i += 1;
+            continue;
+        }
+
+        if arg == "-r" || arg == "--regex" {
+            is_regex = true;
+            i += 1;
+            continue;
+        }
+
+        if arg == "-s" || arg == "--separator" {
+            if i + 1 < args.len() {
+                separator = args[i + 1].as_bytes();
+                i += 2;
+                continue;
+            } else {
+                let _ = sys_write(err_fd, b"tac: option requires an argument -- 's'\n");
+                return 1;
+            }
+        } else if let Some(sep_str) = arg.strip_prefix("--separator=") {
+            separator = sep_str.as_bytes();
+            i += 1;
+            continue;
+        }
+
+        if arg.starts_with('-') && arg != "-" {
+            // Options courtes combinées (ex: -br, -rb)
+            let mut valid = true;
+            for &b in &arg.as_bytes()[1..] {
+                match b {
+                    b'b' => before = true,
+                    b'r' => is_regex = true,
+                    _ => {
+                        valid = false;
+                        break;
+                    }
+                }
+            }
+            if valid {
+                i += 1;
+                continue;
+            } else {
+                let _ = sys_write(err_fd, b"tac: unrecognized option '");
+                let _ = sys_write(err_fd, arg.as_bytes());
+                let _ = sys_write(err_fd, b"'\n");
+                return 1;
+            }
+        }
+
+        if file_count < files.len() {
+            files[file_count] = arg;
+            file_count += 1;
+        }
+        i += 1;
+    }
+
+    let config = TacConfig {
+        separator,
+        before,
+        is_regex,
+    };
+
+    if file_count == 0 {
+        return tac_stream(in_fd, out_fd, &config);
+    }
+
+    let mut exit_code = 0;
+    for &file in &files[..file_count] {
+        if file == "-" {
+            let res = tac_stream(in_fd, out_fd, &config);
+            if res != 0 {
+                exit_code = res;
+            }
+        } else {
+            let fd = sys_open(file, crate::vfs::O_RDONLY);
+            if fd < 0 {
+                let _ = sys_write(err_fd, b"tac: failed to open '");
+                let _ = sys_write(err_fd, file.as_bytes());
+                let _ = sys_write(err_fd, b"': No such file or directory\n");
+                exit_code = 1;
+                continue;
+            }
+            let res = tac_stream(fd, out_fd, &config);
+            let _ = sys_close(fd);
+            if res != 0 {
+                exit_code = res;
+            }
+        }
+    }
+
+    exit_code
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -18993,5 +19358,53 @@ Chaque processus dispose de son propre CR3 sans aucun privilege materiel direct.
         assert!(seq3.contains("\x1b[12G\x1bH"));
         assert!(seq3.contains("\x1b[24G\x1bH"));
         assert!(seq3.contains("\x1b[36G\x1bH"));
+
+        // Test 6: Inversion de flux `tac` (inversion par ligne, séparateur personnalisé et regex)
+        let (in_r_tac, in_w_tac) = crate::vfs::pipe().expect("pipe tac in");
+        let (out_r_tac, out_w_tac) = crate::vfs::pipe().expect("pipe tac out");
+        let _ = sys_write(in_w_tac, b"Line 1\nLine 2\nLine 3\n");
+        let _ = sys_close(in_w_tac);
+
+        let code_tac = run_tac(&[], in_r_tac, out_w_tac, 2);
+        let _ = sys_close(in_r_tac);
+        let _ = sys_close(out_w_tac);
+        assert_eq!(code_tac, 0);
+
+        let mut tac_buf = [0u8; 128];
+        let n_tac = sys_read(out_r_tac, &mut tac_buf);
+        let _ = sys_close(out_r_tac);
+        assert_eq!(&tac_buf[..n_tac as usize], b"Line 3\nLine 2\nLine 1\n");
+
+        // Test 7: `tac` avec séparateur personnalisé `-s`
+        let (in_r_s, in_w_s) = crate::vfs::pipe().expect("pipe tac s in");
+        let (out_r_s, out_w_s) = crate::vfs::pipe().expect("pipe tac s out");
+        let _ = sys_write(in_w_s, b"alpha|beta|gamma|");
+        let _ = sys_close(in_w_s);
+
+        let code_s = run_tac(&["-s", "|"], in_r_s, out_w_s, 2);
+        let _ = sys_close(in_r_s);
+        let _ = sys_close(out_w_s);
+        assert_eq!(code_s, 0);
+
+        let mut buf_s = [0u8; 64];
+        let n_s = sys_read(out_r_s, &mut buf_s);
+        let _ = sys_close(out_r_s);
+        assert_eq!(&buf_s[..n_s as usize], b"gamma|beta|alpha|");
+
+        // Test 8: `tac` avec flag `-b` (--before)
+        let (in_r_b, in_w_b) = crate::vfs::pipe().expect("pipe tac b in");
+        let (out_r_b, out_w_b) = crate::vfs::pipe().expect("pipe tac b out");
+        let _ = sys_write(in_w_b, b":one:two:three");
+        let _ = sys_close(in_w_b);
+
+        let code_b = run_tac(&["-b", "-s", ":"], in_r_b, out_w_b, 2);
+        let _ = sys_close(in_r_b);
+        let _ = sys_close(out_w_b);
+        assert_eq!(code_b, 0);
+
+        let mut buf_b = [0u8; 64];
+        let n_b = sys_read(out_r_b, &mut buf_b);
+        let _ = sys_close(out_r_b);
+        assert_eq!(&buf_b[..n_b as usize], b":three:two:one");
     }
 }

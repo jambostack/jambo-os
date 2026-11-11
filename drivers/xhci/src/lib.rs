@@ -572,6 +572,10 @@ pub const PORTPMSC_U2_TIMEOUT_MASK: u32 = 0xFF << PORTPMSC_U2_TIMEOUT_SHIFT;
 /// Flag Force Link PM Accept (FLA, bit 16 de PORTPMSC USB3)
 pub const PORTPMSC_FLA: u32 = 1 << 16;
 
+/// Masque et décalage pour le délai d'abandon de paquet de transfert USB 3.0 (Transfer Packet Pending Timeouts / TPP, bits 23:17 de PORTPMSC USB3)
+pub const PORTPMSC_USB3_TPP_TIMEOUT_SHIFT: u32 = 17;
+pub const PORTPMSC_USB3_TPP_TIMEOUT_MASK: u32 = 0x7F << PORTPMSC_USB3_TPP_TIMEOUT_SHIFT;
+
 /// Masques pour USB 2.0 Link Power Management (L1 / LPM dans PORTPMSC USB2)
 /// LPM Device Response / Best Effort Service Latency (BESL / L1S, bits 2:0)
 pub const PORTPMSC_L1S_SHIFT: u32 = 0;
@@ -800,11 +804,29 @@ impl PortStatus {
         u2_timeout: u8,
         force_link_pm_accept: bool,
     ) -> u32 {
+        Self::build_usb3_portpmsc_full_write(u1_timeout, u2_timeout, force_link_pm_accept, 0)
+    }
+
+    /// Calcule la valeur d'écriture complète pour le registre PORTPMSC (USB 3.0 / SuperSpeed)
+    /// incluant la configuration du délai d'abandon de paquet de transfert (Transfer Packet Pending Timeouts / TPP).
+    ///
+    /// Selon la spec xHCI 1.2 section 5.4.9.1 :
+    /// - `u1_timeout` : Délai d'inactivité avant transition U0 -> U1 (0 = désactivé, 1..=127 = 1 µs à 127 µs, 0xFF = infini).
+    /// - `u2_timeout` : Délai d'inactivité avant transition U1 -> U2 (0 = désactivé, 1..=254 = multiple de 256 µs, 0xFF = infini).
+    /// - `force_link_pm_accept` (FLA) : Force l'acceptation des requêtes de mise en veille U1/U2.
+    /// - `tpp_timeout` : Transfer Packet Pending Timeout (bits 23:17, 0..=127 en multiples de 8 µs ou 128 µs selon vitesse du lien).
+    pub fn build_usb3_portpmsc_full_write(
+        u1_timeout: u8,
+        u2_timeout: u8,
+        force_link_pm_accept: bool,
+        tpp_timeout: u8,
+    ) -> u32 {
         let mut val = (u1_timeout as u32) << PORTPMSC_U1_TIMEOUT_SHIFT;
         val |= (u2_timeout as u32) << PORTPMSC_U2_TIMEOUT_SHIFT;
         if force_link_pm_accept {
             val |= PORTPMSC_FLA;
         }
+        val |= ((tpp_timeout & 0x7F) as u32) << PORTPMSC_USB3_TPP_TIMEOUT_SHIFT;
         val
     }
 
@@ -836,6 +858,23 @@ impl PortStatus {
     /// Selon la spec xHCI 1.2, les valeurs valides pour U1 sont 0x00..=0x7F ainsi que 0xFF, et pour U2 0x00..=0xFE ainsi que 0xFF.
     pub fn validate_u1_u2_timers(u1_timeout: u8, u2_timeout: u8) -> bool {
         (u1_timeout <= 127 || u1_timeout == 0xFF) && (u2_timeout <= 254 || u2_timeout == 0xFF)
+    }
+
+    /// Vérifie si le port présente une erreur de configuration (Configuration Error Change - bit CEC de PORTSC).
+    ///
+    /// Selon la spécification xHCI 1.2 section 5.4.8, le bit CEC (bit 23) indique qu'une tentative
+    /// d'entraînement de lien USB 3.0 SuperSpeed a échoué car le contrôleur et le périphérique
+    /// n'ont pas pu s'accorder sur une configuration de lien valide (ex: échec d'échange de paquets TS1/TS2).
+    pub fn is_config_error(raw_portsc: u32) -> bool {
+        (raw_portsc & PORTSC_CEC) != 0
+    }
+
+    /// Construit la valeur d'écriture pour acquitter le bit de changement d'erreur de configuration (CEC).
+    ///
+    /// Préserve l'alimentation du port (PP) tout en évitant d'effacer les autres bits RW1C.
+    pub fn build_config_error_ack_write(raw_portsc: u32) -> u32 {
+        let pp_bit = raw_portsc & PORTSC_PP;
+        pp_bit | PORTSC_CEC
     }
 }
 
@@ -3286,6 +3325,9 @@ pub enum PortHotPlugEvent {
         port_id: u8,
         link_state: u8,
     },
+    PortConfigErrorDetected {
+        port_id: u8,
+    },
 }
 
 // ============================================================================
@@ -4960,6 +5002,11 @@ impl XhciController {
                 port_id,
                 speed: status.speed,
             });
+        }
+
+        // Détection d'erreur de configuration matérielle de lien USB 3.0 (CEC=1)
+        if status.change_config_error {
+            return Ok(PortHotPlugEvent::PortConfigErrorDetected { port_id });
         }
 
         // Détection de changement d'état de lien (PLC=1, ex: reprise de veille U3 -> U0 ou U3 -> Resume)
@@ -6951,5 +6998,33 @@ mod tests {
         assert!(PortStatus::validate_u1_u2_timers(0xFF, 0xFF));
         assert!(!PortStatus::validate_u1_u2_timers(128, 64));
         assert!(!PortStatus::validate_u1_u2_timers(200, 64));
+
+        // 24. Détection et validation d'erreur de configuration (CEC) & Timeout TPP
+        let pmsc_tpp = PortStatus::build_usb3_portpmsc_full_write(15, 30, true, 42);
+        assert_eq!(
+            (pmsc_tpp & PORTPMSC_USB3_TPP_TIMEOUT_MASK) >> PORTPMSC_USB3_TPP_TIMEOUT_SHIFT,
+            42
+        );
+        assert_eq!(pmsc_tpp & PORTPMSC_U1_TIMEOUT_MASK, 15);
+        assert_eq!((pmsc_tpp & PORTPMSC_U2_TIMEOUT_MASK) >> 8, 30);
+        assert_ne!(pmsc_tpp & PORTPMSC_FLA, 0);
+
+        let raw_cec = PORTSC_PP | PORTSC_CEC;
+        assert!(PortStatus::is_config_error(raw_cec));
+        let ack_cec = PortStatus::build_config_error_ack_write(raw_cec);
+        assert_eq!(ack_cec, PORTSC_PP | PORTSC_CEC);
+
+        let trb_cec = Trb {
+            parameter: 1 << 24, // Port ID 1
+            status: 0,
+            control: (TRB_TYPE_PORT_STATUS_CHANGE << 10) | 1,
+        };
+        let ev_cec = ctrl
+            .handle_port_status_change_trb(&trb_cec, raw_cec)
+            .expect("CEC event handled");
+        assert_eq!(
+            ev_cec,
+            PortHotPlugEvent::PortConfigErrorDetected { port_id: 1 }
+        );
     }
 }
