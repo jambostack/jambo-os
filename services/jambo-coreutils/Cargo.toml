@@ -557,7 +557,12 @@ name = "stdbuf"
 path = "src/bin/stdbuf.rs"
 test = false
 
-# 110 utilitaires Ring 3
+[[bin]]
+name = "uptime"
+path = "src/bin/uptime.rs"
+test = false
+
+# 111 utilitaires Ring 3
 
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }

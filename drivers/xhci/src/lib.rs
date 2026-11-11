@@ -338,6 +338,8 @@ pub const XHCI_EXT_CAP_USB4_INTER_DOMAIN_TRANSPORT: u8 = 47;
 /// Capacité étendue xHCI 1.2 / USB4 PCIe Tunneling Adapter Configuration Interface (§7.40)
 pub const XHCI_EXT_CAP_USB4_PCIE_ADAPTER_CONFIGURATION: u8 = 48;
 pub const XHCI_EXT_CAP_USB4_DP_ADAPTER_CONFIGURATION: u8 = 49;
+/// Capacité étendue xHCI 1.2 / USB4 Buffer Allocation Interface Capability (§7.42)
+pub const XHCI_EXT_CAP_USB4_BUFFER_ALLOCATION_INTERFACE: u8 = 50;
 
 /// Masques de registres USB Legacy Support (xHCI 1.2 Section 7.1)
 /// Registre USBLEGSUP (Offset 0x00)
@@ -5065,6 +5067,133 @@ impl XhciUsb4DpAdapterConfig {
     pub fn configure_video_stream(&mut self, bw_mbps: u16, bpc: u8) {
         self.video_bandwidth_mbps = bw_mbps;
         self.color_depth_bpc = bpc;
+    }
+}
+
+/// Capacité Étendue xHCI 1.2 / USB4 Buffer Allocation Interface Capability (§7.42)
+///
+/// Gère l'allocation déterministe des mémoires tampons de transmission/réception (Tx/Rx FIFOs),
+/// la politique de contrôle de flux par crédit (Credit-based Flow Control) et les crédits d'adaptateurs USB4.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XhciUsb4BufferAllocation {
+    /// Pointeur dword vers la prochaine capacité étendue (0 = fin de liste)
+    pub next_ptr_dwords: u8,
+    /// Interface d'allocation de tampons activée (bit 0)
+    pub enabled: bool,
+    /// Contrôle de flux par crédit activé (Credit-based Flow Control) (bit 1)
+    pub credit_flow_control: bool,
+    /// Mode d'allocation dynamique automatique activé par le contrôleur (bit 2)
+    pub dynamic_allocation: bool,
+    /// Alerte de seuil de sous-remplissage ou saturation (bit 3)
+    pub threshold_alert: bool,
+    /// Numéro d'adaptateur USB4 cible (bits 8..=15)
+    pub adapter_num: u8,
+    /// Numéro de routeur USB4 associé (bits 16..=23)
+    pub router_id: u8,
+    /// Type de trafic de la mémoire tampon : 0=Control/Config, 1=PCIe Tunnel, 2=DP Tunnel, 3=Host/InterDomain (bits 24..=31)
+    pub traffic_class: u8,
+    /// Registre de statut matériel et d'erreur de tampons (DWORD 2)
+    pub status: u32,
+    /// Nombre total de crédits de tampons alloués pour la transmission (Tx Credits) (DWORD 3 [15:0])
+    pub tx_credits_allocated: u16,
+    /// Nombre total de crédits de tampons alloués pour la réception (Rx Credits) (DWORD 3 [31:16])
+    pub rx_credits_allocated: u16,
+}
+
+impl XhciUsb4BufferAllocation {
+    /// Crée une nouvelle capacité USB4 Buffer Allocation Interface (§7.42)
+    pub const fn new(
+        adapter_num: u8,
+        router_id: u8,
+        traffic_class: u8,
+        tx_credits: u16,
+        rx_credits: u16,
+    ) -> Self {
+        Self {
+            next_ptr_dwords: 0,
+            enabled: false,
+            credit_flow_control: true,
+            dynamic_allocation: false,
+            threshold_alert: false,
+            adapter_num,
+            router_id,
+            traffic_class,
+            status: 0,
+            tx_credits_allocated: tx_credits,
+            rx_credits_allocated: rx_credits,
+        }
+    }
+
+    /// Parse les 4 dwords MMIO d'une capacité étendue USB4 Buffer Allocation Interface (§7.42)
+    pub const fn parse(dwords: &[u32; 4]) -> Option<Self> {
+        let cap_id = (dwords[0] & 0xFF) as u8;
+        if cap_id != XHCI_EXT_CAP_USB4_BUFFER_ALLOCATION_INTERFACE {
+            return None;
+        }
+
+        let next_ptr = ((dwords[0] >> 8) & 0xFF) as u8;
+        let ctrl = dwords[1];
+        let enabled = (ctrl & 0x01) != 0;
+        let credit_flow_control = (ctrl & 0x02) != 0;
+        let dynamic_allocation = (ctrl & 0x04) != 0;
+        let threshold_alert = (ctrl & 0x08) != 0;
+        let adapter_num = ((ctrl >> 8) & 0xFF) as u8;
+        let router_id = ((ctrl >> 16) & 0xFF) as u8;
+        let traffic_class = ((ctrl >> 24) & 0xFF) as u8;
+
+        let status = dwords[2];
+        let tx_credits = (dwords[3] & 0xFFFF) as u16;
+        let rx_credits = ((dwords[3] >> 16) & 0xFFFF) as u16;
+
+        Some(Self {
+            next_ptr_dwords: next_ptr,
+            enabled,
+            credit_flow_control,
+            dynamic_allocation,
+            threshold_alert,
+            adapter_num,
+            router_id,
+            traffic_class,
+            status,
+            tx_credits_allocated: tx_credits,
+            rx_credits_allocated: rx_credits,
+        })
+    }
+
+    /// Encode la capacité étendue en 4 mots dwords MMIO 32-bit
+    pub const fn encode(&self) -> [u32; 4] {
+        let dw0 = (XHCI_EXT_CAP_USB4_BUFFER_ALLOCATION_INTERFACE as u32)
+            | ((self.next_ptr_dwords as u32) << 8);
+        let mut ctrl = ((self.adapter_num as u32) << 8)
+            | ((self.router_id as u32) << 16)
+            | ((self.traffic_class as u32) << 24);
+        if self.enabled {
+            ctrl |= 0x01;
+        }
+        if self.credit_flow_control {
+            ctrl |= 0x02;
+        }
+        if self.dynamic_allocation {
+            ctrl |= 0x04;
+        }
+        if self.threshold_alert {
+            ctrl |= 0x08;
+        }
+        let dw2 = self.status;
+        let dw3 = (self.tx_credits_allocated as u32)
+            | (((self.rx_credits_allocated as u32) & 0xFFFF) << 16);
+        [dw0, ctrl, dw2, dw3]
+    }
+
+    /// Active ou désactive l'allocation de tampons
+    pub fn set_enabled(&mut self, enable: bool) {
+        self.enabled = enable;
+    }
+
+    /// Ajuste les crédits alloués en transmission et réception
+    pub fn update_credits(&mut self, tx: u16, rx: u16) {
+        self.tx_credits_allocated = tx;
+        self.rx_credits_allocated = rx;
     }
 }
 
@@ -14700,5 +14829,50 @@ mod tests {
         assert_eq!(parsed_dp_cfg.video_bandwidth_mbps, 32400);
         assert_eq!(parsed_dp_cfg.max_link_rate, 4);
         assert_eq!(parsed_dp_cfg.color_depth_bpc, 10);
+
+        // Test Capacité Étendue xHCI 1.2 / USB4 Buffer Allocation Interface (§7.42)
+        let mut usb4_buf = XhciUsb4BufferAllocation::new(3, 1, 1, 64, 128);
+        assert_eq!(usb4_buf.adapter_num, 3);
+        assert_eq!(usb4_buf.router_id, 1);
+        assert_eq!(usb4_buf.traffic_class, 1);
+        assert_eq!(usb4_buf.tx_credits_allocated, 64);
+        assert_eq!(usb4_buf.rx_credits_allocated, 128);
+        assert!(!usb4_buf.enabled);
+        assert!(usb4_buf.credit_flow_control);
+        assert!(!usb4_buf.dynamic_allocation);
+        assert!(!usb4_buf.threshold_alert);
+
+        usb4_buf.set_enabled(true);
+        usb4_buf.update_credits(128, 256);
+        usb4_buf.next_ptr_dwords = 48;
+        usb4_buf.status = 0x8899_AABB;
+
+        let encoded_buf = usb4_buf.encode();
+        assert_eq!(
+            encoded_buf[0] & 0xFF,
+            XHCI_EXT_CAP_USB4_BUFFER_ALLOCATION_INTERFACE as u32
+        );
+        assert_eq!((encoded_buf[0] >> 8) & 0xFF, 48);
+        assert_eq!(encoded_buf[1] & 0x01, 1); // enabled
+        assert_eq!(encoded_buf[1] & 0x02, 2); // credit flow control
+        assert_eq!((encoded_buf[1] >> 8) & 0xFF, 3); // adapter_num
+        assert_eq!((encoded_buf[1] >> 16) & 0xFF, 1); // router_id
+        assert_eq!((encoded_buf[1] >> 24) & 0xFF, 1); // traffic_class
+        assert_eq!(encoded_buf[2], 0x8899_AABB);
+        assert_eq!(encoded_buf[3] & 0xFFFF, 128); // tx_credits
+        assert_eq!((encoded_buf[3] >> 16) & 0xFFFF, 256); // rx_credits
+
+        let parsed_buf = XhciUsb4BufferAllocation::parse(&encoded_buf).unwrap();
+        assert_eq!(parsed_buf.next_ptr_dwords, 48);
+        assert!(parsed_buf.enabled);
+        assert!(parsed_buf.credit_flow_control);
+        assert!(!parsed_buf.dynamic_allocation);
+        assert!(!parsed_buf.threshold_alert);
+        assert_eq!(parsed_buf.adapter_num, 3);
+        assert_eq!(parsed_buf.router_id, 1);
+        assert_eq!(parsed_buf.traffic_class, 1);
+        assert_eq!(parsed_buf.status, 0x8899_AABB);
+        assert_eq!(parsed_buf.tx_credits_allocated, 128);
+        assert_eq!(parsed_buf.rx_credits_allocated, 256);
     }
 }

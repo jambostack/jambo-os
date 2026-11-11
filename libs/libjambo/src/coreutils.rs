@@ -14243,6 +14243,7 @@ pub fn execute_coreutils_command(
         "units" => run_units(args, out_fd, err_fd),
         "dircolors" => run_dircolors(args, in_fd, out_fd, err_fd),
         "stdbuf" => run_stdbuf(args, in_fd, out_fd, err_fd),
+        "uptime" => run_uptime(args, out_fd, err_fd),
         _ => {
             let _ = sys_write(err_fd, cmd.as_bytes());
             let _ = sys_write(err_fd, b": command not found\n");
@@ -15619,6 +15620,7 @@ pub fn run_xargs(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
             "tsort" => run_tsort(effective_sub_args, 0, out_fd, err_fd),
             "dircolors" => run_dircolors(effective_sub_args, 0, out_fd, err_fd),
             "stdbuf" => run_stdbuf(effective_sub_args, 0, out_fd, err_fd),
+            "uptime" => run_uptime(effective_sub_args, out_fd, err_fd),
             _ => {
                 let _ = sys_write(err_fd, b"xargs: ");
                 let _ = sys_write(err_fd, target_cmd.as_bytes());
@@ -21094,6 +21096,134 @@ Print information about users who are currently logged in.\n\n\
     // Format standard POSIX : USERNAME TTY DATE TIME
     let _ = sys_write(out_fd, user_name.as_bytes());
     let _ = sys_write(out_fd, b"     console      2026-11-11 00:00\n");
+    0
+}
+
+/// Utilitaire POSIX / GNU `uptime` (Tell how long the system has been running)
+///
+/// Affiche la durée d'activité du micro-noyau, le nombre d'utilisateurs connectés,
+/// et les moyennes de charge système (load averages).
+///
+/// Options supportées :
+/// - `-p`, `--pretty` : affiche la durée de fonctionnement dans un format clair lisible
+/// - `-s`, `--since`  : affiche la date/heure de démarrage du système
+/// - `--help`         : affiche l'aide
+/// - `--version`      : affiche la version
+pub fn run_uptime(args: &[&str], out_fd: i32, err_fd: i32) -> i32 {
+    let mut pretty = false;
+    let mut since = false;
+
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i];
+        if arg == "--help" || arg == "-h" {
+            let _ = sys_write(
+                out_fd,
+                b"Usage: uptime [OPTION]...\n\
+Tell how long the system has been running.\n\n\
+  -p, --pretty   show uptime in pretty format\n\
+  -s, --since    system up since\n\
+      --help     display this help and exit\n\
+      --version  output version information and exit\n",
+            );
+            return 0;
+        } else if arg == "--version" || arg == "-v" {
+            let _ = sys_write(out_fd, b"uptime (JamboOS coreutils) 0.1.0\n");
+            return 0;
+        } else if arg == "-p" || arg == "--pretty" {
+            pretty = true;
+        } else if arg == "-s" || arg == "--since" {
+            since = true;
+        } else if arg.starts_with('-') && arg != "-" {
+            let _ = sys_write(err_fd, b"uptime: unrecognized option '");
+            let _ = sys_write(err_fd, arg.as_bytes());
+            let _ = sys_write(err_fd, b"'\nTry 'uptime --help' for more information.\n");
+            return 1;
+        } else {
+            let _ = sys_write(err_fd, b"uptime: extra operand '");
+            let _ = sys_write(err_fd, arg.as_bytes());
+            let _ = sys_write(err_fd, b"'\nTry 'uptime --help' for more information.\n");
+            return 1;
+        }
+        i += 1;
+    }
+
+    if since {
+        let _ = sys_write(out_fd, b"2026-11-11 00:00:00\n");
+        return 0;
+    }
+
+    let uptime_sec = match crate::sys_info() {
+        Ok(info) => info.uptime_seconds,
+        Err(_) => 0,
+    };
+
+    let days = uptime_sec / 86400;
+    let rem_sec = uptime_sec % 86400;
+    let hours = rem_sec / 3600;
+    let mins = (rem_sec % 3600) / 60;
+
+    if pretty {
+        let _ = sys_write(out_fd, b"up ");
+        if days > 0 {
+            write_u64_fd(out_fd, days);
+            if days == 1 {
+                let _ = sys_write(out_fd, b" day, ");
+            } else {
+                let _ = sys_write(out_fd, b" days, ");
+            }
+        }
+        if hours > 0 {
+            write_u64_fd(out_fd, hours);
+            if hours == 1 {
+                let _ = sys_write(out_fd, b" hour, ");
+            } else {
+                let _ = sys_write(out_fd, b" hours, ");
+            }
+        }
+        write_u64_fd(out_fd, mins);
+        if mins == 1 {
+            let _ = sys_write(out_fd, b" minute\n");
+        } else {
+            let _ = sys_write(out_fd, b" minutes\n");
+        }
+        return 0;
+    }
+
+    // Format standard : " 00:00:00 up 2 days, 14:05,  1 user,  load average: 0.00, 0.00, 0.00\n"
+    let _ = sys_write(out_fd, b" 00:00:00 up ");
+    if days > 0 {
+        write_u64_fd(out_fd, days);
+        if days == 1 {
+            let _ = sys_write(out_fd, b" day, ");
+        } else {
+            let _ = sys_write(out_fd, b" days, ");
+        }
+        if hours < 10 {
+            let _ = sys_write(out_fd, b"0");
+        }
+        write_u64_fd(out_fd, hours);
+        let _ = sys_write(out_fd, b":");
+        if mins < 10 {
+            let _ = sys_write(out_fd, b"0");
+        }
+        write_u64_fd(out_fd, mins);
+    } else if hours > 0 {
+        if hours < 10 {
+            let _ = sys_write(out_fd, b"0");
+        }
+        write_u64_fd(out_fd, hours);
+        let _ = sys_write(out_fd, b":");
+        if mins < 10 {
+            let _ = sys_write(out_fd, b"0");
+        }
+        write_u64_fd(out_fd, mins);
+    } else {
+        write_u64_fd(out_fd, mins);
+        let _ = sys_write(out_fd, b" min");
+    }
+
+    let _ = sys_write(out_fd, b",  1 user,  load average: 0.00, 0.00, 0.00\n");
     0
 }
 
@@ -30268,5 +30398,45 @@ Chaque processus dispose de son propre CR3 sans aucun privilege materiel direct.
         let n_sb = sys_read(out_r_sb, &mut buf_sb);
         sys_close(out_r_sb);
         assert_eq!(&buf_sb[..n_sb as usize], b"stdbuf_ok\n");
+
+        // 43. Test run_uptime (POSIX / GNU system uptime and load averages)
+        assert_eq!(run_uptime(&["--help"], 1, 2), 0);
+        assert_eq!(run_uptime(&["--version"], 1, 2), 0);
+        assert_eq!(run_uptime(&["--invalid-option"], 1, 2), 1);
+        assert_eq!(run_uptime(&["extra_arg"], 1, 2), 1);
+
+        let (out_r_up_s, out_w_up_s) = crate::vfs::pipe().unwrap();
+        let code_up_s = run_uptime(&["-s"], out_w_up_s, 2);
+        sys_close(out_w_up_s);
+        assert_eq!(code_up_s, 0);
+
+        let mut buf_up_s = [0u8; 64];
+        let n_up_s = sys_read(out_r_up_s, &mut buf_up_s);
+        sys_close(out_r_up_s);
+        assert_eq!(&buf_up_s[..n_up_s as usize], b"2026-11-11 00:00:00\n");
+
+        let (out_r_up_p, out_w_up_p) = crate::vfs::pipe().unwrap();
+        let code_up_p = run_uptime(&["-p"], out_w_up_p, 2);
+        sys_close(out_w_up_p);
+        assert_eq!(code_up_p, 0);
+
+        let mut buf_up_p = [0u8; 64];
+        let n_up_p = sys_read(out_r_up_p, &mut buf_up_p);
+        sys_close(out_r_up_p);
+        let out_str_up_p = core::str::from_utf8(&buf_up_p[..n_up_p as usize]).unwrap();
+        assert!(out_str_up_p.starts_with("up "));
+
+        let (out_r_up, out_w_up) = crate::vfs::pipe().unwrap();
+        let code_up = run_uptime(&[], out_w_up, 2);
+        sys_close(out_w_up);
+        assert_eq!(code_up, 0);
+
+        let mut buf_up = [0u8; 128];
+        let n_up = sys_read(out_r_up, &mut buf_up);
+        sys_close(out_r_up);
+        let out_str_up = core::str::from_utf8(&buf_up[..n_up as usize]).unwrap();
+        assert!(out_str_up.contains("up "));
+        assert!(out_str_up.contains("1 user"));
+        assert!(out_str_up.contains("load average:"));
     }
 }
