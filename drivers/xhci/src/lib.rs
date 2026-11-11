@@ -348,6 +348,8 @@ pub const XHCI_EXT_CAP_USB4_INTER_DOMAIN_DMA: u8 = 52;
 pub const XHCI_EXT_CAP_USB4_ROUTER_OPERATIONS: u8 = 53;
 /// Capacité étendue xHCI 1.2 / USB4 Protocol Tunneling Statistics Interface (§7.46)
 pub const XHCI_EXT_CAP_USB4_PROTOCOL_TUNNELING_STATS: u8 = 54;
+/// Capacité étendue xHCI 1.2 / USB4 Host-to-Host Packet Tunneling Interface (§7.47)
+pub const XHCI_EXT_CAP_USB4_HOST_TO_HOST_PACKET_TUNNELING: u8 = 55;
 
 /// Masques de registres USB Legacy Support (xHCI 1.2 Section 7.1)
 /// Registre USBLEGSUP (Offset 0x00)
@@ -5665,6 +5667,114 @@ impl XhciUsb4ProtocolTunnelingStats {
     /// Enregistre la réception d'un paquet
     pub fn record_rx(&mut self) {
         self.rx_packet_count = self.rx_packet_count.wrapping_add(1);
+    }
+}
+
+/// Capacité Étendue xHCI 1.2 / USB4 Host-to-Host Packet Tunneling Interface (§7.47)
+///
+/// Modélise l'interface matérielle de tunnelisation directe de paquets inter-hôtes (H2H)
+/// sans passer par le contrôleur PCIe hôte complet, optimisant les transferts D2D et réseaux virtuels USB4.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XhciUsb4HostToHostPacketTunneling {
+    /// Pointeur dword vers la prochaine capacité étendue (0 = fin de liste)
+    pub next_ptr_dwords: u8,
+    /// Tunneling actif
+    pub enabled: bool,
+    /// Interruption de complétion de trame H2H activée
+    pub irq_enabled: bool,
+    /// Identifiant de l'adaptateur cible distant (0..=63)
+    pub target_adapter_id: u8,
+    /// Identifiant du domaine virtuel hôte local (0..=15)
+    pub local_domain_id: u8,
+    /// Taille maximale du paquet tunnelisé en octets (MTU : 256 à 4096 octets)
+    pub max_packet_size: u16,
+    /// Compteur 32-bit de trames tunnelisées H2H émises
+    pub tx_frame_count: u32,
+    /// Compteur 32-bit de trames tunnelisées H2H reçues
+    pub rx_frame_count: u32,
+}
+
+impl XhciUsb4HostToHostPacketTunneling {
+    /// Initialise une nouvelle capacité USB4 Host-to-Host Packet Tunneling
+    pub const fn new(target_adapter_id: u8, local_domain_id: u8, max_packet_size: u16) -> Self {
+        Self {
+            next_ptr_dwords: 0,
+            enabled: false,
+            irq_enabled: false,
+            target_adapter_id: target_adapter_id & 0x3F,
+            local_domain_id: local_domain_id & 0x0F,
+            max_packet_size,
+            tx_frame_count: 0,
+            rx_frame_count: 0,
+        }
+    }
+
+    /// Parse les 4 dwords MMIO d'une capacité étendue USB4 Host-to-Host Packet Tunneling (§7.47)
+    pub const fn parse(dwords: &[u32; 4]) -> Option<Self> {
+        let cap_id = (dwords[0] & 0xFF) as u8;
+        if cap_id != XHCI_EXT_CAP_USB4_HOST_TO_HOST_PACKET_TUNNELING {
+            return None;
+        }
+
+        let next_ptr = ((dwords[0] >> 8) & 0xFF) as u8;
+        let ctrl = dwords[1];
+        let enabled = (ctrl & 0x01) != 0;
+        let irq_enabled = (ctrl & 0x02) != 0;
+        let target_adapter_id = ((ctrl >> 8) & 0x3F) as u8;
+        let local_domain_id = ((ctrl >> 16) & 0x0F) as u8;
+        let max_packet_size = (ctrl >> 20) as u16;
+
+        let tx_frame_count = dwords[2];
+        let rx_frame_count = dwords[3];
+
+        Some(Self {
+            next_ptr_dwords: next_ptr,
+            enabled,
+            irq_enabled,
+            target_adapter_id,
+            local_domain_id,
+            max_packet_size,
+            tx_frame_count,
+            rx_frame_count,
+        })
+    }
+
+    /// Encode la capacité étendue en 4 mots dwords MMIO 32-bit
+    pub const fn encode(&self) -> [u32; 4] {
+        let dw0 = (XHCI_EXT_CAP_USB4_HOST_TO_HOST_PACKET_TUNNELING as u32)
+            | ((self.next_ptr_dwords as u32) << 8);
+        let mut ctrl = ((self.target_adapter_id as u32 & 0x3F) << 8)
+            | ((self.local_domain_id as u32 & 0x0F) << 16)
+            | ((self.max_packet_size as u32) << 20);
+        if self.enabled {
+            ctrl |= 0x01;
+        }
+        if self.irq_enabled {
+            ctrl |= 0x02;
+        }
+        let dw2 = self.tx_frame_count;
+        let dw3 = self.rx_frame_count;
+        [dw0, ctrl, dw2, dw3]
+    }
+
+    /// Active ou désactive le tunneling de paquets Host-to-Host
+    pub fn enable_tunneling(&mut self, enable: bool) {
+        self.enabled = enable;
+    }
+
+    /// Active ou désactive les interruptions H2H
+    pub fn configure_irq(&mut self, enable: bool) {
+        self.irq_enabled = enable;
+    }
+
+    /// Transmet une trame H2H
+    pub fn transmit_frame(&mut self) {
+        self.tx_frame_count = self.tx_frame_count.wrapping_add(1);
+    }
+
+    /// Réceptionne une trame H2H
+    pub fn receive_frame(&mut self) {
+        self.rx_frame_count = self.rx_frame_count.wrapping_add(1);
     }
 }
 
@@ -15519,5 +15629,46 @@ mod tests {
         assert_eq!(parsed_stats.protocol_type, 1);
         assert_eq!(parsed_stats.tx_packet_count, 2);
         assert_eq!(parsed_stats.rx_packet_count, 1);
+
+        // Test USB4 Host-to-Host Packet Tunneling Interface (§7.47)
+        let mut h2h = XhciUsb4HostToHostPacketTunneling::new(7, 3, 2048);
+        assert_eq!(h2h.target_adapter_id, 7);
+        assert_eq!(h2h.local_domain_id, 3);
+        assert_eq!(h2h.max_packet_size, 2048);
+        assert!(!h2h.enabled);
+        assert!(!h2h.irq_enabled);
+        assert_eq!(h2h.tx_frame_count, 0);
+        assert_eq!(h2h.rx_frame_count, 0);
+
+        h2h.enable_tunneling(true);
+        h2h.configure_irq(true);
+        h2h.transmit_frame();
+        h2h.transmit_frame();
+        h2h.receive_frame();
+        h2h.next_ptr_dwords = 48;
+
+        let encoded_h2h = h2h.encode();
+        assert_eq!(
+            encoded_h2h[0] & 0xFF,
+            XHCI_EXT_CAP_USB4_HOST_TO_HOST_PACKET_TUNNELING as u32
+        );
+        assert_eq!((encoded_h2h[0] >> 8) & 0xFF, 48);
+        assert_eq!(encoded_h2h[1] & 0x01, 1); // enabled
+        assert_eq!(encoded_h2h[1] & 0x02, 2); // irq_enabled
+        assert_eq!((encoded_h2h[1] >> 8) & 0x3F, 7); // target_adapter_id
+        assert_eq!((encoded_h2h[1] >> 16) & 0x0F, 3); // local_domain_id
+        assert_eq!((encoded_h2h[1] >> 20) as u16, 2048); // max_packet_size
+        assert_eq!(encoded_h2h[2], 2); // tx 2
+        assert_eq!(encoded_h2h[3], 1); // rx 1
+
+        let parsed_h2h = XhciUsb4HostToHostPacketTunneling::parse(&encoded_h2h).unwrap();
+        assert_eq!(parsed_h2h.next_ptr_dwords, 48);
+        assert!(parsed_h2h.enabled);
+        assert!(parsed_h2h.irq_enabled);
+        assert_eq!(parsed_h2h.target_adapter_id, 7);
+        assert_eq!(parsed_h2h.local_domain_id, 3);
+        assert_eq!(parsed_h2h.max_packet_size, 2048);
+        assert_eq!(parsed_h2h.tx_frame_count, 2);
+        assert_eq!(parsed_h2h.rx_frame_count, 1);
     }
 }

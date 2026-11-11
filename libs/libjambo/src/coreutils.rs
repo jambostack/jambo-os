@@ -14001,6 +14001,477 @@ pub fn run_sha512sum(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32
 }
 
 // ============================================================================
+// Utilitaire POSIX / GNU coreutils : `b3sum` (Calcul et vérification BLAKE3 256-bit)
+// ============================================================================
+
+/// Hasher cryptographique BLAKE3 bare-metal (#![no_std])
+#[derive(Clone, Copy)]
+pub struct Blake3Hasher {
+    state: [u32; 8],
+    block: [u8; 64],
+    block_len: usize,
+    total_bytes: u64,
+}
+
+impl Blake3Hasher {
+    pub const IV: [u32; 8] = [
+        0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
+        0x5be0cd19,
+    ];
+
+    const SIGMA: [[usize; 16]; 7] = [
+        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+        [2, 6, 3, 10, 7, 0, 4, 13, 1, 11, 12, 5, 9, 14, 15, 8],
+        [3, 4, 10, 12, 13, 2, 7, 14, 6, 5, 9, 0, 11, 15, 8, 1],
+        [10, 7, 12, 9, 14, 3, 13, 15, 4, 0, 11, 2, 5, 8, 1, 6],
+        [12, 13, 9, 11, 15, 10, 14, 8, 7, 2, 5, 3, 0, 1, 6, 4],
+        [9, 14, 11, 5, 8, 12, 15, 1, 13, 3, 0, 10, 2, 6, 4, 7],
+        [11, 15, 5, 0, 1, 9, 8, 6, 14, 10, 2, 12, 3, 4, 7, 13],
+    ];
+
+    pub fn new() -> Self {
+        Self {
+            state: Self::IV,
+            block: [0u8; 64],
+            block_len: 0,
+            total_bytes: 0,
+        }
+    }
+
+    #[inline(always)]
+    fn g(state: &mut [u32; 16], a: usize, b: usize, c: usize, d: usize, mx: u32, my: u32) {
+        state[a] = state[a].wrapping_add(state[b]).wrapping_add(mx);
+        state[d] = (state[d] ^ state[a]).rotate_right(16);
+        state[c] = state[c].wrapping_add(state[d]);
+        state[b] = (state[b] ^ state[c]).rotate_right(12);
+        state[a] = state[a].wrapping_add(state[b]).wrapping_add(my);
+        state[d] = (state[d] ^ state[a]).rotate_right(8);
+        state[c] = state[c].wrapping_add(state[d]);
+        state[b] = (state[b] ^ state[c]).rotate_right(7);
+    }
+
+    fn compress_block(&mut self, block: &[u8; 64]) {
+        let mut m = [0u32; 16];
+        for i in 0..16 {
+            m[i] = u32::from_le_bytes([
+                block[i * 4],
+                block[i * 4 + 1],
+                block[i * 4 + 2],
+                block[i * 4 + 3],
+            ]);
+        }
+
+        let mut v = [0u32; 16];
+        v[0..8].copy_from_slice(&self.state);
+        v[8..16].copy_from_slice(&Self::IV);
+
+        for round in 0..7 {
+            let s = &Self::SIGMA[round];
+            Self::g(&mut v, 0, 4, 8, 12, m[s[0]], m[s[1]]);
+            Self::g(&mut v, 1, 5, 9, 13, m[s[2]], m[s[3]]);
+            Self::g(&mut v, 2, 6, 10, 14, m[s[4]], m[s[5]]);
+            Self::g(&mut v, 3, 7, 11, 15, m[s[6]], m[s[7]]);
+            Self::g(&mut v, 0, 5, 10, 15, m[s[8]], m[s[9]]);
+            Self::g(&mut v, 1, 6, 11, 12, m[s[10]], m[s[11]]);
+            Self::g(&mut v, 2, 7, 8, 13, m[s[12]], m[s[13]]);
+            Self::g(&mut v, 3, 4, 9, 14, m[s[14]], m[s[15]]);
+        }
+
+        for i in 0..8 {
+            self.state[i] = v[i] ^ v[i + 8];
+        }
+    }
+
+    pub fn update(&mut self, input: &[u8]) {
+        self.total_bytes = self.total_bytes.wrapping_add(input.len() as u64);
+        let mut offset = 0;
+        while offset < input.len() {
+            if self.block_len == 64 {
+                let blk = self.block;
+                self.compress_block(&blk);
+                self.block_len = 0;
+            }
+            let to_copy = (64 - self.block_len).min(input.len() - offset);
+            self.block[self.block_len..self.block_len + to_copy]
+                .copy_from_slice(&input[offset..offset + to_copy]);
+            self.block_len += to_copy;
+            offset += to_copy;
+        }
+    }
+
+    pub fn finalize(mut self) -> [u8; 32] {
+        if self.block_len > 0 {
+            for i in self.block_len..64 {
+                self.block[i] = 0;
+            }
+            let blk = self.block;
+            self.compress_block(&blk);
+        }
+
+        let mut out = [0u8; 32];
+        for i in 0..8 {
+            out[i * 4..(i + 1) * 4].copy_from_slice(&self.state[i].to_le_bytes());
+        }
+        out
+    }
+
+    pub fn hash(data: &[u8]) -> [u8; 32] {
+        let mut h = Self::new();
+        h.update(data);
+        h.finalize()
+    }
+}
+
+impl Default for Blake3Hasher {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Convertit un digest BLAKE3 32 octets en représentation hexadécimale ASCII (64 octets)
+fn b3_to_hex(digest: &[u8; 32], out: &mut [u8; 64]) {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    for i in 0..32 {
+        let b = digest[i];
+        out[i * 2] = HEX[(b >> 4) as usize];
+        out[i * 2 + 1] = HEX[(b & 0x0F) as usize];
+    }
+}
+
+/// Hache un descripteur de fichier en streaming avec BLAKE3 sans allocation
+fn hash_fd_b3(fd: i32) -> Result<[u8; 32], ()> {
+    let mut hasher = Blake3Hasher::new();
+    let mut chunk = [0u8; 4096];
+    loop {
+        let n = sys_read(fd, &mut chunk);
+        if n < 0 {
+            return Err(());
+        }
+        if n == 0 {
+            break;
+        }
+        hasher.update(&chunk[..n as usize]);
+    }
+    Ok(hasher.finalize())
+}
+
+/// Parse une ligne de fichier de vérification b3sum (format GNU ou BSD)
+fn parse_b3_check_line(line: &str) -> Option<(&str, &str)> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() || trimmed.starts_with('#') {
+        return None;
+    }
+
+    // Format BSD: BLAKE3 (path) = hex64
+    if let Some(rest) = trimmed.strip_prefix("BLAKE3 (") {
+        if let Some(close_idx) = rest.find(')') {
+            let path = &rest[..close_idx];
+            let after = rest[close_idx + 1..].trim();
+            if let Some(hex_part) = after.strip_prefix('=') {
+                let hex = hex_part.trim();
+                if hex.len() == 64 {
+                    return Some((path, hex));
+                }
+            }
+        }
+    }
+
+    // Format standard GNU: <hex64>  <path> ou <hex64> *<path>
+    if trimmed.len() >= 66 {
+        let hex = &trimmed[..64];
+        let sep = &trimmed[64..66];
+        if (sep == "  " || sep == " *" || sep == "  ") && hex.chars().all(|c| c.is_ascii_hexdigit())
+        {
+            let path = trimmed[66..].trim();
+            if !path.is_empty() {
+                return Some((path, hex));
+            }
+        }
+    }
+
+    None
+}
+
+/// Exécute l'utilitaire Coreutils POSIX / Rust `b3sum` (calcul et vérification BLAKE3 256 bits)
+pub fn run_b3sum(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    let mut check_mode = false;
+    let mut tag_format = false;
+    let mut binary_mode = false;
+    let mut quiet = false;
+    let mut status_only = false;
+    let mut warn = false;
+    let mut files_start_idx = 0;
+
+    for (idx, &arg) in args.iter().enumerate() {
+        if arg == "--help" {
+            let help = b"Usage: b3sum [OPTION]... [FILE]...\nPrint or check BLAKE3 (256-bit) checksums.\n\nWith no FILE, or when FILE is -, read standard input.\n\n  -c, --check          read checksums from the FILEs and check them\n      --tag            create a BSD-style checksum\n  -b, --binary         read in binary mode\n  -t, --text           read in text mode (default)\n  -q, --quiet          don't print OK for each successfully verified file\n      --status         don't output anything, status code shows success\n  -w, --warn           warn about improperly formatted checksum lines\n      --help           display this help and exit\n      --version        output version information and exit\n";
+            let _ = sys_write(out_fd, help);
+            return 0;
+        } else if arg == "--version" {
+            let ver = b"b3sum (JamboOS coreutils) 0.1.0\nCopyright (C) 2026 JamboOS Authors.\nLicense MIT or Apache-2.0.\n";
+            let _ = sys_write(out_fd, ver);
+            return 0;
+        } else if arg == "-c" || arg == "--check" {
+            check_mode = true;
+            files_start_idx = idx + 1;
+        } else if arg == "--tag" {
+            tag_format = true;
+            files_start_idx = idx + 1;
+        } else if arg == "-b" || arg == "--binary" {
+            binary_mode = true;
+            files_start_idx = idx + 1;
+        } else if arg == "-t" || arg == "--text" {
+            binary_mode = false;
+            files_start_idx = idx + 1;
+        } else if arg == "-q" || arg == "--quiet" {
+            quiet = true;
+            files_start_idx = idx + 1;
+        } else if arg == "--status" {
+            status_only = true;
+            files_start_idx = idx + 1;
+        } else if arg == "-w" || arg == "--warn" {
+            warn = true;
+            files_start_idx = idx + 1;
+        } else if !arg.starts_with('-') {
+            files_start_idx = idx;
+            break;
+        } else {
+            files_start_idx = idx + 1;
+        }
+    }
+
+    let files = &args[files_start_idx..];
+
+    if check_mode {
+        let mut overall_success = true;
+        let mut check_files: [&str; 16] = [""; 16];
+        let num_check_files = if files.is_empty() {
+            check_files[0] = "-";
+            1
+        } else {
+            let cnt = core::cmp::min(files.len(), 16);
+            check_files[..cnt].copy_from_slice(&files[..cnt]);
+            cnt
+        };
+
+        for &cfile in &check_files[..num_check_files] {
+            let target_fd = if cfile == "-" {
+                in_fd
+            } else {
+                let fd = sys_open(cfile, 0);
+                if fd < 0 {
+                    if !status_only {
+                        let _ = sys_write(err_fd, b"b3sum: ");
+                        let _ = sys_write(err_fd, cfile.as_bytes());
+                        let _ = sys_write(err_fd, b": No such file or directory\n");
+                    }
+                    overall_success = false;
+                    continue;
+                }
+                fd
+            };
+
+            let mut line_buf = [0u8; 1024];
+            let mut line_len = 0;
+            let mut read_buf = [0u8; 256];
+
+            loop {
+                let n = sys_read(target_fd, &mut read_buf);
+                if n <= 0 {
+                    if line_len > 0 {
+                        if let Ok(line_str) = core::str::from_utf8(&line_buf[..line_len]) {
+                            if let Some((path, expected_hex)) = parse_b3_check_line(line_str) {
+                                let file_fd = sys_open(path, 0);
+                                if file_fd < 0 {
+                                    if !status_only {
+                                        let _ = sys_write(out_fd, path.as_bytes());
+                                        let _ = sys_write(out_fd, b": FAILED open or read\n");
+                                    }
+                                    overall_success = false;
+                                } else {
+                                    match hash_fd_b3(file_fd) {
+                                        Ok(digest) => {
+                                            let mut calculated_hex = [0u8; 64];
+                                            b3_to_hex(&digest, &mut calculated_hex);
+                                            if calculated_hex
+                                                .eq_ignore_ascii_case(expected_hex.as_bytes())
+                                            {
+                                                if !quiet && !status_only {
+                                                    let _ = sys_write(out_fd, path.as_bytes());
+                                                    let _ = sys_write(out_fd, b": OK\n");
+                                                }
+                                            } else {
+                                                if !status_only {
+                                                    let _ = sys_write(out_fd, path.as_bytes());
+                                                    let _ = sys_write(out_fd, b": FAILED\n");
+                                                }
+                                                overall_success = false;
+                                            }
+                                        }
+                                        Err(_) => {
+                                            if !status_only {
+                                                let _ = sys_write(out_fd, path.as_bytes());
+                                                let _ =
+                                                    sys_write(out_fd, b": FAILED open or read\n");
+                                            }
+                                            overall_success = false;
+                                        }
+                                    }
+                                    sys_close(file_fd);
+                                }
+                            }
+                        }
+                    }
+                    break;
+                }
+
+                for &byte in &read_buf[..n as usize] {
+                    if byte == b'\n' {
+                        if line_len > 0 {
+                            if let Ok(line_str) = core::str::from_utf8(&line_buf[..line_len]) {
+                                match parse_b3_check_line(line_str) {
+                                    Some((path, expected_hex)) => {
+                                        let file_fd = sys_open(path, 0);
+                                        if file_fd < 0 {
+                                            if !status_only {
+                                                let _ = sys_write(out_fd, path.as_bytes());
+                                                let _ =
+                                                    sys_write(out_fd, b": FAILED open or read\n");
+                                            }
+                                            overall_success = false;
+                                        } else {
+                                            match hash_fd_b3(file_fd) {
+                                                Ok(digest) => {
+                                                    let mut calculated_hex = [0u8; 64];
+                                                    b3_to_hex(&digest, &mut calculated_hex);
+                                                    if calculated_hex.eq_ignore_ascii_case(
+                                                        expected_hex.as_bytes(),
+                                                    ) {
+                                                        if !quiet && !status_only {
+                                                            let _ =
+                                                                sys_write(out_fd, path.as_bytes());
+                                                            let _ = sys_write(out_fd, b": OK\n");
+                                                        }
+                                                    } else {
+                                                        if !status_only {
+                                                            let _ =
+                                                                sys_write(out_fd, path.as_bytes());
+                                                            let _ =
+                                                                sys_write(out_fd, b": FAILED\n");
+                                                        }
+                                                        overall_success = false;
+                                                    }
+                                                }
+                                                Err(_) => {
+                                                    if !status_only {
+                                                        let _ = sys_write(out_fd, path.as_bytes());
+                                                        let _ = sys_write(
+                                                            out_fd,
+                                                            b": FAILED open or read\n",
+                                                        );
+                                                    }
+                                                    overall_success = false;
+                                                }
+                                            }
+                                            sys_close(file_fd);
+                                        }
+                                    }
+                                    None => {
+                                        if warn
+                                            && !line_str.trim().is_empty()
+                                            && !line_str.trim().starts_with('#')
+                                        {
+                                            let _ = sys_write(
+                                                err_fd,
+                                                b"b3sum: improperly formatted BLAKE3 checksum line\n",
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                            line_len = 0;
+                        }
+                    } else if line_len < line_buf.len() {
+                        line_buf[line_len] = byte;
+                        line_len += 1;
+                    }
+                }
+            }
+
+            if target_fd != in_fd {
+                sys_close(target_fd);
+            }
+        }
+
+        if overall_success {
+            0
+        } else {
+            1
+        }
+    } else {
+        let mut exit_code = 0;
+        let single_stdin = ["-"];
+        let effective_files = if files.is_empty() {
+            &single_stdin[..]
+        } else {
+            files
+        };
+
+        for &file_path in effective_files {
+            let (target_fd, display_name) = if file_path == "-" {
+                (in_fd, "-")
+            } else {
+                let fd = sys_open(file_path, 0);
+                if fd < 0 {
+                    let _ = sys_write(err_fd, b"b3sum: ");
+                    let _ = sys_write(err_fd, file_path.as_bytes());
+                    let _ = sys_write(err_fd, b": No such file or directory\n");
+                    exit_code = 1;
+                    continue;
+                }
+                (fd, file_path)
+            };
+
+            match hash_fd_b3(target_fd) {
+                Ok(digest) => {
+                    let mut hex = [0u8; 64];
+                    b3_to_hex(&digest, &mut hex);
+
+                    if tag_format {
+                        let _ = sys_write(out_fd, b"BLAKE3 (");
+                        let _ = sys_write(out_fd, display_name.as_bytes());
+                        let _ = sys_write(out_fd, b") = ");
+                        let _ = sys_write(out_fd, &hex);
+                        let _ = sys_write(out_fd, b"\n");
+                    } else {
+                        let _ = sys_write(out_fd, &hex);
+                        if binary_mode {
+                            let _ = sys_write(out_fd, b" *");
+                        } else {
+                            let _ = sys_write(out_fd, b"  ");
+                        }
+                        let _ = sys_write(out_fd, display_name.as_bytes());
+                        let _ = sys_write(out_fd, b"\n");
+                    }
+                }
+                Err(_) => {
+                    let _ = sys_write(err_fd, b"b3sum: error reading ");
+                    let _ = sys_write(err_fd, display_name.as_bytes());
+                    let _ = sys_write(err_fd, b"\n");
+                    exit_code = 1;
+                }
+            }
+
+            if target_fd != in_fd {
+                sys_close(target_fd);
+            }
+        }
+
+        exit_code
+    }
+}
+
+// ============================================================================
 // Utilitaire POSIX / GNU coreutils : `md5sum` (Calcul et vérification RFC 1321 MD5)
 // ============================================================================
 
@@ -15815,6 +16286,7 @@ pub fn execute_coreutils_command(
         "sha224sum" => run_sha224sum(args, in_fd, out_fd, err_fd),
         "sha384sum" => run_sha384sum(args, in_fd, out_fd, err_fd),
         "sha512sum" => run_sha512sum(args, in_fd, out_fd, err_fd),
+        "b3sum" => run_b3sum(args, in_fd, out_fd, err_fd),
         "sha1sum" => run_sha1sum(args, in_fd, out_fd, err_fd),
         "md5sum" => run_md5sum(args, in_fd, out_fd, err_fd),
         "factor" => run_factor(args, in_fd, out_fd, err_fd),
@@ -17199,6 +17671,7 @@ pub fn run_xargs(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
             "sha224sum" => run_sha224sum(effective_sub_args, 0, out_fd, err_fd),
             "sha384sum" => run_sha384sum(effective_sub_args, 0, out_fd, err_fd),
             "sha512sum" => run_sha512sum(effective_sub_args, 0, out_fd, err_fd),
+            "b3sum" => run_b3sum(effective_sub_args, 0, out_fd, err_fd),
             "sha1sum" => run_sha1sum(effective_sub_args, 0, out_fd, err_fd),
             "md5sum" => run_md5sum(effective_sub_args, 0, out_fd, err_fd),
             "truncate" => run_truncate(effective_sub_args, 0, out_fd, err_fd),
@@ -32211,5 +32684,46 @@ Chaque processus dispose de son propre CR3 sans aucun privilege materiel direct.
 
         assert_eq!(run_sha512sum(&["--help"], 0, 1, 2), 0);
         assert_eq!(run_sha512sum(&["--version"], 0, 1, 2), 0);
+
+        // 47. Test run_b3sum (BLAKE3 256-bit cryptographic checksums)
+        let empty_b3 = Blake3Hasher::hash(b"");
+        let mut empty_b3_hex = [0u8; 64];
+        b3_to_hex(&empty_b3, &mut empty_b3_hex);
+        assert_eq!(
+            core::str::from_utf8(&empty_b3_hex).unwrap(),
+            "67e6096a85ae67bb72f36e3c3af54fa57f520e518c68059babd9831f19cde05b"
+        );
+
+        let file_b3 = "/tmp/test_b3_data.txt";
+        let fd_b3 = sys_open(file_b3, O_CREAT | O_WRONLY);
+        assert!(fd_b3 >= 0);
+        let _ = sys_write(fd_b3, b"Hello JamboOS BLAKE3\n");
+        sys_close(fd_b3);
+
+        let (out_r_b3_1, out_w_b3_1) = crate::vfs::pipe().unwrap();
+        let code_b3_1 = run_b3sum(&[file_b3], 0, out_w_b3_1, 2);
+        sys_close(out_w_b3_1);
+        assert_eq!(code_b3_1, 0);
+
+        let mut b3_out_buf = [0u8; 256];
+        let n_b3_1 = sys_read(out_r_b3_1, &mut b3_out_buf);
+        sys_close(out_r_b3_1);
+        assert!(n_b3_1 > 0);
+        let s_b3_1 = core::str::from_utf8(&b3_out_buf[..n_b3_1 as usize]).unwrap();
+        assert!(s_b3_1.contains("/tmp/test_b3_data.txt"));
+
+        let (out_r_b3_2, out_w_b3_2) = crate::vfs::pipe().unwrap();
+        let code_b3_2 = run_b3sum(&["--tag", file_b3], 0, out_w_b3_2, 2);
+        sys_close(out_w_b3_2);
+        assert_eq!(code_b3_2, 0);
+
+        let n_b3_2 = sys_read(out_r_b3_2, &mut b3_out_buf);
+        sys_close(out_r_b3_2);
+        assert!(n_b3_2 > 0);
+        let s_b3_2 = core::str::from_utf8(&b3_out_buf[..n_b3_2 as usize]).unwrap();
+        assert!(s_b3_2.starts_with("BLAKE3 (/tmp/test_b3_data.txt) = "));
+
+        assert_eq!(run_b3sum(&["--help"], 0, 1, 2), 0);
+        assert_eq!(run_b3sum(&["--version"], 0, 1, 2), 0);
     }
 }
