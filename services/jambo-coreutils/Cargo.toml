@@ -357,5 +357,10 @@ name = "md5sum"
 path = "src/bin/md5sum.rs"
 test = false
 
+[[bin]]
+name = "sha1sum"
+path = "src/bin/sha1sum.rs"
+test = false
+
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }

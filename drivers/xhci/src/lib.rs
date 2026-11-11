@@ -302,6 +302,95 @@ pub const XHCI_EXT_CAP_LOCAL_MEMORY: u8 = 5;
 pub const XHCI_EXT_CAP_USB_DEBUG_CAPABILITY: u8 = 10;
 pub const XHCI_EXT_CAP_EXTENDED_MESSAGE_INTERRUPT: u8 = 17;
 
+/// Masques de registres USB Legacy Support (xHCI 1.2 Section 7.1)
+/// Registre USBLEGSUP (Offset 0x00)
+pub const USBLEGSUP_CAP_ID_MASK: u32 = 0xFF;
+pub const USBLEGSUP_NEXT_PTR_MASK: u32 = 0xFF00;
+pub const USBLEGSUP_BIOS_OWNED: u32 = 1 << 16;
+pub const USBLEGSUP_OS_OWNED: u32 = 1 << 24;
+
+/// Registre USBLEGCTLSTS (Offset 0x04) - USB Legacy Support Control/Status
+pub const USBLEGCTLSTS_SMI_ENABLE: u32 = 1 << 0;
+pub const USBLEGCTLSTS_SMI_OWNERSHIP_CHANGE_ENABLE: u32 = 1 << 13;
+pub const USBLEGCTLSTS_SMI_PCI_COMMAND_ENABLE: u32 = 1 << 14;
+pub const USBLEGCTLSTS_SMI_BAR_ENABLE: u32 = 1 << 15;
+pub const USBLEGCTLSTS_SMI_OWNERSHIP_CHANGE_EVENT: u32 = 1 << 29;
+pub const USBLEGCTLSTS_SMI_PCI_COMMAND_EVENT: u32 = 1 << 30;
+pub const USBLEGCTLSTS_SMI_BAR_EVENT: u32 = 1 << 31;
+
+/// Structure décodée de la capacité USB Legacy Support (xHCI 1.2 Section 7.1)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct XhciLegacySupport {
+    /// Pointeur dword vers la prochaine capacité étendue (0 = dernière)
+    pub next_ptr_dwords: u8,
+    /// Sémaphore de possession par le BIOS / Firmware UEFI (bit 16 de USBLEGSUP)
+    pub bios_owned: bool,
+    /// Sémaphore de possession par le Système d'Exploitation (bit 24 de USBLEGSUP)
+    pub os_owned: bool,
+    /// Interruption SMI activée sur le contrôleur (bit 0 de USBLEGCTLSTS)
+    pub smi_enabled: bool,
+    /// SMI activée sur transition d'appartenance OS/BIOS (bit 13 de USBLEGCTLSTS)
+    pub smi_ownership_change_enable: bool,
+    /// Événement SMI de changement d'appartenance en attente (bit 29 de USBLEGCTLSTS)
+    pub smi_ownership_change_event: bool,
+}
+
+impl XhciLegacySupport {
+    /// Parse les deux registres 32 bits USBLEGSUP et USBLEGCTLSTS
+    pub const fn parse(usblegsup: u32, usblegctlsts: u32) -> Self {
+        Self {
+            next_ptr_dwords: ((usblegsup >> 8) & 0xFF) as u8,
+            bios_owned: (usblegsup & USBLEGSUP_BIOS_OWNED) != 0,
+            os_owned: (usblegsup & USBLEGSUP_OS_OWNED) != 0,
+            smi_enabled: (usblegctlsts & USBLEGCTLSTS_SMI_ENABLE) != 0,
+            smi_ownership_change_enable: (usblegctlsts & USBLEGCTLSTS_SMI_OWNERSHIP_CHANGE_ENABLE)
+                != 0,
+            smi_ownership_change_event: (usblegctlsts & USBLEGCTLSTS_SMI_OWNERSHIP_CHANGE_EVENT)
+                != 0,
+        }
+    }
+
+    /// Encode le mot 32-bit USBLEGSUP en préservant le pointeur de chaînage
+    pub const fn encode_usblegsup(&self) -> u32 {
+        let mut val =
+            (XHCI_EXT_CAP_USB_LEGACY_SUPPORT as u32) | ((self.next_ptr_dwords as u32) << 8);
+        if self.bios_owned {
+            val |= USBLEGSUP_BIOS_OWNED;
+        }
+        if self.os_owned {
+            val |= USBLEGSUP_OS_OWNED;
+        }
+        val
+    }
+
+    /// Calcule la valeur de requête d'appropriation OS (claim) pour USBLEGSUP
+    pub const fn build_os_claim_usblegsup(raw_usblegsup: u32) -> u32 {
+        raw_usblegsup | USBLEGSUP_OS_OWNED
+    }
+
+    /// Calcule la valeur de libération d'appropriation OS (release) pour USBLEGSUP
+    pub const fn build_os_release_usblegsup(raw_usblegsup: u32) -> u32 {
+        raw_usblegsup & !USBLEGSUP_OS_OWNED
+    }
+
+    /// Calcule la valeur d'extinction des événements SMI et désactivation des interruptions SMI
+    /// pour le registre USBLEGCTLSTS (évite les traps SMI intempestifs une fois l'OS maître).
+    pub const fn build_quiesce_smi_control(raw_usblegctlsts: u32) -> u32 {
+        let mut val = raw_usblegctlsts
+            & !(USBLEGCTLSTS_SMI_ENABLE | USBLEGCTLSTS_SMI_OWNERSHIP_CHANGE_ENABLE);
+        // Écriture de 1 sur les bits RW1C pour acquitter tout événement en attente
+        val |= USBLEGCTLSTS_SMI_OWNERSHIP_CHANGE_EVENT
+            | USBLEGCTLSTS_SMI_PCI_COMMAND_EVENT
+            | USBLEGCTLSTS_SMI_BAR_EVENT;
+        val
+    }
+
+    /// Indique si le handoff OS/BIOS est pleinement accompli (OS=1 et BIOS=0)
+    pub const fn is_os_owned(&self) -> bool {
+        self.os_owned && !self.bios_owned
+    }
+}
+
 /// Structure de parsing d'en-tête de capacité étendue xHCI (Section 7.0)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct XhciExtendedCapHeader {
@@ -5570,6 +5659,47 @@ impl XhciController {
         self.bar0_base + ((xecp_dwords as u64) << 2)
     }
 
+    /// Lit l'état de la capacité USB Legacy Support (xHCI 1.2 section 7.1)
+    /// à partir de l'adresse MMIO de base de la capacité.
+    ///
+    /// # Safety
+    ///
+    /// Effectue des lectures volatiles 32-bit MMIO sur l'espace BAR0 du contrôleur xHCI.
+    pub fn read_legacy_support(&self, cap_addr: u64) -> XhciLegacySupport {
+        let usblegsup = unsafe { core::ptr::read_volatile(cap_addr as *const u32) };
+        let usblegctlsts = unsafe { core::ptr::read_volatile((cap_addr + 4) as *const u32) };
+        XhciLegacySupport::parse(usblegsup, usblegctlsts)
+    }
+
+    /// Revendique l'appropriation matérielle du contrôleur xHCI par l'OS (BIOS handoff).
+    ///
+    /// Positionne le bit `USBLEGSUP_OS_OWNED` (bit 24), puis désactive et acquitte les
+    /// interruptions SMI dans `USBLEGCTLSTS` selon xHCI 1.2 section 7.1.
+    ///
+    /// # Safety
+    ///
+    /// Effectue des accès MMIO volatils en lecture/écriture sur les registres USBLEGSUP et USBLEGCTLSTS.
+    pub fn claim_os_ownership(&mut self, cap_addr: u64) {
+        let raw_sup = unsafe { core::ptr::read_volatile(cap_addr as *const u32) };
+        let new_sup = XhciLegacySupport::build_os_claim_usblegsup(raw_sup);
+        unsafe { core::ptr::write_volatile(cap_addr as *mut u32, new_sup) };
+
+        let raw_ctl = unsafe { core::ptr::read_volatile((cap_addr + 4) as *const u32) };
+        let new_ctl = XhciLegacySupport::build_quiesce_smi_control(raw_ctl);
+        unsafe { core::ptr::write_volatile((cap_addr + 4) as *mut u32, new_ctl) };
+    }
+
+    /// Libère l'appropriation matérielle du contrôleur xHCI par l'OS.
+    ///
+    /// # Safety
+    ///
+    /// Effectue un accès MMIO volatil en écriture sur le registre USBLEGSUP.
+    pub fn release_os_ownership(&mut self, cap_addr: u64) {
+        let raw_sup = unsafe { core::ptr::read_volatile(cap_addr as *const u32) };
+        let new_sup = XhciLegacySupport::build_os_release_usblegsup(raw_sup);
+        unsafe { core::ptr::write_volatile(cap_addr as *mut u32, new_sup) };
+    }
+
     /// Émet une commande Evaluate Context sur le Command Ring.
     pub fn evaluate_context(
         &mut self,
@@ -7950,5 +8080,31 @@ mod tests {
         let stop_idx = ctrl.stop_endpoint(1, 2, true).unwrap();
         assert_eq!(ctrl.cmd_ring.trbs[stop_idx].trb_type(), TRB_TYPE_STOP_EP);
         assert_ne!(ctrl.cmd_ring.trbs[stop_idx].status & (1 << 23), 0); // suspend
+
+        // 8. USB Legacy Support Capability parsing & handoff manipulation
+        let raw_legs_bios: u32 = 1 | (4 << 8) | USBLEGSUP_BIOS_OWNED; // BIOS=1, OS=0, next=4
+        let raw_leg_ctl: u32 = USBLEGCTLSTS_SMI_ENABLE | USBLEGCTLSTS_SMI_OWNERSHIP_CHANGE_ENABLE;
+        let leg = XhciLegacySupport::parse(raw_legs_bios, raw_leg_ctl);
+        assert_eq!(leg.next_ptr_dwords, 4);
+        assert!(leg.bios_owned);
+        assert!(!leg.os_owned);
+        assert!(leg.smi_enabled);
+        assert!(leg.smi_ownership_change_enable);
+        assert!(!leg.is_os_owned());
+
+        // Simulation OS Claim
+        let claimed_usblegsup = XhciLegacySupport::build_os_claim_usblegsup(raw_legs_bios);
+        assert_ne!(claimed_usblegsup & USBLEGSUP_OS_OWNED, 0);
+        assert_ne!(claimed_usblegsup & USBLEGSUP_BIOS_OWNED, 0);
+
+        // Simulation BIOS Handoff Completion (BIOS bits cleared by firmware)
+        let handoff_completed = claimed_usblegsup & !USBLEGSUP_BIOS_OWNED;
+        let quiesced_ctl = XhciLegacySupport::build_quiesce_smi_control(raw_leg_ctl);
+        let leg_final = XhciLegacySupport::parse(handoff_completed, quiesced_ctl);
+        assert!(leg_final.os_owned);
+        assert!(!leg_final.bios_owned);
+        assert!(!leg_final.smi_enabled);
+        assert!(!leg_final.smi_ownership_change_enable);
+        assert!(leg_final.is_os_owned());
     }
 }
