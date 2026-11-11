@@ -452,7 +452,12 @@ name = "tsort"
 path = "src/bin/tsort.rs"
 test = false
 
-# 89 utilitaires Ring 3
+[[bin]]
+name = "banner"
+path = "src/bin/banner.rs"
+test = false
+
+# 90 utilitaires Ring 3
 
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }

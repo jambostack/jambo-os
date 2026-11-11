@@ -628,6 +628,7 @@ impl JamboShell {
             "pathchk" | "/bin/pathchk" | "bin/pathchk" => self.cmd_pathchk(args, out),
             "stty" | "/bin/stty" | "bin/stty" => self.cmd_stty(args, out),
             "tsort" | "/bin/tsort" | "bin/tsort" => self.cmd_tsort(args, out),
+            "banner" | "/bin/banner" | "bin/banner" => self.cmd_banner(args, out),
             "cow" | "/bin/cow" | "bin/cow" => self.cmd_cow(args, out),
             "version" => self.cmd_version(out),
             "uptime" => self.cmd_uptime(out),
@@ -2998,6 +2999,44 @@ Utilitaire d'installation JamboOS (Serie 0.*.*)\n\
             (status, len)
         } else {
             let msg = b"tsort: pipe creation failed\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
+    }
+
+    fn cmd_banner(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if let (Ok((r_out, w_out)), Ok((r_err, w_err))) =
+            (libjambo::vfs::pipe(), libjambo::vfs::pipe())
+        {
+            let code = libjambo::coreutils::run_banner(args, w_out, w_err);
+            let _ = libjambo::coreutils::sys_close(w_out);
+            let _ = libjambo::coreutils::sys_close(w_err);
+
+            let mut len = 0;
+            if code == 0 {
+                let n_out = libjambo::coreutils::sys_read(r_out, out);
+                if n_out > 0 {
+                    len = n_out as usize;
+                }
+            } else {
+                let n_err = libjambo::coreutils::sys_read(r_err, out);
+                if n_err > 0 {
+                    len = n_err as usize;
+                }
+            }
+
+            let _ = libjambo::coreutils::sys_close(r_out);
+            let _ = libjambo::coreutils::sys_close(r_err);
+
+            let status = if code == 0 {
+                ShellStatus::Success
+            } else {
+                ShellStatus::ExecutionFailed
+            };
+            (status, len)
+        } else {
+            let msg = b"banner: pipe creation failed\n";
             let len = msg.len().min(out.len());
             out[..len].copy_from_slice(&msg[..len]);
             (ShellStatus::ExecutionFailed, len)
@@ -20817,5 +20856,22 @@ mod tests {
 
         let (st81, _len81) = shell.execute_line("tsort /nonexistent_file_xyz", &mut out);
         assert_eq!(st81, ShellStatus::ExecutionFailed);
+
+        // 42. banner shell command
+        let (st82, len82) = shell.execute_line("banner --help", &mut out);
+        assert_eq!(st82, ShellStatus::Success);
+        let s82 = core::str::from_utf8(&out[..len82]).unwrap();
+        assert!(s82.contains("Usage: banner"));
+
+        let (st83, len83) = shell.execute_line("banner --version", &mut out);
+        assert_eq!(st83, ShellStatus::Success);
+        let s83 = core::str::from_utf8(&out[..len83]).unwrap();
+        assert!(s83.contains("banner (jambo-coreutils)"));
+
+        let (st84, len84) = shell.execute_line("banner HI", &mut out);
+        assert_eq!(st84, ShellStatus::Success);
+        assert!(len84 > 0);
+        let s84 = core::str::from_utf8(&out[..len84]).unwrap();
+        assert!(s84.contains('#'));
     }
 }

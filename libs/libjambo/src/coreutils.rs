@@ -21070,6 +21070,126 @@ pub fn run_tsort(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
     }
 }
 
+/// Exécute l'utilitaire Coreutils POSIX / BSD `banner`
+/// Affiche les arguments textuels sous forme de grand poster ASCII matriciel
+pub fn run_banner(args: &[&str], out_fd: i32, err_fd: i32) -> i32 {
+    let mut words: [&str; 16] = [""; 16];
+    let mut word_count = 0usize;
+
+    for &arg in args {
+        match arg {
+            "--help" => {
+                let _ = sys_write(
+                    out_fd,
+                    b"Usage: banner [STRING]...\nPrint large banner ASCII art for each argument.\n\n      --help     display this help and exit\n      --version  output version information and exit\n",
+                );
+                return 0;
+            }
+            "--version" => {
+                let _ = sys_write(out_fd, b"banner (jambo-coreutils) 0.1.0\n");
+                return 0;
+            }
+            s if s.starts_with('-') && s.len() > 1 => {
+                let _ = sys_write(err_fd, b"banner: unrecognized option '");
+                let _ = sys_write(err_fd, s.as_bytes());
+                let _ = sys_write(err_fd, b"'\nTry 'banner --help' for more information.\n");
+                return 1;
+            }
+            s => {
+                if word_count < words.len() {
+                    words[word_count] = s;
+                    word_count += 1;
+                }
+            }
+        }
+    }
+
+    if word_count == 0 {
+        // Si aucun argument, ne rien afficher et sortir avec succès
+        return 0;
+    }
+
+    // Matrice ASCII 5x5 simplifiée pour les caractères majuscules et chiffres courants
+    // Chaque glyphe fait 5 lignes de haut
+    for &word in &words[..word_count] {
+        for row in 0..5 {
+            let mut line_buf = [b' '; 128];
+            let mut col = 0usize;
+
+            for &b in word.as_bytes() {
+                let glyph_pattern: [u8; 5] = match b.to_ascii_uppercase() {
+                    b'A' => [0b01110, 0b10001, 0b11111, 0b10001, 0b10001],
+                    b'B' => [0b11110, 0b10001, 0b11110, 0b10001, 0b11110],
+                    b'C' => [0b01111, 0b10000, 0b10000, 0b10000, 0b01111],
+                    b'D' => [0b11110, 0b10001, 0b10001, 0b10001, 0b11110],
+                    b'E' => [0b11111, 0b10000, 0b11110, 0b10000, 0b11111],
+                    b'F' => [0b11111, 0b10000, 0b11110, 0b10000, 0b10000],
+                    b'G' => [0b01111, 0b10000, 0b10111, 0b10001, 0b01110],
+                    b'H' => [0b10001, 0b10001, 0b11111, 0b10001, 0b10001],
+                    b'I' => [0b11111, 0b00100, 0b00100, 0b00100, 0b11111],
+                    b'J' => [0b00001, 0b00001, 0b00001, 0b10001, 0b01110],
+                    b'K' => [0b10001, 0b10010, 0b11100, 0b10010, 0b10001],
+                    b'L' => [0b10000, 0b10000, 0b10000, 0b10000, 0b11111],
+                    b'M' => [0b10001, 0b11011, 0b10101, 0b10001, 0b10001],
+                    b'N' => [0b10001, 0b11001, 0b10101, 0b10011, 0b10001],
+                    b'O' => [0b01110, 0b10001, 0b10001, 0b10001, 0b01110],
+                    b'P' => [0b11110, 0b10001, 0b11110, 0b10000, 0b10000],
+                    b'Q' => [0b01110, 0b10001, 0b10101, 0b10010, 0b01101],
+                    b'R' => [0b11110, 0b10001, 0b11110, 0b10010, 0b10001],
+                    b'S' => [0b01111, 0b10000, 0b01110, 0b00001, 0b11110],
+                    b'T' => [0b11111, 0b00100, 0b00100, 0b00100, 0b00100],
+                    b'U' => [0b10001, 0b10001, 0b10001, 0b10001, 0b01110],
+                    b'V' => [0b10001, 0b10001, 0b10001, 0b01010, 0b00100],
+                    b'W' => [0b10001, 0b10001, 0b10101, 0b11011, 0b10001],
+                    b'X' => [0b10001, 0b01010, 0b00100, 0b01010, 0b10001],
+                    b'Y' => [0b10001, 0b01010, 0b00100, 0b00100, 0b00100],
+                    b'Z' => [0b11111, 0b00010, 0b00100, 0b01000, 0b11111],
+                    b'0' => [0b01110, 0b10011, 0b10101, 0b11001, 0b01110],
+                    b'1' => [0b00100, 0b01100, 0b00100, 0b00100, 0b01110],
+                    b'2' => [0b01110, 0b10001, 0b00110, 0b01000, 0b11111],
+                    b'3' => [0b11110, 0b00001, 0b01110, 0b00001, 0b11110],
+                    b'4' => [0b10010, 0b10010, 0b11111, 0b00010, 0b00010],
+                    b'5' => [0b11111, 0b10000, 0b11110, 0b00001, 0b11110],
+                    b'6' => [0b01110, 0b10000, 0b11110, 0b10001, 0b01110],
+                    b'7' => [0b11111, 0b00001, 0b00010, 0b00100, 0b00100],
+                    b'8' => [0b01110, 0b10001, 0b01110, 0b10001, 0b01110],
+                    b'9' => [0b01110, 0b10001, 0b01111, 0b00001, 0b01110],
+                    b'!' => [0b00100, 0b00100, 0b00100, 0b00000, 0b00100],
+                    b'?' => [0b01110, 0b10001, 0b00110, 0b00000, 0b00100],
+                    b'-' => [0b00000, 0b00000, 0b11111, 0b00000, 0b00000],
+                    b'_' => [0b00000, 0b00000, 0b00000, 0b00000, 0b11111],
+                    _ => [0b00000, 0b00000, 0b00000, 0b00000, 0b00000],
+                };
+
+                let row_bits = glyph_pattern[row];
+                for bit in (0..5).rev() {
+                    if col < line_buf.len() {
+                        line_buf[col] = if (row_bits & (1 << bit)) != 0 {
+                            b'#'
+                        } else {
+                            b' '
+                        };
+                        col += 1;
+                    }
+                }
+                // Espace entre caractères
+                if col < line_buf.len() {
+                    line_buf[col] = b' ';
+                    col += 1;
+                }
+            }
+
+            // Écriture de la ligne
+            let _ = sys_write(out_fd, &line_buf[..col]);
+            let _ = sys_write(out_fd, b"\n");
+        }
+        // Saut de ligne entre chaque mot
+        let _ = sys_write(out_fd, b"\n");
+    }
+
+    0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -25790,5 +25910,28 @@ Chaque processus dispose de son propre CR3 sans aucun privilege materiel direct.
         let _ = sys_read(out_r_cyc, &mut buf_cyc);
         sys_close(out_r_cyc);
         assert_eq!(code_cyc, 1);
+
+        // 21. Test run_banner
+        let (out_r_ban, out_w_ban) = crate::vfs::pipe().unwrap();
+        let code_ban = run_banner(&["OK"], out_w_ban, 2);
+        sys_close(out_w_ban);
+        assert_eq!(code_ban, 0);
+        let mut buf_ban = [0u8; 256];
+        let n_ban = sys_read(out_r_ban, &mut buf_ban);
+        sys_close(out_r_ban);
+        assert!(n_ban > 0);
+        let s_ban = core::str::from_utf8(&buf_ban[..n_ban as usize]).unwrap();
+        assert!(s_ban.contains('#'));
+
+        let (out_r_ban2, out_w_ban2) = crate::vfs::pipe().unwrap();
+        let code_ban2 = run_banner(&["--version"], out_w_ban2, 2);
+        sys_close(out_w_ban2);
+        assert_eq!(code_ban2, 0);
+        let mut buf_ban2 = [0u8; 64];
+        let n_ban2 = sys_read(out_r_ban2, &mut buf_ban2);
+        sys_close(out_r_ban2);
+        assert!(core::str::from_utf8(&buf_ban2[..n_ban2 as usize])
+            .unwrap()
+            .contains("banner (jambo-coreutils)"));
     }
 }

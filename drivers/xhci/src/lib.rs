@@ -313,6 +313,7 @@ pub const XHCI_EXT_CAP_LATENCY_TOLERANCE_MESSAGING: u8 = 25;
 pub const XHCI_EXT_CAP_ENDPOINT_POLLING_OVERRIDE: u8 = 26;
 pub const XHCI_EXT_CAP_INTERRUPTER_MODERATION_OVERRIDE: u8 = 27;
 pub const XHCI_EXT_CAP_PORT_SPEED_MAPPING_OVERRIDE: u8 = 28;
+pub const XHCI_EXT_CAP_EXTENDED_ENERGY_EFFICIENT_USB: u8 = 29;
 
 /// Masques de registres USB Legacy Support (xHCI 1.2 Section 7.1)
 /// Registre USBLEGSUP (Offset 0x00)
@@ -2631,6 +2632,122 @@ impl XhciPortSpeedMappingOverride {
             3 => m.saturating_mul(1000),
             _ => m,
         }
+    }
+}
+
+/// Capacité Étendue xHCI Extended Energy Efficient USB (EEE / xHCI 1.2 §7.21)
+///
+/// Permet la gestion matérielle avancée de la transition basse consommation
+/// L1/L2, les temporisateurs d'inactivité de lien et les états d'économie d'énergie.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XhciExtendedEnergyEfficientUsb {
+    /// Pointeur dword vers la prochaine capacité étendue (0 = fin de liste)
+    pub next_ptr_dwords: u8,
+    /// Activation de la gestion EEE (Energy Efficient Enable)
+    pub enabled: bool,
+    /// Nombre de ports physiques supportant l'extension EEE (1..=255)
+    pub port_count: u8,
+    /// Temporisateur d'inactivité L1 en microsecondes (0..=65535 µs)
+    pub l1_inactivity_timer_us: u16,
+    /// Seuil de réveil rapide (Fast Wake-Up latency threshold en 128 ns)
+    pub fast_wake_threshold_128ns: u8,
+    /// Support du Deep Sleep Controller (DSC)
+    pub deep_sleep_supported: bool,
+    /// Registre de contrôle brut MMIO
+    pub eee_control: u32,
+    /// Registre de statut brut MMIO
+    pub eee_status: u32,
+}
+
+impl XhciExtendedEnergyEfficientUsb {
+    /// Crée un nouveau descripteur étendu EEE
+    pub const fn new(port_count: u8, l1_timer_us: u16, fast_wake_128ns: u8) -> Self {
+        let count = if port_count == 0 { 1 } else { port_count };
+        Self {
+            next_ptr_dwords: 0,
+            enabled: false,
+            port_count: count,
+            l1_inactivity_timer_us: l1_timer_us,
+            fast_wake_threshold_128ns: fast_wake_128ns,
+            deep_sleep_supported: true,
+            eee_control: 0,
+            eee_status: 0,
+        }
+    }
+
+    /// Décode la capacité étendue depuis 4 dwords MMIO
+    pub fn parse(dwords: &[u32]) -> Option<Self> {
+        if dwords.len() < 4 {
+            return None;
+        }
+        let cap_id = (dwords[0] & 0xFF) as u8;
+        if cap_id != XHCI_EXT_CAP_EXTENDED_ENERGY_EFFICIENT_USB {
+            return None;
+        }
+        let next_ptr = ((dwords[0] >> 8) & 0xFF) as u8;
+        let ports = ((dwords[0] >> 16) & 0xFF) as u8;
+        let fw_thresh = ((dwords[0] >> 24) & 0xFF) as u8;
+
+        let ctrl = dwords[1];
+        let sts = dwords[2];
+        let timer = (dwords[3] & 0xFFFF) as u16;
+        let dsc = (dwords[3] & (1 << 16)) != 0;
+
+        let enabled = (ctrl & 0x01) != 0;
+
+        Some(Self {
+            next_ptr_dwords: next_ptr,
+            enabled,
+            port_count: if ports == 0 { 1 } else { ports },
+            l1_inactivity_timer_us: timer,
+            fast_wake_threshold_128ns: fw_thresh,
+            deep_sleep_supported: dsc,
+            eee_control: ctrl,
+            eee_status: sts,
+        })
+    }
+
+    /// Encode la capacité étendue en 4 mots dwords MMIO 32-bit
+    pub const fn encode(&self) -> [u32; 4] {
+        let dw0 = (XHCI_EXT_CAP_EXTENDED_ENERGY_EFFICIENT_USB as u32)
+            | ((self.next_ptr_dwords as u32) << 8)
+            | ((self.port_count as u32) << 16)
+            | ((self.fast_wake_threshold_128ns as u32) << 24);
+        let ctrl_flags = (self.eee_control & !0x01) | (if self.enabled { 1 } else { 0 });
+        let dw1 = ctrl_flags;
+        let dw2 = self.eee_status;
+        let dw3 = (self.l1_inactivity_timer_us as u32)
+            | (if self.deep_sleep_supported {
+                1 << 16
+            } else {
+                0
+            });
+        [dw0, dw1, dw2, dw3]
+    }
+
+    /// Active ou désactive l'efficacité énergétique EEE
+    pub fn set_enabled(&mut self, enable: bool) {
+        self.enabled = enable;
+        if enable {
+            self.eee_control |= 0x01;
+        } else {
+            self.eee_control &= !0x01;
+        }
+    }
+
+    /// Configure le temporisateur d'inactivité L1 (en microsecondes)
+    pub fn set_l1_inactivity_timer(&mut self, timer_us: u16) {
+        self.l1_inactivity_timer_us = timer_us;
+    }
+
+    /// Calcule la latence de réveil rapide en nanosecondes
+    pub const fn fast_wake_latency_ns(&self) -> u64 {
+        (self.fast_wake_threshold_128ns as u64) * 128
+    }
+
+    /// Vérifie si un port donné est dans la plage couverte par cette capacité EEE
+    pub const fn is_port_in_range(&self, port: u8) -> bool {
+        port >= 1 && port <= self.port_count
     }
 }
 
@@ -11406,5 +11523,49 @@ mod tests {
         assert!(parsed_ps.enabled);
         assert_eq!(parsed_ps.override_status, 0x1234_5678);
         assert_eq!(parsed_ps.bitrate_mbps(), 5000);
+
+        // 41. Test Capacité Étendue Extended Energy Efficient USB (§7.21)
+        let mut eee = XhciExtendedEnergyEfficientUsb::new(8, 250, 4); // 8 ports, 250 µs L1 timer, 4 * 128ns = 512 ns
+        assert_eq!(eee.port_count, 8);
+        assert_eq!(eee.l1_inactivity_timer_us, 250);
+        assert_eq!(eee.fast_wake_threshold_128ns, 4);
+        assert!(eee.deep_sleep_supported);
+        assert_eq!(eee.fast_wake_latency_ns(), 512);
+        assert!(!eee.enabled);
+        assert!(eee.is_port_in_range(1));
+        assert!(eee.is_port_in_range(8));
+        assert!(!eee.is_port_in_range(0));
+        assert!(!eee.is_port_in_range(9));
+
+        eee.set_enabled(true);
+        assert!(eee.enabled);
+        eee.set_l1_inactivity_timer(500);
+        assert_eq!(eee.l1_inactivity_timer_us, 500);
+
+        eee.next_ptr_dwords = 40;
+        eee.eee_status = 0xABCD_EF01;
+
+        let encoded_eee = eee.encode();
+        assert_eq!(
+            encoded_eee[0] & 0xFF,
+            XHCI_EXT_CAP_EXTENDED_ENERGY_EFFICIENT_USB as u32
+        );
+        assert_eq!((encoded_eee[0] >> 8) & 0xFF, 40);
+        assert_eq!((encoded_eee[0] >> 16) & 0xFF, 8);
+        assert_eq!((encoded_eee[0] >> 24) & 0xFF, 4);
+        assert_eq!(encoded_eee[1] & 0x01, 1);
+        assert_eq!(encoded_eee[2], 0xABCD_EF01);
+        assert_eq!(encoded_eee[3] & 0xFFFF, 500);
+        assert_eq!((encoded_eee[3] >> 16) & 0x01, 1);
+
+        let parsed_eee = XhciExtendedEnergyEfficientUsb::parse(&encoded_eee).unwrap();
+        assert_eq!(parsed_eee.next_ptr_dwords, 40);
+        assert_eq!(parsed_eee.port_count, 8);
+        assert_eq!(parsed_eee.fast_wake_threshold_128ns, 4);
+        assert!(parsed_eee.enabled);
+        assert_eq!(parsed_eee.eee_status, 0xABCD_EF01);
+        assert_eq!(parsed_eee.l1_inactivity_timer_us, 500);
+        assert!(parsed_eee.deep_sleep_supported);
+        assert_eq!(parsed_eee.fast_wake_latency_ns(), 512);
     }
 }
