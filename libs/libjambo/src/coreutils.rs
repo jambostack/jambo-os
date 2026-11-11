@@ -10804,6 +10804,7 @@ pub const BASE64_ALPHABET: &[u8; 64] =
 // ============================================================================
 
 pub const BASE32_ALPHABET: &[u8; 32] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+pub const BASE32HEX_ALPHABET: &[u8; 32] = b"0123456789ABCDEFGHIJKLMNOPQRSTUV";
 
 /// Erreurs de traitement Base32 (RFC 4648)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -10827,6 +10828,336 @@ pub fn base32_char_to_val(c: u8) -> u8 {
         b'=' => 0xFE,
         b'\r' | b'\n' | b' ' | b'\t' => 0xFD,
         _ => 0xFF,
+    }
+}
+
+/// Convertit un caractère ASCII RFC 4648 Base32hex (Extended Hex Alphabet) en valeur 5-bit (0..31)
+/// Retourne 0xFE pour '=', 0xFD pour whitespace (\r, \n, ' ', \t), 0xFF pour invalide.
+#[inline]
+pub fn base32hex_char_to_val(c: u8) -> u8 {
+    match c {
+        b'0'..=b'9' => c - b'0',
+        b'A'..=b'V' => c - b'A' + 10,
+        b'a'..=b'v' => c - b'a' + 10,
+        b'=' => 0xFE,
+        b'\r' | b'\n' | b' ' | b'\t' => 0xFD,
+        _ => 0xFF,
+    }
+}
+
+/// Encode un slice d'octets en Base32 standard ou Base32hex (RFC 4648)
+/// Insère des retours à la ligne après `wrap_cols` colonnes (si `wrap_cols > 0`).
+pub fn base32hex_encode(
+    input: &[u8],
+    out_buf: &mut [u8],
+    wrap_cols: usize,
+) -> Result<usize, Base32Error> {
+    let mut in_idx = 0;
+    let mut out_idx = 0;
+    let mut col = 0;
+
+    while in_idx < input.len() {
+        let remaining = input.len() - in_idx;
+        let mut chars = [b'='; 8];
+
+        if remaining >= 5 {
+            let b0 = input[in_idx] as usize;
+            let b1 = input[in_idx + 1] as usize;
+            let b2 = input[in_idx + 2] as usize;
+            let b3 = input[in_idx + 3] as usize;
+            let b4 = input[in_idx + 4] as usize;
+            in_idx += 5;
+            chars[0] = BASE32HEX_ALPHABET[b0 >> 3];
+            chars[1] = BASE32HEX_ALPHABET[((b0 & 0x07) << 2) | (b1 >> 6)];
+            chars[2] = BASE32HEX_ALPHABET[(b1 >> 1) & 0x1F];
+            chars[3] = BASE32HEX_ALPHABET[((b1 & 0x01) << 4) | (b2 >> 4)];
+            chars[4] = BASE32HEX_ALPHABET[((b2 & 0x0F) << 1) | (b3 >> 7)];
+            chars[5] = BASE32HEX_ALPHABET[(b3 >> 2) & 0x1F];
+            chars[6] = BASE32HEX_ALPHABET[((b3 & 0x03) << 3) | (b4 >> 5)];
+            chars[7] = BASE32HEX_ALPHABET[b4 & 0x1F];
+        } else if remaining == 4 {
+            let b0 = input[in_idx] as usize;
+            let b1 = input[in_idx + 1] as usize;
+            let b2 = input[in_idx + 2] as usize;
+            let b3 = input[in_idx + 3] as usize;
+            in_idx += 4;
+            chars[0] = BASE32HEX_ALPHABET[b0 >> 3];
+            chars[1] = BASE32HEX_ALPHABET[((b0 & 0x07) << 2) | (b1 >> 6)];
+            chars[2] = BASE32HEX_ALPHABET[(b1 >> 1) & 0x1F];
+            chars[3] = BASE32HEX_ALPHABET[((b1 & 0x01) << 4) | (b2 >> 4)];
+            chars[4] = BASE32HEX_ALPHABET[((b2 & 0x0F) << 1) | (b3 >> 7)];
+            chars[5] = BASE32HEX_ALPHABET[(b3 >> 2) & 0x1F];
+            chars[6] = BASE32HEX_ALPHABET[(b3 & 0x03) << 3];
+            chars[7] = b'=';
+        } else if remaining == 3 {
+            let b0 = input[in_idx] as usize;
+            let b1 = input[in_idx + 1] as usize;
+            let b2 = input[in_idx + 2] as usize;
+            in_idx += 3;
+            chars[0] = BASE32HEX_ALPHABET[b0 >> 3];
+            chars[1] = BASE32HEX_ALPHABET[((b0 & 0x07) << 2) | (b1 >> 6)];
+            chars[2] = BASE32HEX_ALPHABET[(b1 >> 1) & 0x1F];
+            chars[3] = BASE32HEX_ALPHABET[((b1 & 0x01) << 4) | (b2 >> 4)];
+            chars[4] = BASE32HEX_ALPHABET[(b2 & 0x0F) << 1];
+            chars[5] = b'=';
+            chars[6] = b'=';
+            chars[7] = b'=';
+        } else if remaining == 2 {
+            let b0 = input[in_idx] as usize;
+            let b1 = input[in_idx + 1] as usize;
+            in_idx += 2;
+            chars[0] = BASE32HEX_ALPHABET[b0 >> 3];
+            chars[1] = BASE32HEX_ALPHABET[((b0 & 0x07) << 2) | (b1 >> 6)];
+            chars[2] = BASE32HEX_ALPHABET[(b1 >> 1) & 0x1F];
+            chars[3] = BASE32HEX_ALPHABET[(b1 & 0x01) << 4];
+            chars[4] = b'=';
+            chars[5] = b'=';
+            chars[6] = b'=';
+            chars[7] = b'=';
+        } else if remaining == 1 {
+            let b0 = input[in_idx] as usize;
+            in_idx += 1;
+            chars[0] = BASE32HEX_ALPHABET[b0 >> 3];
+            chars[1] = BASE32HEX_ALPHABET[(b0 & 0x07) << 2];
+            chars[2] = b'=';
+            chars[3] = b'=';
+            chars[4] = b'=';
+            chars[5] = b'=';
+            chars[6] = b'=';
+            chars[7] = b'=';
+        }
+
+        for &c in &chars {
+            if out_idx >= out_buf.len() {
+                return Err(Base32Error::BufferTooSmall);
+            }
+            out_buf[out_idx] = c;
+            out_idx += 1;
+            col += 1;
+
+            if wrap_cols > 0 && col == wrap_cols {
+                if out_idx >= out_buf.len() {
+                    return Err(Base32Error::BufferTooSmall);
+                }
+                out_buf[out_idx] = b'\n';
+                out_idx += 1;
+                col = 0;
+            }
+        }
+    }
+
+    if out_idx > 0 {
+        if out_idx >= out_buf.len() {
+            return Err(Base32Error::BufferTooSmall);
+        }
+        out_buf[out_idx] = b'\n';
+        out_idx += 1;
+    }
+
+    Ok(out_idx)
+}
+
+/// Décode un flux Base32hex standard (RFC 4648) en octets binaires
+pub fn base32hex_decode(
+    input: &[u8],
+    out_buf: &mut [u8],
+    ignore_garbage: bool,
+) -> Result<usize, Base32Error> {
+    let mut out_idx = 0;
+    let mut octet_block = [0u8; 8];
+    let mut block_len = 0;
+
+    for &b in input {
+        let val = base32hex_char_to_val(b);
+        if val == 0xFD {
+            continue; // ignorer les blancs (\r, \n, ' ', \t)
+        }
+        if val == 0xFF {
+            if ignore_garbage {
+                continue;
+            } else {
+                return Err(Base32Error::InvalidCharacter);
+            }
+        }
+
+        octet_block[block_len] = val;
+        block_len += 1;
+
+        if block_len == 8 {
+            let o0 = octet_block[0];
+            let o1 = octet_block[1];
+            let o2 = octet_block[2];
+            let o3 = octet_block[3];
+            let o4 = octet_block[4];
+            let o5 = octet_block[5];
+            let o6 = octet_block[6];
+            let o7 = octet_block[7];
+
+            if o0 == 0xFE || o1 == 0xFE {
+                return Err(Base32Error::InvalidPadding);
+            }
+
+            let b0 = (o0 << 3) | (o1 >> 2);
+            if out_idx >= out_buf.len() {
+                return Err(Base32Error::BufferTooSmall);
+            }
+            out_buf[out_idx] = b0;
+            out_idx += 1;
+
+            if o2 != 0xFE {
+                if o3 == 0xFE {
+                    return Err(Base32Error::InvalidPadding);
+                }
+                let b1 = ((o1 & 0x03) << 6) | (o2 << 1) | (o3 >> 4);
+                if out_idx >= out_buf.len() {
+                    return Err(Base32Error::BufferTooSmall);
+                }
+                out_buf[out_idx] = b1;
+                out_idx += 1;
+
+                if o4 != 0xFE {
+                    let b2 = ((o3 & 0x0F) << 4) | (o4 >> 1);
+                    if out_idx >= out_buf.len() {
+                        return Err(Base32Error::BufferTooSmall);
+                    }
+                    out_buf[out_idx] = b2;
+                    out_idx += 1;
+
+                    if o5 != 0xFE {
+                        if o6 == 0xFE {
+                            return Err(Base32Error::InvalidPadding);
+                        }
+                        let b3 = ((o4 & 0x01) << 7) | (o5 << 2) | (o6 >> 3);
+                        if out_idx >= out_buf.len() {
+                            return Err(Base32Error::BufferTooSmall);
+                        }
+                        out_buf[out_idx] = b3;
+                        out_idx += 1;
+
+                        if o7 != 0xFE {
+                            let b4 = ((o6 & 0x07) << 5) | o7;
+                            if out_idx >= out_buf.len() {
+                                return Err(Base32Error::BufferTooSmall);
+                            }
+                            out_buf[out_idx] = b4;
+                            out_idx += 1;
+                        }
+                    }
+                }
+            }
+
+            block_len = 0;
+        }
+    }
+
+    if block_len != 0 {
+        return Err(Base32Error::InvalidPadding);
+    }
+
+    Ok(out_idx)
+}
+
+/// Utilitaire Coreutils POSIX / GNU `base32hex` : encode ou décode des données en Base32hex (RFC 4648 §7)
+pub fn run_base32hex(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    let mut decode = false;
+    let mut ignore_garbage = false;
+    let mut wrap_cols = 76;
+    let mut file: Option<&str> = None;
+
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i];
+        if arg == "--help" || arg == "-h" {
+            let help = b"Usage: base32hex [OPTION]... [FILE]\nBase32hex encode or decode FILE, or standard input, to standard output.\n\n  -d, --decode          decode data\n  -i, --ignore-garbage  when decoding, ignore non-alphabet characters\n  -w, --wrap=COLS       wrap encoded lines after COLS character (default 76, 0 to disable)\n      --help            display this help and exit\n      --version         output version information and exit\n";
+            let _ = sys_write(out_fd, help);
+            return 0;
+        }
+        if arg == "--version" || arg == "-v" {
+            let ver = b"base32hex (JamboOS coreutils) 0.1.0\n";
+            let _ = sys_write(out_fd, ver);
+            return 0;
+        }
+        if arg == "-d" || arg == "--decode" {
+            decode = true;
+        } else if arg == "-i" || arg == "--ignore-garbage" {
+            ignore_garbage = true;
+        } else if arg == "-w0" || arg == "--wrap=0" {
+            wrap_cols = 0;
+        } else if let Some(stripped) = arg.strip_prefix("-w") {
+            if let Ok(w) = stripped.parse::<usize>() {
+                wrap_cols = w;
+            }
+        } else if let Some(stripped) = arg.strip_prefix("--wrap=") {
+            if let Ok(w) = stripped.parse::<usize>() {
+                wrap_cols = w;
+            }
+        } else if arg == "-w" || arg == "--wrap" {
+            if i + 1 < args.len() {
+                if let Ok(w) = args[i + 1].parse::<usize>() {
+                    wrap_cols = w;
+                    i += 1;
+                }
+            }
+        } else if !arg.starts_with('-') && file.is_none() {
+            file = Some(arg);
+        }
+        i += 1;
+    }
+
+    let input_fd = match file {
+        None | Some("-") => in_fd,
+        Some(path) => {
+            let fd = sys_open(path, crate::vfs::O_RDONLY);
+            if fd < 0 {
+                let _ = sys_write(err_fd, b"base32hex: ");
+                let _ = sys_write(err_fd, path.as_bytes());
+                let _ = sys_write(err_fd, b": No such file or directory\n");
+                return 1;
+            }
+            fd
+        }
+    };
+
+    let mut in_buffer = [0u8; 8192];
+    let mut out_buffer = [0u8; 16384];
+
+    let bytes_read = match read_all_fd(input_fd, &mut in_buffer) {
+        Ok(n) => n,
+        Err(_) => {
+            let _ = sys_write(err_fd, b"base32hex: error reading input\n");
+            if input_fd != in_fd {
+                sys_close(input_fd);
+            }
+            return 1;
+        }
+    };
+
+    if input_fd != in_fd {
+        sys_close(input_fd);
+    }
+
+    if decode {
+        match base32hex_decode(&in_buffer[..bytes_read], &mut out_buffer, ignore_garbage) {
+            Ok(n) => {
+                let _ = sys_write(out_fd, &out_buffer[..n]);
+                0
+            }
+            Err(_) => {
+                let _ = sys_write(err_fd, b"base32hex: invalid input\n");
+                1
+            }
+        }
+    } else {
+        match base32hex_encode(&in_buffer[..bytes_read], &mut out_buffer, wrap_cols) {
+            Ok(n) => {
+                let _ = sys_write(out_fd, &out_buffer[..n]);
+                0
+            }
+            Err(_) => {
+                let _ = sys_write(err_fd, b"base32hex: error encoding data\n");
+                1
+            }
+        }
     }
 }
 
@@ -13744,6 +14075,7 @@ pub fn execute_coreutils_command(
         "crc32" => run_crc32(args, in_fd, out_fd, err_fd),
         "base64" => run_base64(args, in_fd, out_fd, err_fd),
         "base32" => run_base32(args, in_fd, out_fd, err_fd),
+        "base32hex" => run_base32hex(args, in_fd, out_fd, err_fd),
         "sha256sum" => run_sha256sum(args, in_fd, out_fd, err_fd),
         "sha1sum" => run_sha1sum(args, in_fd, out_fd, err_fd),
         "md5sum" => run_md5sum(args, in_fd, out_fd, err_fd),
@@ -15120,6 +15452,7 @@ pub fn run_xargs(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
             "factor" => run_factor(effective_sub_args, 0, out_fd, err_fd),
             "base64" => run_base64(effective_sub_args, 0, out_fd, err_fd),
             "base32" => run_base32(effective_sub_args, 0, out_fd, err_fd),
+            "base32hex" => run_base32hex(effective_sub_args, 0, out_fd, err_fd),
             "sha256sum" => run_sha256sum(effective_sub_args, 0, out_fd, err_fd),
             "sha1sum" => run_sha1sum(effective_sub_args, 0, out_fd, err_fd),
             "md5sum" => run_md5sum(effective_sub_args, 0, out_fd, err_fd),
@@ -29352,5 +29685,56 @@ Chaque processus dispose de son propre CR3 sans aucun privilege materiel direct.
         let nb32 = sys_read(out_r_b32, &mut buf_b32);
         sys_close(out_r_b32);
         assert_eq!(&buf_b32[..nb32 as usize], b"NBSWY3DPEB3W64TMMQ======\n");
+
+        // 38. Test run_base32hex (RFC 4648 §7 Extended Hex Alphabet)
+        assert_eq!(run_base32hex(&["--help"], 0, 1, 2), 0);
+        assert_eq!(run_base32hex(&["--version"], 0, 1, 2), 0);
+
+        let mut b32hex_out = [0u8; 64];
+        let mut b32hex_dec = [0u8; 64];
+
+        let h_empty = base32hex_encode(b"", &mut b32hex_out, 0).unwrap();
+        assert_eq!(h_empty, 0);
+
+        let h1 = base32hex_encode(b"f", &mut b32hex_out, 0).unwrap();
+        assert_eq!(&b32hex_out[..h1], b"CO======\n");
+
+        let h2 = base32hex_encode(b"fo", &mut b32hex_out, 0).unwrap();
+        assert_eq!(&b32hex_out[..h2], b"CPNG====\n");
+
+        let h3 = base32hex_encode(b"foo", &mut b32hex_out, 0).unwrap();
+        assert_eq!(&b32hex_out[..h3], b"CPNMU===\n");
+
+        let h4 = base32hex_encode(b"foob", &mut b32hex_out, 0).unwrap();
+        assert_eq!(&b32hex_out[..h4], b"CPNMUOG=\n");
+
+        let h5 = base32hex_encode(b"fooba", &mut b32hex_out, 0).unwrap();
+        assert_eq!(&b32hex_out[..h5], b"CPNMUOJ1\n");
+
+        let h6 = base32hex_encode(b"foobar", &mut b32hex_out, 0).unwrap();
+        assert_eq!(&b32hex_out[..h6], b"CPNMUOJ1E8======\n");
+
+        // Décodage Base32hex
+        let dh1 = base32hex_decode(b"CO======", &mut b32hex_dec, false).unwrap();
+        assert_eq!(&b32hex_dec[..dh1], b"f");
+
+        let dh6 = base32hex_decode(b"CPNMUOJ1E8======", &mut b32hex_dec, false).unwrap();
+        assert_eq!(&b32hex_dec[..dh6], b"foobar");
+
+        // Test pipe base32hex
+        let (in_r_hex, in_w_hex) = crate::vfs::pipe().unwrap();
+        sys_write(in_w_hex, b"hello world");
+        sys_close(in_w_hex);
+
+        let (out_r_hex, out_w_hex) = crate::vfs::pipe().unwrap();
+        let code_hex = run_base32hex(&["-w0"], in_r_hex, out_w_hex, 2);
+        sys_close(in_r_hex);
+        sys_close(out_w_hex);
+        assert_eq!(code_hex, 0);
+
+        let mut buf_hex = [0u8; 64];
+        let n_hex = sys_read(out_r_hex, &mut buf_hex);
+        sys_close(out_r_hex);
+        assert_eq!(&buf_hex[..n_hex as usize], b"D1IMOR3F41RMUSJCCG======\n");
     }
 }

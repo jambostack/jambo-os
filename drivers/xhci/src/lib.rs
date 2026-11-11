@@ -331,6 +331,8 @@ pub const XHCI_EXT_CAP_USB4_TIME_SYNCHRONIZATION_UNIT: u8 = 43;
 pub const XHCI_EXT_CAP_USB4_POWER_MANAGEMENT_TUNNELING: u8 = 44;
 /// Capacité étendue xHCI 1.2 / USB4 DisplayPort Alternate Mode Configuration Interface (§7.37)
 pub const XHCI_EXT_CAP_USB4_DP_ALT_MODE_CONFIGURATION: u8 = 45;
+/// Capacité étendue xHCI 1.2 / USB4 Security and Encryption Control Capability (§7.38)
+pub const XHCI_EXT_CAP_USB4_SECURITY_CONFIGURATION: u8 = 46;
 
 /// Masques de registres USB Legacy Support (xHCI 1.2 Section 7.1)
 /// Registre USBLEGSUP (Offset 0x00)
@@ -4537,6 +4539,118 @@ impl XhciUsb4DpAltModeConfig {
             4
         };
         self.link_rate = rate & 0x07;
+    }
+}
+
+/// Capacité Étendue xHCI 1.2 / USB4 Security and Encryption Control Capability (§7.38)
+///
+/// Gère le niveau de sécurité du domaine USB4 (SL0 à SL3), l'authentification
+/// matérielle cryptographique basée sur certificats et le chiffrement de lien (Link Encryption).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XhciUsb4SecurityConfig {
+    /// Pointeur dword vers la prochaine capacité étendue (0 = fin de liste)
+    pub next_ptr_dwords: u8,
+    /// Chiffrement de lien activé sur les tunnels USB4 (Bit 0)
+    pub link_encryption_enabled: bool,
+    /// Niveau de sécurité USB4 : 0 = SL0 (Aucun), 1 = SL1 (User Approval), 2 = SL2 (Secure Connect), 3 = SL3 (DP Only)
+    pub security_level: u8,
+    /// Authentification matérielle par certificat crypto requise (Bit 4)
+    pub cert_auth_required: bool,
+    /// Protection d'accès direct à la mémoire (DMA Guard / IOMMU protection active) (Bit 5)
+    pub dma_guard_enabled: bool,
+    /// Algorithme cryptographique pris en charge (0 = None, 1 = AES-128-GCM, 2 = AES-256-GCM, 3 = ChaCha20-Poly1305)
+    pub crypto_cipher: u8,
+    /// Identifiant du domaine ou port physique cible
+    pub domain_id: u8,
+    /// Registre d'état matériel de sécurité (Status Register)
+    pub status: u32,
+    /// Hachage / Clé de session cryptographique (Security Session Key Token 32-bit)
+    pub session_token: u32,
+}
+
+impl XhciUsb4SecurityConfig {
+    /// Crée une nouvelle configuration de sécurité USB4
+    pub const fn new(sec_level: u8, domain_id: u8, cipher: u8) -> Self {
+        Self {
+            next_ptr_dwords: 0,
+            link_encryption_enabled: false,
+            security_level: sec_level & 0x03,
+            cert_auth_required: sec_level >= 2,
+            dma_guard_enabled: true,
+            crypto_cipher: cipher & 0x07,
+            domain_id,
+            status: 0,
+            session_token: 0,
+        }
+    }
+
+    /// Parse les 4 dwords MMIO d'une capacité étendue USB4 Security Configuration (§7.38)
+    pub const fn parse(dwords: &[u32; 4]) -> Option<Self> {
+        let cap_id = (dwords[0] & 0xFF) as u8;
+        if cap_id != XHCI_EXT_CAP_USB4_SECURITY_CONFIGURATION {
+            return None;
+        }
+
+        let next_ptr = ((dwords[0] >> 8) & 0xFF) as u8;
+        let ctrl = dwords[1];
+        let link_encryption_enabled = (ctrl & 0x01) != 0;
+        let security_level = ((ctrl >> 1) & 0x03) as u8;
+        let cert_auth_required = (ctrl & 0x10) != 0;
+        let dma_guard_enabled = (ctrl & 0x20) != 0;
+        let crypto_cipher = ((ctrl >> 6) & 0x07) as u8;
+        let domain_id = ((ctrl >> 16) & 0xFF) as u8;
+        let status = dwords[2];
+        let session_token = dwords[3];
+
+        Some(Self {
+            next_ptr_dwords: next_ptr,
+            link_encryption_enabled,
+            security_level,
+            cert_auth_required,
+            dma_guard_enabled,
+            crypto_cipher,
+            domain_id,
+            status,
+            session_token,
+        })
+    }
+
+    /// Encode la capacité étendue en 4 mots dwords MMIO 32-bit
+    pub const fn encode(&self) -> [u32; 4] {
+        let dw0 = (XHCI_EXT_CAP_USB4_SECURITY_CONFIGURATION as u32)
+            | ((self.next_ptr_dwords as u32) << 8);
+        let mut ctrl = (((self.security_level as u32) & 0x03) << 1)
+            | (((self.crypto_cipher as u32) & 0x07) << 6)
+            | (((self.domain_id as u32) & 0xFF) << 16);
+        if self.link_encryption_enabled {
+            ctrl |= 0x01;
+        }
+        if self.cert_auth_required {
+            ctrl |= 0x10;
+        }
+        if self.dma_guard_enabled {
+            ctrl |= 0x20;
+        }
+        let dw2 = self.status;
+        let dw3 = self.session_token;
+        [dw0, ctrl, dw2, dw3]
+    }
+
+    /// Active ou désactive le chiffrement de lien (Link Encryption)
+    pub fn set_encryption(&mut self, enable: bool) {
+        self.link_encryption_enabled = enable;
+    }
+
+    /// Configure le niveau de sécurité et la protection DMA
+    pub fn set_security_level(&mut self, level: u8, dma_guard: bool) {
+        self.security_level = level & 0x03;
+        self.cert_auth_required = self.security_level >= 2;
+        self.dma_guard_enabled = dma_guard;
+    }
+
+    /// Met à jour le jeton de session cryptographique
+    pub fn set_session_token(&mut self, token: u32) {
+        self.session_token = token;
     }
 }
 
@@ -13989,5 +14103,45 @@ mod tests {
         assert_eq!(parsed_dp_alt.physical_port_id, 2);
         assert_eq!(parsed_dp_alt.status, 0x0006_BEEF);
         assert_eq!(parsed_dp_alt.aux_channel_config, 0x0000_0101);
+
+        // 36. Test XhciUsb4SecurityConfig
+        let mut usb4_sec = XhciUsb4SecurityConfig::new(2, 3, 2); // SL2, Domain 3, AES-256-GCM
+        assert_eq!(usb4_sec.security_level, 2);
+        assert_eq!(usb4_sec.domain_id, 3);
+        assert_eq!(usb4_sec.crypto_cipher, 2);
+        assert!(usb4_sec.cert_auth_required);
+        assert!(usb4_sec.dma_guard_enabled);
+        assert!(!usb4_sec.link_encryption_enabled);
+
+        usb4_sec.set_encryption(true);
+        usb4_sec.set_session_token(0xA5A5_5A5A);
+        usb4_sec.next_ptr_dwords = 84;
+        usb4_sec.status = 0x0007_BEEF;
+
+        let encoded_sec = usb4_sec.encode();
+        assert_eq!(
+            encoded_sec[0] & 0xFF,
+            XHCI_EXT_CAP_USB4_SECURITY_CONFIGURATION as u32
+        );
+        assert_eq!((encoded_sec[0] >> 8) & 0xFF, 84);
+        assert_eq!(encoded_sec[1] & 0x01, 1); // link encryption
+        assert_eq!((encoded_sec[1] >> 1) & 0x03, 2); // SL2
+        assert_eq!(encoded_sec[1] & 0x10, 0x10); // cert auth
+        assert_eq!(encoded_sec[1] & 0x20, 0x20); // dma guard
+        assert_eq!((encoded_sec[1] >> 6) & 0x07, 2); // cipher
+        assert_eq!((encoded_sec[1] >> 16) & 0xFF, 3); // domain 3
+        assert_eq!(encoded_sec[2], 0x0007_BEEF);
+        assert_eq!(encoded_sec[3], 0xA5A5_5A5A);
+
+        let parsed_sec = XhciUsb4SecurityConfig::parse(&encoded_sec).unwrap();
+        assert_eq!(parsed_sec.next_ptr_dwords, 84);
+        assert!(parsed_sec.link_encryption_enabled);
+        assert_eq!(parsed_sec.security_level, 2);
+        assert!(parsed_sec.cert_auth_required);
+        assert!(parsed_sec.dma_guard_enabled);
+        assert_eq!(parsed_sec.crypto_cipher, 2);
+        assert_eq!(parsed_sec.domain_id, 3);
+        assert_eq!(parsed_sec.status, 0x0007_BEEF);
+        assert_eq!(parsed_sec.session_token, 0xA5A5_5A5A);
     }
 }
