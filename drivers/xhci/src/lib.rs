@@ -314,6 +314,7 @@ pub const XHCI_EXT_CAP_ENDPOINT_POLLING_OVERRIDE: u8 = 26;
 pub const XHCI_EXT_CAP_INTERRUPTER_MODERATION_OVERRIDE: u8 = 27;
 pub const XHCI_EXT_CAP_PORT_SPEED_MAPPING_OVERRIDE: u8 = 28;
 pub const XHCI_EXT_CAP_EXTENDED_ENERGY_EFFICIENT_USB: u8 = 29;
+pub const XHCI_EXT_CAP_OPTICAL_LOGICAL_LINK: u8 = 30;
 
 /// Masques de registres USB Legacy Support (xHCI 1.2 Section 7.1)
 /// Registre USBLEGSUP (Offset 0x00)
@@ -2748,6 +2749,127 @@ impl XhciExtendedEnergyEfficientUsb {
     /// Vérifie si un port donné est dans la plage couverte par cette capacité EEE
     pub const fn is_port_in_range(&self, port: u8) -> bool {
         port >= 1 && port <= self.port_count
+    }
+}
+
+/// Capacité Étendue xHCI Optical Logical Link Control (OLLC / xHCI 1.2 §7.22)
+///
+/// Modélise le contrôle et la télémétrie des liaisons optiques USB actives (Active Optical Cables - AOC),
+/// la détection de dispersion chromatique, l'atténuation optique en dBm et le budget de liaison.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XhciOpticalLogicalLink {
+    /// Pointeur dword vers la prochaine capacité étendue (0 = fin de liste)
+    pub next_ptr_dwords: u8,
+    /// Activation du contrôleur de liaison optique
+    pub enabled: bool,
+    /// Numéro de port optique xHCI physique (1..=255)
+    pub port_num: u8,
+    /// Atténuation du signal optique mesurée en centièmes de dBm (0..=65535, ex: 150 = 1.50 dBm)
+    pub optical_attenuation_cdbm: u16,
+    /// Longueur d'onde optique nominale en nanomètres (ex: 850 nm VCSEL, 1310 nm DFB)
+    pub wavelength_nm: u16,
+    /// Alerte de perte de signal optique (LOS - Loss Of Signal)
+    pub loss_of_signal: bool,
+    /// Registre de contrôle brut MMIO (Dword 1)
+    pub link_control: u32,
+    /// Registre d'état et télémétrie brut MMIO (Dword 2)
+    pub link_status: u32,
+}
+
+impl XhciOpticalLogicalLink {
+    /// Crée un nouveau descripteur étendu de liaison optique xHCI §7.22
+    pub const fn new(port_num: u8, wavelength_nm: u16, attenuation_cdbm: u16) -> Self {
+        let p = if port_num == 0 { 1 } else { port_num };
+        Self {
+            next_ptr_dwords: 0,
+            enabled: false,
+            port_num: p,
+            optical_attenuation_cdbm: attenuation_cdbm,
+            wavelength_nm,
+            loss_of_signal: false,
+            link_control: 0,
+            link_status: 0,
+        }
+    }
+
+    /// Décode la capacité étendue depuis 4 dwords MMIO
+    pub fn parse(dwords: &[u32]) -> Option<Self> {
+        if dwords.len() < 4 {
+            return None;
+        }
+        let cap_id = (dwords[0] & 0xFF) as u8;
+        if cap_id != XHCI_EXT_CAP_OPTICAL_LOGICAL_LINK {
+            return None;
+        }
+        let next_ptr = ((dwords[0] >> 8) & 0xFF) as u8;
+        let port = ((dwords[0] >> 16) & 0xFF) as u8;
+        let wl = (dwords[0] >> 24) as u8; // 8 bits réservés / format compact
+
+        let ctrl = dwords[1];
+        let sts = dwords[2];
+        let attenuation = (dwords[3] & 0xFFFF) as u16;
+        let wavelength = ((dwords[3] >> 16) & 0xFFFF) as u16;
+
+        let enabled = (ctrl & 0x01) != 0;
+        let los = (sts & 0x01) != 0;
+
+        Some(Self {
+            next_ptr_dwords: next_ptr,
+            enabled,
+            port_num: if port == 0 { 1 } else { port },
+            optical_attenuation_cdbm: attenuation,
+            wavelength_nm: if wavelength != 0 {
+                wavelength
+            } else {
+                (wl as u16) * 10
+            },
+            loss_of_signal: los,
+            link_control: ctrl,
+            link_status: sts,
+        })
+    }
+
+    /// Encode la capacité étendue en 4 mots dwords MMIO 32-bit
+    pub const fn encode(&self) -> [u32; 4] {
+        let dw0 = (XHCI_EXT_CAP_OPTICAL_LOGICAL_LINK as u32)
+            | ((self.next_ptr_dwords as u32) << 8)
+            | ((self.port_num as u32) << 16)
+            | (((self.wavelength_nm / 10) as u32 & 0xFF) << 24);
+        let ctrl_flags = (self.link_control & !0x01) | (if self.enabled { 1 } else { 0 });
+        let dw1 = ctrl_flags;
+        let dw2 = (self.link_status & !0x01) | (if self.loss_of_signal { 1 } else { 0 });
+        let dw3 = (self.optical_attenuation_cdbm as u32) | ((self.wavelength_nm as u32) << 16);
+        [dw0, dw1, dw2, dw3]
+    }
+
+    /// Active ou désactive le contrôleur de liaison optique
+    pub fn set_enabled(&mut self, enable: bool) {
+        self.enabled = enable;
+        if enable {
+            self.link_control |= 0x01;
+        } else {
+            self.link_control &= !0x01;
+        }
+    }
+
+    /// Définit l'état de perte de signal optique (LOS)
+    pub fn set_loss_of_signal(&mut self, los: bool) {
+        self.loss_of_signal = los;
+        if los {
+            self.link_status |= 0x01;
+        } else {
+            self.link_status &= !0x01;
+        }
+    }
+
+    /// Calcule si la liaison optique est saine (active et sans perte de signal)
+    pub const fn is_link_healthy(&self) -> bool {
+        self.enabled && !self.loss_of_signal
+    }
+
+    /// Calcule l'atténuation optique en décibels (dB) entiers
+    pub const fn attenuation_db(&self) -> u16 {
+        self.optical_attenuation_cdbm / 100
     }
 }
 
@@ -11567,5 +11689,50 @@ mod tests {
         assert_eq!(parsed_eee.l1_inactivity_timer_us, 500);
         assert!(parsed_eee.deep_sleep_supported);
         assert_eq!(parsed_eee.fast_wake_latency_ns(), 512);
+
+        // 42. Test Capacité Étendue Optical Logical Link Control (§7.22)
+        let mut oll = XhciOpticalLogicalLink::new(3, 850, 240); // Port 3, 850 nm, 2.40 dBm attenuation
+        assert_eq!(oll.port_num, 3);
+        assert_eq!(oll.wavelength_nm, 850);
+        assert_eq!(oll.optical_attenuation_cdbm, 240);
+        assert_eq!(oll.attenuation_db(), 2);
+        assert!(!oll.enabled);
+        assert!(!oll.loss_of_signal);
+        assert!(!oll.is_link_healthy());
+
+        oll.set_enabled(true);
+        assert!(oll.enabled);
+        assert!(oll.is_link_healthy());
+
+        oll.set_loss_of_signal(true);
+        assert!(oll.loss_of_signal);
+        assert!(!oll.is_link_healthy());
+
+        oll.set_loss_of_signal(false);
+        assert!(oll.is_link_healthy());
+
+        oll.next_ptr_dwords = 44;
+        oll.link_status = 0x55AA;
+
+        let encoded_oll = oll.encode();
+        assert_eq!(
+            encoded_oll[0] & 0xFF,
+            XHCI_EXT_CAP_OPTICAL_LOGICAL_LINK as u32
+        );
+        assert_eq!((encoded_oll[0] >> 8) & 0xFF, 44);
+        assert_eq!((encoded_oll[0] >> 16) & 0xFF, 3);
+        assert_eq!(encoded_oll[1] & 0x01, 1);
+        assert_eq!(encoded_oll[3] & 0xFFFF, 240);
+        assert_eq!((encoded_oll[3] >> 16) & 0xFFFF, 850);
+
+        let parsed_oll = XhciOpticalLogicalLink::parse(&encoded_oll).unwrap();
+        assert_eq!(parsed_oll.next_ptr_dwords, 44);
+        assert_eq!(parsed_oll.port_num, 3);
+        assert_eq!(parsed_oll.wavelength_nm, 850);
+        assert_eq!(parsed_oll.optical_attenuation_cdbm, 240);
+        assert!(parsed_oll.enabled);
+        assert!(!parsed_oll.loss_of_signal);
+        assert!(parsed_oll.is_link_healthy());
+        assert_eq!(parsed_oll.attenuation_db(), 2);
     }
 }

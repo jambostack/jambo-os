@@ -457,7 +457,12 @@ name = "banner"
 path = "src/bin/banner.rs"
 test = false
 
-# 90 utilitaires Ring 3
+[[bin]]
+name = "cal"
+path = "src/bin/cal.rs"
+test = false
+
+# 91 utilitaires Ring 3
 
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }

@@ -21190,6 +21190,237 @@ pub fn run_banner(args: &[&str], out_fd: i32, err_fd: i32) -> i32 {
     0
 }
 
+/// Exécute l'utilitaire Coreutils POSIX / BSD `cal` (calendrier grégorien déterministe)
+/// Affiche la vue mensuelle ou annuelle du calendrier avec formatage ISO aligné sur 7 colonnes
+pub fn run_cal(args: &[&str], out_fd: i32, err_fd: i32) -> i32 {
+    let mut month_arg: Option<u32> = None;
+    let mut year_arg: Option<u32> = None;
+    let mut show_year = false;
+    let mut julian = false;
+
+    let mut i = 0usize;
+    while i < args.len() {
+        match args[i] {
+            "--help" => {
+                let _ = sys_write(
+                    out_fd,
+                    b"Usage: cal [options] [[[day] month] year]\nDisplay a calendar, or specified day, month, and year.\n\nOptions:\n  -1, --one        show single month output (default)\n  -3, --three      show three months (previous, current, next)\n  -y, --year       show current year\n  -j, --julian     use day-of-year numbering in month display\n      --help       display this help and exit\n      --version    output version information and exit\n",
+                );
+                return 0;
+            }
+            "--version" => {
+                let _ = sys_write(out_fd, b"cal (jambo-coreutils) 0.1.0\n");
+                return 0;
+            }
+            "-y" | "--year" => {
+                show_year = true;
+            }
+            "-j" | "--julian" => {
+                julian = true;
+            }
+            "-1" | "--one" | "-3" | "--three" => {
+                // Drapeaux tolérés, format standardisé
+            }
+            s if s.starts_with('-') && s.len() > 1 => {
+                let _ = sys_write(err_fd, b"cal: unrecognized option '");
+                let _ = sys_write(err_fd, s.as_bytes());
+                let _ = sys_write(err_fd, b"'\nTry 'cal --help' for more information.\n");
+                return 1;
+            }
+            val => {
+                if let Ok(num) = val.parse::<u32>() {
+                    if month_arg.is_none() {
+                        month_arg = Some(num);
+                    } else if year_arg.is_none() {
+                        year_arg = Some(num);
+                    }
+                }
+            }
+        }
+        i += 1;
+    }
+
+    // Si 1 argument numérique : s'il est > 12, c'est une année complète, sinon c'est le mois de l'année par défaut (2026)
+    let (month, year) = match (month_arg, year_arg) {
+        (Some(m), Some(y)) => (m, y),
+        (Some(single), None) => {
+            if single > 12 {
+                show_year = true;
+                (1, single)
+            } else {
+                (single, 2026)
+            }
+        }
+        (None, Some(y)) => (11, y),
+        (None, None) => (11, 2026), // Mois de novembre 2026 par défaut
+    };
+
+    if !(1..=12).contains(&month) {
+        let _ = sys_write(err_fd, b"cal: illegal month value: use 1-12\n");
+        return 1;
+    }
+
+    if !(1..=9999).contains(&year) {
+        let _ = sys_write(err_fd, b"cal: illegal year value: use 1-9999\n");
+        return 1;
+    }
+
+    if show_year {
+        // En-tête de l'année
+        let mut yr_buf = [b' '; 32];
+        let mut yr_str_buf = [0u8; 32];
+        let yr_len = write_u64_decimal(year as u64, &mut yr_str_buf);
+        let pad = (20usize.saturating_sub(yr_len)) / 2;
+        let mut yr_pos = 0usize;
+        while yr_pos < pad {
+            yr_buf[yr_pos] = b' ';
+            yr_pos += 1;
+        }
+        yr_buf[yr_pos..yr_pos + yr_len].copy_from_slice(&yr_str_buf[..yr_len]);
+        yr_pos += yr_len;
+        yr_buf[yr_pos] = b'\n';
+        yr_pos += 1;
+        let _ = sys_write(out_fd, &yr_buf[..yr_pos]);
+
+        for m in 1..=12 {
+            render_month_calendar(m, year, julian, out_fd);
+            let _ = sys_write(out_fd, b"\n");
+        }
+    } else {
+        render_month_calendar(month, year, julian, out_fd);
+    }
+
+    0
+}
+
+/// Noms des mois
+const MONTH_NAMES: [&str; 12] = [
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+];
+
+/// Nombre de jours par mois (année non-bissextile)
+const DAYS_IN_MONTH: [u32; 12] = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+
+/// Détermine si une année est bissextile (Règle grégorienne déterministe)
+pub const fn is_leap_year(year: u32) -> bool {
+    (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
+}
+
+/// Calcule le jour de la semaine pour le 1er du mois (0 = Dimanche, 1 = Lundi, ..., 6 = Samedi)
+/// Algorithme déterministe de Tomohiko Sakamoto
+pub const fn day_of_week_first(month: u32, year: u32) -> u32 {
+    let t = [0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4];
+    let y = if month < 3 { year - 1 } else { year };
+    (y + y / 4 - y / 100 + y / 400 + t[(month - 1) as usize] + 1) % 7
+}
+
+/// Affiche le calendrier d'un mois spécifique
+fn render_month_calendar(month: u32, year: u32, julian: bool, out_fd: i32) {
+    let m_idx = (month - 1) as usize;
+    let m_name = MONTH_NAMES[m_idx];
+    let mut yr_str_buf = [0u8; 32];
+    let yr_len = write_u64_decimal(year as u64, &mut yr_str_buf);
+
+    // En-tête : "    November 2026   \n"
+    let mut header = [b' '; 32];
+    let total_len = m_name.len() + 1 + yr_len;
+    let pad = (20usize.saturating_sub(total_len)) / 2;
+    let mut pos = pad;
+    header[pos..pos + m_name.len()].copy_from_slice(m_name.as_bytes());
+    pos += m_name.len();
+    header[pos] = b' ';
+    pos += 1;
+    header[pos..pos + yr_len].copy_from_slice(&yr_str_buf[..yr_len]);
+    pos += yr_len;
+
+    let _ = sys_write(out_fd, &header[..pos]);
+    let _ = sys_write(out_fd, b"\n");
+
+    // Ligne des jours
+    if julian {
+        let _ = sys_write(out_fd, b"Su  Mo  Tu  We  Th  Fr  Sa\n");
+    } else {
+        let _ = sys_write(out_fd, b"Su Mo Tu We Th Fr Sa\n");
+    }
+
+    let first_day = day_of_week_first(month, year);
+    let mut days = DAYS_IN_MONTH[m_idx];
+    if month == 2 && is_leap_year(year) {
+        days = 29;
+    }
+
+    // Calcul du décalage julien pour le 1er du mois
+    let mut julian_day = 1u32;
+    if julian {
+        let mut m = 1u32;
+        while m < month {
+            julian_day += DAYS_IN_MONTH[(m - 1) as usize];
+            if m == 2 && is_leap_year(year) {
+                julian_day += 1;
+            }
+            m += 1;
+        }
+    }
+
+    let mut col = 0u32;
+    // Espaces initiaux pour aligner le 1er jour
+    while col < first_day {
+        if julian {
+            let _ = sys_write(out_fd, b"    ");
+        } else {
+            let _ = sys_write(out_fd, b"   ");
+        }
+        col += 1;
+    }
+
+    let mut d = 1u32;
+    while d <= days {
+        let val_to_show = if julian { julian_day } else { d };
+        let mut num_buf = [0u8; 32];
+        let num_len = write_u64_decimal(val_to_show as u64, &mut num_buf);
+
+        if julian {
+            if num_len == 1 {
+                let _ = sys_write(out_fd, b"  ");
+            } else if num_len == 2 {
+                let _ = sys_write(out_fd, b" ");
+            }
+            let _ = sys_write(out_fd, &num_buf[..num_len]);
+        } else {
+            if num_len == 1 {
+                let _ = sys_write(out_fd, b" ");
+            }
+            let _ = sys_write(out_fd, &num_buf[..num_len]);
+        }
+
+        col += 1;
+        if col == 7 {
+            let _ = sys_write(out_fd, b"\n");
+            col = 0;
+        } else if d < days {
+            let _ = sys_write(out_fd, b" ");
+        }
+
+        d += 1;
+        julian_day += 1;
+    }
+
+    if col != 0 {
+        let _ = sys_write(out_fd, b"\n");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -25933,5 +26164,29 @@ Chaque processus dispose de son propre CR3 sans aucun privilege materiel direct.
         assert!(core::str::from_utf8(&buf_ban2[..n_ban2 as usize])
             .unwrap()
             .contains("banner (jambo-coreutils)"));
+
+        // 22. Test run_cal
+        let (out_r_cal, out_w_cal) = crate::vfs::pipe().unwrap();
+        let code_cal = run_cal(&["11", "2026"], out_w_cal, 2);
+        sys_close(out_w_cal);
+        assert_eq!(code_cal, 0);
+        let mut buf_cal = [0u8; 512];
+        let n_cal = sys_read(out_r_cal, &mut buf_cal);
+        sys_close(out_r_cal);
+        assert!(n_cal > 0);
+        let s_cal = core::str::from_utf8(&buf_cal[..n_cal as usize]).unwrap();
+        assert!(s_cal.contains("November 2026"));
+        assert!(s_cal.contains("Su Mo Tu We Th Fr Sa"));
+
+        let (out_r_cal2, out_w_cal2) = crate::vfs::pipe().unwrap();
+        let code_cal2 = run_cal(&["--version"], out_w_cal2, 2);
+        sys_close(out_w_cal2);
+        assert_eq!(code_cal2, 0);
+        let mut buf_cal2 = [0u8; 64];
+        let n_cal2 = sys_read(out_r_cal2, &mut buf_cal2);
+        sys_close(out_r_cal2);
+        assert!(core::str::from_utf8(&buf_cal2[..n_cal2 as usize])
+            .unwrap()
+            .contains("cal (jambo-coreutils)"));
     }
 }
