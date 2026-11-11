@@ -23575,6 +23575,197 @@ pub fn run_ptx(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
     0
 }
 
+/// Point d'entrée de l'utilitaire Coreutils POSIX `shred`
+///
+/// Détruit de manière sécurisée et irréversible le contenu d'un ou plusieurs fichiers
+/// en les écrasant à plusieurs reprises avec des séquences pseudo-aléatoires déterminées
+/// (générateur LCG xoshiro/knuth) puis optionnellement avec des zéros (`-z`), avant
+/// de les supprimer de la table de fichiers si demandé (`-u`).
+pub fn run_shred(args: &[&str], _in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    let mut iterations: usize = 3;
+    let mut remove_file = false;
+    let mut zero_finalize = false;
+    let mut verbose = false;
+    let mut exact_size: Option<usize> = None;
+    let mut files: [&str; 8] = [""; 8];
+    let mut file_count = 0;
+
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i];
+        if arg == "--help" {
+            let _ = sys_write(
+                out_fd,
+                b"Usage: shred [OPTION]... FILE...\nOverwrite the specified FILE(s) repeatedly, in order to make it harder\nfor even very expensive hardware probing to recover the data.\n\n  -f, --force         change permissions to allow writing if necessary\n  -n, --iterations=N  overwrite N times instead of the default (3)\n  -s, --size=N        shred this many bytes (suffixes like K, M, G accepted)\n  -u, --remove        deallocate and remove file after overwriting\n  -v, --verbose       show progress\n  -x, --exact         do not round file sizes up to the next full block\n  -z, --zero          add a final overwrite with zeros to hide shredding\n      --help          display this help and exit\n      --version       output version information and exit\n",
+            );
+            return 0;
+        } else if arg == "--version" {
+            let _ = sys_write(out_fd, b"shred (jambo-coreutils) 0.1.0\n");
+            return 0;
+        } else if arg == "-u" || arg == "--remove" {
+            remove_file = true;
+        } else if arg == "-z" || arg == "--zero" {
+            zero_finalize = true;
+        } else if arg == "-v" || arg == "--verbose" {
+            verbose = true;
+        } else if arg == "-f" || arg == "--force" || arg == "-x" || arg == "--exact" {
+            // Ignoré / no-op dans l'environnement virtuel
+        } else if arg == "-n" {
+            i += 1;
+            if i < args.len() {
+                if let Some(val) = parse_usize(args[i]) {
+                    iterations = val;
+                }
+            }
+        } else if let Some(stripped) = arg.strip_prefix("--iterations=") {
+            if let Some(val) = parse_usize(stripped) {
+                iterations = val;
+            }
+        } else if arg == "-s" {
+            i += 1;
+            if i < args.len() {
+                if let Some(val) = parse_usize(args[i]) {
+                    exact_size = Some(val);
+                }
+            }
+        } else if let Some(stripped) = arg.strip_prefix("--size=") {
+            if let Some(val) = parse_usize(stripped) {
+                exact_size = Some(val);
+            }
+        } else if arg.starts_with('-') && arg != "-" {
+            let _ = sys_write(err_fd, b"shred: unrecognized option '");
+            let _ = sys_write(err_fd, arg.as_bytes());
+            let _ = sys_write(err_fd, b"'\nTry 'shred --help' for more information.\n");
+            return 1;
+        } else if file_count < 8 {
+            files[file_count] = arg;
+            file_count += 1;
+        }
+        i += 1;
+    }
+
+    if file_count == 0 {
+        let _ = sys_write(
+            err_fd,
+            b"shred: missing file operand\nTry 'shred --help' for more information.\n",
+        );
+        return 1;
+    }
+
+    let mut had_error = false;
+    let mut scratch = [0u8; 1024];
+
+    for &path in &files[..file_count] {
+        let fd = sys_open(path, crate::vfs::O_RDWR);
+        if fd < 0 {
+            let _ = sys_write(err_fd, b"shred: cannot open '");
+            let _ = sys_write(err_fd, path.as_bytes());
+            let _ = sys_write(err_fd, b"'\n");
+            had_error = true;
+            continue;
+        }
+
+        // Déterminer la taille du fichier
+        let file_len: usize = if let Some(sz) = exact_size {
+            sz
+        } else {
+            let mut tmp = [0u8; 1024];
+            let mut total = 0;
+            loop {
+                let n = sys_read(fd, &mut tmp);
+                if n <= 0 {
+                    break;
+                }
+                total += n as usize;
+            }
+            total
+        };
+
+        // Répéter l'écrasement pour chaque itération
+        let mut seed: u64 = 0x853c49e6748fea9b ^ (path.len() as u64);
+        for pass in 0..iterations {
+            let _ = sys_lseek(fd, 0, crate::vfs::SEEK_SET);
+            if verbose {
+                let _ = sys_write(out_fd, b"shred: ");
+                let _ = sys_write(out_fd, path.as_bytes());
+                let _ = sys_write(out_fd, b": pass ");
+                write_u64_fd(out_fd, (pass + 1) as u64);
+                let _ = sys_write(out_fd, b"/");
+                write_u64_fd(
+                    out_fd,
+                    (iterations + if zero_finalize { 1 } else { 0 }) as u64,
+                );
+                let _ = sys_write(out_fd, b" (random)...\n");
+            }
+
+            let mut written = 0;
+            while written < file_len {
+                let chunk_size = core::cmp::min(scratch.len(), file_len - written);
+                for b in scratch[..chunk_size].iter_mut() {
+                    // LCG 64-bit pour générer des octets pseudo-aléatoires rapides
+                    seed = seed
+                        .wrapping_mul(6364136223846793005)
+                        .wrapping_add(1442695040888963407);
+                    *b = (seed >> 56) as u8;
+                }
+                let w = sys_write(fd, &scratch[..chunk_size]);
+                if w <= 0 {
+                    break;
+                }
+                written += w as usize;
+            }
+        }
+
+        // Passe finale de zéros si demandée
+        if zero_finalize {
+            let _ = sys_lseek(fd, 0, crate::vfs::SEEK_SET);
+            if verbose {
+                let _ = sys_write(out_fd, b"shred: ");
+                let _ = sys_write(out_fd, path.as_bytes());
+                let _ = sys_write(out_fd, b": pass ");
+                write_u64_fd(out_fd, (iterations + 1) as u64);
+                let _ = sys_write(out_fd, b"/");
+                write_u64_fd(out_fd, (iterations + 1) as u64);
+                let _ = sys_write(out_fd, b" (000000)...\n");
+            }
+            scratch.fill(0);
+            let mut written = 0;
+            while written < file_len {
+                let chunk_size = core::cmp::min(scratch.len(), file_len - written);
+                let w = sys_write(fd, &scratch[..chunk_size]);
+                if w <= 0 {
+                    break;
+                }
+                written += w as usize;
+            }
+        }
+
+        sys_close(fd);
+
+        // Suppression sécurisée du fichier si demandée (-u)
+        if remove_file {
+            if verbose {
+                let _ = sys_write(out_fd, b"shred: ");
+                let _ = sys_write(out_fd, path.as_bytes());
+                let _ = sys_write(out_fd, b": removing\n");
+            }
+            let unlink_code = sys_unlink_pool(path);
+            if unlink_code < 0 {
+                let _ = sys_write(err_fd, b"shred: failed to remove '");
+                let _ = sys_write(err_fd, path.as_bytes());
+                let _ = sys_write(err_fd, b"'\n");
+                had_error = true;
+            }
+        }
+    }
+
+    if had_error {
+        1
+    } else {
+        0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -28696,5 +28887,36 @@ Chaque processus dispose de son propre CR3 sans aucun privilege materiel direct.
         assert!(s_p1.contains("1: apple orange banana"));
         assert!(s_p1.contains("1: apple orange / banana"));
         assert!(s_p1.contains("1: apple / orange banana"));
+
+        // 36. Test run_shred
+        assert_eq!(run_shred(&["--help"], 0, 1, 2), 0);
+        assert_eq!(run_shred(&["--version"], 0, 1, 2), 0);
+        assert_eq!(run_shred(&[], 0, 1, 2), 1); // Fichier manquant
+
+        // Création d'un fichier de test et destruction avec zéros et suppression
+        let test_path = "/tmp/shred_target.dat";
+        let fd_sh = sys_open(test_path, crate::vfs::O_CREAT | crate::vfs::O_RDWR);
+        assert!(fd_sh >= 0);
+        let sample_data = b"CONFIDENTIAL_DATA_SUPER_SECRET_PAYLOAD_12345";
+        sys_write(fd_sh, sample_data);
+        sys_close(fd_sh);
+
+        let (out_r_sh, out_w_sh) = crate::vfs::pipe().unwrap();
+        let code_sh = run_shred(&["-v", "-n", "2", "-z", "-u", test_path], 0, out_w_sh, 2);
+        sys_close(out_w_sh);
+        assert_eq!(code_sh, 0);
+
+        let mut buf_sh = [0u8; 512];
+        let n_sh = sys_read(out_r_sh, &mut buf_sh);
+        sys_close(out_r_sh);
+        let s_sh = core::str::from_utf8(&buf_sh[..n_sh as usize]).unwrap();
+        assert!(s_sh.contains("pass 1/3 (random)"));
+        assert!(s_sh.contains("pass 2/3 (random)"));
+        assert!(s_sh.contains("pass 3/3 (000000)"));
+        assert!(s_sh.contains("removing"));
+
+        // Vérifier que le fichier est bien supprimé (-u)
+        let fd_check = sys_open(test_path, crate::vfs::O_RDONLY);
+        assert!(fd_check < 0);
     }
 }

@@ -328,6 +328,7 @@ pub const XHCI_EXT_CAP_USB4_DISPLAYPORT_TUNNELING: u8 = 40;
 pub const XHCI_EXT_CAP_USB4_HOST_INTERFACE_MANAGEMENT: u8 = 41;
 pub const XHCI_EXT_CAP_USB4_ROUTER_CONFIGURATION: u8 = 42;
 pub const XHCI_EXT_CAP_USB4_TIME_SYNCHRONIZATION_UNIT: u8 = 43;
+pub const XHCI_EXT_CAP_USB4_POWER_MANAGEMENT_TUNNELING: u8 = 44;
 
 /// Masques de registres USB Legacy Support (xHCI 1.2 Section 7.1)
 /// Registre USBLEGSUP (Offset 0x00)
@@ -4293,6 +4294,123 @@ impl XhciUsb4TimeSyncUnit {
     /// Met à jour l'horloge de référence
     pub fn set_reference_time(&mut self, time_lo: u32) {
         self.reference_time_lo = time_lo;
+    }
+}
+
+/// Capacité Étendue xHCI USB4 Power Management and Tunneling Control (§7.36 / USB4 Specification v1.0/v2.0)
+///
+/// Gère la politique d'économie d'énergie (états CL0, CL1, CL2), les transitions de veille
+/// et l'arbitrage dynamique d'allocation de bandes passantes pour les tunnels USB4 actifs
+/// (PCIe, DisplayPort, Host-to-Host et USB3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XhciUsb4PowerManagementTunneling {
+    /// Pointeur dword vers la prochaine capacité étendue (0 = fin de liste)
+    pub next_ptr_dwords: u8,
+    /// Contrôle d'économie d'énergie USB4 activé (PMTC_EN, bit 0 de DWORD 1)
+    pub enabled: bool,
+    /// Support des états de basse consommation CL0s / CL1 / CL2 (bits 1..=3 de DWORD 1)
+    pub cl_states_supported: u8,
+    /// Mode d'arbitrage de bande passante automatique / QoS dynamique (bit 4 de DWORD 1)
+    pub dynamic_bandwidth_allocation: bool,
+    /// Seuil de veille profonde en microsecondes (bits 8..=15 de DWORD 1)
+    pub sleep_threshold_us: u8,
+    /// Priorité de tunneling PCIe (0 = basse, 3 = temps-réel prioritaire) (bits 16..=17 de DWORD 1)
+    pub pcie_tunnel_priority: u8,
+    /// Priorité de tunneling DisplayPort (0 = basse, 3 = temps-réel prioritaire) (bits 18..=19 de DWORD 1)
+    pub dp_tunnel_priority: u8,
+    /// Priorité de tunneling USB3 (0 = basse, 3 = temps-réel prioritaire) (bits 20..=21 de DWORD 1)
+    pub usb3_tunnel_priority: u8,
+    /// Registre de statut matériel d'alimentation USB4 (DWORD 2)
+    pub status: u32,
+    /// Répartition de bande passante allouée en Gbps (PCIe [7:0], DP [15:8], USB3 [23:16], marge [31:24]) (DWORD 3)
+    pub allocated_bandwidth: u32,
+}
+
+impl XhciUsb4PowerManagementTunneling {
+    /// Crée une nouvelle capacité USB4 Power Management & Tunneling Control
+    pub const fn new(cl_states: u8, dynamic_bw: bool) -> Self {
+        Self {
+            next_ptr_dwords: 0,
+            enabled: false,
+            cl_states_supported: cl_states & 0x07,
+            dynamic_bandwidth_allocation: dynamic_bw,
+            sleep_threshold_us: 50,  // 50 us par défaut
+            pcie_tunnel_priority: 2, // Priorité haute
+            dp_tunnel_priority: 3,   // Priorité temps réel
+            usb3_tunnel_priority: 1, // Priorité normale
+            status: 0,
+            allocated_bandwidth: 0x0A14_2800, // 40 Gbps alloué (DP: 20, PCIe: 10, USB3: 10)
+        }
+    }
+
+    /// Parse les 4 dwords MMIO d'une capacité étendue USB4 Power Management and Tunneling Control (§7.36)
+    pub const fn parse(dwords: &[u32; 4]) -> Option<Self> {
+        let cap_id = (dwords[0] & 0xFF) as u8;
+        if cap_id != XHCI_EXT_CAP_USB4_POWER_MANAGEMENT_TUNNELING {
+            return None;
+        }
+
+        let next_ptr = ((dwords[0] >> 8) & 0xFF) as u8;
+        let ctrl = dwords[1];
+        let enabled = (ctrl & 0x01) != 0;
+        let cl_states_supported = ((ctrl >> 1) & 0x07) as u8;
+        let dynamic_bandwidth_allocation = (ctrl & 0x10) != 0;
+        let sleep_threshold_us = ((ctrl >> 8) & 0xFF) as u8;
+        let pcie_tunnel_priority = ((ctrl >> 16) & 0x03) as u8;
+        let dp_tunnel_priority = ((ctrl >> 18) & 0x03) as u8;
+        let usb3_tunnel_priority = ((ctrl >> 20) & 0x03) as u8;
+        let status = dwords[2];
+        let allocated_bandwidth = dwords[3];
+
+        Some(Self {
+            next_ptr_dwords: next_ptr,
+            enabled,
+            cl_states_supported,
+            dynamic_bandwidth_allocation,
+            sleep_threshold_us,
+            pcie_tunnel_priority,
+            dp_tunnel_priority,
+            usb3_tunnel_priority,
+            status,
+            allocated_bandwidth,
+        })
+    }
+
+    /// Encode la capacité étendue en 4 mots dwords MMIO 32-bit
+    pub const fn encode(&self) -> [u32; 4] {
+        let dw0 = (XHCI_EXT_CAP_USB4_POWER_MANAGEMENT_TUNNELING as u32)
+            | ((self.next_ptr_dwords as u32) << 8);
+        let mut ctrl = (((self.cl_states_supported as u32) & 0x07) << 1)
+            | (((self.sleep_threshold_us as u32) & 0xFF) << 8)
+            | (((self.pcie_tunnel_priority as u32) & 0x03) << 16)
+            | (((self.dp_tunnel_priority as u32) & 0x03) << 18)
+            | (((self.usb3_tunnel_priority as u32) & 0x03) << 20);
+        if self.enabled {
+            ctrl |= 0x01;
+        }
+        if self.dynamic_bandwidth_allocation {
+            ctrl |= 0x10;
+        }
+        let dw2 = self.status;
+        let dw3 = self.allocated_bandwidth;
+        [dw0, ctrl, dw2, dw3]
+    }
+
+    /// Active ou désactive le contrôle PMTC
+    pub fn set_enabled(&mut self, enable: bool) {
+        self.enabled = enable;
+    }
+
+    /// Configure les priorités de bande passante des tunnels USB4
+    pub fn set_tunnel_priorities(&mut self, pcie: u8, dp: u8, usb3: u8) {
+        self.pcie_tunnel_priority = pcie & 0x03;
+        self.dp_tunnel_priority = dp & 0x03;
+        self.usb3_tunnel_priority = usb3 & 0x03;
+    }
+
+    /// Règle le seuil de veille basse consommation
+    pub fn set_sleep_threshold(&mut self, threshold_us: u8) {
+        self.sleep_threshold_us = threshold_us;
     }
 }
 
@@ -13661,5 +13779,49 @@ mod tests {
         assert_eq!(parsed_tmu.propagation_delay_ns, 38);
         assert_eq!(parsed_tmu.status, 0x0004_CAFE);
         assert_eq!(parsed_tmu.reference_time_lo, 0x1234_5678);
+
+        // 34. Test XhciUsb4PowerManagementTunneling
+        let mut usb4_pmtc = XhciUsb4PowerManagementTunneling::new(0x07, true);
+        assert_eq!(usb4_pmtc.cl_states_supported, 0x07);
+        assert!(usb4_pmtc.dynamic_bandwidth_allocation);
+        assert_eq!(usb4_pmtc.sleep_threshold_us, 50);
+        assert_eq!(usb4_pmtc.pcie_tunnel_priority, 2);
+        assert_eq!(usb4_pmtc.dp_tunnel_priority, 3);
+        assert_eq!(usb4_pmtc.usb3_tunnel_priority, 1);
+        assert!(!usb4_pmtc.enabled);
+
+        usb4_pmtc.set_enabled(true);
+        usb4_pmtc.set_tunnel_priorities(1, 2, 0);
+        usb4_pmtc.set_sleep_threshold(35);
+        usb4_pmtc.next_ptr_dwords = 76;
+        usb4_pmtc.status = 0x0005_BEEF;
+
+        let encoded_pmtc = usb4_pmtc.encode();
+        assert_eq!(
+            encoded_pmtc[0] & 0xFF,
+            XHCI_EXT_CAP_USB4_POWER_MANAGEMENT_TUNNELING as u32
+        );
+        assert_eq!((encoded_pmtc[0] >> 8) & 0xFF, 76);
+        assert_eq!(encoded_pmtc[1] & 0x01, 1);
+        assert_eq!((encoded_pmtc[1] >> 1) & 0x07, 7);
+        assert_eq!(encoded_pmtc[1] & 0x10, 0x10);
+        assert_eq!((encoded_pmtc[1] >> 8) & 0xFF, 35);
+        assert_eq!((encoded_pmtc[1] >> 16) & 0x03, 1);
+        assert_eq!((encoded_pmtc[1] >> 18) & 0x03, 2);
+        assert_eq!((encoded_pmtc[1] >> 20) & 0x03, 0);
+        assert_eq!(encoded_pmtc[2], 0x0005_BEEF);
+        assert_eq!(encoded_pmtc[3], 0x0A14_2800);
+
+        let parsed_pmtc = XhciUsb4PowerManagementTunneling::parse(&encoded_pmtc).unwrap();
+        assert_eq!(parsed_pmtc.next_ptr_dwords, 76);
+        assert!(parsed_pmtc.enabled);
+        assert_eq!(parsed_pmtc.cl_states_supported, 7);
+        assert!(parsed_pmtc.dynamic_bandwidth_allocation);
+        assert_eq!(parsed_pmtc.sleep_threshold_us, 35);
+        assert_eq!(parsed_pmtc.pcie_tunnel_priority, 1);
+        assert_eq!(parsed_pmtc.dp_tunnel_priority, 2);
+        assert_eq!(parsed_pmtc.usb3_tunnel_priority, 0);
+        assert_eq!(parsed_pmtc.status, 0x0005_BEEF);
+        assert_eq!(parsed_pmtc.allocated_bandwidth, 0x0A14_2800);
     }
 }

@@ -527,7 +527,12 @@ name = "ptx"
 path = "src/bin/ptx.rs"
 test = false
 
-# 104 utilitaires Ring 3
+[[bin]]
+name = "shred"
+path = "src/bin/shred.rs"
+test = false
+
+# 105 utilitaires Ring 3
 
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }
