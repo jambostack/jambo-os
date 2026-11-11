@@ -12238,6 +12238,373 @@ License MIT or Apache-2.0.\n";
 }
 
 // ============================================================================
+// Utilitaire POSIX / GNU coreutils : `crc32` (Calcul et vérification CRC-32 IEEE 802.3 / ISO 3309)
+// ============================================================================
+
+/// Table de correspondance CRC-32 (IEEE 802.3 / ISO 3309 / ITU-T V.42, polynôme 0xEDB88320)
+pub const CRC32_TABLE: [u32; 256] = {
+    let mut table = [0u32; 256];
+    let mut i = 0usize;
+    while i < 256 {
+        let mut crc = i as u32;
+        let mut bit = 0;
+        while bit < 8 {
+            if (crc & 1) != 0 {
+                crc = (crc >> 1) ^ 0xEDB8_8320;
+            } else {
+                crc >>= 1;
+            }
+            bit += 1;
+        }
+        table[i] = crc;
+        i += 1;
+    }
+    table
+};
+
+/// Structure de calcul incrémental de somme de contrôle CRC-32 IEEE 802.3 / ISO 3309
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Crc32Hasher {
+    crc: u32,
+    total_bytes: u64,
+}
+
+impl Default for Crc32Hasher {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Crc32Hasher {
+    /// Initialise un nouveau calculateur CRC-32 avec registre initial 0xFFFFFFFF
+    pub const fn new() -> Self {
+        Self {
+            crc: 0xFFFF_FFFF,
+            total_bytes: 0,
+        }
+    }
+
+    /// Met à jour l'accumulateur CRC-32 avec un tampon d'octets
+    pub fn update(&mut self, data: &[u8]) {
+        self.total_bytes = self.total_bytes.saturating_add(data.len() as u64);
+        for &b in data {
+            let idx = ((self.crc ^ (b as u32)) & 0xFF) as usize;
+            self.crc = (self.crc >> 8) ^ CRC32_TABLE[idx];
+        }
+    }
+
+    /// Finalise le calcul CRC-32 (inversion finale XOR 0xFFFFFFFF)
+    pub const fn finalize(&self) -> u32 {
+        self.crc ^ 0xFFFF_FFFF
+    }
+
+    /// Retourne le total d'octets traités
+    pub const fn total_bytes(&self) -> u64 {
+        self.total_bytes
+    }
+}
+
+/// Calcule la somme CRC-32 IEEE 802.3 sur un flux de descripteur de fichier ouvert
+pub fn hash_fd_crc32(fd: i32) -> Result<(u32, u64), i32> {
+    let mut hasher = Crc32Hasher::new();
+    let mut buf = [0u8; 4096];
+    loop {
+        let n = sys_read(fd, &mut buf);
+        if n < 0 {
+            return Err(n as i32);
+        }
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n as usize]);
+    }
+    Ok((hasher.finalize(), hasher.total_bytes()))
+}
+
+/// Convertit un entier CRC-32 32-bit en chaîne hexadécimale de 8 caractères
+pub fn crc32_to_hex(crc: u32, out: &mut [u8; 8]) {
+    const HEX_CHARS: &[u8; 16] = b"0123456789abcdef";
+    for (i, byte) in out.iter_mut().enumerate() {
+        let nibble = ((crc >> ((7 - i) * 4)) & 0xF) as usize;
+        *byte = HEX_CHARS[nibble];
+    }
+}
+
+/// Parse une ligne de vérification de fichier crc32 (format standard ou format BSD tag)
+pub fn parse_crc32_check_line(line: &str) -> Option<(&str, &str)> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() || trimmed.starts_with('#') {
+        return None;
+    }
+
+    // Format BSD: CRC32 (path) = hex8
+    if let Some(rest) = trimmed.strip_prefix("CRC32 (") {
+        if let Some(close_idx) = rest.find(')') {
+            let path = &rest[..close_idx];
+            let after = rest[close_idx + 1..].trim();
+            if let Some(hex_part) = after.strip_prefix('=') {
+                let hex = hex_part.trim();
+                if hex.len() == 8 && hex.as_bytes().iter().all(|b| b.is_ascii_hexdigit()) {
+                    return Some((path, hex));
+                }
+            }
+        }
+    }
+
+    // Format standard: <hex8>  <path> ou <hex8> *<path>
+    if trimmed.len() >= 10 {
+        let hex = &trimmed[..8];
+        let sep = &trimmed[8..10];
+        if (sep == "  " || sep == " *" || sep == "  ")
+            && hex.as_bytes().iter().all(|b| b.is_ascii_hexdigit())
+        {
+            let path = trimmed[10..].trim();
+            if !path.is_empty() {
+                return Some((path, hex));
+            }
+        }
+    }
+
+    None
+}
+
+/// Exécute l'utilitaire Coreutils POSIX / GNU `crc32` (calcul et vérification de sommes CRC-32)
+pub fn run_crc32(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    let mut check_mode = false;
+    let mut tag_format = false;
+    let mut binary_mode = false;
+    let mut status_only = false;
+    let mut quiet = false;
+    let mut warn = false;
+    let mut file_args = [""; 64];
+    let mut file_count = 0usize;
+
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i];
+        if arg == "--help" || arg == "-h" {
+            let help = b"Usage: crc32 [OPTION]... [FILE]...\n\
+Print or check CRC-32 (IEEE 802.3 / ISO 3309) checksums.\n\n\
+With no FILE, or when FILE is -, read standard input.\n\n\
+  -b, --binary         read in binary mode\n\
+  -c, --check          read checksums from the FILEs and check them\n\
+      --tag            create a BSD-style checksum\n\
+  -t, --text           read in text mode (default)\n\
+  -q, --quiet          don't print OK for each successfully verified file\n\
+      --status         don't output anything, status code shows success\n\
+  -w, --warn           warn about improperly formatted checksum lines\n\
+      --help           display this help and exit\n\
+      --version        output version information and exit\n";
+            let _ = sys_write(out_fd, help);
+            return 0;
+        }
+        if arg == "--version" || arg == "-v" {
+            let ver = b"crc32 (JamboOS coreutils) 0.1.0\n\
+Copyright (C) 2026 JamboOS Authors.\n\
+License MIT or Apache-2.0.\n";
+            let _ = sys_write(out_fd, ver);
+            return 0;
+        }
+        if arg == "-c" || arg == "--check" {
+            check_mode = true;
+        } else if arg == "--tag" {
+            tag_format = true;
+        } else if arg == "-b" || arg == "--binary" {
+            binary_mode = true;
+        } else if arg == "-t" || arg == "--text" {
+            binary_mode = false;
+        } else if arg == "--status" {
+            status_only = true;
+        } else if arg == "-q" || arg == "--quiet" {
+            quiet = true;
+        } else if arg == "-w" || arg == "--warn" {
+            warn = true;
+        } else if (!arg.starts_with('-') || arg == "-") && file_count < file_args.len() {
+            file_args[file_count] = arg;
+            file_count += 1;
+        }
+        i += 1;
+    }
+
+    if check_mode {
+        let mut overall_success = true;
+        let mut total_verified = 0usize;
+
+        let targets: &[&str] = if file_count == 0 {
+            &["-"]
+        } else {
+            &file_args[..file_count]
+        };
+
+        for &target in targets {
+            let chk_fd = if target == "-" {
+                in_fd
+            } else {
+                let fd = sys_open(target, O_RDONLY);
+                if fd < 0 {
+                    if !status_only {
+                        let _ = sys_write(err_fd, b"crc32: ");
+                        let _ = sys_write(err_fd, target.as_bytes());
+                        let _ = sys_write(err_fd, b": No such file or directory\n");
+                    }
+                    overall_success = false;
+                    continue;
+                }
+                fd
+            };
+
+            let mut chk_buf = [0u8; 8192];
+            let mut read_bytes = 0usize;
+            loop {
+                let n = sys_read(chk_fd, &mut chk_buf[read_bytes..]);
+                if n <= 0 {
+                    break;
+                }
+                read_bytes += n as usize;
+                if read_bytes >= chk_buf.len() {
+                    break;
+                }
+            }
+            if target != "-" {
+                sys_close(chk_fd);
+            }
+
+            let chk_text = match core::str::from_utf8(&chk_buf[..read_bytes]) {
+                Ok(t) => t,
+                Err(_) => {
+                    overall_success = false;
+                    continue;
+                }
+            };
+
+            for line in chk_text.lines() {
+                if let Some((filepath, expected_hex)) = parse_crc32_check_line(line) {
+                    total_verified += 1;
+                    let target_fd = sys_open(filepath, O_RDONLY);
+                    if target_fd < 0 {
+                        if !status_only {
+                            let _ = sys_write(out_fd, filepath.as_bytes());
+                            let _ = sys_write(out_fd, b": FAILED open or read\n");
+                        }
+                        overall_success = false;
+                        continue;
+                    }
+
+                    match hash_fd_crc32(target_fd) {
+                        Ok((crc, _)) => {
+                            let mut hex_buf = [0u8; 8];
+                            crc32_to_hex(crc, &mut hex_buf);
+                            let computed_hex = core::str::from_utf8(&hex_buf).unwrap_or("");
+
+                            let matches = computed_hex.len() == expected_hex.len()
+                                && computed_hex
+                                    .as_bytes()
+                                    .iter()
+                                    .zip(expected_hex.as_bytes().iter())
+                                    .all(|(&a, &b)| a.eq_ignore_ascii_case(&b));
+
+                            if matches {
+                                if !status_only && !quiet {
+                                    let _ = sys_write(out_fd, filepath.as_bytes());
+                                    let _ = sys_write(out_fd, b": OK\n");
+                                }
+                            } else {
+                                if !status_only {
+                                    let _ = sys_write(out_fd, filepath.as_bytes());
+                                    let _ = sys_write(out_fd, b": FAILED\n");
+                                }
+                                overall_success = false;
+                            }
+                        }
+                        Err(_) => {
+                            if !status_only {
+                                let _ = sys_write(out_fd, filepath.as_bytes());
+                                let _ = sys_write(out_fd, b": FAILED\n");
+                            }
+                            overall_success = false;
+                        }
+                    }
+                    sys_close(target_fd);
+                } else if warn && !line.trim().is_empty() && !line.trim().starts_with('#') {
+                    let _ = sys_write(err_fd, b"crc32: improperly formatted line\n");
+                }
+            }
+        }
+
+        if total_verified == 0 {
+            if !status_only {
+                let _ = sys_write(
+                    err_fd,
+                    b"crc32: no properly formatted CRC32 checksum lines found\n",
+                );
+            }
+            return 1;
+        }
+
+        return if overall_success { 0 } else { 1 };
+    }
+
+    let targets: &[&str] = if file_count == 0 {
+        &["-"]
+    } else {
+        &file_args[..file_count]
+    };
+
+    let mut exit_code = 0;
+    for &target in targets {
+        let (target_fd, display_name) = if target == "-" {
+            (in_fd, "-")
+        } else {
+            let fd = sys_open(target, O_RDONLY);
+            if fd < 0 {
+                let _ = sys_write(err_fd, b"crc32: ");
+                let _ = sys_write(err_fd, target.as_bytes());
+                let _ = sys_write(err_fd, b": No such file or directory\n");
+                exit_code = 1;
+                continue;
+            }
+            (fd, target)
+        };
+
+        match hash_fd_crc32(target_fd) {
+            Ok((crc, _)) => {
+                let mut hex_buf = [0u8; 8];
+                crc32_to_hex(crc, &mut hex_buf);
+
+                if tag_format {
+                    let _ = sys_write(out_fd, b"CRC32 (");
+                    let _ = sys_write(out_fd, display_name.as_bytes());
+                    let _ = sys_write(out_fd, b") = ");
+                    let _ = sys_write(out_fd, &hex_buf);
+                    let _ = sys_write(out_fd, b"\n");
+                } else {
+                    let _ = sys_write(out_fd, &hex_buf);
+                    if binary_mode {
+                        let _ = sys_write(out_fd, b" *");
+                    } else {
+                        let _ = sys_write(out_fd, b"  ");
+                    }
+                    let _ = sys_write(out_fd, display_name.as_bytes());
+                    let _ = sys_write(out_fd, b"\n");
+                }
+            }
+            Err(_) => {
+                let _ = sys_write(err_fd, b"crc32: error reading ");
+                let _ = sys_write(err_fd, display_name.as_bytes());
+                let _ = sys_write(err_fd, b"\n");
+                exit_code = 1;
+            }
+        }
+
+        if target_fd != in_fd {
+            sys_close(target_fd);
+        }
+    }
+
+    exit_code
+}
+
+// ============================================================================
 // Utilitaire POSIX / GNU coreutils : `sync` (Synchronisation des écritures persistance CoW)
 // ============================================================================
 
@@ -13566,6 +13933,7 @@ pub fn run_xargs(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
             "expand" => run_expand(effective_sub_args, 0, out_fd, err_fd),
             "unexpand" => run_unexpand(effective_sub_args, 0, out_fd, err_fd),
             "cksum" => run_cksum(effective_sub_args, 0, out_fd, err_fd),
+            "crc32" => run_crc32(effective_sub_args, 0, out_fd, err_fd),
             "base64" => run_base64(effective_sub_args, 0, out_fd, err_fd),
             "sha256sum" => run_sha256sum(effective_sub_args, 0, out_fd, err_fd),
             "sha1sum" => run_sha1sum(effective_sub_args, 0, out_fd, err_fd),
@@ -22396,6 +22764,99 @@ Chaque processus dispose de son propre CR3 sans aucun privilege materiel direct.
         assert!(core::str::from_utf8(&buf6[..n6 as usize])
             .unwrap()
             .contains("Usage: sha1sum"));
+
+        let _ = sys_unlink_pool(file_path);
+        let _ = sys_unlink_pool(check_file);
+    }
+
+    #[test]
+    fn test_posix_crc32() {
+        // 1. Vecteurs CRC32 connus
+        let mut h1 = Crc32Hasher::new();
+        h1.update(b"");
+        assert_eq!(h1.finalize(), 0x00000000);
+
+        let mut h2 = Crc32Hasher::new();
+        h2.update(b"123456789");
+        assert_eq!(h2.finalize(), 0xCBF43926);
+
+        // 2. Calcul crc32 sur un fichier VFS
+        let file_path = "/tmp/test_crc32.txt";
+        let fd = sys_open(file_path, crate::vfs::O_CREAT | crate::vfs::O_RDWR);
+        assert!(fd >= 0);
+        let content = b"123456789";
+        let _ = sys_write(fd, content);
+        let _ = sys_close(fd);
+
+        let (out_r1, out_w1) = crate::vfs::pipe().unwrap();
+        let code1 = run_crc32(&[file_path], 0, out_w1, 2);
+        sys_close(out_w1);
+        assert_eq!(code1, 0);
+
+        let mut buf1 = [0u8; 256];
+        let n1 = sys_read(out_r1, &mut buf1);
+        sys_close(out_r1);
+        let s1 = core::str::from_utf8(&buf1[..n1 as usize]).unwrap();
+        assert!(s1.starts_with("cbf43926  /tmp/test_crc32.txt\n"));
+
+        // 3. Format BSD --tag
+        let (out_r2, out_w2) = crate::vfs::pipe().unwrap();
+        let code2 = run_crc32(&["--tag", file_path], 0, out_w2, 2);
+        sys_close(out_w2);
+        assert_eq!(code2, 0);
+
+        let mut buf2 = [0u8; 256];
+        let n2 = sys_read(out_r2, &mut buf2);
+        sys_close(out_r2);
+        let s2 = core::str::from_utf8(&buf2[..n2 as usize]).unwrap();
+        assert_eq!(s2, "CRC32 (/tmp/test_crc32.txt) = cbf43926\n");
+
+        // 4. Vérification d'intégrité (-c / --check)
+        let check_file = "/tmp/test_crc32.check";
+        let cfd = sys_open(check_file, crate::vfs::O_CREAT | crate::vfs::O_RDWR);
+        assert!(cfd >= 0);
+        let _ = sys_write(cfd, b"cbf43926  /tmp/test_crc32.txt\n");
+        let _ = sys_close(cfd);
+
+        let (out_r3, out_w3) = crate::vfs::pipe().unwrap();
+        let code3 = run_crc32(&["-c", check_file], 0, out_w3, 2);
+        sys_close(out_w3);
+        assert_eq!(code3, 0);
+
+        let mut buf3 = [0u8; 256];
+        let n3 = sys_read(out_r3, &mut buf3);
+        sys_close(out_r3);
+        let s3 = core::str::from_utf8(&buf3[..n3 as usize]).unwrap();
+        assert!(s3.contains("/tmp/test_crc32.txt: OK\n"));
+
+        // 5. Lecture sur stdin via "-"
+        let (in_r5, in_w5) = crate::vfs::pipe().unwrap();
+        let (out_r5, out_w5) = crate::vfs::pipe().unwrap();
+        let _ = sys_write(in_w5, b"123456789");
+        sys_close(in_w5);
+
+        let code5 = run_crc32(&["-"], in_r5, out_w5, 2);
+        sys_close(in_r5);
+        sys_close(out_w5);
+        assert_eq!(code5, 0);
+
+        let mut buf5 = [0u8; 256];
+        let n5 = sys_read(out_r5, &mut buf5);
+        sys_close(out_r5);
+        let s5 = core::str::from_utf8(&buf5[..n5 as usize]).unwrap();
+        assert!(s5.starts_with("cbf43926  -\n"));
+
+        // 6. --help et --version
+        let (out_r6, out_w6) = crate::vfs::pipe().unwrap();
+        let code6 = run_crc32(&["--help"], 0, out_w6, 2);
+        sys_close(out_w6);
+        assert_eq!(code6, 0);
+        let mut buf6 = [0u8; 512];
+        let n6 = sys_read(out_r6, &mut buf6);
+        sys_close(out_r6);
+        assert!(core::str::from_utf8(&buf6[..n6 as usize])
+            .unwrap()
+            .contains("Usage: crc32"));
 
         let _ = sys_unlink_pool(file_path);
         let _ = sys_unlink_pool(check_file);

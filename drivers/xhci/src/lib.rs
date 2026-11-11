@@ -391,6 +391,107 @@ impl XhciLegacySupport {
     }
 }
 
+/// Masques de registres USB Power Management Extended Capability (xHCI 1.2 Section 7.3)
+/// Registre USBPMR (Offset 0x00)
+pub const USBPMR_CAP_ID_MASK: u32 = 0xFF;
+pub const USBPMR_NEXT_PTR_MASK: u32 = 0xFF00;
+pub const USBPMR_PMIC_OFFSET_MASK: u32 = 0x00FF_0000;
+pub const USBPMR_PORT_POWER_CONTROL: u32 = 1 << 24;
+pub const USBPMR_POWER_SOURCE_VALID: u32 = 1 << 25;
+
+/// Registre USBPMCSR (Offset 0x04) - USB Power Management Control/Status
+pub const USBPMCSR_POWER_STATE_MASK: u32 = 0x03; // D0 (00b), D1 (01b), D2 (10b), D3hot (11b)
+pub const USBPMCSR_PME_ENABLE: u32 = 1 << 8;
+pub const USBPMCSR_DATA_SCALE_MASK: u32 = 0x6000;
+pub const USBPMCSR_PME_STATUS: u32 = 1 << 15;
+
+/// États de gestion d'énergie de périphérique xHCI Power Management (D0..D3hot)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum XhciPowerState {
+    D0 = 0b00,
+    D1 = 0b01,
+    D2 = 0b10,
+    D3Hot = 0b11,
+}
+
+impl XhciPowerState {
+    pub const fn from_raw(raw: u8) -> Self {
+        match raw & 0x03 {
+            0b00 => Self::D0,
+            0b01 => Self::D1,
+            0b10 => Self::D2,
+            _ => Self::D3Hot,
+        }
+    }
+
+    pub const fn to_raw(self) -> u8 {
+        self as u8
+    }
+}
+
+/// Structure décodée de la capacité USB Power Management (xHCI 1.2 Section 7.3)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct XhciPowerManagement {
+    /// Pointeur dword vers la prochaine capacité étendue (0 = dernière)
+    pub next_ptr_dwords: u8,
+    /// Offset du contrôleur d'alimentation PMIC en dwords
+    pub pmic_offset_dwords: u8,
+    /// Capacité matérielle de contrôle d'alimentation par port (bit 24 de USBPMR)
+    pub port_power_control_supported: bool,
+    /// Indique que la source d'alimentation est stable et valide (bit 25 de USBPMR)
+    pub power_source_valid: bool,
+    /// État d'alimentation courant (D0, D1, D2, D3hot)
+    pub current_power_state: u8,
+    /// Interruption d'événement de réveil Power Management Event (PME) activée
+    pub pme_enabled: bool,
+    /// Événement PME en attente d'acquittement (bit 15 RW1C de USBPMCSR)
+    pub pme_status: bool,
+}
+
+impl XhciPowerManagement {
+    /// Parse les deux registres 32-bit USBPMR et USBPMCSR
+    pub const fn parse(usbpmr: u32, usbpmcsr: u32) -> Self {
+        Self {
+            next_ptr_dwords: ((usbpmr >> 8) & 0xFF) as u8,
+            pmic_offset_dwords: ((usbpmr >> 16) & 0xFF) as u8,
+            port_power_control_supported: (usbpmr & USBPMR_PORT_POWER_CONTROL) != 0,
+            power_source_valid: (usbpmr & USBPMR_POWER_SOURCE_VALID) != 0,
+            current_power_state: (usbpmcsr & USBPMCSR_POWER_STATE_MASK) as u8,
+            pme_enabled: (usbpmcsr & USBPMCSR_PME_ENABLE) != 0,
+            pme_status: (usbpmcsr & USBPMCSR_PME_STATUS) != 0,
+        }
+    }
+
+    /// Encode le registre USBPMR en préservant le chaînage et l'offset PMIC
+    pub const fn encode_usbpmr(&self) -> u32 {
+        let mut val = (XHCI_EXT_CAP_EXTENDED_POWER_MGMT as u32)
+            | ((self.next_ptr_dwords as u32) << 8)
+            | ((self.pmic_offset_dwords as u32) << 16);
+        if self.port_power_control_supported {
+            val |= USBPMR_PORT_POWER_CONTROL;
+        }
+        if self.power_source_valid {
+            val |= USBPMR_POWER_SOURCE_VALID;
+        }
+        val
+    }
+
+    /// Calcule la valeur d'écriture pour commuter l'état d'énergie cible (D0..D3hot)
+    pub const fn build_power_state_transition(raw_usbpmcsr: u32, target: XhciPowerState) -> u32 {
+        (raw_usbpmcsr & !USBPMCSR_POWER_STATE_MASK) | (target.to_raw() as u32)
+    }
+
+    /// Calcule la valeur d'écriture pour acquitter le drapeau PME Status (bit 15 RW1C)
+    pub const fn build_pme_ack(raw_usbpmcsr: u32) -> u32 {
+        raw_usbpmcsr | USBPMCSR_PME_STATUS
+    }
+
+    /// Indique si le contrôleur est actuellement en état opérationnel D0
+    pub const fn is_d0_active(&self) -> bool {
+        self.current_power_state == (XhciPowerState::D0 as u8)
+    }
+}
+
 /// Structure de parsing d'en-tête de capacité étendue xHCI (Section 7.0)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct XhciExtendedCapHeader {
@@ -5700,6 +5801,40 @@ impl XhciController {
         unsafe { core::ptr::write_volatile(cap_addr as *mut u32, new_sup) };
     }
 
+    /// Lit l'état de la capacité USB Power Management (xHCI 1.2 section 7.3)
+    /// à partir de l'adresse MMIO de base de la capacité étendue.
+    ///
+    /// # Safety
+    ///
+    /// Effectue des lectures volatiles 32-bit MMIO sur l'espace BAR0 du contrôleur xHCI.
+    pub fn read_power_management(&self, cap_addr: u64) -> XhciPowerManagement {
+        let usbpmr = unsafe { core::ptr::read_volatile(cap_addr as *const u32) };
+        let usbpmcsr = unsafe { core::ptr::read_volatile((cap_addr + 4) as *const u32) };
+        XhciPowerManagement::parse(usbpmr, usbpmcsr)
+    }
+
+    /// Règle l'état d'énergie cible (D0..D3hot) dans le registre USBPMCSR (xHCI 1.2 section 7.3).
+    ///
+    /// # Safety
+    ///
+    /// Effectue un cycle de lecture-modification-écriture MMIO 32-bit sur USBPMCSR.
+    pub fn set_power_state(&mut self, cap_addr: u64, target: XhciPowerState) {
+        let raw_csr = unsafe { core::ptr::read_volatile((cap_addr + 4) as *const u32) };
+        let new_csr = XhciPowerManagement::build_power_state_transition(raw_csr, target);
+        unsafe { core::ptr::write_volatile((cap_addr + 4) as *mut u32, new_csr) };
+    }
+
+    /// Acquitte l'indicateur d'événement PME (Power Management Event) dans USBPMCSR.
+    ///
+    /// # Safety
+    ///
+    /// Effectue une écriture RW1C MMIO 32-bit sur le registre USBPMCSR.
+    pub fn ack_pme_status(&mut self, cap_addr: u64) {
+        let raw_csr = unsafe { core::ptr::read_volatile((cap_addr + 4) as *const u32) };
+        let new_csr = XhciPowerManagement::build_pme_ack(raw_csr);
+        unsafe { core::ptr::write_volatile((cap_addr + 4) as *mut u32, new_csr) };
+    }
+
     /// Émet une commande Evaluate Context sur le Command Ring.
     pub fn evaluate_context(
         &mut self,
@@ -8106,5 +8241,32 @@ mod tests {
         assert!(!leg_final.smi_enabled);
         assert!(!leg_final.smi_ownership_change_enable);
         assert!(leg_final.is_os_owned());
+
+        // 9. USB Power Management Capability parsing & state transitions
+        let raw_pmr = (XHCI_EXT_CAP_EXTENDED_POWER_MGMT as u32)
+            | (8 << 8) // next ptr = 8
+            | (2 << 16) // pmic offset = 2
+            | USBPMR_PORT_POWER_CONTROL
+            | USBPMR_POWER_SOURCE_VALID;
+        let raw_pmcsr = USBPMCSR_PME_ENABLE | USBPMCSR_PME_STATUS; // D0, PME enabled, PME status pending
+        let pm = XhciPowerManagement::parse(raw_pmr, raw_pmcsr);
+        assert_eq!(pm.next_ptr_dwords, 8);
+        assert_eq!(pm.pmic_offset_dwords, 2);
+        assert!(pm.port_power_control_supported);
+        assert!(pm.power_source_valid);
+        assert!(pm.is_d0_active());
+        assert!(pm.pme_enabled);
+        assert!(pm.pme_status);
+
+        // Simulation transition vers D3hot
+        let d3_pmcsr =
+            XhciPowerManagement::build_power_state_transition(raw_pmcsr, XhciPowerState::D3Hot);
+        let pm_d3 = XhciPowerManagement::parse(raw_pmr, d3_pmcsr);
+        assert_eq!(pm_d3.current_power_state, XhciPowerState::D3Hot as u8);
+        assert!(!pm_d3.is_d0_active());
+
+        // Simulation acquittement PME Status RW1C
+        let acked_pmcsr = XhciPowerManagement::build_pme_ack(d3_pmcsr);
+        assert_ne!(acked_pmcsr & USBPMCSR_PME_STATUS, 0);
     }
 }
