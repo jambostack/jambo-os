@@ -300,6 +300,7 @@ pub const XHCI_EXT_CAP_EXTENDED_POWER_MGMT: u8 = 3;
 pub const XHCI_EXT_CAP_IO_VIRTUALIZATION: u8 = 4;
 pub const XHCI_EXT_CAP_LOCAL_MEMORY: u8 = 5;
 pub const XHCI_EXT_CAP_USB_DEBUG_CAPABILITY: u8 = 10;
+pub const XHCI_EXT_CAP_EXTENDED_POWER_MGMT_LPM: u8 = 15;
 pub const XHCI_EXT_CAP_EXTENDED_MESSAGE_INTERRUPT: u8 = 17;
 
 /// Masques de registres USB Legacy Support (xHCI 1.2 Section 7.1)
@@ -985,6 +986,152 @@ impl XhciDebugConsole {
         buf[..copy_len].copy_from_slice(&simulated_input[..copy_len]);
         self.bytes_rx = self.bytes_rx.saturating_add(copy_len as u64);
         copy_len
+    }
+}
+
+/// Niveaux de latence de sortie LPM Best Effort (Exit Latency)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum XhciLpmExitLatency {
+    ZeroUs = 0,
+    OneUs = 1,
+    TwoUs = 2,
+    FourUs = 3,
+    EightUs = 4,
+    SixteenUs = 5,
+    ThirtyTwoUs = 6,
+    SixtyFourUs = 7,
+}
+
+impl XhciLpmExitLatency {
+    pub const fn from_raw(raw: u8) -> Self {
+        match raw & 0x07 {
+            0 => Self::ZeroUs,
+            1 => Self::OneUs,
+            2 => Self::TwoUs,
+            3 => Self::FourUs,
+            4 => Self::EightUs,
+            5 => Self::SixteenUs,
+            6 => Self::ThirtyTwoUs,
+            _ => Self::SixtyFourUs,
+        }
+    }
+
+    pub const fn to_raw(self) -> u8 {
+        self as u8
+    }
+
+    pub const fn as_microseconds(self) -> u32 {
+        match self {
+            Self::ZeroUs => 0,
+            Self::OneUs => 1,
+            Self::TwoUs => 2,
+            Self::FourUs => 4,
+            Self::EightUs => 8,
+            Self::SixteenUs => 16,
+            Self::ThirtyTwoUs => 32,
+            Self::SixtyFourUs => 64,
+        }
+    }
+}
+
+/// Structure de décodage et contrôle xHCI 1.2 §7.8 : Extended Power Management & LPM Best Effort
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XhciExtendedPowerManagementLpm {
+    /// Pointeur dword vers la prochaine capacité étendue
+    pub next_ptr_dwords: u8,
+    /// Support matériel du Link Power Management (LPM) Hardware Enforced
+    pub hardware_lpm_capable: bool,
+    /// Support matériel de la latence de sortie LPM Best Effort
+    pub best_effort_exit_latency_capable: bool,
+    /// Latence de sortie Best Effort configurée (microsecondes quantifiées)
+    pub exit_latency: XhciLpmExitLatency,
+    /// LPM Best Effort activé
+    pub best_effort_enabled: bool,
+    /// Timeout d'inactivité avant transition U1/U2 en microsecondes (0..255 µs)
+    pub inactivity_timeout_us: u8,
+}
+
+impl Default for XhciExtendedPowerManagementLpm {
+    fn default() -> Self {
+        Self {
+            next_ptr_dwords: 0,
+            hardware_lpm_capable: true,
+            best_effort_exit_latency_capable: true,
+            exit_latency: XhciLpmExitLatency::EightUs,
+            best_effort_enabled: false,
+            inactivity_timeout_us: 10,
+        }
+    }
+}
+
+impl XhciExtendedPowerManagementLpm {
+    /// Parse les dwords de la capacité LPM Best Effort (§7.8)
+    /// Dword 0: [7:0] CapID (15), [15:8] Next Cap Ptr, [16] HW LPM Capable, [17] Best Effort Latency Capable, [20:18] Exit Latency
+    /// Dword 1: [0] Best Effort Enable, [15:8] Inactivity Timeout (µs)
+    pub const fn parse(dwords: &[u32]) -> Self {
+        if dwords.is_empty() {
+            return Self {
+                next_ptr_dwords: 0,
+                hardware_lpm_capable: false,
+                best_effort_exit_latency_capable: false,
+                exit_latency: XhciLpmExitLatency::ZeroUs,
+                best_effort_enabled: false,
+                inactivity_timeout_us: 0,
+            };
+        }
+        let dw0 = dwords[0];
+        let dw1 = if dwords.len() > 1 { dwords[1] } else { 0 };
+
+        let next_ptr_dwords = ((dw0 >> 8) & 0xFF) as u8;
+        let hardware_lpm_capable = (dw0 & (1 << 16)) != 0;
+        let best_effort_exit_latency_capable = (dw0 & (1 << 17)) != 0;
+        let raw_exit_lat = ((dw0 >> 18) & 0x07) as u8;
+        let exit_latency = XhciLpmExitLatency::from_raw(raw_exit_lat);
+
+        let best_effort_enabled = (dw1 & 0x01) != 0;
+        let inactivity_timeout_us = ((dw1 >> 8) & 0xFF) as u8;
+
+        Self {
+            next_ptr_dwords,
+            hardware_lpm_capable,
+            best_effort_exit_latency_capable,
+            exit_latency,
+            best_effort_enabled,
+            inactivity_timeout_us,
+        }
+    }
+
+    /// Encode la capacité en deux dwords MMIO
+    pub const fn encode(&self) -> [u32; 2] {
+        let mut dw0 =
+            (XHCI_EXT_CAP_EXTENDED_POWER_MGMT_LPM as u32) | ((self.next_ptr_dwords as u32) << 8);
+        if self.hardware_lpm_capable {
+            dw0 |= 1 << 16;
+        }
+        if self.best_effort_exit_latency_capable {
+            dw0 |= 1 << 17;
+        }
+        dw0 |= (self.exit_latency.to_raw() as u32) << 18;
+
+        let mut dw1 = 0u32;
+        if self.best_effort_enabled {
+            dw1 |= 0x01;
+        }
+        dw1 |= (self.inactivity_timeout_us as u32) << 8;
+
+        [dw0, dw1]
+    }
+
+    /// Active ou désactive le mode LPM Best Effort
+    pub fn set_best_effort_enable(&mut self, enable: bool) {
+        if self.best_effort_exit_latency_capable {
+            self.best_effort_enabled = enable;
+        }
+    }
+
+    /// Met à jour la latence de sortie LPM Best Effort
+    pub fn set_exit_latency(&mut self, lat: XhciLpmExitLatency) {
+        self.exit_latency = lat;
     }
 }
 
@@ -8933,5 +9080,29 @@ mod tests {
         console.detach();
         assert!(!console.connected);
         assert_eq!(console.write(b"dropped"), 0);
+
+        // 17. xHCI 1.2 §7.8 LPM Best Effort Extended Capability
+        let lpm_dwords: [u32; 2] = [
+            (XHCI_EXT_CAP_EXTENDED_POWER_MGMT_LPM as u32)
+                | (16 << 8)
+                | (1 << 16)
+                | (1 << 17)
+                | ((XhciLpmExitLatency::ThirtyTwoUs.to_raw() as u32) << 18),
+            0x01 | (25 << 8), // enabled, 25 µs inactivity timeout
+        ];
+        let mut lpm_cap = XhciExtendedPowerManagementLpm::parse(&lpm_dwords);
+        assert_eq!(lpm_cap.next_ptr_dwords, 16);
+        assert!(lpm_cap.hardware_lpm_capable);
+        assert!(lpm_cap.best_effort_exit_latency_capable);
+        assert_eq!(lpm_cap.exit_latency, XhciLpmExitLatency::ThirtyTwoUs);
+        assert_eq!(lpm_cap.exit_latency.as_microseconds(), 32);
+        assert!(lpm_cap.best_effort_enabled);
+        assert_eq!(lpm_cap.inactivity_timeout_us, 25);
+        assert_eq!(lpm_cap.encode(), lpm_dwords);
+
+        lpm_cap.set_best_effort_enable(false);
+        assert!(!lpm_cap.best_effort_enabled);
+        lpm_cap.set_exit_latency(XhciLpmExitLatency::EightUs);
+        assert_eq!(lpm_cap.exit_latency.as_microseconds(), 8);
     }
 }

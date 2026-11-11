@@ -387,7 +387,12 @@ name = "whoami"
 path = "src/bin/whoami.rs"
 test = false
 
-# 76 utilitaires Ring 3
+[[bin]]
+name = "printenv"
+path = "src/bin/printenv.rs"
+test = false
+
+# 77 utilitaires Ring 3
 
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }

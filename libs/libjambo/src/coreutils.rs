@@ -19660,6 +19660,94 @@ Same as id -un.\n\n\
     0
 }
 
+/// Utilitaire POSIX / GNU `printenv` (Print all or part of environment)
+///
+/// Affiche la totalité ou une sélection de variables d'environnement.
+/// Options supportées :
+/// - `-0`, `--null` : termine chaque variable par un octet NUL au lieu d'un saut de ligne
+/// - `--help` : affiche l'aide
+/// - `--version` : affiche la version
+///
+/// Si un ou plusieurs arguments de noms de variables sont fournis, affiche uniquement leurs valeurs.
+/// Renvoie 0 si toutes les variables demandées sont trouvées, 1 si au moins une est manquante.
+pub fn run_printenv(args: &[&str], _in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    const DEFAULT_ENV: [(&str, &str); 6] = [
+        ("PATH", "/bin"),
+        ("USER", "root"),
+        ("SHELL", "/bin/jsh"),
+        ("TERM", "xterm-256color"),
+        ("HOME", "/root"),
+        ("OS", "JamboOS"),
+    ];
+
+    let mut null_delimiter = false;
+    let mut var_names: [&str; 16] = [""; 16];
+    let mut var_count = 0;
+
+    for &arg in args {
+        if arg == "-0" || arg == "--null" {
+            null_delimiter = true;
+        } else if arg == "--help" {
+            let _ = sys_write(
+                out_fd,
+                b"Usage: printenv [OPTION]... [VARIABLE]...\n\
+Print the values of the specified environment VARIABLE(s).\n\
+If no VARIABLE is specified, print name and value pairs for them all.\n\n\
+  -0, --null     end each output line with NUL, not newline\n\
+      --help     display this help and exit\n\
+      --version  output version information and exit\n",
+            );
+            return 0;
+        } else if arg == "--version" {
+            let _ = sys_write(out_fd, b"printenv (jambo-coreutils) 0.1.0\n");
+            return 0;
+        } else if arg.starts_with('-') && arg != "-" {
+            let _ = sys_write(err_fd, b"printenv: unrecognized option '");
+            let _ = sys_write(err_fd, arg.as_bytes());
+            let _ = sys_write(err_fd, b"'\nTry 'printenv --help' for more information.\n");
+            return 2;
+        } else if var_count < var_names.len() {
+            var_names[var_count] = arg;
+            var_count += 1;
+        }
+    }
+
+    let delim: &[u8] = if null_delimiter { b"\0" } else { b"\n" };
+
+    if var_count == 0 {
+        // Affiche toutes les variables par défaut au format NAME=VALUE
+        for &(k, v) in &DEFAULT_ENV {
+            let _ = sys_write(out_fd, k.as_bytes());
+            let _ = sys_write(out_fd, b"=");
+            let _ = sys_write(out_fd, v.as_bytes());
+            let _ = sys_write(out_fd, delim);
+        }
+        0
+    } else {
+        // Affiche la valeur de chacune des variables demandées
+        let mut all_found = true;
+        for &req_var in var_names.iter().take(var_count) {
+            let mut found = false;
+            for &(k, v) in &DEFAULT_ENV {
+                if k == req_var {
+                    let _ = sys_write(out_fd, v.as_bytes());
+                    let _ = sys_write(out_fd, delim);
+                    found = true;
+                    break;
+                }
+            }
+            if !found {
+                all_found = false;
+            }
+        }
+        if all_found {
+            0
+        } else {
+            1
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -23859,5 +23947,33 @@ Chaque processus dispose de son propre CR3 sans aucun privilege materiel direct.
         assert!(core::str::from_utf8(&bufw2[..nw2 as usize])
             .unwrap()
             .contains("whoami"));
+
+        // 8. Test run_printenv
+        let (out_rp1, out_wp1) = crate::vfs::pipe().unwrap();
+        let code_p1 = run_printenv(&[], 0, out_wp1, 2);
+        sys_close(out_wp1);
+        assert_eq!(code_p1, 0);
+        let mut bufp1 = [0u8; 256];
+        let np1 = sys_read(out_rp1, &mut bufp1);
+        sys_close(out_rp1);
+        let s_p1 = core::str::from_utf8(&bufp1[..np1 as usize]).unwrap();
+        assert!(s_p1.contains("PATH=/bin\n"));
+        assert!(s_p1.contains("USER=root\n"));
+        assert!(s_p1.contains("OS=JamboOS\n"));
+
+        let (out_rp2, out_wp2) = crate::vfs::pipe().unwrap();
+        let code_p2 = run_printenv(&["USER", "OS"], 0, out_wp2, 2);
+        sys_close(out_wp2);
+        assert_eq!(code_p2, 0);
+        let mut bufp2 = [0u8; 64];
+        let np2 = sys_read(out_rp2, &mut bufp2);
+        sys_close(out_rp2);
+        assert_eq!(
+            core::str::from_utf8(&bufp2[..np2 as usize]).unwrap(),
+            "root\nJamboOS\n"
+        );
+
+        let code_p3 = run_printenv(&["NONEXISTENT_VAR"], 0, 1, 2);
+        assert_eq!(code_p3, 1);
     }
 }
