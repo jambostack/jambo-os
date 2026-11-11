@@ -333,6 +333,8 @@ pub const XHCI_EXT_CAP_USB4_POWER_MANAGEMENT_TUNNELING: u8 = 44;
 pub const XHCI_EXT_CAP_USB4_DP_ALT_MODE_CONFIGURATION: u8 = 45;
 /// Capacité étendue xHCI 1.2 / USB4 Security and Encryption Control Capability (§7.38)
 pub const XHCI_EXT_CAP_USB4_SECURITY_CONFIGURATION: u8 = 46;
+/// Capacité étendue xHCI 1.2 / USB4 Inter-Domain Transport Interface Capability (§7.39)
+pub const XHCI_EXT_CAP_USB4_INTER_DOMAIN_TRANSPORT: u8 = 47;
 
 /// Masques de registres USB Legacy Support (xHCI 1.2 Section 7.1)
 /// Registre USBLEGSUP (Offset 0x00)
@@ -4651,6 +4653,134 @@ impl XhciUsb4SecurityConfig {
     /// Met à jour le jeton de session cryptographique
     pub fn set_session_token(&mut self, token: u32) {
         self.session_token = token;
+    }
+}
+
+/// Capacité Étendue xHCI 1.2 / USB4 Inter-Domain Transport Interface Capability (§7.39, Cap ID 47)
+///
+/// Permet l'échange de paquets inter-domaines (protocoles réseau XDomain / DMA peer-to-peer)
+/// entre plusieurs routeurs USB4 hôtes ou domaines de virtualisation autonomes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XhciUsb4InterDomainTransport {
+    /// Pointeur dword vers la prochaine capacité étendue (0 = fin de liste)
+    pub next_ptr_dwords: u8,
+    /// Interface de transport inter-domaine activée (bit 0)
+    pub transport_enabled: bool,
+    /// Prise en charge du protocole XDomain Network (bit 1)
+    pub xdomain_net_supported: bool,
+    /// Support de la négociation de bande passante asymétrique (bit 2)
+    pub asymmetric_bw_supported: bool,
+    /// Interruption sur trame de découverte inter-domaine active (bit 3)
+    pub discovery_irq_enabled: bool,
+    /// Identifiant de domaine distant (Peer Domain ID, bits [15:8])
+    pub peer_domain_id: u8,
+    /// Identifiant de routeur cible (Peer Router ID, bits [23:16])
+    pub peer_router_id: u8,
+    /// Index de porte de sonnette inter-domaine (Doorbell Index, bits [31:24])
+    pub doorbell_index: u8,
+    /// Registre de statut d'échange et de handshake (Status Dword 2)
+    pub status: u32,
+    /// Capacité maximale de MTU du tunnel en octets (ex: 4096 octets)
+    pub max_packet_size: u16,
+    /// Nombre de canaux de transport inter-domaine configurés (bits [23:16] de Dword 3)
+    pub channel_count: u8,
+}
+
+impl XhciUsb4InterDomainTransport {
+    /// Crée une nouvelle configuration de transport inter-domaine USB4
+    pub const fn new(peer_domain_id: u8, peer_router_id: u8, max_packet_size: u16) -> Self {
+        Self {
+            next_ptr_dwords: 0,
+            transport_enabled: false,
+            xdomain_net_supported: true,
+            asymmetric_bw_supported: true,
+            discovery_irq_enabled: false,
+            peer_domain_id,
+            peer_router_id,
+            doorbell_index: 0,
+            status: 0,
+            max_packet_size,
+            channel_count: 1,
+        }
+    }
+
+    /// Parse les 4 dwords MMIO d'une capacité étendue USB4 Inter-Domain Transport (§7.39)
+    pub const fn parse(dwords: &[u32; 4]) -> Option<Self> {
+        let cap_id = (dwords[0] & 0xFF) as u8;
+        if cap_id != XHCI_EXT_CAP_USB4_INTER_DOMAIN_TRANSPORT {
+            return None;
+        }
+
+        let next_ptr = ((dwords[0] >> 8) & 0xFF) as u8;
+        let ctrl = dwords[1];
+        let transport_enabled = (ctrl & 0x01) != 0;
+        let xdomain_net_supported = (ctrl & 0x02) != 0;
+        let asymmetric_bw_supported = (ctrl & 0x04) != 0;
+        let discovery_irq_enabled = (ctrl & 0x08) != 0;
+        let peer_domain_id = ((ctrl >> 8) & 0xFF) as u8;
+        let peer_router_id = ((ctrl >> 16) & 0xFF) as u8;
+        let doorbell_index = ((ctrl >> 24) & 0xFF) as u8;
+
+        let status = dwords[2];
+        let dw3 = dwords[3];
+        let max_packet_size = (dw3 & 0xFFFF) as u16;
+        let channel_count = ((dw3 >> 16) & 0xFF) as u8;
+
+        Some(Self {
+            next_ptr_dwords: next_ptr,
+            transport_enabled,
+            xdomain_net_supported,
+            asymmetric_bw_supported,
+            discovery_irq_enabled,
+            peer_domain_id,
+            peer_router_id,
+            doorbell_index,
+            status,
+            max_packet_size,
+            channel_count,
+        })
+    }
+
+    /// Encode la capacité étendue en 4 mots dwords MMIO 32-bit
+    pub const fn encode(&self) -> [u32; 4] {
+        let dw0 = (XHCI_EXT_CAP_USB4_INTER_DOMAIN_TRANSPORT as u32)
+            | ((self.next_ptr_dwords as u32) << 8);
+        let mut ctrl = ((self.peer_domain_id as u32) << 8)
+            | ((self.peer_router_id as u32) << 16)
+            | ((self.doorbell_index as u32) << 24);
+        if self.transport_enabled {
+            ctrl |= 0x01;
+        }
+        if self.xdomain_net_supported {
+            ctrl |= 0x02;
+        }
+        if self.asymmetric_bw_supported {
+            ctrl |= 0x04;
+        }
+        if self.discovery_irq_enabled {
+            ctrl |= 0x08;
+        }
+        let dw2 = self.status;
+        let dw3 = (self.max_packet_size as u32) | ((self.channel_count as u32) << 16);
+        [dw0, ctrl, dw2, dw3]
+    }
+
+    /// Active ou désactive l'interface de transport inter-domaine
+    pub fn set_transport_enabled(&mut self, enable: bool) {
+        self.transport_enabled = enable;
+    }
+
+    /// Configure la cible d'inter-domaine (domaine distant et routeur distant)
+    pub fn set_peer_target(&mut self, domain_id: u8, router_id: u8, doorbell: u8) {
+        self.peer_domain_id = domain_id;
+        self.peer_router_id = router_id;
+        self.doorbell_index = doorbell;
+    }
+
+    /// Met à jour la taille de paquet maximale (MTU) et le nombre de canaux
+    pub fn configure_channels(&mut self, max_pkt: u16, channels: u8) {
+        self.max_packet_size = max_pkt;
+        self.channel_count = channels;
     }
 }
 
@@ -14132,6 +14262,44 @@ mod tests {
         assert_eq!((encoded_sec[1] >> 16) & 0xFF, 3); // domain 3
         assert_eq!(encoded_sec[2], 0x0007_BEEF);
         assert_eq!(encoded_sec[3], 0xA5A5_5A5A);
+
+        // Test Capacité Étendue xHCI 1.2 / USB4 Inter-Domain Transport (§7.39)
+        let mut usb4_idt = XhciUsb4InterDomainTransport::new(5, 12, 2048);
+        assert_eq!(usb4_idt.peer_domain_id, 5);
+        assert_eq!(usb4_idt.peer_router_id, 12);
+        assert_eq!(usb4_idt.max_packet_size, 2048);
+        assert!(!usb4_idt.transport_enabled);
+        assert!(usb4_idt.xdomain_net_supported);
+
+        usb4_idt.set_transport_enabled(true);
+        usb4_idt.set_peer_target(7, 14, 3);
+        usb4_idt.configure_channels(4096, 4);
+        usb4_idt.next_ptr_dwords = 88;
+        usb4_idt.status = 0xCAFE_BABE;
+
+        let encoded_idt = usb4_idt.encode();
+        assert_eq!(
+            encoded_idt[0] & 0xFF,
+            XHCI_EXT_CAP_USB4_INTER_DOMAIN_TRANSPORT as u32
+        );
+        assert_eq!((encoded_idt[0] >> 8) & 0xFF, 88);
+        assert_eq!(encoded_idt[1] & 0x01, 1); // enabled
+        assert_eq!((encoded_idt[1] >> 8) & 0xFF, 7); // peer domain
+        assert_eq!((encoded_idt[1] >> 16) & 0xFF, 14); // peer router
+        assert_eq!((encoded_idt[1] >> 24) & 0xFF, 3); // doorbell
+        assert_eq!(encoded_idt[2], 0xCAFE_BABE);
+        assert_eq!(encoded_idt[3] & 0xFFFF, 4096);
+        assert_eq!((encoded_idt[3] >> 16) & 0xFF, 4);
+
+        let parsed_idt = XhciUsb4InterDomainTransport::parse(&encoded_idt).unwrap();
+        assert_eq!(parsed_idt.next_ptr_dwords, 88);
+        assert!(parsed_idt.transport_enabled);
+        assert_eq!(parsed_idt.peer_domain_id, 7);
+        assert_eq!(parsed_idt.peer_router_id, 14);
+        assert_eq!(parsed_idt.doorbell_index, 3);
+        assert_eq!(parsed_idt.status, 0xCAFE_BABE);
+        assert_eq!(parsed_idt.max_packet_size, 4096);
+        assert_eq!(parsed_idt.channel_count, 4);
 
         let parsed_sec = XhciUsb4SecurityConfig::parse(&encoded_sec).unwrap();
         assert_eq!(parsed_sec.next_ptr_dwords, 84);

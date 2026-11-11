@@ -542,7 +542,12 @@ name = "base32hex"
 path = "src/bin/base32hex.rs"
 test = false
 
-# 107 utilitaires Ring 3
+[[bin]]
+name = "basenc"
+path = "src/bin/basenc.rs"
+test = false
+
+# 108 utilitaires Ring 3
 
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }

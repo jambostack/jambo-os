@@ -11799,6 +11799,135 @@ pub fn run_base64(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
 }
 
 // ============================================================================
+// Utilitaire POSIX / GNU coreutils : `basenc` (RFC 4648 Multi-Encoding Engine)
+// ============================================================================
+
+/// Utilitaire Coreutils POSIX / GNU `basenc` : encode ou décode des données dans diverses bases standard (base64, base32, base32hex)
+pub fn run_basenc(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    let mut decode = false;
+    let mut ignore_garbage = false;
+    let mut wrap_cols = 76;
+    let mut file: Option<&str> = None;
+    let mut mode = "base64"; // Mode par défaut
+
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i];
+        if arg == "--help" || arg == "-h" {
+            let help = b"Usage: basenc [OPTION]... [FILE]\nBasenc encode or decode FILE, or standard input, to standard output.\n\n  --base64          same as 'base64' program (RFC4648 section 4)\n  --base32          same as 'base32' program (RFC4648 section 6)\n  --base32hex       extended hex alphabet base32 (RFC4648 section 7)\n  -d, --decode      decode data\n  -i, --ignore-garbage  when decoding, ignore non-alphabet characters\n  -w, --wrap=COLS   wrap encoded lines after COLS character (default 76, 0 to disable)\n      --help        display this help and exit\n      --version     output version information and exit\n";
+            let _ = sys_write(out_fd, help);
+            return 0;
+        }
+        if arg == "--version" || arg == "-v" {
+            let ver = b"basenc (JamboOS coreutils) 0.1.0\n";
+            let _ = sys_write(out_fd, ver);
+            return 0;
+        }
+        if arg == "--base64" {
+            mode = "base64";
+        } else if arg == "--base32" {
+            mode = "base32";
+        } else if arg == "--base32hex" {
+            mode = "base32hex";
+        } else if arg == "-d" || arg == "--decode" {
+            decode = true;
+        } else if arg == "-i" || arg == "--ignore-garbage" {
+            ignore_garbage = true;
+        } else if arg == "-w" || arg == "--wrap" {
+            if i + 1 < args.len() {
+                i += 1;
+                wrap_cols = parse_usize(args[i]).unwrap_or(76);
+            }
+        } else if let Some(stripped) = arg.strip_prefix("--wrap=") {
+            wrap_cols = parse_usize(stripped).unwrap_or(76);
+        } else if let Some(stripped) = arg.strip_prefix("-w") {
+            wrap_cols = parse_usize(stripped).unwrap_or(76);
+        } else if !arg.starts_with('-') || arg == "-" {
+            file = Some(arg);
+        }
+        i += 1;
+    }
+
+    let input_fd = match file {
+        None | Some("-") => in_fd,
+        Some(path) => {
+            let fd = sys_open(path, crate::vfs::O_RDONLY);
+            if fd < 0 {
+                let _ = sys_write(err_fd, b"basenc: ");
+                let _ = sys_write(err_fd, path.as_bytes());
+                let _ = sys_write(err_fd, b": No such file or directory\n");
+                return 1;
+            }
+            fd
+        }
+    };
+
+    let mut in_buffer = [0u8; 8192];
+    let mut out_buffer = [0u8; 16384];
+
+    let bytes_read = match read_all_fd(input_fd, &mut in_buffer) {
+        Ok(n) => n,
+        Err(_) => {
+            let _ = sys_write(err_fd, b"basenc: error reading input\n");
+            if input_fd != in_fd {
+                let _ = sys_close(input_fd);
+            }
+            return 1;
+        }
+    };
+
+    if input_fd != in_fd {
+        let _ = sys_close(input_fd);
+    }
+
+    if decode {
+        let dec_res = match mode {
+            "base32" => base32_decode(&in_buffer[..bytes_read], &mut out_buffer, ignore_garbage)
+                .map_err(|_| ()),
+            "base32hex" => {
+                base32hex_decode(&in_buffer[..bytes_read], &mut out_buffer, ignore_garbage)
+                    .map_err(|_| ())
+            }
+            _ => base64_decode(&in_buffer[..bytes_read], &mut out_buffer, ignore_garbage)
+                .map_err(|_| ()),
+        };
+
+        match dec_res {
+            Ok(n) => {
+                let _ = sys_write(out_fd, &out_buffer[..n]);
+                0
+            }
+            Err(_) => {
+                let _ = sys_write(err_fd, b"basenc: invalid input\n");
+                1
+            }
+        }
+    } else {
+        let enc_res = match mode {
+            "base32" => {
+                base32_encode(&in_buffer[..bytes_read], &mut out_buffer, wrap_cols).map_err(|_| ())
+            }
+            "base32hex" => base32hex_encode(&in_buffer[..bytes_read], &mut out_buffer, wrap_cols)
+                .map_err(|_| ()),
+            _ => {
+                base64_encode(&in_buffer[..bytes_read], &mut out_buffer, wrap_cols).map_err(|_| ())
+            }
+        };
+
+        match enc_res {
+            Ok(n) => {
+                let _ = sys_write(out_fd, &out_buffer[..n]);
+                0
+            }
+            Err(_) => {
+                let _ = sys_write(err_fd, b"basenc: error encoding data\n");
+                1
+            }
+        }
+    }
+}
+
+// ============================================================================
 // Utilitaire POSIX / GNU coreutils : `sha256sum` (Calcul et vérification FIPS 180-4 SHA-256)
 // ============================================================================
 
@@ -14076,6 +14205,7 @@ pub fn execute_coreutils_command(
         "base64" => run_base64(args, in_fd, out_fd, err_fd),
         "base32" => run_base32(args, in_fd, out_fd, err_fd),
         "base32hex" => run_base32hex(args, in_fd, out_fd, err_fd),
+        "basenc" => run_basenc(args, in_fd, out_fd, err_fd),
         "sha256sum" => run_sha256sum(args, in_fd, out_fd, err_fd),
         "sha1sum" => run_sha1sum(args, in_fd, out_fd, err_fd),
         "md5sum" => run_md5sum(args, in_fd, out_fd, err_fd),
@@ -15453,6 +15583,7 @@ pub fn run_xargs(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
             "base64" => run_base64(effective_sub_args, 0, out_fd, err_fd),
             "base32" => run_base32(effective_sub_args, 0, out_fd, err_fd),
             "base32hex" => run_base32hex(effective_sub_args, 0, out_fd, err_fd),
+            "basenc" => run_basenc(effective_sub_args, 0, out_fd, err_fd),
             "sha256sum" => run_sha256sum(effective_sub_args, 0, out_fd, err_fd),
             "sha1sum" => run_sha1sum(effective_sub_args, 0, out_fd, err_fd),
             "md5sum" => run_md5sum(effective_sub_args, 0, out_fd, err_fd),
@@ -29736,5 +29867,57 @@ Chaque processus dispose de son propre CR3 sans aucun privilege materiel direct.
         let n_hex = sys_read(out_r_hex, &mut buf_hex);
         sys_close(out_r_hex);
         assert_eq!(&buf_hex[..n_hex as usize], b"D1IMOR3F41RMUSJCCG======\n");
+
+        // 39. Test run_basenc (RFC 4648 Multi-Encoding Engine)
+        assert_eq!(run_basenc(&["--help"], 0, 1, 2), 0);
+        assert_eq!(run_basenc(&["--version"], 0, 1, 2), 0);
+
+        // Test pipe basenc mode base64 (défaut)
+        let (in_r_benc, in_w_benc) = crate::vfs::pipe().unwrap();
+        sys_write(in_w_benc, b"hello world");
+        sys_close(in_w_benc);
+
+        let (out_r_benc, out_w_benc) = crate::vfs::pipe().unwrap();
+        let code_benc = run_basenc(&["-w0"], in_r_benc, out_w_benc, 2);
+        sys_close(in_r_benc);
+        sys_close(out_w_benc);
+        assert_eq!(code_benc, 0);
+
+        let mut buf_benc = [0u8; 64];
+        let n_benc = sys_read(out_r_benc, &mut buf_benc);
+        sys_close(out_r_benc);
+        assert_eq!(&buf_benc[..n_benc as usize], b"aGVsbG8gd29ybGQ=\n");
+
+        // Test basenc decode mode base64
+        let (in_r_dec, in_w_dec) = crate::vfs::pipe().unwrap();
+        sys_write(in_w_dec, b"aGVsbG8gd29ybGQ=");
+        sys_close(in_w_dec);
+
+        let (out_r_dec, out_w_dec) = crate::vfs::pipe().unwrap();
+        let code_dec = run_basenc(&["-d"], in_r_dec, out_w_dec, 2);
+        sys_close(in_r_dec);
+        sys_close(out_w_dec);
+        assert_eq!(code_dec, 0);
+
+        let mut buf_dec = [0u8; 64];
+        let n_dec = sys_read(out_r_dec, &mut buf_dec);
+        sys_close(out_r_dec);
+        assert_eq!(&buf_dec[..n_dec as usize], b"hello world");
+
+        // Test basenc encode mode base32
+        let (in_r_b32, in_w_b32) = crate::vfs::pipe().unwrap();
+        sys_write(in_w_b32, b"hello world");
+        sys_close(in_w_b32);
+
+        let (out_r_b32, out_w_b32) = crate::vfs::pipe().unwrap();
+        let code_b32 = run_basenc(&["--base32", "-w0"], in_r_b32, out_w_b32, 2);
+        sys_close(in_r_b32);
+        sys_close(out_w_b32);
+        assert_eq!(code_b32, 0);
+
+        let mut buf_b32 = [0u8; 64];
+        let n_b32 = sys_read(out_r_b32, &mut buf_b32);
+        sys_close(out_r_b32);
+        assert_eq!(&buf_b32[..n_b32 as usize], b"NBSWY3DPEB3W64TMMQ======\n");
     }
 }
