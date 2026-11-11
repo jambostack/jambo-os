@@ -517,7 +517,12 @@ name = "mesg"
 path = "src/bin/mesg.rs"
 test = false
 
-# 102 utilitaires Ring 3
+[[bin]]
+name = "write"
+path = "src/bin/write.rs"
+test = false
+
+# 103 utilitaires Ring 3
 
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }

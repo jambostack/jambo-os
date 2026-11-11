@@ -326,6 +326,7 @@ pub const XHCI_EXT_CAP_ROOT_HUB_TOPOLOGY_DESCRIPTOR: u8 = 38;
 pub const XHCI_EXT_CAP_USB4_PCIE_TUNNELING: u8 = 39;
 pub const XHCI_EXT_CAP_USB4_DISPLAYPORT_TUNNELING: u8 = 40;
 pub const XHCI_EXT_CAP_USB4_HOST_INTERFACE_MANAGEMENT: u8 = 41;
+pub const XHCI_EXT_CAP_USB4_ROUTER_CONFIGURATION: u8 = 42;
 
 /// Masques de registres USB Legacy Support (xHCI 1.2 Section 7.1)
 /// Registre USBLEGSUP (Offset 0x00)
@@ -4072,6 +4073,119 @@ impl XhciUsb4HostInterfaceManagement {
         self.max_mtu_bytes = mtu_bytes;
         self.max_bandwidth_mbps = bandwidth_mbps;
         self.interdomain_enabled = true;
+    }
+}
+
+/// Capacité Étendue xHCI USB4 Router Configuration (§7.34 / USB4 Capability Table)
+///
+/// Modélise la configuration du routeur USB4 intégré au contrôleur xHCI,
+/// comprenant la topologie des adaptateurs internes, le support Time Synchronization (TMU),
+/// les priorités QoS et la profondeur maximale de commutation dans le réseau USB4.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XhciUsb4RouterConfiguration {
+    /// Pointeur dword vers la prochaine capacité étendue
+    pub next_ptr_dwords: u8,
+    /// Routeur USB4 actif et initialisé (bit 0 du registre de contrôle DWORD 1)
+    pub enabled: bool,
+    /// Support de l'unité de synchronisation temporelle (TMU - Time Synchronization Unit) (bit 1)
+    pub tmu_supported: bool,
+    /// Support de la priorisation QoS / Bandwidth Allocation (bit 2)
+    pub qos_supported: bool,
+    /// Nombre d'adaptateurs internes pris en charge par le routeur (bits 8..=15)
+    pub max_adapters: u8,
+    /// Profondeur maximale de topologie supportée (hop count / USB4 tree depth) (bits 16..=23)
+    pub max_topology_depth: u8,
+    /// Version de la spécification de routage USB4 supportée (bits 24..=27, ex: 1 = USB4 1.0, 2 = USB4 2.0)
+    pub router_revision: u8,
+    /// Statut matériel du routeur USB4 (DWORD 2)
+    pub status: u32,
+    /// Bande passante totale agrégée du switch en Mbit/s (DWORD 3 [15:0])
+    pub total_bandwidth_gbps: u16,
+    /// Nombre d'adaptateurs actuellement connectés/actifs (DWORD 3 [31:16])
+    pub active_adapters: u16,
+}
+
+impl XhciUsb4RouterConfiguration {
+    /// Crée une nouvelle capacité de configuration du routeur USB4
+    pub const fn new(max_adapters: u8, max_topology_depth: u8, router_revision: u8) -> Self {
+        Self {
+            next_ptr_dwords: 0,
+            enabled: false,
+            tmu_supported: true,
+            qos_supported: true,
+            max_adapters,
+            max_topology_depth,
+            router_revision,
+            status: 0,
+            total_bandwidth_gbps: 80, // 80 Gbps agrégé standard USB4
+            active_adapters: 0,
+        }
+    }
+
+    /// Parse les 4 dwords MMIO d'une capacité étendue USB4 Router Configuration (§7.34)
+    pub const fn parse(dwords: &[u32; 4]) -> Option<Self> {
+        let cap_id = (dwords[0] & 0xFF) as u8;
+        if cap_id != XHCI_EXT_CAP_USB4_ROUTER_CONFIGURATION {
+            return None;
+        }
+
+        let next_ptr = ((dwords[0] >> 8) & 0xFF) as u8;
+        let ctrl = dwords[1];
+        let enabled = (ctrl & 0x01) != 0;
+        let tmu_supported = (ctrl & 0x02) != 0;
+        let qos_supported = (ctrl & 0x04) != 0;
+        let max_adapters = ((ctrl >> 8) & 0xFF) as u8;
+        let max_topology_depth = ((ctrl >> 16) & 0xFF) as u8;
+        let router_revision = ((ctrl >> 24) & 0x0F) as u8;
+        let status = dwords[2];
+        let total_bandwidth_gbps = (dwords[3] & 0xFFFF) as u16;
+        let active_adapters = ((dwords[3] >> 16) & 0xFFFF) as u16;
+
+        Some(Self {
+            next_ptr_dwords: next_ptr,
+            enabled,
+            tmu_supported,
+            qos_supported,
+            max_adapters,
+            max_topology_depth,
+            router_revision,
+            status,
+            total_bandwidth_gbps,
+            active_adapters,
+        })
+    }
+
+    /// Encode la capacité étendue en 4 mots dwords MMIO 32-bit
+    pub const fn encode(&self) -> [u32; 4] {
+        let dw0 =
+            (XHCI_EXT_CAP_USB4_ROUTER_CONFIGURATION as u32) | ((self.next_ptr_dwords as u32) << 8);
+        let mut ctrl = (((self.max_adapters as u32) & 0xFF) << 8)
+            | (((self.max_topology_depth as u32) & 0xFF) << 16)
+            | (((self.router_revision as u32) & 0x0F) << 24);
+        if self.enabled {
+            ctrl |= 0x01;
+        }
+        if self.tmu_supported {
+            ctrl |= 0x02;
+        }
+        if self.qos_supported {
+            ctrl |= 0x04;
+        }
+        let dw2 = self.status;
+        let dw3 =
+            (self.total_bandwidth_gbps as u32) | (((self.active_adapters as u32) & 0xFFFF) << 16);
+        [dw0, ctrl, dw2, dw3]
+    }
+
+    /// Active ou désactive le routeur USB4
+    pub fn set_enabled(&mut self, enable: bool) {
+        self.enabled = enable;
+    }
+
+    /// Configure la connectivité des adaptateurs actifs
+    pub fn update_active_topology(&mut self, active_adapters: u16, total_bw_gbps: u16) {
+        self.active_adapters = active_adapters;
+        self.total_bandwidth_gbps = total_bw_gbps;
     }
 }
 
@@ -13358,5 +13472,49 @@ mod tests {
         assert_eq!(parsed_hi.status, 0x0002_BEEF);
         assert_eq!(parsed_hi.max_mtu_bytes, 8192);
         assert_eq!(parsed_hi.max_bandwidth_mbps, 40000);
+
+        // 32. Test XhciUsb4RouterConfiguration
+        let mut usb4_router = XhciUsb4RouterConfiguration::new(64, 6, 2); // 64 adaptateurs, max 6 hops, USB4 2.0
+        assert_eq!(usb4_router.max_adapters, 64);
+        assert_eq!(usb4_router.max_topology_depth, 6);
+        assert_eq!(usb4_router.router_revision, 2);
+        assert_eq!(usb4_router.total_bandwidth_gbps, 80);
+        assert_eq!(usb4_router.active_adapters, 0);
+        assert!(!usb4_router.enabled);
+        assert!(usb4_router.tmu_supported);
+        assert!(usb4_router.qos_supported);
+
+        usb4_router.set_enabled(true);
+        usb4_router.update_active_topology(12, 120); // 12 adaptateurs actifs, 120 Gbps agrégé
+        usb4_router.next_ptr_dwords = 68;
+        usb4_router.status = 0x0003_FEED;
+
+        let encoded_router = usb4_router.encode();
+        assert_eq!(
+            encoded_router[0] & 0xFF,
+            XHCI_EXT_CAP_USB4_ROUTER_CONFIGURATION as u32
+        );
+        assert_eq!((encoded_router[0] >> 8) & 0xFF, 68);
+        assert_eq!(encoded_router[1] & 0x01, 1);
+        assert_eq!(encoded_router[1] & 0x02, 2);
+        assert_eq!(encoded_router[1] & 0x04, 4);
+        assert_eq!((encoded_router[1] >> 8) & 0xFF, 64);
+        assert_eq!((encoded_router[1] >> 16) & 0xFF, 6);
+        assert_eq!((encoded_router[1] >> 24) & 0x0F, 2);
+        assert_eq!(encoded_router[2], 0x0003_FEED);
+        assert_eq!(encoded_router[3] & 0xFFFF, 120);
+        assert_eq!((encoded_router[3] >> 16) & 0xFFFF, 12);
+
+        let parsed_router = XhciUsb4RouterConfiguration::parse(&encoded_router).unwrap();
+        assert_eq!(parsed_router.next_ptr_dwords, 68);
+        assert!(parsed_router.enabled);
+        assert!(parsed_router.tmu_supported);
+        assert!(parsed_router.qos_supported);
+        assert_eq!(parsed_router.max_adapters, 64);
+        assert_eq!(parsed_router.max_topology_depth, 6);
+        assert_eq!(parsed_router.router_revision, 2);
+        assert_eq!(parsed_router.status, 0x0003_FEED);
+        assert_eq!(parsed_router.total_bandwidth_gbps, 120);
+        assert_eq!(parsed_router.active_adapters, 12);
     }
 }

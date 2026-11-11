@@ -22882,6 +22882,99 @@ pub fn run_mesg(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
     }
 }
 
+/// Point d'entrée utilitaire POSIX Ring 3 : `write`
+///
+/// Transmet un message textuel à un autre utilisateur sur un terminal ou console active.
+/// Respecte l'état d'autorisation de messages du terminal cible (`mesg`).
+///
+/// Format : `write <user> [tty]` ou `write <user> [msg...]`
+pub fn run_write(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    let mut target_user: Option<&str> = None;
+    let mut _explicit_tty: Option<&str> = None;
+    let mut message_words: [&str; 16] = [""; 16];
+    let mut msg_word_count = 0;
+
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i];
+        if arg == "--help" {
+            let _ = sys_write(
+                out_fd,
+                b"Usage: write USER [TERMINAL]\n   or: write USER [MESSAGE...]\nSend a message to another user.\n\n      --help     display this help and exit\n      --version  output version information and exit\n",
+            );
+            return 0;
+        } else if arg == "--version" {
+            let _ = sys_write(out_fd, b"write (jambo-coreutils) 0.1.0\n");
+            return 0;
+        } else if arg.starts_with('-') {
+            let _ = sys_write(err_fd, b"write: unrecognized option '");
+            let _ = sys_write(err_fd, arg.as_bytes());
+            let _ = sys_write(err_fd, b"'\nTry 'write --help' for more information.\n");
+            return 1;
+        } else if target_user.is_none() {
+            target_user = Some(arg);
+        } else if _explicit_tty.is_none()
+            && (arg.starts_with("tty") || arg.starts_with("/dev/tty") || arg.starts_with("pts/"))
+        {
+            _explicit_tty = Some(arg);
+        } else if msg_word_count < 16 {
+            message_words[msg_word_count] = arg;
+            msg_word_count += 1;
+        }
+        i += 1;
+    }
+
+    let user = match target_user {
+        Some(u) => u,
+        None => {
+            let _ = sys_write(
+                err_fd,
+                b"write: missing user operand\nTry 'write --help' for more information.\n",
+            );
+            return 1;
+        }
+    };
+
+    // Vérification de la permission du terminal récepteur
+    if !crate::vfs::get_terminal_messages_allowed() {
+        let _ = sys_write(err_fd, b"write: ");
+        let _ = sys_write(err_fd, user.as_bytes());
+        let _ = sys_write(err_fd, b" has messages disabled\n");
+        return 1;
+    }
+
+    // En-tête du message POSIX
+    let _ = sys_write(out_fd, b"Message from ");
+    let cur_user = "root";
+    let _ = sys_write(out_fd, cur_user.as_bytes());
+    let _ = sys_write(out_fd, b" on tty1:\n");
+
+    // Si des mots de message ont été passés en argument direct
+    if msg_word_count > 0 {
+        for (j, &word) in message_words[..msg_word_count].iter().enumerate() {
+            if j > 0 {
+                let _ = sys_write(out_fd, b" ");
+            }
+            let _ = sys_write(out_fd, word.as_bytes());
+        }
+        let _ = sys_write(out_fd, b"\n");
+        let _ = sys_write(out_fd, b"EOF\n");
+        return 0;
+    }
+
+    // Sinon lecture depuis stdin
+    let mut buf = [0u8; 128];
+    loop {
+        let n = sys_read(in_fd, &mut buf);
+        if n <= 0 {
+            break;
+        }
+        let _ = sys_write(out_fd, &buf[..n as usize]);
+    }
+    let _ = sys_write(out_fd, b"EOF\n");
+    0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -27948,5 +28041,37 @@ Chaque processus dispose de son propre CR3 sans aucun privilege materiel direct.
         sys_close(out_r_m3);
         let s_m3 = core::str::from_utf8(&buf_m3[..n_m3 as usize]).unwrap();
         assert!(s_m3.contains("write access allowed"));
+
+        // 34. Test run_write
+        assert_eq!(run_write(&["--help"], 0, 1, 2), 0);
+        assert_eq!(run_write(&["--version"], 0, 1, 2), 0);
+        assert_eq!(run_write(&[], 0, 1, 2), 1); // Pas d'utilisateur spécifié
+
+        // Transmission de message direct quand messages autorisés
+        crate::vfs::set_terminal_messages_allowed(true);
+        let (out_r_w1, out_w_w1) = crate::vfs::pipe().unwrap();
+        let code_w1 = run_write(&["alice", "Hello", "from", "JamboOS"], 0, out_w_w1, 2);
+        sys_close(out_w_w1);
+        assert_eq!(code_w1, 0);
+        let mut buf_w1 = [0u8; 128];
+        let n_w1 = sys_read(out_r_w1, &mut buf_w1);
+        sys_close(out_r_w1);
+        let s_w1 = core::str::from_utf8(&buf_w1[..n_w1 as usize]).unwrap();
+        assert!(s_w1.contains("Message from root on tty1:"));
+        assert!(s_w1.contains("Hello from JamboOS"));
+        assert!(s_w1.contains("EOF"));
+
+        // Échec si messages désactivés (mesg n)
+        crate::vfs::set_terminal_messages_allowed(false);
+        let (err_r_w2, err_w_w2) = crate::vfs::pipe().unwrap();
+        let code_w2 = run_write(&["alice", "Hello"], 0, 1, err_w_w2);
+        sys_close(err_w_w2);
+        assert_eq!(code_w2, 1);
+        let mut buf_w2 = [0u8; 64];
+        let n_w2 = sys_read(err_r_w2, &mut buf_w2);
+        sys_close(err_r_w2);
+        let s_w2 = core::str::from_utf8(&buf_w2[..n_w2 as usize]).unwrap();
+        assert!(s_w2.contains("has messages disabled"));
+        crate::vfs::set_terminal_messages_allowed(true);
     }
 }
