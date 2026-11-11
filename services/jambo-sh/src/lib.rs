@@ -625,6 +625,7 @@ impl JamboShell {
             "users" | "/bin/users" | "bin/users" => self.cmd_users(args, out),
             "who" | "/bin/who" | "bin/who" => self.cmd_who(args, out),
             "nohup" | "/bin/nohup" | "bin/nohup" => self.cmd_nohup(args, out),
+            "pathchk" | "/bin/pathchk" | "bin/pathchk" => self.cmd_pathchk(args, out),
             "cow" | "/bin/cow" | "bin/cow" => self.cmd_cow(args, out),
             "version" => self.cmd_version(out),
             "uptime" => self.cmd_uptime(out),
@@ -2884,6 +2885,43 @@ Utilitaire d'installation JamboOS (Serie 0.*.*)\n\
             (status, len)
         } else {
             let msg = b"nohup: pipe creation failed\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
+    }
+
+    fn cmd_pathchk(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if let (Ok((r_out, w_out)), Ok((r_err, w_err))) =
+            (libjambo::vfs::pipe(), libjambo::vfs::pipe())
+        {
+            let code = libjambo::coreutils::run_pathchk(args, w_out, w_err);
+            let _ = libjambo::coreutils::sys_close(w_out);
+            let _ = libjambo::coreutils::sys_close(w_err);
+
+            let mut len = 0;
+            if code == 0 {
+                let n_out = libjambo::coreutils::sys_read(r_out, out);
+                if n_out > 0 {
+                    len = n_out as usize;
+                }
+            } else {
+                let n_err = libjambo::coreutils::sys_read(r_err, out);
+                if n_err > 0 {
+                    len = n_err as usize;
+                }
+            }
+            let _ = libjambo::coreutils::sys_close(r_out);
+            let _ = libjambo::coreutils::sys_close(r_err);
+
+            let status = if code == 0 {
+                ShellStatus::Success
+            } else {
+                ShellStatus::ExecutionFailed
+            };
+            (status, len)
+        } else {
+            let msg = b"pathchk: pipe creation failed\n";
             let len = msg.len().min(out.len());
             out[..len].copy_from_slice(&msg[..len]);
             (ShellStatus::ExecutionFailed, len)
@@ -20640,5 +20678,25 @@ mod tests {
 
         let (st67, _len67) = shell.execute_line("nohup --invalid-flag", &mut out);
         assert_eq!(st67, ShellStatus::ExecutionFailed);
+
+        // 39. pathchk shell command
+        let (st68, _len68) = shell.execute_line("pathchk /usr/bin/echo", &mut out);
+        assert_eq!(st68, ShellStatus::Success);
+
+        let (st69, len69) = shell.execute_line("pathchk --version", &mut out);
+        assert_eq!(st69, ShellStatus::Success);
+        let s69 = core::str::from_utf8(&out[..len69]).unwrap();
+        assert!(s69.contains("pathchk"));
+
+        let (st70, len70) = shell.execute_line("pathchk --help", &mut out);
+        assert_eq!(st70, ShellStatus::Success);
+        let s70 = core::str::from_utf8(&out[..len70]).unwrap();
+        assert!(s70.contains("Usage: pathchk"));
+
+        let (st71, _len71) = shell.execute_line("pathchk", &mut out);
+        assert_eq!(st71, ShellStatus::ExecutionFailed);
+
+        let (st72, _len72) = shell.execute_line("pathchk -p 'invalid space.txt'", &mut out);
+        assert_eq!(st72, ShellStatus::ExecutionFailed);
     }
 }

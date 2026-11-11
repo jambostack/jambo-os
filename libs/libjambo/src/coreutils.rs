@@ -13392,6 +13392,7 @@ pub fn execute_coreutils_command(
         "users" => run_users(args, out_fd, err_fd),
         "who" => run_who(args, out_fd, err_fd),
         "nohup" => run_nohup(args, in_fd, out_fd, err_fd),
+        "pathchk" => run_pathchk(args, out_fd, err_fd),
         _ => {
             let _ = sys_write(err_fd, cmd.as_bytes());
             let _ = sys_write(err_fd, b": command not found\n");
@@ -14760,6 +14761,7 @@ pub fn run_xargs(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
             "users" => run_users(effective_sub_args, out_fd, err_fd),
             "who" => run_who(effective_sub_args, out_fd, err_fd),
             "nohup" => run_nohup(effective_sub_args, 0, out_fd, err_fd),
+            "pathchk" => run_pathchk(effective_sub_args, out_fd, err_fd),
             _ => {
                 let _ = sys_write(err_fd, b"xargs: ");
                 let _ = sys_write(err_fd, target_cmd.as_bytes());
@@ -20347,6 +20349,152 @@ pub fn run_nohup(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
     code
 }
 
+// ============================================================================
+// Utilitaire POSIX / GNU coreutils : `pathchk` (Check whether file names are valid or portable)
+// ============================================================================
+
+/// Vérifie si un caractère appartient au jeu portable POSIX (POSIX portable filename character set)
+/// A-Z, a-z, 0-9, '.', '_', '-'
+pub const fn is_posix_portable_char(b: u8) -> bool {
+    matches!(b, b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'.' | b'_' | b'-')
+}
+
+/// Exécute l'utilitaire Coreutils POSIX / GNU `pathchk` (vérification de la portabilité et validité des chemins)
+/// Options conformes POSIX :
+/// - `-p` : Vérifie la portabilité POSIX la plus stricte (nom de fichier <= 14 caractères, chemin <= 256 caractères, jeu portable)
+/// - `-P` : Vérifie les composants vides ou commençant par '-'
+/// - `--portability` : Équivalent à `-p -P`
+/// - `--help` : Affiche l'aide
+/// - `--version` : Affiche la version
+///
+/// Code retour :
+/// - 0 si tous les chemins sont valides selon les options spécifiées
+/// - 1 si au moins une non-conformité est détectée ou erreur d'arguments
+pub fn run_pathchk(args: &[&str], out_fd: i32, err_fd: i32) -> i32 {
+    let mut check_posix = false;
+    let mut check_empty_or_leading_dash = false;
+    let mut paths_start = 0;
+
+    for (idx, &arg) in args.iter().enumerate() {
+        if arg == "--help" {
+            let _ = sys_write(
+                out_fd,
+                b"Usage: pathchk [OPTION]... NAME...\nDiagnose invalid or non-portable file names.\n\n  -p                  check for most POSIX systems (14-byte components, 256-byte path)\n  -P                  check for empty names and leading \"-\"\n      --portability   check for all POSIX systems (equivalent to -p -P)\n      --help     display this help and exit\n      --version  output version information and exit\n\nExit status is 0 if all PATHNAMEs are valid, 1 otherwise.\n",
+            );
+            return 0;
+        } else if arg == "--version" {
+            let _ = sys_write(out_fd, b"pathchk (jambo-coreutils) 0.1.0\n");
+            return 0;
+        } else if arg == "--portability" {
+            check_posix = true;
+            check_empty_or_leading_dash = true;
+            paths_start = idx + 1;
+        } else if arg.starts_with('-') && arg.len() > 1 && !arg.starts_with("--") {
+            // Options courtes combinées ex: -p, -P, -pP
+            for b in arg[1..].bytes() {
+                match b {
+                    b'p' => check_posix = true,
+                    b'P' => check_empty_or_leading_dash = true,
+                    _ => {
+                        let _ = sys_write(err_fd, b"pathchk: invalid option -- '");
+                        let ch = [b];
+                        let _ = sys_write(err_fd, &ch);
+                        let _ =
+                            sys_write(err_fd, b"'\nTry 'pathchk --help' for more information.\n");
+                        return 1;
+                    }
+                }
+            }
+            paths_start = idx + 1;
+        } else if arg == "--" {
+            paths_start = idx + 1;
+            break;
+        } else {
+            paths_start = idx;
+            break;
+        }
+    }
+
+    let paths = &args[paths_start..];
+    if paths.is_empty() {
+        let _ = sys_write(
+            err_fd,
+            b"pathchk: missing operand\nTry 'pathchk --help' for more information.\n",
+        );
+        return 1;
+    }
+
+    let max_path_len = if check_posix { 256 } else { 4096 };
+    let max_component_len = if check_posix { 14 } else { 255 };
+
+    let mut has_error = false;
+
+    for &path in paths {
+        if path.is_empty() {
+            let _ = sys_write(err_fd, b"pathchk: '': empty file name\n");
+            has_error = true;
+            continue;
+        }
+
+        if path.len() > max_path_len {
+            let _ = sys_write(err_fd, b"pathchk: '");
+            let _ = sys_write(err_fd, path.as_bytes());
+            let _ = sys_write(err_fd, b"': limit ");
+            write_u64_fd(err_fd, max_path_len as u64);
+            let _ = sys_write(err_fd, b" exceeded for path length\n");
+            has_error = true;
+        }
+
+        // Vérification composant par composant
+        for comp in path.split('/') {
+            if comp.is_empty() {
+                // Slashes consécutifs ou / initial/final : valide en POSIX standard
+                continue;
+            }
+
+            if comp.len() > max_component_len {
+                let _ = sys_write(err_fd, b"pathchk: '");
+                let _ = sys_write(err_fd, path.as_bytes());
+                let _ = sys_write(err_fd, b"': limit ");
+                write_u64_fd(err_fd, max_component_len as u64);
+                let _ = sys_write(err_fd, b" exceeded for file name '");
+                let _ = sys_write(err_fd, comp.as_bytes());
+                let _ = sys_write(err_fd, b"'\n");
+                has_error = true;
+            }
+
+            if check_empty_or_leading_dash && comp.starts_with('-') {
+                let _ = sys_write(
+                    err_fd,
+                    b"pathchk: leading '-' in a component of file name '",
+                );
+                let _ = sys_write(err_fd, path.as_bytes());
+                let _ = sys_write(err_fd, b"'\n");
+                has_error = true;
+            }
+
+            if check_posix {
+                for &b in comp.as_bytes() {
+                    if !is_posix_portable_char(b) {
+                        let _ =
+                            sys_write(err_fd, b"pathchk: non-portable character in file name '");
+                        let _ = sys_write(err_fd, path.as_bytes());
+                        let _ = sys_write(err_fd, b"'\n");
+                        has_error = true;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    if has_error {
+        1
+    } else {
+        0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -24915,5 +25063,56 @@ Chaque processus dispose de son propre CR3 sans aucun privilege materiel direct.
         // Option inconnue -> 125
         let code_nohup5 = run_nohup(&["--invalid-flag"], 0, 1, 2);
         assert_eq!(code_nohup5, 125);
+
+        // 18. Test run_pathchk
+        let (out_rchk1, out_wchk1) = crate::vfs::pipe().unwrap();
+        let code_chk1 = run_pathchk(&["/usr/bin/echo", "valid_file.txt"], out_wchk1, 2);
+        sys_close(out_wchk1);
+        sys_close(out_rchk1);
+        assert_eq!(code_chk1, 0);
+
+        // Test option --portability
+        let code_chk2 = run_pathchk(&["--portability", "valid_file.txt"], 1, 2);
+        assert_eq!(code_chk2, 0);
+
+        // Composant avec tiret initial en mode -P
+        let code_chk3 = run_pathchk(&["-P", "/usr/-leading_dash"], 1, 2);
+        assert_eq!(code_chk3, 1);
+
+        // Composant non-portable (espace ou caractère spécial) en mode -p
+        let code_chk4 = run_pathchk(&["-p", "file with space.txt"], 1, 2);
+        assert_eq!(code_chk4, 1);
+
+        // Option --version
+        let (out_rchk5, out_wchk5) = crate::vfs::pipe().unwrap();
+        let code_chk5 = run_pathchk(&["--version"], out_wchk5, 2);
+        sys_close(out_wchk5);
+        let mut bufchk5 = [0u8; 64];
+        let nchk5 = sys_read(out_rchk5, &mut bufchk5);
+        sys_close(out_rchk5);
+        assert_eq!(code_chk5, 0);
+        assert!(core::str::from_utf8(&bufchk5[..nchk5 as usize])
+            .unwrap()
+            .contains("pathchk"));
+
+        // Option --help
+        let (out_rchk6, out_wchk6) = crate::vfs::pipe().unwrap();
+        let code_chk6 = run_pathchk(&["--help"], out_wchk6, 2);
+        sys_close(out_wchk6);
+        let mut bufchk6 = [0u8; 128];
+        let nchk6 = sys_read(out_rchk6, &mut bufchk6);
+        sys_close(out_rchk6);
+        assert_eq!(code_chk6, 0);
+        assert!(core::str::from_utf8(&bufchk6[..nchk6 as usize])
+            .unwrap()
+            .contains("Usage: pathchk"));
+
+        // Manque d'opérande
+        let code_chk7 = run_pathchk(&[], 1, 2);
+        assert_eq!(code_chk7, 1);
+
+        // Option invalide
+        let code_chk8 = run_pathchk(&["-z", "foo"], 1, 2);
+        assert_eq!(code_chk8, 1);
     }
 }

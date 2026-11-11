@@ -437,7 +437,12 @@ name = "nohup"
 path = "src/bin/nohup.rs"
 test = false
 
-# 86 utilitaires Ring 3
+[[bin]]
+name = "pathchk"
+path = "src/bin/pathchk.rs"
+test = false
+
+# 87 utilitaires Ring 3
 
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }

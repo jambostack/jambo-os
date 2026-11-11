@@ -310,6 +310,7 @@ pub const XHCI_EXT_CAP_HUB_VIRTUALIZATION: u8 = 22;
 pub const XHCI_EXT_CAP_CONTROLLER_CAPABILITY_CONTEXT: u8 = 23;
 pub const XHCI_EXT_CAP_BANDWIDTH_NEGOTIATION: u8 = 24;
 pub const XHCI_EXT_CAP_LATENCY_TOLERANCE_MESSAGING: u8 = 25;
+pub const XHCI_EXT_CAP_ENDPOINT_POLLING_OVERRIDE: u8 = 26;
 
 /// Masques de registres USB Legacy Support (xHCI 1.2 Section 7.1)
 /// Registre USBLEGSUP (Offset 0x00)
@@ -2196,6 +2197,154 @@ impl XhciLatencyToleranceMessaging {
             4 => belt.saturating_mul(1048576),
             5 => belt.saturating_mul(33554432),
             _ => belt.saturating_mul(1073741824),
+        }
+    }
+}
+
+/// Capacité Étendue xHCI Endpoint / Stream Context Extension & Polling Interval Overrides (xHCI 1.2 §7.18)
+///
+/// Permet la surcharge fine et dynamique de l'intervalle de polling matériel (`bInterval` / ESIT)
+/// et des paramètres de streams USB 3.x pour optimiser les performances des flux isochrones et UAS/Bulk Streams.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XhciEndpointStreamOverride {
+    /// Pointeur dword vers la prochaine capacité étendue (0 = fin de liste)
+    pub next_ptr_dwords: u8,
+    /// Surcharge active (Override Enable)
+    pub enabled: bool,
+    /// Identifiant de Slot cible (1..=255)
+    pub slot_id: u8,
+    /// Identifiant d'Endpoint cible (1..=31, DCI)
+    pub endpoint_id: u8,
+    /// Intervalle de polling de substitution (0..=15, exprimé en puissances de microframes 2^(interval-1) * 125 µs)
+    pub polling_interval_override: u8,
+    /// Nombre maximal de flux primaires autorisés (Primary Stream Array exponent 2^k)
+    pub max_primary_streams: u8,
+    /// Drapeaux de contrôle de flux (ex: Linear Stream Array, Stream Reset)
+    pub stream_control: u32,
+    /// Statut et compteurs de streams actifs
+    pub stream_status: u32,
+}
+
+impl XhciEndpointStreamOverride {
+    /// Initialise une nouvelle surcharge d'endpoint / stream context
+    pub const fn new(slot_id: u8, endpoint_id: u8, interval_override: u8) -> Self {
+        let ep = if endpoint_id == 0 {
+            1
+        } else if endpoint_id > 31 {
+            31
+        } else {
+            endpoint_id
+        };
+        let interval = if interval_override > 15 {
+            15
+        } else {
+            interval_override
+        };
+        Self {
+            next_ptr_dwords: 0,
+            enabled: false,
+            slot_id,
+            endpoint_id: ep,
+            polling_interval_override: interval,
+            max_primary_streams: 0,
+            stream_control: 0,
+            stream_status: 0,
+        }
+    }
+
+    /// Décode la capacité étendue depuis 4 dwords MMIO
+    pub fn parse(dwords: &[u32]) -> Option<Self> {
+        if dwords.len() < 4 {
+            return None;
+        }
+        let cap_id = (dwords[0] & 0xFF) as u8;
+        if cap_id != XHCI_EXT_CAP_ENDPOINT_POLLING_OVERRIDE {
+            return None;
+        }
+        let next_ptr = ((dwords[0] >> 8) & 0xFF) as u8;
+        let slot = ((dwords[0] >> 16) & 0xFF) as u8;
+        let ep = (((dwords[0] >> 24) & 0x1F) as u8).clamp(1, 31);
+
+        let ctrl = dwords[1];
+        let sts = dwords[2];
+        let _dw3 = dwords[3];
+
+        let enabled = (ctrl & 0x01) != 0;
+        let interval = ((ctrl >> 8) & 0x0F) as u8;
+        let max_streams = ((ctrl >> 16) & 0x0F) as u8;
+
+        Some(Self {
+            next_ptr_dwords: next_ptr,
+            enabled,
+            slot_id: slot,
+            endpoint_id: ep,
+            polling_interval_override: interval,
+            max_primary_streams: max_streams,
+            stream_control: ctrl,
+            stream_status: sts,
+        })
+    }
+
+    /// Encode en 4 mots dwords MMIO 32-bit
+    pub const fn encode(&self) -> [u32; 4] {
+        let dw0 = (XHCI_EXT_CAP_ENDPOINT_POLLING_OVERRIDE as u32)
+            | ((self.next_ptr_dwords as u32) << 8)
+            | ((self.slot_id as u32) << 16)
+            | (((self.endpoint_id & 0x1F) as u32) << 24);
+        let ctrl_flags = (self.stream_control & !0x000F_0F01)
+            | (if self.enabled { 1 } else { 0 })
+            | (((self.polling_interval_override & 0x0F) as u32) << 8)
+            | (((self.max_primary_streams & 0x0F) as u32) << 16);
+        let dw1 = ctrl_flags;
+        let dw2 = self.stream_status;
+        let dw3 = 0u32;
+        [dw0, dw1, dw2, dw3]
+    }
+
+    /// Active ou désactive la surcharge matérielle
+    pub fn set_enabled(&mut self, enable: bool) {
+        self.enabled = enable;
+        if enable {
+            self.stream_control |= 0x01;
+        } else {
+            self.stream_control &= !0x01;
+        }
+    }
+
+    /// Configure l'intervalle de polling surchargé (0..=15)
+    pub fn set_polling_interval(&mut self, interval: u8) {
+        let val = interval.min(15);
+        self.polling_interval_override = val;
+        self.stream_control = (self.stream_control & !(0x0F << 8)) | ((val as u32) << 8);
+    }
+
+    /// Configure le nombre d'exposant max de flux primaires
+    pub fn set_max_primary_streams(&mut self, max_streams: u8) {
+        let val = max_streams.min(15);
+        self.max_primary_streams = val;
+        self.stream_control = (self.stream_control & !(0x0F << 16)) | ((val as u32) << 16);
+    }
+
+    /// Calcule la période de polling en microsecondes (125 µs * 2^(interval-1) pour interval >= 1)
+    pub const fn compute_period_us(&self) -> u32 {
+        if self.polling_interval_override == 0 {
+            125 // 1 microframe = 125 µs
+        } else {
+            let shift = (self.polling_interval_override - 1) as u32;
+            if shift >= 15 {
+                125 << 14
+            } else {
+                125 << shift
+            }
+        }
+    }
+
+    /// Calcule la capacité maximale de streams allouables (2^max_primary_streams)
+    pub const fn max_streams_count(&self) -> u32 {
+        if self.max_primary_streams == 0 {
+            1
+        } else {
+            1 << (self.max_primary_streams as u32)
         }
     }
 }
@@ -10837,5 +10986,46 @@ mod tests {
         assert_eq!(parsed_ltm.ltm_status, 0x1234);
         assert_eq!(parsed_ltm.max_belt_latency, 50);
         assert_eq!(parsed_ltm.compute_latency_ns(), 51_200);
+
+        // 38. Test Capacité Étendue Endpoint / Stream Overrides (§7.18)
+        let mut ep_ovr = XhciEndpointStreamOverride::new(3, 4, 3);
+        assert_eq!(ep_ovr.slot_id, 3);
+        assert_eq!(ep_ovr.endpoint_id, 4);
+        assert_eq!(ep_ovr.polling_interval_override, 3);
+        assert!(!ep_ovr.enabled);
+        assert_eq!(ep_ovr.compute_period_us(), 500); // 125 * 2^(3-1) = 125 * 4 = 500 µs
+        assert_eq!(ep_ovr.max_streams_count(), 1);
+
+        ep_ovr.set_enabled(true);
+        assert!(ep_ovr.enabled);
+        ep_ovr.set_max_primary_streams(4);
+        assert_eq!(ep_ovr.max_primary_streams, 4);
+        assert_eq!(ep_ovr.max_streams_count(), 16);
+
+        ep_ovr.next_ptr_dwords = 20;
+        ep_ovr.stream_status = 0xABCD;
+        let encoded_ovr = ep_ovr.encode();
+        assert_eq!(
+            encoded_ovr[0] & 0xFF,
+            XHCI_EXT_CAP_ENDPOINT_POLLING_OVERRIDE as u32
+        );
+        assert_eq!((encoded_ovr[0] >> 8) & 0xFF, 20);
+        assert_eq!((encoded_ovr[0] >> 16) & 0xFF, 3);
+        assert_eq!((encoded_ovr[0] >> 24) & 0x1F, 4);
+        assert_eq!(encoded_ovr[1] & 0x01, 1);
+        assert_eq!((encoded_ovr[1] >> 8) & 0x0F, 3);
+        assert_eq!((encoded_ovr[1] >> 16) & 0x0F, 4);
+        assert_eq!(encoded_ovr[2], 0xABCD);
+
+        let parsed_ovr = XhciEndpointStreamOverride::parse(&encoded_ovr).unwrap();
+        assert_eq!(parsed_ovr.next_ptr_dwords, 20);
+        assert_eq!(parsed_ovr.slot_id, 3);
+        assert_eq!(parsed_ovr.endpoint_id, 4);
+        assert_eq!(parsed_ovr.polling_interval_override, 3);
+        assert_eq!(parsed_ovr.max_primary_streams, 4);
+        assert!(parsed_ovr.enabled);
+        assert_eq!(parsed_ovr.stream_status, 0xABCD);
+        assert_eq!(parsed_ovr.compute_period_us(), 500);
+        assert_eq!(parsed_ovr.max_streams_count(), 16);
     }
 }
