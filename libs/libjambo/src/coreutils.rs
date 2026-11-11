@@ -22132,6 +22132,116 @@ fn parse_positive_usize(s: &str) -> Option<usize> {
     Some(val)
 }
 
+/// Utilitaire Ring 3 : `rev` (inversement caractère par caractère de chaque ligne)
+///
+/// POSIX / BSD coreutil.
+/// Inverse chaque ligne reçue sur l'entrée standard ou dans les fichiers passés en arguments.
+pub fn run_rev(args: &[&str], out_fd: i32, err_fd: i32) -> i32 {
+    let mut files: [&str; 16] = [""; 16];
+    let mut file_count = 0usize;
+
+    for &arg in args {
+        if arg == "--help" {
+            let _ = sys_write(
+                out_fd,
+                b"Usage: rev [FILE]...\nReverse lines characterwise.\n\nOptions:\n      --help     display this help and exit\n      --version  output version information and exit\n",
+            );
+            return 0;
+        } else if arg == "--version" {
+            let _ = sys_write(out_fd, b"rev (jambo-coreutils) 0.1.0\n");
+            return 0;
+        } else if arg == "-" {
+            if file_count < files.len() {
+                files[file_count] = "-";
+                file_count += 1;
+            }
+        } else if !arg.starts_with('-') {
+            if file_count < files.len() {
+                files[file_count] = arg;
+                file_count += 1;
+            }
+        } else {
+            let _ = sys_write(err_fd, b"rev: unrecognized option '");
+            let _ = sys_write(err_fd, arg.as_bytes());
+            let _ = sys_write(err_fd, b"'\n");
+            return 1;
+        }
+    }
+
+    if file_count == 0 {
+        return rev_fd(0, out_fd);
+    }
+
+    let mut exit_code = 0;
+    for &file in &files[..file_count] {
+        if file == "-" {
+            let rc = rev_fd(0, out_fd);
+            if rc != 0 {
+                exit_code = rc;
+            }
+        } else {
+            let fd = sys_open(file, 0); // O_RDONLY = 0
+            if fd < 0 {
+                let _ = sys_write(err_fd, b"rev: cannot open '");
+                let _ = sys_write(err_fd, file.as_bytes());
+                let _ = sys_write(err_fd, b"'\n");
+                exit_code = 1;
+                continue;
+            }
+            let rc = rev_fd(fd, out_fd);
+            sys_close(fd);
+            if rc != 0 {
+                exit_code = rc;
+            }
+        }
+    }
+
+    exit_code
+}
+
+fn rev_fd(in_fd: i32, out_fd: i32) -> i32 {
+    let mut in_buf = [0u8; 1024];
+    let mut line_buf = [0u8; 1024];
+    let mut line_len = 0usize;
+
+    loop {
+        let n = sys_read(in_fd, &mut in_buf);
+        if n <= 0 {
+            break;
+        }
+
+        for &b in &in_buf[..n as usize] {
+            if b == b'\n' {
+                // Inverser la ligne
+                if line_len > 0 {
+                    let mut rev_buf = [0u8; 1024];
+                    for (idx, &ch) in line_buf[..line_len].iter().rev().enumerate() {
+                        rev_buf[idx] = ch;
+                    }
+                    let _ = sys_write(out_fd, &rev_buf[..line_len]);
+                    line_len = 0;
+                }
+                let _ = sys_write(out_fd, b"\n");
+            } else {
+                if line_len < line_buf.len() {
+                    line_buf[line_len] = b;
+                    line_len += 1;
+                }
+            }
+        }
+    }
+
+    if line_len > 0 {
+        let mut rev_buf = [0u8; 1024];
+        for (idx, &ch) in line_buf[..line_len].iter().rev().enumerate() {
+            rev_buf[idx] = ch;
+        }
+        let _ = sys_write(out_fd, &rev_buf[..line_len]);
+    }
+
+    0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -26974,5 +27084,29 @@ Chaque processus dispose de son propre CR3 sans aucun privilege materiel direct.
         assert_eq!(run_colrm(&["--version"], 1, 2), 0);
         assert_eq!(run_colrm(&["0"], 1, 2), 1);
         assert_eq!(run_colrm(&["5", "3"], 1, 2), 1);
+
+        // 26. Test run_rev
+        assert_eq!(run_rev(&["--help"], 1, 2), 0);
+        assert_eq!(run_rev(&["--version"], 1, 2), 0);
+        assert_eq!(run_rev(&["--unknown"], 1, 2), 1);
+
+        // Test rev sur fichier
+        let rev_file = sys_open("/tmp/test_rev.txt", O_CREAT | O_WRONLY);
+        assert!(rev_file >= 3);
+        let _ = sys_write(rev_file, b"hello\nworld\n12345\n");
+        sys_close(rev_file);
+
+        let (out_r_rev, out_w_rev) = crate::vfs::pipe().unwrap();
+        let code_rev = run_rev(&["/tmp/test_rev.txt"], out_w_rev, 2);
+        sys_close(out_w_rev);
+        assert_eq!(code_rev, 0);
+
+        let mut buf_rev = [0u8; 128];
+        let n_rev = sys_read(out_r_rev, &mut buf_rev);
+        sys_close(out_r_rev);
+        let s_rev = core::str::from_utf8(&buf_rev[..n_rev as usize]).unwrap();
+        assert!(s_rev.contains("olleh\ndlrow\n54321\n"));
+
+        let _ = run_rm(&["/tmp/test_rev.txt"], 2);
     }
 }

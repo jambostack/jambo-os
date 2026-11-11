@@ -318,6 +318,7 @@ pub const XHCI_EXT_CAP_OPTICAL_LOGICAL_LINK: u8 = 30;
 pub const XHCI_EXT_CAP_DBC_TELEMETRY: u8 = 31;
 pub const XHCI_EXT_CAP_SUBLINK_SPEED_ROUTING: u8 = 32;
 pub const XHCI_EXT_CAP_EXTENDED_MESSAGE_INTERRUPT_VECTOR: u8 = 33;
+pub const XHCI_EXT_CAP_EXTENDED_PORT_STATUS_CONTROL: u8 = 34;
 
 /// Masques de registres USB Legacy Support (xHCI 1.2 Section 7.1)
 /// Registre USBLEGSUP (Offset 0x00)
@@ -3227,6 +3228,104 @@ impl XhciExtendedMessageInterruptVector {
     /// Retourne l'offset d'alignement de la table dans le BAR (bits [31:3] alignés sur 8 octets)
     pub const fn table_offset(&self) -> u32 {
         self.table_offset_bir & !0x07
+    }
+}
+
+/// Capacité Étendue xHCI Extended Port Status and Control (EPSC / xHCI 1.2 §7.26)
+///
+/// Permet la lecture et configuration avancée des états étendus des ports USB (vitesse,
+/// conformité de signalisation, mode test et contrôle de lien symétrique/asymétrique).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XhciExtendedPortStatusControl {
+    /// Pointeur dword vers la prochaine capacité étendue (0 = fin de liste)
+    pub next_ptr_dwords: u8,
+    /// Numéro de port physique cible (1..=255)
+    pub port_num: u8,
+    /// Fonctionnalité de contrôle étendu activée
+    pub enabled: bool,
+    /// Mode test de conformité activé (Test Mode Selector)
+    pub test_mode: u8,
+    /// Registre de contrôle brut (DWORD 1)
+    pub control: u32,
+    /// Registre de statut étendu (DWORD 2)
+    pub status: u32,
+    /// Vitesse de lien négociée (ex: Gen 1x1, Gen 1x2, Gen 2x1, Gen 2x2)
+    pub link_speed_protocol: u8,
+}
+
+impl XhciExtendedPortStatusControl {
+    /// Crée une nouvelle configuration EPSC pour un port physique donné
+    pub const fn new(port_num: u8) -> Self {
+        Self {
+            next_ptr_dwords: 0,
+            port_num,
+            enabled: false,
+            test_mode: 0,
+            control: 0,
+            status: 0,
+            link_speed_protocol: 0,
+        }
+    }
+
+    /// Parse les 4 dwords MMIO d'une capacité étendue EPSC (§7.26)
+    pub const fn parse(dwords: &[u32; 4]) -> Option<Self> {
+        let cap_id = (dwords[0] & 0xFF) as u8;
+        if cap_id != XHCI_EXT_CAP_EXTENDED_PORT_STATUS_CONTROL {
+            return None;
+        }
+
+        let next_ptr = ((dwords[0] >> 8) & 0xFF) as u8;
+        let port_num = ((dwords[0] >> 16) & 0xFF) as u8;
+        let ctrl = dwords[1];
+        let enabled = (ctrl & 0x01) != 0;
+        let test_mode = ((ctrl >> 16) & 0x0F) as u8;
+        let status = dwords[2];
+        let link_speed = (dwords[3] & 0x0F) as u8;
+
+        Some(Self {
+            next_ptr_dwords: next_ptr,
+            port_num,
+            enabled,
+            test_mode,
+            control: ctrl,
+            status,
+            link_speed_protocol: link_speed,
+        })
+    }
+
+    /// Encode la capacité étendue en 4 mots dwords MMIO 32-bit
+    pub const fn encode(&self) -> [u32; 4] {
+        let dw0 = (XHCI_EXT_CAP_EXTENDED_PORT_STATUS_CONTROL as u32)
+            | ((self.next_ptr_dwords as u32) << 8)
+            | ((self.port_num as u32) << 16);
+        let mut ctrl = (self.control & !0x000F_0001) | (((self.test_mode & 0x0F) as u32) << 16);
+        if self.enabled {
+            ctrl |= 0x01;
+        }
+        let dw2 = self.status;
+        let dw3 = (self.link_speed_protocol & 0x0F) as u32;
+        [dw0, ctrl, dw2, dw3]
+    }
+
+    /// Active ou désactive le contrôle étendu du port
+    pub fn set_enabled(&mut self, enable: bool) {
+        self.enabled = enable;
+        if enable {
+            self.control |= 0x01;
+        } else {
+            self.control &= !0x01;
+        }
+    }
+
+    /// Définit le sélecteur de mode test de conformité
+    pub fn set_test_mode(&mut self, mode: u8) {
+        self.test_mode = mode & 0x0F;
+        self.control = (self.control & !0x000F_0000) | (((mode & 0x0F) as u32) << 16);
+    }
+
+    /// Configure la vitesse de lien négociée
+    pub fn set_link_speed_protocol(&mut self, speed: u8) {
+        self.link_speed_protocol = speed & 0x0F;
     }
 }
 
@@ -12205,5 +12304,38 @@ mod tests {
         assert_eq!(parsed_mivt.primary_interrupter_index, 42);
         assert_eq!(parsed_mivt.bir(), 4);
         assert_eq!(parsed_mivt.table_offset(), 0x1000);
+
+        // 24. Test XhciExtendedPortStatusControl
+        let mut epsc = XhciExtendedPortStatusControl::new(7);
+        assert_eq!(epsc.port_num, 7);
+        assert!(!epsc.enabled);
+        assert_eq!(epsc.test_mode, 0);
+        assert_eq!(epsc.link_speed_protocol, 0);
+
+        epsc.set_enabled(true);
+        epsc.set_test_mode(3);
+        epsc.set_link_speed_protocol(4);
+        epsc.next_ptr_dwords = 36;
+        epsc.status = 0x8000_1234;
+
+        let encoded_epsc = epsc.encode();
+        assert_eq!(
+            encoded_epsc[0] & 0xFF,
+            XHCI_EXT_CAP_EXTENDED_PORT_STATUS_CONTROL as u32
+        );
+        assert_eq!((encoded_epsc[0] >> 8) & 0xFF, 36);
+        assert_eq!((encoded_epsc[0] >> 16) & 0xFF, 7);
+        assert_eq!(encoded_epsc[1] & 0x01, 1);
+        assert_eq!((encoded_epsc[1] >> 16) & 0x0F, 3);
+        assert_eq!(encoded_epsc[2], 0x8000_1234);
+        assert_eq!(encoded_epsc[3] & 0x0F, 4);
+
+        let parsed_epsc = XhciExtendedPortStatusControl::parse(&encoded_epsc).unwrap();
+        assert_eq!(parsed_epsc.next_ptr_dwords, 36);
+        assert_eq!(parsed_epsc.port_num, 7);
+        assert!(parsed_epsc.enabled);
+        assert_eq!(parsed_epsc.test_mode, 3);
+        assert_eq!(parsed_epsc.status, 0x8000_1234);
+        assert_eq!(parsed_epsc.link_speed_protocol, 4);
     }
 }

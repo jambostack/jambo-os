@@ -477,7 +477,12 @@ name = "colrm"
 path = "src/bin/colrm.rs"
 test = false
 
-# 94 utilitaires Ring 3
+[[bin]]
+name = "rev"
+path = "src/bin/rev.rs"
+test = false
+
+# 95 utilitaires Ring 3
 
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }

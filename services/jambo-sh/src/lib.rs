@@ -633,6 +633,7 @@ impl JamboShell {
             "units" | "/bin/units" | "bin/units" => self.cmd_units(args, out),
             "look" | "/bin/look" | "bin/look" => self.cmd_look(args, out),
             "colrm" | "/bin/colrm" | "bin/colrm" => self.cmd_colrm(args, out),
+            "rev" | "/bin/rev" | "bin/rev" => self.cmd_rev(args, out),
             "cow" | "/bin/cow" | "bin/cow" => self.cmd_cow(args, out),
             "version" => self.cmd_version(out),
             "uptime" => self.cmd_uptime(out),
@@ -3193,6 +3194,44 @@ Utilitaire d'installation JamboOS (Serie 0.*.*)\n\
             (status, len)
         } else {
             let msg = b"colrm: pipe creation failed\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
+    }
+
+    fn cmd_rev(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if let (Ok((r_out, w_out)), Ok((r_err, w_err))) =
+            (libjambo::vfs::pipe(), libjambo::vfs::pipe())
+        {
+            let code = libjambo::coreutils::run_rev(args, w_out, w_err);
+            let _ = libjambo::coreutils::sys_close(w_out);
+            let _ = libjambo::coreutils::sys_close(w_err);
+
+            let mut len = 0;
+            if code == 0 {
+                let n_out = libjambo::coreutils::sys_read(r_out, out);
+                if n_out > 0 {
+                    len = n_out as usize;
+                }
+            } else {
+                let n_err = libjambo::coreutils::sys_read(r_err, out);
+                if n_err > 0 {
+                    len = n_err as usize;
+                }
+            }
+
+            let _ = libjambo::coreutils::sys_close(r_out);
+            let _ = libjambo::coreutils::sys_close(r_err);
+
+            let status = if code == 0 {
+                ShellStatus::Success
+            } else {
+                ShellStatus::ExecutionFailed
+            };
+            (status, len)
+        } else {
+            let msg = b"rev: pipe creation failed\n";
             let len = msg.len().min(out.len());
             out[..len].copy_from_slice(&msg[..len]);
             (ShellStatus::ExecutionFailed, len)
@@ -21074,5 +21113,27 @@ mod tests {
         assert_eq!(st92, ShellStatus::Success);
         let s92 = core::str::from_utf8(&out[..len92]).unwrap();
         assert!(s92.contains("look (jambo-coreutils)"));
+
+        // 46. colrm shell command
+        let (st93, len93) = shell.execute_line("colrm --help", &mut out);
+        assert_eq!(st93, ShellStatus::Success);
+        let s93 = core::str::from_utf8(&out[..len93]).unwrap();
+        assert!(s93.contains("Usage: colrm"));
+
+        let (st94, len94) = shell.execute_line("colrm --version", &mut out);
+        assert_eq!(st94, ShellStatus::Success);
+        let s94 = core::str::from_utf8(&out[..len94]).unwrap();
+        assert!(s94.contains("colrm (jambo-coreutils)"));
+
+        // 47. rev shell command
+        let (st95, len95) = shell.execute_line("rev --help", &mut out);
+        assert_eq!(st95, ShellStatus::Success);
+        let s95 = core::str::from_utf8(&out[..len95]).unwrap();
+        assert!(s95.contains("Usage: rev"));
+
+        let (st96, len96) = shell.execute_line("rev --version", &mut out);
+        assert_eq!(st96, ShellStatus::Success);
+        let s96 = core::str::from_utf8(&out[..len96]).unwrap();
+        assert!(s96.contains("rev (jambo-coreutils)"));
     }
 }
