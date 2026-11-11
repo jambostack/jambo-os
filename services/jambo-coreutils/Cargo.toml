@@ -587,7 +587,12 @@ name = "sha3sum"
 path = "src/bin/sha3sum.rs"
 test = false
 
-# 116 utilitaires Ring 3
+[[bin]]
+name = "sha3_512sum"
+path = "src/bin/sha3_512sum.rs"
+test = false
+
+# 117 utilitaires Ring 3
 
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }

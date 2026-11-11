@@ -352,6 +352,8 @@ pub const XHCI_EXT_CAP_USB4_PROTOCOL_TUNNELING_STATS: u8 = 54;
 pub const XHCI_EXT_CAP_USB4_HOST_TO_HOST_PACKET_TUNNELING: u8 = 55;
 /// Capacité étendue xHCI 1.2 / USB4 Host Interface Discovery and Notification Capability (§7.48)
 pub const XHCI_EXT_CAP_USB4_HOST_INTERFACE_DISCOVERY: u8 = 56;
+/// Capacité étendue xHCI 1.2 / USB4 Sleep and Wake Notification Capability (§7.49)
+pub const XHCI_EXT_CAP_USB4_SLEEP_WAKE_NOTIFICATION: u8 = 57;
 
 /// Masques de registres USB Legacy Support (xHCI 1.2 Section 7.1)
 /// Registre USBLEGSUP (Offset 0x00)
@@ -5886,6 +5888,129 @@ impl XhciUsb4HostInterfaceDiscovery {
     /// Incrémente le compteur de notifications
     pub fn record_notification(&mut self) {
         self.notification_counter = self.notification_counter.wrapping_add(1);
+    }
+}
+
+/// Capacité Étendue xHCI 1.2 / USB4 Sleep and Wake Notification Capability (§7.49)
+///
+/// Permet la gestion déterministe et le dispatch des notifications d'entrée en veille (Sleep/Low-Power State)
+/// et de réveil (Wake Event) des domaines et adaptateurs du routeur USB4.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XhciUsb4SleepWakeNotification {
+    /// Pointeur dword vers la prochaine capacité étendue (0 = fin de liste)
+    pub next_ptr_dwords: u8,
+    /// Fonctionnalité activée dans le contrôleur (bit 0)
+    pub enabled: bool,
+    /// Génération d'interruptions d'événement de réveil / veille activée (bit 1)
+    pub irq_enabled: bool,
+    /// Prise en charge du réveil à distance (Remote Wake Capability, bit 2)
+    pub remote_wake_supported: bool,
+    /// Réveil à distance activé (Remote Wake Enabled, bit 3)
+    pub remote_wake_enabled: bool,
+    /// Niveau d'état de veille cible (Target Sleep State : 0=Active, 1=Sleep-1, 2=Sleep-2, 3=Deep-Sleep)
+    pub target_sleep_state: u8,
+    /// Masque de sources de réveil autorisées (Adaptateurs PCIe, DP, Host, USB3)
+    pub wake_source_mask: u16,
+    /// Compteur d'événements de réveil reçus (Wake Event Counter)
+    pub wake_event_counter: u32,
+    /// Registre de statut d'alimentation USB4 / notification de veille
+    pub power_status: u32,
+}
+
+impl XhciUsb4SleepWakeNotification {
+    /// Crée une nouvelle configuration de notification Sleep/Wake USB4
+    pub const fn new(target_sleep_state: u8, wake_source_mask: u16) -> Self {
+        Self {
+            next_ptr_dwords: 0,
+            enabled: false,
+            irq_enabled: false,
+            remote_wake_supported: true,
+            remote_wake_enabled: false,
+            target_sleep_state: target_sleep_state & 0x07,
+            wake_source_mask,
+            wake_event_counter: 0,
+            power_status: 0,
+        }
+    }
+
+    /// Parse les 4 dwords MMIO d'une capacité étendue USB4 Sleep and Wake Notification (§7.49)
+    pub const fn parse(dwords: &[u32; 4]) -> Option<Self> {
+        let cap_id = (dwords[0] & 0xFF) as u8;
+        if cap_id != XHCI_EXT_CAP_USB4_SLEEP_WAKE_NOTIFICATION {
+            return None;
+        }
+
+        let next_ptr = ((dwords[0] >> 8) & 0xFF) as u8;
+        let ctrl = dwords[1];
+        let enabled = (ctrl & 0x01) != 0;
+        let irq_enabled = (ctrl & 0x02) != 0;
+        let remote_wake_supported = (ctrl & 0x04) != 0;
+        let remote_wake_enabled = (ctrl & 0x08) != 0;
+        let target_sleep_state = ((ctrl >> 8) & 0x07) as u8;
+        let wake_source_mask = (ctrl >> 16) as u16;
+
+        let wake_event_counter = dwords[2];
+        let power_status = dwords[3];
+
+        Some(Self {
+            next_ptr_dwords: next_ptr,
+            enabled,
+            irq_enabled,
+            remote_wake_supported,
+            remote_wake_enabled,
+            target_sleep_state,
+            wake_source_mask,
+            wake_event_counter,
+            power_status,
+        })
+    }
+
+    /// Encode la capacité étendue en 4 mots dwords MMIO 32-bit
+    pub const fn encode(&self) -> [u32; 4] {
+        let dw0 = (XHCI_EXT_CAP_USB4_SLEEP_WAKE_NOTIFICATION as u32)
+            | ((self.next_ptr_dwords as u32) << 8);
+        let mut ctrl =
+            ((self.target_sleep_state as u32 & 0x07) << 8) | ((self.wake_source_mask as u32) << 16);
+        if self.enabled {
+            ctrl |= 0x01;
+        }
+        if self.irq_enabled {
+            ctrl |= 0x02;
+        }
+        if self.remote_wake_supported {
+            ctrl |= 0x04;
+        }
+        if self.remote_wake_enabled {
+            ctrl |= 0x08;
+        }
+        let dw2 = self.wake_event_counter;
+        let dw3 = self.power_status;
+        [dw0, ctrl, dw2, dw3]
+    }
+
+    /// Active ou désactive le sous-système de notification Sleep/Wake
+    pub fn enable(&mut self, enable: bool) {
+        self.enabled = enable;
+    }
+
+    /// Active ou désactive les interruptions matérielles sur événement Sleep/Wake
+    pub fn configure_irq(&mut self, enable: bool) {
+        self.irq_enabled = enable;
+    }
+
+    /// Configure l'état de réveil à distance
+    pub fn configure_remote_wake(&mut self, enable: bool) {
+        self.remote_wake_enabled = enable;
+    }
+
+    /// Définit l'état de veille cible
+    pub fn set_target_sleep_state(&mut self, state: u8) {
+        self.target_sleep_state = state & 0x07;
+    }
+
+    /// Incrémente le compteur d'événements de réveil reçus
+    pub fn record_wake_event(&mut self) {
+        self.wake_event_counter = self.wake_event_counter.wrapping_add(1);
     }
 }
 
@@ -15823,5 +15948,50 @@ mod tests {
         assert_eq!(parsed_disc.notification_mask, 0x1234);
         assert_eq!(parsed_disc.notification_counter, 1);
         assert_eq!(parsed_disc.discovery_status, 0xCAFE_BABE);
+
+        // Test USB4 Sleep and Wake Notification (§7.49)
+        let mut slp = XhciUsb4SleepWakeNotification::new(2, 0x00FF);
+        assert_eq!(slp.target_sleep_state, 2);
+        assert_eq!(slp.wake_source_mask, 0x00FF);
+        assert_eq!(slp.wake_event_counter, 0);
+        assert!(!slp.enabled);
+        assert!(!slp.irq_enabled);
+        assert!(slp.remote_wake_supported);
+        assert!(!slp.remote_wake_enabled);
+
+        slp.enable(true);
+        slp.configure_irq(true);
+        slp.configure_remote_wake(true);
+        slp.set_target_sleep_state(3);
+        slp.record_wake_event();
+        slp.record_wake_event();
+        slp.next_ptr_dwords = 64;
+        slp.power_status = 0xAA55_CC33;
+
+        let encoded_slp = slp.encode();
+        assert_eq!(
+            encoded_slp[0] & 0xFF,
+            XHCI_EXT_CAP_USB4_SLEEP_WAKE_NOTIFICATION as u32
+        );
+        assert_eq!((encoded_slp[0] >> 8) & 0xFF, 64);
+        assert_eq!(encoded_slp[1] & 0x01, 1); // enabled
+        assert_eq!(encoded_slp[1] & 0x02, 2); // irq_enabled
+        assert_eq!(encoded_slp[1] & 0x04, 4); // remote_wake_supported
+        assert_eq!(encoded_slp[1] & 0x08, 8); // remote_wake_enabled
+        assert_eq!((encoded_slp[1] >> 8) & 0x07, 3); // target_sleep_state 3
+        assert_eq!((encoded_slp[1] >> 16) & 0xFFFF, 0x00FF); // wake_source_mask
+        assert_eq!(encoded_slp[2], 2); // 2 wake events
+        assert_eq!(encoded_slp[3], 0xAA55_CC33);
+
+        let parsed_slp = XhciUsb4SleepWakeNotification::parse(&encoded_slp).unwrap();
+        assert_eq!(parsed_slp.next_ptr_dwords, 64);
+        assert!(parsed_slp.enabled);
+        assert!(parsed_slp.irq_enabled);
+        assert!(parsed_slp.remote_wake_supported);
+        assert!(parsed_slp.remote_wake_enabled);
+        assert_eq!(parsed_slp.target_sleep_state, 3);
+        assert_eq!(parsed_slp.wake_source_mask, 0x00FF);
+        assert_eq!(parsed_slp.wake_event_counter, 2);
+        assert_eq!(parsed_slp.power_status, 0xAA55_CC33);
     }
 }
