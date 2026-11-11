@@ -315,6 +315,7 @@ pub const XHCI_EXT_CAP_INTERRUPTER_MODERATION_OVERRIDE: u8 = 27;
 pub const XHCI_EXT_CAP_PORT_SPEED_MAPPING_OVERRIDE: u8 = 28;
 pub const XHCI_EXT_CAP_EXTENDED_ENERGY_EFFICIENT_USB: u8 = 29;
 pub const XHCI_EXT_CAP_OPTICAL_LOGICAL_LINK: u8 = 30;
+pub const XHCI_EXT_CAP_DBC_TELEMETRY: u8 = 31;
 
 /// Masques de registres USB Legacy Support (xHCI 1.2 Section 7.1)
 /// Registre USBLEGSUP (Offset 0x00)
@@ -2870,6 +2871,136 @@ impl XhciOpticalLogicalLink {
     /// Calcule l'atténuation optique en décibels (dB) entiers
     pub const fn attenuation_db(&self) -> u16 {
         self.optical_attenuation_cdbm / 100
+    }
+}
+
+/// Capacité Étendue xHCI DbC Telemetry & Hardware Diagnostics (§7.23 / USB Debug Capability Telemetry)
+///
+/// Modélise les registres matériels xHCI pour la télémétrie haute fidélité du DbC,
+/// le suivi des traces d'exécution PCIe, les compteurs d'échantillonnage de paquets de débogage
+/// et la détection d'erreurs d'intégrité de liaison physique sans interruption d'ordonnancement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XhciDbcTelemetry {
+    /// Pointeur dword vers la prochaine capacité étendue (0 = dernière)
+    pub next_ptr_dwords: u8,
+    /// Activation de la télémétrie DbC (bit 0 du registre de contrôle)
+    pub enabled: bool,
+    /// Mode de trace en boucle circulaire (bit 1 du registre de contrôle)
+    pub circular_buffer: bool,
+    /// Débordement de trace détecté (bit 2 du registre d'état)
+    pub trace_overflow: bool,
+    /// Numéro de port xHCI physique surveillé
+    pub port_num: u8,
+    /// Fréquence d'échantillonnage de télémétrie en kHz (1..=1000)
+    pub sampling_rate_khz: u16,
+    /// Compteur d'événements de trace diagnostique capturés
+    pub trace_event_count: u32,
+    /// Registre de contrôle brut (DWORD 1)
+    pub control: u32,
+    /// Registre d'état brut (DWORD 2)
+    pub status: u32,
+}
+
+impl XhciDbcTelemetry {
+    /// Crée une nouvelle configuration de télémétrie DbC
+    pub const fn new(port_num: u8, sampling_rate_khz: u16) -> Self {
+        Self {
+            next_ptr_dwords: 0,
+            enabled: false,
+            circular_buffer: true,
+            trace_overflow: false,
+            port_num,
+            sampling_rate_khz,
+            trace_event_count: 0,
+            control: 0x02, // circular_buffer activé par défaut
+            status: 0,
+        }
+    }
+
+    /// Parse les 4 dwords MMIO d'une capacité étendue xHCI DbC Telemetry (§7.23)
+    pub const fn parse(dwords: &[u32; 4]) -> Option<Self> {
+        let cap_id = (dwords[0] & 0xFF) as u8;
+        if cap_id != XHCI_EXT_CAP_DBC_TELEMETRY {
+            return None;
+        }
+        let next_ptr = ((dwords[0] >> 8) & 0xFF) as u8;
+        let port = ((dwords[0] >> 16) & 0xFF) as u8;
+
+        let ctrl = dwords[1];
+        let sts = dwords[2];
+        let rate = (dwords[3] & 0xFFFF) as u16;
+        let events = dwords[2]; // status contient également le compteur d'événements ou DWORD 3
+
+        let enabled = (ctrl & 0x01) != 0;
+        let circular = (ctrl & 0x02) != 0;
+        let overflow = (sts & 0x04) != 0;
+
+        Some(Self {
+            next_ptr_dwords: next_ptr,
+            enabled,
+            circular_buffer: circular,
+            trace_overflow: overflow,
+            port_num: if port == 0 { 1 } else { port },
+            sampling_rate_khz: if rate == 0 { 100 } else { rate },
+            trace_event_count: events >> 8,
+            control: ctrl,
+            status: sts,
+        })
+    }
+
+    /// Encode la capacité étendue en 4 mots dwords MMIO 32-bit
+    pub const fn encode(&self) -> [u32; 4] {
+        let dw0 = (XHCI_EXT_CAP_DBC_TELEMETRY as u32)
+            | ((self.next_ptr_dwords as u32) << 8)
+            | ((self.port_num as u32) << 16);
+        let mut ctrl = self.control & !0x03;
+        if self.enabled {
+            ctrl |= 0x01;
+        }
+        if self.circular_buffer {
+            ctrl |= 0x02;
+        }
+        let mut sts = (self.status & !0x04) | ((self.trace_event_count & 0x00FF_FFFF) << 8);
+        if self.trace_overflow {
+            sts |= 0x04;
+        }
+        let dw3 = (self.sampling_rate_khz as u32) & 0xFFFF;
+        [dw0, ctrl, sts, dw3]
+    }
+
+    /// Active ou désactive la capture de télémétrie DbC
+    pub fn set_enabled(&mut self, enable: bool) {
+        self.enabled = enable;
+        if enable {
+            self.control |= 0x01;
+        } else {
+            self.control &= !0x01;
+        }
+    }
+
+    /// Enregistre l'arrivée d'un événement de trace diagnostique
+    pub fn record_event(&mut self) {
+        if !self.enabled {
+            return;
+        }
+        if self.trace_event_count == 0x00FF_FFFF && !self.circular_buffer {
+            self.trace_overflow = true;
+            self.status |= 0x04;
+        } else {
+            self.trace_event_count = (self.trace_event_count + 1) & 0x00FF_FFFF;
+        }
+    }
+
+    /// Réinitialise les compteurs de trace
+    pub fn reset_trace(&mut self) {
+        self.trace_event_count = 0;
+        self.trace_overflow = false;
+        self.status &= !0x04;
+    }
+
+    /// Vérifie si la télémétrie est opérationnelle sans perte de paquets
+    pub const fn is_telemetry_healthy(&self) -> bool {
+        self.enabled && !self.trace_overflow
     }
 }
 
@@ -11734,5 +11865,47 @@ mod tests {
         assert!(!parsed_oll.loss_of_signal);
         assert!(parsed_oll.is_link_healthy());
         assert_eq!(parsed_oll.attenuation_db(), 2);
+
+        // 43. Test Capacité Étendue DbC Telemetry & Diagnostics (§7.23)
+        let mut telemetry = XhciDbcTelemetry::new(2, 250); // Port 2, 250 kHz
+        assert_eq!(telemetry.port_num, 2);
+        assert_eq!(telemetry.sampling_rate_khz, 250);
+        assert!(!telemetry.enabled);
+        assert!(telemetry.circular_buffer);
+        assert!(!telemetry.trace_overflow);
+        assert_eq!(telemetry.trace_event_count, 0);
+        assert!(!telemetry.is_telemetry_healthy());
+
+        telemetry.set_enabled(true);
+        assert!(telemetry.enabled);
+        assert!(telemetry.is_telemetry_healthy());
+
+        telemetry.record_event();
+        telemetry.record_event();
+        assert_eq!(telemetry.trace_event_count, 2);
+
+        telemetry.next_ptr_dwords = 48;
+        let encoded_tel = telemetry.encode();
+        assert_eq!(encoded_tel[0] & 0xFF, XHCI_EXT_CAP_DBC_TELEMETRY as u32);
+        assert_eq!((encoded_tel[0] >> 8) & 0xFF, 48);
+        assert_eq!((encoded_tel[0] >> 16) & 0xFF, 2);
+        assert_eq!(encoded_tel[1] & 0x01, 1);
+        assert_eq!(encoded_tel[1] & 0x02, 2);
+        assert_eq!(encoded_tel[2] >> 8, 2);
+        assert_eq!(encoded_tel[3] & 0xFFFF, 250);
+
+        let parsed_tel = XhciDbcTelemetry::parse(&encoded_tel).unwrap();
+        assert_eq!(parsed_tel.next_ptr_dwords, 48);
+        assert_eq!(parsed_tel.port_num, 2);
+        assert_eq!(parsed_tel.sampling_rate_khz, 250);
+        assert!(parsed_tel.enabled);
+        assert!(parsed_tel.circular_buffer);
+        assert!(!parsed_tel.trace_overflow);
+        assert_eq!(parsed_tel.trace_event_count, 2);
+        assert!(parsed_tel.is_telemetry_healthy());
+
+        telemetry.reset_trace();
+        assert_eq!(telemetry.trace_event_count, 0);
+        assert!(!telemetry.trace_overflow);
     }
 }

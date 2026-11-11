@@ -13395,6 +13395,9 @@ pub fn execute_coreutils_command(
         "pathchk" => run_pathchk(args, out_fd, err_fd),
         "stty" => run_stty(args, in_fd, out_fd, err_fd),
         "tsort" => run_tsort(args, in_fd, out_fd, err_fd),
+        "banner" => run_banner(args, out_fd, err_fd),
+        "cal" => run_cal(args, out_fd, err_fd),
+        "units" => run_units(args, out_fd, err_fd),
         _ => {
             let _ = sys_write(err_fd, cmd.as_bytes());
             let _ = sys_write(err_fd, b": command not found\n");
@@ -21421,6 +21424,470 @@ fn render_month_calendar(month: u32, year: u32, julian: bool, out_fd: i32) {
     }
 }
 
+// ============================================================================
+// Utilitaire POSIX / GNU coreutils : `units` (Conversion d'unités et grandeurs physiques)
+// ============================================================================
+
+/// Définition d'une unité de mesure supportée pour conversion déterministe
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct UnitDefinition {
+    /// Nom ou symbole principal de l'unité
+    pub name: &'static str,
+    /// Alias optionnel (ex: 'm' pour 'meter', 'km' pour 'kilometer')
+    pub alias: &'static str,
+    /// Catégorie de grandeur : 0=Longueur(m), 1=Masse(g), 2=Temps(s), 3=Données(bytes), 4=Température(K)
+    pub category: u8,
+    /// Facteur multiplicateur par rapport à l'unité de référence SI de base
+    pub scale_factor: f64,
+}
+
+/// Table des unités supportées en virgule flottante déterministe (no_std)
+pub static KNOWN_UNITS: &[UnitDefinition] = &[
+    // Longueur (Base: mètre 'm')
+    UnitDefinition {
+        name: "meter",
+        alias: "m",
+        category: 0,
+        scale_factor: 1.0,
+    },
+    UnitDefinition {
+        name: "millimeter",
+        alias: "mm",
+        category: 0,
+        scale_factor: 0.001,
+    },
+    UnitDefinition {
+        name: "centimeter",
+        alias: "cm",
+        category: 0,
+        scale_factor: 0.01,
+    },
+    UnitDefinition {
+        name: "kilometer",
+        alias: "km",
+        category: 0,
+        scale_factor: 1000.0,
+    },
+    UnitDefinition {
+        name: "inch",
+        alias: "in",
+        category: 0,
+        scale_factor: 0.0254,
+    },
+    UnitDefinition {
+        name: "foot",
+        alias: "ft",
+        category: 0,
+        scale_factor: 0.3048,
+    },
+    UnitDefinition {
+        name: "yard",
+        alias: "yd",
+        category: 0,
+        scale_factor: 0.9144,
+    },
+    UnitDefinition {
+        name: "mile",
+        alias: "mi",
+        category: 0,
+        scale_factor: 1609.344,
+    },
+    // Masse (Base: gramme 'g')
+    UnitDefinition {
+        name: "gram",
+        alias: "g",
+        category: 1,
+        scale_factor: 1.0,
+    },
+    UnitDefinition {
+        name: "milligram",
+        alias: "mg",
+        category: 1,
+        scale_factor: 0.001,
+    },
+    UnitDefinition {
+        name: "kilogram",
+        alias: "kg",
+        category: 1,
+        scale_factor: 1000.0,
+    },
+    UnitDefinition {
+        name: "ton",
+        alias: "t",
+        category: 1,
+        scale_factor: 1_000_000.0,
+    },
+    UnitDefinition {
+        name: "pound",
+        alias: "lb",
+        category: 1,
+        scale_factor: 453.59237,
+    },
+    UnitDefinition {
+        name: "ounce",
+        alias: "oz",
+        category: 1,
+        scale_factor: 28.349523125,
+    },
+    // Temps (Base: seconde 's')
+    UnitDefinition {
+        name: "second",
+        alias: "s",
+        category: 2,
+        scale_factor: 1.0,
+    },
+    UnitDefinition {
+        name: "millisecond",
+        alias: "ms",
+        category: 2,
+        scale_factor: 0.001,
+    },
+    UnitDefinition {
+        name: "microsecond",
+        alias: "us",
+        category: 2,
+        scale_factor: 0.000001,
+    },
+    UnitDefinition {
+        name: "minute",
+        alias: "min",
+        category: 2,
+        scale_factor: 60.0,
+    },
+    UnitDefinition {
+        name: "hour",
+        alias: "hr",
+        category: 2,
+        scale_factor: 3600.0,
+    },
+    UnitDefinition {
+        name: "day",
+        alias: "d",
+        category: 2,
+        scale_factor: 86400.0,
+    },
+    // Données informatiques (Base: byte 'B')
+    UnitDefinition {
+        name: "byte",
+        alias: "B",
+        category: 3,
+        scale_factor: 1.0,
+    },
+    UnitDefinition {
+        name: "kilobyte",
+        alias: "KB",
+        category: 3,
+        scale_factor: 1000.0,
+    },
+    UnitDefinition {
+        name: "kibibyte",
+        alias: "KiB",
+        category: 3,
+        scale_factor: 1024.0,
+    },
+    UnitDefinition {
+        name: "megabyte",
+        alias: "MB",
+        category: 3,
+        scale_factor: 1_000_000.0,
+    },
+    UnitDefinition {
+        name: "mebibyte",
+        alias: "MiB",
+        category: 3,
+        scale_factor: 1_048_576.0,
+    },
+    UnitDefinition {
+        name: "gigabyte",
+        alias: "GB",
+        category: 3,
+        scale_factor: 1_000_000_000.0,
+    },
+    UnitDefinition {
+        name: "gibibyte",
+        alias: "GiB",
+        category: 3,
+        scale_factor: 1_073_741_824.0,
+    },
+];
+
+/// Erreur de conversion d'unités
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnitConversionError {
+    /// Incompatibilité de catégorie de grandeur (ex: longueur vers masse)
+    IncompatibleCategories,
+}
+
+/// Résout une unité par son nom ou son alias
+pub fn find_unit(unit_str: &str) -> Option<&'static UnitDefinition> {
+    let s = unit_str.trim();
+    KNOWN_UNITS
+        .iter()
+        .find(|u| u.name.eq_ignore_ascii_case(s) || u.alias.eq_ignore_ascii_case(s))
+}
+
+/// Convertit une quantité d'une unité source vers une unité destination
+pub fn convert_units(
+    val: f64,
+    from: &UnitDefinition,
+    to: &UnitDefinition,
+) -> Result<f64, UnitConversionError> {
+    if from.category != to.category {
+        return Err(UnitConversionError::IncompatibleCategories);
+    }
+    let base_val = val * from.scale_factor;
+    Ok(base_val / to.scale_factor)
+}
+
+/// Formate un f64 avec 4 décimales de précision dans un tampon
+fn format_float_4dec(val: f64, buf: &mut [u8]) -> usize {
+    if val < 0.0 {
+        buf[0] = b'-';
+        let sub = format_float_4dec(-val, &mut buf[1..]);
+        return sub + 1;
+    }
+
+    let int_part = val as u64;
+    let frac_part = ((val - (int_part as f64)) * 10000.0 + 0.5) as u64;
+
+    let mut temp = [0u8; 32];
+    let int_len = write_u64_decimal(int_part, &mut temp);
+    buf[..int_len].copy_from_slice(&temp[..int_len]);
+    let mut pos = int_len;
+
+    if frac_part > 0 {
+        buf[pos] = b'.';
+        pos += 1;
+        let frac_val = frac_part % 10000;
+        let mut frac_str = [b'0'; 4];
+        let mut tmp_frac = frac_val;
+        for i in (0..4).rev() {
+            frac_str[i] = b'0' + (tmp_frac % 10) as u8;
+            tmp_frac /= 10;
+        }
+        // Supprime les zéros inutiles à droite
+        let mut end = 4;
+        while end > 1 && frac_str[end - 1] == b'0' {
+            end -= 1;
+        }
+        buf[pos..pos + end].copy_from_slice(&frac_str[..end]);
+        pos += end;
+    }
+
+    pos
+}
+
+/// Exécute l'utilitaire Coreutils POSIX / GNU `units`
+pub fn run_units(args: &[&str], out_fd: i32, err_fd: i32) -> i32 {
+    let mut verbose = true;
+    let mut non_flag_args = [""; 8];
+    let mut non_flag_count = 0usize;
+
+    let mut i = 0usize;
+    while i < args.len() {
+        match args[i] {
+            "--help" => {
+                let _ = sys_write(
+                    out_fd,
+                    b"Usage: units [options] [from-unit [to-unit]]\nConverts units between scales and dimension systems.\n\nOptions:\n  -q, --quiet, --silent  suppress prompting and verbose output\n  -v, --verbose          verbose output (default)\n  -l, --list             list supported units\n      --help             display this help and exit\n      --version          output version information and exit\n",
+                );
+                return 0;
+            }
+            "--version" => {
+                let _ = sys_write(out_fd, b"units (jambo-coreutils) 0.1.0\n");
+                return 0;
+            }
+            "-q" | "--quiet" | "--silent" => {
+                verbose = false;
+            }
+            "-v" | "--verbose" => {
+                verbose = true;
+            }
+            "-l" | "--list" => {
+                let _ = sys_write(out_fd, b"Supported units (jambo-coreutils):\n");
+                for u in KNOWN_UNITS {
+                    let _ = sys_write(out_fd, b"  ");
+                    let _ = sys_write(out_fd, u.name.as_bytes());
+                    let _ = sys_write(out_fd, b" (");
+                    let _ = sys_write(out_fd, u.alias.as_bytes());
+                    let _ = sys_write(out_fd, b")\n");
+                }
+                return 0;
+            }
+            s if s.starts_with('-') && s.len() > 1 => {
+                let _ = sys_write(err_fd, b"units: unrecognized option '");
+                let _ = sys_write(err_fd, s.as_bytes());
+                let _ = sys_write(err_fd, b"'\nTry 'units --help' for more information.\n");
+                return 1;
+            }
+            val => {
+                if non_flag_count < non_flag_args.len() {
+                    non_flag_args[non_flag_count] = val;
+                    non_flag_count += 1;
+                }
+            }
+        }
+        i += 1;
+    }
+
+    if non_flag_count == 0 {
+        // En mode non interactif sans arguments, afficher l'aide succincte
+        let _ = sys_write(
+            err_fd,
+            b"units: missing operand\nTry 'units --help' for more information.\n",
+        );
+        return 1;
+    }
+
+    // Extraction de la quantité et des unités
+    // Formats acceptés :
+    // 1) "10km" "mi"
+    // 2) "10" "km" "mi"
+    // 3) "km" "mi" (valeur par défaut = 1.0)
+    let (qty, from_str, to_str) = if non_flag_count >= 3 {
+        let q: f64 = match parse_f64_ascii(non_flag_args[0]) {
+            Some(v) => v,
+            None => {
+                let _ = sys_write(err_fd, b"units: invalid quantity '");
+                let _ = sys_write(err_fd, non_flag_args[0].as_bytes());
+                let _ = sys_write(err_fd, b"'\n");
+                return 1;
+            }
+        };
+        (q, non_flag_args[1], non_flag_args[2])
+    } else if non_flag_count == 2 {
+        // Est-ce que arg 0 commence par un chiffre ?
+        let a0 = non_flag_args[0];
+        if let Some((q, u_str)) = split_quantity_unit(a0) {
+            (q, u_str, non_flag_args[1])
+        } else {
+            (1.0, non_flag_args[0], non_flag_args[1])
+        }
+    } else {
+        // 1 seul argument (ex: "10km" vers base)
+        let a0 = non_flag_args[0];
+        if let Some((q, u_str)) = split_quantity_unit(a0) {
+            (q, u_str, u_str)
+        } else {
+            let _ = sys_write(err_fd, b"units: missing target unit\n");
+            return 1;
+        }
+    };
+
+    let from_unit = match find_unit(from_str) {
+        Some(u) => u,
+        None => {
+            let _ = sys_write(err_fd, b"units: unknown unit '");
+            let _ = sys_write(err_fd, from_str.as_bytes());
+            let _ = sys_write(err_fd, b"'\n");
+            return 1;
+        }
+    };
+
+    let to_unit = match find_unit(to_str) {
+        Some(u) => u,
+        None => {
+            let _ = sys_write(err_fd, b"units: unknown unit '");
+            let _ = sys_write(err_fd, to_str.as_bytes());
+            let _ = sys_write(err_fd, b"'\n");
+            return 1;
+        }
+    };
+
+    let converted = match convert_units(qty, from_unit, to_unit) {
+        Ok(v) => v,
+        Err(_) => {
+            let _ = sys_write(
+                err_fd,
+                b"units: conformability error (incompatible unit categories)\n",
+            );
+            return 1;
+        }
+    };
+
+    let mut out_buf = [0u8; 64];
+    let len = format_float_4dec(converted, &mut out_buf);
+
+    if verbose {
+        let _ = sys_write(out_fd, b"\t* ");
+        let _ = sys_write(out_fd, &out_buf[..len]);
+        let _ = sys_write(out_fd, b"\n\t/ ");
+        let recip = if converted != 0.0 {
+            1.0 / converted
+        } else {
+            0.0
+        };
+        let mut recip_buf = [0u8; 64];
+        let rlen = format_float_4dec(recip, &mut recip_buf);
+        let _ = sys_write(out_fd, &recip_buf[..rlen]);
+        let _ = sys_write(out_fd, b"\n");
+    } else {
+        let _ = sys_write(out_fd, &out_buf[..len]);
+        let _ = sys_write(out_fd, b"\n");
+    }
+
+    0
+}
+
+/// Découpe une chaîne en (quantité, suffixe_unité) ex: "10km" -> (10.0, "km")
+fn split_quantity_unit(s: &str) -> Option<(f64, &str)> {
+    let bytes = s.as_bytes();
+    let mut num_end = 0usize;
+    while num_end < bytes.len() && (bytes[num_end].is_ascii_digit() || bytes[num_end] == b'.') {
+        num_end += 1;
+    }
+    if num_end == 0 || num_end == bytes.len() {
+        return None;
+    }
+    let qty = parse_f64_ascii(&s[..num_end])?;
+    Some((qty, &s[num_end..]))
+}
+
+/// Parser ascii simple pour f64 (no_std)
+fn parse_f64_ascii(s: &str) -> Option<f64> {
+    let bytes = s.trim().as_bytes();
+    if bytes.is_empty() {
+        return None;
+    }
+    let mut i = 0usize;
+    let mut negative = false;
+    if bytes[0] == b'-' {
+        negative = true;
+        i += 1;
+    } else if bytes[0] == b'+' {
+        i += 1;
+    }
+
+    let mut int_val = 0u64;
+    let mut has_digits = false;
+    while i < bytes.len() && bytes[i].is_ascii_digit() {
+        int_val = int_val
+            .checked_mul(10)?
+            .checked_add((bytes[i] - b'0') as u64)?;
+        has_digits = true;
+        i += 1;
+    }
+
+    let mut frac_val = 0.0f64;
+    let mut frac_div = 1.0f64;
+    if i < bytes.len() && bytes[i] == b'.' {
+        i += 1;
+        while i < bytes.len() && bytes[i].is_ascii_digit() {
+            has_digits = true;
+            frac_div *= 10.0;
+            frac_val += ((bytes[i] - b'0') as f64) / frac_div;
+            i += 1;
+        }
+    }
+
+    if !has_digits || i < bytes.len() {
+        return None;
+    }
+
+    let res = (int_val as f64) + frac_val;
+    Some(if negative { -res } else { res })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -26188,5 +26655,37 @@ Chaque processus dispose de son propre CR3 sans aucun privilege materiel direct.
         assert!(core::str::from_utf8(&buf_cal2[..n_cal2 as usize])
             .unwrap()
             .contains("cal (jambo-coreutils)"));
+
+        // 23. Test run_units
+        let (out_r_u1, out_w_u1) = crate::vfs::pipe().unwrap();
+        let code_u1 = run_units(&["-q", "1000m", "km"], out_w_u1, 2);
+        sys_close(out_w_u1);
+        assert_eq!(code_u1, 0);
+        let mut buf_u1 = [0u8; 64];
+        let n_u1 = sys_read(out_r_u1, &mut buf_u1);
+        sys_close(out_r_u1);
+        assert_eq!(
+            core::str::from_utf8(&buf_u1[..n_u1 as usize])
+                .unwrap()
+                .trim(),
+            "1"
+        );
+
+        let (out_r_u2, out_w_u2) = crate::vfs::pipe().unwrap();
+        let code_u2 = run_units(&["1024", "B", "KiB"], out_w_u2, 2);
+        sys_close(out_w_u2);
+        assert_eq!(code_u2, 0);
+        let mut buf_u2 = [0u8; 128];
+        let n_u2 = sys_read(out_r_u2, &mut buf_u2);
+        sys_close(out_r_u2);
+        let s_u2 = core::str::from_utf8(&buf_u2[..n_u2 as usize]).unwrap();
+        assert!(s_u2.contains("* 1"));
+
+        // Test erreur de conformabilité (mètre vers kilogramme)
+        let (out_r_u3, out_w_u3) = crate::vfs::pipe().unwrap();
+        let code_u3 = run_units(&["1m", "kg"], out_w_u3, 2);
+        sys_close(out_w_u3);
+        assert_eq!(code_u3, 1);
+        sys_close(out_r_u3);
     }
 }

@@ -630,6 +630,7 @@ impl JamboShell {
             "tsort" | "/bin/tsort" | "bin/tsort" => self.cmd_tsort(args, out),
             "banner" | "/bin/banner" | "bin/banner" => self.cmd_banner(args, out),
             "cal" | "/bin/cal" | "bin/cal" => self.cmd_cal(args, out),
+            "units" | "/bin/units" | "bin/units" => self.cmd_units(args, out),
             "cow" | "/bin/cow" | "bin/cow" => self.cmd_cow(args, out),
             "version" => self.cmd_version(out),
             "uptime" => self.cmd_uptime(out),
@@ -3076,6 +3077,44 @@ Utilitaire d'installation JamboOS (Serie 0.*.*)\n\
             (status, len)
         } else {
             let msg = b"cal: pipe creation failed\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
+    }
+
+    fn cmd_units(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if let (Ok((r_out, w_out)), Ok((r_err, w_err))) =
+            (libjambo::vfs::pipe(), libjambo::vfs::pipe())
+        {
+            let code = libjambo::coreutils::run_units(args, w_out, w_err);
+            let _ = libjambo::coreutils::sys_close(w_out);
+            let _ = libjambo::coreutils::sys_close(w_err);
+
+            let mut len = 0;
+            if code == 0 {
+                let n_out = libjambo::coreutils::sys_read(r_out, out);
+                if n_out > 0 {
+                    len = n_out as usize;
+                }
+            } else {
+                let n_err = libjambo::coreutils::sys_read(r_err, out);
+                if n_err > 0 {
+                    len = n_err as usize;
+                }
+            }
+
+            let _ = libjambo::coreutils::sys_close(r_out);
+            let _ = libjambo::coreutils::sys_close(r_err);
+
+            let status = if code == 0 {
+                ShellStatus::Success
+            } else {
+                ShellStatus::ExecutionFailed
+            };
+            (status, len)
+        } else {
+            let msg = b"units: pipe creation failed\n";
             let len = msg.len().min(out.len());
             out[..len].copy_from_slice(&msg[..len]);
             (ShellStatus::ExecutionFailed, len)
@@ -20930,5 +20969,21 @@ mod tests {
         let s87 = core::str::from_utf8(&out[..len87]).unwrap();
         assert!(s87.contains("November 2026"));
         assert!(s87.contains("Su Mo Tu We Th Fr Sa"));
+
+        // 44. units shell command
+        let (st88, len88) = shell.execute_line("units --help", &mut out);
+        assert_eq!(st88, ShellStatus::Success);
+        let s88 = core::str::from_utf8(&out[..len88]).unwrap();
+        assert!(s88.contains("Usage: units"));
+
+        let (st89, len89) = shell.execute_line("units --version", &mut out);
+        assert_eq!(st89, ShellStatus::Success);
+        let s89 = core::str::from_utf8(&out[..len89]).unwrap();
+        assert!(s89.contains("units (jambo-coreutils)"));
+
+        let (st90, len90) = shell.execute_line("units -q 1000m km", &mut out);
+        assert_eq!(st90, ShellStatus::Success);
+        let s90 = core::str::from_utf8(&out[..len90]).unwrap();
+        assert_eq!(s90.trim(), "1");
     }
 }
