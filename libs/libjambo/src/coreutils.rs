@@ -15341,6 +15341,269 @@ Columnate lists or format tables.\n\n\
     0
 }
 
+/// Configuration et taquets de tabulation pour l'utilitaire `tabs`
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TabsConfig {
+    /// Positions explicites des taquets de tabulation (1-based POSIX, jusqu'à 32 colonnes)
+    pub stops: [usize; 32],
+    /// Nombre de taquets configurés
+    pub count: usize,
+    /// Intervalle uniforme si défini (ex: `-8`, `-4`)
+    pub regular_interval: usize,
+    /// Effacer tous les taquets terminaux (`-0`)
+    pub clear_all: bool,
+}
+
+impl Default for TabsConfig {
+    fn default() -> Self {
+        Self {
+            stops: [0; 32],
+            count: 0,
+            regular_interval: 8,
+            clear_all: false,
+        }
+    }
+}
+
+impl TabsConfig {
+    /// Vérifie si une position de colonne (1-based) correspond à un taquet de tabulation actif
+    pub fn is_tab_stop(&self, col: usize) -> bool {
+        if self.clear_all && self.count == 0 && self.regular_interval == 0 {
+            return false;
+        }
+        if self.count > 0 {
+            for &stop in &self.stops[..self.count] {
+                if stop == col {
+                    return true;
+                }
+            }
+            false
+        } else if self.regular_interval > 0 {
+            col > 1 && (col - 1).is_multiple_of(self.regular_interval)
+        } else {
+            false
+        }
+    }
+
+    /// Calcule la colonne du prochain taquet de tabulation après `current_col` (1-based)
+    pub fn next_tab_stop(&self, current_col: usize) -> usize {
+        if self.count > 0 {
+            for &stop in &self.stops[..self.count] {
+                if stop > current_col {
+                    return stop;
+                }
+            }
+            // Si au-delà du dernier taquet explicite, avance d'une colonne
+            current_col + 1
+        } else if self.regular_interval > 0 {
+            let offset = (current_col - 1) % self.regular_interval;
+            current_col + (self.regular_interval - offset)
+        } else {
+            current_col + 1
+        }
+    }
+
+    /// Génère la séquence d'échappement ANSI / VT100 pour configurer les taquets matériels du terminal
+    /// - `ESC [ 3 g` : Effacer tous les taquets existants (TBC 3)
+    /// - Pour chaque taquet : `ESC [ <col> G` (cursor horizontal absolute) puis `ESC H` (HTS - Horizontal Tab Set)
+    /// - `ESC [ 1 G` : Retour du curseur en colonne 1
+    pub fn emit_ansi_sequences(&self, out_fd: i32) {
+        // Efface tous les taquets existants : ESC [ 3 g
+        let _ = sys_write(out_fd, b"\x1b[3g");
+
+        if self.clear_all && self.count == 0 && self.regular_interval == 0 {
+            return;
+        }
+
+        let write_col_tabstop = |fd: i32, col: usize| {
+            let _ = sys_write(fd, b"\x1b[");
+            let mut num_buf = [0u8; 16];
+            let mut n_idx = 0;
+            let mut tmp = col;
+            if tmp == 0 {
+                num_buf[0] = b'0';
+                n_idx = 1;
+            } else {
+                while tmp > 0 {
+                    num_buf[n_idx] = b'0' + (tmp % 10) as u8;
+                    tmp /= 10;
+                    n_idx += 1;
+                }
+                num_buf[..n_idx].reverse();
+            }
+            let _ = sys_write(fd, &num_buf[..n_idx]);
+            let _ = sys_write(fd, b"G\x1bH");
+        };
+
+        if self.count > 0 {
+            for &stop in &self.stops[..self.count] {
+                write_col_tabstop(out_fd, stop);
+            }
+        } else if self.regular_interval > 0 {
+            let mut col = 1 + self.regular_interval;
+            while col <= 160 {
+                write_col_tabstop(out_fd, col);
+                col += self.regular_interval;
+            }
+        }
+
+        // Repositionne le curseur en début de ligne
+        let _ = sys_write(out_fd, b"\x1b[1G");
+    }
+}
+
+/// Utilitaire Ring 3 : `tabs` (Set Terminal Tab Stops / Tabular Alignment)
+///
+/// Spécification POSIX.1-2017 & IEEE Std 1003.1 :
+/// - `-n`, `--interval=N` ou `-N` (ex: `-4`, `-8`, `-12`) : Définit des taquets répétitifs tous les N caractères
+/// - `LIST` (ex: `tabs 10,20,30,40` ou `tabs 10 20 30`) : Définit des taquets explicites en colonnes spécifiques (1-based)
+/// - `-0` ou `--clear` : Efface tous les taquets de tabulation existants sans en redéfinir
+/// - `--help` : Affiche l'aide utilisateur conforme
+pub fn run_tabs(args: &[&str], _in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    let mut config = TabsConfig::default();
+    let mut has_explicit_settings = false;
+
+    let parse_number = |s: &str| -> Option<usize> {
+        let mut n = 0usize;
+        let mut has_digit = false;
+        for &b in s.as_bytes() {
+            if b.is_ascii_digit() {
+                n = n.wrapping_mul(10).wrapping_add((b - b'0') as usize);
+                has_digit = true;
+            } else {
+                return None;
+            }
+        }
+        if has_digit {
+            Some(n)
+        } else {
+            None
+        }
+    };
+
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i].trim();
+        if arg == "--help" {
+            let _ = sys_write(
+                err_fd,
+                b"Usage: tabs [OPTION]... [TABLIST]\n\
+Set terminal tab stops according to POSIX specifications.\n\n\
+  -n, --interval=N      set repetitive tab stops every N columns\n\
+  -N                    short option for interval (e.g. -4, -8)\n\
+  -0, --clear           clear all tab stops\n\
+      --help            display this help and exit\n\n\
+TABLIST may be a comma-separated or space-separated list of column numbers.\n",
+            );
+            return 0;
+        }
+
+        if arg == "-0" || arg == "--clear" {
+            config.clear_all = true;
+            config.count = 0;
+            config.regular_interval = 0;
+            has_explicit_settings = true;
+            i += 1;
+            continue;
+        }
+
+        // Intervalle sous la forme `-N` (ex: `-4`, `-8`)
+        if arg.starts_with('-') && arg.len() > 1 && arg[1..].chars().all(|c| c.is_ascii_digit()) {
+            if let Some(val) = parse_number(&arg[1..]) {
+                config.clear_all = false;
+                config.count = 0;
+                config.regular_interval = val;
+                has_explicit_settings = true;
+                i += 1;
+                continue;
+            }
+        }
+
+        if arg == "-n" || arg == "--interval" {
+            if i + 1 < args.len() {
+                if let Some(val) = parse_number(args[i + 1].trim()) {
+                    config.clear_all = false;
+                    config.count = 0;
+                    config.regular_interval = val;
+                    has_explicit_settings = true;
+                    i += 2;
+                    continue;
+                }
+            }
+            let _ = sys_write(
+                err_fd,
+                b"tabs: option requires a valid positive integer -- 'n'\n",
+            );
+            return 1;
+        } else if let Some(val_str) = arg.strip_prefix("--interval=") {
+            if let Some(val) = parse_number(val_str.trim()) {
+                config.clear_all = false;
+                config.count = 0;
+                config.regular_interval = val;
+                has_explicit_settings = true;
+                i += 1;
+                continue;
+            } else {
+                let _ = sys_write(err_fd, b"tabs: invalid interval argument\n");
+                return 1;
+            }
+        }
+
+        if arg.starts_with('-') && arg != "-" {
+            let _ = sys_write(err_fd, b"tabs: unrecognized option '");
+            let _ = sys_write(err_fd, arg.as_bytes());
+            let _ = sys_write(err_fd, b"'\n");
+            return 1;
+        }
+
+        // Liste de colonnes séparées par virgule ou espace (ex: "8,16,24,32" ou arguments multiples "8" "16")
+        for token in arg.split(',') {
+            let tok = token.trim();
+            if tok.is_empty() {
+                continue;
+            }
+            if let Some(col) = parse_number(tok) {
+                if col == 0 {
+                    let _ = sys_write(err_fd, b"tabs: tab column must be >= 1\n");
+                    return 1;
+                }
+                if config.count > 0 && col <= config.stops[config.count - 1] {
+                    let _ = sys_write(
+                        err_fd,
+                        b"tabs: tab stops must be in strictly ascending order\n",
+                    );
+                    return 1;
+                }
+                if config.count < config.stops.len() {
+                    config.stops[config.count] = col;
+                    config.count += 1;
+                }
+                has_explicit_settings = true;
+                config.clear_all = false;
+                config.regular_interval = 0;
+            } else {
+                let _ = sys_write(err_fd, b"tabs: invalid column number '");
+                let _ = sys_write(err_fd, tok.as_bytes());
+                let _ = sys_write(err_fd, b"'\n");
+                return 1;
+            }
+        }
+        i += 1;
+    }
+
+    if !has_explicit_settings {
+        // Sans argument explicite : réinitialise aux tabstops POSIX par défaut (tous les 8 caractères)
+        config.regular_interval = 8;
+        config.count = 0;
+        config.clear_all = false;
+    }
+
+    // Émission des codes de contrôle matériels vers le terminal
+    config.emit_ansi_sequences(out_fd);
+
+    0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -18654,5 +18917,81 @@ Chaque processus dispose de son propre CR3 sans aucun privilege materiel direct.
         let res2 = core::str::from_utf8(&out_buf2[..n2 as usize]).unwrap();
         assert!(res2.contains("alpha"));
         assert!(res2.contains("beta"));
+    }
+
+    #[test]
+    fn test_tabs_configuration_and_sequences() {
+        // Test 1: Configuration par défaut (intervalle 8)
+        let cfg_default = TabsConfig::default();
+        assert!(!cfg_default.is_tab_stop(1));
+        assert!(cfg_default.is_tab_stop(9));
+        assert!(cfg_default.is_tab_stop(17));
+        assert_eq!(cfg_default.next_tab_stop(1), 9);
+        assert_eq!(cfg_default.next_tab_stop(4), 9);
+        assert_eq!(cfg_default.next_tab_stop(9), 17);
+
+        // Test 2: Taquets explicites
+        let cfg_explicit = TabsConfig {
+            stops: [
+                10, 20, 35, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 0,
+            ],
+            count: 3,
+            regular_interval: 0,
+            clear_all: false,
+        };
+        assert!(cfg_explicit.is_tab_stop(10));
+        assert!(cfg_explicit.is_tab_stop(20));
+        assert!(cfg_explicit.is_tab_stop(35));
+        assert!(!cfg_explicit.is_tab_stop(15));
+        assert_eq!(cfg_explicit.next_tab_stop(5), 10);
+        assert_eq!(cfg_explicit.next_tab_stop(10), 20);
+        assert_eq!(cfg_explicit.next_tab_stop(25), 35);
+        assert_eq!(cfg_explicit.next_tab_stop(40), 41);
+
+        // Test 3: Exécution run_tabs avec -4
+        let (out_r, out_w) = crate::vfs::pipe().expect("pipe out");
+        let code = run_tabs(&["-4"], 0, out_w, 2);
+        let _ = sys_close(out_w);
+        assert_eq!(code, 0);
+
+        let mut buf = [0u8; 1024];
+        let n = sys_read(out_r, &mut buf);
+        let _ = sys_close(out_r);
+        assert!(n > 0);
+
+        let seq = core::str::from_utf8(&buf[..n as usize]).unwrap();
+        // Vérifie la présence de l'effacement global et de la configuration des taquets
+        assert!(seq.contains("\x1b[3g"));
+        assert!(seq.contains("\x1b[5G\x1bH"));
+        assert!(seq.contains("\x1b[9G\x1bH"));
+        assert!(seq.contains("\x1b[1G"));
+
+        // Test 4: Effacement complet -0
+        let (out_r2, out_w2) = crate::vfs::pipe().expect("pipe out 2");
+        let code2 = run_tabs(&["-0"], 0, out_w2, 2);
+        let _ = sys_close(out_w2);
+        assert_eq!(code2, 0);
+
+        let mut buf2 = [0u8; 64];
+        let n2 = sys_read(out_r2, &mut buf2);
+        let _ = sys_close(out_r2);
+        assert_eq!(n2, 4);
+        assert_eq!(&buf2[..4], b"\x1b[3g");
+
+        // Test 5: Taquets explicites via arguments
+        let (out_r3, out_w3) = crate::vfs::pipe().expect("pipe out 3");
+        let code3 = run_tabs(&["12,24,36"], 0, out_w3, 2);
+        let _ = sys_close(out_w3);
+        assert_eq!(code3, 0);
+
+        let mut buf3 = [0u8; 128];
+        let n3 = sys_read(out_r3, &mut buf3);
+        let _ = sys_close(out_r3);
+        assert!(n3 > 0);
+        let seq3 = core::str::from_utf8(&buf3[..n3 as usize]).unwrap();
+        assert!(seq3.contains("\x1b[12G\x1bH"));
+        assert!(seq3.contains("\x1b[24G\x1bH"));
+        assert!(seq3.contains("\x1b[36G\x1bH"));
     }
 }

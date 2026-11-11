@@ -557,6 +557,31 @@ pub const PLS_COMPLIANCE_MODE: u8 = 10; // Compliance mode
 pub const PLS_TEST_MODE: u8 = 11; // Test mode
 pub const PLS_RESUME: u8 = 15; // Resume state
 
+// ============================================================================
+// Registre PORTPMSC (Port Power Management Status & Control) - xHCI 1.2 section 5.4.9
+// ============================================================================
+
+/// Masque et décalage pour le timeout d'inactivité USB 3.0 U1 (bits 7:0 de PORTPMSC USB3)
+pub const PORTPMSC_U1_TIMEOUT_SHIFT: u32 = 0;
+pub const PORTPMSC_U1_TIMEOUT_MASK: u32 = 0xFF << PORTPMSC_U1_TIMEOUT_SHIFT;
+
+/// Masque et décalage pour le timeout d'inactivité USB 3.0 U2 (bits 15:8 de PORTPMSC USB3)
+pub const PORTPMSC_U2_TIMEOUT_SHIFT: u32 = 8;
+pub const PORTPMSC_U2_TIMEOUT_MASK: u32 = 0xFF << PORTPMSC_U2_TIMEOUT_SHIFT;
+
+/// Flag Force Link PM Accept (FLA, bit 16 de PORTPMSC USB3)
+pub const PORTPMSC_FLA: u32 = 1 << 16;
+
+/// Masques pour USB 2.0 Link Power Management (L1 / LPM dans PORTPMSC USB2)
+/// LPM Device Response / Best Effort Service Latency (BESL / L1S, bits 2:0)
+pub const PORTPMSC_L1S_SHIFT: u32 = 0;
+pub const PORTPMSC_L1S_MASK: u32 = 0x03 << PORTPMSC_L1S_SHIFT;
+/// HIRD (Host Initiated Resume Duration, bits 7:4 - ou bits 5:2 selon révision LPM)
+pub const PORTPMSC_HIRD_SHIFT: u32 = 4;
+pub const PORTPMSC_HIRD_MASK: u32 = 0x0F << PORTPMSC_HIRD_SHIFT;
+/// Remote Wakeup Enable pour USB 2.0 L1 (bit 8)
+pub const PORTPMSC_RWE: u32 = 1 << 8;
+
 /// Masque RW1C (Read-Write 1 to Clear) regroupant tous les bits de changement d'état xHCI
 pub const PORTSC_ALL_CHANGES_MASK: u32 =
     PORTSC_CSC | PORTSC_PEC | PORTSC_WRC | PORTSC_OCC | PORTSC_PRC | PORTSC_PLC | PORTSC_CEC;
@@ -761,6 +786,56 @@ impl PortStatus {
     pub fn is_link_operational_u0(raw_portsc: u32) -> bool {
         let pls = ((raw_portsc & PORTSC_PLS_MASK) >> PORTSC_PLS_SHIFT) as u8;
         pls == PLS_U0 && (raw_portsc & PORTSC_PED) != 0
+    }
+
+    /// Calcule la valeur d'écriture pour le registre PORTPMSC (USB 3.0 / SuperSpeed)
+    /// afin de configurer les timers d'inactivité matérielle pour l'entrée automatique en veille U1 et U2.
+    ///
+    /// Selon la spec xHCI 1.2 section 5.4.9.1 :
+    /// - `u1_timeout` : Délai d'inactivité avant transition U0 -> U1 (0 = désactivé, 1..=127 = 1 µs à 127 µs, 0xFF = infini).
+    /// - `u2_timeout` : Délai d'inactivité avant transition U1 -> U2 (0 = désactivé, 1..=254 = multiple de 256 µs, 0xFF = infini).
+    /// - `force_link_pm_accept` (FLA) : Force l'acceptation des requêtes de mise en veille U1/U2 initiées par le périphérique.
+    pub fn build_usb3_portpmsc_write(
+        u1_timeout: u8,
+        u2_timeout: u8,
+        force_link_pm_accept: bool,
+    ) -> u32 {
+        let mut val = (u1_timeout as u32) << PORTPMSC_U1_TIMEOUT_SHIFT;
+        val |= (u2_timeout as u32) << PORTPMSC_U2_TIMEOUT_SHIFT;
+        if force_link_pm_accept {
+            val |= PORTPMSC_FLA;
+        }
+        val
+    }
+
+    /// Calcule la valeur d'écriture pour le registre PORTPMSC (USB 2.0 / LPM - Link Power Management)
+    /// pour configurer la mise en veille L1 et la durée de reprise initiée par l'hôte (HIRD).
+    ///
+    /// Selon la spec xHCI 1.2 section 5.4.9.2 et USB 2.0 Link Power Management ECN :
+    /// - `hird` : Host Initiated Resume Duration (valeur de 0 à 15 représentant le délai de réveil en pas de 50 µs).
+    /// - `remote_wake_enable` (RWE) : Autorise le périphérique USB 2.0 à sortir de veille L1 par lui-même.
+    /// - `l1_device_state` (L1S) : Statut ou cible L1 (0 = L1 Disabled/Invalid, 1 = L1 Success/Go).
+    pub fn build_usb2_lpm_portpmsc_write(
+        hird: u8,
+        remote_wake_enable: bool,
+        l1_device_state: u8,
+    ) -> u32 {
+        let mut val = ((l1_device_state & 0x03) as u32) << PORTPMSC_L1S_SHIFT;
+        val |= ((hird & 0x0F) as u32) << PORTPMSC_HIRD_SHIFT;
+        if remote_wake_enable {
+            val |= PORTPMSC_RWE;
+        }
+        val
+    }
+
+    /// Valide si les seuils de temporisation U1/U2 sont conformes aux spécifications SuperSpeed USB 3.0 / xHCI 1.2.
+    ///
+    /// - U1 timeout ne doit pas excéder 127 µs (ou 0xFF pour désactivation infinie).
+    /// - U2 timeout ne doit pas excéder 254 (en unités de 256 µs, soit ~65 ms). Si fixé à 0xFF, cela représente l'inactivité infinie (désactivation).
+    ///
+    /// Selon la spec xHCI 1.2, les valeurs valides pour U1 sont 0x00..=0x7F ainsi que 0xFF, et pour U2 0x00..=0xFE ainsi que 0xFF.
+    pub fn validate_u1_u2_timers(u1_timeout: u8, u2_timeout: u8) -> bool {
+        (u1_timeout <= 127 || u1_timeout == 0xFF) && (u2_timeout <= 254 || u2_timeout == 0xFF)
     }
 }
 
@@ -6859,5 +6934,22 @@ mod tests {
                 link_state: PLS_U0,
             }
         );
+
+        // 23. Configuration des seuils d'inactivité de lien U1/U2 et négociation LPM (PORTPMSC)
+        let pmsc_u1_u2 = PortStatus::build_usb3_portpmsc_write(10, 64, true);
+        assert_eq!(pmsc_u1_u2 & PORTPMSC_U1_TIMEOUT_MASK, 10);
+        assert_eq!((pmsc_u1_u2 & PORTPMSC_U2_TIMEOUT_MASK) >> 8, 64);
+        assert_ne!(pmsc_u1_u2 & PORTPMSC_FLA, 0);
+
+        let pmsc_lpm = PortStatus::build_usb2_lpm_portpmsc_write(4, true, 1);
+        assert_eq!((pmsc_lpm & PORTPMSC_HIRD_MASK) >> PORTPMSC_HIRD_SHIFT, 4);
+        assert_ne!(pmsc_lpm & PORTPMSC_RWE, 0);
+        assert_eq!(pmsc_lpm & PORTPMSC_L1S_MASK, 1);
+
+        assert!(PortStatus::validate_u1_u2_timers(10, 64));
+        assert!(PortStatus::validate_u1_u2_timers(127, 254));
+        assert!(PortStatus::validate_u1_u2_timers(0xFF, 0xFF));
+        assert!(!PortStatus::validate_u1_u2_timers(128, 64));
+        assert!(!PortStatus::validate_u1_u2_timers(200, 64));
     }
 }
