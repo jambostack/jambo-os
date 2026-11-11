@@ -19748,6 +19748,48 @@ If no VARIABLE is specified, print name and value pairs for them all.\n\n\
     }
 }
 
+/// Utilitaire POSIX / GNU `logname` (Print user's login name)
+///
+/// Affiche le nom d'utilisateur associé à la session d'ouverture courante (login name).
+/// Selon la norme POSIX.1-2017 `logname`, aucune option n'est requise sauf `--help` / `--version`,
+/// et aucun opérande n'est accepté.
+pub fn run_logname(args: &[&str], _in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    if let Some(&arg) = args.first() {
+        if arg == "--help" {
+            let _ = sys_write(
+                out_fd,
+                b"Usage: logname [OPTION]\n\
+Print the user's login name.\n\n\
+      --help     display this help and exit\n\
+      --version  output version information and exit\n",
+            );
+            return 0;
+        } else if arg == "--version" {
+            let _ = sys_write(out_fd, b"logname (jambo-coreutils) 0.1.0\n");
+            return 0;
+        } else if arg.starts_with('-') && arg != "-" {
+            let _ = sys_write(err_fd, b"logname: unrecognized option '");
+            let _ = sys_write(err_fd, arg.as_bytes());
+            let _ = sys_write(err_fd, b"'\nTry 'logname --help' for more information.\n");
+            return 1;
+        } else {
+            let _ = sys_write(err_fd, b"logname: extra operand '");
+            let _ = sys_write(err_fd, arg.as_bytes());
+            let _ = sys_write(err_fd, b"'\nTry 'logname --help' for more information.\n");
+            return 1;
+        }
+    }
+
+    // Détermination de l'identité de session de login
+    // En environnement bare-metal / Ring 3 JamboOS, si uid == 0 -> "root", sinon "user"
+    let uid = crate::vfs::getuid();
+    let login_name = if uid == 0 { "root" } else { "user" };
+
+    let _ = sys_write(out_fd, login_name.as_bytes());
+    let _ = sys_write(out_fd, b"\n");
+    0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -23975,5 +24017,32 @@ Chaque processus dispose de son propre CR3 sans aucun privilege materiel direct.
 
         let code_p3 = run_printenv(&["NONEXISTENT_VAR"], 0, 1, 2);
         assert_eq!(code_p3, 1);
+
+        // 9. Test run_logname
+        let (out_rl1, out_wl1) = crate::vfs::pipe().unwrap();
+        let code_l1 = run_logname(&[], 0, out_wl1, 2);
+        sys_close(out_wl1);
+        assert_eq!(code_l1, 0);
+        let mut bufl1 = [0u8; 64];
+        let nl1 = sys_read(out_rl1, &mut bufl1);
+        sys_close(out_rl1);
+        assert_eq!(
+            core::str::from_utf8(&bufl1[..nl1 as usize]).unwrap(),
+            "root\n"
+        );
+
+        let (out_rl2, out_wl2) = crate::vfs::pipe().unwrap();
+        let code_l2 = run_logname(&["--version"], 0, out_wl2, 2);
+        sys_close(out_wl2);
+        assert_eq!(code_l2, 0);
+        let mut bufl2 = [0u8; 64];
+        let nl2 = sys_read(out_rl2, &mut bufl2);
+        sys_close(out_rl2);
+        assert!(core::str::from_utf8(&bufl2[..nl2 as usize])
+            .unwrap()
+            .contains("logname"));
+
+        let code_l3 = run_logname(&["extra_argument"], 0, 1, 2);
+        assert_eq!(code_l3, 1);
     }
 }

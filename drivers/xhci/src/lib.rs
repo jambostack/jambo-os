@@ -848,6 +848,168 @@ impl XhciMsixRouter {
     }
 }
 
+/// Entrée individuelle de la table d'interruption MSI-X (PCI-SIG / xHCI 1.2 §7.9)
+/// Chaque entrée fait 16 octets (4 Dwords) :
+/// - Msg Address Low (Dword 0) : Adresse mémoire 32-bit basse (bits [31:2], bits [1:0]=0)
+/// - Msg Address High (Dword 1) : Adresse mémoire 32-bit haute
+/// - Msg Data (Dword 2) : Vecteur d'interruption et flags CPU architecture
+/// - Vector Control (Dword 3) : Bit 0 = Masked (1 = masqué, 0 = non masqué)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XhciMsixTableEntry {
+    /// Adresse destination MSI (Message Address 64-bit)
+    pub msg_address: u64,
+    /// Donnée MSI (Message Data 32-bit : vecteur, delivery mode, trigger mode)
+    pub msg_data: u32,
+    /// Vecteur d'interruption masqué
+    pub masked: bool,
+}
+
+impl Default for XhciMsixTableEntry {
+    fn default() -> Self {
+        Self {
+            msg_address: 0,
+            msg_data: 0,
+            masked: true, // Masqué par défaut selon la spécification PCI / xHCI
+        }
+    }
+}
+
+impl XhciMsixTableEntry {
+    /// Crée une nouvelle entrée MSI-X configurée
+    pub const fn new(msg_address: u64, msg_data: u32, masked: bool) -> Self {
+        Self {
+            msg_address,
+            msg_data,
+            masked,
+        }
+    }
+
+    /// Parse une entrée MSI-X à partir de 4 dwords MMIO
+    pub const fn parse(dwords: &[u32; 4]) -> Self {
+        let msg_addr_lo = dwords[0] & !0x03; // Bits [1:0] réservés/forcés à 0
+        let msg_addr_hi = dwords[1];
+        let msg_address = (msg_addr_lo as u64) | ((msg_addr_hi as u64) << 32);
+        let msg_data = dwords[2];
+        let masked = (dwords[3] & 0x01) != 0;
+        Self {
+            msg_address,
+            msg_data,
+            masked,
+        }
+    }
+
+    /// Encode l'entrée en 4 dwords MMIO
+    pub const fn encode(&self) -> [u32; 4] {
+        let dw0 = (self.msg_address & 0xFFFF_FFFC) as u32;
+        let dw1 = (self.msg_address >> 32) as u32;
+        let dw2 = self.msg_data;
+        let dw3 = if self.masked { 0x01 } else { 0x00 };
+        [dw0, dw1, dw2, dw3]
+    }
+
+    /// Récupère le vecteur CPU associé (bits [7:0] de msg_data)
+    pub const fn vector(&self) -> u8 {
+        (self.msg_data & 0xFF) as u8
+    }
+}
+
+/// Table de routage d'interruptions MSI-X étendue pour xHCI 1.2 §7.9
+///
+/// Gère jusqu'à 32 vecteurs MSI-X découplés (Interrupters 0..31),
+/// associant chaque anneau d'événement xHCI à un cœur CPU et vecteur dédié.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XhciMsixRoutingTable {
+    /// Capacité maximale supportée par l'hôte (1..32)
+    pub capacity: u16,
+    /// Table statique de 32 entrées MSI-X sans allocation
+    pub entries: [XhciMsixTableEntry; 32],
+    /// Masque global de la fonction MSI-X (Function Mask, bit 30 de Message Control)
+    pub function_masked: bool,
+    /// Activation globale du mode MSI-X
+    pub enabled: bool,
+}
+
+impl Default for XhciMsixRoutingTable {
+    fn default() -> Self {
+        Self::new(32)
+    }
+}
+
+impl XhciMsixRoutingTable {
+    /// Initialise une table de routage MSI-X étendue
+    pub const fn new(capacity: u16) -> Self {
+        let cap = if capacity > 32 {
+            32
+        } else if capacity == 0 {
+            1
+        } else {
+            capacity
+        };
+        Self {
+            capacity: cap,
+            entries: [XhciMsixTableEntry {
+                msg_address: 0,
+                msg_data: 0,
+                masked: true,
+            }; 32],
+            function_masked: false,
+            enabled: false,
+        }
+    }
+
+    /// Active la table MSI-X
+    pub fn enable(&mut self) {
+        self.enabled = true;
+    }
+
+    /// Désactive la table MSI-X
+    pub fn disable(&mut self) {
+        self.enabled = false;
+    }
+
+    /// Configure le masquage global (Function Mask)
+    pub fn set_function_mask(&mut self, mask: bool) {
+        self.function_masked = mask;
+    }
+
+    /// Configure une entrée spécifique dans la table
+    pub fn set_entry(&mut self, index: usize, entry: XhciMsixTableEntry) -> bool {
+        if index < self.capacity as usize {
+            self.entries[index] = entry;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Lit une entrée spécifique de la table
+    pub const fn get_entry(&self, index: usize) -> Option<XhciMsixTableEntry> {
+        if index < self.capacity as usize {
+            Some(self.entries[index])
+        } else {
+            None
+        }
+    }
+
+    /// Détermine si un interrupteur est actif et démasqué pour délivrance
+    pub const fn is_interrupter_deliverable(&self, index: usize) -> bool {
+        if !self.enabled || self.function_masked || index >= self.capacity as usize {
+            return false;
+        }
+        !self.entries[index].masked && self.entries[index].msg_address != 0
+    }
+
+    /// Encode une tranche de dwords MMIO pour la table MSI-X
+    pub fn write_mmio_dwords(&self, index: usize, out: &mut [u32; 4]) -> bool {
+        if let Some(entry) = self.get_entry(index) {
+            *out = entry.encode();
+            true
+        } else {
+            false
+        }
+    }
+}
+
 /// Capacité Étendue xHCI USB Debug Capability (DbC / xHCI 1.2 §7.6/§7.7)
 ///
 /// Permet l'émulation d'un périphérique cible de débogage (USB Debug Device)
@@ -9104,5 +9266,35 @@ mod tests {
         assert!(!lpm_cap.best_effort_enabled);
         lpm_cap.set_exit_latency(XhciLpmExitLatency::EightUs);
         assert_eq!(lpm_cap.exit_latency.as_microseconds(), 8);
+
+        // 18. xHCI 1.2 §7.9 Extended Message Capability & MSI-X Extended Routing Table
+        let mut routing_table = XhciMsixRoutingTable::new(16);
+        assert_eq!(routing_table.capacity, 16);
+        assert!(!routing_table.enabled);
+        assert!(!routing_table.is_interrupter_deliverable(0));
+
+        // Inscription de 2 entrées
+        let entry0 = XhciMsixTableEntry::new(0xFEE0_0000, 0x0000_0032, false); // vector 0x32 (50), unmasked
+        let entry1 = XhciMsixTableEntry::new(0xFEE0_0000, 0x0000_0033, true); // vector 0x33 (51), masked
+        assert!(routing_table.set_entry(0, entry0));
+        assert!(routing_table.set_entry(1, entry1));
+        assert_eq!(entry0.vector(), 50);
+        assert_eq!(entry1.vector(), 51);
+
+        routing_table.enable();
+        assert!(routing_table.is_interrupter_deliverable(0));
+        assert!(!routing_table.is_interrupter_deliverable(1)); // car masked
+
+        // Encodage/décodage MMIO dwords
+        let mut enc_buf = [0u32; 4];
+        assert!(routing_table.write_mmio_dwords(0, &mut enc_buf));
+        let parsed_entry0 = XhciMsixTableEntry::parse(&enc_buf);
+        assert_eq!(parsed_entry0, entry0);
+
+        // Masquage global Function Mask
+        routing_table.set_function_mask(true);
+        assert!(!routing_table.is_interrupter_deliverable(0));
+        routing_table.set_function_mask(false);
+        assert!(routing_table.is_interrupter_deliverable(0));
     }
 }

@@ -392,7 +392,12 @@ name = "printenv"
 path = "src/bin/printenv.rs"
 test = false
 
-# 77 utilitaires Ring 3
+[[bin]]
+name = "logname"
+path = "src/bin/logname.rs"
+test = false
+
+# 78 utilitaires Ring 3
 
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }
