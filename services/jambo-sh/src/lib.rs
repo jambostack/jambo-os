@@ -631,6 +631,7 @@ impl JamboShell {
             "banner" | "/bin/banner" | "bin/banner" => self.cmd_banner(args, out),
             "cal" | "/bin/cal" | "bin/cal" => self.cmd_cal(args, out),
             "units" | "/bin/units" | "bin/units" => self.cmd_units(args, out),
+            "look" | "/bin/look" | "bin/look" => self.cmd_look(args, out),
             "cow" | "/bin/cow" | "bin/cow" => self.cmd_cow(args, out),
             "version" => self.cmd_version(out),
             "uptime" => self.cmd_uptime(out),
@@ -3115,6 +3116,44 @@ Utilitaire d'installation JamboOS (Serie 0.*.*)\n\
             (status, len)
         } else {
             let msg = b"units: pipe creation failed\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
+    }
+
+    fn cmd_look(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if let (Ok((r_out, w_out)), Ok((r_err, w_err))) =
+            (libjambo::vfs::pipe(), libjambo::vfs::pipe())
+        {
+            let code = libjambo::coreutils::run_look(args, w_out, w_err);
+            let _ = libjambo::coreutils::sys_close(w_out);
+            let _ = libjambo::coreutils::sys_close(w_err);
+
+            let mut len = 0;
+            if code == 0 {
+                let n_out = libjambo::coreutils::sys_read(r_out, out);
+                if n_out > 0 {
+                    len = n_out as usize;
+                }
+            } else {
+                let n_err = libjambo::coreutils::sys_read(r_err, out);
+                if n_err > 0 {
+                    len = n_err as usize;
+                }
+            }
+
+            let _ = libjambo::coreutils::sys_close(r_out);
+            let _ = libjambo::coreutils::sys_close(r_err);
+
+            let status = if code == 0 {
+                ShellStatus::Success
+            } else {
+                ShellStatus::ExecutionFailed
+            };
+            (status, len)
+        } else {
+            let msg = b"look: pipe creation failed\n";
             let len = msg.len().min(out.len());
             out[..len].copy_from_slice(&msg[..len]);
             (ShellStatus::ExecutionFailed, len)
@@ -20985,5 +21024,16 @@ mod tests {
         assert_eq!(st90, ShellStatus::Success);
         let s90 = core::str::from_utf8(&out[..len90]).unwrap();
         assert_eq!(s90.trim(), "1");
+
+        // 45. look shell command
+        let (st91, len91) = shell.execute_line("look --help", &mut out);
+        assert_eq!(st91, ShellStatus::Success);
+        let s91 = core::str::from_utf8(&out[..len91]).unwrap();
+        assert!(s91.contains("Usage: look"));
+
+        let (st92, len92) = shell.execute_line("look --version", &mut out);
+        assert_eq!(st92, ShellStatus::Success);
+        let s92 = core::str::from_utf8(&out[..len92]).unwrap();
+        assert!(s92.contains("look (jambo-coreutils)"));
     }
 }

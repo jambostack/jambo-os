@@ -316,6 +316,7 @@ pub const XHCI_EXT_CAP_PORT_SPEED_MAPPING_OVERRIDE: u8 = 28;
 pub const XHCI_EXT_CAP_EXTENDED_ENERGY_EFFICIENT_USB: u8 = 29;
 pub const XHCI_EXT_CAP_OPTICAL_LOGICAL_LINK: u8 = 30;
 pub const XHCI_EXT_CAP_DBC_TELEMETRY: u8 = 31;
+pub const XHCI_EXT_CAP_SUBLINK_SPEED_ROUTING: u8 = 32;
 
 /// Masques de registres USB Legacy Support (xHCI 1.2 Section 7.1)
 /// Registre USBLEGSUP (Offset 0x00)
@@ -3001,6 +3002,115 @@ impl XhciDbcTelemetry {
     /// Vérifie si la télémétrie est opérationnelle sans perte de paquets
     pub const fn is_telemetry_healthy(&self) -> bool {
         self.enabled && !self.trace_overflow
+    }
+}
+
+/// Capacité Étendue xHCI Sublink Speed Routing (SSRC / xHCI 1.2 §7.24)
+///
+/// Permet la négociation et l'assignation granulaire des sous-liens PCIe/USB
+/// (Sublink Speed Attributes) pour les architectures multi-voies (USB 3.2 Gen 1x2, 2x2 et USB4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XhciSublinkSpeedRouting {
+    /// Pointeur dword vers la prochaine capacité étendue (0 = fin de liste)
+    pub next_ptr_dwords: u8,
+    /// Routage des sous-liens activé
+    pub enabled: bool,
+    /// Support de la topologie asymétrique de débit Rx/Tx
+    pub asymmetric_rates_supported: bool,
+    /// Numéro de port xHCI assigné
+    pub port_num: u8,
+    /// Débit de sous-lien amont sélectionné (en multiples de 100 Mbps)
+    pub upstream_sublink_rate: u16,
+    /// Débit de sous-lien aval sélectionné (en multiples de 100 Mbps)
+    pub downstream_sublink_rate: u16,
+    /// Registre de contrôle brut (DWORD 1)
+    pub control: u32,
+    /// Registre de statut brut (DWORD 2)
+    pub status: u32,
+}
+
+impl XhciSublinkSpeedRouting {
+    /// Crée une nouvelle configuration de routage de vitesse sous-liens
+    pub const fn new(port_num: u8, symmetric_rate_100mbps: u16) -> Self {
+        Self {
+            next_ptr_dwords: 0,
+            enabled: false,
+            asymmetric_rates_supported: true,
+            port_num,
+            upstream_sublink_rate: symmetric_rate_100mbps,
+            downstream_sublink_rate: symmetric_rate_100mbps,
+            control: 0x02, // Asymmetric support activé par défaut
+            status: 0,
+        }
+    }
+
+    /// Parse les 4 dwords MMIO d'une capacité étendue xHCI Sublink Speed Routing (§7.24)
+    pub const fn parse(dwords: &[u32; 4]) -> Option<Self> {
+        let cap_id = (dwords[0] & 0xFF) as u8;
+        if cap_id != XHCI_EXT_CAP_SUBLINK_SPEED_ROUTING {
+            return None;
+        }
+        let next_ptr = ((dwords[0] >> 8) & 0xFF) as u8;
+        let port = ((dwords[0] >> 16) & 0xFF) as u8;
+
+        let ctrl = dwords[1];
+        let sts = dwords[2];
+        let rates = dwords[3];
+
+        let enabled = (ctrl & 0x01) != 0;
+        let asymmetric = (ctrl & 0x02) != 0;
+        let up_rate = (rates & 0xFFFF) as u16;
+        let down_rate = ((rates >> 16) & 0xFFFF) as u16;
+
+        Some(Self {
+            next_ptr_dwords: next_ptr,
+            enabled,
+            asymmetric_rates_supported: asymmetric,
+            port_num: if port == 0 { 1 } else { port },
+            upstream_sublink_rate: if up_rate == 0 { 50 } else { up_rate },
+            downstream_sublink_rate: if down_rate == 0 { 50 } else { down_rate },
+            control: ctrl,
+            status: sts,
+        })
+    }
+
+    /// Encode la capacité étendue en 4 mots dwords MMIO 32-bit
+    pub const fn encode(&self) -> [u32; 4] {
+        let dw0 = (XHCI_EXT_CAP_SUBLINK_SPEED_ROUTING as u32)
+            | ((self.next_ptr_dwords as u32) << 8)
+            | ((self.port_num as u32) << 16);
+        let mut ctrl = self.control & !0x03;
+        if self.enabled {
+            ctrl |= 0x01;
+        }
+        if self.asymmetric_rates_supported {
+            ctrl |= 0x02;
+        }
+        let sts = self.status;
+        let dw3 =
+            (self.upstream_sublink_rate as u32) | ((self.downstream_sublink_rate as u32) << 16);
+        [dw0, ctrl, sts, dw3]
+    }
+
+    /// Active ou désactive le routage dynamique de sous-lien
+    pub fn set_enabled(&mut self, enable: bool) {
+        self.enabled = enable;
+        if enable {
+            self.control |= 0x01;
+        } else {
+            self.control &= !0x01;
+        }
+    }
+
+    /// Met à jour les débits amont / aval
+    pub fn configure_rates(&mut self, upstream: u16, downstream: u16) {
+        self.upstream_sublink_rate = upstream;
+        self.downstream_sublink_rate = downstream;
+    }
+
+    /// Vérifie si le lien opère en mode symétrique
+    pub const fn is_symmetric(&self) -> bool {
+        self.upstream_sublink_rate == self.downstream_sublink_rate
     }
 }
 
@@ -11907,5 +12017,40 @@ mod tests {
         telemetry.reset_trace();
         assert_eq!(telemetry.trace_event_count, 0);
         assert!(!telemetry.trace_overflow);
+
+        // 22. Test XhciSublinkSpeedRouting
+        let mut ssrc = XhciSublinkSpeedRouting::new(3, 100);
+        assert_eq!(ssrc.port_num, 3);
+        assert_eq!(ssrc.upstream_sublink_rate, 100);
+        assert_eq!(ssrc.downstream_sublink_rate, 100);
+        assert!(ssrc.is_symmetric());
+        assert!(!ssrc.enabled);
+
+        ssrc.set_enabled(true);
+        ssrc.configure_rates(100, 200);
+        assert!(!ssrc.is_symmetric());
+        assert_eq!(ssrc.downstream_sublink_rate, 200);
+
+        ssrc.next_ptr_dwords = 52;
+        let encoded_ssrc = ssrc.encode();
+        assert_eq!(
+            encoded_ssrc[0] & 0xFF,
+            XHCI_EXT_CAP_SUBLINK_SPEED_ROUTING as u32
+        );
+        assert_eq!((encoded_ssrc[0] >> 8) & 0xFF, 52);
+        assert_eq!((encoded_ssrc[0] >> 16) & 0xFF, 3);
+        assert_eq!(encoded_ssrc[1] & 0x01, 1);
+        assert_eq!(encoded_ssrc[1] & 0x02, 2);
+        assert_eq!(encoded_ssrc[3] & 0xFFFF, 100);
+        assert_eq!((encoded_ssrc[3] >> 16) & 0xFFFF, 200);
+
+        let parsed_ssrc = XhciSublinkSpeedRouting::parse(&encoded_ssrc).unwrap();
+        assert_eq!(parsed_ssrc.next_ptr_dwords, 52);
+        assert_eq!(parsed_ssrc.port_num, 3);
+        assert!(parsed_ssrc.enabled);
+        assert!(parsed_ssrc.asymmetric_rates_supported);
+        assert_eq!(parsed_ssrc.upstream_sublink_rate, 100);
+        assert_eq!(parsed_ssrc.downstream_sublink_rate, 200);
+        assert!(!parsed_ssrc.is_symmetric());
     }
 }

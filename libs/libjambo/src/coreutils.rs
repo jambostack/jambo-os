@@ -21888,6 +21888,132 @@ fn parse_f64_ascii(s: &str) -> Option<f64> {
     Some(if negative { -res } else { res })
 }
 
+/// Exécute l'utilitaire Coreutils POSIX `look` (recherche de lignes préfixées dans un dictionnaire/fichier trié)
+pub fn run_look(args: &[&str], out_fd: i32, err_fd: i32) -> i32 {
+    let mut ignore_case = false;
+    let mut prefix = "";
+    let mut file_path = "/usr/share/dict/words";
+    let mut termination_char: Option<u8> = None;
+
+    let mut i = 0usize;
+    while i < args.len() {
+        let arg = args[i];
+        if arg == "--help" {
+            let _ = sys_write(
+                out_fd,
+                b"Usage: look [-f] [-t char] prefix [file]\nDisplay lines beginning with a given prefix.\n\nOptions:\n  -f          ignore case\n  -t <char>   termination character\n      --help  display this help and exit\n",
+            );
+            return 0;
+        } else if arg == "--version" {
+            let _ = sys_write(out_fd, b"look (jambo-coreutils) 0.1.0\n");
+            return 0;
+        } else if arg == "-f" {
+            ignore_case = true;
+            i += 1;
+        } else if arg == "-t" && i + 1 < args.len() {
+            i += 1;
+            let val = args[i];
+            if !val.is_empty() {
+                termination_char = Some(val.as_bytes()[0]);
+            }
+            i += 1;
+        } else if prefix.is_empty() {
+            prefix = arg;
+            i += 1;
+        } else {
+            file_path = arg;
+            i += 1;
+        }
+    }
+
+    if prefix.is_empty() {
+        let _ = sys_write(err_fd, b"look: missing prefix argument\n");
+        return 1;
+    }
+
+    let search_prefix = if let Some(tc) = termination_char {
+        if let Some(pos) = prefix.as_bytes().iter().position(|&b| b == tc) {
+            &prefix[..=pos]
+        } else {
+            prefix
+        }
+    } else {
+        prefix
+    };
+
+    let fd = sys_open(file_path, 0); // O_RDONLY = 0
+    if fd < 0 {
+        let _ = sys_write(err_fd, b"look: cannot open dictionary file '");
+        let _ = sys_write(err_fd, file_path.as_bytes());
+        let _ = sys_write(err_fd, b"'\n");
+        return 1;
+    }
+
+    let mut buf = [0u8; 1024];
+    let mut line = [0u8; 256];
+    let mut line_len = 0usize;
+    let mut found_count = 0usize;
+
+    loop {
+        let n = sys_read(fd, &mut buf);
+        if n <= 0 {
+            break;
+        }
+
+        for &b in &buf[..n as usize] {
+            if b == b'\n' {
+                let curr_line = &line[..line_len];
+                let matches = if ignore_case {
+                    curr_line.len() >= search_prefix.len()
+                        && curr_line[..search_prefix.len()]
+                            .iter()
+                            .zip(search_prefix.as_bytes().iter())
+                            .all(|(a, b)| a.eq_ignore_ascii_case(b))
+                } else {
+                    curr_line.starts_with(search_prefix.as_bytes())
+                };
+
+                if matches {
+                    let _ = sys_write(out_fd, curr_line);
+                    let _ = sys_write(out_fd, b"\n");
+                    found_count += 1;
+                }
+
+                line_len = 0;
+            } else if line_len < line.len() {
+                line[line_len] = b;
+                line_len += 1;
+            }
+        }
+    }
+
+    if line_len > 0 {
+        let curr_line = &line[..line_len];
+        let matches = if ignore_case {
+            curr_line.len() >= search_prefix.len()
+                && curr_line[..search_prefix.len()]
+                    .iter()
+                    .zip(search_prefix.as_bytes().iter())
+                    .all(|(a, b)| a.eq_ignore_ascii_case(b))
+        } else {
+            curr_line.starts_with(search_prefix.as_bytes())
+        };
+
+        if matches {
+            let _ = sys_write(out_fd, curr_line);
+            let _ = sys_write(out_fd, b"\n");
+            found_count += 1;
+        }
+    }
+
+    let _ = sys_close(fd);
+    if found_count > 0 {
+        0
+    } else {
+        1
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -26687,5 +26813,41 @@ Chaque processus dispose de son propre CR3 sans aucun privilege materiel direct.
         sys_close(out_w_u3);
         assert_eq!(code_u3, 1);
         sys_close(out_r_u3);
+
+        // 24. Test run_look
+        let dict_fd = sys_open("/tmp/test_look_dict.txt", O_CREAT | O_WRONLY);
+        assert!(dict_fd >= 3);
+        let _ = sys_write(
+            dict_fd,
+            b"apple\napplication\nbanana\ncherry\nDate\nJAMBO\njamboree\n",
+        );
+        sys_close(dict_fd);
+
+        let (out_r_lk1, out_w_lk1) = crate::vfs::pipe().unwrap();
+        let code_lk1 = run_look(&["app", "/tmp/test_look_dict.txt"], out_w_lk1, 2);
+        sys_close(out_w_lk1);
+        assert_eq!(code_lk1, 0);
+        let mut buf_lk1 = [0u8; 128];
+        let n_lk1 = sys_read(out_r_lk1, &mut buf_lk1);
+        sys_close(out_r_lk1);
+        let s_lk1 = core::str::from_utf8(&buf_lk1[..n_lk1 as usize]).unwrap();
+        assert!(s_lk1.contains("apple"));
+        assert!(s_lk1.contains("application"));
+        assert!(!s_lk1.contains("banana"));
+
+        // Test look avec -f (case insensitive)
+        let (out_r_lk2, out_w_lk2) = crate::vfs::pipe().unwrap();
+        let code_lk2 = run_look(&["-f", "jambo", "/tmp/test_look_dict.txt"], out_w_lk2, 2);
+        sys_close(out_w_lk2);
+        assert_eq!(code_lk2, 0);
+        let mut buf_lk2 = [0u8; 128];
+        let n_lk2 = sys_read(out_r_lk2, &mut buf_lk2);
+        sys_close(out_r_lk2);
+        let s_lk2 = core::str::from_utf8(&buf_lk2[..n_lk2 as usize]).unwrap();
+        assert!(s_lk2.contains("JAMBO"));
+        assert!(s_lk2.contains("jamboree"));
+
+        // Nettoyage
+        let _ = run_rm(&["/tmp/test_look_dict.txt"], 2);
     }
 }
