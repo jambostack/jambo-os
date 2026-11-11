@@ -342,6 +342,8 @@ pub const XHCI_EXT_CAP_USB4_DP_ADAPTER_CONFIGURATION: u8 = 49;
 pub const XHCI_EXT_CAP_USB4_BUFFER_ALLOCATION_INTERFACE: u8 = 50;
 /// Capacité étendue xHCI 1.2 / USB4 Optical Interface Management Capability (§7.43)
 pub const XHCI_EXT_CAP_USB4_OPTICAL_INTERFACE_MANAGEMENT: u8 = 51;
+/// Capacité étendue xHCI 1.2 / USB4 Inter-Domain DMA Transport Capability (§7.44)
+pub const XHCI_EXT_CAP_USB4_INTER_DOMAIN_DMA: u8 = 52;
 
 /// Masques de registres USB Legacy Support (xHCI 1.2 Section 7.1)
 /// Registre USBLEGSUP (Offset 0x00)
@@ -5325,6 +5327,122 @@ impl XhciUsb4OpticalInterface {
         self.rx_power_uw = rx_uw;
         self.low_power_alert = rx_uw < 50; // Alerte si < 50 uW
         self.loss_of_signal = rx_uw == 0;
+    }
+}
+
+/// Capacité Étendue xHCI 1.2 / USB4 Inter-Domain DMA Transport Capability (§7.44)
+///
+/// Gère le canal DMA asynchrone haut débit pour le transfert de paquets inter-domaines
+/// entre routeurs hôtes USB4 / Thunderbolt sans passer par l'émulation réseau logiciel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XhciUsb4InterDomainDma {
+    /// Pointeur dword vers la prochaine capacité étendue (0 = fin de liste)
+    pub next_ptr_dwords: u8,
+    /// Canal DMA inter-domaine activé
+    pub enabled: bool,
+    /// Mode interruption / MSI activé pour les transferts DMA terminés
+    pub irq_enabled: bool,
+    /// Annonce de conformité protocolaire USB4 DMA v2
+    pub dma_v2_support: bool,
+    /// Pointeur d'anneau circulaire de descripteurs DMA (Ring ID 0..15)
+    pub ring_id: u8,
+    /// Identifiant de domaine distant connecté (Domain UUID / Router ID)
+    pub peer_domain_id: u8,
+    /// Taille maximale du paquet DMA MTU en octets (ex: 4096)
+    pub max_packet_size: u16,
+    /// Registre d'état du moteur DMA (bits statut matériel)
+    pub status: u32,
+    /// Nombre de descripteurs de paquets en file d'attente (depth)
+    pub ring_depth: u16,
+    /// Nombre de transferts DMA acquittés avec succès
+    pub tx_completed_count: u16,
+}
+
+impl XhciUsb4InterDomainDma {
+    /// Initialise une nouvelle capacité USB4 Inter-Domain DMA
+    pub const fn new(ring_id: u8, peer_domain_id: u8, max_packet_size: u16) -> Self {
+        Self {
+            next_ptr_dwords: 0,
+            enabled: false,
+            irq_enabled: false,
+            dma_v2_support: true,
+            ring_id,
+            peer_domain_id,
+            max_packet_size,
+            status: 0,
+            ring_depth: 64,
+            tx_completed_count: 0,
+        }
+    }
+
+    /// Parse les 4 dwords MMIO d'une capacité étendue USB4 Inter-Domain DMA (§7.44)
+    pub const fn parse(dwords: &[u32; 4]) -> Option<Self> {
+        let cap_id = (dwords[0] & 0xFF) as u8;
+        if cap_id != XHCI_EXT_CAP_USB4_INTER_DOMAIN_DMA {
+            return None;
+        }
+
+        let next_ptr = ((dwords[0] >> 8) & 0xFF) as u8;
+        let ctrl = dwords[1];
+        let enabled = (ctrl & 0x01) != 0;
+        let irq_enabled = (ctrl & 0x02) != 0;
+        let dma_v2_support = (ctrl & 0x04) != 0;
+        let ring_id = ((ctrl >> 8) & 0x0F) as u8;
+        let peer_domain_id = ((ctrl >> 16) & 0xFF) as u8;
+        let max_packet_size = ((ctrl >> 24) & 0xFF) as u16 * 64; // granules de 64 octets (jusqu'à 16320 octets)
+
+        let status = dwords[2];
+        let ring_depth = (dwords[3] & 0xFFFF) as u16;
+        let tx_completed_count = ((dwords[3] >> 16) & 0xFFFF) as u16;
+
+        Some(Self {
+            next_ptr_dwords: next_ptr,
+            enabled,
+            irq_enabled,
+            dma_v2_support,
+            ring_id,
+            peer_domain_id,
+            max_packet_size,
+            status,
+            ring_depth,
+            tx_completed_count,
+        })
+    }
+
+    /// Encode la capacité étendue en 4 mots dwords MMIO 32-bit
+    pub const fn encode(&self) -> [u32; 4] {
+        let dw0 =
+            (XHCI_EXT_CAP_USB4_INTER_DOMAIN_DMA as u32) | ((self.next_ptr_dwords as u32) << 8);
+        let mut ctrl = ((self.ring_id as u32 & 0x0F) << 8)
+            | ((self.peer_domain_id as u32 & 0xFF) << 16)
+            | ((((self.max_packet_size / 64) as u32) & 0xFF) << 24);
+        if self.enabled {
+            ctrl |= 0x01;
+        }
+        if self.irq_enabled {
+            ctrl |= 0x02;
+        }
+        if self.dma_v2_support {
+            ctrl |= 0x04;
+        }
+        let dw2 = self.status;
+        let dw3 = (self.ring_depth as u32) | ((self.tx_completed_count as u32) << 16);
+        [dw0, ctrl, dw2, dw3]
+    }
+
+    /// Active ou désactive le moteur DMA inter-domaine
+    pub fn enable_dma(&mut self, enable: bool) {
+        self.enabled = enable;
+    }
+
+    /// Configure l'interruption MSI et notifie le contrôleur hôte
+    pub fn configure_irq(&mut self, enable: bool) {
+        self.irq_enabled = enable;
+    }
+
+    /// Simule un transfert DMA de descripteur terminé
+    pub fn record_tx_completion(&mut self) {
+        self.tx_completed_count = self.tx_completed_count.wrapping_add(1);
     }
 }
 
@@ -15050,5 +15168,51 @@ mod tests {
         assert_eq!(parsed_optic.status, 0xCAFE_BABE);
         assert_eq!(parsed_optic.tx_power_uw, 550);
         assert_eq!(parsed_optic.rx_power_uw, 480);
+
+        // Test USB4 Inter-Domain DMA Transport Capability (§7.44)
+        let mut usb4_dma = XhciUsb4InterDomainDma::new(3, 7, 4096);
+        assert_eq!(usb4_dma.ring_id, 3);
+        assert_eq!(usb4_dma.peer_domain_id, 7);
+        assert_eq!(usb4_dma.max_packet_size, 4096);
+        assert!(!usb4_dma.enabled);
+        assert!(!usb4_dma.irq_enabled);
+        assert!(usb4_dma.dma_v2_support);
+        assert_eq!(usb4_dma.ring_depth, 64);
+        assert_eq!(usb4_dma.tx_completed_count, 0);
+
+        usb4_dma.enable_dma(true);
+        usb4_dma.configure_irq(true);
+        usb4_dma.record_tx_completion();
+        usb4_dma.record_tx_completion();
+        usb4_dma.next_ptr_dwords = 48;
+        usb4_dma.status = 0x1234_5678;
+
+        let encoded_dma = usb4_dma.encode();
+        assert_eq!(
+            encoded_dma[0] & 0xFF,
+            XHCI_EXT_CAP_USB4_INTER_DOMAIN_DMA as u32
+        );
+        assert_eq!((encoded_dma[0] >> 8) & 0xFF, 48);
+        assert_eq!(encoded_dma[1] & 0x01, 1); // enabled
+        assert_eq!(encoded_dma[1] & 0x02, 2); // irq_enabled
+        assert_eq!(encoded_dma[1] & 0x04, 4); // dma_v2_support
+        assert_eq!((encoded_dma[1] >> 8) & 0x0F, 3); // ring_id
+        assert_eq!((encoded_dma[1] >> 16) & 0xFF, 7); // peer_domain_id
+        assert_eq!((encoded_dma[1] >> 24) & 0xFF, 64); // 4096 / 64 = 64
+        assert_eq!(encoded_dma[2], 0x1234_5678);
+        assert_eq!(encoded_dma[3] & 0xFFFF, 64); // ring_depth
+        assert_eq!((encoded_dma[3] >> 16) & 0xFFFF, 2); // tx_completed_count
+
+        let parsed_dma = XhciUsb4InterDomainDma::parse(&encoded_dma).unwrap();
+        assert_eq!(parsed_dma.next_ptr_dwords, 48);
+        assert!(parsed_dma.enabled);
+        assert!(parsed_dma.irq_enabled);
+        assert!(parsed_dma.dma_v2_support);
+        assert_eq!(parsed_dma.ring_id, 3);
+        assert_eq!(parsed_dma.peer_domain_id, 7);
+        assert_eq!(parsed_dma.max_packet_size, 4096);
+        assert_eq!(parsed_dma.status, 0x1234_5678);
+        assert_eq!(parsed_dma.ring_depth, 64);
+        assert_eq!(parsed_dma.tx_completed_count, 2);
     }
 }

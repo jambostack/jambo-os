@@ -12787,6 +12787,601 @@ pub fn run_sha224sum(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32
 }
 
 // ============================================================================
+// Utilitaire POSIX / GNU coreutils : `sha384sum` (Calcul et vérification FIPS 180-4 SHA-384)
+// ============================================================================
+
+/// Hasher cryptographique SHA-384 / SHA-512 déterministe bare-metal (#![no_std], FIPS 180-4)
+#[derive(Clone, Copy)]
+pub struct Sha384Hasher {
+    state: [u64; 8],
+    buffer: [u8; 128],
+    buffer_len: usize,
+    total_bytes: u64,
+}
+
+impl Sha384Hasher {
+    /// Constantes d'arrondi K FIPS 180-4 pour SHA-384 / SHA-512 (80 mots 64-bit)
+    const K: [u64; 80] = [
+        0x428a2f98d728ae22,
+        0x7137449123ef65cd,
+        0xb5c0fbcfec4d3b2f,
+        0xe9b5dba58189dbbc,
+        0x3956c25bf348b538,
+        0x59f111f1b605d019,
+        0x923f82a4af194f9b,
+        0xab1c5ed5da6d8118,
+        0xd807aa98a3030242,
+        0x12835b0145706fbe,
+        0x243185be4ee4b28c,
+        0x550c7dc3d5ffb4e2,
+        0x72be5d74f27b896f,
+        0x80deb1fe3b1696b1,
+        0x9bdc06a725c71235,
+        0xc19bf174cf692694,
+        0xe49b69c19ef14ad2,
+        0xefbe4786384f25e3,
+        0x0fc19dc68b8cd5b5,
+        0x240ca1cc77ac9c65,
+        0x2de92c6f592b0275,
+        0x4a7484aa6ea6e483,
+        0x5cb0a9dcbd41fbd4,
+        0x76f988da831153b5,
+        0x983e5152ee66dfab,
+        0xa831c66d2db43210,
+        0xb00327c898fb213f,
+        0xbf597fc7beef0ee4,
+        0xc6e00bf33da88fc2,
+        0xd5a79147930aa725,
+        0x06ca6351e003826f,
+        0x142929670a0e6e70,
+        0x27b70a8546d22ffc,
+        0x2e1b21385c26c926,
+        0x4d2c6dfc5ac42aed,
+        0x53380d139d95b3df,
+        0x650a73548baf63de,
+        0x766a0abb3c77b2a8,
+        0x81c2c92e47edaee6,
+        0x92722c851482353b,
+        0xa2bfe8a14cf10364,
+        0xa81a664bbc423001,
+        0xc24b8b70d0f89791,
+        0xc76c51a30654be30,
+        0xd192e819d6ef5218,
+        0xd69906245565a910,
+        0xf40e35855771202a,
+        0x106aa07032bbd1b8,
+        0x19a4c116b8d2d0c8,
+        0x1e376c085141ab53,
+        0x2748774cdf8eeb99,
+        0x34b0bcb5e19b48a8,
+        0x391c0cb3c5c95a63,
+        0x4ed8aa4ae3418acb,
+        0x5b9cca4f7763e373,
+        0x682e6ff3d6b2b8a3,
+        0x748f82ee5defb2fc,
+        0x78a5636f43172f60,
+        0x84c87814a1f0ab72,
+        0x8cc702081a6439ec,
+        0x90befffa23631e28,
+        0xa4506cebde82bde9,
+        0xbef9a3f7b2c67915,
+        0xc67178f2e372532b,
+        0xca273eceea26619c,
+        0xd186b8c721c0c207,
+        0xeada7dd6cde0eb1e,
+        0xf57d4f7fee6ed178,
+        0x06f067aa72176fba,
+        0x0a637dc5a2c898a6,
+        0x113f9804bef90dae,
+        0x1b710b35131c471b,
+        0x28db77f523047d84,
+        0x32caab7b40c72493,
+        0x3c9ebe0a15c9bebc,
+        0x431d67c49c100d4c,
+        0x4cc5d4becb3e42b6,
+        0x597f299cfc657e2a,
+        0x5fcb6fab3ad6faec,
+        0x6c44198c4a475817,
+    ];
+
+    /// Initialise les vecteurs d'état H0-H7 standard FIPS 180-4 SHA-384
+    pub const fn new() -> Self {
+        Self {
+            state: [
+                0xcbbb9d5dc1059ed8,
+                0x629a292a367cd507,
+                0x9159015a3070dd17,
+                0x152fecd8f70e5939,
+                0x67332667ffc00b31,
+                0x8eb44a8768581511,
+                0xdb0c2e0d64f98fa7,
+                0x47b5481dbefa4fa4,
+            ],
+            buffer: [0u8; 128],
+            buffer_len: 0,
+            total_bytes: 0,
+        }
+    }
+
+    /// Transformation de bloc 1024 bits (128 octets)
+    fn transform_block(&mut self, block: &[u8; 128]) {
+        let mut w = [0u64; 80];
+        let mut i = 0;
+        while i < 16 {
+            w[i] = u64::from_be_bytes([
+                block[i * 8],
+                block[i * 8 + 1],
+                block[i * 8 + 2],
+                block[i * 8 + 3],
+                block[i * 8 + 4],
+                block[i * 8 + 5],
+                block[i * 8 + 6],
+                block[i * 8 + 7],
+            ]);
+            i += 1;
+        }
+        while i < 80 {
+            let s0 = w[i - 15].rotate_right(1) ^ w[i - 15].rotate_right(8) ^ (w[i - 15] >> 7);
+            let s1 = w[i - 2].rotate_right(19) ^ w[i - 2].rotate_right(61) ^ (w[i - 2] >> 6);
+            w[i] = w[i - 16]
+                .wrapping_add(s0)
+                .wrapping_add(w[i - 7])
+                .wrapping_add(s1);
+            i += 1;
+        }
+
+        let mut a = self.state[0];
+        let mut b = self.state[1];
+        let mut c = self.state[2];
+        let mut d = self.state[3];
+        let mut e = self.state[4];
+        let mut f = self.state[5];
+        let mut g = self.state[6];
+        let mut h = self.state[7];
+
+        let mut j = 0;
+        while j < 80 {
+            let s1 = e.rotate_right(14) ^ e.rotate_right(18) ^ e.rotate_right(41);
+            let ch = (e & f) ^ ((!e) & g);
+            let temp1 = h
+                .wrapping_add(s1)
+                .wrapping_add(ch)
+                .wrapping_add(Self::K[j])
+                .wrapping_add(w[j]);
+            let s0 = a.rotate_right(28) ^ a.rotate_right(34) ^ a.rotate_right(39);
+            let maj = (a & b) ^ (a & c) ^ (b & c);
+            let temp2 = s0.wrapping_add(maj);
+
+            h = g;
+            g = f;
+            f = e;
+            e = d.wrapping_add(temp1);
+            d = c;
+            c = b;
+            b = a;
+            a = temp1.wrapping_add(temp2);
+            j += 1;
+        }
+
+        self.state[0] = self.state[0].wrapping_add(a);
+        self.state[1] = self.state[1].wrapping_add(b);
+        self.state[2] = self.state[2].wrapping_add(c);
+        self.state[3] = self.state[3].wrapping_add(d);
+        self.state[4] = self.state[4].wrapping_add(e);
+        self.state[5] = self.state[5].wrapping_add(f);
+        self.state[6] = self.state[6].wrapping_add(g);
+        self.state[7] = self.state[7].wrapping_add(h);
+    }
+
+    /// Absorbe des octets de données
+    pub fn update(&mut self, data: &[u8]) {
+        self.total_bytes = self.total_bytes.wrapping_add(data.len() as u64);
+        let mut offset = 0;
+        while offset < data.len() {
+            if self.buffer_len == 128 {
+                let blk = self.buffer;
+                self.transform_block(&blk);
+                self.buffer_len = 0;
+            }
+            let to_copy = (128 - self.buffer_len).min(data.len() - offset);
+            self.buffer[self.buffer_len..self.buffer_len + to_copy]
+                .copy_from_slice(&data[offset..offset + to_copy]);
+            self.buffer_len += to_copy;
+            offset += to_copy;
+        }
+    }
+
+    /// Finalise et retourne le digest SHA-384 (48 octets / 384 bits)
+    pub fn finalize(mut self) -> [u8; 48] {
+        let total_bits = (self.total_bytes as u128).wrapping_mul(8);
+        if self.buffer_len == 128 {
+            let blk = self.buffer;
+            self.transform_block(&blk);
+            self.buffer_len = 0;
+        }
+        self.buffer[self.buffer_len] = 0x80;
+        self.buffer_len += 1;
+
+        if self.buffer_len > 112 {
+            let mut i = self.buffer_len;
+            while i < 128 {
+                self.buffer[i] = 0;
+                i += 1;
+            }
+            let blk = self.buffer;
+            self.transform_block(&blk);
+            self.buffer_len = 0;
+        }
+
+        let mut i = self.buffer_len;
+        while i < 112 {
+            self.buffer[i] = 0;
+            i += 1;
+        }
+        self.buffer[112..128].copy_from_slice(&total_bits.to_be_bytes());
+        let blk = self.buffer;
+        self.transform_block(&blk);
+
+        let mut out = [0u8; 48];
+        let mut k = 0;
+        while k < 6 {
+            out[k * 8..(k + 1) * 8].copy_from_slice(&self.state[k].to_be_bytes());
+            k += 1;
+        }
+        out
+    }
+
+    /// Raccourci pour hacher en une seule passe
+    pub fn hash(data: &[u8]) -> [u8; 48] {
+        let mut hasher = Self::new();
+        hasher.update(data);
+        hasher.finalize()
+    }
+}
+
+impl Default for Sha384Hasher {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Convertit un condensat SHA-384 (48 octets) en représentation hexadécimale (96 caractères ASCII)
+pub fn sha384_to_hex(digest: &[u8; 48], out: &mut [u8; 96]) {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    for i in 0..48 {
+        let b = digest[i];
+        out[i * 2] = HEX[(b >> 4) as usize];
+        out[i * 2 + 1] = HEX[(b & 0x0F) as usize];
+    }
+}
+
+/// Hache un descripteur de fichier en streaming avec SHA-384 sans allocation
+fn hash_fd_sha384(fd: i32) -> Result<[u8; 48], ()> {
+    let mut hasher = Sha384Hasher::new();
+    let mut chunk = [0u8; 4096];
+    loop {
+        let n = sys_read(fd, &mut chunk);
+        if n < 0 {
+            return Err(());
+        }
+        if n == 0 {
+            break;
+        }
+        hasher.update(&chunk[..n as usize]);
+    }
+    Ok(hasher.finalize())
+}
+
+/// Parse une ligne de fichier de vérification sha384 (format GNU ou BSD)
+fn parse_sha384_check_line(line: &str) -> Option<(&str, &str)> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() || trimmed.starts_with('#') {
+        return None;
+    }
+
+    // Format BSD: SHA384 (path) = hex96
+    if let Some(rest) = trimmed.strip_prefix("SHA384 (") {
+        if let Some(close_idx) = rest.find(')') {
+            let path = &rest[..close_idx];
+            let after = rest[close_idx + 1..].trim();
+            if let Some(hex_part) = after.strip_prefix('=') {
+                let hex = hex_part.trim();
+                if hex.len() == 96 {
+                    return Some((path, hex));
+                }
+            }
+        }
+    }
+
+    // Format standard GNU: <hex96>  <path> ou <hex96> *<path>
+    if trimmed.len() >= 98 {
+        let hex = &trimmed[..96];
+        let sep = &trimmed[96..98];
+        if (sep == "  " || sep == " *" || sep == "  ")
+            && hex.as_bytes().iter().all(|b| b.is_ascii_hexdigit())
+        {
+            let path = trimmed[98..].trim();
+            if !path.is_empty() {
+                return Some((path, hex));
+            }
+        }
+    }
+
+    None
+}
+
+/// Exécute l'utilitaire Coreutils POSIX / GNU `sha384sum` (calcul et vérification SHA-384)
+pub fn run_sha384sum(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    let mut check_mode = false;
+    let mut tag_format = false;
+    let mut binary_mode = false;
+    let mut status_only = false;
+    let mut quiet = false;
+    let mut warn = false;
+    let mut file_args = [""; 64];
+    let mut file_count = 0usize;
+
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i];
+        if arg == "--help" || arg == "-h" {
+            let help = b"Usage: sha384sum [OPTION]... [FILE]...\nPrint or check SHA384 (384-bit) checksums.\n\nWith no FILE, or when FILE is -, read standard input.\n\n  -b, --binary         read in binary mode\n  -c, --check          read checksums from the FILEs and check them\n      --tag            create a BSD-style checksum\n  -t, --text           read in text mode (default)\n  -q, --quiet          don't print OK for each successfully verified file\n      --status         don't output anything, status code shows success\n  -w, --warn           warn about improperly formatted checksum lines\n      --help           display this help and exit\n      --version        output version information and exit\n";
+            let _ = sys_write(out_fd, help);
+            return 0;
+        }
+        if arg == "--version" || arg == "-v" {
+            let ver = b"sha384sum (JamboOS coreutils) 0.1.0\nCopyright (C) 2026 JamboOS Authors.\nLicense MIT or Apache-2.0.\n";
+            let _ = sys_write(out_fd, ver);
+            return 0;
+        }
+
+        if arg == "-c" || arg == "--check" {
+            check_mode = true;
+        } else if arg == "--tag" {
+            tag_format = true;
+        } else if arg == "-b" || arg == "--binary" {
+            binary_mode = true;
+        } else if arg == "-t" || arg == "--text" {
+            binary_mode = false;
+        } else if arg == "--status" {
+            status_only = true;
+        } else if arg == "-q" || arg == "--quiet" {
+            quiet = true;
+        } else if arg == "-w" || arg == "--warn" {
+            warn = true;
+        } else if (!arg.starts_with('-') || arg == "-") && file_count < file_args.len() {
+            file_args[file_count] = arg;
+            file_count += 1;
+        }
+        i += 1;
+    }
+
+    if check_mode {
+        let mut overall_success = true;
+        let mut total_verified = 0usize;
+
+        let targets: &[&str] = if file_count == 0 {
+            &["-"]
+        } else {
+            &file_args[..file_count]
+        };
+
+        for &target in targets {
+            let check_fd = if target == "-" {
+                in_fd
+            } else {
+                let fd = sys_open(target, crate::vfs::O_RDONLY);
+                if fd < 0 {
+                    if !status_only {
+                        let _ = sys_write(err_fd, b"sha384sum: ");
+                        let _ = sys_write(err_fd, target.as_bytes());
+                        let _ = sys_write(err_fd, b": No such file or directory\n");
+                    }
+                    overall_success = false;
+                    continue;
+                }
+                fd
+            };
+
+            let mut line_buf = [0u8; 512];
+            let mut line_len = 0usize;
+            let mut byte_buf = [0u8; 1];
+
+            loop {
+                let n = sys_read(check_fd, &mut byte_buf);
+                if n <= 0 {
+                    if line_len > 0 {
+                        if let Ok(line_str) = core::str::from_utf8(&line_buf[..line_len]) {
+                            if let Some((path, expected_hex)) = parse_sha384_check_line(line_str) {
+                                let file_fd = sys_open(path, crate::vfs::O_RDONLY);
+                                if file_fd < 0 {
+                                    if !status_only {
+                                        let _ = sys_write(err_fd, path.as_bytes());
+                                        let _ = sys_write(err_fd, b": FAILED open or read\n");
+                                    }
+                                    overall_success = false;
+                                } else {
+                                    match hash_fd_sha384(file_fd) {
+                                        Ok(digest) => {
+                                            let mut calculated_hex = [0u8; 96];
+                                            sha384_to_hex(&digest, &mut calculated_hex);
+                                            let hex_matches = calculated_hex
+                                                .iter()
+                                                .zip(expected_hex.as_bytes().iter())
+                                                .all(|(&a, &b)| a.eq_ignore_ascii_case(&b));
+                                            if hex_matches {
+                                                total_verified += 1;
+                                                if !quiet && !status_only {
+                                                    let _ = sys_write(out_fd, path.as_bytes());
+                                                    let _ = sys_write(out_fd, b": OK\n");
+                                                }
+                                            } else {
+                                                overall_success = false;
+                                                if !status_only {
+                                                    let _ = sys_write(out_fd, path.as_bytes());
+                                                    let _ = sys_write(out_fd, b": FAILED\n");
+                                                }
+                                            }
+                                        }
+                                        Err(_) => {
+                                            overall_success = false;
+                                            if !status_only {
+                                                let _ = sys_write(err_fd, path.as_bytes());
+                                                let _ =
+                                                    sys_write(err_fd, b": FAILED open or read\n");
+                                            }
+                                        }
+                                    }
+                                    sys_close(file_fd);
+                                }
+                            }
+                        }
+                    }
+                    break;
+                }
+
+                let b = byte_buf[0];
+                if b == b'\n' || b == b'\r' {
+                    if line_len > 0 {
+                        if let Ok(line_str) = core::str::from_utf8(&line_buf[..line_len]) {
+                            match parse_sha384_check_line(line_str) {
+                                Some((path, expected_hex)) => {
+                                    let file_fd = sys_open(path, crate::vfs::O_RDONLY);
+                                    if file_fd < 0 {
+                                        if !status_only {
+                                            let _ = sys_write(err_fd, path.as_bytes());
+                                            let _ = sys_write(err_fd, b": FAILED open or read\n");
+                                        }
+                                        overall_success = false;
+                                    } else {
+                                        match hash_fd_sha384(file_fd) {
+                                            Ok(digest) => {
+                                                let mut calculated_hex = [0u8; 96];
+                                                sha384_to_hex(&digest, &mut calculated_hex);
+                                                let hex_matches = calculated_hex
+                                                    .iter()
+                                                    .zip(expected_hex.as_bytes().iter())
+                                                    .all(|(&a, &b)| a.eq_ignore_ascii_case(&b));
+                                                if hex_matches {
+                                                    total_verified += 1;
+                                                    if !quiet && !status_only {
+                                                        let _ = sys_write(out_fd, path.as_bytes());
+                                                        let _ = sys_write(out_fd, b": OK\n");
+                                                    }
+                                                } else {
+                                                    overall_success = false;
+                                                    if !status_only {
+                                                        let _ = sys_write(out_fd, path.as_bytes());
+                                                        let _ = sys_write(out_fd, b": FAILED\n");
+                                                    }
+                                                }
+                                            }
+                                            Err(_) => {
+                                                overall_success = false;
+                                                if !status_only {
+                                                    let _ = sys_write(err_fd, path.as_bytes());
+                                                    let _ = sys_write(
+                                                        err_fd,
+                                                        b": FAILED open or read\n",
+                                                    );
+                                                }
+                                            }
+                                        }
+                                        sys_close(file_fd);
+                                    }
+                                }
+                                None => {
+                                    if warn && !status_only {
+                                        let _ = sys_write(
+                                            err_fd,
+                                            b"sha384sum: improperly formatted SHA384 checksum line\n",
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                        line_len = 0;
+                    }
+                } else if line_len < line_buf.len() {
+                    line_buf[line_len] = b;
+                    line_len += 1;
+                }
+            }
+
+            if check_fd != in_fd {
+                sys_close(check_fd);
+            }
+        }
+
+        if overall_success && total_verified > 0 {
+            0
+        } else {
+            1
+        }
+    } else {
+        let targets: &[&str] = if file_count == 0 {
+            &["-"]
+        } else {
+            &file_args[..file_count]
+        };
+
+        let mut exit_code = 0;
+
+        for &target in targets {
+            let (target_fd, display_name) = if target == "-" {
+                (in_fd, "-")
+            } else {
+                let fd = sys_open(target, crate::vfs::O_RDONLY);
+                if fd < 0 {
+                    let _ = sys_write(err_fd, b"sha384sum: ");
+                    let _ = sys_write(err_fd, target.as_bytes());
+                    let _ = sys_write(err_fd, b": No such file or directory\n");
+                    exit_code = 1;
+                    continue;
+                }
+                (fd, target)
+            };
+
+            match hash_fd_sha384(target_fd) {
+                Ok(digest) => {
+                    let mut hex = [0u8; 96];
+                    sha384_to_hex(&digest, &mut hex);
+
+                    if tag_format {
+                        let _ = sys_write(out_fd, b"SHA384 (");
+                        let _ = sys_write(out_fd, display_name.as_bytes());
+                        let _ = sys_write(out_fd, b") = ");
+                        let _ = sys_write(out_fd, &hex);
+                        let _ = sys_write(out_fd, b"\n");
+                    } else {
+                        let _ = sys_write(out_fd, &hex);
+                        if binary_mode {
+                            let _ = sys_write(out_fd, b" *");
+                        } else {
+                            let _ = sys_write(out_fd, b"  ");
+                        }
+                        let _ = sys_write(out_fd, display_name.as_bytes());
+                        let _ = sys_write(out_fd, b"\n");
+                    }
+                }
+                Err(_) => {
+                    let _ = sys_write(err_fd, b"sha384sum: error reading ");
+                    let _ = sys_write(err_fd, display_name.as_bytes());
+                    let _ = sys_write(err_fd, b"\n");
+                    exit_code = 1;
+                }
+            }
+
+            if target_fd != in_fd {
+                sys_close(target_fd);
+            }
+        }
+
+        exit_code
+    }
+}
+
+// ============================================================================
 // Utilitaire POSIX / GNU coreutils : `md5sum` (Calcul et vérification RFC 1321 MD5)
 // ============================================================================
 
@@ -14599,6 +15194,7 @@ pub fn execute_coreutils_command(
         "basenc" => run_basenc(args, in_fd, out_fd, err_fd),
         "sha256sum" => run_sha256sum(args, in_fd, out_fd, err_fd),
         "sha224sum" => run_sha224sum(args, in_fd, out_fd, err_fd),
+        "sha384sum" => run_sha384sum(args, in_fd, out_fd, err_fd),
         "sha1sum" => run_sha1sum(args, in_fd, out_fd, err_fd),
         "md5sum" => run_md5sum(args, in_fd, out_fd, err_fd),
         "factor" => run_factor(args, in_fd, out_fd, err_fd),
@@ -15981,6 +16577,7 @@ pub fn run_xargs(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
             "basenc" => run_basenc(effective_sub_args, 0, out_fd, err_fd),
             "sha256sum" => run_sha256sum(effective_sub_args, 0, out_fd, err_fd),
             "sha224sum" => run_sha224sum(effective_sub_args, 0, out_fd, err_fd),
+            "sha384sum" => run_sha384sum(effective_sub_args, 0, out_fd, err_fd),
             "sha1sum" => run_sha1sum(effective_sub_args, 0, out_fd, err_fd),
             "md5sum" => run_md5sum(effective_sub_args, 0, out_fd, err_fd),
             "truncate" => run_truncate(effective_sub_args, 0, out_fd, err_fd),
@@ -30885,5 +31482,59 @@ Chaque processus dispose de son propre CR3 sans aucun privilege materiel direct.
 
         assert_eq!(run_sha224sum(&["--help"], 0, 1, 2), 0);
         assert_eq!(run_sha224sum(&["--version"], 0, 1, 2), 0);
+
+        // 45. Test run_sha384sum (NIST FIPS 180-4 SHA-384 checksums)
+        let empty_384 = Sha384Hasher::hash(b"");
+        let mut hex_empty_384 = [0u8; 96];
+        sha384_to_hex(&empty_384, &mut hex_empty_384);
+        assert_eq!(
+            core::str::from_utf8(&hex_empty_384).unwrap(),
+            "38b060a751ac96384cd9327eb1b1e36a21fdb71114be07434c0cc7bf63f6e1da274edebfe76f65fbd51ad2f14898b95b"
+        );
+
+        let abc_384 = Sha384Hasher::hash(b"abc");
+        let mut hex_abc_384 = [0u8; 96];
+        sha384_to_hex(&abc_384, &mut hex_abc_384);
+        assert_eq!(
+            core::str::from_utf8(&hex_abc_384).unwrap(),
+            "cb00753f45a35e8bb5a03d699ac65007272c32ab0eded1631a8b605a43ff5bed8086072ba1e7cc2358baeca134c825a7"
+        );
+
+        let file_384 = "/tmp/test_sha384_data.txt";
+        let fd_384 = sys_open(file_384, O_CREAT | O_WRONLY);
+        assert!(fd_384 >= 0);
+        let _ = sys_write(fd_384, b"abc");
+        sys_close(fd_384);
+
+        let (out_r384_1, out_w384_1) = crate::vfs::pipe().unwrap();
+        let code384_1 = run_sha384sum(&[file_384], 0, out_w384_1, 2);
+        sys_close(out_w384_1);
+        assert_eq!(code384_1, 0);
+
+        let mut buf384_1 = [0u8; 256];
+        let n384_1 = sys_read(out_r384_1, &mut buf384_1);
+        sys_close(out_r384_1);
+        let s384_1 = core::str::from_utf8(&buf384_1[..n384_1 as usize]).unwrap();
+        assert!(s384_1.starts_with(
+            "cb00753f45a35e8bb5a03d699ac65007272c32ab0eded1631a8b605a43ff5bed8086072ba1e7cc2358baeca134c825a7  /tmp/test_sha384_data.txt"
+        ));
+
+        // Mode --tag BSD
+        let (out_r384_2, out_w384_2) = crate::vfs::pipe().unwrap();
+        let code384_2 = run_sha384sum(&["--tag", file_384], 0, out_w384_2, 2);
+        sys_close(out_w384_2);
+        assert_eq!(code384_2, 0);
+
+        let mut buf384_2 = [0u8; 256];
+        let n384_2 = sys_read(out_r384_2, &mut buf384_2);
+        sys_close(out_r384_2);
+        let s384_2 = core::str::from_utf8(&buf384_2[..n384_2 as usize]).unwrap();
+        assert_eq!(
+            s384_2,
+            "SHA384 (/tmp/test_sha384_data.txt) = cb00753f45a35e8bb5a03d699ac65007272c32ab0eded1631a8b605a43ff5bed8086072ba1e7cc2358baeca134c825a7\n"
+        );
+
+        assert_eq!(run_sha384sum(&["--help"], 0, 1, 2), 0);
+        assert_eq!(run_sha384sum(&["--version"], 0, 1, 2), 0);
     }
 }
