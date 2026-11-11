@@ -22242,6 +22242,59 @@ fn rev_fd(in_fd: i32, out_fd: i32) -> i32 {
     0
 }
 
+/// Utilitaire Coreutils POSIX `link` (création directe de lien physique dur)
+///
+/// Syntax standard :
+/// `link TARGET LINK_NAME`
+pub fn run_link(args: &[&str], out_fd: i32, err_fd: i32) -> i32 {
+    if args.is_empty() {
+        let _ = sys_write(
+            err_fd,
+            b"link: missing operand\nTry 'link --help' for more information.\n",
+        );
+        return 1;
+    }
+
+    if args.len() == 1 {
+        if args[0] == "--help" {
+            let _ = sys_write(
+                out_fd,
+                b"Usage: link FILE1 FILE2\nCall the link function to create a link named FILE2 to an existing FILE1.\n\nOptions:\n      --help     display this help and exit\n      --version  output version information and exit\n",
+            );
+            return 0;
+        } else if args[0] == "--version" {
+            let _ = sys_write(out_fd, b"link (jambo-coreutils) 0.1.0\n");
+            return 0;
+        }
+        let _ = sys_write(err_fd, b"link: missing operand after '");
+        let _ = sys_write(err_fd, args[0].as_bytes());
+        let _ = sys_write(err_fd, b"'\nTry 'link --help' for more information.\n");
+        return 1;
+    }
+
+    if args.len() > 2 {
+        let _ = sys_write(err_fd, b"link: extra operand '");
+        let _ = sys_write(err_fd, args[2].as_bytes());
+        let _ = sys_write(err_fd, b"'\nTry 'link --help' for more information.\n");
+        return 1;
+    }
+
+    let target = args[0];
+    let linkpath = args[1];
+
+    let res = sys_link_pool(target, linkpath);
+    if res != 0 {
+        let _ = sys_write(err_fd, b"link: cannot create link '");
+        let _ = sys_write(err_fd, linkpath.as_bytes());
+        let _ = sys_write(err_fd, b"' to '");
+        let _ = sys_write(err_fd, target.as_bytes());
+        let _ = sys_write(err_fd, b"': File exists or invalid target\n");
+        1
+    } else {
+        0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -27108,5 +27161,35 @@ Chaque processus dispose de son propre CR3 sans aucun privilege materiel direct.
         assert!(s_rev.contains("olleh\ndlrow\n54321\n"));
 
         let _ = run_rm(&["/tmp/test_rev.txt"], 2);
+
+        // 27. Test run_link
+        assert_eq!(run_link(&["--help"], 1, 2), 0);
+        assert_eq!(run_link(&["--version"], 1, 2), 0);
+        assert_eq!(run_link(&[], 1, 2), 1);
+        assert_eq!(run_link(&["file1"], 1, 2), 1);
+        assert_eq!(run_link(&["file1", "file2", "extra"], 1, 2), 1);
+
+        let orig_file = sys_open("/tmp/test_link_orig.txt", O_CREAT | O_WRONLY);
+        assert!(orig_file >= 3);
+        let _ = sys_write(orig_file, b"link test payload");
+        sys_close(orig_file);
+
+        assert_eq!(
+            run_link(
+                &["/tmp/test_link_orig.txt", "/tmp/test_link_dest.txt"],
+                1,
+                2
+            ),
+            0
+        );
+
+        let check_fd = sys_open("/tmp/test_link_dest.txt", 0);
+        assert!(check_fd >= 3);
+        let mut chk_buf = [0u8; 32];
+        let n_chk = sys_read(check_fd, &mut chk_buf);
+        sys_close(check_fd);
+        assert_eq!(&chk_buf[..n_chk as usize], b"link test payload");
+
+        let _ = run_rm(&["/tmp/test_link_orig.txt", "/tmp/test_link_dest.txt"], 2);
     }
 }

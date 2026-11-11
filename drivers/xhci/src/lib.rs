@@ -319,6 +319,7 @@ pub const XHCI_EXT_CAP_DBC_TELEMETRY: u8 = 31;
 pub const XHCI_EXT_CAP_SUBLINK_SPEED_ROUTING: u8 = 32;
 pub const XHCI_EXT_CAP_EXTENDED_MESSAGE_INTERRUPT_VECTOR: u8 = 33;
 pub const XHCI_EXT_CAP_EXTENDED_PORT_STATUS_CONTROL: u8 = 34;
+pub const XHCI_EXT_CAP_FIRMWARE_DEBUG_TRACE: u8 = 35;
 
 /// Masques de registres USB Legacy Support (xHCI 1.2 Section 7.1)
 /// Registre USBLEGSUP (Offset 0x00)
@@ -3326,6 +3327,110 @@ impl XhciExtendedPortStatusControl {
     /// Configure la vitesse de lien négociée
     pub fn set_link_speed_protocol(&mut self, speed: u8) {
         self.link_speed_protocol = speed & 0x0F;
+    }
+}
+
+/// Capacité Étendue xHCI Firmware Debug and Trace (FDT / xHCI 1.2 §7.27)
+///
+/// Permet l'exposition d'un canal de trace matériel et journalisation du firmware
+/// interne du contrôleur xHCI (niveaux de sévérité, verbosité, masquage de sous-systèmes).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XhciFirmwareDebugTrace {
+    /// Pointeur dword vers la prochaine capacité étendue (0 = fin de liste)
+    pub next_ptr_dwords: u8,
+    /// Fonctionnalité de traçage de firmware activée
+    pub enabled: bool,
+    /// Niveau de sévérité de trace (0 = Panic/Fatal, 1 = Error, 2 = Warn, 3 = Info, 4 = Debug, 5 = Verbose)
+    pub trace_level: u8,
+    /// Masque de sous-systèmes de trace activés (bits 0..=15)
+    pub subsystem_mask: u16,
+    /// Registre de contrôle brut (DWORD 1)
+    pub control: u32,
+    /// Registre de statut / compteur de perte de trace (DWORD 2)
+    pub status: u32,
+    /// Taille du tampon circulaire de trace firmware en Kio (DWORD 3 [15:0])
+    pub buffer_size_kb: u16,
+    /// Nombre de messages de trace consignés (DWORD 3 [31:16])
+    pub trace_counter: u16,
+}
+
+impl XhciFirmwareDebugTrace {
+    /// Crée une nouvelle configuration Firmware Debug Trace
+    pub const fn new(buffer_size_kb: u16) -> Self {
+        Self {
+            next_ptr_dwords: 0,
+            enabled: false,
+            trace_level: 1, // Error par défaut
+            subsystem_mask: 0xFFFF,
+            control: 0,
+            status: 0,
+            buffer_size_kb,
+            trace_counter: 0,
+        }
+    }
+
+    /// Parse les 4 dwords MMIO d'une capacité étendue FDT (§7.27)
+    pub const fn parse(dwords: &[u32; 4]) -> Option<Self> {
+        let cap_id = (dwords[0] & 0xFF) as u8;
+        if cap_id != XHCI_EXT_CAP_FIRMWARE_DEBUG_TRACE {
+            return None;
+        }
+
+        let next_ptr = ((dwords[0] >> 8) & 0xFF) as u8;
+        let ctrl = dwords[1];
+        let enabled = (ctrl & 0x01) != 0;
+        let trace_level = ((ctrl >> 8) & 0x0F) as u8;
+        let subsystem_mask = ((ctrl >> 16) & 0xFFFF) as u16;
+        let status = dwords[2];
+        let buffer_size_kb = (dwords[3] & 0xFFFF) as u16;
+        let trace_counter = ((dwords[3] >> 16) & 0xFFFF) as u16;
+
+        Some(Self {
+            next_ptr_dwords: next_ptr,
+            enabled,
+            trace_level,
+            subsystem_mask,
+            control: ctrl,
+            status,
+            buffer_size_kb,
+            trace_counter,
+        })
+    }
+
+    /// Encode la capacité étendue en 4 mots dwords MMIO 32-bit
+    pub const fn encode(&self) -> [u32; 4] {
+        let dw0 = (XHCI_EXT_CAP_FIRMWARE_DEBUG_TRACE as u32) | ((self.next_ptr_dwords as u32) << 8);
+        let mut ctrl = (self.control & !0xFFFF_0F01)
+            | (((self.trace_level & 0x0F) as u32) << 8)
+            | (((self.subsystem_mask as u32) & 0xFFFF) << 16);
+        if self.enabled {
+            ctrl |= 0x01;
+        }
+        let dw2 = self.status;
+        let dw3 = (self.buffer_size_kb as u32) | (((self.trace_counter as u32) & 0xFFFF) << 16);
+        [dw0, ctrl, dw2, dw3]
+    }
+
+    /// Active ou désactive le traçage du firmware
+    pub fn set_enabled(&mut self, enable: bool) {
+        self.enabled = enable;
+        if enable {
+            self.control |= 0x01;
+        } else {
+            self.control &= !0x01;
+        }
+    }
+
+    /// Définit le niveau de verbosité de trace
+    pub fn set_trace_level(&mut self, level: u8) {
+        self.trace_level = level & 0x0F;
+        self.control = (self.control & !0x0000_0F00) | (((level & 0x0F) as u32) << 8);
+    }
+
+    /// Configure le masque de sous-systèmes tracés
+    pub fn set_subsystem_mask(&mut self, mask: u16) {
+        self.subsystem_mask = mask;
+        self.control = (self.control & !0xFFFF_0000) | (((mask as u32) & 0xFFFF) << 16);
     }
 }
 
@@ -12337,5 +12442,41 @@ mod tests {
         assert_eq!(parsed_epsc.test_mode, 3);
         assert_eq!(parsed_epsc.status, 0x8000_1234);
         assert_eq!(parsed_epsc.link_speed_protocol, 4);
+
+        // 25. Test XhciFirmwareDebugTrace
+        let mut fdt = XhciFirmwareDebugTrace::new(64);
+        assert_eq!(fdt.buffer_size_kb, 64);
+        assert!(!fdt.enabled);
+        assert_eq!(fdt.trace_level, 1);
+        assert_eq!(fdt.subsystem_mask, 0xFFFF);
+
+        fdt.set_enabled(true);
+        fdt.set_trace_level(4);
+        fdt.set_subsystem_mask(0x1234);
+        fdt.next_ptr_dwords = 40;
+        fdt.status = 0x0002_0000;
+        fdt.trace_counter = 500;
+
+        let encoded_fdt = fdt.encode();
+        assert_eq!(
+            encoded_fdt[0] & 0xFF,
+            XHCI_EXT_CAP_FIRMWARE_DEBUG_TRACE as u32
+        );
+        assert_eq!((encoded_fdt[0] >> 8) & 0xFF, 40);
+        assert_eq!(encoded_fdt[1] & 0x01, 1);
+        assert_eq!((encoded_fdt[1] >> 8) & 0x0F, 4);
+        assert_eq!((encoded_fdt[1] >> 16) & 0xFFFF, 0x1234);
+        assert_eq!(encoded_fdt[2], 0x0002_0000);
+        assert_eq!(encoded_fdt[3] & 0xFFFF, 64);
+        assert_eq!((encoded_fdt[3] >> 16) & 0xFFFF, 500);
+
+        let parsed_fdt = XhciFirmwareDebugTrace::parse(&encoded_fdt).unwrap();
+        assert_eq!(parsed_fdt.next_ptr_dwords, 40);
+        assert!(parsed_fdt.enabled);
+        assert_eq!(parsed_fdt.trace_level, 4);
+        assert_eq!(parsed_fdt.subsystem_mask, 0x1234);
+        assert_eq!(parsed_fdt.status, 0x0002_0000);
+        assert_eq!(parsed_fdt.buffer_size_kb, 64);
+        assert_eq!(parsed_fdt.trace_counter, 500);
     }
 }

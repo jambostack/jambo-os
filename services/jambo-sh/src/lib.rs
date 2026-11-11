@@ -634,6 +634,7 @@ impl JamboShell {
             "look" | "/bin/look" | "bin/look" => self.cmd_look(args, out),
             "colrm" | "/bin/colrm" | "bin/colrm" => self.cmd_colrm(args, out),
             "rev" | "/bin/rev" | "bin/rev" => self.cmd_rev(args, out),
+            "link" | "/bin/link" | "bin/link" => self.cmd_link(args, out),
             "cow" | "/bin/cow" | "bin/cow" => self.cmd_cow(args, out),
             "version" => self.cmd_version(out),
             "uptime" => self.cmd_uptime(out),
@@ -3232,6 +3233,44 @@ Utilitaire d'installation JamboOS (Serie 0.*.*)\n\
             (status, len)
         } else {
             let msg = b"rev: pipe creation failed\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
+    }
+
+    fn cmd_link(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if let (Ok((r_out, w_out)), Ok((r_err, w_err))) =
+            (libjambo::vfs::pipe(), libjambo::vfs::pipe())
+        {
+            let code = libjambo::coreutils::run_link(args, w_out, w_err);
+            let _ = libjambo::coreutils::sys_close(w_out);
+            let _ = libjambo::coreutils::sys_close(w_err);
+
+            let mut len = 0;
+            if code == 0 {
+                let n_out = libjambo::coreutils::sys_read(r_out, out);
+                if n_out > 0 {
+                    len = n_out as usize;
+                }
+            } else {
+                let n_err = libjambo::coreutils::sys_read(r_err, out);
+                if n_err > 0 {
+                    len = n_err as usize;
+                }
+            }
+
+            let _ = libjambo::coreutils::sys_close(r_out);
+            let _ = libjambo::coreutils::sys_close(r_err);
+
+            let status = if code == 0 {
+                ShellStatus::Success
+            } else {
+                ShellStatus::ExecutionFailed
+            };
+            (status, len)
+        } else {
+            let msg = b"link: pipe creation failed\n";
             let len = msg.len().min(out.len());
             out[..len].copy_from_slice(&msg[..len]);
             (ShellStatus::ExecutionFailed, len)
@@ -21135,5 +21174,16 @@ mod tests {
         assert_eq!(st96, ShellStatus::Success);
         let s96 = core::str::from_utf8(&out[..len96]).unwrap();
         assert!(s96.contains("rev (jambo-coreutils)"));
+
+        // 48. link shell command
+        let (st97, len97) = shell.execute_line("link --help", &mut out);
+        assert_eq!(st97, ShellStatus::Success);
+        let s97 = core::str::from_utf8(&out[..len97]).unwrap();
+        assert!(s97.contains("Usage: link"));
+
+        let (st98, len98) = shell.execute_line("link --version", &mut out);
+        assert_eq!(st98, ShellStatus::Success);
+        let s98 = core::str::from_utf8(&out[..len98]).unwrap();
+        assert!(s98.contains("link (jambo-coreutils)"));
     }
 }
