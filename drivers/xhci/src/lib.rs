@@ -586,6 +586,57 @@ pub const PORTPMSC_HIRD_MASK: u32 = 0x0F << PORTPMSC_HIRD_SHIFT;
 /// Remote Wakeup Enable pour USB 2.0 L1 (bit 8)
 pub const PORTPMSC_RWE: u32 = 1 << 8;
 
+// ============================================================================
+// Registre PORTLI (Port Link Info) - xHCI 1.2 section 5.4.10
+// ============================================================================
+
+/// Masque et décalage pour le compteur d'erreurs de couche liaison USB 3.0 (Link Error Count / LEC, bits 15:0 de PORTLI)
+pub const PORTLI_LINK_ERROR_COUNT_SHIFT: u32 = 0;
+pub const PORTLI_LINK_ERROR_COUNT_MASK: u32 = 0xFFFF << PORTLI_LINK_ERROR_COUNT_SHIFT;
+
+/// Masque et décalage pour les drapeaux d'état de couche liaison (Link State / Flags, bits 31:16 de PORTLI)
+pub const PORTLI_RX_LANES_SHIFT: u32 = 16;
+pub const PORTLI_RX_LANES_MASK: u32 = 0x0F << PORTLI_RX_LANES_SHIFT;
+pub const PORTLI_TX_LANES_SHIFT: u32 = 20;
+pub const PORTLI_TX_LANES_MASK: u32 = 0x0F << PORTLI_TX_LANES_SHIFT;
+
+/// Télémétrie d'intégrité de trames et d'erreurs de couche liaison USB 3.0 (PORTLI)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct PortLinkInfo {
+    /// Nombre d'erreurs de couche liaison détectées (8b/10b, 128b/132b, CRC, paquet corrompu)
+    pub link_error_count: u16,
+    /// Nombre de voies RX actives négociées (Gen 1x1, 2x1, 2x2...)
+    pub rx_lanes: u8,
+    /// Nombre de voies TX actives négociées
+    pub tx_lanes: u8,
+}
+
+impl PortLinkInfo {
+    /// Décode la valeur brute 32-bit lue depuis le registre PORTLI
+    pub const fn parse(raw_portli: u32) -> Self {
+        let link_error_count = (raw_portli & PORTLI_LINK_ERROR_COUNT_MASK) as u16;
+        let rx_lanes = ((raw_portli & PORTLI_RX_LANES_MASK) >> PORTLI_RX_LANES_SHIFT) as u8;
+        let tx_lanes = ((raw_portli & PORTLI_TX_LANES_MASK) >> PORTLI_TX_LANES_SHIFT) as u8;
+        Self {
+            link_error_count,
+            rx_lanes,
+            tx_lanes,
+        }
+    }
+
+    /// Encode une structure PortLinkInfo en valeur de registre PORTLI 32-bit
+    pub const fn to_raw(&self) -> u32 {
+        ((self.link_error_count as u32) & PORTLI_LINK_ERROR_COUNT_MASK)
+            | (((self.rx_lanes as u32) << PORTLI_RX_LANES_SHIFT) & PORTLI_RX_LANES_MASK)
+            | (((self.tx_lanes as u32) << PORTLI_TX_LANES_SHIFT) & PORTLI_TX_LANES_MASK)
+    }
+
+    /// Indique si la liaison physique présente une dégradation anormale (> seuil d'erreurs)
+    pub const fn is_degraded(&self, threshold: u16) -> bool {
+        self.link_error_count > threshold
+    }
+}
+
 /// Masque RW1C (Read-Write 1 to Clear) regroupant tous les bits de changement d'état xHCI
 pub const PORTSC_ALL_CHANGES_MASK: u32 =
     PORTSC_CSC | PORTSC_PEC | PORTSC_WRC | PORTSC_OCC | PORTSC_PRC | PORTSC_PLC | PORTSC_CEC;
@@ -7026,5 +7077,15 @@ mod tests {
             ev_cec,
             PortHotPlugEvent::PortConfigErrorDetected { port_id: 1 }
         );
+
+        // 25. Télémétrie d'intégrité de liaison physique et erreurs de couche liaison (PORTLI)
+        let raw_li = 0x0021_0007; // 7 erreurs de lien, 1 voie RX, 2 voies TX
+        let li = PortLinkInfo::parse(raw_li);
+        assert_eq!(li.link_error_count, 7);
+        assert_eq!(li.rx_lanes, 1);
+        assert_eq!(li.tx_lanes, 2);
+        assert_eq!(li.to_raw(), raw_li);
+        assert!(!li.is_degraded(10));
+        assert!(li.is_degraded(5));
     }
 }

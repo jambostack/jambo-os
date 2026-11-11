@@ -337,5 +337,10 @@ name = "tac"
 path = "src/bin/tac.rs"
 test = false
 
+[[bin]]
+name = "csplit"
+path = "src/bin/csplit.rs"
+test = false
+
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }
