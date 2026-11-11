@@ -610,6 +610,9 @@ impl JamboShell {
             "shuf" | "/bin/shuf" | "bin/shuf" => self.cmd_shuf(args, out),
             "md5sum" | "/bin/md5sum" | "bin/md5sum" => self.cmd_md5sum(args, out),
             "sha1sum" | "/bin/sha1sum" | "bin/sha1sum" => self.cmd_sha1sum(args, out),
+            "sha224sum" | "/bin/sha224sum" | "bin/sha224sum" => self.cmd_sha224sum(args, out),
+            "sha384sum" | "/bin/sha384sum" | "bin/sha384sum" => self.cmd_sha384sum(args, out),
+            "sha512sum" | "/bin/sha512sum" | "bin/sha512sum" => self.cmd_sha512sum(args, out),
             "crc32" | "/bin/crc32" | "bin/crc32" => self.cmd_crc32(args, out),
             "factor" | "/bin/factor" | "bin/factor" => self.cmd_factor(args, out),
             "timeout" | "/bin/timeout" | "bin/timeout" => self.cmd_timeout(args, out),
@@ -2345,6 +2348,117 @@ Utilitaire d'installation JamboOS (Serie 0.*.*)\n\
             (status, len)
         } else {
             let msg = b"sha1sum: pipe creation failed\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
+    }
+
+    fn cmd_sha224sum(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if let (Ok((r_out, w_out)), Ok((r_err, w_err))) =
+            (libjambo::vfs::pipe(), libjambo::vfs::pipe())
+        {
+            let code = libjambo::coreutils::run_sha224sum(args, 0, w_out, w_err);
+            let _ = libjambo::coreutils::sys_close(w_out);
+            let _ = libjambo::coreutils::sys_close(w_err);
+
+            let mut len = 0;
+            if code == 0 {
+                let n_out = libjambo::coreutils::sys_read(r_out, out);
+                if n_out > 0 {
+                    len = n_out as usize;
+                }
+            } else {
+                let n_err = libjambo::coreutils::sys_read(r_err, out);
+                if n_err > 0 {
+                    len = n_err as usize;
+                }
+            }
+            let _ = libjambo::coreutils::sys_close(r_out);
+            let _ = libjambo::coreutils::sys_close(r_err);
+
+            let status = if code == 0 {
+                ShellStatus::Success
+            } else {
+                ShellStatus::ExecutionFailed
+            };
+            (status, len)
+        } else {
+            let msg = b"sha224sum: pipe creation failed\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
+    }
+
+    fn cmd_sha384sum(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if let (Ok((r_out, w_out)), Ok((r_err, w_err))) =
+            (libjambo::vfs::pipe(), libjambo::vfs::pipe())
+        {
+            let code = libjambo::coreutils::run_sha384sum(args, 0, w_out, w_err);
+            let _ = libjambo::coreutils::sys_close(w_out);
+            let _ = libjambo::coreutils::sys_close(w_err);
+
+            let mut len = 0;
+            if code == 0 {
+                let n_out = libjambo::coreutils::sys_read(r_out, out);
+                if n_out > 0 {
+                    len = n_out as usize;
+                }
+            } else {
+                let n_err = libjambo::coreutils::sys_read(r_err, out);
+                if n_err > 0 {
+                    len = n_err as usize;
+                }
+            }
+            let _ = libjambo::coreutils::sys_close(r_out);
+            let _ = libjambo::coreutils::sys_close(r_err);
+
+            let status = if code == 0 {
+                ShellStatus::Success
+            } else {
+                ShellStatus::ExecutionFailed
+            };
+            (status, len)
+        } else {
+            let msg = b"sha384sum: pipe creation failed\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
+    }
+
+    fn cmd_sha512sum(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if let (Ok((r_out, w_out)), Ok((r_err, w_err))) =
+            (libjambo::vfs::pipe(), libjambo::vfs::pipe())
+        {
+            let code = libjambo::coreutils::run_sha512sum(args, 0, w_out, w_err);
+            let _ = libjambo::coreutils::sys_close(w_out);
+            let _ = libjambo::coreutils::sys_close(w_err);
+
+            let mut len = 0;
+            if code == 0 {
+                let n_out = libjambo::coreutils::sys_read(r_out, out);
+                if n_out > 0 {
+                    len = n_out as usize;
+                }
+            } else {
+                let n_err = libjambo::coreutils::sys_read(r_err, out);
+                if n_err > 0 {
+                    len = n_err as usize;
+                }
+            }
+            let _ = libjambo::coreutils::sys_close(r_out);
+            let _ = libjambo::coreutils::sys_close(r_err);
+
+            let status = if code == 0 {
+                ShellStatus::Success
+            } else {
+                ShellStatus::ExecutionFailed
+            };
+            (status, len)
+        } else {
+            let msg = b"sha512sum: pipe creation failed\n";
             let len = msg.len().min(out.len());
             out[..len].copy_from_slice(&msg[..len]);
             (ShellStatus::ExecutionFailed, len)
@@ -21045,6 +21159,24 @@ mod tests {
         assert_eq!(st26, ShellStatus::Success);
         let s26 = core::str::from_utf8(&out[..len26]).unwrap();
         assert!(s26.contains("/etc/hostname"));
+
+        // sha224sum shell command
+        let (st26_224, len26_224) = shell.execute_line("sha224sum /etc/hostname", &mut out);
+        assert_eq!(st26_224, ShellStatus::Success);
+        let s26_224 = core::str::from_utf8(&out[..len26_224]).unwrap();
+        assert!(s26_224.contains("/etc/hostname"));
+
+        // sha384sum shell command
+        let (st26_384, len26_384) = shell.execute_line("sha384sum /etc/hostname", &mut out);
+        assert_eq!(st26_384, ShellStatus::Success);
+        let s26_384 = core::str::from_utf8(&out[..len26_384]).unwrap();
+        assert!(s26_384.contains("/etc/hostname"));
+
+        // sha512sum shell command
+        let (st26_512, len26_512) = shell.execute_line("sha512sum /etc/hostname", &mut out);
+        assert_eq!(st26_512, ShellStatus::Success);
+        let s26_512 = core::str::from_utf8(&out[..len26_512]).unwrap();
+        assert!(s26_512.contains("/etc/hostname"));
 
         // 24. crc32 shell command
         let (st27, len27) = shell.execute_line("crc32 /etc/hostname", &mut out);

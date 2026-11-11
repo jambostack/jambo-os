@@ -346,6 +346,8 @@ pub const XHCI_EXT_CAP_USB4_OPTICAL_INTERFACE_MANAGEMENT: u8 = 51;
 pub const XHCI_EXT_CAP_USB4_INTER_DOMAIN_DMA: u8 = 52;
 /// Capacité étendue xHCI 1.2 / USB4 Router Operations and Configuration Interface (§7.45)
 pub const XHCI_EXT_CAP_USB4_ROUTER_OPERATIONS: u8 = 53;
+/// Capacité étendue xHCI 1.2 / USB4 Protocol Tunneling Statistics Interface (§7.46)
+pub const XHCI_EXT_CAP_USB4_PROTOCOL_TUNNELING_STATS: u8 = 54;
 
 /// Masques de registres USB Legacy Support (xHCI 1.2 Section 7.1)
 /// Registre USBLEGSUP (Offset 0x00)
@@ -5561,6 +5563,108 @@ impl XhciUsb4RouterOperations {
     /// Incrémente le compteur d'événements du routeur
     pub fn record_event(&mut self) {
         self.event_counter = self.event_counter.wrapping_add(1);
+    }
+}
+
+/// Capacité Étendue xHCI 1.2 / USB4 Protocol Tunneling Statistics Interface (§7.46)
+///
+/// Modélise les métriques de trafic et compteurs de paquets tunnelisés
+/// (PCIe, DP, USB3, D2D DMA) pour l'observabilité matérielle et la télémétrie réseau USB4.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XhciUsb4ProtocolTunnelingStats {
+    /// Pointeur dword vers la prochaine capacité étendue (0 = fin de liste)
+    pub next_ptr_dwords: u8,
+    /// Collecte des statistiques activée
+    pub enabled: bool,
+    /// Interruption de seuil de trafic activée
+    pub irq_enabled: bool,
+    /// Identifiant de l'adaptateur de tunneling supervisé (0..=63)
+    pub adapter_id: u8,
+    /// Type de protocole supervisé (1: PCIe, 2: DisplayPort, 3: USB3, 4: Inter-Domain)
+    pub protocol_type: u8,
+    /// Compteur 32-bit de paquets tunnelisés transmis avec succès
+    pub tx_packet_count: u32,
+    /// Compteur 32-bit de paquets tunnelisés reçus avec succès
+    pub rx_packet_count: u32,
+}
+
+impl XhciUsb4ProtocolTunnelingStats {
+    /// Initialise une nouvelle capacité USB4 Protocol Tunneling Statistics
+    pub const fn new(adapter_id: u8, protocol_type: u8) -> Self {
+        Self {
+            next_ptr_dwords: 0,
+            enabled: false,
+            irq_enabled: false,
+            adapter_id,
+            protocol_type: protocol_type & 0x07,
+            tx_packet_count: 0,
+            rx_packet_count: 0,
+        }
+    }
+
+    /// Parse les 4 dwords MMIO d'une capacité étendue USB4 Protocol Tunneling Statistics (§7.46)
+    pub const fn parse(dwords: &[u32; 4]) -> Option<Self> {
+        let cap_id = (dwords[0] & 0xFF) as u8;
+        if cap_id != XHCI_EXT_CAP_USB4_PROTOCOL_TUNNELING_STATS {
+            return None;
+        }
+
+        let next_ptr = ((dwords[0] >> 8) & 0xFF) as u8;
+        let ctrl = dwords[1];
+        let enabled = (ctrl & 0x01) != 0;
+        let irq_enabled = (ctrl & 0x02) != 0;
+        let adapter_id = ((ctrl >> 8) & 0x3F) as u8;
+        let protocol_type = ((ctrl >> 16) & 0x07) as u8;
+
+        let tx_packet_count = dwords[2];
+        let rx_packet_count = dwords[3];
+
+        Some(Self {
+            next_ptr_dwords: next_ptr,
+            enabled,
+            irq_enabled,
+            adapter_id,
+            protocol_type,
+            tx_packet_count,
+            rx_packet_count,
+        })
+    }
+
+    /// Encode la capacité étendue en 4 mots dwords MMIO 32-bit
+    pub const fn encode(&self) -> [u32; 4] {
+        let dw0 = (XHCI_EXT_CAP_USB4_PROTOCOL_TUNNELING_STATS as u32)
+            | ((self.next_ptr_dwords as u32) << 8);
+        let mut ctrl =
+            ((self.adapter_id as u32 & 0x3F) << 8) | ((self.protocol_type as u32 & 0x07) << 16);
+        if self.enabled {
+            ctrl |= 0x01;
+        }
+        if self.irq_enabled {
+            ctrl |= 0x02;
+        }
+        let dw2 = self.tx_packet_count;
+        let dw3 = self.rx_packet_count;
+        [dw0, ctrl, dw2, dw3]
+    }
+
+    /// Active ou désactive la collecte des statistiques
+    pub fn enable_stats(&mut self, enable: bool) {
+        self.enabled = enable;
+    }
+
+    /// Active ou désactive les interruptions de seuil
+    pub fn configure_irq(&mut self, enable: bool) {
+        self.irq_enabled = enable;
+    }
+
+    /// Enregistre la transmission d'un paquet
+    pub fn record_tx(&mut self) {
+        self.tx_packet_count = self.tx_packet_count.wrapping_add(1);
+    }
+
+    /// Enregistre la réception d'un paquet
+    pub fn record_rx(&mut self) {
+        self.rx_packet_count = self.rx_packet_count.wrapping_add(1);
     }
 }
 
@@ -15377,5 +15481,43 @@ mod tests {
         assert_eq!(parsed_router.power_state, 2);
         assert_eq!(parsed_router.status, 0x8765_4321);
         assert_eq!(parsed_router.event_counter, 3);
+
+        // Test USB4 Protocol Tunneling Statistics Interface (§7.46)
+        let mut stats = XhciUsb4ProtocolTunnelingStats::new(12, 1); // adapter 12, PCIe
+        assert_eq!(stats.adapter_id, 12);
+        assert_eq!(stats.protocol_type, 1);
+        assert!(!stats.enabled);
+        assert!(!stats.irq_enabled);
+        assert_eq!(stats.tx_packet_count, 0);
+        assert_eq!(stats.rx_packet_count, 0);
+
+        stats.enable_stats(true);
+        stats.configure_irq(true);
+        stats.record_tx();
+        stats.record_tx();
+        stats.record_rx();
+        stats.next_ptr_dwords = 32;
+
+        let encoded_stats = stats.encode();
+        assert_eq!(
+            encoded_stats[0] & 0xFF,
+            XHCI_EXT_CAP_USB4_PROTOCOL_TUNNELING_STATS as u32
+        );
+        assert_eq!((encoded_stats[0] >> 8) & 0xFF, 32);
+        assert_eq!(encoded_stats[1] & 0x01, 1); // enabled
+        assert_eq!(encoded_stats[1] & 0x02, 2); // irq_enabled
+        assert_eq!((encoded_stats[1] >> 8) & 0x3F, 12); // adapter 12
+        assert_eq!((encoded_stats[1] >> 16) & 0x07, 1); // protocol 1
+        assert_eq!(encoded_stats[2], 2); // 2 tx
+        assert_eq!(encoded_stats[3], 1); // 1 rx
+
+        let parsed_stats = XhciUsb4ProtocolTunnelingStats::parse(&encoded_stats).unwrap();
+        assert_eq!(parsed_stats.next_ptr_dwords, 32);
+        assert!(parsed_stats.enabled);
+        assert!(parsed_stats.irq_enabled);
+        assert_eq!(parsed_stats.adapter_id, 12);
+        assert_eq!(parsed_stats.protocol_type, 1);
+        assert_eq!(parsed_stats.tx_packet_count, 2);
+        assert_eq!(parsed_stats.rx_packet_count, 1);
     }
 }
