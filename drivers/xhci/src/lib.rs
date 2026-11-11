@@ -340,6 +340,8 @@ pub const XHCI_EXT_CAP_USB4_PCIE_ADAPTER_CONFIGURATION: u8 = 48;
 pub const XHCI_EXT_CAP_USB4_DP_ADAPTER_CONFIGURATION: u8 = 49;
 /// Capacité étendue xHCI 1.2 / USB4 Buffer Allocation Interface Capability (§7.42)
 pub const XHCI_EXT_CAP_USB4_BUFFER_ALLOCATION_INTERFACE: u8 = 50;
+/// Capacité étendue xHCI 1.2 / USB4 Optical Interface Management Capability (§7.43)
+pub const XHCI_EXT_CAP_USB4_OPTICAL_INTERFACE_MANAGEMENT: u8 = 51;
 
 /// Masques de registres USB Legacy Support (xHCI 1.2 Section 7.1)
 /// Registre USBLEGSUP (Offset 0x00)
@@ -5194,6 +5196,135 @@ impl XhciUsb4BufferAllocation {
     pub fn update_credits(&mut self, tx: u16, rx: u16) {
         self.tx_credits_allocated = tx;
         self.rx_credits_allocated = rx;
+    }
+}
+
+/// Capacité Étendue xHCI 1.2 / USB4 Optical Interface Management (§7.43)
+///
+/// Contrôle et télémétrie des interfaces physiques optiques actives (Active Optical Cable - AOC)
+/// pour les liaisons montantes et descendantes USB4 haut débit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XhciUsb4OpticalInterface {
+    /// Pointeur dword vers la prochaine capacité étendue (0 = fin de liste)
+    pub next_ptr_dwords: u8,
+    /// Interface optique activée
+    pub enabled: bool,
+    /// Émetteur laser / optique actif
+    pub laser_enabled: bool,
+    /// Surveillance de faible puissance optique (Low Optical Power Alert)
+    pub low_power_alert: bool,
+    /// Détection de perte de signal (Loss of Signal - LOS)
+    pub loss_of_signal: bool,
+    /// Numéro d'adaptateur physique USB4
+    pub adapter_num: u8,
+    /// Identifiant du routeur USB4
+    pub router_id: u8,
+    /// Longueur d'onde optique nominale en nanomètres (ex: 850 nm, 1310 nm)
+    pub wavelength_nm: u16,
+    /// Statut matériel MMIO
+    pub status: u32,
+    /// Puissance optique reçue (RSSI) en microwatts (uW)
+    pub rx_power_uw: u16,
+    /// Puissance optique transmise en microwatts (uW)
+    pub tx_power_uw: u16,
+}
+
+impl XhciUsb4OpticalInterface {
+    /// Initialise une nouvelle capacité USB4 Optical Interface Management
+    pub const fn new(
+        adapter_num: u8,
+        router_id: u8,
+        wavelength_nm: u16,
+        tx_power: u16,
+        rx_power: u16,
+    ) -> Self {
+        Self {
+            next_ptr_dwords: 0,
+            enabled: false,
+            laser_enabled: false,
+            low_power_alert: false,
+            loss_of_signal: false,
+            adapter_num,
+            router_id,
+            wavelength_nm,
+            status: 0,
+            rx_power_uw: rx_power,
+            tx_power_uw: tx_power,
+        }
+    }
+
+    /// Parse les 4 dwords MMIO d'une capacité étendue USB4 Optical Interface Management (§7.43)
+    pub const fn parse(dwords: &[u32; 4]) -> Option<Self> {
+        let cap_id = (dwords[0] & 0xFF) as u8;
+        if cap_id != XHCI_EXT_CAP_USB4_OPTICAL_INTERFACE_MANAGEMENT {
+            return None;
+        }
+
+        let next_ptr = ((dwords[0] >> 8) & 0xFF) as u8;
+        let ctrl = dwords[1];
+        let enabled = (ctrl & 0x01) != 0;
+        let laser_enabled = (ctrl & 0x02) != 0;
+        let low_power_alert = (ctrl & 0x04) != 0;
+        let loss_of_signal = (ctrl & 0x08) != 0;
+        let adapter_num = ((ctrl >> 8) & 0xFF) as u8;
+        let router_id = ((ctrl >> 16) & 0xFF) as u8;
+        let wavelength_nm = ((ctrl >> 24) & 0xFF) as u16 * 10; // multiple de 10 nm
+
+        let status = dwords[2];
+        let tx_power = (dwords[3] & 0xFFFF) as u16;
+        let rx_power = ((dwords[3] >> 16) & 0xFFFF) as u16;
+
+        Some(Self {
+            next_ptr_dwords: next_ptr,
+            enabled,
+            laser_enabled,
+            low_power_alert,
+            loss_of_signal,
+            adapter_num,
+            router_id,
+            wavelength_nm,
+            status,
+            rx_power_uw: rx_power,
+            tx_power_uw: tx_power,
+        })
+    }
+
+    /// Encode la capacité étendue en 4 mots dwords MMIO 32-bit
+    pub const fn encode(&self) -> [u32; 4] {
+        let dw0 = (XHCI_EXT_CAP_USB4_OPTICAL_INTERFACE_MANAGEMENT as u32)
+            | ((self.next_ptr_dwords as u32) << 8);
+        let mut ctrl = ((self.adapter_num as u32) << 8)
+            | ((self.router_id as u32) << 16)
+            | ((((self.wavelength_nm / 10) as u32) & 0xFF) << 24);
+        if self.enabled {
+            ctrl |= 0x01;
+        }
+        if self.laser_enabled {
+            ctrl |= 0x02;
+        }
+        if self.low_power_alert {
+            ctrl |= 0x04;
+        }
+        if self.loss_of_signal {
+            ctrl |= 0x08;
+        }
+        let dw2 = self.status;
+        let dw3 = (self.tx_power_uw as u32) | (((self.rx_power_uw as u32) & 0xFFFF) << 16);
+        [dw0, ctrl, dw2, dw3]
+    }
+
+    /// Active l'interface optique et l'émetteur laser
+    pub fn enable_optics(&mut self, enable: bool) {
+        self.enabled = enable;
+        self.laser_enabled = enable;
+    }
+
+    /// Met à jour la télémétrie de puissance optique
+    pub fn update_power(&mut self, tx_uw: u16, rx_uw: u16) {
+        self.tx_power_uw = tx_uw;
+        self.rx_power_uw = rx_uw;
+        self.low_power_alert = rx_uw < 50; // Alerte si < 50 uW
+        self.loss_of_signal = rx_uw == 0;
     }
 }
 
@@ -14874,5 +15005,50 @@ mod tests {
         assert_eq!(parsed_buf.status, 0x8899_AABB);
         assert_eq!(parsed_buf.tx_credits_allocated, 128);
         assert_eq!(parsed_buf.rx_credits_allocated, 256);
+
+        // Test Capacité Étendue xHCI 1.2 / USB4 Optical Interface Management (§7.43)
+        let mut usb4_optic = XhciUsb4OpticalInterface::new(4, 1, 850, 500, 450);
+        assert_eq!(usb4_optic.adapter_num, 4);
+        assert_eq!(usb4_optic.router_id, 1);
+        assert_eq!(usb4_optic.wavelength_nm, 850);
+        assert_eq!(usb4_optic.tx_power_uw, 500);
+        assert_eq!(usb4_optic.rx_power_uw, 450);
+        assert!(!usb4_optic.enabled);
+        assert!(!usb4_optic.laser_enabled);
+        assert!(!usb4_optic.low_power_alert);
+        assert!(!usb4_optic.loss_of_signal);
+
+        usb4_optic.enable_optics(true);
+        usb4_optic.update_power(550, 480);
+        usb4_optic.next_ptr_dwords = 32;
+        usb4_optic.status = 0xCAFE_BABE;
+
+        let encoded_optic = usb4_optic.encode();
+        assert_eq!(
+            encoded_optic[0] & 0xFF,
+            XHCI_EXT_CAP_USB4_OPTICAL_INTERFACE_MANAGEMENT as u32
+        );
+        assert_eq!((encoded_optic[0] >> 8) & 0xFF, 32);
+        assert_eq!(encoded_optic[1] & 0x01, 1); // enabled
+        assert_eq!(encoded_optic[1] & 0x02, 2); // laser_enabled
+        assert_eq!((encoded_optic[1] >> 8) & 0xFF, 4); // adapter_num
+        assert_eq!((encoded_optic[1] >> 16) & 0xFF, 1); // router_id
+        assert_eq!((encoded_optic[1] >> 24) & 0xFF, 85); // 850 nm / 10
+        assert_eq!(encoded_optic[2], 0xCAFE_BABE);
+        assert_eq!(encoded_optic[3] & 0xFFFF, 550); // tx_power
+        assert_eq!((encoded_optic[3] >> 16) & 0xFFFF, 480); // rx_power
+
+        let parsed_optic = XhciUsb4OpticalInterface::parse(&encoded_optic).unwrap();
+        assert_eq!(parsed_optic.next_ptr_dwords, 32);
+        assert!(parsed_optic.enabled);
+        assert!(parsed_optic.laser_enabled);
+        assert!(!parsed_optic.low_power_alert);
+        assert!(!parsed_optic.loss_of_signal);
+        assert_eq!(parsed_optic.adapter_num, 4);
+        assert_eq!(parsed_optic.router_id, 1);
+        assert_eq!(parsed_optic.wavelength_nm, 850);
+        assert_eq!(parsed_optic.status, 0xCAFE_BABE);
+        assert_eq!(parsed_optic.tx_power_uw, 550);
+        assert_eq!(parsed_optic.rx_power_uw, 480);
     }
 }

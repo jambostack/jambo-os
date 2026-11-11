@@ -12396,6 +12396,397 @@ pub fn run_sha256sum(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32
 }
 
 // ============================================================================
+// Utilitaire POSIX / GNU coreutils : `sha224sum` (Calcul et vérification FIPS 180-4 SHA-224)
+// ============================================================================
+
+/// Hasher cryptographique SHA-224 déterministe bare-metal (#![no_std], FIPS 180-4)
+#[derive(Clone, Copy)]
+pub struct Sha224Hasher {
+    inner: Sha256Hasher,
+}
+
+impl Sha224Hasher {
+    /// Constantes d'initialisation standard FIPS 180-4 SHA-224 H0-H7
+    pub const fn new() -> Self {
+        Self {
+            inner: Sha256Hasher {
+                state: [
+                    0xc1059ed8, 0x367cd507, 0x3070dd17, 0xf70e5939, 0xffc00b31, 0x68581511,
+                    0x64f98fa7, 0xbefa4fa4,
+                ],
+                buffer: [0u8; 64],
+                buffer_len: 0,
+                total_bytes: 0,
+            },
+        }
+    }
+
+    /// Absorbe les octets en streaming
+    pub fn update(&mut self, data: &[u8]) {
+        self.inner.update(data);
+    }
+
+    /// Finalise et retourne le condensat SHA-224 tronqué à 28 octets (224 bits)
+    pub fn finalize(self) -> [u8; 28] {
+        let full = self.inner.finalize();
+        let mut out = [0u8; 28];
+        out.copy_from_slice(&full[..28]);
+        out
+    }
+
+    /// Fonction d'aide pour hacher en une seule passe
+    pub fn hash(data: &[u8]) -> [u8; 28] {
+        let mut hasher = Self::new();
+        hasher.update(data);
+        hasher.finalize()
+    }
+}
+
+impl Default for Sha224Hasher {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Convertit un condensat SHA-224 (28 octets) en représentation hexadécimale minuscule (56 octets ASCII)
+pub fn sha224_to_hex(digest: &[u8; 28], out: &mut [u8; 56]) {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    for i in 0..28 {
+        let b = digest[i];
+        out[i * 2] = HEX[(b >> 4) as usize];
+        out[i * 2 + 1] = HEX[(b & 0x0F) as usize];
+    }
+}
+
+/// Hache un descripteur de fichier en streaming avec SHA-224 sans allocation
+fn hash_fd_sha224(fd: i32) -> Result<[u8; 28], ()> {
+    let mut hasher = Sha224Hasher::new();
+    let mut chunk = [0u8; 4096];
+    loop {
+        let n = sys_read(fd, &mut chunk);
+        if n < 0 {
+            return Err(());
+        }
+        if n == 0 {
+            break;
+        }
+        hasher.update(&chunk[..n as usize]);
+    }
+    Ok(hasher.finalize())
+}
+
+/// Parse une ligne de fichier de vérification sha224 (format GNU ou BSD)
+fn parse_sha224_check_line(line: &str) -> Option<(&str, &str)> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() || trimmed.starts_with('#') {
+        return None;
+    }
+
+    // Format BSD: SHA224 (path) = hex56
+    if let Some(rest) = trimmed.strip_prefix("SHA224 (") {
+        if let Some(close_idx) = rest.find(')') {
+            let path = &rest[..close_idx];
+            let after = rest[close_idx + 1..].trim();
+            if let Some(hex_part) = after.strip_prefix('=') {
+                let hex = hex_part.trim();
+                if hex.len() == 56 {
+                    return Some((path, hex));
+                }
+            }
+        }
+    }
+
+    // Format standard GNU: <hex56>  <path> ou <hex56> *<path>
+    if trimmed.len() >= 58 {
+        let hex = &trimmed[..56];
+        let sep = &trimmed[56..58];
+        if (sep == "  " || sep == " *" || sep == "  ")
+            && hex.as_bytes().iter().all(|b| b.is_ascii_hexdigit())
+        {
+            let path = trimmed[58..].trim();
+            if !path.is_empty() {
+                return Some((path, hex));
+            }
+        }
+    }
+
+    None
+}
+
+/// Exécute l'utilitaire Coreutils POSIX / GNU `sha224sum` (calcul et vérification SHA-224)
+pub fn run_sha224sum(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    let mut check_mode = false;
+    let mut tag_format = false;
+    let mut binary_mode = false;
+    let mut status_only = false;
+    let mut quiet = false;
+    let mut warn = false;
+    let mut file_args = [""; 64];
+    let mut file_count = 0usize;
+
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i];
+        if arg == "--help" || arg == "-h" {
+            let help = b"Usage: sha224sum [OPTION]... [FILE]...\nPrint or check SHA224 (224-bit) checksums.\n\nWith no FILE, or when FILE is -, read standard input.\n\n  -b, --binary         read in binary mode\n  -c, --check          read checksums from the FILEs and check them\n      --tag            create a BSD-style checksum\n  -t, --text           read in text mode (default)\n  -q, --quiet          don't print OK for each successfully verified file\n      --status         don't output anything, status code shows success\n  -w, --warn           warn about improperly formatted checksum lines\n      --help           display this help and exit\n      --version        output version information and exit\n";
+            let _ = sys_write(out_fd, help);
+            return 0;
+        }
+        if arg == "--version" || arg == "-v" {
+            let ver = b"sha224sum (JamboOS coreutils) 0.1.0\nCopyright (C) 2026 JamboOS Authors.\nLicense MIT or Apache-2.0.\n";
+            let _ = sys_write(out_fd, ver);
+            return 0;
+        }
+
+        if arg == "-c" || arg == "--check" {
+            check_mode = true;
+        } else if arg == "--tag" {
+            tag_format = true;
+        } else if arg == "-b" || arg == "--binary" {
+            binary_mode = true;
+        } else if arg == "-t" || arg == "--text" {
+            binary_mode = false;
+        } else if arg == "--status" {
+            status_only = true;
+        } else if arg == "-q" || arg == "--quiet" {
+            quiet = true;
+        } else if arg == "-w" || arg == "--warn" {
+            warn = true;
+        } else if (!arg.starts_with('-') || arg == "-") && file_count < file_args.len() {
+            file_args[file_count] = arg;
+            file_count += 1;
+        }
+        i += 1;
+    }
+
+    if check_mode {
+        let mut overall_success = true;
+        let mut total_verified = 0usize;
+
+        let targets: &[&str] = if file_count == 0 {
+            &["-"]
+        } else {
+            &file_args[..file_count]
+        };
+
+        for &target in targets {
+            let check_fd = if target == "-" {
+                in_fd
+            } else {
+                let fd = sys_open(target, crate::vfs::O_RDONLY);
+                if fd < 0 {
+                    if !status_only {
+                        let _ = sys_write(err_fd, b"sha224sum: ");
+                        let _ = sys_write(err_fd, target.as_bytes());
+                        let _ = sys_write(err_fd, b": No such file or directory\n");
+                    }
+                    overall_success = false;
+                    continue;
+                }
+                fd
+            };
+
+            // Lecture du fichier de condensats ligne par ligne
+            let mut line_buf = [0u8; 1024];
+            let mut line_len = 0usize;
+            let mut byte_buf = [0u8; 1];
+
+            loop {
+                let n = sys_read(check_fd, &mut byte_buf);
+                if n <= 0 {
+                    if line_len > 0 {
+                        // Traiter la dernière ligne sans newline
+                        if let Ok(line_str) = core::str::from_utf8(&line_buf[..line_len]) {
+                            if let Some((path, expected_hex)) = parse_sha224_check_line(line_str) {
+                                let file_fd = sys_open(path, crate::vfs::O_RDONLY);
+                                if file_fd < 0 {
+                                    if !status_only {
+                                        let _ = sys_write(err_fd, path.as_bytes());
+                                        let _ = sys_write(err_fd, b": FAILED open or read\n");
+                                    }
+                                    overall_success = false;
+                                } else {
+                                    match hash_fd_sha224(file_fd) {
+                                        Ok(digest) => {
+                                            let mut calculated_hex = [0u8; 56];
+                                            sha224_to_hex(&digest, &mut calculated_hex);
+                                            let hex_matches = calculated_hex
+                                                .iter()
+                                                .zip(expected_hex.as_bytes().iter())
+                                                .all(|(&a, &b)| a.eq_ignore_ascii_case(&b));
+                                            if hex_matches {
+                                                total_verified += 1;
+                                                if !quiet && !status_only {
+                                                    let _ = sys_write(out_fd, path.as_bytes());
+                                                    let _ = sys_write(out_fd, b": OK\n");
+                                                }
+                                            } else {
+                                                overall_success = false;
+                                                if !status_only {
+                                                    let _ = sys_write(out_fd, path.as_bytes());
+                                                    let _ = sys_write(out_fd, b": FAILED\n");
+                                                }
+                                            }
+                                        }
+                                        Err(_) => {
+                                            overall_success = false;
+                                            if !status_only {
+                                                let _ = sys_write(err_fd, path.as_bytes());
+                                                let _ =
+                                                    sys_write(err_fd, b": FAILED open or read\n");
+                                            }
+                                        }
+                                    }
+                                    sys_close(file_fd);
+                                }
+                            }
+                        }
+                    }
+                    break;
+                }
+
+                let b = byte_buf[0];
+                if b == b'\n' || b == b'\r' {
+                    if line_len > 0 {
+                        if let Ok(line_str) = core::str::from_utf8(&line_buf[..line_len]) {
+                            match parse_sha224_check_line(line_str) {
+                                Some((path, expected_hex)) => {
+                                    let file_fd = sys_open(path, crate::vfs::O_RDONLY);
+                                    if file_fd < 0 {
+                                        if !status_only {
+                                            let _ = sys_write(err_fd, path.as_bytes());
+                                            let _ = sys_write(err_fd, b": FAILED open or read\n");
+                                        }
+                                        overall_success = false;
+                                    } else {
+                                        match hash_fd_sha224(file_fd) {
+                                            Ok(digest) => {
+                                                let mut calculated_hex = [0u8; 56];
+                                                sha224_to_hex(&digest, &mut calculated_hex);
+                                                let hex_matches = calculated_hex
+                                                    .iter()
+                                                    .zip(expected_hex.as_bytes().iter())
+                                                    .all(|(&a, &b)| a.eq_ignore_ascii_case(&b));
+                                                if hex_matches {
+                                                    total_verified += 1;
+                                                    if !quiet && !status_only {
+                                                        let _ = sys_write(out_fd, path.as_bytes());
+                                                        let _ = sys_write(out_fd, b": OK\n");
+                                                    }
+                                                } else {
+                                                    overall_success = false;
+                                                    if !status_only {
+                                                        let _ = sys_write(out_fd, path.as_bytes());
+                                                        let _ = sys_write(out_fd, b": FAILED\n");
+                                                    }
+                                                }
+                                            }
+                                            Err(_) => {
+                                                overall_success = false;
+                                                if !status_only {
+                                                    let _ = sys_write(err_fd, path.as_bytes());
+                                                    let _ = sys_write(
+                                                        err_fd,
+                                                        b": FAILED open or read\n",
+                                                    );
+                                                }
+                                            }
+                                        }
+                                        sys_close(file_fd);
+                                    }
+                                }
+                                None => {
+                                    if warn && !status_only {
+                                        let _ = sys_write(
+                                            err_fd,
+                                            b"sha224sum: improperly formatted SHA224 checksum line\n",
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                        line_len = 0;
+                    }
+                } else if line_len < line_buf.len() {
+                    line_buf[line_len] = b;
+                    line_len += 1;
+                }
+            }
+
+            if check_fd != in_fd {
+                sys_close(check_fd);
+            }
+        }
+
+        if overall_success && total_verified > 0 {
+            0
+        } else {
+            1
+        }
+    } else {
+        let targets: &[&str] = if file_count == 0 {
+            &["-"]
+        } else {
+            &file_args[..file_count]
+        };
+
+        let mut exit_code = 0;
+
+        for &target in targets {
+            let (target_fd, display_name) = if target == "-" {
+                (in_fd, "-")
+            } else {
+                let fd = sys_open(target, crate::vfs::O_RDONLY);
+                if fd < 0 {
+                    let _ = sys_write(err_fd, b"sha224sum: ");
+                    let _ = sys_write(err_fd, target.as_bytes());
+                    let _ = sys_write(err_fd, b": No such file or directory\n");
+                    exit_code = 1;
+                    continue;
+                }
+                (fd, target)
+            };
+
+            match hash_fd_sha224(target_fd) {
+                Ok(digest) => {
+                    let mut hex = [0u8; 56];
+                    sha224_to_hex(&digest, &mut hex);
+
+                    if tag_format {
+                        let _ = sys_write(out_fd, b"SHA224 (");
+                        let _ = sys_write(out_fd, display_name.as_bytes());
+                        let _ = sys_write(out_fd, b") = ");
+                        let _ = sys_write(out_fd, &hex);
+                        let _ = sys_write(out_fd, b"\n");
+                    } else {
+                        let _ = sys_write(out_fd, &hex);
+                        if binary_mode {
+                            let _ = sys_write(out_fd, b" *");
+                        } else {
+                            let _ = sys_write(out_fd, b"  ");
+                        }
+                        let _ = sys_write(out_fd, display_name.as_bytes());
+                        let _ = sys_write(out_fd, b"\n");
+                    }
+                }
+                Err(_) => {
+                    let _ = sys_write(err_fd, b"sha224sum: error reading ");
+                    let _ = sys_write(err_fd, display_name.as_bytes());
+                    let _ = sys_write(err_fd, b"\n");
+                    exit_code = 1;
+                }
+            }
+
+            if target_fd != in_fd {
+                sys_close(target_fd);
+            }
+        }
+
+        exit_code
+    }
+}
+
+// ============================================================================
 // Utilitaire POSIX / GNU coreutils : `md5sum` (Calcul et vérification RFC 1321 MD5)
 // ============================================================================
 
@@ -14207,6 +14598,7 @@ pub fn execute_coreutils_command(
         "base32hex" => run_base32hex(args, in_fd, out_fd, err_fd),
         "basenc" => run_basenc(args, in_fd, out_fd, err_fd),
         "sha256sum" => run_sha256sum(args, in_fd, out_fd, err_fd),
+        "sha224sum" => run_sha224sum(args, in_fd, out_fd, err_fd),
         "sha1sum" => run_sha1sum(args, in_fd, out_fd, err_fd),
         "md5sum" => run_md5sum(args, in_fd, out_fd, err_fd),
         "factor" => run_factor(args, in_fd, out_fd, err_fd),
@@ -15588,6 +15980,7 @@ pub fn run_xargs(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
             "base32hex" => run_base32hex(effective_sub_args, 0, out_fd, err_fd),
             "basenc" => run_basenc(effective_sub_args, 0, out_fd, err_fd),
             "sha256sum" => run_sha256sum(effective_sub_args, 0, out_fd, err_fd),
+            "sha224sum" => run_sha224sum(effective_sub_args, 0, out_fd, err_fd),
             "sha1sum" => run_sha1sum(effective_sub_args, 0, out_fd, err_fd),
             "md5sum" => run_md5sum(effective_sub_args, 0, out_fd, err_fd),
             "truncate" => run_truncate(effective_sub_args, 0, out_fd, err_fd),
@@ -30438,5 +30831,59 @@ Chaque processus dispose de son propre CR3 sans aucun privilege materiel direct.
         assert!(out_str_up.contains("up "));
         assert!(out_str_up.contains("1 user"));
         assert!(out_str_up.contains("load average:"));
+
+        // 44. Test run_sha224sum (NIST FIPS 180-4 SHA-224 checksums)
+        let empty_224 = Sha224Hasher::hash(b"");
+        let mut hex_empty_224 = [0u8; 56];
+        sha224_to_hex(&empty_224, &mut hex_empty_224);
+        assert_eq!(
+            core::str::from_utf8(&hex_empty_224).unwrap(),
+            "d14a028c2a3a2bc9476102bb288234c415a2b01f828ea62ac5b3e42f"
+        );
+
+        let abc_224 = Sha224Hasher::hash(b"abc");
+        let mut hex_abc_224 = [0u8; 56];
+        sha224_to_hex(&abc_224, &mut hex_abc_224);
+        assert_eq!(
+            core::str::from_utf8(&hex_abc_224).unwrap(),
+            "23097d223405d8228642a477bda255b32aadbce4bda0b3f7e36c9da7"
+        );
+
+        let file_224 = "/tmp/test_sha224_data.txt";
+        let fd_224 = sys_open(file_224, O_CREAT | O_WRONLY);
+        assert!(fd_224 >= 0);
+        let _ = sys_write(fd_224, b"abc");
+        sys_close(fd_224);
+
+        let (out_r224_1, out_w224_1) = crate::vfs::pipe().unwrap();
+        let code224_1 = run_sha224sum(&[file_224], 0, out_w224_1, 2);
+        sys_close(out_w224_1);
+        assert_eq!(code224_1, 0);
+
+        let mut buf224_1 = [0u8; 256];
+        let n224_1 = sys_read(out_r224_1, &mut buf224_1);
+        sys_close(out_r224_1);
+        let s224_1 = core::str::from_utf8(&buf224_1[..n224_1 as usize]).unwrap();
+        assert!(s224_1.starts_with(
+            "23097d223405d8228642a477bda255b32aadbce4bda0b3f7e36c9da7  /tmp/test_sha224_data.txt"
+        ));
+
+        // Mode --tag BSD
+        let (out_r224_2, out_w224_2) = crate::vfs::pipe().unwrap();
+        let code224_2 = run_sha224sum(&["--tag", file_224], 0, out_w224_2, 2);
+        sys_close(out_w224_2);
+        assert_eq!(code224_2, 0);
+
+        let mut buf224_2 = [0u8; 256];
+        let n224_2 = sys_read(out_r224_2, &mut buf224_2);
+        sys_close(out_r224_2);
+        let s224_2 = core::str::from_utf8(&buf224_2[..n224_2 as usize]).unwrap();
+        assert_eq!(
+            s224_2,
+            "SHA224 (/tmp/test_sha224_data.txt) = 23097d223405d8228642a477bda255b32aadbce4bda0b3f7e36c9da7\n"
+        );
+
+        assert_eq!(run_sha224sum(&["--help"], 0, 1, 2), 0);
+        assert_eq!(run_sha224sum(&["--version"], 0, 1, 2), 0);
     }
 }

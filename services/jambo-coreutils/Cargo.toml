@@ -562,7 +562,12 @@ name = "uptime"
 path = "src/bin/uptime.rs"
 test = false
 
-# 111 utilitaires Ring 3
+[[bin]]
+name = "sha224sum"
+path = "src/bin/sha224sum.rs"
+test = false
+
+# 112 utilitaires Ring 3
 
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }
