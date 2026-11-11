@@ -356,6 +356,8 @@ pub const XHCI_EXT_CAP_USB4_HOST_INTERFACE_DISCOVERY: u8 = 56;
 pub const XHCI_EXT_CAP_USB4_SLEEP_WAKE_NOTIFICATION: u8 = 57;
 /// Capacité étendue xHCI 1.2 / USB4 PCIe Adapter Configuration Interface (§7.50)
 pub const XHCI_EXT_CAP_USB4_PCIE_ADAPTER_CONFIGURATION_INTERFACE: u8 = 58;
+/// Capacité étendue xHCI 1.2 / USB4 DP Adapter Configuration Interface (§7.51)
+pub const XHCI_EXT_CAP_USB4_DP_ADAPTER_CONFIGURATION_INTERFACE: u8 = 59;
 
 /// Masques de registres USB Legacy Support (xHCI 1.2 Section 7.1)
 /// Registre USBLEGSUP (Offset 0x00)
@@ -6121,6 +6123,120 @@ impl XhciUsb4PcieAdapterConfigInterface {
     /// Configure la largeur de lien PCIe (x1, x2, x4, x8, x16)
     pub fn set_link_width(&mut self, width: u8) {
         self.link_width = width & 0x1F;
+    }
+
+    /// Enregistre un événement de statut ou d'interruption
+    pub fn record_event(&mut self, status_bits: u32) {
+        self.adapter_status |= status_bits;
+        self.event_counter = self.event_counter.wrapping_add(1);
+    }
+}
+
+/// Capacité étendue xHCI 1.2 / USB4 DP Adapter Configuration Interface (§7.51, Cap ID 59)
+///
+/// Permet la gestion déterministe et le contrôle direct des registres de configuration
+/// des adaptateurs DisplayPort (DP IN / DP OUT Adapters) intégrés dans les routeurs USB4 hôtes et cibles.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XhciUsb4DpAdapterConfigInterface {
+    /// Pointeur dword vers la prochaine capacité étendue (0 = fin de liste)
+    pub next_ptr_dwords: u8,
+    /// Fonctionnalité activée dans le contrôleur (bit 0)
+    pub enabled: bool,
+    /// Génération d'interruptions d'événement d'adaptateur DP activée (bit 1)
+    pub irq_enabled: bool,
+    /// Index ou numéro de l'adaptateur DisplayPort USB4 cible (bits 8..15)
+    pub adapter_index: u8,
+    /// Taux de liaison DP négocié (Link Rate: 1=RBR 1.62Gbps, 2=HBR 2.7Gbps, 3=HBR2 5.4Gbps, 4=HBR3 8.1Gbps, 5=UHBR10, 6=UHBR20)
+    pub link_rate: u8,
+    /// Nombre de voies DP allouées (Lane Count: 1=1 lane, 2=2 lanes, 4=4 lanes)
+    pub lane_count: u8,
+    /// Registre de contrôle et de statut d'adaptateur DisplayPort USB4
+    pub adapter_status: u32,
+    /// Compteur total d'interruptions et d'événements de tunneling DP reçus
+    pub event_counter: u32,
+}
+
+impl XhciUsb4DpAdapterConfigInterface {
+    /// Crée une nouvelle interface de configuration d'adaptateur DisplayPort USB4
+    pub const fn new(adapter_index: u8, link_rate: u8, lane_count: u8) -> Self {
+        Self {
+            next_ptr_dwords: 0,
+            enabled: false,
+            irq_enabled: false,
+            adapter_index,
+            link_rate: link_rate & 0x07,
+            lane_count: lane_count & 0x07,
+            adapter_status: 0,
+            event_counter: 0,
+        }
+    }
+
+    /// Parse les 4 dwords MMIO d'une capacité étendue USB4 DP Adapter Configuration Interface (§7.51)
+    pub const fn parse(dwords: &[u32; 4]) -> Option<Self> {
+        let cap_id = (dwords[0] & 0xFF) as u8;
+        if cap_id != XHCI_EXT_CAP_USB4_DP_ADAPTER_CONFIGURATION_INTERFACE {
+            return None;
+        }
+
+        let next_ptr = ((dwords[0] >> 8) & 0xFF) as u8;
+        let ctrl = dwords[1];
+        let enabled = (ctrl & 0x01) != 0;
+        let irq_enabled = (ctrl & 0x02) != 0;
+        let adapter_index = ((ctrl >> 8) & 0xFF) as u8;
+        let link_rate = ((ctrl >> 16) & 0x07) as u8;
+        let lane_count = ((ctrl >> 20) & 0x07) as u8;
+
+        let adapter_status = dwords[2];
+        let event_counter = dwords[3];
+
+        Some(Self {
+            next_ptr_dwords: next_ptr,
+            enabled,
+            irq_enabled,
+            adapter_index,
+            link_rate,
+            lane_count,
+            adapter_status,
+            event_counter,
+        })
+    }
+
+    /// Encode la capacité étendue en 4 mots dwords MMIO 32-bit
+    pub const fn encode(&self) -> [u32; 4] {
+        let dw0 = (XHCI_EXT_CAP_USB4_DP_ADAPTER_CONFIGURATION_INTERFACE as u32)
+            | ((self.next_ptr_dwords as u32) << 8);
+        let mut ctrl = ((self.adapter_index as u32) << 8)
+            | (((self.link_rate as u32) & 0x07) << 16)
+            | (((self.lane_count as u32) & 0x07) << 20);
+        if self.enabled {
+            ctrl |= 0x01;
+        }
+        if self.irq_enabled {
+            ctrl |= 0x02;
+        }
+        let dw2 = self.adapter_status;
+        let dw3 = self.event_counter;
+        [dw0, ctrl, dw2, dw3]
+    }
+
+    /// Active ou désactive l'interface d'adaptateur DisplayPort
+    pub fn enable(&mut self, enable: bool) {
+        self.enabled = enable;
+    }
+
+    /// Active ou désactive les interruptions matérielles sur événement DisplayPort
+    pub fn configure_irq(&mut self, enable: bool) {
+        self.irq_enabled = enable;
+    }
+
+    /// Configure le taux de liaison DP (Link Rate: 1..6)
+    pub fn set_link_rate(&mut self, rate: u8) {
+        self.link_rate = rate & 0x07;
+    }
+
+    /// Configure le nombre de voies DP (Lane Count: 1, 2, 4)
+    pub fn set_lane_count(&mut self, lanes: u8) {
+        self.lane_count = lanes & 0x07;
     }
 
     /// Enregistre un événement de statut ou d'interruption
@@ -16151,5 +16267,47 @@ mod tests {
         assert_eq!(parsed_pcie.link_width, 8);
         assert_eq!(parsed_pcie.adapter_status, 0x0003);
         assert_eq!(parsed_pcie.event_counter, 2);
+
+        // Test USB4 DisplayPort Adapter Configuration Interface (§7.51)
+        let mut dp = XhciUsb4DpAdapterConfigInterface::new(2, 4, 4);
+        assert_eq!(dp.adapter_index, 2);
+        assert_eq!(dp.link_rate, 4);
+        assert_eq!(dp.lane_count, 4);
+        assert_eq!(dp.event_counter, 0);
+        assert_eq!(dp.adapter_status, 0);
+        assert!(!dp.enabled);
+        assert!(!dp.irq_enabled);
+
+        dp.enable(true);
+        dp.configure_irq(true);
+        dp.set_link_rate(3);
+        dp.set_lane_count(2);
+        dp.record_event(0x0004);
+        dp.record_event(0x0008);
+        dp.next_ptr_dwords = 72;
+
+        let encoded_dp = dp.encode();
+        assert_eq!(
+            encoded_dp[0] & 0xFF,
+            XHCI_EXT_CAP_USB4_DP_ADAPTER_CONFIGURATION_INTERFACE as u32
+        );
+        assert_eq!((encoded_dp[0] >> 8) & 0xFF, 72);
+        assert_eq!(encoded_dp[1] & 0x01, 1); // enabled
+        assert_eq!(encoded_dp[1] & 0x02, 2); // irq_enabled
+        assert_eq!((encoded_dp[1] >> 8) & 0xFF, 2); // adapter_index 2
+        assert_eq!((encoded_dp[1] >> 16) & 0x07, 3); // link_rate 3
+        assert_eq!((encoded_dp[1] >> 20) & 0x07, 2); // lane_count 2
+        assert_eq!(encoded_dp[2], 0x000C); // adapter_status
+        assert_eq!(encoded_dp[3], 2); // 2 events
+
+        let parsed_dp = XhciUsb4DpAdapterConfigInterface::parse(&encoded_dp).unwrap();
+        assert_eq!(parsed_dp.next_ptr_dwords, 72);
+        assert!(parsed_dp.enabled);
+        assert!(parsed_dp.irq_enabled);
+        assert_eq!(parsed_dp.adapter_index, 2);
+        assert_eq!(parsed_dp.link_rate, 3);
+        assert_eq!(parsed_dp.lane_count, 2);
+        assert_eq!(parsed_dp.adapter_status, 0x000C);
+        assert_eq!(parsed_dp.event_counter, 2);
     }
 }
