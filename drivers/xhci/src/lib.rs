@@ -847,6 +847,147 @@ impl XhciMsixRouter {
     }
 }
 
+/// Capacité Étendue xHCI USB Debug Capability (DbC / xHCI 1.2 §7.6/§7.7)
+///
+/// Permet l'émulation d'un périphérique cible de débogage (USB Debug Device)
+/// via le contrôleur hôte, exposant une console série bare-metal bidirectionnelle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XhciDebugCapability {
+    /// Pointeur dword vers la prochaine capacité étendue (0 = fin de liste)
+    pub next_ptr_dwords: u8,
+    /// Débogage USB activé (DCCTRL.DCE, bit 31 du registre de contrôle)
+    pub enabled: bool,
+    /// Numéro de port xHCI physique routé vers la console DbC
+    pub port_num: u8,
+    /// Taille de la table de segments du Debug Event Ring (DC_ERSTSZ)
+    pub erst_size: u16,
+    /// Adresse IOVA de la table de segments d'événements (DC_ERSTBA)
+    pub erst_base_iova: u64,
+    /// Pointeur de dequeuing d'événements (DC_ERDP)
+    pub erdp_iova: u64,
+    /// Pointeur de contexte DbC (DCCP - Debug Capability Context Pointer)
+    pub context_ptr_iova: u64,
+}
+
+impl XhciDebugCapability {
+    /// Parse les registres MMIO d'une capacité étendue USB Debug Capability (DbC)
+    /// `dwords` contient :
+    /// - [0] : DCID (Cap ID=10, Next Ptr, DC_ERSTSZ [21:16])
+    /// - [1] : DC_DOORBELL
+    /// - [2] : DC_ERSTBA_LO
+    /// - [3] : DC_ERSTBA_HI
+    /// - [4] : DC_ERDP_LO
+    /// - [5] : DC_ERDP_HI
+    /// - [6] : DCCTRL (DCE bit 31, Port Num [23:16])
+    /// - [7] : DCCP_LO
+    /// - [8] : DCCP_HI
+    pub const fn parse(dwords: &[u32; 9]) -> Self {
+        let dw0 = dwords[0];
+        let next_ptr_dwords = ((dw0 >> 8) & 0xFF) as u8;
+        let erst_size = ((dw0 >> 16) & 0xFFFF) as u16;
+
+        let erst_base_iova = (dwords[2] as u64) | ((dwords[3] as u64) << 32);
+        let erdp_iova = (dwords[4] as u64) | ((dwords[5] as u64) << 32);
+        let ctrl = dwords[6];
+        let enabled = (ctrl & (1 << 31)) != 0;
+        let port_num = ((ctrl >> 16) & 0xFF) as u8;
+        let context_ptr_iova = (dwords[7] as u64) | ((dwords[8] as u64) << 32);
+
+        Self {
+            next_ptr_dwords,
+            enabled,
+            port_num,
+            erst_size,
+            erst_base_iova,
+            erdp_iova,
+            context_ptr_iova,
+        }
+    }
+
+    /// Encode les 9 dwords de la structure USB Debug Capability (DbC)
+    pub const fn encode(&self) -> [u32; 9] {
+        let dw0 = (XHCI_EXT_CAP_USB_DEBUG_CAPABILITY as u32)
+            | ((self.next_ptr_dwords as u32) << 8)
+            | ((self.erst_size as u32) << 16);
+        let dw1 = 0; // Doorbell
+        let dw2 = (self.erst_base_iova & 0xFFFF_FFFF) as u32;
+        let dw3 = ((self.erst_base_iova >> 32) & 0xFFFF_FFFF) as u32;
+        let dw4 = (self.erdp_iova & 0xFFFF_FFFF) as u32;
+        let dw5 = ((self.erdp_iova >> 32) & 0xFFFF_FFFF) as u32;
+        let dw6 =
+            (if self.enabled { 1 << 31 } else { 0 }) | (((self.port_num as u32) & 0xFF) << 16);
+        let dw7 = (self.context_ptr_iova & 0xFFFF_FFFF) as u32;
+        let dw8 = ((self.context_ptr_iova >> 32) & 0xFFFF_FFFF) as u32;
+
+        [dw0, dw1, dw2, dw3, dw4, dw5, dw6, dw7, dw8]
+    }
+}
+
+/// Console de débogage série USB xHCI DbC (Debug Capability Console)
+///
+/// Fournit un canal Ring 3 bidirectionnel bare-metal pour logs noyau et télémesures
+/// sans nécessiter d'énumération USB standard ni de pilote hôte complexe.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XhciDebugConsole {
+    /// Port USB DbC configuré
+    pub port_num: u8,
+    /// Indique si la console est active et connectée à une machine hôte de débogage
+    pub connected: bool,
+    /// Compteur d'octets émis sur la console
+    pub bytes_tx: u64,
+    /// Compteur d'octets reçus sur la console
+    pub bytes_rx: u64,
+}
+
+impl Default for XhciDebugConsole {
+    fn default() -> Self {
+        Self::new(1)
+    }
+}
+
+impl XhciDebugConsole {
+    /// Crée une nouvelle console de débogage USB xHCI DbC
+    pub const fn new(port_num: u8) -> Self {
+        Self {
+            port_num,
+            connected: false,
+            bytes_tx: 0,
+            bytes_rx: 0,
+        }
+    }
+
+    /// Signale la connexion d'un câble de débogage hôte
+    pub fn attach(&mut self) {
+        self.connected = true;
+    }
+
+    /// Signale la déconnexion du câble de débogage
+    pub fn detach(&mut self) {
+        self.connected = false;
+    }
+
+    /// Écrit un tampon de données sur la console DbC si connectée
+    pub fn write(&mut self, data: &[u8]) -> usize {
+        if !self.connected {
+            return 0;
+        }
+        let len = data.len();
+        self.bytes_tx = self.bytes_tx.saturating_add(len as u64);
+        len
+    }
+
+    /// Lit un tampon de données depuis la console DbC si connectée
+    pub fn read(&mut self, buf: &mut [u8], simulated_input: &[u8]) -> usize {
+        if !self.connected {
+            return 0;
+        }
+        let copy_len = buf.len().min(simulated_input.len());
+        buf[..copy_len].copy_from_slice(&simulated_input[..copy_len]);
+        self.bytes_rx = self.bytes_rx.saturating_add(copy_len as u64);
+        copy_len
+    }
+}
+
 /// Anneau de transfert xHCI dédié à un flux Bulk spécifique (Block Stream / UAS)
 pub struct BulkStreamRing {
     pub stream_id: u16,
@@ -6187,6 +6328,23 @@ impl XhciController {
         XhciExtendedMessageInterrupt::parse(&[dw0, dw1, dw2, dw3])
     }
 
+    /// Lit et décode une capacité Extended Debug Capability (DbC / xHCI 1.2 §7.6/§7.7)
+    /// à partir de son adresse MMIO de base.
+    ///
+    /// # Safety
+    ///
+    /// Effectue 9 lectures volatiles MMIO 32-bit alignées sur l'espace BAR0 du contrôleur xHCI.
+    pub fn read_debug_capability(&self, cap_addr: u64) -> XhciDebugCapability {
+        let mut dwords = [0u32; 9];
+        let mut i = 0;
+        while i < 9 {
+            dwords[i] =
+                unsafe { core::ptr::read_volatile((cap_addr + (i as u64 * 4)) as *const u32) };
+            i += 1;
+        }
+        XhciDebugCapability::parse(&dwords)
+    }
+
     /// Émet une commande Evaluate Context sur le Command Ring.
     pub fn evaluate_context(
         &mut self,
@@ -8732,5 +8890,48 @@ mod tests {
 
         router.disable();
         assert_eq!(router.route_interrupt(50), None);
+
+        // 15. USB Debug Capability (DbC / xHCI 1.2 §7.6/§7.7)
+        let dbc_dwords: [u32; 9] = [
+            (4 << 16) | (12 << 8) | (XHCI_EXT_CAP_USB_DEBUG_CAPABILITY as u32), // erst_size=4, next=12
+            0,                                                                  // doorbell
+            0x1000,
+            0x0000, // erst_base_iova = 0x1000
+            0x2000,
+            0x0000,                // erdp_iova = 0x2000
+            (1 << 31) | (3 << 16), // enabled, port_num = 3
+            0x4000,
+            0x0000, // context_ptr_iova = 0x4000
+        ];
+        let dbc_cap = XhciDebugCapability::parse(&dbc_dwords);
+        assert!(dbc_cap.enabled);
+        assert_eq!(dbc_cap.next_ptr_dwords, 12);
+        assert_eq!(dbc_cap.erst_size, 4);
+        assert_eq!(dbc_cap.erst_base_iova, 0x1000);
+        assert_eq!(dbc_cap.erdp_iova, 0x2000);
+        assert_eq!(dbc_cap.port_num, 3);
+        assert_eq!(dbc_cap.context_ptr_iova, 0x4000);
+        assert_eq!(dbc_cap.encode(), dbc_dwords);
+
+        // 16. Console série USB DbC (XhciDebugConsole)
+        let mut console = XhciDebugConsole::new(3);
+        assert_eq!(console.port_num, 3);
+        assert!(!console.connected);
+        assert_eq!(console.write(b"boot log"), 0);
+
+        console.attach();
+        assert!(console.connected);
+        assert_eq!(console.write(b"JamboOS bare-metal debug log\n"), 29);
+        assert_eq!(console.bytes_tx, 29);
+
+        let mut rx_buf = [0u8; 16];
+        let rx_len = console.read(&mut rx_buf, b"ping");
+        assert_eq!(rx_len, 4);
+        assert_eq!(&rx_buf[..4], b"ping");
+        assert_eq!(console.bytes_rx, 4);
+
+        console.detach();
+        assert!(!console.connected);
+        assert_eq!(console.write(b"dropped"), 0);
     }
 }

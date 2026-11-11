@@ -19621,6 +19621,45 @@ fn parse_shuf_range(s: &str) -> Option<(u64, u64)> {
     Some((lo, hi))
 }
 
+/// Utilitaire POSIX standard `whoami` (Print Effective User Name)
+///
+/// Affiche le nom d'utilisateur effectif correspondant à l'identifiant EUID courant.
+/// Supporte `--help` et `--version`.
+pub fn run_whoami(args: &[&str], _in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    if let Some(&arg) = args.first() {
+        if arg == "--help" {
+            let _ = sys_write(
+                out_fd,
+                b"Usage: whoami [OPTION]...\n\
+Print the user name associated with the current effective user ID.\n\
+Same as id -un.\n\n\
+      --help     display this help and exit\n\
+      --version  output version information and exit\n",
+            );
+            return 0;
+        } else if arg == "--version" {
+            let _ = sys_write(out_fd, b"whoami (jambo-coreutils) 0.1.0\n");
+            return 0;
+        } else if arg.starts_with('-') && arg != "-" {
+            let _ = sys_write(err_fd, b"whoami: unrecognized option '");
+            let _ = sys_write(err_fd, arg.as_bytes());
+            let _ = sys_write(err_fd, b"'\nTry 'whoami --help' for more information.\n");
+            return 1;
+        } else {
+            let _ = sys_write(err_fd, b"whoami: extra operand '");
+            let _ = sys_write(err_fd, arg.as_bytes());
+            let _ = sys_write(err_fd, b"'\nTry 'whoami --help' for more information.\n");
+            return 1;
+        }
+    }
+
+    let euid = crate::vfs::geteuid();
+    let name = if euid == 0 { "root" } else { "user" };
+    let _ = sys_write(out_fd, name.as_bytes());
+    let _ = sys_write(out_fd, b"\n");
+    0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -23796,5 +23835,29 @@ Chaque processus dispose de son propre CR3 sans aucun privilege materiel direct.
         // Timeout avec --preserve-status
         let code_t3 = run_timeout(&["--preserve-status", "10ms", "sleep", "1s"], 0, 1, 2);
         assert_eq!(code_t3, 0);
+
+        // 7. Test run_whoami
+        let (out_rw1, out_ww1) = crate::vfs::pipe().unwrap();
+        let code_w1 = run_whoami(&[], 0, out_ww1, 2);
+        sys_close(out_ww1);
+        assert_eq!(code_w1, 0);
+        let mut bufw1 = [0u8; 16];
+        let nw1 = sys_read(out_rw1, &mut bufw1);
+        sys_close(out_rw1);
+        assert_eq!(
+            core::str::from_utf8(&bufw1[..nw1 as usize]).unwrap(),
+            "root\n"
+        );
+
+        let (out_rw2, out_ww2) = crate::vfs::pipe().unwrap();
+        let code_w2 = run_whoami(&["--version"], 0, out_ww2, 2);
+        sys_close(out_ww2);
+        assert_eq!(code_w2, 0);
+        let mut bufw2 = [0u8; 64];
+        let nw2 = sys_read(out_rw2, &mut bufw2);
+        sys_close(out_rw2);
+        assert!(core::str::from_utf8(&bufw2[..nw2 as usize])
+            .unwrap()
+            .contains("whoami"));
     }
 }
