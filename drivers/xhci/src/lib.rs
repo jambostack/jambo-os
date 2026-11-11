@@ -321,6 +321,7 @@ pub const XHCI_EXT_CAP_EXTENDED_MESSAGE_INTERRUPT_VECTOR: u8 = 33;
 pub const XHCI_EXT_CAP_EXTENDED_PORT_STATUS_CONTROL: u8 = 34;
 pub const XHCI_EXT_CAP_FIRMWARE_DEBUG_TRACE: u8 = 35;
 pub const XHCI_EXT_CAP_OFFLOAD_BUFFER_MANAGEMENT: u8 = 36;
+pub const XHCI_EXT_CAP_HOST_CONTROLLER_SYSTEM_POWER: u8 = 37;
 
 /// Masques de registres USB Legacy Support (xHCI 1.2 Section 7.1)
 /// Registre USBLEGSUP (Offset 0x00)
@@ -3531,6 +3532,113 @@ impl XhciOffloadBufferManagement {
     pub fn set_watermark_threshold(&mut self, threshold_kb: u16) {
         self.watermark_threshold_kb = threshold_kb;
         self.control = (self.control & !0xFFFF_0000) | (((threshold_kb as u32) & 0xFFFF) << 16);
+    }
+}
+
+/// Capacité Étendue xHCI Host Controller System Power (HC-SP / xHCI 1.2 §7.29)
+///
+/// Modélise le contrôle matériel des états d'alimentation système du contrôleur d'hôte,
+/// incluant le support du réveil PME (Power Management Event), les seuils de coupure
+/// d'alimentation D0/D3hot/D3cold et les minuteries matérielles de réveil autonome.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XhciHostControllerSystemPower {
+    /// Pointeur dword vers la prochaine capacité étendue (0 = fin de liste)
+    pub next_ptr_dwords: u8,
+    /// Fonctionnalité de gestion fine de l'alimentation système activée (bit 0)
+    pub enabled: bool,
+    /// Support PME (Power Management Event) activé (bit 1)
+    pub pme_enabled: bool,
+    /// État d'alimentation cible (0 = D0, 1 = D1, 2 = D2, 3 = D3hot, 4 = D3cold)
+    pub power_state: u8,
+    /// Délai de réveil en microsecondes (bits 16..=31 de DWORD 1)
+    pub wakeup_delay_us: u16,
+    /// Registre d'état matériel de l'alimentation (DWORD 2)
+    pub status: u32,
+    /// Masque de réveil par port ou événement (DWORD 3 [15:0])
+    pub wake_mask: u16,
+    /// Minuterie de suspension automatique en millisecondes (DWORD 3 [31:16])
+    pub auto_suspend_ms: u16,
+}
+
+impl XhciHostControllerSystemPower {
+    /// Crée une nouvelle configuration Host Controller System Power
+    pub const fn new(power_state: u8, wakeup_delay_us: u16) -> Self {
+        Self {
+            next_ptr_dwords: 0,
+            enabled: false,
+            pme_enabled: false,
+            power_state,
+            wakeup_delay_us,
+            status: 0,
+            wake_mask: 0x00FF,    // Ports 1..=8 autorisés au réveil par défaut
+            auto_suspend_ms: 100, // 100 ms par défaut
+        }
+    }
+
+    /// Parse les 4 dwords MMIO d'une capacité étendue HC-SP (§7.29)
+    pub const fn parse(dwords: &[u32; 4]) -> Option<Self> {
+        let cap_id = (dwords[0] & 0xFF) as u8;
+        if cap_id != XHCI_EXT_CAP_HOST_CONTROLLER_SYSTEM_POWER {
+            return None;
+        }
+
+        let next_ptr = ((dwords[0] >> 8) & 0xFF) as u8;
+        let ctrl = dwords[1];
+        let enabled = (ctrl & 0x01) != 0;
+        let pme_enabled = (ctrl & 0x02) != 0;
+        let power_state = ((ctrl >> 8) & 0x07) as u8;
+        let wakeup_delay_us = ((ctrl >> 16) & 0xFFFF) as u16;
+        let status = dwords[2];
+        let wake_mask = (dwords[3] & 0xFFFF) as u16;
+        let auto_suspend_ms = ((dwords[3] >> 16) & 0xFFFF) as u16;
+
+        Some(Self {
+            next_ptr_dwords: next_ptr,
+            enabled,
+            pme_enabled,
+            power_state,
+            wakeup_delay_us,
+            status,
+            wake_mask,
+            auto_suspend_ms,
+        })
+    }
+
+    /// Encode la capacité étendue en 4 mots dwords MMIO 32-bit
+    pub const fn encode(&self) -> [u32; 4] {
+        let dw0 = (XHCI_EXT_CAP_HOST_CONTROLLER_SYSTEM_POWER as u32)
+            | ((self.next_ptr_dwords as u32) << 8);
+        let mut ctrl = (((self.power_state as u32) & 0x07) << 8)
+            | (((self.wakeup_delay_us as u32) & 0xFFFF) << 16);
+        if self.enabled {
+            ctrl |= 0x01;
+        }
+        if self.pme_enabled {
+            ctrl |= 0x02;
+        }
+        let dw2 = self.status;
+        let dw3 = (self.wake_mask as u32) | (((self.auto_suspend_ms as u32) & 0xFFFF) << 16);
+        [dw0, ctrl, dw2, dw3]
+    }
+
+    /// Active ou désactive le sous-système d'alimentation
+    pub fn set_enabled(&mut self, enable: bool) {
+        self.enabled = enable;
+    }
+
+    /// Active ou désactive la signalisation PME
+    pub fn set_pme_enabled(&mut self, enable: bool) {
+        self.pme_enabled = enable;
+    }
+
+    /// Définit l'état d'alimentation matériel cible (0=D0, 3=D3hot, etc.)
+    pub fn set_power_state(&mut self, state: u8) {
+        self.power_state = state & 0x07;
+    }
+
+    /// Configure la minuterie de suspension automatique
+    pub fn set_auto_suspend_ms(&mut self, ms: u16) {
+        self.auto_suspend_ms = ms;
     }
 }
 
@@ -12613,5 +12721,45 @@ mod tests {
         assert_eq!(parsed_obm.status, 0x0001_8000);
         assert_eq!(parsed_obm.block_alignment, 4096);
         assert_eq!(parsed_obm.max_segment_kb, 2048);
+
+        // 27. Test XhciHostControllerSystemPower
+        let mut hc_sp = XhciHostControllerSystemPower::new(3, 250);
+        assert_eq!(hc_sp.power_state, 3);
+        assert_eq!(hc_sp.wakeup_delay_us, 250);
+        assert_eq!(hc_sp.wake_mask, 0x00FF);
+        assert_eq!(hc_sp.auto_suspend_ms, 100);
+        assert!(!hc_sp.enabled);
+        assert!(!hc_sp.pme_enabled);
+
+        hc_sp.set_enabled(true);
+        hc_sp.set_pme_enabled(true);
+        hc_sp.set_power_state(4);
+        hc_sp.set_auto_suspend_ms(500);
+        hc_sp.next_ptr_dwords = 48;
+        hc_sp.status = 0x0000_CAFE;
+
+        let encoded_hc_sp = hc_sp.encode();
+        assert_eq!(
+            encoded_hc_sp[0] & 0xFF,
+            XHCI_EXT_CAP_HOST_CONTROLLER_SYSTEM_POWER as u32
+        );
+        assert_eq!((encoded_hc_sp[0] >> 8) & 0xFF, 48);
+        assert_eq!(encoded_hc_sp[1] & 0x01, 1);
+        assert_eq!(encoded_hc_sp[1] & 0x02, 2);
+        assert_eq!((encoded_hc_sp[1] >> 8) & 0x07, 4);
+        assert_eq!((encoded_hc_sp[1] >> 16) & 0xFFFF, 250);
+        assert_eq!(encoded_hc_sp[2], 0x0000_CAFE);
+        assert_eq!(encoded_hc_sp[3] & 0xFFFF, 0x00FF);
+        assert_eq!((encoded_hc_sp[3] >> 16) & 0xFFFF, 500);
+
+        let parsed_hc_sp = XhciHostControllerSystemPower::parse(&encoded_hc_sp).unwrap();
+        assert_eq!(parsed_hc_sp.next_ptr_dwords, 48);
+        assert!(parsed_hc_sp.enabled);
+        assert!(parsed_hc_sp.pme_enabled);
+        assert_eq!(parsed_hc_sp.power_state, 4);
+        assert_eq!(parsed_hc_sp.wakeup_delay_us, 250);
+        assert_eq!(parsed_hc_sp.status, 0x0000_CAFE);
+        assert_eq!(parsed_hc_sp.wake_mask, 0x00FF);
+        assert_eq!(parsed_hc_sp.auto_suspend_ms, 500);
     }
 }

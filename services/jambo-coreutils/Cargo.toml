@@ -492,7 +492,12 @@ name = "unlink"
 path = "src/bin/unlink.rs"
 test = false
 
-# 97 utilitaires Ring 3
+[[bin]]
+name = "sum"
+path = "src/bin/sum.rs"
+test = false
+
+# 98 utilitaires Ring 3
 
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }

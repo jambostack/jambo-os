@@ -22340,6 +22340,129 @@ pub fn run_unlink(args: &[&str], out_fd: i32, err_fd: i32) -> i32 {
     }
 }
 
+/// Utilitaire Coreutils POSIX `cksum` / `sum` (calcul de somme de contrôle checksum 16-bit BSD / SysV)
+///
+/// Syntax standard :
+/// `sum [OPTION]... [FILE]...`
+/// Options :
+///   -r : Algorithme BSD checksum (16-bit rotated sum) (défaut)
+///   -s, --sysv : Algorithme System V checksum (16-bit sum)
+pub fn run_sum(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    let mut use_sysv = false;
+    let mut files_storage: [&str; 64] = [""; 64];
+    let mut files_count = 0usize;
+
+    for &arg in args {
+        if arg == "--help" {
+            let _ = sys_write(
+                out_fd,
+                b"Usage: sum [OPTION]... [FILE]...\nPrint checksum and block counts for each FILE.\n\nOptions:\n  -r              use BSD sum algorithm, use 1K blocks (default)\n  -s, --sysv      use System V sum algorithm, use 512 bytes blocks\n      --help      display this help and exit\n      --version   output version information and exit\n",
+            );
+            return 0;
+        } else if arg == "--version" {
+            let _ = sys_write(out_fd, b"sum (jambo-coreutils) 0.1.0\n");
+            return 0;
+        } else if arg == "-s" || arg == "--sysv" {
+            use_sysv = true;
+        } else if arg == "-r" {
+            use_sysv = false;
+        } else if (!arg.starts_with('-') || arg == "-") && files_count < files_storage.len() {
+            files_storage[files_count] = arg;
+            files_count += 1;
+        }
+    }
+
+    if files_count == 0 {
+        files_storage[0] = "-";
+        files_count = 1;
+    }
+
+    let mut exit_code = 0;
+    let mut read_buf = [0u8; 1024];
+
+    for &file in files_storage.iter().take(files_count) {
+        let (fd, need_close) = if file == "-" {
+            (in_fd, false)
+        } else {
+            let opened = sys_open(file, 0);
+            if opened < 0 {
+                let _ = sys_write(err_fd, b"sum: '");
+                let _ = sys_write(err_fd, file.as_bytes());
+                let _ = sys_write(err_fd, b"': No such file or directory\n");
+                exit_code = 1;
+                continue;
+            }
+            (opened, true)
+        };
+
+        let mut total_bytes: u64 = 0;
+        let mut bsd_checksum: u16 = 0;
+        let mut sysv_sum: u32 = 0;
+
+        loop {
+            let n = sys_read(fd, &mut read_buf);
+            if n <= 0 {
+                break;
+            }
+            let bytes = &read_buf[..n as usize];
+            total_bytes += n as u64;
+
+            for &byte in bytes {
+                if use_sysv {
+                    sysv_sum = sysv_sum.wrapping_add(byte as u32);
+                } else {
+                    // Algorithme BSD sum : rotation à droite de 1 bit + byte
+                    bsd_checksum = (bsd_checksum >> 1) + ((bsd_checksum & 1) << 15);
+                    bsd_checksum = bsd_checksum.wrapping_add(byte as u16);
+                }
+            }
+        }
+
+        if need_close {
+            sys_close(fd);
+        }
+
+        let mut fbuf = [0u8; 32];
+        let mut bbuf = [0u8; 32];
+
+        if use_sysv {
+            // Algorithme System V : r = (sysv_sum & 0xffff) + ((sysv_sum >> 16) & 0xffff)
+            let r = (sysv_sum & 0xFFFF) + ((sysv_sum >> 16) & 0xFFFF);
+            let final_checksum = ((r & 0xFFFF) + (r >> 16)) as u64;
+            let blocks = total_bytes.div_ceil(512);
+
+            let flen = fmt_u64_in_buf(&mut fbuf, final_checksum, 0, false, 10, false);
+            let _ = sys_write(out_fd, &fbuf[..flen]);
+            let _ = sys_write(out_fd, b" ");
+            let blen = fmt_u64_in_buf(&mut bbuf, blocks, 0, false, 10, false);
+            let _ = sys_write(out_fd, &bbuf[..blen]);
+
+            if file != "-" {
+                let _ = sys_write(out_fd, b" ");
+                let _ = sys_write(out_fd, file.as_bytes());
+            }
+            let _ = sys_write(out_fd, b"\n");
+        } else {
+            // Algorithme BSD : blocs de 1 Kio (1024 octets) avec affichage checksum sur 5 digits
+            let blocks = total_bytes.div_ceil(1024);
+
+            let flen = fmt_u64_in_buf(&mut fbuf, bsd_checksum as u64, 5, false, 10, false);
+            let _ = sys_write(out_fd, &fbuf[..flen]);
+            let _ = sys_write(out_fd, b" ");
+            let blen = fmt_u64_in_buf(&mut bbuf, blocks, 5, false, 10, false);
+            let _ = sys_write(out_fd, &bbuf[..blen]);
+
+            if file != "-" {
+                let _ = sys_write(out_fd, b" ");
+                let _ = sys_write(out_fd, file.as_bytes());
+            }
+            let _ = sys_write(out_fd, b"\n");
+        }
+    }
+
+    exit_code
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -27252,5 +27375,39 @@ Chaque processus dispose de son propre CR3 sans aucun privilege materiel direct.
         let check_del = sys_open("/tmp/test_unlink_file.txt", 0);
         assert!(check_del < 0);
         assert_eq!(run_unlink(&["/tmp/test_unlink_file.txt"], 1, 2), 1);
+
+        // 29. Test run_sum
+        assert_eq!(run_sum(&["--help"], 0, 1, 2), 0);
+        assert_eq!(run_sum(&["--version"], 0, 1, 2), 0);
+
+        let sum_f = sys_open("/tmp/test_sum_file.txt", O_CREAT | O_WRONLY);
+        assert!(sum_f >= 3);
+        let _ = sys_write(sum_f, b"hello world\n");
+        sys_close(sum_f);
+
+        let (out_r_sum, out_w_sum) = crate::vfs::pipe().unwrap();
+        let code_sum = run_sum(&["/tmp/test_sum_file.txt"], 0, out_w_sum, 2);
+        sys_close(out_w_sum);
+        assert_eq!(code_sum, 0);
+
+        let mut buf_sum = [0u8; 64];
+        let n_sum = sys_read(out_r_sum, &mut buf_sum);
+        sys_close(out_r_sum);
+        let s_sum = core::str::from_utf8(&buf_sum[..n_sum as usize]).unwrap();
+        assert!(s_sum.contains("/tmp/test_sum_file.txt"));
+
+        // Test sum en mode System V
+        let (out_r_sysv, out_w_sysv) = crate::vfs::pipe().unwrap();
+        let code_sysv = run_sum(&["-s", "/tmp/test_sum_file.txt"], 0, out_w_sysv, 2);
+        sys_close(out_w_sysv);
+        assert_eq!(code_sysv, 0);
+
+        let mut buf_sysv = [0u8; 64];
+        let n_sysv = sys_read(out_r_sysv, &mut buf_sysv);
+        sys_close(out_r_sysv);
+        let s_sysv = core::str::from_utf8(&buf_sysv[..n_sysv as usize]).unwrap();
+        assert!(s_sysv.contains("/tmp/test_sum_file.txt"));
+
+        let _ = run_unlink(&["/tmp/test_sum_file.txt"], 1, 2);
     }
 }
