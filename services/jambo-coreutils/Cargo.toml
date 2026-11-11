@@ -532,7 +532,12 @@ name = "shred"
 path = "src/bin/shred.rs"
 test = false
 
-# 105 utilitaires Ring 3
+[[bin]]
+name = "base32"
+path = "src/bin/base32.rs"
+test = false
+
+# 106 utilitaires Ring 3
 
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }

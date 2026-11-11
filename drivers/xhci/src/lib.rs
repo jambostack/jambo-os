@@ -329,6 +329,8 @@ pub const XHCI_EXT_CAP_USB4_HOST_INTERFACE_MANAGEMENT: u8 = 41;
 pub const XHCI_EXT_CAP_USB4_ROUTER_CONFIGURATION: u8 = 42;
 pub const XHCI_EXT_CAP_USB4_TIME_SYNCHRONIZATION_UNIT: u8 = 43;
 pub const XHCI_EXT_CAP_USB4_POWER_MANAGEMENT_TUNNELING: u8 = 44;
+/// Capacité étendue xHCI 1.2 / USB4 DisplayPort Alternate Mode Configuration Interface (§7.37)
+pub const XHCI_EXT_CAP_USB4_DP_ALT_MODE_CONFIGURATION: u8 = 45;
 
 /// Masques de registres USB Legacy Support (xHCI 1.2 Section 7.1)
 /// Registre USBLEGSUP (Offset 0x00)
@@ -4411,6 +4413,130 @@ impl XhciUsb4PowerManagementTunneling {
     /// Règle le seuil de veille basse consommation
     pub fn set_sleep_threshold(&mut self, threshold_us: u8) {
         self.sleep_threshold_us = threshold_us;
+    }
+}
+
+/// Capacité Étendue xHCI 1.2 / USB4 DisplayPort Alternate Mode Configuration Interface (§7.37, Cap ID 45)
+///
+/// Permet la négociation matérielle et le routage des voies DisplayPort (DP Alt Mode)
+/// sur le bus USB Type-C et les tunnels USB4 natifs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XhciUsb4DpAltModeConfig {
+    /// Pointeur dword vers la prochaine capacité étendue (0 = fin de liste)
+    pub next_ptr_dwords: u8,
+    /// Mode DP Alt Mode activé sur le contrôleur (bit 0 de DWORD 1)
+    pub enabled: bool,
+    /// Nombre de voies DP physiques configurées (1, 2 ou 4 voies) (bits 1..=2 de DWORD 1)
+    pub lane_count: u8,
+    /// Débit par voie : 0 = RBR (1.62 Gbps), 1 = HBR (2.7 Gbps), 2 = HBR2 (5.4 Gbps), 3 = HBR3 (8.1 Gbps), 4 = UHBR10 (10 Gbps) (bits 3..=5 de DWORD 1)
+    pub link_rate: u8,
+    /// Support Multi-Stream Transport (MST) (bit 6 de DWORD 1)
+    pub mst_supported: bool,
+    /// Support High-bandwidth Digital Content Protection (HDCP 2.3) (bit 7 de DWORD 1)
+    pub hdcp_supported: bool,
+    /// Index du port physique Type-C / USB4 associé (bits 8..=15 de DWORD 1)
+    pub physical_port_id: u8,
+    /// Registre de statut du récepteur DP (DWORD 2)
+    pub status: u32,
+    /// Configuration des voies auxiliaires (AUX CH) et égalisation de canal (DWORD 3)
+    pub aux_channel_config: u32,
+}
+
+impl XhciUsb4DpAltModeConfig {
+    /// Crée une nouvelle instance de capacité DP Alt Mode
+    pub const fn new(port_id: u8, lanes: u8, rate: u8) -> Self {
+        Self {
+            next_ptr_dwords: 0,
+            enabled: false,
+            lane_count: if lanes == 1 || lanes == 2 || lanes == 4 {
+                lanes
+            } else {
+                4
+            },
+            link_rate: rate & 0x07,
+            mst_supported: true,
+            hdcp_supported: true,
+            physical_port_id: port_id,
+            status: 0,
+            aux_channel_config: 0x0000_0101, // Voies AUX activées et configurées
+        }
+    }
+
+    /// Parse les 4 dwords MMIO d'une capacité étendue USB4 DP Alt Mode (§7.37)
+    pub const fn parse(dwords: &[u32; 4]) -> Option<Self> {
+        let cap_id = (dwords[0] & 0xFF) as u8;
+        if cap_id != XHCI_EXT_CAP_USB4_DP_ALT_MODE_CONFIGURATION {
+            return None;
+        }
+
+        let next_ptr = ((dwords[0] >> 8) & 0xFF) as u8;
+        let ctrl = dwords[1];
+        let enabled = (ctrl & 0x01) != 0;
+        let lane_bits = ((ctrl >> 1) & 0x03) as u8;
+        let lane_count = match lane_bits {
+            0 => 1,
+            1 => 2,
+            _ => 4,
+        };
+        let link_rate = ((ctrl >> 3) & 0x07) as u8;
+        let mst_supported = (ctrl & 0x40) != 0;
+        let hdcp_supported = (ctrl & 0x80) != 0;
+        let physical_port_id = ((ctrl >> 8) & 0xFF) as u8;
+        let status = dwords[2];
+        let aux_channel_config = dwords[3];
+
+        Some(Self {
+            next_ptr_dwords: next_ptr,
+            enabled,
+            lane_count,
+            link_rate,
+            mst_supported,
+            hdcp_supported,
+            physical_port_id,
+            status,
+            aux_channel_config,
+        })
+    }
+
+    /// Encode la capacité étendue en 4 mots dwords MMIO 32-bit
+    pub const fn encode(&self) -> [u32; 4] {
+        let dw0 = (XHCI_EXT_CAP_USB4_DP_ALT_MODE_CONFIGURATION as u32)
+            | ((self.next_ptr_dwords as u32) << 8);
+        let lane_bits = match self.lane_count {
+            1 => 0u32,
+            2 => 1u32,
+            _ => 2u32,
+        };
+        let mut ctrl = (lane_bits << 1)
+            | (((self.link_rate as u32) & 0x07) << 3)
+            | (((self.physical_port_id as u32) & 0xFF) << 8);
+        if self.enabled {
+            ctrl |= 0x01;
+        }
+        if self.mst_supported {
+            ctrl |= 0x40;
+        }
+        if self.hdcp_supported {
+            ctrl |= 0x80;
+        }
+        let dw2 = self.status;
+        let dw3 = self.aux_channel_config;
+        [dw0, ctrl, dw2, dw3]
+    }
+
+    /// Active ou désactive le mode DP Alt Mode
+    pub fn set_enabled(&mut self, enable: bool) {
+        self.enabled = enable;
+    }
+
+    /// Configure la topologie des voies DP et le taux de transfert
+    pub fn configure_lanes(&mut self, lanes: u8, rate: u8) {
+        self.lane_count = if lanes == 1 || lanes == 2 || lanes == 4 {
+            lanes
+        } else {
+            4
+        };
+        self.link_rate = rate & 0x07;
     }
 }
 
@@ -13823,5 +13949,45 @@ mod tests {
         assert_eq!(parsed_pmtc.usb3_tunnel_priority, 0);
         assert_eq!(parsed_pmtc.status, 0x0005_BEEF);
         assert_eq!(parsed_pmtc.allocated_bandwidth, 0x0A14_2800);
+
+        // 35. Test XhciUsb4DpAltModeConfig
+        let mut usb4_dp_alt = XhciUsb4DpAltModeConfig::new(2, 4, 3);
+        assert_eq!(usb4_dp_alt.physical_port_id, 2);
+        assert_eq!(usb4_dp_alt.lane_count, 4);
+        assert_eq!(usb4_dp_alt.link_rate, 3);
+        assert!(usb4_dp_alt.mst_supported);
+        assert!(usb4_dp_alt.hdcp_supported);
+        assert!(!usb4_dp_alt.enabled);
+
+        usb4_dp_alt.set_enabled(true);
+        usb4_dp_alt.configure_lanes(2, 2);
+        usb4_dp_alt.next_ptr_dwords = 80;
+        usb4_dp_alt.status = 0x0006_BEEF;
+
+        let encoded_dp_alt = usb4_dp_alt.encode();
+        assert_eq!(
+            encoded_dp_alt[0] & 0xFF,
+            XHCI_EXT_CAP_USB4_DP_ALT_MODE_CONFIGURATION as u32
+        );
+        assert_eq!((encoded_dp_alt[0] >> 8) & 0xFF, 80);
+        assert_eq!(encoded_dp_alt[1] & 0x01, 1);
+        assert_eq!((encoded_dp_alt[1] >> 1) & 0x03, 1); // 2 lanes -> bits 01b
+        assert_eq!((encoded_dp_alt[1] >> 3) & 0x07, 2); // rate 2
+        assert_eq!(encoded_dp_alt[1] & 0x40, 0x40); // mst
+        assert_eq!(encoded_dp_alt[1] & 0x80, 0x80); // hdcp
+        assert_eq!((encoded_dp_alt[1] >> 8) & 0xFF, 2); // port 2
+        assert_eq!(encoded_dp_alt[2], 0x0006_BEEF);
+        assert_eq!(encoded_dp_alt[3], 0x0000_0101);
+
+        let parsed_dp_alt = XhciUsb4DpAltModeConfig::parse(&encoded_dp_alt).unwrap();
+        assert_eq!(parsed_dp_alt.next_ptr_dwords, 80);
+        assert!(parsed_dp_alt.enabled);
+        assert_eq!(parsed_dp_alt.lane_count, 2);
+        assert_eq!(parsed_dp_alt.link_rate, 2);
+        assert!(parsed_dp_alt.mst_supported);
+        assert!(parsed_dp_alt.hdcp_supported);
+        assert_eq!(parsed_dp_alt.physical_port_id, 2);
+        assert_eq!(parsed_dp_alt.status, 0x0006_BEEF);
+        assert_eq!(parsed_dp_alt.aux_channel_config, 0x0000_0101);
     }
 }
