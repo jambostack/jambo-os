@@ -376,6 +376,8 @@ pub const XHCI_EXT_CAP_USB4_PORT_LANE_MARGINING_INTERFACE_V2: u8 = 66;
 pub const XHCI_EXT_CAP_USB4_TSU_INTERFACE_V2: u8 = 67;
 /// Capacité étendue xHCI 1.2 / USB4 Quality of Service & Traffic Class Interface v2 (§7.60)
 pub const XHCI_EXT_CAP_USB4_QOS_TRAFFIC_CLASS_INTERFACE_V2: u8 = 68;
+/// Capacité étendue xHCI 1.2 / USB4 Security Level Management Interface v2 (§7.61)
+pub const XHCI_EXT_CAP_USB4_SECURITY_LEVEL_MANAGEMENT_V2: u8 = 69;
 
 /// Masques de registres USB Legacy Support (xHCI 1.2 Section 7.1)
 /// Registre USBLEGSUP (Offset 0x00)
@@ -7382,6 +7384,137 @@ impl XhciUsb4QosTrafficClassInterfaceV2 {
     /// Réinitialise ou met à jour le compteur de paquets rejetés
     pub fn set_dropped_packets_count(&mut self, count: u32) {
         self.dropped_packets_count = count;
+    }
+}
+
+/// Capacité étendue xHCI 1.2 / USB4 Security Level Management Interface v2 (§7.61)
+///
+/// Interface de gestion du niveau de sécurité et d'autorisation du routeur/périphériques USB4 v2.
+/// Supporte les niveaux SL0 (None), SL1 (User Authorization), SL2 (Secure Connection / Challenge-Response),
+/// et SL3 (DisplayPort only). Gère le verrouillage cryptographique (secure boot), le salt challenge et
+/// le statut d'authentification matériel contre les attaques DMA hostiles (Thunderbolt / USB4 Evil Maid).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XhciUsb4SecurityLevelManagementV2 {
+    /// Pointeur dword vers la prochaine capacité étendue (0 = fin de liste)
+    pub next_ptr_dwords: u8,
+    /// Sécurité matérielle activée (bit 0)
+    pub security_enabled: bool,
+    /// Verrouillage matériel actif (bit 1, impossible de désescalader le niveau de sécurité sans reset froid)
+    pub hardware_locked: bool,
+    /// Support matériel du challenge-response cryptographique (bit 2)
+    pub challenge_auth_supported: bool,
+    /// Erreur d'authentification ou tentative d'intrusion DMA détectée (bit 3)
+    pub auth_error: bool,
+    /// Niveau de sécurité actif (bits 4..7 : 0=SL0 None, 1=SL1 User, 2=SL2 Secure, 3=SL3 DP Only)
+    pub security_level: u8,
+    /// Index du port ou adaptateur USB4 ciblé (bits 8..15)
+    pub port_index: u8,
+    /// Challenge Salt cryptographique 32-bit (DWORD 2 [31:0])
+    pub challenge_salt: u32,
+    /// Réponse d'autorisation ou signature cryptographique 32-bit (DWORD 3 [31:0])
+    pub auth_signature: u32,
+}
+
+impl XhciUsb4SecurityLevelManagementV2 {
+    /// Crée une nouvelle interface USB4 Security Level Management v2
+    pub const fn new(port_index: u8, level: u8) -> Self {
+        Self {
+            next_ptr_dwords: 0,
+            security_enabled: true,
+            hardware_locked: false,
+            challenge_auth_supported: true,
+            auth_error: false,
+            security_level: level,
+            port_index,
+            challenge_salt: 0,
+            auth_signature: 0,
+        }
+    }
+
+    /// Parse les 4 dwords MMIO d'une capacité étendue USB4 Security Level Management v2 (§7.61)
+    pub const fn parse(dwords: &[u32; 4]) -> Option<Self> {
+        let cap_id = (dwords[0] & 0xFF) as u8;
+        if cap_id != XHCI_EXT_CAP_USB4_SECURITY_LEVEL_MANAGEMENT_V2 {
+            return None;
+        }
+
+        let next_ptr = ((dwords[0] >> 8) & 0xFF) as u8;
+        let ctrl = dwords[1];
+        let security_enabled = (ctrl & 0x01) != 0;
+        let hardware_locked = (ctrl & 0x02) != 0;
+        let challenge_auth_supported = (ctrl & 0x04) != 0;
+        let auth_error = (ctrl & 0x08) != 0;
+        let security_level = ((ctrl >> 4) & 0x0F) as u8;
+        let port_index = ((ctrl >> 8) & 0xFF) as u8;
+
+        let challenge_salt = dwords[2];
+        let auth_signature = dwords[3];
+
+        Some(Self {
+            next_ptr_dwords: next_ptr,
+            security_enabled,
+            hardware_locked,
+            challenge_auth_supported,
+            auth_error,
+            security_level,
+            port_index,
+            challenge_salt,
+            auth_signature,
+        })
+    }
+
+    /// Encode la capacité étendue v2 en 4 mots dwords MMIO 32-bit
+    pub const fn encode(&self) -> [u32; 4] {
+        let dw0 = (XHCI_EXT_CAP_USB4_SECURITY_LEVEL_MANAGEMENT_V2 as u32)
+            | ((self.next_ptr_dwords as u32) << 8);
+        let mut ctrl =
+            (((self.security_level as u32) & 0x0F) << 4) | (((self.port_index as u32) & 0xFF) << 8);
+        if self.security_enabled {
+            ctrl |= 0x01;
+        }
+        if self.hardware_locked {
+            ctrl |= 0x02;
+        }
+        if self.challenge_auth_supported {
+            ctrl |= 0x04;
+        }
+        if self.auth_error {
+            ctrl |= 0x08;
+        }
+
+        let dw2 = self.challenge_salt;
+        let dw3 = self.auth_signature;
+        [dw0, ctrl, dw2, dw3]
+    }
+
+    /// Active ou désactive le sous-système de sécurité USB4
+    pub fn set_security_enabled(&mut self, enabled: bool) {
+        if !self.hardware_locked {
+            self.security_enabled = enabled;
+        }
+    }
+
+    /// Active le verrouillage matériel permanent
+    pub fn lock_hardware(&mut self) {
+        self.hardware_locked = true;
+    }
+
+    /// Modifie le niveau de sécurité (SL0..SL3)
+    pub fn set_security_level(&mut self, level: u8) {
+        if !self.hardware_locked {
+            self.security_level = level;
+        }
+    }
+
+    /// Définit le sel challenge pour la procédure d'authentification
+    pub fn set_challenge_salt(&mut self, salt: u32) {
+        self.challenge_salt = salt;
+    }
+
+    /// Fournit la signature d'authentification et efface ou active l'erreur d'authentification
+    pub fn set_auth_signature(&mut self, signature: u32, valid: bool) {
+        self.auth_signature = signature;
+        self.auth_error = !valid;
     }
 }
 
@@ -17833,5 +17966,52 @@ mod tests {
         assert_eq!(parsed_qos_v2.active_tc_mask, 0x3F);
         assert_eq!(parsed_qos_v2.high_priority_weight, 200);
         assert_eq!(parsed_qos_v2.dropped_packets_count, 15);
+
+        // Test USB4 Security Level Management Interface v2 (§7.61, Cap ID 69)
+        let mut sec_v2 = XhciUsb4SecurityLevelManagementV2::new(2, 2);
+        assert_eq!(sec_v2.port_index, 2);
+        assert_eq!(sec_v2.security_level, 2); // SL2
+        assert!(sec_v2.security_enabled);
+        assert!(!sec_v2.hardware_locked);
+        assert!(sec_v2.challenge_auth_supported);
+        assert!(!sec_v2.auth_error);
+
+        sec_v2.set_challenge_salt(0xDEAD_BEEF);
+        sec_v2.set_auth_signature(0xCAFE_BABE, true);
+        assert!(!sec_v2.auth_error);
+        sec_v2.next_ptr_dwords = 176;
+
+        let encoded_sec_v2 = sec_v2.encode();
+        assert_eq!(
+            encoded_sec_v2[0] & 0xFF,
+            XHCI_EXT_CAP_USB4_SECURITY_LEVEL_MANAGEMENT_V2 as u32
+        );
+        assert_eq!((encoded_sec_v2[0] >> 8) & 0xFF, 176);
+        assert_eq!(encoded_sec_v2[1] & 0x01, 1); // security_enabled
+        assert_eq!(encoded_sec_v2[1] & 0x02, 0); // hardware_locked false
+        assert_eq!(encoded_sec_v2[1] & 0x04, 4); // challenge_auth_supported
+        assert_eq!(encoded_sec_v2[1] & 0x08, 0); // auth_error false
+        assert_eq!((encoded_sec_v2[1] >> 4) & 0x0F, 2); // security_level SL2
+        assert_eq!((encoded_sec_v2[1] >> 8) & 0xFF, 2); // port_index 2
+        assert_eq!(encoded_sec_v2[2], 0xDEAD_BEEF);
+        assert_eq!(encoded_sec_v2[3], 0xCAFE_BABE);
+
+        let parsed_sec_v2 = XhciUsb4SecurityLevelManagementV2::parse(&encoded_sec_v2).unwrap();
+        assert_eq!(parsed_sec_v2.next_ptr_dwords, 176);
+        assert!(parsed_sec_v2.security_enabled);
+        assert!(!parsed_sec_v2.hardware_locked);
+        assert!(parsed_sec_v2.challenge_auth_supported);
+        assert!(!parsed_sec_v2.auth_error);
+        assert_eq!(parsed_sec_v2.security_level, 2);
+        assert_eq!(parsed_sec_v2.port_index, 2);
+        assert_eq!(parsed_sec_v2.challenge_salt, 0xDEAD_BEEF);
+        assert_eq!(parsed_sec_v2.auth_signature, 0xCAFE_BABE);
+
+        sec_v2.lock_hardware();
+        assert!(sec_v2.hardware_locked);
+        sec_v2.set_security_level(0); // Tentative de désescalade
+        assert_eq!(sec_v2.security_level, 2); // Doit rester inchangé car verrouillé
+        sec_v2.set_security_enabled(false);
+        assert!(sec_v2.security_enabled); // Doit rester activé car verrouillé
     }
 }

@@ -20382,6 +20382,157 @@ There is NO WARRANTY, to the extent permitted by law.\n";
 }
 
 // ============================================================================
+// Utilitaire POSIX / GNU coreutils : `strings` (Extraction de chaînes imprimables)
+// ============================================================================
+
+/// Exécute l'utilitaire `strings`
+///
+/// Extrait les séquences de caractères imprimables d'une longueur minimale spécifiée (par défaut 4).
+pub fn run_strings(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    let mut file_args: [&str; 16] = [""; 16];
+    let mut file_count = 0usize;
+    let mut min_len = 4usize;
+
+    let mut i = 0usize;
+    while i < args.len() {
+        let arg = args[i];
+        if arg == "-h" || arg == "--help" {
+            let help = b"Usage: strings [OPTION]... [FILE]...\n\
+Print the sequences of printable characters in files.\n\n\
+Options:\n\
+  -n, -<number>, --bytes=<number>\n\
+                     Locate & print any sequence of at least <number>\n\
+                     displayable characters (default 4).\n\
+      --help         Display this help and exit\n\
+      --version      Output version information and exit\n";
+            let _ = sys_write(out_fd, help);
+            return 0;
+        } else if arg == "-V" || arg == "--version" {
+            let ver = b"strings (JamboOS coreutils) 0.1.0\n\
+Copyright (C) 2026 ASSOGBA Prudence Dieudonne\n\
+License GPLv3+: GNU GPL version 3 or later <https://gnu.org/licenses/gpl.html>.\n\
+This is free software: you are free to change and redistribute it.\n\
+There is NO WARRANTY, to the extent permitted by law.\n";
+            let _ = sys_write(out_fd, ver);
+            return 0;
+        } else if arg == "-n" {
+            if i + 1 < args.len() {
+                i += 1;
+                if let Some(parsed) = parse_usize_arg(args[i]) {
+                    if parsed > 0 {
+                        min_len = parsed;
+                    }
+                }
+            }
+        } else if arg == "--" {
+            for &f in &args[i + 1..] {
+                if file_count < file_args.len() {
+                    file_args[file_count] = f;
+                    file_count += 1;
+                }
+            }
+            break;
+        } else if let Some(val) = arg.strip_prefix("--bytes=") {
+            if let Some(parsed) = parse_usize_arg(val) {
+                if parsed > 0 {
+                    min_len = parsed;
+                }
+            }
+        } else if let Some(rest) = arg.strip_prefix('-') {
+            if !rest.is_empty() && rest.as_bytes()[0].is_ascii_digit() {
+                if let Some(parsed) = parse_usize_arg(rest) {
+                    if parsed > 0 {
+                        min_len = parsed;
+                    }
+                }
+            } else if rest.is_empty() {
+                // "-" standard input
+                if file_count < file_args.len() {
+                    file_args[file_count] = "-";
+                    file_count += 1;
+                }
+            } else {
+                let _ = sys_write(err_fd, b"strings: unrecognized option '");
+                let _ = sys_write(err_fd, arg.as_bytes());
+                let _ = sys_write(err_fd, b"'\n");
+                return 1;
+            }
+        } else {
+            if file_count < file_args.len() {
+                file_args[file_count] = arg;
+                file_count += 1;
+            }
+        }
+        i += 1;
+    }
+
+    if file_count == 0 {
+        file_args[0] = "-";
+        file_count = 1;
+    }
+
+    let mut in_buf = [0u8; 4096];
+    let mut seq_buf = [0u8; 1024];
+
+    for &f in file_args.iter().take(file_count) {
+        let fd = if f == "-" {
+            in_fd
+        } else {
+            let fd = sys_open(f, O_RDONLY);
+            if fd < 0 {
+                let _ = sys_write(err_fd, b"strings: cannot open file '");
+                let _ = sys_write(err_fd, f.as_bytes());
+                let _ = sys_write(err_fd, b"'\n");
+                return 1;
+            }
+            fd
+        };
+
+        let mut seq_len = 0usize;
+        loop {
+            let n = sys_read(fd, &mut in_buf);
+            if n <= 0 {
+                break;
+            }
+            let slice = &in_buf[..n as usize];
+            for &b in slice {
+                // Caractère imprimable ASCII : 0x20 (espace) .. 0x7E (~), ou tabulation 0x09
+                if (0x20..=0x7E).contains(&b) || b == b'\t' {
+                    if seq_len < seq_buf.len() {
+                        seq_buf[seq_len] = b;
+                        seq_len += 1;
+                    } else {
+                        // Séquence très longue : afficher la portion courante
+                        let _ = sys_write(out_fd, &seq_buf);
+                        seq_len = 0;
+                        seq_buf[seq_len] = b;
+                        seq_len += 1;
+                    }
+                } else {
+                    // Fin de séquence
+                    if seq_len >= min_len {
+                        let _ = sys_write(out_fd, &seq_buf[..seq_len]);
+                        let _ = sys_write(out_fd, b"\n");
+                    }
+                    seq_len = 0;
+                }
+            }
+        }
+
+        if seq_len >= min_len {
+            let _ = sys_write(out_fd, &seq_buf[..seq_len]);
+            let _ = sys_write(out_fd, b"\n");
+        }
+
+        if f != "-" {
+            sys_close(fd);
+        }
+    }
+
+    0
+}
+
+// ============================================================================
 // Utilitaire POSIX / GNU coreutils : `factor` (Décomposition en facteurs premiers)
 // ============================================================================
 
@@ -20930,6 +21081,7 @@ pub fn execute_coreutils_command(
         "lam" => run_lam(args, in_fd, out_fd, err_fd),
         "unvis" => run_unvis(args, in_fd, out_fd, err_fd),
         "vis" => run_vis(args, in_fd, out_fd, err_fd),
+        "strings" => run_strings(args, in_fd, out_fd, err_fd),
         "base64" => run_base64(args, in_fd, out_fd, err_fd),
         "base32" => run_base32(args, in_fd, out_fd, err_fd),
         "base32hex" => run_base32hex(args, in_fd, out_fd, err_fd),
@@ -28486,6 +28638,20 @@ pub fn run_stty(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
     }
 
     0
+}
+
+fn parse_usize_arg(s: &str) -> Option<usize> {
+    let mut val: usize = 0;
+    if s.is_empty() {
+        return None;
+    }
+    for &b in s.as_bytes() {
+        if !b.is_ascii_digit() {
+            return None;
+        }
+        val = val.checked_mul(10)?.checked_add((b - b'0') as usize)?;
+    }
+    Some(val)
 }
 
 fn parse_u16_arg(s: &str) -> Option<u16> {
@@ -38175,5 +38341,37 @@ Chaque processus dispose de son propre CR3 sans aucun privilege materiel direct.
         sys_close(_out_r_vis_h);
 
         assert_eq!(run_vis(&["--version"], 0, 1, 2), 0);
+
+        // 60. Test run_strings (extraction de chaînes de caractères imprimables)
+        let (in_r_str, in_w_str) = crate::vfs::pipe().unwrap();
+        let (out_r_str, out_w_str) = crate::vfs::pipe().unwrap();
+
+        // Écriture d'un flux binaire avec des portions ASCII
+        let _ = sys_write(
+            in_w_str,
+            b"\x00\x01\x02Hello JamboOS\x00\xFF\xFE\x00World\x00\x05Hi\x00",
+        );
+        sys_close(in_w_str);
+
+        let code_str = run_strings(&["-n", "4"], in_r_str, out_w_str, 2);
+        sys_close(in_r_str);
+        sys_close(out_w_str);
+        assert_eq!(code_str, 0);
+
+        let mut str_buf = [0u8; 128];
+        let n_str = sys_read(out_r_str, &mut str_buf);
+        sys_close(out_r_str);
+        assert_eq!(
+            core::str::from_utf8(&str_buf[..n_str as usize]).unwrap(),
+            "Hello JamboOS\nWorld\n"
+        );
+
+        // Test strings --help et --version
+        let (_out_r_str_h, out_w_str_h) = crate::vfs::pipe().unwrap();
+        assert_eq!(run_strings(&["--help"], 0, out_w_str_h, 2), 0);
+        sys_close(out_w_str_h);
+        sys_close(_out_r_str_h);
+
+        assert_eq!(run_strings(&["--version"], 0, 1, 2), 0);
     }
 }

@@ -652,7 +652,12 @@ name = "vis"
 path = "src/bin/vis.rs"
 test = false
 
-# 129 utilitaires Ring 3
+[[bin]]
+name = "strings"
+path = "src/bin/strings.rs"
+test = false
+
+# 130 utilitaires Ring 3
 
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }
