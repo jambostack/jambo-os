@@ -21030,6 +21030,155 @@ fn parse_rs_usize(s: &str) -> Option<usize> {
 }
 
 // ============================================================================
+// Utilitaire BSD / POSIX coreutils : `primes` (Génération de nombres premiers)
+// ============================================================================
+
+fn primes_mul_mod(a: u64, b: u64, m: u64) -> u64 {
+    ((a as u128 * b as u128) % (m as u128)) as u64
+}
+
+fn primes_pow_mod(mut base: u64, mut exp: u64, modulus: u64) -> u64 {
+    let mut result = 1u64;
+    base %= modulus;
+    while exp > 0 {
+        if exp & 1 == 1 {
+            result = primes_mul_mod(result, base, modulus);
+        }
+        base = primes_mul_mod(base, base, modulus);
+        exp >>= 1;
+    }
+    result
+}
+
+fn primes_miller_rabin(n: u64, a: u64) -> bool {
+    if n.is_multiple_of(a) {
+        return false;
+    }
+    let d = (n - 1) >> (n - 1).trailing_zeros();
+    let mut x = primes_pow_mod(a, d, n);
+    if x == 1 || x == n - 1 {
+        return true;
+    }
+    let mut temp_d = d;
+    while temp_d != n - 1 {
+        x = primes_mul_mod(x, x, n);
+        temp_d <<= 1;
+        if x == n - 1 {
+            return true;
+        }
+        if x <= 1 {
+            return false;
+        }
+    }
+    false
+}
+
+/// Test de primalité déterministe bare-metal pour tout entier 64-bit non signé
+pub fn is_prime_u64(n: u64) -> bool {
+    if n < 2 {
+        return false;
+    }
+    if n == 2 || n == 3 || n == 5 || n == 7 {
+        return true;
+    }
+    if n % 2 == 0 || n % 3 == 0 || n % 5 == 0 {
+        return false;
+    }
+    if n < 49 {
+        return true;
+    }
+    const BASES: [u64; 7] = [2, 3, 5, 7, 11, 13, 17];
+    for &base in &BASES {
+        if n == base {
+            return true;
+        }
+        if !primes_miller_rabin(n, base) {
+            return false;
+        }
+    }
+    true
+}
+
+/// Exécute l'utilitaire `primes` (génération de nombres premiers ascendants)
+///
+/// Usage: `primes [start [stop]]`
+/// - Si aucun argument : commence à 0 et affiche les premiers jusqu'à 1000 par défaut
+/// - Si un argument `start` : affiche les premiers >= start (jusqu'à start + 1000 par défaut si non borné)
+/// - Si deux arguments `start stop` : affiche les premiers p tels que start <= p < stop
+pub fn run_primes(args: &[&str], _in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    let mut start_val = 0u64;
+    let mut stop_val: Option<u64> = None;
+    let mut pos_count = 0usize;
+
+    for &arg in args {
+        if arg == "-h" || arg == "--help" {
+            let help = b"Usage: primes [start [stop]]\n\
+Generate prime numbers in ascending order.\n\n\
+Arguments:\n\
+  start          First number to evaluate (default: 0)\n\
+  stop           Upper bound non-inclusive (start <= prime < stop)\n\n\
+Options:\n\
+  -h, --help     Display this help and exit\n\
+  -v, --version  Output version information and exit\n";
+            let _ = sys_write(out_fd, help);
+            return 0;
+        } else if arg == "-v" || arg == "-V" || arg == "--version" {
+            let ver = b"primes (JamboOS coreutils) 0.1.0\n\
+Copyright (C) 2026 ASSOGBA Prudence Dieudonne\n\
+License MIT or Apache-2.0.\n";
+            let _ = sys_write(out_fd, ver);
+            return 0;
+        } else if !arg.starts_with('-') || (arg.len() > 1 && arg.as_bytes()[1].is_ascii_digit()) {
+            let trimmed = arg.trim();
+            if trimmed.is_empty() || !trimmed.bytes().all(|b| b.is_ascii_digit()) {
+                let _ = sys_write(err_fd, b"primes: invalid argument '");
+                let _ = sys_write(err_fd, arg.as_bytes());
+                let _ = sys_write(err_fd, b"'\n");
+                return 1;
+            }
+            let val = parse_u64(trimmed);
+            if pos_count == 0 {
+                start_val = val;
+                pos_count += 1;
+            } else if pos_count == 1 {
+                stop_val = Some(val);
+                pos_count += 1;
+            } else {
+                let _ = sys_write(err_fd, b"primes: too many arguments\n");
+                return 1;
+            }
+        }
+    }
+
+    let end_limit = match stop_val {
+        Some(s) => s,
+        None => start_val.saturating_add(1000),
+    };
+
+    let mut current = start_val;
+    while current < end_limit {
+        if is_prime_u64(current) {
+            let mut num_buf = [0u8; 32];
+            let len = fmt_u64_in_buf(&mut num_buf, current, 0, false, 10, false);
+            let wr = sys_write(out_fd, &num_buf[..len]);
+            if wr <= 0 {
+                break;
+            }
+            let wr_nl = sys_write(out_fd, b"\n");
+            if wr_nl <= 0 {
+                break;
+            }
+        }
+        current = match current.checked_add(1) {
+            Some(c) => c,
+            None => break,
+        };
+    }
+
+    0
+}
+
+// ============================================================================
 // Utilitaire POSIX / GNU coreutils : `factor` (Décomposition en facteurs premiers)
 // ============================================================================
 
@@ -21581,6 +21730,7 @@ pub fn execute_coreutils_command(
         "strings" => run_strings(args, in_fd, out_fd, err_fd),
         "jot" => run_jot(args, in_fd, out_fd, err_fd),
         "rs" => run_rs(args, in_fd, out_fd, err_fd),
+        "primes" => run_primes(args, in_fd, out_fd, err_fd),
         "base64" => run_base64(args, in_fd, out_fd, err_fd),
         "base32" => run_base32(args, in_fd, out_fd, err_fd),
         "base32hex" => run_base32hex(args, in_fd, out_fd, err_fd),
@@ -38951,5 +39101,26 @@ Chaque processus dispose de son propre CR3 sans aucun privilege materiel direct.
         sys_close(_out_r_rs_h);
 
         assert_eq!(run_rs(&["--version"], 0, 1, 2), 0);
+
+        // 63. Test run_primes (génération de nombres premiers ascendants)
+        let (out_r_p, out_w_p) = crate::vfs::pipe().unwrap();
+        assert_eq!(run_primes(&["10", "30"], 0, out_w_p, 2), 0);
+        sys_close(out_w_p);
+
+        let mut p_buf = [0u8; 128];
+        let n_p = sys_read(out_r_p, &mut p_buf);
+        sys_close(out_r_p);
+        assert_eq!(
+            core::str::from_utf8(&p_buf[..n_p as usize]).unwrap(),
+            "11\n13\n17\n19\n23\n29\n"
+        );
+
+        // Test primes --help et --version
+        let (_out_r_p_h, out_w_p_h) = crate::vfs::pipe().unwrap();
+        assert_eq!(run_primes(&["--help"], 0, out_w_p_h, 2), 0);
+        sys_close(out_w_p_h);
+        sys_close(_out_r_p_h);
+
+        assert_eq!(run_primes(&["--version"], 0, 1, 2), 0);
     }
 }

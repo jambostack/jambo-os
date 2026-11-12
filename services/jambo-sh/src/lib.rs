@@ -642,6 +642,7 @@ impl JamboShell {
             "strings" | "/bin/strings" | "bin/strings" => self.cmd_strings(args, out),
             "jot" | "/bin/jot" | "bin/jot" => self.cmd_jot(args, out),
             "rs" | "/bin/rs" | "bin/rs" => self.cmd_rs(args, out),
+            "primes" | "/bin/primes" | "bin/primes" => self.cmd_primes(args, out),
             "factor" | "/bin/factor" | "bin/factor" => self.cmd_factor(args, out),
             "timeout" | "/bin/timeout" | "bin/timeout" => self.cmd_timeout(args, out),
             "nice" | "/bin/nice" | "bin/nice" => self.cmd_nice(args, out),
@@ -3190,6 +3191,43 @@ Utilitaire d'installation JamboOS (Serie 0.*.*)\n\
             (status, len)
         } else {
             let msg = b"rs: pipe creation failed\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
+    }
+
+    fn cmd_primes(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if let (Ok((r_out, w_out)), Ok((r_err, w_err))) =
+            (libjambo::vfs::pipe(), libjambo::vfs::pipe())
+        {
+            let code = libjambo::coreutils::run_primes(args, 0, w_out, w_err);
+            let _ = libjambo::coreutils::sys_close(w_out);
+            let _ = libjambo::coreutils::sys_close(w_err);
+
+            let mut len = 0;
+            if code == 0 {
+                let n_out = libjambo::coreutils::sys_read(r_out, out);
+                if n_out > 0 {
+                    len = n_out as usize;
+                }
+            } else {
+                let n_err = libjambo::coreutils::sys_read(r_err, out);
+                if n_err > 0 {
+                    len = n_err as usize;
+                }
+            }
+            let _ = libjambo::coreutils::sys_close(r_out);
+            let _ = libjambo::coreutils::sys_close(r_err);
+
+            let status = if code == 0 {
+                ShellStatus::Success
+            } else {
+                ShellStatus::ExecutionFailed
+            };
+            (status, len)
+        } else {
+            let msg = b"primes: pipe creation failed\n";
             let len = msg.len().min(out.len());
             out[..len].copy_from_slice(&msg[..len]);
             (ShellStatus::ExecutionFailed, len)

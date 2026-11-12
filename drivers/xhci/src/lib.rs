@@ -382,6 +382,8 @@ pub const XHCI_EXT_CAP_USB4_SECURITY_LEVEL_MANAGEMENT_V2: u8 = 69;
 pub const XHCI_EXT_CAP_USB4_PORT_ERROR_TELEMETRY_V2: u8 = 70;
 /// Capacité étendue xHCI 1.2 / USB4 Retimer High-Speed Telemetry Interface v2 (§7.63)
 pub const XHCI_EXT_CAP_USB4_RETIMER_TELEMETRY_V2: u8 = 71;
+/// Capacité étendue xHCI 1.2 / USB4 PCIe Adapter Configuration Interface v2 (§7.64)
+pub const XHCI_EXT_CAP_USB4_PCIE_ADAPTER_CONFIGURATION_INTERFACE_V2: u8 = 72;
 
 /// Masques de registres USB Legacy Support (xHCI 1.2 Section 7.1)
 /// Registre USBLEGSUP (Offset 0x00)
@@ -7817,6 +7819,160 @@ impl XhciUsb4RetimerTelemetryV2 {
     /// Indique si le répéteur fonctionne dans des paramètres nominaux sains
     pub fn is_operating_normally(&self) -> bool {
         self.retimer_present && !self.temperature_alert && !self.snr_degraded_alert
+    }
+}
+
+/// Capacité étendue xHCI 1.2 / USB4 PCIe Adapter Configuration Interface v2 (§7.64)
+///
+/// Interface de configuration et de tunneling PCIe sur fabric USB4 v2.
+/// Pilote les adaptateurs d'entrée/sortie PCIe (PCIe Downstream/Upstream Adapters),
+/// négocie la vitesse (Gen1 à Gen5) et la largeur des liens PCIe (x1 à x16),
+/// configure le Function Level Reset (FLR), les interruptions matérielles et
+/// le contrôle de flux de crédits TLP (Transaction Layer Packet).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XhciUsb4PcieAdapterConfigInterfaceV2 {
+    /// Pointeur dword vers la prochaine capacité étendue (0 = fin de liste)
+    pub next_ptr_dwords: u8,
+    /// Adaptateur PCIe activé (bit 0)
+    pub enabled: bool,
+    /// Interruptions matérielles sur événement PCIe activées (bit 1)
+    pub irq_enabled: bool,
+    /// Support PCIe Gen 5 (32 GT/s) actif (bit 2)
+    pub gen5_supported: bool,
+    /// Contrôle de flux étendu activé (bit 3)
+    pub enhanced_flow_control: bool,
+    /// Capacité Function Level Reset (FLR) active (bit 4)
+    pub flr_capable: bool,
+    /// Numéro d'adaptateur physique cible (bits 8..15)
+    pub adapter_index: u8,
+    /// Vitesse PCIe négociée (bits 16..18 : 1=Gen1 2.5GT/s, 2=Gen2 5.0GT/s, 3=Gen3 8.0GT/s, 4=Gen4 16.0GT/s, 5=Gen5 32.0GT/s)
+    pub link_speed_gen: u8,
+    /// Largeur de lien PCIe négociée (bits 20..24 : 1=x1, 2=x2, 4=x4, 8=x8, 16=x16)
+    pub link_width: u8,
+    /// Registre de statut étendu et crédits de flux (DWORD 2)
+    pub adapter_status_v2: u32,
+    /// Compteur total de paquets TLP traités (DWORD 3)
+    pub tlp_packet_counter: u32,
+}
+
+impl XhciUsb4PcieAdapterConfigInterfaceV2 {
+    /// Crée une nouvelle interface de configuration d'adaptateur PCIe USB4 v2
+    pub const fn new(adapter_index: u8, link_speed_gen: u8, link_width: u8, gen5: bool) -> Self {
+        Self {
+            next_ptr_dwords: 0,
+            enabled: false,
+            irq_enabled: false,
+            gen5_supported: gen5,
+            enhanced_flow_control: true,
+            flr_capable: true,
+            adapter_index,
+            link_speed_gen: link_speed_gen & 0x07,
+            link_width: link_width & 0x1F,
+            adapter_status_v2: 0,
+            tlp_packet_counter: 0,
+        }
+    }
+
+    /// Parse les 4 dwords MMIO d'une capacité étendue USB4 PCIe Adapter Configuration Interface v2 (§7.64)
+    pub const fn parse(dwords: &[u32; 4]) -> Option<Self> {
+        let cap_id = (dwords[0] & 0xFF) as u8;
+        if cap_id != XHCI_EXT_CAP_USB4_PCIE_ADAPTER_CONFIGURATION_INTERFACE_V2 {
+            return None;
+        }
+
+        let next_ptr = ((dwords[0] >> 8) & 0xFF) as u8;
+        let ctrl = dwords[1];
+        let enabled = (ctrl & 0x01) != 0;
+        let irq_enabled = (ctrl & 0x02) != 0;
+        let gen5_supported = (ctrl & 0x04) != 0;
+        let enhanced_flow_control = (ctrl & 0x08) != 0;
+        let flr_capable = (ctrl & 0x10) != 0;
+        let adapter_index = ((ctrl >> 8) & 0xFF) as u8;
+        let link_speed_gen = ((ctrl >> 16) & 0x07) as u8;
+        let link_width = ((ctrl >> 20) & 0x1F) as u8;
+
+        let adapter_status_v2 = dwords[2];
+        let tlp_packet_counter = dwords[3];
+
+        Some(Self {
+            next_ptr_dwords: next_ptr,
+            enabled,
+            irq_enabled,
+            gen5_supported,
+            enhanced_flow_control,
+            flr_capable,
+            adapter_index,
+            link_speed_gen,
+            link_width,
+            adapter_status_v2,
+            tlp_packet_counter,
+        })
+    }
+
+    /// Encode la capacité étendue v2 en 4 mots dwords MMIO 32-bit
+    pub const fn encode(&self) -> [u32; 4] {
+        let dw0 = (XHCI_EXT_CAP_USB4_PCIE_ADAPTER_CONFIGURATION_INTERFACE_V2 as u32)
+            | ((self.next_ptr_dwords as u32) << 8);
+
+        let mut ctrl = 0u32;
+        if self.enabled {
+            ctrl |= 0x01;
+        }
+        if self.irq_enabled {
+            ctrl |= 0x02;
+        }
+        if self.gen5_supported {
+            ctrl |= 0x04;
+        }
+        if self.enhanced_flow_control {
+            ctrl |= 0x08;
+        }
+        if self.flr_capable {
+            ctrl |= 0x10;
+        }
+        ctrl |= ((self.adapter_index as u32) & 0xFF) << 8;
+        ctrl |= ((self.link_speed_gen as u32) & 0x07) << 16;
+        ctrl |= ((self.link_width as u32) & 0x1F) << 20;
+
+        let dw2 = self.adapter_status_v2;
+        let dw3 = self.tlp_packet_counter;
+
+        [dw0, ctrl, dw2, dw3]
+    }
+
+    /// Active l'adaptateur PCIe USB4 v2
+    pub fn enable_adapter(&mut self) {
+        self.enabled = true;
+    }
+
+    /// Désactive l'adaptateur PCIe USB4 v2
+    pub fn disable_adapter(&mut self) {
+        self.enabled = false;
+    }
+
+    /// Configure l'état d'interruption matérielle
+    pub fn set_irq_enabled(&mut self, enabled: bool) {
+        self.irq_enabled = enabled;
+    }
+
+    /// Configure la vitesse négociée
+    pub fn set_link_speed_gen(&mut self, gen: u8) {
+        self.link_speed_gen = gen & 0x07;
+    }
+
+    /// Configure la largeur de lien négociée
+    pub fn set_link_width(&mut self, width: u8) {
+        self.link_width = width & 0x1F;
+    }
+
+    /// Incrémente le compteur de paquets TLP traités
+    pub fn record_tlp_packets(&mut self, count: u32) {
+        self.tlp_packet_counter = self.tlp_packet_counter.saturating_add(count);
+    }
+
+    /// Indique si l'adaptateur est prêt et opérationnel
+    pub fn is_operational(&self) -> bool {
+        self.enabled && self.link_speed_gen > 0 && self.link_width > 0
     }
 }
 
@@ -18428,5 +18584,57 @@ mod tests {
         assert_eq!(parsed_ret.snr_tenths_db, 165);
         assert_eq!(parsed_ret.jitter_slip_count, 16);
         assert_eq!(parsed_ret.firmware_revision, 0x0100);
+
+        // Test USB4 PCIe Adapter Configuration Interface v2 (§7.64, Cap ID 72)
+        let mut pcie_cfg = XhciUsb4PcieAdapterConfigInterfaceV2::new(1, 4, 16, true);
+        assert_eq!(pcie_cfg.adapter_index, 1);
+        assert_eq!(pcie_cfg.link_speed_gen, 4); // Gen4
+        assert_eq!(pcie_cfg.link_width, 16); // x16
+        assert!(pcie_cfg.gen5_supported);
+        assert!(pcie_cfg.enhanced_flow_control);
+        assert!(pcie_cfg.flr_capable);
+        assert!(!pcie_cfg.enabled);
+        assert!(!pcie_cfg.is_operational());
+
+        pcie_cfg.enable_adapter();
+        pcie_cfg.set_irq_enabled(true);
+        assert!(pcie_cfg.is_operational());
+
+        pcie_cfg.record_tlp_packets(500);
+        pcie_cfg.record_tlp_packets(1500);
+        assert_eq!(pcie_cfg.tlp_packet_counter, 2000);
+
+        pcie_cfg.next_ptr_dwords = 192;
+        let encoded_pcie = pcie_cfg.encode();
+        assert_eq!(
+            encoded_pcie[0] & 0xFF,
+            XHCI_EXT_CAP_USB4_PCIE_ADAPTER_CONFIGURATION_INTERFACE_V2 as u32
+        );
+        assert_eq!((encoded_pcie[0] >> 8) & 0xFF, 192);
+        assert_eq!(encoded_pcie[1] & 0x01, 1); // enabled
+        assert_eq!(encoded_pcie[1] & 0x02, 2); // irq_enabled
+        assert_eq!(encoded_pcie[1] & 0x04, 4); // gen5_supported
+        assert_eq!(encoded_pcie[1] & 0x08, 8); // enhanced_flow_control
+        assert_eq!(encoded_pcie[1] & 0x10, 16); // flr_capable
+        assert_eq!((encoded_pcie[1] >> 8) & 0xFF, 1); // adapter_index
+        assert_eq!((encoded_pcie[1] >> 16) & 0x07, 4); // Gen4
+        assert_eq!((encoded_pcie[1] >> 20) & 0x1F, 16); // x16
+        assert_eq!(encoded_pcie[3], 2000);
+
+        let parsed_pcie = XhciUsb4PcieAdapterConfigInterfaceV2::parse(&encoded_pcie).unwrap();
+        assert_eq!(parsed_pcie.next_ptr_dwords, 192);
+        assert!(parsed_pcie.enabled);
+        assert!(parsed_pcie.irq_enabled);
+        assert!(parsed_pcie.gen5_supported);
+        assert!(parsed_pcie.enhanced_flow_control);
+        assert!(parsed_pcie.flr_capable);
+        assert_eq!(parsed_pcie.adapter_index, 1);
+        assert_eq!(parsed_pcie.link_speed_gen, 4);
+        assert_eq!(parsed_pcie.link_width, 16);
+        assert_eq!(parsed_pcie.tlp_packet_counter, 2000);
+        assert!(parsed_pcie.is_operational());
+
+        pcie_cfg.disable_adapter();
+        assert!(!pcie_cfg.is_operational());
     }
 }

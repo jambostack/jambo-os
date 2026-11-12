@@ -667,7 +667,12 @@ name = "rs"
 path = "src/bin/rs.rs"
 test = false
 
-# 132 utilitaires Ring 3
+[[bin]]
+name = "primes"
+path = "src/bin/primes.rs"
+test = false
+
+# 133 utilitaires Ring 3
 
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }
