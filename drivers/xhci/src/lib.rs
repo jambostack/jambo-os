@@ -388,6 +388,8 @@ pub const XHCI_EXT_CAP_USB4_PCIE_ADAPTER_CONFIGURATION_INTERFACE_V2: u8 = 72;
 pub const XHCI_EXT_CAP_USB4_DP_ADAPTER_CONFIGURATION_INTERFACE_V2: u8 = 73;
 /// Capacité étendue xHCI 1.2 / USB4 USB3 Adapter Configuration Interface v2 (§7.66)
 pub const XHCI_EXT_CAP_USB4_USB3_ADAPTER_CONFIGURATION_INTERFACE_V2: u8 = 74;
+/// Capacité étendue xHCI 1.2 / USB4 Host Interface Configuration Interface v2 (§7.67)
+pub const XHCI_EXT_CAP_USB4_HOST_INTERFACE_CONFIGURATION_INTERFACE_V2: u8 = 75;
 
 /// Masques de registres USB Legacy Support (xHCI 1.2 Section 7.1)
 /// Registre USBLEGSUP (Offset 0x00)
@@ -8353,6 +8355,238 @@ impl XhciUsb4Usb3AdapterConfigInterfaceV2 {
             3 => 10000,
             4 => 20000,
             5 => 40000,
+            _ => 0,
+        }
+    }
+}
+
+/// Capacité étendue xHCI 1.2 / USB4 Host Interface Configuration Interface v2 (§7.67)
+///
+/// Permet la négociation matérielle et le contrôle de haut niveau de l'interface hôte (Host Interface - HI)
+/// du routeur USB4, notamment la configuration des anneaux DMA (Tx/Rx Rings), l'échange de messages de contrôle Mailbox,
+/// la synchronisation des sonnettes (Doorbells) inter-domaines et la gestion fine des trames tunnelisées USB4 2.0.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XhciUsb4HostInterfaceConfigInterfaceV2 {
+    /// Pointeur dword vers la prochaine capacité étendue (0 = fin de liste)
+    pub next_ptr_dwords: u8,
+    /// Interface hôte activée et opérationnelle
+    pub enabled: bool,
+    /// Génération d'interruptions matérielles activée pour l'interface hôte
+    pub irq_enabled: bool,
+    /// Moteur DMA actif pour les transferts d'anneaux Tx/Rx
+    pub dma_active: bool,
+    /// Boîte aux lettres (Mailbox) prête pour émettre/recevoir des commandes du routeur
+    pub mailbox_ready: bool,
+    /// Sonnette/interruption émise par l'hôte vers le routeur USB4
+    pub host_to_router_irq: bool,
+    /// Interruption en attente émise par le routeur USB4 vers l'hôte
+    pub router_to_host_irq: bool,
+    /// Crédits de contrôle de flux inter-domaines validés et synchronisés
+    pub flow_control_credit_valid: bool,
+    /// Réinitialisation matérielle de l'interface hôte en cours
+    pub reset_in_progress: bool,
+    /// Identifiant de l'interface hôte / domaine USB4 (0..255)
+    pub host_interface_id: u8,
+    /// Nombre d'anneaux DMA configurés (Tx/Rx, typiquement 1..16)
+    pub dma_ring_count: u8,
+    /// Version du protocole Host Interface (1 = USB4 1.0, 2 = USB4 2.0)
+    pub protocol_version: u8,
+    /// Échelon de vitesse du lien hôte (0 = Gen2 20Gbps, 1 = Gen3 40Gbps, 2 = Gen4 80Gbps, 3 = Gen4 Asymétrique 120Gbps)
+    pub link_speed_tier: u8,
+    /// Taille totale allouée pour les anneaux DMA en Ko
+    pub ring_buffer_size_kb: u16,
+    /// Taille maximale de charge utile par paquet de transport (bytes, ex: 256, 1024, 4096)
+    pub max_packet_payload_bytes: u16,
+    /// Compteur de commandes Mailbox traitées avec succès
+    pub mailbox_command_counter: u16,
+    /// Compteur d'erreurs d'anneaux DMA ou de dépassement de tampon (Overrun/Underrun)
+    pub dma_error_counter: u16,
+}
+
+impl XhciUsb4HostInterfaceConfigInterfaceV2 {
+    /// Crée une nouvelle interface de configuration Host Interface USB4 v2
+    pub const fn new(
+        host_interface_id: u8,
+        dma_ring_count: u8,
+        protocol_version: u8,
+        link_speed_tier: u8,
+    ) -> Self {
+        Self {
+            next_ptr_dwords: 0,
+            enabled: false,
+            irq_enabled: false,
+            dma_active: false,
+            mailbox_ready: true,
+            host_to_router_irq: false,
+            router_to_host_irq: false,
+            flow_control_credit_valid: true,
+            reset_in_progress: false,
+            host_interface_id,
+            dma_ring_count: dma_ring_count & 0x0F,
+            protocol_version: protocol_version & 0x0F,
+            link_speed_tier: link_speed_tier & 0x0F,
+            ring_buffer_size_kb: 0,
+            max_packet_payload_bytes: 4096,
+            mailbox_command_counter: 0,
+            dma_error_counter: 0,
+        }
+    }
+
+    /// Parse les 4 dwords MMIO d'une capacité étendue USB4 Host Interface Configuration Interface v2 (§7.67)
+    pub const fn parse(dwords: &[u32; 4]) -> Option<Self> {
+        let cap_id = (dwords[0] & 0xFF) as u8;
+        if cap_id != XHCI_EXT_CAP_USB4_HOST_INTERFACE_CONFIGURATION_INTERFACE_V2 {
+            return None;
+        }
+
+        let next_ptr = ((dwords[0] >> 8) & 0xFF) as u8;
+        let ctrl = dwords[1];
+        let enabled = (ctrl & 0x01) != 0;
+        let irq_enabled = (ctrl & 0x02) != 0;
+        let dma_active = (ctrl & 0x04) != 0;
+        let mailbox_ready = (ctrl & 0x08) != 0;
+        let host_to_router_irq = (ctrl & 0x10) != 0;
+        let router_to_host_irq = (ctrl & 0x20) != 0;
+        let flow_control_credit_valid = (ctrl & 0x40) != 0;
+        let reset_in_progress = (ctrl & 0x80) != 0;
+
+        let host_interface_id = ((ctrl >> 8) & 0xFF) as u8;
+        let dma_ring_count = ((ctrl >> 16) & 0x0F) as u8;
+        let protocol_version = ((ctrl >> 20) & 0x0F) as u8;
+        let link_speed_tier = ((ctrl >> 24) & 0x0F) as u8;
+
+        let ring_buffer_size_kb = (dwords[2] & 0xFFFF) as u16;
+        let max_packet_payload_bytes = ((dwords[2] >> 16) & 0xFFFF) as u16;
+
+        let mailbox_command_counter = (dwords[3] & 0xFFFF) as u16;
+        let dma_error_counter = ((dwords[3] >> 16) & 0xFFFF) as u16;
+
+        Some(Self {
+            next_ptr_dwords: next_ptr,
+            enabled,
+            irq_enabled,
+            dma_active,
+            mailbox_ready,
+            host_to_router_irq,
+            router_to_host_irq,
+            flow_control_credit_valid,
+            reset_in_progress,
+            host_interface_id,
+            dma_ring_count,
+            protocol_version,
+            link_speed_tier,
+            ring_buffer_size_kb,
+            max_packet_payload_bytes,
+            mailbox_command_counter,
+            dma_error_counter,
+        })
+    }
+
+    /// Encode la capacité étendue v2 en 4 mots dwords MMIO 32-bit
+    pub const fn encode(&self) -> [u32; 4] {
+        let dw0 = (XHCI_EXT_CAP_USB4_HOST_INTERFACE_CONFIGURATION_INTERFACE_V2 as u32)
+            | ((self.next_ptr_dwords as u32) << 8);
+
+        let mut ctrl = 0u32;
+        if self.enabled {
+            ctrl |= 0x01;
+        }
+        if self.irq_enabled {
+            ctrl |= 0x02;
+        }
+        if self.dma_active {
+            ctrl |= 0x04;
+        }
+        if self.mailbox_ready {
+            ctrl |= 0x08;
+        }
+        if self.host_to_router_irq {
+            ctrl |= 0x10;
+        }
+        if self.router_to_host_irq {
+            ctrl |= 0x20;
+        }
+        if self.flow_control_credit_valid {
+            ctrl |= 0x40;
+        }
+        if self.reset_in_progress {
+            ctrl |= 0x80;
+        }
+        ctrl |= ((self.host_interface_id as u32) & 0xFF) << 8;
+        ctrl |= ((self.dma_ring_count as u32) & 0x0F) << 16;
+        ctrl |= ((self.protocol_version as u32) & 0x0F) << 20;
+        ctrl |= ((self.link_speed_tier as u32) & 0x0F) << 24;
+
+        let dw2 =
+            (self.ring_buffer_size_kb as u32) | ((self.max_packet_payload_bytes as u32) << 16);
+        let dw3 = (self.mailbox_command_counter as u32) | ((self.dma_error_counter as u32) << 16);
+
+        [dw0, ctrl, dw2, dw3]
+    }
+
+    /// Active l'interface hôte USB4 v2
+    pub fn enable_host_interface(&mut self) {
+        self.enabled = true;
+    }
+
+    /// Désactive l'interface hôte USB4 v2
+    pub fn disable_host_interface(&mut self) {
+        self.enabled = false;
+        self.dma_active = false;
+    }
+
+    /// Configure l'état d'interruption matérielle de la Host Interface
+    pub fn set_irq_enabled(&mut self, enabled: bool) {
+        self.irq_enabled = enabled;
+    }
+
+    /// Configure l'activation des moteurs DMA pour les anneaux Tx/Rx
+    pub fn set_dma_active(&mut self, active: bool) {
+        self.dma_active = active;
+    }
+
+    /// Émet une sonnette d'interruption vers le routeur USB4 (Host to Router Doorbell)
+    pub fn trigger_host_to_router_doorbell(&mut self) {
+        self.host_to_router_irq = true;
+    }
+
+    /// Acquitte l'interruption émise par le routeur (Router to Host Interrupt Clear)
+    pub fn clear_router_to_host_irq(&mut self) {
+        self.router_to_host_irq = false;
+    }
+
+    /// Configure la taille de mémoire tampon allouée aux anneaux DMA et la charge utile maximale
+    pub fn set_buffer_and_payload(&mut self, ring_size_kb: u16, max_payload: u16) {
+        self.ring_buffer_size_kb = ring_size_kb;
+        self.max_packet_payload_bytes = max_payload;
+    }
+
+    /// Enregistre l'exécution d'une commande Mailbox
+    pub fn record_mailbox_command(&mut self) {
+        self.mailbox_command_counter = self.mailbox_command_counter.saturating_add(1);
+    }
+
+    /// Enregistre des erreurs d'anneaux DMA
+    pub fn record_dma_errors(&mut self, count: u16) {
+        self.dma_error_counter = self.dma_error_counter.saturating_add(count);
+    }
+
+    /// Indique si la Host Interface est opérationnelle et prête pour le transit de données
+    pub fn is_operational(&self) -> bool {
+        self.enabled
+            && self.mailbox_ready
+            && !self.reset_in_progress
+            && self.flow_control_credit_valid
+            && self.dma_ring_count > 0
+    }
+
+    /// Retourne le débit théorique en Mbps selon l'échelon de vitesse du lien
+    pub fn speed_mbps(&self) -> u32 {
+        match self.link_speed_tier {
+            0 => 20000,
+            1 => 40000,
+            2 => 80000,
+            3 => 120000,
             _ => 0,
         }
     }
@@ -19147,5 +19381,96 @@ mod tests {
 
         usb3_cfg.disable_adapter();
         assert!(!usb3_cfg.is_operational());
+
+        // Test USB4 Host Interface Configuration Interface v2 (§7.67, Cap ID 75)
+        let mut hi_cfg = XhciUsb4HostInterfaceConfigInterfaceV2::new(1, 8, 2, 2);
+        assert_eq!(hi_cfg.host_interface_id, 1);
+        assert_eq!(hi_cfg.dma_ring_count, 8);
+        assert_eq!(hi_cfg.protocol_version, 2); // USB4 2.0
+        assert_eq!(hi_cfg.link_speed_tier, 2); // Gen4 80Gbps
+        assert!(hi_cfg.mailbox_ready);
+        assert!(hi_cfg.flow_control_credit_valid);
+        assert!(!hi_cfg.enabled);
+        assert!(!hi_cfg.irq_enabled);
+        assert!(!hi_cfg.dma_active);
+        assert!(!hi_cfg.host_to_router_irq);
+        assert!(!hi_cfg.router_to_host_irq);
+        assert!(!hi_cfg.reset_in_progress);
+        assert!(!hi_cfg.is_operational());
+        assert_eq!(hi_cfg.speed_mbps(), 80000);
+
+        hi_cfg.enable_host_interface();
+        hi_cfg.set_irq_enabled(true);
+        hi_cfg.set_dma_active(true);
+        hi_cfg.set_buffer_and_payload(512, 4096);
+        hi_cfg.record_mailbox_command();
+        hi_cfg.record_mailbox_command();
+        hi_cfg.record_dma_errors(0);
+        assert!(hi_cfg.is_operational());
+        assert_eq!(hi_cfg.ring_buffer_size_kb, 512);
+        assert_eq!(hi_cfg.max_packet_payload_bytes, 4096);
+        assert_eq!(hi_cfg.mailbox_command_counter, 2);
+        assert_eq!(hi_cfg.dma_error_counter, 0);
+
+        hi_cfg.trigger_host_to_router_doorbell();
+        assert!(hi_cfg.host_to_router_irq);
+        hi_cfg.router_to_host_irq = true;
+        hi_cfg.clear_router_to_host_irq();
+        assert!(!hi_cfg.router_to_host_irq);
+
+        hi_cfg.next_ptr_dwords = 248;
+        let encoded_hi = hi_cfg.encode();
+        assert_eq!(
+            encoded_hi[0] & 0xFF,
+            XHCI_EXT_CAP_USB4_HOST_INTERFACE_CONFIGURATION_INTERFACE_V2 as u32
+        );
+        assert_eq!((encoded_hi[0] >> 8) & 0xFF, 248);
+        assert_eq!(encoded_hi[1] & 0x01, 1); // enabled
+        assert_eq!(encoded_hi[1] & 0x02, 2); // irq_enabled
+        assert_eq!(encoded_hi[1] & 0x04, 4); // dma_active
+        assert_eq!(encoded_hi[1] & 0x08, 8); // mailbox_ready
+        assert_eq!(encoded_hi[1] & 0x10, 16); // host_to_router_irq
+        assert_eq!(encoded_hi[1] & 0x20, 0); // router_to_host_irq
+        assert_eq!(encoded_hi[1] & 0x40, 64); // flow_control_credit_valid
+        assert_eq!(encoded_hi[1] & 0x80, 0); // reset_in_progress
+        assert_eq!((encoded_hi[1] >> 8) & 0xFF, 1); // host_interface_id
+        assert_eq!((encoded_hi[1] >> 16) & 0x0F, 8); // dma_ring_count
+        assert_eq!((encoded_hi[1] >> 20) & 0x0F, 2); // protocol_version
+        assert_eq!((encoded_hi[1] >> 24) & 0x0F, 2); // link_speed_tier
+        assert_eq!(encoded_hi[2] & 0xFFFF, 512); // ring_buffer_size_kb
+        assert_eq!((encoded_hi[2] >> 16) & 0xFFFF, 4096); // max_packet_payload_bytes
+        assert_eq!(encoded_hi[3] & 0xFFFF, 2); // mailbox_command_counter
+        assert_eq!((encoded_hi[3] >> 16) & 0xFFFF, 0); // dma_error_counter
+
+        let parsed_hi = XhciUsb4HostInterfaceConfigInterfaceV2::parse(&encoded_hi).unwrap();
+        assert_eq!(parsed_hi.next_ptr_dwords, 248);
+        assert!(parsed_hi.enabled);
+        assert!(parsed_hi.irq_enabled);
+        assert!(parsed_hi.dma_active);
+        assert!(parsed_hi.mailbox_ready);
+        assert!(parsed_hi.host_to_router_irq);
+        assert!(!parsed_hi.router_to_host_irq);
+        assert!(parsed_hi.flow_control_credit_valid);
+        assert!(!parsed_hi.reset_in_progress);
+        assert_eq!(parsed_hi.host_interface_id, 1);
+        assert_eq!(parsed_hi.dma_ring_count, 8);
+        assert_eq!(parsed_hi.protocol_version, 2);
+        assert_eq!(parsed_hi.link_speed_tier, 2);
+        assert_eq!(parsed_hi.ring_buffer_size_kb, 512);
+        assert_eq!(parsed_hi.max_packet_payload_bytes, 4096);
+        assert_eq!(parsed_hi.mailbox_command_counter, 2);
+        assert_eq!(parsed_hi.dma_error_counter, 0);
+        assert!(parsed_hi.is_operational());
+        assert_eq!(parsed_hi.speed_mbps(), 80000);
+
+        // Test vitesse asymétrique 120Gbps (Tier 3)
+        let mut hi_asym = XhciUsb4HostInterfaceConfigInterfaceV2::new(0, 16, 2, 3);
+        assert_eq!(hi_asym.speed_mbps(), 120000);
+        hi_asym.record_dma_errors(5);
+        assert_eq!(hi_asym.dma_error_counter, 5);
+
+        hi_cfg.disable_host_interface();
+        assert!(!hi_cfg.is_operational());
+        assert!(!hi_cfg.dma_active);
     }
 }

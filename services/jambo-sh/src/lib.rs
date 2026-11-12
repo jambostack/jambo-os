@@ -21231,6 +21231,22 @@ mod tests {
         let (st_err, _) = shell.execute_line("split -z", &mut out);
         assert_eq!(st_err, ShellStatus::ExecutionFailed);
 
+        // 4. Exécution avec suffixes hexadécimaux et suffixe additionnel
+        let (st_hex, _) = shell.execute_line(
+            "split -b 6 -x --additional-suffix=.out /tmp/sh_split_src.txt /tmp/sh_sph_",
+            &mut out,
+        );
+        assert_eq!(st_hex, ShellStatus::Success);
+        let f_hex0 = libjambo::coreutils::sys_open("/tmp/sh_sph_00.out", libjambo::vfs::O_RDONLY);
+        assert!(f_hex0 >= 0);
+        let n_hex0 = libjambo::coreutils::sys_read(f_hex0, &mut b);
+        assert_eq!(&b[..n_hex0 as usize], b"part1\n");
+        libjambo::coreutils::sys_close(f_hex0);
+        let _ = libjambo::coreutils::sys_unlink_pool("/tmp/sh_sph_00.out");
+        let _ = libjambo::coreutils::sys_unlink_pool("/tmp/sh_sph_01.out");
+        let _ = libjambo::coreutils::sys_unlink_pool("/tmp/sh_sph_02.out");
+        let _ = libjambo::coreutils::sys_unlink_pool("/tmp/sh_sph_03.out");
+
         let _ = libjambo::coreutils::sys_unlink_pool(path);
         let _ = libjambo::coreutils::sys_unlink_pool("/tmp/sh_sp_aa");
         let _ = libjambo::coreutils::sys_unlink_pool("/tmp/sh_sp_ab");

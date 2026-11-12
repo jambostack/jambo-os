@@ -6566,25 +6566,54 @@ fn parse_split_size(s: &str) -> Option<usize> {
     num.checked_mul(mult)
 }
 
-/// Génère un suffixe de découpage pour `split` (alphabétique ou numérique)
-fn generate_split_suffix(idx: usize, len: usize, numeric: bool, out: &mut [u8]) -> bool {
+/// Type de suffixe pour l'utilitaire `split`
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum SplitSuffixType {
+    Alphabetic,
+    Numeric,
+    Hex,
+}
+
+/// Génère un suffixe de découpage pour `split` (alphabétique, numérique ou hexadécimal)
+fn generate_split_suffix(
+    idx: usize,
+    len: usize,
+    suffix_type: SplitSuffixType,
+    out: &mut [u8],
+) -> bool {
     if len == 0 || len > out.len() {
         return false;
     }
-    if numeric {
-        let mut val = idx;
-        for i in (0..len).rev() {
-            out[i] = b'0' + (val % 10) as u8;
-            val /= 10;
+    match suffix_type {
+        SplitSuffixType::Numeric => {
+            let mut val = idx;
+            for i in (0..len).rev() {
+                out[i] = b'0' + (val % 10) as u8;
+                val /= 10;
+            }
+            val == 0
         }
-        val == 0
-    } else {
-        let mut val = idx;
-        for i in (0..len).rev() {
-            out[i] = b'a' + (val % 26) as u8;
-            val /= 26;
+        SplitSuffixType::Hex => {
+            let mut val = idx;
+            for i in (0..len).rev() {
+                let digit = (val % 16) as u8;
+                out[i] = if digit < 10 {
+                    b'0' + digit
+                } else {
+                    b'a' + (digit - 10)
+                };
+                val /= 16;
+            }
+            val == 0
         }
-        val == 0
+        SplitSuffixType::Alphabetic => {
+            let mut val = idx;
+            for i in (0..len).rev() {
+                out[i] = b'a' + (val % 26) as u8;
+                val /= 26;
+            }
+            val == 0
+        }
     }
 }
 
@@ -6599,10 +6628,12 @@ enum SplitMode {
 /// Gestionnaire d'écriture des fichiers de sortie partitionnés pour `split`
 struct SplitWriter<'a> {
     prefix: &'a str,
+    additional_suffix: &'a str,
     suffix_len: usize,
-    numeric: bool,
-    numeric_from: usize,
+    suffix_type: SplitSuffixType,
+    suffix_from: usize,
     chunk_idx: usize,
+    files_created: usize,
     current_fd: i32,
     err_fd: i32,
 }
@@ -6610,17 +6641,20 @@ struct SplitWriter<'a> {
 impl<'a> SplitWriter<'a> {
     fn new(
         prefix: &'a str,
+        additional_suffix: &'a str,
         suffix_len: usize,
-        numeric: bool,
-        numeric_from: usize,
+        suffix_type: SplitSuffixType,
+        suffix_from: usize,
         err_fd: i32,
     ) -> Self {
         Self {
             prefix,
+            additional_suffix,
             suffix_len,
-            numeric,
-            numeric_from,
+            suffix_type,
+            suffix_from,
             chunk_idx: 0,
+            files_created: 0,
             current_fd: -1,
             err_fd,
         }
@@ -6630,8 +6664,8 @@ impl<'a> SplitWriter<'a> {
         if self.current_fd >= 0 {
             return Ok(self.current_fd);
         }
-        let total_idx = if self.numeric {
-            self.numeric_from.checked_add(self.chunk_idx).ok_or(())?
+        let total_idx = if self.suffix_type != SplitSuffixType::Alphabetic {
+            self.suffix_from.checked_add(self.chunk_idx).ok_or(())?
         } else {
             self.chunk_idx
         };
@@ -6640,7 +6674,7 @@ impl<'a> SplitWriter<'a> {
         if !generate_split_suffix(
             total_idx,
             self.suffix_len,
-            self.numeric,
+            self.suffix_type,
             &mut suffix_buf[..self.suffix_len],
         ) {
             let _ = sys_write(self.err_fd, b"split: output file suffixes exhausted\n");
@@ -6649,14 +6683,19 @@ impl<'a> SplitWriter<'a> {
 
         let mut path_buf = [0u8; 128];
         let prefix_bytes = self.prefix.as_bytes();
-        if prefix_bytes.len() + self.suffix_len >= path_buf.len() {
+        let add_bytes = self.additional_suffix.as_bytes();
+        let total_path_len = prefix_bytes.len() + self.suffix_len + add_bytes.len();
+        if total_path_len >= path_buf.len() {
             let _ = sys_write(self.err_fd, b"split: output path too long\n");
             return Err(());
         }
         path_buf[..prefix_bytes.len()].copy_from_slice(prefix_bytes);
         path_buf[prefix_bytes.len()..prefix_bytes.len() + self.suffix_len]
             .copy_from_slice(&suffix_buf[..self.suffix_len]);
-        let total_path_len = prefix_bytes.len() + self.suffix_len;
+        if !add_bytes.is_empty() {
+            path_buf[prefix_bytes.len() + self.suffix_len..total_path_len]
+                .copy_from_slice(add_bytes);
+        }
 
         let path_str = match core::str::from_utf8(&path_buf[..total_path_len]) {
             Ok(s) => s,
@@ -6676,6 +6715,7 @@ impl<'a> SplitWriter<'a> {
 
         self.current_fd = new_fd;
         self.chunk_idx += 1;
+        self.files_created += 1;
         Ok(new_fd)
     }
 
@@ -6691,8 +6731,10 @@ impl<'a> SplitWriter<'a> {
 pub fn run_split(args: &[&str], in_fd: i32, _out_fd: i32, err_fd: i32) -> i32 {
     let mut mode: Option<SplitMode> = None;
     let mut suffix_len: usize = 2;
-    let mut numeric = false;
-    let mut numeric_from: usize = 0;
+    let mut suffix_type = SplitSuffixType::Alphabetic;
+    let mut suffix_from: usize = 0;
+    let mut additional_suffix: &str = "";
+    let mut elide_empty = false;
     let mut input_file: Option<&str> = None;
     let mut prefix: &str = "x";
     let mut parsing_options = true;
@@ -6716,23 +6758,76 @@ pub fn run_split(args: &[&str], in_fd: i32, _out_fd: i32, err_fd: i32) -> i32 {
 Output pieces of INPUT to PREFIXaa, PREFIXab, ...;\n\
 default size is 1000 lines, and default PREFIX is 'x'.\n\n\
   -a, --suffix-length=N   generate suffixes of length N (default 2)\n\
+      --additional-suffix=SUFFIX  append an additional SUFFIX to file names\n\
   -b, --bytes=SIZE        put SIZE bytes per output file\n\
   -C, --line-bytes=SIZE   put at most SIZE bytes of lines per output file\n\
   -d, --numeric-suffixes[=FROM]  use numeric suffixes instead of alphabetic\n\
+  -x, --hex-suffixes[=FROM]      use hex suffixes instead of alphabetic\n\
+  -e, --elide-empty-files do not generate empty output files with '-n' or input\n\
   -l, --lines=NUMBER      put NUMBER lines per output file (default 1000)\n\
       --help              display this help and exit\n",
                 );
                 return 0;
             } else if arg == "-d" || arg == "--numeric-suffixes" {
-                numeric = true;
+                suffix_type = SplitSuffixType::Numeric;
+                if i + 1 < args.len()
+                    && !args[i + 1].starts_with('-')
+                    && args[i + 1].bytes().all(|c| c.is_ascii_digit())
+                {
+                    i += 1;
+                    suffix_from = parse_split_size(args[i]).unwrap_or(0);
+                }
             } else if let Some(from_str) = arg.strip_prefix("--numeric-suffixes=") {
-                numeric = true;
+                suffix_type = SplitSuffixType::Numeric;
                 if let Some(val) = parse_split_size(from_str) {
-                    numeric_from = val;
+                    suffix_from = val;
                 } else {
                     let _ = sys_write(err_fd, b"split: invalid numeric suffix start\n");
                     return 1;
                 }
+            } else if let Some(from_str) = arg.strip_prefix("-d") {
+                suffix_type = SplitSuffixType::Numeric;
+                if let Some(val) = parse_split_size(from_str) {
+                    suffix_from = val;
+                } else {
+                    let _ = sys_write(err_fd, b"split: invalid numeric suffix start\n");
+                    return 1;
+                }
+            } else if arg == "-x" || arg == "--hex-suffixes" {
+                suffix_type = SplitSuffixType::Hex;
+                if i + 1 < args.len()
+                    && !args[i + 1].starts_with('-')
+                    && args[i + 1].bytes().all(|c| c.is_ascii_hexdigit())
+                {
+                    i += 1;
+                    if let Ok(val) = usize::from_str_radix(args[i], 16) {
+                        suffix_from = val;
+                    }
+                }
+            } else if let Some(from_str) = arg.strip_prefix("--hex-suffixes=") {
+                suffix_type = SplitSuffixType::Hex;
+                if let Ok(val) = usize::from_str_radix(from_str, 16) {
+                    suffix_from = val;
+                } else if let Some(val) = parse_split_size(from_str) {
+                    suffix_from = val;
+                } else {
+                    let _ = sys_write(err_fd, b"split: invalid hex suffix start\n");
+                    return 1;
+                }
+            } else if let Some(from_str) = arg.strip_prefix("-x") {
+                suffix_type = SplitSuffixType::Hex;
+                if let Ok(val) = usize::from_str_radix(from_str, 16) {
+                    suffix_from = val;
+                } else if let Some(val) = parse_split_size(from_str) {
+                    suffix_from = val;
+                } else {
+                    let _ = sys_write(err_fd, b"split: invalid hex suffix start\n");
+                    return 1;
+                }
+            } else if arg == "-e" || arg == "--elide-empty-files" {
+                elide_empty = true;
+            } else if let Some(suf) = arg.strip_prefix("--additional-suffix=") {
+                additional_suffix = suf;
             } else if arg == "-a" || arg == "--suffix-length" {
                 i += 1;
                 if i >= args.len() {
@@ -6966,7 +7061,14 @@ default size is 1000 lines, and default PREFIX is 'x'.\n\n\
         }
     };
 
-    let mut writer = SplitWriter::new(prefix, suffix_len, numeric, numeric_from, err_fd);
+    let mut writer = SplitWriter::new(
+        prefix,
+        additional_suffix,
+        suffix_len,
+        suffix_type,
+        suffix_from,
+        err_fd,
+    );
     let mut in_buf = [0u8; 1024];
 
     match effective_mode {
@@ -7000,6 +7102,9 @@ default size is 1000 lines, and default PREFIX is 'x'.\n\n\
                         chunk_written = 0;
                     }
                 }
+            }
+            if !elide_empty && writer.files_created == 0 {
+                let _ = writer.ensure_open();
             }
             writer.close_current();
         }
@@ -7044,6 +7149,9 @@ default size is 1000 lines, and default PREFIX is 'x'.\n\n\
                     };
                     let _ = sys_write(out_f, &in_buf[start..len]);
                 }
+            }
+            if !elide_empty && writer.files_created == 0 {
+                let _ = writer.ensure_open();
             }
             writer.close_current();
         }
@@ -7091,6 +7199,9 @@ default size is 1000 lines, and default PREFIX is 'x'.\n\n\
                 if let Ok(out_f) = writer.ensure_open() {
                     let _ = sys_write(out_f, &line_buf[..line_len]);
                 }
+            }
+            if !elide_empty && writer.files_created == 0 {
+                let _ = writer.ensure_open();
             }
             writer.close_current();
         }
@@ -34573,6 +34684,64 @@ mod tests {
         assert_eq!(code5, 1);
         sys_close(out_w5);
         sys_close(out_r5);
+
+        // 6. Test --additional-suffix=.log et suffixes hexadécimaux (-x)
+        let (in_r6, in_w6) = crate::vfs::pipe().expect("pipe in split 6");
+        let _ = sys_write(in_w6, b"DataChunk1DataChunk2");
+        sys_close(in_w6);
+
+        let code6 = run_split(
+            &[
+                "-b",
+                "10",
+                "-x",
+                "--additional-suffix=.log",
+                "-",
+                "/tmp/s6_",
+            ],
+            in_r6,
+            1,
+            2,
+        );
+        assert_eq!(code6, 0);
+        sys_close(in_r6);
+
+        let f6_0 = sys_open("/tmp/s6_00.log", O_RDONLY);
+        assert!(f6_0 >= 3);
+        let n6_0 = sys_read(f6_0, &mut buf);
+        assert_eq!(&buf[..n6_0 as usize], b"DataChunk1");
+        sys_close(f6_0);
+
+        let f6_1 = sys_open("/tmp/s6_01.log", O_RDONLY);
+        assert!(f6_1 >= 3);
+        let n6_1 = sys_read(f6_1, &mut buf);
+        assert_eq!(&buf[..n6_1 as usize], b"DataChunk2");
+        sys_close(f6_1);
+        let _ = sys_unlink_pool("/tmp/s6_00.log");
+        let _ = sys_unlink_pool("/tmp/s6_01.log");
+
+        // 7. Test entrée vide avec et sans -e (--elide-empty-files)
+        // Sans -e : split doit créer un fichier vide conforme POSIX
+        let (in_r7a, in_w7a) = crate::vfs::pipe().expect("pipe in split 7a");
+        sys_close(in_w7a); // 0 octets écrits
+        let code7a = run_split(&["-b", "10", "-", "/tmp/s7a_"], in_r7a, 1, 2);
+        assert_eq!(code7a, 0);
+        sys_close(in_r7a);
+        let f7a = sys_open("/tmp/s7a_aa", O_RDONLY);
+        assert!(f7a >= 3);
+        let n7a = sys_read(f7a, &mut buf);
+        assert_eq!(n7a, 0); // Fichier vide créé
+        sys_close(f7a);
+        let _ = sys_unlink_pool("/tmp/s7a_aa");
+
+        // Avec -e : aucun fichier ne doit être créé
+        let (in_r7b, in_w7b) = crate::vfs::pipe().expect("pipe in split 7b");
+        sys_close(in_w7b); // 0 octets écrits
+        let code7b = run_split(&["-b", "10", "-e", "-", "/tmp/s7b_"], in_r7b, 1, 2);
+        assert_eq!(code7b, 0);
+        sys_close(in_r7b);
+        let f7b = sys_open("/tmp/s7b_aa", O_RDONLY);
+        assert!(f7b < 0); // Le fichier ne doit PAS exister !
     }
 
     #[test]
