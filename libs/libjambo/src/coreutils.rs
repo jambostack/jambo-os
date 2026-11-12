@@ -20222,6 +20222,166 @@ There is NO WARRANTY, to the extent permitted by law.\n";
 }
 
 // ============================================================================
+// Utilitaire BSD / GNU coreutils : `vis` (Encodage visuel de caractères non-imprimables)
+// ============================================================================
+
+/// Encode les octets non imprimables en représentations visuelles réversibles
+/// (ex: retour chariot \r, fin de ligne \n, tabulation \t, anti-slash \\, codes octaux \ooo).
+pub fn run_vis(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    let mut file_args: [&str; 16] = [""; 16];
+    let mut file_count = 0usize;
+    let mut show_tabs = false;
+
+    let mut i = 0usize;
+    while i < args.len() {
+        let arg = args[i];
+        if arg == "-h" || arg == "--help" {
+            let help = b"Usage: vis [OPTION]... [FILE]...\n\
+Display non-printable characters in a visually unambiguous reversible format.\n\n\
+Options:\n\
+  -t, --tabs         Encode horizontal tab characters as \\t\n\
+      --help         Display this help and exit\n\
+      --version      Output version information and exit\n";
+            let _ = sys_write(out_fd, help);
+            return 0;
+        } else if arg == "-V" || arg == "--version" {
+            let ver = b"vis (JamboOS coreutils) 0.1.0\n\
+Copyright (C) 2026 ASSOGBA Prudence Dieudonne\n\
+License GPLv3+: GNU GPL version 3 or later <https://gnu.org/licenses/gpl.html>.\n\
+This is free software: you are free to change and redistribute it.\n\
+There is NO WARRANTY, to the extent permitted by law.\n";
+            let _ = sys_write(out_fd, ver);
+            return 0;
+        } else if arg == "-t" || arg == "--tabs" {
+            show_tabs = true;
+        } else if arg == "--" {
+            for &f in &args[i + 1..] {
+                if file_count < file_args.len() {
+                    file_args[file_count] = f;
+                    file_count += 1;
+                }
+            }
+            break;
+        } else if arg.starts_with('-') && arg != "-" {
+            let _ = sys_write(err_fd, b"vis: unrecognized option '");
+            let _ = sys_write(err_fd, arg.as_bytes());
+            let _ = sys_write(err_fd, b"'\n");
+            return 1;
+        } else {
+            if file_count < file_args.len() {
+                file_args[file_count] = arg;
+                file_count += 1;
+            }
+        }
+        i += 1;
+    }
+
+    if file_count == 0 {
+        file_args[0] = "-";
+        file_count = 1;
+    }
+
+    let mut in_buf = [0u8; 4096];
+    let mut out_buf = [0u8; 4096];
+
+    for &f in file_args.iter().take(file_count) {
+        let fd = if f == "-" {
+            in_fd
+        } else {
+            let fd = sys_open(f, O_RDONLY);
+            if fd < 0 {
+                let _ = sys_write(err_fd, b"vis: cannot open file '");
+                let _ = sys_write(err_fd, f.as_bytes());
+                let _ = sys_write(err_fd, b"'\n");
+                return 1;
+            }
+            fd
+        };
+
+        let mut out_len = 0usize;
+        loop {
+            let n = sys_read(fd, &mut in_buf);
+            if n <= 0 {
+                break;
+            }
+            let slice = &in_buf[..n as usize];
+            for &b in slice {
+                match b {
+                    b'\\' => {
+                        out_buf[out_len] = b'\\';
+                        out_buf[out_len + 1] = b'\\';
+                        out_len += 2;
+                    }
+                    b'\n' => {
+                        out_buf[out_len] = b'\\';
+                        out_buf[out_len + 1] = b'n';
+                        out_buf[out_len + 2] = b'\n';
+                        out_len += 3;
+                    }
+                    b'\r' => {
+                        out_buf[out_len] = b'\\';
+                        out_buf[out_len + 1] = b'r';
+                        out_len += 2;
+                    }
+                    b'\t' => {
+                        if show_tabs {
+                            out_buf[out_len] = b'\\';
+                            out_buf[out_len + 1] = b't';
+                            out_len += 2;
+                        } else {
+                            out_buf[out_len] = b'\t';
+                            out_len += 1;
+                        }
+                    }
+                    0x07 => {
+                        out_buf[out_len] = b'\\';
+                        out_buf[out_len + 1] = b'a';
+                        out_len += 2;
+                    }
+                    0x08 => {
+                        out_buf[out_len] = b'\\';
+                        out_buf[out_len + 1] = b'b';
+                        out_len += 2;
+                    }
+                    0x0C => {
+                        out_buf[out_len] = b'\\';
+                        out_buf[out_len + 1] = b'f';
+                        out_len += 2;
+                    }
+                    0x20..=0x7E => {
+                        out_buf[out_len] = b;
+                        out_len += 1;
+                    }
+                    _ => {
+                        // Octal escape \ooo
+                        out_buf[out_len] = b'\\';
+                        out_buf[out_len + 1] = b'0' + ((b >> 6) & 0x07);
+                        out_buf[out_len + 2] = b'0' + ((b >> 3) & 0x07);
+                        out_buf[out_len + 3] = b'0' + (b & 0x07);
+                        out_len += 4;
+                    }
+                }
+
+                if out_len >= out_buf.len() - 8 {
+                    let _ = sys_write(out_fd, &out_buf[..out_len]);
+                    out_len = 0;
+                }
+            }
+        }
+
+        if out_len > 0 {
+            let _ = sys_write(out_fd, &out_buf[..out_len]);
+        }
+
+        if f != "-" {
+            sys_close(fd);
+        }
+    }
+
+    0
+}
+
+// ============================================================================
 // Utilitaire POSIX / GNU coreutils : `factor` (Décomposition en facteurs premiers)
 // ============================================================================
 
@@ -20769,6 +20929,7 @@ pub fn execute_coreutils_command(
         "ul" => run_ul(args, in_fd, out_fd, err_fd),
         "lam" => run_lam(args, in_fd, out_fd, err_fd),
         "unvis" => run_unvis(args, in_fd, out_fd, err_fd),
+        "vis" => run_vis(args, in_fd, out_fd, err_fd),
         "base64" => run_base64(args, in_fd, out_fd, err_fd),
         "base32" => run_base32(args, in_fd, out_fd, err_fd),
         "base32hex" => run_base32hex(args, in_fd, out_fd, err_fd),
@@ -22160,6 +22321,7 @@ pub fn run_xargs(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
             "ul" => run_ul(effective_sub_args, 0, out_fd, err_fd),
             "lam" => run_lam(effective_sub_args, 0, out_fd, err_fd),
             "unvis" => run_unvis(effective_sub_args, 0, out_fd, err_fd),
+            "vis" => run_vis(effective_sub_args, 0, out_fd, err_fd),
             "factor" => run_factor(effective_sub_args, 0, out_fd, err_fd),
             "base64" => run_base64(effective_sub_args, 0, out_fd, err_fd),
             "base32" => run_base32(effective_sub_args, 0, out_fd, err_fd),
@@ -37985,5 +38147,33 @@ Chaque processus dispose de son propre CR3 sans aucun privilege materiel direct.
         sys_close(_out_r_unvis_h);
 
         assert_eq!(run_unvis(&["--version"], 0, 1, 2), 0);
+
+        // 59. Test run_vis (encodage visuel de caractères de contrôle)
+        let (in_r_vis, in_w_vis) = crate::vfs::pipe().unwrap();
+        let (out_r_vis, out_w_vis) = crate::vfs::pipe().unwrap();
+
+        let _ = sys_write(in_w_vis, b"Line 1\n\tTab\x01End");
+        sys_close(in_w_vis);
+
+        let code_vis = run_vis(&["-t"], in_r_vis, out_w_vis, 2);
+        sys_close(in_r_vis);
+        sys_close(out_w_vis);
+        assert_eq!(code_vis, 0);
+
+        let mut vis_buf = [0u8; 64];
+        let n_vis = sys_read(out_r_vis, &mut vis_buf);
+        sys_close(out_r_vis);
+        assert_eq!(
+            core::str::from_utf8(&vis_buf[..n_vis as usize]).unwrap(),
+            "Line 1\\n\n\\tTab\\001End"
+        );
+
+        // Test vis --help et --version
+        let (_out_r_vis_h, out_w_vis_h) = crate::vfs::pipe().unwrap();
+        assert_eq!(run_vis(&["--help"], 0, out_w_vis_h, 2), 0);
+        sys_close(out_w_vis_h);
+        sys_close(_out_r_vis_h);
+
+        assert_eq!(run_vis(&["--version"], 0, 1, 2), 0);
     }
 }

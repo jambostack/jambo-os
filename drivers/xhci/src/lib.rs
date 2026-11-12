@@ -374,6 +374,8 @@ pub const XHCI_EXT_CAP_USB4_PORT_POWER_MANAGEMENT_CONTROL_INTERFACE_V2: u8 = 65;
 pub const XHCI_EXT_CAP_USB4_PORT_LANE_MARGINING_INTERFACE_V2: u8 = 66;
 /// Capacité étendue xHCI 1.2 / USB4 Time Synchronization Unit Interface v2 (§7.59)
 pub const XHCI_EXT_CAP_USB4_TSU_INTERFACE_V2: u8 = 67;
+/// Capacité étendue xHCI 1.2 / USB4 Quality of Service & Traffic Class Interface v2 (§7.60)
+pub const XHCI_EXT_CAP_USB4_QOS_TRAFFIC_CLASS_INTERFACE_V2: u8 = 68;
 
 /// Masques de registres USB Legacy Support (xHCI 1.2 Section 7.1)
 /// Registre USBLEGSUP (Offset 0x00)
@@ -7262,6 +7264,124 @@ impl XhciUsb4TsuInterfaceV2 {
     /// Met à jour le temps de l'horloge maître (en nanosecondes)
     pub fn update_grandmaster_time(&mut self, time_ns_low: u32) {
         self.grandmaster_time_ns_low = time_ns_low;
+    }
+}
+
+/// Capacité étendue xHCI 1.2 / USB4 Quality of Service & Traffic Class Interface v2 (§7.60)
+///
+/// Interface de gestion de la qualité de service (QoS) et de la classification de trafic USB4 v2.
+/// Permet l'arbitrage déterministe de la bande passante par classe de trafic (TC0 à TC7),
+/// l'allocation de priorités strictes ou pondérées (Weighted Fair Queuing / Deficit Round Robin)
+/// et la surveillance des pertes de paquets ou du jitter pour les flux isochrones / tunneling PCIe / DP.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XhciUsb4QosTrafficClassInterfaceV2 {
+    /// Pointeur dword vers la prochaine capacité étendue (0 = fin de liste)
+    pub next_ptr_dwords: u8,
+    /// QoS matérielle activée (bit 0)
+    pub qos_enabled: bool,
+    /// Ordonnancement à priorité stricte (bit 1 : true = Strict Priority, false = Weighted Round Robin / WFQ)
+    pub strict_priority_mode: bool,
+    /// Nombre de classes de trafic supportées (bits 4..7, typiquement 4 ou 8)
+    pub traffic_class_count: u8,
+    /// Index du port / adaptateur USB4 cible (bits 8..15)
+    pub port_index: u8,
+    /// Masque d'activation des classes de trafic (DWORD 2 [7:0], TC0 à TC7)
+    pub active_tc_mask: u8,
+    /// Poids ou quota de bande passante alloué à la classe haute priorité (DWORD 2 [23:16], en pourcentage ou unités de 1/256)
+    pub high_priority_weight: u8,
+    /// Compteur ou statistiques de paquets rejetés pour non-conformité QoS (DWORD 3 [31:0])
+    pub dropped_packets_count: u32,
+}
+
+impl XhciUsb4QosTrafficClassInterfaceV2 {
+    /// Crée une nouvelle interface USB4 QoS v2
+    pub const fn new(port_index: u8, strict_priority: bool) -> Self {
+        Self {
+            next_ptr_dwords: 0,
+            qos_enabled: false,
+            strict_priority_mode: strict_priority,
+            traffic_class_count: 8,
+            port_index,
+            active_tc_mask: 0x01,      // Par défaut TC0 activé
+            high_priority_weight: 128, // 50%
+            dropped_packets_count: 0,
+        }
+    }
+
+    /// Parse les 4 dwords MMIO d'une capacité étendue USB4 QoS Traffic Class Interface v2 (§7.60)
+    pub const fn parse(dwords: &[u32; 4]) -> Option<Self> {
+        let cap_id = (dwords[0] & 0xFF) as u8;
+        if cap_id != XHCI_EXT_CAP_USB4_QOS_TRAFFIC_CLASS_INTERFACE_V2 {
+            return None;
+        }
+
+        let next_ptr = ((dwords[0] >> 8) & 0xFF) as u8;
+        let ctrl = dwords[1];
+        let qos_enabled = (ctrl & 0x01) != 0;
+        let strict_priority_mode = (ctrl & 0x02) != 0;
+        let traffic_class_count = ((ctrl >> 4) & 0x0F) as u8;
+        let port_index = ((ctrl >> 8) & 0xFF) as u8;
+
+        let dw2 = dwords[2];
+        let active_tc_mask = (dw2 & 0xFF) as u8;
+        let high_priority_weight = ((dw2 >> 16) & 0xFF) as u8;
+
+        let dropped_packets_count = dwords[3];
+
+        Some(Self {
+            next_ptr_dwords: next_ptr,
+            qos_enabled,
+            strict_priority_mode,
+            traffic_class_count,
+            port_index,
+            active_tc_mask,
+            high_priority_weight,
+            dropped_packets_count,
+        })
+    }
+
+    /// Encode la capacité étendue v2 en 4 mots dwords MMIO 32-bit
+    pub const fn encode(&self) -> [u32; 4] {
+        let dw0 = (XHCI_EXT_CAP_USB4_QOS_TRAFFIC_CLASS_INTERFACE_V2 as u32)
+            | ((self.next_ptr_dwords as u32) << 8);
+        let mut ctrl = (((self.traffic_class_count as u32) & 0x0F) << 4)
+            | (((self.port_index as u32) & 0xFF) << 8);
+        if self.qos_enabled {
+            ctrl |= 0x01;
+        }
+        if self.strict_priority_mode {
+            ctrl |= 0x02;
+        }
+
+        let dw2 =
+            (self.active_tc_mask as u32) | (((self.high_priority_weight as u32) & 0xFF) << 16);
+        let dw3 = self.dropped_packets_count;
+        [dw0, ctrl, dw2, dw3]
+    }
+
+    /// Active ou désactive la QoS matérielle
+    pub fn set_enabled(&mut self, enabled: bool) {
+        self.qos_enabled = enabled;
+    }
+
+    /// Définit le mode de priorisation stricte ou pondérée
+    pub fn set_strict_priority(&mut self, strict: bool) {
+        self.strict_priority_mode = strict;
+    }
+
+    /// Configure le masque des classes de trafic actives (TC0..TC7)
+    pub fn set_active_tc_mask(&mut self, mask: u8) {
+        self.active_tc_mask = mask;
+    }
+
+    /// Configure le poids attribué à la classe prioritaire
+    pub fn set_high_priority_weight(&mut self, weight: u8) {
+        self.high_priority_weight = weight;
+    }
+
+    /// Réinitialise ou met à jour le compteur de paquets rejetés
+    pub fn set_dropped_packets_count(&mut self, count: u32) {
+        self.dropped_packets_count = count;
     }
 }
 
@@ -17674,5 +17794,44 @@ mod tests {
         assert_eq!(parsed_tsu_v2.port_index, 3);
         assert_eq!(parsed_tsu_v2.propagation_delay_ps, 12_450);
         assert_eq!(parsed_tsu_v2.grandmaster_time_ns_low, 987_654_321);
+
+        // Test USB4 QoS & Traffic Class Interface v2 (§7.60, Cap ID 68)
+        let mut qos_v2 = XhciUsb4QosTrafficClassInterfaceV2::new(5, false);
+        assert_eq!(qos_v2.port_index, 5);
+        assert!(!qos_v2.strict_priority_mode);
+        assert!(!qos_v2.qos_enabled);
+        assert_eq!(qos_v2.traffic_class_count, 8);
+        assert_eq!(qos_v2.active_tc_mask, 0x01);
+
+        qos_v2.set_enabled(true);
+        qos_v2.set_strict_priority(true);
+        qos_v2.set_active_tc_mask(0x3F);
+        qos_v2.set_high_priority_weight(200);
+        qos_v2.set_dropped_packets_count(15);
+        qos_v2.next_ptr_dwords = 168;
+
+        let encoded_qos_v2 = qos_v2.encode();
+        assert_eq!(
+            encoded_qos_v2[0] & 0xFF,
+            XHCI_EXT_CAP_USB4_QOS_TRAFFIC_CLASS_INTERFACE_V2 as u32
+        );
+        assert_eq!((encoded_qos_v2[0] >> 8) & 0xFF, 168);
+        assert_eq!(encoded_qos_v2[1] & 0x01, 1); // qos_enabled
+        assert_eq!(encoded_qos_v2[1] & 0x02, 2); // strict_priority_mode
+        assert_eq!((encoded_qos_v2[1] >> 4) & 0x0F, 8); // traffic_class_count
+        assert_eq!((encoded_qos_v2[1] >> 8) & 0xFF, 5); // port_index
+        assert_eq!(encoded_qos_v2[2] & 0xFF, 0x3F); // active_tc_mask
+        assert_eq!((encoded_qos_v2[2] >> 16) & 0xFF, 200); // high_priority_weight
+        assert_eq!(encoded_qos_v2[3], 15); // dropped_packets_count
+
+        let parsed_qos_v2 = XhciUsb4QosTrafficClassInterfaceV2::parse(&encoded_qos_v2).unwrap();
+        assert_eq!(parsed_qos_v2.next_ptr_dwords, 168);
+        assert!(parsed_qos_v2.qos_enabled);
+        assert!(parsed_qos_v2.strict_priority_mode);
+        assert_eq!(parsed_qos_v2.traffic_class_count, 8);
+        assert_eq!(parsed_qos_v2.port_index, 5);
+        assert_eq!(parsed_qos_v2.active_tc_mask, 0x3F);
+        assert_eq!(parsed_qos_v2.high_priority_weight, 200);
+        assert_eq!(parsed_qos_v2.dropped_packets_count, 15);
     }
 }
