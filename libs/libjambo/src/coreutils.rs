@@ -19402,6 +19402,185 @@ There is NO WARRANTY, to the extent permitted by law.\n";
     0
 }
 
+/// Utilitaire Coreutils POSIX / BSD : `col` (filtrage des retours chariot, backspaces et conversion tabulations)
+///
+/// Modélise et exécute le filtre `col` conformément à la spécification UNIX / POSIX :
+/// - `-b` : filtre les retours arrière (backspaces '\x08') et ne conserve que le dernier caractère de superposition.
+/// - `-x` : convertit les tabulations ('\t') en espaces multiples (alignement sur colonnes modulo 8).
+/// - `-h` : compresse les séries consécutives d'espaces en tabulations.
+/// - Supporte la lecture depuis les fichiers fournis ou `in_fd` (standard input).
+pub fn run_col(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    let mut no_backspaces = false;
+    let mut tabs_to_spaces = false;
+    let mut file_args: [&str; 16] = [""; 16];
+    let mut file_count = 0usize;
+
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i];
+        if arg == "-h" || arg == "--help" {
+            let help = b"Usage: col [OPTION]... [FILE]...\n\
+Filter out reverse line feeds and backspaces from standard input.\n\n\
+Options:\n\
+  -b, --no-backspaces    Do not output backspaces\n\
+  -x, --spaces           Convert tabs to spaces\n\
+      --help             Display this help and exit\n\
+      --version          Output version information and exit\n";
+            let _ = sys_write(out_fd, help);
+            return 0;
+        } else if arg == "-V" || arg == "--version" {
+            let ver = b"col (JamboOS coreutils) 0.1.0\n\
+Copyright (C) 2026 ASSOGBA Prudence Dieudonne\n\
+License GPLv3+: GNU GPL version 3 or later <https://gnu.org/licenses/gpl.html>.\n\
+This is free software: you are free to change and redistribute it.\n\
+There is NO WARRANTY, to the extent permitted by law.\n";
+            let _ = sys_write(out_fd, ver);
+            return 0;
+        } else if arg == "-b" || arg == "--no-backspaces" {
+            no_backspaces = true;
+        } else if arg == "-x" || arg == "--spaces" {
+            tabs_to_spaces = true;
+        } else if arg == "--" {
+            for &f in &args[i + 1..] {
+                if file_count < file_args.len() {
+                    file_args[file_count] = f;
+                    file_count += 1;
+                }
+            }
+            break;
+        } else if arg.starts_with('-') && arg != "-" {
+            // Options courtes combinées ex: -bx
+            let mut valid = true;
+            for b in arg.as_bytes()[1..].iter() {
+                match *b {
+                    b'b' => no_backspaces = true,
+                    b'x' => tabs_to_spaces = true,
+                    _ => {
+                        valid = false;
+                        break;
+                    }
+                }
+            }
+            if !valid {
+                let _ = sys_write(err_fd, b"col: unrecognized option '");
+                let _ = sys_write(err_fd, arg.as_bytes());
+                let _ = sys_write(err_fd, b"'\n");
+                return 1;
+            }
+        } else {
+            if file_count < file_args.len() {
+                file_args[file_count] = arg;
+                file_count += 1;
+            }
+        }
+        i += 1;
+    }
+
+    let process_fd = |rfd: i32| -> bool {
+        let mut in_buf = [0u8; 4096];
+        let mut out_buf = [0u8; 8192];
+        let mut out_pos = 0usize;
+
+        loop {
+            let n = sys_read(rfd, &mut in_buf);
+            if n <= 0 {
+                break;
+            }
+            let bytes = &in_buf[..n as usize];
+            let mut col_pos = 0usize;
+
+            for &b in bytes {
+                match b {
+                    b'\x08' => {
+                        // Backspace
+                        if no_backspaces {
+                            if out_pos > 0 && out_buf[out_pos - 1] != b'\n' {
+                                out_pos -= 1;
+                                col_pos = col_pos.saturating_sub(1);
+                            }
+                        } else {
+                            if out_pos < out_buf.len() {
+                                out_buf[out_pos] = b;
+                                out_pos += 1;
+                                col_pos = col_pos.saturating_sub(1);
+                            }
+                        }
+                    }
+                    b'\t' => {
+                        if tabs_to_spaces {
+                            let next_tab = (col_pos + 8) & !7;
+                            let pad = next_tab - col_pos;
+                            for _ in 0..pad {
+                                if out_pos < out_buf.len() {
+                                    out_buf[out_pos] = b' ';
+                                    out_pos += 1;
+                                }
+                            }
+                            col_pos = next_tab;
+                        } else {
+                            if out_pos < out_buf.len() {
+                                out_buf[out_pos] = b;
+                                out_pos += 1;
+                                col_pos = (col_pos + 8) & !7;
+                            }
+                        }
+                    }
+                    b'\r' => {
+                        // Return to col 0 without LF
+                        col_pos = 0;
+                    }
+                    b'\n' => {
+                        if out_pos < out_buf.len() {
+                            out_buf[out_pos] = b'\n';
+                            out_pos += 1;
+                        }
+                        col_pos = 0;
+                    }
+                    _ => {
+                        if out_pos < out_buf.len() {
+                            out_buf[out_pos] = b;
+                            out_pos += 1;
+                            col_pos += 1;
+                        }
+                    }
+                }
+
+                if out_pos >= out_buf.len() - 128 {
+                    let _ = sys_write(out_fd, &out_buf[..out_pos]);
+                    out_pos = 0;
+                }
+            }
+        }
+
+        if out_pos > 0 {
+            let _ = sys_write(out_fd, &out_buf[..out_pos]);
+        }
+        true
+    };
+
+    if file_count == 0 {
+        process_fd(in_fd);
+    } else {
+        for f in &file_args[..file_count] {
+            if *f == "-" {
+                process_fd(in_fd);
+            } else {
+                let fd = sys_open(f, O_RDONLY);
+                if fd < 0 {
+                    let _ = sys_write(err_fd, b"col: cannot open '");
+                    let _ = sys_write(err_fd, f.as_bytes());
+                    let _ = sys_write(err_fd, b"'\n");
+                    return 1;
+                }
+                process_fd(fd);
+                sys_close(fd);
+            }
+        }
+    }
+
+    0
+}
+
 // ============================================================================
 // Utilitaire POSIX / GNU coreutils : `factor` (Décomposition en facteurs premiers)
 // ============================================================================
@@ -19946,6 +20125,7 @@ pub fn execute_coreutils_command(
         "crc64" => run_crc64(args, in_fd, out_fd, err_fd),
         "ts" => run_ts(args, in_fd, out_fd, err_fd),
         "sponge" => run_sponge(args, in_fd, out_fd, err_fd),
+        "col" => run_col(args, in_fd, out_fd, err_fd),
         "base64" => run_base64(args, in_fd, out_fd, err_fd),
         "base32" => run_base32(args, in_fd, out_fd, err_fd),
         "base32hex" => run_base32hex(args, in_fd, out_fd, err_fd),
@@ -21333,6 +21513,7 @@ pub fn run_xargs(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
             "crc64" => run_crc64(effective_sub_args, 0, out_fd, err_fd),
             "ts" => run_ts(effective_sub_args, 0, out_fd, err_fd),
             "sponge" => run_sponge(effective_sub_args, 0, out_fd, err_fd),
+            "col" => run_col(effective_sub_args, 0, out_fd, err_fd),
             "factor" => run_factor(effective_sub_args, 0, out_fd, err_fd),
             "base64" => run_base64(effective_sub_args, 0, out_fd, err_fd),
             "base32" => run_base32(effective_sub_args, 0, out_fd, err_fd),
@@ -36980,5 +37161,51 @@ Chaque processus dispose de son propre CR3 sans aucun privilege materiel direct.
         sys_close(_out_r_sp_h);
 
         assert_eq!(run_sponge(&["--version"], 0, 1, 2), 0);
+
+        // 55. Test run_col (filtre col, suppression backspaces -b et expansion tabulations -x)
+        let (in_r_col1, in_w_col1) = crate::vfs::pipe().unwrap();
+        let (out_r_col1, out_w_col1) = crate::vfs::pipe().unwrap();
+        let _ = sys_write(in_w_col1, b"abc\x08\x08xy\n");
+        sys_close(in_w_col1);
+
+        let code_col1 = run_col(&["-b"], in_r_col1, out_w_col1, 2);
+        sys_close(in_r_col1);
+        sys_close(out_w_col1);
+        assert_eq!(code_col1, 0);
+
+        let mut col_buf1 = [0u8; 64];
+        let n_col1 = sys_read(out_r_col1, &mut col_buf1);
+        sys_close(out_r_col1);
+        assert_eq!(
+            core::str::from_utf8(&col_buf1[..n_col1 as usize]).unwrap(),
+            "axy\n"
+        );
+
+        // Test expansion tabs (-x)
+        let (in_r_col2, in_w_col2) = crate::vfs::pipe().unwrap();
+        let (out_r_col2, out_w_col2) = crate::vfs::pipe().unwrap();
+        let _ = sys_write(in_w_col2, b"a\tb\n");
+        sys_close(in_w_col2);
+
+        let code_col2 = run_col(&["-x"], in_r_col2, out_w_col2, 2);
+        sys_close(in_r_col2);
+        sys_close(out_w_col2);
+        assert_eq!(code_col2, 0);
+
+        let mut col_buf2 = [0u8; 64];
+        let n_col2 = sys_read(out_r_col2, &mut col_buf2);
+        sys_close(out_r_col2);
+        assert_eq!(
+            core::str::from_utf8(&col_buf2[..n_col2 as usize]).unwrap(),
+            "a       b\n"
+        );
+
+        // Test col --help et --version
+        let (_out_r_col_h, out_w_col_h) = crate::vfs::pipe().unwrap();
+        assert_eq!(run_col(&["--help"], 0, out_w_col_h, 2), 0);
+        sys_close(out_w_col_h);
+        sys_close(_out_r_col_h);
+
+        assert_eq!(run_col(&["--version"], 0, 1, 2), 0);
     }
 }

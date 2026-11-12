@@ -366,6 +366,8 @@ pub const XHCI_EXT_CAP_USB4_USB3_PORT_CAPABILITY_INTERFACE: u8 = 61;
 pub const XHCI_EXT_CAP_USB4_USB3_PORT_CAPABILITY_INTERFACE_V2: u8 = 62;
 /// Capacité étendue xHCI 1.2 / USB4 Flow Control Configuration Interface v2 (§7.55)
 pub const XHCI_EXT_CAP_USB4_FLOW_CONTROL_CONFIGURATION_INTERFACE_V2: u8 = 63;
+/// Capacité étendue xHCI 1.2 / USB4 Port Link Configuration Interface v2 (§7.56)
+pub const XHCI_EXT_CAP_USB4_PORT_LINK_CONFIGURATION_INTERFACE_V2: u8 = 64;
 
 /// Masques de registres USB Legacy Support (xHCI 1.2 Section 7.1)
 /// Registre USBLEGSUP (Offset 0x00)
@@ -6744,6 +6746,126 @@ impl XhciUsb4FlowControlConfigInterfaceV2 {
     pub fn record_backpressure(&mut self, threshold_adjust: u32) {
         self.credit_threshold = self.credit_threshold.saturating_add(threshold_adjust);
         self.backpressure_events = self.backpressure_events.wrapping_add(1);
+    }
+}
+
+/// Capacité étendue xHCI 1.2 / USB4 Port Link Configuration Interface v2 (§7.56, Cap ID 64)
+///
+/// Modélise et contrôle le lien physique USB4 v2 (PHY/Link Layer) pour les architectures PAM3
+/// 80 Gbps / 120 Gbps Asymmetric Link. Permet la sélection des bandes passantes asymétriques,
+/// le contrôle d'état de lien (CL0, CL1, CL2), la gestion de l'égalisation adaptive et
+/// l'enregistrement télémétrique des erreurs d'alignement de symboles / bit-slip.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XhciUsb4PortLinkConfigInterfaceV2 {
+    /// Pointeur dword vers la prochaine capacité étendue (0 = fin de liste)
+    pub next_ptr_dwords: u8,
+    /// Lien USB4 v2 actif (bit 0)
+    pub link_enabled: bool,
+    /// Mode asymétrique actif (bit 1, 120 Gbps Tx / 40 Gbps Rx)
+    pub asymmetric_mode: bool,
+    /// Modulation PAM3 80/120 Gbps active (bit 2)
+    pub pam3_modulation_enabled: bool,
+    /// Télémétrie d'intégrité de lien active (bit 3)
+    pub link_telemetry_enabled: bool,
+    /// Numéro de port ou adaptateur physique cible (bits 8..15)
+    pub port_index: u8,
+    /// État du lien physique (bits 16..18 : 0=CL0, 1=CL1, 2=CL2, 3=Training, 4=Disabled)
+    pub link_state: u8,
+    /// Registre de statut étendu et flags d'alignement (DWORD 2)
+    pub link_status_v2: u32,
+    /// Compteur d'erreurs d'alignement ou de retrain du lien (DWORD 3)
+    pub retrain_events: u32,
+}
+
+impl XhciUsb4PortLinkConfigInterfaceV2 {
+    /// Crée une nouvelle interface de configuration de lien USB4 v2
+    pub const fn new(port_index: u8, asymmetric: bool, pam3: bool) -> Self {
+        Self {
+            next_ptr_dwords: 0,
+            link_enabled: false,
+            asymmetric_mode: asymmetric,
+            pam3_modulation_enabled: pam3,
+            link_telemetry_enabled: false,
+            port_index,
+            link_state: 0,
+            link_status_v2: 0,
+            retrain_events: 0,
+        }
+    }
+
+    /// Parse les 4 dwords MMIO d'une capacité étendue USB4 Port Link Configuration Interface v2 (§7.56)
+    pub const fn parse(dwords: &[u32; 4]) -> Option<Self> {
+        let cap_id = (dwords[0] & 0xFF) as u8;
+        if cap_id != XHCI_EXT_CAP_USB4_PORT_LINK_CONFIGURATION_INTERFACE_V2 {
+            return None;
+        }
+
+        let next_ptr = ((dwords[0] >> 8) & 0xFF) as u8;
+        let ctrl = dwords[1];
+        let link_enabled = (ctrl & 0x01) != 0;
+        let asymmetric_mode = (ctrl & 0x02) != 0;
+        let pam3_modulation_enabled = (ctrl & 0x04) != 0;
+        let link_telemetry_enabled = (ctrl & 0x08) != 0;
+        let port_index = ((ctrl >> 8) & 0xFF) as u8;
+        let link_state = ((ctrl >> 16) & 0x07) as u8;
+
+        let link_status_v2 = dwords[2];
+        let retrain_events = dwords[3];
+
+        Some(Self {
+            next_ptr_dwords: next_ptr,
+            link_enabled,
+            asymmetric_mode,
+            pam3_modulation_enabled,
+            link_telemetry_enabled,
+            port_index,
+            link_state,
+            link_status_v2,
+            retrain_events,
+        })
+    }
+
+    /// Encode la capacité étendue v2 en 4 mots dwords MMIO 32-bit
+    pub const fn encode(&self) -> [u32; 4] {
+        let dw0 = (XHCI_EXT_CAP_USB4_PORT_LINK_CONFIGURATION_INTERFACE_V2 as u32)
+            | ((self.next_ptr_dwords as u32) << 8);
+        let mut ctrl = ((self.port_index as u32) << 8) | (((self.link_state as u32) & 0x07) << 16);
+        if self.link_enabled {
+            ctrl |= 0x01;
+        }
+        if self.asymmetric_mode {
+            ctrl |= 0x02;
+        }
+        if self.pam3_modulation_enabled {
+            ctrl |= 0x04;
+        }
+        if self.link_telemetry_enabled {
+            ctrl |= 0x08;
+        }
+        let dw2 = self.link_status_v2;
+        let dw3 = self.retrain_events;
+        [dw0, ctrl, dw2, dw3]
+    }
+
+    /// Active ou désactive le lien physique
+    pub fn enable_link(&mut self, enable: bool) {
+        self.link_enabled = enable;
+    }
+
+    /// Active ou désactive la télémétrie du lien
+    pub fn enable_telemetry(&mut self, enable: bool) {
+        self.link_telemetry_enabled = enable;
+    }
+
+    /// Définit l'état du lien (CL0, CL1, CL2, etc.)
+    pub fn set_link_state(&mut self, state: u8) {
+        self.link_state = state & 0x07;
+    }
+
+    /// Enregistre un événement de renégociation (retrain) ou de dérive d'alignement
+    pub fn record_retrain(&mut self, status_flags: u32) {
+        self.link_status_v2 |= status_flags;
+        self.retrain_events = self.retrain_events.wrapping_add(1);
     }
 }
 
@@ -16985,5 +17107,46 @@ mod tests {
         assert_eq!(parsed_fc_v2.traffic_class, 4);
         assert_eq!(parsed_fc_v2.credit_threshold, 750);
         assert_eq!(parsed_fc_v2.backpressure_events, 2);
+
+        // Test USB4 Port Link Configuration Interface v2 (§7.56, Cap ID 64)
+        let mut pl_v2 = XhciUsb4PortLinkConfigInterfaceV2::new(3, true, true);
+        assert_eq!(pl_v2.port_index, 3);
+        assert!(pl_v2.asymmetric_mode);
+        assert!(pl_v2.pam3_modulation_enabled);
+        assert!(!pl_v2.link_enabled);
+        assert!(!pl_v2.link_telemetry_enabled);
+
+        pl_v2.enable_link(true);
+        pl_v2.enable_telemetry(true);
+        pl_v2.set_link_state(1); // CL1
+        pl_v2.record_retrain(0x0004);
+        pl_v2.record_retrain(0x0040);
+        pl_v2.next_ptr_dwords = 128;
+
+        let encoded_pl_v2 = pl_v2.encode();
+        assert_eq!(
+            encoded_pl_v2[0] & 0xFF,
+            XHCI_EXT_CAP_USB4_PORT_LINK_CONFIGURATION_INTERFACE_V2 as u32
+        );
+        assert_eq!((encoded_pl_v2[0] >> 8) & 0xFF, 128);
+        assert_eq!(encoded_pl_v2[1] & 0x01, 1); // link_enabled
+        assert_eq!(encoded_pl_v2[1] & 0x02, 2); // asymmetric_mode
+        assert_eq!(encoded_pl_v2[1] & 0x04, 4); // pam3_modulation_enabled
+        assert_eq!(encoded_pl_v2[1] & 0x08, 8); // link_telemetry_enabled
+        assert_eq!((encoded_pl_v2[1] >> 8) & 0xFF, 3); // port_index 3
+        assert_eq!((encoded_pl_v2[1] >> 16) & 0x07, 1); // link_state 1
+        assert_eq!(encoded_pl_v2[2], 0x0044); // link_status_v2
+        assert_eq!(encoded_pl_v2[3], 2); // retrain_events
+
+        let parsed_pl_v2 = XhciUsb4PortLinkConfigInterfaceV2::parse(&encoded_pl_v2).unwrap();
+        assert_eq!(parsed_pl_v2.next_ptr_dwords, 128);
+        assert!(parsed_pl_v2.link_enabled);
+        assert!(parsed_pl_v2.asymmetric_mode);
+        assert!(parsed_pl_v2.pam3_modulation_enabled);
+        assert!(parsed_pl_v2.link_telemetry_enabled);
+        assert_eq!(parsed_pl_v2.port_index, 3);
+        assert_eq!(parsed_pl_v2.link_state, 1);
+        assert_eq!(parsed_pl_v2.link_status_v2, 0x0044);
+        assert_eq!(parsed_pl_v2.retrain_events, 2);
     }
 }
