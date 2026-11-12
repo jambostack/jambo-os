@@ -20024,6 +20024,204 @@ There is NO WARRANTY, to the extent permitted by law.\n";
 }
 
 // ============================================================================
+// Utilitaire BSD / GNU coreutils : `unvis` (Décodage des séquences vis/ASCII)
+// ============================================================================
+
+/// Décode les séquences d'échappement vis (style `\n`, `\r`, `\t`, `\ooo`, `\^C`, `\M-x`)
+/// en octets bruts pour restaurer des données textuelles ou binaires encodées.
+pub fn run_unvis(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    let mut file_args: [&str; 16] = [""; 16];
+    let mut file_count = 0usize;
+
+    let mut i = 0usize;
+    while i < args.len() {
+        let arg = args[i];
+        if arg == "-h" || arg == "--help" {
+            let help = b"Usage: unvis [OPTION]... [FILE]...\n\
+Decode visual representation of data (vis-encoded strings) to raw bytes.\n\n\
+Options:\n\
+      --help             Display this help and exit\n\
+      --version          Output version information and exit\n";
+            let _ = sys_write(out_fd, help);
+            return 0;
+        } else if arg == "-V" || arg == "--version" {
+            let ver = b"unvis (JamboOS coreutils) 0.1.0\n\
+Copyright (C) 2026 ASSOGBA Prudence Dieudonne\n\
+License GPLv3+: GNU GPL version 3 or later <https://gnu.org/licenses/gpl.html>.\n\
+This is free software: you are free to change and redistribute it.\n\
+There is NO WARRANTY, to the extent permitted by law.\n";
+            let _ = sys_write(out_fd, ver);
+            return 0;
+        } else if arg == "--" {
+            for &f in &args[i + 1..] {
+                if file_count < file_args.len() {
+                    file_args[file_count] = f;
+                    file_count += 1;
+                }
+            }
+            break;
+        } else if arg.starts_with('-') && arg != "-" {
+            let _ = sys_write(err_fd, b"unvis: unrecognized option '");
+            let _ = sys_write(err_fd, arg.as_bytes());
+            let _ = sys_write(err_fd, b"'\n");
+            return 1;
+        } else {
+            if file_count < file_args.len() {
+                file_args[file_count] = arg;
+                file_count += 1;
+            }
+        }
+        i += 1;
+    }
+
+    if file_count == 0 {
+        file_args[0] = "-";
+        file_count = 1;
+    }
+
+    let mut in_buf = [0u8; 4096];
+    let mut out_buf = [0u8; 4096];
+
+    for &f in file_args.iter().take(file_count) {
+        let fd = if f == "-" {
+            in_fd
+        } else {
+            let fd = sys_open(f, O_RDONLY);
+            if fd < 0 {
+                let _ = sys_write(err_fd, b"unvis: cannot open file '");
+                let _ = sys_write(err_fd, f.as_bytes());
+                let _ = sys_write(err_fd, b"'\n");
+                return 1;
+            }
+            fd
+        };
+
+        let mut out_len = 0usize;
+        loop {
+            let n = sys_read(fd, &mut in_buf);
+            if n <= 0 {
+                break;
+            }
+            let slice = &in_buf[..n as usize];
+            let mut j = 0usize;
+
+            while j < slice.len() {
+                if slice[j] == b'\\' && j + 1 < slice.len() {
+                    match slice[j + 1] {
+                        b'a' => {
+                            out_buf[out_len] = 0x07;
+                            out_len += 1;
+                            j += 2;
+                        }
+                        b'b' => {
+                            out_buf[out_len] = 0x08;
+                            out_len += 1;
+                            j += 2;
+                        }
+                        b'f' => {
+                            out_buf[out_len] = 0x0C;
+                            out_len += 1;
+                            j += 2;
+                        }
+                        b'n' => {
+                            out_buf[out_len] = b'\n';
+                            out_len += 1;
+                            j += 2;
+                        }
+                        b'r' => {
+                            out_buf[out_len] = b'\r';
+                            out_len += 1;
+                            j += 2;
+                        }
+                        b't' => {
+                            out_buf[out_len] = b'\t';
+                            out_len += 1;
+                            j += 2;
+                        }
+                        b'v' => {
+                            out_buf[out_len] = 0x0B;
+                            out_len += 1;
+                            j += 2;
+                        }
+                        b'\\' => {
+                            out_buf[out_len] = b'\\';
+                            out_len += 1;
+                            j += 2;
+                        }
+                        b'0'..=b'7' => {
+                            // Octal sequence \ooo (up to 3 digits)
+                            let mut val = slice[j + 1] - b'0';
+                            let mut consumed = 2;
+                            if j + 2 < slice.len() && slice[j + 2] >= b'0' && slice[j + 2] <= b'7' {
+                                val = (val << 3) | (slice[j + 2] - b'0');
+                                consumed = 3;
+                                if j + 3 < slice.len()
+                                    && slice[j + 3] >= b'0'
+                                    && slice[j + 3] <= b'7'
+                                {
+                                    val = (val << 3) | (slice[j + 3] - b'0');
+                                    consumed = 4;
+                                }
+                            }
+                            out_buf[out_len] = val;
+                            out_len += 1;
+                            j += consumed;
+                        }
+                        b'^' if j + 2 < slice.len() => {
+                            // Caret control \^C
+                            let ctrl_c = slice[j + 2];
+                            let byte = if ctrl_c == b'?' { 127 } else { ctrl_c & 0x1F };
+                            out_buf[out_len] = byte;
+                            out_len += 1;
+                            j += 3;
+                        }
+                        b'M' if j + 3 < slice.len() && slice[j + 2] == b'-' => {
+                            // Meta \M-x or \M-^x
+                            if slice[j + 3] == b'^' && j + 4 < slice.len() {
+                                let ctrl_c = slice[j + 4];
+                                let byte = (ctrl_c & 0x1F) | 0x80;
+                                out_buf[out_len] = byte;
+                                out_len += 1;
+                                j += 5;
+                            } else {
+                                let byte = slice[j + 3] | 0x80;
+                                out_buf[out_len] = byte;
+                                out_len += 1;
+                                j += 4;
+                            }
+                        }
+                        _ => {
+                            out_buf[out_len] = slice[j + 1];
+                            out_len += 1;
+                            j += 2;
+                        }
+                    }
+                } else {
+                    out_buf[out_len] = slice[j];
+                    out_len += 1;
+                    j += 1;
+                }
+
+                if out_len >= out_buf.len() - 8 {
+                    let _ = sys_write(out_fd, &out_buf[..out_len]);
+                    out_len = 0;
+                }
+            }
+        }
+
+        if out_len > 0 {
+            let _ = sys_write(out_fd, &out_buf[..out_len]);
+        }
+
+        if f != "-" {
+            sys_close(fd);
+        }
+    }
+
+    0
+}
+
+// ============================================================================
 // Utilitaire POSIX / GNU coreutils : `factor` (Décomposition en facteurs premiers)
 // ============================================================================
 
@@ -20570,6 +20768,7 @@ pub fn execute_coreutils_command(
         "col" => run_col(args, in_fd, out_fd, err_fd),
         "ul" => run_ul(args, in_fd, out_fd, err_fd),
         "lam" => run_lam(args, in_fd, out_fd, err_fd),
+        "unvis" => run_unvis(args, in_fd, out_fd, err_fd),
         "base64" => run_base64(args, in_fd, out_fd, err_fd),
         "base32" => run_base32(args, in_fd, out_fd, err_fd),
         "base32hex" => run_base32hex(args, in_fd, out_fd, err_fd),
@@ -21960,6 +22159,7 @@ pub fn run_xargs(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
             "col" => run_col(effective_sub_args, 0, out_fd, err_fd),
             "ul" => run_ul(effective_sub_args, 0, out_fd, err_fd),
             "lam" => run_lam(effective_sub_args, 0, out_fd, err_fd),
+            "unvis" => run_unvis(effective_sub_args, 0, out_fd, err_fd),
             "factor" => run_factor(effective_sub_args, 0, out_fd, err_fd),
             "base64" => run_base64(effective_sub_args, 0, out_fd, err_fd),
             "base32" => run_base32(effective_sub_args, 0, out_fd, err_fd),
@@ -37756,5 +37956,34 @@ Chaque processus dispose de son propre CR3 sans aucun privilege materiel direct.
         sys_close(_out_r_lam_h);
 
         assert_eq!(run_lam(&["--version"], 0, 1, 2), 0);
+
+        // 58. Test run_unvis (décodage vis / échappements)
+        let (in_r_unvis, in_w_unvis) = crate::vfs::pipe().unwrap();
+        let (out_r_unvis, out_w_unvis) = crate::vfs::pipe().unwrap();
+
+        // Données d'entrée encodées vis : "Hello\\nWorld\\t\\101"
+        let _ = sys_write(in_w_unvis, b"Hello\\nWorld\\t\\101");
+        sys_close(in_w_unvis);
+
+        let code_unvis = run_unvis(&[], in_r_unvis, out_w_unvis, 2);
+        sys_close(in_r_unvis);
+        sys_close(out_w_unvis);
+        assert_eq!(code_unvis, 0);
+
+        let mut unvis_buf = [0u8; 64];
+        let n_unvis = sys_read(out_r_unvis, &mut unvis_buf);
+        sys_close(out_r_unvis);
+        assert_eq!(
+            core::str::from_utf8(&unvis_buf[..n_unvis as usize]).unwrap(),
+            "Hello\nWorld\tA"
+        );
+
+        // Test unvis --help et --version
+        let (_out_r_unvis_h, out_w_unvis_h) = crate::vfs::pipe().unwrap();
+        assert_eq!(run_unvis(&["--help"], 0, out_w_unvis_h, 2), 0);
+        sys_close(out_w_unvis_h);
+        sys_close(_out_r_unvis_h);
+
+        assert_eq!(run_unvis(&["--version"], 0, 1, 2), 0);
     }
 }

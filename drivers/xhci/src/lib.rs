@@ -372,6 +372,8 @@ pub const XHCI_EXT_CAP_USB4_PORT_LINK_CONFIGURATION_INTERFACE_V2: u8 = 64;
 pub const XHCI_EXT_CAP_USB4_PORT_POWER_MANAGEMENT_CONTROL_INTERFACE_V2: u8 = 65;
 /// Capacité étendue xHCI 1.2 / USB4 Port Lane Margining Interface v2 (§7.58)
 pub const XHCI_EXT_CAP_USB4_PORT_LANE_MARGINING_INTERFACE_V2: u8 = 66;
+/// Capacité étendue xHCI 1.2 / USB4 Time Synchronization Unit Interface v2 (§7.59)
+pub const XHCI_EXT_CAP_USB4_TSU_INTERFACE_V2: u8 = 67;
 
 /// Masques de registres USB Legacy Support (xHCI 1.2 Section 7.1)
 /// Registre USBLEGSUP (Offset 0x00)
@@ -7138,6 +7140,128 @@ impl XhciUsb4PortLaneMarginingInterfaceV2 {
         self.error_count = errors;
         self.max_eye_margin = max_eye;
         self.margin_status = status;
+    }
+}
+
+/// Capacité étendue xHCI 1.2 / USB4 Time Synchronization Unit Interface v2 (§7.59)
+///
+/// Interface matérielle de l'Unité de Synchronisation Temporelle (TSU) USB4 v2.
+/// Permet l'alignement temporel sub-nanoseconde (IEEE 1588 / USB4 PTM / Precision Time Protocol)
+/// à travers les routeurs USB4 locaux et partenaires de liaison (Time Sync Handshake).
+/// Expose le contrôle de synchronisation, l'offset temporel d'aller-retour (propagation delay)
+/// et l'horodatage maître haute précision (Grandmaster Time Clock).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XhciUsb4TsuInterfaceV2 {
+    /// Pointeur dword vers la prochaine capacité étendue (0 = fin de liste)
+    pub next_ptr_dwords: u8,
+    /// Horloge TSU activée et asservie (bit 0)
+    pub tsu_enabled: bool,
+    /// Mode Grandmaster Clock actif (bit 1 : true = Grandmaster, false = Subordinate / Follower)
+    pub grandmaster_mode: bool,
+    /// Synchronisation verrouillée (bit 2 : Lock Phase/Frequency Status)
+    pub sync_locked: bool,
+    /// Intervalle de synchronisation en puissances de deux (bits 4..7, ex. 2^n ms)
+    pub sync_interval_log2: u8,
+    /// Index du port / adaptateur USB4 cible (bits 8..15)
+    pub port_index: u8,
+    /// Retard de propagation aller-retour mesuré (Round-Trip Propagation Delay, DWORD 2 [31:0] en picosecondes)
+    pub propagation_delay_ps: u32,
+    /// Horodatage bas (32 bits de poids faible de l'horloge maître TSU, DWORD 3 [31:0] en nanosecondes)
+    pub grandmaster_time_ns_low: u32,
+}
+
+impl XhciUsb4TsuInterfaceV2 {
+    /// Crée une nouvelle interface TSU USB4 v2
+    pub const fn new(port_index: u8, grandmaster: bool) -> Self {
+        Self {
+            next_ptr_dwords: 0,
+            tsu_enabled: false,
+            grandmaster_mode: grandmaster,
+            sync_locked: false,
+            sync_interval_log2: 3, // 8 ms par défaut
+            port_index,
+            propagation_delay_ps: 0,
+            grandmaster_time_ns_low: 0,
+        }
+    }
+
+    /// Parse les 4 dwords MMIO d'une capacité étendue USB4 TSU Interface v2 (§7.59)
+    pub const fn parse(dwords: &[u32; 4]) -> Option<Self> {
+        let cap_id = (dwords[0] & 0xFF) as u8;
+        if cap_id != XHCI_EXT_CAP_USB4_TSU_INTERFACE_V2 {
+            return None;
+        }
+
+        let next_ptr = ((dwords[0] >> 8) & 0xFF) as u8;
+        let ctrl = dwords[1];
+        let tsu_enabled = (ctrl & 0x01) != 0;
+        let grandmaster_mode = (ctrl & 0x02) != 0;
+        let sync_locked = (ctrl & 0x04) != 0;
+        let sync_interval_log2 = ((ctrl >> 4) & 0x0F) as u8;
+        let port_index = ((ctrl >> 8) & 0xFF) as u8;
+
+        let dw2 = dwords[2];
+        let propagation_delay_ps = dw2;
+
+        let dw3 = dwords[3];
+        let grandmaster_time_ns_low = dw3;
+
+        Some(Self {
+            next_ptr_dwords: next_ptr,
+            tsu_enabled,
+            grandmaster_mode,
+            sync_locked,
+            sync_interval_log2,
+            port_index,
+            propagation_delay_ps,
+            grandmaster_time_ns_low,
+        })
+    }
+
+    /// Encode la capacité étendue v2 en 4 mots dwords MMIO 32-bit
+    pub const fn encode(&self) -> [u32; 4] {
+        let dw0 =
+            (XHCI_EXT_CAP_USB4_TSU_INTERFACE_V2 as u32) | ((self.next_ptr_dwords as u32) << 8);
+        let mut ctrl = (((self.sync_interval_log2 as u32) & 0x0F) << 4)
+            | (((self.port_index as u32) & 0xFF) << 8);
+        if self.tsu_enabled {
+            ctrl |= 0x01;
+        }
+        if self.grandmaster_mode {
+            ctrl |= 0x02;
+        }
+        if self.sync_locked {
+            ctrl |= 0x04;
+        }
+
+        let dw2 = self.propagation_delay_ps;
+        let dw3 = self.grandmaster_time_ns_low;
+        [dw0, ctrl, dw2, dw3]
+    }
+
+    /// Active ou désactive l'unité TSU
+    pub fn set_enabled(&mut self, enabled: bool) {
+        self.tsu_enabled = enabled;
+    }
+
+    /// Définit le mode Grandmaster Clock
+    pub fn set_grandmaster_mode(&mut self, gm: bool) {
+        self.grandmaster_mode = gm;
+    }
+
+    /// Met à jour l'état de verrouillage de synchronisation
+    pub fn set_sync_locked(&mut self, locked: bool) {
+        self.sync_locked = locked;
+    }
+
+    /// Définit le délai de propagation mesuré en picosecondes
+    pub fn set_propagation_delay_ps(&mut self, delay_ps: u32) {
+        self.propagation_delay_ps = delay_ps;
+    }
+
+    /// Met à jour le temps de l'horloge maître (en nanosecondes)
+    pub fn update_grandmaster_time(&mut self, time_ns_low: u32) {
+        self.grandmaster_time_ns_low = time_ns_low;
     }
 }
 
@@ -17512,5 +17636,43 @@ mod tests {
         assert_eq!(parsed_lm_v2.sample_bits_scale, 100);
         assert_eq!(parsed_lm_v2.margin_status, 0x0001);
         assert_eq!(parsed_lm_v2.max_eye_margin, 42);
+
+        // Test USB4 Time Synchronization Unit Interface v2 (§7.59, Cap ID 67)
+        let mut tsu_v2 = XhciUsb4TsuInterfaceV2::new(3, true);
+        assert_eq!(tsu_v2.port_index, 3);
+        assert!(tsu_v2.grandmaster_mode);
+        assert!(!tsu_v2.tsu_enabled);
+        assert!(!tsu_v2.sync_locked);
+        assert_eq!(tsu_v2.sync_interval_log2, 3);
+
+        tsu_v2.set_enabled(true);
+        tsu_v2.set_sync_locked(true);
+        tsu_v2.set_propagation_delay_ps(12_450);
+        tsu_v2.update_grandmaster_time(987_654_321);
+        tsu_v2.next_ptr_dwords = 160;
+
+        let encoded_tsu_v2 = tsu_v2.encode();
+        assert_eq!(
+            encoded_tsu_v2[0] & 0xFF,
+            XHCI_EXT_CAP_USB4_TSU_INTERFACE_V2 as u32
+        );
+        assert_eq!((encoded_tsu_v2[0] >> 8) & 0xFF, 160);
+        assert_eq!(encoded_tsu_v2[1] & 0x01, 1); // tsu_enabled
+        assert_eq!(encoded_tsu_v2[1] & 0x02, 2); // grandmaster_mode
+        assert_eq!(encoded_tsu_v2[1] & 0x04, 4); // sync_locked
+        assert_eq!((encoded_tsu_v2[1] >> 4) & 0x0F, 3); // sync_interval_log2
+        assert_eq!((encoded_tsu_v2[1] >> 8) & 0xFF, 3); // port_index
+        assert_eq!(encoded_tsu_v2[2], 12_450); // propagation_delay_ps
+        assert_eq!(encoded_tsu_v2[3], 987_654_321); // grandmaster_time_ns_low
+
+        let parsed_tsu_v2 = XhciUsb4TsuInterfaceV2::parse(&encoded_tsu_v2).unwrap();
+        assert_eq!(parsed_tsu_v2.next_ptr_dwords, 160);
+        assert!(parsed_tsu_v2.tsu_enabled);
+        assert!(parsed_tsu_v2.grandmaster_mode);
+        assert!(parsed_tsu_v2.sync_locked);
+        assert_eq!(parsed_tsu_v2.sync_interval_log2, 3);
+        assert_eq!(parsed_tsu_v2.port_index, 3);
+        assert_eq!(parsed_tsu_v2.propagation_delay_ps, 12_450);
+        assert_eq!(parsed_tsu_v2.grandmaster_time_ns_low, 987_654_321);
     }
 }
