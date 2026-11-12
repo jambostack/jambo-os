@@ -26958,6 +26958,8 @@ pub enum CsplitPattern<'a> {
 pub struct CsplitConfig<'a> {
     /// Préfixe des fichiers créés (par défaut "xx")
     pub prefix: &'a str,
+    /// Format sprintf personnalisé pour le suffixe (ex: "%02d", "%03d", "%d")
+    pub suffix_format: Option<&'a str>,
     /// Nombre de chiffres pour le suffixe numérique (par défaut 2, ex: xx00, xx01...)
     pub digits: usize,
     /// Conserver les fichiers générés même en cas d'erreur (`-k`, `--keep-files`)
@@ -26966,16 +26968,20 @@ pub struct CsplitConfig<'a> {
     pub quiet: bool,
     /// Supprimer les fichiers de sortie de taille nulle (`-z`, `--elide-empty-files`)
     pub elide_empty: bool,
+    /// Supprimer la ligne correspondant au motif du fichier de sortie (`--suppress-matched`)
+    pub suppress_matched: bool,
 }
 
 impl<'a> Default for CsplitConfig<'a> {
     fn default() -> Self {
         Self {
             prefix: "xx",
+            suffix_format: None,
             digits: 2,
             keep_files: false,
             quiet: false,
             elide_empty: false,
+            suppress_matched: false,
         }
     }
 }
@@ -26992,10 +26998,13 @@ fn parse_csplit_pattern(arg: &str) -> Option<CsplitPattern<'_>> {
             let offset_str = &rest[end_slash + 1..];
             let offset = if offset_str.is_empty() {
                 0
-            } else if let Ok(val) = offset_str.parse::<isize>() {
-                val
             } else {
-                return None;
+                let clean = offset_str.strip_prefix('+').unwrap_or(offset_str);
+                if let Ok(val) = clean.parse::<isize>() {
+                    val
+                } else {
+                    return None;
+                }
             };
             return Some(CsplitPattern::MatchUpTo {
                 pattern: pat,
@@ -27008,10 +27017,13 @@ fn parse_csplit_pattern(arg: &str) -> Option<CsplitPattern<'_>> {
             let offset_str = &rest[end_pct + 1..];
             let offset = if offset_str.is_empty() {
                 0
-            } else if let Ok(val) = offset_str.parse::<isize>() {
-                val
             } else {
-                return None;
+                let clean = offset_str.strip_prefix('+').unwrap_or(offset_str);
+                if let Ok(val) = clean.parse::<isize>() {
+                    val
+                } else {
+                    return None;
+                }
             };
             return Some(CsplitPattern::SkipUpTo {
                 pattern: pat,
@@ -27027,29 +27039,68 @@ fn parse_csplit_pattern(arg: &str) -> Option<CsplitPattern<'_>> {
     None
 }
 
-/// Formate un nom de fichier csplit avec préfixe et padding numérique
+/// Formate un nom de fichier csplit avec préfixe et format/padding numérique
 fn format_csplit_filename(
     prefix: &str,
+    suffix_format: Option<&str>,
     index: usize,
     digits: usize,
     buf: &mut [u8],
 ) -> Option<usize> {
     let p_bytes = prefix.as_bytes();
-    if p_bytes.len() + digits >= buf.len() {
+    if p_bytes.len() >= buf.len() {
         return None;
     }
     buf[..p_bytes.len()].copy_from_slice(p_bytes);
+    let cur_len = p_bytes.len();
+
+    let effective_digits = if let Some(fmt) = suffix_format {
+        if let Some(rest) = fmt.strip_prefix("%0") {
+            if let Some(end_d) = rest.strip_suffix('d') {
+                end_d.parse::<usize>().unwrap_or(digits)
+            } else {
+                digits
+            }
+        } else if fmt == "%d" {
+            let mut temp = [0u8; 16];
+            let mut val = index;
+            let mut pos = 0;
+            if val == 0 {
+                temp[0] = b'0';
+                pos = 1;
+            } else {
+                while val > 0 && pos < temp.len() {
+                    temp[pos] = b'0' + (val % 10) as u8;
+                    val /= 10;
+                    pos += 1;
+                }
+                temp[..pos].reverse();
+            }
+            if cur_len + pos > buf.len() {
+                return None;
+            }
+            buf[cur_len..cur_len + pos].copy_from_slice(&temp[..pos]);
+            return Some(cur_len + pos);
+        } else {
+            digits
+        }
+    } else {
+        digits
+    };
 
     let mut temp = [b'0'; 16];
-    let d = digits.min(16);
+    let d = effective_digits.clamp(1, 16);
     let mut val = index;
     for i in (0..d).rev() {
         temp[i] = b'0' + (val % 10) as u8;
         val /= 10;
     }
 
-    buf[p_bytes.len()..p_bytes.len() + d].copy_from_slice(&temp[..d]);
-    Some(p_bytes.len() + d)
+    if cur_len + d > buf.len() {
+        return None;
+    }
+    buf[cur_len..cur_len + d].copy_from_slice(&temp[..d]);
+    Some(cur_len + d)
 }
 
 /// Exécute le découpage contextuel csplit sur un descripteur de fichier d'entrée
@@ -27062,9 +27113,9 @@ fn csplit_stream(
     err_fd: i32,
 ) -> i32 {
     let mut read_buf = [0u8; 1024];
-    let mut line_storage = [0u8; 4096];
-    let mut line_starts = [0usize; 256];
-    let mut line_lens = [0usize; 256];
+    let mut line_storage = [0u8; 16384];
+    let mut line_starts = [0usize; 512];
+    let mut line_lens = [0usize; 512];
     let mut total_lines = 0usize;
     let mut storage_len = 0usize;
 
@@ -27106,21 +27157,27 @@ fn csplit_stream(
     // 2. Traitement des motifs et création des segments de fichiers
     let mut current_line = 0usize;
     let mut file_index = 0usize;
-    let mut created_names_storage = [[0u8; 32]; 32];
-    let mut created_names_len = [0usize; 32];
+    let mut created_names_storage = [[0u8; 48]; 64];
+    let mut created_names_len = [0usize; 64];
     let mut created_count = 0usize;
 
     let write_chunk = |lines_from: usize,
                        lines_to: usize,
                        file_idx: usize,
                        cfg: &CsplitConfig,
-                       cr_storage: &mut [[u8; 32]; 32],
-                       cr_lens: &mut [usize; 32],
+                       cr_storage: &mut [[u8; 48]; 64],
+                       cr_lens: &mut [usize; 64],
                        cr_cnt: &mut usize|
      -> Result<usize, ()> {
-        let mut name_buf = [0u8; 32];
-        let name_len =
-            format_csplit_filename(cfg.prefix, file_idx, cfg.digits, &mut name_buf).ok_or(())?;
+        let mut name_buf = [0u8; 48];
+        let name_len = format_csplit_filename(
+            cfg.prefix,
+            cfg.suffix_format,
+            file_idx,
+            cfg.digits,
+            &mut name_buf,
+        )
+        .ok_or(())?;
         let filename = match core::str::from_utf8(&name_buf[..name_len]) {
             Ok(s) => s,
             Err(_) => return Err(()),
@@ -27168,7 +27225,7 @@ fn csplit_stream(
         Ok(total_bytes)
     };
 
-    let cleanup_created = |cr_storage: &[[u8; 32]; 32], cr_lens: &[usize; 32], cr_cnt: usize| {
+    let cleanup_created = |cr_storage: &[[u8; 48]; 64], cr_lens: &[usize; 64], cr_cnt: usize| {
         for i in 0..cr_cnt {
             let len = cr_lens[i];
             if let Ok(name) = core::str::from_utf8(&cr_storage[i][..len]) {
@@ -27185,9 +27242,13 @@ fn csplit_stream(
         } else {
             1
         };
+        let is_star_repeat = rep_count == usize::MAX;
 
-        for _ in 0..rep_count {
-            if current_line >= total_lines {
+        let mut rep_iter = 0usize;
+        let mut search_from = current_line;
+
+        while is_star_repeat || rep_iter < rep_count {
+            if current_line >= total_lines && search_from >= total_lines {
                 break;
             }
 
@@ -27195,6 +27256,9 @@ fn csplit_stream(
                 CsplitPattern::LineNumber(target_line) => {
                     let target_0_idx = target_line.saturating_sub(1);
                     if target_0_idx <= current_line {
+                        if is_star_repeat {
+                            break;
+                        }
                         let _ = sys_write(
                             err_fd,
                             b"csplit: line number must be greater than current line\n",
@@ -27231,10 +27295,11 @@ fn csplit_stream(
                     }
                     file_index += 1;
                     current_line = split_at;
+                    search_from = current_line;
                 }
                 CsplitPattern::MatchUpTo { pattern, offset } => {
                     let mut found = None;
-                    for l in current_line..total_lines {
+                    for l in search_from..total_lines {
                         let off = line_starts[l];
                         let len = line_lens[l];
                         let line_slice = &line_storage[off..off + len];
@@ -27247,6 +27312,9 @@ fn csplit_stream(
                     let match_l = match found {
                         Some(l) => l,
                         None => {
+                            if is_star_repeat {
+                                break;
+                            }
                             let _ = sys_write(err_fd, b"csplit: match not found: '");
                             let _ = sys_write(err_fd, pattern.as_bytes());
                             let _ = sys_write(err_fd, b"'\n");
@@ -27268,7 +27336,7 @@ fn csplit_stream(
                         match_l.saturating_sub(neg)
                     };
 
-                    if split_at > current_line {
+                    if split_at > current_line || (!config.elide_empty && file_index == 0) {
                         if write_chunk(
                             current_line,
                             split_at,
@@ -27290,12 +27358,19 @@ fn csplit_stream(
                             return 1;
                         }
                         file_index += 1;
+                    }
+
+                    if config.suppress_matched {
+                        current_line = (match_l + 1).min(total_lines);
+                        search_from = current_line;
+                    } else {
                         current_line = split_at;
+                        search_from = (match_l + 1).min(total_lines);
                     }
                 }
                 CsplitPattern::SkipUpTo { pattern, offset } => {
                     let mut found = None;
-                    for l in current_line..total_lines {
+                    for l in search_from..total_lines {
                         let off = line_starts[l];
                         let len = line_lens[l];
                         let line_slice = &line_storage[off..off + len];
@@ -27308,6 +27383,9 @@ fn csplit_stream(
                     let match_l = match found {
                         Some(l) => l,
                         None => {
+                            if is_star_repeat {
+                                break;
+                            }
                             let _ = sys_write(err_fd, b"csplit: match not found: '");
                             let _ = sys_write(err_fd, pattern.as_bytes());
                             let _ = sys_write(err_fd, b"'\n");
@@ -27329,8 +27407,11 @@ fn csplit_stream(
                         match_l.saturating_sub(neg)
                     };
                     current_line = skip_to;
+                    search_from = (match_l + 1).min(total_lines);
                 }
             }
+
+            rep_iter += 1;
         }
         pat_idx += 1;
     }
@@ -27360,11 +27441,15 @@ fn csplit_stream(
 /// Exécute l'utilitaire standard POSIX `csplit` (découpage de fichiers selon des contextes et expressions régulières)
 ///
 /// Drapeaux et options supportés :
+/// - `-b FORMAT`, `--suffix-format=FORMAT` : Définit le format de suffixe (ex: "%02d", "%03d", "%d")
 /// - `-f PREFIX`, `--prefix=PREFIX` : Définit le préfixe des fichiers créés (par défaut "xx")
 /// - `-n DIGITS`, `--digits=DIGITS` : Définit le nombre de chiffres décimaux pour le suffixe (par défaut 2)
 /// - `-k`, `--keep-files` : Conserve les fichiers générés en cas d'erreur
 /// - `-s`, `-q`, `--silent`, `--quiet` : Ne pas afficher la taille en octets des fichiers créés
 /// - `-z`, `--elide-empty-files` : Supprime ou n'écrit pas les fichiers de taille nulle
+/// - `--suppress-matched` : Supprime la ligne correspondant au motif
+/// - `{N}` : Répète le motif N fois supplémentaires
+/// - `{*}` : Répète le motif autant de fois que possible jusqu'à la fin du fichier
 /// - `--help` : Affiche l'aide
 pub fn run_csplit(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
     let mut config = CsplitConfig::default();
@@ -27382,11 +27467,13 @@ pub fn run_csplit(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
                 b"Usage: csplit [OPTION]... FILE PATTERN...\n\
 Output pieces of FILE separated by PATTERN(s) to files 'xx00', 'xx01', ...,\n\
 and output byte counts of each piece to standard output.\n\n\
+  -b, --suffix-format=FORMAT use sprintf FORMAT instead of %02d\n\
   -f, --prefix=PREFIX        use PREFIX instead of 'xx'\n\
   -k, --keep-files           do not remove output files on errors\n\
   -n, --digits=DIGITS        use specified number of digits instead of 2\n\
   -s, -q, --silent, --quiet  do not print counts of output file sizes\n\
   -z, --elide-empty-files    remove empty output files\n\
+      --suppress-matched     suppress the lines matching PATTERN\n\
       --help                 display this help and exit\n",
             );
             return 0;
@@ -27406,6 +27493,27 @@ and output byte counts of each piece to standard output.\n\n\
 
         if arg == "-z" || arg == "--elide-empty-files" {
             config.elide_empty = true;
+            i += 1;
+            continue;
+        }
+
+        if arg == "--suppress-matched" {
+            config.suppress_matched = true;
+            i += 1;
+            continue;
+        }
+
+        if arg == "-b" || arg == "--suffix-format" {
+            if i + 1 < args.len() {
+                config.suffix_format = Some(args[i + 1].trim());
+                i += 2;
+                continue;
+            } else {
+                let _ = sys_write(err_fd, b"csplit: option requires an argument -- 'b'\n");
+                return 1;
+            }
+        } else if let Some(fmt) = arg.strip_prefix("--suffix-format=") {
+            config.suffix_format = Some(fmt.trim());
             i += 1;
             continue;
         }
@@ -27457,13 +27565,22 @@ and output byte counts of each piece to standard output.\n\n\
             continue;
         }
 
-        // Motif ou répétition `{N}`
+        // Motif ou répétition `{N}` ou `{*}`
         if arg.starts_with('{') && arg.ends_with('}') {
-            let inner = &arg[1..arg.len() - 1].trim();
-            if let Ok(rep) = inner.parse::<usize>() {
+            let inner = arg[1..arg.len() - 1].trim();
+            if inner == "*" {
+                if pat_count > 0 {
+                    repeats[pat_count - 1] = usize::MAX;
+                }
+            } else if let Ok(rep) = inner.parse::<usize>() {
                 if pat_count > 0 {
                     repeats[pat_count - 1] = rep + 1; // Répéter rep fois supplémentaires
                 }
+            } else {
+                let _ = sys_write(err_fd, b"csplit: invalid repeat count '");
+                let _ = sys_write(err_fd, arg.as_bytes());
+                let _ = sys_write(err_fd, b"'\n");
+                return 1;
             }
             i += 1;
             continue;
@@ -36535,6 +36652,138 @@ Chaque processus dispose de son propre CR3 sans aucun privilege materiel direct.
         let _ = sys_close(fd_cs1);
         let _ = sys_unlink_pool("/tmp/test_cs_01");
         assert_eq!(&cs1_buf[..n_cs1 as usize], b"SECTION 2\nGamma\nDelta\n");
+
+        // Test enrichi de csplit : répétition {*} avec format %03d et --suppress-matched
+        let input_csplit2 =
+            b"HDR:start\nCHAPTER 1\nLine 1A\nLine 1B\nCHAPTER 2\nLine 2A\nCHAPTER 3\nLine 3A\n";
+        let (in_r_cs2, in_w_cs2) = crate::vfs::pipe().expect("pipe csplit in 2");
+        let (out_r_cs2, out_w_cs2) = crate::vfs::pipe().expect("pipe csplit out 2");
+        let _ = sys_write(in_w_cs2, input_csplit2);
+        let _ = sys_close(in_w_cs2);
+
+        let code_cs2 = run_csplit(
+            &[
+                "-f",
+                "/tmp/test_cs_star_",
+                "-b",
+                "%03d",
+                "-s",
+                "-z",
+                "--suppress-matched",
+                "-",
+                "/CHAPTER/",
+                "{*}",
+            ],
+            in_r_cs2,
+            out_w_cs2,
+            2,
+        );
+        let _ = sys_close(in_r_cs2);
+        let _ = sys_close(out_w_cs2);
+        let _ = sys_close(out_r_cs2);
+        assert_eq!(code_cs2, 0);
+
+        // Fichier 0 : /tmp/test_cs_star_000 ("HDR:start\n")
+        let fd_s0 = sys_open("/tmp/test_cs_star_000", crate::vfs::O_RDONLY);
+        assert!(fd_s0 >= 0);
+        let mut s0_buf = [0u8; 64];
+        let n_s0 = sys_read(fd_s0, &mut s0_buf);
+        let _ = sys_close(fd_s0);
+        let _ = sys_unlink_pool("/tmp/test_cs_star_000");
+        assert_eq!(&s0_buf[..n_s0 as usize], b"HDR:start\n");
+
+        // Fichier 1 : /tmp/test_cs_star_001 ("Line 1A\nLine 1B\n")
+        let fd_s1 = sys_open("/tmp/test_cs_star_001", crate::vfs::O_RDONLY);
+        assert!(fd_s1 >= 0);
+        let mut s1_buf = [0u8; 64];
+        let n_s1 = sys_read(fd_s1, &mut s1_buf);
+        let _ = sys_close(fd_s1);
+        let _ = sys_unlink_pool("/tmp/test_cs_star_001");
+        assert_eq!(&s1_buf[..n_s1 as usize], b"Line 1A\nLine 1B\n");
+
+        // Fichier 2 : /tmp/test_cs_star_002 ("Line 2A\n")
+        let fd_s2 = sys_open("/tmp/test_cs_star_002", crate::vfs::O_RDONLY);
+        assert!(fd_s2 >= 0);
+        let mut s2_buf = [0u8; 64];
+        let n_s2 = sys_read(fd_s2, &mut s2_buf);
+        let _ = sys_close(fd_s2);
+        let _ = sys_unlink_pool("/tmp/test_cs_star_002");
+        assert_eq!(&s2_buf[..n_s2 as usize], b"Line 2A\n");
+
+        // Fichier 3 : /tmp/test_cs_star_003 ("Line 3A\n")
+        let fd_s3 = sys_open("/tmp/test_cs_star_003", crate::vfs::O_RDONLY);
+        assert!(fd_s3 >= 0);
+        let mut s3_buf = [0u8; 64];
+        let n_s3 = sys_read(fd_s3, &mut s3_buf);
+        let _ = sys_close(fd_s3);
+        let _ = sys_unlink_pool("/tmp/test_cs_star_003");
+        assert_eq!(&s3_buf[..n_s3 as usize], b"Line 3A\n");
+    }
+
+    #[test]
+    fn test_csplit_advanced_features() {
+        use crate::vfs::pipe;
+
+        // Test 1: Découpage avec motif %SKIP% et offset relatif /TAG/+1
+        let input_adv =
+            b"Header 1\nSkip this line\n%TARGET%\nLine Keep 1\nLine Keep 2\nSTOP\nFooter\n";
+        let (in_r, in_w) = pipe().expect("pipe adv in");
+        let (out_r, out_w) = pipe().expect("pipe adv out");
+        let _ = sys_write(in_w, input_adv);
+        let _ = sys_close(in_w);
+
+        let code = run_csplit(
+            &[
+                "-f",
+                "/tmp/test_cs_adv_",
+                "-b",
+                "%d",
+                "-s",
+                "-",
+                "%TARGET%",
+                "/STOP/+1",
+            ],
+            in_r,
+            out_w,
+            2,
+        );
+        let _ = sys_close(in_r);
+        let _ = sys_close(out_w);
+        let _ = sys_close(out_r);
+        assert_eq!(code, 0);
+
+        // Fichier 0 (/tmp/test_cs_adv_0) : contient les lignes après le %TARGET% jusqu'à STOP inclus (+1)
+        let fd0 = sys_open("/tmp/test_cs_adv_0", crate::vfs::O_RDONLY);
+        assert!(fd0 >= 0);
+        let mut b0 = [0u8; 128];
+        let n0 = sys_read(fd0, &mut b0);
+        let _ = sys_close(fd0);
+        let _ = sys_unlink_pool("/tmp/test_cs_adv_0");
+        assert_eq!(
+            &b0[..n0 as usize],
+            b"%TARGET%\nLine Keep 1\nLine Keep 2\nSTOP\n"
+        );
+
+        // Fichier 1 (/tmp/test_cs_adv_1) : contient le reste ("Footer\n")
+        let fd1 = sys_open("/tmp/test_cs_adv_1", crate::vfs::O_RDONLY);
+        assert!(fd1 >= 0);
+        let mut b1 = [0u8; 64];
+        let n1 = sys_read(fd1, &mut b1);
+        let _ = sys_close(fd1);
+        let _ = sys_unlink_pool("/tmp/test_cs_adv_1");
+        assert_eq!(&b1[..n1 as usize], b"Footer\n");
+
+        // Test 2: Option --help
+        let (h_r, h_w) = pipe().expect("pipe help");
+        let code_h = run_csplit(&["--help"], 0, 1, h_w);
+        let _ = sys_close(h_w);
+        assert_eq!(code_h, 0);
+        let mut h_buf = [0u8; 256];
+        let n_h = sys_read(h_r, &mut h_buf);
+        let _ = sys_close(h_r);
+        assert!(n_h > 0);
+        let h_str = core::str::from_utf8(&h_buf[..n_h as usize]).unwrap();
+        assert!(h_str.contains("Usage: csplit"));
     }
 
     #[test]

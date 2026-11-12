@@ -21912,6 +21912,14 @@ mod tests {
         let _ = libjambo::coreutils::sys_unlink_pool("/tmp/sh_cs_00");
         let _ = libjambo::coreutils::sys_unlink_pool("/tmp/sh_cs_01");
 
+        let (st23b, _len23b) = shell.execute_line(
+            "csplit -f /tmp/sh_cs_b_ -b %03d -s /etc/hostname 2",
+            &mut out,
+        );
+        assert_eq!(st23b, ShellStatus::Success);
+        let _ = libjambo::coreutils::sys_unlink_pool("/tmp/sh_cs_b_000");
+        let _ = libjambo::coreutils::sys_unlink_pool("/tmp/sh_cs_b_001");
+
         // 21. shuf shell command
         let (st24, len24) = shell.execute_line("shuf -e -n 2 red green blue", &mut out);
         assert_eq!(st24, ShellStatus::Success);
