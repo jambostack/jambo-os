@@ -677,7 +677,12 @@ name = "numfmt"
 path = "src/bin/numfmt.rs"
 test = false
 
-# 134 utilitaires Ring 3
+[[bin]]
+name = "mcookie"
+path = "src/bin/mcookie.rs"
+test = false
+
+# 135 utilitaires Ring 3
 
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }

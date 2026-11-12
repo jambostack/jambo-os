@@ -570,6 +570,7 @@ impl JamboShell {
             "comm" | "/bin/comm" | "bin/comm" => self.cmd_comm(args, out),
             "tr" | "/bin/tr" | "bin/tr" => self.cmd_tr(args, out),
             "split" | "/bin/split" | "bin/split" => self.cmd_split(args, out),
+            "mcookie" | "/bin/mcookie" | "bin/mcookie" => self.cmd_mcookie(args, out),
             "basename" | "/bin/basename" | "bin/basename" => self.cmd_basename(args, out),
             "dirname" | "/bin/dirname" | "bin/dirname" => self.cmd_dirname(args, out),
             "seq" | "/bin/seq" | "bin/seq" => self.cmd_seq(args, out),
@@ -1298,6 +1299,26 @@ Utilitaire d'installation JamboOS (Serie 0.*.*)\n\
             }
         } else {
             let msg = b"split: pipe creation failed\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
+    }
+
+    fn cmd_mcookie(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if let Ok((r, w)) = libjambo::vfs::pipe() {
+            let code = libjambo::coreutils::run_mcookie(args, 0, w, w);
+            let _ = libjambo::coreutils::sys_close(w);
+            let n = libjambo::coreutils::sys_read(r, out);
+            let _ = libjambo::coreutils::sys_close(r);
+            let len = if n > 0 { n as usize } else { 0 };
+            if code == 0 {
+                (ShellStatus::Success, len)
+            } else {
+                (ShellStatus::ExecutionFailed, len)
+            }
+        } else {
+            let msg = b"mcookie: pipe creation failed\n";
             let len = msg.len().min(out.len());
             out[..len].copy_from_slice(&msg[..len]);
             (ShellStatus::ExecutionFailed, len)
@@ -22628,5 +22649,21 @@ mod tests {
         assert_eq!(st152, ShellStatus::Success);
         let s152 = core::str::from_utf8(&out[..len152]).unwrap();
         assert!(s152.contains("numfmt (JamboOS coreutils)"));
+
+        // 68. mcookie shell command
+        let (st153, len153) = shell.execute_line("mcookie", &mut out);
+        assert_eq!(st153, ShellStatus::Success);
+        assert_eq!(len153, 33); // 32 hex chars + newline
+        assert_eq!(out[32], b'\n');
+
+        let (st154, len154) = shell.execute_line("mcookie --help", &mut out);
+        assert_eq!(st154, ShellStatus::Success);
+        let s154 = core::str::from_utf8(&out[..len154]).unwrap();
+        assert!(s154.contains("Usage: mcookie"));
+
+        let (st155, len155) = shell.execute_line("mcookie --version", &mut out);
+        assert_eq!(st155, ShellStatus::Success);
+        let s155 = core::str::from_utf8(&out[..len155]).unwrap();
+        assert!(s155.contains("mcookie (JamboOS coreutils)"));
     }
 }

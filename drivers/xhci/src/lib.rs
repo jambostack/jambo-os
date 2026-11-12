@@ -390,6 +390,8 @@ pub const XHCI_EXT_CAP_USB4_DP_ADAPTER_CONFIGURATION_INTERFACE_V2: u8 = 73;
 pub const XHCI_EXT_CAP_USB4_USB3_ADAPTER_CONFIGURATION_INTERFACE_V2: u8 = 74;
 /// Capacité étendue xHCI 1.2 / USB4 Host Interface Configuration Interface v2 (§7.67)
 pub const XHCI_EXT_CAP_USB4_HOST_INTERFACE_CONFIGURATION_INTERFACE_V2: u8 = 75;
+/// Capacité étendue xHCI 1.2 / USB4 Domain Configuration Interface v2 (§7.68)
+pub const XHCI_EXT_CAP_USB4_DOMAIN_CONFIGURATION_INTERFACE_V2: u8 = 76;
 
 /// Masques de registres USB Legacy Support (xHCI 1.2 Section 7.1)
 /// Registre USBLEGSUP (Offset 0x00)
@@ -8589,6 +8591,214 @@ impl XhciUsb4HostInterfaceConfigInterfaceV2 {
             3 => 120000,
             _ => 0,
         }
+    }
+}
+
+/// Capacité étendue xHCI 1.2 / USB4 Domain Configuration Interface v2 (§7.68)
+///
+/// Permet au gestionnaire de connexion (Connection Manager) de superviser et configurer
+/// le domaine USB4, la topologie arborescente (Root Router et Device Routers), la plage des Hop IDs,
+/// l'état de découverte topologique et la gestion des événements de branchement à chaud (Hotplug).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XhciUsb4DomainConfigInterfaceV2 {
+    /// Pointeur dword vers la prochaine capacité étendue (0 = fin de liste)
+    pub next_ptr_dwords: u8,
+    /// Domaine USB4 activé et opérationnel
+    pub domain_enabled: bool,
+    /// Routage des paquets tunnelisés actif dans le domaine
+    pub routing_active: bool,
+    /// Processus de découverte topologique en cours d'exécution
+    pub discovery_in_progress: bool,
+    /// Découverte topologique initiale ou après reconfiguration complétée avec succès
+    pub discovery_complete: bool,
+    /// Prise en charge des liaisons et du routage inter-domaines
+    pub inter_domain_supported: bool,
+    /// Synchronisation temporelle distribuée du domaine verrouillée (Domain Time Sync Lock)
+    pub domain_time_sync_locked: bool,
+    /// Réinitialisation matérielle du domaine en cours
+    pub reset_in_progress: bool,
+    /// Identifiant unique du domaine USB4 (0..255)
+    pub domain_id: u8,
+    /// Profondeur maximale de l'arbre topologique (typiquement 1..7)
+    pub domain_depth: u8,
+    /// Nombre maximal de routeurs supportés dans ce domaine (1..64)
+    pub max_routers: u8,
+    /// Numéro séquentiel de génération topologique (incrémenté à chaque changement de topologie)
+    pub topology_generation: u8,
+    /// Limite maximale d'identifiant de saut de routage (Hop ID Limit, typiquement 64..1024)
+    pub hop_id_limit: u16,
+    /// Nombre de routeurs actuellement découverts, initialisés et actifs
+    pub active_router_count: u16,
+    /// Compteur d'événements de découverte et de notification topologique (Hotplug/Unplug)
+    pub discovery_event_counter: u16,
+    /// Compteur d'erreurs de routage ou de trames USB4 orphelines/non distribuées
+    pub routing_error_counter: u16,
+}
+
+impl XhciUsb4DomainConfigInterfaceV2 {
+    /// Crée une nouvelle interface de configuration de Domaine USB4 v2
+    pub const fn new(domain_id: u8, domain_depth: u8, max_routers: u8, hop_id_limit: u16) -> Self {
+        Self {
+            next_ptr_dwords: 0,
+            domain_enabled: false,
+            routing_active: false,
+            discovery_in_progress: false,
+            discovery_complete: false,
+            inter_domain_supported: false,
+            domain_time_sync_locked: false,
+            reset_in_progress: false,
+            domain_id,
+            domain_depth: domain_depth & 0x0F,
+            max_routers: max_routers & 0x3F,
+            topology_generation: 1,
+            hop_id_limit,
+            active_router_count: 0,
+            discovery_event_counter: 0,
+            routing_error_counter: 0,
+        }
+    }
+
+    /// Parse les 4 dwords MMIO d'une capacité étendue USB4 Domain Configuration Interface v2 (§7.68)
+    pub const fn parse(dwords: &[u32; 4]) -> Option<Self> {
+        let cap_id = (dwords[0] & 0xFF) as u8;
+        if cap_id != XHCI_EXT_CAP_USB4_DOMAIN_CONFIGURATION_INTERFACE_V2 {
+            return None;
+        }
+
+        let next_ptr = ((dwords[0] >> 8) & 0xFF) as u8;
+        let ctrl = dwords[1];
+        let domain_enabled = (ctrl & 0x01) != 0;
+        let routing_active = (ctrl & 0x02) != 0;
+        let discovery_in_progress = (ctrl & 0x04) != 0;
+        let discovery_complete = (ctrl & 0x08) != 0;
+        let inter_domain_supported = (ctrl & 0x10) != 0;
+        let domain_time_sync_locked = (ctrl & 0x20) != 0;
+        let reset_in_progress = (ctrl & 0x40) != 0;
+        let domain_id = ((ctrl >> 8) & 0xFF) as u8;
+        let domain_depth = ((ctrl >> 16) & 0x0F) as u8;
+        let max_routers = ((ctrl >> 20) & 0x3F) as u8;
+        let topology_generation = ((ctrl >> 26) & 0x3F) as u8;
+
+        let dw2 = dwords[2];
+        let hop_id_limit = (dw2 & 0xFFFF) as u16;
+        let active_router_count = ((dw2 >> 16) & 0xFFFF) as u16;
+
+        let dw3 = dwords[3];
+        let discovery_event_counter = (dw3 & 0xFFFF) as u16;
+        let routing_error_counter = ((dw3 >> 16) & 0xFFFF) as u16;
+
+        Some(Self {
+            next_ptr_dwords: next_ptr,
+            domain_enabled,
+            routing_active,
+            discovery_in_progress,
+            discovery_complete,
+            inter_domain_supported,
+            domain_time_sync_locked,
+            reset_in_progress,
+            domain_id,
+            domain_depth,
+            max_routers,
+            topology_generation,
+            hop_id_limit,
+            active_router_count,
+            discovery_event_counter,
+            routing_error_counter,
+        })
+    }
+
+    /// Encode la capacité étendue USB4 Domain Configuration Interface v2 sous forme de 4 dwords MMIO
+    pub const fn encode(&self) -> [u32; 4] {
+        let dw0 = (XHCI_EXT_CAP_USB4_DOMAIN_CONFIGURATION_INTERFACE_V2 as u32)
+            | ((self.next_ptr_dwords as u32) << 8);
+
+        let mut ctrl = 0u32;
+        if self.domain_enabled {
+            ctrl |= 0x01;
+        }
+        if self.routing_active {
+            ctrl |= 0x02;
+        }
+        if self.discovery_in_progress {
+            ctrl |= 0x04;
+        }
+        if self.discovery_complete {
+            ctrl |= 0x08;
+        }
+        if self.inter_domain_supported {
+            ctrl |= 0x10;
+        }
+        if self.domain_time_sync_locked {
+            ctrl |= 0x20;
+        }
+        if self.reset_in_progress {
+            ctrl |= 0x40;
+        }
+        ctrl |= ((self.domain_id as u32) & 0xFF) << 8;
+        ctrl |= ((self.domain_depth as u32) & 0x0F) << 16;
+        ctrl |= ((self.max_routers as u32) & 0x3F) << 20;
+        ctrl |= ((self.topology_generation as u32) & 0x3F) << 26;
+
+        let dw2 = (self.hop_id_limit as u32) | ((self.active_router_count as u32) << 16);
+        let dw3 =
+            (self.discovery_event_counter as u32) | ((self.routing_error_counter as u32) << 16);
+
+        [dw0, ctrl, dw2, dw3]
+    }
+
+    /// Active le domaine USB4
+    pub fn enable_domain(&mut self) {
+        self.domain_enabled = true;
+    }
+
+    /// Désactive le domaine USB4
+    pub fn disable_domain(&mut self) {
+        self.domain_enabled = false;
+        self.routing_active = false;
+    }
+
+    /// Démarre le processus de découverte topologique du domaine
+    pub fn start_discovery(&mut self) {
+        self.discovery_in_progress = true;
+        self.discovery_complete = false;
+        self.topology_generation = self.topology_generation.wrapping_add(1) & 0x3F;
+    }
+
+    /// Conclut la découverte topologique avec le nombre de routeurs identifiés
+    pub fn finish_discovery(&mut self, active_routers: u16) {
+        self.discovery_in_progress = false;
+        self.discovery_complete = true;
+        self.active_router_count = active_routers;
+        self.routing_active = active_routers > 0;
+    }
+
+    /// Configure la prise en charge inter-domaines
+    pub fn set_inter_domain(&mut self, supported: bool) {
+        self.inter_domain_supported = supported;
+    }
+
+    /// Configure le statut de verrouillage temporel distribué
+    pub fn set_time_sync_locked(&mut self, locked: bool) {
+        self.domain_time_sync_locked = locked;
+    }
+
+    /// Enregistre un événement de découverte (branchement ou débranchement de routeur)
+    pub fn record_discovery_event(&mut self) {
+        self.discovery_event_counter = self.discovery_event_counter.saturating_add(1);
+    }
+
+    /// Enregistre des erreurs de routage
+    pub fn record_routing_error(&mut self, count: u16) {
+        self.routing_error_counter = self.routing_error_counter.saturating_add(count);
+    }
+
+    /// Indique si le domaine USB4 est pleinement opérationnel
+    pub fn is_operational(&self) -> bool {
+        self.domain_enabled
+            && self.routing_active
+            && self.discovery_complete
+            && !self.reset_in_progress
+            && self.active_router_count > 0
     }
 }
 
@@ -19472,5 +19682,94 @@ mod tests {
         hi_cfg.disable_host_interface();
         assert!(!hi_cfg.is_operational());
         assert!(!hi_cfg.dma_active);
+    }
+
+    #[test]
+    fn test_xhci_usb4_domain_config_interface_v2() {
+        let mut dci = XhciUsb4DomainConfigInterfaceV2::new(1, 5, 32, 256);
+        assert_eq!(dci.domain_id, 1);
+        assert_eq!(dci.domain_depth, 5);
+        assert_eq!(dci.max_routers, 32);
+        assert_eq!(dci.hop_id_limit, 256);
+        assert_eq!(dci.topology_generation, 1);
+        assert_eq!(dci.active_router_count, 0);
+        assert!(!dci.is_operational());
+
+        // Activation et découverte topologique
+        dci.enable_domain();
+        assert!(dci.domain_enabled);
+        dci.start_discovery();
+        assert!(dci.discovery_in_progress);
+        assert!(!dci.discovery_complete);
+        assert_eq!(dci.topology_generation, 2);
+
+        dci.finish_discovery(8);
+        assert!(!dci.discovery_in_progress);
+        assert!(dci.discovery_complete);
+        assert!(dci.routing_active);
+        assert_eq!(dci.active_router_count, 8);
+        assert!(dci.is_operational());
+
+        // Inter-domain et synchronisation temporelle
+        dci.set_inter_domain(true);
+        dci.set_time_sync_locked(true);
+        assert!(dci.inter_domain_supported);
+        assert!(dci.domain_time_sync_locked);
+
+        // Événements et erreurs
+        dci.record_discovery_event();
+        dci.record_discovery_event();
+        assert_eq!(dci.discovery_event_counter, 2);
+
+        dci.record_routing_error(3);
+        assert_eq!(dci.routing_error_counter, 3);
+
+        dci.next_ptr_dwords = 252;
+        let encoded = dci.encode();
+        assert_eq!(
+            encoded[0] & 0xFF,
+            XHCI_EXT_CAP_USB4_DOMAIN_CONFIGURATION_INTERFACE_V2 as u32
+        );
+        assert_eq!((encoded[0] >> 8) & 0xFF, 252);
+        assert_eq!(encoded[1] & 0x01, 1); // domain_enabled
+        assert_eq!(encoded[1] & 0x02, 2); // routing_active
+        assert_eq!(encoded[1] & 0x04, 0); // discovery_in_progress
+        assert_eq!(encoded[1] & 0x08, 8); // discovery_complete
+        assert_eq!(encoded[1] & 0x10, 16); // inter_domain_supported
+        assert_eq!(encoded[1] & 0x20, 32); // domain_time_sync_locked
+        assert_eq!(encoded[1] & 0x40, 0); // reset_in_progress
+        assert_eq!((encoded[1] >> 8) & 0xFF, 1); // domain_id
+        assert_eq!((encoded[1] >> 16) & 0x0F, 5); // domain_depth
+        assert_eq!((encoded[1] >> 20) & 0x3F, 32); // max_routers
+        assert_eq!((encoded[1] >> 26) & 0x3F, 2); // topology_generation
+        assert_eq!(encoded[2] & 0xFFFF, 256); // hop_id_limit
+        assert_eq!((encoded[2] >> 16) & 0xFFFF, 8); // active_router_count
+        assert_eq!(encoded[3] & 0xFFFF, 2); // discovery_event_counter
+        assert_eq!((encoded[3] >> 16) & 0xFFFF, 3); // routing_error_counter
+
+        let parsed = XhciUsb4DomainConfigInterfaceV2::parse(&encoded).unwrap();
+        assert_eq!(parsed.next_ptr_dwords, 252);
+        assert!(parsed.domain_enabled);
+        assert!(parsed.routing_active);
+        assert!(!parsed.discovery_in_progress);
+        assert!(parsed.discovery_complete);
+        assert!(parsed.inter_domain_supported);
+        assert!(parsed.domain_time_sync_locked);
+        assert!(!parsed.reset_in_progress);
+        assert_eq!(parsed.domain_id, 1);
+        assert_eq!(parsed.domain_depth, 5);
+        assert_eq!(parsed.max_routers, 32);
+        assert_eq!(parsed.topology_generation, 2);
+        assert_eq!(parsed.hop_id_limit, 256);
+        assert_eq!(parsed.active_router_count, 8);
+        assert_eq!(parsed.discovery_event_counter, 2);
+        assert_eq!(parsed.routing_error_counter, 3);
+        assert!(parsed.is_operational());
+
+        // Test désactivation
+        dci.disable_domain();
+        assert!(!dci.is_operational());
+        assert!(!dci.domain_enabled);
+        assert!(!dci.routing_active);
     }
 }

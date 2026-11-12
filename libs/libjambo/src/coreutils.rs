@@ -22371,6 +22371,7 @@ pub fn execute_coreutils_command(
         "dircolors" => run_dircolors(args, in_fd, out_fd, err_fd),
         "stdbuf" => run_stdbuf(args, in_fd, out_fd, err_fd),
         "uptime" => run_uptime(args, out_fd, err_fd),
+        "mcookie" => run_mcookie(args, in_fd, out_fd, err_fd),
         _ => {
             let _ = sys_write(err_fd, cmd.as_bytes());
             let _ = sys_write(err_fd, b": command not found\n");
@@ -33290,6 +33291,167 @@ In this case the corresponding stream will be fully buffered with the buffer siz
     }
 }
 
+/// Utilitaire `mcookie` (util-linux / RFC POSIX)
+/// Génère des cookies d'autorisation magiques de 128 bits (32 caractères hexadécimaux en minuscules).
+///
+/// Options :
+///   -f, --file FILE      Lire des données aléatoires/entropie supplémentaire depuis FILE
+///   -m, --max-size NUM   Limite la quantité d'octets lus depuis FILE (par défaut 4096)
+///   -v, --verbose        Afficher les informations de source d'entropie sur stderr
+///   -h, --help           Afficher l'aide
+///   -V, --version        Afficher la version
+pub fn run_mcookie(args: &[&str], _in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    let mut file_path: Option<&str> = None;
+    let mut max_size: usize = 4096;
+    let mut verbose = false;
+
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i];
+        if arg == "-h" || arg == "--help" {
+            let help = b"Usage: mcookie [options]\n\n\
+Generate 128-bit magic cookies for xauth.\n\n\
+Options:\n\
+  -f, --file <file>     use file as additional entropy\n\
+  -m, --max-size <num>  limit bytes read from file\n\
+  -v, --verbose         explain what is being done\n\
+  -h, --help            display this help\n\
+  -V, --version         display version\n";
+            let _ = sys_write(out_fd, help);
+            return 0;
+        } else if arg == "-V" || arg == "--version" {
+            let ver = b"mcookie (JamboOS coreutils) 0.1.0\n";
+            let _ = sys_write(out_fd, ver);
+            return 0;
+        } else if arg == "-v" || arg == "--verbose" {
+            verbose = true;
+            i += 1;
+        } else if arg == "-f" || arg == "--file" {
+            if i + 1 >= args.len() {
+                let _ = sys_write(err_fd, b"mcookie: option requires an argument -- 'f'\n");
+                return 1;
+            }
+            file_path = Some(args[i + 1]);
+            i += 2;
+        } else if let Some(val) = arg.strip_prefix("--file=") {
+            file_path = Some(val);
+            i += 1;
+        } else if arg == "-m" || arg == "--max-size" {
+            if i + 1 >= args.len() {
+                let _ = sys_write(err_fd, b"mcookie: option requires an argument -- 'm'\n");
+                return 1;
+            }
+            if let Ok(sz) = args[i + 1].parse::<usize>() {
+                max_size = sz;
+            } else {
+                let _ = sys_write(err_fd, b"mcookie: invalid max-size argument\n");
+                return 1;
+            }
+            i += 2;
+        } else if let Some(val) = arg.strip_prefix("--max-size=") {
+            if let Ok(sz) = val.parse::<usize>() {
+                max_size = sz;
+            } else {
+                let _ = sys_write(err_fd, b"mcookie: invalid max-size argument\n");
+                return 1;
+            }
+            i += 1;
+        } else if arg.starts_with('-') {
+            let _ = sys_write(err_fd, b"mcookie: unrecognized option '");
+            let _ = sys_write(err_fd, arg.as_bytes());
+            let _ = sys_write(err_fd, b"'\nTry 'mcookie --help' for more information.\n");
+            return 1;
+        } else {
+            i += 1;
+        }
+    }
+
+    // Récupération de l'entropie système (horloges et graines)
+    let mono = crate::clock_gettime(crate::clocks::CLOCK_MONOTONIC).unwrap_or(crate::Timespec {
+        tv_sec: 1,
+        tv_nsec: 12345678,
+        _pad: 0,
+    });
+    let real = crate::clock_gettime(crate::clocks::CLOCK_REALTIME).unwrap_or(crate::Timespec {
+        tv_sec: 1700000000,
+        tv_nsec: 87654321,
+        _pad: 0,
+    });
+
+    let mut state0 = mono.tv_sec.wrapping_mul(0x9E3779B97F4A7C15)
+        ^ ((mono.tv_nsec as u64) << 32)
+        ^ 0xBF58476D1CE4E5B9;
+    let mut state1 = real.tv_sec.wrapping_mul(0x517CC1B727220A95)
+        ^ ((real.tv_nsec as u64) << 32)
+        ^ 0x94D049BB133111EB;
+
+    let mut bytes_from_file = 0usize;
+    if let Some(path) = file_path {
+        let fd = sys_open(path, crate::vfs::O_RDONLY);
+        if fd >= 0 {
+            let mut chunk = [0u8; 128];
+            let mut remaining = max_size;
+            while remaining > 0 {
+                let to_read = remaining.min(chunk.len());
+                let n = sys_read(fd, &mut chunk[..to_read]);
+                if n <= 0 {
+                    break;
+                }
+                let bytes_read = n as usize;
+                bytes_from_file += bytes_read;
+                remaining -= bytes_read;
+
+                for &b in &chunk[..bytes_read] {
+                    state0 = (state0 ^ (b as u64)).wrapping_mul(0x100000001B3);
+                    state1 = (state1.rotate_left(5) ^ (b as u64)).wrapping_mul(0x9E3779B97F4A7C15);
+                }
+            }
+            sys_close(fd);
+        } else {
+            let _ = sys_write(err_fd, b"mcookie: cannot open file '");
+            let _ = sys_write(err_fd, path.as_bytes());
+            let _ = sys_write(err_fd, b"'\n");
+        }
+    }
+
+    if verbose {
+        let _ = sys_write(err_fd, b"mcookie: gathered entropy from system clocks\n");
+        if bytes_from_file > 0 {
+            let _ = sys_write(err_fd, b"mcookie: processed entropy from file\n");
+        }
+    }
+
+    // Mélange final SplitMix64 sur les deux états pour une distribution uniforme
+    let mut z0 = state0.wrapping_add(0x9E3779B97F4A7C15);
+    z0 = (z0 ^ (z0 >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
+    z0 = (z0 ^ (z0 >> 27)).wrapping_mul(0x94D049BB133111EB);
+    z0 = z0 ^ (z0 >> 31);
+
+    let mut z1 = state1.wrapping_add(0x9E3779B97F4A7C15);
+    z1 = (z1 ^ (z1 >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
+    z1 = (z1 ^ (z1 >> 27)).wrapping_mul(0x94D049BB133111EB);
+    z1 = z1 ^ (z1 >> 31);
+
+    // Transformation en 32 caractères hexadécimaux
+    let hex_digits = b"0123456789abcdef";
+    let mut out_buf = [0u8; 33]; // 32 hex + '\n'
+    let b0 = z0.to_be_bytes();
+    let b1 = z1.to_be_bytes();
+
+    for j in 0..8 {
+        out_buf[j * 2] = hex_digits[((b0[j] >> 4) & 0x0F) as usize];
+        out_buf[j * 2 + 1] = hex_digits[(b0[j] & 0x0F) as usize];
+    }
+    for j in 0..8 {
+        out_buf[16 + j * 2] = hex_digits[((b1[j] >> 4) & 0x0F) as usize];
+        out_buf[16 + j * 2 + 1] = hex_digits[(b1[j] & 0x0F) as usize];
+    }
+    out_buf[32] = b'\n';
+
+    let _ = sys_write(out_fd, &out_buf);
+    0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -40157,5 +40319,73 @@ Chaque processus dispose de son propre CR3 sans aucun privilege materiel direct.
         sys_close(_out_r_nf_h);
 
         assert_eq!(run_numfmt(&["--version"], 0, 1, 2), 0);
+    }
+
+    #[test]
+    fn test_mcookie_generation_and_options() {
+        let (out_r, out_w) = crate::vfs::pipe().expect("pipe mcookie 1");
+        let (err_r, err_w) = crate::vfs::pipe().expect("pipe mcookie err");
+        let code = run_mcookie(&[], 0, out_w, err_w);
+        assert_eq!(code, 0);
+        sys_close(out_w);
+        sys_close(err_w);
+
+        let mut buf = [0u8; 64];
+        let n = sys_read(out_r, &mut buf);
+        sys_close(out_r);
+        sys_close(err_r);
+
+        assert_eq!(n, 33); // 32 hex chars + '\n'
+        assert_eq!(buf[32], b'\n');
+        for &byte in &buf[..32] {
+            assert!(
+                byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte),
+                "byte should be lowercase hex"
+            );
+        }
+
+        // Test avec fichier d'entropie supplémentaire
+        let fd = sys_open("/tmp/mcookie_seed.txt", O_CREAT | O_WRONLY);
+        assert!(fd >= 3);
+        let _ = sys_write(fd, b"JamboOS Entropy Seed Data 1234567890");
+        sys_close(fd);
+
+        let (out_r2, out_w2) = crate::vfs::pipe().expect("pipe mcookie 2");
+        let (err_r2, err_w2) = crate::vfs::pipe().expect("pipe mcookie err 2");
+        let code2 = run_mcookie(
+            &["-v", "-f", "/tmp/mcookie_seed.txt", "-m", "1024"],
+            0,
+            out_w2,
+            err_w2,
+        );
+        assert_eq!(code2, 0);
+        sys_close(out_w2);
+        sys_close(err_w2);
+
+        let mut buf2 = [0u8; 64];
+        let n2 = sys_read(out_r2, &mut buf2);
+        sys_close(out_r2);
+        assert_eq!(n2, 33);
+        assert_eq!(buf2[32], b'\n');
+
+        let mut err_buf = [0u8; 128];
+        let n_err = sys_read(err_r2, &mut err_buf);
+        sys_close(err_r2);
+        assert!(n_err > 0);
+        let err_str = core::str::from_utf8(&err_buf[..n_err as usize]).unwrap();
+        assert!(err_str.contains("mcookie: gathered entropy"));
+
+        let _ = sys_unlink_pool("/tmp/mcookie_seed.txt");
+
+        // Test --help et --version
+        let (out_r3, out_w3) = crate::vfs::pipe().expect("pipe mcookie 3");
+        assert_eq!(run_mcookie(&["--help"], 0, out_w3, 2), 0);
+        sys_close(out_w3);
+        let n3 = sys_read(out_r3, &mut buf);
+        sys_close(out_r3);
+        let help_str = core::str::from_utf8(&buf[..n3 as usize]).unwrap();
+        assert!(help_str.contains("Usage: mcookie"));
+
+        assert_eq!(run_mcookie(&["--version"], 0, 1, 2), 0);
     }
 }
