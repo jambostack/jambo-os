@@ -641,6 +641,7 @@ impl JamboShell {
             "vis" | "/bin/vis" | "bin/vis" => self.cmd_vis(args, out),
             "strings" | "/bin/strings" | "bin/strings" => self.cmd_strings(args, out),
             "jot" | "/bin/jot" | "bin/jot" => self.cmd_jot(args, out),
+            "rs" | "/bin/rs" | "bin/rs" => self.cmd_rs(args, out),
             "factor" | "/bin/factor" | "bin/factor" => self.cmd_factor(args, out),
             "timeout" | "/bin/timeout" | "bin/timeout" => self.cmd_timeout(args, out),
             "nice" | "/bin/nice" | "bin/nice" => self.cmd_nice(args, out),
@@ -3152,6 +3153,43 @@ Utilitaire d'installation JamboOS (Serie 0.*.*)\n\
             (status, len)
         } else {
             let msg = b"jot: pipe creation failed\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
+    }
+
+    fn cmd_rs(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if let (Ok((r_out, w_out)), Ok((r_err, w_err))) =
+            (libjambo::vfs::pipe(), libjambo::vfs::pipe())
+        {
+            let code = libjambo::coreutils::run_rs(args, 0, w_out, w_err);
+            let _ = libjambo::coreutils::sys_close(w_out);
+            let _ = libjambo::coreutils::sys_close(w_err);
+
+            let mut len = 0;
+            if code == 0 {
+                let n_out = libjambo::coreutils::sys_read(r_out, out);
+                if n_out > 0 {
+                    len = n_out as usize;
+                }
+            } else {
+                let n_err = libjambo::coreutils::sys_read(r_err, out);
+                if n_err > 0 {
+                    len = n_err as usize;
+                }
+            }
+            let _ = libjambo::coreutils::sys_close(r_out);
+            let _ = libjambo::coreutils::sys_close(r_err);
+
+            let status = if code == 0 {
+                ShellStatus::Success
+            } else {
+                ShellStatus::ExecutionFailed
+            };
+            (status, len)
+        } else {
+            let msg = b"rs: pipe creation failed\n";
             let len = msg.len().min(out.len());
             out[..len].copy_from_slice(&msg[..len]);
             (ShellStatus::ExecutionFailed, len)
@@ -22458,5 +22496,16 @@ mod tests {
         assert_eq!(st146, ShellStatus::Success);
         let s146 = core::str::from_utf8(&out[..len146]).unwrap();
         assert!(s146.contains("ul (JamboOS coreutils)"));
+
+        // 66. rs shell command
+        let (st147, len147) = shell.execute_line("rs --help", &mut out);
+        assert_eq!(st147, ShellStatus::Success);
+        let s147 = core::str::from_utf8(&out[..len147]).unwrap();
+        assert!(s147.contains("Usage: rs"));
+
+        let (st148, len148) = shell.execute_line("rs --version", &mut out);
+        assert_eq!(st148, ShellStatus::Success);
+        let s148 = core::str::from_utf8(&out[..len148]).unwrap();
+        assert!(s148.contains("rs (JamboOS coreutils)"));
     }
 }

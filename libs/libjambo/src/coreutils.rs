@@ -20777,6 +20777,259 @@ fn format_i64(n: i64, buf: &mut [u8; 32]) -> usize {
 }
 
 // ============================================================================
+// Utilitaire BSD / Unix coreutils : `rs` (Reshape data array)
+// ============================================================================
+
+/// Reformate un tableau de données en lignes et colonnes.
+/// Conforme à la sémantique `rs [-t | -T] [-c C] [-C C] [-s S] [-S S] [rows [cols]]`.
+pub fn run_rs(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    let mut rows: usize = 0;
+    let mut cols: usize = 0;
+    let mut transpose = false;
+
+    let mut in_sep: u8 = b' '; // Séparateur d'entrée (-s S)
+    let mut out_sep: u8 = b' '; // Séparateur de sortie (-S S)
+    let mut use_blank_sep = true; // Si vrai, sépare sur tout espace blanc (défaut)
+
+    let mut pos_args: [&str; 2] = [""; 2];
+    let mut pos_count = 0usize;
+
+    let mut i = 0usize;
+    while i < args.len() {
+        let arg = args[i];
+        if arg == "-h" || arg == "--help" {
+            let help = b"Usage: rs [OPTIONS] [rows [cols]]\n\
+Reshape a data array.\n\n\
+Options:\n\
+  -t, -T             Transpose array (swap rows and columns)\n\
+  -s SEP             Input field separator\n\
+  -S SEP             Output field separator\n\
+      --help         Display this help and exit\n\
+      --version      Output version information and exit\n";
+            let _ = sys_write(out_fd, help);
+            return 0;
+        } else if arg == "-V" || arg == "--version" {
+            let ver = b"rs (JamboOS coreutils) 0.1.0\n\
+Copyright (C) 2026 ASSOGBA Prudence Dieudonne\n\
+License GPLv3+: GNU GPL version 3 or later <https://gnu.org/licenses/gpl.html>.\n\
+This is free software: you are free to change and redistribute it.\n\
+There is NO WARRANTY, to the extent permitted by law.\n";
+            let _ = sys_write(out_fd, ver);
+            return 0;
+        } else if arg == "-t" || arg == "-T" {
+            transpose = true;
+        } else if arg == "-s" {
+            if i + 1 < args.len() {
+                i += 1;
+                let b = args[i].as_bytes();
+                if !b.is_empty() {
+                    in_sep = b[0];
+                    use_blank_sep = false;
+                }
+            }
+        } else if let Some(s) = arg.strip_prefix("-s") {
+            let b = s.as_bytes();
+            if !b.is_empty() {
+                in_sep = b[0];
+                use_blank_sep = false;
+            }
+        } else if arg == "-S" {
+            if i + 1 < args.len() {
+                i += 1;
+                let b = args[i].as_bytes();
+                if !b.is_empty() {
+                    out_sep = b[0];
+                }
+            }
+        } else if let Some(s) = arg.strip_prefix("-S") {
+            let b = s.as_bytes();
+            if !b.is_empty() {
+                out_sep = b[0];
+            }
+        } else if arg == "--" {
+            for &p in &args[i + 1..] {
+                if pos_count < pos_args.len() {
+                    pos_args[pos_count] = p;
+                    pos_count += 1;
+                }
+            }
+            break;
+        } else if arg.starts_with('-') && arg.len() > 1 && !arg.as_bytes()[1].is_ascii_digit() {
+            let _ = sys_write(err_fd, b"rs: illegal option -- ");
+            let _ = sys_write(err_fd, arg.as_bytes());
+            let _ = sys_write(err_fd, b"\n");
+            return 1;
+        } else {
+            if pos_count < pos_args.len() {
+                pos_args[pos_count] = arg;
+                pos_count += 1;
+            }
+        }
+        i += 1;
+    }
+
+    if pos_count >= 1 {
+        if let Some(r) = parse_rs_usize(pos_args[0]) {
+            rows = r;
+        }
+    }
+    if pos_count >= 2 {
+        if let Some(c) = parse_rs_usize(pos_args[1]) {
+            cols = c;
+        }
+    }
+
+    // Lecture complète de l'entrée stdin dans un tampon local
+    let mut in_buffer = [0u8; 8192];
+    let mut total_in = 0usize;
+    loop {
+        if total_in >= in_buffer.len() {
+            break;
+        }
+        let res = sys_read(in_fd, &mut in_buffer[total_in..]);
+        if res <= 0 {
+            break;
+        }
+        total_in += res as usize;
+    }
+
+    let input = &in_buffer[..total_in];
+
+    // Découpage des éléments (tokens)
+    const MAX_TOKENS: usize = 256;
+    let mut token_ranges: [(usize, usize); MAX_TOKENS] = [(0, 0); MAX_TOKENS];
+    let mut token_count = 0usize;
+
+    let mut idx = 0usize;
+    if use_blank_sep {
+        while idx < input.len() && token_count < MAX_TOKENS {
+            // Sauter les espaces blancs
+            while idx < input.len()
+                && (input[idx] == b' '
+                    || input[idx] == b'\t'
+                    || input[idx] == b'\r'
+                    || input[idx] == b'\n')
+            {
+                idx += 1;
+            }
+            if idx >= input.len() {
+                break;
+            }
+            let start = idx;
+            while idx < input.len()
+                && !(input[idx] == b' '
+                    || input[idx] == b'\t'
+                    || input[idx] == b'\r'
+                    || input[idx] == b'\n')
+            {
+                idx += 1;
+            }
+            token_ranges[token_count] = (start, idx);
+            token_count += 1;
+        }
+    } else {
+        while idx < input.len() && token_count < MAX_TOKENS {
+            let start = idx;
+            while idx < input.len()
+                && input[idx] != in_sep
+                && input[idx] != b'\n'
+                && input[idx] != b'\r'
+            {
+                idx += 1;
+            }
+            if idx > start {
+                token_ranges[token_count] = (start, idx);
+                token_count += 1;
+            }
+            if idx < input.len() {
+                idx += 1; // sauter séparateur
+            }
+        }
+    }
+
+    if token_count == 0 {
+        return 0;
+    }
+
+    // Calcul de la géométrie de la grille (rows x cols)
+    let (target_rows, target_cols) = match (rows, cols) {
+        (0, 0) => (token_count, 1),
+        (0, c) => {
+            let r = token_count.div_ceil(c);
+            (r, c)
+        }
+        (r, 0) => {
+            let c = token_count.div_ceil(r);
+            (r, c)
+        }
+        (r, c) => (r, c),
+    };
+
+    let sep_bytes = [out_sep];
+
+    if !transpose {
+        // Remplissage ligne par ligne
+        let mut t_idx = 0usize;
+        for _ in 0..target_rows {
+            if t_idx >= token_count {
+                break;
+            }
+            for c in 0..target_cols {
+                if t_idx >= token_count {
+                    break;
+                }
+                if c > 0 {
+                    let _ = sys_write(out_fd, &sep_bytes);
+                }
+                let (s, e) = token_ranges[t_idx];
+                let _ = sys_write(out_fd, &input[s..e]);
+                t_idx += 1;
+            }
+            let _ = sys_write(out_fd, b"\n");
+        }
+    } else {
+        // Transposition : remplissage colonne par colonne puis affichage inversé
+        // target_cols lignes dans la sortie si transposé
+        for c in 0..target_cols {
+            let mut first_col = true;
+            for r in 0..target_rows {
+                let elem_idx = r * target_cols + c;
+                if elem_idx < token_count {
+                    if !first_col {
+                        let _ = sys_write(out_fd, &sep_bytes);
+                    }
+                    let (s, e) = token_ranges[elem_idx];
+                    let _ = sys_write(out_fd, &input[s..e]);
+                    first_col = false;
+                }
+            }
+            if !first_col {
+                let _ = sys_write(out_fd, b"\n");
+            }
+        }
+    }
+
+    0
+}
+
+/// Parse un usize bare-metal pour les arguments rows/cols de rs
+fn parse_rs_usize(s: &str) -> Option<usize> {
+    let bytes = s.as_bytes();
+    if bytes.is_empty() {
+        return None;
+    }
+    let mut val: usize = 0;
+    for &b in bytes {
+        if !b.is_ascii_digit() {
+            return None;
+        }
+        val = val.checked_mul(10)?;
+        val = val.checked_add((b - b'0') as usize)?;
+    }
+    Some(val)
+}
+
+// ============================================================================
 // Utilitaire POSIX / GNU coreutils : `factor` (Décomposition en facteurs premiers)
 // ============================================================================
 
@@ -21327,6 +21580,7 @@ pub fn execute_coreutils_command(
         "vis" => run_vis(args, in_fd, out_fd, err_fd),
         "strings" => run_strings(args, in_fd, out_fd, err_fd),
         "jot" => run_jot(args, in_fd, out_fd, err_fd),
+        "rs" => run_rs(args, in_fd, out_fd, err_fd),
         "base64" => run_base64(args, in_fd, out_fd, err_fd),
         "base32" => run_base32(args, in_fd, out_fd, err_fd),
         "base32hex" => run_base32hex(args, in_fd, out_fd, err_fd),
@@ -38652,5 +38906,50 @@ Chaque processus dispose de son propre CR3 sans aucun privilege materiel direct.
         sys_close(_out_r_jot_h);
 
         assert_eq!(run_jot(&["--version"], 0, 1, 2), 0);
+
+        // 62. Test run_rs (reshape array / reshaping matrice données)
+        let (in_r_rs, in_w_rs) = crate::vfs::pipe().unwrap();
+        let _ = sys_write(in_w_rs, b"10 20 30 40 50 60\n");
+        sys_close(in_w_rs);
+
+        let (out_r_rs, out_w_rs) = crate::vfs::pipe().unwrap();
+        let code_rs = run_rs(&["2", "3"], in_r_rs, out_w_rs, 2);
+        sys_close(out_w_rs);
+        sys_close(in_r_rs);
+        assert_eq!(code_rs, 0);
+
+        let mut rs_buf = [0u8; 64];
+        let n_rs = sys_read(out_r_rs, &mut rs_buf);
+        sys_close(out_r_rs);
+        assert_eq!(
+            core::str::from_utf8(&rs_buf[..n_rs as usize]).unwrap(),
+            "10 20 30\n40 50 60\n"
+        );
+
+        // Test rs transposer (-t)
+        let (in_r_rs_t, in_w_rs_t) = crate::vfs::pipe().unwrap();
+        let _ = sys_write(in_w_rs_t, b"a b c d\n");
+        sys_close(in_w_rs_t);
+
+        let (out_r_rs_t, out_w_rs_t) = crate::vfs::pipe().unwrap();
+        assert_eq!(run_rs(&["-t", "2", "2"], in_r_rs_t, out_w_rs_t, 2), 0);
+        sys_close(out_w_rs_t);
+        sys_close(in_r_rs_t);
+
+        let mut rs_t_buf = [0u8; 64];
+        let n_rs_t = sys_read(out_r_rs_t, &mut rs_t_buf);
+        sys_close(out_r_rs_t);
+        assert_eq!(
+            core::str::from_utf8(&rs_t_buf[..n_rs_t as usize]).unwrap(),
+            "a c\nb d\n"
+        );
+
+        // Test rs --help et --version
+        let (_out_r_rs_h, out_w_rs_h) = crate::vfs::pipe().unwrap();
+        assert_eq!(run_rs(&["--help"], 0, out_w_rs_h, 2), 0);
+        sys_close(out_w_rs_h);
+        sys_close(_out_r_rs_h);
+
+        assert_eq!(run_rs(&["--version"], 0, 1, 2), 0);
     }
 }

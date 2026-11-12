@@ -380,6 +380,8 @@ pub const XHCI_EXT_CAP_USB4_QOS_TRAFFIC_CLASS_INTERFACE_V2: u8 = 68;
 pub const XHCI_EXT_CAP_USB4_SECURITY_LEVEL_MANAGEMENT_V2: u8 = 69;
 /// Capacité étendue xHCI 1.2 / USB4 Port Error Counter and Telemetry Interface v2 (§7.62)
 pub const XHCI_EXT_CAP_USB4_PORT_ERROR_TELEMETRY_V2: u8 = 70;
+/// Capacité étendue xHCI 1.2 / USB4 Retimer High-Speed Telemetry Interface v2 (§7.63)
+pub const XHCI_EXT_CAP_USB4_RETIMER_TELEMETRY_V2: u8 = 71;
 
 /// Masques de registres USB Legacy Support (xHCI 1.2 Section 7.1)
 /// Registre USBLEGSUP (Offset 0x00)
@@ -7678,6 +7680,143 @@ impl XhciUsb4PortErrorTelemetryV2 {
     /// Indique si la liaison est considérée comme saine
     pub fn is_link_healthy(&self) -> bool {
         !self.threshold_alert && !self.counter_overflow
+    }
+}
+
+/// Capacité Étendue xHCI 1.2 / USB4 Retimer High-Speed Telemetry Interface v2 (§7.63, Cap ID 71)
+///
+/// Permet la découverte, l'échantillonnage de télémétrie haute vitesse et la surveillance de
+/// l'état des répéteurs / retimers USB4 (jusqu'à 6 retimers par liaison physique)
+/// sur les liens multi-gigabits Gen 2/3/4.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XhciUsb4RetimerTelemetryV2 {
+    /// Pointeur dword vers la prochaine capacité étendue MMIO (0 = fin de liste)
+    pub next_ptr_dwords: u8,
+    /// Numéro de port USB4 physique associé (DWORD 1 [7:0])
+    pub port_index: u8,
+    /// Index du retimer ciblé (0..=5) (DWORD 1 [11:8])
+    pub retimer_index: u8,
+    /// Retimer présent et détecté sur le bus de gestion (DWORD 1 [12])
+    pub retimer_present: bool,
+    /// Échantillonnage de télémétrie actif (DWORD 1 [13])
+    pub telemetry_sampling_enabled: bool,
+    /// Alerte de température critique du retimer (DWORD 1 [14])
+    pub temperature_alert: bool,
+    /// Dégradation du SNR / intégrité de signal détectée (DWORD 1 [15])
+    pub snr_degraded_alert: bool,
+    /// Température de jonction mesurée en degrés Celsius (DWORD 2 [15:0], 0..=255 standard)
+    pub temperature_celsius: u16,
+    /// Rapport Signal sur Bruit (SNR en dixièmes de dB, ex: 240 = 24.0 dB) (DWORD 2 [31:16])
+    pub snr_tenths_db: u16,
+    /// Compteur de gigue de phase / slips d'horloge de récupération (DWORD 3 [15:0])
+    pub jitter_slip_count: u16,
+    /// Version du firmware du retimer (DWORD 3 [31:16])
+    pub firmware_revision: u16,
+}
+
+impl XhciUsb4RetimerTelemetryV2 {
+    /// Crée une nouvelle interface USB4 Retimer Telemetry v2
+    pub const fn new(port_index: u8, retimer_index: u8) -> Self {
+        Self {
+            next_ptr_dwords: 0,
+            port_index,
+            retimer_index: if retimer_index > 5 { 5 } else { retimer_index },
+            retimer_present: true,
+            telemetry_sampling_enabled: true,
+            temperature_alert: false,
+            snr_degraded_alert: false,
+            temperature_celsius: 45, // Température nominale standard 45°C
+            snr_tenths_db: 250,      // SNR nominal standard 25.0 dB
+            jitter_slip_count: 0,
+            firmware_revision: 0x0100, // v1.0
+        }
+    }
+
+    /// Parse les 4 dwords MMIO d'une capacité étendue USB4 Retimer High-Speed Telemetry v2 (§7.63)
+    pub const fn parse(dwords: &[u32; 4]) -> Option<Self> {
+        let cap_id = (dwords[0] & 0xFF) as u8;
+        if cap_id != XHCI_EXT_CAP_USB4_RETIMER_TELEMETRY_V2 {
+            return None;
+        }
+
+        let next_ptr = ((dwords[0] >> 8) & 0xFF) as u8;
+        let ctrl = dwords[1];
+        let port_index = (ctrl & 0xFF) as u8;
+        let retimer_index = ((ctrl >> 8) & 0x0F) as u8;
+        let retimer_present = (ctrl & (1 << 12)) != 0;
+        let telemetry_sampling_enabled = (ctrl & (1 << 13)) != 0;
+        let temperature_alert = (ctrl & (1 << 14)) != 0;
+        let snr_degraded_alert = (ctrl & (1 << 15)) != 0;
+
+        let dw2 = dwords[2];
+        let temperature_celsius = (dw2 & 0xFFFF) as u16;
+        let snr_tenths_db = ((dw2 >> 16) & 0xFFFF) as u16;
+
+        let dw3 = dwords[3];
+        let jitter_slip_count = (dw3 & 0xFFFF) as u16;
+        let firmware_revision = ((dw3 >> 16) & 0xFFFF) as u16;
+
+        Some(Self {
+            next_ptr_dwords: next_ptr,
+            port_index,
+            retimer_index,
+            retimer_present,
+            telemetry_sampling_enabled,
+            temperature_alert,
+            snr_degraded_alert,
+            temperature_celsius,
+            snr_tenths_db,
+            jitter_slip_count,
+            firmware_revision,
+        })
+    }
+
+    /// Encode la capacité étendue v2 en 4 mots dwords MMIO 32-bit
+    pub const fn encode(&self) -> [u32; 4] {
+        let dw0 =
+            (XHCI_EXT_CAP_USB4_RETIMER_TELEMETRY_V2 as u32) | ((self.next_ptr_dwords as u32) << 8);
+
+        let mut ctrl = (self.port_index as u32) & 0xFF;
+        ctrl |= ((self.retimer_index as u32) & 0x0F) << 8;
+        if self.retimer_present {
+            ctrl |= 1 << 12;
+        }
+        if self.telemetry_sampling_enabled {
+            ctrl |= 1 << 13;
+        }
+        if self.temperature_alert {
+            ctrl |= 1 << 14;
+        }
+        if self.snr_degraded_alert {
+            ctrl |= 1 << 15;
+        }
+
+        let dw2 = (self.temperature_celsius as u32) | ((self.snr_tenths_db as u32) << 16);
+        let dw3 = (self.jitter_slip_count as u32) | ((self.firmware_revision as u32) << 16);
+
+        [dw0, ctrl, dw2, dw3]
+    }
+
+    /// Active ou désactive l'échantillonnage de télémétrie
+    pub fn set_telemetry_sampling(&mut self, enabled: bool) {
+        self.telemetry_sampling_enabled = enabled;
+    }
+
+    /// Met à jour les relevés télémétriques haute vitesse du retimer
+    pub fn update_metrics(&mut self, temp_c: u16, snr_tenths: u16, new_slips: u16) {
+        self.temperature_celsius = temp_c;
+        self.snr_tenths_db = snr_tenths;
+        self.jitter_slip_count = self.jitter_slip_count.saturating_add(new_slips);
+
+        // Seuil d'alerte thermique : au-delà de 85°C
+        self.temperature_alert = temp_c >= 85;
+        // Dégradation SNR : si SNR < 18.0 dB (180 dixièmes)
+        self.snr_degraded_alert = snr_tenths < 180;
+    }
+
+    /// Indique si le répéteur fonctionne dans des paramètres nominaux sains
+    pub fn is_operating_normally(&self) -> bool {
+        self.retimer_present && !self.temperature_alert && !self.snr_degraded_alert
     }
 }
 
@@ -18233,5 +18372,61 @@ mod tests {
         assert_eq!(err_tel.link_retrain_count, 0);
         assert!(!err_tel.threshold_alert);
         assert!(err_tel.is_link_healthy());
+
+        // Test USB4 Retimer High-Speed Telemetry Interface v2 (§7.63, Cap ID 71)
+        let mut retimer_tel = XhciUsb4RetimerTelemetryV2::new(1, 2);
+        assert_eq!(retimer_tel.port_index, 1);
+        assert_eq!(retimer_tel.retimer_index, 2);
+        assert!(retimer_tel.retimer_present);
+        assert!(retimer_tel.telemetry_sampling_enabled);
+        assert!(!retimer_tel.temperature_alert);
+        assert!(!retimer_tel.snr_degraded_alert);
+        assert!(retimer_tel.is_operating_normally());
+        assert_eq!(retimer_tel.temperature_celsius, 45);
+        assert_eq!(retimer_tel.snr_tenths_db, 250);
+
+        // Simulation mise à jour normale
+        retimer_tel.update_metrics(52, 230, 4);
+        assert_eq!(retimer_tel.temperature_celsius, 52);
+        assert_eq!(retimer_tel.snr_tenths_db, 230);
+        assert_eq!(retimer_tel.jitter_slip_count, 4);
+        assert!(retimer_tel.is_operating_normally());
+
+        // Alerte thermique et dégradation SNR
+        retimer_tel.update_metrics(90, 165, 12);
+        assert!(retimer_tel.temperature_alert);
+        assert!(retimer_tel.snr_degraded_alert);
+        assert!(!retimer_tel.is_operating_normally());
+
+        retimer_tel.next_ptr_dwords = 200;
+        let encoded_ret = retimer_tel.encode();
+        assert_eq!(
+            encoded_ret[0] & 0xFF,
+            XHCI_EXT_CAP_USB4_RETIMER_TELEMETRY_V2 as u32
+        );
+        assert_eq!((encoded_ret[0] >> 8) & 0xFF, 200);
+        assert_eq!(encoded_ret[1] & 0xFF, 1); // port_index
+        assert_eq!((encoded_ret[1] >> 8) & 0x0F, 2); // retimer_index
+        assert_ne!(encoded_ret[1] & (1 << 12), 0); // retimer_present
+        assert_ne!(encoded_ret[1] & (1 << 13), 0); // telemetry_sampling_enabled
+        assert_ne!(encoded_ret[1] & (1 << 14), 0); // temperature_alert
+        assert_ne!(encoded_ret[1] & (1 << 15), 0); // snr_degraded_alert
+        assert_eq!(encoded_ret[2] & 0xFFFF, 90);
+        assert_eq!((encoded_ret[2] >> 16) & 0xFFFF, 165);
+        assert_eq!(encoded_ret[3] & 0xFFFF, 16); // 4 + 12 = 16
+        assert_eq!((encoded_ret[3] >> 16) & 0xFFFF, 0x0100);
+
+        let parsed_ret = XhciUsb4RetimerTelemetryV2::parse(&encoded_ret).unwrap();
+        assert_eq!(parsed_ret.next_ptr_dwords, 200);
+        assert_eq!(parsed_ret.port_index, 1);
+        assert_eq!(parsed_ret.retimer_index, 2);
+        assert!(parsed_ret.retimer_present);
+        assert!(parsed_ret.telemetry_sampling_enabled);
+        assert!(parsed_ret.temperature_alert);
+        assert!(parsed_ret.snr_degraded_alert);
+        assert_eq!(parsed_ret.temperature_celsius, 90);
+        assert_eq!(parsed_ret.snr_tenths_db, 165);
+        assert_eq!(parsed_ret.jitter_slip_count, 16);
+        assert_eq!(parsed_ret.firmware_revision, 0x0100);
     }
 }
