@@ -571,6 +571,7 @@ impl JamboShell {
             "tr" | "/bin/tr" | "bin/tr" => self.cmd_tr(args, out),
             "split" | "/bin/split" | "bin/split" => self.cmd_split(args, out),
             "mcookie" | "/bin/mcookie" | "bin/mcookie" => self.cmd_mcookie(args, out),
+            "renice" | "/bin/renice" | "bin/renice" => self.cmd_renice(args, out),
             "basename" | "/bin/basename" | "bin/basename" => self.cmd_basename(args, out),
             "dirname" | "/bin/dirname" | "bin/dirname" => self.cmd_dirname(args, out),
             "seq" | "/bin/seq" | "bin/seq" => self.cmd_seq(args, out),
@@ -1319,6 +1320,26 @@ Utilitaire d'installation JamboOS (Serie 0.*.*)\n\
             }
         } else {
             let msg = b"mcookie: pipe creation failed\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
+    }
+
+    fn cmd_renice(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if let Ok((r, w)) = libjambo::vfs::pipe() {
+            let code = libjambo::coreutils::run_renice(args, 0, w, w);
+            let _ = libjambo::coreutils::sys_close(w);
+            let n = libjambo::coreutils::sys_read(r, out);
+            let _ = libjambo::coreutils::sys_close(r);
+            let len = if n > 0 { n as usize } else { 0 };
+            if code == 0 {
+                (ShellStatus::Success, len)
+            } else {
+                (ShellStatus::ExecutionFailed, len)
+            }
+        } else {
+            let msg = b"renice: pipe creation failed\n";
             let len = msg.len().min(out.len());
             out[..len].copy_from_slice(&msg[..len]);
             (ShellStatus::ExecutionFailed, len)
@@ -22665,5 +22686,21 @@ mod tests {
         assert_eq!(st155, ShellStatus::Success);
         let s155 = core::str::from_utf8(&out[..len155]).unwrap();
         assert!(s155.contains("mcookie (JamboOS coreutils)"));
+
+        // 69. renice shell command
+        let (st156, len156) = shell.execute_line("renice -n 5 -p 42", &mut out);
+        assert_eq!(st156, ShellStatus::Success);
+        let s156 = core::str::from_utf8(&out[..len156]).unwrap();
+        assert!(s156.contains("42 (process ID) old priority 0, new priority 5"));
+
+        let (st157, len157) = shell.execute_line("renice --help", &mut out);
+        assert_eq!(st157, ShellStatus::Success);
+        let s157 = core::str::from_utf8(&out[..len157]).unwrap();
+        assert!(s157.contains("Usage: renice"));
+
+        let (st158, len158) = shell.execute_line("renice --version", &mut out);
+        assert_eq!(st158, ShellStatus::Success);
+        let s158 = core::str::from_utf8(&out[..len158]).unwrap();
+        assert!(s158.contains("renice (JamboOS coreutils)"));
     }
 }

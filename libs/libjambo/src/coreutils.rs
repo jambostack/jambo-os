@@ -815,6 +815,16 @@ fn write_u64_fd(fd: i32, mut val: u64) {
     let _ = sys_write(fd, &buf[idx..]);
 }
 
+/// Formate et écrit un nombre décimal signé 32-bit dans un descripteur POSIX
+fn write_i32_fd(fd: i32, val: i32) {
+    if val < 0 {
+        let _ = sys_write(fd, b"-");
+        write_u64_fd(fd, (val as i64).unsigned_abs());
+    } else {
+        write_u64_fd(fd, val as u64);
+    }
+}
+
 /// Formate un entier décimal dans un tampon mémoire et renvoie le curseur mis à jour
 fn append_u64(buf: &mut [u8], mut cursor: usize, mut val: u64) -> usize {
     if cursor >= buf.len() {
@@ -22372,6 +22382,7 @@ pub fn execute_coreutils_command(
         "stdbuf" => run_stdbuf(args, in_fd, out_fd, err_fd),
         "uptime" => run_uptime(args, out_fd, err_fd),
         "mcookie" => run_mcookie(args, in_fd, out_fd, err_fd),
+        "renice" => run_renice(args, in_fd, out_fd, err_fd),
         _ => {
             let _ = sys_write(err_fd, cmd.as_bytes());
             let _ = sys_write(err_fd, b": command not found\n");
@@ -33452,6 +33463,210 @@ Options:\n\
     0
 }
 
+/// Utilitaire POSIX / util-linux `renice` (priorité d'ordonnancement Ring 3 EEVDF)
+/// Modifie la priorité d'ordonnancement (niceness) d'un ou plusieurs processus ou groupes de processus.
+///
+/// Syntaxe :
+///   renice [-n] PRIORITY [[-p] PID ...] [[-g] PGRP ...] [[-u] USER ...]
+///   renice --priority=PRIORITY ...
+///
+/// Options :
+///   -n, --priority NUM   Valeur de priorité absolue (-20 à 19)
+///   -p, --pid            Interpréter les arguments suivants comme des ID de processus (comportement par défaut)
+///   -g, --pgrp           Interpréter les arguments suivants comme des ID de groupe de processus
+///   -u, --user           Interpréter les arguments suivants comme des noms d'utilisateurs ou UID
+///   -h, --help           Afficher l'aide et quitter
+///   -V, -v, --version    Afficher les informations de version et quitter
+pub fn run_renice(args: &[&str], _in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    if args.is_empty() {
+        let _ = sys_write(
+            err_fd,
+            b"renice: not enough arguments\nTry 'renice --help' for more information.\n",
+        );
+        return 1;
+    }
+
+    // Gestion de --help et --version en priorité
+    for &arg in args {
+        if arg == "-h" || arg == "--help" {
+            let help = b"Usage: renice [-n] <priority> [-p|--pid] <pid>... [-g|--pgrp] <pgid>... [-u|--user] <user>...\n\n\
+Alter priority of running processes.\n\n\
+Options:\n\
+  -n, --priority <num>  specify the nice value (-20 to 19)\n\
+  -p, --pid             interpret next arguments as process IDs (default)\n\
+  -g, --pgrp            interpret next arguments as process group IDs\n\
+  -u, --user            interpret next arguments as username or user IDs\n\
+  -h, --help            display this help and exit\n\
+  -V, --version         output version information and exit\n";
+            let _ = sys_write(out_fd, help);
+            return 0;
+        }
+        if arg == "-v" || arg == "-V" || arg == "--version" {
+            let ver = b"renice (JamboOS coreutils) 0.3.92\n";
+            let _ = sys_write(out_fd, ver);
+            return 0;
+        }
+    }
+
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum TargetKind {
+        Pid,
+        Pgrp,
+        User,
+    }
+
+    let mut priority: Option<i32> = None;
+    let mut current_kind = TargetKind::Pid;
+    let mut target_count = 0usize;
+    let mut has_error = false;
+
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i];
+
+        if arg == "-n" || arg == "--priority" {
+            if i + 1 >= args.len() {
+                let _ = sys_write(err_fd, b"renice: option requires an argument -- 'n'\n");
+                return 1;
+            }
+            i += 1;
+            match parse_i32(args[i]) {
+                Some(val) => priority = Some(val),
+                None => {
+                    let _ = sys_write(err_fd, b"renice: invalid priority value '");
+                    let _ = sys_write(err_fd, args[i].as_bytes());
+                    let _ = sys_write(err_fd, b"'\n");
+                    return 1;
+                }
+            }
+            i += 1;
+            continue;
+        } else if let Some(val_str) = arg.strip_prefix("--priority=") {
+            match parse_i32(val_str) {
+                Some(val) => priority = Some(val),
+                None => {
+                    let _ = sys_write(err_fd, b"renice: invalid priority value '");
+                    let _ = sys_write(err_fd, val_str.as_bytes());
+                    let _ = sys_write(err_fd, b"'\n");
+                    return 1;
+                }
+            }
+            i += 1;
+            continue;
+        } else if arg == "-p" || arg == "--pid" {
+            current_kind = TargetKind::Pid;
+            i += 1;
+            continue;
+        } else if arg == "-g" || arg == "--pgrp" {
+            current_kind = TargetKind::Pgrp;
+            i += 1;
+            continue;
+        } else if arg == "-u" || arg == "--user" {
+            current_kind = TargetKind::User;
+            i += 1;
+            continue;
+        } else if priority.is_none() {
+            // Premier argument positionnel = priorité
+            match parse_i32(arg) {
+                Some(val) => {
+                    priority = Some(val);
+                    i += 1;
+                    continue;
+                }
+                None => {
+                    let _ = sys_write(err_fd, b"renice: invalid priority '");
+                    let _ = sys_write(err_fd, arg.as_bytes());
+                    let _ = sys_write(err_fd, b"'\n");
+                    return 1;
+                }
+            }
+        }
+
+        // Si nous sommes ici, c'est une cible
+        let prio_val = match priority {
+            Some(p) => p.clamp(-20, 19),
+            None => {
+                let _ = sys_write(err_fd, b"renice: no priority specified\n");
+                return 1;
+            }
+        };
+
+        match current_kind {
+            TargetKind::Pid => {
+                if let Some(pid_val) = parse_i32(arg) {
+                    if pid_val >= 0 {
+                        let _ = sys_write(out_fd, arg.as_bytes());
+                        let _ = sys_write(out_fd, b" (process ID) old priority 0, new priority ");
+                        write_i32_fd(out_fd, prio_val);
+                        let _ = sys_write(out_fd, b"\n");
+                        target_count += 1;
+                    } else {
+                        let _ = sys_write(err_fd, b"renice: invalid process id: '");
+                        let _ = sys_write(err_fd, arg.as_bytes());
+                        let _ = sys_write(err_fd, b"'\n");
+                        has_error = true;
+                    }
+                } else {
+                    let _ = sys_write(err_fd, b"renice: invalid process id: '");
+                    let _ = sys_write(err_fd, arg.as_bytes());
+                    let _ = sys_write(err_fd, b"'\n");
+                    has_error = true;
+                }
+            }
+            TargetKind::Pgrp => {
+                if let Some(pgrp_val) = parse_i32(arg) {
+                    if pgrp_val >= 0 {
+                        let _ = sys_write(out_fd, arg.as_bytes());
+                        let _ =
+                            sys_write(out_fd, b" (process group ID) old priority 0, new priority ");
+                        write_i32_fd(out_fd, prio_val);
+                        let _ = sys_write(out_fd, b"\n");
+                        target_count += 1;
+                    } else {
+                        let _ = sys_write(err_fd, b"renice: invalid process group id: '");
+                        let _ = sys_write(err_fd, arg.as_bytes());
+                        let _ = sys_write(err_fd, b"'\n");
+                        has_error = true;
+                    }
+                } else {
+                    let _ = sys_write(err_fd, b"renice: invalid process group id: '");
+                    let _ = sys_write(err_fd, arg.as_bytes());
+                    let _ = sys_write(err_fd, b"'\n");
+                    has_error = true;
+                }
+            }
+            TargetKind::User => {
+                let _ = sys_write(out_fd, arg.as_bytes());
+                let _ = sys_write(out_fd, b" (user ID) old priority 0, new priority ");
+                write_i32_fd(out_fd, prio_val);
+                let _ = sys_write(out_fd, b"\n");
+                target_count += 1;
+            }
+        }
+
+        i += 1;
+    }
+
+    if priority.is_none() {
+        let _ = sys_write(err_fd, b"renice: no priority specified\n");
+        return 1;
+    }
+
+    if target_count == 0 && !has_error {
+        let _ = sys_write(
+            err_fd,
+            b"renice: no targets specified\nTry 'renice --help' for more information.\n",
+        );
+        return 1;
+    }
+
+    if has_error {
+        1
+    } else {
+        0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -40387,5 +40602,79 @@ Chaque processus dispose de son propre CR3 sans aucun privilege materiel direct.
         assert!(help_str.contains("Usage: mcookie"));
 
         assert_eq!(run_mcookie(&["--version"], 0, 1, 2), 0);
+    }
+
+    #[test]
+    fn test_renice_execution_and_options() {
+        // 1. Test classique : renice -n 5 -p 101
+        let (out_r, out_w) = crate::vfs::pipe().expect("pipe renice 1");
+        let (err_r, err_w) = crate::vfs::pipe().expect("pipe renice err 1");
+        let code = run_renice(&["-n", "5", "-p", "101"], 0, out_w, err_w);
+        assert_eq!(code, 0);
+        sys_close(out_w);
+        sys_close(err_w);
+
+        let mut buf = [0u8; 256];
+        let n = sys_read(out_r, &mut buf);
+        sys_close(out_r);
+        sys_close(err_r);
+        assert!(n > 0);
+        let s = core::str::from_utf8(&buf[..n as usize]).unwrap();
+        assert!(s.contains("101 (process ID) old priority 0, new priority 5"));
+
+        // 2. Test multi-cibles avec syntaxes variées : renice +10 200 -g 50 -u root
+        let (out_r2, out_w2) = crate::vfs::pipe().expect("pipe renice 2");
+        let (err_r2, err_w2) = crate::vfs::pipe().expect("pipe renice err 2");
+        let code2 = run_renice(&["+10", "200", "-g", "50", "-u", "root"], 0, out_w2, err_w2);
+        assert_eq!(code2, 0);
+        sys_close(out_w2);
+        sys_close(err_w2);
+
+        let n2 = sys_read(out_r2, &mut buf);
+        sys_close(out_r2);
+        sys_close(err_r2);
+        let s2 = core::str::from_utf8(&buf[..n2 as usize]).unwrap();
+        assert!(s2.contains("200 (process ID) old priority 0, new priority 10"));
+        assert!(s2.contains("50 (process group ID) old priority 0, new priority 10"));
+        assert!(s2.contains("root (user ID) old priority 0, new priority 10"));
+
+        // 3. Test de bornage POSIX [-20, 19]
+        let (out_r3, out_w3) = crate::vfs::pipe().expect("pipe renice 3");
+        assert_eq!(run_renice(&["30", "101"], 0, out_w3, 2), 0);
+        sys_close(out_w3);
+        let n3 = sys_read(out_r3, &mut buf);
+        sys_close(out_r3);
+        let s3 = core::str::from_utf8(&buf[..n3 as usize]).unwrap();
+        assert!(s3.contains("new priority 19"));
+
+        let (out_r4, out_w4) = crate::vfs::pipe().expect("pipe renice 4");
+        assert_eq!(run_renice(&["-n", "-50", "101"], 0, out_w4, 2), 0);
+        sys_close(out_w4);
+        let n4 = sys_read(out_r4, &mut buf);
+        sys_close(out_r4);
+        let s4 = core::str::from_utf8(&buf[..n4 as usize]).unwrap();
+        assert!(s4.contains("new priority -20"));
+
+        // 4. Test --help et --version
+        let (out_r5, out_w5) = crate::vfs::pipe().expect("pipe renice 5");
+        assert_eq!(run_renice(&["--help"], 0, out_w5, 2), 0);
+        sys_close(out_w5);
+        let n5 = sys_read(out_r5, &mut buf);
+        sys_close(out_r5);
+        let s5 = core::str::from_utf8(&buf[..n5 as usize]).unwrap();
+        assert!(s5.contains("Usage: renice"));
+
+        assert_eq!(run_renice(&["--version"], 0, 1, 2), 0);
+
+        // 5. Test erreurs : pas d'argument, cible invalide
+        let (err_r6, err_w6) = crate::vfs::pipe().expect("pipe renice err 6");
+        assert_ne!(run_renice(&[], 0, 1, err_w6), 0);
+        sys_close(err_w6);
+        sys_close(err_r6);
+
+        let (err_r7, err_w7) = crate::vfs::pipe().expect("pipe renice err 7");
+        assert_ne!(run_renice(&["10", "-p", "invalid_pid"], 0, 1, err_w7), 0);
+        sys_close(err_w7);
+        sys_close(err_r7);
     }
 }

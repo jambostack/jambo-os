@@ -682,7 +682,12 @@ name = "mcookie"
 path = "src/bin/mcookie.rs"
 test = false
 
-# 135 utilitaires Ring 3
+[[bin]]
+name = "renice"
+path = "src/bin/renice.rs"
+test = false
+
+# 136 utilitaires Ring 3
 
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }

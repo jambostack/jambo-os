@@ -392,6 +392,8 @@ pub const XHCI_EXT_CAP_USB4_USB3_ADAPTER_CONFIGURATION_INTERFACE_V2: u8 = 74;
 pub const XHCI_EXT_CAP_USB4_HOST_INTERFACE_CONFIGURATION_INTERFACE_V2: u8 = 75;
 /// Capacité étendue xHCI 1.2 / USB4 Domain Configuration Interface v2 (§7.68)
 pub const XHCI_EXT_CAP_USB4_DOMAIN_CONFIGURATION_INTERFACE_V2: u8 = 76;
+/// Capacité étendue xHCI 1.2 / USB4 Time Synchronization Configuration Interface v2 (§7.69)
+pub const XHCI_EXT_CAP_USB4_TIME_SYNC_CONFIGURATION_INTERFACE_V2: u8 = 77;
 
 /// Masques de registres USB Legacy Support (xHCI 1.2 Section 7.1)
 /// Registre USBLEGSUP (Offset 0x00)
@@ -8799,6 +8801,229 @@ impl XhciUsb4DomainConfigInterfaceV2 {
             && self.discovery_complete
             && !self.reset_in_progress
             && self.active_router_count > 0
+    }
+}
+
+/// Capacité étendue xHCI 1.2 / USB4 Time Synchronization Configuration Interface v2 (§7.69)
+///
+/// Permet la gestion et la configuration de l'unité de synchronisation temporelle USB4 (TMU v2 / IEEE 802.1AS / PTP),
+/// assurant la synchronisation des horloges matérielles du domaine USB4 avec une précision nanoseconde,
+/// l'étalonnage du délai de propagation sur les liens physiques, le mode Grandmaster et la détection d'asymétrie.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XhciUsb4TimeSyncConfigInterfaceV2 {
+    /// Pointeur dword vers la prochaine capacité étendue (0 = fin de liste)
+    pub next_ptr_dwords: u8,
+    /// Unité de synchronisation temporelle activée (TMU Enable)
+    pub time_sync_enabled: bool,
+    /// Mode Grandmaster d'horloge actif (le contrôleur hôte sert d'horloge de référence pour le domaine)
+    pub grandmaster_mode: bool,
+    /// Horloge locale verrouillée en phase/fréquence avec le Grandmaster (PTP Lock)
+    pub ptp_sync_locked: bool,
+    /// Mesure du délai de propagation calibrée et valide
+    pub propagation_delay_valid: bool,
+    /// Correction d'asymétrie de transmission active (Tx/Rx Asymmetry Compensation)
+    pub asymmetry_correction_enabled: bool,
+    /// Horodatage haute résolution actif (sub-nanoseconde)
+    pub hi_res_timestamp_enabled: bool,
+    /// Réinitialisation matérielle du module TMU en cours
+    pub reset_in_progress: bool,
+    /// Identifiant de l'horloge locale ou de domaine (0..255)
+    pub domain_clock_id: u8,
+    /// Classe de précision de l'horloge matérielle (ex: 0x20 = < 25 ns, 0x30 = < 100 ns)
+    pub clock_accuracy: u8,
+    /// Log2 de l'intervalle de synchronisation PTP (-3 à +3 typiquement, -3 = 125 ms, 0 = 1 s)
+    pub sync_interval_log2: i8,
+    /// Décalage d'horloge locale par rapport à la référence (en nanosecondes, signé)
+    pub local_time_offset_ns: i32,
+    /// Délai de propagation aller-retour calibré (en picosecondes)
+    pub propagation_delay_ps: u32,
+    /// Compteur d'erreurs de synchronisation temporelle (perte de phase, dérive excessive)
+    pub time_sync_error_counter: u16,
+    /// Compteur de paquets ou trames de synchronisation temporelle échangés
+    pub sync_packet_counter: u16,
+}
+
+impl XhciUsb4TimeSyncConfigInterfaceV2 {
+    /// Crée une nouvelle interface de configuration de Synchronisation Temporelle USB4 v2
+    pub const fn new(domain_clock_id: u8, clock_accuracy: u8, sync_interval_log2: i8) -> Self {
+        Self {
+            next_ptr_dwords: 0,
+            time_sync_enabled: false,
+            grandmaster_mode: false,
+            ptp_sync_locked: false,
+            propagation_delay_valid: false,
+            asymmetry_correction_enabled: false,
+            hi_res_timestamp_enabled: false,
+            reset_in_progress: false,
+            domain_clock_id,
+            clock_accuracy,
+            sync_interval_log2,
+            local_time_offset_ns: 0,
+            propagation_delay_ps: 0,
+            time_sync_error_counter: 0,
+            sync_packet_counter: 0,
+        }
+    }
+
+    /// Parse les 4 dwords MMIO d'une capacité étendue USB4 Time Synchronization Configuration Interface v2 (§7.69)
+    pub const fn parse(dwords: &[u32; 4]) -> Option<Self> {
+        let cap_id = (dwords[0] & 0xFF) as u8;
+        if cap_id != XHCI_EXT_CAP_USB4_TIME_SYNC_CONFIGURATION_INTERFACE_V2 {
+            return None;
+        }
+
+        let next_ptr = ((dwords[0] >> 8) & 0xFF) as u8;
+        let clock_accuracy = ((dwords[0] >> 16) & 0xFF) as u8;
+        let sync_interval_log2 = ((dwords[0] >> 24) & 0xFF) as i8;
+
+        let ctrl = dwords[1];
+        let time_sync_enabled = (ctrl & 0x01) != 0;
+        let grandmaster_mode = (ctrl & 0x02) != 0;
+        let ptp_sync_locked = (ctrl & 0x04) != 0;
+        let propagation_delay_valid = (ctrl & 0x08) != 0;
+        let asymmetry_correction_enabled = (ctrl & 0x10) != 0;
+        let hi_res_timestamp_enabled = (ctrl & 0x20) != 0;
+        let reset_in_progress = (ctrl & 0x40) != 0;
+        let domain_clock_id = ((ctrl >> 8) & 0xFF) as u8;
+        let time_sync_error_counter = ((ctrl >> 16) & 0xFFFF) as u16;
+
+        let local_time_offset_ns = dwords[2] as i32;
+
+        let dw3 = dwords[3];
+        let propagation_delay_ps = dw3 & 0xFFFF;
+        let sync_packet_counter = ((dw3 >> 16) & 0xFFFF) as u16;
+
+        Some(Self {
+            next_ptr_dwords: next_ptr,
+            time_sync_enabled,
+            grandmaster_mode,
+            ptp_sync_locked,
+            propagation_delay_valid,
+            asymmetry_correction_enabled,
+            hi_res_timestamp_enabled,
+            reset_in_progress,
+            domain_clock_id,
+            clock_accuracy,
+            sync_interval_log2,
+            local_time_offset_ns,
+            propagation_delay_ps,
+            time_sync_error_counter,
+            sync_packet_counter,
+        })
+    }
+
+    /// Encode la capacité étendue USB4 Time Sync v2 sous forme de 4 dwords MMIO
+    pub const fn encode(&self) -> [u32; 4] {
+        let dw0 = (XHCI_EXT_CAP_USB4_TIME_SYNC_CONFIGURATION_INTERFACE_V2 as u32)
+            | ((self.next_ptr_dwords as u32) << 8)
+            | ((self.clock_accuracy as u32) << 16)
+            | (((self.sync_interval_log2 as u8) as u32) << 24);
+
+        let mut ctrl = 0u32;
+        if self.time_sync_enabled {
+            ctrl |= 0x01;
+        }
+        if self.grandmaster_mode {
+            ctrl |= 0x02;
+        }
+        if self.ptp_sync_locked {
+            ctrl |= 0x04;
+        }
+        if self.propagation_delay_valid {
+            ctrl |= 0x08;
+        }
+        if self.asymmetry_correction_enabled {
+            ctrl |= 0x10;
+        }
+        if self.hi_res_timestamp_enabled {
+            ctrl |= 0x20;
+        }
+        if self.reset_in_progress {
+            ctrl |= 0x40;
+        }
+        ctrl |= ((self.domain_clock_id as u32) & 0xFF) << 8;
+        ctrl |= ((self.time_sync_error_counter as u32) & 0xFFFF) << 16;
+
+        let dw2 = self.local_time_offset_ns as u32;
+        let dw3 = (self.propagation_delay_ps & 0xFFFF)
+            | (((self.sync_packet_counter as u32) & 0xFFFF) << 16);
+
+        [dw0, ctrl, dw2, dw3]
+    }
+
+    /// Active l'unité de synchronisation temporelle
+    pub fn enable_time_sync(&mut self) {
+        self.time_sync_enabled = true;
+    }
+
+    /// Désactive l'unité de synchronisation temporelle
+    pub fn disable_time_sync(&mut self) {
+        self.time_sync_enabled = false;
+        self.ptp_sync_locked = false;
+    }
+
+    /// Configure le mode Grandmaster (horloge maître de référence)
+    pub fn set_grandmaster(&mut self, gm: bool) {
+        self.grandmaster_mode = gm;
+        if gm {
+            self.local_time_offset_ns = 0;
+            self.ptp_sync_locked = true;
+        }
+    }
+
+    /// Met à jour l'état de verrouillage de synchronisation PTP
+    pub fn set_sync_locked(&mut self, locked: bool) {
+        self.ptp_sync_locked = locked;
+    }
+
+    /// Définit le délai de propagation étalonné (en picosecondes)
+    pub fn set_propagation_delay_ps(&mut self, delay_ps: u32) {
+        self.propagation_delay_ps = delay_ps;
+        self.propagation_delay_valid = true;
+    }
+
+    /// Met à jour le décalage temporel local (en nanosecondes)
+    pub fn set_local_offset_ns(&mut self, offset_ns: i32) {
+        self.local_time_offset_ns = offset_ns;
+    }
+
+    /// Active ou désactive la compensation d'asymétrie Tx/Rx
+    pub fn set_asymmetry_correction(&mut self, enabled: bool) {
+        self.asymmetry_correction_enabled = enabled;
+    }
+
+    /// Active ou désactive le mode d'horodatage haute résolution
+    pub fn set_hi_res_timestamp(&mut self, enabled: bool) {
+        self.hi_res_timestamp_enabled = enabled;
+    }
+
+    /// Enregistre l'émission ou la réception d'un paquet de synchronisation temporelle
+    pub fn record_sync_packet(&mut self) {
+        self.sync_packet_counter = self.sync_packet_counter.saturating_add(1);
+    }
+
+    /// Enregistre une erreur de synchronisation (dérive excessive, perte de lock)
+    pub fn record_sync_error(&mut self) {
+        self.time_sync_error_counter = self.time_sync_error_counter.saturating_add(1);
+    }
+
+    /// Description textuelle de la précision de l'horloge
+    pub const fn accuracy_description(&self) -> &'static str {
+        match self.clock_accuracy {
+            0x20 => "< 25 ns (Haute Précision TMU v2)",
+            0x21 => "< 100 ns (Standard PTP TMU)",
+            0x30 => "< 250 ns",
+            0x31 => "< 1 us",
+            _ => "Précision Non Étalonnée",
+        }
+    }
+
+    /// Indique si l'unité de synchronisation temporelle USB4 est pleinement opérationnelle
+    pub fn is_operational(&self) -> bool {
+        self.time_sync_enabled
+            && self.ptp_sync_locked
+            && !self.reset_in_progress
+            && (self.grandmaster_mode || self.propagation_delay_valid)
     }
 }
 
@@ -19771,5 +19996,99 @@ mod tests {
         assert!(!dci.is_operational());
         assert!(!dci.domain_enabled);
         assert!(!dci.routing_active);
+    }
+
+    #[test]
+    fn test_xhci_usb4_time_sync_config_interface_v2() {
+        let mut tsc = XhciUsb4TimeSyncConfigInterfaceV2::new(42, 0x20, -3);
+        assert_eq!(tsc.domain_clock_id, 42);
+        assert_eq!(tsc.clock_accuracy, 0x20);
+        assert_eq!(tsc.sync_interval_log2, -3);
+        assert_eq!(
+            tsc.accuracy_description(),
+            "< 25 ns (Haute Précision TMU v2)"
+        );
+        assert!(!tsc.is_operational());
+
+        // Activation et mode Grandmaster
+        tsc.enable_time_sync();
+        assert!(tsc.time_sync_enabled);
+        assert!(!tsc.is_operational());
+
+        tsc.set_grandmaster(true);
+        assert!(tsc.grandmaster_mode);
+        assert!(tsc.ptp_sync_locked);
+        assert_eq!(tsc.local_time_offset_ns, 0);
+        assert!(tsc.is_operational());
+
+        // Mode Slave / Device Router avec délai de propagation et offset
+        tsc.set_grandmaster(false);
+        tsc.set_propagation_delay_ps(12500); // 12.5 ns de délai aller-retour
+        assert!(tsc.propagation_delay_valid);
+        assert_eq!(tsc.propagation_delay_ps, 12500);
+        tsc.set_local_offset_ns(-45); // -45 ns de retard local
+        assert_eq!(tsc.local_time_offset_ns, -45);
+        tsc.set_asymmetry_correction(true);
+        tsc.set_hi_res_timestamp(true);
+        assert!(tsc.asymmetry_correction_enabled);
+        assert!(tsc.hi_res_timestamp_enabled);
+        assert!(tsc.is_operational());
+
+        // Compteurs de paquets et erreurs
+        tsc.record_sync_packet();
+        tsc.record_sync_packet();
+        tsc.record_sync_packet();
+        assert_eq!(tsc.sync_packet_counter, 3);
+
+        tsc.record_sync_error();
+        assert_eq!(tsc.time_sync_error_counter, 1);
+
+        tsc.next_ptr_dwords = 128;
+        let encoded = tsc.encode();
+        assert_eq!(
+            encoded[0] & 0xFF,
+            XHCI_EXT_CAP_USB4_TIME_SYNC_CONFIGURATION_INTERFACE_V2 as u32
+        );
+        assert_eq!((encoded[0] >> 8) & 0xFF, 128);
+        assert_eq!((encoded[0] >> 16) & 0xFF, 0x20);
+        assert_eq!(((encoded[0] >> 24) & 0xFF) as i8, -3);
+
+        assert_eq!(encoded[1] & 0x01, 1); // time_sync_enabled
+        assert_eq!(encoded[1] & 0x02, 0); // grandmaster_mode (false)
+        assert_eq!(encoded[1] & 0x04, 4); // ptp_sync_locked
+        assert_eq!(encoded[1] & 0x08, 8); // propagation_delay_valid
+        assert_eq!(encoded[1] & 0x10, 16); // asymmetry_correction_enabled
+        assert_eq!(encoded[1] & 0x20, 32); // hi_res_timestamp_enabled
+        assert_eq!(encoded[1] & 0x40, 0); // reset_in_progress
+        assert_eq!((encoded[1] >> 8) & 0xFF, 42); // domain_clock_id
+        assert_eq!((encoded[1] >> 16) & 0xFFFF, 1); // time_sync_error_counter
+
+        assert_eq!(encoded[2] as i32, -45);
+        assert_eq!(encoded[3] & 0xFFFF, 12500);
+        assert_eq!((encoded[3] >> 16) & 0xFFFF, 3);
+
+        let parsed = XhciUsb4TimeSyncConfigInterfaceV2::parse(&encoded).unwrap();
+        assert_eq!(parsed.next_ptr_dwords, 128);
+        assert!(parsed.time_sync_enabled);
+        assert!(!parsed.grandmaster_mode);
+        assert!(parsed.ptp_sync_locked);
+        assert!(parsed.propagation_delay_valid);
+        assert!(parsed.asymmetry_correction_enabled);
+        assert!(parsed.hi_res_timestamp_enabled);
+        assert!(!parsed.reset_in_progress);
+        assert_eq!(parsed.domain_clock_id, 42);
+        assert_eq!(parsed.clock_accuracy, 0x20);
+        assert_eq!(parsed.sync_interval_log2, -3);
+        assert_eq!(parsed.local_time_offset_ns, -45);
+        assert_eq!(parsed.propagation_delay_ps, 12500);
+        assert_eq!(parsed.sync_packet_counter, 3);
+        assert_eq!(parsed.time_sync_error_counter, 1);
+        assert!(parsed.is_operational());
+
+        // Test désactivation
+        tsc.disable_time_sync();
+        assert!(!tsc.is_operational());
+        assert!(!tsc.time_sync_enabled);
+        assert!(!tsc.ptp_sync_locked);
     }
 }
