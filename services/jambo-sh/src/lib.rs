@@ -643,6 +643,7 @@ impl JamboShell {
             "jot" | "/bin/jot" | "bin/jot" => self.cmd_jot(args, out),
             "rs" | "/bin/rs" | "bin/rs" => self.cmd_rs(args, out),
             "primes" | "/bin/primes" | "bin/primes" => self.cmd_primes(args, out),
+            "numfmt" | "/bin/numfmt" | "bin/numfmt" => self.cmd_numfmt(args, out),
             "factor" | "/bin/factor" | "bin/factor" => self.cmd_factor(args, out),
             "timeout" | "/bin/timeout" | "bin/timeout" => self.cmd_timeout(args, out),
             "nice" | "/bin/nice" | "bin/nice" => self.cmd_nice(args, out),
@@ -3228,6 +3229,43 @@ Utilitaire d'installation JamboOS (Serie 0.*.*)\n\
             (status, len)
         } else {
             let msg = b"primes: pipe creation failed\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
+    }
+
+    fn cmd_numfmt(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if let (Ok((r_out, w_out)), Ok((r_err, w_err))) =
+            (libjambo::vfs::pipe(), libjambo::vfs::pipe())
+        {
+            let code = libjambo::coreutils::run_numfmt(args, 0, w_out, w_err);
+            let _ = libjambo::coreutils::sys_close(w_out);
+            let _ = libjambo::coreutils::sys_close(w_err);
+
+            let mut len = 0;
+            if code == 0 {
+                let n_out = libjambo::coreutils::sys_read(r_out, out);
+                if n_out > 0 {
+                    len = n_out as usize;
+                }
+            } else {
+                let n_err = libjambo::coreutils::sys_read(r_err, out);
+                if n_err > 0 {
+                    len = n_err as usize;
+                }
+            }
+            let _ = libjambo::coreutils::sys_close(r_out);
+            let _ = libjambo::coreutils::sys_close(r_err);
+
+            let status = if code == 0 {
+                ShellStatus::Success
+            } else {
+                ShellStatus::ExecutionFailed
+            };
+            (status, len)
+        } else {
+            let msg = b"numfmt: pipe creation failed\n";
             let len = msg.len().min(out.len());
             out[..len].copy_from_slice(&msg[..len]);
             (ShellStatus::ExecutionFailed, len)
@@ -22545,5 +22583,26 @@ mod tests {
         assert_eq!(st148, ShellStatus::Success);
         let s148 = core::str::from_utf8(&out[..len148]).unwrap();
         assert!(s148.contains("rs (JamboOS coreutils)"));
+
+        // 67. primes & numfmt shell commands
+        let (st149, len149) = shell.execute_line("primes 10 20", &mut out);
+        assert_eq!(st149, ShellStatus::Success);
+        let s149 = core::str::from_utf8(&out[..len149]).unwrap();
+        assert_eq!(s149, "11\n13\n17\n19\n");
+
+        let (st150, len150) = shell.execute_line("numfmt --to=si 1000 2000000", &mut out);
+        assert_eq!(st150, ShellStatus::Success);
+        let s150 = core::str::from_utf8(&out[..len150]).unwrap();
+        assert_eq!(s150, "1.0k\n2.0M\n");
+
+        let (st151, len151) = shell.execute_line("numfmt --help", &mut out);
+        assert_eq!(st151, ShellStatus::Success);
+        let s151 = core::str::from_utf8(&out[..len151]).unwrap();
+        assert!(s151.contains("Usage: numfmt"));
+
+        let (st152, len152) = shell.execute_line("numfmt --version", &mut out);
+        assert_eq!(st152, ShellStatus::Success);
+        let s152 = core::str::from_utf8(&out[..len152]).unwrap();
+        assert!(s152.contains("numfmt (JamboOS coreutils)"));
     }
 }

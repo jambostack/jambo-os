@@ -21179,6 +21179,489 @@ License MIT or Apache-2.0.\n";
 }
 
 // ============================================================================
+// Utilitaire POSIX / GNU coreutils : `numfmt` (Reformatage et conversion de nombres)
+// ============================================================================
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum NumfmtScale {
+    None,
+    Si,   // 1000^n: k, M, G, T, P, E
+    Iec,  // 1024^n: K, M, G, T, P, E
+    IecI, // 1024^n: Ki, Mi, Gi, Ti, Pi, Ei
+    Auto, // Détection automatique pour --from
+}
+
+fn format_numfmt_val(
+    val: u64,
+    scale: NumfmtScale,
+    padding: usize,
+    suffix: &str,
+    out: &mut [u8; 64],
+) -> usize {
+    let mut tmp = [0u8; 64];
+    let mut tmp_len;
+
+    match scale {
+        NumfmtScale::None | NumfmtScale::Auto => {
+            let mut num_buf = [0u8; 32];
+            let l = fmt_u64_in_buf(&mut num_buf, val, 0, false, 10, false);
+            tmp[..l].copy_from_slice(&num_buf[..l]);
+            tmp_len = l;
+            if !suffix.is_empty() && tmp_len + suffix.len() <= tmp.len() {
+                tmp[tmp_len..tmp_len + suffix.len()].copy_from_slice(suffix.as_bytes());
+                tmp_len += suffix.len();
+            }
+        }
+        NumfmtScale::Si => {
+            const SI_UNITS: [&str; 7] = ["", "k", "M", "G", "T", "P", "E"];
+            const BASE: u64 = 1000;
+            if val < BASE {
+                let mut num_buf = [0u8; 32];
+                let l = fmt_u64_in_buf(&mut num_buf, val, 0, false, 10, false);
+                tmp[..l].copy_from_slice(&num_buf[..l]);
+                tmp_len = l;
+                if !suffix.is_empty() && tmp_len + suffix.len() <= tmp.len() {
+                    tmp[tmp_len..tmp_len + suffix.len()].copy_from_slice(suffix.as_bytes());
+                    tmp_len += suffix.len();
+                }
+            } else {
+                let mut unit_idx = 0usize;
+                let mut factor = 1u64;
+                while unit_idx + 1 < SI_UNITS.len() && val >= factor.saturating_mul(BASE) {
+                    factor = factor.saturating_mul(BASE);
+                    unit_idx += 1;
+                }
+                let scaled_x10 =
+                    ((val as u128 * 10 + (factor as u128 / 2)) / factor as u128) as u64;
+                let mut int_part = scaled_x10 / 10;
+                let mut frac_part = scaled_x10 % 10;
+                if int_part >= BASE && unit_idx + 1 < SI_UNITS.len() {
+                    unit_idx += 1;
+                    int_part = 1;
+                    frac_part = 0;
+                }
+                let mut num_buf = [0u8; 32];
+                let l1 = fmt_u64_in_buf(&mut num_buf, int_part, 0, false, 10, false);
+                tmp[..l1].copy_from_slice(&num_buf[..l1]);
+                tmp_len = l1;
+                tmp[tmp_len] = b'.';
+                tmp_len += 1;
+                tmp[tmp_len] = b'0' + (frac_part as u8);
+                tmp_len += 1;
+                let u_str = SI_UNITS[unit_idx];
+                tmp[tmp_len..tmp_len + u_str.len()].copy_from_slice(u_str.as_bytes());
+                tmp_len += u_str.len();
+                if !suffix.is_empty() && tmp_len + suffix.len() <= tmp.len() {
+                    tmp[tmp_len..tmp_len + suffix.len()].copy_from_slice(suffix.as_bytes());
+                    tmp_len += suffix.len();
+                }
+            }
+        }
+        NumfmtScale::Iec => {
+            const IEC_UNITS: [&str; 7] = ["", "K", "M", "G", "T", "P", "E"];
+            const BASE: u64 = 1024;
+            if val < BASE {
+                let mut num_buf = [0u8; 32];
+                let l = fmt_u64_in_buf(&mut num_buf, val, 0, false, 10, false);
+                tmp[..l].copy_from_slice(&num_buf[..l]);
+                tmp_len = l;
+                if !suffix.is_empty() && tmp_len + suffix.len() <= tmp.len() {
+                    tmp[tmp_len..tmp_len + suffix.len()].copy_from_slice(suffix.as_bytes());
+                    tmp_len += suffix.len();
+                }
+            } else {
+                let mut unit_idx = 0usize;
+                let mut factor = 1u64;
+                while unit_idx + 1 < IEC_UNITS.len() && val >= factor.saturating_mul(BASE) {
+                    factor = factor.saturating_mul(BASE);
+                    unit_idx += 1;
+                }
+                let scaled_x10 =
+                    ((val as u128 * 10 + (factor as u128 / 2)) / factor as u128) as u64;
+                let mut int_part = scaled_x10 / 10;
+                let mut frac_part = scaled_x10 % 10;
+                if int_part >= BASE && unit_idx + 1 < IEC_UNITS.len() {
+                    unit_idx += 1;
+                    int_part = 1;
+                    frac_part = 0;
+                }
+                let mut num_buf = [0u8; 32];
+                let l1 = fmt_u64_in_buf(&mut num_buf, int_part, 0, false, 10, false);
+                tmp[..l1].copy_from_slice(&num_buf[..l1]);
+                tmp_len = l1;
+                tmp[tmp_len] = b'.';
+                tmp_len += 1;
+                tmp[tmp_len] = b'0' + (frac_part as u8);
+                tmp_len += 1;
+                let u_str = IEC_UNITS[unit_idx];
+                tmp[tmp_len..tmp_len + u_str.len()].copy_from_slice(u_str.as_bytes());
+                tmp_len += u_str.len();
+                if !suffix.is_empty() && tmp_len + suffix.len() <= tmp.len() {
+                    tmp[tmp_len..tmp_len + suffix.len()].copy_from_slice(suffix.as_bytes());
+                    tmp_len += suffix.len();
+                }
+            }
+        }
+        NumfmtScale::IecI => {
+            const IEC_I_UNITS: [&str; 7] = ["", "Ki", "Mi", "Gi", "Ti", "Pi", "Ei"];
+            const BASE: u64 = 1024;
+            if val < BASE {
+                let mut num_buf = [0u8; 32];
+                let l = fmt_u64_in_buf(&mut num_buf, val, 0, false, 10, false);
+                tmp[..l].copy_from_slice(&num_buf[..l]);
+                tmp_len = l;
+                if !suffix.is_empty() && tmp_len + suffix.len() <= tmp.len() {
+                    tmp[tmp_len..tmp_len + suffix.len()].copy_from_slice(suffix.as_bytes());
+                    tmp_len += suffix.len();
+                }
+            } else {
+                let mut unit_idx = 0usize;
+                let mut factor = 1u64;
+                while unit_idx + 1 < IEC_I_UNITS.len() && val >= factor.saturating_mul(BASE) {
+                    factor = factor.saturating_mul(BASE);
+                    unit_idx += 1;
+                }
+                let scaled_x10 =
+                    ((val as u128 * 10 + (factor as u128 / 2)) / factor as u128) as u64;
+                let mut int_part = scaled_x10 / 10;
+                let mut frac_part = scaled_x10 % 10;
+                if int_part >= BASE && unit_idx + 1 < IEC_I_UNITS.len() {
+                    unit_idx += 1;
+                    int_part = 1;
+                    frac_part = 0;
+                }
+                let mut num_buf = [0u8; 32];
+                let l1 = fmt_u64_in_buf(&mut num_buf, int_part, 0, false, 10, false);
+                tmp[..l1].copy_from_slice(&num_buf[..l1]);
+                tmp_len = l1;
+                tmp[tmp_len] = b'.';
+                tmp_len += 1;
+                tmp[tmp_len] = b'0' + (frac_part as u8);
+                tmp_len += 1;
+                let u_str = IEC_I_UNITS[unit_idx];
+                tmp[tmp_len..tmp_len + u_str.len()].copy_from_slice(u_str.as_bytes());
+                tmp_len += u_str.len();
+                if !suffix.is_empty() && tmp_len + suffix.len() <= tmp.len() {
+                    tmp[tmp_len..tmp_len + suffix.len()].copy_from_slice(suffix.as_bytes());
+                    tmp_len += suffix.len();
+                }
+            }
+        }
+    }
+
+    if padding > tmp_len {
+        let pad_count = padding - tmp_len;
+        out[..pad_count].fill(b' ');
+        out[pad_count..pad_count + tmp_len].copy_from_slice(&tmp[..tmp_len]);
+        padding
+    } else {
+        out[..tmp_len].copy_from_slice(&tmp[..tmp_len]);
+        tmp_len
+    }
+}
+
+fn parse_u128_digits(s: &str) -> Option<u128> {
+    if s.is_empty() {
+        return None;
+    }
+    let mut val = 0u128;
+    for b in s.bytes() {
+        if !b.is_ascii_digit() {
+            return None;
+        }
+        val = val.checked_mul(10)?.checked_add((b - b'0') as u128)?;
+    }
+    Some(val)
+}
+
+fn parse_numfmt_val(s: &str, scale: NumfmtScale) -> Option<u64> {
+    let trimmed = s.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let bytes = trimmed.as_bytes();
+    let mut num_end = 0;
+    while num_end < bytes.len() && (bytes[num_end].is_ascii_digit() || bytes[num_end] == b'.') {
+        num_end += 1;
+    }
+    if num_end == 0 {
+        return None;
+    }
+    let num_str = &trimmed[..num_end];
+    let mut suffix_str = &trimmed[num_end..];
+    if suffix_str.ends_with('B') || suffix_str.ends_with('b') {
+        suffix_str = &suffix_str[..suffix_str.len() - 1];
+    }
+
+    let (base, exp): (u64, u32) = if suffix_str.is_empty() {
+        (1000, 0)
+    } else if suffix_str.eq_ignore_ascii_case("k") {
+        let b = match scale {
+            NumfmtScale::Iec | NumfmtScale::IecI => 1024,
+            _ => 1000,
+        };
+        (b, 1)
+    } else if suffix_str.eq_ignore_ascii_case("ki") {
+        (1024, 1)
+    } else if suffix_str.eq_ignore_ascii_case("m") {
+        let b = match scale {
+            NumfmtScale::Iec | NumfmtScale::IecI => 1024,
+            _ => 1000,
+        };
+        (b, 2)
+    } else if suffix_str.eq_ignore_ascii_case("mi") {
+        (1024, 2)
+    } else if suffix_str.eq_ignore_ascii_case("g") {
+        let b = match scale {
+            NumfmtScale::Iec | NumfmtScale::IecI => 1024,
+            _ => 1000,
+        };
+        (b, 3)
+    } else if suffix_str.eq_ignore_ascii_case("gi") {
+        (1024, 3)
+    } else if suffix_str.eq_ignore_ascii_case("t") {
+        let b = match scale {
+            NumfmtScale::Iec | NumfmtScale::IecI => 1024,
+            _ => 1000,
+        };
+        (b, 4)
+    } else if suffix_str.eq_ignore_ascii_case("ti") {
+        (1024, 4)
+    } else if suffix_str.eq_ignore_ascii_case("p") {
+        let b = match scale {
+            NumfmtScale::Iec | NumfmtScale::IecI => 1024,
+            _ => 1000,
+        };
+        (b, 5)
+    } else if suffix_str.eq_ignore_ascii_case("pi") {
+        (1024, 5)
+    } else if suffix_str.eq_ignore_ascii_case("e") {
+        let b = match scale {
+            NumfmtScale::Iec | NumfmtScale::IecI => 1024,
+            _ => 1000,
+        };
+        (b, 6)
+    } else if suffix_str.eq_ignore_ascii_case("ei") {
+        (1024, 6)
+    } else {
+        return None;
+    };
+
+    let mut multiplier = 1u128;
+    for _ in 0..exp {
+        multiplier = multiplier.checked_mul(base as u128)?;
+    }
+
+    if let Some(dot_pos) = num_str.find('.') {
+        let int_str = &num_str[..dot_pos];
+        let frac_str = &num_str[dot_pos + 1..];
+        let int_val = if int_str.is_empty() {
+            0u128
+        } else {
+            parse_u128_digits(int_str)?
+        };
+        let mut frac_val = 0u128;
+        let mut frac_div = 1u128;
+        for b in frac_str.bytes() {
+            if !b.is_ascii_digit() {
+                return None;
+            }
+            frac_val = frac_val.checked_mul(10)?.checked_add((b - b'0') as u128)?;
+            frac_div = frac_div.checked_mul(10)?;
+        }
+        let total = int_val
+            .checked_mul(multiplier)?
+            .checked_add((frac_val.checked_mul(multiplier)?) / frac_div)?;
+        if total > u64::MAX as u128 {
+            return None;
+        }
+        Some(total as u64)
+    } else {
+        let val = parse_u128_digits(num_str)?;
+        let total = val.checked_mul(multiplier)?;
+        if total > u64::MAX as u128 {
+            return None;
+        }
+        Some(total as u64)
+    }
+}
+
+/// Exécute l'utilitaire Coreutils POSIX / GNU `numfmt` (reformatage et conversion de nombres)
+pub fn run_numfmt(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    let mut to_scale = NumfmtScale::None;
+    let mut from_scale = NumfmtScale::None;
+    let mut padding = 0usize;
+    let mut suffix = "";
+    let mut num_args = [""; 64];
+    let mut num_count = 0usize;
+
+    for &arg in args {
+        if arg == "-h" || arg == "--help" {
+            let help = b"Usage: numfmt [OPTION]... [NUMBER]...\n\
+Reformat NUMBER(s), or numbers from standard input if none are specified.\n\n\
+Options:\n\
+  --to=si        Auto-scale numbers to SI units (k, M, G, T, P, E)\n\
+  --to=iec       Auto-scale numbers to IEC units (K, M, G, T, P, E)\n\
+  --to=iec-i     Auto-scale numbers to IEC-i units (Ki, Mi, Gi, Ti, Pi, Ei)\n\
+  --from=si      Auto-scale input numbers from SI units\n\
+  --from=iec     Auto-scale input numbers from IEC units\n\
+  --from=auto    Auto-scale input numbers from auto-detected units\n\
+  --padding=N    Pad the output to N characters (right-aligned)\n\
+  --suffix=STR   Add suffix STR to generated numbers\n\
+  -h, --help     Display this help and exit\n\
+  -v, --version  Output version information and exit\n";
+            let _ = sys_write(out_fd, help);
+            return 0;
+        } else if arg == "-v" || arg == "-V" || arg == "--version" {
+            let ver = b"numfmt (JamboOS coreutils) 0.1.0\n\
+Copyright (C) 2026 ASSOGBA Prudence Dieudonne\n\
+License MIT or Apache-2.0.\n";
+            let _ = sys_write(out_fd, ver);
+            return 0;
+        } else if let Some(mode) = arg.strip_prefix("--to=") {
+            if mode.eq_ignore_ascii_case("si") {
+                to_scale = NumfmtScale::Si;
+            } else if mode.eq_ignore_ascii_case("iec") {
+                to_scale = NumfmtScale::Iec;
+            } else if mode.eq_ignore_ascii_case("iec-i") {
+                to_scale = NumfmtScale::IecI;
+            } else if mode.eq_ignore_ascii_case("none") {
+                to_scale = NumfmtScale::None;
+            } else {
+                let _ = sys_write(err_fd, b"numfmt: invalid --to scale argument\n");
+                return 1;
+            }
+        } else if let Some(mode) = arg.strip_prefix("--from=") {
+            if mode.eq_ignore_ascii_case("si") {
+                from_scale = NumfmtScale::Si;
+            } else if mode.eq_ignore_ascii_case("iec") {
+                from_scale = NumfmtScale::Iec;
+            } else if mode.eq_ignore_ascii_case("auto") {
+                from_scale = NumfmtScale::Auto;
+            } else if mode.eq_ignore_ascii_case("none") {
+                from_scale = NumfmtScale::None;
+            } else {
+                let _ = sys_write(err_fd, b"numfmt: invalid --from scale argument\n");
+                return 1;
+            }
+        } else if let Some(p_str) = arg.strip_prefix("--padding=") {
+            if let Some(p) = parse_u128_digits(p_str) {
+                padding = p as usize;
+            } else {
+                let _ = sys_write(err_fd, b"numfmt: invalid padding width\n");
+                return 1;
+            }
+        } else if let Some(sfx) = arg.strip_prefix("--suffix=") {
+            suffix = sfx;
+        } else if !arg.starts_with('-')
+            || (arg.len() > 1 && (arg.as_bytes()[1].is_ascii_digit() || arg.as_bytes()[1] == b'+'))
+        {
+            if num_count < num_args.len() {
+                num_args[num_count] = arg;
+                num_count += 1;
+            } else {
+                let _ = sys_write(err_fd, b"numfmt: too many positional arguments\n");
+                return 1;
+            }
+        } else {
+            let _ = sys_write(err_fd, b"numfmt: unrecognized option '");
+            let _ = sys_write(err_fd, arg.as_bytes());
+            let _ = sys_write(err_fd, b"'\n");
+            return 1;
+        }
+    }
+
+    if num_count > 0 {
+        let mut out_buf = [0u8; 64];
+        for &num_str in &num_args[..num_count] {
+            let val = match parse_numfmt_val(num_str, from_scale) {
+                Some(v) => v,
+                None => {
+                    let _ = sys_write(err_fd, b"numfmt: invalid number '");
+                    let _ = sys_write(err_fd, num_str.as_bytes());
+                    let _ = sys_write(err_fd, b"'\n");
+                    return 1;
+                }
+            };
+            let len = format_numfmt_val(val, to_scale, padding, suffix, &mut out_buf);
+            let _ = sys_write(out_fd, &out_buf[..len]);
+            let _ = sys_write(out_fd, b"\n");
+        }
+        return 0;
+    }
+
+    let mut read_buf = [0u8; 512];
+    let mut token_buf = [0u8; 64];
+    let mut token_len = 0usize;
+    let mut exit_code = 0;
+    let mut out_buf = [0u8; 64];
+
+    loop {
+        let n = sys_read(in_fd, &mut read_buf);
+        if n <= 0 {
+            break;
+        }
+        for &b in &read_buf[..n as usize] {
+            if b.is_ascii_whitespace() {
+                if token_len > 0 {
+                    if let Ok(s) = core::str::from_utf8(&token_buf[..token_len]) {
+                        let trimmed = s.trim();
+                        if !trimmed.is_empty() {
+                            match parse_numfmt_val(trimmed, from_scale) {
+                                Some(val) => {
+                                    let len = format_numfmt_val(
+                                        val,
+                                        to_scale,
+                                        padding,
+                                        suffix,
+                                        &mut out_buf,
+                                    );
+                                    let _ = sys_write(out_fd, &out_buf[..len]);
+                                    let _ = sys_write(out_fd, b"\n");
+                                }
+                                None => {
+                                    let _ = sys_write(err_fd, b"numfmt: invalid number '");
+                                    let _ = sys_write(err_fd, trimmed.as_bytes());
+                                    let _ = sys_write(err_fd, b"'\n");
+                                    exit_code = 1;
+                                }
+                            }
+                        }
+                    }
+                    token_len = 0;
+                }
+            } else if token_len < token_buf.len() {
+                token_buf[token_len] = b;
+                token_len += 1;
+            }
+        }
+    }
+
+    if token_len > 0 {
+        if let Ok(s) = core::str::from_utf8(&token_buf[..token_len]) {
+            let trimmed = s.trim();
+            if !trimmed.is_empty() {
+                match parse_numfmt_val(trimmed, from_scale) {
+                    Some(val) => {
+                        let len = format_numfmt_val(val, to_scale, padding, suffix, &mut out_buf);
+                        let _ = sys_write(out_fd, &out_buf[..len]);
+                        let _ = sys_write(out_fd, b"\n");
+                    }
+                    None => {
+                        let _ = sys_write(err_fd, b"numfmt: invalid number '");
+                        let _ = sys_write(err_fd, trimmed.as_bytes());
+                        let _ = sys_write(err_fd, b"'\n");
+                        exit_code = 1;
+                    }
+                }
+            }
+        }
+    }
+
+    exit_code
+}
+
+// ============================================================================
 // Utilitaire POSIX / GNU coreutils : `factor` (Décomposition en facteurs premiers)
 // ============================================================================
 
@@ -39122,5 +39605,139 @@ Chaque processus dispose de son propre CR3 sans aucun privilege materiel direct.
         sys_close(_out_r_p_h);
 
         assert_eq!(run_primes(&["--version"], 0, 1, 2), 0);
+
+        // 64. Test run_numfmt (reformatage et conversion de nombres)
+        let (out_r_nf, out_w_nf) = crate::vfs::pipe().unwrap();
+        assert_eq!(
+            run_numfmt(
+                &["--to=si", "500", "1000", "1500", "2500000"],
+                0,
+                out_w_nf,
+                2
+            ),
+            0
+        );
+        sys_close(out_w_nf);
+
+        let mut nf_buf = [0u8; 128];
+        let n_nf = sys_read(out_r_nf, &mut nf_buf);
+        sys_close(out_r_nf);
+        assert_eq!(
+            core::str::from_utf8(&nf_buf[..n_nf as usize]).unwrap(),
+            "500\n1.0k\n1.5k\n2.5M\n"
+        );
+
+        // Test numfmt --to=iec et --to=iec-i
+        let (out_r_iec, out_w_iec) = crate::vfs::pipe().unwrap();
+        assert_eq!(
+            run_numfmt(&["--to=iec", "1024", "1048576"], 0, out_w_iec, 2),
+            0
+        );
+        sys_close(out_w_iec);
+        let mut iec_buf = [0u8; 64];
+        let n_iec = sys_read(out_r_iec, &mut iec_buf);
+        sys_close(out_r_iec);
+        assert_eq!(
+            core::str::from_utf8(&iec_buf[..n_iec as usize]).unwrap(),
+            "1.0K\n1.0M\n"
+        );
+
+        let (out_r_ieci, out_w_ieci) = crate::vfs::pipe().unwrap();
+        assert_eq!(
+            run_numfmt(&["--to=iec-i", "1024", "1048576"], 0, out_w_ieci, 2),
+            0
+        );
+        sys_close(out_w_ieci);
+        let mut ieci_buf = [0u8; 64];
+        let n_ieci = sys_read(out_r_ieci, &mut ieci_buf);
+        sys_close(out_r_ieci);
+        assert_eq!(
+            core::str::from_utf8(&ieci_buf[..n_ieci as usize]).unwrap(),
+            "1.0Ki\n1.0Mi\n"
+        );
+
+        // Test numfmt --from=si, --from=iec, --from=auto
+        let (out_r_from, out_w_from) = crate::vfs::pipe().unwrap();
+        assert_eq!(
+            run_numfmt(&["--from=si", "1.5k", "2M"], 0, out_w_from, 2),
+            0
+        );
+        sys_close(out_w_from);
+        let mut from_buf = [0u8; 64];
+        let n_from = sys_read(out_r_from, &mut from_buf);
+        sys_close(out_r_from);
+        assert_eq!(
+            core::str::from_utf8(&from_buf[..n_from as usize]).unwrap(),
+            "1500\n2000000\n"
+        );
+
+        let (out_r_auto, out_w_auto) = crate::vfs::pipe().unwrap();
+        assert_eq!(
+            run_numfmt(&["--from=auto", "1Ki", "2Mi"], 0, out_w_auto, 2),
+            0
+        );
+        sys_close(out_w_auto);
+        let mut auto_buf = [0u8; 64];
+        let n_auto = sys_read(out_r_auto, &mut auto_buf);
+        sys_close(out_r_auto);
+        assert_eq!(
+            core::str::from_utf8(&auto_buf[..n_auto as usize]).unwrap(),
+            "1024\n2097152\n"
+        );
+
+        // Test numfmt --padding et --suffix
+        let (out_r_pad, out_w_pad) = crate::vfs::pipe().unwrap();
+        assert_eq!(
+            run_numfmt(&["--padding=10", "--to=si", "1000"], 0, out_w_pad, 2),
+            0
+        );
+        sys_close(out_w_pad);
+        let mut pad_buf = [0u8; 64];
+        let n_pad = sys_read(out_r_pad, &mut pad_buf);
+        sys_close(out_r_pad);
+        assert_eq!(
+            core::str::from_utf8(&pad_buf[..n_pad as usize]).unwrap(),
+            "      1.0k\n"
+        );
+
+        let (out_r_sfx, out_w_sfx) = crate::vfs::pipe().unwrap();
+        assert_eq!(
+            run_numfmt(&["--suffix=B", "--to=iec", "1024"], 0, out_w_sfx, 2),
+            0
+        );
+        sys_close(out_w_sfx);
+        let mut sfx_buf = [0u8; 64];
+        let n_sfx = sys_read(out_r_sfx, &mut sfx_buf);
+        sys_close(out_r_sfx);
+        assert_eq!(
+            core::str::from_utf8(&sfx_buf[..n_sfx as usize]).unwrap(),
+            "1.0KB\n"
+        );
+
+        // Test numfmt avec entrée standard (stdin pipe)
+        let (in_r_pipe, in_w_pipe) = crate::vfs::pipe().unwrap();
+        let _ = sys_write(in_w_pipe, b"1000 2000\n");
+        sys_close(in_w_pipe);
+
+        let (out_r_pipe, out_w_pipe) = crate::vfs::pipe().unwrap();
+        assert_eq!(run_numfmt(&["--to=si"], in_r_pipe, out_w_pipe, 2), 0);
+        sys_close(out_w_pipe);
+        sys_close(in_r_pipe);
+
+        let mut pipe_buf = [0u8; 64];
+        let n_pipe = sys_read(out_r_pipe, &mut pipe_buf);
+        sys_close(out_r_pipe);
+        assert_eq!(
+            core::str::from_utf8(&pipe_buf[..n_pipe as usize]).unwrap(),
+            "1.0k\n2.0k\n"
+        );
+
+        // Test numfmt --help et --version
+        let (_out_r_nf_h, out_w_nf_h) = crate::vfs::pipe().unwrap();
+        assert_eq!(run_numfmt(&["--help"], 0, out_w_nf_h, 2), 0);
+        sys_close(out_w_nf_h);
+        sys_close(_out_r_nf_h);
+
+        assert_eq!(run_numfmt(&["--version"], 0, 1, 2), 0);
     }
 }
