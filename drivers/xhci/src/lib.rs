@@ -370,6 +370,8 @@ pub const XHCI_EXT_CAP_USB4_FLOW_CONTROL_CONFIGURATION_INTERFACE_V2: u8 = 63;
 pub const XHCI_EXT_CAP_USB4_PORT_LINK_CONFIGURATION_INTERFACE_V2: u8 = 64;
 /// Capacité étendue xHCI 1.2 / USB4 Port Power Management Control Interface v2 (§7.57)
 pub const XHCI_EXT_CAP_USB4_PORT_POWER_MANAGEMENT_CONTROL_INTERFACE_V2: u8 = 65;
+/// Capacité étendue xHCI 1.2 / USB4 Port Lane Margining Interface v2 (§7.58)
+pub const XHCI_EXT_CAP_USB4_PORT_LANE_MARGINING_INTERFACE_V2: u8 = 66;
 
 /// Masques de registres USB Legacy Support (xHCI 1.2 Section 7.1)
 /// Registre USBLEGSUP (Offset 0x00)
@@ -7002,6 +7004,140 @@ impl XhciUsb4PortPowerManagementControlInterfaceV2 {
     /// Met à jour la température du transceiver en demi-degrés Celsius
     pub fn set_temperature(&mut self, temp_half_c: u16) {
         self.transceiver_temp_half_c = temp_half_c;
+    }
+}
+
+/// Capacité étendue xHCI 1.2 / USB4 Port Lane Margining Interface v2 (§7.58)
+///
+/// Interface de test et qualification physique de marge de récepteur (Lane Margining)
+/// pour les lignes physiques haute vitesse USB4 Gen 2 (20 Gbps), Gen 3 (40 Gbps) et Gen 4 PAM3 (80/120 Gbps).
+/// Permet la commande du margining temporel (Time Margining / Jitter Tolerance) et en tension (Voltage Margining),
+/// ainsi que la lecture du taux d'erreur binaire (BER) et des statuts matériels par ligne.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XhciUsb4PortLaneMarginingInterfaceV2 {
+    /// Pointeur dword vers la prochaine capacité étendue (0 = fin de liste)
+    pub next_ptr_dwords: u8,
+    /// Test de margining actif (bit 0)
+    pub margining_active: bool,
+    /// Type de margining : false = Timing Margining, true = Voltage Margining (bit 1)
+    pub voltage_margining: bool,
+    /// Ligne physique cible (bits 2..3 : 0 = Lane 0, 1 = Lane 1, 2 = Lane 2, 3 = Lane 3)
+    pub target_lane: u8,
+    /// Récepteur cible : false = Local RX, true = Remote Retimer / Link Partner RX (bit 4)
+    pub remote_rx: bool,
+    /// Numéro de port ou adaptateur physique cible (bits 8..15)
+    pub port_index: u8,
+    /// Pas / Décalage d'offset de marge appliqué (bits 16..23, ex. nombre de pas de phase ou mV)
+    pub margin_step: u8,
+    /// Échantillons d'erreurs détectés pendant l'épreuve de marge (DWORD 2 [15:0])
+    pub error_count: u16,
+    /// Nombre total de bits analysés (en unités de 10^7 bits, DWORD 2 [31:16])
+    pub sample_bits_scale: u16,
+    /// Statut matériel de marge (DWORD 3 [15:0] : bits d'état déterministes)
+    pub margin_status: u16,
+    /// Marge maximale mesurée sans erreur (DWORD 3 [31:16] : score / offset d'ouverture d'œil)
+    pub max_eye_margin: u16,
+}
+
+impl XhciUsb4PortLaneMarginingInterfaceV2 {
+    /// Crée une nouvelle interface de margining de ligne de port USB4 v2
+    pub const fn new(port_index: u8, target_lane: u8, remote_rx: bool) -> Self {
+        Self {
+            next_ptr_dwords: 0,
+            margining_active: false,
+            voltage_margining: false,
+            target_lane: target_lane & 0x03,
+            remote_rx,
+            port_index,
+            margin_step: 0,
+            error_count: 0,
+            sample_bits_scale: 100, // 10^9 bits
+            margin_status: 0,
+            max_eye_margin: 0,
+        }
+    }
+
+    /// Parse les 4 dwords MMIO d'une capacité étendue USB4 Port Lane Margining Interface v2 (§7.58)
+    pub const fn parse(dwords: &[u32; 4]) -> Option<Self> {
+        let cap_id = (dwords[0] & 0xFF) as u8;
+        if cap_id != XHCI_EXT_CAP_USB4_PORT_LANE_MARGINING_INTERFACE_V2 {
+            return None;
+        }
+
+        let next_ptr = ((dwords[0] >> 8) & 0xFF) as u8;
+        let ctrl = dwords[1];
+        let margining_active = (ctrl & 0x01) != 0;
+        let voltage_margining = (ctrl & 0x02) != 0;
+        let target_lane = ((ctrl >> 2) & 0x03) as u8;
+        let remote_rx = (ctrl & 0x10) != 0;
+        let port_index = ((ctrl >> 8) & 0xFF) as u8;
+        let margin_step = ((ctrl >> 16) & 0xFF) as u8;
+
+        let dw2 = dwords[2];
+        let error_count = (dw2 & 0xFFFF) as u16;
+        let sample_bits_scale = ((dw2 >> 16) & 0xFFFF) as u16;
+
+        let dw3 = dwords[3];
+        let margin_status = (dw3 & 0xFFFF) as u16;
+        let max_eye_margin = ((dw3 >> 16) & 0xFFFF) as u16;
+
+        Some(Self {
+            next_ptr_dwords: next_ptr,
+            margining_active,
+            voltage_margining,
+            target_lane,
+            remote_rx,
+            port_index,
+            margin_step,
+            error_count,
+            sample_bits_scale,
+            margin_status,
+            max_eye_margin,
+        })
+    }
+
+    /// Encode la capacité étendue v2 en 4 mots dwords MMIO 32-bit
+    pub const fn encode(&self) -> [u32; 4] {
+        let dw0 = (XHCI_EXT_CAP_USB4_PORT_LANE_MARGINING_INTERFACE_V2 as u32)
+            | ((self.next_ptr_dwords as u32) << 8);
+        let mut ctrl = (((self.target_lane as u32) & 0x03) << 2)
+            | ((self.port_index as u32) << 8)
+            | (((self.margin_step as u32) & 0xFF) << 16);
+        if self.margining_active {
+            ctrl |= 0x01;
+        }
+        if self.voltage_margining {
+            ctrl |= 0x02;
+        }
+        if self.remote_rx {
+            ctrl |= 0x10;
+        }
+
+        let dw2 = (self.error_count as u32) | ((self.sample_bits_scale as u32) << 16);
+        let dw3 = (self.margin_status as u32) | ((self.max_eye_margin as u32) << 16);
+        [dw0, ctrl, dw2, dw3]
+    }
+
+    /// Active ou désactive le test de margining
+    pub fn set_margining_active(&mut self, active: bool) {
+        self.margining_active = active;
+    }
+
+    /// Sélectionne le type de margining (Time vs Voltage)
+    pub fn set_voltage_margining(&mut self, is_voltage: bool) {
+        self.voltage_margining = is_voltage;
+    }
+
+    /// Définit le pas de décalage d'offset de marge
+    pub fn set_margin_step(&mut self, step: u8) {
+        self.margin_step = step;
+    }
+
+    /// Enregistre les résultats de mesure de marge (erreurs et œil maximal)
+    pub fn record_margin_result(&mut self, errors: u16, max_eye: u16, status: u16) {
+        self.error_count = errors;
+        self.max_eye_margin = max_eye;
+        self.margin_status = status;
     }
 }
 
@@ -17331,5 +17467,50 @@ mod tests {
         assert_eq!(parsed_pm_v2.l2_timeout_us, 1000);
         assert_eq!(parsed_pm_v2.power_budget_mw, 45_000);
         assert_eq!(parsed_pm_v2.transceiver_temp_half_c, 70);
+
+        // Test USB4 Port Lane Margining Interface v2 (§7.58, Cap ID 66)
+        let mut lm_v2 = XhciUsb4PortLaneMarginingInterfaceV2::new(7, 2, true);
+        assert_eq!(lm_v2.port_index, 7);
+        assert_eq!(lm_v2.target_lane, 2);
+        assert!(lm_v2.remote_rx);
+        assert!(!lm_v2.margining_active);
+        assert!(!lm_v2.voltage_margining);
+        assert_eq!(lm_v2.sample_bits_scale, 100);
+
+        lm_v2.set_margining_active(true);
+        lm_v2.set_voltage_margining(true);
+        lm_v2.set_margin_step(18);
+        lm_v2.record_margin_result(0, 42, 0x0001);
+        lm_v2.next_ptr_dwords = 152;
+
+        let encoded_lm_v2 = lm_v2.encode();
+        assert_eq!(
+            encoded_lm_v2[0] & 0xFF,
+            XHCI_EXT_CAP_USB4_PORT_LANE_MARGINING_INTERFACE_V2 as u32
+        );
+        assert_eq!((encoded_lm_v2[0] >> 8) & 0xFF, 152);
+        assert_eq!(encoded_lm_v2[1] & 0x01, 1); // margining_active
+        assert_eq!(encoded_lm_v2[1] & 0x02, 2); // voltage_margining
+        assert_eq!((encoded_lm_v2[1] >> 2) & 0x03, 2); // target_lane 2
+        assert_eq!(encoded_lm_v2[1] & 0x10, 0x10); // remote_rx
+        assert_eq!((encoded_lm_v2[1] >> 8) & 0xFF, 7); // port_index 7
+        assert_eq!((encoded_lm_v2[1] >> 16) & 0xFF, 18); // margin_step 18
+        assert_eq!(encoded_lm_v2[2] & 0xFFFF, 0); // error_count
+        assert_eq!((encoded_lm_v2[2] >> 16) & 0xFFFF, 100); // sample_bits_scale
+        assert_eq!(encoded_lm_v2[3] & 0xFFFF, 0x0001); // margin_status
+        assert_eq!((encoded_lm_v2[3] >> 16) & 0xFFFF, 42); // max_eye_margin
+
+        let parsed_lm_v2 = XhciUsb4PortLaneMarginingInterfaceV2::parse(&encoded_lm_v2).unwrap();
+        assert_eq!(parsed_lm_v2.next_ptr_dwords, 152);
+        assert!(parsed_lm_v2.margining_active);
+        assert!(parsed_lm_v2.voltage_margining);
+        assert_eq!(parsed_lm_v2.target_lane, 2);
+        assert!(parsed_lm_v2.remote_rx);
+        assert_eq!(parsed_lm_v2.port_index, 7);
+        assert_eq!(parsed_lm_v2.margin_step, 18);
+        assert_eq!(parsed_lm_v2.error_count, 0);
+        assert_eq!(parsed_lm_v2.sample_bits_scale, 100);
+        assert_eq!(parsed_lm_v2.margin_status, 0x0001);
+        assert_eq!(parsed_lm_v2.max_eye_margin, 42);
     }
 }

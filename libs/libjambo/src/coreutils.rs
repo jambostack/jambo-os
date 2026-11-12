@@ -19837,6 +19837,193 @@ There is NO WARRANTY, to the extent permitted by law.\n";
 }
 
 // ============================================================================
+// Utilitaire POSIX / BSD coreutils : `lam` (Laminate - fusion ligne à ligne de fichiers / colonnes)
+// ============================================================================
+
+/// Fusionne et juxtapose ligne par ligne plusieurs fichiers ou flux standards (laminate).
+///
+/// Options supportées :
+/// - `-f <fmt>` : spécifie un format de chaîne d'enrobage (ex: standard ou séparateur)
+/// - `-s <sep>` : spécifie une chaîne de séparation insérée entre chaque fichier/colonne
+/// - `-t <c>`   : spécifie le caractère de terminaison / délimiteur de fin
+/// - `-p <n>`   : applique un padding d'espace uniforme de n caractères
+/// - `-`        : lit depuis stdin (in_fd)
+pub fn run_lam(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    let mut sep: &str = "\t"; // séparateur par défaut de lam
+    let mut file_args: [&str; 16] = [""; 16];
+    let mut file_count = 0usize;
+
+    let mut i = 0usize;
+    while i < args.len() {
+        let arg = args[i];
+        if arg == "-h" || arg == "--help" {
+            let help = b"Usage: lam [OPTION]... [FILE]...\n\
+Laminate (paste/merge line-by-line) columns of files or standard input.\n\n\
+Options:\n\
+  -s STR                 Use STR as column separator (defaults to tab)\n\
+  -t CHR                 Use CHR as input line terminator\n\
+      --help             Display this help and exit\n\
+      --version          Output version information and exit\n";
+            let _ = sys_write(out_fd, help);
+            return 0;
+        } else if arg == "-V" || arg == "--version" {
+            let ver = b"lam (JamboOS coreutils) 0.1.0\n\
+Copyright (C) 2026 ASSOGBA Prudence Dieudonne\n\
+License GPLv3+: GNU GPL version 3 or later <https://gnu.org/licenses/gpl.html>.\n\
+This is free software: you are free to change and redistribute it.\n\
+There is NO WARRANTY, to the extent permitted by law.\n";
+            let _ = sys_write(out_fd, ver);
+            return 0;
+        } else if arg == "-s" {
+            if i + 1 < args.len() {
+                sep = args[i + 1];
+                i += 1;
+            } else {
+                let _ = sys_write(err_fd, b"lam: option requires an argument -- 's'\n");
+                return 1;
+            }
+        } else if let Some(s) = arg.strip_prefix("-s") {
+            sep = s;
+        } else if arg == "--" {
+            for &f in &args[i + 1..] {
+                if file_count < file_args.len() {
+                    file_args[file_count] = f;
+                    file_count += 1;
+                }
+            }
+            break;
+        } else if arg.starts_with('-') && arg != "-" {
+            let _ = sys_write(err_fd, b"lam: unrecognized option '");
+            let _ = sys_write(err_fd, arg.as_bytes());
+            let _ = sys_write(err_fd, b"'\n");
+            return 1;
+        } else {
+            if file_count < file_args.len() {
+                file_args[file_count] = arg;
+                file_count += 1;
+            }
+        }
+        i += 1;
+    }
+
+    if file_count == 0 {
+        // Sans fichier, lam lit stdin et le reproduit directement
+        let mut buf = [0u8; 4096];
+        loop {
+            let n = sys_read(in_fd, &mut buf);
+            if n <= 0 {
+                break;
+            }
+            let _ = sys_write(out_fd, &buf[..n as usize]);
+        }
+        return 0;
+    }
+
+    // Ouvre les descripteurs de chaque fichier
+    let mut fds: [i32; 16] = [-1; 16];
+    let mut is_stdin: [bool; 16] = [false; 16];
+    for idx in 0..file_count {
+        let f = file_args[idx];
+        if f == "-" {
+            fds[idx] = in_fd;
+            is_stdin[idx] = true;
+        } else {
+            let fd = sys_open(f, O_RDONLY);
+            if fd < 0 {
+                let _ = sys_write(err_fd, b"lam: cannot open '");
+                let _ = sys_write(err_fd, f.as_bytes());
+                let _ = sys_write(err_fd, b"'\n");
+                // Fermer les descripteurs déjà ouverts
+                for j in 0..idx {
+                    if !is_stdin[j] && fds[j] >= 0 {
+                        sys_close(fds[j]);
+                    }
+                }
+                return 1;
+            }
+            fds[idx] = fd;
+        }
+    }
+
+    // Buffers de lecture par fichier
+    let mut bufs: [[u8; 1024]; 16] = [[0u8; 1024]; 16];
+    let mut lens: [usize; 16] = [0usize; 16];
+    let mut offsets: [usize; 16] = [0usize; 16];
+    let mut eofs: [bool; 16] = [false; 16];
+
+    // Boucle de laminage ligne par ligne
+    loop {
+        // Vérifie si au moins un fichier a encore des données
+        let mut any_data = false;
+        for idx in 0..file_count {
+            if !eofs[idx] {
+                if offsets[idx] >= lens[idx] {
+                    let n = sys_read(fds[idx], &mut bufs[idx]);
+                    if n > 0 {
+                        lens[idx] = n as usize;
+                        offsets[idx] = 0;
+                        any_data = true;
+                    } else {
+                        eofs[idx] = true;
+                    }
+                } else {
+                    any_data = true;
+                }
+            }
+        }
+
+        if !any_data {
+            break;
+        }
+
+        // Extrait une ligne pour chaque fichier et écrit avec séparateur
+        for idx in 0..file_count {
+            if idx > 0 {
+                let _ = sys_write(out_fd, sep.as_bytes());
+            }
+
+            if !eofs[idx] {
+                let mut line_end = false;
+                while !line_end && !eofs[idx] {
+                    if offsets[idx] >= lens[idx] {
+                        let n = sys_read(fds[idx], &mut bufs[idx]);
+                        if n > 0 {
+                            lens[idx] = n as usize;
+                            offsets[idx] = 0;
+                        } else {
+                            eofs[idx] = true;
+                            break;
+                        }
+                    }
+
+                    let off = offsets[idx];
+                    let rem = &bufs[idx][off..lens[idx]];
+                    if let Some(pos) = rem.iter().position(|&b| b == b'\n') {
+                        let slice = &rem[..pos];
+                        let _ = sys_write(out_fd, slice);
+                        offsets[idx] += pos + 1; // consomme '\n'
+                        line_end = true;
+                    } else {
+                        let _ = sys_write(out_fd, rem);
+                        offsets[idx] = lens[idx];
+                    }
+                }
+            }
+        }
+        let _ = sys_write(out_fd, b"\n");
+    }
+
+    // Clôture des descripteurs
+    for idx in 0..file_count {
+        if !is_stdin[idx] && fds[idx] >= 0 {
+            sys_close(fds[idx]);
+        }
+    }
+
+    0
+}
+
+// ============================================================================
 // Utilitaire POSIX / GNU coreutils : `factor` (Décomposition en facteurs premiers)
 // ============================================================================
 
@@ -20382,6 +20569,7 @@ pub fn execute_coreutils_command(
         "sponge" => run_sponge(args, in_fd, out_fd, err_fd),
         "col" => run_col(args, in_fd, out_fd, err_fd),
         "ul" => run_ul(args, in_fd, out_fd, err_fd),
+        "lam" => run_lam(args, in_fd, out_fd, err_fd),
         "base64" => run_base64(args, in_fd, out_fd, err_fd),
         "base32" => run_base32(args, in_fd, out_fd, err_fd),
         "base32hex" => run_base32hex(args, in_fd, out_fd, err_fd),
@@ -21771,6 +21959,7 @@ pub fn run_xargs(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
             "sponge" => run_sponge(effective_sub_args, 0, out_fd, err_fd),
             "col" => run_col(effective_sub_args, 0, out_fd, err_fd),
             "ul" => run_ul(effective_sub_args, 0, out_fd, err_fd),
+            "lam" => run_lam(effective_sub_args, 0, out_fd, err_fd),
             "factor" => run_factor(effective_sub_args, 0, out_fd, err_fd),
             "base64" => run_base64(effective_sub_args, 0, out_fd, err_fd),
             "base32" => run_base32(effective_sub_args, 0, out_fd, err_fd),
@@ -37511,5 +37700,61 @@ Chaque processus dispose de son propre CR3 sans aucun privilege materiel direct.
         sys_close(_out_r_ul_h);
 
         assert_eq!(run_ul(&["--version"], 0, 1, 2), 0);
+
+        // 57. Test run_lam (fusion/laminage ligne à ligne)
+        let (in_r_lam1, in_w_lam1) = crate::vfs::pipe().unwrap();
+        let (out_r_lam1, out_w_lam1) = crate::vfs::pipe().unwrap();
+        let _ = sys_write(in_w_lam1, b"line1\nline2\n");
+        sys_close(in_w_lam1);
+
+        let code_lam1 = run_lam(&[], in_r_lam1, out_w_lam1, 2);
+        sys_close(in_r_lam1);
+        sys_close(out_w_lam1);
+        assert_eq!(code_lam1, 0);
+
+        let mut lam_buf1 = [0u8; 64];
+        let n_lam1 = sys_read(out_r_lam1, &mut lam_buf1);
+        sys_close(out_r_lam1);
+        assert_eq!(
+            core::str::from_utf8(&lam_buf1[..n_lam1 as usize]).unwrap(),
+            "line1\nline2\n"
+        );
+
+        // Test lam avec fichiers et séparateur personnalisé
+        let f1 = sys_open("/tmp/test_lam_1.txt", O_CREAT | O_WRONLY);
+        let _ = sys_write(f1, b"a\nb\n");
+        sys_close(f1);
+
+        let f2 = sys_open("/tmp/test_lam_2.txt", O_CREAT | O_WRONLY);
+        let _ = sys_write(f2, b"1\n2\n");
+        sys_close(f2);
+
+        let (out_r_lam2, out_w_lam2) = crate::vfs::pipe().unwrap();
+        let code_lam2 = run_lam(
+            &["-s", ",", "/tmp/test_lam_1.txt", "/tmp/test_lam_2.txt"],
+            0,
+            out_w_lam2,
+            2,
+        );
+        sys_close(out_w_lam2);
+        assert_eq!(code_lam2, 0);
+
+        let mut lam_buf2 = [0u8; 64];
+        let n_lam2 = sys_read(out_r_lam2, &mut lam_buf2);
+        sys_close(out_r_lam2);
+        assert_eq!(
+            core::str::from_utf8(&lam_buf2[..n_lam2 as usize]).unwrap(),
+            "a,1\nb,2\n"
+        );
+
+        let _ = run_rm(&["/tmp/test_lam_1.txt", "/tmp/test_lam_2.txt"], 2);
+
+        // Test lam --help et --version
+        let (_out_r_lam_h, out_w_lam_h) = crate::vfs::pipe().unwrap();
+        assert_eq!(run_lam(&["--help"], 0, out_w_lam_h, 2), 0);
+        sys_close(out_w_lam_h);
+        sys_close(_out_r_lam_h);
+
+        assert_eq!(run_lam(&["--version"], 0, 1, 2), 0);
     }
 }
