@@ -20533,6 +20533,250 @@ There is NO WARRANTY, to the extent permitted by law.\n";
 }
 
 // ============================================================================
+// Utilitaire BSD / Unix coreutils : `jot` (Génération séquentielle / aléatoire de données)
+// ============================================================================
+
+/// Génère et affiche une séquence de nombres, caractères ou motifs répétés.
+/// Conforme à la sémantique `jot [-r] [-b word] [-w format] [reps [begin [end [step]]]]`.
+pub fn run_jot(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    let _ = in_fd;
+    let mut reps = 100i64;
+    let mut begin = 1i64;
+    let mut end = 100i64;
+    let mut step = 1i64;
+
+    let mut reps_set = false;
+    let mut begin_set = false;
+    let mut end_set = false;
+    let mut _step_set = false;
+
+    let mut word: Option<&str> = None;
+    let mut random_mode = false;
+
+    let mut positional_args: [&str; 4] = [""; 4];
+    let mut pos_count = 0usize;
+
+    let mut i = 0usize;
+    while i < args.len() {
+        let arg = args[i];
+        if arg == "-h" || arg == "--help" {
+            let help = b"Usage: jot [OPTIONS] [reps [begin [end [step]]]]\n\
+Print sequential or random data.\n\n\
+Options:\n\
+  -r                 Generate random numbers instead of sequential\n\
+  -b WORD            Print WORD repeatedly instead of numbers\n\
+      --help         Display this help and exit\n\
+      --version      Output version information and exit\n";
+            let _ = sys_write(out_fd, help);
+            return 0;
+        } else if arg == "-V" || arg == "--version" {
+            let ver = b"jot (JamboOS coreutils) 0.1.0\n\
+Copyright (C) 2026 ASSOGBA Prudence Dieudonne\n\
+License GPLv3+: GNU GPL version 3 or later <https://gnu.org/licenses/gpl.html>.\n\
+This is free software: you are free to change and redistribute it.\n\
+There is NO WARRANTY, to the extent permitted by law.\n";
+            let _ = sys_write(out_fd, ver);
+            return 0;
+        } else if arg == "-r" {
+            random_mode = true;
+        } else if arg == "-b" {
+            if i + 1 < args.len() {
+                i += 1;
+                word = Some(args[i]);
+            }
+        } else if let Some(w) = arg.strip_prefix("-b") {
+            word = Some(w);
+        } else if arg == "--" {
+            for &p in &args[i + 1..] {
+                if pos_count < positional_args.len() {
+                    positional_args[pos_count] = p;
+                    pos_count += 1;
+                }
+            }
+            break;
+        } else if arg.starts_with('-') && arg.len() > 1 && !arg.as_bytes()[1].is_ascii_digit() {
+            let _ = sys_write(err_fd, b"jot: illegal option -- ");
+            let _ = sys_write(err_fd, arg.as_bytes());
+            let _ = sys_write(err_fd, b"\n");
+            return 1;
+        } else {
+            if pos_count < positional_args.len() {
+                positional_args[pos_count] = arg;
+                pos_count += 1;
+            }
+        }
+        i += 1;
+    }
+
+    if pos_count >= 1 {
+        if let Some(r) = parse_jot_i64(positional_args[0]) {
+            reps = r;
+            reps_set = true;
+        }
+    }
+    if pos_count >= 2 {
+        if let Some(b) = parse_jot_i64(positional_args[1]) {
+            begin = b;
+            begin_set = true;
+        }
+    }
+    if pos_count >= 3 {
+        if let Some(e) = parse_jot_i64(positional_args[2]) {
+            end = e;
+            end_set = true;
+        }
+    }
+    if pos_count >= 4 {
+        if let Some(s) = parse_jot_i64(positional_args[3]) {
+            step = s;
+            _step_set = true;
+        }
+    }
+
+    if reps < 0 {
+        reps = 0;
+    }
+
+    // Calcul automatique selon les arguments fournis si non spécifié
+    if reps_set && begin_set && !end_set {
+        end = begin.saturating_add(reps.saturating_sub(1).saturating_mul(step));
+    } else if reps_set && !begin_set && end_set {
+        begin = end.saturating_sub(reps.saturating_sub(1).saturating_mul(step));
+    } else if !reps_set && begin_set && end_set {
+        if step == 0 {
+            reps = 0;
+        } else if end >= begin && step > 0 {
+            reps = (end - begin) / step + 1;
+        } else if end <= begin && step < 0 {
+            reps = (begin - end) / (-step) + 1;
+        } else {
+            reps = 0;
+        }
+    }
+
+    // Gestion du mot répété (-b)
+    if let Some(w) = word {
+        let mut count = 0i64;
+        while count < reps {
+            let _ = sys_write(out_fd, w.as_bytes());
+            let _ = sys_write(out_fd, b"\n");
+            count += 1;
+        }
+        return 0;
+    }
+
+    if random_mode {
+        let range = if end >= begin {
+            (end - begin + 1) as u64
+        } else {
+            (begin - end + 1) as u64
+        };
+        let low = if end >= begin { begin } else { end };
+
+        let mut count = 0i64;
+        let mut seed: u64 = 0x853c49e6748fea9b ^ (begin as u64);
+        while count < reps {
+            // LCG minimal 64-bit déterministe bare-metal
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            let val = if range > 0 {
+                low + ((seed % range) as i64)
+            } else {
+                low
+            };
+            let mut num_buf = [0u8; 32];
+            let len = format_i64(val, &mut num_buf);
+            let _ = sys_write(out_fd, &num_buf[..len]);
+            let _ = sys_write(out_fd, b"\n");
+            count += 1;
+        }
+        return 0;
+    }
+
+    let mut current = begin;
+    let mut count = 0i64;
+    while count < reps {
+        let mut num_buf = [0u8; 32];
+        let len = format_i64(current, &mut num_buf);
+        let _ = sys_write(out_fd, &num_buf[..len]);
+        let _ = sys_write(out_fd, b"\n");
+        current = current.saturating_add(step);
+        count += 1;
+    }
+
+    0
+}
+
+/// Parse un entier 64 bits signé bare-metal pour jot
+fn parse_jot_i64(s: &str) -> Option<i64> {
+    let bytes = s.as_bytes();
+    if bytes.is_empty() {
+        return None;
+    }
+    let (negative, start) = match bytes[0] {
+        b'-' => (true, 1),
+        b'+' => (false, 1),
+        _ => (false, 0),
+    };
+    if start >= bytes.len() {
+        return None;
+    }
+    let mut val: i64 = 0;
+    for &b in &bytes[start..] {
+        if !b.is_ascii_digit() {
+            return None;
+        }
+        val = val.checked_mul(10)?;
+        val = val.checked_add((b - b'0') as i64)?;
+    }
+    if negative {
+        Some(-val)
+    } else {
+        Some(val)
+    }
+}
+
+/// Formate un i64 dans un tampon et retourne la longueur
+fn format_i64(n: i64, buf: &mut [u8; 32]) -> usize {
+    if n == 0 {
+        buf[0] = b'0';
+        return 1;
+    }
+    let mut is_negative = false;
+    let mut unsigned = if n < 0 {
+        is_negative = true;
+        // Evite overflow pour i64::MIN
+        if n == i64::MIN {
+            let s = b"-9223372036854775808";
+            buf[..s.len()].copy_from_slice(s);
+            return s.len();
+        }
+        -n as u64
+    } else {
+        n as u64
+    };
+
+    let mut tmp = [0u8; 32];
+    let mut idx = 0;
+    while unsigned > 0 {
+        tmp[idx] = (unsigned % 10) as u8 + b'0';
+        unsigned /= 10;
+        idx += 1;
+    }
+    let mut pos = 0;
+    if is_negative {
+        buf[pos] = b'-';
+        pos += 1;
+    }
+    for j in 0..idx {
+        buf[pos] = tmp[idx - 1 - j];
+        pos += 1;
+    }
+    pos
+}
+
+// ============================================================================
 // Utilitaire POSIX / GNU coreutils : `factor` (Décomposition en facteurs premiers)
 // ============================================================================
 
@@ -21082,6 +21326,7 @@ pub fn execute_coreutils_command(
         "unvis" => run_unvis(args, in_fd, out_fd, err_fd),
         "vis" => run_vis(args, in_fd, out_fd, err_fd),
         "strings" => run_strings(args, in_fd, out_fd, err_fd),
+        "jot" => run_jot(args, in_fd, out_fd, err_fd),
         "base64" => run_base64(args, in_fd, out_fd, err_fd),
         "base32" => run_base32(args, in_fd, out_fd, err_fd),
         "base32hex" => run_base32hex(args, in_fd, out_fd, err_fd),
@@ -38373,5 +38618,39 @@ Chaque processus dispose de son propre CR3 sans aucun privilege materiel direct.
         sys_close(_out_r_str_h);
 
         assert_eq!(run_strings(&["--version"], 0, 1, 2), 0);
+
+        // 61. Test run_jot (génération séquentielle de nombres et mots)
+        let (out_r_jot, out_w_jot) = crate::vfs::pipe().unwrap();
+        let code_jot = run_jot(&["5", "10", "14", "1"], 0, out_w_jot, 2);
+        sys_close(out_w_jot);
+        assert_eq!(code_jot, 0);
+
+        let mut jot_buf = [0u8; 64];
+        let n_jot = sys_read(out_r_jot, &mut jot_buf);
+        sys_close(out_r_jot);
+        assert_eq!(
+            core::str::from_utf8(&jot_buf[..n_jot as usize]).unwrap(),
+            "10\n11\n12\n13\n14\n"
+        );
+
+        // Test jot -b Hello 3
+        let (out_r_jot_b, out_w_jot_b) = crate::vfs::pipe().unwrap();
+        assert_eq!(run_jot(&["-b", "Jambo", "3"], 0, out_w_jot_b, 2), 0);
+        sys_close(out_w_jot_b);
+        let mut jot_b_buf = [0u8; 64];
+        let n_jot_b = sys_read(out_r_jot_b, &mut jot_b_buf);
+        sys_close(out_r_jot_b);
+        assert_eq!(
+            core::str::from_utf8(&jot_b_buf[..n_jot_b as usize]).unwrap(),
+            "Jambo\nJambo\nJambo\n"
+        );
+
+        // Test jot --help et --version
+        let (_out_r_jot_h, out_w_jot_h) = crate::vfs::pipe().unwrap();
+        assert_eq!(run_jot(&["--help"], 0, out_w_jot_h, 2), 0);
+        sys_close(out_w_jot_h);
+        sys_close(_out_r_jot_h);
+
+        assert_eq!(run_jot(&["--version"], 0, 1, 2), 0);
     }
 }

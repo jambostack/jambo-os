@@ -378,6 +378,8 @@ pub const XHCI_EXT_CAP_USB4_TSU_INTERFACE_V2: u8 = 67;
 pub const XHCI_EXT_CAP_USB4_QOS_TRAFFIC_CLASS_INTERFACE_V2: u8 = 68;
 /// Capacité étendue xHCI 1.2 / USB4 Security Level Management Interface v2 (§7.61)
 pub const XHCI_EXT_CAP_USB4_SECURITY_LEVEL_MANAGEMENT_V2: u8 = 69;
+/// Capacité étendue xHCI 1.2 / USB4 Port Error Counter and Telemetry Interface v2 (§7.62)
+pub const XHCI_EXT_CAP_USB4_PORT_ERROR_TELEMETRY_V2: u8 = 70;
 
 /// Masques de registres USB Legacy Support (xHCI 1.2 Section 7.1)
 /// Registre USBLEGSUP (Offset 0x00)
@@ -7515,6 +7517,167 @@ impl XhciUsb4SecurityLevelManagementV2 {
     pub fn set_auth_signature(&mut self, signature: u32, valid: bool) {
         self.auth_signature = signature;
         self.auth_error = !valid;
+    }
+}
+
+/// Capacité étendue xHCI 1.2 / USB4 Port Error Counter and Telemetry Interface v2 (§7.62)
+///
+/// Interface de surveillance matérielle et de télémétrie des erreurs USB4 v2.
+/// Suit les erreurs de codage de symboles physiques (bit 0..7), les erreurs CRC d'en-tête (bit 8..15),
+/// les pertes de synchronisation de trames (bit 16..23) et les timeouts de négociation de liens.
+/// Fournit des mécanismes de réinitialisation des compteurs et de déclenchement d'alertes matérielles
+/// en cas de dépassement de seuil critique (surveillance d'intégrité de signal optique/cuivre).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XhciUsb4PortErrorTelemetryV2 {
+    /// Pointeur dword vers la prochaine capacité étendue (0 = fin de liste)
+    pub next_ptr_dwords: u8,
+    /// Surveillance de télémétrie activée (bit 0)
+    pub telemetry_enabled: bool,
+    /// Alerte de seuil d'erreur critique dépassé (bit 1)
+    pub threshold_alert: bool,
+    /// Mode d'échantillonnage continu actif (bit 2)
+    pub continuous_mode: bool,
+    /// Débordement de compteur d'erreur détecté (bit 3)
+    pub counter_overflow: bool,
+    /// Index du port physique USB4 surveillé (bits 8..15)
+    pub port_index: u8,
+    /// Nombre d'erreurs de symboles / bit-errors détectées (DWORD 2 [15:0])
+    pub symbol_error_count: u16,
+    /// Nombre d'erreurs de checksum CRC de paquets détectées (DWORD 2 [31:16])
+    pub crc_error_count: u16,
+    /// Nombre de pertes de synchronisation de trame / link re-trainings (DWORD 3 [15:0])
+    pub link_retrain_count: u16,
+    /// Seuil d'erreur déclenchant l'alerte d'interruption matérielle (DWORD 3 [31:16])
+    pub alert_threshold: u16,
+}
+
+impl XhciUsb4PortErrorTelemetryV2 {
+    /// Crée une nouvelle interface USB4 Port Error Counter and Telemetry v2
+    pub const fn new(port_index: u8, alert_threshold: u16) -> Self {
+        Self {
+            next_ptr_dwords: 0,
+            telemetry_enabled: true,
+            threshold_alert: false,
+            continuous_mode: true,
+            counter_overflow: false,
+            port_index,
+            symbol_error_count: 0,
+            crc_error_count: 0,
+            link_retrain_count: 0,
+            alert_threshold,
+        }
+    }
+
+    /// Parse les 4 dwords MMIO d'une capacité étendue USB4 Port Error Counter and Telemetry v2 (§7.62)
+    pub const fn parse(dwords: &[u32; 4]) -> Option<Self> {
+        let cap_id = (dwords[0] & 0xFF) as u8;
+        if cap_id != XHCI_EXT_CAP_USB4_PORT_ERROR_TELEMETRY_V2 {
+            return None;
+        }
+
+        let next_ptr = ((dwords[0] >> 8) & 0xFF) as u8;
+        let ctrl = dwords[1];
+        let telemetry_enabled = (ctrl & 0x01) != 0;
+        let threshold_alert = (ctrl & 0x02) != 0;
+        let continuous_mode = (ctrl & 0x04) != 0;
+        let counter_overflow = (ctrl & 0x08) != 0;
+        let port_index = ((ctrl >> 8) & 0xFF) as u8;
+
+        let dw2 = dwords[2];
+        let symbol_error_count = (dw2 & 0xFFFF) as u16;
+        let crc_error_count = ((dw2 >> 16) & 0xFFFF) as u16;
+
+        let dw3 = dwords[3];
+        let link_retrain_count = (dw3 & 0xFFFF) as u16;
+        let alert_threshold = ((dw3 >> 16) & 0xFFFF) as u16;
+
+        Some(Self {
+            next_ptr_dwords: next_ptr,
+            telemetry_enabled,
+            threshold_alert,
+            continuous_mode,
+            counter_overflow,
+            port_index,
+            symbol_error_count,
+            crc_error_count,
+            link_retrain_count,
+            alert_threshold,
+        })
+    }
+
+    /// Encode la capacité étendue v2 en 4 mots dwords MMIO 32-bit
+    pub const fn encode(&self) -> [u32; 4] {
+        let dw0 = (XHCI_EXT_CAP_USB4_PORT_ERROR_TELEMETRY_V2 as u32)
+            | ((self.next_ptr_dwords as u32) << 8);
+        let mut ctrl = ((self.port_index as u32) & 0xFF) << 8;
+        if self.telemetry_enabled {
+            ctrl |= 0x01;
+        }
+        if self.threshold_alert {
+            ctrl |= 0x02;
+        }
+        if self.continuous_mode {
+            ctrl |= 0x04;
+        }
+        if self.counter_overflow {
+            ctrl |= 0x08;
+        }
+
+        let dw2 = (self.symbol_error_count as u32) | ((self.crc_error_count as u32) << 16);
+        let dw3 = (self.link_retrain_count as u32) | ((self.alert_threshold as u32) << 16);
+        [dw0, ctrl, dw2, dw3]
+    }
+
+    /// Active ou désactive la télémétrie matérielle
+    pub fn set_telemetry_enabled(&mut self, enabled: bool) {
+        self.telemetry_enabled = enabled;
+    }
+
+    /// Configure le mode continu
+    pub fn set_continuous_mode(&mut self, continuous: bool) {
+        self.continuous_mode = continuous;
+    }
+
+    /// Règle le seuil d'alerte critique
+    pub fn set_alert_threshold(&mut self, threshold: u16) {
+        self.alert_threshold = threshold;
+    }
+
+    /// Enregistre de nouvelles erreurs et met à jour le statut d'alerte et de débordement
+    pub fn record_errors(&mut self, symbols: u16, crcs: u16, retrains: u16) {
+        let (new_sym, o1) = self.symbol_error_count.overflowing_add(symbols);
+        let (new_crc, o2) = self.crc_error_count.overflowing_add(crcs);
+        let (new_ret, o3) = self.link_retrain_count.overflowing_add(retrains);
+
+        self.symbol_error_count = new_sym;
+        self.crc_error_count = new_crc;
+        self.link_retrain_count = new_ret;
+
+        if o1 || o2 || o3 {
+            self.counter_overflow = true;
+        }
+
+        let total_errors = (self.symbol_error_count as u32)
+            + (self.crc_error_count as u32)
+            + (self.link_retrain_count as u32);
+
+        if total_errors >= (self.alert_threshold as u32) && self.alert_threshold > 0 {
+            self.threshold_alert = true;
+        }
+    }
+
+    /// Réinitialise tous les compteurs d'erreur et acquitte les alertes
+    pub fn reset_counters(&mut self) {
+        self.symbol_error_count = 0;
+        self.crc_error_count = 0;
+        self.link_retrain_count = 0;
+        self.threshold_alert = false;
+        self.counter_overflow = false;
+    }
+
+    /// Indique si la liaison est considérée comme saine
+    pub fn is_link_healthy(&self) -> bool {
+        !self.threshold_alert && !self.counter_overflow
     }
 }
 
@@ -18013,5 +18176,62 @@ mod tests {
         assert_eq!(sec_v2.security_level, 2); // Doit rester inchangé car verrouillé
         sec_v2.set_security_enabled(false);
         assert!(sec_v2.security_enabled); // Doit rester activé car verrouillé
+
+        // Test USB4 Port Error Counter and Telemetry Interface v2 (§7.62, Cap ID 70)
+        let mut err_tel = XhciUsb4PortErrorTelemetryV2::new(3, 50);
+        assert_eq!(err_tel.port_index, 3);
+        assert_eq!(err_tel.alert_threshold, 50);
+        assert!(err_tel.telemetry_enabled);
+        assert!(err_tel.continuous_mode);
+        assert!(!err_tel.threshold_alert);
+        assert!(!err_tel.counter_overflow);
+        assert!(err_tel.is_link_healthy());
+
+        err_tel.record_errors(10, 5, 1);
+        assert_eq!(err_tel.symbol_error_count, 10);
+        assert_eq!(err_tel.crc_error_count, 5);
+        assert_eq!(err_tel.link_retrain_count, 1);
+        assert!(!err_tel.threshold_alert); // 16 < 50
+        assert!(err_tel.is_link_healthy());
+
+        err_tel.record_errors(30, 10, 0); // 16 + 40 = 56 >= 50
+        assert!(err_tel.threshold_alert);
+        assert!(!err_tel.is_link_healthy());
+
+        err_tel.next_ptr_dwords = 184;
+        let encoded_tel = err_tel.encode();
+        assert_eq!(
+            encoded_tel[0] & 0xFF,
+            XHCI_EXT_CAP_USB4_PORT_ERROR_TELEMETRY_V2 as u32
+        );
+        assert_eq!((encoded_tel[0] >> 8) & 0xFF, 184);
+        assert_eq!(encoded_tel[1] & 0x01, 1); // telemetry_enabled
+        assert_eq!(encoded_tel[1] & 0x02, 2); // threshold_alert
+        assert_eq!(encoded_tel[1] & 0x04, 4); // continuous_mode
+        assert_eq!(encoded_tel[1] & 0x08, 0); // counter_overflow false
+        assert_eq!((encoded_tel[1] >> 8) & 0xFF, 3); // port_index 3
+        assert_eq!(encoded_tel[2] & 0xFFFF, 40); // symbol_error_count
+        assert_eq!((encoded_tel[2] >> 16) & 0xFFFF, 15); // crc_error_count
+        assert_eq!(encoded_tel[3] & 0xFFFF, 1); // link_retrain_count
+        assert_eq!((encoded_tel[3] >> 16) & 0xFFFF, 50); // alert_threshold
+
+        let parsed_tel = XhciUsb4PortErrorTelemetryV2::parse(&encoded_tel).unwrap();
+        assert_eq!(parsed_tel.next_ptr_dwords, 184);
+        assert!(parsed_tel.telemetry_enabled);
+        assert!(parsed_tel.threshold_alert);
+        assert!(parsed_tel.continuous_mode);
+        assert!(!parsed_tel.counter_overflow);
+        assert_eq!(parsed_tel.port_index, 3);
+        assert_eq!(parsed_tel.symbol_error_count, 40);
+        assert_eq!(parsed_tel.crc_error_count, 15);
+        assert_eq!(parsed_tel.link_retrain_count, 1);
+        assert_eq!(parsed_tel.alert_threshold, 50);
+
+        err_tel.reset_counters();
+        assert_eq!(err_tel.symbol_error_count, 0);
+        assert_eq!(err_tel.crc_error_count, 0);
+        assert_eq!(err_tel.link_retrain_count, 0);
+        assert!(!err_tel.threshold_alert);
+        assert!(err_tel.is_link_healthy());
     }
 }
