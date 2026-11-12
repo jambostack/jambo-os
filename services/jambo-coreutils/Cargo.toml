@@ -632,7 +632,12 @@ name = "col"
 path = "src/bin/col.rs"
 test = false
 
-# 125 utilitaires Ring 3
+[[bin]]
+name = "ul"
+path = "src/bin/ul.rs"
+test = false
+
+# 126 utilitaires Ring 3
 
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }

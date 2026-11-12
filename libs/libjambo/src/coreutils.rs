@@ -19581,6 +19581,261 @@ There is NO WARRANTY, to the extent permitted by law.\n";
     0
 }
 
+/// Exécute l'utilitaire POSIX / BSD / util-linux `ul` (do underlining).
+///
+/// Lit depuis `in_fd` ou les fichiers passés en paramètre, et traduit les séquences de
+/// soulignement formées par `_` suivi de backspace `\x08` et d'un caractère (ou caractère + `\x08` + `_`).
+/// Supporte le mode surligné / souligné direct ANSI (`\x1b[4m...\x1b[0m`) ou le mode d'indication par
+/// ligne séparée de tirets `-` avec l'option `-i` / `--indicated`.
+pub fn run_ul(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    let mut indicated = false; // -i : séparer le soulignement sur une ligne avec des '-'
+    let mut file_args: [&str; 16] = [""; 16];
+    let mut file_count = 0usize;
+
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i];
+        if arg == "-h" || arg == "--help" {
+            let help = b"Usage: ul [OPTION]... [FILE]...\n\
+Do underlining by translating backspace/underscore sequences.\n\n\
+Options:\n\
+  -i, --indicated        Underlining is indicated by a separate line of dashes\n\
+  -t, -T, --terminal     Specify terminal type (ignored, defaults to ANSI)\n\
+      --help             Display this help and exit\n\
+      --version          Output version information and exit\n";
+            let _ = sys_write(out_fd, help);
+            return 0;
+        } else if arg == "-V" || arg == "--version" {
+            let ver = b"ul (JamboOS coreutils) 0.1.0\n\
+Copyright (C) 2026 ASSOGBA Prudence Dieudonne\n\
+License GPLv3+: GNU GPL version 3 or later <https://gnu.org/licenses/gpl.html>.\n\
+This is free software: you are free to change and redistribute it.\n\
+There is NO WARRANTY, to the extent permitted by law.\n";
+            let _ = sys_write(out_fd, ver);
+            return 0;
+        } else if arg == "-i" || arg == "--indicated" {
+            indicated = true;
+        } else if arg == "-t" || arg == "-T" || arg == "--terminal" {
+            if i + 1 < args.len() {
+                i += 1; // ignorer la valeur du terminal
+            }
+        } else if arg.starts_with("-t") || arg.starts_with("-T") {
+            // ex: -txterm
+        } else if arg == "--" {
+            for &f in &args[i + 1..] {
+                if file_count < file_args.len() {
+                    file_args[file_count] = f;
+                    file_count += 1;
+                }
+            }
+            break;
+        } else if arg.starts_with('-') && arg != "-" {
+            let mut valid = true;
+            for b in arg.as_bytes()[1..].iter() {
+                match *b {
+                    b'i' => indicated = true,
+                    _ => {
+                        valid = false;
+                        break;
+                    }
+                }
+            }
+            if !valid {
+                let _ = sys_write(err_fd, b"ul: unrecognized option '");
+                let _ = sys_write(err_fd, arg.as_bytes());
+                let _ = sys_write(err_fd, b"'\n");
+                return 1;
+            }
+        } else {
+            if file_count < file_args.len() {
+                file_args[file_count] = arg;
+                file_count += 1;
+            }
+        }
+        i += 1;
+    }
+
+    let process_fd = |rfd: i32| -> bool {
+        let mut in_buf = [0u8; 4096];
+        let mut line_chars = [0u8; 1024];
+        let mut line_ul = [false; 1024];
+        let mut line_len = 0usize;
+
+        let mut out_buf = [0u8; 4096];
+        let mut out_len = 0usize;
+
+        let flush_out = |buf: &mut [u8; 4096], len: &mut usize| {
+            if *len > 0 {
+                let _ = sys_write(out_fd, &buf[..*len]);
+                *len = 0;
+            }
+        };
+
+        let write_byte = |b: u8, buf: &mut [u8; 4096], len: &mut usize| {
+            if *len >= buf.len() {
+                let _ = sys_write(out_fd, &buf[..*len]);
+                *len = 0;
+            }
+            buf[*len] = b;
+            *len += 1;
+        };
+
+        let flush_line = |indicated: bool,
+                          line_chars: &[u8; 1024],
+                          line_ul: &[bool; 1024],
+                          line_len: usize,
+                          out_buf: &mut [u8; 4096],
+                          out_len: &mut usize| {
+            if indicated {
+                // Ligne de texte brute
+                for &ch in &line_chars[..line_len] {
+                    write_byte(ch, out_buf, out_len);
+                }
+                write_byte(b'\n', out_buf, out_len);
+
+                // Ligne de tirets si au moins un caractère souligné
+                let has_ul = line_ul[..line_len].iter().any(|&u| u);
+                if has_ul {
+                    for &u in &line_ul[..line_len] {
+                        if u {
+                            write_byte(b'-', out_buf, out_len);
+                        } else {
+                            write_byte(b' ', out_buf, out_len);
+                        }
+                    }
+                    write_byte(b'\n', out_buf, out_len);
+                }
+            } else {
+                // Mode ANSI escape sequences (\x1b[4m ... \x1b[0m)
+                let mut in_ul = false;
+                for idx in 0..line_len {
+                    let ch = line_chars[idx];
+                    let is_under = line_ul[idx];
+                    if is_under && !in_ul {
+                        for &esc in b"\x1b[4m" {
+                            write_byte(esc, out_buf, out_len);
+                        }
+                        in_ul = true;
+                    } else if !is_under && in_ul {
+                        for &esc in b"\x1b[0m" {
+                            write_byte(esc, out_buf, out_len);
+                        }
+                        in_ul = false;
+                    }
+                    write_byte(ch, out_buf, out_len);
+                }
+                if in_ul {
+                    for &esc in b"\x1b[0m" {
+                        write_byte(esc, out_buf, out_len);
+                    }
+                }
+                write_byte(b'\n', out_buf, out_len);
+            }
+        };
+
+        loop {
+            let n = sys_read(rfd, &mut in_buf);
+            if n <= 0 {
+                break;
+            }
+            let chunk = &in_buf[..n as usize];
+            let mut cursor = 0usize;
+
+            for &b in chunk {
+                match b {
+                    b'\n' => {
+                        flush_line(
+                            indicated,
+                            &line_chars,
+                            &line_ul,
+                            line_len,
+                            &mut out_buf,
+                            &mut out_len,
+                        );
+                        line_len = 0;
+                        cursor = 0;
+                        line_ul.fill(false);
+                    }
+                    b'\r' => {
+                        cursor = 0;
+                    }
+                    b'\x08' => {
+                        cursor = cursor.saturating_sub(1);
+                    }
+                    b'_' => {
+                        if cursor < line_chars.len() {
+                            if cursor < line_len
+                                && line_chars[cursor] != 0
+                                && line_chars[cursor] != b' '
+                            {
+                                // Overstrike avec '_' sur un caractère existant -> soulignement
+                                line_ul[cursor] = true;
+                            } else {
+                                line_chars[cursor] = b'_';
+                                if cursor >= line_len {
+                                    line_len = cursor + 1;
+                                }
+                            }
+                            cursor += 1;
+                        }
+                    }
+                    _ => {
+                        if cursor < line_chars.len() {
+                            if cursor < line_len && line_chars[cursor] == b'_' {
+                                // Overstrike d'un caractère sur un '_' existant -> soulignement
+                                line_chars[cursor] = b;
+                                line_ul[cursor] = true;
+                            } else {
+                                line_chars[cursor] = b;
+                                if cursor >= line_len {
+                                    line_len = cursor + 1;
+                                }
+                            }
+                            cursor += 1;
+                        }
+                    }
+                }
+            }
+        }
+
+        if line_len > 0 {
+            flush_line(
+                indicated,
+                &line_chars,
+                &line_ul,
+                line_len,
+                &mut out_buf,
+                &mut out_len,
+            );
+        }
+
+        flush_out(&mut out_buf, &mut out_len);
+        true
+    };
+
+    if file_count == 0 {
+        process_fd(in_fd);
+    } else {
+        for f in &file_args[..file_count] {
+            if *f == "-" {
+                process_fd(in_fd);
+            } else {
+                let fd = sys_open(f, O_RDONLY);
+                if fd < 0 {
+                    let _ = sys_write(err_fd, b"ul: cannot open '");
+                    let _ = sys_write(err_fd, f.as_bytes());
+                    let _ = sys_write(err_fd, b"'\n");
+                    return 1;
+                }
+                process_fd(fd);
+                sys_close(fd);
+            }
+        }
+    }
+
+    0
+}
+
 // ============================================================================
 // Utilitaire POSIX / GNU coreutils : `factor` (Décomposition en facteurs premiers)
 // ============================================================================
@@ -20126,6 +20381,7 @@ pub fn execute_coreutils_command(
         "ts" => run_ts(args, in_fd, out_fd, err_fd),
         "sponge" => run_sponge(args, in_fd, out_fd, err_fd),
         "col" => run_col(args, in_fd, out_fd, err_fd),
+        "ul" => run_ul(args, in_fd, out_fd, err_fd),
         "base64" => run_base64(args, in_fd, out_fd, err_fd),
         "base32" => run_base32(args, in_fd, out_fd, err_fd),
         "base32hex" => run_base32hex(args, in_fd, out_fd, err_fd),
@@ -21514,6 +21770,7 @@ pub fn run_xargs(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
             "ts" => run_ts(effective_sub_args, 0, out_fd, err_fd),
             "sponge" => run_sponge(effective_sub_args, 0, out_fd, err_fd),
             "col" => run_col(effective_sub_args, 0, out_fd, err_fd),
+            "ul" => run_ul(effective_sub_args, 0, out_fd, err_fd),
             "factor" => run_factor(effective_sub_args, 0, out_fd, err_fd),
             "base64" => run_base64(effective_sub_args, 0, out_fd, err_fd),
             "base32" => run_base32(effective_sub_args, 0, out_fd, err_fd),
@@ -37207,5 +37464,52 @@ Chaque processus dispose de son propre CR3 sans aucun privilege materiel direct.
         sys_close(_out_r_col_h);
 
         assert_eq!(run_col(&["--version"], 0, 1, 2), 0);
+
+        // 56. Test run_ul (filtre ul de soulignement overstrike '_' + '\x08' + char)
+        let (in_r_ul1, in_w_ul1) = crate::vfs::pipe().unwrap();
+        let (out_r_ul1, out_w_ul1) = crate::vfs::pipe().unwrap();
+        // Overstrike ANSI
+        let _ = sys_write(in_w_ul1, b"_\x08a_\x08b\n");
+        sys_close(in_w_ul1);
+
+        let code_ul1 = run_ul(&[], in_r_ul1, out_w_ul1, 2);
+        sys_close(in_r_ul1);
+        sys_close(out_w_ul1);
+        assert_eq!(code_ul1, 0);
+
+        let mut ul_buf1 = [0u8; 64];
+        let n_ul1 = sys_read(out_r_ul1, &mut ul_buf1);
+        sys_close(out_r_ul1);
+        assert_eq!(
+            core::str::from_utf8(&ul_buf1[..n_ul1 as usize]).unwrap(),
+            "\x1b[4mab\x1b[0m\n"
+        );
+
+        // Test option -i (indicated dashes)
+        let (in_r_ul2, in_w_ul2) = crate::vfs::pipe().unwrap();
+        let (out_r_ul2, out_w_ul2) = crate::vfs::pipe().unwrap();
+        let _ = sys_write(in_w_ul2, b"x_\x08y\n");
+        sys_close(in_w_ul2);
+
+        let code_ul2 = run_ul(&["-i"], in_r_ul2, out_w_ul2, 2);
+        sys_close(in_r_ul2);
+        sys_close(out_w_ul2);
+        assert_eq!(code_ul2, 0);
+
+        let mut ul_buf2 = [0u8; 64];
+        let n_ul2 = sys_read(out_r_ul2, &mut ul_buf2);
+        sys_close(out_r_ul2);
+        assert_eq!(
+            core::str::from_utf8(&ul_buf2[..n_ul2 as usize]).unwrap(),
+            "xy\n -\n"
+        );
+
+        // Test ul --help et --version
+        let (_out_r_ul_h, out_w_ul_h) = crate::vfs::pipe().unwrap();
+        assert_eq!(run_ul(&["--help"], 0, out_w_ul_h, 2), 0);
+        sys_close(out_w_ul_h);
+        sys_close(_out_r_ul_h);
+
+        assert_eq!(run_ul(&["--version"], 0, 1, 2), 0);
     }
 }

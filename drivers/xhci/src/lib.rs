@@ -368,6 +368,8 @@ pub const XHCI_EXT_CAP_USB4_USB3_PORT_CAPABILITY_INTERFACE_V2: u8 = 62;
 pub const XHCI_EXT_CAP_USB4_FLOW_CONTROL_CONFIGURATION_INTERFACE_V2: u8 = 63;
 /// Capacité étendue xHCI 1.2 / USB4 Port Link Configuration Interface v2 (§7.56)
 pub const XHCI_EXT_CAP_USB4_PORT_LINK_CONFIGURATION_INTERFACE_V2: u8 = 64;
+/// Capacité étendue xHCI 1.2 / USB4 Port Power Management Control Interface v2 (§7.57)
+pub const XHCI_EXT_CAP_USB4_PORT_POWER_MANAGEMENT_CONTROL_INTERFACE_V2: u8 = 65;
 
 /// Masques de registres USB Legacy Support (xHCI 1.2 Section 7.1)
 /// Registre USBLEGSUP (Offset 0x00)
@@ -6866,6 +6868,140 @@ impl XhciUsb4PortLinkConfigInterfaceV2 {
     pub fn record_retrain(&mut self, status_flags: u32) {
         self.link_status_v2 |= status_flags;
         self.retrain_events = self.retrain_events.wrapping_add(1);
+    }
+}
+
+/// Capacité étendue xHCI 1.2 / USB4 Port Power Management Control Interface v2 (§7.57)
+///
+/// Supervise la gestion énergétique dynamique de pointe (Low-Power Link States CL0s, CL1, CL2, CLD)
+/// sur les ports physiques et adaptateurs logiques USB4 v2. Permet l'activation de la politique
+/// d'économie d'énergie autonome, la configuration des timers d'inactivité L1/L2, l'autorisation
+/// du réveil à distance (Wake-on-Connect/Wake-on-Disconnect), ainsi que la télémétrie thermique
+/// et la limitation de consommation en watt par port.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XhciUsb4PortPowerManagementControlInterfaceV2 {
+    /// Pointeur dword vers la prochaine capacité étendue (0 = fin de liste)
+    pub next_ptr_dwords: u8,
+    /// Gestion d'alimentation autonome activée (bit 0)
+    pub autonomous_pm_enabled: bool,
+    /// Entrée en état basse consommation L1 (CL1/CL0s) autorisée (bit 1)
+    pub l1_enable: bool,
+    /// Entrée en état très basse consommation L2 autorisée (bit 2)
+    pub l2_enable: bool,
+    /// Réveil à distance activé sur détection de paquet ou signal de réveil (bit 3)
+    pub remote_wake_enabled: bool,
+    /// Numéro de port ou adaptateur physique cible (bits 8..15)
+    pub port_index: u8,
+    /// État énergétique actuel de la cible (bits 16..19 : 0=D0, 1=D1, 2=D2, 3=D3hot, 4=D3cold)
+    pub target_power_state: u8,
+    /// Temporisation d'inactivité avant passage en L1 en microsecondes (DWORD 2 [15:0])
+    pub l1_timeout_us: u16,
+    /// Temporisation d'inactivité avant passage en L2 en microsecondes (DWORD 2 [31:16])
+    pub l2_timeout_us: u16,
+    /// Plafond de puissance allouée en milliwatts (DWORD 3 [15:0])
+    pub power_budget_mw: u16,
+    /// Température du transceiver en demi-degrés Celsius (DWORD 3 [31:16])
+    pub transceiver_temp_half_c: u16,
+}
+
+impl XhciUsb4PortPowerManagementControlInterfaceV2 {
+    /// Crée une nouvelle interface de contrôle d'alimentation de port USB4 v2
+    pub const fn new(port_index: u8, l1: bool, l2: bool, power_budget_mw: u16) -> Self {
+        Self {
+            next_ptr_dwords: 0,
+            autonomous_pm_enabled: false,
+            l1_enable: l1,
+            l2_enable: l2,
+            remote_wake_enabled: false,
+            port_index,
+            target_power_state: 0,
+            l1_timeout_us: 100,
+            l2_timeout_us: 1000,
+            power_budget_mw,
+            transceiver_temp_half_c: 50, // 25°C
+        }
+    }
+
+    /// Parse les 4 dwords MMIO d'une capacité étendue USB4 Port Power Management Control Interface v2 (§7.57)
+    pub const fn parse(dwords: &[u32; 4]) -> Option<Self> {
+        let cap_id = (dwords[0] & 0xFF) as u8;
+        if cap_id != XHCI_EXT_CAP_USB4_PORT_POWER_MANAGEMENT_CONTROL_INTERFACE_V2 {
+            return None;
+        }
+
+        let next_ptr = ((dwords[0] >> 8) & 0xFF) as u8;
+        let ctrl = dwords[1];
+        let autonomous_pm_enabled = (ctrl & 0x01) != 0;
+        let l1_enable = (ctrl & 0x02) != 0;
+        let l2_enable = (ctrl & 0x04) != 0;
+        let remote_wake_enabled = (ctrl & 0x08) != 0;
+        let port_index = ((ctrl >> 8) & 0xFF) as u8;
+        let target_power_state = ((ctrl >> 16) & 0x0F) as u8;
+
+        let dw2 = dwords[2];
+        let l1_timeout_us = (dw2 & 0xFFFF) as u16;
+        let l2_timeout_us = ((dw2 >> 16) & 0xFFFF) as u16;
+
+        let dw3 = dwords[3];
+        let power_budget_mw = (dw3 & 0xFFFF) as u16;
+        let transceiver_temp_half_c = ((dw3 >> 16) & 0xFFFF) as u16;
+
+        Some(Self {
+            next_ptr_dwords: next_ptr,
+            autonomous_pm_enabled,
+            l1_enable,
+            l2_enable,
+            remote_wake_enabled,
+            port_index,
+            target_power_state,
+            l1_timeout_us,
+            l2_timeout_us,
+            power_budget_mw,
+            transceiver_temp_half_c,
+        })
+    }
+
+    /// Encode la capacité étendue v2 en 4 mots dwords MMIO 32-bit
+    pub const fn encode(&self) -> [u32; 4] {
+        let dw0 = (XHCI_EXT_CAP_USB4_PORT_POWER_MANAGEMENT_CONTROL_INTERFACE_V2 as u32)
+            | ((self.next_ptr_dwords as u32) << 8);
+        let mut ctrl =
+            ((self.port_index as u32) << 8) | (((self.target_power_state as u32) & 0x0F) << 16);
+        if self.autonomous_pm_enabled {
+            ctrl |= 0x01;
+        }
+        if self.l1_enable {
+            ctrl |= 0x02;
+        }
+        if self.l2_enable {
+            ctrl |= 0x04;
+        }
+        if self.remote_wake_enabled {
+            ctrl |= 0x08;
+        }
+        let dw2 = (self.l1_timeout_us as u32) | ((self.l2_timeout_us as u32) << 16);
+        let dw3 = (self.power_budget_mw as u32) | ((self.transceiver_temp_half_c as u32) << 16);
+        [dw0, ctrl, dw2, dw3]
+    }
+
+    /// Active ou désactive la gestion d'alimentation autonome
+    pub fn enable_autonomous_pm(&mut self, enable: bool) {
+        self.autonomous_pm_enabled = enable;
+    }
+
+    /// Active ou désactive le réveil à distance
+    pub fn enable_remote_wake(&mut self, enable: bool) {
+        self.remote_wake_enabled = enable;
+    }
+
+    /// Définit l'état énergétique cible (D0, D1, D2, D3hot, D3cold)
+    pub fn set_target_power_state(&mut self, state: u8) {
+        self.target_power_state = state & 0x0F;
+    }
+
+    /// Met à jour la température du transceiver en demi-degrés Celsius
+    pub fn set_temperature(&mut self, temp_half_c: u16) {
+        self.transceiver_temp_half_c = temp_half_c;
     }
 }
 
@@ -17148,5 +17284,52 @@ mod tests {
         assert_eq!(parsed_pl_v2.link_state, 1);
         assert_eq!(parsed_pl_v2.link_status_v2, 0x0044);
         assert_eq!(parsed_pl_v2.retrain_events, 2);
+
+        // Test USB4 Port Power Management Control Interface v2 (§7.57, Cap ID 65)
+        let mut pm_v2 = XhciUsb4PortPowerManagementControlInterfaceV2::new(5, true, true, 45_000);
+        assert_eq!(pm_v2.port_index, 5);
+        assert!(pm_v2.l1_enable);
+        assert!(pm_v2.l2_enable);
+        assert_eq!(pm_v2.power_budget_mw, 45_000);
+        assert!(!pm_v2.autonomous_pm_enabled);
+        assert!(!pm_v2.remote_wake_enabled);
+        assert_eq!(pm_v2.target_power_state, 0);
+
+        pm_v2.enable_autonomous_pm(true);
+        pm_v2.enable_remote_wake(true);
+        pm_v2.set_target_power_state(3); // D3hot
+        pm_v2.set_temperature(70); // 35°C
+        pm_v2.next_ptr_dwords = 140;
+
+        let encoded_pm_v2 = pm_v2.encode();
+        assert_eq!(
+            encoded_pm_v2[0] & 0xFF,
+            XHCI_EXT_CAP_USB4_PORT_POWER_MANAGEMENT_CONTROL_INTERFACE_V2 as u32
+        );
+        assert_eq!((encoded_pm_v2[0] >> 8) & 0xFF, 140);
+        assert_eq!(encoded_pm_v2[1] & 0x01, 1); // autonomous_pm_enabled
+        assert_eq!(encoded_pm_v2[1] & 0x02, 2); // l1_enable
+        assert_eq!(encoded_pm_v2[1] & 0x04, 4); // l2_enable
+        assert_eq!(encoded_pm_v2[1] & 0x08, 8); // remote_wake_enabled
+        assert_eq!((encoded_pm_v2[1] >> 8) & 0xFF, 5); // port_index 5
+        assert_eq!((encoded_pm_v2[1] >> 16) & 0x0F, 3); // target_power_state 3
+        assert_eq!(encoded_pm_v2[2] & 0xFFFF, 100); // l1_timeout_us
+        assert_eq!((encoded_pm_v2[2] >> 16) & 0xFFFF, 1000); // l2_timeout_us
+        assert_eq!(encoded_pm_v2[3] & 0xFFFF, 45_000); // power_budget_mw
+        assert_eq!((encoded_pm_v2[3] >> 16) & 0xFFFF, 70); // transceiver_temp_half_c
+
+        let parsed_pm_v2 =
+            XhciUsb4PortPowerManagementControlInterfaceV2::parse(&encoded_pm_v2).unwrap();
+        assert_eq!(parsed_pm_v2.next_ptr_dwords, 140);
+        assert!(parsed_pm_v2.autonomous_pm_enabled);
+        assert!(parsed_pm_v2.l1_enable);
+        assert!(parsed_pm_v2.l2_enable);
+        assert!(parsed_pm_v2.remote_wake_enabled);
+        assert_eq!(parsed_pm_v2.port_index, 5);
+        assert_eq!(parsed_pm_v2.target_power_state, 3);
+        assert_eq!(parsed_pm_v2.l1_timeout_us, 100);
+        assert_eq!(parsed_pm_v2.l2_timeout_us, 1000);
+        assert_eq!(parsed_pm_v2.power_budget_mw, 45_000);
+        assert_eq!(parsed_pm_v2.transceiver_temp_half_c, 70);
     }
 }
