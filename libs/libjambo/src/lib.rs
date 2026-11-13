@@ -257,43 +257,59 @@ pub fn pci_write32(bus: u8, dev: u8, func: u8, offset: u8, val: u32) -> Result<(
 
 /// Active la capacité MSI-X pour le périphérique spécifié via le broker DeviceIo
 pub fn pci_msix_enable(bus: u8, dev: u8, func: u8, cap_offset: u8) -> Result<(), SysError> {
-    let bdf = ((bus as u64) << 16) | ((dev as u64 & 0x1F) << 11) | ((func as u64 & 0x07) << 8);
-    let (ret, _) = unsafe {
-        syscall6(
-            SyscallNumber::DeviceIo,
-            device_io_op::MSIX_ENABLE as u64,
-            bdf,
-            cap_offset as u64,
-            0,
-            0,
-            0,
-        )
-    };
-    if ret == 0 {
+    #[cfg(not(target_os = "none"))]
+    {
+        let _ = (bus, dev, func, cap_offset);
         Ok(())
-    } else {
-        Err(SysError::PermissionDenied)
+    }
+    #[cfg(target_os = "none")]
+    {
+        let bdf = ((bus as u64) << 16) | ((dev as u64 & 0x1F) << 11) | ((func as u64 & 0x07) << 8);
+        let (ret, _) = unsafe {
+            syscall6(
+                SyscallNumber::DeviceIo,
+                device_io_op::MSIX_ENABLE as u64,
+                bdf,
+                cap_offset as u64,
+                0,
+                0,
+                0,
+            )
+        };
+        if ret == 0 {
+            Ok(())
+        } else {
+            Err(SysError::PermissionDenied)
+        }
     }
 }
 
 /// Désactive la capacité MSI-X pour le périphérique spécifié via le broker DeviceIo
 pub fn pci_msix_disable(bus: u8, dev: u8, func: u8, cap_offset: u8) -> Result<(), SysError> {
-    let bdf = ((bus as u64) << 16) | ((dev as u64 & 0x1F) << 11) | ((func as u64 & 0x07) << 8);
-    let (ret, _) = unsafe {
-        syscall6(
-            SyscallNumber::DeviceIo,
-            device_io_op::MSIX_DISABLE as u64,
-            bdf,
-            cap_offset as u64,
-            0,
-            0,
-            0,
-        )
-    };
-    if ret == 0 {
+    #[cfg(not(target_os = "none"))]
+    {
+        let _ = (bus, dev, func, cap_offset);
         Ok(())
-    } else {
-        Err(SysError::PermissionDenied)
+    }
+    #[cfg(target_os = "none")]
+    {
+        let bdf = ((bus as u64) << 16) | ((dev as u64 & 0x1F) << 11) | ((func as u64 & 0x07) << 8);
+        let (ret, _) = unsafe {
+            syscall6(
+                SyscallNumber::DeviceIo,
+                device_io_op::MSIX_DISABLE as u64,
+                bdf,
+                cap_offset as u64,
+                0,
+                0,
+                0,
+            )
+        };
+        if ret == 0 {
+            Ok(())
+        } else {
+            Err(SysError::PermissionDenied)
+        }
     }
 }
 
@@ -305,22 +321,30 @@ pub fn pci_msix_set_entry(
     entry_index: u8,
     entry: &jambo_abi::MsixEntryDescriptor,
 ) -> Result<(), SysError> {
-    let bdf = ((bus as u64) << 16) | ((dev as u64 & 0x1F) << 11) | ((func as u64 & 0x07) << 8);
-    let (ret, _) = unsafe {
-        syscall6(
-            SyscallNumber::DeviceIo,
-            device_io_op::MSIX_SET_ENTRY as u64,
-            bdf,
-            entry_index as u64,
-            entry as *const _ as u64,
-            0,
-            0,
-        )
-    };
-    if ret == 0 {
+    #[cfg(not(target_os = "none"))]
+    {
+        let _ = (bus, dev, func, entry_index, entry);
         Ok(())
-    } else {
-        Err(SysError::PermissionDenied)
+    }
+    #[cfg(target_os = "none")]
+    {
+        let bdf = ((bus as u64) << 16) | ((dev as u64 & 0x1F) << 11) | ((func as u64 & 0x07) << 8);
+        let (ret, _) = unsafe {
+            syscall6(
+                SyscallNumber::DeviceIo,
+                device_io_op::MSIX_SET_ENTRY as u64,
+                bdf,
+                entry_index as u64,
+                entry as *const _ as u64,
+                0,
+                0,
+            )
+        };
+        if ret == 0 {
+            Ok(())
+        } else {
+            Err(SysError::PermissionDenied)
+        }
     }
 }
 
@@ -331,23 +355,31 @@ pub fn pci_msix_get_entry(
     func: u8,
     entry_index: u8,
 ) -> Result<jambo_abi::MsixEntryDescriptor, SysError> {
-    let bdf = ((bus as u64) << 16) | ((dev as u64 & 0x1F) << 11) | ((func as u64 & 0x07) << 8);
-    let mut entry = jambo_abi::MsixEntryDescriptor::default();
-    let (ret, _) = unsafe {
-        syscall6(
-            SyscallNumber::DeviceIo,
-            device_io_op::MSIX_GET_ENTRY as u64,
-            bdf,
-            entry_index as u64,
-            &mut entry as *mut _ as u64,
-            0,
-            0,
-        )
-    };
-    if ret == 0 {
-        Ok(entry)
-    } else {
-        Err(SysError::PermissionDenied)
+    #[cfg(not(target_os = "none"))]
+    {
+        let _ = (bus, dev, func, entry_index);
+        Ok(jambo_abi::MsixEntryDescriptor::default())
+    }
+    #[cfg(target_os = "none")]
+    {
+        let bdf = ((bus as u64) << 16) | ((dev as u64 & 0x1F) << 11) | ((func as u64 & 0x07) << 8);
+        let mut entry = jambo_abi::MsixEntryDescriptor::default();
+        let (ret, _) = unsafe {
+            syscall6(
+                SyscallNumber::DeviceIo,
+                device_io_op::MSIX_GET_ENTRY as u64,
+                bdf,
+                entry_index as u64,
+                &mut entry as *mut _ as u64,
+                0,
+                0,
+            )
+        };
+        if ret == 0 {
+            Ok(entry)
+        } else {
+            Err(SysError::PermissionDenied)
+        }
     }
 }
 
@@ -360,27 +392,39 @@ pub fn pci_msix_delegate_irq(
     cookie: u64,
     target_vector: u32,
 ) -> Result<Handle, SysError> {
-    let bdf = ((bus as u64) << 16) | ((dev as u64 & 0x1F) << 11) | ((func as u64 & 0x07) << 8);
-    let req = jambo_abi::MsixDelegateRequest {
-        port_handle,
-        cookie,
-        target_vector,
-    };
-    let mut out_handle_val: u64 = 0;
-    let (ret, _) = unsafe {
-        syscall6(
-            SyscallNumber::DeviceIo,
-            device_io_op::MSIX_DELEGATE_IRQ as u64,
-            bdf,
-            0,
-            &req as *const _ as u64,
-            &mut out_handle_val as *mut _ as u64,
-            0,
-        )
-    };
-    if ret == 0 {
-        Ok(Handle(out_handle_val))
-    } else {
-        Err(SysError::PermissionDenied)
+    #[cfg(not(target_os = "none"))]
+    {
+        let _ = (bus, dev, func, port_handle, cookie);
+        if (32..=255).contains(&target_vector) {
+            Ok(Handle(target_vector as u64))
+        } else {
+            Err(SysError::InvalidArgument)
+        }
+    }
+    #[cfg(target_os = "none")]
+    {
+        let bdf = ((bus as u64) << 16) | ((dev as u64 & 0x1F) << 11) | ((func as u64 & 0x07) << 8);
+        let req = jambo_abi::MsixDelegateRequest {
+            port_handle,
+            cookie,
+            target_vector,
+        };
+        let mut out_handle_val: u64 = 0;
+        let (ret, _) = unsafe {
+            syscall6(
+                SyscallNumber::DeviceIo,
+                device_io_op::MSIX_DELEGATE_IRQ as u64,
+                bdf,
+                0,
+                &req as *const _ as u64,
+                &mut out_handle_val as *mut _ as u64,
+                0,
+            )
+        };
+        if ret == 0 {
+            Ok(Handle(out_handle_val))
+        } else {
+            Err(SysError::PermissionDenied)
+        }
     }
 }

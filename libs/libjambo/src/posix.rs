@@ -5,6 +5,7 @@
 
 #[cfg(not(test))]
 use crate::{syscall6, vmo_prot, SyscallNumber, SystemInfo};
+use jambo_abi::Timespec;
 
 // Constantes POSIX standard pour descripteurs de fichiers
 pub const STDIN_FILENO: i32 = 0;
@@ -537,6 +538,43 @@ pub const DEFAULT_RLIMITS: [Rlimit; RLIM_NLIMITS] = [
     Rlimit::infinity(),                          // RLIMIT_RTTIME: illimité
 ];
 
+// Politiques d'ordonnancement POSIX (POSIX 1003.1b / sched.h)
+pub const SCHED_OTHER: i32 = 0;
+pub const SCHED_FIFO: i32 = 1;
+pub const SCHED_RR: i32 = 2;
+pub const SCHED_BATCH: i32 = 3;
+pub const SCHED_IDLE: i32 = 5;
+pub const SCHED_DEADLINE: i32 = 6;
+
+// Bornes de priorités pour les politiques d'ordonnancement
+pub const SCHED_PRIORITY_MIN_OTHER: i32 = 0;
+pub const SCHED_PRIORITY_MAX_OTHER: i32 = 0;
+pub const SCHED_PRIORITY_MIN_FIFO: i32 = 1;
+pub const SCHED_PRIORITY_MAX_FIFO: i32 = 99;
+pub const SCHED_PRIORITY_MIN_RR: i32 = 1;
+pub const SCHED_PRIORITY_MAX_RR: i32 = 99;
+pub const SCHED_PRIORITY_MIN_BATCH: i32 = 0;
+pub const SCHED_PRIORITY_MAX_BATCH: i32 = 0;
+pub const SCHED_PRIORITY_MIN_IDLE: i32 = 0;
+pub const SCHED_PRIORITY_MAX_IDLE: i32 = 0;
+pub const SCHED_PRIORITY_MIN_DEADLINE: i32 = 0;
+pub const SCHED_PRIORITY_MAX_DEADLINE: i32 = 0;
+
+/// Structure de paramètres d'ordonnancement POSIX (struct sched_param)
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct SchedParam {
+    pub sched_priority: i32,
+}
+
+impl SchedParam {
+    pub const fn new(priority: i32) -> Self {
+        Self {
+            sched_priority: priority,
+        }
+    }
+}
+
 /// Descripteur de session et de groupe de processus
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProcessSessionDescriptor {
@@ -547,6 +585,9 @@ pub struct ProcessSessionDescriptor {
     pub unshared_flags: u32,
     pub is_session_leader: bool,
     pub rlimits: [Rlimit; RLIM_NLIMITS],
+    pub sched_policy: i32,
+    pub sched_priority: i32,
+    pub sched_rr_interval_ns: u64,
 }
 
 impl ProcessSessionDescriptor {
@@ -559,6 +600,9 @@ impl ProcessSessionDescriptor {
             unshared_flags: 0,
             is_session_leader: false,
             rlimits: DEFAULT_RLIMITS,
+            sched_policy: SCHED_OTHER,
+            sched_priority: 0,
+            sched_rr_interval_ns: 10_000_000, // 10 ms
         }
     }
 }
@@ -751,6 +795,84 @@ impl ProcessSessionTable {
     pub fn setrlimit(&mut self, resource: u32, rlim: &Rlimit) -> Result<(), i32> {
         self.prlimit(self.current_pid, resource, Some(rlim), None)
     }
+
+    /// Obtient la politique d'ordonnancement POSIX d'un processus
+    pub fn sched_getscheduler(&mut self, pid: pid_t) -> Result<i32, i32> {
+        if pid < 0 {
+            return Err(-EINVAL);
+        }
+        let target_pid = if pid == 0 { self.current_pid } else { pid };
+        let entry = self.get_or_create(target_pid);
+        Ok(entry.sched_policy)
+    }
+
+    /// Modifie la politique et les paramètres d'ordonnancement POSIX d'un processus
+    pub fn sched_setscheduler(
+        &mut self,
+        pid: pid_t,
+        policy: i32,
+        param: &SchedParam,
+    ) -> Result<(), i32> {
+        if pid < 0 {
+            return Err(-EINVAL);
+        }
+        // Validation stricte des politiques et bornes de priorité POSIX
+        match policy {
+            SCHED_FIFO | SCHED_RR => {
+                if !(1..=99).contains(&param.sched_priority) {
+                    return Err(-EINVAL);
+                }
+            }
+            SCHED_OTHER | SCHED_BATCH | SCHED_IDLE | SCHED_DEADLINE => {
+                if param.sched_priority != 0 {
+                    return Err(-EINVAL);
+                }
+            }
+            _ => return Err(-EINVAL),
+        }
+
+        let target_pid = if pid == 0 { self.current_pid } else { pid };
+        let entry = self.get_or_create(target_pid);
+        entry.sched_policy = policy;
+        entry.sched_priority = param.sched_priority;
+        Ok(())
+    }
+
+    /// Obtient les paramètres d'ordonnancement d'un processus
+    pub fn sched_getparam(&mut self, pid: pid_t, param: &mut SchedParam) -> Result<(), i32> {
+        if pid < 0 {
+            return Err(-EINVAL);
+        }
+        let target_pid = if pid == 0 { self.current_pid } else { pid };
+        let entry = self.get_or_create(target_pid);
+        param.sched_priority = entry.sched_priority;
+        Ok(())
+    }
+
+    /// Modifie les paramètres de priorité sans changer la politique
+    pub fn sched_setparam(&mut self, pid: pid_t, param: &SchedParam) -> Result<(), i32> {
+        if pid < 0 {
+            return Err(-EINVAL);
+        }
+        let target_pid = if pid == 0 { self.current_pid } else { pid };
+        let policy = {
+            let entry = self.get_or_create(target_pid);
+            entry.sched_policy
+        };
+        self.sched_setscheduler(target_pid, policy, param)
+    }
+
+    /// Obtient le quantum d'ordonnancement Round-Robin (timespec)
+    pub fn sched_rr_get_interval(&mut self, pid: pid_t, tp: &mut Timespec) -> Result<(), i32> {
+        if pid < 0 {
+            return Err(-EINVAL);
+        }
+        let target_pid = if pid == 0 { self.current_pid } else { pid };
+        let entry = self.get_or_create(target_pid);
+        tp.tv_sec = entry.sched_rr_interval_ns / 1_000_000_000;
+        tp.tv_nsec = (entry.sched_rr_interval_ns % 1_000_000_000) as u32;
+        Ok(())
+    }
 }
 
 impl Default for ProcessSessionTable {
@@ -842,6 +964,140 @@ pub fn sys_getrlimit(resource: u32, rlim: &mut Rlimit) -> Result<(), i32> {
 
 pub fn sys_setrlimit(resource: u32, rlim: &Rlimit) -> Result<(), i32> {
     with_session_table(|tbl| tbl.setrlimit(resource, rlim))
+}
+
+pub fn sys_sched_getscheduler(pid: pid_t) -> Result<i32, i32> {
+    with_session_table(|tbl| tbl.sched_getscheduler(pid))
+}
+
+pub fn sys_sched_setscheduler(pid: pid_t, policy: i32, param: &SchedParam) -> Result<(), i32> {
+    with_session_table(|tbl| tbl.sched_setscheduler(pid, policy, param))
+}
+
+pub fn sys_sched_getparam(pid: pid_t, param: &mut SchedParam) -> Result<(), i32> {
+    with_session_table(|tbl| tbl.sched_getparam(pid, param))
+}
+
+pub fn sys_sched_setparam(pid: pid_t, param: &SchedParam) -> Result<(), i32> {
+    with_session_table(|tbl| tbl.sched_setparam(pid, param))
+}
+
+pub fn sys_sched_get_priority_min(policy: i32) -> Result<i32, i32> {
+    match policy {
+        SCHED_OTHER | SCHED_BATCH | SCHED_IDLE | SCHED_DEADLINE => Ok(0),
+        SCHED_FIFO | SCHED_RR => Ok(1),
+        _ => Err(-EINVAL),
+    }
+}
+
+pub fn sys_sched_get_priority_max(policy: i32) -> Result<i32, i32> {
+    match policy {
+        SCHED_OTHER | SCHED_BATCH | SCHED_IDLE | SCHED_DEADLINE => Ok(0),
+        SCHED_FIFO | SCHED_RR => Ok(99),
+        _ => Err(-EINVAL),
+    }
+}
+
+pub fn sys_sched_rr_get_interval(pid: pid_t, tp: &mut Timespec) -> Result<(), i32> {
+    with_session_table(|tbl| tbl.sched_rr_get_interval(pid, tp))
+}
+
+/// Obtient la politique d'ordonnancement POSIX (sched_getscheduler)
+#[cfg(not(test))]
+#[cfg_attr(target_os = "none", no_mangle)]
+pub extern "C" fn sched_getscheduler(pid: pid_t) -> i32 {
+    match sys_sched_getscheduler(pid) {
+        Ok(pol) => pol,
+        Err(e) => e,
+    }
+}
+
+/// Configure la politique et les paramètres d'ordonnancement POSIX (sched_setscheduler)
+///
+/// # Safety
+/// Le pointeur `param` doit pointer vers une structure `SchedParam` valide.
+#[cfg(not(test))]
+#[cfg_attr(target_os = "none", no_mangle)]
+pub unsafe extern "C" fn sched_setscheduler(
+    pid: pid_t,
+    policy: i32,
+    param: *const SchedParam,
+) -> i32 {
+    if param.is_null() {
+        return -EINVAL;
+    }
+    match sys_sched_setscheduler(pid, policy, &*param) {
+        Ok(()) => 0,
+        Err(e) => e,
+    }
+}
+
+/// Obtient les paramètres d'ordonnancement POSIX (sched_getparam)
+///
+/// # Safety
+/// Le pointeur `param` doit pointer vers un buffer `SchedParam` inscriptible.
+#[cfg(not(test))]
+#[cfg_attr(target_os = "none", no_mangle)]
+pub unsafe extern "C" fn sched_getparam(pid: pid_t, param: *mut SchedParam) -> i32 {
+    if param.is_null() {
+        return -EINVAL;
+    }
+    match sys_sched_getparam(pid, &mut *param) {
+        Ok(()) => 0,
+        Err(e) => e,
+    }
+}
+
+/// Modifie les paramètres d'ordonnancement POSIX (sched_setparam)
+///
+/// # Safety
+/// Le pointeur `param` doit pointer vers une structure `SchedParam` valide.
+#[cfg(not(test))]
+#[cfg_attr(target_os = "none", no_mangle)]
+pub unsafe extern "C" fn sched_setparam(pid: pid_t, param: *const SchedParam) -> i32 {
+    if param.is_null() {
+        return -EINVAL;
+    }
+    match sys_sched_setparam(pid, &*param) {
+        Ok(()) => 0,
+        Err(e) => e,
+    }
+}
+
+/// Obtient la priorité minimale supportée pour une politique d'ordonnancement POSIX
+#[cfg(not(test))]
+#[cfg_attr(target_os = "none", no_mangle)]
+pub extern "C" fn sched_get_priority_min(policy: i32) -> i32 {
+    match sys_sched_get_priority_min(policy) {
+        Ok(min) => min,
+        Err(e) => e,
+    }
+}
+
+/// Obtient la priorité maximale supportée pour une politique d'ordonnancement POSIX
+#[cfg(not(test))]
+#[cfg_attr(target_os = "none", no_mangle)]
+pub extern "C" fn sched_get_priority_max(policy: i32) -> i32 {
+    match sys_sched_get_priority_max(policy) {
+        Ok(max) => max,
+        Err(e) => e,
+    }
+}
+
+/// Obtient l'intervalle de temps imparti au tourniquet Round-Robin (sched_rr_get_interval)
+///
+/// # Safety
+/// Le pointeur `tp` doit pointer vers une structure `Timespec` inscriptible valide.
+#[cfg(not(test))]
+#[cfg_attr(target_os = "none", no_mangle)]
+pub unsafe extern "C" fn sched_rr_get_interval(pid: pid_t, tp: *mut Timespec) -> i32 {
+    if tp.is_null() {
+        return -EINVAL;
+    }
+    match sys_sched_rr_get_interval(pid, &mut *tp) {
+        Ok(()) => 0,
+        Err(e) => e,
+    }
 }
 
 // Points d'entrée C standard exportés pour l'environnement bare-metal
@@ -2309,5 +2565,65 @@ mod tests {
 
         // 5. Ressource invalide -> -EINVAL
         assert_eq!(tbl.prlimit(1, 99, None, None), Err(-EINVAL));
+    }
+
+    #[test]
+    fn test_posix_realtime_scheduling_and_priority_bounds() {
+        let mut tbl = ProcessSessionTable::new();
+
+        // 1. Politique par défaut (SCHED_OTHER, priorité 0)
+        assert_eq!(tbl.sched_getscheduler(1), Ok(SCHED_OTHER));
+        let mut param = SchedParam::default();
+        assert_eq!(tbl.sched_getparam(1, &mut param), Ok(()));
+        assert_eq!(param.sched_priority, 0);
+
+        // 2. Basculement vers SCHED_FIFO avec priorité valide (50)
+        let p50 = SchedParam::new(50);
+        assert_eq!(tbl.sched_setscheduler(1, SCHED_FIFO, &p50), Ok(()));
+        assert_eq!(tbl.sched_getscheduler(1), Ok(SCHED_FIFO));
+        assert_eq!(tbl.sched_getparam(1, &mut param), Ok(()));
+        assert_eq!(param.sched_priority, 50);
+
+        // 3. Basculement vers SCHED_RR avec priorité valide (99)
+        let p99 = SchedParam::new(99);
+        assert_eq!(tbl.sched_setscheduler(1, SCHED_RR, &p99), Ok(()));
+        assert_eq!(tbl.sched_getscheduler(1), Ok(SCHED_RR));
+
+        // 4. Refus des priorités hors bornes pour politiques temps réel
+        let p0 = SchedParam::new(0);
+        let p100 = SchedParam::new(100);
+        assert_eq!(tbl.sched_setscheduler(1, SCHED_FIFO, &p0), Err(-EINVAL));
+        assert_eq!(tbl.sched_setscheduler(1, SCHED_RR, &p100), Err(-EINVAL));
+
+        // 5. Refus des priorités non-nulles pour politiques temps partagé
+        assert_eq!(tbl.sched_setscheduler(1, SCHED_OTHER, &p50), Err(-EINVAL));
+        assert_eq!(tbl.sched_setscheduler(1, SCHED_BATCH, &p50), Err(-EINVAL));
+        assert_eq!(tbl.sched_setscheduler(1, SCHED_IDLE, &p50), Err(-EINVAL));
+
+        // 6. Basculement légitime vers SCHED_OTHER avec priorité 0
+        assert_eq!(tbl.sched_setscheduler(1, SCHED_OTHER, &p0), Ok(()));
+        assert_eq!(tbl.sched_getscheduler(1), Ok(SCHED_OTHER));
+
+        // 7. Bornes POSIX min/max
+        assert_eq!(sys_sched_get_priority_min(SCHED_OTHER), Ok(0));
+        assert_eq!(sys_sched_get_priority_max(SCHED_OTHER), Ok(0));
+        assert_eq!(sys_sched_get_priority_min(SCHED_FIFO), Ok(1));
+        assert_eq!(sys_sched_get_priority_max(SCHED_FIFO), Ok(99));
+        assert_eq!(sys_sched_get_priority_min(SCHED_RR), Ok(1));
+        assert_eq!(sys_sched_get_priority_max(SCHED_RR), Ok(99));
+        assert_eq!(sys_sched_get_priority_min(SCHED_BATCH), Ok(0));
+        assert_eq!(sys_sched_get_priority_max(SCHED_BATCH), Ok(0));
+        assert_eq!(sys_sched_get_priority_min(SCHED_IDLE), Ok(0));
+        assert_eq!(sys_sched_get_priority_max(SCHED_IDLE), Ok(0));
+        assert_eq!(sys_sched_get_priority_min(SCHED_DEADLINE), Ok(0));
+        assert_eq!(sys_sched_get_priority_max(SCHED_DEADLINE), Ok(0));
+        assert_eq!(sys_sched_get_priority_min(999), Err(-EINVAL));
+        assert_eq!(sys_sched_get_priority_max(999), Err(-EINVAL));
+
+        // 8. Intervalle de tourniquet Round-Robin (10 ms)
+        let mut tp = Timespec::default();
+        assert_eq!(tbl.sched_rr_get_interval(1, &mut tp), Ok(()));
+        assert_eq!(tp.tv_sec, 0);
+        assert_eq!(tp.tv_nsec, 10_000_000);
     }
 }

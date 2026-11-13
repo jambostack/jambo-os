@@ -22390,6 +22390,7 @@ pub fn execute_coreutils_command(
         "ionice" => run_ionice(args, in_fd, out_fd, err_fd),
         "unshare" => run_unshare(args, in_fd, out_fd, err_fd),
         "prlimit" => run_prlimit(args, in_fd, out_fd, err_fd),
+        "chrt" => run_chrt(args, in_fd, out_fd, err_fd),
         _ => {
             let _ = sys_write(err_fd, cmd.as_bytes());
             let _ = sys_write(err_fd, b": command not found\n");
@@ -34973,6 +34974,311 @@ Resource options:\n\
     0
 }
 
+// ============================================================================
+// Utilitaire POSIX / util-linux : `chrt` (Attributs d'ordonnancement temps réel)
+// ============================================================================
+
+/// Exécute l'utilitaire Coreutils POSIX / util-linux `chrt` (examine ou modifie les attributs d'ordonnancement temps réel)
+///
+/// Syntaxe :
+///   chrt [options] <priority> <command> [<arg>...]
+///   chrt [options] --pid <priority> <PID>
+///   chrt [options] -p [<priority>] <PID>
+///
+/// Options :
+///   -b, --batch          définit la politique sur SCHED_BATCH
+///   -d, --deadline       définit la politique sur SCHED_DEADLINE
+///   -f, --fifo           définit la politique sur SCHED_FIFO
+///   -i, --idle           définit la politique sur SCHED_IDLE
+///   -o, --other          définit la politique sur SCHED_OTHER
+///   -r, --rr             définit la politique sur SCHED_RR (par défaut)
+///   -m, --max            affiche les priorités min/max valides et termine
+///   -p, --pid            opère sur un PID existant
+///   -v, --verbose        affiche les informations d'état détaillées
+///   -h, --help           affiche cette aide et termine
+///   -V, --version        affiche la version et termine
+pub fn run_chrt(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    let mut opt_pid = false;
+    let mut opt_verbose = false;
+    let mut opt_max = false;
+    let mut selected_policy: Option<i32> = None;
+    let mut operands: [&str; 16] = [""; 16];
+    let mut operand_count = 0usize;
+
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i];
+        if arg == "-h" || arg == "--help" {
+            let help = b"Usage:\n\
+  chrt [options] <priority> <command> [<arg>...]\n\
+  chrt [options] --pid <priority> <PID>\n\
+  chrt [options] -p [<priority>] <PID>\n\n\
+Manipulate the real-time attributes of a process.\n\n\
+Options:\n\
+  -b, --batch          set policy to SCHED_BATCH\n\
+  -d, --deadline       set policy to SCHED_DEADLINE\n\
+  -f, --fifo           set policy to SCHED_FIFO\n\
+  -i, --idle           set policy to SCHED_IDLE\n\
+  -o, --other          set policy to SCHED_OTHER\n\
+  -r, --rr             set policy to SCHED_RR (default)\n\
+  -m, --max            show min and max valid priorities, then exit\n\
+  -p, --pid            operate on existing given pid\n\
+  -v, --verbose        display status information\n\
+  -h, --help           display this help\n\
+  -V, --version        display version\n";
+            let _ = sys_write(out_fd, help);
+            return 0;
+        } else if arg == "-V" || arg == "--version" {
+            let ver = b"chrt (JamboOS coreutils) 0.3.93\n";
+            let _ = sys_write(out_fd, ver);
+            return 0;
+        } else if arg == "-m" || arg == "--max" {
+            opt_max = true;
+        } else if arg == "-p" || arg == "--pid" {
+            opt_pid = true;
+        } else if arg == "-v" || arg == "--verbose" {
+            opt_verbose = true;
+        } else if arg == "-b" || arg == "--batch" {
+            selected_policy = Some(crate::posix::SCHED_BATCH);
+        } else if arg == "-d" || arg == "--deadline" {
+            selected_policy = Some(crate::posix::SCHED_DEADLINE);
+        } else if arg == "-f" || arg == "--fifo" {
+            selected_policy = Some(crate::posix::SCHED_FIFO);
+        } else if arg == "-i" || arg == "--idle" {
+            selected_policy = Some(crate::posix::SCHED_IDLE);
+        } else if arg == "-o" || arg == "--other" {
+            selected_policy = Some(crate::posix::SCHED_OTHER);
+        } else if arg == "-r" || arg == "--rr" {
+            selected_policy = Some(crate::posix::SCHED_RR);
+        } else if arg.starts_with('-') && arg != "-" {
+            let _ = sys_write(err_fd, b"chrt: unrecognized option '");
+            let _ = sys_write(err_fd, arg.as_bytes());
+            let _ = sys_write(err_fd, b"'\nTry 'chrt --help' for more information.\n");
+            return 1;
+        } else {
+            if operand_count < operands.len() {
+                operands[operand_count] = arg;
+                operand_count += 1;
+            }
+        }
+        i += 1;
+    }
+
+    if opt_max {
+        let policies = [
+            ("SCHED_OTHER", crate::posix::SCHED_OTHER),
+            ("SCHED_FIFO", crate::posix::SCHED_FIFO),
+            ("SCHED_RR", crate::posix::SCHED_RR),
+            ("SCHED_BATCH", crate::posix::SCHED_BATCH),
+            ("SCHED_IDLE", crate::posix::SCHED_IDLE),
+            ("SCHED_DEADLINE", crate::posix::SCHED_DEADLINE),
+        ];
+        for (name, pol) in &policies {
+            let min = crate::posix::sys_sched_get_priority_min(*pol).unwrap_or(0);
+            let max = crate::posix::sys_sched_get_priority_max(*pol).unwrap_or(0);
+            let _ = sys_write(out_fd, name.as_bytes());
+            let _ = sys_write(out_fd, b" min/max priority\t: ");
+            write_i32_fd(out_fd, min);
+            let _ = sys_write(out_fd, b"/");
+            write_i32_fd(out_fd, max);
+            let _ = sys_write(out_fd, b"\n");
+        }
+        return 0;
+    }
+
+    fn policy_str(pol: i32) -> &'static str {
+        match pol {
+            crate::posix::SCHED_OTHER => "SCHED_OTHER",
+            crate::posix::SCHED_FIFO => "SCHED_FIFO",
+            crate::posix::SCHED_RR => "SCHED_RR",
+            crate::posix::SCHED_BATCH => "SCHED_BATCH",
+            crate::posix::SCHED_IDLE => "SCHED_IDLE",
+            crate::posix::SCHED_DEADLINE => "SCHED_DEADLINE",
+            _ => "SCHED_UNKNOWN",
+        }
+    }
+
+    if opt_pid {
+        if operand_count == 0 {
+            let _ = sys_write(
+                err_fd,
+                b"chrt: bad usage\nTry 'chrt --help' for more information.\n",
+            );
+            return 1;
+        }
+
+        // Cas 1: chrt -p <pid> (inspection)
+        if operand_count == 1 && selected_policy.is_none() {
+            let pid_str = operands[0];
+            let mut pid_val = 0i32;
+            let mut pid_valid = !pid_str.is_empty();
+            for b in pid_str.bytes() {
+                if b.is_ascii_digit() {
+                    pid_val = pid_val.saturating_mul(10).saturating_add((b - b'0') as i32);
+                } else {
+                    pid_valid = false;
+                    break;
+                }
+            }
+            if !pid_valid || pid_val <= 0 {
+                let _ = sys_write(err_fd, b"chrt: failed to parse PID: '");
+                let _ = sys_write(err_fd, pid_str.as_bytes());
+                let _ = sys_write(err_fd, b"'\n");
+                return 1;
+            }
+
+            let cur_pol = match crate::posix::sys_sched_getscheduler(pid_val) {
+                Ok(p) => p,
+                Err(_) => {
+                    let _ = sys_write(err_fd, b"chrt: failed to get pid ");
+                    let _ = sys_write(err_fd, pid_str.as_bytes());
+                    let _ = sys_write(err_fd, b"'s policy: No such process\n");
+                    return 1;
+                }
+            };
+            let mut cur_param = crate::posix::SchedParam::default();
+            let _ = crate::posix::sys_sched_getparam(pid_val, &mut cur_param);
+
+            let _ = sys_write(out_fd, b"pid ");
+            let _ = sys_write(out_fd, pid_str.as_bytes());
+            let _ = sys_write(out_fd, b"'s current scheduling policy: ");
+            let _ = sys_write(out_fd, policy_str(cur_pol).as_bytes());
+            let _ = sys_write(out_fd, b"\npid ");
+            let _ = sys_write(out_fd, pid_str.as_bytes());
+            let _ = sys_write(out_fd, b"'s current scheduling priority: ");
+            write_i32_fd(out_fd, cur_param.sched_priority);
+            let _ = sys_write(out_fd, b"\n");
+            return 0;
+        }
+
+        // Cas 2: chrt [options] -p <prio> <pid> ou chrt <options> -p <pid>
+        let (prio_val, pid_str) = if operand_count >= 2 {
+            let prio_s = operands[0];
+            let pid_s = operands[1];
+            let mut p = 0i32;
+            let mut p_ok = !prio_s.is_empty();
+            for b in prio_s.bytes() {
+                if b.is_ascii_digit() {
+                    p = p.saturating_mul(10).saturating_add((b - b'0') as i32);
+                } else {
+                    p_ok = false;
+                    break;
+                }
+            }
+            if !p_ok {
+                let _ = sys_write(err_fd, b"chrt: failed to parse priority: '");
+                let _ = sys_write(err_fd, prio_s.as_bytes());
+                let _ = sys_write(err_fd, b"'\n");
+                return 1;
+            }
+            (p, pid_s)
+        } else {
+            (0i32, operands[0])
+        };
+
+        let mut pid_val = 0i32;
+        let mut pid_valid = !pid_str.is_empty();
+        for b in pid_str.bytes() {
+            if b.is_ascii_digit() {
+                pid_val = pid_val.saturating_mul(10).saturating_add((b - b'0') as i32);
+            } else {
+                pid_valid = false;
+                break;
+            }
+        }
+        if !pid_valid || pid_val <= 0 {
+            let _ = sys_write(err_fd, b"chrt: failed to parse PID: '");
+            let _ = sys_write(err_fd, pid_str.as_bytes());
+            let _ = sys_write(err_fd, b"'\n");
+            return 1;
+        }
+
+        let policy = selected_policy.unwrap_or(crate::posix::SCHED_RR);
+        let param = crate::posix::SchedParam::new(prio_val);
+
+        if opt_verbose {
+            let cur_pol =
+                crate::posix::sys_sched_getscheduler(pid_val).unwrap_or(crate::posix::SCHED_OTHER);
+            let mut cur_param = crate::posix::SchedParam::default();
+            let _ = crate::posix::sys_sched_getparam(pid_val, &mut cur_param);
+            let _ = sys_write(out_fd, b"pid ");
+            let _ = sys_write(out_fd, pid_str.as_bytes());
+            let _ = sys_write(out_fd, b"'s current scheduling policy: ");
+            let _ = sys_write(out_fd, policy_str(cur_pol).as_bytes());
+            let _ = sys_write(out_fd, b"\npid ");
+            let _ = sys_write(out_fd, pid_str.as_bytes());
+            let _ = sys_write(out_fd, b"'s current scheduling priority: ");
+            write_i32_fd(out_fd, cur_param.sched_priority);
+            let _ = sys_write(out_fd, b"\n");
+        }
+
+        if crate::posix::sys_sched_setscheduler(pid_val, policy, &param).is_err() {
+            let _ = sys_write(err_fd, b"chrt: failed to set pid ");
+            let _ = sys_write(err_fd, pid_str.as_bytes());
+            let _ = sys_write(err_fd, b"'s policy: Invalid argument\n");
+            return 1;
+        }
+
+        if opt_verbose {
+            let _ = sys_write(out_fd, b"pid ");
+            let _ = sys_write(out_fd, pid_str.as_bytes());
+            let _ = sys_write(out_fd, b"'s new scheduling policy: ");
+            let _ = sys_write(out_fd, policy_str(policy).as_bytes());
+            let _ = sys_write(out_fd, b"\npid ");
+            let _ = sys_write(out_fd, pid_str.as_bytes());
+            let _ = sys_write(out_fd, b"'s new scheduling priority: ");
+            write_i32_fd(out_fd, prio_val);
+            let _ = sys_write(out_fd, b"\n");
+        }
+
+        0
+    } else {
+        // Mode lancement de commande : chrt [options] <priority> <command> [args...]
+        if operand_count < 2 {
+            let _ = sys_write(
+                err_fd,
+                b"chrt: missing operand\nTry 'chrt --help' for more information.\n",
+            );
+            return 1;
+        }
+
+        let prio_s = operands[0];
+        let mut prio_val = 0i32;
+        let mut p_ok = !prio_s.is_empty();
+        for b in prio_s.bytes() {
+            if b.is_ascii_digit() {
+                prio_val = prio_val
+                    .saturating_mul(10)
+                    .saturating_add((b - b'0') as i32);
+            } else {
+                p_ok = false;
+                break;
+            }
+        }
+        if !p_ok {
+            let _ = sys_write(err_fd, b"chrt: failed to parse priority: '");
+            let _ = sys_write(err_fd, prio_s.as_bytes());
+            let _ = sys_write(err_fd, b"'\n");
+            return 1;
+        }
+
+        let policy = selected_policy.unwrap_or(crate::posix::SCHED_RR);
+        let param = crate::posix::SchedParam::new(prio_val);
+
+        if crate::posix::sys_sched_setscheduler(0, policy, &param).is_err() {
+            let _ = sys_write(
+                err_fd,
+                b"chrt: failed to set scheduling policy: Invalid argument\n",
+            );
+            return 1;
+        }
+
+        let target_cmd = operands[1];
+        let target_args = &operands[2..operand_count];
+        execute_coreutils_command(target_cmd, target_args, in_fd, out_fd, err_fd)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -42516,6 +42822,72 @@ Chaque processus dispose de son propre CR3 sans aucun privilege materiel direct.
         // 6. prlimit option inconnue -> Erreur
         let (err_r6, err_w6) = crate::vfs::pipe().expect("pipe prlimit err 6");
         assert_ne!(run_prlimit(&["--invalid-opt"], 0, 1, err_w6), 0);
+        sys_close(err_w6);
+        let n6 = sys_read(err_r6, &mut buf);
+        sys_close(err_r6);
+        let s6 = core::str::from_utf8(&buf[..n6 as usize]).unwrap();
+        assert!(s6.contains("unrecognized option"));
+    }
+
+    #[test]
+    fn test_chrt_execution_and_options() {
+        let mut buf = [0u8; 1024];
+
+        // 1. chrt --help
+        let (out_r1, out_w1) = crate::vfs::pipe().expect("pipe chrt 1");
+        assert_eq!(run_chrt(&["--help"], 0, out_w1, 2), 0);
+        sys_close(out_w1);
+        let n1 = sys_read(out_r1, &mut buf);
+        sys_close(out_r1);
+        let s1 = core::str::from_utf8(&buf[..n1 as usize]).unwrap();
+        assert!(s1.contains("Usage:"));
+        assert!(s1.contains("Manipulate the real-time attributes"));
+
+        // 2. chrt --version
+        let (out_r2, out_w2) = crate::vfs::pipe().expect("pipe chrt 2");
+        assert_eq!(run_chrt(&["--version"], 0, out_w2, 2), 0);
+        sys_close(out_w2);
+        let n2 = sys_read(out_r2, &mut buf);
+        sys_close(out_r2);
+        let s2 = core::str::from_utf8(&buf[..n2 as usize]).unwrap();
+        assert!(s2.contains("chrt (JamboOS coreutils)"));
+
+        // 3. chrt --max (bornes min/max des priorités)
+        let (out_r3, out_w3) = crate::vfs::pipe().expect("pipe chrt 3");
+        assert_eq!(run_chrt(&["--max"], 0, out_w3, 2), 0);
+        sys_close(out_w3);
+        let n3 = sys_read(out_r3, &mut buf);
+        sys_close(out_r3);
+        let s3 = core::str::from_utf8(&buf[..n3 as usize]).unwrap();
+        assert!(s3.contains("SCHED_OTHER min/max priority\t: 0/0"));
+        assert!(s3.contains("SCHED_FIFO min/max priority\t: 1/99"));
+        assert!(s3.contains("SCHED_RR min/max priority\t: 1/99"));
+
+        // 4. chrt -p 1 (inspection du processus 1)
+        let (out_r4, out_w4) = crate::vfs::pipe().expect("pipe chrt 4");
+        assert_eq!(run_chrt(&["-p", "1"], 0, out_w4, 2), 0);
+        sys_close(out_w4);
+        let n4 = sys_read(out_r4, &mut buf);
+        sys_close(out_r4);
+        let s4 = core::str::from_utf8(&buf[..n4 as usize]).unwrap();
+        assert!(s4.contains("pid 1's current scheduling policy:"));
+        assert!(s4.contains("pid 1's current scheduling priority:"));
+
+        // 5. chrt exécution de commande avec priorité FIFO 45
+        let (out_r5, out_w5) = crate::vfs::pipe().expect("pipe chrt 5");
+        assert_eq!(
+            run_chrt(&["--fifo", "45", "echo", "chrt_fifo_ok"], 0, out_w5, 2),
+            0
+        );
+        sys_close(out_w5);
+        let n5 = sys_read(out_r5, &mut buf);
+        sys_close(out_r5);
+        let s5 = core::str::from_utf8(&buf[..n5 as usize]).unwrap();
+        assert!(s5.contains("chrt_fifo_ok"));
+
+        // 6. chrt option invalide -> Erreur
+        let (err_r6, err_w6) = crate::vfs::pipe().expect("pipe chrt err 6");
+        assert_ne!(run_chrt(&["--bad-flag"], 0, 1, err_w6), 0);
         sys_close(err_w6);
         let n6 = sys_read(err_r6, &mut buf);
         sys_close(err_r6);

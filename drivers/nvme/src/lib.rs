@@ -1144,6 +1144,37 @@ impl NvmeActiveNamespaceList {
     }
 }
 
+/// Priorité de la file de soumission NVMe (SQ Priority, NVMe 1.4 §5.5)
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NvmeQueuePriority {
+    Urgent = 0x00,
+    High = 0x01,
+    Medium = 0x02,
+    Low = 0x03,
+}
+
+/// Descripteur de canal d'interruption MSI-X délégué pour une Completion Queue (CQ) NVMe 1.4
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct NvmeCqMsixDelegation {
+    /// Identifiant de la file de complétion (QID, 1..8)
+    pub qid: u16,
+    /// Index du vecteur MSI-X (0..31)
+    pub vector_index: u16,
+    /// Descripteur de port de notification pour réception des interruptions en Ring 3
+    pub port_handle: libjambo::Handle,
+    /// Cookie d'identification opaque retourné lors de la notification d'interruption
+    pub cookie: u64,
+    /// Vecteur d'interruption CPU cible (32..255)
+    pub target_vector: u32,
+    /// Handle de capacité IRQ déléguée retourné par le micro-noyau (Syscall 29)
+    pub irq_handle: libjambo::Handle,
+    /// Interruption activée dans le contrôleur NVMe (IEN=1 dans Create I/O CQ)
+    pub interrupts_enabled: bool,
+    /// Statut de liaison matérielle active
+    pub bound: bool,
+}
+
 /// Contrôleur NVMe opérationnel en espace utilisateur.
 pub struct NvmeController {
     pub bar0_base: u64,
@@ -1156,6 +1187,8 @@ pub struct NvmeController {
     pub next_cid: u16,
     pub msix: NvmeMsixRing,
     pub cq_vector_map: [u8; 8],
+    /// Canaux de délégation d'interruptions MSI-X par CQ (QID 0..7)
+    pub cq_msix_delegations: [Option<NvmeCqMsixDelegation>; 8],
     pub vwc_present: bool,
     pub flush_count: u64,
     pub flush_errors: u64,
@@ -1188,6 +1221,7 @@ impl NvmeController {
             next_cid: 1,
             msix: NvmeMsixRing::new(4),
             cq_vector_map: [0xFF; 8],
+            cq_msix_delegations: [None; 8],
             vwc_present: true,
             flush_count: 0,
             flush_errors: 0,
@@ -1786,6 +1820,7 @@ impl NvmeController {
     pub fn recover_from_crash(&mut self) -> Result<(), SysError> {
         self.admin_queue = NvmeQueuePair::new(0);
         self.io_queue = NvmeQueuePair::new(1);
+        self.cq_msix_delegations = [None; 8];
         self.ready = true;
         Ok(())
     }
@@ -2308,6 +2343,258 @@ impl NvmeController {
         ns.used_blocks = 0;
 
         Ok(())
+    }
+
+    /// Soumet une commande d'administration de création de file de complétion I/O (Create I/O Completion Queue, NVMe 1.4 §5.4).
+    ///
+    /// # Paramètres
+    /// - `qid` : Identifiant de la file CQ (1 à 65535, 0 étant réservé à l'Admin CQ).
+    /// - `size` : Nombre d'entrées de la CQ (1 à 65536 entrées).
+    /// - `prp1_iova` : Adresse physique (IOVA) contiguë du buffer de la file CQ.
+    /// - `vector_index` : Vecteur d'interruption MSI-X ou MSI assigné (IV, bits [31:16] de CDW11).
+    /// - `interrupts_enabled` : Active la génération d'interruptions sur complétion (IEN, bit 1 de CDW11).
+    /// - `physically_contiguous` : Indique si le buffer est contigu en mémoire physique (PC, bit 0 de CDW11).
+    pub fn submit_create_io_cq(
+        &mut self,
+        qid: u16,
+        size: u16,
+        prp1_iova: u64,
+        vector_index: u16,
+        interrupts_enabled: bool,
+        physically_contiguous: bool,
+    ) -> Result<u16, SysError> {
+        if !self.ready {
+            return Err(SysError::NotSupported);
+        }
+        if qid == 0 || size == 0 {
+            return Err(SysError::InvalidArgument);
+        }
+
+        let qsize_minus_one = (size - 1) as u32;
+        let cdw10 = ((qsize_minus_one & 0xFFFF) << 16) | (qid as u32);
+
+        let mut cdw11 = 0u32;
+        if physically_contiguous {
+            cdw11 |= 1 << 0; // PC (Physically Contiguous)
+        }
+        if interrupts_enabled {
+            cdw11 |= 1 << 1; // IEN (Interrupts Enabled)
+        }
+        cdw11 |= (vector_index as u32) << 16; // IV (Interrupt Vector)
+
+        let cmd = NvmeSubmissionEntry {
+            cdw0: NVME_ADMIN_CREATE_CQ as u32,
+            nsid: 0,
+            reserved: 0,
+            mptr: 0,
+            prp1: prp1_iova,
+            prp2: 0,
+            cdw10,
+            cdw11,
+            cdw12: 0,
+            cdw13: 0,
+            cdw14: 0,
+            cdw15: 0,
+        };
+
+        let cid = self.admin_queue.submit(cmd);
+
+        // Mise à jour de l'association CQ -> vecteur MSI-X interne
+        if (qid as usize) < self.cq_vector_map.len() && interrupts_enabled {
+            self.cq_vector_map[qid as usize] = (vector_index & 0xFF) as u8;
+        }
+
+        Ok(cid)
+    }
+
+    /// Soumet une commande d'administration de création de file de soumission I/O (Create I/O Submission Queue, NVMe 1.4 §5.5).
+    ///
+    /// # Paramètres
+    /// - `qid` : Identifiant de la file SQ (1 à 65535).
+    /// - `size` : Nombre d'entrées de la SQ (1 à 65536 entrées).
+    /// - `prp1_iova` : Adresse physique (IOVA) contiguë du buffer de la file SQ.
+    /// - `cqid` : Identifiant de la file de complétion (CQ) associée pour les retours d'exécution.
+    /// - `priority` : Priorité d'arbitrage de la file (Urgent, High, Medium, Low).
+    /// - `physically_contiguous` : Indique si le buffer est physiquement contigu (PC).
+    pub fn submit_create_io_sq(
+        &mut self,
+        qid: u16,
+        size: u16,
+        prp1_iova: u64,
+        cqid: u16,
+        priority: NvmeQueuePriority,
+        physically_contiguous: bool,
+    ) -> Result<u16, SysError> {
+        if !self.ready {
+            return Err(SysError::NotSupported);
+        }
+        if qid == 0 || size == 0 || cqid == 0 {
+            return Err(SysError::InvalidArgument);
+        }
+
+        let qsize_minus_one = (size - 1) as u32;
+        let cdw10 = ((qsize_minus_one & 0xFFFF) << 16) | (qid as u32);
+
+        let mut cdw11 = 0u32;
+        if physically_contiguous {
+            cdw11 |= 1 << 0; // PC (Physically Contiguous)
+        }
+        cdw11 |= ((priority as u32) & 0x03) << 1; // QPRIO (Queue Priority)
+        cdw11 |= (cqid as u32) << 16; // CQID (Completion Queue ID)
+
+        let cmd = NvmeSubmissionEntry {
+            cdw0: NVME_ADMIN_CREATE_SQ as u32,
+            nsid: 0,
+            reserved: 0,
+            mptr: 0,
+            prp1: prp1_iova,
+            prp2: 0,
+            cdw10,
+            cdw11,
+            cdw12: 0,
+            cdw13: 0,
+            cdw14: 0,
+            cdw15: 0,
+        };
+
+        let cid = self.admin_queue.submit(cmd);
+        Ok(cid)
+    }
+
+    /// Soumet la suppression d'une file I/O (Delete I/O SQ ou Delete I/O CQ).
+    pub fn submit_delete_io_queue(&mut self, qid: u16, is_cq: bool) -> Result<u16, SysError> {
+        if !self.ready {
+            return Err(SysError::NotSupported);
+        }
+        if qid == 0 {
+            return Err(SysError::InvalidArgument);
+        }
+
+        let opcode = if is_cq {
+            NVME_ADMIN_DELETE_CQ
+        } else {
+            NVME_ADMIN_DELETE_SQ
+        };
+
+        let cmd = NvmeSubmissionEntry {
+            cdw0: opcode as u32,
+            nsid: 0,
+            reserved: 0,
+            mptr: 0,
+            prp1: 0,
+            prp2: 0,
+            cdw10: qid as u32,
+            cdw11: 0,
+            cdw12: 0,
+            cdw13: 0,
+            cdw14: 0,
+            cdw15: 0,
+        };
+
+        let cid = self.admin_queue.submit(cmd);
+        if is_cq && (qid as usize) < self.cq_vector_map.len() {
+            self.cq_vector_map[qid as usize] = 0xFF;
+            self.cq_msix_delegations[qid as usize] = None;
+        }
+        Ok(cid)
+    }
+
+    /// Raccorde une file de complétion (CQ) NVMe 1.4 à un vecteur MSI-X délégué via le broker matériel DeviceIo.
+    #[allow(clippy::too_many_arguments)]
+    pub fn bind_cq_deviceio_msix(
+        &mut self,
+        qid: u16,
+        vector_index: u16,
+        pci_addr: &libjambo::pci::PciAddress,
+        port_handle: libjambo::Handle,
+        cookie: u64,
+        target_vector: u32,
+        apic_id: u8,
+    ) -> Result<libjambo::Handle, SysError> {
+        if qid == 0 || (qid as usize) >= self.cq_msix_delegations.len() {
+            return Err(SysError::InvalidArgument);
+        }
+        if (vector_index as usize) >= NVME_MSIX_MAX_VECTORS {
+            return Err(SysError::InvalidArgument);
+        }
+        if !(32..=255).contains(&target_vector) {
+            return Err(SysError::InvalidArgument);
+        }
+
+        // 1. Délégation de l'interruption matérielle via l'appel système DeviceIo (Syscall 29)
+        let irq_handle = pci_addr.msix_delegate_irq(port_handle, cookie, target_vector)?;
+
+        // 2. Configuration du vecteur MSI-X dans le ring interne du contrôleur
+        self.bind_cq_msix(qid, vector_index as usize, apic_id, target_vector as u8)?;
+
+        // 3. Enregistrement du descripteur de canal délégué
+        let delegation = NvmeCqMsixDelegation {
+            qid,
+            vector_index,
+            port_handle,
+            cookie,
+            target_vector,
+            irq_handle,
+            interrupts_enabled: true,
+            bound: true,
+        };
+        self.cq_msix_delegations[qid as usize] = Some(delegation);
+
+        Ok(irq_handle)
+    }
+
+    /// Récupère le descripteur de canal MSI-X délégué associé à une file CQ.
+    pub fn get_cq_msix_delegation(&self, qid: u16) -> Option<NvmeCqMsixDelegation> {
+        if (qid as usize) < self.cq_msix_delegations.len() {
+            self.cq_msix_delegations[qid as usize]
+        } else {
+            None
+        }
+    }
+
+    /// Déconnecte une file de complétion CQ de son vecteur MSI-X délégué.
+    pub fn unbind_cq_deviceio_msix(&mut self, qid: u16) -> Result<(), SysError> {
+        if qid == 0 || (qid as usize) >= self.cq_msix_delegations.len() {
+            return Err(SysError::InvalidArgument);
+        }
+        if self.cq_msix_delegations[qid as usize].take().is_some()
+            && (qid as usize) < self.cq_vector_map.len()
+        {
+            self.cq_vector_map[qid as usize] = 0xFF;
+        }
+        Ok(())
+    }
+
+    /// Traite une interruption MSI-X déléguée pour un vecteur cible et retourne la complétion correspondante.
+    pub fn dispatch_delegated_msix_completion(
+        &mut self,
+        target_vector: u32,
+    ) -> Option<(u16, NvmeCompletionEntry)> {
+        for del in self.cq_msix_delegations.iter().flatten() {
+            if del.bound && del.interrupts_enabled && del.target_vector == target_vector {
+                let qid = del.qid;
+                let q = if qid == 0 {
+                    &mut self.admin_queue
+                } else {
+                    &mut self.io_queue
+                };
+                if let Some(entry) = q.consume_completion() {
+                    return Some((qid, entry));
+                }
+                return Some((
+                    qid,
+                    NvmeCompletionEntry {
+                        dw0: 0,
+                        reserved: 0,
+                        sq_head: q.sq_tail,
+                        sq_id: qid,
+                        command_id: 0,
+                        status: if q.cq_phase { 1 } else { 0 },
+                    },
+                ));
+            }
+        }
+        None
     }
 }
 
@@ -3691,5 +3978,110 @@ mod tests {
             ctrl.apply_format_to_namespace(99, cfg, new_format),
             Err(SysError::InvalidHandle)
         );
+    }
+
+    #[test]
+    fn test_create_io_queues_and_deviceio_msix_delegation() {
+        let mut ctrl = NvmeController::new();
+        ctrl.ready = true;
+
+        // 1. Validation de submit_create_io_cq (CDW10, CDW11, Opcode)
+        let cq_cid = ctrl
+            .submit_create_io_cq(1, 64, 0x1000_2000, 2, true, true)
+            .expect("create io cq");
+        let cq_cmd = ctrl.admin_queue.sq[(cq_cid as usize) % QUEUE_SIZE];
+        assert_eq!((cq_cmd.cdw0 & 0xFF) as u8, NVME_ADMIN_CREATE_CQ);
+        assert_eq!(cq_cmd.prp1, 0x1000_2000);
+        // CDW10 : bits [31:16] = size - 1 = 63 = 0x003F, bits [15:0] = QID = 1 -> 0x003F0001
+        assert_eq!(cq_cmd.cdw10, (63 << 16) | 1);
+        // CDW11 : bit 0 = PC (1), bit 1 = IEN (1), bits [31:16] = IV = 2 -> (2 << 16) | 0x03
+        assert_eq!(cq_cmd.cdw11, (2 << 16) | 0x03);
+
+        // Erreurs d'arguments Create I/O CQ
+        assert_eq!(
+            ctrl.submit_create_io_cq(0, 64, 0x1000, 0, true, true),
+            Err(SysError::InvalidArgument)
+        );
+        assert_eq!(
+            ctrl.submit_create_io_cq(1, 0, 0x1000, 0, true, true),
+            Err(SysError::InvalidArgument)
+        );
+
+        // 2. Validation de submit_create_io_sq (CDW10, CDW11, Opcode)
+        let sq_cid = ctrl
+            .submit_create_io_sq(1, 64, 0x1000_4000, 1, NvmeQueuePriority::High, true)
+            .expect("create io sq");
+        let sq_cmd = ctrl.admin_queue.sq[(sq_cid as usize) % QUEUE_SIZE];
+        assert_eq!((sq_cmd.cdw0 & 0xFF) as u8, NVME_ADMIN_CREATE_SQ);
+        assert_eq!(sq_cmd.prp1, 0x1000_4000);
+        // CDW10 : QSIZE-1 = 63, QID = 1
+        assert_eq!(sq_cmd.cdw10, (63 << 16) | 1);
+        // CDW11 : bit 0 = PC (1), bits [2:1] = QPRIO = High (1 << 1 = 2), bits [31:16] = CQID = 1
+        assert_eq!(sq_cmd.cdw11, (1 << 16) | (1 << 1) | 1);
+
+        // Erreurs d'arguments Create I/O SQ
+        assert_eq!(
+            ctrl.submit_create_io_sq(0, 64, 0x1000, 1, NvmeQueuePriority::High, true),
+            Err(SysError::InvalidArgument)
+        );
+        assert_eq!(
+            ctrl.submit_create_io_sq(1, 0, 0x1000, 1, NvmeQueuePriority::High, true),
+            Err(SysError::InvalidArgument)
+        );
+        assert_eq!(
+            ctrl.submit_create_io_sq(1, 64, 0x1000, 0, NvmeQueuePriority::High, true),
+            Err(SysError::InvalidArgument)
+        );
+
+        // 3. Liaison de la CQ 1 au vecteur MSI-X et simulation de délégation
+        assert!(ctrl.enable_msix(8).is_ok());
+        let pci_addr = PciAddress::new(0, 2, 0);
+
+        // Configuration directe de canal délégué
+        let del_res = ctrl.bind_cq_deviceio_msix(
+            1,
+            2,
+            &pci_addr,
+            libjambo::Handle(42), // port_handle
+            0xABCD_EF01,          // cookie
+            0x48,                 // target_vector (72)
+            0,                    // apic_id
+        );
+        let irq_h = del_res.expect("bind_cq_deviceio_msix failed");
+        assert_eq!(irq_h, libjambo::Handle(72));
+
+        let del_desc = ctrl.get_cq_msix_delegation(1).expect("delegation exists");
+        assert_eq!(del_desc.qid, 1);
+        assert_eq!(del_desc.vector_index, 2);
+        assert_eq!(del_desc.port_handle, libjambo::Handle(42));
+        assert_eq!(del_desc.cookie, 0xABCD_EF01);
+        assert_eq!(del_desc.target_vector, 0x48);
+        assert!(del_desc.bound);
+        assert!(del_desc.interrupts_enabled);
+
+        // 4. Traitement de notification asynchrone MSI-X déléguée
+        let event = ctrl.dispatch_delegated_msix_completion(0x48);
+        assert!(event.is_some());
+        let (ev_qid, _completion) = event.unwrap();
+        assert_eq!(ev_qid, 1);
+
+        // Vecteur non relié -> None
+        assert_eq!(ctrl.dispatch_delegated_msix_completion(0x99), None);
+
+        // 5. Déconnexion de la délégation MSI-X
+        assert!(ctrl.unbind_cq_deviceio_msix(1).is_ok());
+        let del_after = ctrl.get_cq_msix_delegation(1);
+        assert_eq!(del_after, None);
+
+        // 6. Suppression de file I/O (Delete I/O SQ et Delete I/O CQ)
+        let del_sq_cid = ctrl.submit_delete_io_queue(1, false).expect("delete sq");
+        let del_sq_cmd = ctrl.admin_queue.sq[(del_sq_cid as usize) % QUEUE_SIZE];
+        assert_eq!((del_sq_cmd.cdw0 & 0xFF) as u8, NVME_ADMIN_DELETE_SQ);
+        assert_eq!(del_sq_cmd.cdw10, 1);
+
+        let del_cq_cid = ctrl.submit_delete_io_queue(1, true).expect("delete cq");
+        let del_cq_cmd = ctrl.admin_queue.sq[(del_cq_cid as usize) % QUEUE_SIZE];
+        assert_eq!((del_cq_cmd.cdw0 & 0xFF) as u8, NVME_ADMIN_DELETE_CQ);
+        assert_eq!(del_cq_cmd.cdw10, 1);
     }
 }
