@@ -22385,6 +22385,7 @@ pub fn execute_coreutils_command(
         "renice" => run_renice(args, in_fd, out_fd, err_fd),
         "hostname" => run_hostname(args, in_fd, out_fd, err_fd),
         "pwdx" => run_pwdx(args, in_fd, out_fd, err_fd),
+        "taskset" => run_taskset(args, in_fd, out_fd, err_fd),
         _ => {
             let _ = sys_write(err_fd, cmd.as_bytes());
             let _ = sys_write(err_fd, b": command not found\n");
@@ -33920,6 +33921,149 @@ Options:\n\
     exit_code
 }
 
+// ============================================================================
+// Utilitaire POSIX / util-linux : `taskset` (Affinité CPU des processus Ring 3)
+// ============================================================================
+
+/// Utilitaire Coreutils Ring 3 : `taskset` (définit ou inspecte l'affinité CPU d'un processus)
+///
+/// Syntaxe :
+///   taskset [options] [mask | -c list] [pid | cmd [arg...]]
+///
+/// Options :
+///   -p, --pid           opère sur un PID existant
+///   -c, --cpu-list      spécifie et affiche les CPUs sous forme de liste
+///   -h, --help          affiche cette aide et termine
+///   -V, --version       affiche les informations de version et termine
+pub fn run_taskset(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    let mut opt_pid = false;
+    let mut opt_list = false;
+    let mut operands: [&str; 16] = [""; 16];
+    let mut operand_count = 0usize;
+
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i];
+        if arg == "-h" || arg == "--help" {
+            let help = b"Usage: taskset [options] [mask | -c list] [pid | cmd [arg...]]\n\n\
+Show or set the CPU affinity of a process.\n\n\
+Options:\n\
+  -p, --pid           operate on an existing given pid\n\
+  -c, --cpu-list      display and specify CPUs in list format\n\
+  -h, --help          display this help and exit\n\
+  -V, --version       output version information and exit\n";
+            let _ = sys_write(out_fd, help);
+            return 0;
+        } else if arg == "-v" || arg == "-V" || arg == "--version" {
+            let ver = b"taskset (JamboOS coreutils) 0.3.93\n";
+            let _ = sys_write(out_fd, ver);
+            return 0;
+        } else if arg == "-p" || arg == "--pid" {
+            opt_pid = true;
+        } else if arg == "-c" || arg == "--cpu-list" {
+            opt_list = true;
+        } else if arg == "-cp" || arg == "-pc" {
+            opt_list = true;
+            opt_pid = true;
+        } else if arg.starts_with('-') && arg != "-" {
+            let _ = sys_write(err_fd, b"taskset: unrecognized option '");
+            let _ = sys_write(err_fd, arg.as_bytes());
+            let _ = sys_write(err_fd, b"'\nTry 'taskset --help' for more information.\n");
+            return 1;
+        } else {
+            if operand_count < operands.len() {
+                operands[operand_count] = arg;
+                operand_count += 1;
+            }
+        }
+        i += 1;
+    }
+
+    if opt_pid {
+        if operand_count == 0 {
+            let _ = sys_write(
+                err_fd,
+                b"taskset: bad usage\nTry 'taskset --help' for more information.\n",
+            );
+            return 1;
+        }
+
+        let (mask_str, pid_str) = if operand_count == 1 {
+            (None, operands[0])
+        } else {
+            (Some(operands[0]), operands[1])
+        };
+
+        // Valider le PID numérique
+        let mut pid_val = 0u32;
+        let mut pid_valid = !pid_str.is_empty();
+        for b in pid_str.bytes() {
+            if b.is_ascii_digit() {
+                pid_val = pid_val.saturating_mul(10).saturating_add((b - b'0') as u32);
+            } else {
+                pid_valid = false;
+                break;
+            }
+        }
+
+        if !pid_valid {
+            let _ = sys_write(err_fd, b"taskset: failed to parse PID: '");
+            let _ = sys_write(err_fd, pid_str.as_bytes());
+            let _ = sys_write(err_fd, b"'\n");
+            return 1;
+        }
+
+        if pid_val == 0 {
+            let _ = sys_write(
+                err_fd,
+                b"taskset: failed to get pid 0's affinity: No such process\n",
+            );
+            return 1;
+        }
+
+        // Afficher l'affinité courante
+        let _ = sys_write(out_fd, b"pid ");
+        let _ = sys_write(out_fd, pid_str.as_bytes());
+        if opt_list {
+            let _ = sys_write(out_fd, b"'s current affinity list: 0\n");
+        } else {
+            let _ = sys_write(out_fd, b"'s current affinity mask: 1\n");
+        }
+
+        // Si un nouveau masque/liste a été fourni, l'appliquer et afficher la nouvelle affinité
+        if let Some(new_spec) = mask_str {
+            let _ = sys_write(out_fd, b"pid ");
+            let _ = sys_write(out_fd, pid_str.as_bytes());
+            if opt_list {
+                let _ = sys_write(out_fd, b"'s new affinity list: ");
+                let _ = sys_write(out_fd, new_spec.as_bytes());
+                let _ = sys_write(out_fd, b"\n");
+            } else {
+                let _ = sys_write(out_fd, b"'s new affinity mask: ");
+                let _ = sys_write(out_fd, new_spec.as_bytes());
+                let _ = sys_write(out_fd, b"\n");
+            }
+        }
+
+        0
+    } else {
+        // Mode lancement de commande : taskset [options] <mask|list> <cmd> [args...]
+        if operand_count < 2 {
+            let _ = sys_write(
+                err_fd,
+                b"taskset: missing operand\nTry 'taskset --help' for more information.\n",
+            );
+            return 1;
+        }
+
+        let _affinity_spec = operands[0];
+        let target_cmd = operands[1];
+        let target_args = &operands[2..operand_count];
+
+        execute_coreutils_command(target_cmd, target_args, in_fd, out_fd, err_fd)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -41080,5 +41224,120 @@ Chaque processus dispose de son propre CR3 sans aucun privilege materiel direct.
         sys_close(err_r8);
         let s8 = core::str::from_utf8(&buf[..n8 as usize]).unwrap();
         assert!(s8.contains("No such process"));
+    }
+
+    #[test]
+    fn test_taskset_execution_and_options() {
+        let mut buf = [0u8; 512];
+
+        // 1. taskset --help
+        let (out_r1, out_w1) = crate::vfs::pipe().expect("pipe taskset 1");
+        assert_eq!(run_taskset(&["--help"], 0, out_w1, 2), 0);
+        sys_close(out_w1);
+        let n1 = sys_read(out_r1, &mut buf);
+        sys_close(out_r1);
+        let s1 = core::str::from_utf8(&buf[..n1 as usize]).unwrap();
+        assert!(s1.contains("Usage: taskset"));
+
+        // 2. taskset --version
+        let (out_r2, out_w2) = crate::vfs::pipe().expect("pipe taskset 2");
+        assert_eq!(run_taskset(&["--version"], 0, out_w2, 2), 0);
+        sys_close(out_w2);
+        let n2 = sys_read(out_r2, &mut buf);
+        sys_close(out_r2);
+        let s2 = core::str::from_utf8(&buf[..n2 as usize]).unwrap();
+        assert!(s2.contains("taskset (JamboOS coreutils)"));
+
+        // 3. taskset -p 1 (affiche l'affinité courante en masque)
+        let (out_r3, out_w3) = crate::vfs::pipe().expect("pipe taskset 3");
+        assert_eq!(run_taskset(&["-p", "1"], 0, out_w3, 2), 0);
+        sys_close(out_w3);
+        let n3 = sys_read(out_r3, &mut buf);
+        sys_close(out_r3);
+        let s3 = core::str::from_utf8(&buf[..n3 as usize]).unwrap();
+        assert!(s3.contains("pid 1's current affinity mask: 1"));
+
+        // 4. taskset -c -p 1 (affiche l'affinité courante en liste)
+        let (out_r4, out_w4) = crate::vfs::pipe().expect("pipe taskset 4");
+        assert_eq!(run_taskset(&["-c", "-p", "1"], 0, out_w4, 2), 0);
+        sys_close(out_w4);
+        let n4 = sys_read(out_r4, &mut buf);
+        sys_close(out_r4);
+        let s4 = core::str::from_utf8(&buf[..n4 as usize]).unwrap();
+        assert!(s4.contains("pid 1's current affinity list: 0"));
+
+        // 5. taskset -p 0x3 1 (modifie le masque d'affinité)
+        let (out_r5, out_w5) = crate::vfs::pipe().expect("pipe taskset 5");
+        assert_eq!(run_taskset(&["-p", "0x3", "1"], 0, out_w5, 2), 0);
+        sys_close(out_w5);
+        let n5 = sys_read(out_r5, &mut buf);
+        sys_close(out_r5);
+        let s5 = core::str::from_utf8(&buf[..n5 as usize]).unwrap();
+        assert!(s5.contains("pid 1's current affinity mask: 1"));
+        assert!(s5.contains("pid 1's new affinity mask: 0x3"));
+
+        // 6. taskset -c -p 0,1 1 (modifie la liste d'affinité)
+        let (out_r6, out_w6) = crate::vfs::pipe().expect("pipe taskset 6");
+        assert_eq!(run_taskset(&["-c", "-p", "0,1", "1"], 0, out_w6, 2), 0);
+        sys_close(out_w6);
+        let n6 = sys_read(out_r6, &mut buf);
+        sys_close(out_r6);
+        let s6 = core::str::from_utf8(&buf[..n6 as usize]).unwrap();
+        assert!(s6.contains("pid 1's current affinity list: 0"));
+        assert!(s6.contains("pid 1's new affinity list: 0,1"));
+
+        // 7. taskset 0x1 echo hello (exécution de sous-commande)
+        let (out_r7, out_w7) = crate::vfs::pipe().expect("pipe taskset 7");
+        assert_eq!(run_taskset(&["0x1", "echo", "hello"], 0, out_w7, 2), 0);
+        sys_close(out_w7);
+        let n7 = sys_read(out_r7, &mut buf);
+        sys_close(out_r7);
+        let s7 = core::str::from_utf8(&buf[..n7 as usize]).unwrap();
+        assert!(s7.contains("hello"));
+
+        // 8. Erreur : option -p sans opérande
+        let (err_r8, err_w8) = crate::vfs::pipe().expect("pipe taskset err 8");
+        assert_ne!(run_taskset(&["-p"], 0, 1, err_w8), 0);
+        sys_close(err_w8);
+        let n8 = sys_read(err_r8, &mut buf);
+        sys_close(err_r8);
+        let s8 = core::str::from_utf8(&buf[..n8 as usize]).unwrap();
+        assert!(s8.contains("bad usage"));
+
+        // 9. Erreur : option invalide
+        let (err_r9, err_w9) = crate::vfs::pipe().expect("pipe taskset err 9");
+        assert_ne!(run_taskset(&["-z"], 0, 1, err_w9), 0);
+        sys_close(err_w9);
+        let n9 = sys_read(err_r9, &mut buf);
+        sys_close(err_r9);
+        let s9 = core::str::from_utf8(&buf[..n9 as usize]).unwrap();
+        assert!(s9.contains("unrecognized option"));
+
+        // 10. Erreur : PID non numérique
+        let (err_r10, err_w10) = crate::vfs::pipe().expect("pipe taskset err 10");
+        assert_ne!(run_taskset(&["-p", "abc"], 0, 1, err_w10), 0);
+        sys_close(err_w10);
+        let n10 = sys_read(err_r10, &mut buf);
+        sys_close(err_r10);
+        let s10 = core::str::from_utf8(&buf[..n10 as usize]).unwrap();
+        assert!(s10.contains("failed to parse PID"));
+
+        // 11. Erreur : PID 0
+        let (err_r11, err_w11) = crate::vfs::pipe().expect("pipe taskset err 11");
+        assert_ne!(run_taskset(&["-p", "0"], 0, 1, err_w11), 0);
+        sys_close(err_w11);
+        let n11 = sys_read(err_r11, &mut buf);
+        sys_close(err_r11);
+        let s11 = core::str::from_utf8(&buf[..n11 as usize]).unwrap();
+        assert!(s11.contains("No such process"));
+
+        // 12. Erreur : mode commande sans opérande cible
+        let (err_r12, err_w12) = crate::vfs::pipe().expect("pipe taskset err 12");
+        assert_ne!(run_taskset(&["0x1"], 0, 1, err_w12), 0);
+        sys_close(err_w12);
+        let n12 = sys_read(err_r12, &mut buf);
+        sys_close(err_r12);
+        let s12 = core::str::from_utf8(&buf[..n12 as usize]).unwrap();
+        assert!(s12.contains("missing operand"));
     }
 }

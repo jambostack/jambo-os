@@ -697,7 +697,12 @@ name = "pwdx"
 path = "src/bin/pwdx.rs"
 test = false
 
-# 138 utilitaires Ring 3
+[[bin]]
+name = "taskset"
+path = "src/bin/taskset.rs"
+test = false
+
+# 139 utilitaires Ring 3
 
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }

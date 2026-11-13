@@ -574,6 +574,7 @@ impl JamboShell {
             "renice" | "/bin/renice" | "bin/renice" => self.cmd_renice(args, out),
             "hostname" | "/bin/hostname" | "bin/hostname" => self.cmd_hostname(args, out),
             "pwdx" | "/bin/pwdx" | "bin/pwdx" => self.cmd_pwdx(args, out),
+            "taskset" | "/bin/taskset" | "bin/taskset" => self.cmd_taskset(args, out),
             "basename" | "/bin/basename" | "bin/basename" => self.cmd_basename(args, out),
             "dirname" | "/bin/dirname" | "bin/dirname" => self.cmd_dirname(args, out),
             "seq" | "/bin/seq" | "bin/seq" => self.cmd_seq(args, out),
@@ -1382,6 +1383,26 @@ Utilitaire d'installation JamboOS (Serie 0.*.*)\n\
             }
         } else {
             let msg = b"pwdx: pipe creation failed\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
+    }
+
+    fn cmd_taskset(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if let Ok((r, w)) = libjambo::vfs::pipe() {
+            let code = libjambo::coreutils::run_taskset(args, 0, w, w);
+            let _ = libjambo::coreutils::sys_close(w);
+            let n = libjambo::coreutils::sys_read(r, out);
+            let _ = libjambo::coreutils::sys_close(r);
+            let len = if n > 0 { n as usize } else { 0 };
+            if code == 0 {
+                (ShellStatus::Success, len)
+            } else {
+                (ShellStatus::ExecutionFailed, len)
+            }
+        } else {
+            let msg = b"taskset: pipe creation failed\n";
             let len = msg.len().min(out.len());
             out[..len].copy_from_slice(&msg[..len]);
             (ShellStatus::ExecutionFailed, len)
@@ -22777,5 +22798,21 @@ mod tests {
         assert_eq!(st164, ShellStatus::Success);
         let s164 = core::str::from_utf8(&out[..len164]).unwrap();
         assert!(s164.contains("pwdx (JamboOS coreutils)"));
+
+        // 72. taskset shell command
+        let (st165, len165) = shell.execute_line("taskset -p 1", &mut out);
+        assert_eq!(st165, ShellStatus::Success);
+        let s165 = core::str::from_utf8(&out[..len165]).unwrap();
+        assert!(s165.contains("pid 1's current affinity mask: 1"));
+
+        let (st166, len166) = shell.execute_line("taskset --help", &mut out);
+        assert_eq!(st166, ShellStatus::Success);
+        let s166 = core::str::from_utf8(&out[..len166]).unwrap();
+        assert!(s166.contains("Usage: taskset"));
+
+        let (st167, len167) = shell.execute_line("taskset --version", &mut out);
+        assert_eq!(st167, ShellStatus::Success);
+        let s167 = core::str::from_utf8(&out[..len167]).unwrap();
+        assert!(s167.contains("taskset (JamboOS coreutils)"));
     }
 }

@@ -398,6 +398,8 @@ pub const XHCI_EXT_CAP_USB4_TIME_SYNC_CONFIGURATION_INTERFACE_V2: u8 = 77;
 pub const XHCI_EXT_CAP_USB4_DP_BANDWIDTH_ALLOCATION_INTERFACE_V2: u8 = 78;
 /// Capacité étendue xHCI 1.2 / USB4 Buffer Allocation Interface v2 (§7.71)
 pub const XHCI_EXT_CAP_USB4_BUFFER_ALLOCATION_INTERFACE_V2: u8 = 79;
+/// Capacité étendue xHCI 1.2 / USB4 Router Protocol Tunneling Adapter Configuration Interface v2 (§7.72)
+pub const XHCI_EXT_CAP_USB4_ROUTER_PROTOCOL_TUNNELING_INTERFACE_V2: u8 = 80;
 
 /// Masques de registres USB Legacy Support (xHCI 1.2 Section 7.1)
 /// Registre USBLEGSUP (Offset 0x00)
@@ -9513,6 +9515,264 @@ impl XhciUsb4BufferAllocationInterfaceV2 {
     /// Indique si l'interface d'allocation de tampons USB4 v2 est opérationnelle
     pub fn is_operational(&self) -> bool {
         self.allocation_enabled && self.credit_negotiation_active && self.buffer_health_status < 3
+    }
+}
+
+/// Capacité étendue xHCI 1.2 / USB4 Router Protocol Tunneling Adapter Configuration Interface v2 (§7.72)
+///
+/// Permet la gestion et la configuration du routage et de la tunnelisation de protocoles
+/// (PCIe, DisplayPort, USB3 SuperSpeed, Host Interface / Inter-Domain) au travers de la
+/// fabrique de commutation de paquets du routeur USB4 v2 hôte (jusqu'à 80/120 Gbps).
+/// Fournit la configuration de bande passante, le contrôle d'asymétrie 120G TX / 40G RX,
+/// la télémétrie d'intégrité (CRC, retransmissions) et la gestion de qualité de service (QoS).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XhciUsb4RouterProtocolTunnelingInterfaceV2 {
+    /// Pointeur dword vers la prochaine capacité étendue (0 = fin de liste)
+    pub next_ptr_dwords: u8,
+    /// Identifiant de l'adaptateur de protocole de routeur cible (0..63)
+    pub router_adapter_id: u8,
+    /// Type de protocole tunnelisé (0: PCIe, 1: DisplayPort, 2: USB3 SuperSpeed, 3: Host Interface DMA)
+    pub protocol_type: u8,
+    /// État opérationnel du tunnel (0: Disabled, 1: Training, 2: Active, 3: Suspended, 4: Error)
+    pub tunnel_state: u8,
+    /// Mode de transmission asymétrique (0: Symétrique, 1: TX 120G / RX 40G, 2: RX 120G / TX 40G)
+    pub asymmetric_mode: u8,
+    /// Tunnelisation active
+    pub tunneling_enabled: bool,
+    /// Contrôle de flux hop-by-hop basé sur les crédits
+    pub credit_based_flow_control: bool,
+    /// Correction d'erreurs sans voie de retour (Forward Error Correction) activée
+    pub fec_enabled: bool,
+    /// Priorité QoS élevée pour trafic à faible latence (isochrone DP / PCIe)
+    pub qos_high_priority: bool,
+    /// Routage inter-domaines activé pour ce tunnel
+    pub inter_domain_routing: bool,
+    /// Interruption / notification de changement d'état du tunnel
+    pub interrupt_on_state_change: bool,
+    /// Nombre de chemins virtuels actifs (Hop IDs / Virtual Paths)
+    pub active_paths_count: u8,
+    /// Compteur d'erreurs CRC de paquets tunnelisés
+    pub crc_error_counter: u16,
+    /// Bande passante allouée actuellement au tunnel (en Mbps)
+    pub allocated_bandwidth_mbps: u16,
+    /// Bande passante maximale allouable au tunnel (en Mbps)
+    pub max_bandwidth_mbps: u16,
+    /// Compteur de paquets réémis ou retransmis sur le lien
+    pub retried_packets_counter: u16,
+    /// Identifiant de saut ou de chemin virtuel cible (Hop ID)
+    pub target_hop_id: u8,
+}
+
+impl XhciUsb4RouterProtocolTunnelingInterfaceV2 {
+    /// Crée une nouvelle interface de tunnelisation de protocole routeur USB4 v2
+    pub const fn new(router_adapter_id: u8, protocol_type: u8, max_bandwidth_mbps: u16) -> Self {
+        Self {
+            next_ptr_dwords: 0,
+            router_adapter_id: router_adapter_id & 0x3F,
+            protocol_type: protocol_type & 0x03,
+            tunnel_state: 0,    // Disabled
+            asymmetric_mode: 0, // Symétrique
+            tunneling_enabled: false,
+            credit_based_flow_control: false,
+            fec_enabled: true,
+            qos_high_priority: false,
+            inter_domain_routing: false,
+            interrupt_on_state_change: true,
+            active_paths_count: 0,
+            crc_error_counter: 0,
+            allocated_bandwidth_mbps: 0,
+            max_bandwidth_mbps,
+            retried_packets_counter: 0,
+            target_hop_id: 1,
+        }
+    }
+
+    /// Parse les 4 dwords MMIO d'une capacité étendue USB4 Router Protocol Tunneling Adapter Configuration Interface v2 (§7.72)
+    pub const fn parse(dwords: &[u32; 4]) -> Option<Self> {
+        let cap_id = (dwords[0] & 0xFF) as u8;
+        if cap_id != XHCI_EXT_CAP_USB4_ROUTER_PROTOCOL_TUNNELING_INTERFACE_V2 {
+            return None;
+        }
+
+        let next_ptr_dwords = ((dwords[0] >> 8) & 0xFF) as u8;
+        let router_adapter_id = ((dwords[0] >> 16) & 0x3F) as u8;
+        let protocol_type = ((dwords[0] >> 22) & 0x03) as u8;
+        let tunnel_state = ((dwords[0] >> 24) & 0x0F) as u8;
+        let asymmetric_mode = ((dwords[0] >> 28) & 0x03) as u8;
+
+        let ctrl = dwords[1];
+        let tunneling_enabled = (ctrl & 0x01) != 0;
+        let credit_based_flow_control = (ctrl & 0x02) != 0;
+        let fec_enabled = (ctrl & 0x04) != 0;
+        let qos_high_priority = (ctrl & 0x08) != 0;
+        let inter_domain_routing = (ctrl & 0x10) != 0;
+        let interrupt_on_state_change = (ctrl & 0x20) != 0;
+        let active_paths_count = ((ctrl >> 8) & 0xFF) as u8;
+        let crc_error_counter = ((ctrl >> 16) & 0xFFFF) as u16;
+
+        let allocated_bandwidth_mbps = (dwords[2] & 0xFFFF) as u16;
+        let max_bandwidth_mbps = ((dwords[2] >> 16) & 0xFFFF) as u16;
+
+        let retried_packets_counter = (dwords[3] & 0xFFFF) as u16;
+        let target_hop_id = ((dwords[3] >> 16) & 0xFF) as u8;
+
+        Some(Self {
+            next_ptr_dwords,
+            router_adapter_id,
+            protocol_type,
+            tunnel_state,
+            asymmetric_mode,
+            tunneling_enabled,
+            credit_based_flow_control,
+            fec_enabled,
+            qos_high_priority,
+            inter_domain_routing,
+            interrupt_on_state_change,
+            active_paths_count,
+            crc_error_counter,
+            allocated_bandwidth_mbps,
+            max_bandwidth_mbps,
+            retried_packets_counter,
+            target_hop_id,
+        })
+    }
+
+    /// Encode la capacité étendue USB4 Router Protocol Tunneling Interface v2 sous forme de 4 dwords MMIO
+    pub const fn encode(&self) -> [u32; 4] {
+        let dw0 = (XHCI_EXT_CAP_USB4_ROUTER_PROTOCOL_TUNNELING_INTERFACE_V2 as u32)
+            | ((self.next_ptr_dwords as u32) << 8)
+            | (((self.router_adapter_id as u32) & 0x3F) << 16)
+            | (((self.protocol_type as u32) & 0x03) << 22)
+            | (((self.tunnel_state as u32) & 0x0F) << 24)
+            | (((self.asymmetric_mode as u32) & 0x03) << 28);
+
+        let mut ctrl = 0u32;
+        if self.tunneling_enabled {
+            ctrl |= 0x01;
+        }
+        if self.credit_based_flow_control {
+            ctrl |= 0x02;
+        }
+        if self.fec_enabled {
+            ctrl |= 0x04;
+        }
+        if self.qos_high_priority {
+            ctrl |= 0x08;
+        }
+        if self.inter_domain_routing {
+            ctrl |= 0x10;
+        }
+        if self.interrupt_on_state_change {
+            ctrl |= 0x20;
+        }
+        ctrl |= ((self.active_paths_count as u32) & 0xFF) << 8;
+        ctrl |= ((self.crc_error_counter as u32) & 0xFFFF) << 16;
+
+        let dw2 = (self.allocated_bandwidth_mbps as u32) | ((self.max_bandwidth_mbps as u32) << 16);
+
+        let dw3 =
+            (self.retried_packets_counter as u32) | (((self.target_hop_id as u32) & 0xFF) << 16);
+
+        [dw0, ctrl, dw2, dw3]
+    }
+
+    /// Active la tunnelisation de protocole sur cet adaptateur
+    pub fn enable_tunnel(&mut self) {
+        self.tunneling_enabled = true;
+        self.credit_based_flow_control = true;
+        self.tunnel_state = 2; // Active
+        if self.active_paths_count == 0 {
+            self.active_paths_count = 1;
+        }
+    }
+
+    /// Désactive la tunnelisation de protocole
+    pub fn disable_tunnel(&mut self) {
+        self.tunneling_enabled = false;
+        self.credit_based_flow_control = false;
+        self.allocated_bandwidth_mbps = 0;
+        self.active_paths_count = 0;
+        self.tunnel_state = 0; // Disabled
+    }
+
+    /// Alloue de la bande passante pour le tunnel
+    pub fn allocate_bandwidth(&mut self, mbps: u16) -> bool {
+        let requested = self.allocated_bandwidth_mbps.saturating_add(mbps);
+        if requested <= self.max_bandwidth_mbps {
+            self.allocated_bandwidth_mbps = requested;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Libère de la bande passante allouée au tunnel
+    pub fn release_bandwidth(&mut self, mbps: u16) {
+        self.allocated_bandwidth_mbps = self.allocated_bandwidth_mbps.saturating_sub(mbps);
+    }
+
+    /// Configure le mode de transmission asymétrique
+    pub fn set_asymmetric_mode(&mut self, mode: u8) {
+        self.asymmetric_mode = mode & 0x03;
+    }
+
+    /// Configure la priorité QoS
+    pub fn set_qos_priority(&mut self, high_priority: bool) {
+        self.qos_high_priority = high_priority;
+    }
+
+    /// Active ou désactive le routage inter-domaines
+    pub fn set_inter_domain(&mut self, enabled: bool) {
+        self.inter_domain_routing = enabled;
+    }
+
+    /// Active ou désactive la correction d'erreurs (FEC)
+    pub fn set_fec(&mut self, enabled: bool) {
+        self.fec_enabled = enabled;
+    }
+
+    /// Définit l'état opérationnel du tunnel
+    pub fn set_state(&mut self, state: u8) {
+        self.tunnel_state = state & 0x0F;
+    }
+
+    /// Enregistre une erreur de somme de contrôle CRC
+    pub fn record_crc_error(&mut self) {
+        self.crc_error_counter = self.crc_error_counter.saturating_add(1);
+        if self.crc_error_counter > 10 {
+            self.tunnel_state = 4; // Error
+        }
+    }
+
+    /// Enregistre une réémission / retransmission de paquets
+    pub fn record_retry(&mut self) {
+        self.retried_packets_counter = self.retried_packets_counter.saturating_add(1);
+    }
+
+    /// Description textuelle du protocole tunnelisé
+    pub const fn protocol_description(&self) -> &'static str {
+        match self.protocol_type {
+            0 => "PCIe Protocol Tunneling",
+            1 => "DisplayPort Protocol Tunneling",
+            2 => "USB3 SuperSpeed Protocol Tunneling",
+            _ => "Host Interface DMA / Inter-Domain Tunneling",
+        }
+    }
+
+    /// Description textuelle de l'état du tunnel
+    pub const fn state_description(&self) -> &'static str {
+        match self.tunnel_state {
+            0 => "Désactivé / Inactif",
+            1 => "Entraînement / Handshaking",
+            2 => "Actif / Opérationnel",
+            3 => "Suspendu / Veille",
+            _ => "Erreur critique / Lien tombé",
+        }
+    }
+
+    /// Indique si le tunnel de protocole routeur USB4 v2 est opérationnel
+    pub fn is_operational(&self) -> bool {
+        self.tunneling_enabled && self.tunnel_state == 2 && self.crc_error_counter < 100
     }
 }
 
@@ -20781,5 +21041,113 @@ mod tests {
         assert!(!ba.credit_negotiation_active);
         assert_eq!(ba.allocated_buffer_credits, 0);
         assert_eq!(ba.available_buffer_credits, 1024);
+    }
+
+    #[test]
+    fn test_xhci_usb4_router_protocol_tunneling_interface_v2() {
+        let mut tunnel = XhciUsb4RouterProtocolTunnelingInterfaceV2::new(14, 1, 40000); // Adapter 14, DP Tunneling, 40 Gbps
+        assert_eq!(tunnel.router_adapter_id, 14);
+        assert_eq!(tunnel.protocol_type, 1);
+        assert_eq!(tunnel.tunnel_state, 0);
+        assert_eq!(tunnel.asymmetric_mode, 0);
+        assert_eq!(tunnel.max_bandwidth_mbps, 40000);
+        assert_eq!(tunnel.allocated_bandwidth_mbps, 0);
+        assert_eq!(
+            tunnel.protocol_description(),
+            "DisplayPort Protocol Tunneling"
+        );
+        assert_eq!(tunnel.state_description(), "Désactivé / Inactif");
+        assert!(!tunnel.is_operational());
+
+        // Activation du tunnel
+        tunnel.enable_tunnel();
+        assert!(tunnel.tunneling_enabled);
+        assert!(tunnel.credit_based_flow_control);
+        assert_eq!(tunnel.tunnel_state, 2);
+        assert_eq!(tunnel.state_description(), "Actif / Opérationnel");
+        assert!(tunnel.is_operational());
+
+        // Allocation de bande passante
+        assert!(tunnel.allocate_bandwidth(18000));
+        assert_eq!(tunnel.allocated_bandwidth_mbps, 18000);
+        assert!(tunnel.allocate_bandwidth(20000));
+        assert_eq!(tunnel.allocated_bandwidth_mbps, 38000);
+
+        // Tentative de dépassement de la bande passante maximale
+        assert!(!tunnel.allocate_bandwidth(5000)); // 38000 + 5000 = 43000 > 40000
+        assert_eq!(tunnel.allocated_bandwidth_mbps, 38000);
+
+        // Libération de bande passante
+        tunnel.release_bandwidth(18000);
+        assert_eq!(tunnel.allocated_bandwidth_mbps, 20000);
+
+        // Modes asymétriques & QoS
+        tunnel.set_asymmetric_mode(1); // TX 120G / RX 40G
+        assert_eq!(tunnel.asymmetric_mode, 1);
+        tunnel.set_qos_priority(true);
+        assert!(tunnel.qos_high_priority);
+        tunnel.set_inter_domain(true);
+        assert!(tunnel.inter_domain_routing);
+
+        // Encodage et décodage MMIO
+        tunnel.next_ptr_dwords = 0x78;
+        tunnel.active_paths_count = 4;
+        tunnel.record_retry();
+        tunnel.record_retry();
+        tunnel.record_crc_error();
+        let encoded = tunnel.encode();
+
+        assert_eq!(
+            encoded[0] & 0xFF,
+            XHCI_EXT_CAP_USB4_ROUTER_PROTOCOL_TUNNELING_INTERFACE_V2 as u32
+        );
+        assert_eq!((encoded[0] >> 8) & 0xFF, 0x78);
+        assert_eq!((encoded[0] >> 16) & 0x3F, 14);
+        assert_eq!((encoded[0] >> 22) & 0x03, 1);
+        assert_eq!((encoded[0] >> 24) & 0x0F, 2);
+        assert_eq!((encoded[0] >> 28) & 0x03, 1);
+
+        assert_eq!(encoded[1] & 0x01, 1); // tunneling_enabled
+        assert_eq!(encoded[1] & 0x02, 2); // credit_based_flow_control
+        assert_eq!(encoded[1] & 0x04, 4); // fec_enabled
+        assert_eq!(encoded[1] & 0x08, 8); // qos_high_priority
+        assert_eq!(encoded[1] & 0x10, 0x10); // inter_domain_routing
+        assert_eq!(encoded[1] & 0x20, 0x20); // interrupt_on_state_change
+        assert_eq!((encoded[1] >> 8) & 0xFF, 4); // active_paths_count
+        assert_eq!((encoded[1] >> 16) & 0xFFFF, 1); // crc_error_counter
+
+        assert_eq!(encoded[2] & 0xFFFF, 20000);
+        assert_eq!((encoded[2] >> 16) & 0xFFFF, 40000);
+
+        assert_eq!(encoded[3] & 0xFFFF, 2); // retried_packets_counter
+        assert_eq!((encoded[3] >> 16) & 0xFF, 1); // target_hop_id
+
+        let parsed = XhciUsb4RouterProtocolTunnelingInterfaceV2::parse(&encoded).unwrap();
+        assert_eq!(parsed.next_ptr_dwords, 0x78);
+        assert_eq!(parsed.router_adapter_id, 14);
+        assert_eq!(parsed.protocol_type, 1);
+        assert_eq!(parsed.tunnel_state, 2);
+        assert_eq!(parsed.asymmetric_mode, 1);
+        assert!(parsed.tunneling_enabled);
+        assert!(parsed.credit_based_flow_control);
+        assert!(parsed.fec_enabled);
+        assert!(parsed.qos_high_priority);
+        assert!(parsed.inter_domain_routing);
+        assert!(parsed.interrupt_on_state_change);
+        assert_eq!(parsed.active_paths_count, 4);
+        assert_eq!(parsed.crc_error_counter, 1);
+        assert_eq!(parsed.allocated_bandwidth_mbps, 20000);
+        assert_eq!(parsed.max_bandwidth_mbps, 40000);
+        assert_eq!(parsed.retried_packets_counter, 2);
+        assert_eq!(parsed.target_hop_id, 1);
+        assert!(parsed.is_operational());
+
+        // Test désactivation
+        tunnel.disable_tunnel();
+        assert!(!tunnel.is_operational());
+        assert!(!tunnel.tunneling_enabled);
+        assert_eq!(tunnel.allocated_bandwidth_mbps, 0);
+        assert_eq!(tunnel.active_paths_count, 0);
+        assert_eq!(tunnel.tunnel_state, 0);
     }
 }
