@@ -22383,6 +22383,7 @@ pub fn execute_coreutils_command(
         "uptime" => run_uptime(args, out_fd, err_fd),
         "mcookie" => run_mcookie(args, in_fd, out_fd, err_fd),
         "renice" => run_renice(args, in_fd, out_fd, err_fd),
+        "hostname" => run_hostname(args, in_fd, out_fd, err_fd),
         _ => {
             let _ = sys_write(err_fd, cmd.as_bytes());
             let _ = sys_write(err_fd, b": command not found\n");
@@ -33667,6 +33668,159 @@ Options:\n\
     }
 }
 
+/// Utilitaire POSIX / GNU coreutils / net-tools : `hostname` (affiche ou modifie le nom d'hôte du système)
+///
+/// Syntaxe :
+///   hostname [-s|--short] [-d|--domain] [-f|--fqdn] [-i|-I|--ip-address] [-b|--boot]
+///   hostname <nouveau_nom>
+///   hostname -h|--help
+///   hostname -V|-v|--version
+pub fn run_hostname(args: &[&str], _in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    let mut show_short = false;
+    let mut show_domain = false;
+    let mut show_fqdn = false;
+    let mut show_ip = false;
+    let mut new_hostname: Option<&str> = None;
+
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i];
+        if arg == "-h" || arg == "--help" {
+            let help = b"Usage: hostname [OPTIONS] [NAME]\n\n\
+Show or set the system's host name.\n\n\
+Options:\n\
+  -s, --short            short host name (up to first dot)\n\
+  -d, --domain           DNS domain name (after first dot)\n\
+  -f, --fqdn, --long     fully qualified domain name\n\
+  -i, --ip-address       addresses for the host name (IPv4 loopback/local)\n\
+  -I, --all-ip-addresses all network addresses\n\
+  -b, --boot             always set a hostname (use default if not found)\n\
+  -h, --help             display this help and exit\n\
+  -V, --version          output version information and exit\n";
+            let _ = sys_write(out_fd, help);
+            return 0;
+        } else if arg == "-v" || arg == "-V" || arg == "--version" {
+            let ver = b"hostname (JamboOS coreutils) 0.3.92\n";
+            let _ = sys_write(out_fd, ver);
+            return 0;
+        } else if arg == "-s" || arg == "--short" {
+            show_short = true;
+        } else if arg == "-d" || arg == "--domain" {
+            show_domain = true;
+        } else if arg == "-f" || arg == "--fqdn" || arg == "--long" {
+            show_fqdn = true;
+        } else if arg == "-i" || arg == "-I" || arg == "--ip-address" || arg == "--all-ip-addresses"
+        {
+            show_ip = true;
+        } else if arg == "-b" || arg == "--boot" {
+            // Option boot sans effet sur runtime
+        } else if arg.starts_with('-') && arg != "-" {
+            let _ = sys_write(err_fd, b"hostname: unrecognized option '");
+            let _ = sys_write(err_fd, arg.as_bytes());
+            let _ = sys_write(err_fd, b"'\nTry 'hostname --help' for more information.\n");
+            return 1;
+        } else if new_hostname.is_none() {
+            new_hostname = Some(arg);
+        } else {
+            let _ = sys_write(err_fd, b"hostname: extra operand '");
+            let _ = sys_write(err_fd, arg.as_bytes());
+            let _ = sys_write(err_fd, b"'\nTry 'hostname --help' for more information.\n");
+            return 1;
+        }
+        i += 1;
+    }
+
+    if let Some(new_name) = new_hostname {
+        if new_name.is_empty() || new_name.len() > 64 {
+            let _ = sys_write(err_fd, b"hostname: invalid host name length\n");
+            return 1;
+        }
+        for byte in new_name.bytes() {
+            if !(byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'.') {
+                let _ = sys_write(err_fd, b"hostname: invalid characters in host name\n");
+                return 1;
+            }
+        }
+
+        let fd = sys_open("/etc/hostname", O_CREAT | O_WRONLY | O_TRUNC);
+        if fd >= 0 {
+            let _ = sys_write(fd, new_name.as_bytes());
+            let _ = sys_write(fd, b"\n");
+            let _ = sys_close(fd);
+            return 0;
+        } else {
+            let _ = sys_write(err_fd, b"hostname: failed to write /etc/hostname\n");
+            return 1;
+        }
+    }
+
+    if show_ip {
+        let _ = sys_write(out_fd, b"127.0.0.1\n");
+        return 0;
+    }
+
+    let mut host_buf = [0u8; 128];
+    let mut host_len = 0usize;
+
+    let fd = sys_open("/etc/hostname", O_RDONLY);
+    if fd >= 0 {
+        let n = sys_read(fd, &mut host_buf);
+        let _ = sys_close(fd);
+        if n > 0 {
+            let mut read_len = n as usize;
+            while read_len > 0
+                && (host_buf[read_len - 1] == b'\n'
+                    || host_buf[read_len - 1] == b'\r'
+                    || host_buf[read_len - 1] == 0)
+            {
+                read_len -= 1;
+            }
+            if read_len > 0 {
+                host_len = read_len;
+            }
+        }
+    }
+
+    if host_len == 0 {
+        let def = b"jambo-os";
+        host_buf[..def.len()].copy_from_slice(def);
+        host_len = def.len();
+    }
+
+    let full_hostname = core::str::from_utf8(&host_buf[..host_len]).unwrap_or("jambo-os");
+
+    if show_short {
+        let short_name = match full_hostname.find('.') {
+            Some(pos) => &full_hostname[..pos],
+            None => full_hostname,
+        };
+        let _ = sys_write(out_fd, short_name.as_bytes());
+        let _ = sys_write(out_fd, b"\n");
+    } else if show_domain {
+        let domain = match full_hostname.find('.') {
+            Some(pos) => &full_hostname[pos + 1..],
+            None => "",
+        };
+        if !domain.is_empty() {
+            let _ = sys_write(out_fd, domain.as_bytes());
+            let _ = sys_write(out_fd, b"\n");
+        } else {
+            let _ = sys_write(out_fd, b"\n");
+        }
+    } else if show_fqdn {
+        let _ = sys_write(out_fd, full_hostname.as_bytes());
+        if !full_hostname.contains('.') {
+            let _ = sys_write(out_fd, b".localdomain");
+        }
+        let _ = sys_write(out_fd, b"\n");
+    } else {
+        let _ = sys_write(out_fd, full_hostname.as_bytes());
+        let _ = sys_write(out_fd, b"\n");
+    }
+
+    0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -40676,5 +40830,79 @@ Chaque processus dispose de son propre CR3 sans aucun privilege materiel direct.
         assert_ne!(run_renice(&["10", "-p", "invalid_pid"], 0, 1, err_w7), 0);
         sys_close(err_w7);
         sys_close(err_r7);
+    }
+
+    #[test]
+    fn test_hostname_execution_and_options() {
+        let mut buf = [0u8; 128];
+
+        // 1. Test lecture hostname standard
+        let (out_r1, out_w1) = crate::vfs::pipe().expect("pipe hostname 1");
+        let code1 = run_hostname(&[], 0, out_w1, 2);
+        sys_close(out_w1);
+        assert_eq!(code1, 0);
+        let n1 = sys_read(out_r1, &mut buf);
+        sys_close(out_r1);
+        let s1 = core::str::from_utf8(&buf[..n1 as usize]).unwrap();
+        assert!(!s1.is_empty());
+        assert!(s1.ends_with('\n'));
+
+        // 2. Test modification du hostname
+        let code_set = run_hostname(&["node1.cluster.internal"], 0, 1, 2);
+        assert_eq!(code_set, 0);
+
+        // 3. Test options -s, -d, -f, -i
+        let (out_r2, out_w2) = crate::vfs::pipe().expect("pipe hostname 2");
+        assert_eq!(run_hostname(&["-s"], 0, out_w2, 2), 0);
+        sys_close(out_w2);
+        let n2 = sys_read(out_r2, &mut buf);
+        sys_close(out_r2);
+        assert_eq!(&buf[..n2 as usize], b"node1\n");
+
+        let (out_r3, out_w3) = crate::vfs::pipe().expect("pipe hostname 3");
+        assert_eq!(run_hostname(&["-d"], 0, out_w3, 2), 0);
+        sys_close(out_w3);
+        let n3 = sys_read(out_r3, &mut buf);
+        sys_close(out_r3);
+        assert_eq!(&buf[..n3 as usize], b"cluster.internal\n");
+
+        let (out_r4, out_w4) = crate::vfs::pipe().expect("pipe hostname 4");
+        assert_eq!(run_hostname(&["-f"], 0, out_w4, 2), 0);
+        sys_close(out_w4);
+        let n4 = sys_read(out_r4, &mut buf);
+        sys_close(out_r4);
+        assert_eq!(&buf[..n4 as usize], b"node1.cluster.internal\n");
+
+        let (out_r5, out_w5) = crate::vfs::pipe().expect("pipe hostname 5");
+        assert_eq!(run_hostname(&["-i"], 0, out_w5, 2), 0);
+        sys_close(out_w5);
+        let n5 = sys_read(out_r5, &mut buf);
+        sys_close(out_r5);
+        assert_eq!(&buf[..n5 as usize], b"127.0.0.1\n");
+
+        // 4. Test --help et --version
+        let (out_r6, out_w6) = crate::vfs::pipe().expect("pipe hostname 6");
+        assert_eq!(run_hostname(&["--help"], 0, out_w6, 2), 0);
+        sys_close(out_w6);
+        let n6 = sys_read(out_r6, &mut buf);
+        sys_close(out_r6);
+        let s6 = core::str::from_utf8(&buf[..n6 as usize]).unwrap();
+        assert!(s6.contains("Usage: hostname"));
+
+        assert_eq!(run_hostname(&["--version"], 0, 1, 2), 0);
+
+        // 5. Test erreurs
+        let (err_r8, err_w8) = crate::vfs::pipe().expect("pipe hostname err 8");
+        assert_ne!(run_hostname(&["--invalid-opt"], 0, 1, err_w8), 0);
+        sys_close(err_w8);
+        sys_close(err_r8);
+
+        let (err_r9, err_w9) = crate::vfs::pipe().expect("pipe hostname err 9");
+        assert_ne!(run_hostname(&["name1", "extra_name"], 0, 1, err_w9), 0);
+        sys_close(err_w9);
+        sys_close(err_r9);
+
+        // Rétablissement du hostname par défaut
+        let _ = run_hostname(&["jambo-os"], 0, 1, 2);
     }
 }

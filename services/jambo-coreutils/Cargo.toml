@@ -687,7 +687,12 @@ name = "renice"
 path = "src/bin/renice.rs"
 test = false
 
-# 136 utilitaires Ring 3
+[[bin]]
+name = "hostname"
+path = "src/bin/hostname.rs"
+test = false
+
+# 137 utilitaires Ring 3
 
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }

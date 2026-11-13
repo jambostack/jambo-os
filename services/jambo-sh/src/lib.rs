@@ -572,6 +572,7 @@ impl JamboShell {
             "split" | "/bin/split" | "bin/split" => self.cmd_split(args, out),
             "mcookie" | "/bin/mcookie" | "bin/mcookie" => self.cmd_mcookie(args, out),
             "renice" | "/bin/renice" | "bin/renice" => self.cmd_renice(args, out),
+            "hostname" | "/bin/hostname" | "bin/hostname" => self.cmd_hostname(args, out),
             "basename" | "/bin/basename" | "bin/basename" => self.cmd_basename(args, out),
             "dirname" | "/bin/dirname" | "bin/dirname" => self.cmd_dirname(args, out),
             "seq" | "/bin/seq" | "bin/seq" => self.cmd_seq(args, out),
@@ -1340,6 +1341,26 @@ Utilitaire d'installation JamboOS (Serie 0.*.*)\n\
             }
         } else {
             let msg = b"renice: pipe creation failed\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
+    }
+
+    fn cmd_hostname(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if let Ok((r, w)) = libjambo::vfs::pipe() {
+            let code = libjambo::coreutils::run_hostname(args, 0, w, w);
+            let _ = libjambo::coreutils::sys_close(w);
+            let n = libjambo::coreutils::sys_read(r, out);
+            let _ = libjambo::coreutils::sys_close(r);
+            let len = if n > 0 { n as usize } else { 0 };
+            if code == 0 {
+                (ShellStatus::Success, len)
+            } else {
+                (ShellStatus::ExecutionFailed, len)
+            }
+        } else {
+            let msg = b"hostname: pipe creation failed\n";
             let len = msg.len().min(out.len());
             out[..len].copy_from_slice(&msg[..len]);
             (ShellStatus::ExecutionFailed, len)
@@ -22702,5 +22723,22 @@ mod tests {
         assert_eq!(st158, ShellStatus::Success);
         let s158 = core::str::from_utf8(&out[..len158]).unwrap();
         assert!(s158.contains("renice (JamboOS coreutils)"));
+
+        // 70. hostname shell command
+        let (st159, len159) = shell.execute_line("hostname", &mut out);
+        assert_eq!(st159, ShellStatus::Success);
+        let s159 = core::str::from_utf8(&out[..len159]).unwrap();
+        assert!(!s159.is_empty());
+        assert!(s159.ends_with('\n'));
+
+        let (st160, len160) = shell.execute_line("hostname --help", &mut out);
+        assert_eq!(st160, ShellStatus::Success);
+        let s160 = core::str::from_utf8(&out[..len160]).unwrap();
+        assert!(s160.contains("Usage: hostname"));
+
+        let (st161, len161) = shell.execute_line("hostname --version", &mut out);
+        assert_eq!(st161, ShellStatus::Success);
+        let s161 = core::str::from_utf8(&out[..len161]).unwrap();
+        assert!(s161.contains("hostname (JamboOS coreutils)"));
     }
 }

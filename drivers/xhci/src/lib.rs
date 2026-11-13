@@ -394,6 +394,8 @@ pub const XHCI_EXT_CAP_USB4_HOST_INTERFACE_CONFIGURATION_INTERFACE_V2: u8 = 75;
 pub const XHCI_EXT_CAP_USB4_DOMAIN_CONFIGURATION_INTERFACE_V2: u8 = 76;
 /// Capacité étendue xHCI 1.2 / USB4 Time Synchronization Configuration Interface v2 (§7.69)
 pub const XHCI_EXT_CAP_USB4_TIME_SYNC_CONFIGURATION_INTERFACE_V2: u8 = 77;
+/// Capacité étendue xHCI 1.2 / USB4 DisplayPort Bandwidth Allocation Interface v2 (§7.70)
+pub const XHCI_EXT_CAP_USB4_DP_BANDWIDTH_ALLOCATION_INTERFACE_V2: u8 = 78;
 
 /// Masques de registres USB Legacy Support (xHCI 1.2 Section 7.1)
 /// Registre USBLEGSUP (Offset 0x00)
@@ -9024,6 +9026,213 @@ impl XhciUsb4TimeSyncConfigInterfaceV2 {
             && self.ptp_sync_locked
             && !self.reset_in_progress
             && (self.grandmaster_mode || self.propagation_delay_valid)
+    }
+}
+
+/// Capacité étendue xHCI 1.2 / USB4 DisplayPort Bandwidth Allocation Interface v2 (§7.70)
+///
+/// Permet la gestion dynamique de l'allocation de bande passante pour le tunneling DisplayPort v2 (UHBR10/13.5/20 et HBR3/2/1),
+/// la négociation de priorité, le support de compression DSC (Display Stream Compression),
+/// et la gestion déterministe de la contention sur les liens du domaine USB4 v2.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XhciUsb4DpBandwidthAllocationInterfaceV2 {
+    /// Pointeur dword vers la prochaine capacité étendue (0 = fin de liste)
+    pub next_ptr_dwords: u8,
+    /// Identifiant de l'adaptateur DisplayPort (0..63)
+    pub adapter_id: u8,
+    /// Allocation de bande passante activée
+    pub allocation_enabled: bool,
+    /// Support matériel de la compression DSC (Display Stream Compression)
+    pub dsc_supported: bool,
+    /// Compression DSC activée
+    pub dsc_enabled: bool,
+    /// Mode d'allocation de bande passante (0: Automatique/Dynamique, 1: Fixe/Manuel, 2: Best-Effort, 3: Réservé)
+    pub allocation_mode: u8,
+    /// Niveau de priorité de flux DisplayPort (0: Faible, 1: Standard, 2: Élevée, 3: Isochrone/Critique)
+    pub priority: u8,
+    /// Statut de la négociation de bande passante (0: Idle, 1: InProgress, 2: Allocated, 3: Contention/Failed)
+    pub negotiation_status: u8,
+    /// Bande passante demandée en Mbps
+    pub requested_bandwidth_mbps: u32,
+    /// Bande passante actuellement allouée en Mbps
+    pub allocated_bandwidth_mbps: u32,
+    /// Bande passante crête maximale supportée par l'adaptateur en Mbps
+    pub max_adapter_bandwidth_mbps: u32,
+    /// Compteur d'allocations ou renégociations réussies
+    pub allocation_events: u8,
+    /// Compteur de rejets d'allocation ou de contentions
+    pub contention_counter: u16,
+}
+
+impl XhciUsb4DpBandwidthAllocationInterfaceV2 {
+    /// Crée une nouvelle interface d'allocation de bande passante DisplayPort USB4 v2
+    pub const fn new(adapter_id: u8, max_adapter_bandwidth_mbps: u32, priority: u8) -> Self {
+        Self {
+            next_ptr_dwords: 0,
+            adapter_id,
+            allocation_enabled: false,
+            dsc_supported: true,
+            dsc_enabled: false,
+            allocation_mode: 0,
+            priority: priority & 0x03,
+            negotiation_status: 0,
+            requested_bandwidth_mbps: 0,
+            allocated_bandwidth_mbps: 0,
+            max_adapter_bandwidth_mbps,
+            allocation_events: 0,
+            contention_counter: 0,
+        }
+    }
+
+    /// Parse les 4 dwords MMIO d'une capacité étendue USB4 DisplayPort Bandwidth Allocation Interface v2 (§7.70)
+    pub const fn parse(dwords: &[u32; 4]) -> Option<Self> {
+        let cap_id = (dwords[0] & 0xFF) as u8;
+        if cap_id != XHCI_EXT_CAP_USB4_DP_BANDWIDTH_ALLOCATION_INTERFACE_V2 {
+            return None;
+        }
+
+        let next_ptr = ((dwords[0] >> 8) & 0xFF) as u8;
+        let adapter_id = ((dwords[0] >> 16) & 0xFF) as u8;
+        let allocation_mode = ((dwords[0] >> 24) & 0x03) as u8;
+        let priority = ((dwords[0] >> 26) & 0x03) as u8;
+        let negotiation_status = ((dwords[0] >> 28) & 0x0F) as u8;
+
+        let ctrl = dwords[1];
+        let allocation_enabled = (ctrl & 0x01) != 0;
+        let dsc_supported = (ctrl & 0x02) != 0;
+        let dsc_enabled = (ctrl & 0x04) != 0;
+        let allocation_events = ((ctrl >> 8) & 0xFF) as u8;
+        let contention_counter = ((ctrl >> 16) & 0xFFFF) as u16;
+
+        let requested_bandwidth_mbps = dwords[2];
+        let allocated_bandwidth_mbps = dwords[3];
+
+        Some(Self {
+            next_ptr_dwords: next_ptr,
+            adapter_id,
+            allocation_enabled,
+            dsc_supported,
+            dsc_enabled,
+            allocation_mode,
+            priority,
+            negotiation_status,
+            requested_bandwidth_mbps,
+            allocated_bandwidth_mbps,
+            max_adapter_bandwidth_mbps: 80_000, // Capacité UHBR20 80 Gbps par défaut
+            allocation_events,
+            contention_counter,
+        })
+    }
+
+    /// Encode la capacité étendue USB4 DP Bandwidth Allocation v2 sous forme de 4 dwords MMIO
+    pub const fn encode(&self) -> [u32; 4] {
+        let dw0 = (XHCI_EXT_CAP_USB4_DP_BANDWIDTH_ALLOCATION_INTERFACE_V2 as u32)
+            | ((self.next_ptr_dwords as u32) << 8)
+            | (((self.adapter_id as u32) & 0xFF) << 16)
+            | (((self.allocation_mode as u32) & 0x03) << 24)
+            | (((self.priority as u32) & 0x03) << 26)
+            | (((self.negotiation_status as u32) & 0x0F) << 28);
+
+        let mut ctrl = 0u32;
+        if self.allocation_enabled {
+            ctrl |= 0x01;
+        }
+        if self.dsc_supported {
+            ctrl |= 0x02;
+        }
+        if self.dsc_enabled {
+            ctrl |= 0x04;
+        }
+        ctrl |= ((self.allocation_events as u32) & 0xFF) << 8;
+        ctrl |= ((self.contention_counter as u32) & 0xFFFF) << 16;
+
+        let dw2 = self.requested_bandwidth_mbps;
+        let dw3 = self.allocated_bandwidth_mbps;
+
+        [dw0, ctrl, dw2, dw3]
+    }
+
+    /// Active l'allocation de bande passante DisplayPort
+    pub fn enable_allocation(&mut self) {
+        self.allocation_enabled = true;
+    }
+
+    /// Désactive l'allocation de bande passante DisplayPort
+    pub fn disable_allocation(&mut self) {
+        self.allocation_enabled = false;
+        self.negotiation_status = 0;
+        self.allocated_bandwidth_mbps = 0;
+    }
+
+    /// Effectue une requête d'allocation de bande passante (en Mbps)
+    pub fn request_bandwidth(&mut self, mbps: u32) -> bool {
+        self.requested_bandwidth_mbps = mbps;
+        if mbps <= self.max_adapter_bandwidth_mbps {
+            self.allocated_bandwidth_mbps = mbps;
+            self.negotiation_status = 2; // Alloué
+            self.allocation_events = self.allocation_events.saturating_add(1);
+            true
+        } else {
+            self.negotiation_status = 3; // Contention / Refus
+            self.record_contention();
+            false
+        }
+    }
+
+    /// Configure le support et l'activation du codec DSC
+    pub fn set_dsc(&mut self, supported: bool, enabled: bool) {
+        self.dsc_supported = supported;
+        self.dsc_enabled = supported && enabled;
+    }
+
+    /// Configure le niveau de priorité de bande passante
+    pub fn set_priority(&mut self, priority: u8) {
+        self.priority = priority & 0x03;
+    }
+
+    /// Configure le mode d'allocation
+    pub fn set_allocation_mode(&mut self, mode: u8) {
+        self.allocation_mode = mode & 0x03;
+    }
+
+    /// Enregistre un événement de contention ou de rejet
+    pub fn record_contention(&mut self) {
+        self.contention_counter = self.contention_counter.saturating_add(1);
+    }
+
+    /// Description textuelle du mode d'allocation
+    pub const fn mode_description(&self) -> &'static str {
+        match self.allocation_mode {
+            0 => "Automatique / Dynamique",
+            1 => "Fixe / Manuel",
+            2 => "Best-Effort",
+            _ => "Réservé / Prioritaire",
+        }
+    }
+
+    /// Description textuelle du statut de négociation
+    pub const fn status_description(&self) -> &'static str {
+        match self.negotiation_status {
+            0 => "Inactif / Idle",
+            1 => "Négociation en cours",
+            2 => "Bande passante allouée",
+            _ => "Contention / Refus",
+        }
+    }
+
+    /// Description textuelle du niveau de priorité
+    pub const fn priority_description(&self) -> &'static str {
+        match self.priority {
+            0 => "Faible (Low)",
+            1 => "Standard (Normal)",
+            2 => "Élevée (High)",
+            _ => "Isochrone / Temps Réel",
+        }
+    }
+
+    /// Indique si l'interface d'allocation de bande passante DP est opérationnelle
+    pub fn is_operational(&self) -> bool {
+        self.allocation_enabled && self.negotiation_status == 2 && self.allocated_bandwidth_mbps > 0
     }
 }
 
@@ -20090,5 +20299,94 @@ mod tests {
         assert!(!tsc.is_operational());
         assert!(!tsc.time_sync_enabled);
         assert!(!tsc.ptp_sync_locked);
+    }
+
+    #[test]
+    fn test_xhci_usb4_dp_bandwidth_allocation_interface_v2() {
+        let mut bwa = XhciUsb4DpBandwidthAllocationInterfaceV2::new(7, 40_000, 2);
+        assert_eq!(bwa.adapter_id, 7);
+        assert_eq!(bwa.max_adapter_bandwidth_mbps, 40_000);
+        assert_eq!(bwa.priority, 2);
+        assert_eq!(bwa.allocation_mode, 0);
+        assert_eq!(bwa.mode_description(), "Automatique / Dynamique");
+        assert_eq!(bwa.priority_description(), "Élevée (High)");
+        assert_eq!(bwa.status_description(), "Inactif / Idle");
+        assert!(!bwa.is_operational());
+
+        // Activation et allocation réussie
+        bwa.enable_allocation();
+        assert!(bwa.allocation_enabled);
+        assert!(!bwa.is_operational());
+
+        let ok = bwa.request_bandwidth(32_400); // 32.4 Gbps (4K 144Hz 10bpc)
+        assert!(ok);
+        assert_eq!(bwa.requested_bandwidth_mbps, 32_400);
+        assert_eq!(bwa.allocated_bandwidth_mbps, 32_400);
+        assert_eq!(bwa.negotiation_status, 2);
+        assert_eq!(bwa.status_description(), "Bande passante allouée");
+        assert_eq!(bwa.allocation_events, 1);
+        assert_eq!(bwa.contention_counter, 0);
+        assert!(bwa.is_operational());
+
+        // Configuration DSC
+        bwa.set_dsc(true, true);
+        assert!(bwa.dsc_supported);
+        assert!(bwa.dsc_enabled);
+
+        // Test contention / dépassement de capacité
+        let over = bwa.request_bandwidth(50_000); // > 40_000 max
+        assert!(!over);
+        assert_eq!(bwa.negotiation_status, 3);
+        assert_eq!(bwa.status_description(), "Contention / Refus");
+        assert_eq!(bwa.contention_counter, 1);
+        assert!(!bwa.is_operational());
+
+        // Rétablissement
+        assert!(bwa.request_bandwidth(20_000));
+        assert!(bwa.is_operational());
+        assert_eq!(bwa.allocation_events, 2);
+
+        bwa.next_ptr_dwords = 0x48;
+        let encoded = bwa.encode();
+        assert_eq!(
+            encoded[0] & 0xFF,
+            XHCI_EXT_CAP_USB4_DP_BANDWIDTH_ALLOCATION_INTERFACE_V2 as u32
+        );
+        assert_eq!((encoded[0] >> 8) & 0xFF, 0x48);
+        assert_eq!((encoded[0] >> 16) & 0xFF, 7);
+        assert_eq!((encoded[0] >> 24) & 0x03, 0);
+        assert_eq!((encoded[0] >> 26) & 0x03, 2);
+        assert_eq!((encoded[0] >> 28) & 0x0F, 2);
+
+        assert_eq!(encoded[1] & 0x01, 1); // allocation_enabled
+        assert_eq!(encoded[1] & 0x02, 2); // dsc_supported
+        assert_eq!(encoded[1] & 0x04, 4); // dsc_enabled
+        assert_eq!((encoded[1] >> 8) & 0xFF, 2); // allocation_events
+        assert_eq!((encoded[1] >> 16) & 0xFFFF, 1); // contention_counter
+
+        assert_eq!(encoded[2], 20_000);
+        assert_eq!(encoded[3], 20_000);
+
+        let parsed = XhciUsb4DpBandwidthAllocationInterfaceV2::parse(&encoded).unwrap();
+        assert_eq!(parsed.next_ptr_dwords, 0x48);
+        assert_eq!(parsed.adapter_id, 7);
+        assert!(parsed.allocation_enabled);
+        assert!(parsed.dsc_supported);
+        assert!(parsed.dsc_enabled);
+        assert_eq!(parsed.allocation_mode, 0);
+        assert_eq!(parsed.priority, 2);
+        assert_eq!(parsed.negotiation_status, 2);
+        assert_eq!(parsed.requested_bandwidth_mbps, 20_000);
+        assert_eq!(parsed.allocated_bandwidth_mbps, 20_000);
+        assert_eq!(parsed.allocation_events, 2);
+        assert_eq!(parsed.contention_counter, 1);
+        assert!(parsed.is_operational());
+
+        // Test désactivation
+        bwa.disable_allocation();
+        assert!(!bwa.is_operational());
+        assert!(!bwa.allocation_enabled);
+        assert_eq!(bwa.negotiation_status, 0);
+        assert_eq!(bwa.allocated_bandwidth_mbps, 0);
     }
 }
