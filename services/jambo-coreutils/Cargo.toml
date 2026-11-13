@@ -702,7 +702,12 @@ name = "taskset"
 path = "src/bin/taskset.rs"
 test = false
 
-# 139 utilitaires Ring 3
+[[bin]]
+name = "setsid"
+path = "src/bin/setsid.rs"
+test = false
+
+# 140 utilitaires Ring 3
 
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }

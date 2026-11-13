@@ -30,11 +30,30 @@ pub const NVME_ADMIN_IDENTIFY: u8 = 0x06;
 pub const NVME_ADMIN_GET_LOG_PAGE: u8 = 0x02;
 pub const NVME_ADMIN_SET_FEATURES: u8 = 0x09;
 pub const NVME_ADMIN_ASYNC_EVENT_REQ: u8 = 0x0C;
+/// Commande de gestion de namespace NVMe 1.4 (Namespace Management, §8.11)
+pub const NVME_ADMIN_NS_MANAGEMENT: u8 = 0x0D;
+/// Commande d'attachement/détachement de namespace aux contrôleurs (Namespace Attachment, §8.12)
+pub const NVME_ADMIN_NS_ATTACHMENT: u8 = 0x15;
+
 pub const NVME_LOG_ERROR_INFO: u8 = 0x01;
 pub const NVME_LOG_SMART_HEALTH: u8 = 0x02;
 pub const NVME_ERROR_LOG_ENTRY_SIZE: usize = 64;
 pub const NVME_FEAT_TEMPERATURE_THRESHOLD: u32 = 0x04;
 pub const NVME_FEAT_ASYNC_EVENT_CONFIG: u32 = 0x0B;
+
+/// Sélecteur d'action Namespace Management : création d'un nouveau namespace (CDW10 bits 3:0 = 0x0)
+pub const NVME_NS_MGMT_CREATE: u8 = 0x00;
+/// Sélecteur d'action Namespace Management : suppression d'un namespace existant (CDW10 bits 3:0 = 0x1)
+pub const NVME_NS_MGMT_DELETE: u8 = 0x01;
+/// Sélecteur d'action Namespace Attachment : rattachement d'un namespace à des contrôleurs (CDW10 bits 3:0 = 0x0)
+pub const NVME_NS_ATTACH_CTRL: u8 = 0x00;
+/// Sélecteur d'action Namespace Attachment : détachement d'un namespace de contrôleurs (CDW10 bits 3:0 = 0x1)
+pub const NVME_NS_DETACH_CTRL: u8 = 0x01;
+
+/// Capacité maximale de la liste de contrôleurs pour l'attachement de namespace (§5.26)
+pub const NVME_CTRL_LIST_MAX: usize = 2047;
+/// Nombre maximum de namespaces gérés simultanément par le contrôleur
+pub const NVME_MAX_NAMESPACES: usize = 16;
 
 /// Commande NVM standard de vidange de cache matériel (NVMe Flush Command, opcode 0x00)
 pub const NVME_NVM_CMD_FLUSH: u8 = 0x00;
@@ -579,6 +598,242 @@ pub struct NvmeFlushMetrics {
     pub last_flush_cycles: u64,
 }
 
+// =========================================================================
+// Namespace Management (NVMe 1.4 §8.11 / §8.12) — Structures de données
+// =========================================================================
+
+/// Format de bloc logique (LBA Format) supporté par un namespace NVMe
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct NvmeLbaFormat {
+    /// Taille des métadonnées en octets (0 = pas de métadonnées)
+    pub metadata_size: u16,
+    /// Puissance de 2 de la taille de secteur logique (ex. 9 = 512 B, 12 = 4096 B)
+    pub lba_data_size_pow2: u8,
+    /// Niveau de performance relatif (0 = meilleur, 3 = pire)
+    pub relative_performance: u8,
+}
+
+impl NvmeLbaFormat {
+    /// Retourne la taille réelle en octets d'un secteur logique
+    pub const fn sector_bytes(&self) -> u32 {
+        if self.lba_data_size_pow2 >= 9 && self.lba_data_size_pow2 <= 15 {
+            1u32 << self.lba_data_size_pow2
+        } else {
+            512
+        }
+    }
+
+    /// Indique si ce format utilise des secteurs natifs 4 Kio
+    pub const fn is_4kn(&self) -> bool {
+        self.lba_data_size_pow2 == 12
+    }
+
+    /// Indique si ce format utilise des secteurs de 512 octets
+    pub const fn is_512e(&self) -> bool {
+        self.lba_data_size_pow2 == 9
+    }
+}
+
+/// Descripteur complet d'un namespace NVMe 1.4 (Namespace Identification Structure, §6.1.2).
+///
+/// Contient les attributs physiques et logiques d'un namespace : capacité totale,
+/// utilisation courante, format de LBA actif, drapeaux de fonctionnalités (DPS, sharing,
+/// write-protect) et identifiant unique 128 bits (NGUID/EUI64).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct NvmeNamespaceDescriptor {
+    /// Identifiant du namespace (NSID, 1-based, NVMe 1.4 §6.1)
+    pub nsid: u32,
+    /// Capacité totale en blocs logiques (NSZE — Namespace Size)
+    pub total_blocks: u64,
+    /// Capacité disponible allouable en blocs logiques (NCAP — Namespace Capacity)
+    pub capacity_blocks: u64,
+    /// Blocs logiques actuellement utilisés (NUSE — Namespace Utilization)
+    pub used_blocks: u64,
+    /// Indique si le namespace supporte les données minces (Thin Provisioning, bit 0 de NSFEAT)
+    pub thin_provisioning: bool,
+    /// Indique si le namespace est partagé entre plusieurs contrôleurs (bit 3 de NSFEAT)
+    pub shared: bool,
+    /// Format LBA actif (index FLBAS 3:0 dans la table LBAF)
+    pub active_lba_format: NvmeLbaFormat,
+    /// Nombre de formats LBA supportés (NLBAF + 1)
+    pub num_lba_formats: u8,
+    /// Niveau de protection des données (DPS — Data Protection Settings, NVMe 1.4 §6.1.3)
+    pub data_protection: u8,
+    /// Namespace Global Unique Identifier (NGUID, 128 bits = 16 octets)
+    pub nguid: [u8; 16],
+    /// IEEE Extended Unique Identifier 64 bits (EUI64, optionnel)
+    pub eui64: [u8; 8],
+    /// Namespace est en mode écriture protégée
+    pub write_protected: bool,
+    /// Namespace a été alloué (créé) mais pas encore attaché à un contrôleur
+    pub allocated_unattached: bool,
+}
+
+impl NvmeNamespaceDescriptor {
+    /// Crée un descripteur de namespace avec les attributs essentiels.
+    ///
+    /// Le format LBA par défaut est 512e (sector_pow2 = 9, relative_performance = 0).
+    pub fn new(nsid: u32, total_blocks: u64, capacity_blocks: u64) -> Self {
+        Self {
+            nsid,
+            total_blocks,
+            capacity_blocks,
+            used_blocks: 0,
+            thin_provisioning: false,
+            shared: false,
+            active_lba_format: NvmeLbaFormat {
+                metadata_size: 0,
+                lba_data_size_pow2: 9, // 512 B par défaut
+                relative_performance: 0,
+            },
+            num_lba_formats: 1,
+            data_protection: 0,
+            nguid: [0u8; 16],
+            eui64: [0u8; 8],
+            write_protected: false,
+            allocated_unattached: false,
+        }
+    }
+
+    /// Retourne la capacité totale du namespace en octets
+    pub fn capacity_bytes(&self) -> u64 {
+        self.total_blocks
+            .saturating_mul(self.active_lba_format.sector_bytes() as u64)
+    }
+
+    /// Retourne le taux d'utilisation du namespace (0–100 %)
+    pub fn utilization_percent(&self) -> u8 {
+        if self.capacity_blocks == 0 {
+            return 0;
+        }
+        let percent = self.used_blocks.saturating_mul(100) / self.capacity_blocks;
+        percent.min(100) as u8
+    }
+
+    /// Sérialise le descripteur dans un tampon de 512 octets (NVMe Identify Namespace, §6.1.2).
+    ///
+    /// La structure produite est compatible avec la réponse de la commande Identify (CNS=0x0).
+    pub fn to_identify_bytes(&self) -> [u8; 512] {
+        let mut buf = [0u8; 512];
+        buf[0..8].copy_from_slice(&self.total_blocks.to_le_bytes());
+        buf[8..16].copy_from_slice(&self.capacity_blocks.to_le_bytes());
+        buf[16..24].copy_from_slice(&self.used_blocks.to_le_bytes());
+        // NSFEAT : bit 0 = thin provisioning, bit 3 = shared
+        let nsfeat: u8 = (self.thin_provisioning as u8) | ((self.shared as u8) << 3);
+        buf[24] = nsfeat;
+        // NLBAF (0-based, donc num_lba_formats - 1)
+        buf[25] = self.num_lba_formats.saturating_sub(1);
+        // FLBAS (bits 3:0 = index du format actif)
+        buf[26] = 0; // format index 0 (seul défini ici)
+                     // DPS
+        buf[29] = self.data_protection;
+        // NMIC : bit 0 = shared namespace
+        buf[30] = self.shared as u8;
+        // NGUID (octets 104..120)
+        buf[104..120].copy_from_slice(&self.nguid);
+        // EUI64 (octets 120..128)
+        buf[120..128].copy_from_slice(&self.eui64);
+        // LBAF0 (octets 128..132) : MS[15:0] | LBADS[7:0] | RP[1:0]
+        let lbaf = &self.active_lba_format;
+        buf[128..130].copy_from_slice(&lbaf.metadata_size.to_le_bytes());
+        buf[130] = lbaf.lba_data_size_pow2;
+        buf[131] = lbaf.relative_performance & 0x03;
+        buf
+    }
+
+    /// Désérialise un descripteur depuis une réponse Identify Namespace de 512 octets.
+    ///
+    /// Retourne `None` si le tampon est invalide (taille_total nulle indique un namespace non alloué).
+    pub fn from_identify_bytes(nsid: u32, raw: &[u8; 512]) -> Option<Self> {
+        let total_blocks = u64::from_le_bytes(raw[0..8].try_into().ok()?);
+        if total_blocks == 0 {
+            return None;
+        }
+        let capacity_blocks = u64::from_le_bytes(raw[8..16].try_into().ok()?);
+        let used_blocks = u64::from_le_bytes(raw[16..24].try_into().ok()?);
+        let nsfeat = raw[24];
+        let thin_provisioning = (nsfeat & 0x01) != 0;
+        let shared = (nsfeat & 0x08) != 0;
+        let num_lba_formats = raw[25].saturating_add(1);
+        let data_protection = raw[29];
+        let write_protected = (raw[30] & 0x02) != 0;
+        let mut nguid = [0u8; 16];
+        nguid.copy_from_slice(&raw[104..120]);
+        let mut eui64 = [0u8; 8];
+        eui64.copy_from_slice(&raw[120..128]);
+        let metadata_size = u16::from_le_bytes(raw[128..130].try_into().ok()?);
+        let lba_data_size_pow2 = raw[130];
+        let relative_performance = raw[131] & 0x03;
+        Some(Self {
+            nsid,
+            total_blocks,
+            capacity_blocks,
+            used_blocks,
+            thin_provisioning,
+            shared,
+            active_lba_format: NvmeLbaFormat {
+                metadata_size,
+                lba_data_size_pow2,
+                relative_performance,
+            },
+            num_lba_formats,
+            data_protection,
+            nguid,
+            eui64,
+            write_protected,
+            allocated_unattached: false,
+        })
+    }
+}
+
+/// Liste de namespaces active retournée par la commande Identify (CNS=0x2 — Active NS ID list).
+///
+/// Contient jusqu'à 1024 NSIDs actifs listés en ordre croissant. Les entrées non utilisées
+/// sont à zéro. Conforme à la §6.1.2.1 de la spécification NVMe 1.4.
+#[derive(Clone, Copy)]
+pub struct NvmeActiveNamespaceList {
+    /// Tableau des NSIDs actifs (en ordre croissant, 0 = terminateur)
+    pub nsids: [u32; 1024],
+    /// Nombre de NSIDs valides dans la liste
+    pub count: usize,
+}
+
+impl Default for NvmeActiveNamespaceList {
+    fn default() -> Self {
+        Self {
+            nsids: [0u32; 1024],
+            count: 0,
+        }
+    }
+}
+
+impl NvmeActiveNamespaceList {
+    /// Désérialise la liste de namespaces actifs depuis un tampon brut de 4096 octets.
+    pub fn from_bytes(raw: &[u8; 4096]) -> Self {
+        let mut list = Self::default();
+        for i in 0..1024 {
+            let offset = i * 4;
+            let nsid = u32::from_le_bytes([
+                raw[offset],
+                raw[offset + 1],
+                raw[offset + 2],
+                raw[offset + 3],
+            ]);
+            if nsid == 0 {
+                break;
+            }
+            list.nsids[list.count] = nsid;
+            list.count += 1;
+        }
+        list
+    }
+
+    /// Indique si un NSID est présent dans la liste
+    pub fn contains(&self, nsid: u32) -> bool {
+        self.nsids[..self.count].contains(&nsid)
+    }
+}
+
 /// Contrôleur NVMe opérationnel en espace utilisateur.
 pub struct NvmeController {
     pub bar0_base: u64,
@@ -600,6 +855,8 @@ pub struct NvmeController {
     pub error_log_flushes: u64,
     pub last_error_count: u64,
     pub pending_error_log_cid: Option<u16>,
+    /// Table locale des namespaces enregistrés (NVMe 1.4 §8.11)
+    pub namespaces: [Option<NvmeNamespaceDescriptor>; NVME_MAX_NAMESPACES],
 }
 
 impl Default for NvmeController {
@@ -630,6 +887,7 @@ impl NvmeController {
             error_log_flushes: 0,
             last_error_count: 0,
             pending_error_log_cid: None,
+            namespaces: [None; NVME_MAX_NAMESPACES],
         }
     }
 
@@ -1474,6 +1732,195 @@ impl NvmeController {
             }
         }
         Ok(None)
+    }
+
+    // =========================================================================
+    // Namespace Management (NVMe 1.4 §8.11 et §8.12)
+    // =========================================================================
+
+    /// Soumet une commande asynchrone de création de namespace (Namespace Management Create).
+    ///
+    /// Construit et soumet en Admin SQ la commande d'administration `NVME_ADMIN_NS_MANAGEMENT`
+    /// avec le sélecteur Create (CDW10[3:0] = 0x0). Le descripteur `NvmeNamespaceDescriptor`
+    /// doit avoir été préalablement sérialisé dans la page pointée par `prp1_iova` (512 octets,
+    /// alignée sur une page 4 Kio). Le NSID résultant est retourné par le firmware dans DW0
+    /// de la complétion (NVMe 1.4 §6.11).
+    ///
+    /// # Errors
+    /// Retourne `SysError::NotSupported` si le contrôleur n'est pas initialisé.
+    pub fn submit_ns_create(&mut self, prp1_iova: u64) -> Result<u16, SysError> {
+        if !self.ready {
+            return Err(SysError::NotSupported);
+        }
+        let cid = self.next_cid;
+        self.next_cid = self.next_cid.wrapping_add(1).max(1);
+        let cmd = NvmeSubmissionEntry {
+            cdw0: ((cid as u32) << 16) | (NVME_ADMIN_NS_MANAGEMENT as u32),
+            nsid: 0,
+            reserved: 0,
+            mptr: 0,
+            prp1: prp1_iova,
+            prp2: 0,
+            cdw10: NVME_NS_MGMT_CREATE as u32,
+            cdw11: 0,
+            cdw12: 0,
+            cdw13: 0,
+            cdw14: 0,
+            cdw15: 0,
+        };
+        let _submitted = self.admin_queue.submit(cmd);
+        Ok(cid)
+    }
+
+    /// Soumet une commande asynchrone de suppression de namespace (Namespace Management Delete).
+    ///
+    /// La commande `NVME_ADMIN_NS_MANAGEMENT` avec sélecteur Delete (CDW10[3:0] = 0x1) est
+    /// soumise sur l'Admin SQ. Le namespace ciblé par `nsid` doit être préalablement détaché
+    /// de tous les contrôleurs (via `submit_ns_detach`) avant d'être supprimé, conformément
+    /// à la §8.11.3 de la spécification NVMe 1.4.
+    ///
+    /// # Errors
+    /// Retourne `SysError::NotSupported` si le contrôleur n'est pas initialisé.
+    /// Retourne `SysError::InvalidArgument` si `nsid` vaut 0 ou 0xFFFFFFFF (réservé).
+    pub fn submit_ns_delete(&mut self, nsid: u32) -> Result<u16, SysError> {
+        if !self.ready {
+            return Err(SysError::NotSupported);
+        }
+        if nsid == 0 || nsid == 0xFFFF_FFFF {
+            return Err(SysError::InvalidArgument);
+        }
+        let cid = self.next_cid;
+        self.next_cid = self.next_cid.wrapping_add(1).max(1);
+        let cmd = NvmeSubmissionEntry {
+            cdw0: ((cid as u32) << 16) | (NVME_ADMIN_NS_MANAGEMENT as u32),
+            nsid,
+            reserved: 0,
+            mptr: 0,
+            prp1: 0,
+            prp2: 0,
+            cdw10: NVME_NS_MGMT_DELETE as u32,
+            cdw11: 0,
+            cdw12: 0,
+            cdw13: 0,
+            cdw14: 0,
+            cdw15: 0,
+        };
+        let _submitted = self.admin_queue.submit(cmd);
+        Ok(cid)
+    }
+
+    /// Soumet une commande asynchrone d'attachement de namespace à des contrôleurs.
+    ///
+    /// La commande `NVME_ADMIN_NS_ATTACHMENT` avec sélecteur Attach (CDW10[3:0] = 0x0) est
+    /// soumise sur l'Admin SQ. La liste des contrôleurs (Controller List, NVMe 1.4 §5.26.2)
+    /// doit être sérialisée dans la page pointée par `ctrl_list_iova`. Cette liste est un
+    /// tableau de `u16` dont l'entrée [0] contient le nombre de contrôleurs et les entrées
+    /// [1..N] contiennent les identifiants de contrôleurs (CNTLID) en ordre croissant.
+    ///
+    /// # Errors
+    /// Retourne `SysError::NotSupported` si le contrôleur n'est pas initialisé.
+    /// Retourne `SysError::InvalidArgument` si `nsid` vaut 0 ou 0xFFFFFFFF.
+    pub fn submit_ns_attach(&mut self, nsid: u32, ctrl_list_iova: u64) -> Result<u16, SysError> {
+        if !self.ready {
+            return Err(SysError::NotSupported);
+        }
+        if nsid == 0 || nsid == 0xFFFF_FFFF {
+            return Err(SysError::InvalidArgument);
+        }
+        let cid = self.next_cid;
+        self.next_cid = self.next_cid.wrapping_add(1).max(1);
+        let cmd = NvmeSubmissionEntry {
+            cdw0: ((cid as u32) << 16) | (NVME_ADMIN_NS_ATTACHMENT as u32),
+            nsid,
+            reserved: 0,
+            mptr: 0,
+            prp1: ctrl_list_iova,
+            prp2: 0,
+            cdw10: NVME_NS_ATTACH_CTRL as u32,
+            cdw11: 0,
+            cdw12: 0,
+            cdw13: 0,
+            cdw14: 0,
+            cdw15: 0,
+        };
+        let _submitted = self.admin_queue.submit(cmd);
+        Ok(cid)
+    }
+
+    /// Soumet une commande asynchrone de détachement de namespace de contrôleurs.
+    ///
+    /// Identique à `submit_ns_attach` mais avec le sélecteur Detach (CDW10[3:0] = 0x1).
+    /// Le détachement doit précéder toute suppression de namespace (§8.11.3).
+    ///
+    /// # Errors
+    /// Retourne `SysError::NotSupported` si le contrôleur n'est pas initialisé.
+    /// Retourne `SysError::InvalidArgument` si `nsid` vaut 0 ou 0xFFFFFFFF.
+    pub fn submit_ns_detach(&mut self, nsid: u32, ctrl_list_iova: u64) -> Result<u16, SysError> {
+        if !self.ready {
+            return Err(SysError::NotSupported);
+        }
+        if nsid == 0 || nsid == 0xFFFF_FFFF {
+            return Err(SysError::InvalidArgument);
+        }
+        let cid = self.next_cid;
+        self.next_cid = self.next_cid.wrapping_add(1).max(1);
+        let cmd = NvmeSubmissionEntry {
+            cdw0: ((cid as u32) << 16) | (NVME_ADMIN_NS_ATTACHMENT as u32),
+            nsid,
+            reserved: 0,
+            mptr: 0,
+            prp1: ctrl_list_iova,
+            prp2: 0,
+            cdw10: NVME_NS_DETACH_CTRL as u32,
+            cdw11: 0,
+            cdw12: 0,
+            cdw13: 0,
+            cdw14: 0,
+            cdw15: 0,
+        };
+        let _submitted = self.admin_queue.submit(cmd);
+        Ok(cid)
+    }
+
+    /// Enregistre un namespace actif dans le registre local du contrôleur.
+    ///
+    /// Met à jour l'entrée de la table de namespaces interne avec le descripteur fourni.
+    /// Retourne `SysError::ResourceBusy` si la table est pleine (> `NVME_MAX_NAMESPACES`).
+    pub fn register_namespace(&mut self, desc: NvmeNamespaceDescriptor) -> Result<(), SysError> {
+        if let Some(slot) = self.namespaces.iter_mut().find(|s| s.is_none()) {
+            *slot = Some(desc);
+            Ok(())
+        } else {
+            Err(SysError::ResourceBusy)
+        }
+    }
+
+    /// Supprime un namespace du registre local par son NSID.
+    ///
+    /// Retourne `SysError::InvalidHandle` si le NSID n'est pas enregistré.
+    pub fn unregister_namespace(&mut self, nsid: u32) -> Result<(), SysError> {
+        for slot in self.namespaces.iter_mut() {
+            if slot.map(|d| d.nsid) == Some(nsid) {
+                *slot = None;
+                return Ok(());
+            }
+        }
+        Err(SysError::InvalidHandle)
+    }
+
+    /// Retourne le descripteur d'un namespace par son NSID (lecture seule).
+    ///
+    /// Retourne `None` si le NSID n'est pas enregistré dans le contrôleur local.
+    pub fn find_namespace(&self, nsid: u32) -> Option<&NvmeNamespaceDescriptor> {
+        self.namespaces
+            .iter()
+            .filter_map(|s| s.as_ref())
+            .find(|d| d.nsid == nsid)
+    }
+
+    /// Retourne le nombre de namespaces actuellement enregistrés.
+    pub fn namespace_count(&self) -> usize {
+        self.namespaces.iter().filter(|s| s.is_some()).count()
     }
 }
 
@@ -2433,6 +2880,262 @@ mod tests {
         assert_eq!(
             cmd_async.cdw11,
             NVME_DSM_ATTR_DEALLOCATE | NVME_DSM_ATTR_INTEGRAL_WRITE
+        );
+    }
+
+    // =========================================================================
+    // Tests — Namespace Management (NVMe 1.4 §8.11 / §8.12)
+    // =========================================================================
+
+    #[test]
+    fn test_lba_format_sector_sizes() {
+        let fmt_512 = NvmeLbaFormat {
+            metadata_size: 0,
+            lba_data_size_pow2: 9,
+            relative_performance: 0,
+        };
+        assert_eq!(fmt_512.sector_bytes(), 512);
+        assert!(fmt_512.is_512e());
+        assert!(!fmt_512.is_4kn());
+
+        let fmt_4k = NvmeLbaFormat {
+            metadata_size: 8,
+            lba_data_size_pow2: 12,
+            relative_performance: 1,
+        };
+        assert_eq!(fmt_4k.sector_bytes(), 4096);
+        assert!(fmt_4k.is_4kn());
+        assert!(!fmt_4k.is_512e());
+
+        // Format invalide → repli sur 512 octets
+        let fmt_bad = NvmeLbaFormat {
+            metadata_size: 0,
+            lba_data_size_pow2: 0,
+            relative_performance: 0,
+        };
+        assert_eq!(fmt_bad.sector_bytes(), 512);
+    }
+
+    #[test]
+    fn test_namespace_descriptor_creation_and_capacity() {
+        let desc = NvmeNamespaceDescriptor::new(1, 2_097_152, 2_097_152);
+        assert_eq!(desc.nsid, 1);
+        assert_eq!(desc.total_blocks, 2_097_152);
+        assert_eq!(desc.capacity_blocks, 2_097_152);
+        assert_eq!(desc.used_blocks, 0);
+        // Capacité = 2 097 152 blocs × 512 octets = 1 Gio
+        assert_eq!(desc.capacity_bytes(), 1_073_741_824);
+        assert!(!desc.thin_provisioning);
+        assert!(!desc.shared);
+        assert!(!desc.write_protected);
+        // 0 blocs utilisés → 0 %
+        assert_eq!(desc.utilization_percent(), 0);
+    }
+
+    #[test]
+    fn test_namespace_descriptor_utilization_percent() {
+        let mut desc = NvmeNamespaceDescriptor::new(2, 1000, 1000);
+        // 50 % utilisé
+        desc.used_blocks = 500;
+        assert_eq!(desc.utilization_percent(), 50);
+        // 100 % utilisé
+        desc.used_blocks = 1000;
+        assert_eq!(desc.utilization_percent(), 100);
+        // Dépassement → plafonné à 100 %
+        desc.used_blocks = 1500;
+        assert_eq!(desc.utilization_percent(), 100);
+        // Capacité nulle → 0 %
+        let empty_desc = NvmeNamespaceDescriptor::new(3, 0, 0);
+        assert_eq!(empty_desc.utilization_percent(), 0);
+    }
+
+    #[test]
+    fn test_namespace_descriptor_identify_serialization_roundtrip() {
+        let mut desc = NvmeNamespaceDescriptor::new(5, 4_194_304, 4_194_304);
+        desc.used_blocks = 1_048_576;
+        desc.thin_provisioning = true;
+        desc.shared = true;
+        desc.data_protection = 0x05;
+        desc.nguid = [
+            0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E,
+            0x0F, 0x10,
+        ];
+        desc.eui64 = [0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x11, 0x22];
+        desc.active_lba_format = NvmeLbaFormat {
+            metadata_size: 8,
+            lba_data_size_pow2: 12,
+            relative_performance: 1,
+        };
+
+        let raw = desc.to_identify_bytes();
+        assert_eq!(raw.len(), 512);
+
+        // Vérification des champs NSZE / NCAP / NUSE
+        let nsze = u64::from_le_bytes(raw[0..8].try_into().unwrap());
+        let ncap = u64::from_le_bytes(raw[8..16].try_into().unwrap());
+        let nuse = u64::from_le_bytes(raw[16..24].try_into().unwrap());
+        assert_eq!(nsze, 4_194_304);
+        assert_eq!(ncap, 4_194_304);
+        assert_eq!(nuse, 1_048_576);
+
+        // NSFEAT : bit 0 (thin) | bit 3 (shared) = 0b00001001 = 0x09
+        assert_eq!(raw[24], 0x09);
+        // DPS
+        assert_eq!(raw[29], 0x05);
+        // NGUID
+        assert_eq!(&raw[104..120], &desc.nguid);
+        // EUI64
+        assert_eq!(&raw[120..128], &desc.eui64);
+        // LBAF0 : MS=8, LBADS=12, RP=1
+        let ms = u16::from_le_bytes(raw[128..130].try_into().unwrap());
+        assert_eq!(ms, 8);
+        assert_eq!(raw[130], 12);
+        assert_eq!(raw[131], 1);
+
+        // Désérialisation aller-retour
+        let restored = NvmeNamespaceDescriptor::from_identify_bytes(5, &raw).unwrap();
+        assert_eq!(restored.nsid, 5);
+        assert_eq!(restored.total_blocks, 4_194_304);
+        assert_eq!(restored.capacity_blocks, 4_194_304);
+        assert_eq!(restored.used_blocks, 1_048_576);
+        assert!(restored.thin_provisioning);
+        assert!(restored.shared);
+        assert_eq!(restored.data_protection, 0x05);
+        assert_eq!(restored.nguid, desc.nguid);
+        assert_eq!(restored.eui64, desc.eui64);
+        assert_eq!(restored.active_lba_format.lba_data_size_pow2, 12);
+        assert_eq!(restored.active_lba_format.metadata_size, 8);
+        assert_eq!(restored.active_lba_format.relative_performance, 1);
+    }
+
+    #[test]
+    fn test_namespace_descriptor_from_identify_null_ns() {
+        // Un namespace non alloué retourne NSZE = 0 → None
+        let raw = [0u8; 512];
+        assert!(NvmeNamespaceDescriptor::from_identify_bytes(99, &raw).is_none());
+    }
+
+    #[test]
+    fn test_active_namespace_list_parsing() {
+        let mut raw = [0u8; 4096];
+        // Inject 3 NSIDs actifs
+        raw[0..4].copy_from_slice(&1u32.to_le_bytes());
+        raw[4..8].copy_from_slice(&3u32.to_le_bytes());
+        raw[8..12].copy_from_slice(&7u32.to_le_bytes());
+        // Reste à 0 = terminateur
+
+        let list = NvmeActiveNamespaceList::from_bytes(&raw);
+        assert_eq!(list.count, 3);
+        assert_eq!(list.nsids[0], 1);
+        assert_eq!(list.nsids[1], 3);
+        assert_eq!(list.nsids[2], 7);
+        assert!(list.contains(1));
+        assert!(list.contains(3));
+        assert!(list.contains(7));
+        assert!(!list.contains(2));
+        assert!(!list.contains(0));
+    }
+
+    #[test]
+    fn test_nvme_ns_management_command_construction() {
+        let mut ctrl = NvmeController::new();
+        ctrl.ready = true;
+
+        // 1. Création de namespace : vérification de l'opcode CDW0 et CDW10
+        let prp_iova: u64 = 0x0000_2000_0000;
+        let cid_create = ctrl.submit_ns_create(prp_iova).expect("submit_ns_create");
+        let cmd_create = ctrl.admin_queue.sq[0];
+        assert_eq!((cmd_create.cdw0 & 0xFF) as u8, NVME_ADMIN_NS_MANAGEMENT);
+        assert_eq!(cmd_create.cdw10 as u8, NVME_NS_MGMT_CREATE);
+        assert_eq!(cmd_create.prp1, prp_iova);
+        assert_eq!(cmd_create.nsid, 0); // Create : NSID ignoré par le contrôleur
+
+        // 2. Suppression de namespace : vérification de l'opcode et du NSID cible
+        let cid_delete = ctrl.submit_ns_delete(2).expect("submit_ns_delete");
+        assert!(cid_delete > cid_create); // CID incrémental
+                                          // Validation des arguments invalides
+        assert_eq!(ctrl.submit_ns_delete(0), Err(SysError::InvalidArgument));
+        assert_eq!(
+            ctrl.submit_ns_delete(0xFFFF_FFFF),
+            Err(SysError::InvalidArgument)
+        );
+
+        // 3. Attachement : opcode NVME_ADMIN_NS_ATTACHMENT + sélecteur 0x0
+        let ctrl_list_iova: u64 = 0x0000_3000_0000;
+        let cid_attach = ctrl
+            .submit_ns_attach(1, ctrl_list_iova)
+            .expect("submit_ns_attach");
+        let cmd_attach = ctrl.admin_queue.sq[2];
+        assert_eq!((cmd_attach.cdw0 & 0xFF) as u8, NVME_ADMIN_NS_ATTACHMENT);
+        assert_eq!(cmd_attach.cdw10 as u8, NVME_NS_ATTACH_CTRL);
+        assert_eq!(cmd_attach.nsid, 1);
+        assert_eq!(cmd_attach.prp1, ctrl_list_iova);
+
+        // 4. Détachement : sélecteur 0x1
+        let cid_detach = ctrl
+            .submit_ns_detach(1, ctrl_list_iova)
+            .expect("submit_ns_detach");
+        assert!(cid_detach > cid_attach);
+        let cmd_detach = ctrl.admin_queue.sq[3];
+        assert_eq!((cmd_detach.cdw0 & 0xFF) as u8, NVME_ADMIN_NS_ATTACHMENT);
+        assert_eq!(cmd_detach.cdw10 as u8, NVME_NS_DETACH_CTRL);
+
+        // 5. Contrôleur non prêt → NotSupported
+        ctrl.ready = false;
+        assert_eq!(ctrl.submit_ns_create(0x1000), Err(SysError::NotSupported));
+        assert_eq!(ctrl.submit_ns_delete(1), Err(SysError::NotSupported));
+        assert_eq!(
+            ctrl.submit_ns_attach(1, 0x2000),
+            Err(SysError::NotSupported)
+        );
+        assert_eq!(
+            ctrl.submit_ns_detach(1, 0x2000),
+            Err(SysError::NotSupported)
+        );
+    }
+
+    #[test]
+    fn test_nvme_namespace_registry_lifecycle() {
+        let mut ctrl = NvmeController::new();
+        assert_eq!(ctrl.namespace_count(), 0);
+
+        // Enregistrement de plusieurs namespaces
+        let ns1 = NvmeNamespaceDescriptor::new(1, 2_097_152, 2_097_152);
+        let ns2 = NvmeNamespaceDescriptor::new(2, 4_194_304, 4_000_000);
+        ctrl.register_namespace(ns1).expect("register ns1");
+        ctrl.register_namespace(ns2).expect("register ns2");
+        assert_eq!(ctrl.namespace_count(), 2);
+
+        // Recherche par NSID
+        let found = ctrl.find_namespace(1).expect("find ns1");
+        assert_eq!(found.nsid, 1);
+        assert_eq!(found.total_blocks, 2_097_152);
+
+        let found2 = ctrl.find_namespace(2).expect("find ns2");
+        assert_eq!(found2.capacity_blocks, 4_000_000);
+
+        assert!(ctrl.find_namespace(99).is_none());
+
+        // Désenregistrement
+        ctrl.unregister_namespace(1).expect("unregister ns1");
+        assert_eq!(ctrl.namespace_count(), 1);
+        assert!(ctrl.find_namespace(1).is_none());
+
+        // Double désenregistrement → erreur
+        assert_eq!(ctrl.unregister_namespace(1), Err(SysError::InvalidHandle));
+
+        // Remplissage de la table jusqu'à saturation
+        ctrl.unregister_namespace(2).ok();
+        for i in 1..=(NVME_MAX_NAMESPACES as u32) {
+            let ns = NvmeNamespaceDescriptor::new(i, 100, 100);
+            ctrl.register_namespace(ns).expect("register");
+        }
+        assert_eq!(ctrl.namespace_count(), NVME_MAX_NAMESPACES);
+        // La table est pleine → ResourceBusy
+        let overflow = NvmeNamespaceDescriptor::new(999, 1, 1);
+        assert_eq!(
+            ctrl.register_namespace(overflow),
+            Err(SysError::ResourceBusy)
         );
     }
 }

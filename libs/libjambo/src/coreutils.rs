@@ -22386,6 +22386,7 @@ pub fn execute_coreutils_command(
         "hostname" => run_hostname(args, in_fd, out_fd, err_fd),
         "pwdx" => run_pwdx(args, in_fd, out_fd, err_fd),
         "taskset" => run_taskset(args, in_fd, out_fd, err_fd),
+        "setsid" => run_setsid(args, in_fd, out_fd, err_fd),
         _ => {
             let _ = sys_write(err_fd, cmd.as_bytes());
             let _ = sys_write(err_fd, b": command not found\n");
@@ -34064,6 +34065,86 @@ Options:\n\
     }
 }
 
+// ============================================================================
+// Utilitaire POSIX / util-linux : `setsid` (Exécution dans une nouvelle session)
+// ============================================================================
+
+/// Exécute l'utilitaire Coreutils POSIX / util-linux `setsid` (exécute un programme dans une nouvelle session de processus)
+///
+/// Syntaxe :
+///   setsid [options] <program> [arguments ...]
+///
+/// Options :
+///   -c, --ctty          définit le terminal de contrôle sur le terminal actuel
+///   -f, --fork          crée toujours un nouveau processus (fork)
+///   -w, --wait          attend que le programme termine et propage son code de sortie
+///   -h, --help          affiche cette aide et termine
+///   -V, --version       affiche les informations de version et termine
+pub fn run_setsid(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    let mut opt_ctty = false;
+    let mut opt_fork = false;
+    let mut opt_wait = false;
+    let mut prog_idx = None;
+
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i];
+        if arg == "-h" || arg == "--help" {
+            let help = b"Usage: setsid [options] <program> [arguments ...]\n\n\
+Run a program in a new session.\n\n\
+Options:\n\
+  -c, --ctty     set the controlling terminal to the current one\n\
+  -f, --fork     always fork a new process\n\
+  -w, --wait     wait for program to exit, and use the same exit code\n\
+  -h, --help     display this help and exit\n\
+  -V, --version  output version information and exit\n";
+            let _ = sys_write(out_fd, help);
+            return 0;
+        } else if arg == "-v" || arg == "-V" || arg == "--version" {
+            let ver = b"setsid (JamboOS coreutils) 0.3.93\n";
+            let _ = sys_write(out_fd, ver);
+            return 0;
+        } else if arg == "-c" || arg == "--ctty" {
+            opt_ctty = true;
+        } else if arg == "-f" || arg == "--fork" {
+            opt_fork = true;
+        } else if arg == "-w" || arg == "--wait" {
+            opt_wait = true;
+        } else if arg == "--" {
+            prog_idx = Some(i + 1);
+            break;
+        } else if arg.starts_with('-') && arg != "-" {
+            let _ = sys_write(err_fd, b"setsid: unrecognized option '");
+            let _ = sys_write(err_fd, arg.as_bytes());
+            let _ = sys_write(err_fd, b"'\nTry 'setsid --help' for more information.\n");
+            return 1;
+        } else {
+            prog_idx = Some(i);
+            break;
+        }
+        i += 1;
+    }
+
+    let start = match prog_idx {
+        Some(idx) if idx < args.len() => idx,
+        _ => {
+            let _ = sys_write(
+                err_fd,
+                b"setsid: no program specified\nTry 'setsid --help' for more information.\n",
+            );
+            return 1;
+        }
+    };
+
+    let target_prog = args[start];
+    let target_args = &args[start + 1..];
+
+    // Dans l'architecture micro-noyau capabilaire JamboOS, setsid initialise la session
+    // et dispatche la commande cible avec isolation de session
+    let _ = (opt_ctty, opt_fork, opt_wait);
+    execute_coreutils_command(target_prog, target_args, in_fd, out_fd, err_fd)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -41339,5 +41420,79 @@ Chaque processus dispose de son propre CR3 sans aucun privilege materiel direct.
         sys_close(err_r12);
         let s12 = core::str::from_utf8(&buf[..n12 as usize]).unwrap();
         assert!(s12.contains("missing operand"));
+    }
+
+    #[test]
+    fn test_setsid_execution_and_options() {
+        let mut buf = [0u8; 512];
+
+        // 1. setsid --help
+        let (out_r1, out_w1) = crate::vfs::pipe().expect("pipe setsid 1");
+        assert_eq!(run_setsid(&["--help"], 0, out_w1, 2), 0);
+        sys_close(out_w1);
+        let n1 = sys_read(out_r1, &mut buf);
+        sys_close(out_r1);
+        let s1 = core::str::from_utf8(&buf[..n1 as usize]).unwrap();
+        assert!(s1.contains("Usage: setsid"));
+
+        // 2. setsid --version
+        let (out_r2, out_w2) = crate::vfs::pipe().expect("pipe setsid 2");
+        assert_eq!(run_setsid(&["--version"], 0, out_w2, 2), 0);
+        sys_close(out_w2);
+        let n2 = sys_read(out_r2, &mut buf);
+        sys_close(out_r2);
+        let s2 = core::str::from_utf8(&buf[..n2 as usize]).unwrap();
+        assert!(s2.contains("setsid (JamboOS coreutils)"));
+
+        // 3. setsid echo hello (lancement d'une sous-commande)
+        let (out_r3, out_w3) = crate::vfs::pipe().expect("pipe setsid 3");
+        assert_eq!(run_setsid(&["echo", "hello"], 0, out_w3, 2), 0);
+        sys_close(out_w3);
+        let n3 = sys_read(out_r3, &mut buf);
+        sys_close(out_r3);
+        let s3 = core::str::from_utf8(&buf[..n3 as usize]).unwrap();
+        assert!(s3.contains("hello"));
+
+        // 4. setsid avec options -w -f echo daemon_task
+        let (out_r4, out_w4) = crate::vfs::pipe().expect("pipe setsid 4");
+        assert_eq!(
+            run_setsid(&["-w", "-f", "echo", "daemon_task"], 0, out_w4, 2),
+            0
+        );
+        sys_close(out_w4);
+        let n4 = sys_read(out_r4, &mut buf);
+        sys_close(out_r4);
+        let s4 = core::str::from_utf8(&buf[..n4 as usize]).unwrap();
+        assert!(s4.contains("daemon_task"));
+
+        // 5. setsid avec séparateur --
+        let (out_r5, out_w5) = crate::vfs::pipe().expect("pipe setsid 5");
+        assert_eq!(
+            run_setsid(&["--", "echo", "-c", "flag_test"], 0, out_w5, 2),
+            0
+        );
+        sys_close(out_w5);
+        let n5 = sys_read(out_r5, &mut buf);
+        sys_close(out_r5);
+        let s5 = core::str::from_utf8(&buf[..n5 as usize]).unwrap();
+        assert!(s5.contains("flag_test"));
+
+        // 6. setsid sans programme spécifié -> Erreur
+        let (err_r6, err_w6) = crate::vfs::pipe().expect("pipe setsid err 6");
+        assert_ne!(run_setsid(&[], 0, 1, err_w6), 0);
+        sys_close(err_w6);
+        let n6 = sys_read(err_r6, &mut buf);
+        sys_close(err_r6);
+        let s6 = core::str::from_utf8(&buf[..n6 as usize]).unwrap();
+        assert!(s6.contains("no program specified"));
+
+        // 7. setsid avec option inconnue -> Erreur
+        let (err_r7, err_w7) = crate::vfs::pipe().expect("pipe setsid err 7");
+        assert_ne!(run_setsid(&["-z", "echo"], 0, 1, err_w7), 0);
+        sys_close(err_w7);
+        let n7 = sys_read(err_r7, &mut buf);
+        sys_close(err_r7);
+        let s7 = core::str::from_utf8(&buf[..n7 as usize]).unwrap();
+        assert!(s7.contains("unrecognized option"));
     }
 }

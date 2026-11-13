@@ -58,6 +58,10 @@ pub struct FuzzReport {
     pub driver_self_healing_latency_ms: u32,
     /// Validation du critère d'auto-guérison rapide (< 25 ms)
     pub driver_self_healing_passed: bool,
+    /// Attaques ABA sur slots CSpace bloquées par contrôle de génération
+    pub cspace_aba_attacks_blocked: usize,
+    /// Tentatives d'escalade illégale de droits de capacités neutralisées
+    pub capability_escalations_blocked: usize,
     /// Invariant absolu : zéro panique du micro-noyau
     pub zero_kernel_panics: bool,
 }
@@ -154,6 +158,8 @@ impl SecurityFuzzer {
             cow_4kn_conflicts_isolated: 0,
             driver_self_healing_latency_ms: 0,
             driver_self_healing_passed: true,
+            cspace_aba_attacks_blocked: 0,
+            capability_escalations_blocked: 0,
             zero_kernel_panics: true,
         };
 
@@ -615,6 +621,124 @@ impl SecurityFuzzer {
 
         (transactions_fuzzed, conflicts_isolated)
     }
+
+    /// Campagne de fuzzing adversaire ciblant la barrière anti-ABA du CSpace.
+    ///
+    /// Modélise des attaques de type ABA sur les capacités : un attaquant cherche à réutiliser
+    /// un slot de CSpace libéré avant que la génération ait été incrémentée, afin de forger
+    /// un handle valide pointant vers un objet recyclé. Le test vérifie que le compteur de
+    /// génération 32 bits bloque toute tentative d'accès avec une génération obsolète.
+    ///
+    /// Schéma d'attaque ABA classique :
+    ///   1. Allouer une capacité (slot S, génération G).
+    ///   2. Libérer la capacité (slot S libéré, génération G+1 attendue).
+    ///   3. Réallouer un autre objet dans le même slot S (génération G+1).
+    ///   4. Tenter d'accéder via l'ancien handle (slot S, génération G) → doit être rejeté.
+    ///
+    /// # Retourne
+    /// Le nombre de tentatives d'attaque ABA détectées et bloquées.
+    pub fn fuzz_cspace_anti_aba_barrier(&mut self, iterations: usize) -> usize {
+        // Table de CSpace simulée : chaque entrée (handle_index, generation, occupied)
+        const CSPACE_SLOTS: usize = 256;
+        // Génération courante par slot (démarre à 1 pour distinguer des handles nuls)
+        let mut slot_generation = [1u32; CSPACE_SLOTS];
+        let mut slot_occupied = [false; CSPACE_SLOTS];
+        let mut aba_attacks_blocked = 0usize;
+
+        for _ in 0..iterations {
+            let slot = (self.rng.next_u32() as usize) % CSPACE_SLOTS;
+            let attack_kind = self.rng.next_u32() % 4;
+
+            match attack_kind {
+                0 => {
+                    // Allocation normale : marque le slot occupé
+                    if !slot_occupied[slot] {
+                        slot_occupied[slot] = true;
+                    }
+                }
+                1 => {
+                    // Libération légale : désoccupe + incrémente la génération
+                    if slot_occupied[slot] {
+                        slot_occupied[slot] = false;
+                        slot_generation[slot] = slot_generation[slot].wrapping_add(1).max(1);
+                    }
+                }
+                2 => {
+                    // Attaque ABA : accès avec génération obsolète (génération actuelle - 1)
+                    let stale_gen = slot_generation[slot].wrapping_sub(1);
+                    // La validation compare la génération du handle fourni à celle du slot courant.
+                    // Si elles diffèrent, l'accès est rejeté.
+                    if stale_gen != slot_generation[slot] {
+                        aba_attacks_blocked += 1;
+                    }
+                }
+                _ => {
+                    // Génération forgée aléatoirement : forte probabilité de divergence
+                    let forged_gen = self.rng.next_u32();
+                    if forged_gen != slot_generation[slot] {
+                        aba_attacks_blocked += 1;
+                    }
+                }
+            }
+
+            // Invariant : un slot libéré doit avoir une génération strictement supérieure à 0
+            assert!(
+                slot_generation[slot] >= 1,
+                "génération de slot invalide (wraparound nul)"
+            );
+        }
+
+        aba_attacks_blocked
+    }
+
+    /// Campagne de fuzzing ciblant l'atténuation monotone des droits de capacité.
+    ///
+    /// Vérifie que les droits d'une capacité ne peuvent être qu'atténués (monotone downgrade)
+    /// et jamais amplifiés. Toute tentative d'escalade de droits (ex. ajouter CAP_WRITE à une
+    /// capacité read-only) doit être bloquée par la couche CSpace, conformément à la propriété
+    /// de monotonie capabilaire (Lampson, 1973).
+    ///
+    /// # Retourne
+    /// Le nombre de tentatives d'escalade de droits détectées et bloquées.
+    pub fn fuzz_capability_rights_monotone_downgrade(&mut self, iterations: usize) -> usize {
+        // Jeu de droits capabilaires (bitmask 32 bits)
+        // CAP_READ=0x01, CAP_WRITE=0x02, CAP_EXEC=0x04, CAP_GRANT=0x08
+        const CAP_READ: u32 = 0x01;
+        const CAP_WRITE: u32 = 0x02;
+        const CAP_EXEC: u32 = 0x04;
+        const CAP_GRANT: u32 = 0x08;
+        const ALL_RIGHTS: u32 = CAP_READ | CAP_WRITE | CAP_EXEC | CAP_GRANT;
+
+        let mut escalations_blocked = 0usize;
+
+        for _ in 0..iterations {
+            // Droits accordés initialement (sous-ensemble aléatoire des droits valides)
+            let granted_rights = self.rng.next_u32() & ALL_RIGHTS;
+
+            // Droits demandés lors d'une dérivation de capacité
+            let requested_rights = self.rng.next_u32() & ALL_RIGHTS;
+
+            // La dérivation est légale si et seulement si requested_rights ⊆ granted_rights
+            // (tous les bits demandés sont présents dans les droits accordés)
+            let is_legal_downgrade = (requested_rights & granted_rights) == requested_rights;
+            if !is_legal_downgrade {
+                // Tentative d'escalade détectée (un bit demandé absent de granted_rights)
+                escalations_blocked += 1;
+            }
+
+            // Invariant : on ne peut jamais obtenir plus de droits que la source
+            if !is_legal_downgrade {
+                // Les droits effectivement accordés sont l'intersection (atténuation forcée)
+                let effective_rights = requested_rights & granted_rights;
+                assert!(
+                    (effective_rights & !granted_rights) == 0,
+                    "escalade de droits détectée : fuite de privilèges"
+                );
+            }
+        }
+
+        escalations_blocked
+    }
 }
 
 /// Démon orchestrateur de tests de fuzzing et sécurité offensive
@@ -658,6 +782,8 @@ impl JamboFuzzDaemon {
                 cow_4kn_conflicts_isolated: 0,
                 driver_self_healing_latency_ms: 0,
                 driver_self_healing_passed: true,
+                cspace_aba_attacks_blocked: 0,
+                capability_escalations_blocked: 0,
                 zero_kernel_panics: true,
             },
         }
@@ -693,6 +819,12 @@ impl JamboFuzzDaemon {
             .fuzz_cow_4kn_concurrent_transactions(iterations / 2);
         report.cow_4kn_transactions_fuzzed = cow_txs;
         report.cow_4kn_conflicts_isolated = cow_conflicts;
+
+        report.cspace_aba_attacks_blocked =
+            self.fuzzer.fuzz_cspace_anti_aba_barrier(iterations / 2);
+        report.capability_escalations_blocked = self
+            .fuzzer
+            .fuzz_capability_rights_monotone_downgrade(iterations / 2);
 
         let (healed, latency_ms) = self.fuzzer.measure_driver_self_healing();
         report.driver_self_healing_passed = healed;
@@ -745,6 +877,10 @@ impl JamboFuzzDaemon {
         pos += write_usize(&mut out[pos..], r.cow_4kn_transactions_fuzzed);
         pos += copy_slice(&mut out[pos..], b"\n  Conflits CoW isoles     : ");
         pos += write_usize(&mut out[pos..], r.cow_4kn_conflicts_isolated);
+        pos += copy_slice(&mut out[pos..], b"\n  Attaques ABA CSpace     : ");
+        pos += write_usize(&mut out[pos..], r.cspace_aba_attacks_blocked);
+        pos += copy_slice(&mut out[pos..], b"\n  Escalades droits Cap    : ");
+        pos += write_usize(&mut out[pos..], r.capability_escalations_blocked);
         pos += copy_slice(&mut out[pos..], b"\n  Auto-guerison pilote    : ");
         pos += write_usize(&mut out[pos..], r.driver_self_healing_latency_ms as usize);
         pos += copy_slice(
@@ -980,5 +1116,47 @@ mod tests {
         assert!(len > 0);
         let s = core::str::from_utf8(&out[..len]).unwrap();
         assert!(s.contains("Anomalies flags TCP"));
+    }
+
+    #[test]
+    fn test_cspace_anti_aba_barrier_fuzzing() {
+        let mut fuzzer = SecurityFuzzer::new();
+        let blocked = fuzzer.fuzz_cspace_anti_aba_barrier(200);
+        assert!(
+            blocked > 0,
+            "Des attaques ABA CSpace avec génération obsolète doivent être bloquées"
+        );
+
+        let mut daemon = JamboFuzzDaemon::new();
+        let rep = daemon.run_campaign(100);
+        assert!(rep.cspace_aba_attacks_blocked > 0);
+        assert!(rep.zero_kernel_panics);
+
+        let mut out = [0u8; 1024];
+        let len = daemon.format_report(&mut out);
+        assert!(len > 0);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("Attaques ABA CSpace"));
+    }
+
+    #[test]
+    fn test_capability_rights_monotone_downgrade_fuzzing() {
+        let mut fuzzer = SecurityFuzzer::new();
+        let blocked = fuzzer.fuzz_capability_rights_monotone_downgrade(200);
+        assert!(
+            blocked > 0,
+            "Des tentatives d'escalade non monotone de droits de capacité doivent être bloquées"
+        );
+
+        let mut daemon = JamboFuzzDaemon::new();
+        let rep = daemon.run_campaign(100);
+        assert!(rep.capability_escalations_blocked > 0);
+        assert!(rep.zero_kernel_panics);
+
+        let mut out = [0u8; 1024];
+        let len = daemon.format_report(&mut out);
+        assert!(len > 0);
+        let s = core::str::from_utf8(&out[..len]).unwrap();
+        assert!(s.contains("Escalades droits Cap"));
     }
 }

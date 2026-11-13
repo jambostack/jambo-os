@@ -575,6 +575,7 @@ impl JamboShell {
             "hostname" | "/bin/hostname" | "bin/hostname" => self.cmd_hostname(args, out),
             "pwdx" | "/bin/pwdx" | "bin/pwdx" => self.cmd_pwdx(args, out),
             "taskset" | "/bin/taskset" | "bin/taskset" => self.cmd_taskset(args, out),
+            "setsid" | "/bin/setsid" | "bin/setsid" => self.cmd_setsid(args, out),
             "basename" | "/bin/basename" | "bin/basename" => self.cmd_basename(args, out),
             "dirname" | "/bin/dirname" | "bin/dirname" => self.cmd_dirname(args, out),
             "seq" | "/bin/seq" | "bin/seq" => self.cmd_seq(args, out),
@@ -1403,6 +1404,26 @@ Utilitaire d'installation JamboOS (Serie 0.*.*)\n\
             }
         } else {
             let msg = b"taskset: pipe creation failed\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
+    }
+
+    fn cmd_setsid(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if let Ok((r, w)) = libjambo::vfs::pipe() {
+            let code = libjambo::coreutils::run_setsid(args, 0, w, w);
+            let _ = libjambo::coreutils::sys_close(w);
+            let n = libjambo::coreutils::sys_read(r, out);
+            let _ = libjambo::coreutils::sys_close(r);
+            let len = if n > 0 { n as usize } else { 0 };
+            if code == 0 {
+                (ShellStatus::Success, len)
+            } else {
+                (ShellStatus::ExecutionFailed, len)
+            }
+        } else {
+            let msg = b"setsid: pipe creation failed\n";
             let len = msg.len().min(out.len());
             out[..len].copy_from_slice(&msg[..len]);
             (ShellStatus::ExecutionFailed, len)
@@ -22814,5 +22835,21 @@ mod tests {
         assert_eq!(st167, ShellStatus::Success);
         let s167 = core::str::from_utf8(&out[..len167]).unwrap();
         assert!(s167.contains("taskset (JamboOS coreutils)"));
+
+        // 73. setsid shell command
+        let (st168, len168) = shell.execute_line("setsid echo test_setsid", &mut out);
+        assert_eq!(st168, ShellStatus::Success);
+        let s168 = core::str::from_utf8(&out[..len168]).unwrap();
+        assert!(s168.contains("test_setsid"));
+
+        let (st169, len169) = shell.execute_line("setsid --help", &mut out);
+        assert_eq!(st169, ShellStatus::Success);
+        let s169 = core::str::from_utf8(&out[..len169]).unwrap();
+        assert!(s169.contains("Usage: setsid"));
+
+        let (st170, len170) = shell.execute_line("setsid --version", &mut out);
+        assert_eq!(st170, ShellStatus::Success);
+        let s170 = core::str::from_utf8(&out[..len170]).unwrap();
+        assert!(s170.contains("setsid (JamboOS coreutils)"));
     }
 }
