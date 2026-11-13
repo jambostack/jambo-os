@@ -36,6 +36,26 @@ pub const NVME_ADMIN_NS_MANAGEMENT: u8 = 0x0D;
 pub const NVME_ADMIN_NS_ATTACHMENT: u8 = 0x15;
 /// Commande de formatage physique NVM de bas niveau (Format NVM, NVMe 1.4 §5.24)
 pub const NVME_ADMIN_FORMAT_NVM: u8 = 0x80;
+/// Commande d'effacement global sécurisé du média (Sanitize, NVMe 1.4 §5.27 & §8.21)
+pub const NVME_ADMIN_SANITIZE: u8 = 0x84;
+
+/// Identifiant de page de journal pour l'état d'effacement sécurisé (Sanitize Status Log, NVMe 1.4 §5.14.1.9.25)
+pub const NVME_LOG_SANITIZE_STATUS: u8 = 0x81;
+
+/// Actions d'effacement Sanitize (SANACT, CDW10 bits 2:0)
+pub const NVME_SANACT_EXIT_FAILURE: u8 = 0x01;
+pub const NVME_SANACT_START_BLOCK_ERASE: u8 = 0x02;
+pub const NVME_SANACT_START_OVERWRITE: u8 = 0x03;
+pub const NVME_SANACT_START_CRYPTO_ERASE: u8 = 0x04;
+
+/// Statut de Sanitize dans le journal 0x81 (SSTAT bits 2:0)
+pub const NVME_SANITIZE_NEVER_SANITIZED: u16 = 0x00;
+pub const NVME_SANITIZE_COMPLETED_SUCCESS: u16 = 0x01;
+pub const NVME_SANITIZE_IN_PROGRESS: u16 = 0x02;
+pub const NVME_SANITIZE_COMPLETED_FAILED: u16 = 0x03;
+
+/// Indicateur de données globales effacées (SSTAT bit 8)
+pub const NVME_SANITIZE_GLOBAL_DATA_ERASED: u16 = 1 << 8;
 
 /// Sélecteur d'effacement sécurisé (SES - Secure Erase Settings, CDW10 bits 11:9)
 pub const NVME_SES_NO_SECURE_ERASE: u8 = 0x0;
@@ -952,6 +972,111 @@ impl NvmeProtectionInformation {
     }
 }
 
+/// Actions d'effacement global de média pour l'opération Sanitize (NVMe 1.4 §8.21).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NvmeSanitizeAction {
+    /// Sort de l'état d'échec de Sanitize (Exit Failure Mode, SANACT = 001b)
+    ExitFailure = 0x01,
+    /// Déclenche l'effacement par blocs NAND physiques (Start Block Erase, SANACT = 010b)
+    StartBlockErase = 0x02,
+    /// Déclenche l'écrasement répétitif par motifs 32 bits (Start Overwrite, SANACT = 011b)
+    StartOverwrite = 0x03,
+    /// Déclenche l'effacement cryptographique des clés média (Start Crypto Erase, SANACT = 100b)
+    StartCryptoErase = 0x04,
+}
+
+impl NvmeSanitizeAction {
+    pub const fn from_u8(val: u8) -> Option<Self> {
+        match val {
+            0x01 => Some(Self::ExitFailure),
+            0x02 => Some(Self::StartBlockErase),
+            0x03 => Some(Self::StartOverwrite),
+            0x04 => Some(Self::StartCryptoErase),
+            _ => None,
+        }
+    }
+}
+
+/// Configuration matérielle complète pour la commande `Sanitize` (NVMe 1.4 §5.27).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct NvmeSanitizeConfig {
+    /// Permet la sortie sans restriction en cas d'échec (AUSE, CDW10 bit 3)
+    pub allow_unrestricted_exit: bool,
+    /// Nombre de passes d'écrasement physique (OWPASS, CDW10 bits 7:4, 0 à 15 pour 1 à 16 passes)
+    pub overwrite_pass_count: u8,
+    /// Inverse le motif entre les passes successives (OIPBP, CDW10 bit 8)
+    pub invert_pattern_between_passes: bool,
+    /// Pas de mode de réponse de désallocation (NODRM, CDW10 bit 9)
+    pub no_deallocate_response: bool,
+    /// Motif 32 bits d'écrasement (OVRPAT, CDW11)
+    pub overwrite_pattern: u32,
+}
+
+impl NvmeSanitizeConfig {
+    /// Construit le mot CDW10 pour la commande Sanitize
+    pub const fn to_cdw10(&self, action: NvmeSanitizeAction) -> u32 {
+        let act = (action as u32) & 0x07;
+        let ause = if self.allow_unrestricted_exit {
+            1 << 3
+        } else {
+            0
+        };
+        let count = if self.overwrite_pass_count > 15 {
+            15
+        } else {
+            self.overwrite_pass_count
+        };
+        let owpass = (count as u32) << 4;
+        let oipbp = if self.invert_pattern_between_passes {
+            1 << 8
+        } else {
+            0
+        };
+        let nodrm = if self.no_deallocate_response {
+            1 << 9
+        } else {
+            0
+        };
+        act | ause | owpass | oipbp | nodrm
+    }
+
+    /// Construit le mot CDW11 contenant le motif d'écrasement
+    pub const fn to_cdw11(&self) -> u32 {
+        self.overwrite_pattern
+    }
+}
+
+/// Structure de journal d'état Sanitize (NVMe 1.4 §5.14.1.9.25, LID 0x81).
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NvmeSanitizeStatusLog {
+    /// Sanitize Progress (SPROG, fraction d'avancement sur 16 bits : 0..65535, 65535 = 100%)
+    pub sprog: u16,
+    /// Sanitize Status (SSTAT, bits 2:0 statut de l'opération, bit 8 global data erased)
+    pub sstat: u16,
+    /// Sanitize Command Dword 10 Information (SCDW10)
+    pub scdw10: u32,
+    /// Estimated Time For Overwrite (secondes)
+    pub eto: u32,
+    /// Estimated Time For Block Erase (secondes)
+    pub etbe: u32,
+    /// Estimated Time For Crypto Erase (secondes)
+    pub etce: u32,
+}
+
+impl Default for NvmeSanitizeStatusLog {
+    fn default() -> Self {
+        Self {
+            sprog: 0,
+            sstat: NVME_SANITIZE_NEVER_SANITIZED,
+            scdw10: 0,
+            eto: 0,
+            etbe: 0,
+            etce: 0,
+        }
+    }
+}
+
 /// Descripteur complet d'un namespace NVMe 1.4 (Namespace Identification Structure, §6.1.2).
 ///
 /// Contient les attributs physiques et logiques d'un namespace : capacité totale,
@@ -1480,6 +1605,8 @@ pub struct NvmeController {
     pub pending_error_log_cid: Option<u16>,
     /// Table locale des namespaces enregistrés (NVMe 1.4 §8.11)
     pub namespaces: [Option<NvmeNamespaceDescriptor>; NVME_MAX_NAMESPACES],
+    /// État et télémétrie de l'opération d'effacement global sécurisé (Sanitize, NVMe 1.4 §8.21)
+    pub sanitize_status: NvmeSanitizeStatusLog,
 }
 
 impl Default for NvmeController {
@@ -1516,6 +1643,14 @@ impl NvmeController {
             last_error_count: 0,
             pending_error_log_cid: None,
             namespaces: [None; NVME_MAX_NAMESPACES],
+            sanitize_status: NvmeSanitizeStatusLog {
+                sprog: 0,
+                sstat: NVME_SANITIZE_NEVER_SANITIZED,
+                scdw10: 0,
+                eto: 0,
+                etbe: 0,
+                etce: 0,
+            },
         }
     }
 
@@ -1533,6 +1668,15 @@ impl NvmeController {
     /// Indique si le contrôleur opère en mode secteurs natifs 4Kn (4096 octets)
     pub fn is_4kn(&self) -> bool {
         self.block_size == 4096
+    }
+
+    /// Indique si une opération d'effacement physique global (Sanitize) est en cours d'exécution.
+    ///
+    /// Selon NVMe 1.4 §8.21, toute commande d'I/O (Read, Write, DSM, etc.) émise pendant
+    /// que `SSTAT` vaut 0x02 (`NVME_SANITIZE_IN_PROGRESS`) doit être rejetée avec `SysError::ResourceBusy`.
+    #[inline]
+    pub fn is_sanitize_in_progress(&self) -> bool {
+        (self.sanitize_status.sstat & 0x07) == NVME_SANITIZE_IN_PROGRESS
     }
 
     /// Indique si le contrôleur opère en mode secteurs logiques 512 octets (512e)
@@ -1827,7 +1971,7 @@ impl NvmeController {
         count: u16,
         dma: NvmeDmaBuffer,
     ) -> Result<u16, SysError> {
-        if !self.ready {
+        if !self.ready || self.is_sanitize_in_progress() {
             return Err(SysError::ResourceBusy);
         }
         let cmd = NvmeSubmissionEntry {
@@ -1864,7 +2008,7 @@ impl NvmeController {
         count: u16,
         dma: NvmeDmaBuffer,
     ) -> Result<u16, SysError> {
-        if !self.ready {
+        if !self.ready || self.is_sanitize_in_progress() {
             return Err(SysError::ResourceBusy);
         }
         let cmd = NvmeSubmissionEntry {
@@ -1901,7 +2045,7 @@ impl NvmeController {
         count: u16,
         deallocate: bool,
     ) -> Result<u16, SysError> {
-        if !self.ready {
+        if !self.ready || self.is_sanitize_in_progress() {
             return Err(SysError::ResourceBusy);
         }
         if count == 0 {
@@ -1924,7 +2068,7 @@ impl NvmeController {
 
     /// Soumet une commande de synchronisation cache asynchrone (Non-blocking Flush)
     pub fn submit_async_flush(&mut self, nsid: u32) -> Result<u16, SysError> {
-        if !self.ready {
+        if !self.ready || self.is_sanitize_in_progress() {
             return Err(SysError::ResourceBusy);
         }
         let cmd = NvmeSubmissionEntry {
@@ -1960,7 +2104,7 @@ impl NvmeController {
         num_ranges: u16,
         attributes: u32,
     ) -> Result<u16, SysError> {
-        if !self.ready {
+        if !self.ready || self.is_sanitize_in_progress() {
             return Err(SysError::ResourceBusy);
         }
         if num_ranges == 0 || num_ranges > 256 {
@@ -2252,9 +2396,18 @@ impl NvmeController {
                     log_page_id
                 },
             },
-            2 => NvmeAsyncEventAction::Notice {
-                notice_code: event_info,
-            },
+            2 => {
+                if log_page_id == NVME_LOG_SANITIZE_STATUS || event_info == 0x01 {
+                    NvmeAsyncEventAction::FetchSanitizeStatusLog {
+                        notice_code: event_info,
+                        log_page_id: NVME_LOG_SANITIZE_STATUS,
+                    }
+                } else {
+                    NvmeAsyncEventAction::Notice {
+                        notice_code: event_info,
+                    }
+                }
+            }
             3 => NvmeAsyncEventAction::SubsystemReset,
             _ => NvmeAsyncEventAction::Unknown(dw0),
         }
@@ -2627,6 +2780,96 @@ impl NvmeController {
         ns.used_blocks = 0;
 
         Ok(())
+    }
+
+    /// Soumet une commande d'administration d'effacement global de média (Sanitize, NVMe 1.4 §5.27 & §8.21).
+    ///
+    /// Opère sur la totalité du sous-système NVM (tous les namespaces). Pendant l'exécution
+    /// de l'effacement physique, les requêtes d'I/O utilisateur sont rejetées avec `SysError::ResourceBusy`.
+    ///
+    /// # Paramètres
+    /// - `action` : Opération de nettoyage (ExitFailure, StartBlockErase, StartOverwrite, StartCryptoErase).
+    /// - `config` : Paramètres d'effacement (passes, motif, inversion, etc.).
+    ///
+    /// # Errors
+    /// Retourne `SysError::NotSupported` si le contrôleur n'est pas prêt.
+    /// Retourne `SysError::ResourceBusy` si une opération Sanitize est déjà en cours.
+    pub fn submit_sanitize(
+        &mut self,
+        action: NvmeSanitizeAction,
+        config: NvmeSanitizeConfig,
+    ) -> Result<u16, SysError> {
+        if !self.ready {
+            return Err(SysError::NotSupported);
+        }
+        if self.is_sanitize_in_progress() && action != NvmeSanitizeAction::ExitFailure {
+            return Err(SysError::ResourceBusy);
+        }
+
+        let cdw10 = config.to_cdw10(action);
+        let cdw11 = config.to_cdw11();
+
+        let cmd = NvmeSubmissionEntry {
+            cdw0: NVME_ADMIN_SANITIZE as u32,
+            nsid: 0,
+            reserved: 0,
+            mptr: 0,
+            prp1: 0,
+            prp2: 0,
+            cdw10,
+            cdw11,
+            cdw12: 0,
+            cdw13: 0,
+            cdw14: 0,
+            cdw15: 0,
+        };
+
+        let cid = self.admin_queue.submit(cmd);
+        if action == NvmeSanitizeAction::ExitFailure {
+            self.sanitize_status.sstat = NVME_SANITIZE_COMPLETED_FAILED;
+        } else {
+            self.sanitize_status.sstat = NVME_SANITIZE_IN_PROGRESS;
+            self.sanitize_status.sprog = 0;
+            self.sanitize_status.scdw10 = cdw10;
+        }
+        Ok(cid)
+    }
+
+    /// Soumet une requête asynchrone de lecture du journal d'état Sanitize (LID 0x81).
+    ///
+    /// # Errors
+    /// Retourne `SysError::ResourceBusy` si le contrôleur n'est pas prêt.
+    pub fn submit_async_sanitize_status_log(&mut self, prp1_iova: u64) -> Result<u16, SysError> {
+        if !self.ready {
+            return Err(SysError::ResourceBusy);
+        }
+
+        let num_dwords = (core::mem::size_of::<NvmeSanitizeStatusLog>() / 4) - 1;
+        let cdw10 = ((num_dwords as u32) << 16) | (NVME_LOG_SANITIZE_STATUS as u32);
+
+        let cmd = NvmeSubmissionEntry {
+            cdw0: NVME_ADMIN_GET_LOG_PAGE as u32,
+            nsid: 0xFFFF_FFFF,
+            prp1: prp1_iova,
+            cdw10,
+            ..Default::default()
+        };
+
+        Ok(self.admin_queue.submit(cmd))
+    }
+
+    /// Met à jour l'état local du contrôleur à partir du journal Sanitize Status récupéré du matériel.
+    ///
+    /// Si l'opération d'effacement sécurisé a réussi (`NVME_SANITIZE_COMPLETED_SUCCESS`),
+    /// l'ensemble des blocs alloués sur tous les namespaces locaux est remis à zéro.
+    pub fn apply_sanitize_status(&mut self, log: NvmeSanitizeStatusLog) {
+        self.sanitize_status = log;
+        let status = log.sstat & 0x07;
+        if status == NVME_SANITIZE_COMPLETED_SUCCESS {
+            for ns in self.namespaces.iter_mut().flatten() {
+                ns.used_blocks = 0;
+            }
+        }
     }
 
     /// Soumet une commande d'administration de création de file de complétion I/O (Create I/O Completion Queue, NVMe 1.4 §5.4).
@@ -3011,6 +3254,8 @@ pub enum NvmeAsyncEventAction {
     },
     /// Notification de statut système
     Notice { notice_code: u8 },
+    /// Collecte du journal d'état d'effacement sécurisé (Sanitize Status Log ID 0x81)
+    FetchSanitizeStatusLog { notice_code: u8, log_page_id: u8 },
     /// Réinitialisation requise du contrôleur NVM
     SubsystemReset,
     /// Événement non pris en charge ou réservé
@@ -4581,5 +4826,136 @@ mod tests {
 
         // Plus de commandes
         assert_eq!(sched.select_next_queue(), None);
+    }
+
+    #[test]
+    fn test_nvme_sanitize_operations_and_io_fencing() {
+        let mut ctrl = NvmeController::new();
+        ctrl.ready = true;
+
+        // 1. Validation de l'encodage Sanitize Action et Config
+        assert_eq!(
+            NvmeSanitizeAction::from_u8(0x01),
+            Some(NvmeSanitizeAction::ExitFailure)
+        );
+        assert_eq!(
+            NvmeSanitizeAction::from_u8(0x02),
+            Some(NvmeSanitizeAction::StartBlockErase)
+        );
+        assert_eq!(
+            NvmeSanitizeAction::from_u8(0x03),
+            Some(NvmeSanitizeAction::StartOverwrite)
+        );
+        assert_eq!(
+            NvmeSanitizeAction::from_u8(0x04),
+            Some(NvmeSanitizeAction::StartCryptoErase)
+        );
+        assert_eq!(NvmeSanitizeAction::from_u8(0x99), None);
+
+        let cfg = NvmeSanitizeConfig {
+            allow_unrestricted_exit: true,
+            overwrite_pass_count: 5,
+            invert_pattern_between_passes: true,
+            no_deallocate_response: true,
+            overwrite_pattern: 0xDEADBEEF,
+        };
+        let cdw10 = cfg.to_cdw10(NvmeSanitizeAction::StartOverwrite);
+        assert_eq!((cdw10 & 0x07) as u8, NVME_SANACT_START_OVERWRITE);
+        assert_ne!(cdw10 & (1 << 3), 0); // AUSE
+        assert_eq!(((cdw10 >> 4) & 0x0F) as u8, 5); // OWPASS
+        assert_ne!(cdw10 & (1 << 8), 0); // OIPBP
+        assert_ne!(cdw10 & (1 << 9), 0); // NODRM
+        assert_eq!(cfg.to_cdw11(), 0xDEADBEEF);
+
+        // 2. Enregistrement d'un namespace avec des blocs alloués
+        let ns = NvmeNamespaceDescriptor {
+            nsid: 1,
+            total_blocks: 1_000_000,
+            capacity_blocks: 1_000_000,
+            used_blocks: 50_000,
+            active_lba_format: NvmeLbaFormat {
+                metadata_size: 0,
+                lba_data_size_pow2: 9,
+                relative_performance: 0,
+            },
+            num_lba_formats: 1,
+            ..Default::default()
+        };
+        ctrl.namespaces[0] = Some(ns);
+
+        // 3. Soumission d'une commande Sanitize Block Erase
+        assert!(!ctrl.is_sanitize_in_progress());
+        let cid = ctrl
+            .submit_sanitize(
+                NvmeSanitizeAction::StartBlockErase,
+                NvmeSanitizeConfig::default(),
+            )
+            .expect("submit sanitize");
+        assert!(ctrl.is_sanitize_in_progress());
+
+        let cmd = ctrl.admin_queue.sq[(cid as usize) % QUEUE_SIZE];
+        assert_eq!((cmd.cdw0 & 0xFF) as u8, NVME_ADMIN_SANITIZE);
+        assert_eq!((cmd.cdw10 & 0x07) as u8, NVME_SANACT_START_BLOCK_ERASE);
+
+        // 4. Barrière I/O stricte pendant Sanitize (NVMe 1.4 §8.21)
+        let dma = NvmeDmaBuffer::single_page(0x1000);
+        assert_eq!(
+            ctrl.submit_async_read_dma(0, 1, dma),
+            Err(SysError::ResourceBusy)
+        );
+        assert_eq!(
+            ctrl.submit_async_write_dma(0, 1, dma),
+            Err(SysError::ResourceBusy)
+        );
+        assert_eq!(
+            ctrl.submit_async_write_zeroes(0, 1, false),
+            Err(SysError::ResourceBusy)
+        );
+        assert_eq!(ctrl.submit_async_flush(1), Err(SysError::ResourceBusy));
+        assert_eq!(
+            ctrl.submit_async_dataset_management(1, 0x2000, 1, 0),
+            Err(SysError::ResourceBusy)
+        );
+
+        // Nouvelle commande Sanitize rejetée tant qu'en cours (sauf ExitFailure)
+        assert_eq!(
+            ctrl.submit_sanitize(
+                NvmeSanitizeAction::StartCryptoErase,
+                NvmeSanitizeConfig::default()
+            ),
+            Err(SysError::ResourceBusy)
+        );
+
+        // 5. Requête du journal de statut Sanitize (LID 0x81)
+        let log_cid = ctrl
+            .submit_async_sanitize_status_log(0x5000)
+            .expect("submit sanitize log");
+        let log_cmd = ctrl.admin_queue.sq[(log_cid as usize) % QUEUE_SIZE];
+        assert_eq!((log_cmd.cdw0 & 0xFF) as u8, NVME_ADMIN_GET_LOG_PAGE);
+        assert_eq!((log_cmd.cdw10 & 0xFF) as u8, NVME_LOG_SANITIZE_STATUS);
+
+        // 6. Complétion réussie de Sanitize et remise à zéro des blocs alloués
+        let log = NvmeSanitizeStatusLog {
+            sstat: NVME_SANITIZE_COMPLETED_SUCCESS | NVME_SANITIZE_GLOBAL_DATA_ERASED,
+            sprog: 65535, // 100%
+            ..Default::default()
+        };
+        ctrl.apply_sanitize_status(log);
+        assert!(!ctrl.is_sanitize_in_progress());
+        assert_eq!(ctrl.namespaces[0].as_ref().unwrap().used_blocks, 0);
+
+        // I/O de nouveau permises après complétion
+        assert!(ctrl.submit_async_write_zeroes(0, 1, false).is_ok());
+
+        // 7. Événement AER Sanitize Completed
+        let aer_dw0_sanitize = 2 | (0x01 << 8) | ((NVME_LOG_SANITIZE_STATUS as u32) << 16);
+        let action = ctrl.dispatch_async_event_action(aer_dw0_sanitize);
+        assert_eq!(
+            action,
+            NvmeAsyncEventAction::FetchSanitizeStatusLog {
+                notice_code: 0x01,
+                log_page_id: NVME_LOG_SANITIZE_STATUS,
+            }
+        );
     }
 }
