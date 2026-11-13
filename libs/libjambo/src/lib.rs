@@ -3,12 +3,18 @@
 pub use jambo_abi::*;
 
 pub mod coreutils;
+pub mod driver;
 pub mod dynlink;
 pub mod gpt;
 pub mod net;
 pub mod pci;
 pub mod posix;
 pub mod vfs;
+
+pub use driver::{
+    DeviceRemoveLock, IoFilterRole, IoMajorFunction, IoRequestPacket, IoStackLocation,
+    IoStatusBlock, RemoveLockStatus, MAX_IO_STACK_DEPTH,
+};
 
 /// Wrapper d'appel système brut pour x86-64
 ///

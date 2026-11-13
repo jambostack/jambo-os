@@ -10,7 +10,7 @@
 extern crate std;
 
 use libjambo::pci::PciDeviceInfo;
-use libjambo::SysError;
+use libjambo::{DeviceRemoveLock, SysError};
 
 pub const NVME_REG_CAP: usize = 0x00;
 pub const NVME_REG_VS: usize = 0x08;
@@ -1607,6 +1607,8 @@ pub struct NvmeController {
     pub namespaces: [Option<NvmeNamespaceDescriptor>; NVME_MAX_NAMESPACES],
     /// État et télémétrie de l'opération d'effacement global sécurisé (Sanitize, NVMe 1.4 §8.21)
     pub sanitize_status: NvmeSanitizeStatusLog,
+    /// Verrou de déconnexion matérielle pour le suivi atomique des E/S en vol
+    pub remove_lock: DeviceRemoveLock,
 }
 
 impl Default for NvmeController {
@@ -1651,6 +1653,7 @@ impl NvmeController {
                 etbe: 0,
                 etce: 0,
             },
+            remove_lock: DeviceRemoveLock::new(),
         }
     }
 

@@ -14,7 +14,7 @@
 extern crate std;
 
 use libjambo::pci::PciDeviceInfo;
-use libjambo::SysError;
+use libjambo::{DeviceRemoveLock, SysError};
 
 // ============================================================================
 // Types et Constantes TRB (Transfer Request Block) - Spécification xHCI 1.2
@@ -14099,6 +14099,8 @@ pub struct XhciController {
     pub interrupter: XhciInterrupter,
     pub port_slots: [Option<u8>; 16],
     pub ready: bool,
+    /// Verrou de déconnexion matérielle pour le suivi atomique des E/S en vol
+    pub remove_lock: DeviceRemoveLock,
 }
 
 impl Default for XhciController {
@@ -14156,6 +14158,7 @@ impl XhciController {
             interrupter: XhciInterrupter::new(),
             port_slots: [None; 16],
             ready: false,
+            remove_lock: DeviceRemoveLock::new(),
         }
     }
 
