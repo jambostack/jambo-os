@@ -742,6 +742,10 @@ impl MultiNamespaceTxCoordinator {
     pub fn generation_of(&self, nsid: u32) -> Option<u64> {
         self.find_namespace(nsid).map(|ns| ns.current_generation)
     }
+
+    pub fn get_namespace_generation(&self, nsid: u32) -> Option<u64> {
+        self.generation_of(nsid)
+    }
 }
 
 /// Uberblock racine JamboFS validé atomiquement
@@ -2234,6 +2238,197 @@ impl SnapshotTable {
 }
 
 // ============================================================================
+// Instantanés Atomiques CoW par Namespace NVMe & Coordination Überblock A/B
+// ============================================================================
+
+/// Emplacement physique du bloc d'amorçage racine Überblock (Slot A ou Slot B)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UberblockSlot {
+    /// Slot A principal (LBA de base de la partition)
+    SlotA,
+    /// Slot B alternatif (LBA de base + décalage d'un bloc de 4 Kio)
+    SlotB,
+}
+
+impl UberblockSlot {
+    #[inline]
+    pub fn is_slot_b(&self) -> bool {
+        matches!(self, UberblockSlot::SlotB)
+    }
+
+    #[inline]
+    pub fn alternate(&self) -> Self {
+        match self {
+            UberblockSlot::SlotA => UberblockSlot::SlotB,
+            UberblockSlot::SlotB => UberblockSlot::SlotA,
+        }
+    }
+}
+
+/// Longueur maximale du libellé d'un instantané de namespace
+pub const MAX_NS_SNAPSHOT_NAME_LEN: usize = 32;
+/// Nombre maximal d'instantanés par namespace NVMe
+pub const MAX_NS_SNAPSHOTS: usize = 32;
+
+/// Descripteur d'instantané atomique CoW par namespace NVMe avec coordination Überblock A/B
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NamespaceCowCheckpoint {
+    /// Identifiant du namespace NVMe (NSID, 1..16)
+    pub nsid: u32,
+    /// Identifiant unique du point de reprise / instantané
+    pub snapshot_id: u64,
+    /// Génération CoW capturée lors de l'instantané
+    pub generation: u64,
+    /// Racine de l'arbre B+ associée au namespace
+    pub root_tree_offset: u64,
+    /// Empreinte cryptographique Merkle BLAKE3 de la racine du namespace
+    pub root_checksum: [u8; 32],
+    /// Emplacement physique du slot Überblock lors du snapshot (Slot A ou Slot B)
+    pub slot: UberblockSlot,
+    /// Horodatage de capture
+    pub timestamp: u64,
+    /// Libellé de l'instantané
+    pub name: [u8; MAX_NS_SNAPSHOT_NAME_LEN],
+    /// Longueur du nom
+    pub name_len: usize,
+    /// Statut actif de l'entrée
+    pub active: bool,
+}
+
+impl Default for NamespaceCowCheckpoint {
+    fn default() -> Self {
+        Self {
+            nsid: 0,
+            snapshot_id: 0,
+            generation: 0,
+            root_tree_offset: 0,
+            root_checksum: [0u8; 32],
+            slot: UberblockSlot::SlotA,
+            timestamp: 0,
+            name: [0u8; MAX_NS_SNAPSHOT_NAME_LEN],
+            name_len: 0,
+            active: false,
+        }
+    }
+}
+
+impl NamespaceCowCheckpoint {
+    pub fn name_str(&self) -> &str {
+        core::str::from_utf8(&self.name[..self.name_len]).unwrap_or("")
+    }
+}
+
+/// Table de gestion des instantanés atomiques CoW multi-namespaces
+#[derive(Debug, Clone, Copy)]
+pub struct NamespaceSnapshotTable {
+    pub entries: [NamespaceCowCheckpoint; MAX_NS_SNAPSHOTS],
+    pub next_id: u64,
+    pub total_checkpoints_created: u64,
+    pub total_checkpoints_restored: u64,
+}
+
+impl Default for NamespaceSnapshotTable {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl NamespaceSnapshotTable {
+    pub const fn new() -> Self {
+        Self {
+            entries: [NamespaceCowCheckpoint {
+                nsid: 0,
+                snapshot_id: 0,
+                generation: 0,
+                root_tree_offset: 0,
+                root_checksum: [0u8; 32],
+                slot: UberblockSlot::SlotA,
+                timestamp: 0,
+                name: [0u8; MAX_NS_SNAPSHOT_NAME_LEN],
+                name_len: 0,
+                active: false,
+            }; MAX_NS_SNAPSHOTS],
+            next_id: 1,
+            total_checkpoints_created: 0,
+            total_checkpoints_restored: 0,
+        }
+    }
+
+    /// Enregistre un instantané CoW pour un namespace NVMe donné
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_checkpoint(
+        &mut self,
+        nsid: u32,
+        name: &str,
+        generation: u64,
+        root_offset: u64,
+        checksum: [u8; 32],
+        slot: UberblockSlot,
+        timestamp: u64,
+    ) -> Result<u64, FsError> {
+        if nsid == 0 {
+            return Err(FsError::InvalidMagic);
+        }
+        let name_bytes = name.as_bytes();
+        let len = name_bytes.len().min(MAX_NS_SNAPSHOT_NAME_LEN);
+
+        // Vérifier l'unicité du nom pour ce namespace
+        for e in self.entries.iter() {
+            if e.active && e.nsid == nsid && e.name_str() == name {
+                return Err(FsError::BufferTooSmall);
+            }
+        }
+
+        for e in self.entries.iter_mut() {
+            if !e.active {
+                let id = self.next_id;
+                self.next_id += 1;
+                e.nsid = nsid;
+                e.snapshot_id = id;
+                e.generation = generation;
+                e.root_tree_offset = root_offset;
+                e.root_checksum = checksum;
+                e.slot = slot;
+                e.timestamp = timestamp;
+                e.name = [0u8; MAX_NS_SNAPSHOT_NAME_LEN];
+                e.name[..len].copy_from_slice(&name_bytes[..len]);
+                e.name_len = len;
+                e.active = true;
+                self.total_checkpoints_created += 1;
+                return Ok(id);
+            }
+        }
+
+        Err(FsError::QuotaExceeded)
+    }
+
+    /// Recherche un instantané par ID pour un namespace donné
+    pub fn find_checkpoint(&self, nsid: u32, snapshot_id: u64) -> Option<&NamespaceCowCheckpoint> {
+        self.entries
+            .iter()
+            .find(|e| e.active && e.nsid == nsid && e.snapshot_id == snapshot_id)
+    }
+
+    /// Recherche un instantané par nom pour un namespace donné
+    pub fn find_by_name(&self, nsid: u32, name: &str) -> Option<&NamespaceCowCheckpoint> {
+        self.entries
+            .iter()
+            .find(|e| e.active && e.nsid == nsid && e.name_str() == name)
+    }
+
+    /// Supprime un instantané
+    pub fn delete_checkpoint(&mut self, nsid: u32, snapshot_id: u64) -> Result<(), FsError> {
+        for e in self.entries.iter_mut() {
+            if e.active && e.nsid == nsid && e.snapshot_id == snapshot_id {
+                e.active = false;
+                return Ok(());
+            }
+        }
+        Err(FsError::FileNotFound)
+    }
+}
+
+// ============================================================================
 // Journal des Transactions CoW (WAL / Write-Ahead Logging & Intent Log)
 // ============================================================================
 
@@ -3348,6 +3543,7 @@ pub struct JamboFs {
     pub wal: MetadataWalManager,
     pub bitmap: CowBitmapAllocator,
     pub multi_ns: MultiNamespaceTxCoordinator,
+    pub ns_snapshot_table: NamespaceSnapshotTable,
 }
 
 impl JamboFs {
@@ -3456,6 +3652,7 @@ impl JamboFs {
             wal: MetadataWalManager::new(),
             bitmap,
             multi_ns,
+            ns_snapshot_table: NamespaceSnapshotTable::new(),
         };
 
         // Replay automatique de résilience après coupure électrique
@@ -3484,6 +3681,7 @@ impl JamboFs {
             wal: MetadataWalManager::new(),
             bitmap: CowBitmapAllocator::new(),
             multi_ns,
+            ns_snapshot_table: NamespaceSnapshotTable::new(),
         }
     }
 
@@ -4163,6 +4361,129 @@ impl JamboFs {
     /// Synchronise et force la persistance matérielle de tous les blocs en attente
     pub fn sync(&mut self) -> Result<(), FsError> {
         self.client.flush().map_err(FsError::BlockIoError)
+    }
+
+    /// Crée un instantané atomique Copy-on-Write (CoW) ciblant un namespace NVMe spécifique.
+    ///
+    /// Capture l'état exact de l'Überblock actif (génération, racine B-Tree, Merkle root, slot A/B)
+    /// et émet une barrière matérielle flush pour garantir la durabilité du point de reprise.
+    pub fn create_namespace_cow_checkpoint(
+        &mut self,
+        nsid: u32,
+        name: &str,
+    ) -> Result<u64, FsError> {
+        let current_gen = self
+            .multi_ns
+            .get_namespace_generation(nsid)
+            .unwrap_or(self.active_uberblock.generation);
+
+        let current_slot = if self.active_slot_b {
+            UberblockSlot::SlotB
+        } else {
+            UberblockSlot::SlotA
+        };
+
+        // Forcer la synchronisation matérielle avant scellement du checkpoint
+        self.sync()?;
+
+        let snap_id = self.ns_snapshot_table.create_checkpoint(
+            nsid,
+            name,
+            current_gen,
+            self.active_uberblock.root_tree_offset,
+            self.active_uberblock.root_checksum,
+            current_slot,
+            self.active_uberblock.timestamp,
+        )?;
+
+        Ok(snap_id)
+    }
+
+    /// Restaure atomiquement l'état d'un namespace à partir d'un point de reprise (CoW checkpoint).
+    ///
+    /// Effectue une bascule sécurisée Überblock A/B sur le slot opposé au slot actif,
+    /// garantissant que l'opération est insensible aux coupures d'alimentation impromptues.
+    pub fn restore_namespace_checkpoint(
+        &mut self,
+        nsid: u32,
+        snapshot_id: u64,
+    ) -> Result<Uberblock, FsError> {
+        let cp = self
+            .ns_snapshot_table
+            .find_checkpoint(nsid, snapshot_id)
+            .copied()
+            .ok_or(FsError::FileNotFound)?;
+
+        // Nouvelle génération strictement supérieure à l'actuelle et à celle du point de reprise
+        let next_gen = core::cmp::max(self.active_uberblock.generation, cp.generation) + 1;
+
+        let mut restored_ub = self.active_uberblock;
+        restored_ub.generation = next_gen;
+        restored_ub.root_tree_offset = cp.root_tree_offset;
+        restored_ub.root_checksum = cp.root_checksum;
+        restored_ub.timestamp = restored_ub.timestamp.wrapping_add(1);
+
+        let mut ub_buf = [0u8; BLOCK_SIZE];
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                &restored_ub as *const Uberblock as *const u8,
+                ub_buf.as_mut_ptr(),
+                core::mem::size_of::<Uberblock>(),
+            );
+        }
+
+        // Alternance de slot : écriture sur le slot opposé au slot actif courant
+        let target_ub_lba = if self.active_slot_b {
+            self.partition_base_lba // Slot A
+        } else {
+            self.partition_base_lba + self.geometry.sectors_per_4k_block() // Slot B
+        };
+
+        self.client
+            .write_block(target_ub_lba, &ub_buf)
+            .map_err(FsError::BlockIoError)?;
+        self.client.flush().map_err(FsError::BlockIoError)?;
+
+        // Validation en mémoire
+        self.active_uberblock = restored_ub;
+        self.root_offset = cp.root_tree_offset;
+        self.active_slot_b = !self.active_slot_b;
+
+        // Synchroniser le coordinateur multi-namespaces
+        let _ = self.multi_ns.commit_transaction(
+            &mut MultiNamespaceTxContext {
+                txid: next_gen,
+                state: TransactionState::Active,
+                participants: [NamespaceSnapshot {
+                    nsid,
+                    base_generation: cp.generation,
+                }; MAX_TX_NAMESPACES],
+                participant_count: 1,
+                attempt: 1,
+            },
+            &[(nsid, next_gen)],
+        );
+
+        self.ns_snapshot_table.total_checkpoints_restored += 1;
+        Ok(restored_ub)
+    }
+
+    /// Supprime un instantané de namespace
+    pub fn delete_namespace_checkpoint(
+        &mut self,
+        nsid: u32,
+        snapshot_id: u64,
+    ) -> Result<(), FsError> {
+        self.ns_snapshot_table.delete_checkpoint(nsid, snapshot_id)
+    }
+
+    /// Récupère les métadonnées d'un instantané de namespace
+    pub fn get_namespace_checkpoint(
+        &self,
+        nsid: u32,
+        snapshot_id: u64,
+    ) -> Option<&NamespaceCowCheckpoint> {
+        self.ns_snapshot_table.find_checkpoint(nsid, snapshot_id)
     }
 
     /// Exécute un cycle de Data Scrubbing sur l'ensemble de l'arborescence Merkle

@@ -579,6 +579,8 @@ impl JamboShell {
             "ionice" | "/bin/ionice" | "bin/ionice" => self.cmd_ionice(args, out),
             "unshare" | "/bin/unshare" | "bin/unshare" => self.cmd_unshare(args, out),
             "prlimit" | "/bin/prlimit" | "bin/prlimit" => self.cmd_prlimit(args, out),
+            "chrt" | "/bin/chrt" | "bin/chrt" => self.cmd_chrt(args, out),
+            "chcpu" | "/bin/chcpu" | "bin/chcpu" => self.cmd_chcpu(args, out),
             "basename" | "/bin/basename" | "bin/basename" => self.cmd_basename(args, out),
             "dirname" | "/bin/dirname" | "bin/dirname" => self.cmd_dirname(args, out),
             "seq" | "/bin/seq" | "bin/seq" => self.cmd_seq(args, out),
@@ -1487,6 +1489,46 @@ Utilitaire d'installation JamboOS (Serie 0.*.*)\n\
             }
         } else {
             let msg = b"prlimit: pipe creation failed\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
+    }
+
+    fn cmd_chrt(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if let Ok((r, w)) = libjambo::vfs::pipe() {
+            let code = libjambo::coreutils::run_chrt(args, 0, w, w);
+            let _ = libjambo::coreutils::sys_close(w);
+            let n = libjambo::coreutils::sys_read(r, out);
+            let _ = libjambo::coreutils::sys_close(r);
+            let len = if n > 0 { n as usize } else { 0 };
+            if code == 0 {
+                (ShellStatus::Success, len)
+            } else {
+                (ShellStatus::ExecutionFailed, len)
+            }
+        } else {
+            let msg = b"chrt: pipe creation failed\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
+    }
+
+    fn cmd_chcpu(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if let Ok((r, w)) = libjambo::vfs::pipe() {
+            let code = libjambo::coreutils::run_chcpu(args, 0, w, w);
+            let _ = libjambo::coreutils::sys_close(w);
+            let n = libjambo::coreutils::sys_read(r, out);
+            let _ = libjambo::coreutils::sys_close(r);
+            let len = if n > 0 { n as usize } else { 0 };
+            if code == 0 {
+                (ShellStatus::Success, len)
+            } else {
+                (ShellStatus::ExecutionFailed, len)
+            }
+        } else {
+            let msg = b"chcpu: pipe creation failed\n";
             let len = msg.len().min(out.len());
             out[..len].copy_from_slice(&msg[..len]);
             (ShellStatus::ExecutionFailed, len)
@@ -22962,5 +23004,43 @@ mod tests {
         assert_eq!(st179, ShellStatus::Success);
         let s179 = core::str::from_utf8(&out[..len179]).unwrap();
         assert!(s179.starts_with("NOFILE "));
+
+        // 77. chrt shell command
+        let (st180, len180) = shell.execute_line("chrt --help", &mut out);
+        assert_eq!(st180, ShellStatus::Success);
+        let s180 = core::str::from_utf8(&out[..len180]).unwrap();
+        assert!(s180.contains("Usage:"));
+        assert!(s180.contains("chrt"));
+
+        let (st181, len181) = shell.execute_line("chrt --version", &mut out);
+        assert_eq!(st181, ShellStatus::Success);
+        let s181 = core::str::from_utf8(&out[..len181]).unwrap();
+        assert!(s181.contains("chrt (JamboOS coreutils)"));
+
+        let (st182, len182) = shell.execute_line("chrt -m", &mut out);
+        assert_eq!(st182, ShellStatus::Success);
+        let s182 = core::str::from_utf8(&out[..len182]).unwrap();
+        assert!(s182.contains("SCHED_FIFO min/max priority"));
+
+        // 78. chcpu shell command
+        let (st183, len183) = shell.execute_line("chcpu --help", &mut out);
+        assert_eq!(st183, ShellStatus::Success);
+        let s183 = core::str::from_utf8(&out[..len183]).unwrap();
+        assert!(s183.contains("Usage: chcpu"));
+
+        let (st184, len184) = shell.execute_line("chcpu --version", &mut out);
+        assert_eq!(st184, ShellStatus::Success);
+        let s184 = core::str::from_utf8(&out[..len184]).unwrap();
+        assert!(s184.contains("chcpu (JamboOS coreutils)"));
+
+        let (st185, len185) = shell.execute_line("chcpu -e 1", &mut out);
+        assert_eq!(st185, ShellStatus::Success);
+        let s185 = core::str::from_utf8(&out[..len185]).unwrap();
+        assert!(s185.contains("CPU 1 enabled"));
+
+        let (st186, len186) = shell.execute_line("chcpu -d 1", &mut out);
+        assert_eq!(st186, ShellStatus::Success);
+        let s186 = core::str::from_utf8(&out[..len186]).unwrap();
+        assert!(s186.contains("CPU 1 disabled"));
     }
 }

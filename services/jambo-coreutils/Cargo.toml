@@ -722,7 +722,17 @@ name = "prlimit"
 path = "src/bin/prlimit.rs"
 test = false
 
-# 143 utilitaires Ring 3
+[[bin]]
+name = "chrt"
+path = "src/bin/chrt.rs"
+test = false
+
+[[bin]]
+name = "chcpu"
+path = "src/bin/chcpu.rs"
+test = false
+
+# 145 utilitaires Ring 3
 
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }

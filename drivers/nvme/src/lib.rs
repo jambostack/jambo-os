@@ -62,8 +62,16 @@ pub const NVME_NSID_BROADCAST: u32 = 0xFFFF_FFFF;
 pub const NVME_LOG_ERROR_INFO: u8 = 0x01;
 pub const NVME_LOG_SMART_HEALTH: u8 = 0x02;
 pub const NVME_ERROR_LOG_ENTRY_SIZE: usize = 64;
+pub const NVME_FEAT_ARBITRATION: u32 = 0x01;
 pub const NVME_FEAT_TEMPERATURE_THRESHOLD: u32 = 0x04;
+pub const NVME_FEAT_INTERRUPT_COALESCING: u32 = 0x08;
+pub const NVME_FEAT_INTERRUPT_VECTOR_CONFIG: u32 = 0x09;
 pub const NVME_FEAT_ASYNC_EVENT_CONFIG: u32 = 0x0B;
+
+/// Masque et valeurs de sélection du mécanisme d'arbitrage (CC.AMS & CAP.AMS, NVMe 1.4 §3.1.3.8)
+pub const NVME_CC_AMS_ROUND_ROBIN: u32 = 0x0 << 11;
+pub const NVME_CC_AMS_WRR_URGENT: u32 = 0x1 << 11;
+pub const NVME_CAP_AMS_WRR_URGENT: u64 = 1 << 17;
 
 /// Sélecteur d'action Namespace Management : création d'un nouveau namespace (CDW10 bits 3:0 = 0x0)
 pub const NVME_NS_MGMT_CREATE: u8 = 0x00;
@@ -1175,6 +1183,270 @@ pub struct NvmeCqMsixDelegation {
     pub bound: bool,
 }
 
+/// Configuration de l'arbitrage des commandes NVMe 1.4 (§5.21.1.1 - FID 0x01 Arbitration Feature)
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct NvmeArbitrationConfig {
+    /// Arbitration Burst (AB) : 0..7 (exprimé en 2^AB commandes, 0 = 1 commande, 7 = illimité)
+    pub arbitration_burst: u8,
+    /// Poids de la classe de priorité basse (LPW - Low Priority Weight) : 0..255 (1..256 commandes)
+    pub low_priority_weight: u8,
+    /// Poids de la classe de priorité moyenne (MPW - Medium Priority Weight) : 0..255 (1..256 commandes)
+    pub medium_priority_weight: u8,
+    /// Poids de la classe de priorité haute (HPW - High Priority Weight) : 0..255 (1..256 commandes)
+    pub high_priority_weight: u8,
+}
+
+impl NvmeArbitrationConfig {
+    pub const fn new(ab: u8, lpw: u8, mpw: u8, hpw: u8) -> Self {
+        Self {
+            arbitration_burst: ab & 0x07,
+            low_priority_weight: lpw,
+            medium_priority_weight: mpw,
+            high_priority_weight: hpw,
+        }
+    }
+}
+
+/// Configuration du regroupement (coalescence) d'interruptions NVMe 1.4 (§5.21.1.8 - FID 0x08)
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct NvmeInterruptCoalescingConfig {
+    /// Seuil d'agrégation d'interruptions (THR - Aggregation Threshold) : 0 = désactivé, 1..255 entrées
+    pub aggregation_threshold: u8,
+    /// Délai d'agrégation (TIME - Aggregation Time) : exprimé en unités de 100 microsecondes (0..255 => 0..25.5 ms)
+    pub aggregation_time_100us: u8,
+}
+
+impl NvmeInterruptCoalescingConfig {
+    pub const fn new(threshold: u8, time_100us: u8) -> Self {
+        Self {
+            aggregation_threshold: threshold,
+            aggregation_time_100us: time_100us,
+        }
+    }
+}
+
+/// Gestionnaire de regroupement (coalescing / batching) des écritures aux Doorbells NVMe
+///
+/// Réduit la surcharge du bus PCIe et la latence MMIO en évitant d'écrire un TLP PCIe
+/// à chaque soumission unitaire, tout en garantissant un flush automatique dès que le seuil
+/// ou une barrière de synchronisation est atteinte.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NvmeSubmissionDoorbellCoalescer {
+    /// Seuil de déclenchement automatique du Doorbell (ex: 4, 8, 16 commandes)
+    pub batch_threshold: u16,
+    /// Nombre de commandes en attente par file SQ (QID 0..7)
+    pub pending_count: [u16; 8],
+    /// Dernier pointeur tail soumis par file SQ (QID 0..7)
+    pub last_tail: [u16; 8],
+    /// Nombre total d'écritures réelles de Doorbell effectuées
+    pub doorbell_writes: u64,
+    /// Nombre total de commandes transmises
+    pub total_commands_queued: u64,
+}
+
+impl Default for NvmeSubmissionDoorbellCoalescer {
+    fn default() -> Self {
+        Self::new(8)
+    }
+}
+
+impl NvmeSubmissionDoorbellCoalescer {
+    pub const fn new(batch_threshold: u16) -> Self {
+        let threshold = if batch_threshold == 0 {
+            1
+        } else {
+            batch_threshold
+        };
+        Self {
+            batch_threshold: threshold,
+            pending_count: [0; 8],
+            last_tail: [0; 8],
+            doorbell_writes: 0,
+            total_commands_queued: 0,
+        }
+    }
+
+    /// Enregistre une soumission de commande pour la file SQ `qid` avec sa nouvelle position tail.
+    /// Retourne `true` si le seuil de coalescence est atteint et qu'une écriture Doorbell immédiate est requise.
+    pub fn record_submission(&mut self, qid: u16, tail: u16) -> bool {
+        let idx = (qid as usize) % 8;
+        self.pending_count[idx] = self.pending_count[idx].saturating_add(1);
+        self.last_tail[idx] = tail;
+        self.total_commands_queued = self.total_commands_queued.saturating_add(1);
+
+        if self.pending_count[idx] >= self.batch_threshold {
+            self.pending_count[idx] = 0;
+            self.doorbell_writes = self.doorbell_writes.saturating_add(1);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Vide (flush) de manière forcée le Doorbell en attente pour la file SQ `qid`.
+    /// Retourne le dernier tail à écrire s'il y avait des commandes non notifiées.
+    pub fn flush(&mut self, qid: u16) -> Option<u16> {
+        let idx = (qid as usize) % 8;
+        if self.pending_count[idx] > 0 {
+            self.pending_count[idx] = 0;
+            self.doorbell_writes = self.doorbell_writes.saturating_add(1);
+            Some(self.last_tail[idx])
+        } else {
+            None
+        }
+    }
+
+    /// Nombre de sonnettes (écritures MMIO) économisées grâce au regroupement
+    #[inline]
+    pub fn doorbells_saved(&self) -> u64 {
+        self.total_commands_queued
+            .saturating_sub(self.doorbell_writes)
+    }
+
+    /// Taux d'efficacité de coalescence en pourcentage (0..100)
+    pub fn efficiency_percentage(&self) -> u32 {
+        if self.total_commands_queued == 0 {
+            return 0;
+        }
+        let saved = self.doorbells_saved();
+        ((saved * 100) / self.total_commands_queued) as u32
+    }
+}
+
+/// Ordonnanceur d'arbitrage de soumission pondéré NVMe 1.4 (§4.11 / §4.13)
+/// Weighted Round Robin with Urgent Priority Class (WRRU)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NvmeWrruScheduler {
+    pub config: NvmeArbitrationConfig,
+    /// Crédits restants pour chaque classe de priorité dans la ronde courante
+    pub high_credits: u16,
+    pub medium_credits: u16,
+    pub low_credits: u16,
+    /// Nombre de commandes en attente par file SQ (QID 0..7)
+    pub sq_pending: [u16; 8],
+    /// Priorité assignée à chaque file SQ (QID 0..7)
+    pub sq_priority: [NvmeQueuePriority; 8],
+    /// File active pour le tourniquet des classes WRR (0 = High, 1 = Medium, 2 = Low)
+    pub current_wrr_class: u8,
+    /// Index de la dernière file servie au sein d'une même classe (tourniquet intra-classe)
+    pub last_served_sq: [usize; 4],
+}
+
+impl Default for NvmeWrruScheduler {
+    fn default() -> Self {
+        Self::new(NvmeArbitrationConfig::default())
+    }
+}
+
+impl NvmeWrruScheduler {
+    pub const fn new(config: NvmeArbitrationConfig) -> Self {
+        let hpw = (config.high_priority_weight as u16) + 1;
+        let mpw = (config.medium_priority_weight as u16) + 1;
+        let lpw = (config.low_priority_weight as u16) + 1;
+        Self {
+            config,
+            high_credits: hpw,
+            medium_credits: mpw,
+            low_credits: lpw,
+            sq_pending: [0; 8],
+            sq_priority: [NvmeQueuePriority::Medium; 8],
+            current_wrr_class: 0,
+            last_served_sq: [0; 4],
+        }
+    }
+
+    /// Met à jour la configuration d'arbitrage et réinitialise les quotas de crédits
+    pub fn set_config(&mut self, config: NvmeArbitrationConfig) {
+        self.config = config;
+        self.high_credits = (config.high_priority_weight as u16) + 1;
+        self.medium_credits = (config.medium_priority_weight as u16) + 1;
+        self.low_credits = (config.low_priority_weight as u16) + 1;
+    }
+
+    /// Enregistre ou met à jour la classe de priorité d'une file SQ
+    pub fn register_queue(&mut self, qid: u16, priority: NvmeQueuePriority) {
+        let idx = (qid as usize) % 8;
+        self.sq_priority[idx] = priority;
+    }
+
+    /// Dépose une commande en attente dans la file SQ
+    pub fn enqueue_command(&mut self, qid: u16) {
+        let idx = (qid as usize) % 8;
+        self.sq_pending[idx] = self.sq_pending[idx].saturating_add(1);
+    }
+
+    /// Sélectionne la prochaine file SQ à servir selon l'arbitrage WRRU NVMe 1.4
+    ///
+    /// Règles d'arbitrage (§4.13) :
+    /// 1. Priorité absolue pour la classe `Urgent` : tant qu'une file Urgent a des commandes, elle est servie immédiatement.
+    /// 2. Pour les classes `High`, `Medium` et `Low`, arbitrage par Weighted Round Robin (WRR) selon les poids configurés.
+    pub fn select_next_queue(&mut self) -> Option<u16> {
+        // Règle 1 : Vérifier la classe Urgent
+        let mut urgent_found = None;
+        let start_u = self.last_served_sq[0];
+        for offset in 0..8 {
+            let idx = (start_u + offset + 1) % 8;
+            if self.sq_priority[idx] == NvmeQueuePriority::Urgent && self.sq_pending[idx] > 0 {
+                urgent_found = Some(idx);
+                self.last_served_sq[0] = idx;
+                break;
+            }
+        }
+        if let Some(idx) = urgent_found {
+            self.sq_pending[idx] = self.sq_pending[idx].saturating_sub(1);
+            return Some(idx as u16);
+        }
+
+        // Règle 2 : Arbitrage WRR parmi High, Medium, Low
+        for _round in 0..3 {
+            // Recharger les crédits si toutes les classes avec des commandes ont épuisé leurs crédits
+            if self.high_credits == 0 && self.medium_credits == 0 && self.low_credits == 0 {
+                self.high_credits = (self.config.high_priority_weight as u16) + 1;
+                self.medium_credits = (self.config.medium_priority_weight as u16) + 1;
+                self.low_credits = (self.config.low_priority_weight as u16) + 1;
+            }
+
+            for class_offset in 0..3 {
+                let target_class = (self.current_wrr_class + class_offset) % 3;
+                let (target_prio, credits) = match target_class {
+                    0 => (NvmeQueuePriority::High, &mut self.high_credits),
+                    1 => (NvmeQueuePriority::Medium, &mut self.medium_credits),
+                    _ => (NvmeQueuePriority::Low, &mut self.low_credits),
+                };
+
+                if *credits > 0 {
+                    let class_idx = (target_class + 1) as usize;
+                    let start_idx = self.last_served_sq[class_idx];
+                    let mut chosen_sq = None;
+
+                    for offset in 0..8 {
+                        let idx = (start_idx + offset + 1) % 8;
+                        if self.sq_priority[idx] == target_prio && self.sq_pending[idx] > 0 {
+                            chosen_sq = Some(idx);
+                            self.last_served_sq[class_idx] = idx;
+                            break;
+                        }
+                    }
+
+                    if let Some(idx) = chosen_sq {
+                        *credits = credits.saturating_sub(1);
+                        self.sq_pending[idx] = self.sq_pending[idx].saturating_sub(1);
+                        self.current_wrr_class = target_class;
+                        return Some(idx as u16);
+                    } else {
+                        // Pas de commandes dans cette classe, épuiser ses crédits pour passer à la suivante
+                        *credits = 0;
+                    }
+                }
+            }
+        }
+
+        None
+    }
+}
+
 /// Contrôleur NVMe opérationnel en espace utilisateur.
 pub struct NvmeController {
     pub bar0_base: u64,
@@ -1189,6 +1461,14 @@ pub struct NvmeController {
     pub cq_vector_map: [u8; 8],
     /// Canaux de délégation d'interruptions MSI-X par CQ (QID 0..7)
     pub cq_msix_delegations: [Option<NvmeCqMsixDelegation>; 8],
+    /// Configuration d'arbitrage pondéré des files (WRRU, §5.21.1.1)
+    pub arbitration_config: NvmeArbitrationConfig,
+    /// Configuration du regroupement d'interruptions CQ (§5.21.1.8)
+    pub interrupt_coalescing: NvmeInterruptCoalescingConfig,
+    /// Gestionnaire de regroupement (coalescing) des écritures Doorbell SQ
+    pub doorbell_coalescer: NvmeSubmissionDoorbellCoalescer,
+    /// Ordonnanceur WRRU (Weighted Round Robin with Urgent Priority Class)
+    pub wrru_scheduler: NvmeWrruScheduler,
     pub vwc_present: bool,
     pub flush_count: u64,
     pub flush_errors: u64,
@@ -1222,6 +1502,10 @@ impl NvmeController {
             msix: NvmeMsixRing::new(4),
             cq_vector_map: [0xFF; 8],
             cq_msix_delegations: [None; 8],
+            arbitration_config: NvmeArbitrationConfig::new(0, 0, 0, 0),
+            interrupt_coalescing: NvmeInterruptCoalescingConfig::new(0, 0),
+            doorbell_coalescer: NvmeSubmissionDoorbellCoalescer::new(8),
+            wrru_scheduler: NvmeWrruScheduler::new(NvmeArbitrationConfig::new(0, 0, 0, 0)),
             vwc_present: true,
             flush_count: 0,
             flush_errors: 0,
@@ -2595,6 +2879,123 @@ impl NvmeController {
             }
         }
         None
+    }
+
+    /// Configure l'arbitrage pondéré des commandes NVMe (Weighted Round Robin with Urgent Priority Class - FID 0x01).
+    pub fn submit_set_arbitration_config(
+        &mut self,
+        config: NvmeArbitrationConfig,
+    ) -> Result<u16, SysError> {
+        if !self.ready {
+            return Err(SysError::NotSupported);
+        }
+
+        let cdw10 = NVME_FEAT_ARBITRATION;
+        let cdw11 = (config.arbitration_burst as u32 & 0x07)
+            | ((config.low_priority_weight as u32) << 8)
+            | ((config.medium_priority_weight as u32) << 16)
+            | ((config.high_priority_weight as u32) << 24);
+
+        let cmd = NvmeSubmissionEntry {
+            cdw0: NVME_ADMIN_SET_FEATURES as u32,
+            nsid: 0,
+            reserved: 0,
+            mptr: 0,
+            prp1: 0,
+            prp2: 0,
+            cdw10,
+            cdw11,
+            cdw12: 0,
+            cdw13: 0,
+            cdw14: 0,
+            cdw15: 0,
+        };
+
+        let cid = self.admin_queue.submit(cmd);
+        self.arbitration_config = config;
+        self.wrru_scheduler.set_config(config);
+        Ok(cid)
+    }
+
+    /// Configure le regroupement / agrégation des interruptions matérielles CQ (FID 0x08, NVMe 1.4 §5.21.1.8).
+    pub fn submit_set_interrupt_coalescing(
+        &mut self,
+        config: NvmeInterruptCoalescingConfig,
+    ) -> Result<u16, SysError> {
+        if !self.ready {
+            return Err(SysError::NotSupported);
+        }
+
+        let cdw10 = NVME_FEAT_INTERRUPT_COALESCING;
+        let cdw11 = (config.aggregation_threshold as u32 & 0xFF)
+            | ((config.aggregation_time_100us as u32 & 0xFF) << 8);
+
+        let cmd = NvmeSubmissionEntry {
+            cdw0: NVME_ADMIN_SET_FEATURES as u32,
+            nsid: 0,
+            reserved: 0,
+            mptr: 0,
+            prp1: 0,
+            prp2: 0,
+            cdw10,
+            cdw11,
+            cdw12: 0,
+            cdw13: 0,
+            cdw14: 0,
+            cdw15: 0,
+        };
+
+        let cid = self.admin_queue.submit(cmd);
+        self.interrupt_coalescing = config;
+        Ok(cid)
+    }
+
+    /// Enregistre une file de soumission avec sa classe de priorité dans l'ordonnanceur WRRU.
+    pub fn register_sq_priority(&mut self, qid: u16, priority: NvmeQueuePriority) {
+        self.wrru_scheduler.register_queue(qid, priority);
+    }
+
+    /// Soumet une commande dans une file SQ avec regroupement (coalescing) de Doorbell.
+    /// Retourne le CID et un booléen indiquant si un flush MMIO Doorbell est immédiatement requis.
+    pub fn submit_sq_command_coalesced(
+        &mut self,
+        qid: u16,
+        cmd: NvmeSubmissionEntry,
+    ) -> Result<(u16, bool), SysError> {
+        if !self.ready {
+            return Err(SysError::NotSupported);
+        }
+
+        let (cid, tail) = if qid == 0 {
+            let cid = self.admin_queue.submit(cmd);
+            (cid, self.admin_queue.sq_tail)
+        } else {
+            let cid = self.io_queue.submit(cmd);
+            (cid, self.io_queue.sq_tail)
+        };
+
+        self.wrru_scheduler.enqueue_command(qid);
+        let flush_needed = self.doorbell_coalescer.record_submission(qid, tail);
+        Ok((cid, flush_needed))
+    }
+
+    /// Force le flush du Doorbell en attente pour la file SQ `qid`.
+    pub fn flush_sq_doorbell(&mut self, qid: u16) -> Option<u16> {
+        self.doorbell_coalescer.flush(qid)
+    }
+
+    /// Vide l'intégralité des Doorbells en attente de notification MMIO.
+    pub fn flush_all_sq_doorbells<F: FnMut(u16, u16)>(&mut self, mut write_doorbell_cb: F) {
+        for qid in 0..8 {
+            if let Some(tail) = self.doorbell_coalescer.flush(qid as u16) {
+                write_doorbell_cb(qid as u16, tail);
+            }
+        }
+    }
+
+    /// Sélectionne la prochaine file SQ à dépiler selon l'ordonnancement WRRU.
+    pub fn schedule_next_sq(&mut self) -> Option<u16> {
+        self.wrru_scheduler.select_next_queue()
     }
 }
 
@@ -4083,5 +4484,102 @@ mod tests {
         let del_cq_cmd = ctrl.admin_queue.sq[(del_cq_cid as usize) % QUEUE_SIZE];
         assert_eq!((del_cq_cmd.cdw0 & 0xFF) as u8, NVME_ADMIN_DELETE_CQ);
         assert_eq!(del_cq_cmd.cdw10, 1);
+    }
+
+    #[test]
+    fn test_nvme_weighted_round_robin_and_doorbell_coalescing() {
+        let mut ctrl = NvmeController::new();
+        ctrl.ready = true;
+
+        // 1. Validation de submit_set_arbitration_config (FID 0x01)
+        // AB = 2 (burst de 4 commandes), LPW = 1, MPW = 3, HPW = 7
+        let arb_cfg = NvmeArbitrationConfig::new(2, 1, 3, 7);
+        let cid_arb = ctrl
+            .submit_set_arbitration_config(arb_cfg)
+            .expect("set arbitration");
+        let arb_cmd = ctrl.admin_queue.sq[(cid_arb as usize) % QUEUE_SIZE];
+        assert_eq!((arb_cmd.cdw0 & 0xFF) as u8, NVME_ADMIN_SET_FEATURES);
+        assert_eq!(arb_cmd.cdw10, NVME_FEAT_ARBITRATION);
+        // CDW11 : AB(2) | (LPW(1) << 8) | (MPW(3) << 16) | (HPW(7) << 24)
+        assert_eq!(arb_cmd.cdw11, 2 | (1 << 8) | (3 << 16) | (7 << 24));
+        assert_eq!(ctrl.arbitration_config, arb_cfg);
+
+        // 2. Validation de submit_set_interrupt_coalescing (FID 0x08)
+        // THR = 16 complétions, TIME = 5 (500 microsecondes)
+        let coal_cfg = NvmeInterruptCoalescingConfig::new(16, 5);
+        let cid_coal = ctrl
+            .submit_set_interrupt_coalescing(coal_cfg)
+            .expect("set coalescing");
+        let coal_cmd = ctrl.admin_queue.sq[(cid_coal as usize) % QUEUE_SIZE];
+        assert_eq!((coal_cmd.cdw0 & 0xFF) as u8, NVME_ADMIN_SET_FEATURES);
+        assert_eq!(coal_cmd.cdw10, NVME_FEAT_INTERRUPT_COALESCING);
+        // CDW11 : THR(16) | (TIME(5) << 8)
+        assert_eq!(coal_cmd.cdw11, 16 | (5 << 8));
+        assert_eq!(ctrl.interrupt_coalescing, coal_cfg);
+
+        // 3. Validation de NvmeSubmissionDoorbellCoalescer
+        ctrl.doorbell_coalescer = NvmeSubmissionDoorbellCoalescer::new(4);
+        let dummy_cmd = NvmeSubmissionEntry::default();
+
+        // 3 premières commandes -> Pas de flush requis (accumulation dans le coalescer)
+        let (_, f1) = ctrl
+            .submit_sq_command_coalesced(1, dummy_cmd)
+            .expect("submit 1");
+        assert!(!f1);
+        let (_, f2) = ctrl
+            .submit_sq_command_coalesced(1, dummy_cmd)
+            .expect("submit 2");
+        assert!(!f2);
+        let (_, f3) = ctrl
+            .submit_sq_command_coalesced(1, dummy_cmd)
+            .expect("submit 3");
+        assert!(!f3);
+
+        // 4e commande -> Seuil de 4 atteint, flush MMIO requis
+        let (_, f4) = ctrl
+            .submit_sq_command_coalesced(1, dummy_cmd)
+            .expect("submit 4");
+        assert!(f4);
+        assert_eq!(ctrl.doorbell_coalescer.doorbell_writes, 1);
+        assert_eq!(ctrl.doorbell_coalescer.total_commands_queued, 4);
+        assert_eq!(ctrl.doorbell_coalescer.doorbells_saved(), 3);
+        assert_eq!(ctrl.doorbell_coalescer.efficiency_percentage(), 75);
+
+        // 5e commande -> pas de flush, puis flush forcé
+        let (_, f5) = ctrl
+            .submit_sq_command_coalesced(1, dummy_cmd)
+            .expect("submit 5");
+        assert!(!f5);
+        let flushed_tail = ctrl.flush_sq_doorbell(1);
+        assert!(flushed_tail.is_some());
+        assert_eq!(ctrl.doorbell_coalescer.doorbell_writes, 2);
+        assert_eq!(ctrl.doorbell_coalescer.doorbells_saved(), 3);
+
+        // Deuxième flush consécutif -> None (déjà purgé)
+        assert_eq!(ctrl.flush_sq_doorbell(1), None);
+
+        // 4. Validation de l'arbitrage WRRU (Weighted Round Robin with Urgent Priority Class)
+        let mut sched = NvmeWrruScheduler::new(NvmeArbitrationConfig::new(0, 0, 1, 3));
+        sched.register_queue(1, NvmeQueuePriority::Urgent);
+        sched.register_queue(2, NvmeQueuePriority::High);
+        sched.register_queue(3, NvmeQueuePriority::Medium);
+        sched.register_queue(4, NvmeQueuePriority::Low);
+
+        // Enqueuer des commandes dans chaque file
+        sched.enqueue_command(2); // High
+        sched.enqueue_command(3); // Medium
+        sched.enqueue_command(4); // Low
+        sched.enqueue_command(1); // Urgent (en dernier pour vérifier la priorité absolue)
+
+        // La file Urgent (1) doit être servie en premier malgré son ajout tardif
+        assert_eq!(sched.select_next_queue(), Some(1));
+
+        // Puis les classes High (2), Medium (3), Low (4)
+        assert_eq!(sched.select_next_queue(), Some(2));
+        assert_eq!(sched.select_next_queue(), Some(3));
+        assert_eq!(sched.select_next_queue(), Some(4));
+
+        // Plus de commandes
+        assert_eq!(sched.select_next_queue(), None);
     }
 }
