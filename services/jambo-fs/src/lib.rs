@@ -306,12 +306,22 @@ pub enum FsError {
     FileNotFound,
     BufferTooSmall,
     CorruptedData,
-    WriteConflict { expected_gen: u64, actual_gen: u64 },
+    WriteConflict {
+        expected_gen: u64,
+        actual_gen: u64,
+    },
     TransactionAborted,
     ReadOnlyFileSystem,
     AttributeNotFound,
     QuotaExceeded,
     FileLocked,
+    MultiNamespaceConflict {
+        nsid: u32,
+        expected_gen: u64,
+        actual_gen: u64,
+    },
+    NamespaceNotFound(u32),
+    TransactionDeadlock,
 }
 
 /// État d'une transaction Copy-on-Write (CoW)
@@ -378,6 +388,252 @@ impl WriteConflictBackoff {
         self.total_collisions = self.total_collisions.saturating_add(1);
         self.total_backoff_us = self.total_backoff_us.saturating_add(total as u64);
         total
+    }
+}
+
+/// Nombre maximum de namespaces sous-jacents pris en charge par le coordinateur CoW
+pub const MAX_COORDINATED_NAMESPACES: usize = 8;
+/// Nombre maximum de namespaces impliqués dans une transaction atomique distribuée
+pub const MAX_TX_NAMESPACES: usize = 4;
+
+/// État transactionnel d'un namespace CoW managé
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ManagedNamespaceState {
+    pub nsid: u32,
+    pub current_generation: u64,
+    pub active_tx_count: u32,
+    pub total_commits: u64,
+    pub total_conflicts: u64,
+    pub locked: bool,
+}
+
+impl ManagedNamespaceState {
+    pub const fn new(nsid: u32, generation: u64) -> Self {
+        Self {
+            nsid,
+            current_generation: generation,
+            active_tx_count: 0,
+            total_commits: 0,
+            total_conflicts: 0,
+            locked: false,
+        }
+    }
+}
+
+/// Instantané d'un namespace capturé au début d'une transaction multi-namespaces
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct NamespaceSnapshot {
+    pub nsid: u32,
+    pub base_generation: u64,
+}
+
+/// Contexte d'une transaction atomique multi-namespaces CoW
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MultiNamespaceTxContext {
+    pub txid: u64,
+    pub state: TransactionState,
+    pub participants: [NamespaceSnapshot; MAX_TX_NAMESPACES],
+    pub participant_count: usize,
+    pub attempt: u32,
+}
+
+/// Coordinateur transactionnel Copy-on-Write multi-namespaces (OCC + Deadlock Prevention + 2PC Barrier)
+#[derive(Debug, Clone, Copy)]
+pub struct MultiNamespaceTxCoordinator {
+    pub namespaces: [Option<ManagedNamespaceState>; MAX_COORDINATED_NAMESPACES],
+    pub next_txid: u64,
+    pub total_multi_ns_commits: u64,
+    pub total_multi_ns_collisions: u64,
+}
+
+impl Default for MultiNamespaceTxCoordinator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl MultiNamespaceTxCoordinator {
+    pub const fn new() -> Self {
+        Self {
+            namespaces: [None; MAX_COORDINATED_NAMESPACES],
+            next_txid: 1,
+            total_multi_ns_commits: 0,
+            total_multi_ns_collisions: 0,
+        }
+    }
+
+    /// Enregistre un namespace dans le coordinateur avec sa génération initiale
+    pub fn register_namespace(
+        &mut self,
+        nsid: u32,
+        initial_generation: u64,
+    ) -> Result<(), FsError> {
+        if nsid == 0 {
+            return Err(FsError::InvalidMagic);
+        }
+        for ns in self.namespaces.iter().flatten() {
+            if ns.nsid == nsid {
+                return Ok(());
+            }
+        }
+        for slot in self.namespaces.iter_mut() {
+            if slot.is_none() {
+                *slot = Some(ManagedNamespaceState::new(nsid, initial_generation));
+                return Ok(());
+            }
+        }
+        Err(FsError::QuotaExceeded)
+    }
+
+    /// Supprime un namespace du coordinateur
+    pub fn unregister_namespace(&mut self, nsid: u32) -> Result<(), FsError> {
+        for slot in self.namespaces.iter_mut() {
+            if slot.map(|ns| ns.nsid) == Some(nsid) {
+                *slot = None;
+                return Ok(());
+            }
+        }
+        Err(FsError::NamespaceNotFound(nsid))
+    }
+
+    /// Démarre une transaction multi-namespaces en capturant les générations des participants
+    ///
+    /// Ordonne strictement les NSID par ordre croissant pour garantir l'absence totale
+    /// d'interblocage (prévention de deadlock de type Havender).
+    pub fn begin_multi_ns_transaction(
+        &mut self,
+        target_nsids: &[u32],
+    ) -> Result<MultiNamespaceTxContext, FsError> {
+        if target_nsids.is_empty() || target_nsids.len() > MAX_TX_NAMESPACES {
+            return Err(FsError::BufferTooSmall);
+        }
+
+        // Tri et vérification d'unicité des NSIDs pour garantir l'absence de cycles d'interblocage
+        let mut sorted = [0u32; MAX_TX_NAMESPACES];
+        let count = target_nsids.len();
+        sorted[..count].copy_from_slice(target_nsids);
+        sorted[..count].sort_unstable();
+
+        for i in 1..count {
+            if sorted[i] == sorted[i - 1] {
+                return Err(FsError::TransactionDeadlock);
+            }
+        }
+
+        let mut participants = [NamespaceSnapshot::default(); MAX_TX_NAMESPACES];
+        for (idx, &nsid) in sorted[..count].iter().enumerate() {
+            let ns_state = self
+                .find_namespace_mut(nsid)
+                .ok_or(FsError::NamespaceNotFound(nsid))?;
+            if ns_state.locked {
+                return Err(FsError::FileLocked);
+            }
+            ns_state.active_tx_count = ns_state.active_tx_count.saturating_add(1);
+            participants[idx] = NamespaceSnapshot {
+                nsid,
+                base_generation: ns_state.current_generation,
+            };
+        }
+
+        let txid = self.next_txid;
+        self.next_txid = self.next_txid.wrapping_add(1).max(1);
+
+        Ok(MultiNamespaceTxContext {
+            txid,
+            state: TransactionState::Active,
+            participants,
+            participant_count: count,
+            attempt: 1,
+        })
+    }
+
+    /// Valide l'absence de conflit pour l'ensemble des namespaces impliqués
+    pub fn validate_transaction(&self, ctx: &MultiNamespaceTxContext) -> Result<(), FsError> {
+        if ctx.state != TransactionState::Active {
+            return Err(FsError::TransactionAborted);
+        }
+        for snap in &ctx.participants[..ctx.participant_count] {
+            let ns_state = self
+                .find_namespace(snap.nsid)
+                .ok_or(FsError::NamespaceNotFound(snap.nsid))?;
+            if ns_state.current_generation != snap.base_generation {
+                return Err(FsError::MultiNamespaceConflict {
+                    nsid: snap.nsid,
+                    expected_gen: snap.base_generation,
+                    actual_gen: ns_state.current_generation,
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Valide et committe atomiquement la transaction multi-namespaces (Barrière 2PC)
+    pub fn commit_transaction(
+        &mut self,
+        ctx: &mut MultiNamespaceTxContext,
+        generation_advances: &[(u32, u64)],
+    ) -> Result<(), FsError> {
+        if ctx.state != TransactionState::Active {
+            return Err(FsError::TransactionAborted);
+        }
+
+        // Phase 1 : Validation OCC (Prepared)
+        if let Err(err) = self.validate_transaction(ctx) {
+            ctx.state = TransactionState::Collided;
+            self.total_multi_ns_collisions = self.total_multi_ns_collisions.saturating_add(1);
+            for snap in &ctx.participants[..ctx.participant_count] {
+                if let Some(ns_state) = self.find_namespace_mut(snap.nsid) {
+                    ns_state.active_tx_count = ns_state.active_tx_count.saturating_sub(1);
+                    ns_state.total_conflicts = ns_state.total_conflicts.saturating_add(1);
+                }
+            }
+            return Err(err);
+        }
+
+        // Phase 2 : Application atomique (Commit Point)
+        for &(nsid, new_gen) in generation_advances {
+            if let Some(ns_state) = self.find_namespace_mut(nsid) {
+                ns_state.current_generation = new_gen;
+                ns_state.total_commits = ns_state.total_commits.saturating_add(1);
+            }
+        }
+
+        for snap in &ctx.participants[..ctx.participant_count] {
+            if let Some(ns_state) = self.find_namespace_mut(snap.nsid) {
+                ns_state.active_tx_count = ns_state.active_tx_count.saturating_sub(1);
+            }
+        }
+
+        ctx.state = TransactionState::Committed;
+        self.total_multi_ns_commits = self.total_multi_ns_commits.saturating_add(1);
+        Ok(())
+    }
+
+    /// Annule une transaction en vol
+    pub fn abort_transaction(&mut self, ctx: &mut MultiNamespaceTxContext) {
+        if ctx.state == TransactionState::Active {
+            for snap in &ctx.participants[..ctx.participant_count] {
+                if let Some(ns_state) = self.find_namespace_mut(snap.nsid) {
+                    ns_state.active_tx_count = ns_state.active_tx_count.saturating_sub(1);
+                }
+            }
+            ctx.state = TransactionState::Aborted;
+        }
+    }
+
+    pub fn find_namespace(&self, nsid: u32) -> Option<&ManagedNamespaceState> {
+        self.namespaces.iter().flatten().find(|ns| ns.nsid == nsid)
+    }
+
+    pub fn find_namespace_mut(&mut self, nsid: u32) -> Option<&mut ManagedNamespaceState> {
+        self.namespaces
+            .iter_mut()
+            .flatten()
+            .find(|ns| ns.nsid == nsid)
+    }
+
+    pub fn generation_of(&self, nsid: u32) -> Option<u64> {
+        self.find_namespace(nsid).map(|ns| ns.current_generation)
     }
 }
 
@@ -2984,6 +3240,7 @@ pub struct JamboFs {
     pub lock_table: FileLockTable,
     pub wal: MetadataWalManager,
     pub bitmap: CowBitmapAllocator,
+    pub multi_ns: MultiNamespaceTxCoordinator,
 }
 
 impl JamboFs {
@@ -3073,6 +3330,9 @@ impl JamboFs {
         let mut bitmap = CowBitmapAllocator::new();
         let _ = bitmap.load(client, partition_base_lba);
 
+        let mut multi_ns = MultiNamespaceTxCoordinator::new();
+        let _ = multi_ns.register_namespace(1, uberblock.generation);
+
         let mut fs = Self {
             client: *client,
             active_uberblock: uberblock,
@@ -3088,6 +3348,7 @@ impl JamboFs {
             lock_table: FileLockTable::new(),
             wal: MetadataWalManager::new(),
             bitmap,
+            multi_ns,
         };
 
         // Replay automatique de résilience après coupure électrique
@@ -3098,6 +3359,8 @@ impl JamboFs {
 
     /// Crée une instance de secours avec un Uberblock standard
     pub fn new_fallback(client: BlockClient) -> Self {
+        let mut multi_ns = MultiNamespaceTxCoordinator::new();
+        let _ = multi_ns.register_namespace(1, 1);
         Self {
             client,
             active_uberblock: Uberblock::default(),
@@ -3113,6 +3376,7 @@ impl JamboFs {
             lock_table: FileLockTable::new(),
             wal: MetadataWalManager::new(),
             bitmap: CowBitmapAllocator::new(),
+            multi_ns,
         }
     }
 
@@ -3751,6 +4015,28 @@ impl JamboFs {
         } else {
             Err(FsError::TransactionAborted)
         }
+    }
+
+    /// Démarre une transaction Copy-on-Write multi-namespaces sécurisée
+    pub fn begin_multi_ns_cow_tx(
+        &mut self,
+        target_nsids: &[u32],
+    ) -> Result<MultiNamespaceTxContext, FsError> {
+        self.multi_ns.begin_multi_ns_transaction(target_nsids)
+    }
+
+    /// Valide et committe atomiquement une transaction CoW multi-namespaces (Barrière 2PC)
+    pub fn commit_multi_ns_cow_tx(
+        &mut self,
+        ctx: &mut MultiNamespaceTxContext,
+        advances: &[(u32, u64)],
+    ) -> Result<(), FsError> {
+        self.multi_ns.commit_transaction(ctx, advances)
+    }
+
+    /// Annule une transaction CoW multi-namespaces en cours
+    pub fn abort_multi_ns_cow_tx(&mut self, ctx: &mut MultiNamespaceTxContext) {
+        self.multi_ns.abort_transaction(ctx);
     }
 
     /// Rejoue les intentions orphelines du journal WAL (Recovery suite à une coupure électrique)
@@ -5260,5 +5546,87 @@ mod tests {
             .is_ok());
 
         reset_local_ramdisk();
+    }
+
+    #[test]
+    fn test_multi_namespace_transaction_coordinator_lifecycle_and_conflicts() {
+        let mut coord = MultiNamespaceTxCoordinator::new();
+
+        // 1. Enregistrement de 3 namespaces
+        assert!(coord.register_namespace(1, 10).is_ok());
+        assert!(coord.register_namespace(2, 50).is_ok());
+        assert!(coord.register_namespace(3, 100).is_ok());
+
+        assert_eq!(coord.generation_of(1), Some(10));
+        assert_eq!(coord.generation_of(2), Some(50));
+        assert_eq!(coord.generation_of(3), Some(100));
+
+        // 2. Début d'une transaction sur les namespaces [2, 1] (non ordonnés à l'entrée)
+        let mut ctx1 = coord
+            .begin_multi_ns_transaction(&[2, 1])
+            .expect("begin tx1");
+        assert_eq!(ctx1.participant_count, 2);
+        // Doivent être triés [1, 2]
+        assert_eq!(ctx1.participants[0].nsid, 1);
+        assert_eq!(ctx1.participants[0].base_generation, 10);
+        assert_eq!(ctx1.participants[1].nsid, 2);
+        assert_eq!(ctx1.participants[1].base_generation, 50);
+
+        // Détection de deadlock si doublon dans la liste demandée
+        assert_eq!(
+            coord.begin_multi_ns_transaction(&[1, 1]),
+            Err(FsError::TransactionDeadlock)
+        );
+
+        // 3. Namespace non enregistré -> NamespaceNotFound
+        assert_eq!(
+            coord.begin_multi_ns_transaction(&[1, 99]),
+            Err(FsError::NamespaceNotFound(99))
+        );
+
+        // 4. Conflit CoW : simulation d'une avance de génération sur NSID 2 par un commit concurrent
+        let mut concurrent_ctx = coord.begin_multi_ns_transaction(&[2]).unwrap();
+        coord
+            .commit_transaction(&mut concurrent_ctx, &[(2, 51)])
+            .unwrap();
+        assert_eq!(coord.generation_of(2), Some(51));
+
+        // Tentative de commit de ctx1 -> Détection de collision
+        let commit_res = coord.commit_transaction(&mut ctx1, &[(1, 11), (2, 52)]);
+        match commit_res {
+            Err(FsError::MultiNamespaceConflict {
+                nsid,
+                expected_gen,
+                actual_gen,
+            }) => {
+                assert_eq!(nsid, 2);
+                assert_eq!(expected_gen, 50);
+                assert_eq!(actual_gen, 51);
+            }
+            _ => panic!("Expected MultiNamespaceConflict, got {:?}", commit_res),
+        }
+        assert_eq!(ctx1.state, TransactionState::Collided);
+        assert_eq!(coord.total_multi_ns_collisions, 1);
+
+        // 5. Nouvelle transaction réussie après rafraîchissement
+        let mut ctx2 = coord.begin_multi_ns_transaction(&[1, 2, 3]).unwrap();
+        assert_eq!(ctx2.participants[1].base_generation, 51);
+
+        assert!(coord
+            .commit_transaction(&mut ctx2, &[(1, 11), (2, 52), (3, 101)])
+            .is_ok());
+        assert_eq!(ctx2.state, TransactionState::Committed);
+        assert_eq!(coord.generation_of(1), Some(11));
+        assert_eq!(coord.generation_of(2), Some(52));
+        assert_eq!(coord.generation_of(3), Some(101));
+        assert_eq!(coord.total_multi_ns_commits, 2);
+
+        // 6. Test d'abandon (abort)
+        let mut ctx3 = coord.begin_multi_ns_transaction(&[1]).unwrap();
+        let active_count_before = coord.find_namespace(1).unwrap().active_tx_count;
+        coord.abort_transaction(&mut ctx3);
+        assert_eq!(ctx3.state, TransactionState::Aborted);
+        let active_count_after = coord.find_namespace(1).unwrap().active_tx_count;
+        assert_eq!(active_count_after, active_count_before - 1);
     }
 }

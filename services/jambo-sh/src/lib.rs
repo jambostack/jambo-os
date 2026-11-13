@@ -576,6 +576,8 @@ impl JamboShell {
             "pwdx" | "/bin/pwdx" | "bin/pwdx" => self.cmd_pwdx(args, out),
             "taskset" | "/bin/taskset" | "bin/taskset" => self.cmd_taskset(args, out),
             "setsid" | "/bin/setsid" | "bin/setsid" => self.cmd_setsid(args, out),
+            "ionice" | "/bin/ionice" | "bin/ionice" => self.cmd_ionice(args, out),
+            "unshare" | "/bin/unshare" | "bin/unshare" => self.cmd_unshare(args, out),
             "basename" | "/bin/basename" | "bin/basename" => self.cmd_basename(args, out),
             "dirname" | "/bin/dirname" | "bin/dirname" => self.cmd_dirname(args, out),
             "seq" | "/bin/seq" | "bin/seq" => self.cmd_seq(args, out),
@@ -1424,6 +1426,46 @@ Utilitaire d'installation JamboOS (Serie 0.*.*)\n\
             }
         } else {
             let msg = b"setsid: pipe creation failed\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
+    }
+
+    fn cmd_ionice(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if let Ok((r, w)) = libjambo::vfs::pipe() {
+            let code = libjambo::coreutils::run_ionice(args, 0, w, w);
+            let _ = libjambo::coreutils::sys_close(w);
+            let n = libjambo::coreutils::sys_read(r, out);
+            let _ = libjambo::coreutils::sys_close(r);
+            let len = if n > 0 { n as usize } else { 0 };
+            if code == 0 {
+                (ShellStatus::Success, len)
+            } else {
+                (ShellStatus::ExecutionFailed, len)
+            }
+        } else {
+            let msg = b"ionice: pipe creation failed\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
+    }
+
+    fn cmd_unshare(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if let Ok((r, w)) = libjambo::vfs::pipe() {
+            let code = libjambo::coreutils::run_unshare(args, 0, w, w);
+            let _ = libjambo::coreutils::sys_close(w);
+            let n = libjambo::coreutils::sys_read(r, out);
+            let _ = libjambo::coreutils::sys_close(r);
+            let len = if n > 0 { n as usize } else { 0 };
+            if code == 0 {
+                (ShellStatus::Success, len)
+            } else {
+                (ShellStatus::ExecutionFailed, len)
+            }
+        } else {
+            let msg = b"unshare: pipe creation failed\n";
             let len = msg.len().min(out.len());
             out[..len].copy_from_slice(&msg[..len]);
             (ShellStatus::ExecutionFailed, len)
@@ -22851,5 +22893,37 @@ mod tests {
         assert_eq!(st170, ShellStatus::Success);
         let s170 = core::str::from_utf8(&out[..len170]).unwrap();
         assert!(s170.contains("setsid (JamboOS coreutils)"));
+
+        // 74. ionice shell command
+        let (st171, len171) = shell.execute_line("ionice --help", &mut out);
+        assert_eq!(st171, ShellStatus::Success);
+        let s171 = core::str::from_utf8(&out[..len171]).unwrap();
+        assert!(s171.contains("Usage: ionice"));
+
+        let (st172, len172) = shell.execute_line("ionice --version", &mut out);
+        assert_eq!(st172, ShellStatus::Success);
+        let s172 = core::str::from_utf8(&out[..len172]).unwrap();
+        assert!(s172.contains("ionice (JamboOS coreutils)"));
+
+        let (st173, len173) = shell.execute_line("ionice -c 2 -n 4 echo test_ionice", &mut out);
+        assert_eq!(st173, ShellStatus::Success);
+        let s173 = core::str::from_utf8(&out[..len173]).unwrap();
+        assert!(s173.contains("test_ionice"));
+
+        // 75. unshare shell command
+        let (st174, len174) = shell.execute_line("unshare --help", &mut out);
+        assert_eq!(st174, ShellStatus::Success);
+        let s174 = core::str::from_utf8(&out[..len174]).unwrap();
+        assert!(s174.contains("Usage: unshare"));
+
+        let (st175, len175) = shell.execute_line("unshare --version", &mut out);
+        assert_eq!(st175, ShellStatus::Success);
+        let s175 = core::str::from_utf8(&out[..len175]).unwrap();
+        assert!(s175.contains("unshare (JamboOS coreutils)"));
+
+        let (st176, len176) = shell.execute_line("unshare -m -u echo test_unshare", &mut out);
+        assert_eq!(st176, ShellStatus::Success);
+        let s176 = core::str::from_utf8(&out[..len176]).unwrap();
+        assert!(s176.contains("test_unshare"));
     }
 }

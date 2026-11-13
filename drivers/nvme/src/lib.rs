@@ -34,6 +34,30 @@ pub const NVME_ADMIN_ASYNC_EVENT_REQ: u8 = 0x0C;
 pub const NVME_ADMIN_NS_MANAGEMENT: u8 = 0x0D;
 /// Commande d'attachement/détachement de namespace aux contrôleurs (Namespace Attachment, §8.12)
 pub const NVME_ADMIN_NS_ATTACHMENT: u8 = 0x15;
+/// Commande de formatage physique NVM de bas niveau (Format NVM, NVMe 1.4 §5.24)
+pub const NVME_ADMIN_FORMAT_NVM: u8 = 0x80;
+
+/// Sélecteur d'effacement sécurisé (SES - Secure Erase Settings, CDW10 bits 11:9)
+pub const NVME_SES_NO_SECURE_ERASE: u8 = 0x0;
+pub const NVME_SES_USER_DATA_ERASE: u8 = 0x1;
+pub const NVME_SES_CRYPTO_ERASE: u8 = 0x2;
+
+/// Sélecteur d'information de protection des données (PI - Protection Information Type, CDW10 bits 7:5)
+pub const NVME_PI_DISABLE: u8 = 0x0;
+pub const NVME_PI_TYPE1: u8 = 0x1;
+pub const NVME_PI_TYPE2: u8 = 0x2;
+pub const NVME_PI_TYPE3: u8 = 0x3;
+
+/// Emplacement de l'information de protection (PIL - Protection Information Location, CDW10 bit 8)
+pub const NVME_PIL_LAST_8_BYTES: u8 = 0x0;
+pub const NVME_PIL_FIRST_8_BYTES: u8 = 0x1;
+
+/// Mode de stockage des métadonnées (MSET - Metadata Settings, CDW10 bit 4)
+pub const NVME_MSET_SEPARATE_BUFFER: u8 = 0x0;
+pub const NVME_MSET_EXTENDED_LBA: u8 = 0x1;
+
+/// Identifiant NSID de diffusion broadcast pour formater l'intégralité des namespaces
+pub const NVME_NSID_BROADCAST: u32 = 0xFFFF_FFFF;
 
 pub const NVME_LOG_ERROR_INFO: u8 = 0x01;
 pub const NVME_LOG_SMART_HEALTH: u8 = 0x02;
@@ -631,6 +655,292 @@ impl NvmeLbaFormat {
     /// Indique si ce format utilise des secteurs de 512 octets
     pub const fn is_512e(&self) -> bool {
         self.lba_data_size_pow2 == 9
+    }
+}
+
+/// Type d'information de protection des données (PI Type, NVMe 1.4 §5.24 / §6.1.3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NvmeProtectionType {
+    /// Information de protection désactivée (DIF désactivé)
+    None = 0,
+    /// Type 1 : PI de 8 octets (CRC-16 Guard + Application Tag + Reference Tag validé contre LBA)
+    Type1 = 1,
+    /// Type 2 : PI de 8 octets (CRC-16 Guard + Application Tag + Reference Tag dynamique vérifié par contrôleur)
+    Type2 = 2,
+    /// Type 3 : PI de 8 octets (CRC-16 Guard + Application Tag, Reference Tag opaque non vérifié)
+    Type3 = 3,
+}
+
+impl NvmeProtectionType {
+    /// Retourne la valeur numérique codée sur 3 bits (0 à 3)
+    pub const fn as_u8(self) -> u8 {
+        self as u8
+    }
+
+    /// Tente de désérialiser depuis une valeur 3 bits
+    pub fn from_u8(val: u8) -> Option<Self> {
+        match val & 0x07 {
+            0 => Some(Self::None),
+            1 => Some(Self::Type1),
+            2 => Some(Self::Type2),
+            3 => Some(Self::Type3),
+            _ => None,
+        }
+    }
+
+    /// Indique si une protection matérielle de données est active
+    pub const fn is_enabled(self) -> bool {
+        !matches!(self, Self::None)
+    }
+}
+
+/// Emplacement de l'information de protection dans le bloc de métadonnées (PIL).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NvmeProtectionLocation {
+    /// L'information de protection est transférée dans les 8 derniers octets des métadonnées
+    Last8Bytes = 0,
+    /// L'information de protection est transférée dans les 8 premiers octets des métadonnées
+    First8Bytes = 1,
+}
+
+impl NvmeProtectionLocation {
+    pub const fn as_u8(self) -> u8 {
+        self as u8
+    }
+
+    pub fn from_u8(val: u8) -> Self {
+        if (val & 0x01) != 0 {
+            Self::First8Bytes
+        } else {
+            Self::Last8Bytes
+        }
+    }
+}
+
+/// Paramètres d'effacement sécurisé physique (SES - Secure Erase Settings, NVMe 1.4 §5.24).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NvmeSecureErase {
+    /// Aucun effacement sécurisé demandé
+    None = 0,
+    /// Effacement sécurisé des données utilisateur (User Data Erase)
+    UserDataErase = 1,
+    /// Effacement cryptographique immédiat des clés de chiffrement (Cryptographic Erase)
+    CryptographicErase = 2,
+}
+
+impl NvmeSecureErase {
+    pub const fn as_u8(self) -> u8 {
+        self as u8
+    }
+
+    pub fn from_u8(val: u8) -> Option<Self> {
+        match val & 0x07 {
+            0 => Some(Self::None),
+            1 => Some(Self::UserDataErase),
+            2 => Some(Self::CryptographicErase),
+            _ => None,
+        }
+    }
+}
+
+/// Mode d'agencement des métadonnées LBA (MSET - Metadata Settings, NVMe 1.4 §5.24).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NvmeMetadataSetting {
+    /// Métadonnées transférées dans un tampon mémoire séparé (Separate Buffer)
+    SeparateBuffer = 0,
+    /// Métadonnées transférées en tant qu'extension contiguë de chaque bloc LBA (Extended LBA)
+    ExtendedLba = 1,
+}
+
+impl NvmeMetadataSetting {
+    pub const fn as_u8(self) -> u8 {
+        self as u8
+    }
+
+    pub fn from_u8(val: u8) -> Self {
+        if (val & 0x01) != 0 {
+            Self::ExtendedLba
+        } else {
+            Self::SeparateBuffer
+        }
+    }
+}
+
+/// Configuration matérielle complète pour la commande de formatage de bas niveau `Format NVM` (§5.24).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NvmeFormatConfig {
+    /// Index du format LBA cible dans la table LBAF du namespace (0 à 15)
+    pub lba_format_index: u8,
+    /// Mode d'agencement des métadonnées (MSET)
+    pub metadata_setting: NvmeMetadataSetting,
+    /// Type de protection des données (PI)
+    pub protection_type: NvmeProtectionType,
+    /// Emplacement de l'information de protection (PIL)
+    pub protection_location: NvmeProtectionLocation,
+    /// Mode d'effacement sécurisé physique (SES)
+    pub secure_erase: NvmeSecureErase,
+}
+
+impl Default for NvmeFormatConfig {
+    fn default() -> Self {
+        Self {
+            lba_format_index: 0,
+            metadata_setting: NvmeMetadataSetting::SeparateBuffer,
+            protection_type: NvmeProtectionType::None,
+            protection_location: NvmeProtectionLocation::Last8Bytes,
+            secure_erase: NvmeSecureErase::None,
+        }
+    }
+}
+
+impl NvmeFormatConfig {
+    /// Encode la configuration dans le mot de commande CDW10 conforme à la spécification NVMe 1.4 §5.24.
+    pub const fn to_cdw10(&self) -> u32 {
+        let lbaf = (self.lba_format_index as u32) & 0x0F;
+        let mset = ((self.metadata_setting as u32) & 0x01) << 4;
+        let pi = ((self.protection_type as u32) & 0x07) << 5;
+        let pil = ((self.protection_location as u32) & 0x01) << 8;
+        let ses = ((self.secure_erase as u32) & 0x07) << 9;
+        lbaf | mset | pi | pil | ses
+    }
+
+    /// Décode une configuration à partir du mot de commande CDW10.
+    pub fn from_cdw10(cdw10: u32) -> Result<Self, SysError> {
+        let lba_format_index = (cdw10 & 0x0F) as u8;
+        let mset_val = ((cdw10 >> 4) & 0x01) as u8;
+        let pi_val = ((cdw10 >> 5) & 0x07) as u8;
+        let pil_val = ((cdw10 >> 8) & 0x01) as u8;
+        let ses_val = ((cdw10 >> 9) & 0x07) as u8;
+
+        let protection_type =
+            NvmeProtectionType::from_u8(pi_val).ok_or(SysError::InvalidArgument)?;
+        let secure_erase = NvmeSecureErase::from_u8(ses_val).ok_or(SysError::InvalidArgument)?;
+
+        Ok(Self {
+            lba_format_index,
+            metadata_setting: NvmeMetadataSetting::from_u8(mset_val),
+            protection_type,
+            protection_location: NvmeProtectionLocation::from_u8(pil_val),
+            secure_erase,
+        })
+    }
+}
+
+/// Structure de champ d'intégrité des données T10 DIF / NVMe (8 octets).
+///
+/// Composé de :
+/// - Guard CRC-16 (polynôme T10 standard 0x8BB7)
+/// - Application Tag (16 bits, métadonnées de l'application cliente ou 0xFFFF pour bypasser la vérification)
+/// - Reference Tag (32 bits, typiquement les 32 bits de poids faible du LBA du secteur)
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct NvmeProtectionInformation {
+    /// CRC-16 Guard field
+    pub guard: u16,
+    /// Application Tag (propriétaire applicatif)
+    pub application_tag: u16,
+    /// Logical Block Reference Tag (LBA inférieur)
+    pub reference_tag: u32,
+}
+
+impl NvmeProtectionInformation {
+    /// Crée une structure de protection avec des valeurs directes
+    pub const fn new(guard: u16, application_tag: u16, reference_tag: u32) -> Self {
+        Self {
+            guard,
+            application_tag,
+            reference_tag,
+        }
+    }
+
+    /// Calcule le CRC-16 standard T10-DIF (polynôme 0x8BB7) sur un tampon de données
+    pub fn compute_crc16_t10(data: &[u8]) -> u16 {
+        let mut crc: u16 = 0x0000;
+        for &b in data {
+            let mut byte = b;
+            for _ in 0..8 {
+                let bit = ((byte ^ ((crc >> 8) as u8)) & 0x80) != 0;
+                crc <<= 1;
+                if bit {
+                    crc ^= 0x8BB7;
+                }
+                byte <<= 1;
+            }
+        }
+        crc
+    }
+
+    /// Construit une balise PI en calculant automatiquement le CRC-16 Guard sur le bloc logique
+    pub fn generate_from_data(data: &[u8], application_tag: u16, reference_tag: u32) -> Self {
+        let guard = Self::compute_crc16_t10(data);
+        Self {
+            guard,
+            application_tag,
+            reference_tag,
+        }
+    }
+
+    /// Valide l'intégrité des données et de l'adressage selon le type de protection NVMe
+    ///
+    /// # Errors
+    /// - `SysError::InvalidState` si le Guard CRC-16 ne correspond pas aux données
+    /// - `SysError::BadAddress` si le Reference Tag ne correspond pas au LBA attendu (Type 1 ou 2)
+    pub fn verify(
+        &self,
+        data: &[u8],
+        expected_ref_tag: u32,
+        pi_type: NvmeProtectionType,
+    ) -> Result<(), SysError> {
+        if !pi_type.is_enabled() {
+            return Ok(());
+        }
+
+        // T10 / NVMe spec : si application_tag == 0xFFFF, la vérification peut être ignorée
+        if self.application_tag == 0xFFFF {
+            return Ok(());
+        }
+
+        let computed_crc = Self::compute_crc16_t10(data);
+        if self.guard != computed_crc {
+            return Err(SysError::InvalidArgument);
+        }
+
+        match pi_type {
+            NvmeProtectionType::Type1 => {
+                if self.reference_tag != expected_ref_tag {
+                    return Err(SysError::BadAddress);
+                }
+            }
+            NvmeProtectionType::Type2 => {
+                if expected_ref_tag != 0xFFFF_FFFF && self.reference_tag != expected_ref_tag {
+                    return Err(SysError::BadAddress);
+                }
+            }
+            NvmeProtectionType::Type3 | NvmeProtectionType::None => {}
+        }
+
+        Ok(())
+    }
+
+    /// Sérialise les 8 octets en format petit-boutiste
+    pub fn to_bytes(&self) -> [u8; 8] {
+        let mut out = [0u8; 8];
+        out[0..2].copy_from_slice(&self.guard.to_le_bytes());
+        out[2..4].copy_from_slice(&self.application_tag.to_le_bytes());
+        out[4..8].copy_from_slice(&self.reference_tag.to_le_bytes());
+        out
+    }
+
+    /// Désérialise depuis 8 octets en format petit-boutiste
+    pub fn from_bytes(bytes: &[u8; 8]) -> Self {
+        let guard = u16::from_le_bytes([bytes[0], bytes[1]]);
+        let application_tag = u16::from_le_bytes([bytes[2], bytes[3]]);
+        let reference_tag = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
+        Self {
+            guard,
+            application_tag,
+            reference_tag,
+        }
     }
 }
 
@@ -1922,6 +2232,83 @@ impl NvmeController {
     pub fn namespace_count(&self) -> usize {
         self.namespaces.iter().filter(|s| s.is_some()).count()
     }
+
+    /// Soumet une commande d'administration de formatage physique NVM (Format NVM, §5.24).
+    ///
+    /// Transmet la commande d'opcode `NVME_ADMIN_FORMAT_NVM` (0x80) à l'Admin Submission Queue.
+    /// Le champ `cdw10` encode le format LBA désiré, le mode d'effacement sécurisé (SES),
+    /// les informations de protection (PI/DPS) et l'emplacement des métadonnées (PIL/MSET).
+    /// Si `nsid` vaut `NVME_NSID_BROADCAST` (0xFFFFFFFF), le formatage s'applique à l'ensemble
+    /// des namespaces supportés par le sous-système de stockage.
+    ///
+    /// # Errors
+    /// Retourne `SysError::NotSupported` si le contrôleur n'est pas prêt.
+    /// Retourne `SysError::InvalidArgument` si `nsid` vaut 0.
+    pub fn submit_format_nvm(
+        &mut self,
+        nsid: u32,
+        config: NvmeFormatConfig,
+    ) -> Result<u16, SysError> {
+        if !self.ready {
+            return Err(SysError::NotSupported);
+        }
+        if nsid == 0 {
+            return Err(SysError::InvalidArgument);
+        }
+
+        let cmd = NvmeSubmissionEntry {
+            cdw0: NVME_ADMIN_FORMAT_NVM as u32,
+            nsid,
+            reserved: 0,
+            mptr: 0,
+            prp1: 0,
+            prp2: 0,
+            cdw10: config.to_cdw10(),
+            cdw11: 0,
+            cdw12: 0,
+            cdw13: 0,
+            cdw14: 0,
+            cdw15: 0,
+        };
+
+        let cid = self.admin_queue.submit(cmd);
+        Ok(cid)
+    }
+
+    /// Applique les changements de formatage physique et de protection DPS au descripteur de namespace local.
+    ///
+    /// Met à jour `active_lba_format`, le champ `data_protection` (DPS), et réinitialise
+    /// le compteur `used_blocks` à 0 après un effacement ou reformatage physique réussi.
+    ///
+    /// # Errors
+    /// Retourne `SysError::InvalidHandle` si le namespace ciblé n'est pas enregistré.
+    /// Retourne `SysError::InvalidArgument` si l'index de format LBA dépasse les capacités supportées.
+    pub fn apply_format_to_namespace(
+        &mut self,
+        nsid: u32,
+        config: NvmeFormatConfig,
+        new_format: NvmeLbaFormat,
+    ) -> Result<(), SysError> {
+        let ns = self
+            .namespaces
+            .iter_mut()
+            .filter_map(|s| s.as_mut())
+            .find(|d| d.nsid == nsid)
+            .ok_or(SysError::InvalidHandle)?;
+
+        if config.lba_format_index >= ns.num_lba_formats.max(1) && config.lba_format_index > 0 {
+            return Err(SysError::InvalidArgument);
+        }
+
+        ns.active_lba_format = new_format;
+        // DPS : bits 2:0 = Type de protection, bit 3 = PIL (0 = last 8 bytes, 1 = first 8 bytes)
+        let pi_bits = (config.protection_type as u8) & 0x07;
+        let pil_bit = ((config.protection_location as u8) & 0x01) << 3;
+        ns.data_protection = pi_bits | pil_bit;
+        ns.used_blocks = 0;
+
+        Ok(())
+    }
 }
 
 /// Action résultant du traitement d'un événement asynchrone NVMe AER
@@ -3136,6 +3523,173 @@ mod tests {
         assert_eq!(
             ctrl.register_namespace(overflow),
             Err(SysError::ResourceBusy)
+        );
+    }
+
+    #[test]
+    fn test_format_nvm_cdw10_encoding_and_submission() {
+        let mut ctrl = NvmeController::new();
+        ctrl.ready = true;
+
+        // 1. Configuration Format NVM : LBAF 1 (4Kn), PI Type 1, PIL last 8 bytes, UserDataErase
+        let cfg = NvmeFormatConfig {
+            lba_format_index: 1,
+            metadata_setting: NvmeMetadataSetting::ExtendedLba,
+            protection_type: NvmeProtectionType::Type1,
+            protection_location: NvmeProtectionLocation::Last8Bytes,
+            secure_erase: NvmeSecureErase::UserDataErase,
+        };
+
+        let cdw10 = cfg.to_cdw10();
+        // LBAF: bits 3:0 = 1
+        assert_eq!(cdw10 & 0x0F, 1);
+        // MSET: bit 4 = 1
+        assert_eq!((cdw10 >> 4) & 0x01, 1);
+        // PI: bits 7:5 = 1 (Type 1)
+        assert_eq!((cdw10 >> 5) & 0x07, 1);
+        // PIL: bit 8 = 0 (Last 8 bytes)
+        assert_eq!((cdw10 >> 8) & 0x01, 0);
+        // SES: bits 11:9 = 1 (UserDataErase)
+        assert_eq!((cdw10 >> 9) & 0x07, 1);
+
+        // Décodage symétrique
+        let decoded = NvmeFormatConfig::from_cdw10(cdw10).expect("decode cdw10");
+        assert_eq!(decoded.lba_format_index, 1);
+        assert_eq!(decoded.metadata_setting, NvmeMetadataSetting::ExtendedLba);
+        assert_eq!(decoded.protection_type, NvmeProtectionType::Type1);
+        assert_eq!(
+            decoded.protection_location,
+            NvmeProtectionLocation::Last8Bytes
+        );
+        assert_eq!(decoded.secure_erase, NvmeSecureErase::UserDataErase);
+
+        // Soumission de la commande sur l'Admin SQ
+        let cid = ctrl.submit_format_nvm(1, cfg).expect("submit format");
+        let cmd = ctrl.admin_queue.sq[0];
+        assert_eq!((cmd.cdw0 & 0xFF) as u8, NVME_ADMIN_FORMAT_NVM);
+        assert_eq!(cmd.nsid, 1);
+        assert_eq!(cmd.cdw10, cdw10);
+        assert_eq!((cmd.cdw0 >> 16) as u16, cid);
+
+        // Broadcast format (NSID 0xFFFFFFFF)
+        let cid_bcast = ctrl
+            .submit_format_nvm(NVME_NSID_BROADCAST, cfg)
+            .expect("broadcast format");
+        assert!(cid_bcast > cid);
+        assert_eq!(ctrl.admin_queue.sq[1].nsid, NVME_NSID_BROADCAST);
+
+        // NSID 0 invalide
+        assert_eq!(
+            ctrl.submit_format_nvm(0, cfg),
+            Err(SysError::InvalidArgument)
+        );
+
+        // Contrôleur non prêt
+        ctrl.ready = false;
+        assert_eq!(ctrl.submit_format_nvm(1, cfg), Err(SysError::NotSupported));
+    }
+
+    #[test]
+    fn test_format_nvm_protection_information_dif_guard() {
+        let block_data = [0x5Au8; 512];
+        let app_tag: u16 = 0x1234;
+        let lba_ref_tag: u32 = 0x00A0_B0C0;
+
+        // Génération automatique avec CRC-16 Guard
+        let pi = NvmeProtectionInformation::generate_from_data(&block_data, app_tag, lba_ref_tag);
+        assert_ne!(pi.guard, 0);
+        assert_eq!(pi.application_tag, app_tag);
+        assert_eq!(pi.reference_tag, lba_ref_tag);
+
+        // Validation Type 1 réussie
+        assert!(pi
+            .verify(&block_data, lba_ref_tag, NvmeProtectionType::Type1)
+            .is_ok());
+
+        // Mauvais LBA / Reference Tag -> BadAddress
+        assert_eq!(
+            pi.verify(&block_data, 0x00A0_B0C1, NvmeProtectionType::Type1),
+            Err(SysError::BadAddress)
+        );
+
+        // Altération des données -> InvalidArgument (CRC Guard mismatch)
+        let mut corrupted_data = block_data;
+        corrupted_data[10] ^= 0xFF;
+        assert_eq!(
+            pi.verify(&corrupted_data, lba_ref_tag, NvmeProtectionType::Type1),
+            Err(SysError::InvalidArgument)
+        );
+
+        // Validation Type 3 (ignore reference tag)
+        assert!(pi
+            .verify(&block_data, 0xDEAD_BEEF, NvmeProtectionType::Type3)
+            .is_ok());
+
+        // Bypass d'application avec 0xFFFF (standard T10/NVMe)
+        let pi_bypass = NvmeProtectionInformation::new(0x0000, 0xFFFF, 0);
+        assert!(pi_bypass
+            .verify(&corrupted_data, 0x9999, NvmeProtectionType::Type1)
+            .is_ok());
+
+        // Sérialisation et désérialisation
+        let bytes = pi.to_bytes();
+        let pi_restored = NvmeProtectionInformation::from_bytes(&bytes);
+        assert_eq!(pi, pi_restored);
+    }
+
+    #[test]
+    fn test_format_nvm_apply_to_namespace_dps() {
+        let mut ctrl = NvmeController::new();
+        ctrl.ready = true;
+
+        let mut desc = NvmeNamespaceDescriptor::new(1, 4_194_304, 4_194_304);
+        desc.used_blocks = 1_000_000;
+        desc.num_lba_formats = 2; // Supporte format 0 (512e) et format 1 (4Kn)
+        ctrl.register_namespace(desc).expect("register");
+
+        let initial_ns = ctrl.find_namespace(1).unwrap();
+        assert!(initial_ns.active_lba_format.is_512e());
+        assert_eq!(initial_ns.data_protection, 0);
+        assert_eq!(initial_ns.used_blocks, 1_000_000);
+
+        // Configuration reformatage en 4Kn avec Protection Type 2 et First8Bytes PIL
+        let new_format = NvmeLbaFormat {
+            metadata_size: 8,
+            lba_data_size_pow2: 12, // 4096 B
+            relative_performance: 1,
+        };
+        let cfg = NvmeFormatConfig {
+            lba_format_index: 1,
+            metadata_setting: NvmeMetadataSetting::ExtendedLba,
+            protection_type: NvmeProtectionType::Type2,
+            protection_location: NvmeProtectionLocation::First8Bytes,
+            secure_erase: NvmeSecureErase::None,
+        };
+
+        ctrl.apply_format_to_namespace(1, cfg, new_format)
+            .expect("apply format");
+
+        let updated_ns = ctrl.find_namespace(1).unwrap();
+        assert!(updated_ns.active_lba_format.is_4kn());
+        assert_eq!(updated_ns.active_lba_format.sector_bytes(), 4096);
+        assert_eq!(updated_ns.used_blocks, 0); // Réinitialisé
+                                               // DPS : bits 2:0 = Type 2 (2), bit 3 = First8Bytes (1 << 3 = 8) -> 0x0A
+        assert_eq!(updated_ns.data_protection, 0x0A);
+
+        // Index hors bornes -> Erreur
+        let bad_cfg = NvmeFormatConfig {
+            lba_format_index: 5,
+            ..Default::default()
+        };
+        assert_eq!(
+            ctrl.apply_format_to_namespace(1, bad_cfg, new_format),
+            Err(SysError::InvalidArgument)
+        );
+
+        // NSID inexistant -> InvalidHandle
+        assert_eq!(
+            ctrl.apply_format_to_namespace(99, cfg, new_format),
+            Err(SysError::InvalidHandle)
         );
     }
 }

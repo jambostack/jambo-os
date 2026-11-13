@@ -22387,6 +22387,8 @@ pub fn execute_coreutils_command(
         "pwdx" => run_pwdx(args, in_fd, out_fd, err_fd),
         "taskset" => run_taskset(args, in_fd, out_fd, err_fd),
         "setsid" => run_setsid(args, in_fd, out_fd, err_fd),
+        "ionice" => run_ionice(args, in_fd, out_fd, err_fd),
+        "unshare" => run_unshare(args, in_fd, out_fd, err_fd),
         _ => {
             let _ = sys_write(err_fd, cmd.as_bytes());
             let _ = sys_write(err_fd, b": command not found\n");
@@ -34145,6 +34147,422 @@ Options:\n\
     execute_coreutils_command(target_prog, target_args, in_fd, out_fd, err_fd)
 }
 
+// ============================================================================
+// Utilitaire POSIX / util-linux : `ionice` (Gestion de classe d'ordonnancement d'E/S)
+// ============================================================================
+
+/// Parse une chaîne ASCII en entier non signé u64 strict
+fn parse_u64_posix(s: &str) -> Option<u64> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    let mut v = 0u64;
+    for b in s.bytes() {
+        if !b.is_ascii_digit() {
+            return None;
+        }
+        v = v.checked_mul(10)?.checked_add((b - b'0') as u64)?;
+    }
+    Some(v)
+}
+
+/// Formate un entier non signé u64 dans un tampon et renvoie la tranche sous forme de &str
+fn fmt_u64(val: u64, buf: &mut [u8; 16]) -> &str {
+    let mut n = val;
+    let mut len = 0;
+    if n == 0 {
+        buf[0] = b'0';
+        return core::str::from_utf8(&buf[..1]).unwrap_or("0");
+    }
+    while n > 0 && len < buf.len() {
+        buf[len] = b'0' + (n % 10) as u8;
+        n /= 10;
+        len += 1;
+    }
+    buf[..len].reverse();
+    core::str::from_utf8(&buf[..len]).unwrap_or("0")
+}
+
+/// Exécute l'utilitaire Coreutils POSIX / util-linux `ionice` (examine ou modifie la classe d'ordonnancement d'E/S)
+///
+/// Syntaxe :
+///   ionice [options] -p <pid>
+///   ionice [options] <command> [argument ...]
+///
+/// Options :
+///   -c, --class <class>      nom ou numéro de classe : 0 (none), 1 (realtime), 2 (best-effort), 3 (idle)
+///   -n, --classdata <level>  données de classe / priorité (0-7, 0 = plus prioritaire)
+///   -p, --pid <pid>          identifiant du processus cible
+///   -t, --ignore             ignore les erreurs d'incompatibilité noyau
+///   -h, --help               affiche cette aide et termine
+///   -V, --version            affiche les informations de version et termine
+pub fn run_ionice(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    let mut opt_class: Option<u32> = None;
+    let mut opt_data: Option<u32> = None;
+    let mut opt_pid: Option<u32> = None;
+    let mut opt_ignore = false;
+    let mut cmd_idx = None;
+
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i];
+        if arg == "-h" || arg == "--help" {
+            let help = b"Usage: ionice [options] -p <pid>\n\
+       ionice [options] <command> [argument ...]\n\n\
+Show or set I/O-scheduling class and priority.\n\n\
+Options:\n\
+  -c, --class <class>     name or number of scheduling class:\n\
+                          0: none, 1: realtime, 2: best-effort, 3: idle\n\
+  -n, --classdata <level> priority level within class (0-7, default 4)\n\
+  -p, --pid <pid>         target process ID\n\
+  -t, --ignore            silently ignore failures\n\
+  -h, --help              display this help and exit\n\
+  -V, --version           output version information and exit\n";
+            let _ = sys_write(out_fd, help);
+            return 0;
+        } else if arg == "-v" || arg == "-V" || arg == "--version" {
+            let ver = b"ionice (JamboOS coreutils) 0.3.93\n";
+            let _ = sys_write(out_fd, ver);
+            return 0;
+        } else if arg == "-t" || arg == "--ignore" {
+            opt_ignore = true;
+        } else if arg == "-c" || arg == "--class" {
+            if i + 1 >= args.len() {
+                let _ = sys_write(err_fd, b"ionice: option requires an argument -- 'c'\n");
+                return 1;
+            }
+            i += 1;
+            let val = match args[i] {
+                "none" | "0" => 0,
+                "realtime" | "1" => 1,
+                "best-effort" | "2" => 2,
+                "idle" | "3" => 3,
+                s => match parse_u64_posix(s) {
+                    Some(v) if v <= 3 => v as u32,
+                    _ => {
+                        let _ = sys_write(err_fd, b"ionice: unknown scheduling class: ");
+                        let _ = sys_write(err_fd, s.as_bytes());
+                        let _ = sys_write(err_fd, b"\n");
+                        return 1;
+                    }
+                },
+            };
+            opt_class = Some(val);
+        } else if arg.starts_with("-c") && arg.len() > 2 {
+            let s = &arg[2..];
+            let val = match s {
+                "none" | "0" => 0,
+                "realtime" | "1" => 1,
+                "best-effort" | "2" => 2,
+                "idle" | "3" => 3,
+                _ => match parse_u64_posix(s) {
+                    Some(v) if v <= 3 => v as u32,
+                    _ => {
+                        let _ = sys_write(err_fd, b"ionice: unknown scheduling class\n");
+                        return 1;
+                    }
+                },
+            };
+            opt_class = Some(val);
+        } else if arg == "-n" || arg == "--classdata" {
+            if i + 1 >= args.len() {
+                let _ = sys_write(err_fd, b"ionice: option requires an argument -- 'n'\n");
+                return 1;
+            }
+            i += 1;
+            let val = match parse_u64_posix(args[i]) {
+                Some(v) if v <= 7 => v as u32,
+                _ => {
+                    let _ = sys_write(err_fd, b"ionice: invalid priority level (0-7)\n");
+                    return 1;
+                }
+            };
+            opt_data = Some(val);
+        } else if arg.starts_with("-n") && arg.len() > 2 {
+            let val = match parse_u64_posix(&arg[2..]) {
+                Some(v) if v <= 7 => v as u32,
+                _ => {
+                    let _ = sys_write(err_fd, b"ionice: invalid priority level (0-7)\n");
+                    return 1;
+                }
+            };
+            opt_data = Some(val);
+        } else if arg == "-p" || arg == "--pid" {
+            if i + 1 >= args.len() {
+                let _ = sys_write(err_fd, b"ionice: option requires an argument -- 'p'\n");
+                return 1;
+            }
+            i += 1;
+            let val = match parse_u64_posix(args[i]) {
+                Some(v) => v as u32,
+                None => {
+                    let _ = sys_write(err_fd, b"ionice: invalid PID\n");
+                    return 1;
+                }
+            };
+            opt_pid = Some(val);
+        } else if arg.starts_with("-p") && arg.len() > 2 {
+            let val = match parse_u64_posix(&arg[2..]) {
+                Some(v) => v as u32,
+                None => {
+                    let _ = sys_write(err_fd, b"ionice: invalid PID\n");
+                    return 1;
+                }
+            };
+            opt_pid = Some(val);
+        } else if arg == "--" {
+            cmd_idx = Some(i + 1);
+            break;
+        } else if arg.starts_with('-') && arg != "-" {
+            let _ = sys_write(err_fd, b"ionice: unrecognized option '");
+            let _ = sys_write(err_fd, arg.as_bytes());
+            let _ = sys_write(err_fd, b"'\nTry 'ionice --help' for more information.\n");
+            return 1;
+        } else {
+            cmd_idx = Some(i);
+            break;
+        }
+        i += 1;
+    }
+
+    let _ = opt_ignore;
+
+    // Cas 1 : PID spécifié sans classe -> afficher la classe I/O actuelle
+    if let Some(target_pid) = opt_pid {
+        if opt_class.is_none() && opt_data.is_none() {
+            let prio =
+                match crate::posix::sys_ioprio_get(crate::posix::IOPRIO_WHO_PROCESS, target_pid) {
+                    Ok(p) => p,
+                    Err(_) => {
+                        let _ = sys_write(err_fd, b"ionice: failed to get priority\n");
+                        return 1;
+                    }
+                };
+            let class = crate::posix::ioprio_prio_class(prio);
+            let data = crate::posix::ioprio_prio_data(prio);
+            match class {
+                0 => {
+                    let _ = sys_write(out_fd, b"none: prio 0\n");
+                }
+                1 => {
+                    let _ = sys_write(out_fd, b"realtime: prio ");
+                    let mut b = [0u8; 16];
+                    let s = fmt_u64(data as u64, &mut b);
+                    let _ = sys_write(out_fd, s.as_bytes());
+                    let _ = sys_write(out_fd, b"\n");
+                }
+                2 => {
+                    let _ = sys_write(out_fd, b"best-effort: prio ");
+                    let mut b = [0u8; 16];
+                    let s = fmt_u64(data as u64, &mut b);
+                    let _ = sys_write(out_fd, s.as_bytes());
+                    let _ = sys_write(out_fd, b"\n");
+                }
+                3 => {
+                    let _ = sys_write(out_fd, b"idle\n");
+                }
+                _ => {
+                    let _ = sys_write(out_fd, b"unknown\n");
+                }
+            }
+            return 0;
+        }
+
+        // Configuration du PID cible
+        let class = opt_class.unwrap_or(crate::posix::IOPRIO_CLASS_BE);
+        let data = opt_data.unwrap_or(if class == crate::posix::IOPRIO_CLASS_IDLE {
+            0
+        } else {
+            4
+        });
+        let ioprio = crate::posix::ioprio_prio_value(class, data);
+        if crate::posix::sys_ioprio_set(crate::posix::IOPRIO_WHO_PROCESS, target_pid, ioprio)
+            .is_err()
+            && !opt_ignore
+        {
+            let _ = sys_write(err_fd, b"ionice: setpriority failed\n");
+            return 1;
+        }
+        return 0;
+    }
+
+    // Cas 2 : Commande spécifiée -> configure la priorité courante et exécute la sous-commande
+    if let Some(start) = cmd_idx {
+        if start < args.len() {
+            let class = opt_class.unwrap_or(crate::posix::IOPRIO_CLASS_BE);
+            let data = opt_data.unwrap_or(if class == crate::posix::IOPRIO_CLASS_IDLE {
+                0
+            } else {
+                4
+            });
+            let ioprio = crate::posix::ioprio_prio_value(class, data);
+            let _ = crate::posix::sys_ioprio_set(crate::posix::IOPRIO_WHO_PROCESS, 0, ioprio);
+
+            let target_cmd = args[start];
+            let target_args = &args[start + 1..];
+            return execute_coreutils_command(target_cmd, target_args, in_fd, out_fd, err_fd);
+        }
+    }
+
+    // Cas 3 : Ni PID ni commande -> afficher la priorité du processus courant
+    let prio = match crate::posix::sys_ioprio_get(crate::posix::IOPRIO_WHO_PROCESS, 0) {
+        Ok(p) => p,
+        Err(_) => {
+            let _ = sys_write(err_fd, b"ionice: failed to get current priority\n");
+            return 1;
+        }
+    };
+    let class = crate::posix::ioprio_prio_class(prio);
+    let data = crate::posix::ioprio_prio_data(prio);
+    match class {
+        0 => {
+            let _ = sys_write(out_fd, b"none: prio 0\n");
+        }
+        1 => {
+            let _ = sys_write(out_fd, b"realtime: prio ");
+            let mut b = [0u8; 16];
+            let s = fmt_u64(data as u64, &mut b);
+            let _ = sys_write(out_fd, s.as_bytes());
+            let _ = sys_write(out_fd, b"\n");
+        }
+        2 => {
+            let _ = sys_write(out_fd, b"best-effort: prio ");
+            let mut b = [0u8; 16];
+            let s = fmt_u64(data as u64, &mut b);
+            let _ = sys_write(out_fd, s.as_bytes());
+            let _ = sys_write(out_fd, b"\n");
+        }
+        3 => {
+            let _ = sys_write(out_fd, b"idle\n");
+        }
+        _ => {
+            let _ = sys_write(out_fd, b"unknown\n");
+        }
+    }
+    0
+}
+
+// ============================================================================
+// Utilitaire POSIX / util-linux : `unshare` (Isolation d'espaces de noms)
+// ============================================================================
+
+/// Exécute l'utilitaire Coreutils POSIX / util-linux `unshare` (exécute un programme dans des namespaces privés)
+///
+/// Syntaxe :
+///   unshare [options] [<program> [arguments ...]]
+///
+/// Options :
+///   -m, --mount              détache le namespace de montage (mount points VFS)
+///   -u, --uts                détache le namespace UTS (hostname / domainname)
+///   -i, --ipc                détache le namespace IPC (System V / POSIX IPC)
+///   -n, --net                détache le namespace réseau (sockets / stack IP)
+///   -p, --pid                détache le namespace de processus (PID isolation)
+///   -U, --user               détache le namespace utilisateur (UID/GID mapping)
+///   -r, --map-root-user      associe l'utilisateur appelant à root dans le namespace
+///   -h, --help               affiche cette aide et termine
+///   -V, --version            affiche les informations de version et termine
+pub fn run_unshare(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    let mut flags: u32 = 0;
+    let mut _map_root = false;
+    let mut prog_idx = None;
+
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i];
+        if arg == "-h" || arg == "--help" {
+            let help = b"Usage: unshare [options] [<program> [arguments ...]]\n\n\
+Run a program with some namespaces unshared from parent.\n\n\
+Options:\n\
+  -m, --mount           unshare mounts namespace\n\
+  -u, --uts             unshare UTS namespace (hostname)\n\
+  -i, --ipc             unshare System V IPC namespace\n\
+  -n, --net             unshare network namespace\n\
+  -p, --pid             unshare pid namespace\n\
+  -U, --user            unshare user namespace\n\
+  -r, --map-root-user   map current user to root\n\
+  -h, --help            display this help and exit\n\
+  -V, --version         output version information and exit\n";
+            let _ = sys_write(out_fd, help);
+            return 0;
+        } else if arg == "-v" || arg == "-V" || arg == "--version" {
+            let ver = b"unshare (JamboOS coreutils) 0.3.93\n";
+            let _ = sys_write(out_fd, ver);
+            return 0;
+        } else if arg == "-m" || arg == "--mount" {
+            flags |= crate::posix::CLONE_NEWNS;
+        } else if arg == "-u" || arg == "--uts" {
+            flags |= crate::posix::CLONE_NEWUTS;
+        } else if arg == "-i" || arg == "--ipc" {
+            flags |= crate::posix::CLONE_NEWIPC;
+        } else if arg == "-n" || arg == "--net" {
+            flags |= crate::posix::CLONE_NEWNET;
+        } else if arg == "-p" || arg == "--pid" {
+            flags |= crate::posix::CLONE_NEWPID;
+        } else if arg == "-U" || arg == "--user" {
+            flags |= crate::posix::CLONE_NEWUSER;
+        } else if arg == "-r" || arg == "--map-root-user" {
+            _map_root = true;
+            flags |= crate::posix::CLONE_NEWUSER;
+        } else if arg.starts_with('-') && arg.len() > 1 && !arg.starts_with("--") {
+            let mut valid = true;
+            for b in arg[1..].bytes() {
+                match b {
+                    b'm' => flags |= crate::posix::CLONE_NEWNS,
+                    b'u' => flags |= crate::posix::CLONE_NEWUTS,
+                    b'i' => flags |= crate::posix::CLONE_NEWIPC,
+                    b'n' => flags |= crate::posix::CLONE_NEWNET,
+                    b'p' => flags |= crate::posix::CLONE_NEWPID,
+                    b'U' => flags |= crate::posix::CLONE_NEWUSER,
+                    b'r' => {
+                        _map_root = true;
+                        flags |= crate::posix::CLONE_NEWUSER;
+                    }
+                    _ => {
+                        valid = false;
+                        break;
+                    }
+                }
+            }
+            if !valid {
+                let _ = sys_write(err_fd, b"unshare: unrecognized option '");
+                let _ = sys_write(err_fd, arg.as_bytes());
+                let _ = sys_write(err_fd, b"'\nTry 'unshare --help' for more information.\n");
+                return 1;
+            }
+        } else if arg == "--" {
+            prog_idx = Some(i + 1);
+            break;
+        } else if arg.starts_with('-') {
+            let _ = sys_write(err_fd, b"unshare: unrecognized option '");
+            let _ = sys_write(err_fd, arg.as_bytes());
+            let _ = sys_write(err_fd, b"'\nTry 'unshare --help' for more information.\n");
+            return 1;
+        } else {
+            prog_idx = Some(i);
+            break;
+        }
+        i += 1;
+    }
+
+    if flags != 0 && crate::posix::sys_unshare(flags).is_err() {
+        let _ = sys_write(err_fd, b"unshare: unshare failed\n");
+        return 1;
+    }
+
+    if let Some(start) = prog_idx {
+        if start < args.len() {
+            let target_prog = args[start];
+            let target_args = &args[start + 1..];
+            return execute_coreutils_command(target_prog, target_args, in_fd, out_fd, err_fd);
+        }
+    }
+
+    // Si aucun programme n'est fourni, confirmation de détachement
+    let _ = sys_write(out_fd, b"unshare: namespaces unshared successfully\n");
+    0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -41494,5 +41912,135 @@ Chaque processus dispose de son propre CR3 sans aucun privilege materiel direct.
         sys_close(err_r7);
         let s7 = core::str::from_utf8(&buf[..n7 as usize]).unwrap();
         assert!(s7.contains("unrecognized option"));
+    }
+
+    #[test]
+    fn test_ionice_execution_and_options() {
+        let mut buf = [0u8; 512];
+
+        // 1. ionice --help
+        let (out_r1, out_w1) = crate::vfs::pipe().expect("pipe ionice 1");
+        assert_eq!(run_ionice(&["--help"], 0, out_w1, 2), 0);
+        sys_close(out_w1);
+        let n1 = sys_read(out_r1, &mut buf);
+        sys_close(out_r1);
+        let s1 = core::str::from_utf8(&buf[..n1 as usize]).unwrap();
+        assert!(s1.contains("Usage: ionice"));
+
+        // 2. ionice --version
+        let (out_r2, out_w2) = crate::vfs::pipe().expect("pipe ionice 2");
+        assert_eq!(run_ionice(&["--version"], 0, out_w2, 2), 0);
+        sys_close(out_w2);
+        let n2 = sys_read(out_r2, &mut buf);
+        sys_close(out_r2);
+        let s2 = core::str::from_utf8(&buf[..n2 as usize]).unwrap();
+        assert!(s2.contains("ionice (JamboOS coreutils)"));
+
+        // 3. ionice lecture PID courant (par défaut)
+        let (out_r3, out_w3) = crate::vfs::pipe().expect("pipe ionice 3");
+        assert_eq!(run_ionice(&[], 0, out_w3, 2), 0);
+        sys_close(out_w3);
+        let n3 = sys_read(out_r3, &mut buf);
+        sys_close(out_r3);
+        let s3 = core::str::from_utf8(&buf[..n3 as usize]).unwrap();
+        assert!(s3.contains("prio") || s3.contains("idle") || s3.contains("none"));
+
+        // 4. ionice configuration PID cible
+        assert_eq!(run_ionice(&["-c", "1", "-n", "2", "-p", "50"], 0, 1, 2), 0);
+        let (out_r4, out_w4) = crate::vfs::pipe().expect("pipe ionice 4");
+        assert_eq!(run_ionice(&["-p", "50"], 0, out_w4, 2), 0);
+        sys_close(out_w4);
+        let n4 = sys_read(out_r4, &mut buf);
+        sys_close(out_r4);
+        let s4 = core::str::from_utf8(&buf[..n4 as usize]).unwrap();
+        assert!(s4.contains("realtime: prio 2"));
+
+        // 5. ionice exécution sous-commande
+        let (out_r5, out_w5) = crate::vfs::pipe().expect("pipe ionice 5");
+        assert_eq!(
+            run_ionice(
+                &["-c", "2", "-n", "3", "echo", "io_scheduled"],
+                0,
+                out_w5,
+                2
+            ),
+            0
+        );
+        sys_close(out_w5);
+        let n5 = sys_read(out_r5, &mut buf);
+        sys_close(out_r5);
+        let s5 = core::str::from_utf8(&buf[..n5 as usize]).unwrap();
+        assert!(s5.contains("io_scheduled"));
+
+        // 6. ionice avec classe invalide -> Erreur
+        let (err_r6, err_w6) = crate::vfs::pipe().expect("pipe ionice err 6");
+        assert_ne!(run_ionice(&["-c", "9", "-p", "1"], 0, 1, err_w6), 0);
+        sys_close(err_w6);
+        let n6 = sys_read(err_r6, &mut buf);
+        sys_close(err_r6);
+        let s6 = core::str::from_utf8(&buf[..n6 as usize]).unwrap();
+        assert!(s6.contains("unknown scheduling class"));
+    }
+
+    #[test]
+    fn test_unshare_execution_and_options() {
+        let mut buf = [0u8; 512];
+
+        // 1. unshare --help
+        let (out_r1, out_w1) = crate::vfs::pipe().expect("pipe unshare 1");
+        assert_eq!(run_unshare(&["--help"], 0, out_w1, 2), 0);
+        sys_close(out_w1);
+        let n1 = sys_read(out_r1, &mut buf);
+        sys_close(out_r1);
+        let s1 = core::str::from_utf8(&buf[..n1 as usize]).unwrap();
+        assert!(s1.contains("Usage: unshare"));
+
+        // 2. unshare --version
+        let (out_r2, out_w2) = crate::vfs::pipe().expect("pipe unshare 2");
+        assert_eq!(run_unshare(&["--version"], 0, out_w2, 2), 0);
+        sys_close(out_w2);
+        let n2 = sys_read(out_r2, &mut buf);
+        sys_close(out_r2);
+        let s2 = core::str::from_utf8(&buf[..n2 as usize]).unwrap();
+        assert!(s2.contains("unshare (JamboOS coreutils)"));
+
+        // 3. unshare sans commande -> confirmation de détachement
+        let (out_r3, out_w3) = crate::vfs::pipe().expect("pipe unshare 3");
+        assert_eq!(run_unshare(&["-m", "-u", "-i"], 0, out_w3, 2), 0);
+        sys_close(out_w3);
+        let n3 = sys_read(out_r3, &mut buf);
+        sys_close(out_r3);
+        let s3 = core::str::from_utf8(&buf[..n3 as usize]).unwrap();
+        assert!(s3.contains("namespaces unshared successfully"));
+
+        // 4. unshare avec sous-commande
+        let (out_r4, out_w4) = crate::vfs::pipe().expect("pipe unshare 4");
+        assert_eq!(
+            run_unshare(&["--net", "--pid", "echo", "isolated_ns"], 0, out_w4, 2),
+            0
+        );
+        sys_close(out_w4);
+        let n4 = sys_read(out_r4, &mut buf);
+        sys_close(out_r4);
+        let s4 = core::str::from_utf8(&buf[..n4 as usize]).unwrap();
+        assert!(s4.contains("isolated_ns"));
+
+        // 5. unshare avec option groupée (-r -U)
+        let (out_r5, out_w5) = crate::vfs::pipe().expect("pipe unshare 5");
+        assert_eq!(run_unshare(&["-r", "echo", "mapped_root"], 0, out_w5, 2), 0);
+        sys_close(out_w5);
+        let n5 = sys_read(out_r5, &mut buf);
+        sys_close(out_r5);
+        let s5 = core::str::from_utf8(&buf[..n5 as usize]).unwrap();
+        assert!(s5.contains("mapped_root"));
+
+        // 6. unshare avec option invalide -> Erreur
+        let (err_r6, err_w6) = crate::vfs::pipe().expect("pipe unshare err 6");
+        assert_ne!(run_unshare(&["-z", "echo"], 0, 1, err_w6), 0);
+        sys_close(err_w6);
+        let n6 = sys_read(err_r6, &mut buf);
+        sys_close(err_r6);
+        let s6 = core::str::from_utf8(&buf[..n6 as usize]).unwrap();
+        assert!(s6.contains("unrecognized option"));
     }
 }

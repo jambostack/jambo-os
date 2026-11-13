@@ -430,6 +430,296 @@ pub fn sys_sigpending(set: &mut Sigset) -> Result<(), i32> {
     })
 }
 
+// =========================================================================
+// Descripteurs de Sessions, Groupes de Processus et Priorités d'E/S POSIX
+// =========================================================================
+
+#[allow(non_camel_case_types)]
+pub type pid_t = i32;
+
+// Ordonnancement d'E/S (I/O Scheduling POSIX/Linux - ionice)
+pub const IOPRIO_CLASS_NONE: u32 = 0;
+pub const IOPRIO_CLASS_RT: u32 = 1;
+pub const IOPRIO_CLASS_BE: u32 = 2;
+pub const IOPRIO_CLASS_IDLE: u32 = 3;
+
+pub const IOPRIO_WHO_PROCESS: u32 = 1;
+pub const IOPRIO_WHO_PGRP: u32 = 2;
+pub const IOPRIO_WHO_USER: u32 = 3;
+
+pub const IOPRIO_CLASS_SHIFT: u32 = 13;
+pub const IOPRIO_PRIO_MASK: u32 = 0x1FFF;
+
+#[inline]
+pub const fn ioprio_prio_value(class: u32, data: u32) -> u32 {
+    (class << IOPRIO_CLASS_SHIFT) | (data & IOPRIO_PRIO_MASK)
+}
+
+#[inline]
+pub const fn ioprio_prio_class(prio: u32) -> u32 {
+    (prio >> IOPRIO_CLASS_SHIFT) & 0x07
+}
+
+#[inline]
+pub const fn ioprio_prio_data(prio: u32) -> u32 {
+    prio & IOPRIO_PRIO_MASK
+}
+
+// Flags d'isolation d'espaces de noms (Linux/POSIX Namespaces - unshare)
+pub const CLONE_NEWNS: u32 = 0x00020000;
+pub const CLONE_NEWUTS: u32 = 0x04000000;
+pub const CLONE_NEWIPC: u32 = 0x08000000;
+pub const CLONE_NEWUSER: u32 = 0x10000000;
+pub const CLONE_NEWPID: u32 = 0x20000000;
+pub const CLONE_NEWNET: u32 = 0x40000000;
+
+/// Descripteur de session et de groupe de processus
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProcessSessionDescriptor {
+    pub pid: pid_t,
+    pub sid: pid_t,
+    pub pgid: pid_t,
+    pub ioprio: u32,
+    pub unshared_flags: u32,
+    pub is_session_leader: bool,
+}
+
+impl ProcessSessionDescriptor {
+    pub const fn new(pid: pid_t) -> Self {
+        Self {
+            pid,
+            sid: pid,
+            pgid: pid,
+            ioprio: ioprio_prio_value(IOPRIO_CLASS_BE, 4),
+            unshared_flags: 0,
+            is_session_leader: false,
+        }
+    }
+}
+
+pub const MAX_PROCESS_SESSIONS: usize = 32;
+
+/// Table des sessions de processus et priorités d'E/S
+pub struct ProcessSessionTable {
+    pub current_pid: pid_t,
+    pub entries: [ProcessSessionDescriptor; MAX_PROCESS_SESSIONS],
+    pub entry_count: usize,
+}
+
+impl ProcessSessionTable {
+    pub const fn new() -> Self {
+        Self {
+            current_pid: 1,
+            entries: [ProcessSessionDescriptor::new(0); MAX_PROCESS_SESSIONS],
+            entry_count: 0,
+        }
+    }
+
+    pub fn get_or_create(&mut self, pid: pid_t) -> &mut ProcessSessionDescriptor {
+        for i in 0..self.entry_count {
+            if self.entries[i].pid == pid {
+                return &mut self.entries[i];
+            }
+        }
+        if self.entry_count < MAX_PROCESS_SESSIONS {
+            let idx = self.entry_count;
+            self.entries[idx] = ProcessSessionDescriptor::new(pid);
+            self.entry_count += 1;
+            &mut self.entries[idx]
+        } else {
+            &mut self.entries[0]
+        }
+    }
+
+    pub fn setsid(&mut self, pid: pid_t) -> Result<pid_t, i32> {
+        let entry = self.get_or_create(pid);
+        if entry.is_session_leader {
+            return Err(-EPERM);
+        }
+        entry.sid = pid;
+        entry.pgid = pid;
+        entry.is_session_leader = true;
+        Ok(pid)
+    }
+
+    pub fn getsid(&mut self, pid: pid_t) -> Result<pid_t, i32> {
+        let target = if pid == 0 { self.current_pid } else { pid };
+        for entry in self.entries.iter().take(self.entry_count) {
+            if entry.pid == target {
+                return Ok(entry.sid);
+            }
+        }
+        Ok(target)
+    }
+
+    pub fn setpgid(&mut self, pid: pid_t, pgid: pid_t) -> Result<(), i32> {
+        let target_pid = if pid == 0 { self.current_pid } else { pid };
+        let new_pgid = if pgid == 0 { target_pid } else { pgid };
+        if new_pgid < 0 {
+            return Err(-EINVAL);
+        }
+        let entry = self.get_or_create(target_pid);
+        if entry.is_session_leader {
+            return Err(-EPERM);
+        }
+        entry.pgid = new_pgid;
+        Ok(())
+    }
+
+    pub fn getpgrp(&mut self, pid: pid_t) -> pid_t {
+        let target = if pid == 0 { self.current_pid } else { pid };
+        for entry in self.entries.iter().take(self.entry_count) {
+            if entry.pid == target {
+                return entry.pgid;
+            }
+        }
+        target
+    }
+
+    pub fn ioprio_set(&mut self, which: u32, who: u32, ioprio: u32) -> Result<(), i32> {
+        let class = ioprio_prio_class(ioprio);
+        let data = ioprio_prio_data(ioprio);
+        if class > IOPRIO_CLASS_IDLE {
+            return Err(-EINVAL);
+        }
+        if (class == IOPRIO_CLASS_RT || class == IOPRIO_CLASS_BE) && data > 7 {
+            return Err(-EINVAL);
+        }
+
+        let target_pid = if who == 0 {
+            self.current_pid as u32
+        } else {
+            who
+        };
+        match which {
+            IOPRIO_WHO_PROCESS => {
+                let entry = self.get_or_create(target_pid as pid_t);
+                entry.ioprio = ioprio;
+                Ok(())
+            }
+            IOPRIO_WHO_PGRP => {
+                for entry in self.entries[..self.entry_count].iter_mut() {
+                    if entry.pgid == target_pid as pid_t {
+                        entry.ioprio = ioprio;
+                    }
+                }
+                Ok(())
+            }
+            IOPRIO_WHO_USER => Ok(()),
+            _ => Err(-EINVAL),
+        }
+    }
+
+    pub fn ioprio_get(&mut self, which: u32, who: u32) -> Result<u32, i32> {
+        let target_pid = if who == 0 {
+            self.current_pid as u32
+        } else {
+            who
+        };
+        match which {
+            IOPRIO_WHO_PROCESS => {
+                let entry = self.get_or_create(target_pid as pid_t);
+                Ok(entry.ioprio)
+            }
+            IOPRIO_WHO_PGRP => {
+                for entry in self.entries.iter().take(self.entry_count) {
+                    if entry.pgid == target_pid as pid_t {
+                        return Ok(entry.ioprio);
+                    }
+                }
+                Ok(ioprio_prio_value(IOPRIO_CLASS_BE, 4))
+            }
+            IOPRIO_WHO_USER => Ok(ioprio_prio_value(IOPRIO_CLASS_BE, 4)),
+            _ => Err(-EINVAL),
+        }
+    }
+
+    pub fn unshare(&mut self, flags: u32) -> Result<(), i32> {
+        let valid_flags =
+            CLONE_NEWNS | CLONE_NEWUTS | CLONE_NEWIPC | CLONE_NEWUSER | CLONE_NEWPID | CLONE_NEWNET;
+        if (flags & !valid_flags) != 0 {
+            return Err(-EINVAL);
+        }
+        let entry = self.get_or_create(self.current_pid);
+        entry.unshared_flags |= flags;
+        Ok(())
+    }
+}
+
+impl Default for ProcessSessionTable {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+static mut GLOBAL_SESSION_TABLE: ProcessSessionTable = ProcessSessionTable::new();
+static SESSION_LOCK: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+#[inline]
+fn acquire_session_lock() {
+    while SESSION_LOCK
+        .compare_exchange_weak(
+            false,
+            true,
+            core::sync::atomic::Ordering::Acquire,
+            core::sync::atomic::Ordering::Relaxed,
+        )
+        .is_err()
+    {
+        core::hint::spin_loop();
+    }
+}
+
+#[inline]
+fn release_session_lock() {
+    SESSION_LOCK.store(false, core::sync::atomic::Ordering::Release);
+}
+
+pub fn with_session_table<F, R>(f: F) -> R
+where
+    F: FnOnce(&mut ProcessSessionTable) -> R,
+{
+    acquire_session_lock();
+    let ptr = core::ptr::addr_of_mut!(GLOBAL_SESSION_TABLE);
+    let res = unsafe { f(&mut *ptr) };
+    release_session_lock();
+    res
+}
+
+pub fn sys_setsid() -> Result<pid_t, i32> {
+    with_session_table(|tbl| {
+        let pid = tbl.current_pid;
+        tbl.setsid(pid)
+    })
+}
+
+pub fn sys_getsid(pid: pid_t) -> Result<pid_t, i32> {
+    with_session_table(|tbl| tbl.getsid(pid))
+}
+
+pub fn sys_setpgid(pid: pid_t, pgid: pid_t) -> Result<(), i32> {
+    with_session_table(|tbl| tbl.setpgid(pid, pgid))
+}
+
+pub fn sys_getpgrp() -> pid_t {
+    with_session_table(|tbl| {
+        let pid = tbl.current_pid;
+        tbl.getpgrp(pid)
+    })
+}
+
+pub fn sys_ioprio_set(which: u32, who: u32, ioprio: u32) -> Result<(), i32> {
+    with_session_table(|tbl| tbl.ioprio_set(which, who, ioprio))
+}
+
+pub fn sys_ioprio_get(which: u32, who: u32) -> Result<u32, i32> {
+    with_session_table(|tbl| tbl.ioprio_get(which, who))
+}
+
+pub fn sys_unshare(flags: u32) -> Result<(), i32> {
+    with_session_table(|tbl| tbl.unshare(flags))
+}
+
 // Points d'entrée C standard exportés pour l'environnement bare-metal
 
 /// Examine et modifie l'action associée à un signal POSIX
@@ -1809,5 +2099,49 @@ mod tests {
             Ok(())
         );
         assert_eq!(table.blocked_mask & (1u64 << SIGINT), 0);
+    }
+
+    #[test]
+    fn test_posix_sessions_and_ioprio_table() {
+        let mut tbl = ProcessSessionTable::new();
+        tbl.current_pid = 42;
+
+        // 1. getsid sur PID courant
+        assert_eq!(tbl.getsid(0), Ok(42));
+        assert_eq!(tbl.getpgrp(0), 42);
+
+        // 2. setsid crée une nouvelle session et devient session leader
+        assert_eq!(tbl.setsid(42), Ok(42));
+        // Double setsid -> -EPERM car déjà session leader
+        assert_eq!(tbl.setsid(42), Err(-EPERM));
+
+        // 3. setpgid sur un autre processus
+        assert_eq!(tbl.setpgid(100, 100), Ok(()));
+        assert_eq!(tbl.getpgrp(100), 100);
+        assert_eq!(tbl.setpgid(101, 100), Ok(()));
+        assert_eq!(tbl.getpgrp(101), 100);
+
+        // 4. IOPRIO get et set
+        let prio_rt0 = ioprio_prio_value(IOPRIO_CLASS_RT, 0);
+        assert_eq!(ioprio_prio_class(prio_rt0), IOPRIO_CLASS_RT);
+        assert_eq!(ioprio_prio_data(prio_rt0), 0);
+
+        assert_eq!(tbl.ioprio_set(IOPRIO_WHO_PROCESS, 100, prio_rt0), Ok(()));
+        assert_eq!(tbl.ioprio_get(IOPRIO_WHO_PROCESS, 100), Ok(prio_rt0));
+
+        // IOPRIO hors bornes
+        let prio_bad = ioprio_prio_value(IOPRIO_CLASS_RT, 9); // data > 7
+        assert_eq!(
+            tbl.ioprio_set(IOPRIO_WHO_PROCESS, 100, prio_bad),
+            Err(-EINVAL)
+        );
+
+        // 5. unshare namespaces
+        assert_eq!(tbl.unshare(CLONE_NEWNS | CLONE_NEWNET), Ok(()));
+        let entry = tbl.get_or_create(42);
+        assert_eq!(entry.unshared_flags, CLONE_NEWNS | CLONE_NEWNET);
+
+        // Flag invalide
+        assert_eq!(tbl.unshare(0x8000_0000), Err(-EINVAL));
     }
 }
