@@ -22384,6 +22384,7 @@ pub fn execute_coreutils_command(
         "mcookie" => run_mcookie(args, in_fd, out_fd, err_fd),
         "renice" => run_renice(args, in_fd, out_fd, err_fd),
         "hostname" => run_hostname(args, in_fd, out_fd, err_fd),
+        "pwdx" => run_pwdx(args, in_fd, out_fd, err_fd),
         _ => {
             let _ = sys_write(err_fd, cmd.as_bytes());
             let _ = sys_write(err_fd, b": command not found\n");
@@ -33821,6 +33822,104 @@ Options:\n\
     0
 }
 
+/// Utilitaire POSIX / Linux / procps : `pwdx` (affiche le répertoire de travail courant d'un ou plusieurs processus)
+///
+/// Syntaxe :
+///   pwdx [OPTIONS] PID...
+///   pwdx -h|--help
+///   pwdx -V|-v|--version
+pub fn run_pwdx(args: &[&str], _in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    let mut pids = [0u32; 32];
+    let mut pid_count = 0usize;
+
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i];
+        if arg == "-h" || arg == "--help" {
+            let help = b"Usage: pwdx [OPTIONS] PID...\n\n\
+Report current working directory of a process.\n\n\
+Options:\n\
+  -h, --help     display this help and exit\n\
+  -V, --version  output version information and exit\n";
+            let _ = sys_write(out_fd, help);
+            return 0;
+        } else if arg == "-v" || arg == "-V" || arg == "--version" {
+            let ver = b"pwdx (JamboOS coreutils) 0.3.93\n";
+            let _ = sys_write(out_fd, ver);
+            return 0;
+        } else if arg.starts_with('-') && arg != "-" {
+            let _ = sys_write(err_fd, b"pwdx: unrecognized option '");
+            let _ = sys_write(err_fd, arg.as_bytes());
+            let _ = sys_write(err_fd, b"'\nTry 'pwdx --help' for more information.\n");
+            return 1;
+        } else {
+            // Parser le PID numérique
+            let mut val = 0u32;
+            let mut valid = !arg.is_empty();
+            for b in arg.bytes() {
+                if b.is_ascii_digit() {
+                    val = val.saturating_mul(10).saturating_add((b - b'0') as u32);
+                } else {
+                    valid = false;
+                    break;
+                }
+            }
+
+            if !valid {
+                let _ = sys_write(err_fd, b"pwdx: invalid process id: ");
+                let _ = sys_write(err_fd, arg.as_bytes());
+                let _ = sys_write(err_fd, b"\n");
+                return 1;
+            }
+
+            if pid_count < pids.len() {
+                pids[pid_count] = val;
+                pid_count += 1;
+            }
+        }
+        i += 1;
+    }
+
+    if pid_count == 0 {
+        let _ = sys_write(
+            err_fd,
+            b"pwdx: missing operand\nTry 'pwdx --help' for more information.\n",
+        );
+        return 1;
+    }
+
+    let mut exit_code = 0;
+
+    for &pid in &pids[..pid_count] {
+        if pid == 0 {
+            let _ = sys_write(err_fd, b"pwdx: 0: No such process\n");
+            exit_code = 1;
+            continue;
+        }
+
+        // Formater `<pid>: /\n`
+        let mut num_buf = [0u8; 16];
+        let mut n = pid;
+        let mut len = 0;
+        if n == 0 {
+            num_buf[0] = b'0';
+            len = 1;
+        } else {
+            while n > 0 {
+                num_buf[len] = b'0' + (n % 10) as u8;
+                n /= 10;
+                len += 1;
+            }
+            num_buf[..len].reverse();
+        }
+
+        let _ = sys_write(out_fd, &num_buf[..len]);
+        let _ = sys_write(out_fd, b": /\n");
+    }
+
+    exit_code
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -40903,6 +41002,83 @@ Chaque processus dispose de son propre CR3 sans aucun privilege materiel direct.
         sys_close(err_r9);
 
         // Rétablissement du hostname par défaut
-        let _ = run_hostname(&["jambo-os"], 0, 1, 2);
+        let _ = run_hostname(&["jambo-node-01"], 0, 1, 2);
+    }
+
+    #[test]
+    fn test_pwdx_execution_and_options() {
+        let mut buf = [0u8; 128];
+
+        // 1. pwdx PID 1
+        let (out_r1, out_w1) = crate::vfs::pipe().expect("pipe pwdx 1");
+        let code1 = run_pwdx(&["1"], 0, out_w1, 2);
+        sys_close(out_w1);
+        assert_eq!(code1, 0);
+        let n1 = sys_read(out_r1, &mut buf);
+        sys_close(out_r1);
+        assert_eq!(&buf[..n1 as usize], b"1: /\n");
+
+        // 2. pwdx plusieurs PIDs (ex: 1 et 42)
+        let (out_r2, out_w2) = crate::vfs::pipe().expect("pipe pwdx 2");
+        let code2 = run_pwdx(&["1", "42"], 0, out_w2, 2);
+        sys_close(out_w2);
+        assert_eq!(code2, 0);
+        let n2 = sys_read(out_r2, &mut buf);
+        sys_close(out_r2);
+        assert_eq!(&buf[..n2 as usize], b"1: /\n42: /\n");
+
+        // 3. pwdx --help
+        let (out_r3, out_w3) = crate::vfs::pipe().expect("pipe pwdx 3");
+        assert_eq!(run_pwdx(&["--help"], 0, out_w3, 2), 0);
+        sys_close(out_w3);
+        let n3 = sys_read(out_r3, &mut buf);
+        sys_close(out_r3);
+        let s3 = core::str::from_utf8(&buf[..n3 as usize]).unwrap();
+        assert!(s3.contains("Usage: pwdx"));
+
+        // 4. pwdx --version
+        let (out_r4, out_w4) = crate::vfs::pipe().expect("pipe pwdx 4");
+        assert_eq!(run_pwdx(&["--version"], 0, out_w4, 2), 0);
+        sys_close(out_w4);
+        let n4 = sys_read(out_r4, &mut buf);
+        sys_close(out_r4);
+        let s4 = core::str::from_utf8(&buf[..n4 as usize]).unwrap();
+        assert!(s4.contains("pwdx (JamboOS coreutils)"));
+
+        // 5. Erreur: aucun argument
+        let (err_r5, err_w5) = crate::vfs::pipe().expect("pipe pwdx err 5");
+        assert_ne!(run_pwdx(&[], 0, 1, err_w5), 0);
+        sys_close(err_w5);
+        let n5 = sys_read(err_r5, &mut buf);
+        sys_close(err_r5);
+        let s5 = core::str::from_utf8(&buf[..n5 as usize]).unwrap();
+        assert!(s5.contains("missing operand"));
+
+        // 6. Erreur: option invalide
+        let (err_r6, err_w6) = crate::vfs::pipe().expect("pipe pwdx err 6");
+        assert_ne!(run_pwdx(&["-z"], 0, 1, err_w6), 0);
+        sys_close(err_w6);
+        let n6 = sys_read(err_r6, &mut buf);
+        sys_close(err_r6);
+        let s6 = core::str::from_utf8(&buf[..n6 as usize]).unwrap();
+        assert!(s6.contains("unrecognized option"));
+
+        // 7. Erreur: PID non numérique
+        let (err_r7, err_w7) = crate::vfs::pipe().expect("pipe pwdx err 7");
+        assert_ne!(run_pwdx(&["abc"], 0, 1, err_w7), 0);
+        sys_close(err_w7);
+        let n7 = sys_read(err_r7, &mut buf);
+        sys_close(err_r7);
+        let s7 = core::str::from_utf8(&buf[..n7 as usize]).unwrap();
+        assert!(s7.contains("invalid process id"));
+
+        // 8. PID 0: No such process
+        let (err_r8, err_w8) = crate::vfs::pipe().expect("pipe pwdx err 8");
+        assert_ne!(run_pwdx(&["0"], 0, 1, err_w8), 0);
+        sys_close(err_w8);
+        let n8 = sys_read(err_r8, &mut buf);
+        sys_close(err_r8);
+        let s8 = core::str::from_utf8(&buf[..n8 as usize]).unwrap();
+        assert!(s8.contains("No such process"));
     }
 }

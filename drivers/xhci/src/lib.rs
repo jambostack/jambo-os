@@ -396,6 +396,8 @@ pub const XHCI_EXT_CAP_USB4_DOMAIN_CONFIGURATION_INTERFACE_V2: u8 = 76;
 pub const XHCI_EXT_CAP_USB4_TIME_SYNC_CONFIGURATION_INTERFACE_V2: u8 = 77;
 /// Capacité étendue xHCI 1.2 / USB4 DisplayPort Bandwidth Allocation Interface v2 (§7.70)
 pub const XHCI_EXT_CAP_USB4_DP_BANDWIDTH_ALLOCATION_INTERFACE_V2: u8 = 78;
+/// Capacité étendue xHCI 1.2 / USB4 Buffer Allocation Interface v2 (§7.71)
+pub const XHCI_EXT_CAP_USB4_BUFFER_ALLOCATION_INTERFACE_V2: u8 = 79;
 
 /// Masques de registres USB Legacy Support (xHCI 1.2 Section 7.1)
 /// Registre USBLEGSUP (Offset 0x00)
@@ -9233,6 +9235,284 @@ impl XhciUsb4DpBandwidthAllocationInterfaceV2 {
     /// Indique si l'interface d'allocation de bande passante DP est opérationnelle
     pub fn is_operational(&self) -> bool {
         self.allocation_enabled && self.negotiation_status == 2 && self.allocated_bandwidth_mbps > 0
+    }
+}
+
+/// Capacité étendue xHCI 1.2 / USB4 Buffer Allocation Interface v2 (§7.71)
+///
+/// Permet la gestion dynamique des crédits de tampons (Buffer Credits / Buffer Allocation)
+/// pour les adaptateurs de protocole tunnelisés (PCIe, DisplayPort, USB3, Host Interface)
+/// opérant au sein du routeur USB4 v2 hôte (jusqu'à 80/120 Gbps).
+/// Fournit le contrôle de seuil d'épuisement (starvation), la détection de congestion,
+/// et l'optimisation asymétrique des flux de données à haute bande passante.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XhciUsb4BufferAllocationInterfaceV2 {
+    /// Pointeur dword vers la prochaine capacité étendue (0 = fin de liste)
+    pub next_ptr_dwords: u8,
+    /// Identifiant de l'adaptateur de protocole cible (0..63)
+    pub adapter_id: u8,
+    /// Type de trafic tunnelisé (0: PCIe, 1: DisplayPort, 2: USB3 SuperSpeed, 3: Host Interface)
+    pub traffic_type: u8,
+    /// Statut de santé du pool de crédits de buffer (0: Optimal, 1: Normal, 2: Throttling, 3: Starvation / Critique)
+    pub buffer_health_status: u8,
+    /// Allocation dynamique de tampons activée
+    pub allocation_enabled: bool,
+    /// Négociation continue des crédits de buffer active
+    pub credit_negotiation_active: bool,
+    /// Alerte de seuil bas de crédits de buffer activée
+    pub low_credit_alert_enabled: bool,
+    /// Alerte de seuil haut / saturation de buffer activée
+    pub high_credit_alert_enabled: bool,
+    /// Boost de priorité d'allocation de crédits pour flux critiques
+    pub priority_boost: bool,
+    /// Optimisation asymétrique de transmission (asymmetric link tuning)
+    pub asymmetric_tuning: bool,
+    /// Compteur d'événements de famine de crédits (Starvation)
+    pub starvation_counter: u8,
+    /// Compteur d'avertissements de dépassement ou quasi-saturation (High Threshold Warning)
+    pub overflow_warning_counter: u16,
+    /// Nombre de crédits de buffer actuellement alloués à l'adaptateur
+    pub allocated_buffer_credits: u16,
+    /// Nombre total maximal de crédits de buffer dans le pool de l'adaptateur
+    pub total_buffer_credits: u16,
+    /// Seuil d'alerte bas de crédits de buffer (pourcentage ou crédits résiduels)
+    pub buffer_threshold_low: u8,
+    /// Seuil d'alerte haut de crédits de buffer
+    pub buffer_threshold_high: u8,
+    /// Nombre de crédits de buffer disponibles immédiatement
+    pub available_buffer_credits: u16,
+}
+
+impl XhciUsb4BufferAllocationInterfaceV2 {
+    /// Crée une nouvelle interface d'allocation de tampons USB4 v2
+    pub const fn new(adapter_id: u8, traffic_type: u8, total_buffer_credits: u16) -> Self {
+        Self {
+            next_ptr_dwords: 0,
+            adapter_id: adapter_id & 0x3F,
+            traffic_type: traffic_type & 0x03,
+            buffer_health_status: 0, // Optimal
+            allocation_enabled: false,
+            credit_negotiation_active: false,
+            low_credit_alert_enabled: true,
+            high_credit_alert_enabled: true,
+            priority_boost: false,
+            asymmetric_tuning: false,
+            starvation_counter: 0,
+            overflow_warning_counter: 0,
+            allocated_buffer_credits: 0,
+            total_buffer_credits,
+            buffer_threshold_low: 10,  // 10% ou seuil par défaut
+            buffer_threshold_high: 90, // 90% ou seuil par défaut
+            available_buffer_credits: total_buffer_credits,
+        }
+    }
+
+    /// Parse les 4 dwords MMIO d'une capacité étendue USB4 Buffer Allocation Interface v2 (§7.71)
+    pub const fn parse(dwords: &[u32; 4]) -> Option<Self> {
+        let cap_id = (dwords[0] & 0xFF) as u8;
+        if cap_id != XHCI_EXT_CAP_USB4_BUFFER_ALLOCATION_INTERFACE_V2 {
+            return None;
+        }
+
+        let next_ptr_dwords = ((dwords[0] >> 8) & 0xFF) as u8;
+        let adapter_id = ((dwords[0] >> 16) & 0x3F) as u8;
+        let traffic_type = ((dwords[0] >> 24) & 0x03) as u8;
+        let buffer_health_status = ((dwords[0] >> 28) & 0x0F) as u8;
+
+        let ctrl = dwords[1];
+        let allocation_enabled = (ctrl & 0x01) != 0;
+        let credit_negotiation_active = (ctrl & 0x02) != 0;
+        let low_credit_alert_enabled = (ctrl & 0x04) != 0;
+        let high_credit_alert_enabled = (ctrl & 0x08) != 0;
+        let priority_boost = (ctrl & 0x10) != 0;
+        let asymmetric_tuning = (ctrl & 0x20) != 0;
+        let starvation_counter = ((ctrl >> 8) & 0xFF) as u8;
+        let overflow_warning_counter = ((ctrl >> 16) & 0xFFFF) as u16;
+
+        let allocated_buffer_credits = (dwords[2] & 0xFFFF) as u16;
+        let total_buffer_credits = ((dwords[2] >> 16) & 0xFFFF) as u16;
+
+        let buffer_threshold_low = (dwords[3] & 0xFF) as u8;
+        let buffer_threshold_high = ((dwords[3] >> 8) & 0xFF) as u8;
+        let available_buffer_credits = ((dwords[3] >> 16) & 0xFFFF) as u16;
+
+        Some(Self {
+            next_ptr_dwords,
+            adapter_id,
+            traffic_type,
+            buffer_health_status,
+            allocation_enabled,
+            credit_negotiation_active,
+            low_credit_alert_enabled,
+            high_credit_alert_enabled,
+            priority_boost,
+            asymmetric_tuning,
+            starvation_counter,
+            overflow_warning_counter,
+            allocated_buffer_credits,
+            total_buffer_credits,
+            buffer_threshold_low,
+            buffer_threshold_high,
+            available_buffer_credits,
+        })
+    }
+
+    /// Encode la capacité étendue USB4 Buffer Allocation Interface v2 sous forme de 4 dwords MMIO
+    pub const fn encode(&self) -> [u32; 4] {
+        let dw0 = (XHCI_EXT_CAP_USB4_BUFFER_ALLOCATION_INTERFACE_V2 as u32)
+            | ((self.next_ptr_dwords as u32) << 8)
+            | (((self.adapter_id as u32) & 0x3F) << 16)
+            | (((self.traffic_type as u32) & 0x03) << 24)
+            | (((self.buffer_health_status as u32) & 0x0F) << 28);
+
+        let mut ctrl = 0u32;
+        if self.allocation_enabled {
+            ctrl |= 0x01;
+        }
+        if self.credit_negotiation_active {
+            ctrl |= 0x02;
+        }
+        if self.low_credit_alert_enabled {
+            ctrl |= 0x04;
+        }
+        if self.high_credit_alert_enabled {
+            ctrl |= 0x08;
+        }
+        if self.priority_boost {
+            ctrl |= 0x10;
+        }
+        if self.asymmetric_tuning {
+            ctrl |= 0x20;
+        }
+        ctrl |= ((self.starvation_counter as u32) & 0xFF) << 8;
+        ctrl |= ((self.overflow_warning_counter as u32) & 0xFFFF) << 16;
+
+        let dw2 =
+            (self.allocated_buffer_credits as u32) | ((self.total_buffer_credits as u32) << 16);
+
+        let dw3 = (self.buffer_threshold_low as u32)
+            | ((self.buffer_threshold_high as u32) << 8)
+            | ((self.available_buffer_credits as u32) << 16);
+
+        [dw0, ctrl, dw2, dw3]
+    }
+
+    /// Active l'allocation de tampons et la gestion de crédits
+    pub fn enable_allocation(&mut self) {
+        self.allocation_enabled = true;
+        self.credit_negotiation_active = true;
+    }
+
+    /// Désactive l'allocation de tampons
+    pub fn disable_allocation(&mut self) {
+        self.allocation_enabled = false;
+        self.credit_negotiation_active = false;
+        self.allocated_buffer_credits = 0;
+        self.available_buffer_credits = self.total_buffer_credits;
+        self.buffer_health_status = 0;
+    }
+
+    /// Alloue un nombre donné de crédits de buffer à l'adaptateur
+    pub fn allocate_credits(&mut self, credits: u16) -> bool {
+        if credits <= self.available_buffer_credits {
+            self.allocated_buffer_credits = self.allocated_buffer_credits.saturating_add(credits);
+            self.available_buffer_credits = self.available_buffer_credits.saturating_sub(credits);
+            self.update_health();
+            true
+        } else {
+            self.record_starvation();
+            false
+        }
+    }
+
+    /// Libère un nombre donné de crédits de buffer alloués
+    pub fn release_credits(&mut self, credits: u16) {
+        let actual = credits.min(self.allocated_buffer_credits);
+        self.allocated_buffer_credits = self.allocated_buffer_credits.saturating_sub(actual);
+        self.available_buffer_credits =
+            (self.available_buffer_credits.saturating_add(actual)).min(self.total_buffer_credits);
+        self.update_health();
+    }
+
+    /// Configure les seuils d'alerte de buffer
+    pub fn set_thresholds(&mut self, low: u8, high: u8) {
+        self.buffer_threshold_low = low;
+        self.buffer_threshold_high = high;
+        self.update_health();
+    }
+
+    /// Configure l'activation des alertes
+    pub fn set_alerts(&mut self, low_alert: bool, high_alert: bool) {
+        self.low_credit_alert_enabled = low_alert;
+        self.high_credit_alert_enabled = high_alert;
+    }
+
+    /// Configure le boost de priorité
+    pub fn set_priority_boost(&mut self, enabled: bool) {
+        self.priority_boost = enabled;
+    }
+
+    /// Configure l'ajustement de transmission asymétrique
+    pub fn set_asymmetric_tuning(&mut self, enabled: bool) {
+        self.asymmetric_tuning = enabled;
+    }
+
+    /// Enregistre un événement de manque de crédits (Starvation)
+    pub fn record_starvation(&mut self) {
+        self.starvation_counter = self.starvation_counter.saturating_add(1);
+        self.buffer_health_status = 3; // Starvation
+    }
+
+    /// Enregistre un avertissement de congestion ou saturation
+    pub fn record_overflow_warning(&mut self) {
+        self.overflow_warning_counter = self.overflow_warning_counter.saturating_add(1);
+    }
+
+    /// Met à jour le statut de santé du buffer en fonction des crédits alloués et des seuils
+    fn update_health(&mut self) {
+        if self.total_buffer_credits == 0 {
+            self.buffer_health_status = 0;
+            return;
+        }
+        let percentage =
+            ((self.allocated_buffer_credits as u32 * 100) / self.total_buffer_credits as u32) as u8;
+        if percentage >= self.buffer_threshold_high {
+            self.buffer_health_status = 2; // Throttling
+            if self.high_credit_alert_enabled {
+                self.record_overflow_warning();
+            }
+        } else if self.available_buffer_credits <= (self.buffer_threshold_low as u16) {
+            self.buffer_health_status = 2; // Throttling
+        } else if percentage > 50 {
+            self.buffer_health_status = 1; // Normal
+        } else {
+            self.buffer_health_status = 0; // Optimal
+        }
+    }
+
+    /// Description textuelle du type de trafic
+    pub const fn traffic_description(&self) -> &'static str {
+        match self.traffic_type {
+            0 => "PCIe Tunneling",
+            1 => "DisplayPort Tunneling",
+            2 => "USB3 SuperSpeed Tunneling",
+            _ => "Host Interface / Inter-Domain",
+        }
+    }
+
+    /// Description textuelle du statut de santé
+    pub const fn health_description(&self) -> &'static str {
+        match self.buffer_health_status {
+            0 => "Optimal (Ressources abondantes)",
+            1 => "Normal (Charge nominale)",
+            2 => "Régulation / Throttling actif",
+            _ => "Famine de crédits / Critique",
+        }
+    }
+
+    /// Indique si l'interface d'allocation de tampons USB4 v2 est opérationnelle
+    pub fn is_operational(&self) -> bool {
+        self.allocation_enabled && self.credit_negotiation_active && self.buffer_health_status < 3
     }
 }
 
@@ -20388,5 +20668,118 @@ mod tests {
         assert!(!bwa.allocation_enabled);
         assert_eq!(bwa.negotiation_status, 0);
         assert_eq!(bwa.allocated_bandwidth_mbps, 0);
+    }
+
+    #[test]
+    fn test_xhci_usb4_buffer_allocation_interface_v2() {
+        let mut ba = XhciUsb4BufferAllocationInterfaceV2::new(12, 0, 1024); // Adapter 12, PCIe Tunneling, 1024 credits
+        assert_eq!(ba.adapter_id, 12);
+        assert_eq!(ba.traffic_type, 0);
+        assert_eq!(ba.total_buffer_credits, 1024);
+        assert_eq!(ba.available_buffer_credits, 1024);
+        assert_eq!(ba.allocated_buffer_credits, 0);
+        assert_eq!(ba.traffic_description(), "PCIe Tunneling");
+        assert_eq!(ba.health_description(), "Optimal (Ressources abondantes)");
+        assert!(!ba.is_operational());
+
+        // Activation
+        ba.enable_allocation();
+        assert!(ba.allocation_enabled);
+        assert!(ba.credit_negotiation_active);
+        assert!(ba.is_operational());
+
+        // Allocation de crédits
+        assert!(ba.allocate_credits(256));
+        assert_eq!(ba.allocated_buffer_credits, 256);
+        assert_eq!(ba.available_buffer_credits, 768);
+        assert_eq!(ba.buffer_health_status, 0); // 25% <= 50% -> Optimal
+
+        // Allocation supplémentaire menant à Normal (> 50%)
+        assert!(ba.allocate_credits(300));
+        assert_eq!(ba.allocated_buffer_credits, 556);
+        assert_eq!(ba.available_buffer_credits, 468);
+        assert_eq!(ba.buffer_health_status, 1); // Normal
+
+        // Allocation menant à seuil haut (>= 90%)
+        assert!(ba.allocate_credits(400));
+        assert_eq!(ba.allocated_buffer_credits, 956);
+        assert_eq!(ba.available_buffer_credits, 68);
+        assert_eq!(ba.buffer_health_status, 2); // Throttling
+        assert_eq!(ba.overflow_warning_counter, 1);
+        assert_eq!(ba.health_description(), "Régulation / Throttling actif");
+        assert!(ba.is_operational());
+
+        // Allocation au-delà des crédits disponibles -> famine (Starvation)
+        assert!(!ba.allocate_credits(100)); // 100 > 68
+        assert_eq!(ba.buffer_health_status, 3);
+        assert_eq!(ba.starvation_counter, 1);
+        assert_eq!(ba.health_description(), "Famine de crédits / Critique");
+        assert!(!ba.is_operational());
+
+        // Libération de crédits et rétablissement
+        ba.release_credits(500);
+        assert_eq!(ba.allocated_buffer_credits, 456);
+        assert_eq!(ba.available_buffer_credits, 568);
+        assert_eq!(ba.buffer_health_status, 0); // Optimal
+        assert!(ba.is_operational());
+
+        // Encodage et décodage MMIO
+        ba.next_ptr_dwords = 0x64;
+        ba.set_priority_boost(true);
+        ba.set_asymmetric_tuning(true);
+        let encoded = ba.encode();
+
+        assert_eq!(
+            encoded[0] & 0xFF,
+            XHCI_EXT_CAP_USB4_BUFFER_ALLOCATION_INTERFACE_V2 as u32
+        );
+        assert_eq!((encoded[0] >> 8) & 0xFF, 0x64);
+        assert_eq!((encoded[0] >> 16) & 0x3F, 12);
+        assert_eq!((encoded[0] >> 24) & 0x03, 0);
+        assert_eq!((encoded[0] >> 28) & 0x0F, 0);
+
+        assert_eq!(encoded[1] & 0x01, 1); // allocation_enabled
+        assert_eq!(encoded[1] & 0x02, 2); // credit_negotiation_active
+        assert_eq!(encoded[1] & 0x04, 4); // low_credit_alert_enabled
+        assert_eq!(encoded[1] & 0x08, 8); // high_credit_alert_enabled
+        assert_eq!(encoded[1] & 0x10, 0x10); // priority_boost
+        assert_eq!(encoded[1] & 0x20, 0x20); // asymmetric_tuning
+        assert_eq!((encoded[1] >> 8) & 0xFF, 1); // starvation_counter
+        assert_eq!((encoded[1] >> 16) & 0xFFFF, 1); // overflow_warning_counter
+
+        assert_eq!(encoded[2] & 0xFFFF, 456);
+        assert_eq!((encoded[2] >> 16) & 0xFFFF, 1024);
+
+        assert_eq!(encoded[3] & 0xFF, 10);
+        assert_eq!((encoded[3] >> 8) & 0xFF, 90);
+        assert_eq!((encoded[3] >> 16) & 0xFFFF, 568);
+
+        let parsed = XhciUsb4BufferAllocationInterfaceV2::parse(&encoded).unwrap();
+        assert_eq!(parsed.next_ptr_dwords, 0x64);
+        assert_eq!(parsed.adapter_id, 12);
+        assert_eq!(parsed.traffic_type, 0);
+        assert_eq!(parsed.buffer_health_status, 0);
+        assert!(parsed.allocation_enabled);
+        assert!(parsed.credit_negotiation_active);
+        assert!(parsed.low_credit_alert_enabled);
+        assert!(parsed.high_credit_alert_enabled);
+        assert!(parsed.priority_boost);
+        assert!(parsed.asymmetric_tuning);
+        assert_eq!(parsed.starvation_counter, 1);
+        assert_eq!(parsed.overflow_warning_counter, 1);
+        assert_eq!(parsed.allocated_buffer_credits, 456);
+        assert_eq!(parsed.total_buffer_credits, 1024);
+        assert_eq!(parsed.buffer_threshold_low, 10);
+        assert_eq!(parsed.buffer_threshold_high, 90);
+        assert_eq!(parsed.available_buffer_credits, 568);
+        assert!(parsed.is_operational());
+
+        // Test désactivation
+        ba.disable_allocation();
+        assert!(!ba.is_operational());
+        assert!(!ba.allocation_enabled);
+        assert!(!ba.credit_negotiation_active);
+        assert_eq!(ba.allocated_buffer_credits, 0);
+        assert_eq!(ba.available_buffer_credits, 1024);
     }
 }

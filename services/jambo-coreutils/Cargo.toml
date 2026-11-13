@@ -692,7 +692,12 @@ name = "hostname"
 path = "src/bin/hostname.rs"
 test = false
 
-# 137 utilitaires Ring 3
+[[bin]]
+name = "pwdx"
+path = "src/bin/pwdx.rs"
+test = false
+
+# 138 utilitaires Ring 3
 
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }
