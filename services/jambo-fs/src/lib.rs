@@ -396,6 +396,54 @@ pub const MAX_COORDINATED_NAMESPACES: usize = 8;
 /// Nombre maximum de namespaces impliqués dans une transaction atomique distribuée
 pub const MAX_TX_NAMESPACES: usize = 4;
 
+/// Descripteur de quotas d'E/S et capacité par namespace NVMe / CoW
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct NamespaceQuotaDescriptor {
+    pub max_bytes: u64,
+    pub used_bytes: u64,
+    pub max_iops: u32,
+    pub current_iops: u32,
+    pub enforce_quota: bool,
+}
+
+impl NamespaceQuotaDescriptor {
+    pub const fn new(max_bytes: u64, max_iops: u32) -> Self {
+        Self {
+            max_bytes,
+            used_bytes: 0,
+            max_iops,
+            current_iops: 0,
+            enforce_quota: max_bytes > 0 || max_iops > 0,
+        }
+    }
+
+    pub const fn unlimited() -> Self {
+        Self {
+            max_bytes: 0,
+            used_bytes: 0,
+            max_iops: 0,
+            current_iops: 0,
+            enforce_quota: false,
+        }
+    }
+
+    pub fn check_and_charge(&mut self, bytes_delta: u64) -> Result<(), FsError> {
+        if self.enforce_quota
+            && self.max_bytes > 0
+            && self.used_bytes.saturating_add(bytes_delta) > self.max_bytes
+        {
+            return Err(FsError::QuotaExceeded);
+        }
+        self.used_bytes = self.used_bytes.saturating_add(bytes_delta);
+        self.current_iops = self.current_iops.saturating_add(1);
+        Ok(())
+    }
+
+    pub fn release_bytes(&mut self, bytes_delta: u64) {
+        self.used_bytes = self.used_bytes.saturating_sub(bytes_delta);
+    }
+}
+
 /// État transactionnel d'un namespace CoW managé
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ManagedNamespaceState {
@@ -405,6 +453,7 @@ pub struct ManagedNamespaceState {
     pub total_commits: u64,
     pub total_conflicts: u64,
     pub locked: bool,
+    pub quota: NamespaceQuotaDescriptor,
 }
 
 impl ManagedNamespaceState {
@@ -416,6 +465,7 @@ impl ManagedNamespaceState {
             total_commits: 0,
             total_conflicts: 0,
             locked: false,
+            quota: NamespaceQuotaDescriptor::unlimited(),
         }
     }
 }
@@ -619,6 +669,63 @@ impl MultiNamespaceTxCoordinator {
             }
             ctx.state = TransactionState::Aborted;
         }
+    }
+
+    /// Configure les quotas d'E/S et de capacité pour un namespace managé
+    pub fn set_namespace_quota(
+        &mut self,
+        nsid: u32,
+        quota: NamespaceQuotaDescriptor,
+    ) -> Result<(), FsError> {
+        let ns = self
+            .find_namespace_mut(nsid)
+            .ok_or(FsError::NamespaceNotFound(nsid))?;
+        ns.quota = quota;
+        Ok(())
+    }
+
+    /// Récupère les quotas actuels d'un namespace managé
+    pub fn get_namespace_quota(&self, nsid: u32) -> Result<NamespaceQuotaDescriptor, FsError> {
+        let ns = self
+            .find_namespace(nsid)
+            .ok_or(FsError::NamespaceNotFound(nsid))?;
+        Ok(ns.quota)
+    }
+
+    /// Valide et committe atomiquement la transaction multi-namespaces en appliquant les quotas d'E/S
+    pub fn commit_transaction_with_quotas(
+        &mut self,
+        ctx: &mut MultiNamespaceTxContext,
+        generation_advances: &[(u32, u64)],
+        bytes_written_per_ns: &[(u32, u64)],
+    ) -> Result<(), FsError> {
+        if ctx.state != TransactionState::Active {
+            return Err(FsError::TransactionAborted);
+        }
+
+        // Vérification préalable des quotas pour tous les participants
+        for &(nsid, bytes) in bytes_written_per_ns {
+            if let Some(ns_state) = self.find_namespace(nsid) {
+                if ns_state.quota.enforce_quota
+                    && ns_state.quota.max_bytes > 0
+                    && ns_state.quota.used_bytes.saturating_add(bytes) > ns_state.quota.max_bytes
+                {
+                    return Err(FsError::QuotaExceeded);
+                }
+            }
+        }
+
+        // Exécution du commit 2PC standard
+        self.commit_transaction(ctx, generation_advances)?;
+
+        // Débit effectif des quotas après succès du commit
+        for &(nsid, bytes) in bytes_written_per_ns {
+            if let Some(ns_state) = self.find_namespace_mut(nsid) {
+                let _ = ns_state.quota.check_and_charge(bytes);
+            }
+        }
+
+        Ok(())
     }
 
     pub fn find_namespace(&self, nsid: u32) -> Option<&ManagedNamespaceState> {
@@ -5628,5 +5735,52 @@ mod tests {
         assert_eq!(ctx3.state, TransactionState::Aborted);
         let active_count_after = coord.find_namespace(1).unwrap().active_tx_count;
         assert_eq!(active_count_after, active_count_before - 1);
+    }
+
+    #[test]
+    fn test_multi_namespace_quotas_and_enforcement() {
+        let mut coord = MultiNamespaceTxCoordinator::new();
+        coord.register_namespace(1, 10).unwrap();
+        coord.register_namespace(2, 20).unwrap();
+
+        // 1. Quotas par défaut illimités
+        let q1 = coord.get_namespace_quota(1).unwrap();
+        assert!(!q1.enforce_quota);
+
+        // 2. Définition d'un quota de 1024 octets sur NSID 1
+        coord
+            .set_namespace_quota(1, NamespaceQuotaDescriptor::new(1024, 100))
+            .unwrap();
+        let q1_set = coord.get_namespace_quota(1).unwrap();
+        assert!(q1_set.enforce_quota);
+        assert_eq!(q1_set.max_bytes, 1024);
+
+        // 3. Transaction avec écriture sous le quota (512 octets) -> Succès
+        let mut ctx1 = coord.begin_multi_ns_transaction(&[1, 2]).unwrap();
+        assert_eq!(
+            coord.commit_transaction_with_quotas(
+                &mut ctx1,
+                &[(1, 11), (2, 21)],
+                &[(1, 512), (2, 2048)]
+            ),
+            Ok(())
+        );
+        let q1_after = coord.get_namespace_quota(1).unwrap();
+        assert_eq!(q1_after.used_bytes, 512);
+
+        // 4. Seconde transaction dépassant le quota restant (512 + 600 > 1024) -> Rejet QuotaExceeded
+        let mut ctx2 = coord.begin_multi_ns_transaction(&[1, 2]).unwrap();
+        assert_eq!(
+            coord.commit_transaction_with_quotas(
+                &mut ctx2,
+                &[(1, 12), (2, 22)],
+                &[(1, 600), (2, 128)]
+            ),
+            Err(FsError::QuotaExceeded)
+        );
+        // Le quota utilisé et la génération restent intacts
+        let q1_intact = coord.get_namespace_quota(1).unwrap();
+        assert_eq!(q1_intact.used_bytes, 512);
+        assert_eq!(coord.generation_of(1), Some(11));
     }
 }

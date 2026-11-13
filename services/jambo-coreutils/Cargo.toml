@@ -717,7 +717,12 @@ name = "unshare"
 path = "src/bin/unshare.rs"
 test = false
 
-# 142 utilitaires Ring 3
+[[bin]]
+name = "prlimit"
+path = "src/bin/prlimit.rs"
+test = false
+
+# 143 utilitaires Ring 3
 
 [dependencies]
 libjambo = { path = "../../libs/libjambo" }

@@ -51,6 +51,55 @@ impl PciAddress {
     pub fn write32(&self, offset: u8, val: u32) -> Result<(), SysError> {
         pci_write32(self.bus, self.device, self.function, offset, val)
     }
+
+    /// Active la capacité MSI-X pour ce périphérique via le broker DeviceIo
+    #[inline]
+    pub fn msix_enable(&self, cap_offset: u8) -> Result<(), SysError> {
+        crate::pci_msix_enable(self.bus, self.device, self.function, cap_offset)
+    }
+
+    /// Désactive la capacité MSI-X pour ce périphérique via le broker DeviceIo
+    #[inline]
+    pub fn msix_disable(&self, cap_offset: u8) -> Result<(), SysError> {
+        crate::pci_msix_disable(self.bus, self.device, self.function, cap_offset)
+    }
+
+    /// Configure une entrée de table MSI-X pour ce périphérique via le broker DeviceIo
+    #[inline]
+    pub fn msix_set_entry(
+        &self,
+        entry_index: u8,
+        entry: &jambo_abi::MsixEntryDescriptor,
+    ) -> Result<(), SysError> {
+        crate::pci_msix_set_entry(self.bus, self.device, self.function, entry_index, entry)
+    }
+
+    /// Lit une entrée de table MSI-X pour ce périphérique via le broker DeviceIo
+    #[inline]
+    pub fn msix_get_entry(
+        &self,
+        entry_index: u8,
+    ) -> Result<jambo_abi::MsixEntryDescriptor, SysError> {
+        crate::pci_msix_get_entry(self.bus, self.device, self.function, entry_index)
+    }
+
+    /// Délègue une interruption MSI-X de ce périphérique vers un port de notification en Ring 3
+    #[inline]
+    pub fn msix_delegate_irq(
+        &self,
+        port_handle: jambo_abi::Handle,
+        cookie: u64,
+        target_vector: u32,
+    ) -> Result<jambo_abi::Handle, SysError> {
+        crate::pci_msix_delegate_irq(
+            self.bus,
+            self.device,
+            self.function,
+            port_handle,
+            cookie,
+            target_vector,
+        )
+    }
 }
 
 /// Type et attributs d'un registre de base d'adresse (Base Address Register - BAR).

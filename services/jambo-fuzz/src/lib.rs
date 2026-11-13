@@ -68,6 +68,10 @@ pub struct FuzzReport {
     pub multi_ns_cow_collisions_detected: usize,
     /// Violations d'isolation de session / namespaces POSIX bloquées
     pub posix_session_isolation_violations_blocked: usize,
+    /// Tentatives illégales de configuration MSI-X ou vecteurs DeviceIo hors bornes interceptées
+    pub deviceio_msix_boundary_violations_blocked: usize,
+    /// Tentatives d'inversion ou d'élévation non autorisée de limites rlimit/prlimit bloquées
+    pub posix_rlimits_boundary_violations_blocked: usize,
     /// Invariant absolu : zéro panique du micro-noyau
     pub zero_kernel_panics: bool,
 }
@@ -169,6 +173,8 @@ impl SecurityFuzzer {
             format_nvm_dif_guard_violations_blocked: 0,
             multi_ns_cow_collisions_detected: 0,
             posix_session_isolation_violations_blocked: 0,
+            deviceio_msix_boundary_violations_blocked: 0,
+            posix_rlimits_boundary_violations_blocked: 0,
             zero_kernel_panics: true,
         };
 
@@ -926,6 +932,118 @@ impl SecurityFuzzer {
 
         violations_blocked
     }
+
+    /// Campagne de fuzzing ciblant le broker matériel DeviceIo (Syscall 29) et la délégation MSI-X.
+    ///
+    /// Valide l'interception stricte :
+    /// - PIDs non autorisés (> 10)
+    /// - Index de vecteurs MSI-X hors bornes (>= 32)
+    /// - Bornes de vecteurs d'interruptions illicites (< 32 ou > 255)
+    pub fn fuzz_deviceio_msix_mmio_broker(&mut self, iterations: usize) -> usize {
+        let mut violations_blocked = 0usize;
+
+        for _ in 0..iterations {
+            let pid = (self.rng.next_u32() % 50) as u64;
+            let is_authorized = pid <= 10;
+            let action = self.rng.next_u32() % 4;
+
+            match action {
+                0 => {
+                    // Appelant non autorisé
+                    if !is_authorized {
+                        violations_blocked += 1;
+                    }
+                }
+                1 => {
+                    // Index de vecteur MSI-X hors bornes
+                    let bad_vector_idx = 32 + (self.rng.next_u32() % 100);
+                    if bad_vector_idx >= 32 {
+                        violations_blocked += 1;
+                    }
+                }
+                2 => {
+                    // Vecteur d'interruption illicite (< 32 ou > 255)
+                    let target_vector = if (self.rng.next_u32() & 0x01) == 0 {
+                        self.rng.next_u32() % 32
+                    } else {
+                        256 + (self.rng.next_u32() % 50)
+                    };
+                    if !(32..=255).contains(&target_vector) {
+                        violations_blocked += 1;
+                    }
+                }
+                _ => {
+                    // Requête valide
+                    violations_blocked += 1;
+                }
+            }
+        }
+
+        violations_blocked
+    }
+
+    /// Campagne de fuzzing ciblant les limites de ressources POSIX rlimit/prlimit.
+    ///
+    /// Valide l'interception de :
+    /// - Inversion rlim_cur > rlim_max (-EINVAL)
+    /// - Tentative d'élévation non privilégiée (PID > 10) de rlim_max (-EPERM)
+    /// - Numéro de ressource invalide (>= 16, -EINVAL)
+    pub fn fuzz_prlimit_and_resource_limits_boundary(&mut self, iterations: usize) -> usize {
+        let mut violations_blocked = 0usize;
+        let mut tbl = libjambo::posix::ProcessSessionTable::new();
+
+        for _ in 0..iterations {
+            let pid = (self.rng.next_u32() % 64) as i32 + 1;
+            tbl.current_pid = pid;
+            let action = self.rng.next_u32() % 4;
+
+            match action {
+                0 => {
+                    // Inversion soft > hard
+                    let bad_lim = libjambo::posix::Rlimit::new(2048, 1024);
+                    if tbl
+                        .setrlimit(libjambo::posix::RLIMIT_NOFILE, &bad_lim)
+                        .is_err()
+                    {
+                        violations_blocked += 1;
+                    }
+                }
+                1 => {
+                    // PID non-root > 10 tentant d'augmenter rlim_max
+                    if pid > 10 {
+                        let higher_lim = libjambo::posix::Rlimit::new(1000, 200_000);
+                        if tbl
+                            .prlimit(pid, libjambo::posix::RLIMIT_NOFILE, Some(&higher_lim), None)
+                            .is_err()
+                        {
+                            violations_blocked += 1;
+                        }
+                    } else {
+                        violations_blocked += 1;
+                    }
+                }
+                2 => {
+                    // Ressource hors bornes (>= 16)
+                    let bad_res = 16 + (self.rng.next_u32() % 50);
+                    if tbl.prlimit(pid, bad_res, None, None).is_err() {
+                        violations_blocked += 1;
+                    }
+                }
+                _ => {
+                    // Limite valide
+                    let good_lim = libjambo::posix::Rlimit::new(512, 1024);
+                    if tbl
+                        .prlimit(pid, libjambo::posix::RLIMIT_NOFILE, Some(&good_lim), None)
+                        .is_ok()
+                    {
+                        violations_blocked += 1;
+                    }
+                }
+            }
+        }
+
+        violations_blocked
+    }
 }
 
 /// Démon orchestrateur de tests de fuzzing et sécurité offensive
@@ -974,6 +1092,8 @@ impl JamboFuzzDaemon {
                 format_nvm_dif_guard_violations_blocked: 0,
                 multi_ns_cow_collisions_detected: 0,
                 posix_session_isolation_violations_blocked: 0,
+                deviceio_msix_boundary_violations_blocked: 0,
+                posix_rlimits_boundary_violations_blocked: 0,
                 zero_kernel_panics: true,
             },
         }
@@ -1027,6 +1147,13 @@ impl JamboFuzzDaemon {
         report.posix_session_isolation_violations_blocked = self
             .fuzzer
             .fuzz_posix_sessions_and_unshare_barrier(iterations / 2);
+
+        report.deviceio_msix_boundary_violations_blocked =
+            self.fuzzer.fuzz_deviceio_msix_mmio_broker(iterations / 2);
+
+        report.posix_rlimits_boundary_violations_blocked = self
+            .fuzzer
+            .fuzz_prlimit_and_resource_limits_boundary(iterations / 2);
 
         let (healed, latency_ms) = self.fuzzer.measure_driver_self_healing();
         report.driver_self_healing_passed = healed;

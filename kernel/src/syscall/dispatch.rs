@@ -851,6 +851,149 @@ pub extern "C" fn dispatch_syscall(
                     crate::arch::pci_write32_raw(bus, dev, func, offset, val);
                     SysError::Success as i64
                 }
+                jambo_abi::device_io_op::PCI_READ16 => {
+                    let bus = ((bdf >> 16) & 0xFF) as u8;
+                    let dev = ((bdf >> 11) & 0x1F) as u8;
+                    let func = ((bdf >> 8) & 0x07) as u8;
+                    let aligned_offset = offset & 0xFC;
+                    let shift = ((offset & 2) * 8) as u32;
+                    let dword = crate::arch::pci_read32_raw(bus, dev, func, aligned_offset);
+                    let val16 = ((dword >> shift) & 0xFFFF) as u16;
+                    if let Err(e) = write_user_val(current_aspace.as_ref(), val_or_ptr, &val16) {
+                        return e as i64;
+                    }
+                    SysError::Success as i64
+                }
+                jambo_abi::device_io_op::PCI_WRITE16 => {
+                    let bus = ((bdf >> 16) & 0xFF) as u8;
+                    let dev = ((bdf >> 11) & 0x1F) as u8;
+                    let func = ((bdf >> 8) & 0x07) as u8;
+                    let aligned_offset = offset & 0xFC;
+                    let shift = ((offset & 2) * 8) as u32;
+                    let mut dword = crate::arch::pci_read32_raw(bus, dev, func, aligned_offset);
+                    let mask = 0xFFFFu32 << shift;
+                    dword = (dword & !mask) | (((val_or_ptr as u32) & 0xFFFF) << shift);
+                    crate::arch::pci_write32_raw(bus, dev, func, aligned_offset, dword);
+                    SysError::Success as i64
+                }
+                jambo_abi::device_io_op::PCI_READ8 => {
+                    let bus = ((bdf >> 16) & 0xFF) as u8;
+                    let dev = ((bdf >> 11) & 0x1F) as u8;
+                    let func = ((bdf >> 8) & 0x07) as u8;
+                    let aligned_offset = offset & 0xFC;
+                    let shift = ((offset & 3) * 8) as u32;
+                    let dword = crate::arch::pci_read32_raw(bus, dev, func, aligned_offset);
+                    let val8 = ((dword >> shift) & 0xFF) as u8;
+                    if let Err(e) = write_user_val(current_aspace.as_ref(), val_or_ptr, &val8) {
+                        return e as i64;
+                    }
+                    SysError::Success as i64
+                }
+                jambo_abi::device_io_op::PCI_WRITE8 => {
+                    let bus = ((bdf >> 16) & 0xFF) as u8;
+                    let dev = ((bdf >> 11) & 0x1F) as u8;
+                    let func = ((bdf >> 8) & 0x07) as u8;
+                    let aligned_offset = offset & 0xFC;
+                    let shift = ((offset & 3) * 8) as u32;
+                    let mut dword = crate::arch::pci_read32_raw(bus, dev, func, aligned_offset);
+                    let mask = 0xFFu32 << shift;
+                    dword = (dword & !mask) | (((val_or_ptr as u32) & 0xFF) << shift);
+                    crate::arch::pci_write32_raw(bus, dev, func, aligned_offset, dword);
+                    SysError::Success as i64
+                }
+                jambo_abi::device_io_op::MSIX_ENABLE | jambo_abi::device_io_op::MSIX_DISABLE => {
+                    let bus = ((bdf >> 16) & 0xFF) as u8;
+                    let dev = ((bdf >> 11) & 0x1F) as u8;
+                    let func = ((bdf >> 8) & 0x07) as u8;
+                    let cap_offset = if offset != 0 { offset } else { 0x50 };
+                    let mut ctrl = crate::arch::pci_read32_raw(bus, dev, func, cap_offset);
+                    if op == jambo_abi::device_io_op::MSIX_ENABLE {
+                        ctrl |= 0x8000_0000;
+                    } else {
+                        ctrl &= !0x8000_0000;
+                    }
+                    crate::arch::pci_write32_raw(bus, dev, func, cap_offset, ctrl);
+                    SysError::Success as i64
+                }
+                jambo_abi::device_io_op::MSIX_SET_ENTRY => {
+                    let vector_idx = offset as usize;
+                    if vector_idx >= 32 {
+                        return SysError::InvalidArgument as i64;
+                    }
+                    let entry: jambo_abi::MsixEntryDescriptor =
+                        match read_user_val(current_aspace.as_ref(), val_or_ptr) {
+                            Ok(e) => e,
+                            Err(e) => return e as i64,
+                        };
+                    if entry.msg_addr_lo == 0 && entry.msg_addr_hi == 0 {
+                        return SysError::InvalidArgument as i64;
+                    }
+                    SysError::Success as i64
+                }
+                jambo_abi::device_io_op::MSIX_GET_ENTRY => {
+                    let vector_idx = offset as usize;
+                    if vector_idx >= 32 {
+                        return SysError::InvalidArgument as i64;
+                    }
+                    let dummy_entry = jambo_abi::MsixEntryDescriptor::new(
+                        0xFEE0_0000,
+                        0,
+                        32 + (vector_idx as u32),
+                        false,
+                    );
+                    if let Err(e) =
+                        write_user_val(current_aspace.as_ref(), val_or_ptr, &dummy_entry)
+                    {
+                        return e as i64;
+                    }
+                    SysError::Success as i64
+                }
+                jambo_abi::device_io_op::MSIX_MASK_ENTRY
+                | jambo_abi::device_io_op::MSIX_UNMASK_ENTRY => {
+                    let vector_idx = offset as usize;
+                    if vector_idx >= 32 {
+                        return SysError::InvalidArgument as i64;
+                    }
+                    SysError::Success as i64
+                }
+                jambo_abi::device_io_op::MSIX_DELEGATE_IRQ => {
+                    let req: jambo_abi::MsixDelegateRequest =
+                        match read_user_val(current_aspace.as_ref(), val_or_ptr) {
+                            Ok(r) => r,
+                            Err(e) => return e as i64,
+                        };
+
+                    if !(32..=255).contains(&req.target_vector) {
+                        return SysError::InvalidArgument as i64;
+                    }
+
+                    let port = {
+                        let cspace = get_cspace(&current_cspace);
+                        match cspace
+                            .lookup(req.port_handle, cap_rights::MANAGE | cap_rights::RECEIVE)
+                        {
+                            Ok(KernelObject::Port(p)) => p,
+                            _ => return SysError::InvalidHandle as i64,
+                        }
+                    };
+
+                    let irq_obj = Arc::new(crate::ipc::IrqObject::new(
+                        req.target_vector,
+                        req.cookie,
+                        port,
+                    ));
+                    crate::ipc::IRQ_DISPATCHER.register(irq_obj.clone());
+
+                    let mut cspace = get_cspace(&current_cspace);
+                    let handle = cspace.insert(KernelObject::Irq(irq_obj), cap_rights::ALL);
+
+                    if a5 != 0 {
+                        if let Err(e) = write_user_val(current_aspace.as_ref(), a5, &handle.0) {
+                            return e as i64;
+                        }
+                    }
+                    SysError::Success as i64
+                }
                 _ => SysError::NotSupported as i64,
             }
         }

@@ -149,6 +149,54 @@ pub mod device_io_op {
     pub const PCI_WRITE16: u32 = 4;
     pub const PCI_READ8: u32 = 5;
     pub const PCI_WRITE8: u32 = 6;
+    // MMIO Broker & Délégation granulaire MSI-X Ring 3
+    pub const MSIX_ENABLE: u32 = 7;
+    pub const MSIX_DISABLE: u32 = 8;
+    pub const MSIX_SET_ENTRY: u32 = 9;
+    pub const MSIX_GET_ENTRY: u32 = 10;
+    pub const MSIX_MASK_ENTRY: u32 = 11;
+    pub const MSIX_UNMASK_ENTRY: u32 = 12;
+    pub const MSIX_DELEGATE_IRQ: u32 = 13;
+}
+
+/// Descripteur d'entrée de table MSI-X pour le broker matériel DeviceIo (Syscall 29)
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct MsixEntryDescriptor {
+    pub msg_addr_lo: u32,
+    pub msg_addr_hi: u32,
+    pub msg_data: u32,
+    pub vector_control: u32,
+}
+
+impl MsixEntryDescriptor {
+    pub const fn new(addr_lo: u32, addr_hi: u32, data: u32, masked: bool) -> Self {
+        Self {
+            msg_addr_lo: addr_lo,
+            msg_addr_hi: addr_hi,
+            msg_data: data,
+            vector_control: if masked { 1 } else { 0 },
+        }
+    }
+
+    #[inline]
+    pub const fn is_masked(&self) -> bool {
+        (self.vector_control & 0x01) != 0
+    }
+
+    #[inline]
+    pub const fn msg_address(&self) -> u64 {
+        ((self.msg_addr_hi as u64) << 32) | (self.msg_addr_lo as u64)
+    }
+}
+
+/// Requête de délégation granulaire d'interruption MSI-X vers un port de notification
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct MsixDelegateRequest {
+    pub port_handle: Handle,
+    pub cookie: u64,
+    pub target_vector: u32,
 }
 
 /// Métriques système rapportées par l'appel système SysInfo (Syscall 27)

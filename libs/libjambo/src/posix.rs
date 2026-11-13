@@ -473,6 +473,70 @@ pub const CLONE_NEWUSER: u32 = 0x10000000;
 pub const CLONE_NEWPID: u32 = 0x20000000;
 pub const CLONE_NEWNET: u32 = 0x40000000;
 
+// Limites de ressources POSIX / Linux (rlimit & prlimit)
+pub const RLIMIT_CPU: u32 = 0;
+pub const RLIMIT_FSIZE: u32 = 1;
+pub const RLIMIT_DATA: u32 = 2;
+pub const RLIMIT_STACK: u32 = 3;
+pub const RLIMIT_CORE: u32 = 4;
+pub const RLIMIT_RSS: u32 = 5;
+pub const RLIMIT_NPROC: u32 = 6;
+pub const RLIMIT_NOFILE: u32 = 7;
+pub const RLIMIT_MEMLOCK: u32 = 8;
+pub const RLIMIT_AS: u32 = 9;
+pub const RLIMIT_LOCKS: u32 = 10;
+pub const RLIMIT_SIGPENDING: u32 = 11;
+pub const RLIMIT_MSGQUEUE: u32 = 12;
+pub const RLIMIT_NICE: u32 = 13;
+pub const RLIMIT_RTPRIO: u32 = 14;
+pub const RLIMIT_RTTIME: u32 = 15;
+pub const RLIM_NLIMITS: usize = 16;
+
+pub const RLIM_INFINITY: u64 = u64::MAX;
+
+/// Structure de limites de ressource POSIX (valeur souple et valeur dure)
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Rlimit {
+    pub rlim_cur: u64,
+    pub rlim_max: u64,
+}
+
+impl Rlimit {
+    pub const fn new(cur: u64, max: u64) -> Self {
+        Self {
+            rlim_cur: cur,
+            rlim_max: max,
+        }
+    }
+
+    pub const fn infinity() -> Self {
+        Self {
+            rlim_cur: RLIM_INFINITY,
+            rlim_max: RLIM_INFINITY,
+        }
+    }
+}
+
+pub const DEFAULT_RLIMITS: [Rlimit; RLIM_NLIMITS] = [
+    Rlimit::infinity(),                          // RLIMIT_CPU: illimité
+    Rlimit::infinity(),                          // RLIMIT_FSIZE: illimité
+    Rlimit::infinity(),                          // RLIMIT_DATA: illimité
+    Rlimit::new(8 * 1024 * 1024, RLIM_INFINITY), // RLIMIT_STACK: 8 Mio / illimité
+    Rlimit::new(0, RLIM_INFINITY),               // RLIMIT_CORE: 0 / illimité
+    Rlimit::infinity(),                          // RLIMIT_RSS: illimité
+    Rlimit::new(4096, 4096),                     // RLIMIT_NPROC: 4096
+    Rlimit::new(1024, 65536),                    // RLIMIT_NOFILE: 1024 / 65536
+    Rlimit::new(65536, 65536),                   // RLIMIT_MEMLOCK: 64 Kio
+    Rlimit::infinity(),                          // RLIMIT_AS: illimité
+    Rlimit::infinity(),                          // RLIMIT_LOCKS: illimité
+    Rlimit::new(16384, 16384),                   // RLIMIT_SIGPENDING: 16384
+    Rlimit::new(819200, 819200),                 // RLIMIT_MSGQUEUE: 800 Kio
+    Rlimit::new(0, 0),                           // RLIMIT_NICE: 0
+    Rlimit::new(0, 0),                           // RLIMIT_RTPRIO: 0
+    Rlimit::infinity(),                          // RLIMIT_RTTIME: illimité
+];
+
 /// Descripteur de session et de groupe de processus
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProcessSessionDescriptor {
@@ -482,6 +546,7 @@ pub struct ProcessSessionDescriptor {
     pub ioprio: u32,
     pub unshared_flags: u32,
     pub is_session_leader: bool,
+    pub rlimits: [Rlimit; RLIM_NLIMITS],
 }
 
 impl ProcessSessionDescriptor {
@@ -493,6 +558,7 @@ impl ProcessSessionDescriptor {
             ioprio: ioprio_prio_value(IOPRIO_CLASS_BE, 4),
             unshared_flags: 0,
             is_session_leader: false,
+            rlimits: DEFAULT_RLIMITS,
         }
     }
 }
@@ -644,6 +710,47 @@ impl ProcessSessionTable {
         entry.unshared_flags |= flags;
         Ok(())
     }
+
+    pub fn prlimit(
+        &mut self,
+        pid: pid_t,
+        resource: u32,
+        new_limit: Option<&Rlimit>,
+        old_limit: Option<&mut Rlimit>,
+    ) -> Result<(), i32> {
+        let res_idx = resource as usize;
+        if res_idx >= RLIM_NLIMITS {
+            return Err(-EINVAL);
+        }
+
+        let target_pid = if pid == 0 { self.current_pid } else { pid };
+        let entry = self.get_or_create(target_pid);
+
+        if let Some(old) = old_limit {
+            *old = entry.rlimits[res_idx];
+        }
+
+        if let Some(new_lim) = new_limit {
+            if new_lim.rlim_cur > new_lim.rlim_max {
+                return Err(-EINVAL);
+            }
+            // Si le processus n'est pas superviseur/root (PID > 10), il ne peut pas augmenter rlim_max
+            if target_pid > 10 && new_lim.rlim_max > entry.rlimits[res_idx].rlim_max {
+                return Err(-EPERM);
+            }
+            entry.rlimits[res_idx] = *new_lim;
+        }
+
+        Ok(())
+    }
+
+    pub fn getrlimit(&mut self, resource: u32, rlim: &mut Rlimit) -> Result<(), i32> {
+        self.prlimit(self.current_pid, resource, None, Some(rlim))
+    }
+
+    pub fn setrlimit(&mut self, resource: u32, rlim: &Rlimit) -> Result<(), i32> {
+        self.prlimit(self.current_pid, resource, Some(rlim), None)
+    }
 }
 
 impl Default for ProcessSessionTable {
@@ -718,6 +825,23 @@ pub fn sys_ioprio_get(which: u32, who: u32) -> Result<u32, i32> {
 
 pub fn sys_unshare(flags: u32) -> Result<(), i32> {
     with_session_table(|tbl| tbl.unshare(flags))
+}
+
+pub fn sys_prlimit(
+    pid: pid_t,
+    resource: u32,
+    new_limit: Option<&Rlimit>,
+    old_limit: Option<&mut Rlimit>,
+) -> Result<(), i32> {
+    with_session_table(|tbl| tbl.prlimit(pid, resource, new_limit, old_limit))
+}
+
+pub fn sys_getrlimit(resource: u32, rlim: &mut Rlimit) -> Result<(), i32> {
+    with_session_table(|tbl| tbl.getrlimit(resource, rlim))
+}
+
+pub fn sys_setrlimit(resource: u32, rlim: &Rlimit) -> Result<(), i32> {
+    with_session_table(|tbl| tbl.setrlimit(resource, rlim))
 }
 
 // Points d'entrée C standard exportés pour l'environnement bare-metal
@@ -2143,5 +2267,47 @@ mod tests {
 
         // Flag invalide
         assert_eq!(tbl.unshare(0x8000_0000), Err(-EINVAL));
+    }
+
+    #[test]
+    fn test_posix_resource_limits_and_prlimit() {
+        let mut tbl = ProcessSessionTable::new();
+        tbl.current_pid = 1; // Root / Init
+
+        // 1. getrlimit par défaut pour RLIMIT_NOFILE
+        let mut rlim = Rlimit::new(0, 0);
+        assert_eq!(tbl.getrlimit(RLIMIT_NOFILE, &mut rlim), Ok(()));
+        assert_eq!(rlim.rlim_cur, 1024);
+        assert_eq!(rlim.rlim_max, 65536);
+
+        // 2. setrlimit valide pour PID 1
+        let new_lim = Rlimit::new(2048, 131072);
+        assert_eq!(tbl.setrlimit(RLIMIT_NOFILE, &new_lim), Ok(()));
+        assert_eq!(tbl.getrlimit(RLIMIT_NOFILE, &mut rlim), Ok(()));
+        assert_eq!(rlim.rlim_cur, 2048);
+        assert_eq!(rlim.rlim_max, 131072);
+
+        // 3. Incohérence rlim_cur > rlim_max -> -EINVAL
+        let bad_lim = Rlimit::new(5000, 4000);
+        assert_eq!(tbl.setrlimit(RLIMIT_NOFILE, &bad_lim), Err(-EINVAL));
+
+        // 4. prlimit sur PID tiers (PID 50 - non root)
+        let mut old = Rlimit::new(0, 0);
+        let lim50 = Rlimit::new(512, 1024);
+        assert_eq!(
+            tbl.prlimit(50, RLIMIT_NOFILE, Some(&lim50), Some(&mut old)),
+            Ok(())
+        );
+        assert_eq!(old.rlim_cur, 1024);
+
+        // Tentative d'élévation de rlim_max par PID non-root > 10 -> -EPERM
+        let higher_lim = Rlimit::new(1024, 2048);
+        assert_eq!(
+            tbl.prlimit(50, RLIMIT_NOFILE, Some(&higher_lim), None),
+            Err(-EPERM)
+        );
+
+        // 5. Ressource invalide -> -EINVAL
+        assert_eq!(tbl.prlimit(1, 99, None, None), Err(-EINVAL));
     }
 }

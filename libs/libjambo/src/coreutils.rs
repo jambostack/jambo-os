@@ -22389,6 +22389,7 @@ pub fn execute_coreutils_command(
         "setsid" => run_setsid(args, in_fd, out_fd, err_fd),
         "ionice" => run_ionice(args, in_fd, out_fd, err_fd),
         "unshare" => run_unshare(args, in_fd, out_fd, err_fd),
+        "prlimit" => run_prlimit(args, in_fd, out_fd, err_fd),
         _ => {
             let _ = sys_write(err_fd, cmd.as_bytes());
             let _ = sys_write(err_fd, b": command not found\n");
@@ -34563,6 +34564,415 @@ Options:\n\
     0
 }
 
+// ============================================================================
+// Utilitaire POSIX / util-linux : `prlimit` (Gestion et examen des limites de ressources de processus)
+// ============================================================================
+
+/// Analyse une valeur de limite (nombre entier ou "unlimited" / "inf")
+fn parse_rlimit_val(s: &str) -> Option<u64> {
+    let s = s.trim();
+    if s == "unlimited" || s == "inf" || s == "infinity" {
+        return Some(crate::posix::RLIM_INFINITY);
+    }
+    parse_u64_posix(s)
+}
+
+/// Analyse une spécification de limite de ressource `<soft>:<hard>` ou `<val>`
+fn parse_limit_spec(spec: &str) -> Option<crate::posix::Rlimit> {
+    let spec = spec.trim();
+    if let Some(colon) = spec.find(':') {
+        let soft_str = &spec[..colon];
+        let hard_str = &spec[colon + 1..];
+        let soft = parse_rlimit_val(soft_str)?;
+        let hard = parse_rlimit_val(hard_str)?;
+        Some(crate::posix::Rlimit::new(soft, hard))
+    } else {
+        let val = parse_rlimit_val(spec)?;
+        Some(crate::posix::Rlimit::new(val, val))
+    }
+}
+
+/// Méta-informations pour l'affichage de limites de ressources POSIX
+struct ResourceMeta {
+    res_id: u32,
+    name: &'static str,
+    desc: &'static str,
+    unit: &'static str,
+}
+
+const RESOURCES_META: [ResourceMeta; 16] = [
+    ResourceMeta {
+        res_id: crate::posix::RLIMIT_CPU,
+        name: "CPU",
+        desc: "CPU time",
+        unit: "seconds",
+    },
+    ResourceMeta {
+        res_id: crate::posix::RLIMIT_FSIZE,
+        name: "FSIZE",
+        desc: "max file size",
+        unit: "bytes",
+    },
+    ResourceMeta {
+        res_id: crate::posix::RLIMIT_DATA,
+        name: "DATA",
+        desc: "max data size",
+        unit: "bytes",
+    },
+    ResourceMeta {
+        res_id: crate::posix::RLIMIT_STACK,
+        name: "STACK",
+        desc: "max stack size",
+        unit: "bytes",
+    },
+    ResourceMeta {
+        res_id: crate::posix::RLIMIT_CORE,
+        name: "CORE",
+        desc: "max core file size",
+        unit: "bytes",
+    },
+    ResourceMeta {
+        res_id: crate::posix::RLIMIT_RSS,
+        name: "RSS",
+        desc: "max resident set",
+        unit: "bytes",
+    },
+    ResourceMeta {
+        res_id: crate::posix::RLIMIT_NPROC,
+        name: "NPROC",
+        desc: "max processes",
+        unit: "processes",
+    },
+    ResourceMeta {
+        res_id: crate::posix::RLIMIT_NOFILE,
+        name: "NOFILE",
+        desc: "max open files",
+        unit: "files",
+    },
+    ResourceMeta {
+        res_id: crate::posix::RLIMIT_MEMLOCK,
+        name: "MEMLOCK",
+        desc: "max locked memory",
+        unit: "bytes",
+    },
+    ResourceMeta {
+        res_id: crate::posix::RLIMIT_AS,
+        name: "AS",
+        desc: "address space",
+        unit: "bytes",
+    },
+    ResourceMeta {
+        res_id: crate::posix::RLIMIT_LOCKS,
+        name: "LOCKS",
+        desc: "max file locks",
+        unit: "locks",
+    },
+    ResourceMeta {
+        res_id: crate::posix::RLIMIT_SIGPENDING,
+        name: "SIGPENDING",
+        desc: "max pending signals",
+        unit: "signals",
+    },
+    ResourceMeta {
+        res_id: crate::posix::RLIMIT_MSGQUEUE,
+        name: "MSGQUEUE",
+        desc: "max bytes in mqueue",
+        unit: "bytes",
+    },
+    ResourceMeta {
+        res_id: crate::posix::RLIMIT_NICE,
+        name: "NICE",
+        desc: "max nice priority",
+        unit: "",
+    },
+    ResourceMeta {
+        res_id: crate::posix::RLIMIT_RTPRIO,
+        name: "RTPRIO",
+        desc: "max realtime priority",
+        unit: "",
+    },
+    ResourceMeta {
+        res_id: crate::posix::RLIMIT_RTTIME,
+        name: "RTTIME",
+        desc: "timeout for realtime",
+        unit: "microsecs",
+    },
+];
+
+/// Exécute l'utilitaire Coreutils POSIX / util-linux `prlimit` (examine ou modifie les limites de ressources)
+///
+/// Syntaxe :
+///   prlimit [options] [--resource[=limits]] [--pid <pid>]
+///   prlimit [options] [--pid <pid>] <command> [argument ...]
+pub fn run_prlimit(args: &[&str], in_fd: i32, out_fd: i32, err_fd: i32) -> i32 {
+    let mut opt_pid: Option<i32> = None;
+    let mut opt_raw = false;
+    let mut opt_noheadings = false;
+    let mut cmd_idx: Option<usize> = None;
+
+    let mut set_limits: [Option<crate::posix::Rlimit>; 16] = [None; 16];
+    let mut inspect_filters: [bool; 16] = [false; 16];
+    let mut has_set_limit = false;
+    let mut has_filter = false;
+
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i];
+        if arg == "-h" || arg == "--help" {
+            let help = b"Usage: prlimit [options] [--resource[=limits]] [--pid <pid>]\n\
+       prlimit [options] [--pid <pid>] <command> [argument ...]\n\n\
+Get and set process resource limits.\n\n\
+Options:\n\
+  -p, --pid <pid>        target process ID (default: current process)\n\
+  -o, --output <list>    define which output columns to use\n\
+      --noheadings       do not print a header line\n\
+      --raw              use an unformatted output format\n\
+  -h, --help             display this help and exit\n\
+  -V, --version          output version information and exit\n\n\
+Resource options:\n\
+  -c, --core[=limits]        maximum size of core files created\n\
+  -d, --data[=limits]        maximum size of a process's data segment\n\
+  -e, --nice[=limits]        maximum nice priority\n\
+  -f, --fsize[=limits]       maximum size of files written\n\
+  -i, --sigpending[=limits]  maximum number of pending signals\n\
+  -l, --memlock[=limits]     maximum locked-in-memory address space\n\
+  -m, --rss[=limits]         maximum resident set size (RSS)\n\
+  -n, --nofile[=limits]      maximum number of open files\n\
+  -q, --msgqueue[=limits]    maximum bytes in POSIX message queues\n\
+  -r, --rtprio[=limits]      maximum real-time scheduling priority\n\
+  -s, --stack[=limits]       maximum size of the process stack\n\
+  -t, --cpu[=limits]         CPU time limit in seconds\n\
+  -u, --nproc[=limits]       maximum number of processes\n\
+  -v, --as[=limits]          address space limit\n\
+  -x, --locks[=limits]       maximum number of file locks held\n\
+  -y, --rttime[=limits]      timeout for real-time tasks (microseconds)\n";
+            let _ = sys_write(out_fd, help);
+            return 0;
+        } else if arg == "-V" || arg == "-v" || arg == "--version" {
+            let ver = b"prlimit (JamboOS coreutils) 0.3.93\n";
+            let _ = sys_write(out_fd, ver);
+            return 0;
+        } else if arg == "--raw" {
+            opt_raw = true;
+        } else if arg == "--noheadings" {
+            opt_noheadings = true;
+        } else if arg == "-p" || arg == "--pid" {
+            if i + 1 >= args.len() {
+                let _ = sys_write(err_fd, b"prlimit: option requires an argument -- 'p'\n");
+                return 1;
+            }
+            i += 1;
+            match parse_u64_posix(args[i]) {
+                Some(p) => opt_pid = Some(p as i32),
+                None => {
+                    let _ = sys_write(err_fd, b"prlimit: invalid pid argument\n");
+                    return 1;
+                }
+            }
+        } else if let Some(val_str) = arg.strip_prefix("--pid=") {
+            match parse_u64_posix(val_str) {
+                Some(p) => opt_pid = Some(p as i32),
+                None => {
+                    let _ = sys_write(err_fd, b"prlimit: invalid pid argument\n");
+                    return 1;
+                }
+            }
+        } else if arg == "--" {
+            cmd_idx = Some(i + 1);
+            break;
+        } else if arg.starts_with('-') {
+            let (res_opt, val_opt) = if let Some(eq_pos) = arg.find('=') {
+                (&arg[..eq_pos], Some(&arg[eq_pos + 1..]))
+            } else {
+                (arg, None)
+            };
+
+            let res_id_opt = match res_opt {
+                "-c" | "--core" => Some(crate::posix::RLIMIT_CORE),
+                "-d" | "--data" => Some(crate::posix::RLIMIT_DATA),
+                "-e" | "--nice" => Some(crate::posix::RLIMIT_NICE),
+                "-f" | "--fsize" => Some(crate::posix::RLIMIT_FSIZE),
+                "-i" | "--sigpending" => Some(crate::posix::RLIMIT_SIGPENDING),
+                "-l" | "--memlock" => Some(crate::posix::RLIMIT_MEMLOCK),
+                "-m" | "--rss" => Some(crate::posix::RLIMIT_RSS),
+                "-n" | "--nofile" => Some(crate::posix::RLIMIT_NOFILE),
+                "-q" | "--msgqueue" => Some(crate::posix::RLIMIT_MSGQUEUE),
+                "-r" | "--rtprio" => Some(crate::posix::RLIMIT_RTPRIO),
+                "-s" | "--stack" => Some(crate::posix::RLIMIT_STACK),
+                "-t" | "--cpu" => Some(crate::posix::RLIMIT_CPU),
+                "-u" | "--nproc" => Some(crate::posix::RLIMIT_NPROC),
+                "-v" | "--as" => Some(crate::posix::RLIMIT_AS),
+                "-x" | "--locks" => Some(crate::posix::RLIMIT_LOCKS),
+                "-y" | "--rttime" => Some(crate::posix::RLIMIT_RTTIME),
+                _ => None,
+            };
+
+            if let Some(res_id) = res_id_opt {
+                let limit_val_str = if let Some(v) = val_opt {
+                    Some(v)
+                } else if i + 1 < args.len() && !args[i + 1].starts_with('-') {
+                    if parse_limit_spec(args[i + 1]).is_some() {
+                        i += 1;
+                        Some(args[i])
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                if let Some(spec) = limit_val_str {
+                    match parse_limit_spec(spec) {
+                        Some(lim) => {
+                            set_limits[res_id as usize] = Some(lim);
+                            has_set_limit = true;
+                        }
+                        None => {
+                            let _ = sys_write(err_fd, b"prlimit: failed to parse limit\n");
+                            return 1;
+                        }
+                    }
+                } else {
+                    inspect_filters[res_id as usize] = true;
+                    has_filter = true;
+                }
+            } else {
+                let _ = sys_write(err_fd, b"prlimit: unrecognized option '");
+                let _ = sys_write(err_fd, arg.as_bytes());
+                let _ = sys_write(err_fd, b"'\nTry 'prlimit --help' for more information.\n");
+                return 1;
+            }
+        } else {
+            cmd_idx = Some(i);
+            break;
+        }
+        i += 1;
+    }
+
+    let target_pid = opt_pid.unwrap_or(0);
+
+    if has_set_limit {
+        for (res_idx, lim_opt) in set_limits.iter().enumerate() {
+            if let Some(lim) = lim_opt {
+                if let Err(_e) =
+                    crate::posix::sys_prlimit(target_pid, res_idx as u32, Some(lim), None)
+                {
+                    let _ = sys_write(err_fd, b"prlimit: failed to set resource limit\n");
+                    return 1;
+                }
+            }
+        }
+    }
+
+    if let Some(start) = cmd_idx {
+        if start < args.len() {
+            let target_prog = args[start];
+            let target_args = &args[start + 1..];
+            return execute_coreutils_command(target_prog, target_args, in_fd, out_fd, err_fd);
+        }
+    }
+
+    if !has_set_limit || has_filter {
+        if !opt_noheadings && !opt_raw {
+            let _ = sys_write(
+                out_fd,
+                b"RESOURCE   DESCRIPTION                             SOFT      HARD UNITS\n",
+            );
+        }
+
+        let mut buf_soft = [0u8; 16];
+        let mut buf_hard = [0u8; 16];
+
+        for meta in RESOURCES_META.iter() {
+            let res_idx = meta.res_id as usize;
+            if has_filter && !inspect_filters[res_idx] {
+                continue;
+            }
+
+            let mut cur_lim = crate::posix::Rlimit::infinity();
+            if crate::posix::sys_prlimit(target_pid, meta.res_id, None, Some(&mut cur_lim)).is_err()
+            {
+                continue;
+            }
+
+            let soft_str = if cur_lim.rlim_cur == crate::posix::RLIM_INFINITY {
+                "unlimited"
+            } else {
+                fmt_u64(cur_lim.rlim_cur, &mut buf_soft)
+            };
+
+            let hard_str = if cur_lim.rlim_max == crate::posix::RLIM_INFINITY {
+                "unlimited"
+            } else {
+                fmt_u64(cur_lim.rlim_max, &mut buf_hard)
+            };
+
+            if opt_raw {
+                let _ = sys_write(out_fd, meta.name.as_bytes());
+                let _ = sys_write(out_fd, b" ");
+                let _ = sys_write(out_fd, soft_str.as_bytes());
+                let _ = sys_write(out_fd, b" ");
+                let _ = sys_write(out_fd, hard_str.as_bytes());
+                let _ = sys_write(out_fd, b" ");
+                let _ = sys_write(out_fd, meta.unit.as_bytes());
+                let _ = sys_write(out_fd, b"\n");
+            } else {
+                let mut line = [b' '; 80];
+                let mut pos = 0;
+
+                for &b in meta.name.as_bytes() {
+                    if pos < 11 {
+                        line[pos] = b;
+                        pos += 1;
+                    }
+                }
+                pos = 11;
+
+                for &b in meta.desc.as_bytes() {
+                    if pos < 51 {
+                        line[pos] = b;
+                        pos += 1;
+                    }
+                }
+                pos = 51;
+
+                for &b in soft_str.as_bytes() {
+                    if pos < 61 {
+                        line[pos] = b;
+                        pos += 1;
+                    }
+                }
+                pos = 61;
+
+                for &b in hard_str.as_bytes() {
+                    if pos < 71 {
+                        line[pos] = b;
+                        pos += 1;
+                    }
+                }
+                pos = 71;
+
+                for &b in meta.unit.as_bytes() {
+                    if pos < line.len() - 1 {
+                        line[pos] = b;
+                        pos += 1;
+                    }
+                }
+
+                while pos > 0 && line[pos - 1] == b' ' {
+                    pos -= 1;
+                }
+                line[pos] = b'\n';
+                pos += 1;
+
+                let _ = sys_write(out_fd, &line[..pos]);
+            }
+        }
+    }
+
+    0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -42037,6 +42447,75 @@ Chaque processus dispose de son propre CR3 sans aucun privilege materiel direct.
         // 6. unshare avec option invalide -> Erreur
         let (err_r6, err_w6) = crate::vfs::pipe().expect("pipe unshare err 6");
         assert_ne!(run_unshare(&["-z", "echo"], 0, 1, err_w6), 0);
+        sys_close(err_w6);
+        let n6 = sys_read(err_r6, &mut buf);
+        sys_close(err_r6);
+        let s6 = core::str::from_utf8(&buf[..n6 as usize]).unwrap();
+        assert!(s6.contains("unrecognized option"));
+    }
+
+    #[test]
+    fn test_prlimit_execution_and_options() {
+        let mut buf = [0u8; 1024];
+
+        // 1. prlimit --help
+        let (out_r1, out_w1) = crate::vfs::pipe().expect("pipe prlimit 1");
+        assert_eq!(run_prlimit(&["--help"], 0, out_w1, 2), 0);
+        sys_close(out_w1);
+        let n1 = sys_read(out_r1, &mut buf);
+        sys_close(out_r1);
+        let s1 = core::str::from_utf8(&buf[..n1 as usize]).unwrap();
+        assert!(s1.contains("Usage: prlimit"));
+
+        // 2. prlimit --version
+        let (out_r2, out_w2) = crate::vfs::pipe().expect("pipe prlimit 2");
+        assert_eq!(run_prlimit(&["--version"], 0, out_w2, 2), 0);
+        sys_close(out_w2);
+        let n2 = sys_read(out_r2, &mut buf);
+        sys_close(out_r2);
+        let s2 = core::str::from_utf8(&buf[..n2 as usize]).unwrap();
+        assert!(s2.contains("prlimit (JamboOS coreutils)"));
+
+        // 3. prlimit inspection par défaut (tableau complet)
+        let (out_r3, out_w3) = crate::vfs::pipe().expect("pipe prlimit 3");
+        assert_eq!(run_prlimit(&[], 0, out_w3, 2), 0);
+        sys_close(out_w3);
+        let n3 = sys_read(out_r3, &mut buf);
+        sys_close(out_r3);
+        let s3 = core::str::from_utf8(&buf[..n3 as usize]).unwrap();
+        assert!(s3.contains("NOFILE"));
+        assert!(s3.contains("NPROC"));
+        assert!(s3.contains("RESOURCE   DESCRIPTION"));
+
+        // 4. prlimit format brut --raw avec filtre --nofile
+        let (out_r4, out_w4) = crate::vfs::pipe().expect("pipe prlimit 4");
+        assert_eq!(run_prlimit(&["--raw", "--nofile"], 0, out_w4, 2), 0);
+        sys_close(out_w4);
+        let n4 = sys_read(out_r4, &mut buf);
+        sys_close(out_r4);
+        let s4 = core::str::from_utf8(&buf[..n4 as usize]).unwrap();
+        assert!(s4.starts_with("NOFILE "));
+
+        // 5. prlimit modification de limites et exécution de commande
+        let (out_r5, out_w5) = crate::vfs::pipe().expect("pipe prlimit 5");
+        assert_eq!(
+            run_prlimit(
+                &["--nofile=2048:4096", "echo", "prlimit_passed"],
+                0,
+                out_w5,
+                2
+            ),
+            0
+        );
+        sys_close(out_w5);
+        let n5 = sys_read(out_r5, &mut buf);
+        sys_close(out_r5);
+        let s5 = core::str::from_utf8(&buf[..n5 as usize]).unwrap();
+        assert!(s5.contains("prlimit_passed"));
+
+        // 6. prlimit option inconnue -> Erreur
+        let (err_r6, err_w6) = crate::vfs::pipe().expect("pipe prlimit err 6");
+        assert_ne!(run_prlimit(&["--invalid-opt"], 0, 1, err_w6), 0);
         sys_close(err_w6);
         let n6 = sys_read(err_r6, &mut buf);
         sys_close(err_r6);

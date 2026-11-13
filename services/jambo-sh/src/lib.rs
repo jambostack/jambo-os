@@ -578,6 +578,7 @@ impl JamboShell {
             "setsid" | "/bin/setsid" | "bin/setsid" => self.cmd_setsid(args, out),
             "ionice" | "/bin/ionice" | "bin/ionice" => self.cmd_ionice(args, out),
             "unshare" | "/bin/unshare" | "bin/unshare" => self.cmd_unshare(args, out),
+            "prlimit" | "/bin/prlimit" | "bin/prlimit" => self.cmd_prlimit(args, out),
             "basename" | "/bin/basename" | "bin/basename" => self.cmd_basename(args, out),
             "dirname" | "/bin/dirname" | "bin/dirname" => self.cmd_dirname(args, out),
             "seq" | "/bin/seq" | "bin/seq" => self.cmd_seq(args, out),
@@ -1466,6 +1467,26 @@ Utilitaire d'installation JamboOS (Serie 0.*.*)\n\
             }
         } else {
             let msg = b"unshare: pipe creation failed\n";
+            let len = msg.len().min(out.len());
+            out[..len].copy_from_slice(&msg[..len]);
+            (ShellStatus::ExecutionFailed, len)
+        }
+    }
+
+    fn cmd_prlimit(&self, args: &[&str], out: &mut [u8]) -> (ShellStatus, usize) {
+        if let Ok((r, w)) = libjambo::vfs::pipe() {
+            let code = libjambo::coreutils::run_prlimit(args, 0, w, w);
+            let _ = libjambo::coreutils::sys_close(w);
+            let n = libjambo::coreutils::sys_read(r, out);
+            let _ = libjambo::coreutils::sys_close(r);
+            let len = if n > 0 { n as usize } else { 0 };
+            if code == 0 {
+                (ShellStatus::Success, len)
+            } else {
+                (ShellStatus::ExecutionFailed, len)
+            }
+        } else {
+            let msg = b"prlimit: pipe creation failed\n";
             let len = msg.len().min(out.len());
             out[..len].copy_from_slice(&msg[..len]);
             (ShellStatus::ExecutionFailed, len)
@@ -22925,5 +22946,21 @@ mod tests {
         assert_eq!(st176, ShellStatus::Success);
         let s176 = core::str::from_utf8(&out[..len176]).unwrap();
         assert!(s176.contains("test_unshare"));
+
+        // 76. prlimit shell command
+        let (st177, len177) = shell.execute_line("prlimit --help", &mut out);
+        assert_eq!(st177, ShellStatus::Success);
+        let s177 = core::str::from_utf8(&out[..len177]).unwrap();
+        assert!(s177.contains("Usage: prlimit"));
+
+        let (st178, len178) = shell.execute_line("prlimit --version", &mut out);
+        assert_eq!(st178, ShellStatus::Success);
+        let s178 = core::str::from_utf8(&out[..len178]).unwrap();
+        assert!(s178.contains("prlimit (JamboOS coreutils)"));
+
+        let (st179, len179) = shell.execute_line("prlimit --raw --nofile", &mut out);
+        assert_eq!(st179, ShellStatus::Success);
+        let s179 = core::str::from_utf8(&out[..len179]).unwrap();
+        assert!(s179.starts_with("NOFILE "));
     }
 }
